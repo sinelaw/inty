@@ -1,0 +1,30 @@
+[package]
+name = "inty-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Language Server Protocol server backed by inty"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["stdio"]
+# The stdio LSP server (lsp-server runtime + JSON-RPC loop).
+stdio = ["dep:lsp-server"]
+# WebAssembly bindings that expose `Analysis` to JS for the web playground.
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:console_error_panic_hook"]
+
+[dependencies]
+inty = { path = "../inty" }
+lsp-types = "0.97"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# stdio-only
+lsp-server = { version = "0.7", optional = true }
+
+# wasm-only
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }

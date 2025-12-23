@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 67672f223237a7d02ff033f6f299822732c8b7a2c0dcf16f2c256f43ad5f1b69 # shrinks to program = Program { statements: [Var { kind: Var, declarations: [VarDeclarator { name: "a", init: Some(Array { elements: [Some(Array { elements: [Some(Ident { name: "as", span: Span { start: 0, end: 0 } })], span: Span { start: 0, end: 0 } })], span: Span { start: 0, end: 0 } }), type_annotation: None, kind: Var, span: Span { start: 0, end: 0 } }], span: Span { start: 0, end: 0 } }], span: Span { start: 0, end: 0 } }

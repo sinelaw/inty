@@ -1,0 +1,13 @@
+[package]
+name = "inty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A static type checker for JavaScript"
+
+[dependencies]
+thiserror = "2"
+ariadne = "0.6"
+
+[dev-dependencies]
+proptest = "1"

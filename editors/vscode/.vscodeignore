@@ -1,0 +1,13 @@
+.vscode/**
+.vscode-test/**
+.gitignore
+.eslintrc.json
+install.sh
+*.vsix
+**/*.map
+**/*.ts
+# NOTE: do NOT exclude node_modules/**. We don't bundle the extension
+# (no webpack/esbuild step), so the runtime dependencies — most
+# importantly `vscode-languageclient` — must be shipped inside the
+# .vsix. Without them, `require("vscode-languageclient/node")` throws
+# at extension load time and the activation hangs.
