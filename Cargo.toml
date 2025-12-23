@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/inty",
+    "crates/inty-lsp",
+    "crates/inty-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+opt-level = "s"
+lto = true

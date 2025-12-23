@@ -1,0 +1,56 @@
+{
+  "name": "inty-lsp",
+  "displayName": "inty",
+  "description": "VS Code integration for the inty language server — hover types, go-to-definition, rename, completion, signature help, inlay hints, and live diagnostics for JavaScript.",
+  "publisher": "local",
+  "version": "0.0.3",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sinelaw/typed-js.git",
+    "directory": "editors/vscode"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "inty.showLog",  "title": "inty: Show Server Log" },
+      { "command": "inty.restart",  "title": "inty: Restart Server" }
+    ],
+    "languages": [
+      {
+        "id": "javascript",
+        "extensions": [
+          ".js"
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "inty",
+      "properties": {
+        "inty.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the inty binary. If empty, the extension uses the MINFERN_BIN environment variable, or falls back to looking up `inty` on PATH."
+        },
+        "inty.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace LSP traffic in the Output channel."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0"
+  }
+}

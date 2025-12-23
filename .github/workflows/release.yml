@@ -1,0 +1,352 @@
+# Release workflow - builds binaries, creates a GitHub Release,
+# and publishes to crates.io and npm.
+
+name: Release
+permissions:
+  contents: write
+  id-token: write
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract version info
+        id: version
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            IS_PRERELEASE="true"
+          else
+            IS_PRERELEASE="false"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive_ext: tar.xz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive_ext: tar.xz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive_ext: tar.xz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_ext: tar.xz
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            archive_ext: zip
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM)
+        if: matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ] && [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            export RUSTFLAGS="-C target-feature=+crt-static"
+          fi
+          cargo build --release -p inty-cli --target ${{ matrix.target }}
+
+      - name: Create archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ARCHIVE_NAME="inty-${{ matrix.target }}"
+          mkdir -p "${ARCHIVE_NAME}"
+          cp target/${{ matrix.target }}/release/inty "${ARCHIVE_NAME}/"
+          cp README.md "${ARCHIVE_NAME}/"
+          [ -f LICENSE ] && cp LICENSE "${ARCHIVE_NAME}/" || true
+          tar -cJvf "${ARCHIVE_NAME}.tar.xz" "${ARCHIVE_NAME}"
+          sha256sum "${ARCHIVE_NAME}.tar.xz" > "${ARCHIVE_NAME}.tar.xz.sha256"
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ARCHIVE_NAME = "inty-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $ARCHIVE_NAME -Force
+          Copy-Item "target/${{ matrix.target }}/release/inty.exe" "$ARCHIVE_NAME/"
+          Copy-Item "README.md" "$ARCHIVE_NAME/"
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "$ARCHIVE_NAME/" }
+          Compress-Archive -Path "$ARCHIVE_NAME/*" -DestinationPath "$ARCHIVE_NAME.zip"
+          $hash = (Get-FileHash "$ARCHIVE_NAME.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $ARCHIVE_NAME.zip" | Out-File -Encoding ASCII "$ARCHIVE_NAME.zip.sha256"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: |
+            inty-${{ matrix.target }}.${{ matrix.archive_ext }}
+            inty-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+
+  release:
+    needs: [plan, build]
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${{ needs.plan.outputs.is_prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            $PRERELEASE_FLAG \
+            --title "inty ${VERSION}" \
+            --generate-notes \
+            artifacts/*.tar.xz \
+            artifacts/*.tar.xz.sha256 \
+            artifacts/*.zip \
+            artifacts/*.zip.sha256
+
+  publish-cargo:
+    needs: [plan, release]
+    if: ${{ needs.plan.outputs.is_prerelease != 'true' }}
+    uses: ./.github/workflows/cargo-publish.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+    secrets: inherit
+
+  publish-npm:
+    needs: [plan, release]
+    if: ${{ needs.plan.outputs.is_prerelease != 'true' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build npm package
+        run: |
+          mkdir -p npm-package
+
+          cat > npm-package/package.json << PKGJSON
+          {
+            "name": "inty",
+            "version": "${VERSION}",
+            "description": "A static type checker for JavaScript",
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/sinelaw/minfern.git"
+            },
+            "license": "MIT",
+            "bin": {
+              "inty": "run-inty.js"
+            },
+            "scripts": {
+              "postinstall": "node install.js"
+            },
+            "files": [
+              "binary.js",
+              "binary-install.js",
+              "install.js",
+              "run-inty.js",
+              "README.md",
+              "LICENSE"
+            ],
+            "os": ["darwin", "linux", "win32"],
+            "cpu": ["x64", "arm64"],
+            "keywords": ["typechecker", "javascript", "type-inference", "lsp"],
+            "engines": {
+              "node": ">=18"
+            }
+          }
+          PKGJSON
+
+          cat > npm-package/binary.js << 'BINARYJS'
+          const os = require('os');
+
+          function getBinaryInfo() {
+            const platform = os.platform();
+            const arch = os.arch();
+
+            const targets = {
+              'darwin-x64': { target: 'x86_64-apple-darwin', ext: 'tar.xz' },
+              'darwin-arm64': { target: 'aarch64-apple-darwin', ext: 'tar.xz' },
+              'linux-x64': { target: 'x86_64-unknown-linux-gnu', ext: 'tar.xz' },
+              'linux-arm64': { target: 'aarch64-unknown-linux-gnu', ext: 'tar.xz' },
+              'win32-x64': { target: 'x86_64-pc-windows-msvc', ext: 'zip' }
+            };
+
+            const key = `${platform}-${arch}`;
+            const info = targets[key];
+            if (!info) {
+              throw new Error(`Unsupported platform: ${platform}-${arch}`);
+            }
+
+            return {
+              ...info,
+              binaryName: platform === 'win32' ? 'inty.exe' : 'inty'
+            };
+          }
+
+          module.exports = { getBinaryInfo };
+          BINARYJS
+
+          cat > npm-package/binary-install.js << 'INSTALLJS'
+          const https = require('https');
+          const fs = require('fs');
+          const path = require('path');
+          const { execSync } = require('child_process');
+          const { getBinaryInfo } = require('./binary');
+
+          const VERSION = require('./package.json').version;
+          const REPO = 'sinelaw/minfern';
+
+          function download(url, dest) {
+            return new Promise((resolve, reject) => {
+              const file = fs.createWriteStream(dest);
+              file.on('error', (err) => { file.close(); reject(err); });
+              https.get(url, (response) => {
+                if (response.statusCode === 302 || response.statusCode === 301) {
+                  file.close(() => {
+                    download(response.headers.location, dest).then(resolve).catch(reject);
+                  });
+                  return;
+                }
+                if (response.statusCode !== 200) {
+                  file.close();
+                  reject(new Error(`Failed to download: ${response.statusCode}`));
+                  return;
+                }
+                response.pipe(file);
+                file.on('finish', () => { file.close(); resolve(); });
+              }).on('error', (err) => { file.close(); reject(err); });
+            });
+          }
+
+          async function install() {
+            const info = getBinaryInfo();
+            const archiveName = `inty-${info.target}.${info.ext}`;
+            const url = `https://github.com/${REPO}/releases/download/v${VERSION}/${archiveName}`;
+            const archivePath = path.join(__dirname, archiveName);
+            const binDir = path.join(__dirname, 'bin');
+            const binaryPath = path.join(binDir, info.binaryName);
+
+            console.log(`Downloading ${url}...`);
+            await download(url, archivePath);
+
+            const stats = fs.statSync(archivePath);
+            if (stats.size === 0) {
+              throw new Error(`Downloaded file is empty: ${archivePath}`);
+            }
+
+            fs.mkdirSync(binDir, { recursive: true });
+
+            if (info.ext === 'tar.xz') {
+              execSync(`tar -xJf "${archivePath}" -C "${binDir}" --strip-components=1`, { stdio: 'inherit' });
+            } else if (info.ext === 'zip') {
+              if (process.platform === 'win32') {
+                execSync(`powershell -Command "Expand-Archive -Path '${archivePath}' -DestinationPath '${binDir}' -Force"`, { stdio: 'inherit' });
+                const nested = path.join(binDir, `inty-${info.target}`);
+                if (fs.existsSync(nested)) {
+                  fs.readdirSync(nested).forEach(f => {
+                    fs.renameSync(path.join(nested, f), path.join(binDir, f));
+                  });
+                  fs.rmdirSync(nested);
+                }
+              } else {
+                execSync(`unzip -o "${archivePath}" -d "${binDir}"`, { stdio: 'inherit' });
+              }
+            }
+
+            fs.unlinkSync(archivePath);
+
+            if (!fs.existsSync(binaryPath)) {
+              throw new Error(`Installation failed: binary not found at ${binaryPath}`);
+            }
+            console.log('inty installed successfully!');
+          }
+
+          module.exports = { install };
+          INSTALLJS
+
+          cat > npm-package/install.js << 'POSTINSTALL'
+          const { install } = require('./binary-install');
+          install().catch(err => { console.error(err); process.exit(1); });
+          POSTINSTALL
+
+          cat > npm-package/run-inty.js << 'RUNJS'
+          #!/usr/bin/env node
+          const { spawn } = require('child_process');
+          const path = require('path');
+          const { getBinaryInfo } = require('./binary');
+
+          const info = getBinaryInfo();
+          const binPath = path.join(__dirname, 'bin', info.binaryName);
+
+          const child = spawn(binPath, process.argv.slice(2), { stdio: 'inherit' });
+          child.on('exit', (code) => process.exit(code || 0));
+          RUNJS
+
+          cp README.md npm-package/ 2>/dev/null || true
+          [ -f LICENSE ] && cp LICENSE npm-package/ || true
+
+      - name: Publish to npm with provenance (OIDC)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd npm-package
+          npm publish --access public --provenance
