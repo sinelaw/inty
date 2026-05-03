@@ -312,6 +312,23 @@ pub enum Type {
 /// Body of `Type::Module`. A module is identified nominally (by source
 /// path) and carries its export table as a map from exported name to
 /// the scheme of the local binding it points to.
+///
+/// Identity is *nominal*, not structural: two modules unify iff their
+/// `source` strings match. Width subtyping is intentionally not
+/// implemented — a function expecting `module "./foo.js"` cannot be
+/// passed a different module that happens to have a superset of the
+/// same exports, and that's the right semantics for module identity.
+/// If structural reuse across modules is ever needed, write the
+/// parameter as a row type and pick out the field at the call site.
+///
+/// Future extension points (see `modules.rs` "Known limitations"):
+/// - Type-class instances exported by a module would hang here
+///   (`pub instances: Vec<InstanceDecl>`) so import-time merging can
+///   detect conflicts.
+/// - Module-field immutability is currently enforced ad-hoc in the
+///   resolver; once the assignment-site check lands (see TODO in
+///   `infer_assign`'s `Expr::Member` arm), no `ModuleType` field is
+///   needed for it — the type variant alone is the discriminator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleType {
     /// Canonicalised source path of the module — the identity of the type.

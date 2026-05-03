@@ -122,6 +122,14 @@ impl InferState {
                                 .into());
                             }
                         }
+                        // TODO(modules): if `binding.scheme.body.ty` is
+                        // `Type::Module(_)`, reject every property
+                        // assignment unconditionally with a dedicated
+                        // "cannot assign to module export" error. ESM
+                        // bindings are immutable on the importer side;
+                        // today the assignment falls through and tends
+                        // to fail later as a unification mismatch
+                        // instead of a clean diagnostic.
                     }
                 }
             }
