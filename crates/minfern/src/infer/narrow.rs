@@ -295,29 +295,33 @@ fn member_property_compatible(member_ty: &Type, steps: &[PropName], narrowing: &
 /// Recognised patterns:
 ///   - `typeof <path> === "lit"`     → `IsTypeof("lit")` on `<path>`
 ///   - `typeof <path> !== "lit"`     → `IsNotTypeof("lit")` on `<path>`
+///   - `typeof <path> ==  "lit"`     → `IsTypeof("lit")` on `<path>`
+///   - `typeof <path> !=  "lit"`     → `IsNotTypeof("lit")` on `<path>`
 ///   - `<path> === <literal>`        → `Equals(literal)` on `<path>`
 ///   - `<path> !== <literal>`        → `NotEquals(literal)` on `<path>`
 ///
 /// Both operand orders are accepted for the comparison operators.
+///
+/// Loose equality (`==`/`!=`) is supported only for the typeof form: a
+/// `typeof <expr>` always evaluates to a string, and the other operand
+/// is a string literal, so JS's coercion rules cannot make `==` and
+/// `===` differ. For `<value> == <literal>` in general, semantics
+/// diverge from `===` (e.g. `0 == ""`), so loose equality is rejected.
 pub fn try_extract_narrowing(test: &Expr) -> Option<(Path, Narrowing)> {
     let Expr::Binary { op, left, right, .. } = test else {
         return None;
     };
 
-    let (eq, neg) = match op {
+    let (strict, neg) = match op {
         BinOp::EqEqEq => (true, false),
         BinOp::NotEqEq => (true, true),
-        // Loose equality is intentionally excluded — its narrowing
-        // semantics differ from === in JS (e.g. `0 == ""`), and we want
-        // the predicate set to mirror what TypeScript's flow analysis
-        // recognises.
+        BinOp::EqEq => (false, false),
+        BinOp::NotEq => (false, true),
         _ => return None,
     };
-    if !eq {
-        return None;
-    }
 
-    // Try `typeof <path> === "lit"` in either operand order.
+    // `typeof <path> {==,===} "lit"` — sound for both strict and loose
+    // equality (see doc comment).
     if let Some((path, name)) = try_typeof_string_pair(left, right) {
         let narrowing = if neg {
             Narrowing::IsNotTypeof(name)
@@ -327,7 +331,11 @@ pub fn try_extract_narrowing(test: &Expr) -> Option<(Path, Narrowing)> {
         return Some((path, narrowing));
     }
 
-    // Try `<path> === <literal>` in either operand order.
+    // For `<path> === <literal>`, only strict equality is recognised.
+    if !strict {
+        return None;
+    }
+
     if let (Some(path), Some(lit)) = (path_from_expr(left), literal_value(right)) {
         let narrowing = if neg {
             Narrowing::NotEquals(lit)
@@ -346,6 +354,33 @@ pub fn try_extract_narrowing(test: &Expr) -> Option<(Path, Narrowing)> {
     }
 
     None
+}
+
+/// True when applying a narrowing at `path` collapsed the binding's
+/// type from a non-`never` type to `never`. That means the predicate
+/// is statically unsatisfiable on this branch — the branch is dead.
+///
+/// Returns `false` if the binding wasn't found, isn't monomorphic, or
+/// was already `never` before narrowing — in those cases there's
+/// nothing useful to report.
+pub fn narrowing_collapsed_to_never(
+    state: &super::state::InferState,
+    before: &TypeEnv,
+    after: &TypeEnv,
+    path: &Path,
+) -> bool {
+    let root = path.root_ident();
+    let (Some(before_scheme), Some(after_scheme)) =
+        (before.lookup(root), after.lookup(root))
+    else {
+        return false;
+    };
+    if !before_scheme.is_mono() || !after_scheme.is_mono() {
+        return false;
+    }
+    let before_ty = state.apply_subst(before_scheme.ty());
+    let after_ty = state.apply_subst(after_scheme.ty());
+    !before_ty.is_never() && after_ty.is_never()
 }
 
 /// Match `typeof <path>` on either operand and a string literal on the
