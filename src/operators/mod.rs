@@ -151,10 +151,11 @@ const PLUS_ARMS: &[TypingArm] = &[
         notes: "",
     },
     TypingArm {
-        inputs: &[
-            AnyOfClass(ClassName::Plus),
-            AnyOfClass(ClassName::Plus),
-        ],
+        // Both arms of `+` share the same Plus instance; the second
+        // input is `SameAsArg(0)` (not a fresh `AnyOfClass`) so the
+        // catalog doesn't accept `Number + String` mixed pairs that
+        // typing in fact rejects (Plus unifies the operand types).
+        inputs: &[AnyOfClass(ClassName::Plus), SameAsArg(0)],
         output: SameAsArg(0),
         class: Some(ClassName::Plus),
         notes: "",

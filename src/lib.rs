@@ -15,6 +15,7 @@ pub mod dynamics;
 pub mod error;
 pub mod infer;
 pub mod lexer;
+pub mod meta;
 pub mod modules;
 pub mod operators;
 pub mod parser;
