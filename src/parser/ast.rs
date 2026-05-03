@@ -43,6 +43,9 @@ pub enum ExportDecl {
         type_annotation: Option<TypeAnnotation>,
         span: Source,
     },
+    /// Default export: `export default expr;` or `export default function f() {}`.
+    /// A named function expression also binds its name in module scope, matching JS.
+    Default { value: Expr, span: Source },
 }
 
 /// Source location type alias

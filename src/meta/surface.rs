@@ -104,6 +104,7 @@ pub fn is_surface_stmt(stmt: &Stmt) -> bool {
                 .iter()
                 .all(|d| d.init.as_ref().map_or(true, is_surface_expr)),
             ExportDecl::Function { body, .. } => is_surface_stmt(body),
+            ExportDecl::Default { value, .. } => is_surface_expr(value),
         },
     }
 }
