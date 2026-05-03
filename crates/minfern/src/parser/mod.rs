@@ -471,13 +471,14 @@ impl Parser {
 
         // Check what we're exporting
         match self.current() {
-            // `let` is treated as `var` for parsing purposes.
             Token::Var | Token::Let => {
-                // export var x = 1;  (also: export let x = 1;)
+                // export var x = 1;  /  export let x = 1;
+                let was_let = self.check(&Token::Let);
+                let kind = if was_let { VarKind::Let } else { VarKind::Var };
                 self.advance();
                 let mut declarations = Vec::new();
                 loop {
-                    let decl = self.parse_var_declarator(VarKind::Var)?;
+                    let decl = self.parse_var_declarator(kind)?;
                     declarations.push(decl);
                     if !self.consume_if(&Token::Comma) {
                         break;
@@ -487,7 +488,7 @@ impl Parser {
                 let decl_span = Span::new(start, self.prev_span().end);
                 Ok(Stmt::Export {
                     declaration: ExportDecl::Var {
-                        kind: VarKind::Var,
+                        kind,
                         declarations,
                         span: decl_span,
                     },
@@ -1161,9 +1162,11 @@ impl Parser {
         self.expect(&Token::For)?;
         self.expect(&Token::LParen)?;
 
-        // Parse init. `let i` in a for-init is treated identically to `var i`.
+        // Parse init.
         let init_or_lhs = if self.check(&Token::Var) || self.check(&Token::Let) {
             let var_start = self.current_span().start;
+            let was_let = self.check(&Token::Let);
+            let kind = if was_let { VarKind::Let } else { VarKind::Var };
             self.advance();
 
             // `for (let {a, b} of arr) { ... }` — a destructuring pattern
@@ -1190,11 +1193,11 @@ impl Parser {
                             name: temp.clone(),
                             span: pattern_span,
                         },
-                        VarKind::Var,
+                        kind,
                         &mut destr_decls,
                     );
                     let destr_stmt = Stmt::Var {
-                        kind: VarKind::Var,
+                        kind,
                         declarations: destr_decls,
                         span: pattern_span,
                     };
@@ -1296,12 +1299,12 @@ impl Parser {
                 name,
                 init,
                 type_annotation,
-                kind: VarKind::Var,
+                kind,
                 span: Span::new(var_start, self.prev_span().end),
             }];
 
             while self.consume_if(&Token::Comma) {
-                declarations.push(self.parse_var_declarator(VarKind::Var)?);
+                declarations.push(self.parse_var_declarator(kind)?);
             }
 
             Some(ForInit::VarDecl(declarations))

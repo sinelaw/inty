@@ -354,15 +354,12 @@ impl Resolution {
                 if let Some(init) = init {
                     match init {
                         ForInit::VarDecl(decls) => {
-                            // Re-derive the kind. The parser uses
-                            // `Var` here (since `for (var i …)` is
-                            // common); `let` and `const` would surface
-                            // through the same path with their kind.
-                            // We lose the original kind in this AST,
-                            // so default to `Var`. Editors will still
-                            // resolve correctly because hoist_scope
-                            // handled `var` already.
-                            self.visit_var_decls(VarKind::Var, decls, fn_scope, for_scope);
+                            // Each declarator carries its own kind; a
+                            // single for-init keyword applies to all
+                            // declarators, so the first one is
+                            // representative.
+                            let kind = decls.first().map(|d| d.kind).unwrap_or(VarKind::Var);
+                            self.visit_var_decls(kind, decls, fn_scope, for_scope);
                         }
                         ForInit::Expr(e) => self.visit_expr(e, for_scope),
                     }
@@ -645,8 +642,10 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
         Stmt::For { init, body, .. } => {
             if let Some(ForInit::VarDecl(decls)) = init {
                 for d in decls {
-                    let name_span = name_span_from_decl(d);
-                    r.declare(scope, &d.name, name_span, DefKind::Var);
+                    if d.kind == VarKind::Var {
+                        let name_span = name_span_from_decl(d);
+                        r.declare(scope, &d.name, name_span, DefKind::Var);
+                    }
                 }
             }
             hoist_stmt(body, r, scope);
@@ -806,6 +805,42 @@ mod tests {
         // Def span should land on the param `a` in the header (index 13).
         let header_a = src.find("(a").unwrap() + 1;
         assert_eq!(def.name_span, Span::new(header_a, header_a + 1));
+    }
+
+    #[test]
+    fn export_let_is_block_scoped() {
+        // `export let y = 1;` at module top level: the binding lands in
+        // module scope (there's no enclosing block), but the resolver
+        // must record it as `Let`, not `Var`. Previously the parser
+        // collapsed `export let` into `VarKind::Var`, causing the
+        // resolver to hoist it like a `var`.
+        let src = "export let y = 1;\n";
+        let r = build(src);
+        let y_off = src.find("y").unwrap();
+        let def = r.def_at(Span::new(y_off, y_off + 1)).expect("def");
+        assert_eq!(def.name, "y");
+        assert_eq!(def.kind, DefKind::Let);
+    }
+
+    #[test]
+    fn for_let_is_per_iteration_scoped() {
+        // `for (let i = 0; ...) { i; } i;` — the trailing `i;` should
+        // not resolve, because `let i` is scoped to the for-loop.
+        // Previously the parser stored `i` as `Var` and the resolver
+        // hoisted it.
+        let src = "for (let i = 0; i < 10; i = i + 1) { i; }\ni;\n";
+        let r = build(src);
+        let trailing_i = src.rfind("i;").unwrap();
+        assert!(
+            r.def_of_use(Span::new(trailing_i, trailing_i + 1)).is_none(),
+            "let i should not leak out of the for-loop"
+        );
+        // Sanity check: the `i` inside the body still resolves.
+        let body_i_off = src.find("{ i").unwrap() + 2;
+        let body_def = r
+            .def_of_use(Span::new(body_i_off, body_i_off + 1))
+            .expect("body i should resolve");
+        assert_eq!(body_def.kind, DefKind::Let);
     }
 
     #[test]
