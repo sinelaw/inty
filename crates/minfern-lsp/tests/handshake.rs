@@ -198,6 +198,101 @@ fn hover_returns_inferred_type() {
 }
 
 #[test]
+fn hover_picks_shadowing_binding() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///shadow.js");
+    // Outer x is Number, inner is String. Hovering on the inner-block
+    // `x;` use should report String, not Number.
+    let src = "var x = 1;\n{ let x = \"hi\"; x; }\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // The inner `x;` use is on line 1, somewhere after `let x = "hi"; `.
+    // We pick the column of the trailing `x` by scanning the line.
+    let line = "{ let x = \"hi\"; x; }";
+    let col = line.rfind("x;").unwrap() as u32;
+
+    client
+        .sender
+        .send(Message::Request(req::<HoverRequest>(
+            11,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 1, character: col },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let hover: Option<Hover> = expect_response(&client, 11);
+    let value = match hover.unwrap().contents {
+        lsp_types::HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown contents"),
+    };
+    assert!(
+        value.to_lowercase().contains("string"),
+        "inner x should be String: {}",
+        value
+    );
+    assert!(
+        !value.to_lowercase().contains("number"),
+        "inner x should NOT be Number (that's the outer): {}",
+        value
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn hover_on_parameter_returns_param_type() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///param.js");
+    // Pin the param type concretely with a function-level annotation so
+    // the hover answer is unambiguous (otherwise `add` is polymorphic).
+    let src = "/** function add (Number, Number) => Number */\nfunction add(a, b) { return a + b; }\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // The first occurrence of `a` is in the parameter list of the
+    // function declaration on line 1, column 13.
+    client
+        .sender
+        .send(Message::Request(req::<HoverRequest>(
+            12,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 1, character: 13 },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let hover: Option<Hover> = expect_response(&client, 12);
+    let value = match hover.unwrap().contents {
+        lsp_types::HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown contents"),
+    };
+    assert!(
+        value.contains("a"),
+        "hover should mention the parameter name: {}",
+        value
+    );
+    assert!(
+        value.to_lowercase().contains("number"),
+        "param should be Number after add(1, 2): {}",
+        value
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
 fn definition_returns_binding_site() {
     let (client, handle) = boot();
     handshake(&client);
