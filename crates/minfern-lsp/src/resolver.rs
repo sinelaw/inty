@@ -27,8 +27,8 @@ use std::collections::HashMap;
 
 use minfern::lexer::Span;
 use minfern::parser::ast::{
-    Expr, ExportDecl, ForInLhs, ForInit, ImportSpecifier, Program, PropDef, Stmt, VarDeclarator,
-    VarKind,
+    Expr, ExportDecl, ForInLhs, ForInit, ImportSpecifier, Param, Program, PropDef, Stmt,
+    VarDeclarator, VarKind,
 };
 
 /// What kind of thing a binding-site span refers to.
@@ -464,7 +464,12 @@ impl Resolution {
                             self.visit_function_body(*span, &[], body, scope);
                         }
                         PropDef::Setter { param, body, span, .. } => {
-                            let params = vec![param.clone()];
+                            // Setter has a single string param; we don't
+                            // get a precise span for it from the parser
+                            // (the AST stores just `param: String`), so
+                            // anchor at the start of the setter.
+                            let params =
+                                vec![Param::new(param.clone(), Span::new(span.start, span.start))];
                             self.visit_function_body(*span, &params, body, scope);
                         }
                     }
@@ -521,7 +526,7 @@ impl Resolution {
     fn visit_function_body(
         &mut self,
         span: Span,
-        params: &[String],
+        params: &[Param],
         body: &Stmt,
         parent: ScopeId,
     ) {
@@ -532,7 +537,7 @@ impl Resolution {
         &mut self,
         span: Span,
         self_name: Option<&str>,
-        params: &[String],
+        params: &[Param],
         body: &Stmt,
         parent: ScopeId,
     ) {
@@ -543,12 +548,11 @@ impl Resolution {
             // span for the name on `Expr::Function`.
             self.declare(func_scope, name, span, DefKind::Function);
         }
-        // Params: we don't have per-param spans, so synthesise a span
-        // by anchoring at the start of the function. This is good
-        // enough for go-to-def (it lands on the function header).
+        // Each param now has a real source span (the parser tracks
+        // them), so go-to-def lands on the parameter name in the
+        // header — matching what users expect.
         for p in params {
-            let synth_span = Span::new(span.start, span.start);
-            self.declare(func_scope, p, synth_span, DefKind::Param);
+            self.declare(func_scope, &p.name, p.span, DefKind::Param);
         }
         // Hoist `var` and `function` declarations from anywhere in the
         // body that isn't itself inside a nested function.

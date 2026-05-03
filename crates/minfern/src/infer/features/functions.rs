@@ -1,7 +1,7 @@
 //! Function expressions, calls, `new`, and function declarations.
 
 use crate::lexer::Span;
-use crate::parser::ast::{Expr, Stmt, TypeAnnotation};
+use crate::parser::ast::{Expr, Param, Stmt, TypeAnnotation};
 use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
@@ -15,7 +15,7 @@ impl InferState {
         &mut self,
         env: &TypeEnv,
         name: Option<&str>,
-        params: &[String],
+        params: &[Param],
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
         span: Span,
@@ -27,14 +27,14 @@ impl InferState {
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()
-            .map(|(idx, param_name)| {
+            .map(|(idx, param)| {
                 let ty = self.fresh_type_var();
                 // Record origin for parameter types
                 if let Type::Var(var) = &ty {
                     self.record_origin(
                         var.clone(),
                         crate::error::TypeOrigin::Parameter {
-                            param_name: param_name.clone(),
+                            param_name: param.name.clone(),
                             param_index: idx,
                             span,
                         },
@@ -64,7 +64,11 @@ impl InferState {
         let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
 
         for (param, ty) in params.iter().zip(param_types.iter()) {
-            body_env = body_env.extend(param.clone(), TypeScheme::mono(ty.clone()));
+            body_env = body_env.extend(param.name.clone(), TypeScheme::mono(ty.clone()));
+            // Record per-param type for the LSP / hover. Keyed by the
+            // param's name span so we can look it up at any reference
+            // to the parameter.
+            self.record_decl_type(param.span, ty.clone());
         }
 
         // If function is named, add it for recursion
@@ -88,7 +92,7 @@ impl InferState {
         &mut self,
         env: &TypeEnv,
         name: Option<&str>,
-        params: &[String],
+        params: &[Param],
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
         this_type: Type,
@@ -98,14 +102,14 @@ impl InferState {
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()
-            .map(|(idx, param_name)| {
+            .map(|(idx, param)| {
                 let ty = self.fresh_type_var();
                 // Record origin for parameter types
                 if let Type::Var(var) = &ty {
                     self.record_origin(
                         var.clone(),
                         crate::error::TypeOrigin::Parameter {
-                            param_name: param_name.clone(),
+                            param_name: param.name.clone(),
                             param_index: idx,
                             span,
                         },
@@ -135,7 +139,8 @@ impl InferState {
         let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
 
         for (param, ty) in params.iter().zip(param_types.iter()) {
-            body_env = body_env.extend(param.clone(), TypeScheme::mono(ty.clone()));
+            body_env = body_env.extend(param.name.clone(), TypeScheme::mono(ty.clone()));
+            self.record_decl_type(param.span, ty.clone());
         }
 
         // If function is named, add it for recursion
@@ -356,7 +361,7 @@ impl InferState {
         &mut self,
         env: &TypeEnv,
         name: &str,
-        params: &[String],
+        params: &[Param],
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
         span: Span,
