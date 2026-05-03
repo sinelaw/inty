@@ -78,6 +78,13 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
 fn main() -> ExitCode {
     let raw: Vec<String> = env::args().collect();
 
+    // Sub-command dispatch: if argv[1] is `lsp`, hand off to the
+    // language server. The CLI has no global options, so `lsp` is the
+    // only sub-command and it always sits in slot 1.
+    if raw.get(1).map(String::as_str) == Some("lsp") {
+        return run_lsp(&raw[2..]);
+    }
+
     let args = match parse_args(raw) {
         Ok(a) => a,
         Err(e) => {
@@ -179,6 +186,36 @@ fn load_extra_libs(
     Ok((env, state))
 }
 
+fn run_lsp(args: &[String]) -> ExitCode {
+    for arg in args {
+        match arg.as_str() {
+            "--stdio" => {} // currently the only transport
+            "--help" | "-h" => {
+                println!("minfern lsp - Language Server Protocol over stdio");
+                println!();
+                println!("USAGE:");
+                println!("    minfern lsp [--stdio]");
+                println!();
+                println!("Speaks LSP on stdin/stdout. Editors can launch this directly.");
+                return ExitCode::SUCCESS;
+            }
+            _ => {
+                eprintln!("error: unknown argument to 'lsp': {}", arg);
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    match minfern_lsp::run_stdio() {
+        Ok(0) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(code as u8),
+        Err(e) => {
+            eprintln!("lsp: I/O error: {}", e);
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn print_help() {
     println!(
         r#"minfern - HMF-based type inference for mquickjs
@@ -186,6 +223,7 @@ fn print_help() {
 USAGE:
     minfern [OPTIONS] <file.js>
     minfern [OPTIONS] -
+    minfern lsp [--stdio]
 
 OPTIONS:
     --lib <path>         Load an additional declaration file (can be repeated)
@@ -193,6 +231,9 @@ OPTIONS:
     --no-color           Disable ANSI colors in diagnostic output
     -h, --help           Print help information
     -V, --version        Print version information
+
+SUBCOMMANDS:
+    lsp                  Start the language server (LSP over stdio)
 
 DESCRIPTION:
     Minfern performs static type inference on mquickjs JavaScript code.
@@ -214,6 +255,7 @@ EXAMPLES:
     minfern --lib types/lodash.d.js app.js     Add a lib before checking
     minfern --no-stdlib small.js               Check without any libs
     echo "var x = 1" | minfern -               Check from stdin
+    minfern lsp                                Speak LSP on stdin/stdout
 
 AUTHOR:
     (c) Noam Lewis

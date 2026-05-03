@@ -1,0 +1,10 @@
+[package]
+name = "minfern-lsp"
+version = "0.1.0"
+edition = "2021"
+description = "Language Server Protocol server backed by minfern"
+license = "MIT"
+
+[dependencies]
+minfern = { path = "../minfern" }
+serde_json = "1"

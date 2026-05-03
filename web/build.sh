@@ -14,9 +14,10 @@ if ! command -v wasm-pack &> /dev/null; then
     cargo install wasm-pack
 fi
 
-# Build the WASM module
+# Build the WASM module. The minfern library now lives in
+# crates/minfern/, so wasm-pack must point at that crate explicitly.
 cd "$PROJECT_ROOT"
-wasm-pack build --target web --out-dir web/pkg --features wasm
+wasm-pack build crates/minfern --target web --out-dir ../../web/pkg --features wasm
 
 echo ""
 echo "Build complete!"
