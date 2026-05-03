@@ -157,6 +157,71 @@ var v: Number | Undefined
 var pick: Number
 ```
 
+### Modules (ES `import` / `export`)
+
+minfern resolves `import` statements relative to the importing file's
+directory and threads inferred types across the module graph. Visibility
+is explicit — only what's marked `export` is reachable from another
+file. A `const` without an `export` is private; the resolver rejects
+imports of private names with a structured error pointing at the
+offending source module.
+
+```javascript
+// math.js
+function square(n) { return n * n; }
+export { square };
+
+// app.js
+import { square } from "./math.js";
+var area = square(5);
+```
+
+```
+var area: Number
+```
+
+Supported forms (see `examples/modules/` for runnable fixtures):
+
+| Form                                                      |        |
+|-----------------------------------------------------------|--------|
+| `import "./mod.js";`                                      | side-effect — merges every export |
+| `import { a, b as c } from "./mod.js";`                   | named, with renaming |
+| `import name from "./mod.js";`                            | default |
+| `import * as ns from "./mod.js";`                         | namespace as a `Type::Module` |
+| `import name, { a } from "./mod.js";`                     | default + named |
+| `import name, * as ns from "./mod.js";`                   | default + namespace |
+| `export var/let/const/function …;`                        | declaration export |
+| `export default …;`                                       | expression or named function |
+| `export { a, b as c };`                                   | export list |
+| `export { a, b as c } from "./mod.js";`                   | re-export, with renaming |
+| `export * from "./mod.js";`                               | re-export all named (excludes `default`, per ESM) |
+| `export * as ns from "./mod.js";`                         | re-export target namespace under one name |
+
+`import * as ns` builds a first-class `Type::Module` rather than an
+object — each `ns.foo` access re-instantiates the export's scheme, so
+polymorphism is preserved across uses:
+
+```javascript
+// identity.js
+export function id(x) { return x; }
+
+// app.js
+import * as ns from "./identity.js";
+var n = ns.id(42);
+var s = ns.id("hello");
+```
+
+```
+var n: Number
+var s: String
+```
+
+A row-typed namespace would have unified `n` and `s` against a single
+type variable; the dedicated module type keeps each access independent.
+See [modules.md](modules.md) for the design and the planned remaining
+sections (bare specifiers, dynamic `import()`, JSON imports, cross-module
+type-class instances).
+
 ## Unsupported JavaScript Idioms
 
 A binding's type is fixed at declaration. Operators that combine values still need their operands' types to agree. Output below is verbatim from `minfern --no-color`.
@@ -249,7 +314,7 @@ function f(x) {
 
 ## Supported Syntax
 
-Template literals, regex literals, getters/setters, method shorthand, `for-of`, `const`, `let` (treated as `var` — block scoping isn't modelled), arrow functions, destructuring (object and array, desugared at parse time), `class` declarations (desugared into factory functions; no inheritance, no static members), `async`/`await` (desugared via `Promise.resolve`), and `import`/`export` with file-system-based module resolution.
+Template literals, regex literals, getters/setters, method shorthand, `for-of`, `const`, `let` (treated as `var` — block scoping isn't modelled), arrow functions, destructuring (object and array, desugared at parse time), `class` declarations (desugared into factory functions; no inheritance, no static members), and `async`/`await` (desugared via `Promise.resolve`). ES modules (`import`/`export`) are covered separately above.
 
 Type annotations are accepted in two forms: inline `var x /*: T */` and doc-comment `/** var x: T */`. See [declare.md](declare.md) for the rules around external declarations and Rank-1 polymorphism.
 
