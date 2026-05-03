@@ -38,6 +38,37 @@ pub struct InferWarning {
     pub message: String,
 }
 
+/// User-facing knobs for inference behaviour.
+///
+/// The defaults match minfern's previous hardcoded behaviour so that
+/// `InferConfig::default()` is a drop-in for callers that don't care
+/// about policy. Each field is documented with what's affected when
+/// the flag is flipped.
+#[derive(Clone, Debug)]
+pub struct InferConfig {
+    /// Emit a non-fatal warning when a `switch` lacks a `default` arm
+    /// and doesn't cover every literal of a closed-union discriminant.
+    /// Default: `true` (matches phase-6 design-doc behaviour).
+    pub exhaustiveness_warnings: bool,
+
+    /// Generalise mutable container literals (arrays / objects) bound
+    /// with `var` if all their elements are syntactic values. Default:
+    /// `false` (the value-restriction default), matching what minfern
+    /// shipped before this knob existed. Setting to `true` is unsound
+    /// in the presence of indexed assignment — the option exists so
+    /// the meta-tests can exercise the looser regime.
+    pub generalize_mutable_var_containers: bool,
+}
+
+impl Default for InferConfig {
+    fn default() -> Self {
+        InferConfig {
+            exhaustiveness_warnings: true,
+            generalize_mutable_var_containers: false,
+        }
+    }
+}
+
 /// Inference state tracking type variables, substitution, and constraints.
 pub struct InferState {
     /// Counter for generating fresh type variables.
@@ -69,6 +100,9 @@ pub struct InferState {
     /// Currently used by switch-exhaustiveness; consumers can iterate
     /// over them after inference completes.
     pub warnings: Vec<InferWarning>,
+
+    /// Policy knobs. See `InferConfig`.
+    pub config: InferConfig,
 }
 
 impl Default for InferState {
@@ -78,8 +112,13 @@ impl Default for InferState {
 }
 
 impl InferState {
-    /// Create a new inference state.
+    /// Create a new inference state with default policy.
     pub fn new() -> Self {
+        Self::with_config(InferConfig::default())
+    }
+
+    /// Create a new inference state with the given policy.
+    pub fn with_config(config: InferConfig) -> Self {
         InferState {
             name_source: 0,
             main_subst: Subst::empty(),
@@ -90,6 +129,7 @@ impl InferState {
             decl_types: HashMap::new(),
             type_origins: HashMap::new(),
             warnings: Vec::new(),
+            config,
         }
     }
 
