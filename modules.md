@@ -46,9 +46,11 @@ The currently supported surface:
 | `export { a, b as c };`                           | ✅      |
 | `import * as ns from "./mod.js";`                 | ✅ namespace as `Type::Module` (per-export polymorphism preserved) |
 | `import foo, * as ns from "./mod.js";`            | ✅ default + namespace (composes §1 + §2) |
-| `export { a } from "./mod.js";` (re-export)       | ❌ not parsed |
-| `export * from "./mod.js";`                       | ❌ not parsed |
-| `export * as ns from "./mod.js";`                 | ❌ not parsed |
+| `export { a, b as c } from "./mod.js";`           | ✅ named re-export, with renaming |
+| `export { default } from "./mod.js";`             | ✅ re-export target's default as ours |
+| `export { default as alias } from "./mod.js";`    | ✅ |
+| `export * from "./mod.js";`                       | ✅ all named exports (excludes `default`, per ESM) |
+| `export * as ns from "./mod.js";`                 | ✅ target's namespace as one export |
 | `import "lodash";` (bare specifier)               | ❌ resolver looks for a file path only |
 | `await import("./mod.js")` (dynamic)              | ❌ no expression form |
 | `import x from "./d.json" with { type: "json" };` | ❌ no attributes |
@@ -164,19 +166,49 @@ MDN:
 - `export * as ns from "./mod.js";`
 - `export { default } from "./mod.js";`
 
-**Design.** A re-export is an import the local scope never sees. Parse
-into `ExportDecl::From { kind, source, span }` where `kind` is
-`Named(Vec<ExportSpecifier>)` / `All` / `AllAs(String)`. The resolver:
+**Status: shipped.** Parsed as `ExportDecl::From { kind, source, span }`
+with `ExportFromKind::Named(Vec<ExportSpecifier>) | All | AllAs(String)`.
+Inference is a no-op — re-exports introduce no local bindings.
 
-1. Calls `load_module` on `source` exactly like a normal import would.
-2. For `Named`, looks up each `local` in the loaded env and adds it under
-   `exported` to the *current* module's exports map.
-3. For `All`, copies every binding from the loaded env into the exports
-   map (skipping `default`, matching JS).
-4. For `AllAs(ns)`, builds the namespace row of §2 and adds it under `ns`.
+The resolver work pivots on the `ExportEntry`:
 
-Cycles involving re-exports use the same visited set; the existing
-"circular import" error suffices.
+```rust
+pub enum ExportBinding {
+    Local(String),       // existing: name in this module's TypeEnv
+    Inline(TypeScheme),  // new: scheme already extracted from elsewhere
+}
+```
+
+`Local` is what `export const x = …` and `export { foo as bar };` produce
+— the entry points back at this module's env. `Inline` is what
+`export … from` produces — the scheme has already been pulled from the
+target module, so no second lookup is needed (and no need to extend this
+module's `TypeEnv` with phantom bindings).
+
+`compute_export_table` walks `Stmt::Export` after inference. For each
+`ExportDecl::From` it:
+
+1. Resolves the path; cycle-checks against the shared `visiting` set
+   (so a re-export cycle errors with the same "circular" diagnostic as
+   an import cycle).
+2. Calls `load_module` on the target, getting back its
+   `(TypeEnv, ExportTable)`.
+3. Materialises entries based on the kind:
+   - `Named`: for each spec, looks up `spec.local` in the target's
+     export table, resolves to a scheme, pushes
+     `Inline(scheme)` under `spec.exported`.
+   - `All`: copies every entry whose `exported != "default"`. ESM
+     intentionally excludes the target's default; the test
+     `re_export_star_excludes_default` pins this.
+   - `AllAs(ns)`: builds a `Type::Module` from the target via the same
+     `build_namespace_type` helper §2 uses, wraps it in a mono scheme,
+     pushes under `ns`.
+
+Composition falls out: a chain `a.js → b.js → c.js` of `export { x } from`
+re-exports works because each hop's `Inline` entry already carries the
+fully-resolved scheme; no recursion at lookup time. `re_export_through_two_hops_works`
+covers this. `default` re-exports work via `expect_module_name`'s
+`Token::Default` handling on both sides of `as`.
 
 ## 5. Combined default + named / default + namespace
 

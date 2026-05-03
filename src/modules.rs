@@ -1,4 +1,4 @@
-//! File-based module resolution for ES6 `import` statements.
+//! File-based module resolution for ES6 `import` / `export` statements.
 //!
 //! Walks the program's AST, resolves every `import "./path.js"` relative to
 //! the importing file's directory, loads the target, recursively resolves
@@ -6,99 +6,241 @@
 //! into the environment that the main program is then checked against.
 //! Cycles are rejected with an error rather than silently ignored.
 //!
-//! Visibility is driven by an explicit per-module exports map collected
-//! from `Stmt::Export` nodes, *not* by diffing the env. A module's
-//! top-level `const x = …;` without an `export` clause is therefore
-//! invisible to importers — only declarations actually marked `export`
-//! reach the resolver. This matches ES module semantics.
+//! Visibility is driven by an explicit per-module exports table whose
+//! entries are produced by `compute_export_table`. For local declarations
+//! (`export var/const/function/default/{ … }`) the entry points back at a
+//! local binding by name; for re-exports (`export { … } from`,
+//! `export * from`, `export * as ns from`) the target module is loaded
+//! and the resulting scheme is stored *inline* in the entry, so the
+//! importer never has to know whether a name came from this module or
+//! transitively. Either way the resolver only ever looks at the exports
+//! table — unexported top-level bindings are unreachable.
 //!
 //! Supported surface today:
 //! - `import "./foo.js";`              (side-effect — merges all exports)
 //! - `import { a, b as c } from "./foo.js";`
 //! - `import name from "./foo.js";`    (default)
+//! - `import * as ns from "./foo.js";` (namespace, as `Type::Module`)
+//! - `import name, { a } from "./foo.js";`
+//! - `import name, * as ns from "./foo.js";`
 //! - `export var/let/const/function …;`
 //! - `export default …;`               (expression or named function)
 //! - `export { a, b as c };`           (export list, optionally renamed)
-//!
-//! Namespace imports (`import * as ns`) and re-exports (`export … from`)
-//! are not handled yet.
+//! - `export { a, b as c } from "./foo.js";`
+//! - `export * from "./foo.js";`       (excludes default, per ESM spec)
+//! - `export * as ns from "./foo.js";`
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::MinfernError;
 use crate::infer::{InferState, TypeEnv};
-use crate::parser::ast::{ExportDecl, Expr, ImportSpecifier, Program, Stmt};
+use crate::parser::ast::{
+    ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt,
+};
 use crate::parser::parse;
 use crate::types::{ModuleType, Type, TypeScheme};
 
-/// One entry of a module's export table: the name an importer would write
-/// (`exported`) paired with the local binding it points to (`local`).
-/// For `export const x = 1;` both are `"x"`; for `export { foo as bar };`
-/// they differ; for `export default …` the exported name is `"default"`.
+/// One entry of a module's export table.
 #[derive(Debug, Clone)]
 pub struct ExportEntry {
+    /// The name an importer would write.
     pub exported: String,
-    pub local: String,
+    /// What the entry points at — either a local binding by name, or a
+    /// scheme already extracted from another module (used for re-exports).
+    pub binding: ExportBinding,
 }
 
-/// A module's exports — gathered by walking the AST, independently of
-/// inference. Order follows source order; duplicates are not deduplicated
-/// here (the resolver looks up by name and the first match wins, which
-/// matches how shadowing reads in source).
+/// What an export entry points at.
+#[derive(Debug, Clone)]
+pub enum ExportBinding {
+    /// Name of a local binding in the same module's `TypeEnv`.
+    Local(String),
+    /// Scheme already extracted from somewhere else (re-export target).
+    Inline(TypeScheme),
+}
+
+/// A module's exports — order follows source order; the resolver looks
+/// up by name and the first match wins.
 pub type ExportTable = Vec<ExportEntry>;
 
-/// Walk a program's top-level statements and collect every `export`-marked
-/// binding. This is purely syntactic: no inference, no env, no IO.
-pub fn collect_exports(program: &Program) -> ExportTable {
+/// Resolve an export entry to a concrete scheme. Returns `None` only if
+/// `Local(name)` doesn't exist in `module_env`, which is a programmer
+/// error in the module itself (caught by inference's List validation).
+fn export_scheme(entry: &ExportEntry, module_env: &TypeEnv) -> Option<TypeScheme> {
+    match &entry.binding {
+        ExportBinding::Local(name) => module_env.lookup(name).cloned(),
+        ExportBinding::Inline(s) => Some(s.clone()),
+    }
+}
+
+/// Build a `Type::Module` from a fully-resolved (env, exports) pair. Used
+/// for `import * as ns` and for `export * as ns from`.
+fn build_namespace_type(
+    source_id: String,
+    module_env: &TypeEnv,
+    exports: &ExportTable,
+    err_span: crate::lexer::Span,
+    err_source: &str,
+) -> Result<Type, MinfernError> {
+    let mut export_schemes: BTreeMap<String, TypeScheme> = BTreeMap::new();
+    for entry in exports {
+        let scheme = export_scheme(entry, module_env).ok_or_else(|| {
+            MinfernError::Type(crate::error::TypeError::Module {
+                message: format!(
+                    "module {:?} declares export {:?} but its local binding is missing",
+                    err_source, entry.exported
+                ),
+                span: err_span,
+            })
+        })?;
+        export_schemes.insert(entry.exported.clone(), scheme);
+    }
+    Ok(Type::Module(ModuleType {
+        source: source_id,
+        exports: export_schemes,
+    }))
+}
+
+/// Compute the effective export table of an inferred module. For local
+/// `Stmt::Export` forms the entry is a `Local(name)`; for `export … from`
+/// re-exports the target is loaded and the entry is `Inline(scheme)`.
+fn compute_export_table(
+    state: &mut InferState,
+    starting_env: &TypeEnv,
+    program: &Program,
+    base_dir: &Path,
+    visiting: &mut HashSet<PathBuf>,
+) -> Result<ExportTable, MinfernError> {
     let mut out = ExportTable::new();
     for stmt in &program.statements {
-        if let Stmt::Export { declaration, .. } = stmt {
-            match declaration {
-                ExportDecl::Var { declarations, .. } => {
-                    for d in declarations {
-                        if d.name.starts_with("$destr$") {
-                            continue;
-                        }
-                        out.push(ExportEntry {
-                            exported: d.name.clone(),
-                            local: d.name.clone(),
-                        });
+        let Stmt::Export { declaration, .. } = stmt else {
+            continue;
+        };
+        match declaration {
+            ExportDecl::Var { declarations, .. } => {
+                for d in declarations {
+                    if d.name.starts_with("$destr$") {
+                        continue;
                     }
-                }
-                ExportDecl::Function { name, .. } => {
                     out.push(ExportEntry {
-                        exported: name.clone(),
-                        local: name.clone(),
+                        exported: d.name.clone(),
+                        binding: ExportBinding::Local(d.name.clone()),
                     });
                 }
-                ExportDecl::Default { value, .. } => {
-                    // The local backing the default export is the binding
-                    // that inference creates: `default` for an expression
-                    // RHS, or the function's own name for a named function
-                    // expression (which we then alias to `default` too —
-                    // either lookup name resolves the same scheme).
-                    let local = match value {
-                        Expr::Function { name: Some(n), .. } => n.clone(),
-                        _ => "default".to_string(),
-                    };
+            }
+            ExportDecl::Function { name, .. } => {
+                out.push(ExportEntry {
+                    exported: name.clone(),
+                    binding: ExportBinding::Local(name.clone()),
+                });
+            }
+            ExportDecl::Default { value, .. } => {
+                let local = match value {
+                    Expr::Function { name: Some(n), .. } => n.clone(),
+                    _ => "default".to_string(),
+                };
+                out.push(ExportEntry {
+                    exported: "default".to_string(),
+                    binding: ExportBinding::Local(local),
+                });
+            }
+            ExportDecl::List { specifiers, .. } => {
+                for s in specifiers {
                     out.push(ExportEntry {
-                        exported: "default".to_string(),
-                        local,
+                        exported: s.exported.clone(),
+                        binding: ExportBinding::Local(s.local.clone()),
                     });
                 }
-                ExportDecl::List { specifiers, .. } => {
-                    for s in specifiers {
+            }
+            ExportDecl::From { kind, source, span } => {
+                let resolved_path = resolve_path(base_dir, source).map_err(|msg| {
+                    MinfernError::Type(crate::error::TypeError::Module {
+                        message: format!("cannot resolve re-export {:?}: {}", source, msg),
+                        span: *span,
+                    })
+                })?;
+                if visiting.contains(&resolved_path) {
+                    return Err(MinfernError::Type(crate::error::TypeError::Module {
+                        message: format!(
+                            "circular re-export involving {}",
+                            resolved_path.display()
+                        ),
+                        span: *span,
+                    }));
+                }
+                let (target_env, target_exports) = load_module(
+                    state,
+                    starting_env.clone(),
+                    &resolved_path,
+                    visiting,
+                )?;
+
+                let resolve_target = |name: &str| -> Option<TypeScheme> {
+                    target_exports
+                        .iter()
+                        .find(|e| e.exported == name)
+                        .and_then(|e| export_scheme(e, &target_env))
+                };
+
+                match kind {
+                    ExportFromKind::Named(specs) => {
+                        for spec in specs {
+                            let scheme = resolve_target(&spec.local).ok_or_else(|| {
+                                MinfernError::Type(crate::error::TypeError::Module {
+                                    message: format!(
+                                        "module {:?} has no export named {:?}",
+                                        source, spec.local
+                                    ),
+                                    span: spec.span,
+                                })
+                            })?;
+                            out.push(ExportEntry {
+                                exported: spec.exported.clone(),
+                                binding: ExportBinding::Inline(scheme),
+                            });
+                        }
+                    }
+                    ExportFromKind::All => {
+                        // ESM: `export *` re-exports all *named* exports
+                        // and intentionally excludes `default`.
+                        for entry in &target_exports {
+                            if entry.exported == "default" {
+                                continue;
+                            }
+                            let scheme = export_scheme(entry, &target_env).ok_or_else(|| {
+                                MinfernError::Type(crate::error::TypeError::Module {
+                                    message: format!(
+                                        "module {:?} export {:?} has no resolvable scheme",
+                                        source, entry.exported
+                                    ),
+                                    span: *span,
+                                })
+                            })?;
+                            out.push(ExportEntry {
+                                exported: entry.exported.clone(),
+                                binding: ExportBinding::Inline(scheme),
+                            });
+                        }
+                    }
+                    ExportFromKind::AllAs(ns_name) => {
+                        let module_ty = build_namespace_type(
+                            resolved_path.to_string_lossy().into_owned(),
+                            &target_env,
+                            &target_exports,
+                            *span,
+                            source,
+                        )?;
                         out.push(ExportEntry {
-                            exported: s.exported.clone(),
-                            local: s.local.clone(),
+                            exported: ns_name.clone(),
+                            binding: ExportBinding::Inline(TypeScheme::mono(module_ty)),
                         });
                     }
                 }
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Resolve every `import` in `program` relative to `base_dir`, merge the
@@ -143,19 +285,19 @@ pub fn resolve_imports(
             let (module_env, exports) =
                 load_module(state, env.clone(), &resolved_path, visiting)?;
 
-            let lookup_export = |name: &str| -> Option<String> {
+            let lookup_export_scheme = |name: &str| -> Option<TypeScheme> {
                 exports
                     .iter()
                     .find(|e| e.exported == name)
-                    .map(|e| e.local.clone())
+                    .and_then(|e| export_scheme(e, &module_env))
             };
 
             if specifiers.is_empty() {
                 // Side-effect import: merge every export from the module
                 // into the current env, under its exported name.
                 for entry in &exports {
-                    if let Some(scheme) = module_env.lookup(&entry.local) {
-                        env = env.extend(entry.exported.clone(), scheme.clone());
+                    if let Some(scheme) = export_scheme(entry, &module_env) {
+                        env = env.extend(entry.exported.clone(), scheme);
                     }
                 }
             } else {
@@ -164,7 +306,7 @@ pub fn resolve_imports(
                         ImportSpecifier::Named {
                             imported, local, ..
                         } => {
-                            let local_in_module = lookup_export(imported).ok_or_else(|| {
+                            let scheme = lookup_export_scheme(imported).ok_or_else(|| {
                                 MinfernError::Type(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} has no export named {:?}",
@@ -173,19 +315,10 @@ pub fn resolve_imports(
                                     span: *span,
                                 })
                             })?;
-                            let scheme = module_env.lookup(&local_in_module).ok_or_else(|| {
-                                MinfernError::Type(crate::error::TypeError::Module {
-                                    message: format!(
-                                        "module {:?} exports {:?} but its local binding {:?} is missing",
-                                        source, imported, local_in_module
-                                    ),
-                                    span: *span,
-                                })
-                            })?;
-                            env = env.extend(local.clone(), scheme.clone());
+                            env = env.extend(local.clone(), scheme);
                         }
                         ImportSpecifier::Default { local, span } => {
-                            let local_in_module = lookup_export("default").ok_or_else(|| {
+                            let scheme = lookup_export_scheme("default").ok_or_else(|| {
                                 MinfernError::Type(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} has no default export",
@@ -194,46 +327,16 @@ pub fn resolve_imports(
                                     span: *span,
                                 })
                             })?;
-                            let scheme = module_env.lookup(&local_in_module).ok_or_else(|| {
-                                MinfernError::Type(crate::error::TypeError::Module {
-                                    message: format!(
-                                        "module {:?} declares a default export but its local binding {:?} is missing",
-                                        source, local_in_module
-                                    ),
-                                    span: *span,
-                                })
-                            })?;
-                            env = env.extend(local.clone(), scheme.clone());
+                            env = env.extend(local.clone(), scheme);
                         }
                         ImportSpecifier::Namespace { local, span } => {
-                            // Build a `Type::Module` whose identity is the
-                            // resolved file path and whose exports map
-                            // mirrors the export table — each entry stored
-                            // as the *scheme* of the underlying local
-                            // binding so that `ns.foo` can re-instantiate
-                            // polymorphism per access.
-                            let source_id = resolved_path.to_string_lossy().into_owned();
-                            let mut export_schemes: BTreeMap<String, TypeScheme> =
-                                BTreeMap::new();
-                            for entry in &exports {
-                                let scheme = module_env
-                                    .lookup(&entry.local)
-                                    .cloned()
-                                    .ok_or_else(|| {
-                                        MinfernError::Type(crate::error::TypeError::Module {
-                                            message: format!(
-                                                "module {:?} declares export {:?} but its local binding {:?} is missing",
-                                                source, entry.exported, entry.local
-                                            ),
-                                            span: *span,
-                                        })
-                                    })?;
-                                export_schemes.insert(entry.exported.clone(), scheme);
-                            }
-                            let module_ty = Type::Module(ModuleType {
-                                source: source_id,
-                                exports: export_schemes,
-                            });
+                            let module_ty = build_namespace_type(
+                                resolved_path.to_string_lossy().into_owned(),
+                                &module_env,
+                                &exports,
+                                *span,
+                                source,
+                            )?;
                             env = env
                                 .extend(local.clone(), TypeScheme::mono(module_ty));
                         }
@@ -246,7 +349,7 @@ pub fn resolve_imports(
 }
 
 /// Parse and infer a single module file, returning the inferred env and
-/// the module's export table. Recursively resolves nested imports.
+/// the module's effective export table (with re-exports resolved).
 fn load_module(
     state: &mut InferState,
     starting_env: TypeEnv,
@@ -270,14 +373,22 @@ fn load_module(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // First resolve imports of THIS module, then infer it.
+    // Resolve imports, then infer, then resolve re-exports. The cycle set
+    // is shared with both passes.
     let env_with_imports =
-        resolve_imports(state, starting_env, &program, &base_dir, visiting)?;
+        resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting)?;
     let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
+
+    let exports = compute_export_table(
+        state,
+        &starting_env,
+        &program,
+        &base_dir,
+        visiting,
+    )?;
 
     visiting.remove(&canonical);
 
-    let exports = collect_exports(&program);
     Ok((module_env, exports))
 }
 
@@ -340,6 +451,23 @@ mod tests {
         )
     }
 
+    fn check(dir: &Path, main: &str) -> Result<(), MinfernError> {
+        let main_path = dir.join(main);
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let program = parse(&source).unwrap();
+        let mut state = InferState::new();
+        let mut visiting = HashSet::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            main_path.parent().unwrap(),
+            &mut visiting,
+        )?;
+        state.infer_program_with_env(&env, &program)?;
+        Ok(())
+    }
+
     #[test]
     fn named_import_resolves() {
         let dir = tempdir();
@@ -395,9 +523,6 @@ mod tests {
 
     #[test]
     fn private_const_is_not_importable() {
-        // Regression: prior behaviour silently allowed importing any
-        // top-level binding by diffing the env. The exports table now
-        // gates visibility — only `visible` is reachable.
         let dir = tempdir();
         write_file(
             dir.path(),
@@ -434,7 +559,6 @@ mod tests {
         let env = resolve(dir.path(), "main.js").unwrap();
         assert!(env.lookup("sq").is_some(), "sq should be imported");
 
-        // The local name is not exported, so importing it must fail.
         let dir2 = tempdir();
         write_file(
             dir2.path(),
@@ -478,38 +602,19 @@ mod tests {
             "main.js",
             "import * as lib from \"./lib.js\"; var s = lib.add(1, 2); var p = lib.PI;",
         );
-        let env = resolve(dir.path(), "main.js").unwrap();
-        assert!(env.lookup("lib").is_some(), "lib namespace should bind");
+        check(dir.path(), "main.js").unwrap();
     }
 
     #[test]
     fn namespace_member_missing_is_module_error() {
         let dir = tempdir();
-        write_file(
-            dir.path(),
-            "lib.js",
-            "export const visible = 1;",
-        );
+        write_file(dir.path(), "lib.js", "export const visible = 1;");
         write_file(
             dir.path(),
             "main.js",
             "import * as lib from \"./lib.js\"; var x = lib.bogus;",
         );
-        let main_path = dir.path().join("main.js");
-        let source = std::fs::read_to_string(&main_path).unwrap();
-        let program = parse(&source).unwrap();
-        let mut state = InferState::new();
-        let mut visiting = HashSet::new();
-        let env = resolve_imports(
-            &mut state,
-            crate::builtins::initial_env(),
-            &program,
-            main_path.parent().unwrap(),
-            &mut visiting,
-        )
-        .unwrap();
-        let err = state
-            .infer_program_with_env(&env, &program)
+        let err = check(dir.path(), "main.js")
             .expect_err("accessing a non-export through a namespace must error");
         assert!(
             format!("{}", err).contains("no export named"),
@@ -520,9 +625,6 @@ mod tests {
 
     #[test]
     fn namespace_preserves_polymorphism_across_uses() {
-        // Each `ns.id` access should re-instantiate the polymorphic
-        // export, so the second call at a different type does not
-        // unify against the first call's resolved type.
         let dir = tempdir();
         write_file(
             dir.path(),
@@ -534,9 +636,8 @@ mod tests {
             "main.js",
             "import * as ns from \"./lib.js\"; var n = ns.id(1); var s = ns.id(\"hello\");",
         );
-        let env = resolve(dir.path(), "main.js")
+        check(dir.path(), "main.js")
             .expect("namespace polymorphism should resolve");
-        assert!(env.lookup("ns").is_some());
     }
 
     #[test]
@@ -552,30 +653,13 @@ mod tests {
             "main.js",
             "import * as ns from \"./lib.js\"; var s = ns.secret;",
         );
-        let main_path = dir.path().join("main.js");
-        let source = std::fs::read_to_string(&main_path).unwrap();
-        let program = parse(&source).unwrap();
-        let mut state = InferState::new();
-        let mut visiting = HashSet::new();
-        let env = resolve_imports(
-            &mut state,
-            crate::builtins::initial_env(),
-            &program,
-            main_path.parent().unwrap(),
-            &mut visiting,
-        )
-        .unwrap();
-        let err = state
-            .infer_program_with_env(&env, &program)
+        let err = check(dir.path(), "main.js")
             .expect_err("private bindings must not be reachable through a namespace");
         assert!(format!("{}", err).contains("no export named"));
     }
 
     #[test]
     fn default_plus_namespace_import_resolves() {
-        // `import foo, * as ns from "./mod.js";` binds both the default
-        // export under `foo` and the whole module under `ns`. Composes §1
-        // and §2 with no extra resolver code.
         let dir = tempdir();
         write_file(
             dir.path(),
@@ -590,6 +674,243 @@ mod tests {
         let env = resolve(dir.path(), "main.js").unwrap();
         assert!(env.lookup("greet").is_some(), "default should bind");
         assert!(env.lookup("lib").is_some(), "namespace should bind");
+    }
+
+    // --- §4 re-exports ---
+
+    #[test]
+    fn re_export_named_works() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "inner.js",
+            "export function add(a, b) { return a + b; }",
+        );
+        write_file(
+            dir.path(),
+            "outer.js",
+            "export { add } from \"./inner.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { add } from \"./outer.js\"; var r = add(1, 2);",
+        );
+        check(dir.path(), "main.js").unwrap();
+    }
+
+    #[test]
+    fn re_export_renames() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "inner.js",
+            "export function add(a, b) { return a + b; }",
+        );
+        write_file(
+            dir.path(),
+            "outer.js",
+            "export { add as plus } from \"./inner.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { plus } from \"./outer.js\"; var r = plus(1, 2);",
+        );
+        check(dir.path(), "main.js").unwrap();
+
+        // The original name `add` is *not* exported by `outer.js`.
+        let dir2 = tempdir();
+        write_file(
+            dir2.path(),
+            "inner.js",
+            "export function add(a, b) { return a + b; }",
+        );
+        write_file(
+            dir2.path(),
+            "outer.js",
+            "export { add as plus } from \"./inner.js\";",
+        );
+        write_file(
+            dir2.path(),
+            "main.js",
+            "import { add } from \"./outer.js\";",
+        );
+        let err = check(dir2.path(), "main.js")
+            .expect_err("renamed re-export should hide the original name");
+        assert!(format!("{}", err).contains("no export named"));
+    }
+
+    #[test]
+    fn re_export_named_missing_in_target_errors() {
+        let dir = tempdir();
+        write_file(dir.path(), "inner.js", "export const x = 1;");
+        write_file(
+            dir.path(),
+            "outer.js",
+            "export { ghost } from \"./inner.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { ghost } from \"./outer.js\";",
+        );
+        let err = check(dir.path(), "main.js")
+            .expect_err("re-exporting a name the target doesn't have should error");
+        assert!(format!("{}", err).contains("no export named"));
+    }
+
+    #[test]
+    fn re_export_star_excludes_default() {
+        // Per ESM, `export *` re-exports all named exports but not `default`.
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "inner.js",
+            "export const a = 1; export const b = 2; export default 999;",
+        );
+        write_file(
+            dir.path(),
+            "outer.js",
+            "export * from \"./inner.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { a, b } from \"./outer.js\";",
+        );
+        check(dir.path(), "main.js").unwrap();
+
+        let dir2 = tempdir();
+        write_file(
+            dir2.path(),
+            "inner.js",
+            "export const a = 1; export default 999;",
+        );
+        write_file(
+            dir2.path(),
+            "outer.js",
+            "export * from \"./inner.js\";",
+        );
+        write_file(
+            dir2.path(),
+            "main.js",
+            "import x from \"./outer.js\";",
+        );
+        let err = check(dir2.path(), "main.js")
+            .expect_err("`export *` must not propagate the target's default");
+        assert!(format!("{}", err).contains("default"));
+    }
+
+    #[test]
+    fn re_export_star_as_namespace_works() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "inner.js",
+            "export function id(x) { return x; }",
+        );
+        write_file(
+            dir.path(),
+            "outer.js",
+            "export * as inner from \"./inner.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { inner } from \"./outer.js\"; var n = inner.id(1); var s = inner.id(\"hi\");",
+        );
+        check(dir.path(), "main.js").unwrap();
+    }
+
+    #[test]
+    fn re_export_default_named_works() {
+        // `export { default } from "./mod.js"` re-exports target's default
+        // as our default; `export { default as alias } from` renames it.
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "inner.js",
+            "export default function greet(n) { return \"hi \" + n; }",
+        );
+        write_file(
+            dir.path(),
+            "outer.js",
+            "export { default } from \"./inner.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import g from \"./outer.js\"; var s = g(\"world\");",
+        );
+        check(dir.path(), "main.js").unwrap();
+
+        let dir2 = tempdir();
+        write_file(
+            dir2.path(),
+            "inner.js",
+            "export default 42;",
+        );
+        write_file(
+            dir2.path(),
+            "outer.js",
+            "export { default as answer } from \"./inner.js\";",
+        );
+        write_file(
+            dir2.path(),
+            "main.js",
+            "import { answer } from \"./outer.js\";",
+        );
+        check(dir2.path(), "main.js").unwrap();
+    }
+
+    #[test]
+    fn re_export_through_two_hops_works() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "a.js",
+            "export const value = 100;",
+        );
+        write_file(
+            dir.path(),
+            "b.js",
+            "export { value } from \"./a.js\";",
+        );
+        write_file(
+            dir.path(),
+            "c.js",
+            "export { value } from \"./b.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { value } from \"./c.js\";",
+        );
+        check(dir.path(), "main.js").unwrap();
+    }
+
+    #[test]
+    fn re_export_cycle_is_rejected() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "a.js",
+            "export * from \"./b.js\";",
+        );
+        write_file(
+            dir.path(),
+            "b.js",
+            "export * from \"./a.js\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { x } from \"./a.js\";",
+        );
+        let err = check(dir.path(), "main.js")
+            .expect_err("re-export cycle should error");
+        assert!(format!("{}", err).contains("circular"));
     }
 
     #[test]

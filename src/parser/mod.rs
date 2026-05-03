@@ -559,11 +559,16 @@ impl Parser {
                 })
             }
             Token::LBrace => {
-                // export { a, b as c };  (no `from` clause — re-export forms come later)
+                // Either `export { … };` (List) or `export { … } from "…";` (re-export).
+                // Disambiguated by the optional `from` clause after the closing brace.
                 self.advance();
                 let mut specifiers = Vec::new();
                 while !self.check(&Token::RBrace) {
                     let spec_start = self.current_span().start;
+                    // For re-exports the LHS is a name in the *target* module
+                    // (which can be `default`); for plain lists it's a local
+                    // binding. Same lexical shape — `expect_module_name`
+                    // covers both.
                     let local = self.expect_module_name()?;
                     let exported = if self.consume_if(&Token::As) {
                         self.expect_module_name()?
@@ -580,11 +585,49 @@ impl Parser {
                     }
                 }
                 self.expect(&Token::RBrace)?;
+
+                if self.consume_if(&Token::From) {
+                    let source = self.expect_string()?;
+                    self.consume_semicolon();
+                    let decl_span = Span::new(start, self.prev_span().end);
+                    Ok(Stmt::Export {
+                        declaration: ExportDecl::From {
+                            kind: ExportFromKind::Named(specifiers),
+                            source,
+                            span: decl_span,
+                        },
+                        span: decl_span,
+                    })
+                } else {
+                    self.consume_semicolon();
+                    let decl_span = Span::new(start, self.prev_span().end);
+                    Ok(Stmt::Export {
+                        declaration: ExportDecl::List {
+                            specifiers,
+                            span: decl_span,
+                        },
+                        span: decl_span,
+                    })
+                }
+            }
+            Token::Star => {
+                // export * from "./mod.js";
+                // export * as ns from "./mod.js";
+                self.advance();
+                let kind = if self.consume_if(&Token::As) {
+                    let ns = self.expect_ident()?;
+                    ExportFromKind::AllAs(ns)
+                } else {
+                    ExportFromKind::All
+                };
+                self.expect(&Token::From)?;
+                let source = self.expect_string()?;
                 self.consume_semicolon();
                 let decl_span = Span::new(start, self.prev_span().end);
                 Ok(Stmt::Export {
-                    declaration: ExportDecl::List {
-                        specifiers,
+                    declaration: ExportDecl::From {
+                        kind,
+                        source,
                         span: decl_span,
                     },
                     span: decl_span,
@@ -592,7 +635,7 @@ impl Parser {
             }
             _ => Err(ParseError::UnexpectedToken {
                 found: format!("{}", self.current()),
-                expected: "var, const, function, default, or {".to_string(),
+                expected: "var, const, function, default, {, or *".to_string(),
                 span: self.current_span(),
             }
             .into()),
