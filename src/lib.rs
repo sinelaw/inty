@@ -10,6 +10,7 @@
 //! - **Type annotations in comments** using `/*: Type */` syntax
 
 pub mod builtins;
+pub mod classes;
 pub mod diagnostics;
 pub mod dynamics;
 pub mod error;
