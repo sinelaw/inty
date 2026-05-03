@@ -146,20 +146,32 @@ impl Resolution {
 
     /// Find a binding (def *or* use) whose span contains `offset`.
     /// Returns the def-span and the actual span of the identifier hit.
+    ///
+    /// Picks the **smallest** matching span across both defs and refs.
+    /// Some defs (notably named function expressions) are stored with a
+    /// span covering the whole function, so without the smallest-span
+    /// tie-breaker, hovering on an identifier inside the body would
+    /// always return the enclosing function's def first.
     pub fn binding_at(&self, offset: usize) -> Option<(Span, Span)> {
-        // Direct hit on a def?
-        for (&def_span, _) in &self.defs {
-            if span_contains(def_span, offset) {
-                return Some((def_span, def_span));
+        let mut best: Option<(Span, Span)> = None;
+        let consider = |best: &mut Option<(Span, Span)>, def_span: Span, hit_span: Span| {
+            let hit_len = hit_span.end.saturating_sub(hit_span.start);
+            match *best {
+                Some((_, b)) if b.end.saturating_sub(b.start) <= hit_len => {}
+                _ => *best = Some((def_span, hit_span)),
+            }
+        };
+        for (&def_span, def) in &self.defs {
+            if span_contains(def.name_span, offset) {
+                consider(&mut best, def_span, def.name_span);
             }
         }
-        // Otherwise a use.
         for (&use_span, &def_span) in &self.refs {
             if span_contains(use_span, offset) {
-                return Some((def_span, use_span));
+                consider(&mut best, def_span, use_span);
             }
         }
-        None
+        best
     }
 
     /// Every binding visible at `offset`, walking the scope chain.

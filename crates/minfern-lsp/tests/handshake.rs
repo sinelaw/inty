@@ -691,3 +691,101 @@ fn rename_propagates_to_importing_files() {
 
     shutdown(client, handle);
 }
+
+#[test]
+fn hover_inside_function_body_picks_inner_expr() {
+    // Hovering on an identifier inside a function body must report the
+    // type of *that* expression, not the enclosing function. Named
+    // function expressions store the function's def with a span that
+    // covers the entire body, so without the smallest-span tie-breaker
+    // in `binding_at`, this hover used to return the function type.
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///fbody.js");
+    let src = "var g = function f(x) { var y = x; y; };\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Hover on the inner `y;` use: line 0, at the column of the last `y`.
+    let col = src.rfind("y;").unwrap() as u32;
+
+    client
+        .sender
+        .send(Message::Request(req::<HoverRequest>(
+            50,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 0, character: col },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let hover: Option<Hover> = expect_response(&client, 50);
+    let value = match hover.expect("hover present").contents {
+        lsp_types::HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown contents"),
+    };
+    assert!(
+        value.contains("y"),
+        "hover should mention the inner identifier `y`: {}",
+        value
+    );
+    assert!(
+        !value.contains("=>"),
+        "hover on inner `y` should NOT show the function type: {}",
+        value
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn hover_on_function_name_still_works() {
+    // Hovering on the literal `f` in a function declaration's header
+    // should still return the function type (smallest-span tie-breaker
+    // shouldn't cause the name lookup to disappear).
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///fname.js");
+    let src = "function f(x) { return x + 1; }\nf(1);\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Position on the literal `f` in `function f(x)` — column 9.
+    let col = src.find("function f").unwrap() as u32 + "function ".len() as u32;
+
+    client
+        .sender
+        .send(Message::Request(req::<HoverRequest>(
+            51,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 0, character: col },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let hover: Option<Hover> = expect_response(&client, 51);
+    let value = match hover.expect("hover present").contents {
+        lsp_types::HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown contents"),
+    };
+    assert!(
+        value.contains("f"),
+        "hover should mention the function name `f`: {}",
+        value
+    );
+    assert!(
+        value.contains("=>"),
+        "hover on function name should show a function type: {}",
+        value
+    );
+
+    shutdown(client, handle);
+}
