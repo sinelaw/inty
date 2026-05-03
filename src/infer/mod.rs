@@ -317,6 +317,25 @@ impl InferState {
                             span: *span,
                         },
                     ),
+                    ExportDecl::List { specifiers, span: _ } => {
+                        // `export { a, b as c };` doesn't change types — the
+                        // resolver reads the exported names from a separate
+                        // table built by `modules::collect_exports`. All we
+                        // do here is verify each `local` is in fact declared,
+                        // so a typo doesn't survive until import time.
+                        for spec in specifiers {
+                            if env.lookup(&spec.local).is_none() {
+                                return Err(MinfernError::Type(TypeError::Module {
+                                    message: format!(
+                                        "exported name `{}` is not declared in this module",
+                                        spec.local
+                                    ),
+                                    span: spec.span,
+                                }));
+                            }
+                        }
+                        Ok((Type::Undefined, env.clone()))
+                    }
                     ExportDecl::Default { value, span } => {
                         // `export default function f() { … }` is two bindings:
                         // a function declaration `f` and an alias `default = f`.

@@ -8,41 +8,44 @@ each step is independently shippable.
 
 ## What works today
 
-`src/modules.rs` already implements a file-based resolver. From an entry file
-the pipeline is:
+`src/modules.rs` implements a file-based resolver. From an entry file the
+pipeline is:
 
-1. Parse the entry program (`src/parser/mod.rs:368` parses every `import`
-   form into `Stmt::Import { specifiers, source, span }`).
+1. Parse the entry program (`src/parser/mod.rs` parses every `import` form
+   into `Stmt::Import { specifiers, source, span }`).
 2. For each `Stmt::Import`, resolve `source` relative to the importing file's
    directory, trying the literal path then `.js` then `.d.js`
-   (`resolve_path` in `src/modules.rs:176`).
-3. Recursively `parse → resolve_imports → infer` the target, snapshot the
-   bindings the module introduced (`diff_env` in `src/modules.rs:156`),
-   and merge them into the caller's `TypeEnv`.
-4. Cycle detection via a `HashSet<PathBuf>` of canonicalised paths
-   (`src/modules.rs:51`).
+   (`resolve_path` in `src/modules.rs`).
+3. Recursively `parse → resolve_imports → infer` the target, then build an
+   **explicit export table** by walking the program's `Stmt::Export` nodes
+   (`collect_exports` in `src/modules.rs`). The table is a `Vec<{exported,
+   local}>`; the resolver looks up the requested name in the table, takes
+   the local binding it points to, and reads its scheme out of the inferred
+   env. Bindings without an `export` clause are invisible — that is the
+   single source of truth for module visibility.
+4. Cycle detection via a `HashSet<PathBuf>` of canonicalised paths.
 5. Type inference treats `Stmt::Export` as a transparent wrapper around the
-   underlying `var` / `const` / `function` declaration
-   (`src/infer/mod.rs:285`), so the inferred env carries the export's scheme
-   under its own name; the resolver then re-binds it on the import side.
+   underlying declaration so locals get bound normally; `ExportDecl::List`
+   is purely a visibility marker and only validates that each `local` is
+   declared.
 
 The currently supported surface:
 
 | Form                                              | Status |
 |---------------------------------------------------|--------|
-| `import "./foo.js";`                              | ✅ side-effect: merges every top-level binding |
+| `import "./foo.js";`                              | ✅ side-effect: merges every export under its exported name |
 | `import { a } from "./foo.js";`                   | ✅      |
 | `import { a as b } from "./foo.js";`              | ✅      |
 | `import { a, b, c } from "./foo.js";`             | ✅      |
+| `import foo from "./mod.js";`                     | ✅      |
+| `import foo, { a } from "./mod.js";`              | ✅ (composes from default + named) |
 | `export var x = …;` / `export let x = …;`         | ✅      |
 | `export const x = …;`                             | ✅      |
 | `export function f(…) { … }`                      | ✅      |
-| `import foo from "./mod.js";`                     | ⚠️ parsed, rejected at resolve time |
+| `export default …;`                               | ✅ (expression or named function) |
+| `export { a, b as c };`                           | ✅      |
 | `import * as ns from "./mod.js";`                 | ⚠️ parsed, rejected at resolve time |
-| `import foo, { a } from "./mod.js";`              | ⚠️ same |
 | `import foo, * as ns from "./mod.js";`            | ❌ not parsed |
-| `export default …;`                               | ❌ not parsed |
-| `export { a, b as c };`                           | ❌ not parsed |
 | `export { a } from "./mod.js";` (re-export)       | ❌ not parsed |
 | `export * from "./mod.js";`                       | ❌ not parsed |
 | `export * as ns from "./mod.js";`                 | ❌ not parsed |

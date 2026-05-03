@@ -551,6 +551,20 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     write_expr(w, value, false)?;
                     write!(w, ";")
                 }
+                ExportDecl::List { specifiers, .. } => {
+                    write!(w, "export {{ ")?;
+                    for (i, spec) in specifiers.iter().enumerate() {
+                        if i > 0 {
+                            write!(w, ", ")?;
+                        }
+                        if spec.exported == spec.local {
+                            write!(w, "{}", spec.local)?;
+                        } else {
+                            write!(w, "{} as {}", spec.local, spec.exported)?;
+                        }
+                    }
+                    write!(w, " }};")
+                }
             }
         }
 
