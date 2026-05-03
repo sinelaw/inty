@@ -21,21 +21,83 @@ v1 (already shipped, hand-rolled JSON):
    `didClose`) — keep an in-memory mirror of every open file and
    re-check on every change.
 
-v2 (this revision adds):
+v2 (current):
 
 4. **Go to definition** (`textDocument/definition`) — jump from an
    identifier reference to its binding site.
 5. **Rename** (`textDocument/rename`) — rename a binding and every
-   reference to it inside the same file.
+   reference to it. Also propagates across open files via imports
+   (see "Cross-file rename" below).
 6. **Completions** (`textDocument/completion`) — list identifiers in
    scope (and properties of an object after a `.`).
 7. **Signature help** (`textDocument/signatureHelp`) — show the
    parameter list of the function being called, with the cursor's
-   active parameter highlighted.
+   active parameter highlighted. Supports both bare-identifier
+   callees (`foo(...)`) and member chains (`obj.method(...)`,
+   `a.b.c.method(...)`).
+8. **Inlay hints** (`textDocument/inlayHint`) — render `: <Type>`
+   ghost labels after each binding's name (var / let / const /
+   function declaration / function parameter), pulled from the
+   inferred type.
 
-Still out of scope: workspace-wide refactors (we only see one file at a
-time), find-references across files, document symbols, code actions,
-semantic tokens, formatting.
+## Block scoping
+
+The parser distinguishes `var` from `let` (since v2). Inference treats
+them identically; the resolver gives each block its own scope so that
+`let x` and `const x` declarations bind only inside the enclosing block,
+while `var x` continues to hoist to the enclosing function/module
+scope. Strict TDZ (rejecting use-before-`let`-declaration) is **not**
+modelled — that's a control-flow analysis we don't need for go-to-def
+/ rename / completion correctness.
+
+## Per-position type lookup
+
+Hover and inlay hints used to look every binding up by name in the
+program's *final* env. That broke shadowing: an inner `let x = "hi"`
+hidden by an outer `var x = 1` would surface the outer's type. v2:
+
+- The AST's function/method/arrow `params` field is now
+  `Vec<Param>` where `Param { name, span }` — every parameter has a
+  unique source span.
+- Inference records `binding span -> Type` in `InferState.decl_types`
+  at every binding site (var declarators, function declarations,
+  function parameters). The key for function declarations is the
+  *name* offset (not the `function` keyword), matching the
+  resolver's go-to-def target.
+- The hover handler resolves `cursor → def_span` via the resolver
+  (which is scope-aware and picks the innermost shadow), then looks
+  the type up by `def_span` in `decl_types`. Falls back to env
+  lookup for binding kinds we don't yet record per-span (catch
+  params, named function expressions).
+
+## Cross-file rename
+
+The server holds a `documents: HashMap<Uri, Document>`. When the user
+renames a top-level binding `foo` exported from file A:
+
+1. Build same-file edits as before (def site + every use).
+2. For each other open document B:
+   - Walk its imports via `Analysis::imports()`.
+   - For each import where:
+     - the resolved module URI of the import equals A's URI, AND
+     - `import.imported == "foo"`,
+   - emit a `TextEdit` for the imported-name span.
+   - If the import is *not* aliased (the local equals the imported),
+     also emit edits for every use of the local binding (via B's
+     resolver's `uses_of`).
+   - If aliased (`{ foo as bar }`), only the `foo` portion is
+     rewritten; `bar` and its uses stay — the alias is B's local
+     choice.
+
+Module path resolution is a small `file://`-only helper in
+`server.rs` that joins relative paths against the importer's
+directory and normalises `.` / `..` segments. Limitation: only
+currently-open files are scanned; we don't crawl the filesystem for
+unopened importers.
+
+Still out of scope: filesystem-crawling cross-file refactors (we
+only see open files), find-references across files, document symbols,
+code actions, semantic tokens, formatting, strict TDZ for `let`.
 
 ## Dependency change: switch to `lsp-server` + `lsp-types`
 
