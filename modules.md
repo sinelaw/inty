@@ -45,7 +45,7 @@ The currently supported surface:
 | `export default …;`                               | ✅ (expression or named function) |
 | `export { a, b as c };`                           | ✅      |
 | `import * as ns from "./mod.js";`                 | ✅ namespace as `Type::Module` (per-export polymorphism preserved) |
-| `import foo, * as ns from "./mod.js";`            | ❌ not parsed |
+| `import foo, * as ns from "./mod.js";`            | ✅ default + namespace (composes §1 + §2) |
 | `export { a } from "./mod.js";` (re-export)       | ❌ not parsed |
 | `export * from "./mod.js";`                       | ❌ not parsed |
 | `export * as ns from "./mod.js";`                 | ❌ not parsed |

@@ -404,7 +404,7 @@ impl Parser {
                 });
 
                 // If followed by comma, continue to parse named imports
-                // Otherwise, go directly to 'from' clause
+                // or a namespace import. Otherwise, go directly to 'from'.
                 if !self.consume_if(&Token::Comma) {
                     self.expect(&Token::From)?;
                     let source = self.expect_string()?;
@@ -415,7 +415,17 @@ impl Parser {
                         span: Span::new(start, self.prev_span().end),
                     });
                 }
-                // If we consumed a comma, fall through to named imports parsing
+                // After `default,`, JS allows either `{ … }` (named) or
+                // `* as ns` (namespace). Accept the namespace form here;
+                // a `{` falls through to the named-imports branch below.
+                if self.consume_if(&Token::Star) {
+                    self.expect(&Token::As)?;
+                    let ns_local = self.expect_ident()?;
+                    specifiers.push(ImportSpecifier::Namespace {
+                        local: ns_local,
+                        span: Span::new(start, self.prev_span().end),
+                    });
+                }
             }
         }
 
