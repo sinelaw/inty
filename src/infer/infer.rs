@@ -3171,6 +3171,45 @@ mod tests {
     }
 
     // ========================================================================
+    // Phase 7 — Builtins return `T | undefined` and the user narrows it.
+    // ========================================================================
+
+    #[test]
+    fn test_phase7_find_returns_optional() {
+        // arr.find(p) on a known Number[] returns Number | Undefined.
+        let src = "var arr = [1, 2, 3]; var v = arr.find(function(x) { return x > 0; });";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("v").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        match ty {
+            Type::Union(ref m) => {
+                assert_eq!(m.len(), 2);
+                assert!(m.contains(&Type::Number));
+                assert!(m.contains(&Type::Undefined));
+            }
+            other => panic!("expected union, got {}", other),
+        }
+    }
+
+    #[test]
+    fn test_phase7_find_with_typeof_narrowing() {
+        // Caller narrows the optional via typeof === "undefined".
+        let src = "function pickPositive(arr) { \
+                     /** var arr: Number[] */ \
+                     var v = arr.find(function(x) { return x > 0; }); \
+                     if (typeof v === \"undefined\") { return 0; } else { return v; } \
+                   }";
+        let _ = src; // alternate form below; skip the inner-annotation form.
+        let src = "var arr = [1, 2, 3]; \
+                   var v = arr.find(function(x) { return x > 0; }); \
+                   var pick = (typeof v === \"undefined\") ? 0 : v;";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("pick").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        assert_eq!(ty, Type::Number);
+    }
+
+    // ========================================================================
     // Phase 6 — Switch-exhaustiveness as a derived check.
     // ========================================================================
 

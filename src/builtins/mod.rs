@@ -141,9 +141,13 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
         "reverse" => Type::simple_func(vec![], arr.clone()),
         "sort" => Type::simple_func(vec![], arr.clone()),
         "fill" => Type::simple_func(vec![elem.clone()], arr.clone()),
+        // Returns `T | undefined` — the predicate may match nothing, in
+        // which case the runtime returns `undefined`. Forces the caller
+        // through narrowing before they can use the result, which is
+        // the user-visible payoff that closes the loop on phase 1.
         "find" => Type::simple_func(
             vec![Type::simple_func(vec![elem.clone()], b.clone())],
-            elem.clone(),
+            Type::union(vec![elem.clone(), Type::Undefined]),
         ),
         "findIndex" => Type::simple_func(
             vec![Type::simple_func(vec![elem.clone()], b.clone())],
