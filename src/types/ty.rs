@@ -41,7 +41,7 @@ impl TVarName {
 }
 
 /// Type class names for constraint-based polymorphism.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ClassName {
     /// Plus class: types that support the + operator (Number, String).
     Plus,
