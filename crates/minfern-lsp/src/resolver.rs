@@ -820,6 +820,34 @@ mod tests {
     }
 
     #[test]
+    fn for_let_def_lands_on_the_name() {
+        // The for-let declarator's name span must cover just `i`, not
+        // the `let` keyword. Otherwise hover / go-to-def on the binding
+        // site itself misses (the def's name_span doesn't contain the
+        // cursor on `i`).
+        let src = "for (let i = 0; i < 10; i = i + 1) { i; }\n";
+        let r = build(src);
+        let i_off = src.find("let i").unwrap() + 4; // index of `i`
+        let def = r
+            .def_at(Span::new(i_off, i_off + 1))
+            .expect("for-let `i` should be a def whose name span lands on `i`");
+        assert_eq!(def.name, "i");
+        assert_eq!(def.kind, DefKind::Let);
+    }
+
+    #[test]
+    fn for_of_let_def_lands_on_the_name() {
+        // Same check for `for (let x of ...)`.
+        let src = "for (let x of arr) { x; }\n";
+        let r = build(src);
+        let x_off = src.find("let x").unwrap() + 4;
+        let def = r
+            .def_at(Span::new(x_off, x_off + 1))
+            .expect("for-of `x` should be a def whose span lands on `x`");
+        assert_eq!(def.name, "x");
+    }
+
+    #[test]
     fn export_let_is_block_scoped() {
         // `export let y = 1;` at module top level: the binding lands in
         // module scope (there's no enclosing block), but the resolver
