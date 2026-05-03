@@ -279,9 +279,19 @@ function f(x) {
 
 ## Supported Syntax
 
-Template literals, regex literals, getters/setters, method shorthand, `for-of`, `const`, `let` (treated as `var` — block scoping isn't modelled), arrow functions, destructuring (object and array, desugared at parse time), `class` declarations (desugared into factory functions; no inheritance, no static members), and `async`/`await` (desugared via `Promise.resolve`). ES modules (`import`/`export`) are covered separately above.
+Quick reference for the JavaScript surface minfern accepts:
 
-Type annotations are accepted in two forms: inline `var x /*: T */` and doc-comment `/** var x: T */`. See [declare.md](declare.md) for the rules around external declarations and Rank-1 polymorphism.
+| Category       | What works                                                                                                |
+|----------------|-----------------------------------------------------------------------------------------------------------|
+| Literals       | template literals, regex literals                                                                         |
+| Variables      | `var`, `const`, `let` (treated as `var` — block scoping isn't modelled)                                   |
+| Functions      | declarations, expressions, arrow functions, method shorthand, getters/setters                             |
+| Destructuring  | object and array (desugared at parse time)                                                                |
+| Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
+| Classes        | declarations only, desugared into factory functions; no inheritance, no `static` members                  |
+| Async          | `async`/`await`, desugared via `Promise.resolve`                                                          |
+| Modules        | ES `import`/`export` — see [Modules](#modules-es-import--export) above                                    |
+| Annotations    | inline `var x /*: T */` and doc-comment `/** var x: T */` — see [declare.md](declare.md)                  |
 
 ## Future Work
 
