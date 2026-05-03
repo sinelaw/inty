@@ -317,6 +317,12 @@ impl InferState {
                             span: *span,
                         },
                     ),
+                    ExportDecl::From { .. } => {
+                        // Re-exports introduce no local bindings; the
+                        // resolver merges the target module's schemes
+                        // directly into this module's exports table.
+                        Ok((Type::Undefined, env.clone()))
+                    }
                     ExportDecl::List { specifiers, span: _ } => {
                         // `export { a, b as c };` doesn't change types — the
                         // resolver reads the exported names from a separate

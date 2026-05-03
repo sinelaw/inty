@@ -565,6 +565,28 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     }
                     write!(w, " }};")
                 }
+                ExportDecl::From { kind, source, .. } => {
+                    write!(w, "export ")?;
+                    match kind {
+                        ExportFromKind::Named(specifiers) => {
+                            write!(w, "{{ ")?;
+                            for (i, spec) in specifiers.iter().enumerate() {
+                                if i > 0 {
+                                    write!(w, ", ")?;
+                                }
+                                if spec.exported == spec.local {
+                                    write!(w, "{}", spec.local)?;
+                                } else {
+                                    write!(w, "{} as {}", spec.local, spec.exported)?;
+                                }
+                            }
+                            write!(w, " }}")?;
+                        }
+                        ExportFromKind::All => write!(w, "*")?,
+                        ExportFromKind::AllAs(name) => write!(w, "* as {}", name)?,
+                    }
+                    write!(w, " from \"{}\";", source)
+                }
             }
         }
 

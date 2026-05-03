@@ -54,6 +54,15 @@ pub enum ExportDecl {
         specifiers: Vec<ExportSpecifier>,
         span: Source,
     },
+    /// Re-export from another module:
+    /// - `Named`: `export { a, b as c } from "./mod.js";`
+    /// - `All`: `export * from "./mod.js";` (all named exports, excludes default)
+    /// - `AllAs`: `export * as ns from "./mod.js";` (target's namespace under one name)
+    From {
+        kind: ExportFromKind,
+        source: String,
+        span: Source,
+    },
 }
 
 /// One entry of an `export { … }` clause.
@@ -64,6 +73,21 @@ pub struct ExportSpecifier {
     /// The name under which it's exported (== `local` when not renamed).
     pub exported: String,
     pub span: Source,
+}
+
+/// Shape of a re-export's binding clause.
+#[derive(Debug, Clone)]
+pub enum ExportFromKind {
+    /// `export { foo, bar as baz } from "./mod.js";`
+    /// Each spec's `local` is the name in the *target* module; `exported`
+    /// is the name in *this* module.
+    Named(Vec<ExportSpecifier>),
+    /// `export * from "./mod.js";` — re-export every named export of the
+    /// target (excluding its `default`, per ESM spec).
+    All,
+    /// `export * as ns from "./mod.js";` — bind the target's whole
+    /// namespace under one new export name.
+    AllAs(String),
 }
 
 /// Source location type alias

@@ -106,6 +106,7 @@ pub fn is_surface_stmt(stmt: &Stmt) -> bool {
             ExportDecl::Function { body, .. } => is_surface_stmt(body),
             ExportDecl::Default { value, .. } => is_surface_expr(value),
             ExportDecl::List { .. } => true,
+            ExportDecl::From { .. } => true,
         },
     }
 }
