@@ -150,7 +150,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                         let name = prop_key_to_name(key);
                         let closure = Value::Closure(Closure {
                             name: None,
-                            params: params.clone(),
+                            params: params.iter().map(|p| p.name.clone()).collect(),
                             body: body.clone(),
                             env: env.clone(),
                         });
@@ -167,7 +167,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
 
         Expr::Function { name, params, body, .. } => Ok(Value::Closure(Closure {
             name: name.clone(),
-            params: params.clone(),
+            params: params.iter().map(|p| p.name.clone()).collect(),
             body: body.clone(),
             env: env.clone(),
         })),
@@ -725,7 +725,7 @@ pub fn eval_stmt(
         Stmt::FunctionDecl { name, params, body, .. } => {
             let closure = Value::Closure(Closure {
                 name: Some(name.clone()),
-                params: params.clone(),
+                params: params.iter().map(|p| p.name.clone()).collect(),
                 body: body.clone(),
                 env: env.clone(),
             });
@@ -986,7 +986,7 @@ fn eval_block(
         if let Stmt::FunctionDecl { name, params, body, .. } = s {
             let closure = Value::Closure(Closure {
                 name: Some(name.clone()),
-                params: params.clone(),
+                params: params.iter().map(|p| p.name.clone()).collect(),
                 body: body.clone(),
                 env: block_env.clone(),
             });

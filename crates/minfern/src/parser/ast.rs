@@ -2,6 +2,24 @@
 
 use crate::lexer::Span;
 
+/// One function/method parameter, with its source span.
+///
+/// The span covers the parameter name as it appears in the source.
+/// Pattern parameters (destructuring) are desugared by the parser into
+/// a fresh temp name plus a destructuring `var` statement at the start
+/// of the body; the temp's span anchors at the pattern's location.
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub span: Span,
+}
+
+impl Param {
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Param { name: name.into(), span }
+    }
+}
+
 /// Variable declaration kind.
 ///
 /// `Var` and `Let` share the same type-system semantics in mquickjs
@@ -46,7 +64,7 @@ pub enum ExportDecl {
     /// Function export: `export function foo() {}`
     Function {
         name: String,
-        params: Vec<String>,
+        params: Vec<Param>,
         body: Box<Stmt>,
         type_annotation: Option<TypeAnnotation>,
         span: Source,
@@ -271,7 +289,7 @@ pub enum PropDef {
     /// Method shorthand: key() { ... }
     Method {
         key: PropKey,
-        params: Vec<String>,
+        params: Vec<Param>,
         body: Box<Stmt>,
         span: Source,
     },
@@ -312,7 +330,7 @@ pub enum Expr {
     /// Function expression: function(a, b) { ... }
     Function {
         name: Option<String>,
-        params: Vec<String>,
+        params: Vec<Param>,
         body: Box<Stmt>,
         type_annotation: Option<TypeAnnotation>,
         span: Source,
@@ -593,7 +611,7 @@ pub enum Stmt {
     /// Function declaration: function name(params) { }
     FunctionDecl {
         name: String,
-        params: Vec<String>,
+        params: Vec<Param>,
         body: Box<Stmt>,
         type_annotation: Option<TypeAnnotation>,
         span: Source,

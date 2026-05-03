@@ -85,7 +85,7 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
                 if i > 0 {
                     write!(w, ", ")?;
                 }
-                write!(w, "{}", p)?;
+                write!(w, "{}", p.name)?;
             }
             write!(w, ")")?;
             if let Some(ann) = type_annotation {
@@ -377,7 +377,7 @@ fn write_prop_def(w: &mut impl Write, prop: &PropDef) -> fmt::Result {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
-                write!(w, "{}", p)?;
+                write!(w, "{}", p.name)?;
             }
             write!(w, ") ")?;
             write_stmt(w, body, 0)
@@ -543,7 +543,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                         if i > 0 {
                             write!(w, ", ")?;
                         }
-                        write!(w, "{}", p)?;
+                        write!(w, "{}", p.name)?;
                     }
                     write!(w, ") ")?;
                     write_stmt(w, body, indent)
@@ -814,7 +814,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
-                write!(w, "{}", p)?;
+                write!(w, "{}", p.name)?;
             }
             write!(w, ") ")?;
             write_stmt(w, body, indent)
@@ -941,7 +941,10 @@ mod tests {
     fn test_print_function() {
         let stmt = Stmt::FunctionDecl {
             name: "add".to_string(),
-            params: vec!["a".to_string(), "b".to_string()],
+            params: vec![
+                Param::new("a", Span::default()),
+                Param::new("b", Span::default()),
+            ],
             body: Box::new(Stmt::Block {
                 body: vec![Stmt::Return {
                     argument: Some(Expr::Binary {

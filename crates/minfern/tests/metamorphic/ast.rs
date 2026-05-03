@@ -92,7 +92,7 @@ pub fn names_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
         } => {
             out.insert(name.clone());
             for p in params {
-                out.insert(p.clone());
+                out.insert(p.name.clone());
             }
             names_in_stmt(body, out);
         }
@@ -139,7 +139,7 @@ pub fn names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
                     PropDef::Property { value, .. } => names_in_expr(value, out),
                     PropDef::Method { params, body, .. } => {
                         for param in params {
-                            out.insert(param.clone());
+                            out.insert(param.name.clone());
                         }
                         names_in_stmt(body, out);
                     }
@@ -158,7 +158,7 @@ pub fn names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
                 out.insert(n.clone());
             }
             for p in params {
-                out.insert(p.clone());
+                out.insert(p.name.clone());
             }
             names_in_stmt(body, out);
         }
@@ -318,7 +318,7 @@ fn rename_stmt(stmt: &Stmt, from: &str, to: &str) -> Stmt {
             name: if name == from { to.to_string() } else { name.clone() },
             params: params
                 .iter()
-                .map(|p| if p == from { to.to_string() } else { p.clone() })
+                .map(|p| if p.name == from { Param::new(to.to_string(), p.span) } else { p.clone() })
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             type_annotation: type_annotation.clone(),
@@ -394,7 +394,7 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
                 .map(|n| if n == from { to.to_string() } else { n.clone() }),
             params: params
                 .iter()
-                .map(|p| if p == from { to.to_string() } else { p.clone() })
+                .map(|p| if p.name == from { Param::new(to.to_string(), p.span) } else { p.clone() })
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             type_annotation: type_annotation.clone(),
@@ -516,7 +516,7 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             key: key.clone(),
             params: params
                 .iter()
-                .map(|p| if p == from { to.to_string() } else { p.clone() })
+                .map(|p| if p.name == from { Param::new(to.to_string(), p.span) } else { p.clone() })
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             span: *span,

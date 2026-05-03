@@ -686,7 +686,7 @@ impl Parser {
 
         self.expect(&Token::LBrace)?;
 
-        let mut ctor_params: Vec<String> = Vec::new();
+        let mut ctor_params: Vec<Param> = Vec::new();
         let mut field_props: Vec<PropDef> = Vec::new();
         let mut method_props: Vec<PropDef> = Vec::new();
 
@@ -742,7 +742,7 @@ impl Parser {
                     }
                     PropDef::Setter {
                         key: PropKey::Ident(accessor_name),
-                        param: params.into_iter().next().unwrap(),
+                        param: params.into_iter().next().unwrap().name,
                         body: Box::new(body),
                         span: member_span,
                     }
@@ -977,19 +977,18 @@ impl Parser {
     /// prepend to the function body.
     fn parse_parameters_with_prefix(
         &mut self,
-    ) -> Result<(Vec<String>, Vec<Stmt>)> {
-        let mut names = Vec::new();
+    ) -> Result<(Vec<Param>, Vec<Stmt>)> {
+        let mut params = Vec::new();
         let mut prefix = Vec::new();
 
         if !self.check(&Token::RParen) {
             loop {
                 if self.check(&Token::LBrace) || self.check(&Token::LBracket) {
+                    let pattern_start = self.current_span().start;
                     let pattern = self.parse_pattern()?;
+                    let pattern_end = self.prev_span().end;
+                    let pattern_span = Span::new(pattern_start, pattern_end);
                     let temp = self.fresh_temp_name();
-                    let pattern_span = Span::new(
-                        self.prev_span().start,
-                        self.prev_span().end,
-                    );
                     let mut decls = Vec::new();
                     self.desugar_pattern(
                         &pattern,
@@ -1005,9 +1004,18 @@ impl Parser {
                         declarations: decls,
                         span: pattern_span,
                     });
-                    names.push(temp);
+                    // The synthesised temp has no source name, so we
+                    // anchor its span at the pattern's start. Editors
+                    // hovering on the pattern still see something.
+                    params.push(Param::new(temp, pattern_span));
                 } else {
-                    names.push(self.expect_ident()?);
+                    let name_span = self.current_span();
+                    let name = self.expect_ident()?;
+                    let actual_span = Span::new(
+                        name_span.start,
+                        name_span.start + name.len(),
+                    );
+                    params.push(Param::new(name, actual_span));
                 }
 
                 if !self.consume_if(&Token::Comma) {
@@ -1016,7 +1024,7 @@ impl Parser {
             }
         }
 
-        Ok((names, prefix))
+        Ok((params, prefix))
     }
 
     /// Parse a function body block, establishing a fresh async context.
@@ -1035,8 +1043,8 @@ impl Parser {
 
     /// Thin wrapper for sites that know they don't have patterns (e.g.
     /// the deliberately-restricted class constructor parameters).
-    fn parse_parameters(&mut self) -> Result<Vec<String>> {
-        let (names, prefix) = self.parse_parameters_with_prefix()?;
+    fn parse_parameters(&mut self) -> Result<Vec<Param>> {
+        let (params, prefix) = self.parse_parameters_with_prefix()?;
         if !prefix.is_empty() {
             let span = prefix[0].span();
             return Err(ParseError::UnexpectedToken {
@@ -1046,7 +1054,7 @@ impl Parser {
             }
             .into());
         }
-        Ok(names)
+        Ok(params)
     }
 
     /// Given a function body and any destructuring statements synthesised
@@ -2342,11 +2350,13 @@ impl Parser {
         let start = self.current_span().start;
 
         // Parse parameters.
-        let (params, prefix): (Vec<String>, Vec<Stmt>) =
+        let (params, prefix): (Vec<Param>, Vec<Stmt>) =
             if matches!(self.current(), Token::Ident(_)) {
                 // Single-identifier form: `x => ...`
+                let name_span = self.current_span();
                 let name = self.expect_ident()?;
-                (vec![name], vec![])
+                let span = Span::new(name_span.start, name_span.start + name.len());
+                (vec![Param::new(name, span)], vec![])
             } else {
                 self.expect(&Token::LParen)?;
                 let result = self.parse_parameters_with_prefix()?;

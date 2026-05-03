@@ -203,7 +203,7 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                     };
                     Expr::Function {
                         name: None,
-                        params,
+                        params: params.into_iter().map(|n| Param::new(n, span())).collect(),
                         body: Box::new(body),
                         type_annotation: None,
                         span: span(),
@@ -300,7 +300,7 @@ pub fn stmt_strategy() -> impl Strategy<Value = Stmt> {
             .prop_map(|(name, params, ret_expr)| {
                 Stmt::FunctionDecl {
                     name,
-                    params,
+                    params: params.into_iter().map(|n| Param::new(n, span())).collect(),
                     body: Box::new(Stmt::Block {
                         body: vec![Stmt::Return {
                             argument: Some(ret_expr),
