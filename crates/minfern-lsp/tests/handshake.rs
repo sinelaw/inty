@@ -619,3 +619,75 @@ fn signature_help_on_member_call() {
 
     shutdown(client, handle);
 }
+
+#[test]
+fn rename_propagates_to_importing_files() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    // `lib.js` exports `foo`. `app.js` imports it (no alias) and
+    // uses it. Renaming `foo` in `lib.js` should produce edits in
+    // both files: lib.js (the export decl + uses) and app.js (the
+    // import specifier + every use).
+    let lib_uri = uri("file:///proj/lib.js");
+    let app_uri = uri("file:///proj/app.js");
+
+    let lib_src = "export var foo = 1;\n";
+    open_doc(&client, &lib_uri, lib_src);
+    let _ = drain_diagnostics(&client, &lib_uri);
+
+    let app_src = "import { foo } from \"./lib.js\";\nfoo;\n";
+    open_doc(&client, &app_uri, app_src);
+    let _ = drain_diagnostics(&client, &app_uri);
+
+    // Position of `foo` in lib.js: column 11 ("export var ").
+    client
+        .sender
+        .send(Message::Request(req::<Rename>(
+            81,
+            RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: lib_uri.clone() },
+                    position: Position { line: 0, character: 11 },
+                },
+                new_name: "bar".to_string(),
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let edit: Option<WorkspaceEdit> = expect_response(&client, 81);
+    let edit = edit.expect("workspace edit present");
+    let mut changes = edit.changes.unwrap();
+
+    // Both files should have edits.
+    assert!(
+        changes.contains_key(&lib_uri),
+        "edits expected for lib.js: {:?}",
+        changes.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        changes.contains_key(&app_uri),
+        "edits expected for app.js: {:?}",
+        changes.keys().collect::<Vec<_>>()
+    );
+
+    // Every edit replaces with `bar`.
+    let lib_edits = changes.remove(&lib_uri).unwrap();
+    for e in &lib_edits {
+        assert_eq!(e.new_text, "bar", "lib edit: {:?}", e);
+    }
+    let app_edits = changes.remove(&app_uri).unwrap();
+    for e in &app_edits {
+        assert_eq!(e.new_text, "bar", "app edit: {:?}", e);
+    }
+    // app.js should have at least 2 edits: the import specifier and
+    // the use of `foo`.
+    assert!(
+        app_edits.len() >= 2,
+        "app.js should have >= 2 edits, got {}: {:?}",
+        app_edits.len(),
+        app_edits
+    );
+
+    shutdown(client, handle);
+}

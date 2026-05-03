@@ -252,7 +252,8 @@ impl Server {
 
     fn on_rename(&self, params: RenameParams) -> Option<WorkspaceEdit> {
         let pos = params.text_document_position;
-        let doc = self.documents.get(&pos.text_document.uri)?;
+        let current_uri = pos.text_document.uri.clone();
+        let doc = self.documents.get(&current_uri)?;
         let offset = position_to_byte(&doc.text, pos.position)?;
         let new_name = params.new_name;
         if !is_valid_identifier(&new_name) {
@@ -260,23 +261,67 @@ impl Server {
         }
 
         let (def_span, _) = doc.analysis.resolution.binding_at(offset)?;
-        let mut edits: Vec<TextEdit> = Vec::new();
+        let def = doc.analysis.resolution.def_at(def_span)?;
+        let def_name = def.name.clone();
 
-        // The def site itself.
-        edits.push(TextEdit {
+        let mut current_edits: Vec<TextEdit> = Vec::new();
+        current_edits.push(TextEdit {
             range: span_to_range(&doc.text, def_span),
             new_text: new_name.clone(),
         });
-        // Every use.
         for &use_span in doc.analysis.resolution.uses_of(def_span) {
-            edits.push(TextEdit {
+            current_edits.push(TextEdit {
                 range: span_to_range(&doc.text, use_span),
                 new_text: new_name.clone(),
             });
         }
 
-        let mut changes = HashMap::new();
-        changes.insert(pos.text_document.uri, edits);
+        let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
+        changes.insert(current_uri.clone(), current_edits);
+
+        // Cross-file: any other open document whose `import` resolves
+        // to this file and references this exported name gets edits
+        // too. We touch only the imported part of the specifier (so
+        // an aliased `{ foo as bar }` updates `foo` but leaves `bar`),
+        // plus -- when the import isn't aliased -- the local uses,
+        // which the other doc's resolver already tracks.
+        for (other_uri, other_doc) in &self.documents {
+            if other_uri == &current_uri {
+                continue;
+            }
+            for import in other_doc.analysis.imports() {
+                let resolved = resolve_module_uri(other_uri, &import.source);
+                if resolved.as_ref() != Some(&current_uri) {
+                    continue;
+                }
+                if import.imported != def_name {
+                    continue;
+                }
+                let mut other_edits: Vec<TextEdit> = Vec::new();
+                // Rewrite the imported name in the specifier.
+                other_edits.push(TextEdit {
+                    range: span_to_range(&other_doc.text, import.imported_span),
+                    new_text: new_name.clone(),
+                });
+                // If the import is not aliased the local IS the
+                // imported, and the resolver tracks the local-binding
+                // span for go-to-def. Update every use.
+                if import.local == import.imported {
+                    let local_def_span = import.local_span;
+                    for &use_span in other_doc.analysis.resolution.uses_of(local_def_span) {
+                        other_edits.push(TextEdit {
+                            range: span_to_range(&other_doc.text, use_span),
+                            new_text: new_name.clone(),
+                        });
+                    }
+                }
+                changes
+                    .entry(other_uri.clone())
+                    .or_default()
+                    .extend(other_edits);
+            }
+        }
+
         Some(WorkspaceEdit {
             changes: Some(changes),
             document_changes: None,
@@ -426,6 +471,55 @@ where
         Ok(Some(params))
     } else {
         Ok(None)
+    }
+}
+
+/// Resolve an import path string (e.g. `"./shared.js"` or
+/// `"../lib/foo.js"`) against the importing file's URI to a target
+/// URI. Returns `None` for non-`file://` schemes or absolute import
+/// paths -- minfern's module system is currently relative-only and we
+/// don't have access to a wider workspace map here.
+fn resolve_module_uri(importer: &Uri, import_path: &str) -> Option<Uri> {
+    let imp_str = importer.as_str();
+    let prefix = "file://";
+    let path_part = imp_str.strip_prefix(prefix)?;
+    // Strip optional empty authority `///` -> `/`. fluent_uri keeps it.
+    let path_part = path_part.strip_prefix('/').map(|s| format!("/{}", s))
+        .unwrap_or_else(|| path_part.to_string());
+    // Drop the file portion to get the directory.
+    let dir_end = path_part.rfind('/')?;
+    let dir = &path_part[..dir_end];
+
+    // Combine and normalise. We accept the import path as-is, only
+    // resolving `.` and `..` segments. An import that starts with
+    // `/` is treated as an absolute path within the same scheme.
+    let combined = if import_path.starts_with('/') {
+        import_path.to_string()
+    } else {
+        format!("{}/{}", dir, import_path)
+    };
+    let normalised = normalise_path(&combined);
+    let result = format!("{}{}", prefix, normalised);
+    result.parse().ok()
+}
+
+fn normalise_path(p: &str) -> String {
+    let absolute = p.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in p.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    let body = parts.join("/");
+    if absolute {
+        format!("/{}", body)
+    } else {
+        body
     }
 }
 

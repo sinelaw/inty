@@ -6,7 +6,7 @@ use lsp_types::{CompletionItem, CompletionItemKind};
 use minfern::error::MinfernError;
 use minfern::infer::{InferState, TypeEnv};
 use minfern::lexer::{Scanner, Span, Token};
-use minfern::parser::ast::{Expr, Program, Stmt};
+use minfern::parser::ast::{Expr, ImportSpecifier, Program, Stmt};
 use minfern::parser::Parser;
 use minfern::stdlib::initial_env_with_stdlib;
 use minfern::types::{PrettyContext, RowType, Type};
@@ -346,6 +346,141 @@ impl Analysis {
 pub struct InlayHintData {
     pub after_byte: usize,
     pub type_str: String,
+}
+
+/// One import specifier, decoded enough that the LSP rename logic can
+/// reason about cross-file edits.
+#[derive(Debug, Clone)]
+pub struct ImportRecord {
+    /// The module-path string from `from "..."`.
+    pub source: String,
+    /// The original (exported) name, or "default" / "*" for default
+    /// and namespace imports respectively.
+    pub imported: String,
+    /// The local name introduced into this file.
+    pub local: String,
+    /// Source span of the local binding (this is what the resolver
+    /// already records as a `DefKind::Import` def).
+    pub local_span: Span,
+    /// Source span of the *imported* name, for Named imports. For
+    /// Default and Namespace this equals `local_span`.
+    pub imported_span: Span,
+    pub kind: ImportKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportKind {
+    Named,
+    Default,
+    Namespace,
+}
+
+impl Analysis {
+    /// Enumerate all `import` statements in the program. Used by
+    /// cross-file rename to find which other open documents
+    /// reference a binding being renamed in this document.
+    pub fn imports(&self) -> Vec<ImportRecord> {
+        let program = match self.program.as_ref() {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        for stmt in &program.statements {
+            if let Stmt::Import { specifiers, source, .. } = stmt {
+                for spec in specifiers {
+                    match spec {
+                        ImportSpecifier::Named { imported, local, span } => {
+                            // The imported name starts at the spec
+                            // span's start. For `foo as bar` that's
+                            // `foo`; for `foo` it's `foo` (and equals
+                            // the local).
+                            let imported_span = Span::new(
+                                span.start,
+                                span.start + imported.len(),
+                            );
+                            // The local name spans the whole specifier
+                            // — the resolver also keys off `span` for
+                            // `DefKind::Import`. For a non-aliased
+                            // import the local *is* the imported.
+                            let local_span = if imported == local {
+                                imported_span
+                            } else {
+                                // Aliased: scan from the imported's
+                                // end forward past whitespace and
+                                // `as` to the local name.
+                                local_span_from_aliased(
+                                    self.source_text_unchecked(),
+                                    *span,
+                                    imported.len(),
+                                    local.len(),
+                                )
+                            };
+                            out.push(ImportRecord {
+                                source: source.clone(),
+                                imported: imported.clone(),
+                                local: local.clone(),
+                                local_span,
+                                imported_span,
+                                kind: ImportKind::Named,
+                            });
+                        }
+                        ImportSpecifier::Default { local, span } => {
+                            out.push(ImportRecord {
+                                source: source.clone(),
+                                imported: "default".to_string(),
+                                local: local.clone(),
+                                local_span: *span,
+                                imported_span: *span,
+                                kind: ImportKind::Default,
+                            });
+                        }
+                        ImportSpecifier::Namespace { local, span } => {
+                            out.push(ImportRecord {
+                                source: source.clone(),
+                                imported: "*".to_string(),
+                                local: local.clone(),
+                                local_span: *span,
+                                imported_span: *span,
+                                kind: ImportKind::Namespace,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn source_text_unchecked(&self) -> &str {
+        // The Analysis doesn't carry the source text directly. We
+        // store it on Document at the server layer; for the import
+        // span calculation we only need to rescan a small substring
+        // by index, but that requires text access. Rather than thread
+        // it everywhere, the local_span computation accepts the parser
+        // span and trusts that our parser puts `as` between the names
+        // — see local_span_from_aliased.
+        ""
+    }
+}
+
+/// Best-effort recovery of the local-name span in `{ imported as local }`
+/// form when only the whole-specifier span is available. We can't see
+/// the source here, so we synthesise a span sized to `local.len()` at
+/// the *end* of the specifier — good enough for editors that highlight
+/// rename ranges (the actual edit text is what matters).
+fn local_span_from_aliased(
+    _text: &str,
+    spec_span: Span,
+    _imported_len: usize,
+    local_len: usize,
+) -> Span {
+    // Anchor at the end of the spec span: spec_span.end - local_len .. spec_span.end.
+    // For a malformed span we fall back to the whole spec.
+    if spec_span.end >= local_len + spec_span.start {
+        Span::new(spec_span.end - local_len, spec_span.end)
+    } else {
+        spec_span
+    }
 }
 
 /// Result of a successful hover lookup.
