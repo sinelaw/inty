@@ -1,16 +1,9 @@
 //! Conversions between minfern's byte spans and LSP positions, plus
-//! `MinfernError` → LSP `Diagnostic` mapping.
+//! `MinfernError` → `lsp_types::Diagnostic` mapping.
 
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 use minfern::error::{LexError, MinfernError, ParseError, TypeError};
 use minfern::lexer::Span;
-use serde_json::{json, Value};
-
-/// LSP position: zero-based line, character (UTF-16 code units).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Position {
-    pub line: u32,
-    pub character: u32,
-}
 
 /// Convert a byte offset in `text` to an LSP `Position` (UTF-16 units).
 ///
@@ -73,14 +66,12 @@ pub fn position_to_byte(text: &str, pos: Position) -> Option<usize> {
     Some(byte_offset)
 }
 
-/// Convert a span to an LSP-shaped `{start, end}` range as JSON.
-pub fn span_to_range(text: &str, span: Span) -> Value {
-    let start = byte_to_position(text, span.start);
-    let end = byte_to_position(text, span.end);
-    json!({
-        "start": {"line": start.line, "character": start.character},
-        "end":   {"line": end.line,   "character": end.character},
-    })
+/// Convert a span to an LSP `Range`.
+pub fn span_to_range(text: &str, span: Span) -> Range {
+    Range {
+        start: byte_to_position(text, span.start),
+        end: byte_to_position(text, span.end),
+    }
 }
 
 /// Stable code string for an error variant. Editors can filter by this.
@@ -131,15 +122,19 @@ fn error_span(err: &MinfernError) -> Span {
     }
 }
 
-/// Convert a single `MinfernError` into an LSP `Diagnostic` JSON object.
-pub fn error_to_diagnostic(text: &str, err: &MinfernError) -> Value {
-    json!({
-        "range": span_to_range(text, error_span(err)),
-        "severity": 1, // Error
-        "source": "minfern",
-        "code": error_code(err),
-        "message": err.to_string(),
-    })
+/// Convert a single `MinfernError` into an LSP `Diagnostic`.
+pub fn error_to_diagnostic(text: &str, err: &MinfernError) -> Diagnostic {
+    Diagnostic {
+        range: span_to_range(text, error_span(err)),
+        severity: Some(DiagnosticSeverity::ERROR),
+        code: Some(NumberOrString::String(error_code(err).to_string())),
+        code_description: None,
+        source: Some("minfern".to_string()),
+        message: err.to_string(),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
 }
 
 #[cfg(test)]
@@ -182,7 +177,6 @@ mod tests {
     #[test]
     fn position_to_byte_clamps_past_line_end() {
         let text = "ab\ncd";
-        // character 99 on line 0 → end of line 0 (offset of '\n')
         let pos = Position { line: 0, character: 99 };
         assert_eq!(position_to_byte(text, pos), Some(2));
     }

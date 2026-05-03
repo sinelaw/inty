@@ -1,275 +1,436 @@
-//! LSP server state and message dispatch.
+//! LSP server: glues `lsp-server`'s sync stdio loop to minfern.
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
+use std::error::Error;
 
-use serde_json::{json, Value};
+use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
+use lsp_types::notification::{
+    DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
+    Notification as LspNotification, PublishDiagnostics,
+};
+use lsp_types::request::{
+    Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, Rename, Request as LspRequest,
+    SignatureHelpRequest,
+};
+use lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
+    Diagnostic, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, Location, MarkupContent, MarkupKind, OneOf, ParameterInformation,
+    ParameterLabel, PrepareRenameResponse, PublishDiagnosticsParams, RenameOptions, RenameParams,
+    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
+    SignatureInformation, TextDocumentPositionParams, TextDocumentSyncKind, TextEdit, Uri,
+    WorkDoneProgressOptions, WorkspaceEdit,
+};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::analysis::Analysis;
-use crate::convert::{error_to_diagnostic, position_to_byte, span_to_range, Position};
-use crate::protocol::{read_message, write_message};
+use crate::convert::{error_to_diagnostic, position_to_byte, span_to_range};
 
-/// One in-memory document, keyed by its LSP URI.
+/// One in-memory document.
 struct Document {
     text: String,
     analysis: Analysis,
 }
 
-/// Top-level LSP server. Owns the open-document map and runs the
-/// read-dispatch-write loop until the client sends `exit`.
-pub struct Server<R: BufRead, W: Write> {
-    reader: R,
-    writer: W,
-    documents: HashMap<String, Document>,
-    initialized: bool,
-    shutdown_requested: bool,
+/// Owns the connection and document map; its `run` method is the
+/// message loop.
+pub struct Server {
+    connection: Connection,
+    documents: HashMap<Uri, Document>,
 }
 
-impl<R: BufRead, W: Write> Server<R, W> {
-    pub fn new(reader: R, writer: W) -> Self {
+impl Server {
+    /// Create a server bound to the given `Connection`. For production
+    /// use prefer [`run_stdio`]; this constructor is exposed so tests
+    /// can pair the server with `Connection::memory()`.
+    pub fn new(connection: Connection) -> Self {
         Server {
-            reader,
-            writer,
+            connection,
             documents: HashMap::new(),
-            initialized: false,
-            shutdown_requested: false,
         }
     }
 
-    /// Run the LSP message loop. Returns `Ok(0)` if the client sent the
-    /// proper `shutdown` then `exit` sequence, `Ok(1)` if the client
-    /// sent `exit` without `shutdown` first, and any IO error otherwise.
-    pub fn run(mut self) -> io::Result<i32> {
-        loop {
-            let msg = match read_message(&mut self.reader)? {
-                Some(m) => m,
-                None => {
-                    // Client closed stdin without `exit`.
-                    return Ok(if self.shutdown_requested { 0 } else { 1 });
-                }
-            };
-
-            // Distinguish requests (have an `id`) from notifications.
-            let id = msg.get("id").cloned();
-            let method = msg
-                .get("method")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let params = msg.get("params").cloned().unwrap_or(Value::Null);
-
-            if method == "exit" {
-                return Ok(if self.shutdown_requested { 0 } else { 1 });
-            }
-
-            match (id.is_some(), method.as_str()) {
-                (true, "initialize") => {
-                    let resp = self.on_initialize(params);
-                    self.respond(id.unwrap(), resp)?;
-                }
-                (true, "shutdown") => {
-                    self.shutdown_requested = true;
-                    self.respond(id.unwrap(), Ok(Value::Null))?;
-                }
-                (true, "textDocument/hover") => {
-                    let resp = self.on_hover(params);
-                    self.respond(id.unwrap(), resp)?;
-                }
-                (true, _) => {
-                    // Unknown request — answer with MethodNotFound so the
-                    // client doesn't hang on its `id`.
-                    self.respond_error(id.unwrap(), -32601, format!("Method not found: {}", method))?;
-                }
-                (false, "initialized") => {
-                    self.initialized = true;
-                }
-                (false, "textDocument/didOpen") => {
-                    self.on_did_open(params)?;
-                }
-                (false, "textDocument/didChange") => {
-                    self.on_did_change(params)?;
-                }
-                (false, "textDocument/didSave") => {
-                    // No-op: we re-check on every change.
-                }
-                (false, "textDocument/didClose") => {
-                    self.on_did_close(params)?;
-                }
-                (false, _) => {
-                    // Unknown notification — silently ignore per LSP spec.
-                }
-            }
-        }
-    }
-
-    fn respond(&mut self, id: Value, result: Result<Value, (i64, String)>) -> io::Result<()> {
-        let msg = match result {
-            Ok(value) => json!({"jsonrpc": "2.0", "id": id, "result": value}),
-            Err((code, message)) => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": {"code": code, "message": message},
-            }),
-        };
-        write_message(&mut self.writer, &msg)
-    }
-
-    fn respond_error(&mut self, id: Value, code: i64, message: String) -> io::Result<()> {
-        self.respond(id, Err((code, message)))
-    }
-
-    fn on_initialize(&mut self, _params: Value) -> Result<Value, (i64, String)> {
-        Ok(json!({
-            "capabilities": {
-                // Full document sync (TextDocumentSyncKind.Full).
-                "textDocumentSync": 1,
-                "hoverProvider": true,
-                "positionEncoding": "utf-16",
-            },
+    /// Drive the server until the client sends `shutdown` + `exit`.
+    pub fn run(mut self) -> Result<(), Box<dyn Error + Sync + Send>> {
+        // Initialize handshake.
+        let (id, _params_json) = self.connection.initialize_start()?;
+        let init_result = serde_json::json!({
+            "capabilities": server_capabilities(),
             "serverInfo": {
                 "name": "minfern-lsp",
                 "version": env!("CARGO_PKG_VERSION"),
             },
-        }))
+        });
+        self.connection.initialize_finish(id, init_result)?;
+
+        // Main loop.
+        for msg in &self.connection.receiver.clone() {
+            match msg {
+                Message::Request(req) => {
+                    if self.connection.handle_shutdown(&req)? {
+                        return Ok(());
+                    }
+                    self.handle_request(req)?;
+                }
+                Message::Response(_) => {
+                    // We don't issue server-to-client requests yet, so
+                    // any response is ignored.
+                }
+                Message::Notification(not) => {
+                    self.handle_notification(not)?;
+                }
+            }
+        }
+        Ok(())
     }
 
-    fn on_did_open(&mut self, params: Value) -> io::Result<()> {
-        let doc = match params.get("textDocument") {
-            Some(d) => d,
-            None => return Ok(()),
-        };
-        let uri = doc
-            .get("uri")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let text = doc
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let version = doc.get("version").and_then(Value::as_i64).unwrap_or(0);
-        self.update_document(uri, text, version)
+    fn handle_request(&mut self, req: Request) -> Result<(), Box<dyn Error + Sync + Send>> {
+        let id = req.id.clone();
+        let method = req.method.clone();
+
+        if let Some(params) = cast_req::<HoverRequest>(&req)? {
+            let result = self.on_hover(params);
+            self.respond_ok(id, &result)?;
+            return Ok(());
+        }
+        if let Some(params) = cast_req::<GotoDefinition>(&req)? {
+            let result = self.on_definition(params);
+            self.respond_ok(id, &result)?;
+            return Ok(());
+        }
+        if let Some(params) = cast_req::<PrepareRenameRequest>(&req)? {
+            let result = self.on_prepare_rename(params);
+            self.respond_ok(id, &result)?;
+            return Ok(());
+        }
+        if let Some(params) = cast_req::<Rename>(&req)? {
+            let result = self.on_rename(params);
+            self.respond_ok(id, &result)?;
+            return Ok(());
+        }
+        if let Some(params) = cast_req::<Completion>(&req)? {
+            let result = self.on_completion(params);
+            self.respond_ok(id, &result)?;
+            return Ok(());
+        }
+        if let Some(params) = cast_req::<SignatureHelpRequest>(&req)? {
+            let result = self.on_signature_help(params);
+            self.respond_ok(id, &result)?;
+            return Ok(());
+        }
+
+        // Unknown request — answer with MethodNotFound so the client
+        // doesn't hang on the id.
+        self.connection.sender.send(Message::Response(Response {
+            id,
+            result: None,
+            error: Some(lsp_server::ResponseError {
+                code: lsp_server::ErrorCode::MethodNotFound as i32,
+                message: format!("Method not found: {}", method),
+                data: None,
+            }),
+        }))?;
+        Ok(())
     }
 
-    fn on_did_change(&mut self, params: Value) -> io::Result<()> {
-        let doc = match params.get("textDocument") {
-            Some(d) => d,
-            None => return Ok(()),
-        };
-        let uri = doc
-            .get("uri")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let version = doc.get("version").and_then(Value::as_i64).unwrap_or(0);
-
-        // We advertise full sync, so the client sends a single change
-        // event whose `text` is the whole document.
-        let new_text = params
-            .get("contentChanges")
-            .and_then(Value::as_array)
-            .and_then(|arr| arr.last())
-            .and_then(|c| c.get("text"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-
-        self.update_document(uri, new_text, version)
+    fn handle_notification(&mut self, not: Notification) -> Result<(), Box<dyn Error + Sync + Send>> {
+        let method = not.method.clone();
+        if let Some(params) = cast_not::<DidOpenTextDocument>(&not)? {
+            let uri = params.text_document.uri.clone();
+            self.update_document(uri, params.text_document.text)?;
+            return Ok(());
+        }
+        if let Some(params) = cast_not::<DidChangeTextDocument>(&not)? {
+            let uri = params.text_document.uri.clone();
+            // We advertise full sync, so the last change has the whole
+            // new text.
+            if let Some(change) = params.content_changes.into_iter().last() {
+                self.update_document(uri, change.text)?;
+            }
+            return Ok(());
+        }
+        if cast_not::<DidSaveTextDocument>(&not)?.is_some() {
+            // No-op: we re-check on every change.
+            return Ok(());
+        }
+        if let Some(params) = cast_not::<DidCloseTextDocument>(&not)? {
+            self.documents.remove(&params.text_document.uri);
+            self.publish_diagnostics(&params.text_document.uri, &[])?;
+            return Ok(());
+        }
+        let _ = method; // unknown notifications are silently ignored
+        Ok(())
     }
 
-    fn on_did_close(&mut self, params: Value) -> io::Result<()> {
-        let uri = match params
-            .get("textDocument")
-            .and_then(|d| d.get("uri"))
-            .and_then(Value::as_str)
-        {
-            Some(u) => u.to_string(),
-            None => return Ok(()),
-        };
-        self.documents.remove(&uri);
-        // Clear any diagnostics we previously published for this doc.
-        self.publish_diagnostics(&uri, None, &[])
-    }
-
-    fn update_document(&mut self, uri: String, text: String, version: i64) -> io::Result<()> {
+    fn update_document(
+        &mut self,
+        uri: Uri,
+        text: String,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         let analysis = Analysis::check(&text);
-        let diagnostics: Vec<Value> = analysis
+        let diagnostics: Vec<Diagnostic> = analysis
             .errors
             .iter()
             .map(|e| error_to_diagnostic(&text, e))
             .collect();
-
-        self.publish_diagnostics(&uri, Some(version), &diagnostics)?;
-
-        let _ = version;
+        self.publish_diagnostics(&uri, &diagnostics)?;
         self.documents.insert(uri, Document { text, analysis });
         Ok(())
     }
 
     fn publish_diagnostics(
-        &mut self,
-        uri: &str,
-        version: Option<i64>,
-        diagnostics: &[Value],
-    ) -> io::Result<()> {
-        let mut params = json!({
-            "uri": uri,
-            "diagnostics": diagnostics,
-        });
-        if let Some(v) = version {
-            params["version"] = json!(v);
-        }
-        let msg = json!({
-            "jsonrpc": "2.0",
-            "method": "textDocument/publishDiagnostics",
-            "params": params,
-        });
-        write_message(&mut self.writer, &msg)
+        &self,
+        uri: &Uri,
+        diagnostics: &[Diagnostic],
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
+        let params = PublishDiagnosticsParams {
+            uri: uri.clone(),
+            diagnostics: diagnostics.to_vec(),
+            version: None,
+        };
+        let not = Notification {
+            method: PublishDiagnostics::METHOD.to_string(),
+            params: serde_json::to_value(params)?,
+        };
+        self.connection.sender.send(Message::Notification(not))?;
+        Ok(())
     }
 
-    fn on_hover(&mut self, params: Value) -> Result<Value, (i64, String)> {
-        let uri = params
-            .get("textDocument")
-            .and_then(|d| d.get("uri"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let position = match parse_position(params.get("position")) {
-            Some(p) => p,
-            None => return Ok(Value::Null),
+    fn respond_ok<R: Serialize>(
+        &self,
+        id: RequestId,
+        result: &R,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
+        let resp = Response {
+            id,
+            result: Some(serde_json::to_value(result)?),
+            error: None,
         };
+        self.connection.sender.send(Message::Response(resp))?;
+        Ok(())
+    }
 
-        let doc = match self.documents.get(&uri) {
-            Some(d) => d,
-            None => return Ok(Value::Null),
-        };
+    // ---------- Per-feature handlers ----------
 
-        let byte_offset = match position_to_byte(&doc.text, position) {
-            Some(o) => o,
-            None => return Ok(Value::Null),
-        };
+    fn on_hover(&self, params: HoverParams) -> Option<Hover> {
+        let pos = params.text_document_position_params;
+        let doc = self.documents.get(&pos.text_document.uri)?;
+        let offset = position_to_byte(&doc.text, pos.position)?;
+        let hover = doc.analysis.hover_at(offset)?;
+        let value = format!("```ts\n{}: {}\n```", hover.name, hover.type_str);
+        Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value,
+            }),
+            range: Some(span_to_range(&doc.text, hover.span)),
+        })
+    }
 
-        let hover = match doc.analysis.hover_at(byte_offset) {
-            Some(h) => h,
-            None => return Ok(Value::Null),
-        };
-
-        // Render as a fenced TypeScript-ish block. Editors that show
-        // hover use Markdown, and `ts` is the closest highlighter for
-        // minfern's type syntax.
-        let markdown = format!("```ts\n{}: {}\n```", hover.name, hover.type_str);
-        Ok(json!({
-            "contents": {"kind": "markdown", "value": markdown},
-            "range": span_to_range(&doc.text, hover.span),
+    fn on_definition(&self, params: GotoDefinitionParams) -> Option<GotoDefinitionResponse> {
+        let pos = params.text_document_position_params;
+        let doc = self.documents.get(&pos.text_document.uri)?;
+        let offset = position_to_byte(&doc.text, pos.position)?;
+        let (def_span, _) = doc.analysis.resolution.binding_at(offset)?;
+        Some(GotoDefinitionResponse::Scalar(Location {
+            uri: pos.text_document.uri,
+            range: span_to_range(&doc.text, def_span),
         }))
+    }
+
+    fn on_prepare_rename(&self, params: TextDocumentPositionParams) -> Option<PrepareRenameResponse> {
+        let doc = self.documents.get(&params.text_document.uri)?;
+        let offset = position_to_byte(&doc.text, params.position)?;
+        let (_, hit_span) = doc.analysis.resolution.binding_at(offset)?;
+        Some(PrepareRenameResponse::Range(span_to_range(&doc.text, hit_span)))
+    }
+
+    fn on_rename(&self, params: RenameParams) -> Option<WorkspaceEdit> {
+        let pos = params.text_document_position;
+        let doc = self.documents.get(&pos.text_document.uri)?;
+        let offset = position_to_byte(&doc.text, pos.position)?;
+        let new_name = params.new_name;
+        if !is_valid_identifier(&new_name) {
+            return None;
+        }
+
+        let (def_span, _) = doc.analysis.resolution.binding_at(offset)?;
+        let mut edits: Vec<TextEdit> = Vec::new();
+
+        // The def site itself.
+        edits.push(TextEdit {
+            range: span_to_range(&doc.text, def_span),
+            new_text: new_name.clone(),
+        });
+        // Every use.
+        for &use_span in doc.analysis.resolution.uses_of(def_span) {
+            edits.push(TextEdit {
+                range: span_to_range(&doc.text, use_span),
+                new_text: new_name.clone(),
+            });
+        }
+
+        let mut changes = HashMap::new();
+        changes.insert(pos.text_document.uri, edits);
+        Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        })
+    }
+
+    fn on_completion(&self, params: CompletionParams) -> Option<CompletionResponse> {
+        let pos = params.text_document_position;
+        let doc = self.documents.get(&pos.text_document.uri)?;
+        let offset = position_to_byte(&doc.text, pos.position)?;
+
+        // Member completion: cursor immediately after a `.`.
+        if let Some(items) = doc
+            .analysis
+            .member_completions_before_with(&doc.text, offset)
+        {
+            return Some(CompletionResponse::Array(items));
+        }
+
+        // Identifier completion: list everything visible.
+        let visible = doc.analysis.resolution.visible_at(offset);
+        let items: Vec<CompletionItem> = visible
+            .into_iter()
+            .map(|def| {
+                let kind = match def.kind {
+                    crate::resolver::DefKind::Function => CompletionItemKind::FUNCTION,
+                    crate::resolver::DefKind::Param => CompletionItemKind::VARIABLE,
+                    crate::resolver::DefKind::Const => CompletionItemKind::CONSTANT,
+                    crate::resolver::DefKind::Var => CompletionItemKind::VARIABLE,
+                    crate::resolver::DefKind::Catch => CompletionItemKind::VARIABLE,
+                    crate::resolver::DefKind::Import => CompletionItemKind::MODULE,
+                };
+                let detail = doc.analysis.type_of_name(&def.name);
+                CompletionItem {
+                    label: def.name.clone(),
+                    kind: Some(kind),
+                    detail,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        Some(CompletionResponse::Array(items))
+    }
+
+    fn on_signature_help(&self, params: SignatureHelpParams) -> Option<SignatureHelp> {
+        let pos = params.text_document_position_params;
+        let doc = self.documents.get(&pos.text_document.uri)?;
+        let offset = position_to_byte(&doc.text, pos.position)?;
+        let info = doc.analysis.signature_help_at(&doc.text, offset)?;
+
+        let label = info.signature_label.clone();
+        let parameters: Vec<ParameterInformation> = info
+            .parameters
+            .iter()
+            .map(|p: &String| ParameterInformation {
+                label: ParameterLabel::Simple(p.clone()),
+                documentation: None,
+            })
+            .collect();
+        Some(SignatureHelp {
+            signatures: vec![SignatureInformation {
+                label,
+                documentation: None,
+                parameters: Some(parameters),
+                active_parameter: Some(info.active_parameter),
+            }],
+            active_signature: Some(0),
+            active_parameter: Some(info.active_parameter),
+        })
     }
 }
 
-fn parse_position(v: Option<&Value>) -> Option<Position> {
-    let v = v?;
-    let line = v.get("line")?.as_u64()? as u32;
-    let character = v.get("character")?.as_u64()? as u32;
-    Some(Position { line, character })
+fn server_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
+        text_document_sync: Some(TextDocumentSyncKind::FULL.into()),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        })),
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec![".".to_string()]),
+            ..Default::default()
+        }),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+            retrigger_characters: None,
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        }),
+        ..Default::default()
+    }
+}
+
+fn cast_req<R: LspRequest>(req: &Request) -> Result<Option<R::Params>, ExtractError<Request>>
+where
+    R::Params: DeserializeOwned,
+{
+    if req.method == R::METHOD {
+        let req = req.clone();
+        let (_, params) = req.extract::<R::Params>(R::METHOD)?;
+        Ok(Some(params))
+    } else {
+        Ok(None)
+    }
+}
+
+fn cast_not<N: LspNotification>(
+    not: &Notification,
+) -> Result<Option<N::Params>, ExtractError<Notification>>
+where
+    N::Params: DeserializeOwned,
+{
+    if not.method == N::METHOD {
+        let not = not.clone();
+        let params = not.extract::<N::Params>(N::METHOD)?;
+        Ok(Some(params))
+    } else {
+        Ok(None)
+    }
+}
+
+fn is_valid_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '$') {
+        return false;
+    }
+    for c in chars {
+        if !(c.is_ascii_alphanumeric() || c == '_' || c == '$') {
+            return false;
+        }
+    }
+    !is_reserved_word(s)
+}
+
+fn is_reserved_word(s: &str) -> bool {
+    matches!(
+        s,
+        "break" | "case" | "catch" | "class" | "const" | "continue" | "debugger" | "default"
+            | "delete" | "do" | "else" | "export" | "extends" | "finally" | "for" | "function"
+            | "if" | "import" | "in" | "instanceof" | "new" | "null" | "return" | "super"
+            | "switch" | "this" | "throw" | "true" | "false" | "try" | "typeof" | "var"
+            | "void" | "while" | "with" | "yield" | "let" | "static" | "enum" | "await"
+            | "implements" | "interface" | "package" | "private" | "protected" | "public"
+    )
+}
+
+/// Run the LSP server on stdin/stdout. Returns when the client cleanly
+/// shuts down.
+pub fn run_stdio() -> Result<(), Box<dyn Error + Sync + Send>> {
+    let (connection, threads) = Connection::stdio();
+    let server = Server::new(connection);
+    server.run()?;
+    threads.join()?;
+    Ok(())
 }
 

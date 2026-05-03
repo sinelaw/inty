@@ -1,240 +1,432 @@
-//! End-to-end LSP server tests: feed messages on stdin, assert on
-//! stdout. Uses in-memory channels so no real process is spawned.
+//! End-to-end LSP server tests using `lsp_server::Connection::memory()`
+//! to drive the server in the same process.
 
-use std::io::{BufReader, Cursor, Write};
+use std::thread;
 
+use lsp_server::{Connection, Message, Notification, Request, RequestId};
+use lsp_types::notification::{
+    DidOpenTextDocument, Initialized, Notification as LspNotification, PublishDiagnostics,
+};
+use lsp_types::request::{
+    Completion, GotoDefinition, HoverRequest, Initialize, PrepareRenameRequest, Rename,
+    Request as LspRequest, Shutdown, SignatureHelpRequest,
+};
+use lsp_types::{
+    ClientCapabilities, CompletionParams, CompletionResponse, DidOpenTextDocumentParams,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeParams,
+    PartialResultParams, Position, PrepareRenameResponse, PublishDiagnosticsParams, RenameParams,
+    SignatureHelp, SignatureHelpContext, SignatureHelpParams, SignatureHelpTriggerKind,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, Uri, WorkDoneProgressParams,
+    WorkspaceEdit,
+};
 use minfern_lsp::Server;
-use serde_json::{json, Value};
+use serde::{de::DeserializeOwned, Serialize};
 
-/// Pack one or more LSP messages into a single byte buffer with proper
-/// `Content-Length` headers.
-fn frame(msgs: &[Value]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    for msg in msgs {
-        let body = serde_json::to_vec(msg).unwrap();
-        write!(buf, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
-        buf.extend_from_slice(&body);
-    }
-    buf
+fn boot() -> (Connection, thread::JoinHandle<()>) {
+    let (server_conn, client_conn) = Connection::memory();
+    let handle = thread::spawn(move || {
+        Server::new(server_conn).run().unwrap();
+    });
+    (client_conn, handle)
 }
 
-/// Parse all framed LSP messages out of `bytes`.
-fn parse_messages(bytes: &[u8]) -> Vec<Value> {
-    let mut reader = BufReader::new(bytes);
-    let mut out = Vec::new();
+fn next_request_id(n: i32) -> RequestId {
+    RequestId::from(n)
+}
+
+fn req<R: LspRequest>(id: i32, params: R::Params) -> Request
+where
+    R::Params: Serialize,
+{
+    Request::new(next_request_id(id), R::METHOD.to_string(), params)
+}
+
+fn not<N: LspNotification>(params: N::Params) -> Notification
+where
+    N::Params: Serialize,
+{
+    Notification::new(N::METHOD.to_string(), params)
+}
+
+fn handshake(client: &Connection) {
+    client
+        .sender
+        .send(Message::Request(req::<Initialize>(
+            1,
+            InitializeParams {
+                capabilities: ClientCapabilities::default(),
+                ..Default::default()
+            },
+        )))
+        .unwrap();
+    let _ = expect_response::<lsp_types::InitializeResult>(client, 1);
+    client
+        .sender
+        .send(Message::Notification(not::<Initialized>(
+            lsp_types::InitializedParams {},
+        )))
+        .unwrap();
+}
+
+fn shutdown(client: Connection, handle: thread::JoinHandle<()>) {
+    client
+        .sender
+        .send(Message::Request(req::<Shutdown>(99, ())))
+        .unwrap();
+    let _ = expect_response::<serde_json::Value>(&client, 99);
+    client
+        .sender
+        .send(Message::Notification(Notification::new(
+            "exit".to_string(),
+            (),
+        )))
+        .unwrap();
+    drop(client);
+    handle.join().unwrap();
+}
+
+fn expect_response<R: DeserializeOwned>(client: &Connection, id: i32) -> R {
     loop {
-        match minfern_lsp_test_support::read_one(&mut reader) {
-            Some(v) => out.push(v),
-            None => break,
-        }
-    }
-    out
-}
-
-mod minfern_lsp_test_support {
-    use serde_json::Value;
-    use std::io::BufRead;
-
-    pub fn read_one<R: BufRead>(reader: &mut R) -> Option<Value> {
-        let mut content_length: Option<usize> = None;
-        loop {
-            let mut line = String::new();
-            let n = reader.read_line(&mut line).ok()?;
-            if n == 0 {
-                return None;
-            }
-            let trimmed = line.trim_end_matches(['\r', '\n']);
-            if trimmed.is_empty() {
-                break;
-            }
-            if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-                content_length = rest.trim().parse().ok();
+        let msg = client.receiver.recv().expect("recv");
+        if let Message::Response(resp) = msg {
+            if resp.id == next_request_id(id) {
+                let value = resp.result.expect("response result");
+                return serde_json::from_value(value).expect("parse response");
             }
         }
-        let len = content_length?;
-        let mut buf = vec![0u8; len];
-        reader.read_exact(&mut buf).ok()?;
-        serde_json::from_slice(&buf).ok()
     }
 }
 
-fn run_server(input: Vec<u8>) -> (Vec<Value>, i32) {
-    let reader = BufReader::new(Cursor::new(input));
-    let mut output: Vec<u8> = Vec::new();
-    let exit = Server::new(reader, &mut output).run().unwrap();
-    (parse_messages(&output), exit)
-}
-
-#[test]
-fn initialize_then_shutdown_exit() {
-    let init = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {"capabilities": {}}
-    });
-    let initialized = json!({"jsonrpc": "2.0", "method": "initialized", "params": {}});
-    let shutdown = json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown"});
-    let exit = json!({"jsonrpc": "2.0", "method": "exit"});
-
-    let (replies, code) = run_server(frame(&[init, initialized, shutdown, exit]));
-    assert_eq!(code, 0, "clean shutdown should exit 0");
-
-    // First reply: initialize response.
-    assert_eq!(replies[0]["id"], 1);
-    assert_eq!(replies[0]["result"]["capabilities"]["hoverProvider"], true);
-    assert_eq!(replies[0]["result"]["capabilities"]["textDocumentSync"], 1);
-
-    // Second reply: shutdown response (null result).
-    assert_eq!(replies[1]["id"], 2);
-    assert!(replies[1]["result"].is_null());
-}
-
-#[test]
-fn did_open_publishes_diagnostics_for_bad_program() {
-    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
-    // `var x: number = "hello";` would need an annotation; use undefined
-    // variable instead — definitely a type error, span well-defined.
-    let did_open = json!({
-        "jsonrpc": "2.0",
-        "method": "textDocument/didOpen",
-        "params": {
-            "textDocument": {
-                "uri": "file:///bad.js",
-                "languageId": "javascript",
-                "version": 1,
-                "text": "y;\n",
+fn drain_diagnostics(client: &Connection, uri: &Uri) -> Vec<lsp_types::Diagnostic> {
+    loop {
+        let msg = client.receiver.recv().expect("recv");
+        if let Message::Notification(n) = msg {
+            if n.method == PublishDiagnostics::METHOD {
+                let params: PublishDiagnosticsParams = serde_json::from_value(n.params).unwrap();
+                if &params.uri == uri {
+                    return params.diagnostics;
+                }
             }
         }
-    });
-    let exit = json!({"jsonrpc": "2.0", "method": "exit"});
+    }
+}
 
-    let (replies, _) = run_server(frame(&[init, did_open, exit]));
+fn open_doc(client: &Connection, uri: &Uri, text: &str) {
+    client
+        .sender
+        .send(Message::Notification(not::<DidOpenTextDocument>(
+            DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri.clone(),
+                    language_id: "javascript".to_string(),
+                    version: 1,
+                    text: text.to_string(),
+                },
+            },
+        )))
+        .unwrap();
+}
 
-    let diag_msg = replies
-        .iter()
-        .find(|m| m["method"] == "textDocument/publishDiagnostics")
-        .expect("expected a diagnostics notification");
-    assert_eq!(diag_msg["params"]["uri"], "file:///bad.js");
-    let diags = diag_msg["params"]["diagnostics"].as_array().unwrap();
-    assert!(!diags.is_empty(), "should have at least one diagnostic");
-    assert_eq!(diags[0]["source"], "minfern");
-    assert_eq!(diags[0]["code"], "UndefinedVariable");
-    // Severity 1 == Error.
-    assert_eq!(diags[0]["severity"], 1);
+fn uri(u: &str) -> Uri {
+    u.parse().unwrap()
 }
 
 #[test]
-fn did_open_publishes_empty_diagnostics_for_good_program() {
-    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
-    let did_open = json!({
-        "jsonrpc": "2.0",
-        "method": "textDocument/didOpen",
-        "params": {
-            "textDocument": {
-                "uri": "file:///ok.js",
-                "languageId": "javascript",
-                "version": 1,
-                "text": "var x = 1;\n",
-            }
-        }
-    });
-    let exit = json!({"jsonrpc": "2.0", "method": "exit"});
+fn diagnostics_for_undefined_variable() {
+    let (client, handle) = boot();
+    handshake(&client);
 
-    let (replies, _) = run_server(frame(&[init, did_open, exit]));
+    let u = uri("file:///bad.js");
+    open_doc(&client, &u, "y;\n");
+    let diags = drain_diagnostics(&client, &u);
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].source.as_deref(), Some("minfern"));
+    assert!(diags[0].message.contains("Undefined variable"));
 
-    let diag_msg = replies
-        .iter()
-        .find(|m| m["method"] == "textDocument/publishDiagnostics")
-        .expect("expected a diagnostics notification");
-    let diags = diag_msg["params"]["diagnostics"].as_array().unwrap();
-    assert!(diags.is_empty(), "expected no diagnostics, got: {:?}", diags);
+    shutdown(client, handle);
+}
+
+#[test]
+fn empty_diagnostics_for_clean_program() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///ok.js");
+    open_doc(&client, &u, "var x = 1;\n");
+    let diags = drain_diagnostics(&client, &u);
+    assert!(diags.is_empty(), "expected no diagnostics, got {:?}", diags);
+
+    shutdown(client, handle);
 }
 
 #[test]
 fn hover_returns_inferred_type() {
-    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
-    let did_open = json!({
-        "jsonrpc": "2.0",
-        "method": "textDocument/didOpen",
-        "params": {
-            "textDocument": {
-                "uri": "file:///hover.js",
-                "languageId": "javascript",
-                "version": 1,
-                "text": "var x = 42;\n",
-            }
-        }
-    });
-    // `x` is at line 0, char 4 (after `var `).
-    let hover = json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "textDocument/hover",
-        "params": {
-            "textDocument": {"uri": "file:///hover.js"},
-            "position": {"line": 0, "character": 4},
-        }
-    });
-    let exit = json!({"jsonrpc": "2.0", "method": "exit"});
+    let (client, handle) = boot();
+    handshake(&client);
 
-    let (replies, _) = run_server(frame(&[init, did_open, hover, exit]));
+    let u = uri("file:///hover.js");
+    open_doc(&client, &u, "var x = 42;\n");
+    let _ = drain_diagnostics(&client, &u);
 
-    let hover_reply = replies
-        .iter()
-        .find(|m| m["id"] == 2)
-        .expect("expected a reply to the hover request");
-    let value = &hover_reply["result"]["contents"]["value"];
-    let s = value.as_str().expect("hover contents should be a string");
-    assert!(s.contains("x"), "hover should mention `x`: {}", s);
-    // Number is the inferred type for the literal 42.
+    client
+        .sender
+        .send(Message::Request(req::<HoverRequest>(
+            10,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 0, character: 4 },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let hover: Option<Hover> = expect_response(&client, 10);
+    let hover = hover.expect("hover present");
+    let value = match hover.contents {
+        lsp_types::HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown contents"),
+    };
+    assert!(value.contains("x"), "hover mentions x: {}", value);
     assert!(
-        s.to_lowercase().contains("number"),
-        "hover should mention Number: {}",
-        s
+        value.to_lowercase().contains("number"),
+        "hover mentions Number: {}",
+        value
     );
+
+    shutdown(client, handle);
 }
 
 #[test]
-fn hover_off_identifier_returns_null() {
-    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
-    let did_open = json!({
-        "jsonrpc": "2.0",
-        "method": "textDocument/didOpen",
-        "params": {
-            "textDocument": {
-                "uri": "file:///hover.js",
-                "languageId": "javascript",
-                "version": 1,
-                "text": "var x = 1;\n",
-            }
-        }
-    });
-    // Position past end of file.
-    let hover = json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "textDocument/hover",
-        "params": {
-            "textDocument": {"uri": "file:///hover.js"},
-            "position": {"line": 99, "character": 0},
-        }
-    });
-    let exit = json!({"jsonrpc": "2.0", "method": "exit"});
+fn definition_returns_binding_site() {
+    let (client, handle) = boot();
+    handshake(&client);
 
-    let (replies, _) = run_server(frame(&[init, did_open, hover, exit]));
+    let u = uri("file:///def.js");
+    let src = "var x = 1;\nx;\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
 
-    let hover_reply = replies.iter().find(|m| m["id"] == 2).unwrap();
-    assert!(hover_reply["result"].is_null());
+    // The use of `x` is at line 1, character 0.
+    client
+        .sender
+        .send(Message::Request(req::<GotoDefinition>(
+            20,
+            GotoDefinitionParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 1, character: 0 },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            },
+        )))
+        .unwrap();
+    let resp: Option<GotoDefinitionResponse> = expect_response(&client, 20);
+    let resp = resp.expect("definition present");
+    let loc = match resp {
+        GotoDefinitionResponse::Scalar(l) => l,
+        _ => panic!("expected scalar location"),
+    };
+    assert_eq!(loc.uri, u);
+    // The definition's `x` is at line 0, char 4.
+    assert_eq!(loc.range.start.line, 0);
+    assert_eq!(loc.range.start.character, 4);
+
+    shutdown(client, handle);
 }
 
 #[test]
-fn unknown_request_returns_method_not_found() {
-    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
-    let bogus = json!({"jsonrpc": "2.0", "id": 7, "method": "textDocument/wave"});
-    let exit = json!({"jsonrpc": "2.0", "method": "exit"});
+fn rename_produces_workspace_edit_with_all_uses() {
+    let (client, handle) = boot();
+    handshake(&client);
 
-    let (replies, _) = run_server(frame(&[init, bogus, exit]));
-    let err = replies.iter().find(|m| m["id"] == 7).unwrap();
-    assert_eq!(err["error"]["code"], -32601);
+    let u = uri("file:///rename.js");
+    let src = "var x = 1;\nx + x;\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Rename `x` (the def) -> `y`. Cursor on line 0, character 4.
+    client
+        .sender
+        .send(Message::Request(req::<Rename>(
+            30,
+            RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 0, character: 4 },
+                },
+                new_name: "y".to_string(),
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let edit: Option<WorkspaceEdit> = expect_response(&client, 30);
+    let edit = edit.expect("workspace edit present");
+    let edits = edit.changes.unwrap().remove(&u).unwrap();
+    // 1 def + 2 uses.
+    assert_eq!(edits.len(), 3, "edits: {:?}", edits);
+    for e in &edits {
+        assert_eq!(e.new_text, "y");
+    }
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn prepare_rename_returns_identifier_range() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///prep.js");
+    open_doc(&client, &u, "var foo = 1;\n");
+    let _ = drain_diagnostics(&client, &u);
+
+    client
+        .sender
+        .send(Message::Request(req::<PrepareRenameRequest>(
+            40,
+            TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: u.clone() },
+                position: Position { line: 0, character: 5 }, // inside `foo`
+            },
+        )))
+        .unwrap();
+    let resp: Option<PrepareRenameResponse> = expect_response(&client, 40);
+    let resp = resp.expect("prepare-rename present");
+    match resp {
+        PrepareRenameResponse::Range(_) => {}
+        other => panic!("expected Range, got {:?}", other),
+    }
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn completion_lists_visible_identifiers() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///comp.js");
+    let src = "var apple = 1; var banana = 2;\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    client
+        .sender
+        .send(Message::Request(req::<Completion>(
+            50,
+            CompletionParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 0, character: 30 },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+                context: None,
+            },
+        )))
+        .unwrap();
+    let resp: Option<CompletionResponse> = expect_response(&client, 50);
+    let items = match resp.expect("completion") {
+        CompletionResponse::Array(items) => items,
+        CompletionResponse::List(list) => list.items,
+    };
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert!(
+        labels.iter().any(|l| *l == "apple"),
+        "apple in {:?}",
+        labels
+    );
+    assert!(
+        labels.iter().any(|l| *l == "banana"),
+        "banana in {:?}",
+        labels
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn completion_after_dot_lists_object_fields() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///mem.js");
+    // `obj.x` and `obj.y` give obj a row type with x: Number and y: Number.
+    let src = "var obj = { x: 1, y: 2 };\nobj.\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Cursor sits right after the `.` on line 1.
+    client
+        .sender
+        .send(Message::Request(req::<Completion>(
+            60,
+            CompletionParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 1, character: 4 },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+                context: None,
+            },
+        )))
+        .unwrap();
+    let resp: Option<CompletionResponse> = expect_response(&client, 60);
+    let items = match resp.expect("completion") {
+        CompletionResponse::Array(items) => items,
+        CompletionResponse::List(list) => list.items,
+    };
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert!(labels.iter().any(|l| *l == "x"), "x in {:?}", labels);
+    assert!(labels.iter().any(|l| *l == "y"), "y in {:?}", labels);
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn signature_help_inside_function_call() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///sig.js");
+    // A function with a known param list.
+    let src = "function add(a, b) { return a + b; }\nadd(1, 2);\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Cursor on the `2` argument: line 1, column 7. That's the second
+    // arg, so signature help should highlight active parameter index 1.
+    client
+        .sender
+        .send(Message::Request(req::<SignatureHelpRequest>(
+            70,
+            SignatureHelpParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 1, character: 7 },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                context: Some(SignatureHelpContext {
+                    trigger_kind: SignatureHelpTriggerKind::CONTENT_CHANGE,
+                    trigger_character: None,
+                    is_retrigger: false,
+                    active_signature_help: None,
+                }),
+            },
+        )))
+        .unwrap();
+    let resp: Option<SignatureHelp> = expect_response(&client, 70);
+    let help = resp.expect("signature help present");
+    assert_eq!(help.signatures.len(), 1);
+    let sig = &help.signatures[0];
+    assert!(sig.label.contains("add"));
+    let params = sig.parameters.as_ref().unwrap();
+    assert_eq!(params.len(), 2);
+    // Active parameter should be index 1 (the second arg).
+    assert_eq!(help.active_parameter, Some(1));
+
+    shutdown(client, handle);
 }

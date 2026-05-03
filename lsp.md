@@ -9,20 +9,217 @@ that delegates all type reasoning to the existing `minfern` library. Expose
 it as a sub-command of the project's CLI binary so editors can launch it
 with a single command (e.g. `minfern lsp`).
 
-The first cut targets the most common LSP features programmers expect from
-a typed language:
+## Feature set
+
+v1 (already shipped, hand-rolled JSON):
 
 1. **Diagnostics** (`textDocument/publishDiagnostics`) — surface lex,
    parse, and type errors as red squigglies.
 2. **Hover** (`textDocument/hover`) — show the inferred type of the
-   identifier or expression under the cursor.
+   identifier under the cursor.
 3. **Document lifecycle** (`textDocument/didOpen`, `didChange`, `didSave`,
-   `didClose`) — keep an in-memory mirror of every open file and re-check
-   on every change.
+   `didClose`) — keep an in-memory mirror of every open file and
+   re-check on every change.
 
-Out of scope for v1 (but the architecture is designed to allow them
-later): completions, go-to-definition, find-references, document
-symbols, rename, code actions, semantic tokens, signature help.
+v2 (this revision adds):
+
+4. **Go to definition** (`textDocument/definition`) — jump from an
+   identifier reference to its binding site.
+5. **Rename** (`textDocument/rename`) — rename a binding and every
+   reference to it inside the same file.
+6. **Completions** (`textDocument/completion`) — list identifiers in
+   scope (and properties of an object after a `.`).
+7. **Signature help** (`textDocument/signatureHelp`) — show the
+   parameter list of the function being called, with the cursor's
+   active parameter highlighted.
+
+Still out of scope: workspace-wide refactors (we only see one file at a
+time), find-references across files, document symbols, code actions,
+semantic tokens, formatting.
+
+## Dependency change: switch to `lsp-server` + `lsp-types`
+
+v1 hand-rolled the protocol on top of `serde_json::Value`. Adding the
+v2 features makes that increasingly painful: each new method needs
+hand-written request extraction, each new response needs hand-shaped
+JSON, and a typo silently breaks clients.
+
+v2 replaces `protocol.rs` and most of `server.rs`'s message dispatch
+with the rust-analyzer-team-maintained pair:
+
+- **`lsp-server`** — sync, stdio-based message loop. `Connection::stdio()`
+  + `connection.handle_shutdown(&req)` covers the lifecycle. No async
+  runtime, no Tokio, fits the existing CPU-bound checker.
+- **`lsp-types`** — `serde`-derived structs for every LSP request,
+  notification, and parameter. Typos become compile errors.
+
+Net dep delta: `lsp-server`, `lsp-types`, `crossbeam-channel`, `serde`,
+plus the existing `serde_json`. No async runtime added.
+
+## Name resolution
+
+The four new features all need scope-aware identifier resolution, which
+minfern itself doesn't expose (its `TypeEnv` knows what each name's type
+is, but not what `Span` originally bound it). v2 adds a separate pass
+in `crates/minfern-lsp/src/resolver.rs`:
+
+```rust
+pub struct Resolution {
+    /// Identifier-use span -> binding-site span.
+    refs: HashMap<Span, Span>,
+    /// Binding-site span -> info about the binding.
+    defs: HashMap<Span, DefInfo>,
+    /// Binding-site span -> all use spans (for rename, find-refs).
+    uses: HashMap<Span, Vec<Span>>,
+    /// For completion: scope chain at every position. Stored as a flat
+    /// list of (span, scope_id), sorted by inclusion; for a query we
+    /// pick the smallest containing entry.
+    scopes: Vec<(Span, ScopeId)>,
+    scope_chain: HashMap<ScopeId, Vec<ScopeId>>,
+    scope_bindings: HashMap<ScopeId, Vec<(String, Span)>>,
+}
+
+pub enum DefInfo {
+    Var,       // var x
+    Const,     // const x
+    Param,     // function parameter
+    Function,  // function declaration
+    Catch,     // catch (e)
+}
+```
+
+The pass walks the AST top-down with a scope stack:
+
+- **Function entry** opens a new scope. Pre-scan the body for `var X`
+  (anywhere except inside nested functions) and `function X` (any
+  block) and add them to the function scope. Then add params. Then
+  walk.
+- **Block entry** opens a new scope only if the block contains any
+  `const` declarations (minfern's mquickjs subset doesn't fully
+  distinguish `let`; treat `var`/`const` as the two relevant kinds).
+- **Catch clause** opens a one-binding scope for the caught name.
+- **`Expr::Ident { name, span }`** in non-target position resolves
+  against the scope chain, innermost first; record an entry in
+  `refs` and `uses`.
+
+Limitations for v1 of the resolver:
+
+- No real let/TDZ semantics; same-named `var` shadowing across blocks
+  resolves to the function-scope binding.
+- We don't follow imports; cross-file rename / definition is out of
+  scope for now.
+
+## Per-feature wiring
+
+### Go to definition
+
+```
+textDocument/definition (params: TextDocumentPositionParams)
+  -> Option<Location>
+```
+
+1. Convert `(line, character)` to a byte offset.
+2. Find the smallest `Expr::Ident` whose span contains the offset.
+3. Look up `resolution.refs[span]` for the def span.
+4. Return `Location { uri, range: span_to_range(def_span) }`.
+
+If the cursor is on the binding site itself, return that same site
+(so VS Code's "Go to definition" doesn't no-op silently).
+
+### Rename
+
+```
+textDocument/rename (params: RenameParams { new_name, position })
+  -> WorkspaceEdit
+```
+
+1. Resolve the cursor to a definition span (either the cursor is on
+   the def, or `resolution.refs[use_span]` gives the def).
+2. Validate the new name is a legal mquickjs identifier (regex
+   `[a-zA-Z_$][a-zA-Z0-9_$]*` and not a reserved word).
+3. Build a `WorkspaceEdit` with one `TextEdit` per use span and one for
+   the def span itself, all replacing the old text with `new_name`.
+4. Return the edit; the editor applies it atomically.
+
+We also implement `textDocument/prepareRename` returning the range of
+the identifier under the cursor (or `null` if it isn't an identifier),
+so editors can show the rename UI inline.
+
+### Completions
+
+```
+textDocument/completion (params: CompletionParams { position, context })
+  -> Vec<CompletionItem>
+```
+
+Two cases:
+
+1. **Member completion** — if the position is right after a `.` on a
+   `Member` or stalled-parser member access, look up the type of the
+   object expression. If it's a row type, return the row's labels as
+   completion items, each with its field type as `detail`.
+2. **Identifier completion** — otherwise, return every binding visible
+   in the resolver's scope chain at that position. `kind` is mapped
+   from `DefInfo` (Function -> `Function`, Param -> `Variable`, …).
+
+For v1 we won't filter by prefix; the editor does that fuzzy match.
+
+### Signature help
+
+```
+textDocument/signatureHelp (params: TextDocumentPositionParams)
+  -> Option<SignatureHelp>
+```
+
+1. Walk the AST and find the innermost `Expr::Call { callee, arguments, span }`
+   whose span contains the cursor *and* whose argument list (the part
+   between `(` and the matching `)`) brackets the cursor.
+2. Resolve the type of `callee`:
+   - If `callee` is `Expr::Ident { name }`, look up `name` in the env
+     active at the call's position.
+   - If it's a member access we punt for v1.
+3. Apply the substitution, instantiate, and read parameter and return
+   types from the resulting function type.
+4. Build `SignatureInformation` with one `ParameterInformation` per
+   parameter.
+5. Determine `activeParameter` by counting top-level commas in the
+   argument list source between `(` and the cursor.
+
+If the call's callee type isn't a function (or isn't resolvable),
+return `null`.
+
+## Capability negotiation update
+
+The `initialize` reply now advertises:
+
+```json
+{
+  "textDocumentSync": 1,
+  "hoverProvider": true,
+  "definitionProvider": true,
+  "renameProvider": { "prepareProvider": true },
+  "completionProvider": { "triggerCharacters": ["."] },
+  "signatureHelpProvider": { "triggerCharacters": ["(", ","] }
+}
+```
+
+## Testing strategy update
+
+v1's `tests/handshake.rs` already covers diagnostics + hover via JSON
+round-trips. After the migration to `lsp-types` we keep the round-trip
+shape but use the typed structs to build messages. New tests cover:
+
+- definition: open file, request definition on a use, assert location
+  matches the binding's span.
+- rename: open file with two uses + one def, request rename, assert
+  the resulting `WorkspaceEdit` has three text edits with correct
+  ranges.
+- completion: open file with several bindings, request completion,
+  assert all visible names appear in the result.
+- signature help: open file with a function, request signature help
+  inside a call, assert the parameter list and active index.
+
+
 
 ## Workspace layout
 
