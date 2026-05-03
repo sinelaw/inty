@@ -1,0 +1,46 @@
+{
+  "name": "minfern-lsp",
+  "displayName": "minfern",
+  "description": "JavaScript type inference (HMF) via the minfern language server",
+  "publisher": "local",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:javascript"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "javascript",
+        "extensions": [
+          ".js"
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "minfern",
+      "properties": {
+        "minfern.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the minfern binary. If empty, the extension uses the MINFERN_BIN environment variable, or falls back to looking up `minfern` on PATH."
+        },
+        "minfern.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace LSP traffic in the Output channel."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0"
+  }
+}
