@@ -7,9 +7,10 @@
 //! against. Cycles are rejected with an error rather than silently ignored.
 //!
 //! Only the subset needed for simple multi-file projects is supported:
-//! side-effect imports (`import "./foo.js"`) and named imports
-//! (`import { a, b as c } from "./foo.js"`). Default imports, namespace
-//! imports, and re-exports are not handled yet.
+//! side-effect imports (`import "./foo.js"`), named imports
+//! (`import { a, b as c } from "./foo.js"`), and default imports
+//! (`import name from "./foo.js"`). Namespace imports and re-exports
+//! are not handled yet.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -85,13 +86,17 @@ pub fn resolve_imports(
                             })?;
                             env = env.extend(local.clone(), scheme.clone());
                         }
-                        ImportSpecifier::Default { span, .. } => {
-                            return Err(MinfernError::Type(
-                                crate::error::TypeError::Module {
-                                    message: "default imports are not supported".to_string(),
+                        ImportSpecifier::Default { local, span } => {
+                            let scheme = module_env.lookup("default").ok_or_else(|| {
+                                MinfernError::Type(crate::error::TypeError::Module {
+                                    message: format!(
+                                        "module {:?} has no default export",
+                                        source
+                                    ),
                                     span: *span,
-                                },
-                            ));
+                                })
+                            })?;
+                            env = env.extend(local.clone(), scheme.clone());
                         }
                         ImportSpecifier::Namespace { span, .. } => {
                             return Err(MinfernError::Type(
@@ -242,6 +247,95 @@ mod tests {
         .unwrap();
 
         assert!(env.lookup("add").is_some(), "add should be imported");
+    }
+
+    #[test]
+    fn default_import_resolves() {
+        let dir = tempdir();
+        let _lib = write_file(
+            dir.path(),
+            "lib.js",
+            "export default function greet(name) { return \"hi \" + name; }",
+        );
+        let main_path = write_file(
+            dir.path(),
+            "main.js",
+            "import greet from \"./lib.js\"; var r = greet(\"world\");",
+        );
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let program = parse(&source).unwrap();
+
+        let mut state = InferState::new();
+        let mut visiting = HashSet::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            main_path.parent().unwrap(),
+            &mut visiting,
+        )
+        .unwrap();
+
+        assert!(env.lookup("greet").is_some(), "greet should be imported");
+    }
+
+    #[test]
+    fn default_export_expression_resolves() {
+        let dir = tempdir();
+        let _lib = write_file(
+            dir.path(),
+            "lib.js",
+            "export default 42;",
+        );
+        let main_path = write_file(
+            dir.path(),
+            "main.js",
+            "import answer from \"./lib.js\";",
+        );
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let program = parse(&source).unwrap();
+
+        let mut state = InferState::new();
+        let mut visiting = HashSet::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            main_path.parent().unwrap(),
+            &mut visiting,
+        )
+        .unwrap();
+
+        assert!(env.lookup("answer").is_some(), "answer should be imported");
+    }
+
+    #[test]
+    fn default_import_without_export_errors() {
+        let dir = tempdir();
+        let _lib = write_file(
+            dir.path(),
+            "lib.js",
+            "export const x = 1;",
+        );
+        let main_path = write_file(
+            dir.path(),
+            "main.js",
+            "import x from \"./lib.js\";",
+        );
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let program = parse(&source).unwrap();
+
+        let mut state = InferState::new();
+        let mut visiting = HashSet::new();
+        let err = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            main_path.parent().unwrap(),
+            &mut visiting,
+        )
+        .expect_err("missing default export should error");
+        assert!(format!("{}", err).contains("default export"));
     }
 
     #[test]

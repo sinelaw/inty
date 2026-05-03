@@ -1040,6 +1040,12 @@ fn declared_names(stmt: &Stmt) -> Vec<&str> {
                 declarations.iter().map(|d| d.name.as_str()).collect()
             }
             crate::parser::ast::ExportDecl::Function { name, .. } => vec![name.as_str()],
+            crate::parser::ast::ExportDecl::Default { value, .. } => match value {
+                crate::parser::ast::Expr::Function {
+                    name: Some(name), ..
+                } => vec![name.as_str(), "default"],
+                _ => vec!["default"],
+            },
         },
         _ => Vec::new(),
     }

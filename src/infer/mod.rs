@@ -27,7 +27,7 @@ pub use type_parser::parse_type_annotation;
 pub use unify::UnifyResult;
 
 use crate::error::{MinfernError, TypeError};
-use crate::parser::ast::{ExportDecl, Expr, Program, Stmt, VarKind};
+use crate::parser::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
 use crate::types::Type;
 
 /// Result type for inference operations.
@@ -287,32 +287,84 @@ impl InferState {
                 // `export var x = 1;` and `export function f() {}` end up
                 // in the env exactly like their un-exported counterparts.
                 // The module resolver reads the final env back out.
-                let inner = match declaration {
+                let _ = span;
+                match declaration {
                     ExportDecl::Var {
                         kind,
                         declarations,
                         span,
-                    } => Stmt::Var {
-                        kind: *kind,
-                        declarations: declarations.clone(),
-                        span: *span,
-                    },
+                    } => self.infer_stmt(
+                        env,
+                        &Stmt::Var {
+                            kind: *kind,
+                            declarations: declarations.clone(),
+                            span: *span,
+                        },
+                    ),
                     ExportDecl::Function {
                         name,
                         params,
                         body,
                         type_annotation,
                         span,
-                    } => Stmt::FunctionDecl {
-                        name: name.clone(),
-                        params: params.clone(),
-                        body: body.clone(),
-                        type_annotation: type_annotation.clone(),
-                        span: *span,
-                    },
-                };
-                let _ = span;
-                self.infer_stmt(env, &inner)
+                    } => self.infer_stmt(
+                        env,
+                        &Stmt::FunctionDecl {
+                            name: name.clone(),
+                            params: params.clone(),
+                            body: body.clone(),
+                            type_annotation: type_annotation.clone(),
+                            span: *span,
+                        },
+                    ),
+                    ExportDecl::Default { value, span } => {
+                        // `export default function f() { … }` is two bindings:
+                        // a function declaration `f` and an alias `default = f`.
+                        // Other RHS forms desugar to `const default = <value>;`.
+                        if let Expr::Function {
+                            name: Some(fn_name),
+                            params,
+                            body,
+                            type_annotation,
+                            span: f_span,
+                        } = value
+                        {
+                            let (_, env_after_fn) = self.infer_stmt(
+                                env,
+                                &Stmt::FunctionDecl {
+                                    name: fn_name.clone(),
+                                    params: params.clone(),
+                                    body: body.clone(),
+                                    type_annotation: type_annotation.clone(),
+                                    span: *f_span,
+                                },
+                            )?;
+                            let scheme = env_after_fn
+                                .lookup(fn_name)
+                                .cloned()
+                                .expect("function decl should bind its name");
+                            Ok((
+                                Type::Undefined,
+                                env_after_fn.extend("default".to_string(), scheme),
+                            ))
+                        } else {
+                            self.infer_stmt(
+                                env,
+                                &Stmt::Var {
+                                    kind: VarKind::Const,
+                                    declarations: vec![VarDeclarator {
+                                        name: "default".to_string(),
+                                        init: Some(value.clone()),
+                                        type_annotation: None,
+                                        kind: VarKind::Const,
+                                        span: *span,
+                                    }],
+                                    span: *span,
+                                },
+                            )
+                        }
+                    }
+                }
             }
 
             Stmt::If {

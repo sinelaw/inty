@@ -530,9 +530,27 @@ impl Parser {
                     span: Span::new(start, self.prev_span().end),
                 })
             }
+            Token::Default => {
+                // export default <function-expression-or-assignment-expression>
+                self.advance();
+                let value = if self.check(&Token::Function) {
+                    self.parse_function_expression()?
+                } else {
+                    self.parse_assignment_expression()?
+                };
+                self.consume_semicolon();
+                let decl_span = Span::new(start, self.prev_span().end);
+                Ok(Stmt::Export {
+                    declaration: ExportDecl::Default {
+                        value,
+                        span: decl_span,
+                    },
+                    span: decl_span,
+                })
+            }
             _ => Err(ParseError::UnexpectedToken {
                 found: format!("{}", self.current()),
-                expected: "var, const, or function".to_string(),
+                expected: "var, const, function, or default".to_string(),
                 span: self.current_span(),
             }
             .into()),

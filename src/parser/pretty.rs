@@ -546,6 +546,11 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                     write!(w, ") ")?;
                     write_stmt(w, body, indent)
                 }
+                ExportDecl::Default { value, .. } => {
+                    write!(w, "export default ")?;
+                    write_expr(w, value, false)?;
+                    write!(w, ";")
+                }
             }
         }
 
