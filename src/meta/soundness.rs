@@ -155,6 +155,16 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
         .parse_program()
         .map_err(|e| format!("parse error: {:?}", e))?;
 
+    // Phase 7c: refuse to feed non-surface AST forms into the prober.
+    // Anything coming from `parse_program` is by definition surface,
+    // so this only fires if a future AST extension forgets to update
+    // `crate::meta::surface::is_surface_*`.
+    for stmt in &program.statements {
+        if !crate::meta::surface::is_surface_stmt(stmt) {
+            return Err("non-surface AST form in synthesised program".to_string());
+        }
+    }
+
     // Type-check.
     let mut infer = InferState::new();
     let env = initial_env();

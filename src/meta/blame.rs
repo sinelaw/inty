@@ -65,20 +65,34 @@ fn probe_for_base(b: BaseType) -> Option<(&'static str, &'static str)> {
     }
 }
 
-fn probes_for_class(c: ClassName) -> &'static [(&'static str, &'static str)] {
-    match c {
-        ClassName::Plus => &[("number", "0"), ("string", "\"\"")],
-        // Indexable is conservatively unsupported here: arms that use
-        // it carry a `notes` exemption already.
-        ClassName::Indexable => &[],
+fn probes_for_class(c: ClassName) -> Vec<(&'static str, &'static str)> {
+    // Phase 7b: read instances from the declarative table instead of
+    // a hardcoded list. The table only describes which shapes
+    // satisfy a class; the prober materialises each shape via the
+    // existing `probe_for_base` map.
+    let mut out = Vec::new();
+    for inst in crate::classes::instances_of(c) {
+        // Only handle unary Plus-style classes here. Multi-position
+        // classes (Indexable) carry `notes` exemptions on every arm
+        // and aren't synthesised by `build_program`, so the probe
+        // expansion isn't reached.
+        if inst.inputs.len() != 1 {
+            continue;
+        }
+        if let crate::operators::TypeShape::Concrete(b) = inst.inputs[0] {
+            if let Some(p) = probe_for_base(b) {
+                out.push(p);
+            }
+        }
     }
+    out
 }
 
 /// All concrete instantiations of one input position.
 fn probes_for_shape(shape: TypeShape) -> Vec<(&'static str, &'static str)> {
     match shape {
         TypeShape::Concrete(b) => probe_for_base(b).into_iter().collect(),
-        TypeShape::AnyOfClass(c) => probes_for_class(c).to_vec(),
+        TypeShape::AnyOfClass(c) => probes_for_class(c),
         TypeShape::Wildcard => PRIMITIVE_PROBES.to_vec(),
         TypeShape::SameAsArg(_) => Vec::new(), // resolved during enumeration
     }

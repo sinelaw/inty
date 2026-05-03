@@ -12,6 +12,8 @@
 pub mod blame;
 pub mod config;
 pub mod soundness;
+pub mod surface;
 
 pub use blame::{all_blame_triples, blame_triples_for_op, BlameTriple, ConfigSnapshot};
 pub use soundness::{check_program, SynthType};
+pub use surface::{is_surface_expr, is_surface_stmt};

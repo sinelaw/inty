@@ -2,6 +2,23 @@
 //!
 //! The type environment maps variable names to their type schemes,
 //! supporting scoping through immutable extension.
+//!
+//! # Value-restriction note (phase 7e)
+//!
+//! The `Mutability` flag plus `crate::infer::features::bindings::is_syntactic_value`
+//! is the canonical answer for the value restriction. Don't replace
+//! it with a body-walker that traces aliasing — that approach
+//!
+//! 1. **misses aliasing.** A polymorphic binding aliased into a `var`
+//!    is still polymorphic by the syntactic rule but a body-walker
+//!    needs whole-program flow to detect that the alias is later
+//!    mutated.
+//! 2. **is O(n²).** Every assignment site re-walks every reachable
+//!    binding's RHS expression to decide whether to demote.
+//! 3. **looks more "principled" than it is.** The syntactic value
+//!    rule is sound and small; resist the temptation.
+//!
+//! Adding policy here belongs in `crate::infer::InferConfig` (phase 6).
 
 use std::collections::{HashMap, HashSet};
 
