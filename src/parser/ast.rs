@@ -46,24 +46,6 @@ pub enum ExportDecl {
     /// Default export: `export default expr;` or `export default function f() {}`.
     /// A named function expression also binds its name in module scope, matching JS.
     Default { value: Expr, span: Source },
-    /// Export list: `export { a, b as c };` — re-binds existing locals under
-    /// (possibly renamed) export names without introducing new declarations.
-    /// `default` is permitted as the local or exported name to interoperate
-    /// with `export default`.
-    List {
-        specifiers: Vec<ExportSpecifier>,
-        span: Source,
-    },
-}
-
-/// One entry of an `export { … }` clause.
-#[derive(Debug, Clone)]
-pub struct ExportSpecifier {
-    /// The local binding being exported.
-    pub local: String,
-    /// The name under which it's exported (== `local` when not renamed).
-    pub exported: String,
-    pub span: Source,
 }
 
 /// Source location type alias

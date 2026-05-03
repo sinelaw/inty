@@ -1046,7 +1046,6 @@ fn declared_names(stmt: &Stmt) -> Vec<&str> {
                 } => vec![name.as_str(), "default"],
                 _ => vec!["default"],
             },
-            crate::parser::ast::ExportDecl::List { .. } => Vec::new(),
         },
         _ => Vec::new(),
     }

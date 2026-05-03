@@ -548,41 +548,9 @@ impl Parser {
                     span: decl_span,
                 })
             }
-            Token::LBrace => {
-                // export { a, b as c };  (no `from` clause — re-export forms come later)
-                self.advance();
-                let mut specifiers = Vec::new();
-                while !self.check(&Token::RBrace) {
-                    let spec_start = self.current_span().start;
-                    let local = self.expect_module_name()?;
-                    let exported = if self.consume_if(&Token::As) {
-                        self.expect_module_name()?
-                    } else {
-                        local.clone()
-                    };
-                    specifiers.push(ExportSpecifier {
-                        local,
-                        exported,
-                        span: Span::new(spec_start, self.prev_span().end),
-                    });
-                    if !self.consume_if(&Token::Comma) {
-                        break;
-                    }
-                }
-                self.expect(&Token::RBrace)?;
-                self.consume_semicolon();
-                let decl_span = Span::new(start, self.prev_span().end);
-                Ok(Stmt::Export {
-                    declaration: ExportDecl::List {
-                        specifiers,
-                        span: decl_span,
-                    },
-                    span: decl_span,
-                })
-            }
             _ => Err(ParseError::UnexpectedToken {
                 found: format!("{}", self.current()),
-                expected: "var, const, function, default, or {".to_string(),
+                expected: "var, const, function, or default".to_string(),
                 span: self.current_span(),
             }
             .into()),
@@ -2464,28 +2432,6 @@ impl Parser {
                 span: self.current_span(),
             }
             .into())
-        }
-    }
-
-    /// Identifier or the keyword `default`. Used for names inside
-    /// `import { … }` / `export { … }` clauses where `default` is permitted
-    /// to interoperate with `export default`.
-    fn expect_module_name(&mut self) -> Result<String> {
-        match self.current().clone() {
-            Token::Ident(name) => {
-                self.advance();
-                Ok(name)
-            }
-            Token::Default => {
-                self.advance();
-                Ok("default".to_string())
-            }
-            _ => Err(ParseError::UnexpectedToken {
-                found: format!("{}", self.current()),
-                expected: "identifier or `default`".to_string(),
-                span: self.current_span(),
-            }
-            .into()),
         }
     }
 
