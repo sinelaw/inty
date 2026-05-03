@@ -301,7 +301,9 @@ impl Server {
                     crate::resolver::DefKind::Function => CompletionItemKind::FUNCTION,
                     crate::resolver::DefKind::Param => CompletionItemKind::VARIABLE,
                     crate::resolver::DefKind::Const => CompletionItemKind::CONSTANT,
-                    crate::resolver::DefKind::Var => CompletionItemKind::VARIABLE,
+                    crate::resolver::DefKind::Var | crate::resolver::DefKind::Let => {
+                        CompletionItemKind::VARIABLE
+                    }
                     crate::resolver::DefKind::Catch => CompletionItemKind::VARIABLE,
                     crate::resolver::DefKind::Import => CompletionItemKind::MODULE,
                 };

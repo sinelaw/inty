@@ -251,9 +251,12 @@ impl InferState {
                         let env_free = new_env.free_vars();
                         self.generalize(&env_free, &var_type)
                     }
-                    // var declarations: generalize syntactic values EXCEPT mutable containers
+                    // var/let declarations: generalize syntactic values EXCEPT mutable containers
                     // (unless config.generalize_mutable_var_containers loosens this).
-                    (VarKind::Var, Some(init))
+                    // `let` is treated identically to `var` here — the only
+                    // difference is scope, which is the resolver's
+                    // concern.
+                    (VarKind::Var | VarKind::Let, Some(init))
                         if is_syntactic_value(init)
                             && (self.config.generalize_mutable_var_containers
                                 || !is_mutable_container_literal(init)) =>
@@ -273,8 +276,8 @@ impl InferState {
             // 3. var declarations with init are mutable
             let mutability = match kind {
                 VarKind::Const => Mutability::Immutable,
-                VarKind::Var if is_declaration => Mutability::Immutable,
-                VarKind::Var => Mutability::Mutable,
+                VarKind::Var | VarKind::Let if is_declaration => Mutability::Immutable,
+                VarKind::Var | VarKind::Let => Mutability::Mutable,
             };
             new_env = new_env.extend_with_mutability(decl.name.clone(), scheme, mutability);
         }
