@@ -14,9 +14,14 @@
   },
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:javascript"
+    "onLanguage:javascript",
+    "onStartupFinished"
   ],
   "contributes": {
+    "commands": [
+      { "command": "minfern.showLog",  "title": "minfern: Show Server Log" },
+      { "command": "minfern.restart",  "title": "minfern: Restart Server" }
+    ],
     "languages": [
       {
         "id": "javascript",
