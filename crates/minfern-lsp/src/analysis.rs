@@ -122,24 +122,59 @@ impl Analysis {
     /// If an identifier covers `byte_offset`, return its inferred type
     /// formatted as a string.
     ///
-    /// v1 limitation: the lookup uses the *final* environment, so for a
-    /// shadowed binding the deepest definition wins regardless of where
-    /// the cursor sits. Good enough until per-position env snapshots
-    /// arrive.
+    /// Resolution order:
+    /// 1. Ask the resolver for the binding at the cursor (handles
+    ///    shadowing — inner scopes win).
+    /// 2. Look up the binding's type in the inference state's
+    ///    `decl_types` map by the binding's name span.
+    /// 3. Fall back to `env.lookup(name)` (the final env) for bindings
+    ///    we don't yet record per-span — currently catch params and
+    ///    named function expressions whose spans the resolver can't
+    ///    pin precisely.
     pub fn hover_at(&self, byte_offset: usize) -> Option<HoverResult> {
-        let program = self.program.as_ref()?;
-        let env = self.final_env.as_ref()?;
         let state = self.state.as_ref()?;
+        let env = self.final_env.as_ref()?;
 
+        // Try the resolver first — gives shadowing-correct answers and
+        // also resolves uses of function parameters that aren't in the
+        // final env at all.
+        if let Some((def_span, hit_span)) = self.resolution.binding_at(byte_offset) {
+            let def = self.resolution.def_at(def_span)?;
+            if let Some(ty) = state.get_decl_type(def_span) {
+                let applied = state.apply_subst(ty);
+                let mut ctx = PrettyContext::new();
+                return Some(HoverResult {
+                    name: def.name.clone(),
+                    span: hit_span,
+                    type_str: ctx.format_type(&applied),
+                });
+            }
+            // Resolver knows the def but inference didn't record a
+            // type for it. Fall back to env lookup by name — catches
+            // catch params and similar.
+            if let Some(scheme) = env.lookup(&def.name) {
+                let applied_scheme = state.apply_subst(scheme);
+                let mut ctx = PrettyContext::new();
+                return Some(HoverResult {
+                    name: def.name.clone(),
+                    span: hit_span,
+                    type_str: ctx.format_scheme(&applied_scheme),
+                });
+            }
+        }
+
+        // Resolver said nothing — fall back to the original AST scan
+        // (e.g. for unresolved free identifiers we still want a
+        // best-effort type from the final env).
+        let program = self.program.as_ref()?;
         let (name, span) = find_identifier(program, byte_offset)?;
         let scheme = env.lookup(&name)?;
         let applied_scheme = state.apply_subst(scheme);
         let mut ctx = PrettyContext::new();
-        let formatted = ctx.format_scheme(&applied_scheme);
         Some(HoverResult {
             name,
             span,
-            type_str: formatted,
+            type_str: ctx.format_scheme(&applied_scheme),
         })
     }
 

@@ -304,7 +304,15 @@ impl InferState {
                     *span,
                 )?;
                 self.unify(*span, &func_var, &func_type)?;
-                self.record_decl_type(*span, func_type);
+                // Key the recorded type by the *name* offset, not the
+                // `function` keyword's offset, so the LSP resolver
+                // (which returns the name span for go-to-def) can look
+                // the type up directly.
+                let name_offset = span.start + "function ".len();
+                self.record_decl_type(
+                    Span::new(name_offset, name_offset + name.len()),
+                    func_type,
+                );
             }
         }
 
@@ -383,8 +391,13 @@ impl InferState {
         // Unify pre-bound type with inferred type
         self.unify(span, &func_var, &func_type)?;
 
-        // Record the type for this declaration
-        self.record_decl_type(span, func_type.clone());
+        // Record the type at the *name* offset (not the `function`
+        // keyword) so LSP go-to-def → hover lookups line up.
+        let name_offset = span.start + "function ".len();
+        self.record_decl_type(
+            Span::new(name_offset, name_offset + name.len()),
+            func_type.clone(),
+        );
 
         // Generalize the function type
         let env_free = env.free_vars();

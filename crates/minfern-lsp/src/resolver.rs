@@ -777,6 +777,21 @@ mod tests {
     }
 
     #[test]
+    fn param_span_lands_on_name() {
+        let src = "function add(a, b) { return a + b; }\n";
+        let r = build(src);
+        // The use of `a` inside the body is at index 28.
+        let use_a = src.find("a +").unwrap();
+        let def = r
+            .def_of_use(Span::new(use_a, use_a + 1))
+            .expect("body `a` should resolve to a param");
+        assert_eq!(def.kind, DefKind::Param);
+        // Def span should land on the param `a` in the header (index 13).
+        let header_a = src.find("(a").unwrap() + 1;
+        assert_eq!(def.name_span, Span::new(header_a, header_a + 1));
+    }
+
+    #[test]
     fn inner_let_shadows_outer() {
         let src = "var x = 1;\n{ let x = 2; x; }\n";
         let r = build(src);
