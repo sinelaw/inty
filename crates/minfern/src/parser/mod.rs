@@ -1256,10 +1256,14 @@ impl Parser {
                 }
             }
 
+            let name_start = self.current_span().start;
             let name = self.expect_ident()?;
             let var_end = self.prev_span().end;
             let type_annotation = self.try_get_type_annotation(self.current_span(), &name);
-            let var_span = Span::new(var_start, var_end);
+            // The for-in/of LHS span is just the name's source range, so
+            // the resolver records the def at the identifier (not at the
+            // `let`/`var` keyword).
+            let var_span = Span::new(name_start, var_end);
 
             // Check for for-in/of
             if self.check(&Token::In) || self.check(&Token::Of) {
@@ -1300,7 +1304,11 @@ impl Parser {
                 init,
                 type_annotation,
                 kind,
-                span: Span::new(var_start, self.prev_span().end),
+                // Match `parse_var_declarator`: declarator span starts at
+                // the name, not the `let`/`var` keyword. `name_span_from_decl`
+                // takes `span.start..span.start + name.len()`, so the
+                // resolver lands the def on the identifier.
+                span: Span::new(name_start, self.prev_span().end),
             }];
 
             while self.consume_if(&Token::Comma) {
