@@ -572,6 +572,27 @@ mod tests {
     }
 
     #[test]
+    fn default_plus_namespace_import_resolves() {
+        // `import foo, * as ns from "./mod.js";` binds both the default
+        // export under `foo` and the whole module under `ns`. Composes §1
+        // and §2 with no extra resolver code.
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "export default function greet(name) { return \"hi \" + name; } export const VERSION = \"1.0\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import greet, * as lib from \"./lib.js\"; var a = greet(\"x\"); var v = lib.VERSION;",
+        );
+        let env = resolve(dir.path(), "main.js").unwrap();
+        assert!(env.lookup("greet").is_some(), "default should bind");
+        assert!(env.lookup("lib").is_some(), "namespace should bind");
+    }
+
+    #[test]
     fn cycle_is_rejected() {
         let dir = tempdir();
         write_file(
