@@ -4,7 +4,26 @@ Minimal VS Code adapter for the [minfern](../../README.md) LSP server.
 Adds no editor logic of its own — it just launches `minfern lsp --stdio`
 and routes traffic through `vscode-languageclient`.
 
-## Setup
+## Quick start
+
+```sh
+cd editors/vscode
+
+./install.sh             # build server, package extension, install into VS Code
+./install.sh dev         # OR: launch an Extension Development Host (no install)
+./install.sh uninstall   # remove the installed extension
+```
+
+After `install.sh` finishes, set `minfern.serverPath` in VS Code settings
+to the printed binary path, then reload the window. (`dev` mode wires
+the path automatically via `MINFERN_BIN`.)
+
+The script honours `$CODE` if you use a non-default channel
+(`CODE=code-insiders ./install.sh`).
+
+## Manual setup
+
+If you'd rather drive it yourself:
 
 1. **Build the server.** From the repo root:
 
@@ -16,33 +35,23 @@ and routes traffic through `vscode-languageclient`.
 2. **Install extension dependencies.** From this directory:
 
    ```sh
-   cd editors/vscode
    npm install
    ```
 
-3. **Tell the extension where the binary is.** Either set
-   `minfern.serverPath` in VS Code settings to an absolute path, set
-   the `MINFERN_BIN` environment variable, or put `minfern` on `PATH`.
+3. **Run it.** Either:
 
-## Run it
+   ```sh
+   # Dev host (no install):
+   code --extensionDevelopmentPath=$PWD .
 
-### As an Extension Development Host (no install)
+   # Permanent install:
+   npx @vscode/vsce package
+   code --install-extension minfern-lsp-0.0.1.vsix
+   ```
 
-```sh
-code --extensionDevelopmentPath=$PWD .
-```
-
-A new VS Code window opens with the extension loaded. Open any `.js`
-file: hovers, diagnostics, completions, go-to-def, rename, signature
-help, and inlay hints come from minfern.
-
-### Install permanently
-
-```sh
-npm install -g @vscode/vsce
-vsce package          # produces minfern-lsp-<version>.vsix
-code --install-extension minfern-lsp-0.0.1.vsix
-```
+4. **Tell the extension where the binary is.** Set `minfern.serverPath`
+   in VS Code settings to an absolute path, or export `MINFERN_BIN`,
+   or put `minfern` on `PATH`.
 
 ## Settings
 
