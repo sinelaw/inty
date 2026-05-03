@@ -82,6 +82,74 @@ impl TypePred {
     }
 }
 
+/// Literal value for singleton-literal types.
+///
+/// `LitValue` represents a single concrete JavaScript value lifted into the
+/// type lattice. Literal types are required for switch-exhaustiveness on
+/// finite string sets (e.g. `"a" | "b" | "c"`) and for the discriminator
+/// field of TypeScript-style discriminated unions.
+#[derive(Clone, Debug)]
+pub enum LitValue {
+    /// String literal type, e.g. the type `"circle"`.
+    String(String),
+    /// Number literal type, e.g. the type `3.14`.
+    Number(f64),
+    /// Boolean literal type, e.g. the type `true`.
+    Bool(bool),
+}
+
+impl LitValue {
+    /// The base primitive type that this literal subsumes into.
+    pub fn base_type(&self) -> Type {
+        match self {
+            LitValue::String(_) => Type::String,
+            LitValue::Number(_) => Type::Number,
+            LitValue::Bool(_) => Type::Boolean,
+        }
+    }
+
+    /// Stable sort key used for normalising unions deterministically.
+    fn sort_key(&self) -> (u8, String) {
+        match self {
+            LitValue::String(s) => (0, s.clone()),
+            LitValue::Number(n) => (1, n.to_bits().to_string()),
+            LitValue::Bool(b) => (2, b.to_string()),
+        }
+    }
+}
+
+impl PartialEq for LitValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LitValue::String(a), LitValue::String(b)) => a == b,
+            (LitValue::Number(a), LitValue::Number(b)) => a.to_bits() == b.to_bits(),
+            (LitValue::Bool(a), LitValue::Bool(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for LitValue {}
+
+impl std::hash::Hash for LitValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            LitValue::String(s) => {
+                0u8.hash(state);
+                s.hash(state);
+            }
+            LitValue::Number(n) => {
+                1u8.hash(state);
+                n.to_bits().hash(state);
+            }
+            LitValue::Bool(b) => {
+                2u8.hash(state);
+                b.hash(state);
+            }
+        }
+    }
+}
+
 /// Property name in object types.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PropName(pub String);
@@ -223,6 +291,14 @@ pub enum Type {
     /// Named recursive type reference: μα.T
     /// The TypeId refers to a type definition, and the Vec<Type> are type arguments.
     Named(TypeId, Vec<Type>),
+
+    /// Singleton literal type, e.g. `"circle"` or `42` or `true`.
+    Literal(LitValue),
+
+    /// Untagged union type: `T1 | T2 | ...`. Always normalised so that
+    /// members are deduplicated and sorted. A union is only constructed via
+    /// [`Type::union`] which enforces the invariants.
+    Union(Vec<Type>),
 }
 
 impl Type {
@@ -288,6 +364,69 @@ impl Type {
         Type::Row(row)
     }
 
+    /// Create a string-literal type.
+    pub fn lit_string(s: impl Into<String>) -> Self {
+        Type::Literal(LitValue::String(s.into()))
+    }
+
+    /// Create a number-literal type.
+    pub fn lit_number(n: f64) -> Self {
+        Type::Literal(LitValue::Number(n))
+    }
+
+    /// Create a boolean-literal type.
+    pub fn lit_bool(b: bool) -> Self {
+        Type::Literal(LitValue::Bool(b))
+    }
+
+    /// The empty union, representing an unreachable / impossible value.
+    pub fn never() -> Self {
+        Type::Union(Vec::new())
+    }
+
+    /// Construct a union type, normalising the members.
+    ///
+    /// Normal form rules:
+    /// - Nested unions are flattened: `(A | B) | A` ≡ `A | B`.
+    /// - Members are deduplicated and sorted by a stable key.
+    /// - A single-element union collapses to that element.
+    /// - The empty union stays as `Type::Union(vec![])` (i.e. `never`).
+    pub fn union(members: impl IntoIterator<Item = Type>) -> Self {
+        let mut flat: Vec<Type> = Vec::new();
+        for m in members {
+            match m {
+                Type::Union(inner) => {
+                    for t in inner {
+                        flat.push(t);
+                    }
+                }
+                other => flat.push(other),
+            }
+        }
+
+        // Deduplicate by structural equality. Quadratic in number of
+        // members but unions in practice are small.
+        let mut seen: Vec<Type> = Vec::new();
+        for t in flat {
+            if !seen.iter().any(|s| s == &t) {
+                seen.push(t);
+            }
+        }
+
+        seen.sort_by_key(union_member_sort_key);
+
+        if seen.len() == 1 {
+            seen.into_iter().next().unwrap()
+        } else {
+            Type::Union(seen)
+        }
+    }
+
+    /// True if this type is the empty union (`never`).
+    pub fn is_never(&self) -> bool {
+        matches!(self, Type::Union(v) if v.is_empty())
+    }
+
     /// Create a closed object type with the given properties.
     pub fn object(props: impl IntoIterator<Item = (impl Into<PropName>, Type)>) -> Self {
         let props: BTreeMap<PropName, Type> =
@@ -338,6 +477,11 @@ impl Type {
                 | Type::Null
                 | Type::Regex
         )
+    }
+
+    /// Check if this is a union type.
+    pub fn is_union(&self) -> bool {
+        matches!(self, Type::Union(_))
     }
 
     // === Accessors ===
@@ -431,6 +575,14 @@ impl Type {
                     arg.collect_free_vars(vars);
                 }
             }
+
+            Type::Literal(_) => {}
+
+            Type::Union(members) => {
+                for m in members {
+                    m.collect_free_vars(vars);
+                }
+            }
         }
     }
 }
@@ -519,6 +671,41 @@ impl TypeScheme {
             vars.remove(v);
         }
         vars
+    }
+}
+
+/// Stable sort key for union members so the normal form is deterministic
+/// across runs. Variants are first ordered by a small tag, then by a
+/// content-derived string. The exact ordering is unspecified — we only
+/// care that it's total and stable.
+fn union_member_sort_key(t: &Type) -> (u8, String) {
+    match t {
+        Type::Number => (0, String::new()),
+        Type::String => (1, String::new()),
+        Type::Boolean => (2, String::new()),
+        Type::Undefined => (3, String::new()),
+        Type::Null => (4, String::new()),
+        Type::Regex => (5, String::new()),
+        Type::Literal(lit) => {
+            let (sub, key) = lit.sort_key();
+            (6, format!("{}|{}", sub, key))
+        }
+        Type::Var(TVarName::Flex(id)) => (7, format!("f{}", id)),
+        Type::Var(TVarName::Skolem(id)) => (8, format!("s{}", id)),
+        Type::Func { params, ret, .. } => (
+            9,
+            format!("{}->{}", params.len(), union_member_sort_key(ret).1),
+        ),
+        Type::Row(row) => {
+            let mut keys: Vec<&str> = row.props.keys().map(|p| p.0.as_str()).collect();
+            keys.sort();
+            (10, keys.join(","))
+        }
+        Type::Array(elem) => (11, union_member_sort_key(elem).1),
+        Type::Map(v) => (12, union_member_sort_key(v).1),
+        Type::Promise(v) => (13, union_member_sort_key(v).1),
+        Type::Named(id, _) => (14, format!("{}", id)),
+        Type::Union(_) => (15, String::new()),
     }
 }
 

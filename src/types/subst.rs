@@ -175,6 +175,15 @@ impl Substitutable for Type {
             Type::Named(id, args) => {
                 Type::Named(*id, args.iter().map(|a| a.apply_subst(subst)).collect())
             }
+
+            // Literal types are unchanged by substitution
+            Type::Literal(lit) => Type::Literal(lit.clone()),
+
+            // Substitution can produce duplicates / nested unions, so
+            // re-normalise via Type::union.
+            Type::Union(members) => {
+                Type::union(members.iter().map(|m| m.apply_subst(subst)))
+            }
         }
     }
 

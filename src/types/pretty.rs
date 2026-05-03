@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display, Write};
 
-use super::ty::{ClassName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
+use super::ty::{ClassName, LitValue, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
 
 /// Context for pretty-printing, tracking variable names.
 pub struct PrettyContext {
@@ -159,6 +159,48 @@ impl PrettyContext {
                 }
                 Ok(())
             }
+
+            Type::Literal(lit) => self.write_literal(w, lit),
+
+            Type::Union(members) => {
+                if members.is_empty() {
+                    return write!(w, "never");
+                }
+                // Unions bind weaker than function arrows; if we're already
+                // inside a function-arg context, parenthesise to avoid
+                // `A | B => C` reading as `A | (B => C)`.
+                if in_func_arg {
+                    write!(w, "(")?;
+                }
+                for (i, m) in members.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, " | ")?;
+                    }
+                    // Parenthesise function members so `(A) => B | C` reads
+                    // as `((A) => B) | C` rather than `(A) => (B | C)`.
+                    let needs_parens = matches!(m, Type::Func { .. });
+                    if needs_parens {
+                        write!(w, "(")?;
+                    }
+                    self.write_type(w, m, false)?;
+                    if needs_parens {
+                        write!(w, ")")?;
+                    }
+                }
+                if in_func_arg {
+                    write!(w, ")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Write a literal-value type.
+    fn write_literal<W: Write>(&mut self, w: &mut W, lit: &LitValue) -> fmt::Result {
+        match lit {
+            LitValue::String(s) => write!(w, "\"{}\"", s),
+            LitValue::Number(n) => write!(w, "{}", n),
+            LitValue::Bool(b) => write!(w, "{}", b),
         }
     }
 

@@ -10,6 +10,6 @@ mod ty;
 pub use pretty::PrettyContext;
 pub use subst::{Subst, Substitutable};
 pub use ty::{
-    ClassName, PropName, QualType, RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId,
-    TypePred, TypeScheme,
+    ClassName, LitValue, PropName, QualType, RowTail, RowType, TVarId, TVarName, Type, TypeDef,
+    TypeId, TypePred, TypeScheme,
 };
