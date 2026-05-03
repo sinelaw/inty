@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::error::TypeError;
 use crate::lexer::Span;
-use crate::types::Type;
+use crate::types::{LitValue, Type};
 
 /// Result type for type annotation parsing.
 pub type ParseResult<T> = Result<T, TypeError>;
@@ -60,7 +60,7 @@ impl<'a> TypeParser<'a> {
         Ok(ty)
     }
 
-    /// Parse a type.
+    /// Parse a type, including union postfixes (`A | B | ...`).
     fn parse_type(&mut self) -> ParseResult<Type> {
         self.skip_whitespace();
 
@@ -73,8 +73,23 @@ impl<'a> TypeParser<'a> {
             return self.parse_generic_type();
         }
 
-        // Parse simple type (handles parens, primitives, and [] suffixes)
-        self.parse_simple_type()
+        // Parse the leading simple-or-function type, then collect any
+        // `| Type` continuations into a union. `|` binds weaker than `=>`,
+        // so the function type is parsed first and the union is built
+        // around it.
+        let first = self.parse_simple_type()?;
+        self.skip_whitespace();
+        if self.peek_char() != Some('|') {
+            return Ok(first);
+        }
+        let mut members = vec![first];
+        while self.peek_char() == Some('|') {
+            self.pos += 1;
+            self.skip_whitespace();
+            members.push(self.parse_simple_type()?);
+            self.skip_whitespace();
+        }
+        Ok(Type::union(members))
     }
 
     /// Parse a generic type like `<T>(x: T) => T`.
@@ -236,6 +251,8 @@ impl<'a> TypeParser<'a> {
                 // Could be grouped type or function type
                 self.parse_func_or_grouped()
             }
+            Some('"') => self.parse_string_literal_type(),
+            Some(c) if c.is_ascii_digit() || c == '-' => self.parse_number_literal_type(),
             Some(c) if self.is_ident_start(Some(c)) => {
                 let ident = self.parse_ident()?;
                 self.ident_to_type(&ident)
@@ -243,6 +260,77 @@ impl<'a> TypeParser<'a> {
             Some(c) => Err(self.error(format!("unexpected character '{}'", c))),
             None => Err(self.error("unexpected end of type annotation".to_string())),
         }
+    }
+
+    /// Parse a string-literal type like `"circle"`. Supports basic escape
+    /// sequences `\\`, `\"`, `\n`, `\t`. Other backslashed characters
+    /// pass through as-is.
+    fn parse_string_literal_type(&mut self) -> ParseResult<Type> {
+        self.expect_char('"')?;
+        let mut s = String::new();
+        loop {
+            match self.peek_char() {
+                None => return Err(self.error("unterminated string literal type".to_string())),
+                Some('"') => {
+                    self.pos += 1;
+                    return Ok(Type::Literal(LitValue::String(s)));
+                }
+                Some('\\') => {
+                    self.pos += 1;
+                    match self.peek_char() {
+                        Some('"') => {
+                            s.push('"');
+                            self.pos += 1;
+                        }
+                        Some('\\') => {
+                            s.push('\\');
+                            self.pos += 1;
+                        }
+                        Some('n') => {
+                            s.push('\n');
+                            self.pos += 1;
+                        }
+                        Some('t') => {
+                            s.push('\t');
+                            self.pos += 1;
+                        }
+                        Some(c) => {
+                            s.push(c);
+                            self.pos += c.len_utf8();
+                        }
+                        None => {
+                            return Err(self.error("dangling backslash in string literal".into()))
+                        }
+                    }
+                }
+                Some(c) => {
+                    s.push(c);
+                    self.pos += c.len_utf8();
+                }
+            }
+        }
+    }
+
+    /// Parse a number-literal type like `42` or `-3.14`.
+    fn parse_number_literal_type(&mut self) -> ParseResult<Type> {
+        let start = self.pos;
+        if self.peek_char() == Some('-') {
+            self.pos += 1;
+        }
+        while matches!(self.peek_char(), Some('0'..='9')) {
+            self.pos += 1;
+        }
+        if self.peek_char() == Some('.') {
+            self.pos += 1;
+            while matches!(self.peek_char(), Some('0'..='9')) {
+                self.pos += 1;
+            }
+        }
+        let text = &self.input[start..self.pos];
+        let n: f64 = text
+            .parse()
+            .map_err(|_| self.error(format!("invalid number literal '{}'", text)))?;
+        Ok(Type::Literal(LitValue::Number(n)))
     }
 
     /// Parse an object type like `{name: String, age: Number}`.
@@ -291,6 +379,9 @@ impl<'a> TypeParser<'a> {
             "Undefined" | "undefined" | "void" => Ok(Type::Undefined),
             "Null" | "null" => Ok(Type::Null),
             "Regex" => Ok(Type::Regex),
+            "never" => Ok(Type::never()),
+            "true" => Ok(Type::lit_bool(true)),
+            "false" => Ok(Type::lit_bool(false)),
             "Promise" => {
                 // `Promise<T>` — the inner type is required.
                 self.skip_whitespace();

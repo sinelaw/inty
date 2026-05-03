@@ -15,6 +15,7 @@ use super::type_parser::parse_type_annotation;
 use crate::types::{PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme};
 
 use super::env::{Mutability, TypeEnv};
+use super::narrow::{apply_narrowing, try_extract_narrowing};
 use super::state::InferState;
 
 /// Check if an expression is a syntactic value (for the value restriction).
@@ -1507,8 +1508,20 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let _test_type = self.infer_expr(env, test)?;
-        let cons_type = self.infer_expr(env, consequent)?;
-        let alt_type = self.infer_expr(env, alternate)?;
+
+        // Flow-sensitive narrowing: if the test is one of the recognised
+        // patterns (typeof / === / !==), refine the consequent's env with
+        // the predicate and the alternate's env with its negation.
+        let (cons_env, alt_env) = match try_extract_narrowing(test) {
+            Some((path, narrowing)) => (
+                apply_narrowing(self, env, &path, &narrowing),
+                apply_narrowing(self, env, &path, &narrowing.negate()),
+            ),
+            None => (env.clone(), env.clone()),
+        };
+
+        let cons_type = self.infer_expr(&cons_env, consequent)?;
+        let alt_type = self.infer_expr(&alt_env, alternate)?;
 
         // Branches that disagree in type are merged into a union rather
         // than rejected — see InferState::join for details.
@@ -1694,10 +1707,19 @@ impl InferState {
                 span,
             } => {
                 let _test_type = self.infer_expr(env, test)?;
-                let (cons_type, _) = self.infer_stmt(env, consequent)?;
+
+                let (cons_env, alt_env) = match try_extract_narrowing(test) {
+                    Some((path, narrowing)) => (
+                        apply_narrowing(self, env, &path, &narrowing),
+                        apply_narrowing(self, env, &path, &narrowing.negate()),
+                    ),
+                    None => (env.clone(), env.clone()),
+                };
+
+                let (cons_type, _) = self.infer_stmt(&cons_env, consequent)?;
 
                 let result = if let Some(alt) = alternate {
-                    let (alt_type, _) = self.infer_stmt(env, alt)?;
+                    let (alt_type, _) = self.infer_stmt(&alt_env, alt)?;
                     self.join(*span, &cons_type, &alt_type)
                 } else {
                     self.apply_subst(&cons_type)
@@ -1864,14 +1886,38 @@ impl InferState {
             } => {
                 let disc_type = self.infer_expr(env, discriminant)?;
 
+                // The path the switch is dispatching on (if it's an
+                // identifier or member chain). Used to narrow each case
+                // body's env. Falls back to no narrowing for switches on
+                // arbitrary expressions.
+                let disc_path = super::narrow::path_from_expr(discriminant);
+
                 for case in cases {
-                    if let Some(test) = &case.test {
+                    let case_env = if let Some(test) = &case.test {
                         let test_type = self.infer_expr(env, test)?;
                         self.unify(*span, &disc_type, &test_type)?;
-                    }
+
+                        // If the case test is a literal and we know the
+                        // discriminator's path, the case body gets an env
+                        // narrowed by `disc === literal`.
+                        match (
+                            disc_path.as_ref(),
+                            super::narrow::literal_value_of(test),
+                        ) {
+                            (Some(path), Some(lit)) => apply_narrowing(
+                                self,
+                                env,
+                                path,
+                                &super::narrow::Narrowing::Equals(lit),
+                            ),
+                            _ => env.clone(),
+                        }
+                    } else {
+                        env.clone()
+                    };
 
                     for stmt in &case.consequent {
-                        self.infer_stmt(env, stmt)?;
+                        self.infer_stmt(&case_env, stmt)?;
                     }
                 }
 
@@ -2938,6 +2984,109 @@ mod tests {
             }
         } else {
             panic!("map should be a function type");
+        }
+    }
+
+    // ========================================================================
+    // Phase 5 — Narrowing predicates: typeof, ===, !==, member-equality.
+    // The three programs here mirror the "What good looks like" examples
+    // in the design doc and must all type-check end-to-end.
+    // ========================================================================
+
+    #[test]
+    fn test_phase5_typeof_undefined_narrowing() {
+        // function f(x: String | undefined) {
+        //   if (typeof x === "undefined") { return 0; }
+        //   else { return x.length; }   // x narrowed to String in the else
+        // }
+        // (TypeScript-style "narrow into post-if via early return" relies
+        // on control-flow analysis we don't yet do; the explicit else
+        // works because Phase-5 narrowing flows the negated predicate
+        // into the alternate branch.)
+        let src = "/** function f(x: String | undefined) => Number */\n\
+                   function f(x) { if (typeof x === \"undefined\") { return 0; } else { return x.length; } }";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("f").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        if let Some((_, _, ret)) = ty.as_func() {
+            let ret = state.apply_subst(ret);
+            assert_eq!(ret, Type::Number);
+        } else {
+            panic!("f should be a function");
+        }
+    }
+
+    #[test]
+    fn test_phase5_switch_on_string_literal_union() {
+        // function g(s: "a" | "b" | "c") {
+        //   switch (s) { case "a": return 1; case "b": return 2; case "c": return 3; }
+        // }
+        let src = "/** function g(s: \"a\" | \"b\" | \"c\") => Number */\n\
+                   function g(s) { switch (s) { case \"a\": return 1; case \"b\": return 2; case \"c\": return 3; } return 0; }";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("g").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        if let Some((_, _, ret)) = ty.as_func() {
+            let ret = state.apply_subst(ret);
+            assert_eq!(ret, Type::Number);
+        } else {
+            panic!("g should be a function");
+        }
+    }
+
+    #[test]
+    fn test_phase5_discriminated_union_via_if() {
+        // Same shape as the switch example, but using a single if
+        // instead of a switch — easier to isolate the narrowing.
+        let src = "/** function area(\
+                   shape: {kind: \"circle\", r: Number} \
+                        | {kind: \"square\", s: Number}) => Number */\n\
+                   function area(shape) { \
+                     if (shape.kind === \"circle\") { return shape.r; } else { return shape.s; } \
+                   }";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("area").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        if let Some((_, _, ret)) = ty.as_func() {
+            let ret = state.apply_subst(ret);
+            assert_eq!(ret, Type::Number);
+        } else {
+            panic!("area should be a function");
+        }
+    }
+
+    #[test]
+    fn test_phase5_discriminated_union_via_switch() {
+        // function area(shape: {kind:"circle", r:Number}
+        //                    | {kind:"square", s:Number}
+        //                    | {kind:"rect", w:Number, h:Number}) {
+        //   switch (shape.kind) {
+        //     case "circle": return shape.r * shape.r;     // narrowed
+        //     case "square": return shape.s * shape.s;     // narrowed
+        //     case "rect":   return shape.w * shape.h;     // narrowed
+        //   }
+        //   return 0;
+        // }
+        let src = "/** function area(\
+                   shape: {kind: \"circle\", r: Number} \
+                        | {kind: \"square\", s: Number} \
+                        | {kind: \"rect\", w: Number, h: Number}) => Number */\n\
+                   function area(shape) { \
+                     switch (shape.kind) { \
+                       case \"circle\": return shape.r * shape.r; \
+                       case \"square\": return shape.s * shape.s; \
+                       case \"rect\":   return shape.w * shape.h; \
+                     } \
+                     return 0; \
+                   }";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("area").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        if let Some((_, _, ret)) = ty.as_func() {
+            let ret = state.apply_subst(ret);
+            assert_eq!(ret, Type::Number);
+        } else {
+            panic!("area should be a function");
         }
     }
 
