@@ -207,10 +207,9 @@ fn run_lsp(args: &[String]) -> ExitCode {
     }
 
     match minfern_lsp::run_stdio() {
-        Ok(0) => ExitCode::SUCCESS,
-        Ok(code) => ExitCode::from(code as u8),
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("lsp: I/O error: {}", e);
+            eprintln!("lsp: {}", e);
             ExitCode::from(1)
         }
     }
