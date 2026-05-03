@@ -87,6 +87,36 @@ fn is_mutable_container_literal(expr: &Expr) -> bool {
     }
 }
 
+/// If `ty` is a closed union whose every member is a literal type
+/// (or just a single literal type), return the set of literal values.
+/// Otherwise None.
+fn literal_set_of_type(ty: &Type) -> Option<Vec<crate::types::LitValue>> {
+    match ty {
+        Type::Literal(l) => Some(vec![l.clone()]),
+        Type::Union(members) => {
+            let mut out = Vec::with_capacity(members.len());
+            for m in members {
+                if let Type::Literal(l) = m {
+                    out.push(l.clone());
+                } else {
+                    return None;
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Format a literal value for human-readable warning messages.
+fn format_literal(l: &crate::types::LitValue) -> String {
+    match l {
+        crate::types::LitValue::String(s) => format!("\"{}\"", s),
+        crate::types::LitValue::Number(n) => n.to_string(),
+        crate::types::LitValue::Bool(b) => b.to_string(),
+    }
+}
+
 /// Result type for inference operations.
 pub type InferResult<T> = Result<T, MinfernError>;
 
@@ -868,6 +898,22 @@ impl InferState {
                 Ok(result_type)
             }
         }
+    }
+
+    /// If the discriminant of a switch has a finite, closed type (a
+    /// union of literal types, or a single literal type), return the
+    /// covered literals; used by switch-exhaustiveness analysis.
+    ///
+    /// We rely on phase-3 union elimination having already pushed
+    /// member access through unions, so `shape.kind` on a discriminated
+    /// union resolves to a literal union directly.
+    fn resolve_finite_literal_set(
+        &self,
+        _discriminant: &Expr,
+        disc_type: &Type,
+    ) -> Option<Vec<crate::types::LitValue>> {
+        let disc = self.apply_subst(disc_type);
+        literal_set_of_type(&disc)
     }
 
     /// Index a single (non-union) type with a known index-type. Used by
@@ -1892,6 +1938,9 @@ impl InferState {
                 // arbitrary expressions.
                 let disc_path = super::narrow::path_from_expr(discriminant);
 
+                let mut covered_literals: Vec<crate::types::LitValue> = Vec::new();
+                let mut has_default = false;
+
                 for case in cases {
                     let case_env = if let Some(test) = &case.test {
                         let test_type = self.infer_expr(env, test)?;
@@ -1900,10 +1949,11 @@ impl InferState {
                         // If the case test is a literal and we know the
                         // discriminator's path, the case body gets an env
                         // narrowed by `disc === literal`.
-                        match (
-                            disc_path.as_ref(),
-                            super::narrow::literal_value_of(test),
-                        ) {
+                        let lit = super::narrow::literal_value_of(test);
+                        if let Some(lit) = lit.clone() {
+                            covered_literals.push(lit);
+                        }
+                        match (disc_path.as_ref(), lit) {
                             (Some(path), Some(lit)) => apply_narrowing(
                                 self,
                                 env,
@@ -1913,11 +1963,41 @@ impl InferState {
                             _ => env.clone(),
                         }
                     } else {
+                        has_default = true;
                         env.clone()
                     };
 
                     for stmt in &case.consequent {
                         self.infer_stmt(&case_env, stmt)?;
+                    }
+                }
+
+                // Phase 6 — exhaustiveness: if the discriminant resolves
+                // to a closed union of literal types (after narrowing
+                // through subst, which also walks through the path), and
+                // the switch has no default, every literal in the union
+                // must be covered by some case test. Otherwise we warn.
+                if !has_default {
+                    let disc_finite = self
+                        .resolve_finite_literal_set(discriminant, &disc_type);
+                    if let Some(domain) = disc_finite {
+                        let missing: Vec<&crate::types::LitValue> = domain
+                            .iter()
+                            .filter(|d| !covered_literals.contains(d))
+                            .collect();
+                        if !missing.is_empty() {
+                            let names: Vec<String> = missing
+                                .iter()
+                                .map(|l| format_literal(l))
+                                .collect();
+                            self.warn(
+                                *span,
+                                format!(
+                                    "non-exhaustive switch: missing case(s) for {}",
+                                    names.join(", ")
+                                ),
+                            );
+                        }
                     }
                 }
 
@@ -3088,6 +3168,68 @@ mod tests {
         } else {
             panic!("area should be a function");
         }
+    }
+
+    // ========================================================================
+    // Phase 6 — Switch-exhaustiveness as a derived check.
+    // ========================================================================
+
+    #[test]
+    fn test_phase6_exhaustive_switch_no_warning() {
+        let src = "/** function g(s: \"a\" | \"b\" | \"c\") => Number */\n\
+                   function g(s) { switch (s) { case \"a\": return 1; case \"b\": return 2; case \"c\": return 3; } return 0; }";
+        let (_, _, state) = infer_program_with_state(src).unwrap();
+        assert!(
+            state.warnings.is_empty(),
+            "expected no warnings, got: {:?}",
+            state.warnings
+        );
+    }
+
+    #[test]
+    fn test_phase6_non_exhaustive_switch_warns() {
+        // Missing case "c" — should warn but still type-check.
+        let src = "/** function g(s: \"a\" | \"b\" | \"c\") => Number */\n\
+                   function g(s) { switch (s) { case \"a\": return 1; case \"b\": return 2; } return 0; }";
+        let (_, _, state) = infer_program_with_state(src).unwrap();
+        assert!(
+            state.warnings.iter().any(|w| w.message.contains("non-exhaustive")
+                && w.message.contains("\"c\"")),
+            "expected non-exhaustive warning mentioning 'c', got: {:?}",
+            state.warnings
+        );
+    }
+
+    #[test]
+    fn test_phase6_default_case_suppresses_warning() {
+        let src = "/** function g(s: \"a\" | \"b\" | \"c\") => Number */\n\
+                   function g(s) { switch (s) { case \"a\": return 1; default: return 0; } return 0; }";
+        let (_, _, state) = infer_program_with_state(src).unwrap();
+        assert!(
+            state.warnings.is_empty(),
+            "expected no warnings (default present), got: {:?}",
+            state.warnings
+        );
+    }
+
+    #[test]
+    fn test_phase6_discriminated_union_exhaustive() {
+        let src = "/** function area(\
+                   shape: {kind: \"circle\", r: Number} \
+                        | {kind: \"square\", s: Number}) => Number */\n\
+                   function area(shape) { \
+                     switch (shape.kind) { \
+                       case \"circle\": return shape.r * shape.r; \
+                       case \"square\": return shape.s * shape.s; \
+                     } \
+                     return 0; \
+                   }";
+        let (_, _, state) = infer_program_with_state(src).unwrap();
+        assert!(
+            state.warnings.is_empty(),
+            "expected no warnings on exhaustive disc-union switch, got: {:?}",
+            state.warnings
+        );
     }
 
     // ========================================================================
