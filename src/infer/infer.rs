@@ -421,14 +421,18 @@ impl InferState {
         elements: &[Option<Expr>],
         span: Span,
     ) -> InferResult<Type> {
-        let elem_type = self.fresh_type_var();
+        // Start with a fresh elem-type variable so an empty array still
+        // has a polymorphic element type. Each element joins into the
+        // accumulator: when elements agree (after unification) we keep a
+        // single type; when they don't, the result is a union.
+        let mut acc: Type = self.fresh_type_var();
 
         for elem in elements.iter().flatten() {
             let t = self.infer_expr(env, elem)?;
-            self.unify(span, &elem_type, &t)?;
+            acc = self.join(span, &acc, &t);
         }
 
-        Ok(Type::array(self.apply_subst(&elem_type)))
+        Ok(Type::array(self.apply_subst(&acc)))
     }
 
     /// Infer the type of an object literal.
@@ -1409,10 +1413,9 @@ impl InferState {
         let cons_type = self.infer_expr(env, consequent)?;
         let alt_type = self.infer_expr(env, alternate)?;
 
-        // Both branches should have the same type
-        self.unify(span, &cons_type, &alt_type)?;
-
-        Ok(self.apply_subst(&cons_type))
+        // Branches that disagree in type are merged into a union rather
+        // than rejected — see InferState::join for details.
+        Ok(self.join(span, &cons_type, &alt_type))
     }
 
     /// Infer the type of a sequence expression.
@@ -1596,12 +1599,14 @@ impl InferState {
                 let _test_type = self.infer_expr(env, test)?;
                 let (cons_type, _) = self.infer_stmt(env, consequent)?;
 
-                if let Some(alt) = alternate {
+                let result = if let Some(alt) = alternate {
                     let (alt_type, _) = self.infer_stmt(env, alt)?;
-                    self.unify(*span, &cons_type, &alt_type)?;
-                }
+                    self.join(*span, &cons_type, &alt_type)
+                } else {
+                    self.apply_subst(&cons_type)
+                };
 
-                Ok((self.apply_subst(&cons_type), env.clone()))
+                Ok((result, env.clone()))
             }
 
             Stmt::While { test, body, .. } => {

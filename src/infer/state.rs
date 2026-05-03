@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use crate::error::TypeOrigin;
 use crate::lexer::Span;
 use crate::types::{
-    ClassName, RowTail, Subst, Substitutable, TVarId, TVarName, Type, TypeDef, TypeId, TypePred,
-    TypeScheme,
+    ClassName, LitValue, RowTail, Subst, Substitutable, TVarId, TVarName, Type, TypeDef, TypeId,
+    TypePred, TypeScheme,
 };
 
 /// Type class definition with instances.
@@ -188,6 +188,90 @@ impl InferState {
     /// Apply the current substitution to a type.
     pub fn apply_subst<T: Substitutable>(&self, t: &T) -> T {
         self.main_subst.apply(t)
+    }
+
+    /// Join two types into their least upper bound.
+    ///
+    /// Unlike [`Self::unify`], this never fails: if the two types disagree
+    /// in a way unification can't reconcile, it returns the (normalised)
+    /// union of the two. Used at branch-joining sites — ternary
+    /// alternatives, if/else branches, array literal elements — where
+    /// JavaScript naturally produces values of differing types and the
+    /// type system needs to express "either".
+    ///
+    /// Side-effects: if unification succeeds, the substitution is updated
+    /// as if the user had called `unify` directly. If it fails, the
+    /// substitution is rolled back and a union is returned. This means
+    /// `join` is safe to call speculatively at branch boundaries.
+    pub fn join(&mut self, span: Span, t1: &Type, t2: &Type) -> Type {
+        let t1 = self.apply_subst(t1);
+        let t2 = self.apply_subst(t2);
+
+        if t1 == t2 {
+            return t1;
+        }
+
+        // If either side is already a union, we don't try to unify (which
+        // would just fail) — we fold members together instead. This also
+        // makes `join` associative when chained over a list of types.
+        if matches!(t1, Type::Union(_)) || matches!(t2, Type::Union(_)) {
+            let mut all: Vec<Type> = Vec::new();
+            match t1 {
+                Type::Union(m) => all.extend(m),
+                other => all.push(other),
+            }
+            match t2 {
+                Type::Union(m) => all.extend(m),
+                other => all.push(other),
+            }
+            return Self::normalise_union_members(all);
+        }
+
+        // Try to unify with rollback. We restore the substitution and the
+        // pending-constraints list on failure so a join attempt has no
+        // observable side-effect when it falls back to the union path.
+        let saved_subst = self.main_subst.clone();
+        let saved_constraints = self.pending_constraints.clone();
+
+        if self.unify(span, &t1, &t2).is_ok() {
+            return self.apply_subst(&t1);
+        }
+
+        self.main_subst = saved_subst;
+        self.pending_constraints = saved_constraints;
+
+        Self::normalise_union_members(vec![t1, t2])
+    }
+
+    /// Normalise a list of would-be union members applying the
+    /// literal-subsumption rule: a literal type is dropped from the union
+    /// when its base type (`Number`/`String`/`Boolean`) is also present
+    /// (e.g. `"a" | String` collapses to `String`, but `"a" | "b"` stays
+    /// a closed literal union).
+    pub(crate) fn normalise_union_members(members: Vec<Type>) -> Type {
+        let mut has_number = false;
+        let mut has_string = false;
+        let mut has_boolean = false;
+        for m in &members {
+            match m {
+                Type::Number => has_number = true,
+                Type::String => has_string = true,
+                Type::Boolean => has_boolean = true,
+                _ => {}
+            }
+        }
+
+        let filtered: Vec<Type> = members
+            .into_iter()
+            .filter(|m| match m {
+                Type::Literal(LitValue::String(_)) => !has_string,
+                Type::Literal(LitValue::Number(_)) => !has_number,
+                Type::Literal(LitValue::Bool(_)) => !has_boolean,
+                _ => true,
+            })
+            .collect();
+
+        Type::union(filtered)
     }
 
     /// Extend the substitution with a new binding.
@@ -489,6 +573,67 @@ mod tests {
 
         // var 0 does not occur in Number
         assert!(!state.occurs_in(0, &Type::Number));
+    }
+
+    #[test]
+    fn test_join_equal_types() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let r = state.join(span, &Type::Number, &Type::Number);
+        assert_eq!(r, Type::Number);
+    }
+
+    #[test]
+    fn test_join_unifiable_types() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let v = Type::flex(0);
+        // a flex var joined with Number unifies to Number
+        let r = state.join(span, &v, &Type::Number);
+        assert_eq!(r, Type::Number);
+    }
+
+    #[test]
+    fn test_join_disjoint_primitives_yields_union() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let r = state.join(span, &Type::Number, &Type::String);
+        match r {
+            Type::Union(members) => {
+                assert_eq!(members.len(), 2);
+                assert!(members.contains(&Type::Number));
+                assert!(members.contains(&Type::String));
+            }
+            other => panic!("expected union, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_join_literal_with_base_collapses() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let r = state.join(span, &Type::lit_string("a"), &Type::String);
+        assert_eq!(r, Type::String);
+    }
+
+    #[test]
+    fn test_join_literals_keep_distinct() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let r = state.join(span, &Type::lit_string("a"), &Type::lit_string("b"));
+        match r {
+            Type::Union(m) => assert_eq!(m.len(), 2),
+            other => panic!("expected union, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_join_does_not_leak_subst_on_failure() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        // join Number ~ String: unification fails, substitution must be unchanged.
+        let _ = state.join(span, &Type::Number, &Type::String);
+        assert!(state.main_subst.is_empty());
     }
 
     #[test]
