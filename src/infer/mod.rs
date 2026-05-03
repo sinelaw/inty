@@ -317,6 +317,29 @@ impl InferState {
                             span: *span,
                         },
                     ),
+                    ExportDecl::List { specifiers, span } => {
+                        // `export { a, b as c };` doesn't introduce types — it
+                        // just re-binds existing locals under their export
+                        // names. The renamed binding shows up in the env so
+                        // the resolver's diff finds it.
+                        let mut new_env = env.clone();
+                        for spec in specifiers {
+                            let scheme = new_env.lookup(&spec.local).cloned().ok_or_else(|| {
+                                MinfernError::Type(TypeError::Module {
+                                    message: format!(
+                                        "exported name `{}` is not declared in this module",
+                                        spec.local
+                                    ),
+                                    span: spec.span,
+                                })
+                            })?;
+                            if spec.exported != spec.local {
+                                new_env = new_env.extend(spec.exported.clone(), scheme);
+                            }
+                        }
+                        let _ = span;
+                        Ok((Type::Undefined, new_env))
+                    }
                     ExportDecl::Default { value, span } => {
                         // `export default function f() { … }` is two bindings:
                         // a function declaration `f` and an alias `default = f`.
