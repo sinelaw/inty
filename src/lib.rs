@@ -11,6 +11,7 @@
 
 pub mod builtins;
 pub mod diagnostics;
+pub mod dynamics;
 pub mod error;
 pub mod infer;
 pub mod lexer;
