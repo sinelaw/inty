@@ -267,19 +267,30 @@ impl Analysis {
 
         // Find the innermost call expression containing offset.
         let call = innermost_call_at(program, offset)?;
-        let (callee_name, paren_open) = call_descriptor(call, text)?;
+        let (callee_expr, call_span) = match call {
+            Expr::Call { callee, span, .. } => (callee.as_ref(), *span),
+            _ => return None,
+        };
 
-        // Look up the callee's type (only Ident callees in v1).
-        let scheme = env.lookup(callee_name.as_str())?;
-        let ty = state.apply_subst(&scheme.body.ty);
-        let (params, ret) = func_params(&ty)?;
+        // Resolve the callee's type. Supports plain identifiers and
+        // member chains (`obj.method`, `a.b.method`, …); other callee
+        // shapes (computed members, calls returning functions) we
+        // punt on for v1.
+        let (callee_label, callee_ty) = resolve_callee_type(env, state, callee_expr)?;
+        let (params, ret) = func_params(&callee_ty)?;
+
+        // Find the `(` opening the argument list after the callee.
+        let bytes = text.as_bytes();
+        let search_start = callee_expr.span().end;
+        let search_end = call_span.end.min(bytes.len());
+        let paren_open = (search_start..search_end).find(|&i| bytes[i] == b'(')?;
 
         let mut ctx = PrettyContext::new();
         let param_labels: Vec<String> = params.iter().map(|p| ctx.format_type(p)).collect();
         let ret_label = ctx.format_type(&ret);
         let signature_label = format!(
             "{}({}): {}",
-            callee_name,
+            callee_label,
             param_labels.join(", "),
             ret_label,
         );
@@ -476,22 +487,40 @@ fn find_call_expr<'a>(expr: &'a Expr, offset: usize, best: &mut Option<&'a Expr>
 
 /// Pull `(callee_name, paren_open_byte)` out of an `Expr::Call`. v1
 /// only handles bare-identifier callees.
-fn call_descriptor(call: &Expr, text: &str) -> Option<(String, usize)> {
-    let (callee, span) = match call {
-        Expr::Call { callee, span, .. } => (callee, span),
-        _ => return None,
-    };
-    let name = match callee.as_ref() {
-        Expr::Ident { name, .. } => name.clone(),
-        _ => return None,
-    };
-    // Find the `(` after the callee. The callee's span ends right
-    // before any whitespace and the paren.
-    let search_start = callee.span().end;
-    let search_end = span.end.min(text.len());
-    let bytes = text.as_bytes();
-    let paren = (search_start..search_end).find(|&i| bytes[i] == b'(')?;
-    Some((name, paren))
+/// Recursively resolve the type of a call's callee expression.
+/// Supported shapes:
+///
+/// - `Expr::Ident { name }` — looked up in the env directly.
+/// - `Expr::Member { object, property }` — recurses on `object`,
+///   expects the result to be a row, picks `property` from the row's
+///   props. Handles arbitrary chains (`a.b.c.method`).
+///
+/// Anything else (computed member, call returning a function, etc.)
+/// returns `None` and the LSP server reports no signature help.
+fn resolve_callee_type(
+    env: &TypeEnv,
+    state: &InferState,
+    expr: &Expr,
+) -> Option<(String, Type)> {
+    use minfern::types::PropName;
+    match expr {
+        Expr::Ident { name, .. } => {
+            let scheme = env.lookup(name)?;
+            let ty = state.apply_subst(&scheme.body.ty);
+            Some((name.clone(), ty))
+        }
+        Expr::Member { object, property, .. } => {
+            let (obj_label, obj_ty) = resolve_callee_type(env, state, object)?;
+            let row = match &obj_ty {
+                Type::Row(r) => r,
+                _ => return None,
+            };
+            let prop_ty = row.props.get(&PropName(property.clone()))?;
+            let applied = state.apply_subst(prop_ty);
+            Some((format!("{}.{}", obj_label, property), applied))
+        }
+        _ => None,
+    }
 }
 
 /// Count top-level commas between `start` (just past the `(`) and
