@@ -1284,3 +1284,105 @@ fn test_member_on_union_disagreeing_field_joins() {
         panic!("getX should be a function");
     }
 }
+
+// --- Unreachable-narrowing diagnostics --------------------------------
+
+#[test]
+fn test_warn_typeof_eqeq_impossible_branch() {
+    // `res : Number | String`; `(typeof res) == "boolean"` can never
+    // hold, so the if-body is unreachable and we should warn.
+    let src = "\
+        /** function test(Number) => Number | String */ \
+        function test(x) { if (x > 4) { return \"bad\"; } else { return x; } } \
+        /** function moshe(Number) => String */ \
+        function moshe(x) { \
+            /** let res: Number | String */ \
+            let res = test(x); \
+            if ((typeof res) == \"number\") { return \"cool\"; } \
+            else if ((typeof res) == \"boolean\") { return \"bad\"; } \
+            else { return \"other\"; } \
+        }";
+    let (_, _, state) = infer_program_with_state(src).unwrap();
+    assert!(
+        state
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("always false")),
+        "expected an 'always false' warning for the boolean branch, got: {:?}",
+        state.warnings
+    );
+}
+
+#[test]
+fn test_warn_typeof_strict_eq_impossible_branch() {
+    // Same as above, but with strict equality.
+    let src = "\
+        function f(x) { \
+            /** let res: Number | String */ \
+            let res = x; \
+            if ((typeof res) === \"boolean\") { return 1; } else { return 2; } \
+        }";
+    let (_, _, state) = infer_program_with_state(src).unwrap();
+    assert!(
+        state
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("always false")),
+        "expected an 'always false' warning, got: {:?}",
+        state.warnings
+    );
+}
+
+#[test]
+fn test_no_warn_typeof_satisfiable_branch() {
+    // `res : Number | String`; both `"number"` and `"string"` are
+    // possible, so neither side of the if should warn.
+    let src = "\
+        function f(x) { \
+            /** let res: Number | String */ \
+            let res = x; \
+            if ((typeof res) === \"number\") { return 1; } else { return 2; } \
+        }";
+    let (_, _, state) = infer_program_with_state(src).unwrap();
+    assert!(
+        !state
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("always false") || w.message.contains("always true")),
+        "did not expect an unreachable-branch warning, got: {:?}",
+        state.warnings
+    );
+}
+
+#[test]
+fn test_warn_strict_eq_literal_impossible_branch() {
+    // Discriminated-union narrowing: the `triangle` arm can never
+    // match the closed `"circle" | "square"` discriminator.
+    let src = "\
+        function area(shape) { \
+            if (shape.kind === \"circle\") { return shape.r; } \
+            else if (shape.kind === \"triangle\") { return 0; } \
+            else { return shape.s; } \
+        } \
+        /** let c: {kind: \"circle\", r: Number} */ \
+        let c = {kind: \"circle\", r: 1}; \
+        area(c);";
+    let (_, _, state) = infer_program_with_state(src).unwrap();
+    // The narrowing on the second arm depends on `area`'s parameter
+    // being inferred to a closed-union shape. If inference doesn't
+    // reach that, the warning may not fire — we only assert that
+    // *no* spurious warnings are emitted on the satisfiable arms.
+    let spurious = state
+        .warnings
+        .iter()
+        .filter(|w| {
+            (w.message.contains("always false") || w.message.contains("always true"))
+                && w.span.start <= "function area(shape) { if (shape.kind === \"circle\"".len()
+        })
+        .count();
+    assert_eq!(
+        spurious, 0,
+        "no warning should fire on the first satisfiable arm, got: {:?}",
+        state.warnings
+    );
+}

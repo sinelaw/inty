@@ -5,7 +5,9 @@ use crate::parser::ast::{CatchClause, Expr, ForInLhs, ForInit, Stmt, SwitchCase,
 use crate::types::{Type, TypeScheme};
 
 use super::super::env::TypeEnv;
-use super::super::narrow::{apply_narrowing, try_extract_narrowing};
+use super::super::narrow::{
+    apply_narrowing, narrowing_collapsed_to_never, try_extract_narrowing, Path,
+};
 use super::super::state::InferState;
 use super::super::InferResult;
 
@@ -39,6 +41,33 @@ fn format_literal(l: &crate::types::LitValue) -> String {
     }
 }
 
+/// Emit warnings for an `if`-test or conditional whose narrowing makes
+/// one branch dead. The check fires after `apply_narrowing` has
+/// produced the consequent and alternate environments — if the bound
+/// path's type was non-never before but is `never` in either branch,
+/// the predicate is statically constant and the branch is unreachable.
+fn warn_if_narrowing_unreachable(
+    state: &mut InferState,
+    base_env: &TypeEnv,
+    cons_env: &TypeEnv,
+    alt_env: &TypeEnv,
+    path: &Path,
+    test_span: Span,
+) {
+    if narrowing_collapsed_to_never(state, base_env, cons_env, path) {
+        state.warn(
+            test_span,
+            "this comparison is always false: the type of the operand cannot satisfy it",
+        );
+    }
+    if narrowing_collapsed_to_never(state, base_env, alt_env, path) {
+        state.warn(
+            test_span,
+            "this comparison is always true: the type of the operand cannot violate it",
+        );
+    }
+}
+
 impl InferState {
     /// Infer the type of a conditional expression.
     pub(in crate::infer) fn infer_conditional(
@@ -55,10 +84,14 @@ impl InferState {
         // patterns (typeof / === / !==), refine the consequent's env with
         // the predicate and the alternate's env with its negation.
         let (cons_env, alt_env) = match try_extract_narrowing(test) {
-            Some((path, narrowing)) => (
-                apply_narrowing(self, env, &path, &narrowing),
-                apply_narrowing(self, env, &path, &narrowing.negate()),
-            ),
+            Some((path, narrowing)) => {
+                let cons_env = apply_narrowing(self, env, &path, &narrowing);
+                let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
+                warn_if_narrowing_unreachable(
+                    self, env, &cons_env, &alt_env, &path, test.span(),
+                );
+                (cons_env, alt_env)
+            }
             None => (env.clone(), env.clone()),
         };
 
@@ -128,10 +161,14 @@ impl InferState {
         let _test_type = self.infer_expr(env, test)?;
 
         let (cons_env, alt_env) = match try_extract_narrowing(test) {
-            Some((path, narrowing)) => (
-                apply_narrowing(self, env, &path, &narrowing),
-                apply_narrowing(self, env, &path, &narrowing.negate()),
-            ),
+            Some((path, narrowing)) => {
+                let cons_env = apply_narrowing(self, env, &path, &narrowing);
+                let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
+                warn_if_narrowing_unreachable(
+                    self, env, &cons_env, &alt_env, &path, test.span(),
+                );
+                (cons_env, alt_env)
+            }
             None => (env.clone(), env.clone()),
         };
 
