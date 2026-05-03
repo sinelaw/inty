@@ -60,13 +60,44 @@ If you'd rather drive it yourself:
 | `minfern.serverPath`     | `""`    | Absolute path to the `minfern` binary. Falls back to `MINFERN_BIN`, then `PATH`. |
 | `minfern.trace.server`   | `"off"` | `"messages"` or `"verbose"` to log LSP traffic to the Output channel. |
 
+## Verifying it's running
+
+After install + reload, you should see:
+
+1. **A "minfern" item in the status bar (bottom-right of the window)**.
+   - `$(check) minfern` → server started.
+   - `$(error) minfern` (red background) → startup failed; click it to
+     open the log.
+   - No item at all → the extension didn't activate. Run **Developer:
+     Show Running Extensions** from the Command Palette to confirm
+     `local.minfern-lsp` is in the list.
+
+2. **An Output channel called "minfern"**. View it via:
+   - the status bar item (it's clickable), or
+   - **View → Output**, then pick **minfern** in the dropdown, or
+   - Command Palette → **minfern: Show Server Log**.
+
+3. The log starts with something like:
+
+   ```
+   minfern extension activated
+   server path: /…/target/release/minfern  (from minfern.serverPath)
+   spawning: /…/target/release/minfern lsp --stdio
+   client started
+   ```
+
 ## Troubleshooting
 
-- **No diagnostics appear.** Check **View → Output → "minfern"**. If the
-  channel doesn't exist the extension didn't activate (open a `.js`
-  file). If it shows `spawn ... ENOENT`, fix `minfern.serverPath`.
+- **Status item is red / log says "binary not found".** Build the
+  server (`cargo build --release -p minfern-cli`), then set
+  `minfern.serverPath` to the absolute path printed by `install.sh`,
+  or run **minfern: Restart Server**.
+- **No status item, no Output channel.** The extension didn't activate.
+  Confirm install with `code --list-extensions | grep minfern`. If
+  missing, re-run `./install.sh`. If present, open **Output → Extension
+  Host** for activation errors.
 - **Diagnostics appear but hover does nothing.** A type-check error
   early in the file makes inference bail out, which suppresses hovers
   for the whole document. Fix the diagnostic first.
 - **Want to see the LSP traffic.** Set `minfern.trace.server` to
-  `"verbose"` in settings.
+  `"verbose"` in settings; messages stream to the same Output channel.
