@@ -697,9 +697,39 @@ impl InferState {
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
         let obj_type = self.apply_subst(&obj_type);
+        self.infer_member_on_type(&obj_type, property, span)
+    }
+
+    /// Look up a property on a (substituted) type. Used by `infer_member`
+    /// after evaluating the object expression, and recursively to elide
+    /// access against union members.
+    fn infer_member_on_type(
+        &mut self,
+        obj_type: &Type,
+        property: &str,
+        span: Span,
+    ) -> InferResult<Type> {
+        // Union elimination: read the property from every member and join
+        // the results. Fails if any member lacks the property at a
+        // compatible type. This is the load-bearing rule that lets users
+        // *do* something with a union after they've formed one.
+        if let Type::Union(members) = obj_type {
+            let mut result: Option<Type> = None;
+            for m in members {
+                let m_resolved = self.apply_subst(m);
+                let prop_ty = self.infer_member_on_type(&m_resolved, property, span)?;
+                result = Some(match result {
+                    None => prop_ty,
+                    Some(acc) => self.join(span, &acc, &prop_ty),
+                });
+            }
+            // The empty union (`never`) can be accessed at any property —
+            // it's unreachable. Synthesise `never` for the result.
+            return Ok(result.unwrap_or_else(Type::never));
+        }
 
         // Handle built-in properties for arrays and strings
-        match &obj_type {
+        match obj_type {
             Type::Array(_) => {
                 match property {
                     "length" => return Ok(Type::Number),
@@ -742,7 +772,7 @@ impl InferState {
         let row_var = self.fresh_flex();
         let expected_row = Type::object_open([(property, result_type.clone())], row_var);
 
-        self.unify(span, &obj_type, &expected_row)?;
+        self.unify(span, obj_type, &expected_row)?;
 
         Ok(self.apply_subst(&result_type))
     }
@@ -760,6 +790,23 @@ impl InferState {
 
         // Apply substitution to see if we know the object type
         let obj_type_resolved = self.apply_subst(&obj_type);
+
+        // Union elimination on indexing: index every member and join.
+        if let Type::Union(members) = &obj_type_resolved {
+            let mut result: Option<Type> = None;
+            for m in members {
+                let m_resolved = self.apply_subst(m);
+                // We re-derive the index by re-using the same `index_type`
+                // expression — it's already been inferred once at the top
+                // and unification against multiple member types is fine.
+                let idx_ty = self.index_into_type(&m_resolved, &index_type, span)?;
+                result = Some(match result {
+                    None => idx_ty,
+                    Some(acc) => self.join(span, &acc, &idx_ty),
+                });
+            }
+            return Ok(result.unwrap_or_else(Type::never));
+        }
 
         // Try to resolve immediately for known types
         match &obj_type_resolved {
@@ -815,6 +862,42 @@ impl InferState {
                 let result_type = self.fresh_type_var();
                 self.add_constraint(
                     TypePred::indexable(obj_type, index_type, result_type.clone()),
+                    span,
+                );
+                Ok(result_type)
+            }
+        }
+    }
+
+    /// Index a single (non-union) type with a known index-type. Used by
+    /// `infer_computed_member` to elide indexing through every member of
+    /// a union. Mirrors the `match obj_type_resolved` block, minus the
+    /// rebind_var hook (which only fires for the top-level variable that
+    /// indexed-into-a-union no longer applies to).
+    fn index_into_type(
+        &mut self,
+        obj_type: &Type,
+        index_type: &Type,
+        span: Span,
+    ) -> InferResult<Type> {
+        match obj_type {
+            Type::Array(elem_type) => {
+                self.unify(span, index_type, &Type::Number)?;
+                Ok(elem_type.as_ref().clone())
+            }
+            Type::String => {
+                self.unify(span, index_type, &Type::Number)?;
+                Ok(Type::String)
+            }
+            Type::Map(value_type) => {
+                self.unify(span, index_type, &Type::String)?;
+                Ok(value_type.as_ref().clone())
+            }
+            _ => {
+                // Defer to the constraint solver for rows / type vars.
+                let result_type = self.fresh_type_var();
+                self.add_constraint(
+                    TypePred::indexable(obj_type.clone(), index_type.clone(), result_type.clone()),
                     span,
                 );
                 Ok(result_type)
@@ -908,6 +991,20 @@ impl InferState {
         property: &str,
         span: Span,
     ) -> InferResult<Type> {
+        // Union elimination: read the property from every member and join.
+        if let Type::Union(members) = obj_type {
+            let mut result: Option<Type> = None;
+            for m in members {
+                let m_resolved = self.apply_subst(m);
+                let prop_ty = self.infer_member_from_type(&m_resolved, property, span)?;
+                result = Some(match result {
+                    None => prop_ty,
+                    Some(acc) => self.join(span, &acc, &prop_ty),
+                });
+            }
+            return Ok(result.unwrap_or_else(Type::never));
+        }
+
         // Handle built-in properties for arrays and strings
         match obj_type {
             Type::Array(elem_ty) => {
@@ -2841,6 +2938,68 @@ mod tests {
             }
         } else {
             panic!("map should be a function type");
+        }
+    }
+
+    // ========================================================================
+    // Phase 2 / 3 — Unions formed by join, then read at member-access sites.
+    // ========================================================================
+
+    #[test]
+    fn test_if_branches_form_union() {
+        // Two branches with disjoint row shapes form a union.
+        let src = "function pick(b) { if (b) { return {x: 1, y: 2}; } else { return {x: 3, z: 4}; } }";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("pick").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        // The function's return should be a union of the two row shapes.
+        if let Some((_, _, ret)) = ty.as_func() {
+            let ret = state.apply_subst(ret);
+            assert!(
+                matches!(ret, Type::Union(_)),
+                "expected return type to be a union, got: {}",
+                ret
+            );
+        } else {
+            panic!("pick should be a function");
+        }
+    }
+
+    #[test]
+    fn test_member_on_union_with_shared_field() {
+        // Both branches expose `x: Number`, so reading `.x` on the union
+        // returns Number even though the rows differ otherwise.
+        let src = "function getX(b) { var pt = b ? {x: 1, y: 2} : {x: 3, z: 4}; return pt.x; }";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("getX").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        if let Some((_, _, ret)) = ty.as_func() {
+            let ret = state.apply_subst(ret);
+            assert_eq!(ret, Type::Number, "getX return type should be Number");
+        } else {
+            panic!("getX should be a function");
+        }
+    }
+
+    #[test]
+    fn test_member_on_union_disagreeing_field_joins() {
+        // .x has type Number in one member and String in another →
+        // the property access yields a union.
+        let src = "function getX(b) { var pt = b ? {x: 1, y: 2} : {x: \"a\", z: 4}; return pt.x; }";
+        let (_, env, state) = infer_program_with_state(src).unwrap();
+        let scheme = env.lookup("getX").unwrap();
+        let ty = state.apply_subst(scheme.ty());
+        if let Some((_, _, ret)) = ty.as_func() {
+            let ret = state.apply_subst(ret);
+            match ret {
+                Type::Union(ref m) => {
+                    assert!(m.contains(&Type::Number));
+                    assert!(m.contains(&Type::String));
+                }
+                other => panic!("expected union, got {}", other),
+            }
+        } else {
+            panic!("getX should be a function");
         }
     }
 }
