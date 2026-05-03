@@ -44,7 +44,7 @@ The currently supported surface:
 | `export function f(…) { … }`                      | ✅      |
 | `export default …;`                               | ✅ (expression or named function) |
 | `export { a, b as c };`                           | ✅      |
-| `import * as ns from "./mod.js";`                 | ⚠️ parsed, rejected at resolve time |
+| `import * as ns from "./mod.js";`                 | ✅ namespace as `Type::Module` (per-export polymorphism preserved) |
 | `import foo, * as ns from "./mod.js";`            | ❌ not parsed |
 | `export { a } from "./mod.js";` (re-export)       | ❌ not parsed |
 | `export * from "./mod.js";`                       | ❌ not parsed |
@@ -103,20 +103,44 @@ behaves exactly like `const default = …;`. Anonymous `export default function
 
 MDN: `import * as ns from "module";`
 
-**Design.** Build a row type from the module's export env and bind it to
-`local` as a regular variable.
+**Status: shipped.** Implemented as a dedicated `Type::Module { source,
+exports: BTreeMap<String, TypeScheme> }` variant rather than a row, after
+weighing three options (modules-as-rows with row-generalization,
+`RowField::Scheme`, and a first-class module type). The dedicated variant
+won on robustness:
 
-- After `load_module` returns the diffed env, walk its bindings and
-  construct an open-row object type `{ name1: τ₁, name2: τ₂, …, …ρ }`.
-  Use `Type::Row` from `src/types/`. Closed vs. open is a design call:
-  recommend closed rows so `ns.bogus` is a static error.
-- Each scheme in the module env is *instantiated* once into the row, then
-  re-generalised under `ns`. Because schemes can be polymorphic, the row
-  field stores the scheme directly via a new `RowField::Scheme` variant; on
-  member access (`ns.foo`) the elaborator instantiates as if it were a
-  bare reference. (Without this the namespace import collapses every export
-  to a monotype, defeating the point.)
-- Drop the resolver's `"namespace imports are not supported"` arm.
+- *Polymorphism is intrinsic.* Each export is stored as its own
+  `TypeScheme`; member access goes through `infer_member_on_type` ⇒
+  `state.instantiate(&scheme)` so each `ns.foo` re-instantiates per use.
+  No row-generalization trick, no shared quantifier scope, no dependency
+  on `instantiate` not leaking constraints. The metamorphic-style proof
+  is the test `namespace_preserves_polymorphism_across_uses`: with
+  `export function id(x) { return x; }`, both `ns.id(1)` and
+  `ns.id("hello")` type-check in the same program.
+- *Mutability is wrong-by-construction.* Modules carry no field-assignment
+  rule, so `ns.foo = bar` simply doesn't type-check — the type system
+  *can't express* mutating a namespace. Rows would have allowed it.
+- *Identity is nominal by source.* `Type::Module` unifies with itself iff
+  `source` matches (the canonicalised file path). Two imports of the same
+  file produce the same type; two imports of different files don't unify
+  even if their export shapes coincide. This matches ESM semantics: each
+  module is its own thing.
+- *Diagnostics carry the source.* `ns.bogus` produces "module
+  `"./identity.js"` has no export named `"bogus"`" rather than a generic
+  "row missing property bogus", because `infer_member` knows it's looking
+  at a module.
+
+Cost: a `Type::Module` arm in every site that walks `Type` —
+`Subst::apply`, `Type::collect_free_vars`, `unify`, `pretty`,
+`infer_member_on_type`, `infer_member_from_type`, `occurs_in`. Mechanical;
+no algorithmic novelty. The remaining match sites (`narrow`, `decorate`,
+`type_parser` structural-equality, `find_origin_in_type`) all have
+default arms and treat modules as opaque, which is the right semantic.
+
+Future: §4 (re-exports) builds another `ModuleType` from the imported
+module's exports; §7 (dynamic `import()`) returns `Promise<Type::Module>`;
+§9 (cross-module type-class instances) hangs instance metadata off the
+`ModuleType`. The variant is the carrier the rest of the design wants.
 
 ## 3. Export lists and renamed exports
 

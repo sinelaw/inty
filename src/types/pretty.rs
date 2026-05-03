@@ -162,6 +162,14 @@ impl PrettyContext {
 
             Type::Literal(lit) => self.write_literal(w, lit),
 
+            Type::Module(m) => {
+                // Display only the source identity in inline contexts.
+                // The full export listing is verbose enough to belong
+                // elsewhere (e.g. a `--verbose` mode); here we keep the
+                // type readable in error messages and `--annotate` output.
+                write!(w, "module {:?}", m.source)
+            }
+
             Type::Union(members) => {
                 if members.is_empty() {
                     return write!(w, "never");

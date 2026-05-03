@@ -23,13 +23,14 @@
 //! Namespace imports (`import * as ns`) and re-exports (`export … from`)
 //! are not handled yet.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::MinfernError;
 use crate::infer::{InferState, TypeEnv};
 use crate::parser::ast::{ExportDecl, Expr, ImportSpecifier, Program, Stmt};
 use crate::parser::parse;
+use crate::types::{ModuleType, Type, TypeScheme};
 
 /// One entry of a module's export table: the name an importer would write
 /// (`exported`) paired with the local binding it points to (`local`).
@@ -204,13 +205,37 @@ pub fn resolve_imports(
                             })?;
                             env = env.extend(local.clone(), scheme.clone());
                         }
-                        ImportSpecifier::Namespace { span, .. } => {
-                            return Err(MinfernError::Type(
-                                crate::error::TypeError::Module {
-                                    message: "namespace imports are not supported".to_string(),
-                                    span: *span,
-                                },
-                            ));
+                        ImportSpecifier::Namespace { local, span } => {
+                            // Build a `Type::Module` whose identity is the
+                            // resolved file path and whose exports map
+                            // mirrors the export table — each entry stored
+                            // as the *scheme* of the underlying local
+                            // binding so that `ns.foo` can re-instantiate
+                            // polymorphism per access.
+                            let source_id = resolved_path.to_string_lossy().into_owned();
+                            let mut export_schemes: BTreeMap<String, TypeScheme> =
+                                BTreeMap::new();
+                            for entry in &exports {
+                                let scheme = module_env
+                                    .lookup(&entry.local)
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        MinfernError::Type(crate::error::TypeError::Module {
+                                            message: format!(
+                                                "module {:?} declares export {:?} but its local binding {:?} is missing",
+                                                source, entry.exported, entry.local
+                                            ),
+                                            span: *span,
+                                        })
+                                    })?;
+                                export_schemes.insert(entry.exported.clone(), scheme);
+                            }
+                            let module_ty = Type::Module(ModuleType {
+                                source: source_id,
+                                exports: export_schemes,
+                            });
+                            env = env
+                                .extend(local.clone(), TypeScheme::mono(module_ty));
                         }
                     }
                 }
@@ -438,6 +463,112 @@ mod tests {
         let err = resolve(dir.path(), "main.js")
             .expect_err("exporting an undeclared local should error");
         assert!(format!("{}", err).contains("not declared"));
+    }
+
+    #[test]
+    fn namespace_import_member_access_works() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "export function add(a, b) { return a + b; } export const PI = 3.14;",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import * as lib from \"./lib.js\"; var s = lib.add(1, 2); var p = lib.PI;",
+        );
+        let env = resolve(dir.path(), "main.js").unwrap();
+        assert!(env.lookup("lib").is_some(), "lib namespace should bind");
+    }
+
+    #[test]
+    fn namespace_member_missing_is_module_error() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "export const visible = 1;",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import * as lib from \"./lib.js\"; var x = lib.bogus;",
+        );
+        let main_path = dir.path().join("main.js");
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let program = parse(&source).unwrap();
+        let mut state = InferState::new();
+        let mut visiting = HashSet::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            main_path.parent().unwrap(),
+            &mut visiting,
+        )
+        .unwrap();
+        let err = state
+            .infer_program_with_env(&env, &program)
+            .expect_err("accessing a non-export through a namespace must error");
+        assert!(
+            format!("{}", err).contains("no export named"),
+            "expected 'no export named' error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn namespace_preserves_polymorphism_across_uses() {
+        // Each `ns.id` access should re-instantiate the polymorphic
+        // export, so the second call at a different type does not
+        // unify against the first call's resolved type.
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "export function id(x) { return x; }",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import * as ns from \"./lib.js\"; var n = ns.id(1); var s = ns.id(\"hello\");",
+        );
+        let env = resolve(dir.path(), "main.js")
+            .expect("namespace polymorphism should resolve");
+        assert!(env.lookup("ns").is_some());
+    }
+
+    #[test]
+    fn private_const_not_in_namespace() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "const secret = 42; export const visible = \"ok\";",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import * as ns from \"./lib.js\"; var s = ns.secret;",
+        );
+        let main_path = dir.path().join("main.js");
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let program = parse(&source).unwrap();
+        let mut state = InferState::new();
+        let mut visiting = HashSet::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            main_path.parent().unwrap(),
+            &mut visiting,
+        )
+        .unwrap();
+        let err = state
+            .infer_program_with_env(&env, &program)
+            .expect_err("private bindings must not be reachable through a namespace");
+        assert!(format!("{}", err).contains("no export named"));
     }
 
     #[test]
