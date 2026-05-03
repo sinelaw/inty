@@ -127,6 +127,23 @@ impl Resolution {
         self.uses_of.get(&def_span).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// Iterate every binding whose name span lies inside `[start,
+    /// end)`. Used by the inlay-hint feature to bound work to the
+    /// editor's visible range.
+    pub fn defs_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> impl Iterator<Item = (Span, &Def)> + '_ {
+        self.defs.iter().filter_map(move |(span, def)| {
+            if span.start >= start && span.end <= end {
+                Some((*span, def))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Find a binding (def *or* use) whose span contains `offset`.
     /// Returns the def-span and the actual span of the identifier hit.
     pub fn binding_at(&self, offset: usize) -> Option<(Span, Span)> {

@@ -291,6 +291,50 @@ impl Analysis {
             active_parameter: active as u32,
         })
     }
+
+    /// Inlay hints for every binding whose name span lies in `[start,
+    /// end)`. Each hint anchors right after the binding's name and
+    /// contains the formatted type. We skip bindings whose declarator
+    /// has an explicit user annotation (so we don't double up).
+    pub fn inlay_hints_in(&self, start: usize, end: usize) -> Vec<InlayHintData> {
+        let state = match self.state.as_ref() {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        let mut hints = Vec::new();
+        for (def_span, def) in self.resolution.defs_in_range(start, end) {
+            // Skip catch params and named function-expression names —
+            // we don't pin types for those yet, and a stale hint
+            // would be worse than no hint.
+            use crate::resolver::DefKind;
+            if matches!(def.kind, DefKind::Catch | DefKind::Import) {
+                continue;
+            }
+            let ty = match state.get_decl_type(def_span) {
+                Some(t) => t,
+                None => continue,
+            };
+            // Don't hint on synthesised destructuring temps (their
+            // names start with `$destr$` or `$param$N`).
+            if def.name.starts_with('$') {
+                continue;
+            }
+            let applied = state.apply_subst(ty);
+            let mut ctx = PrettyContext::new();
+            hints.push(InlayHintData {
+                after_byte: def_span.end,
+                type_str: ctx.format_type(&applied),
+            });
+        }
+        hints
+    }
+}
+
+/// Minimal inlay-hint payload returned by [`Analysis::inlay_hints_in`];
+/// the server wraps these in `lsp_types::InlayHint`.
+pub struct InlayHintData {
+    pub after_byte: usize,
+    pub type_str: String,
 }
 
 /// Result of a successful hover lookup.

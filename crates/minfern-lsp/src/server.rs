@@ -9,22 +9,22 @@ use lsp_types::notification::{
     Notification as LspNotification, PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, Rename, Request as LspRequest,
-    SignatureHelpRequest,
+    Completion, GotoDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest, Rename,
+    Request as LspRequest, SignatureHelpRequest,
 };
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
     Diagnostic, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, Location, MarkupContent, MarkupKind, OneOf, ParameterInformation,
-    ParameterLabel, PrepareRenameResponse, PublishDiagnosticsParams, RenameOptions, RenameParams,
-    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-    SignatureInformation, TextDocumentPositionParams, TextDocumentSyncKind, TextEdit, Uri,
-    WorkDoneProgressOptions, WorkspaceEdit,
+    HoverProviderCapability, InlayHint, InlayHintKind, InlayHintLabel, InlayHintParams, Location,
+    MarkupContent, MarkupKind, OneOf, ParameterInformation, ParameterLabel, PrepareRenameResponse,
+    PublishDiagnosticsParams, RenameOptions, RenameParams, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, SignatureInformation, TextDocumentPositionParams,
+    TextDocumentSyncKind, TextEdit, Uri, WorkDoneProgressOptions, WorkspaceEdit,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::analysis::Analysis;
-use crate::convert::{error_to_diagnostic, position_to_byte, span_to_range};
+use crate::convert::{byte_to_position, error_to_diagnostic, position_to_byte, span_to_range};
 
 /// One in-memory document.
 struct Document {
@@ -115,6 +115,11 @@ impl Server {
         }
         if let Some(params) = cast_req::<SignatureHelpRequest>(&req)? {
             let result = self.on_signature_help(params);
+            self.respond_ok(id, &result)?;
+            return Ok(());
+        }
+        if let Some(params) = cast_req::<InlayHintRequest>(&req)? {
+            let result = self.on_inlay_hint(params);
             self.respond_ok(id, &result)?;
             return Ok(());
         }
@@ -345,6 +350,32 @@ impl Server {
             active_parameter: Some(info.active_parameter),
         })
     }
+
+    fn on_inlay_hint(&self, params: InlayHintParams) -> Option<Vec<InlayHint>> {
+        let doc = self.documents.get(&params.text_document.uri)?;
+        let range = params.range;
+        // Editors often request hints with a generous range that may
+        // extend past EOF (e.g. last visible line + a buffer). Clamp
+        // out-of-range positions to the document bounds rather than
+        // returning None.
+        let start = position_to_byte(&doc.text, range.start).unwrap_or(0);
+        let end = position_to_byte(&doc.text, range.end).unwrap_or(doc.text.len());
+        let raw = doc.analysis.inlay_hints_in(start, end);
+        Some(
+            raw.into_iter()
+                .map(|h| InlayHint {
+                    position: byte_to_position(&doc.text, h.after_byte),
+                    label: InlayHintLabel::String(format!(": {}", h.type_str)),
+                    kind: Some(InlayHintKind::TYPE),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: Some(false),
+                    padding_right: Some(false),
+                    data: None,
+                })
+                .collect(),
+        )
+    }
 }
 
 fn server_capabilities() -> ServerCapabilities {
@@ -365,6 +396,7 @@ fn server_capabilities() -> ServerCapabilities {
             retrigger_characters: None,
             work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
+        inlay_hint_provider: Some(OneOf::Left(true)),
         ..Default::default()
     }
 }
