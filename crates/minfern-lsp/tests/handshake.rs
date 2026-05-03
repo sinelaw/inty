@@ -572,3 +572,50 @@ fn inlay_hints_show_inferred_types() {
 
     shutdown(client, handle);
 }
+
+#[test]
+fn signature_help_on_member_call() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///mc.js");
+    // `Math.pow` is in stdlib at type (Number, Number) => Number.
+    let src = "Math.pow(2, 3);\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Cursor on the second arg, line 0 col 12 (the `3`).
+    client
+        .sender
+        .send(Message::Request(req::<SignatureHelpRequest>(
+            71,
+            SignatureHelpParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position { line: 0, character: 12 },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                context: Some(SignatureHelpContext {
+                    trigger_kind: SignatureHelpTriggerKind::CONTENT_CHANGE,
+                    trigger_character: None,
+                    is_retrigger: false,
+                    active_signature_help: None,
+                }),
+            },
+        )))
+        .unwrap();
+    let resp: Option<SignatureHelp> = expect_response(&client, 71);
+    let help = resp.expect("signature help present for member call");
+    assert_eq!(help.signatures.len(), 1);
+    let sig = &help.signatures[0];
+    assert!(
+        sig.label.contains("Math.pow"),
+        "label should mention Math.pow: {}",
+        sig.label
+    );
+    let params = sig.parameters.as_ref().unwrap();
+    assert_eq!(params.len(), 2);
+    assert_eq!(help.active_parameter, Some(1));
+
+    shutdown(client, handle);
+}
