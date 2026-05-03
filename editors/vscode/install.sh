@@ -72,9 +72,20 @@ case "$cmd" in
     require_cmd "$CODE"
     echo ">> packaging .vsix via npx @vscode/vsce…"
     (cd "$SCRIPT_DIR" && npx --yes @vscode/vsce package --out "$VSIX_PATH")
+    # Force a clean replace: --force alone occasionally keeps the old
+    # manifest cached in VS Code's extension index, so commands /
+    # activation events from the new build don't appear.
+    echo ">> uninstalling previous version (if any)…"
+    "$CODE" --uninstall-extension "$EXT_ID" >/dev/null 2>&1 || true
     echo ">> installing extension into $CODE…"
     "$CODE" --install-extension "$VSIX_PATH" --force
     print_setting_hint
+    cat <<EOF
+
+  3. *** Reload the VS Code window *** (Cmd/Ctrl+Shift+P -> "Developer:
+     Reload Window"). New commands and contributions only register on
+     reload — without it you'll see "command not found" errors.
+EOF
     ;;
 
   dev)
