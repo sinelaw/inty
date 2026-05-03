@@ -34,6 +34,65 @@ impl InferState {
                 self.var_bind(span, *n, t)
             }
 
+            // Literal types unify with themselves and with their base.
+            // The literal-vs-base direction lets `var x: String = "hi"`
+            // type-check (annotation is `String`, value infers as
+            // `String`); the literal-vs-literal direction handles
+            // re-unifying inside a discriminator after narrowing.
+            (Type::Literal(l1), Type::Literal(l2)) => {
+                if l1 == l2 {
+                    Ok(())
+                } else {
+                    Err(self.unification_error(span, t1, t2))
+                }
+            }
+            (Type::Literal(l), other) | (other, Type::Literal(l)) if &l.base_type() == other => {
+                Ok(())
+            }
+
+            // Union ~ Union: if both sides are equal as sets (we already
+            // normalise), accept. Otherwise reject — the calling site
+            // should use join() if it wants subsumption-style behaviour.
+            (Type::Union(m1), Type::Union(m2)) => {
+                if m1.len() == m2.len() && m1.iter().all(|t| m2.contains(t)) {
+                    Ok(())
+                } else {
+                    Err(self.unification_error(span, t1, t2))
+                }
+            }
+
+            // Union ~ T: succeed if T is a member of the union (after
+            // subst). This is the bridge that lets `var x: T | undefined
+            // = expr` accept an `expr` that infers as `T` or `undefined`.
+            (Type::Union(members), other) | (other, Type::Union(members)) => {
+                let mut matched = false;
+                for m in members {
+                    let m = self.apply_subst(m);
+                    if &m == other {
+                        matched = true;
+                        break;
+                    }
+                    // Literal-into-base subsumption.
+                    if let Type::Literal(lit) = other {
+                        if m == lit.base_type() {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if let Type::Literal(lit) = &m {
+                        if &lit.base_type() == other {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+                if matched {
+                    Ok(())
+                } else {
+                    Err(self.unification_error(span, t1, t2))
+                }
+            }
+
             // Skolems must match exactly
             (Type::Var(TVarName::Skolem(n1)), Type::Var(TVarName::Skolem(n2))) if n1 == n2 => {
                 Ok(())

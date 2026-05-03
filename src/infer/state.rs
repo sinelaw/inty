@@ -211,6 +211,20 @@ impl InferState {
             return t1;
         }
 
+        // Literal-with-base subsumption is decided at the join level
+        // (not via unify): "a" | String → String, even though unify
+        // accepts "a" ~ String for assignment-from-narrowed paths.
+        if let Type::Literal(lit) = &t1 {
+            if lit.base_type() == t2 {
+                return t2;
+            }
+        }
+        if let Type::Literal(lit) = &t2 {
+            if lit.base_type() == t1 {
+                return t1;
+            }
+        }
+
         // If either side is already a union, we don't try to unify (which
         // would just fail) — we fold members together instead. This also
         // makes `join` associative when chained over a list of types.

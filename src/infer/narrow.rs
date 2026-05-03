@@ -23,6 +23,7 @@
 use crate::types::{LitValue, PropName, RowTail, RowType, Type, TypeScheme};
 
 use super::env::TypeEnv;
+use crate::parser::ast::{BinOp, Expr, Literal, UnaryOp};
 
 /// A `Path` names something that can be narrowed: a local identifier, or
 /// a (possibly nested) property access off one.
@@ -75,10 +76,20 @@ impl Narrowing {
 /// copy. The binding for the root identifier is replaced with one whose
 /// type reflects the predicate; other bindings are untouched.
 ///
+/// The binding's type is normalised through the current substitution
+/// before refinement — without this, a parameter bound to a fresh
+/// variable that *happens* to be substituted to a union would never
+/// narrow, because the env still holds the bare variable.
+///
 /// If the path's root isn't bound, the input env is returned unchanged —
 /// a missing binding is a non-narrowable expression and the type checker
 /// will report the underlying use later.
-pub fn apply_narrowing(env: &TypeEnv, path: &Path, narrowing: &Narrowing) -> TypeEnv {
+pub fn apply_narrowing(
+    state: &super::state::InferState,
+    env: &TypeEnv,
+    path: &Path,
+    narrowing: &Narrowing,
+) -> TypeEnv {
     let root = path.root_ident().to_string();
     let Some(scheme) = env.lookup(&root).cloned() else {
         return env.clone();
@@ -92,7 +103,7 @@ pub fn apply_narrowing(env: &TypeEnv, path: &Path, narrowing: &Narrowing) -> Typ
         return env.clone();
     }
 
-    let original_ty = scheme.ty().clone();
+    let original_ty = state.apply_subst(scheme.ty());
     let new_ty = refine_at_path(&original_ty, &path_steps(path), narrowing);
 
     let new_scheme = TypeScheme::mono(new_ty);
@@ -277,9 +288,125 @@ fn member_property_compatible(member_ty: &Type, steps: &[PropName], narrowing: &
     }
 }
 
+/// Try to extract a `(Path, Narrowing)` from a test expression.
+/// Returns `None` if the expression isn't a recognised narrowing pattern.
+///
+/// Recognised patterns:
+///   - `typeof <path> === "lit"`     → `IsTypeof("lit")` on `<path>`
+///   - `typeof <path> !== "lit"`     → `IsNotTypeof("lit")` on `<path>`
+///   - `<path> === <literal>`        → `Equals(literal)` on `<path>`
+///   - `<path> !== <literal>`        → `NotEquals(literal)` on `<path>`
+///
+/// Both operand orders are accepted for the comparison operators.
+pub fn try_extract_narrowing(test: &Expr) -> Option<(Path, Narrowing)> {
+    let Expr::Binary { op, left, right, .. } = test else {
+        return None;
+    };
+
+    let (eq, neg) = match op {
+        BinOp::EqEqEq => (true, false),
+        BinOp::NotEqEq => (true, true),
+        // Loose equality is intentionally excluded — its narrowing
+        // semantics differ from === in JS (e.g. `0 == ""`), and we want
+        // the predicate set to mirror what TypeScript's flow analysis
+        // recognises.
+        _ => return None,
+    };
+    if !eq {
+        return None;
+    }
+
+    // Try `typeof <path> === "lit"` in either operand order.
+    if let Some((path, name)) = try_typeof_string_pair(left, right) {
+        let narrowing = if neg {
+            Narrowing::IsNotTypeof(name)
+        } else {
+            Narrowing::IsTypeof(name)
+        };
+        return Some((path, narrowing));
+    }
+
+    // Try `<path> === <literal>` in either operand order.
+    if let (Some(path), Some(lit)) = (path_from_expr(left), literal_value(right)) {
+        let narrowing = if neg {
+            Narrowing::NotEquals(lit)
+        } else {
+            Narrowing::Equals(lit)
+        };
+        return Some((path, narrowing));
+    }
+    if let (Some(path), Some(lit)) = (path_from_expr(right), literal_value(left)) {
+        let narrowing = if neg {
+            Narrowing::NotEquals(lit)
+        } else {
+            Narrowing::Equals(lit)
+        };
+        return Some((path, narrowing));
+    }
+
+    None
+}
+
+/// Match `typeof <path>` on either operand and a string literal on the
+/// other. Returns the path and the typeof string.
+fn try_typeof_string_pair(a: &Expr, b: &Expr) -> Option<(Path, String)> {
+    if let Some(path) = typeof_path(a) {
+        if let Some(s) = string_literal(b) {
+            return Some((path, s));
+        }
+    }
+    if let Some(path) = typeof_path(b) {
+        if let Some(s) = string_literal(a) {
+            return Some((path, s));
+        }
+    }
+    None
+}
+
+fn typeof_path(e: &Expr) -> Option<Path> {
+    match e {
+        Expr::Unary { op: UnaryOp::Typeof, argument, .. } => path_from_expr(argument),
+        _ => None,
+    }
+}
+
+fn string_literal(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Lit { value: Literal::String(s), .. } => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// Public wrapper for switch's case-literal extraction.
+pub fn literal_value_of(e: &Expr) -> Option<LitValue> {
+    literal_value(e)
+}
+
+fn literal_value(e: &Expr) -> Option<LitValue> {
+    match e {
+        Expr::Lit { value: Literal::String(s), .. } => Some(LitValue::String(s.clone())),
+        Expr::Lit { value: Literal::Number(n), .. } => Some(LitValue::Number(*n)),
+        Expr::Lit { value: Literal::Boolean(b), .. } => Some(LitValue::Bool(*b)),
+        _ => None,
+    }
+}
+
+/// Build a `Path` from an `Expr`, if it's a pure identifier-or-member
+/// chain. Anything else returns None — narrowing on derived expressions
+/// (calls, arithmetic) isn't supported.
+pub fn path_from_expr(e: &Expr) -> Option<Path> {
+    match e {
+        Expr::Ident { name, .. } => Some(Path::Ident(name.clone())),
+        Expr::Member { object, property, .. } => {
+            let parent = path_from_expr(object)?;
+            Some(Path::Member(Box::new(parent), PropName(property.clone())))
+        }
+        _ => None,
+    }
+}
+
 /// Convenience: walk a `Type` looking for a row property at the given
-/// path, returning its type if found. Used by predicate detection in
-/// Phase 5 to know whether a Member path can plausibly be narrowed.
+/// path, returning its type if found.
 #[allow(dead_code)]
 pub fn lookup_path_type(ty: &Type, steps: &[PropName]) -> Option<Type> {
     if steps.is_empty() {
@@ -331,7 +458,9 @@ mod tests {
     fn test_narrow_typeof_undefined_drops_undefined_member() {
         let ty = Type::union(vec![Type::String, Type::Undefined]);
         let env = env_with("x", ty);
+        let state = crate::infer::InferState::new();
         let narrowed = apply_narrowing(
+            &state,
             &env,
             &Path::Ident("x".to_string()),
             &Narrowing::IsNotTypeof("undefined".to_string()),
@@ -344,7 +473,9 @@ mod tests {
     fn test_narrow_typeof_undefined_keeps_undefined_member() {
         let ty = Type::union(vec![Type::String, Type::Undefined]);
         let env = env_with("x", ty);
+        let state = crate::infer::InferState::new();
         let narrowed = apply_narrowing(
+            &state,
             &env,
             &Path::Ident("x".to_string()),
             &Narrowing::IsTypeof("undefined".to_string()),
@@ -356,13 +487,45 @@ mod tests {
     #[test]
     fn test_narrow_equals_literal_sharpens_string() {
         let env = env_with("s", Type::String);
+        let state = crate::infer::InferState::new();
         let narrowed = apply_narrowing(
+            &state,
             &env,
             &Path::Ident("s".to_string()),
             &Narrowing::Equals(LitValue::String("hi".into())),
         );
         let new_ty = narrowed.lookup("s").unwrap().ty();
         assert_eq!(*new_ty, Type::lit_string("hi"));
+    }
+
+    #[test]
+    fn test_extract_narrowing_for_member_eq_literal() {
+        // shape.kind === "circle" — does the predicate detector find it?
+        let span = crate::lexer::Span::new(0, 0);
+        let test = Expr::Binary {
+            op: BinOp::EqEqEq,
+            left: Box::new(Expr::Member {
+                object: Box::new(Expr::Ident { name: "shape".into(), span }),
+                property: "kind".into(),
+                span,
+            }),
+            right: Box::new(Expr::Lit {
+                value: Literal::String("circle".into()),
+                span,
+            }),
+            span,
+        };
+        let extracted = try_extract_narrowing(&test);
+        assert!(extracted.is_some(), "should extract a narrowing");
+        let (path, narrowing) = extracted.unwrap();
+        assert_eq!(
+            path,
+            Path::Member(
+                Box::new(Path::Ident("shape".into())),
+                PropName("kind".into())
+            )
+        );
+        assert_eq!(narrowing, Narrowing::Equals(LitValue::String("circle".into())));
     }
 
     #[test]
@@ -384,7 +547,8 @@ mod tests {
             PropName("kind".into()),
         );
         let narrowing = Narrowing::Equals(LitValue::String("circle".into()));
-        let narrowed = apply_narrowing(&env, &path, &narrowing);
+        let state = crate::infer::InferState::new();
+        let narrowed = apply_narrowing(&state, &env, &path, &narrowing);
         let new_ty = narrowed.lookup("shape").unwrap().ty();
         assert_eq!(*new_ty, circle);
     }
@@ -407,7 +571,8 @@ mod tests {
             PropName("kind".into()),
         );
         let narrowing = Narrowing::NotEquals(LitValue::String("circle".into()));
-        let narrowed = apply_narrowing(&env, &path, &narrowing);
+        let state = crate::infer::InferState::new();
+        let narrowed = apply_narrowing(&state, &env, &path, &narrowing);
         let new_ty = narrowed.lookup("shape").unwrap().ty();
         assert_eq!(*new_ty, square);
     }
@@ -416,7 +581,9 @@ mod tests {
     fn test_narrow_exhausts_to_never() {
         // Narrow String to "a", then to NotEquals "a" — should be never.
         let env = env_with("s", Type::lit_string("a"));
+        let state = crate::infer::InferState::new();
         let narrowed = apply_narrowing(
+            &state,
             &env,
             &Path::Ident("s".to_string()),
             &Narrowing::NotEquals(LitValue::String("a".into())),
