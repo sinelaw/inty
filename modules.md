@@ -215,10 +215,11 @@ covers this. `default` re-exports work via `expect_module_name`'s
 MDN: `import foo, { a, b } from "./mod.js";` and `import foo, * as ns
 from "./mod.js";`
 
-The parser already handles the first; once §1 lands the resolver no longer
-rejects it. The second needs one parser change in `parse_import_declaration`
-(after consuming the default and the comma, accept either `{` or `*`).
-Resolver-side it falls out of §1 + §2.
+**Status: shipped.** Both forms now parse to one `Default` and one
+`Named`/`Namespace` specifier in the same `Stmt::Import`; the resolver's
+existing §1 / §2 paths each take their specifier with no new wiring.
+The parser change was a single branch after the default-comma accepting
+either `{` or `*`.
 
 ## 6. Bare specifiers
 
@@ -328,3 +329,65 @@ operational semantics.
 Each step is independently mergeable, each leaves the existing examples
 green, and each grows `examples/modules/` by one file so the user-visible
 surface keeps pace with what the checker accepts.
+
+## Current state
+
+§1, §2, §3, §4, §5 are landed and exercised by fixtures under
+`examples/modules/`. The remaining MDN-shaped work is §6 (bare
+specifiers), §7 (dynamic `import()`), §8 (import attributes), and §9
+(cross-module type-class instances), each independent and orderable
+per the section above.
+
+## Open issues to address before §6+ land
+
+These don't block any of the remaining sections but they're real bugs
+or papercuts in what's already shipped. A future contributor picking up
+the next section should consider clearing them first.
+
+1. **Re-export error spans land in the wrong file.** When
+   `compute_export_table` fails because a re-export target doesn't have
+   the requested name (e.g. `export { ghost } from "./inner.js";` and
+   `inner.js` has no `ghost`), the error bubbles up with the inner
+   module's span attached to the *outer* module's import statement.
+   The diagnostic message correctly names the offending module, but the
+   highlighted source location can be a few files away from the
+   `export … from` clause that caused the load. Wrap the
+   `load_module(...)` call in `compute_export_table` to attach a
+   "while resolving `export { … } from \"…\"`" frame so the
+   highlighted span belongs to the re-export clause itself.
+
+2. **`ns.foo = bar` is silently allowed.** `Type::Module` has no
+   field-assignment rule — assignment falls through and tends to fail
+   later as a unification mismatch instead of "cannot assign to module
+   export". The right place to catch it is the `Expr::Member` arm of
+   `check_assignment_target` in `src/infer/features/bindings.rs`; the
+   TODO there already describes the fix. A test
+   `assigning_to_namespace_field_errors` belongs in `modules.rs` once
+   the check lands.
+
+3. **Importer's env leaks into loaded modules.** `load_module` threads
+   the caller's `starting_env` into `resolve_imports` for the target,
+   so a module loaded mid-chain sees whatever bindings the importer
+   happened to have. ESM modules are isolated. Fix: always start a
+   target with `crate::builtins::initial_env()` (or a single shared
+   immutable base), regardless of who's calling. Today nothing breaks
+   because module bindings don't shadow stdlib names in practice, but
+   it's a latent footgun.
+
+4. **No module cache.** A diamond `main → a, main → b, a → c, b → c`
+   re-parses, re-resolves, and re-infers `c.js` twice. `Type::Module`'s
+   nominal-by-source identity means the two passes still unify
+   correctly, but the work is wasted (linear in dependency-graph
+   re-traversals). Add a `HashMap<PathBuf, (TypeEnv, ExportTable)>`
+   keyed on the canonical path; `visiting` already gives the right
+   key shape. Be careful that the cache is keyed on the *fully
+   resolved* module — caching mid-resolution would tangle with cycle
+   detection.
+
+5. **Module subtyping is intentionally absent.** Documented on
+   `ModuleType` in `src/types/ty.rs`. If a future use case demands
+   structural module reuse (a function parameter typed as "any module
+   exporting `greet`"), it should land as a row-typed parameter, not
+   as a width-subtyping rule on `Type::Module` — module identity is
+   nominal by source path and changing that would silently weaken
+   diagnostics across the board.

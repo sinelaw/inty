@@ -29,6 +29,64 @@
 //! - `export { a, b as c } from "./foo.js";`
 //! - `export * from "./foo.js";`       (excludes default, per ESM spec)
 //! - `export * as ns from "./foo.js";`
+//!
+//! ## Known limitations / future work
+//!
+//! See `modules.md` for the full design plan. The pieces this module
+//! still has to grow:
+//!
+//! - **Bare specifiers (modules.md §6).** `import _ from "lodash";`
+//!   currently fails at `resolve_path` because the resolver only knows
+//!   how to treat `source` as a file path. A registry mapping bare
+//!   specifier → resolved path would slot in at the top of `resolve_path`.
+//! - **Dynamic `import()` (§7).** No `Expr::DynamicImport` variant; the
+//!   plan is to require a string-literal argument and return
+//!   `Promise<Type::Module>` so the existing module machinery is reused.
+//! - **Import attributes (§8).** `import data from "./d.json" with
+//!   { type: "json" };` would need an attributes field on `Stmt::Import`
+//!   and a JSON branch in `load_module` that infers the file as a closed
+//!   object literal under the default export.
+//! - **Cross-module type-class instances (§9).** Today instances live in
+//!   a process-global table. If a user module ever exports an instance,
+//!   `Type::Module` is the obvious carrier — add an `instances` field to
+//!   `ModuleType` and merge at import time, with conflicts at the merge
+//!   point as an error.
+//!
+//! ## Known rough edges in the current implementation
+//!
+//! - **Re-export error spans are imprecise.** When `compute_export_table`
+//!   loads a target via `load_module` and that load fails (e.g. the
+//!   target re-exports a name that doesn't exist further down the chain),
+//!   the error bubbles up with whichever span the inner failure carried,
+//!   not the span of the `export … from` clause that caused the load.
+//!   The diagnostic *message* still names the offending module, so users
+//!   can find the bug, but the highlighted source location can be a few
+//!   files away from the actual `from` clause. Wrapping inner errors in
+//!   a "while resolving export … from `…`" frame would tighten this.
+//! - **Module-field assignment is silently allowed.** `Type::Module`
+//!   has no field-assignment rule, but a `ns.foo = bar` expression
+//!   currently goes through `infer_member`/assignment without being
+//!   rejected by an explicit module-immutability check. The right home
+//!   for that check is `infer_assign` for `Expr::Member` whose object
+//!   resolves to `Type::Module(_)`. Today the gap is benign because
+//!   `Type::Module` doesn't unify with anything the assignment RHS would
+//!   produce, but it should fail with a clear "cannot assign to module
+//!   export" error rather than a unification mismatch.
+//! - **Importer's env leaks into loaded modules.** `load_module` passes
+//!   the caller's `starting_env` through to `resolve_imports` for the
+//!   target, so a module loaded in the middle of a chain sees whatever
+//!   bindings the importer happened to have at that point. ESM modules
+//!   are isolated. Today nothing user-visible breaks because module
+//!   bindings don't shadow stdlib names in practice, but the right fix
+//!   is to always use `crate::builtins::initial_env()` (or a shared
+//!   immutable base) as the starting env for `load_module`, regardless
+//!   of who's calling it.
+//! - **No module cache.** A diamond `main → a, main → b, a → c, b → c`
+//!   re-parses, re-resolves, and re-infers `c.js` twice. `Type::Module`'s
+//!   nominal-by-source identity means the two passes still unify
+//!   correctly, but the work is wasted. A `HashMap<PathBuf, (TypeEnv,
+//!   ExportTable)>` keyed on the canonical path would eliminate it; the
+//!   `visiting` set already gives us the right key shape.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
