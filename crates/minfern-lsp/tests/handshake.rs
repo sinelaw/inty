@@ -8,16 +8,16 @@ use lsp_types::notification::{
     DidOpenTextDocument, Initialized, Notification as LspNotification, PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, GotoDefinition, HoverRequest, Initialize, PrepareRenameRequest, Rename,
-    Request as LspRequest, Shutdown, SignatureHelpRequest,
+    Completion, GotoDefinition, HoverRequest, Initialize, InlayHintRequest, PrepareRenameRequest,
+    Rename, Request as LspRequest, Shutdown, SignatureHelpRequest,
 };
 use lsp_types::{
     ClientCapabilities, CompletionParams, CompletionResponse, DidOpenTextDocumentParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeParams,
-    PartialResultParams, Position, PrepareRenameResponse, PublishDiagnosticsParams, RenameParams,
-    SignatureHelp, SignatureHelpContext, SignatureHelpParams, SignatureHelpTriggerKind,
-    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, Uri, WorkDoneProgressParams,
-    WorkspaceEdit,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeParams, InlayHint,
+    InlayHintParams, PartialResultParams, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, RenameParams, SignatureHelp, SignatureHelpContext,
+    SignatureHelpParams, SignatureHelpTriggerKind, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, Uri, WorkDoneProgressParams, WorkspaceEdit,
 };
 use minfern_lsp::Server;
 use serde::{de::DeserializeOwned, Serialize};
@@ -522,6 +522,53 @@ fn signature_help_inside_function_call() {
     assert_eq!(params.len(), 2);
     // Active parameter should be index 1 (the second arg).
     assert_eq!(help.active_parameter, Some(1));
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn inlay_hints_show_inferred_types() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///hints.js");
+    // Three bindings: var x = 1; (Number), const s = "hi"; (String),
+    // function f(n) { return n; } (a polymorphic function).
+    let src = "var x = 1;\nconst s = \"hi\";\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    client
+        .sender
+        .send(Message::Request(req::<InlayHintRequest>(
+            80,
+            InlayHintParams {
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                text_document: TextDocumentIdentifier { uri: u.clone() },
+                range: Range {
+                    start: Position { line: 0, character: 0 },
+                    end: Position { line: 10, character: 0 },
+                },
+            },
+        )))
+        .unwrap();
+    let hints: Option<Vec<InlayHint>> = expect_response(&client, 80);
+    let hints = hints.expect("inlay hints present");
+
+    // We expect at least two hints: one for x, one for s.
+    let labels: Vec<String> = hints
+        .iter()
+        .map(|h| match &h.label {
+            lsp_types::InlayHintLabel::String(s) => s.clone(),
+            lsp_types::InlayHintLabel::LabelParts(parts) => {
+                parts.iter().map(|p| p.value.clone()).collect::<String>()
+            }
+        })
+        .collect();
+    let any_number = labels.iter().any(|l| l.to_lowercase().contains("number"));
+    let any_string = labels.iter().any(|l| l.to_lowercase().contains("string"));
+    assert!(any_number, "expected a Number hint among {:?}", labels);
+    assert!(any_string, "expected a String hint among {:?}", labels);
 
     shutdown(client, handle);
 }
