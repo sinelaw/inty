@@ -161,45 +161,8 @@ var pick: Number
 
 minfern resolves `import` statements relative to the importing file's
 directory and threads inferred types across the module graph. Visibility
-is explicit — only what's marked `export` is reachable from another
-file. A `const` without an `export` is private; the resolver rejects
-imports of private names with a structured error pointing at the
-offending source module.
-
-```javascript
-// math.js
-function square(n) { return n * n; }
-export { square };
-
-// app.js
-import { square } from "./math.js";
-var area = square(5);
-```
-
-```
-var area: Number
-```
-
-Supported forms (see `examples/modules/` for runnable fixtures):
-
-| Form                                                      |        |
-|-----------------------------------------------------------|--------|
-| `import "./mod.js";`                                      | side-effect — merges every export |
-| `import { a, b as c } from "./mod.js";`                   | named, with renaming |
-| `import name from "./mod.js";`                            | default |
-| `import * as ns from "./mod.js";`                         | namespace as a `Type::Module` |
-| `import name, { a } from "./mod.js";`                     | default + named |
-| `import name, * as ns from "./mod.js";`                   | default + namespace |
-| `export var/let/const/function …;`                        | declaration export |
-| `export default …;`                                       | expression or named function |
-| `export { a, b as c };`                                   | export list |
-| `export { a, b as c } from "./mod.js";`                   | re-export, with renaming |
-| `export * from "./mod.js";`                               | re-export all named (excludes `default`, per ESM) |
-| `export * as ns from "./mod.js";`                         | re-export target namespace under one name |
-
-`import * as ns` builds a first-class `Type::Module` rather than an
-object — each `ns.foo` access re-instantiates the export's scheme, so
-polymorphism is preserved across uses:
+is explicit: only what's marked `export` is reachable from another
+file, and importing a private binding is a structured error.
 
 ```javascript
 // identity.js
@@ -216,11 +179,13 @@ var n: Number
 var s: String
 ```
 
-A row-typed namespace would have unified `n` and `s` against a single
-type variable; the dedicated module type keeps each access independent.
-See [modules.md](modules.md) for the design and the planned remaining
-sections (bare specifiers, dynamic `import()`, JSON imports, cross-module
-type-class instances).
+`import * as ns` builds a first-class module type rather than an object,
+so each `ns.foo` access re-instantiates the export's scheme — `ns.id`
+stays polymorphic across uses. Default imports, named exports and
+imports (with renaming), `export default`, and re-exports
+(`export … from`, `export * from`, `export * as ns from`) are all
+supported. See [modules.md](modules.md) for the full design and
+`examples/modules/` for runnable fixtures.
 
 ## Unsupported JavaScript Idioms
 
