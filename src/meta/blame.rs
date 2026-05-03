@@ -29,10 +29,14 @@ pub struct BlameTriple {
     pub stuck: Stuck,
 }
 
-/// Phase 6 will populate this. For now, an empty marker so the API
-/// shape matches the design doc.
+/// Snapshot of the type-system policy in effect when blame triples
+/// were enumerated. Phase 6 wires the real `InferConfig` in here so
+/// that as policy knobs are added, the meta-test produces triples
+/// tagged with the configuration that allowed them.
 #[derive(Clone, Debug, Default)]
-pub struct ConfigSnapshot;
+pub struct ConfigSnapshot {
+    pub infer: crate::infer::InferConfig,
+}
 
 /// Probe values used to instantiate `Wildcard` and class shapes. A
 /// small fixed alphabet — see the design doc, "Don't try to enumerate
@@ -216,7 +220,7 @@ pub fn blame_triples_for_op(op: &OpInfo) -> Vec<BlameTriple> {
             if let Some(stuck) = run_or_stuck(&program) {
                 out.push(BlameTriple {
                     operator: op.name,
-                    config: ConfigSnapshot,
+                    config: ConfigSnapshot::default(),
                     shape: tag.to_vec(),
                     program,
                     stuck,

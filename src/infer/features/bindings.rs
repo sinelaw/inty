@@ -244,8 +244,11 @@ impl InferState {
                         self.generalize(&env_free, &var_type)
                     }
                     // var declarations: generalize syntactic values EXCEPT mutable containers
+                    // (unless config.generalize_mutable_var_containers loosens this).
                     (VarKind::Var, Some(init))
-                        if is_syntactic_value(init) && !is_mutable_container_literal(init) =>
+                        if is_syntactic_value(init)
+                            && (self.config.generalize_mutable_var_containers
+                                || !is_mutable_container_literal(init)) =>
                     {
                         let env_free = new_env.free_vars();
                         self.generalize(&env_free, &var_type)

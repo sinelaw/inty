@@ -344,7 +344,8 @@ impl InferState {
         // through subst, which also walks through the path), and
         // the switch has no default, every literal in the union
         // must be covered by some case test. Otherwise we warn.
-        if !has_default {
+        // Suppressed when `config.exhaustiveness_warnings` is off.
+        if !has_default && self.config.exhaustiveness_warnings {
             let disc_finite = self.resolve_finite_literal_set(discriminant, &disc_type);
             if let Some(domain) = disc_finite {
                 let missing: Vec<&crate::types::LitValue> = domain

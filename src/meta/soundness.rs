@@ -17,8 +17,6 @@
 //! string concat, function call to identity). Adding cases here is
 //! how we widen coverage as the type system grows.
 
-use proptest::prelude::*;
-
 use crate::builtins::initial_env;
 use crate::dynamics::{run_to_end_with_fuel, Stuck, Value};
 use crate::infer::InferState;
@@ -54,7 +52,15 @@ impl SynthType {
     }
 }
 
+// The proptest strategies live behind `#[cfg(test)]` because
+// `proptest` is a dev-dependency. Public callers use `check_program`
+// directly with their own source.
+
+#[cfg(test)]
+use proptest::prelude::*;
+
 /// Strategy for a small Number expression at the given depth.
+#[cfg(test)]
 pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
     if depth == 0 {
         return prop_oneof![
@@ -86,6 +92,7 @@ pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
     .boxed()
 }
 
+#[cfg(test)]
 pub fn arb_string(depth: u32) -> BoxedStrategy<String> {
     if depth == 0 {
         return prop_oneof![
@@ -105,6 +112,7 @@ pub fn arb_string(depth: u32) -> BoxedStrategy<String> {
     .boxed()
 }
 
+#[cfg(test)]
 pub fn arb_boolean(depth: u32) -> BoxedStrategy<String> {
     if depth == 0 {
         return prop_oneof![Just("true".to_string()), Just("false".to_string())].boxed();

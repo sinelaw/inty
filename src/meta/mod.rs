@@ -10,6 +10,7 @@
 //!   meta-test.
 
 pub mod blame;
+pub mod config;
 pub mod soundness;
 
 pub use blame::{all_blame_triples, blame_triples_for_op, BlameTriple, ConfigSnapshot};
