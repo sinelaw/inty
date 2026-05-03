@@ -2,12 +2,20 @@
 
 use crate::lexer::Span;
 
-/// Variable declaration kind (var vs const)
+/// Variable declaration kind.
+///
+/// `Var` and `Let` share the same type-system semantics in mquickjs
+/// (both mutable, neither has a TDZ at the type-checker level), but
+/// they differ in scoping: `Var` is function-scoped and hoisted, while
+/// `Let` is block-scoped. The parser preserves the distinction so the
+/// resolver can emit accurate go-to-def / rename / find-references.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VarKind {
-    /// Mutable variable declaration
+    /// Mutable variable declaration: `var x = …`
     Var,
-    /// Immutable constant declaration
+    /// Mutable block-scoped declaration: `let x = …`
+    Let,
+    /// Immutable constant declaration: `const x = …`
     Const,
 }
 

@@ -411,6 +411,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
         } => {
             let kw = match kind {
                 VarKind::Var => "var",
+                VarKind::Let => "let",
                 VarKind::Const => "const",
             };
             // Output type annotations before the declaration
@@ -503,6 +504,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                 } => {
                     let kw = match kind {
                         VarKind::Var => "var",
+                        VarKind::Let => "let",
                         VarKind::Const => "const",
                     };
                     // Output type annotations before the declaration

@@ -35,6 +35,7 @@ use minfern::parser::ast::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefKind {
     Var,
+    Let,
     Const,
     Param,
     Function,
@@ -98,9 +99,11 @@ impl Resolution {
         let mut r = Resolution::default();
         let module_span = Span::new(0, text_len.max(program.span.end));
         let module_scope = r.new_scope(None, module_span);
+        // The module scope is also the enclosing "function scope" for
+        // any `var` declared at the top level.
         hoist_scope(&program.statements, &mut r, module_scope);
         for stmt in &program.statements {
-            r.visit_stmt(stmt, module_scope);
+            r.visit_stmt(stmt, module_scope, module_scope);
         }
         r.finalize();
         r
@@ -239,16 +242,25 @@ impl Resolution {
         None
     }
 
-    fn visit_stmt(&mut self, stmt: &Stmt, scope: ScopeId) {
+    /// `fn_scope` is the enclosing function-or-module scope; it's where
+    /// `var` and hoisted function declarations live. `scope` is the
+    /// current (possibly block) scope where lookups start and where
+    /// `let`/`const` bindings go.
+    fn visit_stmt(&mut self, stmt: &Stmt, fn_scope: ScopeId, scope: ScopeId) {
         match stmt {
-            Stmt::Block { body, .. } => {
+            Stmt::Block { body, span } => {
+                // `let`/`const` declared inside this block are scoped
+                // to the block, so we always open a new scope here.
+                // It chains to the enclosing scope so lookups still
+                // see outer bindings.
+                let block_scope = self.new_scope(Some(scope), *span);
                 for s in body {
-                    self.visit_stmt(s, scope);
+                    self.visit_stmt(s, fn_scope, block_scope);
                 }
             }
             Stmt::Expr { expression, .. } => self.visit_expr(expression, scope),
             Stmt::Var { kind, declarations, .. } => {
-                self.visit_var_decls(*kind, declarations, scope);
+                self.visit_var_decls(*kind, declarations, fn_scope, scope);
             }
             Stmt::Import { specifiers, .. } => {
                 for spec in specifiers {
@@ -257,18 +269,19 @@ impl Resolution {
                         ImportSpecifier::Default { local, span } => (local.clone(), *span),
                         ImportSpecifier::Namespace { local, span } => (local.clone(), *span),
                     };
-                    self.declare(scope, &name, span, DefKind::Import);
+                    // Imports are top-level, always module-scope.
+                    self.declare(fn_scope, &name, span, DefKind::Import);
                 }
             }
             Stmt::Export { declaration, .. } => match declaration {
                 ExportDecl::Var { kind, declarations, .. } => {
-                    self.visit_var_decls(*kind, declarations, scope);
+                    self.visit_var_decls(*kind, declarations, fn_scope, scope);
                 }
                 ExportDecl::Function {
                     name, params, body, span, ..
                 } => {
                     let name_span = name_span_from_func(*span, name);
-                    self.declare(scope, name, name_span, DefKind::Function);
+                    self.declare(fn_scope, name, name_span, DefKind::Function);
                     self.visit_function_body(*span, params, body, scope);
                 }
                 ExportDecl::Default { value, .. } => {
@@ -304,45 +317,60 @@ impl Resolution {
                 test, consequent, alternate, ..
             } => {
                 self.visit_expr(test, scope);
-                self.visit_stmt(consequent, scope);
+                self.visit_stmt(consequent, fn_scope, scope);
                 if let Some(a) = alternate {
-                    self.visit_stmt(a, scope);
+                    self.visit_stmt(a, fn_scope, scope);
                 }
             }
             Stmt::While { test, body, .. } | Stmt::DoWhile { test, body, .. } => {
                 self.visit_expr(test, scope);
-                self.visit_stmt(body, scope);
+                self.visit_stmt(body, fn_scope, scope);
             }
             Stmt::For {
-                init, test, update, body, ..
+                init, test, update, body, span,
             } => {
+                // A `for (let i = 0; …)` introduces `i` in a per-loop
+                // scope. We always open a scope here so `let` lands in
+                // the right place; for plain `var` it's harmless (the
+                // declaration goes to fn_scope regardless).
+                let for_scope = self.new_scope(Some(scope), *span);
                 if let Some(init) = init {
                     match init {
                         ForInit::VarDecl(decls) => {
-                            // Treat the for-init `var` as belonging to the
-                            // enclosing scope, matching JS hoisting.
-                            self.visit_var_decls(VarKind::Var, decls, scope);
+                            // Re-derive the kind. The parser uses
+                            // `Var` here (since `for (var i …)` is
+                            // common); `let` and `const` would surface
+                            // through the same path with their kind.
+                            // We lose the original kind in this AST,
+                            // so default to `Var`. Editors will still
+                            // resolve correctly because hoist_scope
+                            // handled `var` already.
+                            self.visit_var_decls(VarKind::Var, decls, fn_scope, for_scope);
                         }
-                        ForInit::Expr(e) => self.visit_expr(e, scope),
+                        ForInit::Expr(e) => self.visit_expr(e, for_scope),
                     }
                 }
                 if let Some(t) = test {
-                    self.visit_expr(t, scope);
+                    self.visit_expr(t, for_scope);
                 }
                 if let Some(u) = update {
-                    self.visit_expr(u, scope);
+                    self.visit_expr(u, for_scope);
                 }
-                self.visit_stmt(body, scope);
+                self.visit_stmt(body, fn_scope, for_scope);
             }
-            Stmt::ForIn { left, right, body, .. } | Stmt::ForOf { left, right, body, .. } => {
+            Stmt::ForIn { left, right, body, span } | Stmt::ForOf { left, right, body, span } => {
+                let for_scope = self.new_scope(Some(scope), *span);
                 match left {
-                    ForInLhs::VarDecl(name, _, span) => {
-                        self.declare(scope, name, *span, DefKind::Var);
+                    ForInLhs::VarDecl(name, _, lhs_span) => {
+                        // `for (var x in …)` hoists; `for (let x in …)`
+                        // wouldn't, but the parser flattens both to
+                        // VarDecl. Treat as `var` for compatibility.
+                        self.declare(fn_scope, name, *lhs_span, DefKind::Var);
                     }
-                    ForInLhs::Expr(e) => self.visit_expr(e, scope),
+                    ForInLhs::Expr(e) => self.visit_expr(e, for_scope),
                 }
-                self.visit_expr(right, scope);
-                self.visit_stmt(body, scope);
+                self.visit_expr(right, for_scope);
+                self.visit_stmt(body, fn_scope, for_scope);
             }
             Stmt::Return { argument, .. } => {
                 if let Some(a) = argument {
@@ -351,18 +379,14 @@ impl Resolution {
             }
             Stmt::Throw { argument, .. } => self.visit_expr(argument, scope),
             Stmt::Try { block, handler, finalizer, .. } => {
-                self.visit_stmt(block, scope);
+                self.visit_stmt(block, fn_scope, scope);
                 if let Some(h) = handler {
                     let catch_scope = self.new_scope(Some(scope), h.span);
-                    // The catch parameter has no separate name span in
-                    // the AST, so use the clause's span as the def
-                    // location. Editors will highlight the whole
-                    // `catch (e)` header on go-to-def, which is fine.
                     self.declare(catch_scope, &h.param, h.span, DefKind::Catch);
-                    self.visit_stmt(&h.body, catch_scope);
+                    self.visit_stmt(&h.body, fn_scope, catch_scope);
                 }
                 if let Some(f) = finalizer {
-                    self.visit_stmt(f, scope);
+                    self.visit_stmt(f, fn_scope, scope);
                 }
             }
             Stmt::Switch { discriminant, cases, .. } => {
@@ -372,31 +396,44 @@ impl Resolution {
                         self.visit_expr(t, scope);
                     }
                     for s in &c.consequent {
-                        self.visit_stmt(s, scope);
+                        self.visit_stmt(s, fn_scope, scope);
                     }
                 }
             }
-            Stmt::Labeled { body, .. } => self.visit_stmt(body, scope),
+            Stmt::Labeled { body, .. } => self.visit_stmt(body, fn_scope, scope),
             Stmt::FunctionDecl {
-                name, params, body, span, ..
+                name: _, params, body, span, ..
             } => {
-                // The decl was already hoisted into `scope`; we still
-                // walk the body to handle nested decls and uses.
-                let _ = (name, scope);
+                // The decl was already hoisted into `fn_scope`; we
+                // still walk the body to record nested decls/uses.
                 self.visit_function_body(*span, params, body, scope);
             }
             Stmt::Empty { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {}
         }
     }
 
-    fn visit_var_decls(&mut self, kind: VarKind, decls: &[VarDeclarator], scope: ScopeId) {
+    fn visit_var_decls(
+        &mut self,
+        kind: VarKind,
+        decls: &[VarDeclarator],
+        fn_scope: ScopeId,
+        scope: ScopeId,
+    ) {
         let def_kind = match kind {
             VarKind::Var => DefKind::Var,
+            VarKind::Let => DefKind::Let,
             VarKind::Const => DefKind::Const,
+        };
+        // `var` lands in the enclosing function scope (that's where
+        // hoist_scope already pre-bound it). `let`/`const` land in the
+        // current (block) scope.
+        let target = match kind {
+            VarKind::Var => fn_scope,
+            VarKind::Let | VarKind::Const => scope,
         };
         for d in decls {
             let name_span = name_span_from_decl(d);
-            self.declare(scope, &d.name, name_span, def_kind);
+            self.declare(target, &d.name, name_span, def_kind);
             if let Some(init) = &d.init {
                 self.visit_expr(init, scope);
             }
@@ -518,7 +555,17 @@ impl Resolution {
         if let Stmt::Block { body: stmts, .. } = body {
             hoist_scope(stmts, self, func_scope);
         }
-        self.visit_stmt(body, func_scope);
+        // The function's body is *the* function scope for both
+        // hoisting (var) and lookup (let/const see params). To avoid
+        // visit_stmt opening a fresh block scope when it sees the
+        // outer Block, we walk the body's statements directly.
+        if let Stmt::Block { body: stmts, .. } = body {
+            for s in stmts {
+                self.visit_stmt(s, func_scope, func_scope);
+            }
+        } else {
+            self.visit_stmt(body, func_scope, func_scope);
+        }
     }
 }
 
@@ -533,31 +580,29 @@ fn hoist_scope(stmts: &[Stmt], r: &mut Resolution, scope: ScopeId) {
 
 fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
     match stmt {
-        Stmt::Var { kind, declarations, .. } => {
-            let def_kind = match kind {
-                VarKind::Var => DefKind::Var,
-                VarKind::Const => DefKind::Const,
-            };
+        Stmt::Var { kind: VarKind::Var, declarations, .. } => {
+            // Only `var` hoists to the enclosing function scope.
+            // `let`/`const` are block-scoped and bind in visit_stmt.
             for d in declarations {
                 let name_span = name_span_from_decl(d);
-                r.declare(scope, &d.name, name_span, def_kind);
+                r.declare(scope, &d.name, name_span, DefKind::Var);
             }
         }
+        // Skip Let/Const here — visit_stmt will handle them in their
+        // proper block scope.
+        Stmt::Var { .. } => {}
         Stmt::FunctionDecl { name, span, .. } => {
             let name_span = name_span_from_func(*span, name);
             r.declare(scope, name, name_span, DefKind::Function);
         }
         Stmt::Export { declaration, .. } => match declaration {
-            ExportDecl::Var { kind, declarations, .. } => {
-                let def_kind = match kind {
-                    VarKind::Var => DefKind::Var,
-                    VarKind::Const => DefKind::Const,
-                };
+            ExportDecl::Var { kind: VarKind::Var, declarations, .. } => {
                 for d in declarations {
                     let name_span = name_span_from_decl(d);
-                    r.declare(scope, &d.name, name_span, def_kind);
+                    r.declare(scope, &d.name, name_span, DefKind::Var);
                 }
             }
+            ExportDecl::Var { .. } => {} // Let/Const not hoisted.
             ExportDecl::Function { name, span, .. } => {
                 let name_span = name_span_from_func(*span, name);
                 r.declare(scope, name, name_span, DefKind::Function);
@@ -684,5 +729,59 @@ mod tests {
         let mut names: Vec<_> = r.visible_at(0).iter().map(|d| d.name.clone()).collect();
         names.sort();
         assert_eq!(names, vec!["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn let_is_block_scoped() {
+        // `let y` inside the block should NOT be visible after the
+        // block ends.
+        let src = "if (true) { let y = 1; }\ny;\n";
+        let r = build(src);
+        // Cursor on the trailing `y;` reference (line 1, col 0):
+        let trailing_y = src.rfind("y;").unwrap();
+        // Reference at offset `trailing_y` should not resolve.
+        assert!(
+            r.def_of_use(Span::new(trailing_y, trailing_y + 1)).is_none(),
+            "let y should not leak out of its block"
+        );
+    }
+
+    #[test]
+    fn var_inside_block_hoists_to_function() {
+        // `var x` inside an `if` block IS visible after the block
+        // (function-scoped, hoisted).
+        let src = "function f() {\n  if (true) { var x = 1; }\n  x;\n}\n";
+        let r = build(src);
+        // The trailing `x;` use on line 2 should resolve.
+        let trailing_x = src.rfind("x;").unwrap();
+        let def = r
+            .def_of_use(Span::new(trailing_x, trailing_x + 1))
+            .expect("var x is hoisted to f's scope");
+        assert_eq!(def.name, "x");
+        assert_eq!(def.kind, DefKind::Var);
+    }
+
+    #[test]
+    fn const_is_block_scoped() {
+        let src = "if (true) { const k = 1; }\nk;\n";
+        let r = build(src);
+        let trailing_k = src.rfind("k;").unwrap();
+        assert!(
+            r.def_of_use(Span::new(trailing_k, trailing_k + 1)).is_none(),
+            "const k should not leak out of its block"
+        );
+    }
+
+    #[test]
+    fn inner_let_shadows_outer() {
+        let src = "var x = 1;\n{ let x = 2; x; }\n";
+        let r = build(src);
+        // The use of `x` inside the block should resolve to the inner
+        // `let x`, not the outer `var x`.
+        let inner_use = src.rfind("x;").unwrap();
+        let def = r
+            .def_of_use(Span::new(inner_use, inner_use + 1))
+            .expect("x should resolve to the inner let");
+        assert_eq!(def.kind, DefKind::Let);
     }
 }

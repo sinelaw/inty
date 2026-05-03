@@ -103,7 +103,7 @@ impl Parser {
             // `let` is parsed as `var`. minfern doesn't yet model per-block
             // lexical scoping or temporal-dead-zone rules, but var-with-block
             // scoping is a sound over-approximation for type checking.
-            Token::Let => self.parse_var_declaration(VarKind::Var),
+            Token::Let => self.parse_var_declaration(VarKind::Let),
             Token::Const => self.parse_var_declaration(VarKind::Const),
             Token::Function => self.parse_function_declaration(),
             Token::Class => self.parse_class_declaration(),
