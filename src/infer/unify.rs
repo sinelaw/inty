@@ -189,6 +189,19 @@ impl InferState {
                 }
             }
 
+            // Modules are nominally identified by source path. Two
+            // namespace-import bindings of the same file unify; two
+            // bindings of different files don't, even if their export
+            // shapes happen to coincide. This matches ES module identity:
+            // each file is its own module.
+            (Type::Module(m1), Type::Module(m2)) => {
+                if m1.source == m2.source {
+                    Ok(())
+                } else {
+                    Err(self.unification_error(span, t1, t2))
+                }
+            }
+
             // Mismatch
             _ => Err(self.unification_error(span, t1, t2)),
         }

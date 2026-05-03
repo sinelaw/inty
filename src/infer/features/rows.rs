@@ -186,6 +186,20 @@ impl InferState {
                 }
                 // If property not found and row is closed, this will fail in unification below
             }
+            Type::Module(m) => {
+                if let Some(scheme) = m.exports.get(property) {
+                    let ty = self.instantiate(scheme);
+                    return Ok(self.apply_subst(&ty));
+                }
+                return Err(crate::error::TypeError::Module {
+                    message: format!(
+                        "module {:?} has no export named {:?}",
+                        m.source, property
+                    ),
+                    span,
+                }
+                .into());
+            }
             _ => {}
         }
 
@@ -265,6 +279,20 @@ impl InferState {
                     return Ok(self.apply_subst(&prop_type));
                 }
                 // If property not found and row is closed, this will fail in unification below
+            }
+            Type::Module(m) => {
+                if let Some(scheme) = m.exports.get(property) {
+                    let ty = self.instantiate(scheme);
+                    return Ok(self.apply_subst(&ty));
+                }
+                return Err(crate::error::TypeError::Module {
+                    message: format!(
+                        "module {:?} has no export named {:?}",
+                        m.source, property
+                    ),
+                    span,
+                }
+                .into());
             }
             _ => {}
         }

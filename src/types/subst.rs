@@ -184,6 +184,17 @@ impl Substitutable for Type {
             Type::Union(members) => {
                 Type::union(members.iter().map(|m| m.apply_subst(subst)))
             }
+
+            // Modules: each export is a scheme; reuse TypeScheme's
+            // substitution which already shadows quantified vars.
+            Type::Module(m) => Type::Module(crate::types::ModuleType {
+                source: m.source.clone(),
+                exports: m
+                    .exports
+                    .iter()
+                    .map(|(k, scheme)| (k.clone(), scheme.apply_subst(subst)))
+                    .collect(),
+            }),
         }
     }
 

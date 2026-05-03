@@ -217,6 +217,7 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
         (Type::Func { .. }, "function") => true,
         (Type::Row(_), "object") | (Type::Array(_), "object") => true,
         (Type::Map(_), "object") | (Type::Promise(_), "object") => true,
+        (Type::Module(_), "object") => true,
         (Type::Null, "object") => true,
         (Type::Literal(LitValue::String(_)), "string") => true,
         (Type::Literal(LitValue::Number(_)), "number") => true,

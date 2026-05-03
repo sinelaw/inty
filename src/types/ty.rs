@@ -299,6 +299,28 @@ pub enum Type {
     /// members are deduplicated and sorted. A union is only constructed via
     /// [`Type::union`] which enforces the invariants.
     Union(Vec<Type>),
+
+    /// ES module namespace: the type of `ns` after `import * as ns from
+    /// "./mod.js";`. Carries one type *scheme* per export so member access
+    /// (`ns.foo`) instantiates polymorphism per use, and is identified by
+    /// the canonicalised source path so two imports of the same file get
+    /// the same type and two imports of different files don't unify even
+    /// when their export shapes happen to coincide. See `modules.md` §2.
+    Module(ModuleType),
+}
+
+/// Body of `Type::Module`. A module is identified nominally (by source
+/// path) and carries its export table as a map from exported name to
+/// the scheme of the local binding it points to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModuleType {
+    /// Canonicalised source path of the module — the identity of the type.
+    /// Two `Type::Module` values unify iff their `source` strings match.
+    pub source: String,
+    /// Exported name → scheme of the underlying local binding. Stored as
+    /// schemes (not types) so each `ns.foo` access can re-instantiate
+    /// polymorphic exports independently.
+    pub exports: BTreeMap<String, TypeScheme>,
 }
 
 impl Type {
@@ -362,6 +384,15 @@ impl Type {
     /// Create a row type from an object.
     pub fn row(row: RowType) -> Self {
         Type::Row(row)
+    }
+
+    /// Create a module type with the given source identity and export
+    /// schemes.
+    pub fn module(source: impl Into<String>, exports: BTreeMap<String, TypeScheme>) -> Self {
+        Type::Module(ModuleType {
+            source: source.into(),
+            exports,
+        })
     }
 
     /// Create a string-literal type.
@@ -494,6 +525,19 @@ impl Type {
         }
     }
 
+    /// True if this is a module type.
+    pub fn is_module(&self) -> bool {
+        matches!(self, Type::Module(_))
+    }
+
+    /// Get the module type if this is a Module.
+    pub fn as_module(&self) -> Option<&ModuleType> {
+        match self {
+            Type::Module(m) => Some(m),
+            _ => None,
+        }
+    }
+
     /// Get the row type if this is a Row.
     pub fn as_row(&self) -> Option<&RowType> {
         match self {
@@ -581,6 +625,25 @@ impl Type {
             Type::Union(members) => {
                 for m in members {
                     m.collect_free_vars(vars);
+                }
+            }
+
+            Type::Module(m) => {
+                // Each export is a scheme — its own quantified vars are
+                // *not* free at the module level; only what survives in
+                // the body after subtracting the scheme's binders is.
+                for scheme in m.exports.values() {
+                    let mut inner = HashSet::new();
+                    scheme.body.ty.collect_free_vars(&mut inner);
+                    for pred in &scheme.body.preds {
+                        for ty in &pred.types {
+                            ty.collect_free_vars(&mut inner);
+                        }
+                    }
+                    for v in &scheme.vars {
+                        inner.remove(v);
+                    }
+                    vars.extend(inner);
                 }
             }
         }
@@ -706,6 +769,7 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Promise(v) => (13, union_member_sort_key(v).1),
         Type::Named(id, _) => (14, format!("{}", id)),
         Type::Union(_) => (15, String::new()),
+        Type::Module(m) => (16, m.source.clone()),
     }
 }
 
@@ -769,6 +833,43 @@ mod tests {
         );
 
         assert!(open_row.is_open());
+    }
+
+    #[test]
+    fn test_module_free_vars_excludes_scheme_quantifiers() {
+        // Module exports `id: ∀a. a → a`. The `a` is bound by the scheme
+        // and must NOT show up as a free var of the enclosing module type.
+        let var_a = TVarName::Flex(7);
+        let id_scheme = TypeScheme::poly(
+            vec![var_a.clone()],
+            Type::simple_func(vec![Type::Var(var_a.clone())], Type::Var(var_a.clone())),
+        );
+        let mut exports = BTreeMap::new();
+        exports.insert("id".to_string(), id_scheme);
+        let module_ty = Type::module("./id.js", exports);
+
+        let free = module_ty.free_vars();
+        assert!(
+            !free.contains(&var_a),
+            "scheme-bound variable leaked into module's free_vars"
+        );
+
+        // A truly free variable inside an export's body should still count.
+        let escaped = TVarName::Flex(99);
+        let leaky_scheme = TypeScheme::mono(Type::Var(escaped.clone()));
+        let mut exports2 = BTreeMap::new();
+        exports2.insert("k".to_string(), leaky_scheme);
+        let module_ty2 = Type::module("./k.js", exports2);
+        assert!(module_ty2.free_vars().contains(&escaped));
+    }
+
+    #[test]
+    fn test_module_equality_is_nominal_by_source() {
+        let a = Type::module("./a.js", BTreeMap::new());
+        let a2 = Type::module("./a.js", BTreeMap::new());
+        let b = Type::module("./b.js", BTreeMap::new());
+        assert_eq!(a, a2);
+        assert_ne!(a, b);
     }
 
     #[test]

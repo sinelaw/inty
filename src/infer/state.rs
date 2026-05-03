@@ -543,6 +543,15 @@ impl InferState {
 
             Type::Literal(_) => false,
             Type::Union(members) => members.iter().any(|m| self.occurs_in_impl(var, m)),
+
+            Type::Module(m) => {
+                // A module's exports are schemes; the occurs check looks
+                // at free variables of each scheme (i.e. those not bound
+                // by the scheme's quantifier).
+                m.exports
+                    .values()
+                    .any(|scheme| scheme.free_vars().contains(&TVarName::Flex(var)))
+            }
         }
     }
 
