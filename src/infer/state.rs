@@ -29,6 +29,15 @@ pub struct PendingConstraint {
     pub span: Span,
 }
 
+/// A non-fatal diagnostic raised during inference. Warnings are
+/// collected on `InferState` and surfaced after inference completes;
+/// they do not abort type-checking.
+#[derive(Debug, Clone)]
+pub struct InferWarning {
+    pub span: Span,
+    pub message: String,
+}
+
 /// Inference state tracking type variables, substitution, and constraints.
 pub struct InferState {
     /// Counter for generating fresh type variables.
@@ -55,6 +64,11 @@ pub struct InferState {
 
     /// Type origins for error reporting.
     pub type_origins: HashMap<TVarName, TypeOrigin>,
+
+    /// Non-fatal warnings collected during inference.
+    /// Currently used by switch-exhaustiveness; consumers can iterate
+    /// over them after inference completes.
+    pub warnings: Vec<InferWarning>,
 }
 
 impl Default for InferState {
@@ -75,7 +89,17 @@ impl InferState {
             pending_constraints: Vec::new(),
             decl_types: HashMap::new(),
             type_origins: HashMap::new(),
+            warnings: Vec::new(),
         }
+    }
+
+    /// Push a non-fatal warning. Called from inference paths that detect
+    /// suspicious-but-not-broken patterns (e.g. non-exhaustive switch).
+    pub fn warn(&mut self, span: Span, message: impl Into<String>) {
+        self.warnings.push(InferWarning {
+            span,
+            message: message.into(),
+        });
     }
 
     /// Record the origin of a type variable (only if higher priority than existing)
