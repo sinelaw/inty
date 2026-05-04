@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "inty"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ariadne",
  "proptest",
@@ -136,7 +136,7 @@ dependencies = [
 
 [[package]]
 name = "inty-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "inty",
  "inty-lsp",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "inty-lsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "console_error_panic_hook",
  "inty",
