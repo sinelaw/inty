@@ -1,14 +1,14 @@
-//! Diagnostic printing for minfern errors.
+//! Diagnostic printing for inty errors.
 
 use std::io::Write;
 
 use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind, Source};
 
-use crate::error::{LexError, MinfernError, ParseError, TypeError};
+use crate::error::{LexError, intyError, ParseError, TypeError};
 use crate::lexer::Span;
 
 /// Ariadne interprets label offsets as character (Unicode scalar) indices,
-/// not byte offsets. Minfern's lexer tracks positions in bytes, so every
+/// not byte offsets. inty's lexer tracks positions in bytes, so every
 /// span destined for ariadne must be converted first. If this conversion is
 /// skipped, any multi-byte character (including non-ASCII letters, emoji,
 /// and typographic symbols) earlier in the source shifts the underline to
@@ -28,7 +28,7 @@ fn byte_to_char_offset(source: &str, byte_offset: usize) -> usize {
     source[..boundary].chars().count()
 }
 
-/// Convert a minfern byte-offset span to the character-offset range that
+/// Convert a inty byte-offset span to the character-offset range that
 /// ariadne expects.
 fn char_range(source: &str, span: Span) -> std::ops::Range<usize> {
     let start = byte_to_char_offset(source, span.start);
@@ -36,17 +36,17 @@ fn char_range(source: &str, span: Span) -> std::ops::Range<usize> {
     start..end
 }
 
-/// Print a minfern error with colored diagnostics to stderr.
-pub fn print_error(filename: &str, source: &str, error: &MinfernError) {
+/// Print a inty error with colored diagnostics to stderr.
+pub fn print_error(filename: &str, source: &str, error: &intyError) {
     let _ = write_error(std::io::stderr(), filename, source, error, true);
 }
 
-/// Print a minfern error to stderr without ANSI color escapes.
-pub fn print_error_plain(filename: &str, source: &str, error: &MinfernError) {
+/// Print a inty error to stderr without ANSI color escapes.
+pub fn print_error_plain(filename: &str, source: &str, error: &intyError) {
     let _ = write_error(std::io::stderr(), filename, source, error, false);
 }
 
-/// Render a minfern error into `writer`.
+/// Render a inty error into `writer`.
 ///
 /// Extracted from [`print_error`] so tests (and future consumers that
 /// pipe diagnostics) can inspect the rendered output without spawning
@@ -57,7 +57,7 @@ pub fn write_error<W: Write>(
     mut writer: W,
     filename: &str,
     source: &str,
-    error: &MinfernError,
+    error: &intyError,
     color: bool,
 ) -> std::io::Result<()> {
     let config = Config::new().with_color(color);
@@ -71,7 +71,7 @@ pub fn write_error<W: Write>(
         }
     };
     // Handle UnificationError specially since it has multiple labels
-    if let MinfernError::Type(TypeError::UnificationError {
+    if let intyError::Type(TypeError::UnificationError {
         expected,
         found,
         span,
@@ -152,7 +152,7 @@ pub fn write_error<W: Write>(
 
     // Handle all other errors with single note
     let (message, span, note) = match error {
-        MinfernError::Lex(e) => match e {
+        intyError::Lex(e) => match e {
             LexError::UnexpectedCharacter { ch, span } => {
                 (format!("Unexpected character: '{}'", ch), *span, None)
             }
@@ -171,7 +171,7 @@ pub fn write_error<W: Write>(
             LexError::InvalidNumber { span } => ("Invalid number literal".to_string(), *span, None),
         },
 
-        MinfernError::Parse(e) => match e {
+        intyError::Parse(e) => match e {
             ParseError::UnexpectedToken {
                 found,
                 expected,
@@ -206,7 +206,7 @@ pub fn write_error<W: Write>(
             }
         },
 
-        MinfernError::Type(e) => match e {
+        intyError::Type(e) => match e {
             TypeError::UnificationError { .. } => {
                 unreachable!("UnificationError is handled above")
             }
@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(byte_to_char_offset(s, 3), 1);
     }
 
-    fn render_error(source: &str, error: &MinfernError) -> String {
+    fn render_error(source: &str, error: &intyError) -> String {
         let mut buf = Vec::new();
         // color=false keeps tests asserting on plain text without having
         // to strip ANSI escapes after the fact.
@@ -372,7 +372,7 @@ mod tests {
     /// Regression test for highlighting offset when multi-byte Unicode
     /// characters appear earlier in the source.
     ///
-    /// Minfern stores spans in bytes. Ariadne interprets span offsets as
+    /// inty stores spans in bytes. Ariadne interprets span offsets as
     /// character indices. Before the fix, the em-dash below would shift the
     /// underline 2 columns to the right of `x`, because the span's byte
     /// start landed past the dash but ariadne counted it as characters.
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(x_start, 11, "fixture math");
         let span = Span::new(x_start, x_start + 1);
 
-        let error = MinfernError::Type(TypeError::UnificationError {
+        let error = intyError::Type(TypeError::UnificationError {
             expected: "String".to_string(),
             found: "Number".to_string(),
             span,
@@ -433,7 +433,7 @@ mod tests {
         let foo_start = source.find("foo").unwrap();
         let span = Span::new(foo_start, foo_start + 3);
 
-        let error = MinfernError::Type(TypeError::UndefinedVariable {
+        let error = intyError::Type(TypeError::UndefinedVariable {
             name: "foo".to_string(),
             span,
         });
@@ -465,7 +465,7 @@ mod tests {
         let x_start = source.find("x").unwrap();
         let span = Span::new(x_start, x_start + 1);
 
-        let error = MinfernError::Type(TypeError::UndefinedVariable {
+        let error = intyError::Type(TypeError::UndefinedVariable {
             name: "x".to_string(),
             span,
         });

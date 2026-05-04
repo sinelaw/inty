@@ -1,4 +1,4 @@
-//! Minfern: HMF-based type inference for mquickjs JavaScript subset.
+//! inty: HMF-based type inference for mquickjs JavaScript subset.
 //!
 //! This library provides static type inference for mquickjs, a minimal
 //! JavaScript subset. It features:

@@ -1,6 +1,6 @@
 // Namespace-import demo. Run with:
 //
-//     minfern examples/modules/app-namespace.js
+//     inty examples/modules/app-namespace.js
 //
 // `import * as id from "./identity.js";` binds `id` to a *module* type
 // — not an object literal. Each `id.id(...)` access re-instantiates the

@@ -180,7 +180,7 @@ const LOOSE_EQ_ARMS: &[TypingArm] = &[TypingArm {
     inputs: &[Wildcard, Wildcard],
     output: Concrete(Boolean),
     class: None,
-    notes: "minfern's typing for `==` does not coerce; runtime does",
+    notes: "inty's typing for `==` does not coerce; runtime does",
 }];
 
 const LOGICAL_ARMS: &[TypingArm] = &[TypingArm {
@@ -253,7 +253,7 @@ const AWAIT_ARMS: &[TypingArm] = &[TypingArm {
 // The catalog.
 // ---------------------------------------------------------------------
 
-/// Every operator minfern knows about, in a stable order.
+/// Every operator inty knows about, in a stable order.
 pub static OPERATORS: &[OpInfo] = &[
     // --- Arithmetic --------------------------------------------------
     OpInfo {

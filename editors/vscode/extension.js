@@ -1,4 +1,4 @@
-// Thin VS Code adapter that launches the minfern LSP server over stdio.
+// Thin VS Code adapter that launches the inty LSP server over stdio.
 //
 // The extension itself adds no editor logic — the server speaks LSP and
 // drives hovers, diagnostics, completions, go-to-def, rename, signature
@@ -14,19 +14,19 @@ let log;
 let status;
 
 function resolveServerPath() {
-  const cfg = vscode.workspace.getConfiguration("minfern");
+  const cfg = vscode.workspace.getConfiguration("inty");
   const fromSetting = cfg.get("serverPath", "").trim();
-  if (fromSetting) return { path: fromSetting, source: "minfern.serverPath" };
-  if (process.env.MINFERN_BIN) {
-    return { path: process.env.MINFERN_BIN, source: "MINFERN_BIN env" };
+  if (fromSetting) return { path: fromSetting, source: "inty.serverPath" };
+  if (process.env.inty_BIN) {
+    return { path: process.env.inty_BIN, source: "inty_BIN env" };
   }
-  return { path: "minfern", source: "PATH lookup" };
+  return { path: "inty", source: "PATH lookup" };
 }
 
 function activate(context) {
   // Create the Output channel up front so even early failures (binary
-  // missing, wrong path, etc.) surface in View -> Output -> "minfern".
-  log = vscode.window.createOutputChannel("minfern");
+  // missing, wrong path, etc.) surface in View -> Output -> "inty".
+  log = vscode.window.createOutputChannel("inty");
   context.subscriptions.push(log);
 
   // Status-bar item gives a visible signal that the extension activated.
@@ -34,15 +34,15 @@ function activate(context) {
     vscode.StatusBarAlignment.Right,
     100
   );
-  status.text = "$(loading~spin) minfern";
-  status.tooltip = "minfern language server";
-  status.command = "minfern.showLog";
+  status.text = "$(loading~spin) inty";
+  status.tooltip = "inty language server";
+  status.command = "inty.showLog";
   status.show();
   context.subscriptions.push(status);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("minfern.showLog", () => log.show(true)),
-    vscode.commands.registerCommand("minfern.restart", async () => {
+    vscode.commands.registerCommand("inty.showLog", () => log.show(true)),
+    vscode.commands.registerCommand("inty.restart", async () => {
       if (client) {
         log.appendLine(">> restarting client...");
         await client.stop();
@@ -56,20 +56,20 @@ function activate(context) {
 
 function startClient(context) {
   const { path, source } = resolveServerPath();
-  log.appendLine(`minfern extension activated`);
+  log.appendLine(`inty extension activated`);
   log.appendLine(`server path: ${path}  (from ${source})`);
 
   // If the path is absolute, sanity-check it exists. A "spawn ENOENT"
   // from VS Code's process layer is opaque, so catching it here gives a
   // clearer error.
   if (path.startsWith("/") && !fs.existsSync(path)) {
-    const msg = `minfern binary not found at: ${path}`;
+    const msg = `inty binary not found at: ${path}`;
     log.appendLine(`ERROR: ${msg}`);
     vscode.window.showErrorMessage(
-      `${msg}. Set "minfern.serverPath" or build with: cargo build --release -p minfern-cli`,
+      `${msg}. Set "inty.serverPath" or build with: cargo build --release -p inty-cli`,
       "Show Log"
     ).then(pick => { if (pick === "Show Log") log.show(true); });
-    status.text = "$(error) minfern";
+    status.text = "$(error) inty";
     status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
     return;
   }
@@ -91,20 +91,20 @@ function startClient(context) {
     traceOutputChannel: log,
   };
 
-  client = new LanguageClient("minfern", "minfern", serverOptions, clientOptions);
+  client = new LanguageClient("inty", "inty", serverOptions, clientOptions);
 
   client.start().then(
     () => {
       log.appendLine("client started");
-      status.text = "$(check) minfern";
+      status.text = "$(check) inty";
       status.backgroundColor = undefined;
     },
     err => {
       log.appendLine(`ERROR starting client: ${err && err.stack ? err.stack : err}`);
-      status.text = "$(error) minfern";
+      status.text = "$(error) inty";
       status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
       vscode.window.showErrorMessage(
-        `minfern failed to start: ${err && err.message ? err.message : err}`,
+        `inty failed to start: ${err && err.message ? err.message : err}`,
         "Show Log"
       ).then(pick => { if (pick === "Show Log") log.show(true); });
     }

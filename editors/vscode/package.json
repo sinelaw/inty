@@ -1,7 +1,7 @@
 {
-  "name": "minfern-lsp",
-  "displayName": "minfern",
-  "description": "JavaScript type inference (HMF) via the minfern language server",
+  "name": "inty-lsp",
+  "displayName": "inty",
+  "description": "JavaScript type inference (HMF) via the inty language server",
   "publisher": "local",
   "version": "0.0.3",
   "engines": {
@@ -19,8 +19,8 @@
   ],
   "contributes": {
     "commands": [
-      { "command": "minfern.showLog",  "title": "minfern: Show Server Log" },
-      { "command": "minfern.restart",  "title": "minfern: Restart Server" }
+      { "command": "inty.showLog",  "title": "inty: Show Server Log" },
+      { "command": "inty.restart",  "title": "inty: Restart Server" }
     ],
     "languages": [
       {
@@ -31,14 +31,14 @@
       }
     ],
     "configuration": {
-      "title": "minfern",
+      "title": "inty",
       "properties": {
-        "minfern.serverPath": {
+        "inty.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the minfern binary. If empty, the extension uses the MINFERN_BIN environment variable, or falls back to looking up `minfern` on PATH."
+          "description": "Absolute path to the inty binary. If empty, the extension uses the inty_BIN environment variable, or falls back to looking up `inty` on PATH."
         },
-        "minfern.trace.server": {
+        "inty.trace.server": {
           "type": "string",
           "enum": ["off", "messages", "verbose"],
           "default": "off",

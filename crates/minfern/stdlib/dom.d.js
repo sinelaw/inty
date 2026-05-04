@@ -1,12 +1,12 @@
-// minfern stdlib: minimal browser DOM.
+// inty stdlib: minimal browser DOM.
 //
-// Embedded in the minfern binary and auto-loaded with the core library. Like
+// Embedded in the inty binary and auto-loaded with the core library. Like
 // core.d.js, this file is never executed by a JavaScript runtime, so
 // `const x;` without an initializer is safe here.
 //
 // This is intentionally a small subset — enough to build a React-style SPA
 // out of plain JS. Everything returned by `getElementById`/`createElement`
-// collapses to a single "Element" shape because minfern has no union types,
+// collapses to a single "Element" shape because inty has no union types,
 // so we can't distinguish HTMLInputElement from HTMLDivElement etc. at the
 // type level. That's a trade-off, not an oversight.
 

@@ -27,7 +27,7 @@ mod transform;
 
 use proptest::prelude::*;
 
-use minfern::parser::{ast::Program, parse, pretty::print_program};
+use inty::parser::{ast::Program, parse, pretty::print_program};
 
 #[cfg(test)]
 use oracle::CheckResult;
@@ -157,7 +157,7 @@ proptest! {
 mod unit {
     use super::*;
     use super::ast::{bound_names_in_stmt, names_in, rename_all};
-    use minfern::parser::ast::Stmt;
+    use inty::parser::ast::Stmt;
 
     fn p_from(src: &str) -> Program {
         parse(src).expect("source must parse")

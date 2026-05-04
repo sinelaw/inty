@@ -25,8 +25,8 @@
 
 use std::collections::HashMap;
 
-use minfern::lexer::Span;
-use minfern::parser::ast::{
+use inty::lexer::Span;
+use inty::parser::ast::{
     Expr, ExportDecl, ForInLhs, ForInit, ImportSpecifier, Param, Program, PropDef, Stmt,
     VarDeclarator, VarKind,
 };
@@ -712,7 +712,7 @@ fn span_contains(span: Span, offset: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minfern::parser::parse;
+    use inty::parser::parse;
 
     fn build(src: &str) -> Resolution {
         let program = parse(src).expect("parse");

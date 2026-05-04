@@ -3,8 +3,8 @@
 //! how the transformation renamed / introduced / removed bindings, so
 //! the oracle can assert the appropriate equivalence.
 
-use minfern::lexer::Span;
-use minfern::parser::ast::*;
+use inty::lexer::Span;
+use inty::parser::ast::*;
 
 use super::ast::{
     bound_names_in_stmt, empty_stmt, fresh_name, names_in, num_lit, referenced_names_in_stmt,
@@ -94,11 +94,11 @@ pub fn t_intersperse_empty(p: &Program) -> (Program, Comparison) {
 /// - pairs where *neither* statement is a `FunctionDecl`.
 ///
 /// The function-decl exclusion sidesteps a known limitation in
-/// minfern's hoisting: only *adjacent* function declarations are
+/// inty's hoisting: only *adjacent* function declarations are
 /// grouped into one binding scope for mutual-recursion purposes, so a
 /// swap that breaks adjacency changes whether two functions can see
 /// each other (see `tests/metamorphic.rs` commit history for the
-/// failing case that motivated this restriction). Until minfern
+/// failing case that motivated this restriction). Until inty
 /// switches to a dependency-graph-based letrec grouping, swaps
 /// involving function decls can genuinely change type-check outcomes
 /// in a way that's not a metamorphic-property bug.
@@ -122,7 +122,7 @@ pub fn t_swap_first_independent_pair(p: &Program) -> Option<(Program, Comparison
         let a = &p.statements[i];
         let b = &p.statements[i + 1];
 
-        // Sidestep minfern's adjacency-sensitive function hoisting.
+        // Sidestep inty's adjacency-sensitive function hoisting.
         if matches!(a, Stmt::FunctionDecl { .. }) || matches!(b, Stmt::FunctionDecl { .. }) {
             continue;
         }
@@ -270,7 +270,7 @@ fn wrap_in_iife(expr: Expr, s: Span) -> Expr {
 
 // -------------------------------------------------------------------------
 // Destructuring equivalence: checked as a pair-of-programs test at the
-// source level, because minfern's parser desugars destructuring patterns
+// source level, because inty's parser desugars destructuring patterns
 // into ordinary `VarDeclarator`s at parse time. That means we can't
 // build a destructuring-shaped AST directly — we have to go via source
 // text and let the parser produce the lowered form.

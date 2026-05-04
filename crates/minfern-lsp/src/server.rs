@@ -1,4 +1,4 @@
-//! LSP server: glues `lsp-server`'s sync stdio loop to minfern.
+//! LSP server: glues `lsp-server`'s sync stdio loop to inty.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -57,7 +57,7 @@ impl Server {
         let init_result = serde_json::json!({
             "capabilities": server_capabilities(),
             "serverInfo": {
-                "name": "minfern-lsp",
+                "name": "inty-lsp",
                 "version": env!("CARGO_PKG_VERSION"),
             },
         });
@@ -477,7 +477,7 @@ where
 /// Resolve an import path string (e.g. `"./shared.js"` or
 /// `"../lib/foo.js"`) against the importing file's URI to a target
 /// URI. Returns `None` for non-`file://` schemes or absolute import
-/// paths -- minfern's module system is currently relative-only and we
+/// paths -- inty's module system is currently relative-only and we
 /// don't have access to a wider workspace map here.
 fn resolve_module_uri(importer: &Uri, import_path: &str) -> Option<Uri> {
     let imp_str = importer.as_str();

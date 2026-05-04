@@ -100,7 +100,7 @@ impl Parser {
     fn parse_statement(&mut self) -> Result<Stmt> {
         match self.current() {
             Token::Var => self.parse_var_declaration(VarKind::Var),
-            // `let` is parsed as `var`. minfern doesn't yet model per-block
+            // `let` is parsed as `var`. inty doesn't yet model per-block
             // lexical scoping or temporal-dead-zone rules, but var-with-block
             // scoping is a sound over-approximation for type checking.
             Token::Let => self.parse_var_declaration(VarKind::Let),
@@ -674,7 +674,7 @@ impl Parser {
         let name = self.expect_ident()?;
 
         // Reject `extends Parent` for now; it'd need a real prototype chain
-        // to match runtime semantics and minfern has no inheritance.
+        // to match runtime semantics and inty has no inheritance.
         if self.check(&Token::Extends) {
             let span = self.current_span();
             return Err(ParseError::UnexpectedToken {
@@ -2974,12 +2974,12 @@ mod tests {
 
     #[test]
     fn test_import_default_and_named() {
-        let program = parse("import init, { check_types } from './pkg/minfern.js';").unwrap();
+        let program = parse("import init, { check_types } from './pkg/inty.js';").unwrap();
         if let Stmt::Import {
             specifiers, source, ..
         } = &program.statements[0]
         {
-            assert_eq!(source, "./pkg/minfern.js");
+            assert_eq!(source, "./pkg/inty.js");
             assert_eq!(specifiers.len(), 2);
             assert!(
                 matches!(&specifiers[0], ImportSpecifier::Default { local, .. } if local == "init")

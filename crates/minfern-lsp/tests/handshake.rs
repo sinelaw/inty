@@ -19,7 +19,7 @@ use lsp_types::{
     SignatureHelpParams, SignatureHelpTriggerKind, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, Uri, WorkDoneProgressParams, WorkspaceEdit,
 };
-use minfern_lsp::Server;
+use inty_lsp::Server;
 use serde::{de::DeserializeOwned, Serialize};
 
 fn boot() -> (Connection, thread::JoinHandle<()>) {
@@ -140,7 +140,7 @@ fn diagnostics_for_undefined_variable() {
     open_doc(&client, &u, "y;\n");
     let diags = drain_diagnostics(&client, &u);
     assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].source.as_deref(), Some("minfern"));
+    assert_eq!(diags[0].source.as_deref(), Some("inty"));
     assert!(diags[0].message.contains("Undefined variable"));
 
     shutdown(client, handle);

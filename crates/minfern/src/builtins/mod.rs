@@ -5,7 +5,7 @@
 //! - Type class instances for Plus and Indexable
 //! - Constraint solving for deferred type class predicates
 
-use crate::error::{MinfernError, TypeError};
+use crate::error::{intyError, TypeError};
 use crate::infer::{InferState, TypeEnv};
 use crate::lexer::Span;
 use crate::types::{ClassName, RowType, TVarName, Type, TypePred, TypeScheme};
@@ -213,7 +213,7 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
 ///
 /// `.then` here commits to the "callback must return a Promise" shape
 /// (`(T) => Promise<U>) => Promise<U>`) rather than the JS-spec
-/// `(T) => U | Promise<U>` form, because minfern has no union types.
+/// `(T) => U | Promise<U>` form, because inty has no union types.
 /// Users passing a plain-value callback should return `Promise.resolve(v)`
 /// or make the function `async`.
 pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -> Option<Type> {
@@ -230,7 +230,7 @@ pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -
         }
         "catch" => {
             // (error -> Promise<T>) -> Promise<T>. error is a fresh var
-            // since minfern has no single "Error" type.
+            // since inty has no single "Error" type.
             let err_var = state.fresh_type_var();
             Type::simple_func(
                 vec![Type::simple_func(
@@ -251,7 +251,7 @@ pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -
 impl InferState {
     /// Resolve pending type class constraints.
     /// This should be called after inference to check that all constraints are satisfiable.
-    pub fn resolve_constraints(&mut self) -> Result<(), MinfernError> {
+    pub fn resolve_constraints(&mut self) -> Result<(), intyError> {
         let constraints = std::mem::take(&mut self.pending_constraints);
 
         for constraint in constraints {
@@ -262,7 +262,7 @@ impl InferState {
     }
 
     /// Resolve a single type class constraint.
-    fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), MinfernError> {
+    fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), intyError> {
         match pred.class {
             ClassName::Plus => self.resolve_plus(&pred.types[0], span),
             ClassName::Indexable => {
@@ -272,7 +272,7 @@ impl InferState {
     }
 
     /// Resolve Plus constraint: type must be Number or String.
-    fn resolve_plus(&mut self, ty: &Type, span: Span) -> Result<(), MinfernError> {
+    fn resolve_plus(&mut self, ty: &Type, span: Span) -> Result<(), intyError> {
         let ty = self.apply_subst(ty);
 
         match &ty {
@@ -309,7 +309,7 @@ impl InferState {
         index: &Type,
         element: &Type,
         span: Span,
-    ) -> Result<(), MinfernError> {
+    ) -> Result<(), intyError> {
         let container = self.apply_subst(container);
         let index = self.apply_subst(index);
         let element = self.apply_subst(element);

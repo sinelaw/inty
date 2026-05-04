@@ -40,7 +40,7 @@ pub struct InferWarning {
 
 /// User-facing knobs for inference behaviour.
 ///
-/// The defaults match minfern's previous hardcoded behaviour so that
+/// The defaults match inty's previous hardcoded behaviour so that
 /// `InferConfig::default()` is a drop-in for callers that don't care
 /// about policy. Each field is documented with what's affected when
 /// the flag is flipped.
@@ -53,7 +53,7 @@ pub struct InferConfig {
 
     /// Generalise mutable container literals (arrays / objects) bound
     /// with `var` if all their elements are syntactic values. Default:
-    /// `false` (the value-restriction default), matching what minfern
+    /// `false` (the value-restriction default), matching what inty
     /// shipped before this knob existed. Setting to `true` is unsound
     /// in the presence of indexed assignment — the option exists so
     /// the meta-tests can exercise the looser regime.

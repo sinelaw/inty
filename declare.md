@@ -1,10 +1,10 @@
-# Type Declarations and Soundness in Minfern
+# Type Declarations and Soundness in inty
 
-This document outlines the design for supporting external type declarations (e.g., for the DOM, Node.js built-ins, or third-party libraries) in Minfern, with a strict focus on maintaining type soundness within a Rank-1 polymorphic system.
+This document outlines the design for supporting external type declarations (e.g., for the DOM, Node.js built-ins, or third-party libraries) in inty, with a strict focus on maintaining type soundness within a Rank-1 polymorphic system.
 
 ## 1. The Core Problem: Soundness & Mutation
 
-Minfern uses a Hindley-Milner (Rank-1) type system. In such systems, giving a mutable variable a polymorphic type is unsound.
+inty uses a Hindley-Milner (Rank-1) type system. In such systems, giving a mutable variable a polymorphic type is unsound.
 
 **Example of Unsoundness:**
 ```javascript
@@ -35,7 +35,7 @@ const document /*: { getElementById: (id: String) => Element } */;
 **B. `var` Declarations (Legacy Compatibility)**
 Standard `var` declarations **without initializers** and **with type annotations** are treated as `const` by the type checker.
 ```javascript
-// Treated as const by Minfern
+// Treated as const by inty
 var console /*: { log: (msg: String) => Undefined } */;
 ```
 
@@ -43,7 +43,7 @@ var console /*: { log: (msg: String) => Undefined } */;
 
 ## 3. Module System (ES6)
 
-Minfern leverages standard ECMAScript modules for organizing declarations.
+inty leverages standard ECMAScript modules for organizing declarations.
 
 ### 3.1. Imports are Immutable
 ES6 module bindings are live read-only views. This aligns perfectly with our soundness requirement.
@@ -95,7 +95,7 @@ import "./dom.d.js"; // Loads 'document', 'window', etc. into global scope
 
 ## 5. Rank-1 Restriction
 
-Minfern uses Hindley-Milner type inference, which is only decidable for **Rank-1** polymorphism. Type annotations in declarations must conform to this restriction.
+inty uses Hindley-Milner type inference, which is only decidable for **Rank-1** polymorphism. Type annotations in declarations must conform to this restriction.
 
 ### 5.1. What is Rank-1?
 
@@ -184,4 +184,4 @@ This preserves the invariant that polymorphic types accurately describe runtime 
 
 ## 7. Summary
 
-By enforcing immutability on all external type declarations, restricting to Rank-1 types, and preventing polymorphic property mutation, Minfern maintains decidable type inference and type soundness while providing a standard, JavaScript-compatible syntax for typing external code.
+By enforcing immutability on all external type declarations, restricting to Rank-1 types, and preventing polymorphic property mutation, inty maintains decidable type inference and type soundness while providing a standard, JavaScript-compatible syntax for typing external code.

@@ -1,6 +1,6 @@
 // Default-import entry point. Run with:
 //
-//     minfern examples/modules/app-default.js
+//     inty examples/modules/app-default.js
 //
 // Each `import name from "./mod.js";` binds the module's `export default`
 // under whatever local name the importer chooses — `hello` here is the

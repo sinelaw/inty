@@ -1,14 +1,14 @@
 [package]
-name = "minfern-cli"
+name = "inty-cli"
 version = "0.1.0"
 edition = "2021"
-description = "Command-line interface for minfern (type checker + LSP server)"
+description = "Command-line interface for inty (type checker + LSP server)"
 license = "MIT"
 
 [[bin]]
-name = "minfern"
+name = "inty"
 path = "src/main.rs"
 
 [dependencies]
-minfern = { path = "../minfern" }
-minfern-lsp = { path = "../minfern-lsp" }
+inty = { path = "../inty" }
+inty-lsp = { path = "../inty-lsp" }

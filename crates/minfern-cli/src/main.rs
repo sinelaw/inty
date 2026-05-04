@@ -1,17 +1,17 @@
-//! Minfern CLI: Type inference for mquickjs JavaScript subset.
+//! inty CLI: Type inference for mquickjs JavaScript subset.
 
 use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
 
-use minfern::diagnostics::{print_error, print_error_plain};
-use minfern::error::MinfernError;
-use minfern::infer::{decorate_with_types, InferState, TypeEnv};
-use minfern::lexer::{Scanner, Token};
-use minfern::parser::{pretty::print_program, Parser};
-use minfern::stdlib::{initial_env_with_stdlib, load_lib};
-use minfern::types::PrettyContext;
+use inty::diagnostics::{print_error, print_error_plain};
+use inty::error::intyError;
+use inty::infer::{decorate_with_types, InferState, TypeEnv};
+use inty::lexer::{Scanner, Token};
+use inty::parser::{pretty::print_program, Parser};
+use inty::stdlib::{initial_env_with_stdlib, load_lib};
+use inty::types::PrettyContext;
 
 struct Args {
     input: Option<String>,
@@ -37,7 +37,7 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "--version" | "-V" => {
-                println!("minfern {}", env!("CARGO_PKG_VERSION"));
+                println!("inty {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "--lib" => {
@@ -90,7 +90,7 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("error: {}", e);
             eprintln!();
-            eprintln!("run 'minfern --help' for usage.");
+            eprintln!("run 'inty --help' for usage.");
             return ExitCode::from(2);
         }
     };
@@ -98,8 +98,8 @@ fn main() -> ExitCode {
     let input = match args.input {
         Some(s) => s,
         None => {
-            eprintln!("Usage: minfern <file.js> | minfern -");
-            eprintln!("       minfern --help");
+            eprintln!("Usage: inty <file.js> | inty -");
+            eprintln!("       inty --help");
             return ExitCode::from(1);
         }
     };
@@ -125,7 +125,7 @@ fn main() -> ExitCode {
     // same InferState is threaded through so fresh type var IDs never clash
     // between the libs and the user program.
     let (env, state) = if args.no_stdlib {
-        (minfern::builtins::initial_env(), InferState::new())
+        (inty::builtins::initial_env(), InferState::new())
     } else {
         match initial_env_with_stdlib() {
             Ok(r) => r,
@@ -136,7 +136,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let report = |path: &str, source: &str, error: &MinfernError| {
+    let report = |path: &str, source: &str, error: &intyError| {
         if args.no_color {
             print_error_plain(path, source, error);
         } else {
@@ -165,7 +165,7 @@ fn load_extra_libs(
     mut env: TypeEnv,
     mut state: InferState,
     paths: &[String],
-    report: &dyn Fn(&str, &str, &MinfernError),
+    report: &dyn Fn(&str, &str, &intyError),
 ) -> Result<(TypeEnv, InferState), ExitCode> {
     for path in paths {
         let source = match fs::read_to_string(path) {
@@ -191,10 +191,10 @@ fn run_lsp(args: &[String]) -> ExitCode {
         match arg.as_str() {
             "--stdio" => {} // currently the only transport
             "--help" | "-h" => {
-                println!("minfern lsp - Language Server Protocol over stdio");
+                println!("inty lsp - Language Server Protocol over stdio");
                 println!();
                 println!("USAGE:");
-                println!("    minfern lsp [--stdio]");
+                println!("    inty lsp [--stdio]");
                 println!();
                 println!("Speaks LSP on stdin/stdout. Editors can launch this directly.");
                 return ExitCode::SUCCESS;
@@ -206,7 +206,7 @@ fn run_lsp(args: &[String]) -> ExitCode {
         }
     }
 
-    match minfern_lsp::run_stdio() {
+    match inty_lsp::run_stdio() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("lsp: {}", e);
@@ -217,12 +217,12 @@ fn run_lsp(args: &[String]) -> ExitCode {
 
 fn print_help() {
     println!(
-        r#"minfern - HMF-based type inference for mquickjs
+        r#"inty - HMF-based type inference for mquickjs
 
 USAGE:
-    minfern [OPTIONS] <file.js>
-    minfern [OPTIONS] -
-    minfern lsp [--stdio]
+    inty [OPTIONS] <file.js>
+    inty [OPTIONS] -
+    inty lsp [--stdio]
 
 OPTIONS:
     --lib <path>         Load an additional declaration file (can be repeated)
@@ -235,7 +235,7 @@ SUBCOMMANDS:
     lsp                  Start the language server (LSP over stdio)
 
 DESCRIPTION:
-    Minfern performs static type inference on mquickjs JavaScript code.
+    inty performs static type inference on mquickjs JavaScript code.
     It features:
 
     - Row polymorphism for structural typing of objects
@@ -244,17 +244,17 @@ DESCRIPTION:
     - HMF-based inference with first-class polymorphism
     - Type annotations in doc comments using /** var x: T */ syntax
 
-    By default, minfern auto-loads the embedded core and DOM declarations
+    By default, inty auto-loads the embedded core and DOM declarations
     (stdlib/core.d.js and stdlib/dom.d.js). Pass --no-stdlib to disable
     them, or --lib <path> to load additional user-supplied declarations
     (e.g. for a third-party library).
 
 EXAMPLES:
-    minfern example.js                         Check example.js
-    minfern --lib types/lodash.d.js app.js     Add a lib before checking
-    minfern --no-stdlib small.js               Check without any libs
-    echo "var x = 1" | minfern -               Check from stdin
-    minfern lsp                                Speak LSP on stdin/stdout
+    inty example.js                         Check example.js
+    inty --lib types/lodash.d.js app.js     Add a lib before checking
+    inty --no-stdlib small.js               Check without any libs
+    echo "var x = 1" | inty -               Check from stdin
+    inty lsp                                Speak LSP on stdin/stdout
 
 AUTHOR:
     (c) Noam Lewis
@@ -267,7 +267,7 @@ fn run_inference(
     env: TypeEnv,
     source: &str,
     filename: &str,
-) -> Result<(), Vec<MinfernError>> {
+) -> Result<(), Vec<intyError>> {
     let mut errors = Vec::new();
 
     // Lexing
@@ -315,7 +315,7 @@ fn run_inference(
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let mut visiting = std::collections::HashSet::new();
-        match minfern::modules::resolve_imports(
+        match inty::modules::resolve_imports(
             state,
             env,
             &program,

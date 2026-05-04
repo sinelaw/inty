@@ -1,22 +1,22 @@
-//! Run minfern's lex/parse/infer pipeline on an in-memory document and
+//! Run inty's lex/parse/infer pipeline on an in-memory document and
 //! expose the results in a form the LSP server can query.
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
-use minfern::error::MinfernError;
-use minfern::infer::{InferState, TypeEnv};
-use minfern::lexer::{Scanner, Span, Token};
-use minfern::parser::ast::{Expr, ImportSpecifier, Program, Stmt};
-use minfern::parser::Parser;
-use minfern::stdlib::initial_env_with_stdlib;
-use minfern::types::{PrettyContext, RowType, Type};
+use inty::error::intyError;
+use inty::infer::{InferState, TypeEnv};
+use inty::lexer::{Scanner, Span, Token};
+use inty::parser::ast::{Expr, ImportSpecifier, Program, Stmt};
+use inty::parser::Parser;
+use inty::stdlib::initial_env_with_stdlib;
+use inty::types::{PrettyContext, RowType, Type};
 
 use crate::resolver::Resolution;
 
 /// Result of checking one document: the errors found and (when the
 /// program parsed) the inference state needed to answer hover queries.
 pub struct Analysis {
-    pub errors: Vec<MinfernError>,
+    pub errors: Vec<intyError>,
     program: Option<Program>,
     final_env: Option<TypeEnv>,
     state: Option<InferState>,
@@ -109,7 +109,7 @@ impl Analysis {
         }
     }
 
-    fn errors_only(errors: Vec<MinfernError>) -> Self {
+    fn errors_only(errors: Vec<intyError>) -> Self {
         Analysis {
             errors,
             program: None,
@@ -637,7 +637,7 @@ fn resolve_callee_type(
     state: &InferState,
     expr: &Expr,
 ) -> Option<(String, Type)> {
-    use minfern::types::PropName;
+    use inty::types::PropName;
     match expr {
         Expr::Ident { name, .. } => {
             let scheme = env.lookup(name)?;
@@ -732,7 +732,7 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             ..
         } => {
             if let Some(init) = init {
-                use minfern::parser::ast::ForInit;
+                use inty::parser::ast::ForInit;
                 match init {
                     ForInit::VarDecl(decls) => {
                         for d in decls {
@@ -817,7 +817,7 @@ fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
             }
         }
         Expr::Object { properties, .. } => {
-            use minfern::parser::ast::PropDef;
+            use inty::parser::ast::PropDef;
             for p in properties {
                 match p {
                     PropDef::Property { value, .. } => visit_expr(value, offset, best),

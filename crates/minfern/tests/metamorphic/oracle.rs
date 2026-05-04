@@ -17,11 +17,11 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use minfern::infer::{InferState, TypeEnv};
-use minfern::parser::ast::Program;
-use minfern::parser::pretty::print_program;
-use minfern::stdlib::initial_env_with_stdlib;
-use minfern::types::PrettyContext;
+use inty::infer::{InferState, TypeEnv};
+use inty::parser::ast::Program;
+use inty::parser::pretty::print_program;
+use inty::stdlib::initial_env_with_stdlib;
+use inty::types::PrettyContext;
 
 /// Successful check result. `program_ty` is the top-level program's
 /// type; `bindings` is the set of bindings the program *introduced*

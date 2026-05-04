@@ -1,4 +1,4 @@
-//! Core type definitions for minfern type inference.
+//! Core type definitions for inty type inference.
 //!
 //! This module defines the type representation following the HMF (Hindley-Milner
 //! with First-class Polymorphism) approach, with support for:

@@ -1,13 +1,13 @@
-// minfern stdlib: core JavaScript built-ins.
+// inty stdlib: core JavaScript built-ins.
 //
-// This file is embedded in the minfern binary and auto-loaded before every
-// user program. It is parsed and type-checked by minfern but never executed
+// This file is embedded in the inty binary and auto-loaded before every
+// user program. It is parsed and type-checked by inty but never executed
 // by any JavaScript runtime, so it freely uses `const x;` without an
 // initializer (a SyntaxError in real JS) to express external bindings.
 //
 // The polymorphic primitive constructors (`Array`, `String`, `Number`,
 // `Boolean` used as functions) stay in Rust (`src/builtins/mod.rs`) so each
-// lookup produces fresh type variables — minfern's handling of polymorphic
+// lookup produces fresh type variables — inty's handling of polymorphic
 // types inside annotation-declared schemes doesn't yet re-instantiate on
 // every use. Library-shaped bindings (Math, console, JSON, Object, Array
 // statics, Promise helpers, parseInt/Float, isNaN/Finite) live here.

@@ -1,9 +1,9 @@
 // Entry point. Pulls the mutable `state` and its mutators from `./store`
 // and the pretty-printers from `./format`. Run with:
 //
-//     minfern examples/modules/app.js
+//     inty examples/modules/app.js
 //
-// minfern resolves the two relative imports from `app.js`'s directory,
+// inty resolves the two relative imports from `app.js`'s directory,
 // parses and infers each module, then merges the exported bindings into
 // this file's environment. You'll see every call below type-check with
 // no per-call annotations.

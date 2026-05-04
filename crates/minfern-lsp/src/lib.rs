@@ -1,4 +1,4 @@
-//! Language Server Protocol implementation backed by [`minfern`].
+//! Language Server Protocol implementation backed by [`inty`].
 //!
 //! Built on `lsp-server` (sync stdio transport) and `lsp-types` (typed
 //! protocol structs). Supported features:

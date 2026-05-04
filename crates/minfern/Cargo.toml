@@ -1,5 +1,5 @@
 [package]
-name = "minfern"
+name = "inty"
 version = "0.1.0"
 edition = "2021"
 description = "HMF-based type inference for mquickjs JavaScript subset"

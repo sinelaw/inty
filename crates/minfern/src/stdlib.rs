@@ -2,13 +2,13 @@
 //!
 //! Each `.d.js` file is baked into the binary at compile time with
 //! `include_str!` and loaded into the initial type environment before user
-//! code is checked. The files are regular minfern-checkable JavaScript
+//! code is checked. The files are regular inty-checkable JavaScript
 //! declarations — the same format any user can write — but they're never
 //! executed, so they use `const name;` (no initializer) to declare external
 //! bindings.
 
 use crate::builtins::initial_env;
-use crate::error::MinfernError;
+use crate::error::intyError;
 use crate::infer::{InferState, TypeEnv};
 use crate::parser::parse;
 
@@ -33,7 +33,7 @@ pub fn load_lib(
     state: &mut InferState,
     env: TypeEnv,
     source: &str,
-) -> Result<TypeEnv, MinfernError> {
+) -> Result<TypeEnv, intyError> {
     let program = parse(source)?;
     let (_ty, new_env) = state.infer_program_with_env(&env, &program)?;
     Ok(new_env)
@@ -44,7 +44,7 @@ pub fn load_lib(
 /// Returns the environment plus the fresh `InferState` used to load the
 /// libs. Callers should continue inferring their user program with the
 /// returned state so type variable IDs remain unique.
-pub fn initial_env_with_stdlib() -> Result<(TypeEnv, InferState), MinfernError> {
+pub fn initial_env_with_stdlib() -> Result<(TypeEnv, InferState), intyError> {
     let mut state = InferState::new();
     let mut env = initial_env();
     for (source, _name) in DEFAULT_LIBS {

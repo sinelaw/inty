@@ -7,14 +7,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::{MinfernError, TypeError};
+use crate::error::{intyError, TypeError};
 use crate::lexer::Span;
 use crate::types::{PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef};
 
 use super::state::InferState;
 
 /// Result type for unification.
-pub type UnifyResult<T> = Result<T, MinfernError>;
+pub type UnifyResult<T> = Result<T, intyError>;
 
 impl InferState {
     /// Unify two types, updating the substitution.
@@ -454,7 +454,7 @@ impl InferState {
     }
 
     /// Create a unification error.
-    fn unification_error(&self, span: Span, t1: &Type, t2: &Type) -> MinfernError {
+    fn unification_error(&self, span: Span, t1: &Type, t2: &Type) -> intyError {
         let expected_origin = self
             .get_origin(t1)
             .cloned()

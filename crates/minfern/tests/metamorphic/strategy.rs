@@ -16,7 +16,7 @@
 
 use proptest::prelude::*;
 
-use minfern::parser::ast::*;
+use inty::parser::ast::*;
 
 use super::ast::span;
 

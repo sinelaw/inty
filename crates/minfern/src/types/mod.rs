@@ -1,4 +1,4 @@
-//! Type system module for minfern.
+//! Type system module for inty.
 //!
 //! This module provides the core type definitions, substitution implementation,
 //! and pretty-printing for the HMF-based type inference system.

@@ -4,8 +4,8 @@
 
 use std::collections::HashSet;
 
-use minfern::lexer::Span;
-use minfern::parser::ast::*;
+use inty::lexer::Span;
+use inty::parser::ast::*;
 
 // -------------------------------------------------------------------------
 // Small constructors — cut down on boilerplate when building expected ASTs

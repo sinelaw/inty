@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the minfern server, then install / dev-run the VS Code extension.
+# Build the inty server, then install / dev-run the VS Code extension.
 #
 # Usage:
 #   ./install.sh               # build server + install extension into VS Code
@@ -12,9 +12,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BIN_PATH="$REPO_ROOT/target/release/minfern"
-EXT_ID="local.minfern-lsp"
-VSIX_PATH="$SCRIPT_DIR/minfern-lsp.vsix"
+BIN_PATH="$REPO_ROOT/target/release/inty"
+EXT_ID="local.inty-lsp"
+VSIX_PATH="$SCRIPT_DIR/inty-lsp.vsix"
 
 # Match VS Code's installation channel via $CODE if set; default to `code`.
 CODE="${CODE:-code}"
@@ -32,8 +32,8 @@ require_cmd() {
 
 build_server() {
   require_cmd cargo
-  echo ">> building minfern (release)…"
-  (cd "$REPO_ROOT" && cargo build --release -p minfern-cli)
+  echo ">> building inty (release)…"
+  (cd "$REPO_ROOT" && cargo build --release -p inty-cli)
   [ -x "$BIN_PATH" ] || {
     echo "error: build did not produce $BIN_PATH" >&2
     exit 1
@@ -55,9 +55,9 @@ print_setting_hint() {
 Next:
   1. Set this in VS Code user settings (Cmd/Ctrl+Shift+P -> "Open User Settings (JSON)"):
 
-         "minfern.serverPath": "$BIN_PATH"
+         "inty.serverPath": "$BIN_PATH"
 
-     Or export MINFERN_BIN in the shell you launch VS Code from.
+     Or export inty_BIN in the shell you launch VS Code from.
 
   2. Reload the window (Cmd/Ctrl+Shift+P -> "Reload Window") and open a .js file.
 EOF
@@ -94,7 +94,7 @@ EOF
     require_cmd "$CODE"
     workspace="${2:-$PWD}"
     echo ">> launching Extension Development Host on: $workspace"
-    MINFERN_BIN="$BIN_PATH" exec "$CODE" \
+    inty_BIN="$BIN_PATH" exec "$CODE" \
       --extensionDevelopmentPath="$SCRIPT_DIR" \
       "$workspace"
     ;;

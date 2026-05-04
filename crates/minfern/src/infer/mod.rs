@@ -1,4 +1,4 @@
-//! Type inference module for minfern.
+//! Type inference module for inty.
 //!
 //! This module provides the core type inference implementation:
 //! - `state`: Inference state with fresh variable generation and substitution
@@ -26,12 +26,12 @@ pub use state::{InferConfig, InferState, InferWarning, PendingConstraint, TypeCl
 pub use type_parser::parse_type_annotation;
 pub use unify::UnifyResult;
 
-use crate::error::{MinfernError, TypeError};
+use crate::error::{intyError, TypeError};
 use crate::parser::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
 use crate::types::Type;
 
 /// Result type for inference operations.
-pub type InferResult<T> = Result<T, MinfernError>;
+pub type InferResult<T> = Result<T, intyError>;
 
 impl InferState {
     /// Infer the type of a program.
@@ -331,7 +331,7 @@ impl InferState {
                         // so a typo doesn't survive until import time.
                         for spec in specifiers {
                             if env.lookup(&spec.local).is_none() {
-                                return Err(MinfernError::Type(TypeError::Module {
+                                return Err(intyError::Type(TypeError::Module {
                                     message: format!(
                                         "exported name `{}` is not declared in this module",
                                         spec.local

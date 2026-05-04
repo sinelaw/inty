@@ -1,6 +1,6 @@
-# Gaps found while writing a minfern-checked SPA
+# Gaps found while writing a inty-checked SPA
 
-This started as the list of minfern limitations encountered while writing
+This started as the list of inty limitations encountered while writing
 the todo-list example in this directory. Several of them have since been
 fixed — those entries are marked *(resolved)* and kept as a record of
 what changed and why.
@@ -39,7 +39,7 @@ what changed and why.
 ### 1. No function hoisting *(resolved)*
 
 Previously, `function outer() { return inner(); } function inner() {...}`
-failed with `Undefined variable: 'inner'` because minfern resolved names
+failed with `Undefined variable: 'inner'` because inty resolved names
 strictly in source order. Mutual recursion between peer functions was
 equivalently blocked. The SPA's original workaround was a mutable
 `var doRender = function () { ... };` placeholder rewritten at the bottom
@@ -68,7 +68,7 @@ use the doc-comment form.
 
 ### 4. No built-in DOM / `window` / event types *(resolved)*
 
-minfern now ships `stdlib/core.d.js` and `stdlib/dom.d.js`, baked into
+inty now ships `stdlib/core.d.js` and `stdlib/dom.d.js`, baked into
 the binary via `include_str!` and auto-loaded before every user program.
 Users get `document`, `window`, `console`, `Math`, `JSON`, `setTimeout`,
 etc. without writing any declarations themselves. Pass `--lib <path>` to
@@ -103,7 +103,7 @@ The SPA's `deleteTodo`, `clearDone`, `countRemaining`, `hasAnyDone`,
 `renderList`, and all the per-item handler factories collapsed from
 loop-based to one-liners (`state.todos.filter(t => t.id !== id)` etc.).
 
-`find` is typed `(T => Boolean) => T` — minfern has no union types, so
+`find` is typed `(T => Boolean) => T` — inty has no union types, so
 "not found" at runtime returns `undefined` regardless of the declared
 type. Same trade-off `getElementById` makes.
 
@@ -114,7 +114,7 @@ all parse now. The parser lowers arrows to `Expr::Function` with
 `name: None`, so inference/decoration/printing are unchanged.
 
 Not modelled: `this` binding. Arrow functions in JS inherit the
-enclosing `this`; minfern's function handler re-creates a fresh `this`
+enclosing `this`; inty's function handler re-creates a fresh `this`
 variable for every function regardless. The SPA happens not to care.
 
 ### 12. No `let` *(resolved)*
@@ -131,7 +131,7 @@ parses and the types fall out correctly.
 There are no union types and no optional properties, so there's no way
 to type `getElementById: (String) => Element | Null`. The shipped DOM
 library pretends `getElementById` always succeeds. At runtime this is
-fine for IDs we control, but it means minfern cannot catch typos like
+fine for IDs we control, but it means inty cannot catch typos like
 `getElementById("todo-lsit")`.
 
 Related: `arr.find(...)`, `obj[missingKey]`, `JSON.parse` of arbitrary
@@ -141,7 +141,7 @@ needs a type-system extension (unions, options, or an explicit `?T` sugar).
 ### 7. `String` and `String[]` collide under structural indexing
 
 A function that only uses `s.length` and `s[i]` satisfies both `String`
-and `String[]` identically, so minfern picks one by unification order
+and `String[]` identically, so inty picks one by unification order
 and may default wrongly. The workaround is to throw a `"" + s` into the
 body to trigger the `Plus` type-class and pin it to `String`. Now that
 `String.prototype` methods dispatch directly (gap 5), most real code
@@ -307,15 +307,15 @@ Modules aren't used in the main SPA because Chromium blocks
 example stop running without a local HTTP server. A minimal
 multi-file project demonstrating import/export lives in
 `examples/modules/` — type-check with
-`minfern examples/modules/app.js`.
+`inty examples/modules/app.js`.
 
 ## By design (not going to fix)
 
 A handful of JavaScript features are deliberately outside the scope
-of minfern. Marking them explicitly so they don't keep showing up
+of inty. Marking them explicitly so they don't keep showing up
 as "open" on the gap list.
 
-**Prototype chain and anything that rides on it.** minfern has no
+**Prototype chain and anything that rides on it.** inty has no
 inheritance model. Classes lower to factory functions returning an
 object literal; that literal has no `__proto__`, no constructor
 link, no dynamic dispatch through `prototype`. Consequently:
@@ -343,19 +343,19 @@ So:
    regular functions (both currently get a fresh `this` variable).
  * `.call` / `.apply` / `.bind` to rebind `this` isn't type-checked.
  * Method detachment (`let f = obj.method; f()`) loses the `this`
-   binding at runtime; minfern doesn't warn because it has no
+   binding at runtime; inty doesn't warn because it has no
    notion of "bound to a receiver".
 
 **`let` per-iteration binding and the temporal-dead-zone.** `let`
-parses and lowers to the same AST node as `var`; minfern treats
+parses and lowers to the same AST node as `var`; inty treats
 both as block-scoped for the purposes of where the name is visible
 but doesn't model per-iteration bindings in a `for (let i ...)`
 loop or the TDZ where referring to a `let` before its declaration
 throws. These are runtime semantics irrelevant to types the way
-minfern uses them.
+inty uses them.
 
 **`var` being function-scoped, not block-scoped.** `var` inside a
-nested block is visible outside that block at runtime; minfern
+nested block is visible outside that block at runtime; inty
 treats it as block-scoped, which is an over-approximation — the
 false positives it produces are strict-but-sound.
 

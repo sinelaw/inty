@@ -1,6 +1,6 @@
 // Export-list demo. Run with:
 //
-//     minfern examples/modules/app-list.js
+//     inty examples/modules/app-list.js
 //
 // `math.js` exports `square` under its own name and renames `cube` to
 // `pow3`. The local name `cube` is intentionally not importable — try

@@ -1,4 +1,4 @@
-//! Error types for the minfern type checker.
+//! Error types for the inty type checker.
 
 use crate::lexer::Span;
 use thiserror::Error;
@@ -129,12 +129,12 @@ impl TypeOrigin {
     }
 }
 
-/// Result type for minfern operations.
-pub type Result<T> = std::result::Result<T, MinfernError>;
+/// Result type for inty operations.
+pub type Result<T> = std::result::Result<T, intyError>;
 
-/// Main error type for minfern.
+/// Main error type for inty.
 #[derive(Debug, Error)]
-pub enum MinfernError {
+pub enum intyError {
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
 

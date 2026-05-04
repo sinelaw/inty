@@ -1,9 +1,9 @@
-//! WebAssembly bindings for minfern type checker.
+//! WebAssembly bindings for inty type checker.
 
 use wasm_bindgen::prelude::*;
 
 use crate::builtins::initial_env;
-use crate::error::MinfernError;
+use crate::error::intyError;
 use crate::infer::{decorate_with_types, InferState};
 use crate::lexer::{Scanner, Token};
 use crate::parser::{pretty::print_program, Parser};
@@ -43,17 +43,17 @@ impl CheckResult {
 }
 
 /// Format an error into a structured object for JS.
-fn format_error(error: &MinfernError) -> JsValue {
+fn format_error(error: &intyError) -> JsValue {
     let (message, start, end) = match error {
-        MinfernError::Lex(e) => {
+        intyError::Lex(e) => {
             let span = e.span();
             (e.to_string(), span.start, span.end)
         }
-        MinfernError::Parse(e) => {
+        intyError::Parse(e) => {
             let span = e.span();
             (e.to_string(), span.start, span.end)
         }
-        MinfernError::Type(e) => {
+        intyError::Type(e) => {
             let span = e.span();
             (e.to_string(), span.start, span.end)
         }
@@ -76,7 +76,7 @@ pub fn init() {
 /// Type check JavaScript source code and return the result.
 #[wasm_bindgen]
 pub fn check_types(source: &str) -> CheckResult {
-    let mut errors: Vec<MinfernError> = Vec::new();
+    let mut errors: Vec<intyError> = Vec::new();
 
     // Lexing
     let mut scanner = Scanner::new(source);

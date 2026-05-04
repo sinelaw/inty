@@ -1,6 +1,6 @@
-# Add discriminated-union support to minfern
+# Add discriminated-union support to inty
 
-minfern's type lattice is currently products-only: it has `Number`, `String`, `Row`, `Array`, `Func`, `Promise`, `Map`, `Named`, type variables — but no coproducts. That gap shows up in real JS the moment a function returns "either a string or undefined," or a parameter is "one of these literal strings," or a value is one variant of a tagged union. Right now minfern fakes the first case with `Type::Undefined` as a single scalar and gives up entirely on the rest.
+inty's type lattice is currently products-only: it has `Number`, `String`, `Row`, `Array`, `Func`, `Promise`, `Map`, `Named`, type variables — but no coproducts. That gap shows up in real JS the moment a function returns "either a string or undefined," or a parameter is "one of these literal strings," or a value is one variant of a tagged union. Right now inty fakes the first case with `Type::Undefined` as a single scalar and gives up entirely on the rest.
 
 Your job is to add **untagged unions**, **`T | undefined` as the canonical Option encoding**, **flow-sensitive narrowing** (on `typeof`, `=== / !==`, and `x.kind === literal`), **TypeScript-style discriminated unions**, and **switch-exhaustiveness** as a derived check. These features are deeply coupled — adding any one without the others produces a type system that is technically more expressive but practically worse, because users will form union types that the checker then refuses to use. Treat this as one project.
 

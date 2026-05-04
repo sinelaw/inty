@@ -1,9 +1,9 @@
-//! Conversions between minfern's byte spans and LSP positions, plus
-//! `MinfernError` → `lsp_types::Diagnostic` mapping.
+//! Conversions between inty's byte spans and LSP positions, plus
+//! `intyError` → `lsp_types::Diagnostic` mapping.
 
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
-use minfern::error::{LexError, MinfernError, ParseError, TypeError};
-use minfern::lexer::Span;
+use inty::error::{LexError, intyError, ParseError, TypeError};
+use inty::lexer::Span;
 
 /// Convert a byte offset in `text` to an LSP `Position` (UTF-16 units).
 ///
@@ -75,9 +75,9 @@ pub fn span_to_range(text: &str, span: Span) -> Range {
 }
 
 /// Stable code string for an error variant. Editors can filter by this.
-fn error_code(err: &MinfernError) -> &'static str {
+fn error_code(err: &intyError) -> &'static str {
     match err {
-        MinfernError::Lex(e) => match e {
+        intyError::Lex(e) => match e {
             LexError::UnexpectedCharacter { .. } => "UnexpectedCharacter",
             LexError::UnterminatedString { .. } => "UnterminatedString",
             LexError::UnterminatedComment { .. } => "UnterminatedComment",
@@ -85,7 +85,7 @@ fn error_code(err: &MinfernError) -> &'static str {
             LexError::InvalidEscapeSequence { .. } => "InvalidEscapeSequence",
             LexError::UnterminatedRegex { .. } => "UnterminatedRegex",
         },
-        MinfernError::Parse(e) => match e {
+        intyError::Parse(e) => match e {
             ParseError::UnexpectedToken { .. } => "UnexpectedToken",
             ParseError::UnexpectedEof { .. } => "UnexpectedEof",
             ParseError::InvalidAssignmentTarget { .. } => "InvalidAssignmentTarget",
@@ -95,7 +95,7 @@ fn error_code(err: &MinfernError) -> &'static str {
             ParseError::ContinueOutsideLoop { .. } => "ContinueOutsideLoop",
             ParseError::ReturnOutsideFunction { .. } => "ReturnOutsideFunction",
         },
-        MinfernError::Type(e) => match e {
+        intyError::Type(e) => match e {
             TypeError::UnificationError { .. } => "UnificationError",
             TypeError::OccursCheck { .. } => "OccursCheck",
             TypeError::UndefinedVariable { .. } => "UndefinedVariable",
@@ -114,22 +114,22 @@ fn error_code(err: &MinfernError) -> &'static str {
     }
 }
 
-fn error_span(err: &MinfernError) -> Span {
+fn error_span(err: &intyError) -> Span {
     match err {
-        MinfernError::Lex(e) => e.span(),
-        MinfernError::Parse(e) => e.span(),
-        MinfernError::Type(e) => e.span(),
+        intyError::Lex(e) => e.span(),
+        intyError::Parse(e) => e.span(),
+        intyError::Type(e) => e.span(),
     }
 }
 
-/// Convert a single `MinfernError` into an LSP `Diagnostic`.
-pub fn error_to_diagnostic(text: &str, err: &MinfernError) -> Diagnostic {
+/// Convert a single `intyError` into an LSP `Diagnostic`.
+pub fn error_to_diagnostic(text: &str, err: &intyError) -> Diagnostic {
     Diagnostic {
         range: span_to_range(text, error_span(err)),
         severity: Some(DiagnosticSeverity::ERROR),
         code: Some(NumberOrString::String(error_code(err).to_string())),
         code_description: None,
-        source: Some("minfern".to_string()),
+        source: Some("inty".to_string()),
         message: err.to_string(),
         related_information: None,
         tags: None,

@@ -1,7 +1,7 @@
 # JavaScript Built-in Coverage
 
-Status of standard JavaScript built-ins minfern knows about. The original
-version of this document was a wishlist written while running minfern
+Status of standard JavaScript built-ins inty knows about. The original
+version of this document was a wishlist written while running inty
 against the [depflame](https://github.com/example/depflame) codebase; most
 of those gaps have since been filled in. What's left is genuinely missing
 or deliberately out of scope.
@@ -48,7 +48,7 @@ rest of the "no nullable" trade-offs in the README.
 Implemented (`src/builtins/mod.rs::promise_method_type`):
 
 `then`, `catch`, `finally`. `then` requires the callback to return a
-`Promise<U>` (rather than a plain value or a promise) because minfern has
+`Promise<U>` (rather than a plain value or a promise) because inty has
 no union types; pass a plain value through `Promise.resolve(v)`.
 
 Constructor helpers `Promise.resolve`, `Promise.reject`, `Promise.all` are
