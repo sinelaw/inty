@@ -16,40 +16,20 @@ fn ident_strategy() -> impl Strategy<Value = String> {
     prop::string::string_regex("[a-zA-Z_][a-zA-Z0-9_]{0,5}")
         .unwrap()
         .prop_filter("not a keyword", |s| {
-            !matches!(
-                s.as_str(),
-                "var"
-                    | "function"
-                    | "if"
-                    | "else"
-                    | "while"
-                    | "do"
-                    | "for"
-                    | "in"
-                    | "of"
-                    | "return"
-                    | "break"
-                    | "continue"
-                    | "throw"
-                    | "try"
-                    | "catch"
-                    | "finally"
-                    | "switch"
-                    | "case"
-                    | "default"
-                    | "new"
-                    | "this"
-                    | "typeof"
-                    | "void"
-                    | "delete"
-                    | "instanceof"
-                    | "null"
-                    | "undefined"
-                    | "true"
-                    | "false"
-                    | "NaN"
-                    | "Infinity"
-            )
+            // Use the lexer's authoritative keyword table so this stays
+            // in sync as new keywords are added (previously this was a
+            // hand-maintained list and silently fell out of date —
+            // e.g. `as`, `let`, `const`, `class`, `import`, `export`,
+            // `from` were all missing, producing spurious round-trip
+            // failures whenever the generator picked one of those names).
+            if crate::lexer::Token::keyword(s).is_some() {
+                return false;
+            }
+            // These are regular identifiers at the lexer level (they
+            // bind to globals) but the rest of the pipeline gives them
+            // special meaning, so exclude them to keep generated
+            // programs semantically meaningful.
+            !matches!(s.as_str(), "undefined" | "NaN" | "Infinity")
         })
 }
 
