@@ -3,6 +3,7 @@
 
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 use minfern::error::{LexError, MinfernError, ParseError, TypeError};
+use minfern::infer::InferWarning;
 use minfern::lexer::Span;
 
 /// Convert a byte offset in `text` to an LSP `Position` (UTF-16 units).
@@ -131,6 +132,21 @@ pub fn error_to_diagnostic(text: &str, err: &MinfernError) -> Diagnostic {
         code_description: None,
         source: Some("minfern".to_string()),
         message: err.to_string(),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
+
+/// Convert a non-fatal inference warning into an LSP `Diagnostic`.
+pub fn warning_to_diagnostic(text: &str, warning: &InferWarning) -> Diagnostic {
+    Diagnostic {
+        range: span_to_range(text, warning.span),
+        severity: Some(DiagnosticSeverity::WARNING),
+        code: Some(NumberOrString::String("InferWarning".to_string())),
+        code_description: None,
+        source: Some("minfern".to_string()),
+        message: warning.message.clone(),
         related_information: None,
         tags: None,
         data: None,
