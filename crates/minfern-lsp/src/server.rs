@@ -24,7 +24,9 @@ use lsp_types::{
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::analysis::Analysis;
-use crate::convert::{byte_to_position, error_to_diagnostic, position_to_byte, span_to_range};
+use crate::convert::{
+    byte_to_position, error_to_diagnostic, position_to_byte, span_to_range, warning_to_diagnostic,
+};
 
 /// One in-memory document.
 struct Document {
@@ -173,11 +175,17 @@ impl Server {
         text: String,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
         let analysis = Analysis::check(&text);
-        let diagnostics: Vec<Diagnostic> = analysis
+        let mut diagnostics: Vec<Diagnostic> = analysis
             .errors
             .iter()
             .map(|e| error_to_diagnostic(&text, e))
             .collect();
+        diagnostics.extend(
+            analysis
+                .warnings()
+                .iter()
+                .map(|w| warning_to_diagnostic(&text, w)),
+        );
         self.publish_diagnostics(&uri, &diagnostics)?;
         self.documents.insert(uri, Document { text, analysis });
         Ok(())

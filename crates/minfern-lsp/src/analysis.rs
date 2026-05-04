@@ -4,7 +4,7 @@
 use lsp_types::{CompletionItem, CompletionItemKind};
 
 use minfern::error::MinfernError;
-use minfern::infer::{InferState, TypeEnv};
+use minfern::infer::{InferState, InferWarning, TypeEnv};
 use minfern::lexer::{Scanner, Span, Token};
 use minfern::parser::ast::{Expr, ImportSpecifier, Program, Stmt};
 use minfern::parser::Parser;
@@ -106,6 +106,16 @@ impl Analysis {
                     resolution,
                 }
             }
+        }
+    }
+
+    /// Non-fatal warnings collected during inference (e.g. unreachable
+    /// narrowing branches). Empty if inference didn't run or didn't emit
+    /// any.
+    pub fn warnings(&self) -> &[InferWarning] {
+        match self.state.as_ref() {
+            Some(s) => &s.warnings,
+            None => &[],
         }
     }
 
