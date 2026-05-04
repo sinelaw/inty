@@ -5,6 +5,7 @@ use std::io::Write;
 use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind, Source};
 
 use crate::error::{LexError, MinfernError, ParseError, TypeError};
+use crate::infer::InferWarning;
 use crate::lexer::Span;
 
 /// Ariadne interprets label offsets as character (Unicode scalar) indices,
@@ -44,6 +45,43 @@ pub fn print_error(filename: &str, source: &str, error: &MinfernError) {
 /// Print a minfern error to stderr without ANSI color escapes.
 pub fn print_error_plain(filename: &str, source: &str, error: &MinfernError) {
     let _ = write_error(std::io::stderr(), filename, source, error, false);
+}
+
+/// Print a non-fatal inference warning with colored diagnostics to stderr.
+pub fn print_warning(filename: &str, source: &str, warning: &InferWarning) {
+    let _ = write_warning(std::io::stderr(), filename, source, warning, true);
+}
+
+/// Print a non-fatal inference warning to stderr without ANSI color escapes.
+pub fn print_warning_plain(filename: &str, source: &str, warning: &InferWarning) {
+    let _ = write_warning(std::io::stderr(), filename, source, warning, false);
+}
+
+/// Render a non-fatal inference warning into `writer`.
+pub fn write_warning<W: Write>(
+    mut writer: W,
+    filename: &str,
+    source: &str,
+    warning: &InferWarning,
+    color: bool,
+) -> std::io::Result<()> {
+    let config = Config::new().with_color(color);
+    let range = char_range(source, warning.span);
+    let report = Report::build(ReportKind::Warning, (filename, range.clone()))
+        .with_config(config)
+        .with_message(&warning.message)
+        .with_label(
+            Label::new((filename, range))
+                .with_message(&warning.message)
+                .with_color(Color::Yellow),
+        );
+
+    writeln!(writer)?;
+    report
+        .finish()
+        .write((filename, Source::from(source)), &mut writer)?;
+    writeln!(writer)?;
+    Ok(())
 }
 
 /// Render a minfern error into `writer`.

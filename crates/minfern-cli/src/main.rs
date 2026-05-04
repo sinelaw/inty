@@ -5,9 +5,9 @@ use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
 
-use minfern::diagnostics::{print_error, print_error_plain};
+use minfern::diagnostics::{print_error, print_error_plain, print_warning, print_warning_plain};
 use minfern::error::MinfernError;
-use minfern::infer::{decorate_with_types, InferState, TypeEnv};
+use minfern::infer::{decorate_with_types, InferState, InferWarning, TypeEnv};
 use minfern::lexer::{Scanner, Token};
 use minfern::parser::{pretty::print_program, Parser};
 use minfern::stdlib::{initial_env_with_stdlib, load_lib};
@@ -144,13 +144,27 @@ fn main() -> ExitCode {
         }
     };
 
+    let report_warning = |path: &str, source: &str, warning: &InferWarning| {
+        if args.no_color {
+            print_warning_plain(path, source, warning);
+        } else {
+            print_warning(path, source, warning);
+        }
+    };
+
     // Load any extra user-supplied lib files.
     let (env, mut state) = match load_extra_libs(env, state, &args.extra_libs, &report) {
         Ok(r) => r,
         Err(code) => return code,
     };
 
-    match run_inference(&mut state, env, &source, &filename) {
+    let result = run_inference(&mut state, env, &source, &filename);
+
+    for warning in &state.warnings {
+        report_warning(&filename, &source, warning);
+    }
+
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(errors) => {
             for error in errors {
