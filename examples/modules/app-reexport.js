@@ -1,6 +1,6 @@
 // Re-export demo. Run with:
 //
-//     minfern examples/modules/app-reexport.js
+//     inty examples/modules/app-reexport.js
 //
 // `lib.js` is a barrel: it re-exports a curated subset of
 // `lib-internal.js`. We never touch the internal module directly — every

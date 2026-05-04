@@ -1,13 +1,13 @@
-# Minfern LSP — design
+# Inty LSP — design
 
 Status: design doc, work-in-progress.
 
 ## Goals
 
 Ship a Language Server Protocol implementation for mquickjs source files
-that delegates all type reasoning to the existing `minfern` library. Expose
+that delegates all type reasoning to the existing `inty` library. Expose
 it as a sub-command of the project's CLI binary so editors can launch it
-with a single command (e.g. `minfern lsp`).
+with a single command (e.g. `inty lsp`).
 
 ## Feature set
 
@@ -121,9 +121,9 @@ plus the existing `serde_json`. No async runtime added.
 ## Name resolution
 
 The four new features all need scope-aware identifier resolution, which
-minfern itself doesn't expose (its `TypeEnv` knows what each name's type
+inty itself doesn't expose (its `TypeEnv` knows what each name's type
 is, but not what `Span` originally bound it). v2 adds a separate pass
-in `crates/minfern-lsp/src/resolver.rs`:
+in `crates/inty-lsp/src/resolver.rs`:
 
 ```rust
 pub struct Resolution {
@@ -157,7 +157,7 @@ The pass walks the AST top-down with a scope stack:
   block) and add them to the function scope. Then add params. Then
   walk.
 - **Block entry** opens a new scope only if the block contains any
-  `const` declarations (minfern's mquickjs subset doesn't fully
+  `const` declarations (inty's mquickjs subset doesn't fully
   distinguish `let`; treat `var`/`const` as the two relevant kinds).
 - **Catch clause** opens a one-binding scope for the caught name.
 - **`Expr::Ident { name, span }`** in non-target position resolves
@@ -294,15 +294,15 @@ typed-js/
 ├── Cargo.toml                  # [workspace] only — no [package]
 ├── Cargo.lock
 ├── crates/
-│   ├── minfern/                # library: type inference / checking
+│   ├── inty/                # library: type inference / checking
 │   │   ├── Cargo.toml
 │   │   ├── stdlib/             # core.d.js, dom.d.js (include_str! targets)
 │   │   ├── tests/              # integration + metamorphic tests
 │   │   └── src/                # everything that was in src/ (minus main.rs)
-│   ├── minfern-lsp/            # library: LSP server
+│   ├── inty-lsp/            # library: LSP server
 │   │   ├── Cargo.toml
 │   │   └── src/lib.rs
-│   └── minfern-cli/            # binary: top-level entry point
+│   └── inty-cli/            # binary: top-level entry point
 │       ├── Cargo.toml
 │       └── src/main.rs         # dispatches to either inference or `lsp`
 └── ... (docs, examples, web)
@@ -310,19 +310,19 @@ typed-js/
 
 Why three crates and not two:
 
-- `minfern` is reused by tests, the WASM build, downstream consumers, and
+- `inty` is reused by tests, the WASM build, downstream consumers, and
   the LSP. It must not pull in any LSP/JSON-RPC dependencies.
-- `minfern-lsp` depends on `minfern` and on `serde_json` for protocol
+- `inty-lsp` depends on `inty` and on `serde_json` for protocol
   framing. Other tools (e.g. an editor that embeds the server in-process)
   can depend on it directly without going through the binary.
-- `minfern-cli` is the user-facing entry point. It owns argument parsing,
+- `inty-cli` is the user-facing entry point. It owns argument parsing,
   stdin/stdout wiring, and the `lsp` sub-command dispatch. Keeping it
   separate means the library crates compile and ship without the CLI's
   argument layer.
 
-The WASM `cdylib` lives on the `minfern` crate (the `wasm` feature already
+The WASM `cdylib` lives on the `inty` crate (the `wasm` feature already
 gates it). The web build script's `wasm-pack build` invocation will need
-to point at `crates/minfern` instead of the workspace root — a one-line
+to point at `crates/inty` instead of the workspace root — a one-line
 fix in `web/build.sh`.
 
 ## CLI surface
@@ -332,10 +332,10 @@ sub-crate split, the binary keeps that default behaviour and adds one
 new sub-command:
 
 ```
-minfern <file.js>          # unchanged: type-check a file
-minfern -                  # unchanged: type-check stdin
-minfern lsp                # NEW: speak LSP on stdin/stdout
-minfern lsp --stdio        # explicit form, same as above
+inty <file.js>          # unchanged: type-check a file
+inty -                  # unchanged: type-check stdin
+inty lsp                # NEW: speak LSP on stdin/stdout
+inty lsp --stdio        # explicit form, same as above
 ```
 
 Detection: if the first positional argument is `lsp`, dispatch to the LSP
@@ -382,7 +382,7 @@ struct Analysis {
     decorated: Program,
     /// Errors collected during the last check. Translated to LSP
     /// diagnostics on demand.
-    errors: Vec<MinfernError>,
+    errors: Vec<IntyError>,
 }
 ```
 
@@ -420,18 +420,18 @@ running them synchronously is fine.
     "hoverProvider": true,
     "positionEncoding": "utf-16"  // LSP default; UTF-8 needs negotiation
   },
-  "serverInfo": { "name": "minfern-lsp", "version": "<crate version>" }
+  "serverInfo": { "name": "inty-lsp", "version": "<crate version>" }
 }
 ```
 
 Full document sync (mode `1`) avoids implementing incremental edit
 application in v1. The cost is re-sending the whole file on each
-keystroke, which is fine for the file sizes minfern targets.
+keystroke, which is fine for the file sizes inty targets.
 
 ### Position encoding
 
 LSP positions are `(line, character)` — zero-based — where `character`
-counts UTF-16 code units by default. Minfern stores byte offsets in
+counts UTF-16 code units by default. Inty stores byte offsets in
 `Span`. The LSP layer therefore needs two conversions:
 
 - `byte_to_position(text, offset) -> Position` (for diagnostics)
@@ -443,12 +443,12 @@ char. We can advertise UTF-8 once a wider client base supports it via
 
 ### Diagnostics
 
-For each `MinfernError` collected during inference:
+For each `IntyError` collected during inference:
 
 - Map the error's `Span` to an LSP `Range`.
 - Severity is always `Error` (1) for v1; warnings can be added once
   `InferState::warnings` is plumbed through.
-- `source` is `"minfern"`. `code` is the error variant name (e.g.
+- `source` is `"inty"`. `code` is the error variant name (e.g.
   `"UndefinedVariable"`), useful for filtering in the editor.
 - `message` is the same human-readable string the CLI prints, sans
   ariadne formatting — the editor draws its own underline.
@@ -480,18 +480,18 @@ with `null`.
 
 ## Dependencies
 
-`minfern-lsp` adds:
+`inty-lsp` adds:
 
 - `serde_json = "1"` — JSON parsing/encoding via `Value`. We don't
   derive any structs in v1; the protocol surface is small enough to
   read/write fields by name.
 
-`minfern-cli` adds:
+`inty-cli` adds:
 
-- a path dep on `minfern-lsp`
-- a path dep on `minfern`
+- a path dep on `inty-lsp`
+- a path dep on `inty`
 
-The existing `minfern` crate keeps its current dependency set
+The existing `inty` crate keeps its current dependency set
 (`thiserror`, `ariadne`, plus the optional WASM trio).
 
 ## Testing strategy
@@ -509,12 +509,12 @@ No editor-integration tests in v1; those can live downstream.
 
 ## Migration notes
 
-- `src/main.rs`'s argument parser moves into `crates/minfern-cli/src/`.
+- `src/main.rs`'s argument parser moves into `crates/inty-cli/src/`.
   Its `--lib`, `--no-stdlib`, `--no-color` options stay untouched.
 - The `tests/` directory at the workspace root moves into
-  `crates/minfern/tests/` so it can `use minfern::...` against the
+  `crates/inty/tests/` so it can `use inty::...` against the
   relocated library.
-- `web/build.sh` learns the new path: `wasm-pack build crates/minfern
+- `web/build.sh` learns the new path: `wasm-pack build crates/inty
   --target web --out-dir ../../web/pkg --features wasm`.
 - The CI workflow (`.github/workflows/rust.yml`) does not need to
   change: `cargo build` and `cargo test` at the workspace root build

@@ -1,13 +1,13 @@
-// minfern-checked SPA: a classic todo list without React or any framework.
+// inty-checked SPA: a classic todo list without React or any framework.
 //
 // State lives in a single plain object. Every event handler mutates that
 // state and calls `render()`, which rebuilds the list portion of the DOM
 // from an HTML string and re-attaches per-item handlers.
 //
 // To type-check:
-//     minfern examples/spa/app.js
+//     inty examples/spa/app.js
 //
-// Features exercised (every one produced by minfern's regular inference —
+// Features exercised (every one produced by inty's regular inference —
 // no body annotations anywhere except the single `state` declaration):
 //   - Embedded stdlib (document, console, Math, JSON, Object, Array, ...)
 //   - Function hoisting: `render()` is defined at the bottom, called from
@@ -235,7 +235,7 @@ document.getElementById("new-input").onkeydown = e => {
 
 document.getElementById("save-btn").onclick = () => {
     // `save()` returns a Promise<Undefined>; we don't await it here since
-    // top-level await isn't something minfern enforces yet, and we don't
+    // top-level await isn't something inty enforces yet, and we don't
     // need the result.
     save();
     return undefined;

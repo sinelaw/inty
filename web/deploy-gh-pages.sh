@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy Minfern web app to gh-pages branch
+# Deploy Inty web app to gh-pages branch
 # Usage: ./deploy-gh-pages.sh
 
 set -e
@@ -68,7 +68,7 @@ rm -rf "$TEMP_DIR"
 echo ""
 echo "Committing changes..."
 git add -A
-git commit -m "Deploy Minfern web app
+git commit -m "Deploy Inty web app
 
 Built from $CURRENT_BRANCH branch" || echo "No changes to commit"
 

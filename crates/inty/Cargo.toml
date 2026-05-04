@@ -1,0 +1,25 @@
+[package]
+name = "inty"
+version = "0.1.0"
+edition = "2021"
+description = "HMF-based type inference for mquickjs JavaScript subset"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook"]
+
+[dependencies]
+thiserror = "2"
+ariadne = "0.6"
+
+# WASM dependencies (optional)
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[dev-dependencies]
+proptest = "1"

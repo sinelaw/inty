@@ -1,0 +1,14 @@
+[package]
+name = "inty-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for inty (type checker + LSP server)"
+license = "MIT"
+
+[[bin]]
+name = "inty"
+path = "src/main.rs"
+
+[dependencies]
+inty = { path = "../inty" }
+inty-lsp = { path = "../inty-lsp" }

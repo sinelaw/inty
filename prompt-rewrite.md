@@ -1,6 +1,6 @@
-# minfern architectural rewrite — make the type system data-driven and testable
+# inty architectural rewrite — make the type system data-driven and testable
 
-minfern works. It typechecks real JS, produces good error messages, and ships a sensible HMF-with-classes type system. But the implementation has structural weaknesses that will get worse as features land:
+inty works. It typechecks real JS, produces good error messages, and ships a sensible HMF-with-classes type system. But the implementation has structural weaknesses that will get worse as features land:
 
 - **`src/infer/infer.rs` is 2,814 lines** doing inference for every AST variant in one file. Adding a feature touches a giant match; reviewing a change requires reading the whole file.
 - **No operational semantics.** Soundness is asserted, not demonstrated. There's no mechanism that catches the day a typing rule promises something the runtime won't deliver.
@@ -10,7 +10,7 @@ minfern works. It typechecks real JS, produces good error messages, and ships a 
 
 This rewrite addresses all of these. It is strictly an internal-architecture project — **the user-visible CLI behavior should not change** except where a config knob is explicitly flipped. Existing tests must continue to pass at every phase boundary.
 
-This plan does **not** add new typing features. The discriminated-unions / narrowing / exhaustiveness work lives in `prompt-minfern.md` and is a parallel track. Phase 1 of this plan should land before that work begins, to avoid merge conflicts on the file moves. Phases 2–7 of this plan and `prompt-minfern.md` can be interleaved.
+This plan does **not** add new typing features. The discriminated-unions / narrowing / exhaustiveness work lives in `prompt-inty.md` and is a parallel track. Phase 1 of this plan should land before that work begins, to avoid merge conflicts on the file moves. Phases 2–7 of this plan and `prompt-inty.md` can be interleaved.
 
 ## Sequencing
 
@@ -103,7 +103,7 @@ pub enum TypeShape {
 }
 ```
 
-Populate it for every operator minfern currently knows about: `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `===`, `!=`, `!==`, `&&`, `||`, unary `-`, `!`, `typeof`, `void`, member access, indexing, function call, `new`, `await`.
+Populate it for every operator inty currently knows about: `+`, `-`, `*`, `/`, `%`, `<`, `<=`, `>`, `>=`, `==`, `===`, `!=`, `!==`, `&&`, `||`, unary `-`, `!`, `typeof`, `void`, member access, indexing, function call, `new`, `await`.
 
 **Decisions.**
 
@@ -125,7 +125,7 @@ Populate it for every operator minfern currently knows about: `+`, `-`, `*`, `/`
 
 ## Phase 3 — Small-step operational semantics
 
-**Why.** minfern has no mechanism for testing its typing rules against actual JS behavior. Without operational rules, there's no definition of "stuck" — and therefore no falsifiable soundness claim. We're not building a JS engine; we're building enough mechanics to define what the typed subset *means*, so that phases 4 and 5 can use it.
+**Why.** inty has no mechanism for testing its typing rules against actual JS behavior. Without operational rules, there's no definition of "stuck" — and therefore no falsifiable soundness claim. We're not building a JS engine; we're building enough mechanics to define what the typed subset *means*, so that phases 4 and 5 can use it.
 
 **Deliverables.**
 
@@ -147,7 +147,7 @@ For each operator listed in the phase-2 catalog, write at least one operational 
 
 **Decisions.**
 
-- **Reduction is for testing, not execution.** It does not need to be performant. It does not need to handle arbitrary JS programs. It needs to handle the programs minfern types as well-formed.
+- **Reduction is for testing, not execution.** It does not need to be performant. It does not need to handle arbitrary JS programs. It needs to handle the programs inty types as well-formed.
 - "Stuck" = "not a value AND no rule applies." A stuck typed term is a soundness violation. Build `is_stuck(state) -> Option<StuckReason>` so phase 5 can produce useful failure reports.
 - Pick a small heap model. The simplest correct one: `Heap = HashMap<Loc, Cell>`, with `Cell = Object(BTreeMap<PropName, Value>) | Array(Vec<Value>) | Var(Value)`. Don't model prototypes initially; flatten the prototype field at object construction if you need it.
 - If you need a fuel parameter to bound non-termination, set the default to 10,000 steps. Tests fail with a clear "fuel exhausted" message rather than hanging.
@@ -156,7 +156,7 @@ For each operator listed in the phase-2 catalog, write at least one operational 
 
 - The operational semantics will reveal weird corners of the type system. Resist the temptation to "fix" them mid-phase. Document, move on, return in phase 4 or 5.
 - Object property assignment is the trickiest case: needs to interact with the polymorphic-property check at the type level. If a typing rule rejects the assignment, the operational rule should never fire on a typed-and-typed-good term — but you need to verify this in phase 5, not assume it.
-- `==` vs `===` semantics: be explicit. `===` is structural for primitives, reference for objects. `==` does coercion that minfern's typing rules currently don't permit, so the operational arm should still implement standard `==` and you'll find out in phase 5 whether the typing rules let you reach it.
+- `==` vs `===` semantics: be explicit. `===` is structural for primitives, reference for objects. `==` does coercion that inty's typing rules currently don't permit, so the operational arm should still implement standard `==` and you'll find out in phase 5 whether the typing rules let you reach it.
 
 **Success criteria.** `cargo test dynamics::operators` passes for every operator in the catalog. `dynamics::run_to_end` on the typed examples in `tests/*.js` produces a value (or, for non-terminating ones, fuel-exhausts cleanly).
 
@@ -195,7 +195,7 @@ A test `tests/meta/blame.rs` that asserts `all_blame_triples(...).is_empty()`. I
 **Pitfalls.**
 
 - **False positives are worse than false negatives.** A blame triple that turns out to be sound (because of a side-condition the catalog couldn't express) erodes trust in the meta-test. Be conservative: when uncertain, mark it `Notes` in phase 2 and skip.
-- The triples that *do* fire are interesting. Don't suppress them; document each one. If minfern has soundness gaps today, we want to find out now.
+- The triples that *do* fire are interesting. Don't suppress them; document each one. If inty has soundness gaps today, we want to find out now.
 
 **Success criteria.** `cargo test meta::blame` passes (i.e., zero blame triples) OR a documented short list of known-acceptable triples is checked in alongside the test, with each entry citing the side-condition that makes it actually sound. The list is a maintenance hazard; aim to keep it empty.
 
@@ -255,7 +255,7 @@ The hard part is `generate_well_typed_term`. Strategy: a small, top-down generat
 A new `src/config/mod.rs`:
 
 ```rust
-pub struct MinfernConfig {
+pub struct IntyConfig {
     pub binop_policy: BinopPolicy,             // Strict | Permissive | TypeClass | JsCoerce
     pub record_policy: RecordPolicy,           // Closed | WidthSubtype | RowPoly
     pub case_exhaustiveness: Exhaustiveness,   // Required | Warn | Off
@@ -265,26 +265,26 @@ pub struct MinfernConfig {
     pub mcall_policy: McallPolicy,             // ExplicitThis | ImplicitThis | EnforcedThis
 }
 
-impl MinfernConfig {
+impl IntyConfig {
     pub const DEFAULT: Self = Self { /* matches current behavior */ };
     pub fn soundness_summary(&self) -> SoundnessSummary;  // calls blame analysis
 }
 ```
 
-CLI flag: `minfern --config strict` / `--config permissive` / `--config-file foo.toml`. Per-policy CLI flags for individual overrides.
+CLI flag: `inty --config strict` / `--config permissive` / `--config-file foo.toml`. Per-policy CLI flags for individual overrides.
 
 The blame meta-test from phase 4 grows a parameter: it now runs against every (operator × policy combination) and reports which combinations are sound.
 
 **Decisions.**
 
 - **Default config preserves today's behavior.** Existing users see no change. Anyone who flips a knob gets a clearly-labeled non-default and the blame report tells them what they've signed up for.
-- Every operator that consults config does so by reading from a `&MinfernConfig` passed through `InferState` (or stored on it once at startup). No `lazy_static` config; configurability means parameterizable.
+- Every operator that consults config does so by reading from a `&IntyConfig` passed through `InferState` (or stored on it once at startup). No `lazy_static` config; configurability means parameterizable.
 - The number of policies is fixed; users can't add their own. Extension is a new variant on the policy enum + a code path in the corresponding feature module + a phase-4 entry. Keep the surface closed.
 
 **Pitfalls.**
 
 - **Combinational explosion.** With 7 axes and ~3 values each, that's 2,000+ configurations. The blame test enumerates the subset that could plausibly differ — read the catalog and only enumerate axis values that affect the rule arm under test. A naive nested loop times out.
-- **Users will pick incoherent combinations.** `record_policy = Closed` + `width_subtype` extras in code = surprise rejections. Document each policy's interactions; consider a `MinfernConfig::validate()` that warns on known-bad combinations.
+- **Users will pick incoherent combinations.** `record_policy = Closed` + `width_subtype` extras in code = surprise rejections. Document each policy's interactions; consider a `IntyConfig::validate()` that warns on known-bad combinations.
 - **Don't expose policies that don't change behavior yet.** If `if_branch_unification` doesn't actually have alternative implementations because the relevant rule is hardcoded, removing it from config is better than shipping a knob that does nothing.
 
 **Success criteria.** Default config preserves 100% of existing test outcomes. At least 3 non-default policy combinations have working implementations and explicit test coverage. Blame meta-test runs across all configurations in CI; sound configurations test green, unsound ones produce documented blame triples that match a checked-in expected-output file.
@@ -333,7 +333,7 @@ After phase 3 introduces internal/runtime forms (e.g., `Value::Closure`, runtime
 
 **7d. Origin-tracking extension.**
 
-`TypeOrigin` already produces `typeof(.length)` in errors. Once `prompt-minfern.md` lands its discriminated-union work, extend origins to include `narrowed-from(union, condition)`, so the error message "expected number, got string" can become "expected number, got string (narrowed from `string | undefined` at line 12 via `typeof === 'string'`)."
+`TypeOrigin` already produces `typeof(.length)` in errors. Once `prompt-inty.md` lands its discriminated-union work, extend origins to include `narrowed-from(union, condition)`, so the error message "expected number, got string" can become "expected number, got string (narrowed from `string | undefined` at line 12 via `typeof === 'string'`)."
 
 **7e. Mutability stays — don't switch to syntactic walking.**
 
@@ -351,16 +351,16 @@ These are real things rosa does that we deliberately do not bring over:
 - **22 parallel judgment forms.** Phase 6's config approach gives the same expressiveness as one parameterized inference path, not 22.
 - **A separate "rendering grammar" for documentation.** Pretty-printing is a view over the one canonical AST, not a parallel data structure.
 - **Replacing the JSDoc-comment annotation surface.** That's a frontend change, not a type-system change; out of scope for this rewrite.
-- **New typing features.** Discriminated unions, narrowing, exhaustiveness all live in `prompt-minfern.md`. Don't add features here; refactor first, add features after, take advantage of the new infrastructure when you do.
+- **New typing features.** Discriminated unions, narrowing, exhaustiveness all live in `prompt-inty.md`. Don't add features here; refactor first, add features after, take advantage of the new infrastructure when you do.
 
-## Coordination with `prompt-minfern.md`
+## Coordination with `prompt-inty.md`
 
 That plan adds discriminated unions, untagged unions, literal types, `typeof`-narrowing, property-path narrowing, and switch-exhaustiveness. Recommended ordering with this plan:
 
 1. Land **phase 1** of this plan (modularize `infer.rs`). Required — adding a feature into the old monolithic file would destroy the value of the modularization.
-2. Land **phases 1–4** of `prompt-minfern.md` (lattice, join, union elimination, narrowing infrastructure). User-visible payoff.
+2. Land **phases 1–4** of `prompt-inty.md` (lattice, join, union elimination, narrowing infrastructure). User-visible payoff.
 3. Land **phases 2–4** of this plan (operator catalog, dynamics, blame). The operator catalog should now include the new union-eliminating arms; the dynamics should include literal-equality and union-narrowing reductions.
-4. Land **phases 5–7** of `prompt-minfern.md` (narrowing predicates, exhaustiveness, builtins update).
+4. Land **phases 5–7** of `prompt-inty.md` (narrowing predicates, exhaustiveness, builtins update).
 5. Land **phases 5–7** of this plan (proptest soundness, configuration, polish).
 
 This interleaving means each plan delivers user value periodically and each plan benefits from the other's infrastructure when it matures.

@@ -1,6 +1,6 @@
-// Minfern Web App - Live JavaScript Type Checker
+// Inty Web App - Live JavaScript Type Checker
 
-import init, { check_types } from './pkg/minfern.js';
+import init, { check_types } from './pkg/inty.js';
 
 // State
 let wasm = null;
@@ -72,7 +72,7 @@ function getCodeFromUrl() {
 }
 
 // Example code
-const EXAMPLE_CODE = `// Welcome to Minfern!
+const EXAMPLE_CODE = `// Welcome to Inty!
 // A static type checker for JavaScript with HMF-based inference.
 // Start typing to see inferred types live.
 

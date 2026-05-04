@@ -1,22 +1,22 @@
-# minfern
+# inty
 
 Type checker with full type inference for a subset of JavaScript.
 
-Try it online at: https://sinelaw.github.io/minfern/
+Try it online at: https://sinelaw.github.io/inty/
 
 Based on the type system developed for [infernu](https://github.com/sinelaw/infernu). See [infernu.md](infernu.md) for a partial formalization. The implementation also covers `this` resolution, Rank-1 restrictions on type annotations, and a value restriction for generalisation and polymorphic-property mutation; the formal document doesn't go into these.
 
-The JavaScript checked by minfern is just JavaScript and can be run by browsers or any other runtime, or even embedded engines. See [mquickjs](https://github.com/bellard/mquickjs) which is a runtime that also supports a subset of JavaScript.
+The JavaScript checked by inty is just JavaScript and can be run by browsers or any other runtime, or even embedded engines. See [mquickjs](https://github.com/bellard/mquickjs) which is a runtime that also supports a subset of JavaScript.
 
 ## Strict by Design
 
-minfern isn't a strict mode you opt into — it's the only mode. Every variable, expression, and function return has a single type for its lifetime. The type may be polymorphic, or a closed union of literals or row shapes, but it can't *change* under assignment, and operators that combine values still require their operands' types to agree. The benefit is that type errors in JavaScript become compile-time errors, with no runtime fallback.
+inty isn't a strict mode you opt into — it's the only mode. Every variable, expression, and function return has a single type for its lifetime. The type may be polymorphic, or a closed union of literals or row shapes, but it can't *change* under assignment, and operators that combine values still require their operands' types to agree. The benefit is that type errors in JavaScript become compile-time errors, with no runtime fallback.
 
 ## Type System Features
 
 ### Full Type Inference
 
-No annotations required — every type is inferred. Annotations are accepted (in JSDoc comments or inline) for documentation; minfern can also emit them for you.
+No annotations required — every type is inferred. Annotations are accepted (in JSDoc comments or inline) for documentation; inty can also emit them for you.
 
 ```javascript
 function add(x, y) { return x + y; }
@@ -34,7 +34,7 @@ The function is polymorphic in any type that supports `+` (the `Plus` type class
 
 ### Parametric Polymorphism (Generic Functions)
 
-`function id(x) { return x; }` works with any type. minfern infers `id<a>(a) => a`:
+`function id(x) { return x; }` works with any type. inty infers `id<a>(a) => a`:
 
 ```javascript
 function id(x) { return x; }
@@ -87,7 +87,7 @@ var requestBuilder = {
 var response = requestBuilder.setUrl("/api/users").setMethod("POST").send();
 ```
 
-minfern infers `setUrl` as `this: {url: String | c} => (String) => {url: String | c}` — the row variable `c` carries the rest of the builder along through the chain.
+inty infers `setUrl` as `this: {url: String | c} => (String) => {url: String | c}` — the row variable `c` carries the rest of the builder along through the chain.
 
 ### Control-Flow Joins (Union Types)
 
@@ -159,7 +159,7 @@ var pick: Number
 
 ### Modules (ES `import` / `export`)
 
-minfern resolves `import` statements relative to the importing file's
+inty resolves `import` statements relative to the importing file's
 directory and threads inferred types across the module graph. Visibility
 is explicit: only what's marked `export` is reachable from another
 file, and importing a private binding is a structured error.
@@ -189,7 +189,7 @@ supported. See [modules.md](modules.md) for the full design and
 
 ## Unsupported JavaScript Idioms
 
-A binding's type is fixed at declaration. Operators that combine values still need their operands' types to agree. Output below is verbatim from `minfern --no-color`.
+A binding's type is fixed at declaration. Operators that combine values still need their operands' types to agree. Output below is verbatim from `inty --no-color`.
 
 **No variable type changes.** Assignment unifies with the binding's existing type.
 
@@ -224,7 +224,7 @@ Error: Type mismatch: expected 'Number', found 'String'
    │                  ╰──────── Type mismatch: expected 'Number', found 'String'
 ```
 
-**No `&&` / `||` between values of different types.** `&&` and `||` return one of their operands and minfern unifies them, so `1 && "hi"` is rejected. The default-value pattern `name || "Guest"` only works when `name` is also `String`.
+**No `&&` / `||` between values of different types.** `&&` and `||` return one of their operands and inty unifies them, so `1 && "hi"` is rejected. The default-value pattern `name || "Guest"` only works when `name` is also `String`.
 
 ```javascript
 // ❌ Rejected
@@ -279,7 +279,7 @@ function f(x) {
 
 ## Supported Syntax
 
-Quick reference for the JavaScript surface minfern accepts:
+Quick reference for the JavaScript surface inty accepts:
 
 | Category       | What works                                                                                                |
 |----------------|-----------------------------------------------------------------------------------------------------------|
@@ -301,4 +301,4 @@ Not yet supported: spread/rest parameters, class inheritance, static class membe
 
 ## Self-testing
 
-minfern is heavily tested against itself: every operator's typing rule is cross-checked against an operational semantics, and a property test generates well-typed programs by construction and reduces them to verify they never get "stuck". See [ARCHITECTURE.md](ARCHITECTURE.md) for the module layout and the four test layers.
+inty is heavily tested against itself: every operator's typing rule is cross-checked against an operational semantics, and a property test generates well-typed programs by construction and reduces them to verify they never get "stuck". See [ARCHITECTURE.md](ARCHITECTURE.md) for the module layout and the four test layers.

@@ -1,6 +1,6 @@
 // Shared state + mutations. Exports a single mutable `state` binding and a
 // handful of functions that operate on it. The importing file uses the same
-// names directly — minfern's module resolver threads types through `export`
+// names directly — inty's module resolver threads types through `export`
 // and `import` without any annotations on the import side.
 
 /** export let state: {

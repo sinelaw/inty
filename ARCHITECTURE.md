@@ -1,10 +1,10 @@
-# minfern — architecture
+# inty — architecture
 
 This document is for contributors. It describes the module layout and the testing strategy. For user-facing docs, see [README.md](README.md).
 
 ## Module overview
 
-minfern is built as a small set of cooperating modules. Each one does one job; together they form a self-checking type system.
+inty is built as a small set of cooperating modules. Each one does one job; together they form a self-checking type system.
 
 - **`src/lexer/` + `src/parser/`** — turn source into an AST. Type annotations live in JSDoc-style comments and are surfaced through the lexer alongside the token stream.
 - **`src/types/`** — the core lattice: primitives, rows, arrays, functions, unions, literals, type schemes, and substitution.
@@ -20,7 +20,7 @@ The production pipeline is `parse → infer → (optionally) decorate`. The dyna
 
 ## Testing
 
-minfern has four kinds of tests. The first three each fix a specific class of bug; the fourth is a meta-layer that asserts the first three agree with each other. Run everything with:
+inty has four kinds of tests. The first three each fix a specific class of bug; the fourth is a meta-layer that asserts the first three agree with each other. Run everything with:
 
 ```
 cargo test --lib -- --skip parser::proptests

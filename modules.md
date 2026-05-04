@@ -1,7 +1,7 @@
-# minfern — module support
+# inty — module support
 
 This document is a design proposal. It catalogues what `import`/`export` already
-does in minfern, walks the [MDN `import`
+does in inty, walks the [MDN `import`
 reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/import)
 form by form, and proposes how to close the gaps. Implementation is staged so
 each step is independently shippable.
@@ -74,7 +74,7 @@ The two `⚠️` rows are noteworthy: the parser accepts the syntax but
 **Non-goals.**
 
 - Live ES-module semantics (live bindings, TDZ across modules, top-level
-  `await`). minfern uses an evaluation-on-load model and that is fine for
+  `await`). inty uses an evaluation-on-load model and that is fine for
   the static type system.
 - Tree-shaking, bundling, source maps. The resolver is a checker, not a
   builder.
@@ -232,14 +232,14 @@ populate it:
 - A built-in table for stdlib modules already documented in
   `missing-builtins.md`. Entries point into the `stdlib/` directory's
   `.d.js` declaration files.
-- A user-supplied JSON file (`minfern.modules.json`) discovered by walking
+- A user-supplied JSON file (`inty.modules.json`) discovered by walking
   upwards from the entry file. Each entry maps `"name"` to a path.
 
 `resolve_path` tries the registry before treating the specifier as a path,
 so `./` and `../` keep their existing meaning. Bare specifiers without a
 registry entry produce a structured error pointing at the import span.
 
-We deliberately do not implement Node's `node_modules` resolution: minfern
+We deliberately do not implement Node's `node_modules` resolution: inty
 is a checker, and silently picking up JS from `node_modules` is exactly the
 kind of action whose blast radius warrants explicit configuration.
 
