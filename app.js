@@ -1,339 +1,339 @@
-// Minfern Web App - Live JavaScript Type Checker
+// Inty playground.
+//
+// The web app runs the same Analysis the editor LSP uses (compiled to
+// WASM from inty-lsp). We feed it the source on every change, then
+// render inlay hints and hover tooltips from its responses.
 
-import init, { check_types } from './pkg/minfern.js';
+import init, { Analysis } from './pkg/inty.js';
 
-// State
-let wasm = null;
+let wasmReady = false;
 let inputEditor = null;
-let checkTimeout = null;
-let hashUpdateTimeout = null;
-const DEBOUNCE_MS = 300;
-const HASH_UPDATE_MS = 500;
+let analysis = null;
+let charToByteTable = null;
 
-// URL hash encoding/decoding using UTF-8 + base64
+let checkTimeout = null;
+const DEBOUNCE_MS = 200;
+
+let inlayBookmarks = [];
+let errorMarks = [];
+let lastHoverKey = null;
+let hintsEnabled = localStorage.getItem('inty.hints') !== 'off';
+
+// ---- URL hash sync ----------------------------------------------------
+
 function encodeToHash(code) {
     try {
-        // Encode UTF-8 bytes to base64
         const bytes = new TextEncoder().encode(code);
         const binary = String.fromCharCode(...bytes);
-        const base64 = btoa(binary);
-        // Make URL-safe: replace + with -, / with _, remove padding =
-        return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    } catch (e) {
-        console.error('Failed to encode to hash:', e);
+        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    } catch (_) {
         return null;
     }
 }
 
 function decodeFromHash(hash) {
     try {
-        // Restore standard base64 from URL-safe version
         let base64 = hash.replace(/-/g, '+').replace(/_/g, '/');
-        // Add padding if needed
-        while (base64.length % 4) {
-            base64 += '=';
-        }
+        while (base64.length % 4) base64 += '=';
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-        }
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         return new TextDecoder().decode(bytes);
-    } catch (e) {
-        console.error('Failed to decode from hash:', e);
+    } catch (_) {
         return null;
     }
 }
 
-function updateUrlHash(code) {
-    const encoded = encodeToHash(code);
-    if (encoded) {
-        // Use replaceState to avoid polluting browser history
-        history.replaceState(null, '', '#' + encoded);
-    }
-}
-
-function scheduleHashUpdate() {
-    if (hashUpdateTimeout) {
-        clearTimeout(hashUpdateTimeout);
-    }
-    hashUpdateTimeout = setTimeout(() => {
-        const code = inputEditor.getValue();
-        updateUrlHash(code);
-    }, HASH_UPDATE_MS);
+function setUrlHash(code) {
+    const enc = encodeToHash(code);
+    if (enc) history.replaceState(null, '', '#' + enc);
 }
 
 function getCodeFromUrl() {
     const hash = window.location.hash.slice(1);
-    if (hash) {
-        return decodeFromHash(hash);
-    }
-    return null;
+    return hash ? decodeFromHash(hash) : null;
 }
 
-// Example code
-const EXAMPLE_CODE = `// Welcome to Minfern!
-// A static type checker for JavaScript with HMF-based inference.
-// Start typing to see inferred types live.
+// ---- UTF-16 (JS) <-> UTF-8 (Rust) offset mapping ---------------------
+//
+// CodeMirror works in UTF-16 code units; the Rust side returns and
+// expects UTF-8 byte offsets. Build one map per source snapshot.
 
-// Simple function - types are inferred automatically
-function add(a, b) {
-    return a + b;
+function buildOffsetTable(source) {
+    const len = source.length;
+    const c2b = new Int32Array(len + 1);
+    let byte = 0;
+    for (let i = 0; i < len; i++) {
+        c2b[i] = byte;
+        const code = source.charCodeAt(i);
+        if (code < 0x80) byte += 1;
+        else if (code < 0x800) byte += 2;
+        else if (code >= 0xd800 && code <= 0xdbff) byte += 4; // high surrogate
+        else if (code >= 0xdc00 && code <= 0xdfff) byte += 0; // low surrogate (counted with high)
+        else byte += 3;
+    }
+    c2b[len] = byte;
+    return c2b;
 }
 
-var sum = add(1, 2);
+function charToByte(charOffset) {
+    if (!charToByteTable) return charOffset;
+    const idx = Math.max(0, Math.min(charOffset, charToByteTable.length - 1));
+    return charToByteTable[idx];
+}
 
-// Objects with structural typing
-var person = {
-    name: "Alice",
-    age: 30,
-    greet: function() {
-        return "Hello, " + this.name;
+function byteToChar(byteOffset) {
+    if (!charToByteTable) return byteOffset;
+    let lo = 0;
+    let hi = charToByteTable.length - 1;
+    while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (charToByteTable[mid] < byteOffset) lo = mid + 1;
+        else hi = mid;
     }
+    return lo;
+}
+
+// ---- Example code ----------------------------------------------------
+
+const EXAMPLE_CODE = `// Inty — full type inference for plain JavaScript.
+// Hover any binding to see its inferred type.
+
+// Overloaded \`+\` — works for any addable type
+function add(x, y) { return x + y; }
+var n = add(1, 2);
+
+// Generics — id<a>(a) => a
+function id(x) { return x; }
+var a = id(42);
+var b = id("hello");
+
+// Structural typing — any object with a \`name\` field works
+function getName(obj) { return obj.name; }
+var person = getName({ name: "Alice", age: 30 });
+var dog    = getName({ name: "Rover", breed: "Labrador" });
+
+// Method chaining — builder-style \`this\`
+var counter = {
+    n: 0,
+    inc: function() { this.n = this.n + 1; return this; }
 };
+var v = counter.inc().inc().n;
 
-var greeting = person.greet();
+// Union types from branches
+function tag(c) { return c ? 42 : "err"; }
 
-// Higher-order functions
-function map(arr, fn) {
-    var result = [];
-    for (var i = 0; i < arr.length; i++) {
-        result[i] = fn(arr[i]);
-    }
-    return result;
+// Tagged unions — narrowed by the discriminator
+/** function area(s: {kind: "circle", r: Number}
+                 | {kind: "square", s: Number}) => Number */
+function area(shape) {
+    if (shape.kind === "circle") { return shape.r; }
+    else                         { return shape.s; }
 }
 
-var numbers = [1, 2, 3];
-var doubled = map(numbers, function(x) { return x * 2; });
-
-// Try introducing a type error:
+// Try a type error:
 // var bad = add("hello", 42);
 `;
 
-// DOM elements
+// ---- DOM -------------------------------------------------------------
+
 const statusEl = document.getElementById('status');
-const outputEl = document.getElementById('output-editor');
-const programTypeEl = document.getElementById('program-type');
 const errorPanel = document.getElementById('error-panel');
 const errorContent = document.getElementById('error-content');
+const errorSummary = document.getElementById('error-summary');
 const closeErrorsBtn = document.getElementById('close-errors');
-const formatBtn = document.getElementById('format-btn');
-const divider = document.getElementById('divider');
-const inputPane = document.getElementById('input-pane');
+const tooltipEl = document.getElementById('hover-tooltip');
+const shareBtn = document.getElementById('share-btn');
+const hintsBtn = document.getElementById('hints-btn');
 
-// Initialize
+// ---- Init ------------------------------------------------------------
+
 async function initialize() {
     try {
-        wasm = await init();
-        statusEl.textContent = 'Ready';
+        await init();
+        wasmReady = true;
+        statusEl.textContent = 'ready';
         statusEl.classList.add('ready');
 
-        // Set up CodeMirror
-        inputEditor = CodeMirror.fromTextArea(document.getElementById('input-editor'), {
-            mode: 'javascript',
-            theme: 'dracula',
-            lineNumbers: true,
-            matchBrackets: true,
-            autoCloseBrackets: true,
-            indentUnit: 4,
-            tabSize: 4,
-            indentWithTabs: false,
-        });
+        inputEditor = CodeMirror.fromTextArea(
+            document.getElementById('input-editor'),
+            {
+                mode: 'javascript',
+                theme: 'dracula',
+                lineNumbers: true,
+                matchBrackets: true,
+                autoCloseBrackets: true,
+                indentUnit: 4,
+                tabSize: 4,
+                indentWithTabs: false,
+            },
+        );
 
-        // Load code from URL hash or use example
         const urlCode = getCodeFromUrl();
-        if (urlCode) {
-            inputEditor.setValue(urlCode);
-        } else {
-            inputEditor.setValue(EXAMPLE_CODE);
-            // Set initial hash for example code
-            updateUrlHash(EXAMPLE_CODE);
-        }
+        inputEditor.setValue(urlCode || EXAMPLE_CODE);
+        // Drop the synthetic "load" edit so the first Ctrl+Z doesn't
+        // wipe the editor back to empty.
+        inputEditor.clearHistory();
 
-        inputEditor.on('change', () => {
-            scheduleCheck();
-            scheduleHashUpdate();
-        });
+        inputEditor.on('change', scheduleCheck);
 
-        // Initial check
-        checkTypes();
-
+        setupHover();
+        runCheck();
     } catch (e) {
         console.error('Failed to initialize WASM:', e);
-        statusEl.textContent = 'Failed to load';
+        statusEl.textContent = 'failed';
         statusEl.classList.add('error');
-        outputEl.innerHTML = '<span class="empty-state">Failed to load type checker. Make sure the WASM module is built.</span>';
     }
 }
 
-// Schedule a type check with debouncing
 function scheduleCheck() {
-    if (checkTimeout) {
-        clearTimeout(checkTimeout);
-    }
-    checkTimeout = setTimeout(checkTypes, DEBOUNCE_MS);
+    clearTimeout(checkTimeout);
+    checkTimeout = setTimeout(runCheck, DEBOUNCE_MS);
 }
 
-// Perform type checking
-function checkTypes() {
-    if (!wasm) return;
-
+function runCheck() {
+    if (!wasmReady) return;
     const source = inputEditor.getValue();
 
+    if (analysis) {
+        analysis.free();
+        analysis = null;
+    }
+    charToByteTable = buildOffsetTable(source);
+
     if (!source.trim()) {
-        outputEl.innerHTML = '<span class="empty-state">Enter some JavaScript code to check types...</span>';
-        programTypeEl.textContent = '';
+        clearInlayHints();
+        clearEditorErrors();
         hideErrors();
         return;
     }
 
-    try {
-        const result = check_types(source);
+    analysis = new Analysis(source);
+    const errors = analysis.errors();
 
-        if (result.success) {
-            // Show successful output with syntax highlighting
-            outputEl.innerHTML = highlightOutput(result.output, result.program_type);
-            programTypeEl.textContent = `Type: ${result.program_type}`;
-            programTypeEl.style.color = '';
-            hideErrors();
-            clearEditorErrors();
-        } else {
-            // Show errors
-            outputEl.innerHTML = '<span class="empty-state">Type checking failed. See errors below.</span>';
-            programTypeEl.textContent = '';
-            showErrors(result.errors, source);
-        }
-    } catch (e) {
-        console.error('Type check error:', e);
-        outputEl.innerHTML = `<span class="empty-state">Error: ${e.message}</span>`;
+    if (errors.length === 0) {
+        renderInlayHints(source);
+        clearEditorErrors();
+        hideErrors();
+    } else {
+        clearInlayHints();
+        showErrors(errors, source);
     }
 }
 
-// Syntax highlight the output
-function highlightOutput(code, programType) {
-    // First, escape HTML
-    let escaped = escapeHtml(code);
+// ---- Inlay hints -----------------------------------------------------
 
-    // Use placeholder approach to avoid regex corruption:
-    // 1. Extract type annotations and comments first, replace with placeholders
-    // 2. Highlight keywords, strings, numbers on the remaining text
-    // 3. Restore the extracted parts with their styling
+function renderInlayHints(source) {
+    clearInlayHints();
+    if (!analysis || !hintsEnabled) return;
 
-    const typeAnnotations = [];
-    const comments = [];
+    const totalBytes = charToByte(source.length);
+    const hints = analysis.inlay_hints(0, totalBytes);
 
-    // Extract type annotations
-    escaped = escaped.replace(/\/\*:\s*([^*]+)\s*\*\//g, (match, content) => {
-        const idx = typeAnnotations.length;
-        typeAnnotations.push(content);
-        return `__TYPE_${idx}__`;
-    });
-
-    // Extract regular comments
-    escaped = escaped.replace(/(\/\/[^\n]*)/g, (match) => {
-        const idx = comments.length;
-        comments.push(match);
-        return `__COMMENT_${idx}__`;
-    });
-
-    // Now highlight on text without any HTML spans yet
-
-    // Highlight strings
-    escaped = escaped.replace(
-        /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g,
-        '<span class="string">$1</span>'
-    );
-
-    // Highlight numbers (but not in placeholders)
-    escaped = escaped.replace(
-        /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b(?!__)/gi,
-        '<span class="number">$1</span>'
-    );
-
-    // Highlight keywords
-    const keywords = ['function', 'var', 'let', 'const', 'if', 'else', 'for', 'while', 'do',
-                      'return', 'throw', 'try', 'catch', 'finally', 'new', 'typeof', 'instanceof',
-                      'in', 'of', 'break', 'continue', 'switch', 'case', 'default', 'this', 'null',
-                      'undefined', 'true', 'false', 'delete', 'void'];
-
-    const keywordPattern = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
-    escaped = escaped.replace(keywordPattern, '<span class="keyword">$1</span>');
-
-    // Highlight function names (function keyword followed by name)
-    escaped = escaped.replace(
-        /(<span class="keyword">function<\/span>)\s+(\w+)/g,
-        '$1 <span class="function-name">$2</span>'
-    );
-
-    // Restore type annotations with styling
-    typeAnnotations.forEach((content, idx) => {
-        escaped = escaped.replace(
-            `__TYPE_${idx}__`,
-            `<span class="type-annotation">/*: ${content}*/</span>`
-        );
-    });
-
-    // Restore comments with styling
-    comments.forEach((content, idx) => {
-        escaped = escaped.replace(
-            `__COMMENT_${idx}__`,
-            `<span class="comment">${content}</span>`
-        );
-    });
-
-    // Add program type comment at the top
-    const typeComment = `<span class="comment">// Program type: ${escapeHtml(programType)}</span>\n\n`;
-
-    return typeComment + escaped;
+    for (const hint of hints) {
+        const charOffset = byteToChar(hint.after_byte);
+        const pos = inputEditor.posFromIndex(charOffset);
+        const widget = document.createElement('span');
+        widget.className = 'inlay-hint';
+        // `label` already includes its prefix (`: T` or `-> Ret`).
+        widget.textContent = hint.label;
+        const bm = inputEditor.setBookmark(pos, {
+            widget,
+            insertLeft: false,
+            handleMouseEvents: false,
+        });
+        inlayBookmarks.push(bm);
+    }
 }
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+function clearInlayHints() {
+    inlayBookmarks.forEach((b) => b.clear());
+    inlayBookmarks = [];
 }
 
-// Show error panel
+// ---- Hover -----------------------------------------------------------
+
+function setupHover() {
+    const wrapper = inputEditor.getWrapperElement();
+    wrapper.addEventListener('mousemove', onHoverMove);
+    wrapper.addEventListener('mouseleave', hideHover);
+    document.addEventListener('scroll', hideHover, true);
+}
+
+function onHoverMove(e) {
+    if (!analysis) {
+        hideHover();
+        return;
+    }
+    const pos = inputEditor.coordsChar(
+        { left: e.clientX, top: e.clientY },
+        'window',
+    );
+    const charOffset = inputEditor.indexFromPos(pos);
+    const byteOffset = charToByte(charOffset);
+    const hover = analysis.hover(byteOffset);
+    if (!hover) {
+        hideHover();
+        return;
+    }
+
+    const key = `${hover.start}:${hover.end}:${hover.type_str}`;
+    if (key !== lastHoverKey) {
+        tooltipEl.innerHTML =
+            `<span class="tooltip-name">${escapeHtml(hover.name)}</span>` +
+            `<span class="tooltip-type">: ${escapeHtml(hover.type_str)}</span>`;
+        lastHoverKey = key;
+    }
+    tooltipEl.classList.add('visible');
+
+    let left = e.clientX + 14;
+    let top = e.clientY + 18;
+    const w = tooltipEl.offsetWidth;
+    const h = tooltipEl.offsetHeight;
+    if (left + w > window.innerWidth - 12) left = window.innerWidth - w - 12;
+    if (top + h > window.innerHeight - 12) top = e.clientY - h - 10;
+    tooltipEl.style.left = left + 'px';
+    tooltipEl.style.top = top + 'px';
+}
+
+function hideHover() {
+    tooltipEl.classList.remove('visible');
+    lastHoverKey = null;
+}
+
+// ---- Errors ----------------------------------------------------------
+
 function showErrors(errors, source) {
     errorContent.innerHTML = '';
+    errorSummary.textContent = `${errors.length} error${errors.length === 1 ? '' : 's'}`;
 
-    errors.forEach(error => {
+    errors.forEach((error) => {
         const item = document.createElement('div');
         item.className = 'error-item';
-
-        // Calculate line and column from offset
-        const loc = offsetToLineCol(source, error.start);
-
-        item.innerHTML = `
-            <div class="message">${escapeHtml(error.message)}</div>
-            <div class="location">Line ${loc.line}, Column ${loc.column}</div>
-        `;
-
+        const startChar = byteToChar(error.start);
+        const loc = offsetToLineCol(source, startChar);
+        item.innerHTML =
+            `<div class="message">${escapeHtml(error.message)}</div>` +
+            `<div class="location">Line ${loc.line}, Column ${loc.column}</div>`;
         item.addEventListener('click', () => {
             inputEditor.setCursor({ line: loc.line - 1, ch: loc.column - 1 });
             inputEditor.focus();
         });
-
         errorContent.appendChild(item);
     });
 
     errorPanel.classList.add('visible');
-
-    // Mark errors in editor
-    markEditorErrors(errors, source);
+    markEditorErrors(errors);
 }
 
-// Hide error panel
 function hideErrors() {
     errorPanel.classList.remove('visible');
 }
 
-// Convert byte offset to line/column
-function offsetToLineCol(source, offset) {
+function offsetToLineCol(source, charOffset) {
     let line = 1;
     let column = 1;
-
-    for (let i = 0; i < offset && i < source.length; i++) {
+    for (let i = 0; i < charOffset && i < source.length; i++) {
         if (source[i] === '\n') {
             line++;
             column = 1;
@@ -341,81 +341,90 @@ function offsetToLineCol(source, offset) {
             column++;
         }
     }
-
     return { line, column };
 }
 
-// Mark errors in the editor
-function markEditorErrors(errors, source) {
+function markEditorErrors(errors) {
     clearEditorErrors();
-
-    errors.forEach(error => {
-        const startLoc = offsetToLineCol(source, error.start);
-        const endLoc = offsetToLineCol(source, error.end);
-
-        inputEditor.markText(
-            { line: startLoc.line - 1, ch: startLoc.column - 1 },
-            { line: endLoc.line - 1, ch: endLoc.column - 1 },
-            { className: 'error-underline' }
+    errors.forEach((error) => {
+        const startPos = inputEditor.posFromIndex(byteToChar(error.start));
+        const endPos = inputEditor.posFromIndex(byteToChar(error.end));
+        errorMarks.push(
+            inputEditor.markText(startPos, endPos, { className: 'error-underline' }),
         );
     });
 }
 
-// Clear error marks from editor
 function clearEditorErrors() {
-    inputEditor.getAllMarks().forEach(mark => mark.clear());
+    errorMarks.forEach((m) => m.clear());
+    errorMarks = [];
 }
 
-// Divider drag handling
-let isDragging = false;
+// ---- Misc ------------------------------------------------------------
 
-divider.addEventListener('mousedown', (e) => {
-    isDragging = true;
-    divider.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-    e.preventDefault();
-});
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
 
-document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-
-    const containerRect = document.querySelector('main').getBoundingClientRect();
-    const percentage = ((e.clientX - containerRect.left) / containerRect.width) * 100;
-
-    if (percentage > 20 && percentage < 80) {
-        inputPane.style.flex = `0 0 ${percentage}%`;
-    }
-});
-
-document.addEventListener('mouseup', () => {
-    if (isDragging) {
-        isDragging = false;
-        divider.classList.remove('dragging');
-        document.body.style.cursor = '';
-        inputEditor.refresh();
-    }
-});
-
-// Button handlers
-formatBtn.addEventListener('click', checkTypes);
 closeErrorsBtn.addEventListener('click', hideErrors);
 
-// Keyboard shortcuts
+function reflectHintsBtn() {
+    hintsBtn.classList.toggle('off', !hintsEnabled);
+    hintsBtn.textContent = hintsEnabled ? 'Hints on' : 'Hints off';
+}
+
+hintsBtn.addEventListener('click', () => {
+    hintsEnabled = !hintsEnabled;
+    localStorage.setItem('inty.hints', hintsEnabled ? 'on' : 'off');
+    reflectHintsBtn();
+    if (hintsEnabled) {
+        renderInlayHints(inputEditor.getValue());
+    } else {
+        clearInlayHints();
+    }
+});
+reflectHintsBtn();
+
+shareBtn.addEventListener('click', async () => {
+    const code = inputEditor.getValue();
+    setUrlHash(code);
+    let label = 'Link copied';
+    try {
+        await navigator.clipboard.writeText(window.location.href);
+    } catch (_) {
+        label = 'Link in URL';
+    }
+    flashShareLabel(label);
+});
+
+function flashShareLabel(text) {
+    const original = shareBtn.dataset.label || shareBtn.textContent;
+    shareBtn.dataset.label = original;
+    shareBtn.textContent = text;
+    shareBtn.classList.add('copied');
+    clearTimeout(flashShareLabel._t);
+    flashShareLabel._t = setTimeout(() => {
+        shareBtn.textContent = original;
+        shareBtn.classList.remove('copied');
+    }, 1600);
+}
+
 document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
-        checkTypes();
+        runCheck();
     }
 });
 
-// Handle browser back/forward navigation
 window.addEventListener('hashchange', () => {
     const urlCode = getCodeFromUrl();
     if (urlCode && inputEditor && urlCode !== inputEditor.getValue()) {
         inputEditor.setValue(urlCode);
-        checkTypes();
+        inputEditor.clearHistory();
+        runCheck();
     }
 });
 
-// Start
 initialize();

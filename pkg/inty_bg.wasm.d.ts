@@ -1,12 +1,12 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
-export const __wbg_checkresult_free: (a: number, b: number) => void;
-export const check_types: (a: number, b: number) => number;
-export const checkresult_errors: (a: number) => [number, number];
-export const checkresult_output: (a: number) => [number, number];
-export const checkresult_program_type: (a: number) => [number, number];
-export const checkresult_success: (a: number) => number;
+export const __wbg_analysis_free: (a: number, b: number) => void;
+export const analysis_errors: (a: number) => [number, number];
+export const analysis_hover: (a: number, b: number) => any;
+export const analysis_inlay_hints: (a: number, b: number, c: number) => [number, number];
+export const analysis_new: (a: number, b: number) => number;
+export const analysis_ok: (a: number) => number;
 export const init: () => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

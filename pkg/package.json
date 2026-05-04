@@ -1,16 +1,16 @@
 {
-  "name": "minfern",
+  "name": "inty-lsp",
   "type": "module",
-  "description": "HMF-based type inference for mquickjs JavaScript subset",
+  "description": "Language Server Protocol server backed by inty",
   "version": "0.1.0",
   "license": "MIT",
   "files": [
-    "minfern_bg.wasm",
-    "minfern.js",
-    "minfern.d.ts"
+    "inty_bg.wasm",
+    "inty.js",
+    "inty.d.ts"
   ],
-  "main": "minfern.js",
-  "types": "minfern.d.ts",
+  "main": "inty.js",
+  "types": "inty.d.ts",
   "sideEffects": [
     "./snippets/*"
   ]

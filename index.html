@@ -3,62 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minfern - JavaScript Type Checker</title>
+    <title>Inty - JavaScript Type Checker</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=13">
 </head>
 <body>
-    <header>
-        <h1>Minfern</h1>
-        <span class="subtitle">Type checking for JavaScript without transpilation</span>
-        <div class="header-right">
-            <span class="credits">by <a href="https://github.com/sinelaw" target="_blank" rel="noopener noreferrer">Noam Lewis</a></span>
-            <a href="https://github.com/sinelaw/minfern" target="_blank" rel="noopener noreferrer" class="github-link" title="View on GitHub">
-                <img src="github-mark.svg" alt="GitHub" class="github-icon">
-                <span class="github-text">GitHub</span>
-            </a>
-            <div class="status" id="status">Loading WASM...</div>
-        </div>
-    </header>
+    <div class="backdrop">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
 
-    <main>
-        <div class="pane" id="input-pane">
-            <div class="pane-header">
-                <span class="pane-title">Input</span>
-                <button id="format-btn" title="Check Types (Ctrl+Enter)">Check Types</button>
+    <div class="window">
+        <div class="title-bar">
+            <div class="traffic" aria-hidden="true">
+                <span class="dot dot-red"></span>
+                <span class="dot dot-yellow"></span>
+                <span class="dot dot-green"></span>
             </div>
-            <div class="editor-container">
-                <textarea id="input-editor"></textarea>
+            <div class="title">
+                <span class="title-name">Inty</span>
+                <span class="title-sep">·</span>
+                <span class="title-sub">JavaScript Type Checker</span>
             </div>
-        </div>
-
-        <div class="divider" id="divider"></div>
-
-        <div class="pane" id="output-pane">
-            <div class="pane-header">
-                <span class="pane-title">Output</span>
-                <span class="type-display" id="program-type"></span>
-            </div>
-            <div class="editor-container">
-                <div id="output-editor"></div>
+            <div class="title-actions">
+                <span class="credits">
+                    by <span class="credit-name">Noam Lewis</span>
+                    <span class="credit-sep">·</span>
+                    <a href="https://github.com/sinelaw/inty" target="_blank" rel="noopener noreferrer" class="credit-link">github.com/sinelaw/inty</a>
+                </span>
+                <button id="hints-btn" class="chip" title="Show or hide inline type hints">Hints on</button>
+                <button id="share-btn" class="chip" title="Copy a link to this snippet">Share link</button>
+                <span class="status" id="status">Loading…</span>
+                <a href="https://github.com/sinelaw/inty" target="_blank" rel="noopener noreferrer" class="github-link" title="View on GitHub">
+                    <img src="github-mark.svg" alt="GitHub" class="github-icon">
+                </a>
             </div>
         </div>
 
-        <div class="error-panel" id="error-panel">
-        <div class="error-header">
-            <span>Errors</span>
-            <button id="close-errors">x</button>
+        <div class="editor-container">
+            <textarea id="input-editor"></textarea>
         </div>
-        <div class="error-content" id="error-content"></div>
+
+        <div class="error-bar" id="error-panel">
+            <div class="error-bar-header">
+                <span id="error-summary">Errors</span>
+                <button id="close-errors" aria-label="Dismiss errors">×</button>
+            </div>
+            <div class="error-content" id="error-content"></div>
         </div>
-    </main>
+    </div>
+
+    <div id="hover-tooltip" class="hover-tooltip" role="tooltip"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=7"></script>
     <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0858f4857c744e418bce27f9577ea9d2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

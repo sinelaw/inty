@@ -1,36 +1,49 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export class CheckResult {
-  private constructor();
+export class Analysis {
   free(): void;
   [Symbol.dispose](): void;
-  readonly program_type: string;
-  readonly errors: any[];
-  readonly output: string;
-  readonly success: boolean;
+  /**
+   * Inlay hints in the byte range `[start, end)`. Each hint is
+   * `{after_byte, label}` — `label` is the full text to render
+   * (already prefixed with `: ` or `-> `).
+   */
+  inlay_hints(start: number, end: number): any[];
+  /**
+   * Lex, parse, and infer `source`. Always returns an `Analysis`; on
+   * failure `errors()` is non-empty and queries return null/empty.
+   */
+  constructor(source: string);
+  /**
+   * Hover at a UTF-8 byte offset. Returns
+   * `{name, start, end, type_str}` or `null` if no binding sits
+   * under the offset.
+   */
+  hover(byte_offset: number): any;
+  /**
+   * Diagnostics as `[{message, start, end}]`. `start`/`end` are
+   * UTF-8 byte offsets into the source.
+   */
+  errors(): any[];
+  /**
+   * `true` iff the document type-checked without errors.
+   */
+  readonly ok: boolean;
 }
 
-/**
- * Type check JavaScript source code and return the result.
- */
-export function check_types(source: string): CheckResult;
-
-/**
- * Initialize the WASM module (call once at startup).
- */
 export function init(): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
-  readonly __wbg_checkresult_free: (a: number, b: number) => void;
-  readonly check_types: (a: number, b: number) => number;
-  readonly checkresult_errors: (a: number) => [number, number];
-  readonly checkresult_output: (a: number) => [number, number];
-  readonly checkresult_program_type: (a: number) => [number, number];
-  readonly checkresult_success: (a: number) => number;
+  readonly __wbg_analysis_free: (a: number, b: number) => void;
+  readonly analysis_errors: (a: number) => [number, number];
+  readonly analysis_hover: (a: number, b: number) => any;
+  readonly analysis_inlay_hints: (a: number, b: number, c: number) => [number, number];
+  readonly analysis_new: (a: number, b: number) => number;
+  readonly analysis_ok: (a: number) => number;
   readonly init: () => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

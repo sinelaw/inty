@@ -178,95 +178,85 @@ if (!('encodeInto' in cachedTextEncoder)) {
 
 let WASM_VECTOR_LEN = 0;
 
-const CheckResultFinalization = (typeof FinalizationRegistry === 'undefined')
+const AnalysisFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_checkresult_free(ptr >>> 0, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_analysis_free(ptr >>> 0, 1));
 
 /**
- * Result of type checking, returned as JSON.
+ * Opaque handle around an [`Analysis`]. Construct one per source
+ * snapshot from JS, then ask it for inlay hints, hovers, and errors.
  */
-export class CheckResult {
-    static __wrap(ptr) {
-        ptr = ptr >>> 0;
-        const obj = Object.create(CheckResult.prototype);
-        obj.__wbg_ptr = ptr;
-        CheckResultFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
+export class Analysis {
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
-        CheckResultFinalization.unregister(this);
+        AnalysisFinalization.unregister(this);
         return ptr;
     }
     free() {
         const ptr = this.__destroy_into_raw();
-        wasm.__wbg_checkresult_free(ptr, 0);
+        wasm.__wbg_analysis_free(ptr, 0);
     }
     /**
-     * @returns {string}
-     */
-    get program_type() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const ret = wasm.checkresult_program_type(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
+     * Inlay hints in the byte range `[start, end)`. Each hint is
+     * `{after_byte, label}` — `label` is the full text to render
+     * (already prefixed with `: ` or `-> `).
+     * @param {number} start
+     * @param {number} end
      * @returns {any[]}
      */
-    get errors() {
-        const ret = wasm.checkresult_errors(this.__wbg_ptr);
+    inlay_hints(start, end) {
+        const ret = wasm.analysis_inlay_hints(this.__wbg_ptr, start, end);
         var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         return v1;
     }
     /**
-     * @returns {string}
-     */
-    get output() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const ret = wasm.checkresult_output(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
+     * `true` iff the document type-checked without errors.
      * @returns {boolean}
      */
-    get success() {
-        const ret = wasm.checkresult_success(this.__wbg_ptr);
+    get ok() {
+        const ret = wasm.analysis_ok(this.__wbg_ptr);
         return ret !== 0;
     }
+    /**
+     * Lex, parse, and infer `source`. Always returns an `Analysis`; on
+     * failure `errors()` is non-empty and queries return null/empty.
+     * @param {string} source
+     */
+    constructor(source) {
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.analysis_new(ptr0, len0);
+        this.__wbg_ptr = ret >>> 0;
+        AnalysisFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+    /**
+     * Hover at a UTF-8 byte offset. Returns
+     * `{name, start, end, type_str}` or `null` if no binding sits
+     * under the offset.
+     * @param {number} byte_offset
+     * @returns {any}
+     */
+    hover(byte_offset) {
+        const ret = wasm.analysis_hover(this.__wbg_ptr, byte_offset);
+        return ret;
+    }
+    /**
+     * Diagnostics as `[{message, start, end}]`. `start`/`end` are
+     * UTF-8 byte offsets into the source.
+     * @returns {any[]}
+     */
+    errors() {
+        const ret = wasm.analysis_errors(this.__wbg_ptr);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
 }
-if (Symbol.dispose) CheckResult.prototype[Symbol.dispose] = CheckResult.prototype.free;
+if (Symbol.dispose) Analysis.prototype[Symbol.dispose] = Analysis.prototype.free;
 
-/**
- * Type check JavaScript source code and return the result.
- * @param {string} source
- * @returns {CheckResult}
- */
-export function check_types(source) {
-    const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.check_types(ptr0, len0);
-    return CheckResult.__wrap(ret);
-}
-
-/**
- * Initialize the WASM module (call once at startup).
- */
 export function init() {
     wasm.init();
 }
@@ -413,7 +403,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (typeof module_or_path === 'undefined') {
-        module_or_path = new URL('minfern_bg.wasm', import.meta.url);
+        module_or_path = new URL('inty_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 
