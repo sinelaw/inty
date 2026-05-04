@@ -130,11 +130,11 @@ impl TypeOrigin {
 }
 
 /// Result type for inty operations.
-pub type Result<T> = std::result::Result<T, intyError>;
+pub type Result<T> = std::result::Result<T, IntyError>;
 
 /// Main error type for inty.
 #[derive(Debug, Error)]
-pub enum intyError {
+pub enum IntyError {
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
 

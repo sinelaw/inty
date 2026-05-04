@@ -6,7 +6,7 @@ use std::io::{self, Read};
 use std::process::ExitCode;
 
 use inty::diagnostics::{print_error, print_error_plain};
-use inty::error::intyError;
+use inty::error::IntyError;
 use inty::infer::{decorate_with_types, InferState, TypeEnv};
 use inty::lexer::{Scanner, Token};
 use inty::parser::{pretty::print_program, Parser};
@@ -136,7 +136,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let report = |path: &str, source: &str, error: &intyError| {
+    let report = |path: &str, source: &str, error: &IntyError| {
         if args.no_color {
             print_error_plain(path, source, error);
         } else {
@@ -165,7 +165,7 @@ fn load_extra_libs(
     mut env: TypeEnv,
     mut state: InferState,
     paths: &[String],
-    report: &dyn Fn(&str, &str, &intyError),
+    report: &dyn Fn(&str, &str, &IntyError),
 ) -> Result<(TypeEnv, InferState), ExitCode> {
     for path in paths {
         let source = match fs::read_to_string(path) {
@@ -267,7 +267,7 @@ fn run_inference(
     env: TypeEnv,
     source: &str,
     filename: &str,
-) -> Result<(), Vec<intyError>> {
+) -> Result<(), Vec<IntyError>> {
     let mut errors = Vec::new();
 
     // Lexing

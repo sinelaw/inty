@@ -4,7 +4,7 @@ use std::io::Write;
 
 use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind, Source};
 
-use crate::error::{LexError, intyError, ParseError, TypeError};
+use crate::error::{LexError, IntyError, ParseError, TypeError};
 use crate::lexer::Span;
 
 /// Ariadne interprets label offsets as character (Unicode scalar) indices,
@@ -37,12 +37,12 @@ fn char_range(source: &str, span: Span) -> std::ops::Range<usize> {
 }
 
 /// Print a inty error with colored diagnostics to stderr.
-pub fn print_error(filename: &str, source: &str, error: &intyError) {
+pub fn print_error(filename: &str, source: &str, error: &IntyError) {
     let _ = write_error(std::io::stderr(), filename, source, error, true);
 }
 
 /// Print a inty error to stderr without ANSI color escapes.
-pub fn print_error_plain(filename: &str, source: &str, error: &intyError) {
+pub fn print_error_plain(filename: &str, source: &str, error: &IntyError) {
     let _ = write_error(std::io::stderr(), filename, source, error, false);
 }
 
@@ -57,7 +57,7 @@ pub fn write_error<W: Write>(
     mut writer: W,
     filename: &str,
     source: &str,
-    error: &intyError,
+    error: &IntyError,
     color: bool,
 ) -> std::io::Result<()> {
     let config = Config::new().with_color(color);
@@ -71,7 +71,7 @@ pub fn write_error<W: Write>(
         }
     };
     // Handle UnificationError specially since it has multiple labels
-    if let intyError::Type(TypeError::UnificationError {
+    if let IntyError::Type(TypeError::UnificationError {
         expected,
         found,
         span,
@@ -152,7 +152,7 @@ pub fn write_error<W: Write>(
 
     // Handle all other errors with single note
     let (message, span, note) = match error {
-        intyError::Lex(e) => match e {
+        IntyError::Lex(e) => match e {
             LexError::UnexpectedCharacter { ch, span } => {
                 (format!("Unexpected character: '{}'", ch), *span, None)
             }
@@ -171,7 +171,7 @@ pub fn write_error<W: Write>(
             LexError::InvalidNumber { span } => ("Invalid number literal".to_string(), *span, None),
         },
 
-        intyError::Parse(e) => match e {
+        IntyError::Parse(e) => match e {
             ParseError::UnexpectedToken {
                 found,
                 expected,
@@ -206,7 +206,7 @@ pub fn write_error<W: Write>(
             }
         },
 
-        intyError::Type(e) => match e {
+        IntyError::Type(e) => match e {
             TypeError::UnificationError { .. } => {
                 unreachable!("UnificationError is handled above")
             }
@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(byte_to_char_offset(s, 3), 1);
     }
 
-    fn render_error(source: &str, error: &intyError) -> String {
+    fn render_error(source: &str, error: &IntyError) -> String {
         let mut buf = Vec::new();
         // color=false keeps tests asserting on plain text without having
         // to strip ANSI escapes after the fact.
@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(x_start, 11, "fixture math");
         let span = Span::new(x_start, x_start + 1);
 
-        let error = intyError::Type(TypeError::UnificationError {
+        let error = IntyError::Type(TypeError::UnificationError {
             expected: "String".to_string(),
             found: "Number".to_string(),
             span,
@@ -433,7 +433,7 @@ mod tests {
         let foo_start = source.find("foo").unwrap();
         let span = Span::new(foo_start, foo_start + 3);
 
-        let error = intyError::Type(TypeError::UndefinedVariable {
+        let error = IntyError::Type(TypeError::UndefinedVariable {
             name: "foo".to_string(),
             span,
         });
@@ -465,7 +465,7 @@ mod tests {
         let x_start = source.find("x").unwrap();
         let span = Span::new(x_start, x_start + 1);
 
-        let error = intyError::Type(TypeError::UndefinedVariable {
+        let error = IntyError::Type(TypeError::UndefinedVariable {
             name: "x".to_string(),
             span,
         });

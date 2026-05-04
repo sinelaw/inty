@@ -8,7 +8,7 @@
 //! bindings.
 
 use crate::builtins::initial_env;
-use crate::error::intyError;
+use crate::error::IntyError;
 use crate::infer::{InferState, TypeEnv};
 use crate::parser::parse;
 
@@ -33,7 +33,7 @@ pub fn load_lib(
     state: &mut InferState,
     env: TypeEnv,
     source: &str,
-) -> Result<TypeEnv, intyError> {
+) -> Result<TypeEnv, IntyError> {
     let program = parse(source)?;
     let (_ty, new_env) = state.infer_program_with_env(&env, &program)?;
     Ok(new_env)
@@ -44,7 +44,7 @@ pub fn load_lib(
 /// Returns the environment plus the fresh `InferState` used to load the
 /// libs. Callers should continue inferring their user program with the
 /// returned state so type variable IDs remain unique.
-pub fn initial_env_with_stdlib() -> Result<(TypeEnv, InferState), intyError> {
+pub fn initial_env_with_stdlib() -> Result<(TypeEnv, InferState), IntyError> {
     let mut state = InferState::new();
     let mut env = initial_env();
     for (source, _name) in DEFAULT_LIBS {

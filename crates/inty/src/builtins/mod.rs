@@ -5,7 +5,7 @@
 //! - Type class instances for Plus and Indexable
 //! - Constraint solving for deferred type class predicates
 
-use crate::error::{intyError, TypeError};
+use crate::error::{IntyError, TypeError};
 use crate::infer::{InferState, TypeEnv};
 use crate::lexer::Span;
 use crate::types::{ClassName, RowType, TVarName, Type, TypePred, TypeScheme};
@@ -251,7 +251,7 @@ pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -
 impl InferState {
     /// Resolve pending type class constraints.
     /// This should be called after inference to check that all constraints are satisfiable.
-    pub fn resolve_constraints(&mut self) -> Result<(), intyError> {
+    pub fn resolve_constraints(&mut self) -> Result<(), IntyError> {
         let constraints = std::mem::take(&mut self.pending_constraints);
 
         for constraint in constraints {
@@ -262,7 +262,7 @@ impl InferState {
     }
 
     /// Resolve a single type class constraint.
-    fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), intyError> {
+    fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
         match pred.class {
             ClassName::Plus => self.resolve_plus(&pred.types[0], span),
             ClassName::Indexable => {
@@ -272,7 +272,7 @@ impl InferState {
     }
 
     /// Resolve Plus constraint: type must be Number or String.
-    fn resolve_plus(&mut self, ty: &Type, span: Span) -> Result<(), intyError> {
+    fn resolve_plus(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
         let ty = self.apply_subst(ty);
 
         match &ty {
@@ -309,7 +309,7 @@ impl InferState {
         index: &Type,
         element: &Type,
         span: Span,
-    ) -> Result<(), intyError> {
+    ) -> Result<(), IntyError> {
         let container = self.apply_subst(container);
         let index = self.apply_subst(index);
         let element = self.apply_subst(element);

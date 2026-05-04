@@ -91,7 +91,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::error::intyError;
+use crate::error::IntyError;
 use crate::infer::{InferState, TypeEnv};
 use crate::parser::ast::{
     ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt,
@@ -140,11 +140,11 @@ fn build_namespace_type(
     exports: &ExportTable,
     err_span: crate::lexer::Span,
     err_source: &str,
-) -> Result<Type, intyError> {
+) -> Result<Type, IntyError> {
     let mut export_schemes: BTreeMap<String, TypeScheme> = BTreeMap::new();
     for entry in exports {
         let scheme = export_scheme(entry, module_env).ok_or_else(|| {
-            intyError::Type(crate::error::TypeError::Module {
+            IntyError::Type(crate::error::TypeError::Module {
                 message: format!(
                     "module {:?} declares export {:?} but its local binding is missing",
                     err_source, entry.exported
@@ -169,7 +169,7 @@ fn compute_export_table(
     program: &Program,
     base_dir: &Path,
     visiting: &mut HashSet<PathBuf>,
-) -> Result<ExportTable, intyError> {
+) -> Result<ExportTable, IntyError> {
     let mut out = ExportTable::new();
     for stmt in &program.statements {
         let Stmt::Export { declaration, .. } = stmt else {
@@ -213,13 +213,13 @@ fn compute_export_table(
             }
             ExportDecl::From { kind, source, span } => {
                 let resolved_path = resolve_path(base_dir, source).map_err(|msg| {
-                    intyError::Type(crate::error::TypeError::Module {
+                    IntyError::Type(crate::error::TypeError::Module {
                         message: format!("cannot resolve re-export {:?}: {}", source, msg),
                         span: *span,
                     })
                 })?;
                 if visiting.contains(&resolved_path) {
-                    return Err(intyError::Type(crate::error::TypeError::Module {
+                    return Err(IntyError::Type(crate::error::TypeError::Module {
                         message: format!(
                             "circular re-export involving {}",
                             resolved_path.display()
@@ -245,7 +245,7 @@ fn compute_export_table(
                     ExportFromKind::Named(specs) => {
                         for spec in specs {
                             let scheme = resolve_target(&spec.local).ok_or_else(|| {
-                                intyError::Type(crate::error::TypeError::Module {
+                                IntyError::Type(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} has no export named {:?}",
                                         source, spec.local
@@ -267,7 +267,7 @@ fn compute_export_table(
                                 continue;
                             }
                             let scheme = export_scheme(entry, &target_env).ok_or_else(|| {
-                                intyError::Type(crate::error::TypeError::Module {
+                                IntyError::Type(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} export {:?} has no resolvable scheme",
                                         source, entry.exported
@@ -314,7 +314,7 @@ pub fn resolve_imports(
     program: &Program,
     base_dir: &Path,
     visiting: &mut HashSet<PathBuf>,
-) -> Result<TypeEnv, intyError> {
+) -> Result<TypeEnv, IntyError> {
     let mut env = env;
     for stmt in &program.statements {
         if let Stmt::Import {
@@ -324,14 +324,14 @@ pub fn resolve_imports(
         } = stmt
         {
             let resolved_path = resolve_path(base_dir, source).map_err(|msg| {
-                intyError::Type(crate::error::TypeError::Module {
+                IntyError::Type(crate::error::TypeError::Module {
                     message: format!("cannot resolve import {:?}: {}", source, msg),
                     span: *span,
                 })
             })?;
 
             if visiting.contains(&resolved_path) {
-                return Err(intyError::Type(crate::error::TypeError::Module {
+                return Err(IntyError::Type(crate::error::TypeError::Module {
                     message: format!(
                         "circular import involving {}",
                         resolved_path.display()
@@ -365,7 +365,7 @@ pub fn resolve_imports(
                             imported, local, ..
                         } => {
                             let scheme = lookup_export_scheme(imported).ok_or_else(|| {
-                                intyError::Type(crate::error::TypeError::Module {
+                                IntyError::Type(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} has no export named {:?}",
                                         source, imported
@@ -377,7 +377,7 @@ pub fn resolve_imports(
                         }
                         ImportSpecifier::Default { local, span } => {
                             let scheme = lookup_export_scheme("default").ok_or_else(|| {
-                                intyError::Type(crate::error::TypeError::Module {
+                                IntyError::Type(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} has no default export",
                                         source
@@ -413,9 +413,9 @@ fn load_module(
     starting_env: TypeEnv,
     path: &Path,
     visiting: &mut HashSet<PathBuf>,
-) -> Result<(TypeEnv, ExportTable), intyError> {
+) -> Result<(TypeEnv, ExportTable), IntyError> {
     let source = std::fs::read_to_string(path).map_err(|e| {
-        intyError::Type(crate::error::TypeError::Module {
+        IntyError::Type(crate::error::TypeError::Module {
             message: format!("failed to read {}: {}", path.display(), e),
             span: crate::lexer::Span::new(0, 0),
         })
@@ -494,7 +494,7 @@ mod tests {
         path
     }
 
-    fn resolve(dir: &Path, main: &str) -> Result<TypeEnv, intyError> {
+    fn resolve(dir: &Path, main: &str) -> Result<TypeEnv, IntyError> {
         let main_path = dir.join(main);
         let source = std::fs::read_to_string(&main_path).unwrap();
         let program = parse(&source).unwrap();
@@ -509,7 +509,7 @@ mod tests {
         )
     }
 
-    fn check(dir: &Path, main: &str) -> Result<(), intyError> {
+    fn check(dir: &Path, main: &str) -> Result<(), IntyError> {
         let main_path = dir.join(main);
         let source = std::fs::read_to_string(&main_path).unwrap();
         let program = parse(&source).unwrap();

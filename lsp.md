@@ -382,7 +382,7 @@ struct Analysis {
     decorated: Program,
     /// Errors collected during the last check. Translated to LSP
     /// diagnostics on demand.
-    errors: Vec<intyError>,
+    errors: Vec<IntyError>,
 }
 ```
 
@@ -443,7 +443,7 @@ char. We can advertise UTF-8 once a wider client base supports it via
 
 ### Diagnostics
 
-For each `intyError` collected during inference:
+For each `IntyError` collected during inference:
 
 - Map the error's `Span` to an LSP `Range`.
 - Severity is always `Error` (1) for v1; warnings can be added once

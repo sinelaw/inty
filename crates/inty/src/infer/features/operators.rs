@@ -1,6 +1,6 @@
 //! Unary and binary operators.
 
-use crate::error::{intyError, TypeError};
+use crate::error::{IntyError, TypeError};
 use crate::lexer::Span;
 use crate::parser::ast::{BinOp, Expr, UnaryOp};
 use crate::types::{Type, TypePred};
@@ -183,7 +183,7 @@ impl InferState {
                 let op_name = if matches!(op, BinOp::And) { "&&" } else { "||" };
                 if let Err(mut err) = self.unify(span, &left_type, &right_type) {
                     // Add helpful context about the && or || operator
-                    if let intyError::Type(TypeError::UnificationError { context, .. }) =
+                    if let IntyError::Type(TypeError::UnificationError { context, .. }) =
                         &mut err
                     {
                         let msg = vec![

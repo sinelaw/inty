@@ -3,7 +3,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::builtins::initial_env;
-use crate::error::intyError;
+use crate::error::IntyError;
 use crate::infer::{decorate_with_types, InferState};
 use crate::lexer::{Scanner, Token};
 use crate::parser::{pretty::print_program, Parser};
@@ -43,17 +43,17 @@ impl CheckResult {
 }
 
 /// Format an error into a structured object for JS.
-fn format_error(error: &intyError) -> JsValue {
+fn format_error(error: &IntyError) -> JsValue {
     let (message, start, end) = match error {
-        intyError::Lex(e) => {
+        IntyError::Lex(e) => {
             let span = e.span();
             (e.to_string(), span.start, span.end)
         }
-        intyError::Parse(e) => {
+        IntyError::Parse(e) => {
             let span = e.span();
             (e.to_string(), span.start, span.end)
         }
-        intyError::Type(e) => {
+        IntyError::Type(e) => {
             let span = e.span();
             (e.to_string(), span.start, span.end)
         }
@@ -76,7 +76,7 @@ pub fn init() {
 /// Type check JavaScript source code and return the result.
 #[wasm_bindgen]
 pub fn check_types(source: &str) -> CheckResult {
-    let mut errors: Vec<intyError> = Vec::new();
+    let mut errors: Vec<IntyError> = Vec::new();
 
     // Lexing
     let mut scanner = Scanner::new(source);

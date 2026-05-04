@@ -3,7 +3,7 @@
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
-use inty::error::intyError;
+use inty::error::IntyError;
 use inty::infer::{InferState, TypeEnv};
 use inty::lexer::{Scanner, Span, Token};
 use inty::parser::ast::{Expr, ImportSpecifier, Program, Stmt};
@@ -16,7 +16,7 @@ use crate::resolver::Resolution;
 /// Result of checking one document: the errors found and (when the
 /// program parsed) the inference state needed to answer hover queries.
 pub struct Analysis {
-    pub errors: Vec<intyError>,
+    pub errors: Vec<IntyError>,
     program: Option<Program>,
     final_env: Option<TypeEnv>,
     state: Option<InferState>,
@@ -109,7 +109,7 @@ impl Analysis {
         }
     }
 
-    fn errors_only(errors: Vec<intyError>) -> Self {
+    fn errors_only(errors: Vec<IntyError>) -> Self {
         Analysis {
             errors,
             program: None,

@@ -1,8 +1,8 @@
 //! Conversions between inty's byte spans and LSP positions, plus
-//! `intyError` → `lsp_types::Diagnostic` mapping.
+//! `IntyError` → `lsp_types::Diagnostic` mapping.
 
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
-use inty::error::{LexError, intyError, ParseError, TypeError};
+use inty::error::{LexError, IntyError, ParseError, TypeError};
 use inty::lexer::Span;
 
 /// Convert a byte offset in `text` to an LSP `Position` (UTF-16 units).
@@ -75,9 +75,9 @@ pub fn span_to_range(text: &str, span: Span) -> Range {
 }
 
 /// Stable code string for an error variant. Editors can filter by this.
-fn error_code(err: &intyError) -> &'static str {
+fn error_code(err: &IntyError) -> &'static str {
     match err {
-        intyError::Lex(e) => match e {
+        IntyError::Lex(e) => match e {
             LexError::UnexpectedCharacter { .. } => "UnexpectedCharacter",
             LexError::UnterminatedString { .. } => "UnterminatedString",
             LexError::UnterminatedComment { .. } => "UnterminatedComment",
@@ -85,7 +85,7 @@ fn error_code(err: &intyError) -> &'static str {
             LexError::InvalidEscapeSequence { .. } => "InvalidEscapeSequence",
             LexError::UnterminatedRegex { .. } => "UnterminatedRegex",
         },
-        intyError::Parse(e) => match e {
+        IntyError::Parse(e) => match e {
             ParseError::UnexpectedToken { .. } => "UnexpectedToken",
             ParseError::UnexpectedEof { .. } => "UnexpectedEof",
             ParseError::InvalidAssignmentTarget { .. } => "InvalidAssignmentTarget",
@@ -95,7 +95,7 @@ fn error_code(err: &intyError) -> &'static str {
             ParseError::ContinueOutsideLoop { .. } => "ContinueOutsideLoop",
             ParseError::ReturnOutsideFunction { .. } => "ReturnOutsideFunction",
         },
-        intyError::Type(e) => match e {
+        IntyError::Type(e) => match e {
             TypeError::UnificationError { .. } => "UnificationError",
             TypeError::OccursCheck { .. } => "OccursCheck",
             TypeError::UndefinedVariable { .. } => "UndefinedVariable",
@@ -114,16 +114,16 @@ fn error_code(err: &intyError) -> &'static str {
     }
 }
 
-fn error_span(err: &intyError) -> Span {
+fn error_span(err: &IntyError) -> Span {
     match err {
-        intyError::Lex(e) => e.span(),
-        intyError::Parse(e) => e.span(),
-        intyError::Type(e) => e.span(),
+        IntyError::Lex(e) => e.span(),
+        IntyError::Parse(e) => e.span(),
+        IntyError::Type(e) => e.span(),
     }
 }
 
-/// Convert a single `intyError` into an LSP `Diagnostic`.
-pub fn error_to_diagnostic(text: &str, err: &intyError) -> Diagnostic {
+/// Convert a single `IntyError` into an LSP `Diagnostic`.
+pub fn error_to_diagnostic(text: &str, err: &IntyError) -> Diagnostic {
     Diagnostic {
         range: span_to_range(text, error_span(err)),
         severity: Some(DiagnosticSeverity::ERROR),
