@@ -12,12 +12,12 @@ use lsp_types::request::{
     Rename, Request as LspRequest, Shutdown, SignatureHelpRequest,
 };
 use lsp_types::{
-    ClientCapabilities, CompletionParams, CompletionResponse, DidOpenTextDocumentParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeParams, InlayHint,
-    InlayHintParams, PartialResultParams, Position, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, RenameParams, SignatureHelp, SignatureHelpContext,
-    SignatureHelpParams, SignatureHelpTriggerKind, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, Uri, WorkDoneProgressParams, WorkspaceEdit,
+    ClientCapabilities, CompletionParams, CompletionResponse, DiagnosticSeverity,
+    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    InitializeParams, InlayHint, InlayHintParams, PartialResultParams, Position,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, RenameParams, SignatureHelp,
+    SignatureHelpContext, SignatureHelpParams, SignatureHelpTriggerKind, TextDocumentIdentifier,
+    TextDocumentItem, TextDocumentPositionParams, Uri, WorkDoneProgressParams, WorkspaceEdit,
 };
 use minfern_lsp::Server;
 use serde::{de::DeserializeOwned, Serialize};
@@ -786,6 +786,51 @@ fn hover_on_function_name_still_works() {
         "hover on function name should show a function type: {}",
         value
     );
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn diagnostics_include_unreachable_narrowing_warning() {
+    // `res : Number | String`; `(typeof res) == "boolean"` can never
+    // hold, so the inference layer emits an "always false" warning. The
+    // LSP server should publish that warning as a Warning diagnostic on
+    // the same document, alongside any errors.
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///narrow.js");
+    let src = "\
+        /** function test(Number) => Number | String */\n\
+        function test(x) { if (x > 4) { return \"bad\"; } else { return x; } }\n\
+        /** function moshe(Number) => String */\n\
+        function moshe(x) {\n\
+          /** let res: Number | String */\n\
+          let res = test(x);\n\
+          if ((typeof res) == \"number\") { return \"cool\"; }\n\
+          else if ((typeof res) == \"boolean\") { return \"bad\"; }\n\
+          else { return \"other\"; }\n\
+        }\n";
+    open_doc(&client, &u, src);
+    let diags = drain_diagnostics(&client, &u);
+
+    let warnings: Vec<_> = diags
+        .iter()
+        .filter(|d| d.severity == Some(DiagnosticSeverity::WARNING))
+        .collect();
+    let w = warnings
+        .iter()
+        .find(|d| d.message.contains("always false"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected an 'always false' Warning diagnostic, got: {:?}",
+                diags
+            )
+        });
+    assert_eq!(w.source.as_deref(), Some("minfern"));
+    assert_eq!(w.code, Some(lsp_types::NumberOrString::String("InferWarning".to_string())));
+    // The else-if test sits on line 7 of the source above (0-indexed).
+    assert_eq!(w.range.start.line, 7, "warning range: {:?}", w.range);
 
     shutdown(client, handle);
 }
