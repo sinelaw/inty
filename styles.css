@@ -96,7 +96,9 @@ html, body {
     z-index: 1;
     width: 90vw;
     height: 90vh;
+    height: 90dvh;
     margin: 5vh auto;
+    margin: 5dvh auto;
     display: flex;
     flex-direction: column;
     background: var(--bg-window);
@@ -179,12 +181,13 @@ html, body {
 .chip {
     font-family: inherit;
     font-size: var(--fs-sm);
-    padding: 5px 14px;
-    border-radius: 999px;
+    padding: 5px 12px;
+    border-radius: 8px;
     border: 1px solid rgba(137, 180, 250, 0.28);
     background: rgba(137, 180, 250, 0.12);
     color: var(--accent);
     cursor: pointer;
+    white-space: nowrap;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .chip:hover {
@@ -207,8 +210,9 @@ html, body {
 
 .status {
     font-size: var(--fs-sm);
-    padding: 5px 13px;
-    border-radius: 999px;
+    padding: 5px 11px;
+    border-radius: 8px;
+    white-space: nowrap;
     background: rgba(108, 112, 134, 0.18);
     color: var(--text-muted);
     text-transform: lowercase;
@@ -367,13 +371,38 @@ html, body {
         --fs-lg: 16px;
         --fs-xl: 22px;
     }
+    /* Full-bleed on mobile so the title bar + editor reach the visible
+       edges of the viewport (no clipped-under-URL-bar surprise). */
     .window {
-        width: 96vw;
-        height: 96vh;
-        margin: 2vh auto;
-        border-radius: 10px;
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+        margin: 0;
+        border-radius: 0;
+        border-width: 0;
     }
-    .title-sub, .title-sep { display: none; }
-    .credits { display: none; }
-    .chip { padding: 4px 11px; }
+    /* Drop the desktop grid for flex so chips can sit naturally on the
+       right and the title can ellipsis-truncate instead of overflowing. */
+    .title-bar {
+        display: flex;
+        gap: 8px;
+        padding: 0 10px;
+    }
+    .title {
+        flex: 1 1 auto;
+        min-width: 0;
+        justify-content: flex-start;
+        overflow: hidden;
+    }
+    .title-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .title-actions {
+        flex-shrink: 0;
+        gap: 6px;
+    }
+    .title-sub, .title-sep, .credits { display: none; }
+    .chip { padding: 4px 10px; }
 }

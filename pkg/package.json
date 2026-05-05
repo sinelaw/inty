@@ -2,7 +2,7 @@
   "name": "inty-lsp",
   "type": "module",
   "description": "Language Server Protocol server backed by inty",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "files": [
     "inty_bg.wasm",
