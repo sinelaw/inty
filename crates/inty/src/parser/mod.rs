@@ -16,11 +16,17 @@ use ast::*;
 #[derive(Debug, Clone)]
 enum Pattern {
     Ident(String, Span),
-    /// `{source: sub_pattern, ...}`. Shorthand `{a}` stores
-    /// `("a", Pattern::Ident("a"))`.
-    Object(Vec<(String, Pattern, Span)>, Span),
-    /// `[sub_pattern, sub_pattern, ...]`.
-    Array(Vec<Pattern>, Span),
+    /// `{source: sub_pattern, ..., ...rest}`. Shorthand `{a}` stores
+    /// `("a", Pattern::Ident("a"))`. The third tuple element holds
+    /// the optional rest binding's name and span.
+    Object(
+        Vec<(String, Pattern, Span)>,
+        Option<(String, Span)>,
+        Span,
+    ),
+    /// `[sub_pattern, sub_pattern, ..., ...rest]`. The middle tuple
+    /// holds the optional rest binding's name and span.
+    Array(Vec<Pattern>, Option<(String, Span)>, Span),
 }
 
 /// The parser for mquickjs source code.
@@ -236,7 +242,16 @@ impl Parser {
         let start = self.current_span().start;
         self.expect(&Token::LBrace)?;
         let mut entries: Vec<(String, Pattern, Span)> = Vec::new();
+        let mut rest: Option<(String, Span)> = None;
         while !self.check(&Token::RBrace) {
+            if self.check(&Token::DotDotDot) {
+                let rest_span = self.current_span();
+                self.advance();
+                let name = self.expect_ident()?;
+                rest = Some((name, rest_span));
+                // Per spec, rest must be the trailing element.
+                break;
+            }
             let entry_span = self.current_span();
             let source = self.expect_ident()?;
             let sub = if self.consume_if(&Token::Colon) {
@@ -252,14 +267,23 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         let end = self.prev_span().end;
-        Ok(Pattern::Object(entries, Span::new(start, end)))
+        Ok(Pattern::Object(entries, rest, Span::new(start, end)))
     }
 
     fn parse_array_pattern(&mut self) -> Result<Pattern> {
         let start = self.current_span().start;
         self.expect(&Token::LBracket)?;
         let mut elems: Vec<Pattern> = Vec::new();
+        let mut rest: Option<(String, Span)> = None;
         while !self.check(&Token::RBracket) {
+            if self.check(&Token::DotDotDot) {
+                let rest_span = self.current_span();
+                self.advance();
+                let name = self.expect_ident()?;
+                rest = Some((name, rest_span));
+                // Per spec, rest must be the trailing element.
+                break;
+            }
             elems.push(self.parse_pattern()?);
             if !self.consume_if(&Token::Comma) {
                 break;
@@ -267,7 +291,7 @@ impl Parser {
         }
         self.expect(&Token::RBracket)?;
         let end = self.prev_span().end;
-        Ok(Pattern::Array(elems, Span::new(start, end)))
+        Ok(Pattern::Array(elems, rest, Span::new(start, end)))
     }
 
     /// Produce a flat list of declarators that destructure `source` into
@@ -290,7 +314,7 @@ impl Parser {
                     span: *span,
                 });
             }
-            Pattern::Object(entries, span) => {
+            Pattern::Object(entries, rest, span) => {
                 let temp = self.fresh_temp_name();
                 decls.push(VarDeclarator {
                     name: temp.clone(),
@@ -310,8 +334,27 @@ impl Parser {
                     };
                     self.desugar_pattern(sub, access, kind, decls);
                 }
+                if let Some((rest_name, rest_span)) = rest {
+                    let excluded: Vec<String> =
+                        entries.iter().map(|(p, _, _)| p.clone()).collect();
+                    let init = Expr::RestRow {
+                        source: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *rest_span,
+                        }),
+                        excluded,
+                        span: *rest_span,
+                    };
+                    decls.push(VarDeclarator {
+                        name: rest_name.clone(),
+                        init: Some(init),
+                        type_annotation: None,
+                        kind,
+                        span: *rest_span,
+                    });
+                }
             }
-            Pattern::Array(elems, span) => {
+            Pattern::Array(elems, rest, span) => {
                 let temp = self.fresh_temp_name();
                 decls.push(VarDeclarator {
                     name: temp.clone(),
@@ -334,6 +377,23 @@ impl Parser {
                         span: elem_span,
                     };
                     self.desugar_pattern(sub, access, kind, decls);
+                }
+                if let Some((rest_name, rest_span)) = rest {
+                    let init = Expr::RestArray {
+                        source: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *rest_span,
+                        }),
+                        skip: elems.len(),
+                        span: *rest_span,
+                    };
+                    decls.push(VarDeclarator {
+                        name: rest_name.clone(),
+                        init: Some(init),
+                        type_annotation: None,
+                        kind,
+                        span: *rest_span,
+                    });
                 }
             }
         }
@@ -2408,6 +2468,15 @@ impl Parser {
             if self.check(&Token::Comma) {
                 // Hole in array
                 elements.push(None);
+            } else if self.check(&Token::DotDotDot) {
+                let spread_start = self.current_span().start;
+                self.advance();
+                let argument = self.parse_assignment_expression()?;
+                let spread_span = Span::new(spread_start, self.prev_span().end);
+                elements.push(Some(Expr::Spread {
+                    argument: Box::new(argument),
+                    span: spread_span,
+                }));
             } else {
                 elements.push(Some(self.parse_assignment_expression()?));
             }
@@ -2449,6 +2518,17 @@ impl Parser {
 
     fn parse_property_definition(&mut self) -> Result<PropDef> {
         let start = self.current_span().start;
+
+        // `...expr` spread element. Right-bias is implicit in the
+        // typing rule: properties later in source order win.
+        if self.check(&Token::DotDotDot) {
+            self.advance();
+            let argument = self.parse_assignment_expression()?;
+            return Ok(PropDef::Spread {
+                argument,
+                span: Span::new(start, self.prev_span().end),
+            });
+        }
 
         // Check for getter/setter
         // Must be: get/set followed by property key (not : or ()

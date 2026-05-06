@@ -693,6 +693,10 @@ impl<'a> Decorator<'a> {
                 body: Box::new(self.decorate_stmt(body, env).0),
                 span: *span,
             },
+            PropDef::Spread { argument, span } => PropDef::Spread {
+                argument: self.decorate_expr(argument, env),
+                span: *span,
+            },
         }
     }
 

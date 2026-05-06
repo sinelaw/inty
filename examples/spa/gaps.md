@@ -182,22 +182,24 @@ The SPA still seeds `state.todos` with two entries for illustrative
 reasons, but the annotation form works and is now mentioned in the
 comment above `state` so readers know the option is there.
 
-### 13. No destructuring *(resolved, partial)*
+### 13. No destructuring *(resolved)*
 
 Object and array destructuring in `var`/`let`/`const` declarations
 parses and desugars to a sequence of simple declarators sharing a
 synthesised temp binding. Covers:
 
 ```js
-const {a, b: renamed} = obj;   // -> const $t = obj, a = $t.a, renamed = $t.b;
-const [x, y] = tuple;          // -> const $t = tuple, x = $t[0], y = $t[1];
+const {a, b: renamed} = obj;        // -> const $t = obj, a = $t.a, renamed = $t.b;
+const [x, y] = tuple;               // -> const $t = tuple, x = $t[0], y = $t[1];
+const {a, ...rest} = obj;           // -> rest typed as obj's row minus a
+const [head, ...tail] = xs;         // -> tail : T[] when xs : T[]
+var merged = { ...defaults, x: 2 }; // -> right-biased row merge
+var arr = [...xs, last];            // -> T[] propagation
 ```
 
 Not yet covered: nested patterns (`{a: {b}}`), defaults (`{a = 1}`),
-rest (`{...xs}`, `[...tail]`), destructuring in function parameters,
-destructuring in `for`-loop heads. Spread (`[...arr]`, `{...obj}`)
-in expressions is also not done — needs more thought around typing
-heterogeneous merges.
+destructuring in function parameters, destructuring in `for`-loop
+heads.
 
 ### 14a. No `class` *(resolved, partial)*
 

@@ -13,6 +13,13 @@ use super::super::InferResult;
 
 impl InferState {
     /// Infer the type of an object literal.
+    ///
+    /// Properties are walked in source order. Object spreads
+    /// (`...expr`) merge the spread argument's row in right-bias
+    /// fashion: keys later in source order overwrite earlier ones.
+    /// Per spec, the result row's tail is the tail of the last
+    /// spread operand if that tail is a row variable; otherwise the
+    /// row is closed.
     pub(in crate::infer) fn infer_object(
         &mut self,
         env: &TypeEnv,
@@ -25,6 +32,11 @@ impl InferState {
         let shared_this = self.fresh_type_var();
 
         let mut props: BTreeMap<PropName, Type> = BTreeMap::new();
+        let mut row_tail: RowTail = RowTail::Closed;
+        // True if any spread was processed — even a closed-row spread
+        // counts; the result is closed but `row_tail` may have been
+        // set and then overridden back to Closed.
+        let mut had_spread = false;
 
         for prop in properties {
             match prop {
@@ -100,16 +112,107 @@ impl InferState {
                     // In a full implementation, we'd track getter/setter separately
                     props.insert(prop_name, self.fresh_type_var());
                 }
+
+                PropDef::Spread { argument, span: spread_span } => {
+                    had_spread = true;
+                    let arg_ty = self.infer_expr(env, argument)?;
+                    let resolved = self.apply_subst(&arg_ty);
+                    let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
+                    // Right-biased merge: this spread's properties
+                    // overwrite anything earlier — including the
+                    // result of an earlier spread or property.
+                    for (k, v) in spread_row.props {
+                        props.insert(k, v);
+                    }
+                    // Per spec: "the result row's tail is the tail
+                    // of the last spread operand if it's a row
+                    // variable." A `Closed` tail flips the result
+                    // back to closed; an `Open(α)` tail makes the
+                    // result open at `α` (any later spread overwrites).
+                    row_tail = spread_row.tail;
+                }
             }
         }
 
-        let obj_type = Type::Row(RowType::closed(props));
+        let final_row = match row_tail {
+            RowTail::Open(var) => RowType::open(props, var),
+            // Closed and Recursive both produce a closed row at the
+            // surface — Recursive doesn't arise from a fresh row
+            // var introduced by spread inference, but if a user
+            // spreads a recursive-typed value the result is still
+            // soundly closed for the keys we know about.
+            _ => RowType::closed(props),
+        };
+        let obj_type = Type::Row(final_row);
 
-        // Unify the shared 'this' with the complete object type
-        // This creates the equi-recursive type where methods reference the containing object
+        // Unify the shared 'this' with the complete object type so
+        // method bodies that mention `this.foo` see the correct
+        // row. This is the equi-recursive bit.
         self.unify(span, &shared_this, &obj_type)?;
 
+        let _ = had_spread;
         Ok(self.apply_subst(&obj_type))
+    }
+
+    /// Infer `Expr::RestRow { source, excluded }` — the synthetic
+    /// node emitted when desugaring `const {a, ...rest} = obj`. The
+    /// source's type must be a row (or a free variable, in which
+    /// case we pin it to a row). The result is that row with
+    /// `excluded` keys removed; the tail (open or closed) is
+    /// preserved so a row variable still carries "the rest of the
+    /// caller's row" through.
+    pub(in crate::infer) fn infer_rest_row(
+        &mut self,
+        env: &TypeEnv,
+        source: &Expr,
+        excluded: &[String],
+        span: Span,
+    ) -> InferResult<Type> {
+        let source_ty = self.infer_expr(env, source)?;
+        let row = self.coerce_to_row(&source_ty, span)?;
+        let mut new_props = row.props.clone();
+        for key in excluded {
+            new_props.remove(&PropName(key.clone()));
+        }
+        let new_row = RowType {
+            props: new_props,
+            tail: row.tail,
+        };
+        Ok(Type::Row(new_row))
+    }
+
+    /// Resolve a type that's expected to be a row (because an
+    /// object spread or destructuring rest is operating on it).
+    /// If the type is already a row, return it unchanged. If it's
+    /// a free type variable, unify it with a fresh open row.
+    /// Otherwise reject with a span-anchored diagnostic.
+    fn coerce_to_row(&mut self, ty: &Type, span: Span) -> InferResult<RowType> {
+        let resolved = self.apply_subst(ty);
+        match resolved {
+            Type::Row(row) => Ok(row),
+            Type::Var(_) => {
+                // Open row of unknown shape; pin the type variable
+                // to a fresh open row so it can be merged in.
+                let row_var = self.fresh_tvar_name();
+                let row = RowType::empty_open(row_var);
+                let row_ty = Type::Row(row.clone());
+                self.unify(span, &resolved, &row_ty)?;
+                Ok(row)
+            }
+            other => Err(crate::error::TypeError::TypeMismatch {
+                expected: format!("{}", Type::Row(RowType::empty_closed())),
+                found: format!("{}", other),
+                span,
+            }
+            .into()),
+        }
+    }
+
+    /// Generate a fresh row-tail variable name. Mirrors the bare
+    /// type-var helper but flagged as a row variable through its
+    /// usage in `RowTail::Open`.
+    fn fresh_tvar_name(&mut self) -> TVarName {
+        TVarName::Flex(self.next_var_id())
     }
 
     /// Convert a property key to a property name.

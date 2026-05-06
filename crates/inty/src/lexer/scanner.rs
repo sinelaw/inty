@@ -173,6 +173,23 @@ impl<'a> Scanner<'a> {
             '^' => self.scan_caret(),
             '.' => {
                 self.advance();
+                // Spread/rest: `...`. Only matches when the next two
+                // characters are both dots.
+                if matches!(self.peek(), Some((_, '.'))) {
+                    let after = {
+                        let mut iter = self.chars.clone();
+                        iter.next();
+                        iter.next().map(|(_, c)| c)
+                    };
+                    if matches!(after, Some('.')) {
+                        self.advance(); // .
+                        self.advance(); // .
+                        return Ok(Spanned::new(
+                            Token::DotDotDot,
+                            Span::new(start, self.current_pos),
+                        ));
+                    }
+                }
                 // Check for number starting with .
                 if self
                     .peek()

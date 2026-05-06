@@ -902,6 +902,7 @@ fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
                     PropDef::Method { body, .. }
                     | PropDef::Getter { body, .. }
                     | PropDef::Setter { body, .. } => visit_stmt(body, offset, best),
+                    PropDef::Spread { argument, .. } => visit_expr(argument, offset, best),
                 }
             }
         }

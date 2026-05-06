@@ -1721,3 +1721,128 @@ fn optional_chain_member_chain_propagates() {
     let ty = state.apply_subst(&scheme.body.ty);
     assert_union_eq(&ty, &[Type::Number, Type::Undefined]);
 }
+
+// ----- P3: spread/rest in object & array literals -----
+
+#[test]
+fn array_spread_propagates_element_type() {
+    // `[...xs, y]` with `xs : Number[]` and `y : Number` is
+    // `Number[]`. Mixing element types fails just as plain literals
+    // do.
+    let src = "\
+        var xs = [1, 2, 3]; \
+        var ys = [...xs, 4];";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("ys").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::array(Type::Number));
+}
+
+#[test]
+fn array_spread_mixed_types_unions() {
+    // Mixed element types union, matching the existing `[1, "two"]`
+    // behaviour. `[...xs, "three"]` with `xs : Number[]` produces
+    // `(Number | String)[]`.
+    let src = "\
+        var xs = [1, 2]; \
+        var ys = [...xs, \"three\"];";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("ys").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(
+        ty,
+        Type::array(Type::union([Type::Number, Type::String]))
+    );
+}
+
+#[test]
+fn object_spread_right_biased_merge() {
+    // `{ ...a, x: 2 }` overrides `a.x`. With `a : {x: Number, y: String}`
+    // the result is `{x: Number, y: String}` — right-bias keeps the
+    // last value type at `x`.
+    let src = "\
+        var a = {x: 1, y: \"s\"}; \
+        var b = { ...a, x: 99 }; \
+        var bx = b.x; \
+        var by = b.y;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("bx").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("by").unwrap().body.ty),
+        Type::String
+    );
+}
+
+#[test]
+fn object_spread_two_sources_merge() {
+    // `{ ...a, ...b }` with a and b disjoint produces the union of
+    // their fields.
+    let src = "\
+        var a = {x: 1}; \
+        var b = {y: \"hi\"}; \
+        var c = { ...a, ...b }; \
+        var cx = c.x; \
+        var cy = c.y;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("cx").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("cy").unwrap().body.ty),
+        Type::String
+    );
+}
+
+#[test]
+fn array_destructuring_rest_gives_array_type() {
+    let src = "\
+        var xs = [1, 2, 3]; \
+        const [head, ...tail] = xs; \
+        var hd = head; \
+        var tl = tail;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("hd").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("tl").unwrap().body.ty),
+        Type::array(Type::Number)
+    );
+}
+
+#[test]
+fn object_destructuring_rest_strips_named_keys() {
+    // After `{a, ...rest} = {a: 1, b: "x", c: true}`, `rest` should
+    // have the row `{b: String, c: Boolean}` — `a` is removed.
+    let src = "\
+        var obj = {a: 1, b: \"x\", c: true}; \
+        const {a, ...rest} = obj; \
+        var av = a; \
+        var bv = rest.b; \
+        var cv = rest.c;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("av").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("bv").unwrap().body.ty),
+        Type::String
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("cv").unwrap().body.ty),
+        Type::Boolean
+    );
+
+    // Reading `rest.a` must fail — the key was removed from the row.
+    let src_bad = "\
+        var obj = {a: 1, b: \"x\"}; \
+        const {a, ...rest} = obj; \
+        var av = rest.a;";
+    assert!(infer_program_with_state(src_bad).is_err());
+}

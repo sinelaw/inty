@@ -124,7 +124,17 @@ fn is_syntactic_value(expr: &Expr) -> bool {
             PropDef::Property { value, .. } => is_syntactic_value(value),
             // Getters/setters/methods are function-like, so they're values
             PropDef::Getter { .. } | PropDef::Setter { .. } | PropDef::Method { .. } => true,
+            // A spread is a value iff its argument is — the merge
+            // itself is pure (no side effects beyond evaluating the
+            // operand).
+            PropDef::Spread { argument, .. } => is_syntactic_value(argument),
         }),
+
+        // A spread's value-ness is the spread argument's value-ness.
+        // (Reachable only when a spread expression is bound directly,
+        // which the inference rules reject; covered for completeness
+        // so the value-restriction predicate is total.)
+        Expr::Spread { argument, .. } => is_syntactic_value(argument),
 
         // Unary operations on values are values (e.g., -1, !true)
         Expr::Unary { argument, .. } => is_syntactic_value(argument),

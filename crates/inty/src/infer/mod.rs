@@ -251,6 +251,27 @@ impl InferState {
                 span,
             } => self.infer_optional_chain(env, head, segments, *span),
 
+            Expr::Spread { span, .. } => {
+                // Spread is only legal inside an array literal element
+                // position or a call-argument list; the array and call
+                // inference handle `Expr::Spread` directly. Reaching
+                // it here means the user wrote `var x = ...y;` or
+                // similar — reject with a clear diagnostic.
+                Err(crate::error::TypeError::InvalidSyntax {
+                    message: "spread (`...`) is only allowed in array elements, call arguments, or object spread".to_string(),
+                    span: *span,
+                }
+                .into())
+            }
+
+            Expr::RestArray { source, span, .. } => self.infer_rest_array(env, source, *span),
+
+            Expr::RestRow {
+                source,
+                excluded,
+                span,
+            } => self.infer_rest_row(env, source, excluded, *span),
+
             Expr::Sequence { expressions, span } => self.infer_sequence(env, expressions, *span),
 
             Expr::TemplateLiteral {

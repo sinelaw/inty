@@ -288,6 +288,16 @@ pub enum TypeError {
     #[error("{message}")]
     Module { message: String, span: Span },
 
+    #[error("{message}")]
+    InvalidSyntax { message: String, span: Span },
+
+    #[error("Type mismatch: expected {expected}, found {found}")]
+    TypeMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
+
     #[error("Cannot assign to polymorphic property '{property}' of immutable binding '{object}'")]
     AssignmentToPolymorphicProperty {
         object: String,
@@ -313,6 +323,8 @@ impl TypeError {
             TypeError::AssignmentToConstant { span, .. } => *span,
             TypeError::AssignmentToPolymorphicProperty { span, .. } => *span,
             TypeError::Module { span, .. } => *span,
+            TypeError::InvalidSyntax { span, .. } => *span,
+            TypeError::TypeMismatch { span, .. } => *span,
         }
     }
 }

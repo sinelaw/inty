@@ -9,7 +9,30 @@ use super::super::state::InferState;
 use super::super::InferResult;
 
 impl InferState {
+    /// Infer the type of `Expr::RestArray { source, skip }`. The
+    /// source must unify with `T[]` for some `T`, and the result is
+    /// `T[]` — `[head, ...tail]` always gives `tail` the same
+    /// element type as the source array.
+    pub(in crate::infer) fn infer_rest_array(
+        &mut self,
+        env: &TypeEnv,
+        source: &Expr,
+        span: Span,
+    ) -> InferResult<Type> {
+        let source_ty = self.infer_expr(env, source)?;
+        let elem_var = self.fresh_type_var();
+        let array_ty = Type::array(elem_var.clone());
+        self.unify(span, &source_ty, &array_ty)?;
+        Ok(self.apply_subst(&array_ty))
+    }
+
     /// Infer the type of an array literal.
+    ///
+    /// Spread elements (`...xs`) require the operand to be `T[]` for
+    /// some element type `T`, and `T` joins into the result element
+    /// type just like a non-spread element. This means
+    /// `[...xs, y]` produces `T[]` with `y : T` enforced; mismatched
+    /// element types fail just as for plain literals.
     pub(in crate::infer) fn infer_array(
         &mut self,
         env: &TypeEnv,
@@ -23,8 +46,19 @@ impl InferState {
         let mut acc: Type = self.fresh_type_var();
 
         for elem in elements.iter().flatten() {
-            let t = self.infer_expr(env, elem)?;
-            acc = self.join(span, &acc, &t);
+            let elem_ty = match elem {
+                Expr::Spread { argument, span: spread_span } => {
+                    // The spread operand must be an array; its
+                    // element type joins the accumulator.
+                    let arg_ty = self.infer_expr(env, argument)?;
+                    let elem_var = self.fresh_type_var();
+                    let expected = Type::array(elem_var.clone());
+                    self.unify(*spread_span, &arg_ty, &expected)?;
+                    self.apply_subst(&elem_var)
+                }
+                other => self.infer_expr(env, other)?,
+            };
+            acc = self.join(span, &acc, &elem_ty);
         }
 
         Ok(Type::array(self.apply_subst(&acc)))

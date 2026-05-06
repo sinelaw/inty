@@ -30,6 +30,7 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
             crate::parser::ast::PropDef::Method { body, .. } => is_surface_stmt(body),
             crate::parser::ast::PropDef::Getter { body, .. } => is_surface_stmt(body),
             crate::parser::ast::PropDef::Setter { body, .. } => is_surface_stmt(body),
+            crate::parser::ast::PropDef::Spread { argument, .. } => is_surface_expr(argument),
         }),
         Expr::Function { body, .. } => is_surface_stmt(body),
         Expr::Member { object, .. } => is_surface_expr(object),
@@ -61,6 +62,11 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
                     }
                 })
         }
+        Expr::Spread { argument, .. } => is_surface_expr(argument),
+        // Synthetic destructuring-rest nodes never appear in
+        // user-written source — they're emitted by the desugarer in
+        // declarator initialisers — so they're not "surface" forms.
+        Expr::RestArray { .. } | Expr::RestRow { .. } => false,
         Expr::Sequence { expressions, .. } => expressions.iter().all(is_surface_expr),
         Expr::TemplateLiteral { expressions, .. } => expressions.iter().all(is_surface_expr),
     }

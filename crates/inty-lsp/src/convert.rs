@@ -111,6 +111,8 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::AssignmentToConstant { .. } => "AssignmentToConstant",
             TypeError::AssignmentToPolymorphicProperty { .. } => "AssignmentToPolymorphicProperty",
             TypeError::Module { .. } => "Module",
+            TypeError::InvalidSyntax { .. } => "InvalidSyntax",
+            TypeError::TypeMismatch { .. } => "TypeMismatch",
         },
     }
 }
