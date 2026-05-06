@@ -11,6 +11,7 @@
 
 pub mod builtins;
 pub mod classes;
+pub mod declarations;
 pub mod diagnostics;
 pub mod dynamics;
 pub mod error;
