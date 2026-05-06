@@ -206,9 +206,29 @@ functions that return an object literal, matching the builder-pattern
 style `test_builder_pattern.js` already exercises. Methods, a
 constructor, and `new Class()` all work.
 
+Class-body field declarations and access modifiers parse too:
+
+```js
+class Counter {
+  private count: Number = 0;
+  private name: String;
+  constructor(name) { this.name = name; }
+  inc() { return this.count + 1; }
+}
+```
+
+Modifiers (`public` / `private` / `protected` / `readonly`) erase —
+inty has no visibility model. Field annotations are accepted in
+TS-style (`field: T`) and JSDoc-style (`/** field: T */`). A
+declaration-only annotated field (no initializer, set in the
+constructor body) moves its annotation to the constructor's
+extracted property so the parameter is type-checked against the
+declared type. Duplicate field declarations in the same class body
+are rejected.
+
 Not yet covered: `extends`/`super` (would need a prototype chain),
-static methods, getters/setters in class bodies, private fields, and
-constructor statements beyond `this.FIELD = EXPR;`.
+static methods, getters/setters in class bodies, private fields,
+and constructor statements beyond `this.FIELD = EXPR;`.
 
 ### 14b. No `async`/`await` *(resolved)*
 

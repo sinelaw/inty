@@ -14,7 +14,7 @@ pieces stay reviewable.
 | # | Item | Effort | Status |
 |---|------|--------|--------|
 | P2 | `.d.js` emit from a checked module | S (~½ day) | **done** |
-| P4 | Class field declarations + modifier tolerance | S–M (~1 day) | planned |
+| P4 | Class field declarations + modifier tolerance | S–M (~1 day) | **done** |
 | P7 | Optional chaining `?.` and nullish coalescing `??` | M (~1–2 days) | planned |
 | P3 | Spread/rest in object & array literals + destructuring rest | M–L (~2 days) | planned |
 | P1 | Bundler crate `inty-bundle` + CLI `inty bundle` | L (~2–3 days) | planned |
