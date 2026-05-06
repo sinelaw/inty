@@ -12,3 +12,4 @@ path = "src/main.rs"
 [dependencies]
 inty = { path = "../inty" }
 inty-lsp = { path = "../inty-lsp" }
+inty-bundle = { path = "../inty-bundle" }

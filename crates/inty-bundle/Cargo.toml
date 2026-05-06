@@ -1,0 +1,13 @@
+[package]
+name = "inty-bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Single-file bundler for inty-checked ES modules"
+
+[dependencies]
+inty = { path = "../inty" }
+sourcemap = "9"
+
+[dev-dependencies]
+rquickjs = { version = "0.6", default-features = false }

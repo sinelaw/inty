@@ -17,7 +17,7 @@ pieces stay reviewable.
 | P4 | Class field declarations + modifier tolerance | S–M (~1 day) | **done** |
 | P7 | Optional chaining `?.` and nullish coalescing `??` | M (~1–2 days) | **done** |
 | P3 | Spread/rest in object & array literals + destructuring rest | M–L (~2 days) | **done** |
-| P1 | Bundler crate `inty-bundle` + CLI `inty bundle` | L (~2–3 days) | planned |
+| P1 | Bundler crate `inty-bundle` + CLI `inty bundle` | L (~2–3 days) | **done** |
 | P6 | User‑defined generic type aliases | L (~2–3 days) | planned |
 | P8 | TS‑flavor parser + pretty printer + `.d.ts` loader | M–L (~2 days) | planned |
 | ~~P5~~ | ~~Discriminated‑union narrowing on tag fields~~ | — | **deferred — don't do** |

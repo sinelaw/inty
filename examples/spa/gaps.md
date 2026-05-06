@@ -309,6 +309,16 @@ These weren't in the original 14 but got addressed alongside:
   type identically to `.` — `o?.name` on a non-null `o` produces
   just the field type, no `Undefined` widening. Idiomatic
   `arr.find(p)?.field ?? default` pulls a clean `T`.
+- **Bundler (`inty bundle`)** — new `inty-bundle` crate plus a
+  `bundle` subcommand. Walks the import graph from an entry `.js`,
+  wraps each module in an IIFE that returns its export table, and
+  rewrites cross-module references against a shared `__mods`
+  registry. Output is a single QuickJS-eval-able JS blob plus a
+  v3 source map. Cycle detection rejects with a clear diagnostic
+  in v1; bare specifiers (`import _ from "lodash"`) are also
+  rejected — the bundler supports relative paths only. Test suite
+  includes a full QuickJS round-trip via `rquickjs` to verify
+  emitted bundles execute without errors.
 - **Per-field type annotations on object literals** — the inline
   `/*: T */` form now also attaches to object property keys:
   `{ foo /*: Number */: 1, bar /*: String */: "" }`. The annotation
