@@ -319,6 +319,15 @@ These weren't in the original 14 but got addressed alongside:
   rejected — the bundler supports relative paths only. Test suite
   includes a full QuickJS round-trip via `rquickjs` to verify
   emitted bundles execute without errors.
+- **User-defined generic type aliases** — `/** type Foo<T> = ... */`
+  declarations register a non-nominal alias whose body is parsed
+  once and substituted at every reference site (`Foo<X>` is
+  interchangeable with the inline form). Mutual references between
+  aliases work; direct self-recursion is not yet expanded.
+  Multiple type parameters parse left-to-right; arity mismatches
+  are diagnosed at the call site. Plays naturally with row
+  polymorphism — `Cancellable<T> = { result: Promise<T>, cancel:
+  () => Promise<Boolean> }` was the motivating migration form.
 - **Per-field type annotations on object literals** — the inline
   `/*: T */` form now also attaches to object property keys:
   `{ foo /*: Number */: 1, bar /*: String */: "" }`. The annotation

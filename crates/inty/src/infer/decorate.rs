@@ -88,6 +88,7 @@ impl<'a> Decorator<'a> {
         Program {
             statements: decorated_stmts,
             span: program.span,
+            type_aliases: program.type_aliases.clone(),
         }
     }
 

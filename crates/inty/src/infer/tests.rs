@@ -132,10 +132,13 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
     }
 
     let type_annotations = scanner.type_annotations().to_vec();
+    let type_aliases = scanner.type_aliases().to_vec();
     let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
-    let program = parser.parse_program().unwrap();
+    let mut program = parser.parse_program().unwrap();
+    program.type_aliases = type_aliases;
 
     let mut state = InferState::new();
+    state.load_type_aliases(&program.type_aliases)?;
     let env = initial_env();
 
     // Infer statements and track final environment
@@ -1813,6 +1816,92 @@ fn array_destructuring_rest_gives_array_type() {
         state.apply_subst(&env.lookup("tl").unwrap().body.ty),
         Type::array(Type::Number)
     );
+}
+
+// ----- P6: user-defined generic type aliases -----
+
+#[test]
+fn generic_alias_substitutes_in_annotation() {
+    // `Pair<Number>` substitutes `Number` for the alias's `T` and
+    // produces a closed row `{ first: Number, second: Number }`.
+    let src = "\
+        /** type Pair<T> = { first: T, second: T } */ \
+        /** const p: Pair<Number> */ \
+        const p; \
+        var f = p.first; \
+        var s = p.second;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let f = state.apply_subst(&env.lookup("f").unwrap().body.ty);
+    let s = state.apply_subst(&env.lookup("s").unwrap().body.ty);
+    assert_eq!(f, Type::Number);
+    assert_eq!(s, Type::Number);
+}
+
+#[test]
+fn generic_alias_used_as_function_return_type() {
+    // `(T) => Pair<T>` infers a polymorphic function whose return
+    // type unifies with the substituted alias body.
+    let src = "\
+        /** type Pair<T> = { first: T, second: T } */ \
+        /** const makePair: (T) => Pair<T> */ \
+        const makePair; \
+        var p = makePair(42); \
+        var f = p.first;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let f = state.apply_subst(&env.lookup("f").unwrap().body.ty);
+    assert_eq!(f, Type::Number);
+}
+
+#[test]
+fn generic_alias_two_parameters() {
+    // `type Mapping<K, V> = { key: K, value: V }` with separate
+    // parameters in source order.
+    let src = "\
+        /** type Mapping<K, V> = { key: K, value: V } */ \
+        /** const m: Mapping<String, Number> */ \
+        const m; \
+        var k = m.key; \
+        var v = m.value;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let k = state.apply_subst(&env.lookup("k").unwrap().body.ty);
+    let v = state.apply_subst(&env.lookup("v").unwrap().body.ty);
+    assert_eq!(k, Type::String);
+    assert_eq!(v, Type::Number);
+}
+
+#[test]
+fn alias_arity_mismatch_errors() {
+    // Calling a 1-arg alias with 0 args is a parse-time error from
+    // the type parser, surfaced as an inference error.
+    let src = "\
+        /** type Pair<T> = { first: T, second: T } */ \
+        /** const p: Pair */ \
+        const p;";
+    // Without `<...>`, `Pair` falls back to a fresh type variable
+    // (no error). The migration error is when args count differs.
+    let _ = infer_program_with_state(src);
+
+    let bad = "\
+        /** type Pair<T> = { first: T, second: T } */ \
+        /** const p: Pair<Number, String> */ \
+        const p;";
+    assert!(infer_program_with_state(bad).is_err());
+}
+
+#[test]
+fn alias_is_structural_not_nominal() {
+    // `Cancellable<X>` and an inline row of the same shape are
+    // interchangeable. Passing the inline form where an alias is
+    // expected (and vice versa) type-checks.
+    let src = "\
+        /** type Box<T> = { value: T } */ \
+        /** const f: (Box<Number>) => Number */ \
+        const f; \
+        var inline = { value: 42 }; \
+        var n = f(inline);";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let n = state.apply_subst(&env.lookup("n").unwrap().body.ty);
+    assert_eq!(n, Type::Number);
 }
 
 #[test]

@@ -338,5 +338,6 @@ pub fn program_strategy() -> impl Strategy<Value = Program> {
     prop::collection::vec(stmt_strategy(), 1..6).prop_map(|statements| Program {
         statements,
         span: span(),
+        type_aliases: Vec::new(),
     })
 }

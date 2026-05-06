@@ -8,7 +8,7 @@ use crate::types::{PropName, RowTail, RowType, TVarId, TVarName, Type, TypeSchem
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation;
+use super::super::type_parser::parse_type_annotation_with_aliases;
 use super::super::InferResult;
 
 impl InferState {
@@ -54,11 +54,15 @@ impl InferState {
                     // declaration's annotation is.
                     let prop_type = if let Some(ann) = type_annotation {
                         let ann_span = Span::new(ann.span.start, ann.span.end);
-                        let (annotated_type, _) = parse_type_annotation(
+                        let (annotated_type, var_map) = parse_type_annotation_with_aliases(
                             &ann.content,
                             ann_span,
                             self.next_var_id(),
+                            &self.type_aliases,
                         )?;
+                        if let Some(&max) = var_map.values().max() {
+                            self.bump_var_id_to(max + 1);
+                        }
                         // Annotation first: it's what the user wrote, so
                         // the error message reads as "expected <annotated>,
                         // found <value>".

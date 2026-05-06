@@ -13,6 +13,8 @@ use crate::error::TypeError;
 use crate::lexer::Span;
 use crate::types::{LitValue, Type};
 
+use super::state::AliasDef;
+
 /// Result type for type annotation parsing.
 pub type ParseResult<T> = Result<T, TypeError>;
 
@@ -31,6 +33,10 @@ pub struct TypeParser<'a> {
     /// Whether we're at the top level (quantifiers allowed).
     /// Set to false when parsing nested types (e.g., inside function parameters).
     allow_quantifiers: bool,
+    /// User-defined generic type aliases reachable in this annotation
+    /// scope. When `Foo<args>` is parsed and `Foo` is an alias, the
+    /// args are substituted into a fresh copy of the alias body.
+    aliases: Option<&'a HashMap<String, AliasDef>>,
 }
 
 impl<'a> TypeParser<'a> {
@@ -43,7 +49,44 @@ impl<'a> TypeParser<'a> {
             type_vars: HashMap::new(),
             next_var_id: start_var_id,
             allow_quantifiers: true, // Quantifiers allowed at top level
+            aliases: None,
         }
+    }
+
+    /// Create a type parser that consults the supplied alias env when
+    /// it encounters `Foo<args>` for a user-defined alias `Foo`.
+    pub fn with_aliases(
+        input: &'a str,
+        span: Span,
+        start_var_id: u32,
+        aliases: &'a HashMap<String, AliasDef>,
+    ) -> Self {
+        TypeParser {
+            input,
+            pos: 0,
+            span,
+            type_vars: HashMap::new(),
+            next_var_id: start_var_id,
+            allow_quantifiers: true,
+            aliases: Some(aliases),
+        }
+    }
+
+    /// Pre-bind a type-variable name to a specific ID before parsing.
+    /// Used when loading a type alias's body so each parameter name
+    /// (`T`, `U`, …) maps to the alias-owned ID rather than a fresh
+    /// one. Must be called before `parse`.
+    pub fn preset_var(&mut self, name: String, id: u32) {
+        self.type_vars.insert(name, id);
+        if id + 1 > self.next_var_id {
+            self.next_var_id = id + 1;
+        }
+    }
+
+    /// The next free type-variable ID — useful after parsing if the
+    /// caller needs to keep its own counter in sync.
+    pub fn next_var_id(&self) -> u32 {
+        self.next_var_id
     }
 
     /// Parse the entire type annotation.
@@ -398,6 +441,54 @@ impl<'a> TypeParser<'a> {
                 Ok(Type::promise(inner))
             }
             _ => {
+                // Generic alias application `Foo<arg1, arg2, ...>` —
+                // only fires when the alias env has `Foo` registered
+                // AND the next non-whitespace char is `<`.
+                if let Some(aliases) = self.aliases {
+                    let saved_pos = self.pos;
+                    self.skip_whitespace();
+                    if self.peek_char() == Some('<') {
+                        if let Some(def) = aliases.get(ident) {
+                            self.expect_char('<')?;
+                            let mut args: Vec<Type> = Vec::new();
+                            self.skip_whitespace();
+                            if self.peek_char() != Some('>') {
+                                loop {
+                                    self.skip_whitespace();
+                                    let arg = self.parse_type()?;
+                                    args.push(arg);
+                                    self.skip_whitespace();
+                                    if self.peek_char() == Some(',') {
+                                        self.expect_char(',')?;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                            self.skip_whitespace();
+                            self.expect_char('>')?;
+                            if args.len() != def.params.len() {
+                                return Err(self.error(format!(
+                                    "type alias '{}' expects {} type argument(s), got {}",
+                                    ident,
+                                    def.params.len(),
+                                    args.len()
+                                )));
+                            }
+                            // Capture-avoiding substitution: clone the
+                            // body and replace each parameter var with
+                            // the corresponding argument type.
+                            let mut subst: HashMap<u32, Type> =
+                                HashMap::with_capacity(args.len());
+                            for (p, a) in def.params.iter().zip(args.iter()) {
+                                subst.insert(*p, a.clone());
+                            }
+                            return Ok(substitute_alias_body(&def.body, &subst));
+                        }
+                    }
+                    self.pos = saved_pos;
+                }
+
                 // Check if it's a known type variable
                 if let Some(&var_id) = self.type_vars.get(ident) {
                     Ok(Type::flex(var_id))
@@ -501,6 +592,86 @@ pub fn parse_type_annotation(
     let mut parser = TypeParser::new(content, span, start_var_id);
     let ty = parser.parse()?;
     Ok((ty, parser.type_vars.clone()))
+}
+
+/// Like [`parse_type_annotation`] but consults the supplied alias
+/// env when it encounters `Foo<args>` for a user-defined alias.
+pub fn parse_type_annotation_with_aliases(
+    content: &str,
+    span: Span,
+    start_var_id: u32,
+    aliases: &HashMap<String, AliasDef>,
+) -> ParseResult<(Type, HashMap<String, u32>)> {
+    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
+    let ty = parser.parse()?;
+    Ok((ty, parser.type_vars.clone()))
+}
+
+/// Capture-avoiding substitution against an alias body. Walks a
+/// `Type` cloning structure and replaces every flex variable whose
+/// id is a key in `subst` with the corresponding type. Other type
+/// variables are left alone — alias parameters use the dedicated
+/// IDs the alias was registered with, so collisions are impossible.
+fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
+    use crate::types::{RowTail, RowType, TVarName};
+    match ty {
+        Type::Var(TVarName::Flex(id)) => {
+            if let Some(replacement) = subst.get(id) {
+                replacement.clone()
+            } else {
+                ty.clone()
+            }
+        }
+        Type::Var(_) => ty.clone(),
+        Type::Number
+        | Type::String
+        | Type::Boolean
+        | Type::Undefined
+        | Type::Null
+        | Type::Regex
+        | Type::Literal(_) => ty.clone(),
+        Type::Array(elem) => Type::array(substitute_alias_body(elem, subst)),
+        Type::Map(value) => Type::Map(Box::new(substitute_alias_body(value, subst))),
+        Type::Promise(inner) => Type::promise(substitute_alias_body(inner, subst)),
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: this_type
+                .as_ref()
+                .map(|t| Box::new(substitute_alias_body(t, subst))),
+            params: params.iter().map(|p| substitute_alias_body(p, subst)).collect(),
+            ret: Box::new(substitute_alias_body(ret, subst)),
+        },
+        Type::Union(members) => {
+            Type::union(members.iter().map(|m| substitute_alias_body(m, subst)))
+        }
+        Type::Row(row) => {
+            let new_props = row
+                .props
+                .iter()
+                .map(|(k, v)| (k.clone(), substitute_alias_body(v, subst)))
+                .collect();
+            let new_tail = match &row.tail {
+                RowTail::Closed => RowTail::Closed,
+                RowTail::Open(v) => RowTail::Open(v.clone()),
+                RowTail::Recursive(id, args) => RowTail::Recursive(
+                    *id,
+                    args.iter().map(|a| substitute_alias_body(a, subst)).collect(),
+                ),
+            };
+            Type::Row(RowType {
+                props: new_props,
+                tail: new_tail,
+            })
+        }
+        Type::Named(id, args) => Type::Named(
+            *id,
+            args.iter().map(|a| substitute_alias_body(a, subst)).collect(),
+        ),
+        Type::Module(_) => ty.clone(),
+    }
 }
 
 #[cfg(test)]

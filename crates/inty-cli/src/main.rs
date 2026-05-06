@@ -500,15 +500,17 @@ fn run_inference(
 
     // Parsing
     let type_annotations = scanner.type_annotations().to_vec();
+    let type_aliases = scanner.type_aliases().to_vec();
     let mut parser = Parser::new(tokens, type_annotations);
 
-    let program = match parser.parse_program() {
+    let mut program = match parser.parse_program() {
         Ok(program) => program,
         Err(e) => {
             errors.push(e);
             return Err(errors);
         }
     };
+    program.type_aliases = type_aliases;
 
     // Resolve any `import "./foo.js"` statements relative to the file's
     // parent directory before inferring the program itself. For stdin

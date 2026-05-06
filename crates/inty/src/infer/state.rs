@@ -103,6 +103,27 @@ pub struct InferState {
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
+
+    /// User-defined generic type aliases, keyed by the alias name.
+    /// Each entry stores its type-parameter list (as fresh skolemised
+    /// variable IDs introduced when the alias body was first parsed)
+    /// and the parsed body type. Application is by capture-avoiding
+    /// substitution: instantiate fresh copies of the parameters, walk
+    /// the body cloning structure, and substitute argument types in
+    /// for the parameters.
+    pub type_aliases: HashMap<String, AliasDef>,
+}
+
+/// A parsed generic type alias. Treated as not-nominal: applying
+/// `Foo<X>` produces the same type as inlining `Foo`'s body with
+/// `X` substituted for the parameter, so unification is unaware of
+/// alias identity.
+#[derive(Debug, Clone)]
+pub struct AliasDef {
+    /// Type-parameter variable IDs (used in `body`).
+    pub params: Vec<u32>,
+    /// Parsed body type with `params` appearing as `Type::flex(id)`.
+    pub body: Type,
 }
 
 impl Default for InferState {
@@ -130,6 +151,7 @@ impl InferState {
             type_origins: HashMap::new(),
             warnings: Vec::new(),
             config,
+            type_aliases: HashMap::new(),
         }
     }
 
@@ -240,6 +262,16 @@ impl InferState {
     /// Get the next type variable ID (for type annotation parsing).
     pub fn next_var_id(&self) -> u32 {
         self.name_source
+    }
+
+    /// Advance the name source past the given id so subsequent
+    /// `fresh_flex` calls don't collide. Used after a type-parser
+    /// invocation that may have allocated its own ids beyond the
+    /// state's view.
+    pub fn bump_var_id_to(&mut self, id: u32) {
+        if id > self.name_source {
+            self.name_source = id;
+        }
     }
 
     /// Generate a fresh type ID for recursive types.

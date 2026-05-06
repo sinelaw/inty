@@ -113,6 +113,7 @@ impl Parser {
         Ok(Program {
             statements,
             span: Span::new(start, end),
+            type_aliases: Vec::new(),
         })
     }
 
@@ -3081,10 +3082,12 @@ pub fn parse(source: &str) -> Result<Program> {
     use crate::lexer::Scanner;
 
     let scanner = Scanner::new(source);
-    let (tokens, type_annotations) = scanner.tokenize()?;
+    let (tokens, type_annotations, type_aliases) = scanner.tokenize()?;
 
     let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
-    parser.parse_program()
+    let mut program = parser.parse_program()?;
+    program.type_aliases = type_aliases;
+    Ok(program)
 }
 
 #[cfg(test)]

@@ -307,6 +307,7 @@ pub fn rename_all(program: &Program, from: &str, to: &str) -> Program {
     Program {
         statements: stmts,
         span: program.span,
+        type_aliases: program.type_aliases.clone(),
     }
 }
 
