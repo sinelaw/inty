@@ -162,6 +162,7 @@ pub enum Token {
     RBracket,  // ]
     Comma,     // ,
     Dot,       // .
+    DotDotDot, // ... (spread / rest)
     Semicolon, // ;
     Colon,     // :
     Question,    // ?
@@ -365,6 +366,7 @@ impl fmt::Display for Token {
             Token::RBracket => write!(f, "]"),
             Token::Comma => write!(f, ","),
             Token::Dot => write!(f, "."),
+            Token::DotDotDot => write!(f, "..."),
             Token::Semicolon => write!(f, ";"),
             Token::Colon => write!(f, ":"),
             Token::Question => write!(f, "?"),

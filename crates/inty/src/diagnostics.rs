@@ -331,6 +331,12 @@ pub fn write_error<W: Write>(
                 ),
             ),
             TypeError::Module { message, span } => (message.clone(), *span, None),
+            TypeError::InvalidSyntax { message, span } => (message.clone(), *span, None),
+            TypeError::TypeMismatch { expected, found, span } => (
+                format!("Type mismatch: expected '{}', found '{}'", expected, found),
+                *span,
+                None,
+            ),
         },
     };
 

@@ -127,11 +127,35 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         Expr::Array { elements, .. } => {
             let mut vs = Vec::with_capacity(elements.len());
             for e in elements {
-                let v = match e {
-                    Some(e) => eval_expr(state, env, e)?,
-                    None => Value::Undefined,
+                match e {
+                    Some(Expr::Spread { argument, .. }) => {
+                        let v = eval_expr(state, env, argument)?;
+                        match v {
+                            Value::Array(loc) => match state.heap.get(loc) {
+                                Some(Cell::Array(items)) => {
+                                    for item in items.clone() {
+                                        vs.push(item);
+                                    }
+                                }
+                                _ => {
+                                    return Err(Stuck::NotImplemented(
+                                        "spread of non-array cell",
+                                    ));
+                                }
+                            },
+                            _ => {
+                                return Err(Stuck::NotImplemented(
+                                    "spread argument is not an array value",
+                                ));
+                            }
+                        }
+                    }
+                    Some(e) => {
+                        let v = eval_expr(state, env, e)?;
+                        vs.push(v);
+                    }
+                    None => vs.push(Value::Undefined),
                 };
-                vs.push(v);
             }
             let loc = state.heap.alloc(Cell::Array(vs));
             Ok(Value::Array(loc))
@@ -158,6 +182,32 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                     }
                     PropDef::Getter { .. } | PropDef::Setter { .. } => {
                         return Err(Stuck::NotImplemented("getters/setters"));
+                    }
+                    PropDef::Spread { argument, .. } => {
+                        let v = eval_expr(state, env, argument)?;
+                        match v {
+                            Value::Object(loc) => match state.heap.get(loc) {
+                                Some(Cell::Object(other)) => {
+                                    // Right-bias: this spread's keys
+                                    // overwrite earlier ones; later
+                                    // entries in source order will in
+                                    // turn overwrite these.
+                                    for (k, v) in other.clone() {
+                                        props.insert(k, v);
+                                    }
+                                }
+                                _ => {
+                                    return Err(Stuck::NotImplemented(
+                                        "spread of non-object cell",
+                                    ));
+                                }
+                            },
+                            _ => {
+                                return Err(Stuck::NotImplemented(
+                                    "spread argument is not an object value",
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -289,6 +339,62 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             // already-typechecked programs whose optional chains
             // never receive a nullish receiver in practice.
             Err(Stuck::NotImplemented("OptionalChain (dynamics)"))
+        }
+
+        Expr::Spread { .. } => {
+            // A bare `Expr::Spread` is rejected at type-check time
+            // (only valid inside an array element or call argument
+            // position, where the array/call evaluator handles it
+            // inline). Reaching here means a type-check escape; that
+            // is a soundness violation at the type level, but the
+            // operational semantics still has nothing to step.
+            Err(Stuck::NotImplemented("bare Expr::Spread"))
+        }
+
+        Expr::RestArray { source, skip, .. } => {
+            // Synthetic node from destructuring; produces a fresh
+            // array containing the source's elements from `skip`
+            // onwards. The source must already evaluate to an array.
+            let v = eval_expr(state, env, source)?;
+            match v {
+                Value::Array(loc) => match state.heap.get(loc) {
+                    Some(Cell::Array(items)) => {
+                        let tail: Vec<Value> = items
+                            .iter()
+                            .skip(*skip)
+                            .cloned()
+                            .collect();
+                        let new_loc = state.heap.alloc(Cell::Array(tail));
+                        Ok(Value::Array(new_loc))
+                    }
+                    _ => Err(Stuck::NotImplemented("RestArray of non-array cell")),
+                },
+                _ => Err(Stuck::NotImplemented("RestArray source not an array")),
+            }
+        }
+
+        Expr::RestRow { source, excluded, .. } => {
+            // Copy all properties from the source object except those
+            // listed in `excluded`. Preserves field iteration order
+            // by re-using BTreeMap's natural ordering (which is what
+            // the inference rule sees too).
+            let v = eval_expr(state, env, source)?;
+            match v {
+                Value::Object(loc) => match state.heap.get(loc) {
+                    Some(Cell::Object(props)) => {
+                        let mut out: BTreeMap<PropName, Value> = BTreeMap::new();
+                        for (k, v) in props.clone() {
+                            if !excluded.iter().any(|e| e == &k.0) {
+                                out.insert(k, v);
+                            }
+                        }
+                        let new_loc = state.heap.alloc(Cell::Object(out));
+                        Ok(Value::Object(new_loc))
+                    }
+                    _ => Err(Stuck::NotImplemented("RestRow of non-object cell")),
+                },
+                _ => Err(Stuck::NotImplemented("RestRow source not an object")),
+            }
         }
 
         Expr::Sequence { expressions, .. } => {

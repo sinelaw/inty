@@ -293,6 +293,13 @@ pub enum PropDef {
         body: Box<Stmt>,
         span: Source,
     },
+    /// Spread: `...expr`. Merged into the row of the containing
+    /// object literal at typing time with right-biased semantics —
+    /// keys later in source order win on collision.
+    Spread {
+        argument: Expr,
+        span: Source,
+    },
 }
 
 /// One step of an `OptionalChain`. `optional` is `true` when the
@@ -446,6 +453,37 @@ pub enum Expr {
         span: Source,
     },
 
+    /// Spread element: `...expr`. Only legal inside an array literal
+    /// element or a call-argument list — typing rejects it elsewhere.
+    /// (Object spread uses `PropDef::Spread`; rest patterns in
+    /// destructuring are handled at the declarator level.)
+    Spread {
+        argument: Box<Expr>,
+        span: Source,
+    },
+
+    /// Synthetic node emitted when desugaring an array destructuring
+    /// rest pattern: `const [head, ...tail] = xs` lowers to a
+    /// declarator `tail = RestArray { source: xs, skip: 1 }`. The
+    /// typing rule expects `source : T[]` and produces `T[]`. Not
+    /// user-writable.
+    RestArray {
+        source: Box<Expr>,
+        skip: usize,
+        span: Source,
+    },
+
+    /// Synthetic node emitted when desugaring an object destructuring
+    /// rest pattern: `const {a, ...rest} = obj` lowers to a
+    /// declarator `rest = RestRow { source: obj, excluded: ["a"] }`.
+    /// The typing rule produces the row of `source` with those keys
+    /// removed, preserving the tail. Not user-writable.
+    RestRow {
+        source: Box<Expr>,
+        excluded: Vec<String>,
+        span: Source,
+    },
+
     /// Sequence: a, b, c
     Sequence {
         expressions: Vec<Expr>,
@@ -483,6 +521,9 @@ impl Expr {
             Expr::Conditional { span, .. } => *span,
             Expr::NullishCoalesce { span, .. } => *span,
             Expr::OptionalChain { span, .. } => *span,
+            Expr::Spread { span, .. } => *span,
+            Expr::RestArray { span, .. } => *span,
+            Expr::RestRow { span, .. } => *span,
             Expr::Sequence { span, .. } => *span,
             Expr::TemplateLiteral { span, .. } => *span,
         }

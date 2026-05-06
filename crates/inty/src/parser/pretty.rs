@@ -305,6 +305,37 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             Ok(())
         }
 
+        Expr::Spread { argument, .. } => {
+            write!(w, "...")?;
+            write_expr(w, argument, true)
+        }
+
+        // Synthetic destructuring-rest nodes. The source-form
+        // round-trip emits something readable rather than the
+        // internal shape — these are emitted by the desugarer, not
+        // user-written, but `print_program` should still produce
+        // valid JavaScript-ish output so decorate-and-reprint works.
+        Expr::RestArray { source, skip, .. } => {
+            write_expr(w, source, true)?;
+            write!(w, ".slice({})", skip)
+        }
+        Expr::RestRow { source, excluded, .. } => {
+            // No clean inty surface form for object rest; emit a
+            // placeholder that round-trips into something the parser
+            // could re-accept if reformatted. Used only for decorate
+            // output; the underlying typing rule is handled by
+            // `Expr::RestRow`'s own arm.
+            write!(w, "/* {{...rest excluding [", )?;
+            for (i, k) in excluded.iter().enumerate() {
+                if i > 0 {
+                    write!(w, ", ")?;
+                }
+                write!(w, "{:?}", k)?;
+            }
+            write!(w, "]}} */ ")?;
+            write_expr(w, source, true)
+        }
+
         Expr::Sequence { expressions, .. } => {
             if needs_parens {
                 write!(w, "(")?;
@@ -435,6 +466,10 @@ fn write_prop_def(w: &mut impl Write, prop: &PropDef) -> fmt::Result {
             }
             write!(w, ") ")?;
             write_stmt(w, body, 0)
+        }
+        PropDef::Spread { argument, .. } => {
+            write!(w, "...")?;
+            write_expr(w, argument, false)
         }
     }
 }

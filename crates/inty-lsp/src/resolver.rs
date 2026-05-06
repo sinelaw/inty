@@ -498,6 +498,7 @@ impl Resolution {
                                 vec![Param::new(param.clone(), Span::new(span.start, span.start))];
                             self.visit_function_body(*span, &params, body, scope);
                         }
+                        PropDef::Spread { argument, .. } => self.visit_expr(argument, scope),
                     }
                 }
             }
@@ -539,6 +540,10 @@ impl Resolution {
             Expr::NullishCoalesce { left, right, .. } => {
                 self.visit_expr(left, scope);
                 self.visit_expr(right, scope);
+            }
+            Expr::Spread { argument, .. } => self.visit_expr(argument, scope),
+            Expr::RestArray { source, .. } | Expr::RestRow { source, .. } => {
+                self.visit_expr(source, scope)
             }
             Expr::OptionalChain { head, segments, .. } => {
                 use inty::parser::ast::ChainSegment;
