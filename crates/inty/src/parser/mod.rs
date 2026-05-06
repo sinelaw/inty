@@ -43,10 +43,24 @@ pub struct Parser {
     /// (and immediately cleared) by that parser to decide whether the
     /// body it's about to read should start in an async context.
     next_fn_is_async: bool,
+    /// Original source text. Used to slice byte ranges out of the source
+    /// when we need to reconstruct content the lexer didn't capture as a
+    /// JSDoc annotation — currently only TS-style `field: T` annotations
+    /// in class-body field declarations. Empty when the parser is
+    /// constructed without a source (legacy callers in tests).
+    source: String,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Spanned<Token>>, type_annotations: Vec<TypeAnnotation>) -> Self {
+        Self::with_source(tokens, type_annotations, String::new())
+    }
+
+    pub fn with_source(
+        tokens: Vec<Spanned<Token>>,
+        type_annotations: Vec<TypeAnnotation>,
+        source: String,
+    ) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -56,6 +70,7 @@ impl Parser {
             temp_counter: 0,
             async_depth: 0,
             next_fn_is_async: false,
+            source,
         }
     }
 
@@ -691,6 +706,20 @@ impl Parser {
         let mut field_props: Vec<PropDef> = Vec::new();
         let mut method_props: Vec<PropDef> = Vec::new();
 
+        // Annotations contributed by declaration-only fields whose initial
+        // value comes from a `this.NAME = …` line in the constructor body.
+        // The annotation moves to that constructor-extracted property at
+        // emit time so the constructor parameter's inferred type is
+        // checked against the declared field type.
+        let mut deferred_field_annotations: Vec<(String, TypeAnnotation)> = Vec::new();
+        // Names already declared as class-body fields. Used to catch
+        // duplicate declarations like `class Foo { a; a = 1; }`. Note we
+        // intentionally allow a class-body declaration AND a `this.a = …`
+        // in the constructor — the constructor is the value site, the
+        // declaration carries the annotation.
+        let mut declared_field_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         while !self.check(&Token::RBrace) && !self.is_at_end() {
             // Skip empty separators (class bodies don't require semicolons
             // between members but tolerate them).
@@ -699,6 +728,34 @@ impl Parser {
             }
 
             let member_start = self.current_span().start;
+
+            // Modifier tolerance: `public` / `private` / `protected` /
+            // `readonly` have no semantic effect under inty's structural
+            // typing, so erase them. Eat a run of modifier idents — TS
+            // allows e.g. `public readonly name: string`.
+            loop {
+                let is_modifier = matches!(
+                    self.current(),
+                    Token::Ident(name)
+                        if matches!(
+                            name.as_str(),
+                            "public" | "private" | "protected" | "readonly"
+                        )
+                );
+                if !is_modifier {
+                    break;
+                }
+                // Lookahead: only treat as a modifier if another ident
+                // follows (so `private` used as a field name still works,
+                // unusual as that is).
+                let saved = self.pos;
+                let _ = self.expect_ident()?;
+                if !matches!(self.current(), Token::Ident(_)) {
+                    self.pos = saved;
+                    break;
+                }
+            }
+
             let key_name = self.expect_ident()?;
             let key_span = self.prev_span();
 
@@ -712,6 +769,157 @@ impl Parser {
                     span: key_span,
                 }
                 .into());
+            }
+
+            // Field declaration vs method/constructor: methods always
+            // open with `(`. Anything else after the key name (`:`, `=`,
+            // `;`, `,`, `}`) is a field declaration — empty body, with
+            // an optional TS-style `: T` annotation and/or `= EXPR`
+            // initializer.
+            let is_field = !matches!(self.current(), Token::LParen);
+            if is_field {
+                // TS-style inline annotation `field: T`. We slice the
+                // source between the colon and the next `=`/`;`/`,`/`}`,
+                // wrap it in a TypeAnnotation, and let the type parser
+                // handle the rest at inference time. JSDoc-style
+                // `/** field: T */` annotations are picked up below via
+                // `try_get_type_annotation`.
+                let mut ts_annotation: Option<TypeAnnotation> = None;
+                if self.check(&Token::Colon) {
+                    let colon_span = self.current_span();
+                    self.advance();
+                    // Consume tokens until we hit `=`, `;`, `,`, or `}`.
+                    let type_start = self.current_span().start;
+                    let mut type_end = type_start;
+                    let mut depth = 0i32;
+                    loop {
+                        match self.current() {
+                            Token::Eof => break,
+                            Token::LParen | Token::LBracket => {
+                                depth += 1;
+                                type_end = self.current_span().end;
+                                self.advance();
+                            }
+                            Token::RParen | Token::RBracket => {
+                                depth -= 1;
+                                type_end = self.current_span().end;
+                                self.advance();
+                            }
+                            Token::Lt => {
+                                depth += 1;
+                                type_end = self.current_span().end;
+                                self.advance();
+                            }
+                            Token::Gt => {
+                                depth -= 1;
+                                type_end = self.current_span().end;
+                                self.advance();
+                            }
+                            Token::Eq | Token::Semicolon | Token::RBrace
+                            | Token::Comma if depth <= 0 => break,
+                            _ => {
+                                type_end = self.current_span().end;
+                                self.advance();
+                            }
+                        }
+                    }
+                    if type_end <= type_start {
+                        return Err(ParseError::UnexpectedToken {
+                            found: "empty type".to_string(),
+                            expected: "a type after `:` in field declaration".to_string(),
+                            span: colon_span,
+                        }
+                        .into());
+                    }
+                    let content = if !self.source.is_empty()
+                        && type_end <= self.source.len()
+                        && type_start <= type_end
+                    {
+                        self.source[type_start..type_end].trim().to_string()
+                    } else {
+                        // Parser was constructed without source — TS-style
+                        // inline annotations are only available when going
+                        // through `parse(source)`. Emit an empty content
+                        // and let downstream type parsing fail loudly.
+                        String::new()
+                    };
+                    ts_annotation = Some(TypeAnnotation {
+                        name: key_name.clone(),
+                        content,
+                        span: Span::new(type_start, type_end),
+                    });
+                }
+
+                // Initializer (optional).
+                let initializer = if self.consume_if(&Token::Eq) {
+                    Some(self.parse_assignment_expression()?)
+                } else {
+                    None
+                };
+
+                // Optional separator.
+                let _ = self.consume_if(&Token::Semicolon)
+                    || self.consume_if(&Token::Comma);
+
+                let member_span = Span::new(member_start, self.prev_span().end);
+
+                if !declared_field_names.insert(key_name.clone()) {
+                    return Err(ParseError::UnexpectedToken {
+                        found: format!("duplicate field `{}`", key_name),
+                        expected: "each class-body field may be declared at most once".to_string(),
+                        span: member_span,
+                    }
+                    .into());
+                }
+
+                // Resolve annotation: TS-style wins; JSDoc-style is the
+                // fallback. (Both are mutually exclusive in practice; a
+                // user who writes both gets the TS-style form.)
+                let annotation = ts_annotation.or_else(|| {
+                    self.try_get_type_annotation(self.current_span(), &key_name)
+                });
+
+                match initializer {
+                    Some(init) => {
+                        field_props.push(PropDef::Property {
+                            key: PropKey::Ident(key_name),
+                            value: init,
+                            type_annotation: annotation,
+                            span: member_span,
+                        });
+                    }
+                    None => {
+                        // Declaration-only. Two cases:
+                        //   1. Annotated: stash the annotation; the
+                        //      constructor's `this.NAME = …` extraction
+                        //      will pick it up. If the constructor never
+                        //      sets the field, we emit an `undefined`
+                        //      placeholder with the annotation attached
+                        //      so the type-level row still includes the
+                        //      field at the declared type (annotations
+                        //      are unified with the value's inferred
+                        //      type — `Undefined` against `T` will fail,
+                        //      and the user gets a clear diagnostic).
+                        //   2. Unannotated: emit `name: undefined` —
+                        //      typed at `Undefined` and the constructor
+                        //      can later widen it via assignment if it
+                        //      reaches that field at all.
+                        if let Some(ann) = annotation {
+                            deferred_field_annotations
+                                .push((key_name.clone(), ann));
+                        }
+                        field_props.push(PropDef::Property {
+                            key: PropKey::Ident(key_name),
+                            value: Expr::Lit {
+                                value: Literal::Undefined,
+                                span: member_span,
+                            },
+                            type_annotation: None,
+                            span: member_span,
+                        });
+                    }
+                }
+                continue;
             }
 
             // `get name()` / `set name(param)` — accessor property. The
@@ -785,10 +993,27 @@ impl Parser {
                             if let Some((field, value, span)) =
                                 Parser::extract_this_assignment(&expression)
                             {
+                                // If a class-body field declaration with
+                                // an annotation already pushed a placeholder
+                                // for `field`, drop it — the constructor's
+                                // assignment supplies the real value, and
+                                // we'll attach the deferred annotation
+                                // below.
+                                field_props.retain(|p| {
+                                    !matches!(
+                                        p,
+                                        PropDef::Property { key: PropKey::Ident(n), .. }
+                                            if n == &field
+                                    )
+                                });
+                                let type_annotation = Self::take_field_annotation_inner(
+                                    &mut deferred_field_annotations,
+                                    &field,
+                                );
                                 field_props.push(PropDef::Property {
                                     key: PropKey::Ident(field),
                                     value,
-                                    type_annotation: None,
+                                    type_annotation,
                                     span,
                                 });
                             } else {
@@ -826,6 +1051,25 @@ impl Parser {
         let end = self.prev_span().end;
         let span = Span::new(start, end);
 
+        // Any deferred field annotations not consumed by a constructor
+        // assignment attach to the existing `name: undefined` placeholder
+        // entry in `field_props` (declaration-only field with no setter).
+        for (name, ann) in deferred_field_annotations {
+            for prop in field_props.iter_mut() {
+                if let PropDef::Property {
+                    key: PropKey::Ident(n),
+                    type_annotation,
+                    ..
+                } = prop
+                {
+                    if n == &name && type_annotation.is_none() {
+                        *type_annotation = Some(ann);
+                        break;
+                    }
+                }
+            }
+        }
+
         // Build the object literal: field properties first, then methods.
         let mut all_props = field_props;
         all_props.extend(method_props);
@@ -854,6 +1098,14 @@ impl Parser {
 
     /// Match `this.FIELD = EXPR` exactly and return `(FIELD, EXPR, span)`.
     /// Any other expression returns None.
+    fn take_field_annotation_inner(
+        list: &mut Vec<(String, TypeAnnotation)>,
+        name: &str,
+    ) -> Option<TypeAnnotation> {
+        let pos = list.iter().position(|(n, _)| n == name)?;
+        Some(list.remove(pos).1)
+    }
+
     fn extract_this_assignment(expr: &Expr) -> Option<(String, Expr, Span)> {
         if let Expr::Assign {
             op: AssignOp::Assign,
@@ -2659,7 +2911,7 @@ pub fn parse(source: &str) -> Result<Program> {
     let scanner = Scanner::new(source);
     let (tokens, type_annotations) = scanner.tokenize()?;
 
-    let mut parser = Parser::new(tokens, type_annotations);
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
     parser.parse_program()
 }
 
@@ -3020,6 +3272,146 @@ mod tests {
             assert!(specifiers.is_empty());
         } else {
             panic!("Expected import statement");
+        }
+    }
+
+    // ----- P4: class field declarations + modifier tolerance -----
+
+    fn parse_class_factory(source: &str) -> Vec<PropDef> {
+        let program = parse(source).unwrap();
+        // The class declaration desugars to `function Name(args) { return { ... }; }`.
+        let stmt = program.statements.last().unwrap();
+        if let Stmt::FunctionDecl { body, .. } = stmt {
+            if let Stmt::Block { body, .. } = body.as_ref() {
+                if let Some(Stmt::Return {
+                    argument: Some(Expr::Object { properties, .. }),
+                    ..
+                }) = body.last()
+                {
+                    return properties.clone();
+                }
+            }
+        }
+        panic!("class did not desugar to expected factory function shape: {:?}", stmt);
+    }
+
+    #[test]
+    fn class_fields_with_initializers_become_props() {
+        let props = parse_class_factory(
+            "class C { a = 0; b = \"hi\"; c = []; constructor() {} }",
+        );
+        let names: Vec<_> = props
+            .iter()
+            .filter_map(|p| match p {
+                PropDef::Property { key: PropKey::Ident(n), .. } => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"a".to_string()));
+        assert!(names.contains(&"b".to_string()));
+        assert!(names.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn class_modifier_tolerance() {
+        // Modifiers parse and are erased. Constructor still gets the field
+        // values via `this.NAME = …`, so the desugared object literal has
+        // the fields.
+        let props = parse_class_factory(
+            "class C { private name; private count = 0; readonly tag = \"c\"; \
+             constructor(name) { this.name = name; } }",
+        );
+        let names: Vec<_> = props
+            .iter()
+            .filter_map(|p| match p {
+                PropDef::Property { key: PropKey::Ident(n), .. } => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"name".to_string()));
+        assert!(names.contains(&"count".to_string()));
+        assert!(names.contains(&"tag".to_string()));
+    }
+
+    #[test]
+    fn class_ts_inline_annotation_attaches_to_field() {
+        // The TS-style `: Number` annotation on a field declaration
+        // becomes a TypeAnnotation whose name matches the field name.
+        let props = parse_class_factory(
+            "class C { count: Number = 0; constructor() {} }",
+        );
+        let count_prop = props
+            .iter()
+            .find(|p| matches!(
+                p,
+                PropDef::Property { key: PropKey::Ident(n), .. } if n == "count"
+            ))
+            .expect("count field");
+        if let PropDef::Property { type_annotation, .. } = count_prop {
+            let ann = type_annotation.as_ref().expect("annotation present");
+            assert_eq!(ann.name, "count");
+            assert_eq!(ann.content.trim(), "Number");
+        } else {
+            panic!("expected Property");
+        }
+    }
+
+    #[test]
+    fn class_ts_annotation_moves_to_constructor_assignment() {
+        // A declaration-only annotated field with a constructor that
+        // sets it: the annotation moves to the constructor-extracted
+        // property so the constructor parameter gets type-checked
+        // against the declared type.
+        let props = parse_class_factory(
+            "class C { name: String; constructor(name) { this.name = name; } }",
+        );
+        let name_prop = props
+            .iter()
+            .find(|p| matches!(
+                p,
+                PropDef::Property { key: PropKey::Ident(n), .. } if n == "name"
+            ))
+            .expect("name field");
+        if let PropDef::Property {
+            value, type_annotation, ..
+        } = name_prop
+        {
+            assert!(matches!(value, Expr::Ident { .. }));
+            let ann = type_annotation.as_ref().expect("annotation moved");
+            assert_eq!(ann.name, "name");
+            assert_eq!(ann.content.trim(), "String");
+        } else {
+            panic!("expected Property");
+        }
+    }
+
+    #[test]
+    fn class_duplicate_field_rejected() {
+        let result = parse(
+            "class C { a; a = 1; constructor() {} }",
+        );
+        let err = result.expect_err("duplicate field should error");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("duplicate field"), "got: {}", msg);
+    }
+
+    #[test]
+    fn class_field_array_type_annotation() {
+        // Array brackets in the type don't terminate the type span
+        // (depth-counting on `[ ]`).
+        let props = parse_class_factory(
+            "class C { items: Item[] = []; constructor() {} }",
+        );
+        let prop = props
+            .iter()
+            .find(|p| matches!(
+                p,
+                PropDef::Property { key: PropKey::Ident(n), .. } if n == "items"
+            ))
+            .expect("items field");
+        if let PropDef::Property { type_annotation, .. } = prop {
+            let ann = type_annotation.as_ref().expect("annotation");
+            assert_eq!(ann.content.trim(), "Item[]");
         }
     }
 }

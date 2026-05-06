@@ -22,7 +22,7 @@ fn infer_expr_str(source: &str) -> InferResult<Type> {
     }
 
     let type_annotations = scanner.type_annotations().to_vec();
-    let mut parser = Parser::new(tokens, type_annotations);
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
     let program = parser.parse_program().unwrap();
 
     // Get the first expression statement
@@ -132,7 +132,7 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
     }
 
     let type_annotations = scanner.type_annotations().to_vec();
-    let mut parser = Parser::new(tokens, type_annotations);
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
     let program = parser.parse_program().unwrap();
 
     let mut state = InferState::new();
@@ -1553,4 +1553,68 @@ fn test_warn_strict_eq_literal_impossible_branch() {
         "no warning should fire on the first satisfiable arm, got: {:?}",
         state.warnings
     );
+}
+
+// ----- P4: class field declarations + modifier tolerance -----
+
+#[test]
+fn class_with_modifier_and_field_decls_types_check() {
+    // The migration-style class: modifiers, declaration-only field
+    // (constructor sets it), declaration-with-initializer, and a method.
+    let src = "\
+        class Counter { \
+            private count = 0; \
+            inc() { return this.count + 1; } \
+        } \
+        var c = Counter(); \
+        var n = c.inc();";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("n").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::Number);
+}
+
+#[test]
+fn class_ts_inline_annotation_pins_field_type() {
+    let src = "\
+        class C { count: Number = 0; constructor() {} } \
+        var c = C(); \
+        var v = c.count;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::Number);
+}
+
+#[test]
+fn class_decl_only_field_annotation_typechecks_against_constructor_param() {
+    // `name: String;` declaration-only field; constructor sets it.
+    // Annotation moves to the constructor-extracted property, so the
+    // parameter `name` is fixed at String. Calling with a Number errors.
+    let src = "\
+        class P { name: String; constructor(name) { this.name = name; } } \
+        var p = P(\"alice\"); \
+        var n = p.name;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("n").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::String);
+
+    // Calling with a Number must fail (type mismatch on constructor arg).
+    let src_bad = "\
+        class P { name: String; constructor(name) { this.name = name; } } \
+        var p = P(42);";
+    assert!(infer_program_with_state(src_bad).is_err());
+}
+
+#[test]
+fn class_field_array_type() {
+    let src = "\
+        class C { items: Number[] = []; constructor() {} } \
+        var c = C(); \
+        var first = c.items.length;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("first").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::Number);
 }
