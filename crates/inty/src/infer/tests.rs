@@ -2016,3 +2016,232 @@ fn object_destructuring_rest_strips_named_keys() {
         var av = rest.a;";
     assert!(infer_program_with_state(src_bad).is_err());
 }
+
+/// Re-runs a source string through the same code path as the CLI
+/// (`infer_program_with_env`), which is the only path that exercises the
+/// binding-group / hoisting logic in `infer_stmt_list`. The simpler
+/// `infer_program_with_state` walks statements one at a time and bypasses
+/// hoisting entirely.
+fn infer_program_via_program(source: &str) -> InferResult<(Type, TypeEnv, InferState)> {
+    let mut scanner = Scanner::new(source);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let type_annotations = scanner.type_annotations().to_vec();
+    let type_aliases = scanner.type_aliases().to_vec();
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
+    let mut program = parser.parse_program().unwrap();
+    program.type_aliases = type_aliases;
+
+    let mut state = InferState::new();
+    let env = initial_env();
+    let (ty, env) = state.infer_program_with_env(&env, &program)?;
+    Ok((ty, env, state))
+}
+
+/// Phase 0.1 regression: `export function` declarations must hoist as a
+/// peer group so forward references and mutual recursion across exports
+/// resolve, exactly like plain `function` declarations already do.
+#[test]
+fn export_functions_forward_reference_resolves() {
+    let src = "\
+        export function diff(x, y) { return bod(y) - bod(x); } \
+        export function bod(d) { return 1; }";
+    let result = infer_program_via_program(src);
+    assert!(
+        result.is_ok(),
+        "export function peer forward reference must type-check: {:?}",
+        result.err()
+    );
+}
+
+/// Plain function declarations were already hoisted; this guards against
+/// regression while the predicate was extended to cover exports.
+#[test]
+fn plain_functions_forward_reference_still_resolves() {
+    let src = "\
+        function diff(x, y) { return bod(y) - bod(x); } \
+        function bod(d) { return 1; }";
+    let result = infer_program_via_program(src);
+    assert!(result.is_ok(), "plain forward ref regressed: {:?}", result.err());
+}
+
+/// Mixed group: a plain `function` and an `export function` share a
+/// binding group when they're adjacent.
+#[test]
+fn mixed_plain_and_export_functions_hoist_together() {
+    let src = "\
+        function helper(x) { return adjust(x); } \
+        export function adjust(x) { return x + 1; }";
+    let result = infer_program_via_program(src);
+    assert!(
+        result.is_ok(),
+        "mixed plain/export hoisting must work: {:?}",
+        result.err()
+    );
+}
+
+/// Phase 1.1 regression: `export async function` parses without a
+/// "found 'async', expected ..." error. The body is wrapped in a
+/// `Promise.resolve` IIFE by the parser, so this test only verifies
+/// that the production parses; full-stdlib resolution lives in the
+/// CLI integration path.
+#[test]
+fn export_async_function_parses() {
+    let mut scanner = Scanner::new("export async function f(x) { return x; }");
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let mut parser = Parser::with_source(
+        tokens,
+        scanner.type_annotations().to_vec(),
+        "export async function f(x) { return x; }".to_string(),
+    );
+    let result = parser.parse_program();
+    assert!(result.is_ok(), "export async function must parse: {:?}", result.err());
+}
+
+/// Phase 1.3 regression: a default parameter value constrains the
+/// parameter's inferred type to the default's type.
+#[test]
+fn default_parameter_pins_param_type() {
+    let src = "\
+        function throttle(fn, delay = 1000) { return delay; } \
+        var n = throttle(function(){}, 500);";
+    let result = infer_program_via_program(src);
+    assert!(result.is_ok(), "default param must work: {:?}", result.err());
+
+    // Mismatched call site: passing a String for `delay` must error.
+    let bad = "\
+        function throttle(fn, delay = 1000) { return delay; } \
+        var n = throttle(function(){}, \"oops\");";
+    assert!(
+        infer_program_via_program(bad).is_err(),
+        "default param must constrain call-site arg type"
+    );
+}
+
+/// Phase 1.4 regression: destructuring defaults parse without error.
+/// inty has no nullable types so the default itself isn't type-checked,
+/// but the surrounding pattern must continue to work.
+#[test]
+fn destructuring_default_in_function_param() {
+    let src = "\
+        function orient({ target, anchor = null, reset = false }) { return target; } \
+        var x = orient({ target: 1, anchor: 2, reset: true });";
+    let result = infer_program_via_program(src);
+    assert!(
+        result.is_ok(),
+        "destructuring defaults must parse: {:?}",
+        result.err()
+    );
+}
+
+/// Phase 1.5 regression: rest parameters bind a single name and don't
+/// disturb earlier parameters. inty has no variadic-call shape so
+/// callers must match arity exactly — `f(1, [2, 3])` would work but
+/// `f(1, 2, 3)` would error on arity. This test exercises the parse
+/// + the single-name binding shape only.
+#[test]
+fn rest_parameter_parses_and_binds() {
+    let src = "function f(first, ...rest) { return first; } var n = f(1, [2, 3]);";
+    let result = infer_program_via_program(src);
+    assert!(result.is_ok(), "rest param must work: {:?}", result.err());
+}
+
+/// Phase 1.6 regression: spread in a call argument unwraps the array
+/// to its element type and is treated as a single argument.
+#[test]
+fn spread_call_arg_unwraps_array_element() {
+    let src = "\
+        function f(x) { return x + 1; } \
+        const arr = [1, 2, 3]; \
+        const r = f(...arr);";
+    let result = infer_program_via_program(src);
+    assert!(result.is_ok(), "spread in call must work: {:?}", result.err());
+}
+
+/// Phase 1.7 regression: `catch {}` without a binding parses.
+#[test]
+fn catch_without_binding_parses() {
+    let mut scanner = Scanner::new("function f() { try { return 1; } catch {} }");
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let mut parser = Parser::with_source(
+        tokens,
+        scanner.type_annotations().to_vec(),
+        "function f() { try { return 1; } catch {} }".to_string(),
+    );
+    let result = parser.parse_program();
+    assert!(result.is_ok(), "catch-no-bind must parse: {:?}", result.err());
+}
+
+/// Phase 1.9 (bonus) regression: object property shorthand `{a, b}`
+/// expands to `{a: a, b: b}`.
+#[test]
+fn object_property_shorthand() {
+    let src = "var a = 1; var b = \"hi\"; var o = {a, b}; var n = o.a; var s = o.b;";
+    let (_, env, state) = infer_program_via_program(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("n").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("s").unwrap().body.ty),
+        Type::String
+    );
+}
+
+/// Phase 1.2 regression: `export default class extends X { ... }`
+/// produces the existing inheritance-rejection error rather than a
+/// confusing "expected expression" parse error.
+#[test]
+fn export_default_class_extends_rejects_with_inheritance_error() {
+    use crate::error::IntyError;
+    let src = "import { B } from \"./b.js\"; export default class extends B {}";
+    let mut scanner = Scanner::new(src);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let mut parser = Parser::with_source(
+        tokens,
+        scanner.type_annotations().to_vec(),
+        src.to_string(),
+    );
+    let result = parser.parse_program();
+    let err = result.err().expect("must error on extends");
+    let msg = match err {
+        IntyError::Parse(p) => format!("{:?}", p),
+        other => panic!("expected ParseError, got {:?}", other),
+    };
+    assert!(
+        msg.contains("class inheritance is not supported"),
+        "diagnostic should mention inheritance: {}",
+        msg
+    );
+}

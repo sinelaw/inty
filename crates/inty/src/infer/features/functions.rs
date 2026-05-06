@@ -1,13 +1,44 @@
 //! Function expressions, calls, `new`, and function declarations.
 
 use crate::lexer::Span;
-use crate::parser::ast::{Expr, Param, Stmt, TypeAnnotation};
+use crate::parser::ast::{ExportDecl, Expr, Param, Stmt, TypeAnnotation};
 use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
 use super::super::type_parser::parse_type_annotation_with_aliases;
 use super::super::InferResult;
+
+/// Borrow-able view of a function declaration that abstracts over
+/// `Stmt::FunctionDecl` and `Stmt::Export { declaration:
+/// ExportDecl::Function }`. Hoisting and group inference need to treat
+/// both forms uniformly so peer forward references and mutual recursion
+/// across exports type-check.
+fn function_decl_parts<'a>(
+    stmt: &'a Stmt,
+) -> Option<(&'a str, &'a [Param], &'a Stmt, &'a Option<TypeAnnotation>, Span)> {
+    match stmt {
+        Stmt::FunctionDecl {
+            name,
+            params,
+            body,
+            type_annotation,
+            span,
+        } => Some((name.as_str(), params.as_slice(), body.as_ref(), type_annotation, *span)),
+        Stmt::Export {
+            declaration:
+                ExportDecl::Function {
+                    name,
+                    params,
+                    body,
+                    type_annotation,
+                    span,
+                },
+            ..
+        } => Some((name.as_str(), params.as_slice(), body.as_ref(), type_annotation, *span)),
+        _ => None,
+    }
+}
 
 impl InferState {
     /// Infer the type of a function expression.
@@ -215,10 +246,27 @@ impl InferState {
             }
         };
 
-        // Infer argument types
+        // Infer argument types. `...expr` (Expr::Spread) in argument
+        // position unwraps the inner array to its element type and is
+        // treated as a single argument — inty has no variadic call
+        // shape, so a spread can't expand into N arguments. Callers
+        // that rely on variadic semantics will see an arity error
+        // here; callers that want a single-arg function fed from an
+        // array's element will type-check correctly.
         let arg_types: Vec<Type> = arguments
             .iter()
-            .map(|arg| self.infer_expr(env, arg))
+            .map(|arg| match arg {
+                Expr::Spread {
+                    argument,
+                    span: spread_span,
+                } => {
+                    let inner = self.infer_expr(env, argument)?;
+                    let elem = self.fresh_type_var();
+                    self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
+                    Ok(self.apply_subst(&elem))
+                }
+                _ => self.infer_expr(env, arg),
+            })
             .collect::<InferResult<_>>()?;
 
         // Fresh types for this and return
@@ -253,10 +301,27 @@ impl InferState {
     ) -> InferResult<Type> {
         let callee_type = self.infer_expr(env, callee)?;
 
-        // Infer argument types
+        // Infer argument types. `...expr` (Expr::Spread) in argument
+        // position unwraps the inner array to its element type and is
+        // treated as a single argument — inty has no variadic call
+        // shape, so a spread can't expand into N arguments. Callers
+        // that rely on variadic semantics will see an arity error
+        // here; callers that want a single-arg function fed from an
+        // array's element will type-check correctly.
         let arg_types: Vec<Type> = arguments
             .iter()
-            .map(|arg| self.infer_expr(env, arg))
+            .map(|arg| match arg {
+                Expr::Spread {
+                    argument,
+                    span: spread_span,
+                } => {
+                    let inner = self.infer_expr(env, argument)?;
+                    let elem = self.fresh_type_var();
+                    self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
+                    Ok(self.apply_subst(&elem))
+                }
+                _ => self.infer_expr(env, arg),
+            })
             .collect::<InferResult<_>>()?;
 
         // The constructor returns some object type
@@ -287,15 +352,10 @@ impl InferState {
         // unify each function's type with its hoisted variable. Bindings
         // stay monomorphic here so peer references (still type variables at
         // this point) get filled in as their own bodies are processed.
+        // Both `function f` and `export function f` participate; the
+        // helper function_decl_parts unifies the two shapes.
         for stmt in group {
-            if let Stmt::FunctionDecl {
-                name,
-                params,
-                body,
-                type_annotation,
-                span,
-            } = stmt
-            {
+            if let Some((name, params, body, type_annotation, span)) = function_decl_parts(stmt) {
                 let func_var = hoisted
                     .lookup(name)
                     .expect("hoisted name must be in env")
@@ -307,14 +367,20 @@ impl InferState {
                     params,
                     body,
                     type_annotation,
-                    *span,
+                    span,
                 )?;
-                self.unify(*span, &func_var, &func_type)?;
-                // Key the recorded type by the *name* offset, not the
-                // `function` keyword's offset, so the LSP resolver
-                // (which returns the name span for go-to-def) can look
-                // the type up directly.
-                let name_offset = span.start + "function ".len();
+                self.unify(span, &func_var, &func_type)?;
+                // Key the recorded type by the *name* offset so the LSP
+                // resolver (which returns the name span for go-to-def)
+                // can look the type up directly. The exported form is
+                // prefixed with `export `, so the keyword offset
+                // accounts for that.
+                let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
+                    "export function ".len()
+                } else {
+                    "function ".len()
+                };
+                let name_offset = span.start + keyword_len;
                 self.record_decl_type(
                     Span::new(name_offset, name_offset + name.len()),
                     func_type,
@@ -328,7 +394,7 @@ impl InferState {
         // receive the same polymorphism.
         let base_free = env.free_vars();
         for stmt in group {
-            if let Stmt::FunctionDecl { name, .. } = stmt {
+            if let Some((name, _, _, _, _)) = function_decl_parts(stmt) {
                 let ty = hoisted
                     .lookup(name)
                     .expect("function must be in env after pass 1")
@@ -336,7 +402,7 @@ impl InferState {
                     .clone();
                 let ty = self.apply_subst(&ty);
                 let scheme = self.generalize(&base_free, &ty);
-                hoisted = hoisted.extend(name.clone(), scheme);
+                hoisted = hoisted.extend(name.to_string(), scheme);
             }
         }
 
@@ -362,9 +428,9 @@ impl InferState {
     ) -> TypeEnv {
         let mut new_env = env.clone();
         for stmt in stmts {
-            if let Stmt::FunctionDecl { name, .. } = stmt {
+            if let Some((name, _, _, _, _)) = function_decl_parts(stmt) {
                 let var = self.fresh_type_var();
-                new_env = new_env.extend(name.clone(), TypeScheme::mono(var));
+                new_env = new_env.extend(name.to_string(), TypeScheme::mono(var));
             }
         }
         new_env

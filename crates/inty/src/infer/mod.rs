@@ -33,6 +33,20 @@ use crate::types::Type;
 /// Result type for inference operations.
 pub type InferResult<T> = Result<T, IntyError>;
 
+/// True when a statement is either a plain `function f() {}` declaration or
+/// an `export function f() {}` — both participate in the same hoisting
+/// group so peer forward references and mutual recursion work uniformly.
+pub(crate) fn is_function_like_decl(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::FunctionDecl { .. }
+            | Stmt::Export {
+                declaration: ExportDecl::Function { .. },
+                ..
+            }
+    )
+}
+
 impl InferState {
     /// Infer the type of a program.
     pub fn infer_program(&mut self, env: &TypeEnv, program: &Program) -> InferResult<Type> {
@@ -144,22 +158,26 @@ impl InferState {
         let mut current_env = env.clone();
         let mut i = 0;
         while i < stmts.len() {
-            if matches!(stmts[i], Stmt::FunctionDecl { .. }) {
+            if is_function_like_decl(&stmts[i]) {
                 // Extend the group across intervening empty statements:
                 // `function f() {} ; function g() {}` should still let
                 // `f` and `g` see each other (JS hoists all function
                 // declarations in a scope to the top). Without this,
-                // a stray `;` silently breaks mutual recursion.
+                // a stray `;` silently breaks mutual recursion. Both
+                // plain and `export function` participate in the same
+                // group so that `export function a(){ return b(); }
+                // export function b(){...}` type-checks.
                 let start = i;
                 while i < stmts.len()
-                    && matches!(stmts[i], Stmt::FunctionDecl { .. } | Stmt::Empty { .. })
+                    && (is_function_like_decl(&stmts[i])
+                        || matches!(stmts[i], Stmt::Empty { .. }))
                 {
                     i += 1;
                 }
                 // Trim trailing empties so the slice handed to
-                // `infer_function_group` ends on a FunctionDecl — the
-                // group-inference routine skips empties either way, but
-                // trimming avoids pointless iteration over them.
+                // `infer_function_group` ends on a function-like decl —
+                // the group-inference routine skips empties either way,
+                // but trimming avoids pointless iteration over them.
                 let mut end = i;
                 while end > start
                     && matches!(stmts[end - 1], Stmt::Empty { .. })
