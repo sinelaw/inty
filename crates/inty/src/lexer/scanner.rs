@@ -2,7 +2,7 @@
 
 use super::token::{Span, Spanned, Token};
 use crate::error::{LexError, Result};
-use crate::parser::ast::TypeAnnotation;
+use crate::parser::ast::{TypeAlias, TypeAnnotation};
 
 /// The lexer/scanner for mquickjs source code.
 pub struct Scanner<'a> {
@@ -11,6 +11,10 @@ pub struct Scanner<'a> {
     current_pos: usize,
     /// Collected type annotations for later retrieval
     type_annotations: Vec<TypeAnnotation>,
+    /// Collected user-defined type aliases (`/** type Foo<T> = ... */`).
+    /// Inference parses each alias body lazily so the parameter
+    /// names can bind to fresh type variables per alias.
+    type_aliases: Vec<TypeAlias>,
     /// Whether the last token allows a regex to follow (for disambiguation)
     last_token_allows_regex: bool,
     /// Stack of template literal depth (for nested templates)
@@ -28,6 +32,7 @@ impl<'a> Scanner<'a> {
             chars: source.char_indices().peekable(),
             current_pos: 0,
             type_annotations: Vec::new(),
+            type_aliases: Vec::new(),
             last_token_allows_regex: true, // At start of file, / is regex
             template_depth: 0,
             last_ident: None,
@@ -35,7 +40,9 @@ impl<'a> Scanner<'a> {
     }
 
     /// Tokenize the entire source and return all tokens along with type annotations.
-    pub fn tokenize(mut self) -> Result<(Vec<Spanned<Token>>, Vec<TypeAnnotation>)> {
+    pub fn tokenize(
+        mut self,
+    ) -> Result<(Vec<Spanned<Token>>, Vec<TypeAnnotation>, Vec<TypeAlias>)> {
         let mut tokens = Vec::new();
 
         loop {
@@ -47,7 +54,13 @@ impl<'a> Scanner<'a> {
             }
         }
 
-        Ok((tokens, self.type_annotations))
+        Ok((tokens, self.type_annotations, self.type_aliases))
+    }
+
+    /// Type aliases collected by the scanner. Available alongside
+    /// `type_annotations()` after tokenisation.
+    pub fn type_aliases(&self) -> &[TypeAlias] {
+        &self.type_aliases
     }
 
     /// Update regex context based on the token we just produced
@@ -314,6 +327,11 @@ impl<'a> Scanner<'a> {
                                     Some("function") => {
                                         self.advance_keyword("function");
                                         self.parse_function_annotation(start);
+                                        continue;
+                                    }
+                                    Some("type") => {
+                                        self.advance_keyword("type");
+                                        self.parse_type_alias(start);
                                         continue;
                                     }
                                     Some("export") => {
@@ -1258,6 +1276,71 @@ impl<'a> Scanner<'a> {
         self.consume_comment_end();
     }
 
+    /// Parse `/** type Name<P1, P2> = body */`. Captures the alias
+    /// name, parameter list (possibly empty for `type Foo = ...`),
+    /// and body string. The body is re-parsed at inference time so
+    /// the parameter names can map to fresh type-variable IDs.
+    fn parse_type_alias(&mut self, start: usize) {
+        self.skip_whitespace();
+
+        let name = self.read_identifier();
+        if name.is_empty() {
+            self.consume_comment_end();
+            return;
+        }
+        self.skip_whitespace();
+
+        // Optional `<P1, P2, ...>` list.
+        let mut params: Vec<String> = Vec::new();
+        if self.peek().map(|(_, c)| c == '<').unwrap_or(false) {
+            self.advance(); // <
+            loop {
+                self.skip_whitespace();
+                let p = self.read_identifier();
+                if p.is_empty() {
+                    self.consume_comment_end();
+                    return;
+                }
+                params.push(p);
+                self.skip_whitespace();
+                match self.peek().map(|(_, c)| c) {
+                    Some(',') => {
+                        self.advance();
+                    }
+                    Some('>') => {
+                        self.advance();
+                        break;
+                    }
+                    _ => {
+                        self.consume_comment_end();
+                        return;
+                    }
+                }
+            }
+            self.skip_whitespace();
+        }
+
+        // Expect `=`.
+        if !self.peek().map(|(_, c)| c == '=').unwrap_or(false) {
+            self.consume_comment_end();
+            return;
+        }
+        self.advance(); // =
+        self.skip_whitespace();
+
+        // Body runs until `*/`.
+        let body = self.read_until_comment_end();
+        let span = Span::new(start, self.current_pos + 2);
+        self.type_aliases.push(TypeAlias {
+            name: name.trim().to_string(),
+            params,
+            body: body.trim().to_string(),
+            span,
+        });
+
+        self.consume_comment_end();
+    }
+
     fn is_ident_char(ch: char) -> bool {
         ch.is_alphanumeric() || ch == '_' || ch == '$'
     }
@@ -1390,7 +1473,7 @@ mod tests {
     #[test]
     fn test_type_annotation() {
         let scanner = Scanner::new("/** var x: Number */ var x = 42;");
-        let (tokens, annotations) = scanner.tokenize().unwrap();
+        let (tokens, annotations, _) = scanner.tokenize().unwrap();
         assert!(tokens.iter().any(|t| t.value == Token::Var));
         assert!(tokens
             .iter()

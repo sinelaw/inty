@@ -197,6 +197,7 @@ fn program_strategy() -> impl Strategy<Value = Program> {
     prop::collection::vec(stmt_strategy(), 1..4).prop_map(|statements| Program {
         statements,
         span: span(),
+        type_aliases: Vec::new(),
     })
 }
 
@@ -511,6 +512,7 @@ proptest! {
         let program = Program {
             statements: vec![Stmt::Expr { expression: expr.clone(), span: span() }],
             span: span(),
+            type_aliases: Vec::new(),
         };
 
         // Pretty print
@@ -538,6 +540,7 @@ proptest! {
         let program = Program {
             statements: vec![stmt.clone()],
             span: span(),
+            type_aliases: Vec::new(),
         };
 
         let source = print_program(&program);

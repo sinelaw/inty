@@ -6,7 +6,7 @@ use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation;
+use super::super::type_parser::parse_type_annotation_with_aliases;
 use super::super::InferResult;
 
 impl InferState {
@@ -53,8 +53,11 @@ impl InferState {
         // If there's a type annotation, parse and unify with it
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-            let (annotated_type, _var_map) =
-                parse_type_annotation(&annotation.content, annotation_span, self.next_var_id())?;
+            let (annotated_type, var_map) =
+                parse_type_annotation_with_aliases(&annotation.content, annotation_span, self.next_var_id(), &self.type_aliases)?;
+            if let Some(&max) = var_map.values().max() {
+                self.bump_var_id_to(max + 1);
+            }
 
             // Unify the function type with the annotated type
             self.unify(annotation_span, &func_type, &annotated_type)?;
@@ -128,8 +131,11 @@ impl InferState {
         // If there's a type annotation, parse and unify with it
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-            let (annotated_type, _var_map) =
-                parse_type_annotation(&annotation.content, annotation_span, self.next_var_id())?;
+            let (annotated_type, var_map) =
+                parse_type_annotation_with_aliases(&annotation.content, annotation_span, self.next_var_id(), &self.type_aliases)?;
+            if let Some(&max) = var_map.values().max() {
+                self.bump_var_id_to(max + 1);
+            }
 
             // Unify the function type with the annotated type
             self.unify(annotation_span, &func_type, &annotated_type)?;

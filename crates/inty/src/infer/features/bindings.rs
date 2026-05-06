@@ -9,7 +9,7 @@ use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation;
+use super::super::type_parser::parse_type_annotation_with_aliases;
 use super::super::InferResult;
 
 /// If `lhs` is an assignment target whose binding resolves to a polymorphic
@@ -337,11 +337,17 @@ impl InferState {
             // If there's a type annotation, parse and unify with it
             let var_type = if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-                let (annotated_type, _var_map) = parse_type_annotation(
+                let (annotated_type, var_map) = parse_type_annotation_with_aliases(
                     &annotation.content,
                     annotation_span,
                     self.next_var_id(),
+                    &self.type_aliases,
                 )?;
+                // Reflect any IDs the parser allocated back into the
+                // state so subsequent fresh_flex doesn't collide.
+                if let Some(&max) = var_map.values().max() {
+                    self.bump_var_id_to(max + 1);
+                }
                 self.unify(annotation_span, &var_type, &annotated_type)?;
                 self.apply_subst(&var_type)
             } else {

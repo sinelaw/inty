@@ -23,7 +23,7 @@ pub use decorate::decorate_with_types;
 pub use env::TypeEnv;
 pub use narrow::{apply_narrowing, Narrowing, Path};
 pub use state::{InferConfig, InferState, InferWarning, PendingConstraint, TypeClass};
-pub use type_parser::parse_type_annotation;
+pub use type_parser::{parse_type_annotation, parse_type_annotation_with_aliases};
 pub use unify::UnifyResult;
 
 use crate::error::{IntyError, TypeError};
@@ -46,7 +46,77 @@ impl InferState {
         env: &TypeEnv,
         program: &Program,
     ) -> InferResult<(Type, TypeEnv)> {
+        // Load any user-defined generic type aliases before
+        // checking the program. Aliases are not nominal — referring
+        // to `Foo<X>` is exactly equivalent to inlining `Foo`'s body
+        // with the type argument substituted.
+        self.load_type_aliases(&program.type_aliases)?;
         self.infer_stmt_list(env, &program.statements)
+    }
+
+    /// Parse each declared type alias's body once, with the alias's
+    /// own parameter names bound to fresh skolemised type-var IDs.
+    /// Subsequent `Foo<args>` references substitute argument types
+    /// for those parameter IDs.
+    pub fn load_type_aliases(
+        &mut self,
+        aliases: &[crate::parser::ast::TypeAlias],
+    ) -> InferResult<()> {
+        use crate::infer::state::AliasDef;
+        use crate::types::TVarName;
+
+        // Two-pass: first reserve a placeholder for every alias so
+        // each body can see its peers (mutual references are
+        // allowed, even though direct self-recursion isn't yet
+        // expanded). Then parse each body with the env populated.
+        for alias in aliases {
+            self.type_aliases.insert(
+                alias.name.clone(),
+                AliasDef {
+                    params: Vec::new(),
+                    body: Type::Undefined,
+                },
+            );
+        }
+
+        for alias in aliases {
+            // Allocate one genuinely fresh type-var ID per parameter.
+            let mut param_ids: Vec<u32> = Vec::with_capacity(alias.params.len());
+            for _ in &alias.params {
+                let TVarName::Flex(id) = self.fresh_flex() else {
+                    unreachable!("fresh_flex returns Flex");
+                };
+                param_ids.push(id);
+            }
+
+            // Parse the body with the alias env visible (so other
+            // alias references resolve), seeding type_vars with our
+            // parameter mappings.
+            let body = {
+                let mut parser = crate::infer::type_parser::TypeParser::with_aliases(
+                    &alias.body,
+                    alias.span,
+                    self.next_var_id(),
+                    &self.type_aliases,
+                );
+                for (name, id) in alias.params.iter().zip(param_ids.iter()) {
+                    parser.preset_var(name.clone(), *id);
+                }
+                let body = parser.parse()?;
+                let next = parser.next_var_id();
+                (body, next)
+            };
+            self.bump_var_id_to(body.1);
+
+            self.type_aliases.insert(
+                alias.name.clone(),
+                AliasDef {
+                    params: param_ids,
+                    body: body.0,
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Infer a list of statements with function-declaration hoisting.

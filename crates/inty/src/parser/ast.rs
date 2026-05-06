@@ -137,6 +137,10 @@ impl<T> Located<T> {
 pub struct Program {
     pub statements: Vec<Stmt>,
     pub span: Source,
+    /// User-defined generic type aliases collected by the lexer
+    /// from `/** type Foo<T> = body */` doc comments. Inference
+    /// loads them into the alias env before checking statements.
+    pub type_aliases: Vec<TypeAlias>,
 }
 
 /// Literal values
@@ -334,6 +338,19 @@ pub enum ChainSegment {
 pub struct TypeAnnotation {
     pub name: String,
     pub content: String,
+    pub span: Source,
+}
+
+/// User-defined generic type alias parsed from a doc comment of the
+/// form `/** type Name<P1, P2> = body */`. The body is captured as a
+/// raw string so the type parser can re-parse it with the alias's
+/// parameter names bound to fresh type-variable IDs at inference
+/// time (giving each application a self-contained substitution).
+#[derive(Debug, Clone)]
+pub struct TypeAlias {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: String,
     pub span: Source,
 }
 
