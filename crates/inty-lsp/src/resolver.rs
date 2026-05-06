@@ -536,6 +536,27 @@ impl Resolution {
                 self.visit_expr(consequent, scope);
                 self.visit_expr(alternate, scope);
             }
+            Expr::NullishCoalesce { left, right, .. } => {
+                self.visit_expr(left, scope);
+                self.visit_expr(right, scope);
+            }
+            Expr::OptionalChain { head, segments, .. } => {
+                use inty::parser::ast::ChainSegment;
+                self.visit_expr(head, scope);
+                for seg in segments {
+                    match seg {
+                        ChainSegment::Member { .. } => {}
+                        ChainSegment::Computed { property, .. } => {
+                            self.visit_expr(property, scope);
+                        }
+                        ChainSegment::Call { arguments, .. } => {
+                            for a in arguments {
+                                self.visit_expr(a, scope);
+                            }
+                        }
+                    }
+                }
+            }
             Expr::Sequence { expressions, .. } => {
                 for e in expressions {
                     self.visit_expr(e, scope);

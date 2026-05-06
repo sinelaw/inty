@@ -46,6 +46,21 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
         Expr::Conditional { test, consequent, alternate, .. } => {
             is_surface_expr(test) && is_surface_expr(consequent) && is_surface_expr(alternate)
         }
+        Expr::NullishCoalesce { left, right, .. } => {
+            is_surface_expr(left) && is_surface_expr(right)
+        }
+        Expr::OptionalChain { head, segments, .. } => {
+            is_surface_expr(head)
+                && segments.iter().all(|s| match s {
+                    crate::parser::ast::ChainSegment::Member { .. } => true,
+                    crate::parser::ast::ChainSegment::Computed { property, .. } => {
+                        is_surface_expr(property)
+                    }
+                    crate::parser::ast::ChainSegment::Call { arguments, .. } => {
+                        arguments.iter().all(is_surface_expr)
+                    }
+                })
+        }
         Expr::Sequence { expressions, .. } => expressions.iter().all(is_surface_expr),
         Expr::TemplateLiteral { expressions, .. } => expressions.iter().all(is_surface_expr),
     }

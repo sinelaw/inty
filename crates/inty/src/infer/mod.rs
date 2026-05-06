@@ -241,6 +241,16 @@ impl InferState {
                 span,
             } => self.infer_conditional(env, test, consequent, alternate, *span),
 
+            Expr::NullishCoalesce { left, right, span } => {
+                self.infer_nullish_coalesce(env, left, right, *span)
+            }
+
+            Expr::OptionalChain {
+                head,
+                segments,
+                span,
+            } => self.infer_optional_chain(env, head, segments, *span),
+
             Expr::Sequence { expressions, span } => self.infer_sequence(env, expressions, *span),
 
             Expr::TemplateLiteral {

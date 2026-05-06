@@ -133,7 +133,25 @@ impl<'a> Scanner<'a> {
             }
             '?' => {
                 self.advance();
-                Token::Question
+                // `?.` only forms an optional-chain token if the next
+                // char is NOT a digit — TC39 keeps `cond ? .5 : 0`
+                // working. `??` is the nullish-coalescing operator.
+                match self.peek() {
+                    Some((_, '.')) => {
+                        let following = self.peek_next();
+                        if !matches!(following, Some(d) if d.is_ascii_digit()) {
+                            self.advance(); // .
+                            Token::QuestionDot
+                        } else {
+                            Token::Question
+                        }
+                    }
+                    Some((_, '?')) => {
+                        self.advance(); // ?
+                        Token::QuestionQuestion
+                    }
+                    _ => Token::Question,
+                }
             }
             '~' => {
                 self.advance();

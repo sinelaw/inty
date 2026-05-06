@@ -295,6 +295,33 @@ pub enum PropDef {
     },
 }
 
+/// One step of an `OptionalChain`. `optional` is `true` when the
+/// preceding link in the source was `?.` — that's the step that
+/// short-circuits when the receiver is nullish. Subsequent
+/// non-optional steps still belong to the same chain so the
+/// short-circuit propagates.
+#[derive(Debug, Clone)]
+pub enum ChainSegment {
+    /// `.prop` or `?.prop`
+    Member {
+        property: String,
+        optional: bool,
+        span: Source,
+    },
+    /// `[expr]` or `?.[expr]`
+    Computed {
+        property: Box<Expr>,
+        optional: bool,
+        span: Source,
+    },
+    /// `(args)` or `?.(args)`
+    Call {
+        arguments: Vec<Expr>,
+        optional: bool,
+        span: Source,
+    },
+}
+
 /// Type annotation from comments: /** name: Type */
 #[derive(Debug, Clone)]
 pub struct TypeAnnotation {
@@ -398,6 +425,27 @@ pub enum Expr {
         span: Source,
     },
 
+    /// Nullish coalescing: `a ?? b`. Returns `a` unless it's `null` /
+    /// `undefined`, in which case it returns `b`.
+    NullishCoalesce {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: Source,
+    },
+
+    /// Optional chain: `a?.b.c`, `a?.()`, `a?.[k]`. The whole chain
+    /// short-circuits when an optional segment receives a nullish
+    /// receiver, producing `undefined` for the entire expression. We
+    /// keep the chain in a single node (rather than reusing
+    /// `Member`/`Call`/`ComputedMember`) so the typing rule can peel
+    /// nullables off the head exactly once and walk the segments
+    /// against the non-null type.
+    OptionalChain {
+        head: Box<Expr>,
+        segments: Vec<ChainSegment>,
+        span: Source,
+    },
+
     /// Sequence: a, b, c
     Sequence {
         expressions: Vec<Expr>,
@@ -433,6 +481,8 @@ impl Expr {
             Expr::Binary { span, .. } => *span,
             Expr::Assign { span, .. } => *span,
             Expr::Conditional { span, .. } => *span,
+            Expr::NullishCoalesce { span, .. } => *span,
+            Expr::OptionalChain { span, .. } => *span,
             Expr::Sequence { span, .. } => *span,
             Expr::TemplateLiteral { span, .. } => *span,
         }
