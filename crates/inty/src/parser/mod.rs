@@ -1900,7 +1900,7 @@ impl Parser {
 
     fn parse_conditional_expression(&mut self) -> Result<Expr> {
         let start = self.current_span().start;
-        let test = self.parse_binary_expression(0)?;
+        let test = self.parse_nullish_expression()?;
 
         if self.consume_if(&Token::Question) {
             let consequent = self.parse_assignment_expression()?;
@@ -1916,6 +1916,25 @@ impl Parser {
         }
 
         Ok(test)
+    }
+
+    /// Parse `??` chains. Sits below the conditional and above the
+    /// binary precedence ladder — `??` binds looser than `||` (so
+    /// `a || b ?? c` is `(a || b) ?? c`) and tighter than `?:`.
+    /// Left-associative: `a ?? b ?? c` ≡ `(a ?? b) ?? c`.
+    fn parse_nullish_expression(&mut self) -> Result<Expr> {
+        let mut left = self.parse_binary_expression(0)?;
+        while self.check(&Token::QuestionQuestion) {
+            self.advance();
+            let right = self.parse_binary_expression(0)?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = Expr::NullishCoalesce {
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+        Ok(left)
     }
 
     fn parse_binary_expression(&mut self, min_prec: u8) -> Result<Expr> {
@@ -2078,33 +2097,106 @@ impl Parser {
 
         let mut expr = self.parse_member_expression()?;
 
-        // Handle call and member expressions
+        // Handle call and member expressions, including optional-chain
+        // links. Once we see the first `?.` the chain switches to an
+        // `OptionalChain` accumulator and all subsequent `.x` / `[k]` /
+        // `(args)` and `?.` segments fold into it so the short-circuit
+        // propagates over the whole tail.
+        let mut chain_segments: Option<Vec<crate::parser::ast::ChainSegment>> = None;
+
         loop {
+            // `?.` — the chain switch. Subsequent forms get folded into
+            // the segment list rather than wrapped as separate AST
+            // nodes. The next-segment shape is determined by the token
+            // immediately after `?.`: `(` for an optional call, `[` for
+            // an optional computed access, otherwise an optional member.
+            if self.check(&Token::QuestionDot) {
+                self.advance();
+                let segments = chain_segments.get_or_insert_with(Vec::new);
+                let seg_start = self.prev_span().start;
+                if self.consume_if(&Token::LParen) {
+                    let arguments = self.parse_arguments()?;
+                    segments.push(crate::parser::ast::ChainSegment::Call {
+                        arguments,
+                        optional: true,
+                        span: Span::new(seg_start, self.prev_span().end),
+                    });
+                } else if self.consume_if(&Token::LBracket) {
+                    let property = self.parse_expression()?;
+                    self.expect(&Token::RBracket)?;
+                    segments.push(crate::parser::ast::ChainSegment::Computed {
+                        property: Box::new(property),
+                        optional: true,
+                        span: Span::new(seg_start, self.prev_span().end),
+                    });
+                } else {
+                    let property = self.expect_ident_or_keyword()?;
+                    segments.push(crate::parser::ast::ChainSegment::Member {
+                        property,
+                        optional: true,
+                        span: Span::new(seg_start, self.prev_span().end),
+                    });
+                }
+                continue;
+            }
+
             if self.consume_if(&Token::LParen) {
                 let arguments = self.parse_arguments()?;
-                expr = Expr::Call {
-                    callee: Box::new(expr),
-                    arguments,
-                    span: Span::new(start, self.prev_span().end),
-                };
+                if let Some(segments) = chain_segments.as_mut() {
+                    segments.push(crate::parser::ast::ChainSegment::Call {
+                        arguments,
+                        optional: false,
+                        span: Span::new(start, self.prev_span().end),
+                    });
+                } else {
+                    expr = Expr::Call {
+                        callee: Box::new(expr),
+                        arguments,
+                        span: Span::new(start, self.prev_span().end),
+                    };
+                }
             } else if self.consume_if(&Token::Dot) {
                 let property = self.expect_ident_or_keyword()?;
-                expr = Expr::Member {
-                    object: Box::new(expr),
-                    property,
-                    span: Span::new(start, self.prev_span().end),
-                };
+                if let Some(segments) = chain_segments.as_mut() {
+                    segments.push(crate::parser::ast::ChainSegment::Member {
+                        property,
+                        optional: false,
+                        span: Span::new(start, self.prev_span().end),
+                    });
+                } else {
+                    expr = Expr::Member {
+                        object: Box::new(expr),
+                        property,
+                        span: Span::new(start, self.prev_span().end),
+                    };
+                }
             } else if self.consume_if(&Token::LBracket) {
                 let property = self.parse_expression()?;
                 self.expect(&Token::RBracket)?;
-                expr = Expr::ComputedMember {
-                    object: Box::new(expr),
-                    property: Box::new(property),
-                    span: Span::new(start, self.prev_span().end),
-                };
+                if let Some(segments) = chain_segments.as_mut() {
+                    segments.push(crate::parser::ast::ChainSegment::Computed {
+                        property: Box::new(property),
+                        optional: false,
+                        span: Span::new(start, self.prev_span().end),
+                    });
+                } else {
+                    expr = Expr::ComputedMember {
+                        object: Box::new(expr),
+                        property: Box::new(property),
+                        span: Span::new(start, self.prev_span().end),
+                    };
+                }
             } else {
                 break;
             }
+        }
+
+        if let Some(segments) = chain_segments {
+            expr = Expr::OptionalChain {
+                head: Box::new(expr),
+                segments,
+                span: Span::new(start, self.prev_span().end),
+            };
         }
 
         Ok(expr)

@@ -251,6 +251,60 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             Ok(())
         }
 
+        Expr::NullishCoalesce { left, right, .. } => {
+            if needs_parens {
+                write!(w, "(")?;
+            }
+            write_expr(w, left, true)?;
+            write!(w, " ?? ")?;
+            write_expr(w, right, true)?;
+            if needs_parens {
+                write!(w, ")")?;
+            }
+            Ok(())
+        }
+
+        Expr::OptionalChain { head, segments, .. } => {
+            use crate::parser::ast::ChainSegment;
+            if needs_parens {
+                write!(w, "(")?;
+            }
+            write_expr(w, head, true)?;
+            for seg in segments {
+                match seg {
+                    ChainSegment::Member { property, optional, .. } => {
+                        write!(w, "{}{}", if *optional { "?." } else { "." }, property)?;
+                    }
+                    ChainSegment::Computed { property, optional, .. } => {
+                        if *optional {
+                            write!(w, "?.[")?;
+                        } else {
+                            write!(w, "[")?;
+                        }
+                        write_expr(w, property, false)?;
+                        write!(w, "]")?;
+                    }
+                    ChainSegment::Call { arguments, optional, .. } => {
+                        if *optional {
+                            write!(w, "?.")?;
+                        }
+                        write!(w, "(")?;
+                        for (i, a) in arguments.iter().enumerate() {
+                            if i > 0 {
+                                write!(w, ", ")?;
+                            }
+                            write_expr(w, a, false)?;
+                        }
+                        write!(w, ")")?;
+                    }
+                }
+            }
+            if needs_parens {
+                write!(w, ")")?;
+            }
+            Ok(())
+        }
+
         Expr::Sequence { expressions, .. } => {
             if needs_parens {
                 write!(w, "(")?;

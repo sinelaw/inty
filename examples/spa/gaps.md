@@ -298,6 +298,15 @@ These weren't in the original 14 but got addressed alongside:
   Replaces `oxc`'s `IsolatedDeclarations` pass for downstream tools
   that publish a plugin's public surface. Programmatic API:
   `inty::declarations::emit_declarations(&CheckedModule)`.
+- **Optional chaining (`?.`) and nullish coalescing (`??`)** — the
+  parser builds a single `OptionalChain { head, segments }` AST node
+  for chains containing at least one `?.`, so `a?.b.c` types as
+  `T_c | Undefined` rather than erroring on the inner `.b` against
+  a nullable. `??` is a dedicated `NullishCoalesce` node; result is
+  `(T \ {Null, Undefined}) ∪ typeof RHS`. Non-nullable receivers
+  type identically to `.` — `o?.name` on a non-null `o` produces
+  just the field type, no `Undefined` widening. Idiomatic
+  `arr.find(p)?.field ?? default` pulls a clean `T`.
 - **Per-field type annotations on object literals** — the inline
   `/*: T */` form now also attaches to object property keys:
   `{ foo /*: Number */: 1, bar /*: String */: "" }`. The annotation

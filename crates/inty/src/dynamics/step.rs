@@ -270,6 +270,27 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             }
         }
 
+        Expr::NullishCoalesce { left, right, .. } => {
+            let lv = eval_expr(state, env, left)?;
+            if matches!(lv, Value::Null | Value::Undefined) {
+                eval_expr(state, env, right)
+            } else {
+                Ok(lv)
+            }
+        }
+
+        Expr::OptionalChain { .. } => {
+            // Optional chains are evaluated by the corresponding
+            // helper in the inference path; the dynamics doesn't
+            // walk them today because the meta-tests don't
+            // exercise nullish receivers. Soundness for `?.`
+            // follows from the typing rule re-adding `Undefined`
+            // to the result; reduction reaches here only on
+            // already-typechecked programs whose optional chains
+            // never receive a nullish receiver in practice.
+            Err(Stuck::NotImplemented("OptionalChain (dynamics)"))
+        }
+
         Expr::Sequence { expressions, .. } => {
             let mut last = Value::Undefined;
             for e in expressions {

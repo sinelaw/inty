@@ -1618,3 +1618,106 @@ fn class_field_array_type() {
     let ty = state.apply_subst(&scheme.body.ty);
     assert_eq!(ty, Type::Number);
 }
+
+// ----- P7: optional chaining (?.) and nullish coalescing (??) -----
+
+fn assert_union_eq(actual: &Type, expected_members: &[Type]) {
+    let want = Type::union(expected_members.iter().cloned());
+    assert_eq!(
+        actual, &want,
+        "expected {:?}, got {:?}",
+        want, actual
+    );
+}
+
+#[test]
+fn optional_member_on_nullable_receiver_adds_undefined() {
+    // `o : {name: String} | Null` → `o?.name : String | Undefined`.
+    let src = "\
+        /** function f(o: {name: String} | Null) => String | Undefined */ \
+        function f(o) { return o?.name; } \
+        var v = f({name: \"a\"});";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_union_eq(&ty, &[Type::String, Type::Undefined]);
+}
+
+#[test]
+fn optional_member_on_non_nullable_no_undefined() {
+    // Non-nullable receiver: `?.` types identically to `.`.
+    let src = "\
+        var o = {name: \"a\"}; \
+        var v = o?.name;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::String);
+}
+
+#[test]
+fn nullish_coalesce_strips_null_and_undefined() {
+    // `(String | Null) ?? "x"` → `String`.
+    let src = "\
+        /** function f(s: String | Null) => String */ \
+        function f(s) { return s ?? \"x\"; } \
+        var v = f(\"a\");";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::String);
+}
+
+#[test]
+fn nullish_coalesce_with_disjoint_branches_unions() {
+    // `(String | Null) ?? Number` → `String | Number`.
+    let src = "\
+        /** function f(s: String | Null) => String | Number */ \
+        function f(s) { return s ?? 42; } \
+        var v = f(\"a\");";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_union_eq(&ty, &[Type::String, Type::Number]);
+}
+
+#[test]
+fn nullish_coalesce_non_nullable_left_drops_right() {
+    // Non-nullable left: result is just the left type. Right side is
+    // type-checked but unreachable.
+    let src = "\
+        var s = \"a\"; \
+        var v = s ?? \"b\";";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::String);
+}
+
+#[test]
+fn optional_chain_combined_with_nullish_coalesce() {
+    // `o?.name ?? "anon"` on a nullable receiver pulls a clean `String`.
+    let src = "\
+        /** function getName(o: {name: String} | Null) => String */ \
+        function getName(o) { return o?.name ?? \"anon\"; } \
+        var v = getName(null);";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_eq!(ty, Type::String);
+}
+
+#[test]
+fn optional_chain_member_chain_propagates() {
+    // `a?.b.c` on a nullable head: the `.c` step rides the chain so
+    // the whole expression types as `T_c | Undefined` rather than
+    // erroring on the inner `.b` access against a nullable.
+    let src = "\
+        /** function f(o: {b: {c: Number}} | Null) => Number | Undefined */ \
+        function f(o) { return o?.b.c; } \
+        var v = f(null);";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("v").unwrap();
+    let ty = state.apply_subst(&scheme.body.ty);
+    assert_union_eq(&ty, &[Type::Number, Type::Undefined]);
+}

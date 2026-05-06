@@ -164,7 +164,9 @@ pub enum Token {
     Dot,       // .
     Semicolon, // ;
     Colon,     // :
-    Question,  // ?
+    Question,    // ?
+    QuestionDot, // ?. (optional chaining)
+    QuestionQuestion, // ?? (nullish coalescing)
     FatArrow,  // =>
 
     // Special
@@ -366,6 +368,8 @@ impl fmt::Display for Token {
             Token::Semicolon => write!(f, ";"),
             Token::Colon => write!(f, ":"),
             Token::Question => write!(f, "?"),
+            Token::QuestionDot => write!(f, "?."),
+            Token::QuestionQuestion => write!(f, "??"),
             Token::FatArrow => write!(f, "=>"),
             Token::Eof => write!(f, "<eof>"),
         }
