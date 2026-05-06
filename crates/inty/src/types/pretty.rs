@@ -59,6 +59,119 @@ impl PrettyContext {
         s
     }
 
+    /// Format a type using TypeScript-flavour syntax: lowercase
+    /// primitives, `;`-separated object properties, `void` instead
+    /// of `Undefined` at return positions (we still emit
+    /// `undefined` elsewhere). Used by `inty declarations
+    /// --format=ts` to emit `.d.ts` output downstream tooling
+    /// expects.
+    pub fn format_type_ts(&mut self, ty: &Type) -> String {
+        let mut s = String::new();
+        self.write_type_ts(&mut s, ty, false).unwrap();
+        s
+    }
+
+    fn write_type_ts<W: Write>(
+        &mut self,
+        w: &mut W,
+        ty: &Type,
+        in_func_arg: bool,
+    ) -> fmt::Result {
+        match ty {
+            Type::Number => write!(w, "number"),
+            Type::String => write!(w, "string"),
+            Type::Boolean => write!(w, "boolean"),
+            Type::Undefined => write!(w, "undefined"),
+            Type::Null => write!(w, "null"),
+            Type::Regex => write!(w, "RegExp"),
+            Type::Var(name) => self.write_var(w, name),
+            Type::Func {
+                this_type: _,
+                params,
+                ret,
+            } => {
+                if in_func_arg {
+                    write!(w, "(")?;
+                }
+                write!(w, "(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    write!(w, "_a{}: ", i)?;
+                    self.write_type_ts(w, p, false)?;
+                }
+                write!(w, ") => ")?;
+                self.write_type_ts(w, ret, false)?;
+                if in_func_arg {
+                    write!(w, ")")?;
+                }
+                Ok(())
+            }
+            Type::Row(row) => {
+                use super::ty::RowTail;
+                write!(w, "{{ ")?;
+                let mut first = true;
+                for (k, v) in &row.props {
+                    if !first {
+                        write!(w, "; ")?;
+                    }
+                    first = false;
+                    write!(w, "{}: ", k.0)?;
+                    self.write_type_ts(w, v, false)?;
+                }
+                if let RowTail::Open(name) = &row.tail {
+                    if !first {
+                        write!(w, "; ")?;
+                    }
+                    write!(w, "[k: string]: ")?;
+                    self.write_var(w, name)?;
+                }
+                write!(w, " }}")
+            }
+            Type::Array(elem) => {
+                let needs_parens = matches!(**elem, Type::Func { .. } | Type::Union(_));
+                if needs_parens {
+                    write!(w, "(")?;
+                }
+                self.write_type_ts(w, elem, false)?;
+                if needs_parens {
+                    write!(w, ")")?;
+                }
+                write!(w, "[]")
+            }
+            Type::Map(value) => {
+                write!(w, "Record<string, ")?;
+                self.write_type_ts(w, value, false)?;
+                write!(w, ">")
+            }
+            Type::Promise(inner) => {
+                write!(w, "Promise<")?;
+                self.write_type_ts(w, inner, false)?;
+                write!(w, ">")
+            }
+            Type::Named(_, _) => {
+                // Named recursive types don't have a clean TS shape;
+                // fall back to the inty form.
+                self.write_type(w, ty, in_func_arg)
+            }
+            Type::Literal(lit) => self.write_literal(w, lit),
+            Type::Union(members) => {
+                if members.is_empty() {
+                    return write!(w, "never");
+                }
+                for (i, m) in members.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, " | ")?;
+                    }
+                    self.write_type_ts(w, m, false)?;
+                }
+                Ok(())
+            }
+            Type::Module(_) => self.write_type(w, ty, in_func_arg),
+        }
+    }
+
     /// Format a type scheme to a string.
     pub fn format_scheme(&mut self, scheme: &TypeScheme) -> String {
         let mut s = String::new();

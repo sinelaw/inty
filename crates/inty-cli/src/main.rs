@@ -210,18 +210,25 @@ fn run_declarations(args: &[String]) -> ExitCode {
     let mut input: Option<String> = None;
     let mut no_stdlib = false;
     let mut no_color = false;
+    let mut flavor = inty::declarations::DeclarationFlavor::Inty;
     for arg in args {
         match arg.as_str() {
             "--help" | "-h" => {
-                println!("inty declarations <entry.js>");
+                println!("inty declarations <entry.js> [--format=ts|inty]");
                 println!();
                 println!("Type-check the entry module and emit one");
-                println!("`/** const NAME: T */ const NAME;` declaration");
-                println!("per export to stdout.");
+                println!("declaration per export to stdout.");
+                println!();
+                println!("With --format=inty (default), each export prints as");
+                println!("`/** const NAME: T */ const NAME;` (an inty .d.js).");
+                println!("With --format=ts, output uses TypeScript syntax:");
+                println!("`declare const NAME: T;` (a .d.ts).");
                 return ExitCode::SUCCESS;
             }
             "--no-stdlib" => no_stdlib = true,
             "--no-color" | "--no-colour" => no_color = true,
+            "--format=ts" => flavor = inty::declarations::DeclarationFlavor::Ts,
+            "--format=inty" => flavor = inty::declarations::DeclarationFlavor::Inty,
             _ if arg.starts_with("--") => {
                 eprintln!("error: unknown option to 'declarations': {}", arg);
                 return ExitCode::from(2);
@@ -281,7 +288,10 @@ fn run_declarations(args: &[String]) -> ExitCode {
     }
 
     let module = inty::declarations::CheckedModule::new(module_env, exports);
-    print!("{}", inty::declarations::emit_declarations(&module));
+    print!(
+        "{}",
+        inty::declarations::emit_declarations_with_flavor(&module, flavor)
+    );
 
     ExitCode::SUCCESS
 }

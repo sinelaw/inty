@@ -1818,6 +1818,87 @@ fn array_destructuring_rest_gives_array_type() {
     );
 }
 
+// ----- P8: TS-flavor type-annotation extensions -----
+
+#[test]
+fn ts_optional_property_widens_to_union_with_undefined() {
+    // `{ name?: String }` parses as `{ name: String | Undefined }`.
+    let src = "\
+        /** const o: { name?: String } */ \
+        const o; \
+        var n = o.name;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let n = state.apply_subst(&env.lookup("n").unwrap().body.ty);
+    assert_eq!(n, Type::union([Type::String, Type::Undefined]));
+}
+
+#[test]
+fn ts_object_type_semicolon_separator_accepted() {
+    // TS uses `;` between properties in object types; we accept
+    // both `;` and `,` for compatibility with hand-imported `.d.ts`.
+    let src = "\
+        /** const o: { x: Number; y: String } */ \
+        const o; \
+        var x = o.x; \
+        var y = o.y;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("x").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("y").unwrap().body.ty),
+        Type::String
+    );
+}
+
+#[test]
+fn ts_readonly_modifier_erased() {
+    let src = "\
+        /** const o: { readonly id: Number, name: String } */ \
+        const o; \
+        var n = o.id;";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("n").unwrap().body.ty),
+        Type::Number
+    );
+}
+
+#[test]
+fn ts_any_rejected_with_suggestion() {
+    let src = "\
+        /** const x: any */ \
+        const x;";
+    let err = match infer_program_with_state(src) {
+        Ok(_) => panic!("any should reject"),
+        Err(e) => e,
+    };
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("not supported") && msg.contains("concrete type"),
+        "expected a suggestion mentioning concrete types, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn ts_intersection_rejected_with_suggestion() {
+    let src = "\
+        /** const x: { a: Number } & { b: String } */ \
+        const x;";
+    let err = match infer_program_with_state(src) {
+        Ok(_) => panic!("intersection should reject"),
+        Err(e) => e,
+    };
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("intersection") && msg.contains("merge"),
+        "expected a suggestion to merge rows, got: {}",
+        msg
+    );
+}
+
 // ----- P6: user-defined generic type aliases -----
 
 #[test]

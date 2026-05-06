@@ -328,6 +328,26 @@ These weren't in the original 14 but got addressed alongside:
   are diagnosed at the call site. Plays naturally with row
   polymorphism — `Cancellable<T> = { result: Promise<T>, cancel:
   () => Promise<Boolean> }` was the motivating migration form.
+- **TS-flavor type-annotation extensions** — the type parser now
+  accepts the TypeScript syntax migration sources expect alongside
+  the inty form:
+  - Optional property `x?: T` desugars to `x: T | Undefined`.
+  - Object types accept either `,` or `;` between properties; a
+    trailing separator is allowed.
+  - The `readonly` modifier is parsed and erased.
+  - `any` and `unknown` reject with a span-anchored diagnostic
+    that suggests "use a concrete type, or a closed union of the
+    values you actually accept."
+  - Intersection `A & B` rejects with "merge the rows into a
+    single object type `{ ...fields of A, ...fields of B }`."
+  - `never` continues to map to the empty union (`Type::never()`).
+- **TS-flavor pretty printer** — `inty declarations --format=ts`
+  emits `declare const NAME: T;` lines using lowercase TypeScript
+  primitives, `;`-separated object types, `Promise<T>` /
+  `Record<string, T>` / `T[]` for compound forms. Default
+  `--format=inty` is unchanged. Lets `fresh` consume the
+  generated declarations directly from any TypeScript-aware
+  tooling.
 - **Per-field type annotations on object literals** — the inline
   `/*: T */` form now also attaches to object property keys:
   `{ foo /*: Number */: 1, bar /*: String */: "" }`. The annotation

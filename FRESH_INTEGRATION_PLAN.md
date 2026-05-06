@@ -19,7 +19,7 @@ pieces stay reviewable.
 | P3 | Spread/rest in object & array literals + destructuring rest | M–L (~2 days) | **done** |
 | P1 | Bundler crate `inty-bundle` + CLI `inty bundle` | L (~2–3 days) | **done** |
 | P6 | User‑defined generic type aliases | L (~2–3 days) | **done** |
-| P8 | TS‑flavor parser + pretty printer + `.d.ts` loader | M–L (~2 days) | planned |
+| P8 | TS‑flavor parser + pretty printer + `.d.ts` loader | M–L (~2 days) | **partially done** (see notes) |
 | ~~P5~~ | ~~Discriminated‑union narrowing on tag fields~~ | — | **deferred — don't do** |
 
 Rationale for the order:
@@ -354,6 +354,35 @@ references.
 Lets `fresh` import `.d.ts` files directly and write annotations
 in the TS syntax that's already common in the migration sources.
 Output: `inty declarations` can emit `.d.ts` instead of `.d.js`.
+
+### Status
+
+**Shipped in this PR**:
+- Optional property `x?: T` desugars to `x: T | Undefined` in the
+  type parser.
+- `,` and `;` both accepted as object-property separators.
+- `readonly` modifier parses and erases.
+- `any` and `unknown` reject with span-anchored diagnostics that
+  suggest concrete types or closed unions.
+- Intersection `A & B` rejects with a suggestion to merge rows.
+- `inty declarations --format=ts` emits `declare const NAME: T;`
+  lines using lowercase TS primitives, `;`-separated rows, and
+  `Promise<T>` / `Record<string, T>` / `T[]` for compound forms.
+
+**Deferred to a follow-up**:
+- Full `.d.ts` file loader: `interface Foo { … }`,
+  `declare const/function/class`, and the rest of the ambient-
+  declaration surface as a single parsing entry point. Today
+  `fresh.d.ts` would need translation to inty's existing
+  `/** const NAME: T */` form before being passed via `--lib`.
+- `// @inty-format: ts` per-file marker for `.js` files.
+- Additional rejection diagnostics for `keyof`, `typeof T` in
+  type position, indexed access `T[K]` (currently parses as array
+  type), mapped/conditional types, tuple `[T, U]`, type assertion
+  `as T`. Scope is bounded; the type parser already rejects each
+  with a generic "unexpected character" message — promoting those
+  to suggestion-bearing diagnostics is mechanical but wasn't on
+  the critical path for the migration.
 
 ### What maps cleanly (accept)
 
