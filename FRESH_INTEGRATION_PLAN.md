@@ -56,15 +56,16 @@ Rationale for the order:
 - No new crate dependencies beyond what's in `Cargo.toml` without
   justification (P1 is the legitimate exception; see below).
 
-## Open decisions before starting P1
+## Decisions
 
-1. **Source maps**: add `sourcemap` crate as a workspace dep, or
-   hand‑roll VLQ (~150 LOC, no new dep)?
-2. **Bundler runtime test**: `quickjs-rs` as a dev‑dep (heavyweight,
-   C build), or a lighter "bundle re‑parses + re‑type‑checks" shape
-   test?
-
-(PR shape decided: single PR.)
+- **PR shape**: single PR on `claude/inty-fresh-integration-zZzai`
+  against `master`, items as separate commits.
+- **Source maps**: use the `sourcemap` crate. Added to
+  `crates/inty-bundle/Cargo.toml` as a runtime dep.
+- **Bundler runtime test**: use `quickjs-rs` (or `rquickjs`) as a
+  dev‑dep on `crates/inty-bundle/`. Round‑trip
+  `examples/spa/app.js` through the bundler and execute the result
+  to assert the same final state as today.
 
 ---
 
