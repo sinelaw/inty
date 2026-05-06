@@ -144,6 +144,7 @@ pub fn names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
                         names_in_stmt(body, out);
                     }
                     PropDef::Getter { body, .. } => names_in_stmt(body, out),
+                    PropDef::Spread { argument, .. } => names_in_expr(argument, out),
                     PropDef::Setter { param, body, .. } => {
                         out.insert(param.clone());
                         names_in_stmt(body, out);
@@ -194,6 +195,31 @@ pub fn names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
             names_in_expr(test, out);
             names_in_expr(consequent, out);
             names_in_expr(alternate, out);
+        }
+        Expr::NullishCoalesce { left, right, .. } => {
+            names_in_expr(left, out);
+            names_in_expr(right, out);
+        }
+        Expr::OptionalChain { head, segments, .. } => {
+            use inty::parser::ast::ChainSegment;
+            names_in_expr(head, out);
+            for seg in segments {
+                match seg {
+                    ChainSegment::Member { .. } => {}
+                    ChainSegment::Computed { property, .. } => {
+                        names_in_expr(property, out);
+                    }
+                    ChainSegment::Call { arguments, .. } => {
+                        for a in arguments {
+                            names_in_expr(a, out);
+                        }
+                    }
+                }
+            }
+        }
+        Expr::Spread { argument, .. } => names_in_expr(argument, out),
+        Expr::RestArray { source, .. } | Expr::RestRow { source, .. } => {
+            names_in_expr(source, out);
         }
         Expr::Sequence { expressions, .. } => {
             for e in expressions {
@@ -535,6 +561,10 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             key: key.clone(),
             param: if param == from { to.to_string() } else { param.clone() },
             body: Box::new(rename_stmt(body, from, to)),
+            span: *span,
+        },
+        PropDef::Spread { argument, span } => PropDef::Spread {
+            argument: rename_expr(argument, from, to),
             span: *span,
         },
     }

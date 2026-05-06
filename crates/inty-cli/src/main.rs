@@ -87,6 +87,9 @@ fn main() -> ExitCode {
     if raw.get(1).map(String::as_str) == Some("declarations") {
         return run_declarations(&raw[2..]);
     }
+    if raw.get(1).map(String::as_str) == Some("bundle") {
+        return run_bundle(&raw[2..]);
+    }
 
     let args = match parse_args(raw) {
         Ok(a) => a,
@@ -283,6 +286,106 @@ fn run_declarations(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_bundle(args: &[String]) -> ExitCode {
+    let mut input: Option<String> = None;
+    let mut out_path: Option<String> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                println!("inty bundle <entry.js> [-o out.js]");
+                println!();
+                println!("Type-check the entry module's import graph,");
+                println!("then emit a single self-contained JS blob");
+                println!("plus a v3 source map. With -o, writes <out>");
+                println!("and <out>.map; without, prints the bundle to");
+                println!("stdout (no source map written).");
+                return ExitCode::SUCCESS;
+            }
+            "-o" | "--output" => {
+                match iter.next() {
+                    Some(p) => out_path = Some(p.clone()),
+                    None => {
+                        eprintln!("error: -o requires a path argument");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            _ if arg.starts_with("--output=") => {
+                out_path = Some(arg["--output=".len()..].to_string());
+            }
+            _ if arg.starts_with("--") => {
+                eprintln!("error: unknown option to 'bundle': {}", arg);
+                return ExitCode::from(2);
+            }
+            _ => {
+                if input.is_some() {
+                    eprintln!("error: unexpected extra argument: {}", arg);
+                    return ExitCode::from(2);
+                }
+                input = Some(arg.clone());
+            }
+        }
+    }
+
+    let entry = match input {
+        Some(p) => p,
+        None => {
+            eprintln!("Usage: inty bundle <entry.js> [-o out.js]");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Type-check the entry first. The bundler assumes the program
+    // type-checks and won't surface a useful error if it doesn't.
+    let (env, mut state) = match initial_env_with_stdlib() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error loading stdlib: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+    let entry_path = std::path::Path::new(&entry);
+    if let Err(e) = inty::modules::check_module(&mut state, env, entry_path) {
+        let source = fs::read_to_string(entry_path).unwrap_or_default();
+        print_error_plain(&entry, &source, &e);
+        return ExitCode::from(1);
+    }
+    if let Err(e) = state.resolve_constraints() {
+        let source = fs::read_to_string(entry_path).unwrap_or_default();
+        print_error_plain(&entry, &source, &e);
+        return ExitCode::from(1);
+    }
+
+    // Now bundle.
+    let out = match inty_bundle::bundle(entry_path) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("bundle error: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+
+    match out_path {
+        Some(p) => {
+            if let Err(e) = fs::write(&p, &out.code) {
+                eprintln!("error writing {}: {}", p, e);
+                return ExitCode::from(1);
+            }
+            let map_path = format!("{}.map", p);
+            if let Err(e) = fs::write(&map_path, &out.source_map) {
+                eprintln!("error writing {}: {}", map_path, e);
+                return ExitCode::from(1);
+            }
+        }
+        None => {
+            print!("{}", out.code);
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
 fn run_lsp(args: &[String]) -> ExitCode {
     for arg in args {
         match arg.as_str() {
@@ -332,6 +435,8 @@ SUBCOMMANDS:
     lsp                  Start the language server (LSP over stdio)
     declarations         Emit `/** const NAME: T */ const NAME;` lines
                          for every exported binding of a module
+    bundle               Bundle a module's import graph into a single
+                         self-contained JS blob plus a v3 source map
 
 DESCRIPTION:
     Inty performs static type inference on mquickjs JavaScript code.

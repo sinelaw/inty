@@ -4,6 +4,7 @@ members = [
     "crates/inty",
     "crates/inty-lsp",
     "crates/inty-cli",
+    "crates/inty-bundle",
 ]
 
 [workspace.package]
