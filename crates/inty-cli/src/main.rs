@@ -79,10 +79,13 @@ fn main() -> ExitCode {
     let raw: Vec<String> = env::args().collect();
 
     // Sub-command dispatch: if argv[1] is `lsp`, hand off to the
-    // language server. The CLI has no global options, so `lsp` is the
-    // only sub-command and it always sits in slot 1.
+    // language server. `declarations` is a one-shot emitter for `.d.js`.
+    // Both sit in slot 1; the CLI has no global options before them.
     if raw.get(1).map(String::as_str) == Some("lsp") {
         return run_lsp(&raw[2..]);
+    }
+    if raw.get(1).map(String::as_str) == Some("declarations") {
+        return run_declarations(&raw[2..]);
     }
 
     let args = match parse_args(raw) {
@@ -200,6 +203,86 @@ fn load_extra_libs(
     Ok((env, state))
 }
 
+fn run_declarations(args: &[String]) -> ExitCode {
+    let mut input: Option<String> = None;
+    let mut no_stdlib = false;
+    let mut no_color = false;
+    for arg in args {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                println!("inty declarations <entry.js>");
+                println!();
+                println!("Type-check the entry module and emit one");
+                println!("`/** const NAME: T */ const NAME;` declaration");
+                println!("per export to stdout.");
+                return ExitCode::SUCCESS;
+            }
+            "--no-stdlib" => no_stdlib = true,
+            "--no-color" | "--no-colour" => no_color = true,
+            _ if arg.starts_with("--") => {
+                eprintln!("error: unknown option to 'declarations': {}", arg);
+                return ExitCode::from(2);
+            }
+            _ => {
+                if input.is_some() {
+                    eprintln!("error: unexpected extra argument: {}", arg);
+                    return ExitCode::from(2);
+                }
+                input = Some(arg.clone());
+            }
+        }
+    }
+
+    let path = match input {
+        Some(p) => p,
+        None => {
+            eprintln!("Usage: inty declarations <entry.js>");
+            return ExitCode::from(2);
+        }
+    };
+
+    let (env, mut state) = if no_stdlib {
+        (inty::builtins::initial_env(), InferState::new())
+    } else {
+        match initial_env_with_stdlib() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error loading built-in stdlib: {}", e);
+                return ExitCode::from(1);
+            }
+        }
+    };
+
+    let report_err = |source_label: &str, source: &str, error: &IntyError| {
+        if no_color {
+            print_error_plain(source_label, source, error);
+        } else {
+            print_error(source_label, source, error);
+        }
+    };
+
+    let (module_env, exports) =
+        match inty::modules::check_module(&mut state, env, std::path::Path::new(&path)) {
+            Ok(r) => r,
+            Err(e) => {
+                let source = fs::read_to_string(&path).unwrap_or_default();
+                report_err(&path, &source, &e);
+                return ExitCode::from(1);
+            }
+        };
+
+    if let Err(e) = state.resolve_constraints() {
+        let source = fs::read_to_string(&path).unwrap_or_default();
+        report_err(&path, &source, &e);
+        return ExitCode::from(1);
+    }
+
+    let module = inty::declarations::CheckedModule::new(module_env, exports);
+    print!("{}", inty::declarations::emit_declarations(&module));
+
+    ExitCode::SUCCESS
+}
+
 fn run_lsp(args: &[String]) -> ExitCode {
     for arg in args {
         match arg.as_str() {
@@ -247,6 +330,8 @@ OPTIONS:
 
 SUBCOMMANDS:
     lsp                  Start the language server (LSP over stdio)
+    declarations         Emit `/** const NAME: T */ const NAME;` lines
+                         for every exported binding of a module
 
 DESCRIPTION:
     Inty performs static type inference on mquickjs JavaScript code.

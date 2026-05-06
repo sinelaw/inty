@@ -29,6 +29,7 @@ what changed and why.
 | — | Missing Math methods (log/sin/cos/atan2/…)           | *resolved*   |
 | — | No `Object.keys`, `Array.isArray`                    | *resolved*   |
 | — | No module resolution (`import`/`export`)             | *resolved*   |
+| — | No `.d.js` emit from a checked module                | *resolved*   |
 | — | `await` outside an async function                    | *resolved* (now errors at parse time) |
 | — | Duplicate `const` in the same scope                  | *resolved* (now errors) |
 | — | Arrow `this` inheritance / `let` per-iteration / `var` function-scope | **out of scope** (see "By design" below) |
@@ -270,6 +271,13 @@ These weren't in the original 14 but got addressed alongside:
   to an IIFE wrapped in `Promise.resolve`; `await e` is a unary
   operator that unwraps `Promise<T>` to `T`. `fetch` in the stdlib
   returns `Promise<Response>`.
+- **`.d.js` emit from a checked module** — `inty declarations
+  <entry.js>` walks the module's effective export table and prints
+  one `/** const NAME: T */ const NAME;` line per export. Internal
+  bindings are omitted; re-exports flatten into inline schemes.
+  Replaces `oxc`'s `IsolatedDeclarations` pass for downstream tools
+  that publish a plugin's public surface. Programmatic API:
+  `inty::declarations::emit_declarations(&CheckedModule)`.
 - **Per-field type annotations on object literals** — the inline
   `/*: T */` form now also attaches to object property keys:
   `{ foo /*: Number */: 1, bar /*: String */: "" }`. The annotation

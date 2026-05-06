@@ -406,6 +406,24 @@ pub fn resolve_imports(
     Ok(env)
 }
 
+/// Parse and type-check a single module file from disk, returning the
+/// inferred environment and the effective export table.
+///
+/// This is the public entry point downstream consumers use when they
+/// need both halves of a checked module (typically to render a `.d.js`
+/// declarations file via [`crate::declarations::emit_declarations`]).
+/// Equivalent to the internal `load_module` but exposed and not gated
+/// on a caller-supplied cycle-detection set — top-level callers always
+/// start from an empty `visiting` set.
+pub fn check_module(
+    state: &mut InferState,
+    starting_env: TypeEnv,
+    path: &Path,
+) -> Result<(TypeEnv, ExportTable), IntyError> {
+    let mut visiting = HashSet::new();
+    load_module(state, starting_env, path, &mut visiting)
+}
+
 /// Parse and infer a single module file, returning the inferred env and
 /// the module's effective export table (with re-exports resolved).
 fn load_module(
