@@ -45,6 +45,21 @@ impl CheckedModule {
     }
 }
 
+/// Output flavor for [`emit_declarations`]. The default `Inty`
+/// flavor matches `stdlib/*.d.js`; the `Ts` flavor produces TS
+/// `declare const NAME: T;` lines suitable for a `.d.ts` consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclarationFlavor {
+    Inty,
+    Ts,
+}
+
+impl Default for DeclarationFlavor {
+    fn default() -> Self {
+        DeclarationFlavor::Inty
+    }
+}
+
 /// Emit `.d.js` declarations for a checked module's exports.
 ///
 /// Each export becomes a `/** const NAME: T */ const NAME;` pair.
@@ -57,10 +72,24 @@ impl CheckedModule {
 /// at the binding level on re-import, matching how `stdlib/core.d.js`
 /// declarations work.
 pub fn emit_declarations(module: &CheckedModule) -> String {
+    emit_declarations_with_flavor(module, DeclarationFlavor::Inty)
+}
+
+/// Emit declarations in the requested flavor. With
+/// `DeclarationFlavor::Ts`, output uses TypeScript syntax — one
+/// `declare const NAME: T;` line per export, suitable for a `.d.ts`
+/// file other TS tooling can consume.
+pub fn emit_declarations_with_flavor(
+    module: &CheckedModule,
+    flavor: DeclarationFlavor,
+) -> String {
     let mut out = String::new();
     for entry in &module.exports {
         if let Some(scheme) = resolve_scheme(entry, &module.env) {
-            emit_one(&mut out, &entry.exported, &scheme);
+            match flavor {
+                DeclarationFlavor::Inty => emit_one(&mut out, &entry.exported, &scheme),
+                DeclarationFlavor::Ts => emit_one_ts(&mut out, &entry.exported, &scheme),
+            }
         }
     }
     out
@@ -83,6 +112,16 @@ fn emit_one(out: &mut String, name: &str, scheme: &TypeScheme) {
     out.push_str(" */\n");
     out.push_str("const ");
     out.push_str(name);
+    out.push_str(";\n");
+}
+
+fn emit_one_ts(out: &mut String, name: &str, scheme: &TypeScheme) {
+    let mut ctx = PrettyContext::new();
+    let body = ctx.format_type_ts(&scheme.body.ty);
+    out.push_str("declare const ");
+    out.push_str(name);
+    out.push_str(": ");
+    out.push_str(&body);
     out.push_str(";\n");
 }
 
@@ -145,6 +184,42 @@ mod tests {
         let out = emit_declarations(&module);
         assert!(out.contains("exported"));
         assert!(!out.contains("internal"));
+    }
+
+    #[test]
+    fn ts_flavor_emits_declare_const_lines() {
+        // TS-flavor output uses `declare const NAME: T;` with
+        // lowercase TS primitives and `;`-separated object types.
+        let env = TypeEnv::empty()
+            .extend(
+                "answer".to_string(),
+                TypeScheme::mono(Type::Number),
+            )
+            .extend(
+                "cfg".to_string(),
+                TypeScheme::mono(Type::object([
+                    ("name", Type::String),
+                    ("count", Type::Number),
+                ])),
+            );
+        let exports = vec![
+            ExportEntry {
+                exported: "answer".to_string(),
+                binding: ExportBinding::Local("answer".to_string()),
+            },
+            ExportEntry {
+                exported: "cfg".to_string(),
+                binding: ExportBinding::Local("cfg".to_string()),
+            },
+        ];
+        let module = CheckedModule::new(env, exports);
+        let out =
+            emit_declarations_with_flavor(&module, DeclarationFlavor::Ts);
+        assert!(out.contains("declare const answer: number;"));
+        assert!(out.contains("declare const cfg:"));
+        // TS-flavor row should use semicolons between fields.
+        assert!(out.contains("name: string"));
+        assert!(out.contains("count: number"));
     }
 
     #[test]

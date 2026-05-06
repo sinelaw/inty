@@ -122,6 +122,20 @@ impl<'a> TypeParser<'a> {
         // around it.
         let first = self.parse_simple_type()?;
         self.skip_whitespace();
+        // Intersection types `A & B` are TS-only — reject with a
+        // suggested alternative pointing at row merging.
+        if self.peek_char() == Some('&') {
+            // Don't fire on `&&`; only standalone `&`.
+            let after = self.input[self.pos + 1..].chars().next();
+            if after != Some('&') {
+                return Err(self.error(
+                    "intersection types `A & B` are not supported in inty. \
+                     Help: merge the rows into a single object type \
+                     `{ ...fields of A, ...fields of B }`."
+                        .to_string(),
+                ));
+            }
+        }
         if self.peek_char() != Some('|') {
             return Ok(first);
         }
@@ -390,21 +404,58 @@ impl<'a> TypeParser<'a> {
         if self.peek_char() != Some('}') {
             loop {
                 self.skip_whitespace();
+                // `readonly` is a TS modifier with no semantic effect
+                // under inty's structural typing — erase if present.
+                if self.input[self.pos..].starts_with("readonly")
+                    && !matches!(
+                        self.input[self.pos + "readonly".len()..].chars().next(),
+                        Some(c) if self.is_ident_cont(Some(c))
+                    )
+                {
+                    self.pos += "readonly".len();
+                    self.skip_whitespace();
+                }
                 let name = self.parse_ident()?;
                 self.skip_whitespace();
+                // Optional property `x?: T` desugars to `x: T | Undefined`.
+                let optional = if self.peek_char() == Some('?') {
+                    self.pos += 1;
+                    self.skip_whitespace();
+                    true
+                } else {
+                    false
+                };
                 self.expect_char(':')?;
                 self.skip_whitespace();
                 // Property types inherit the current allow_quantifiers context.
                 // At top level, quantifiers are allowed: { fn: <T>(x: T) => T } is valid.
                 // Inside function params, they're not: (obj: { fn: <T>(x: T) => T }) => X is Rank-2.
                 let ty = self.parse_type()?;
-                props.push((name, ty));
+                let prop_ty = if optional {
+                    Type::union([ty, Type::Undefined])
+                } else {
+                    ty
+                };
+                props.push((name, prop_ty));
 
                 self.skip_whitespace();
                 if self.peek_char() == Some('}') {
                     break;
                 }
-                self.expect_char(',')?;
+                // Accept either `,` or `;` as separator — TS uses `;`,
+                // inty traditionally uses `,`. Both are equivalent here.
+                if self.peek_char() == Some(',') || self.peek_char() == Some(';') {
+                    self.pos += 1;
+                } else {
+                    return Err(self.error(format!(
+                        "expected ',' or ';' between object-type properties"
+                    )));
+                }
+                self.skip_whitespace();
+                // Trailing separator before `}` is allowed.
+                if self.peek_char() == Some('}') {
+                    break;
+                }
             }
         }
 
@@ -415,6 +466,16 @@ impl<'a> TypeParser<'a> {
 
     /// Convert an identifier to a type.
     fn ident_to_type(&mut self, ident: &str) -> ParseResult<Type> {
+        // Unsupported TS constructs: rejected with a span-anchored
+        // diagnostic that names the construct and the inty idiom
+        // that replaces it.
+        if let Some(suggestion) = unsupported_ts_alternative(ident) {
+            return Err(self.error(format!(
+                "type '{}' is not supported in inty. {}",
+                ident, suggestion
+            )));
+        }
+
         match ident {
             "Number" | "number" => Ok(Type::Number),
             "String" | "string" => Ok(Type::String),
@@ -605,6 +666,23 @@ pub fn parse_type_annotation_with_aliases(
     let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
     let ty = parser.parse()?;
     Ok((ty, parser.type_vars.clone()))
+}
+
+/// Map a rejected TS-style type name to a suggested inty
+/// alternative. Returns `None` if the identifier isn't a known
+/// TS-only construct — caller falls through to the regular type-
+/// variable / alias-application paths.
+fn unsupported_ts_alternative(ident: &str) -> Option<&'static str> {
+    match ident {
+        "any" => Some(
+            "Help: use a concrete type, or a closed union of the values you actually accept.",
+        ),
+        "unknown" => Some(
+            "Help: same as `any` — the parser cannot model an opaque \"any value\" without subtyping.",
+        ),
+        // `never` is supported as the empty union; not rejected.
+        _ => None,
+    }
 }
 
 /// Capture-avoiding substitution against an alias body. Walks a
