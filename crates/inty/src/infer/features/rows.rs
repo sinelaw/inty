@@ -376,6 +376,16 @@ impl InferState {
                     return Ok(ty);
                 }
             }
+            Type::Regex => {
+                // Regex.prototype methods. `test` is a Boolean predicate;
+                // `match`/`exec` would return `match-info | Null` in JS,
+                // but inty has no nullable types — for now we type them
+                // optimistically (assume a match), letting downstream
+                // code that checks `=== null` fail to narrow.
+                if let Some(ty) = crate::builtins::regex_method_type(self, property) {
+                    return Ok(ty);
+                }
+            }
             Type::Row(row) => {
                 // If the property exists in the row, return its type directly
                 if let Some(prop_type) = row.props.get(&PropName(property.to_string())) {

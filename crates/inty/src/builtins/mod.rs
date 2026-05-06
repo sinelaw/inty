@@ -115,6 +115,38 @@ pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> 
     })
 }
 
+/// Look up a built-in Regex prototype method by name. Each call gets a
+/// fresh function type. `test` returns Boolean; `match`/`exec` return
+/// the match-info row directly (without modelling the "no match"
+/// `null` fallback, which would require nullable types).
+pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
+    let _ = state;
+    let s = Type::String;
+    let n = Type::Number;
+    let b = Type::Boolean;
+    Some(match method {
+        "test" => Type::simple_func(vec![s.clone()], b.clone()),
+        "exec" => Type::simple_func(
+            vec![s.clone()],
+            Type::array(s.clone()),
+        ),
+        "toString" => Type::simple_func(vec![], s.clone()),
+        // Direct properties.
+        "source" => s.clone(),
+        "flags" => s.clone(),
+        "global" => b.clone(),
+        "ignoreCase" => b.clone(),
+        "multiline" => b.clone(),
+        "sticky" => b.clone(),
+        "unicode" => b.clone(),
+        "lastIndex" => n.clone(),
+        _ => {
+            let _ = (s, n, b);
+            return None;
+        }
+    })
+}
+
 /// Look up a built-in Array prototype method by name for an array whose
 /// element type is `elem`.
 ///

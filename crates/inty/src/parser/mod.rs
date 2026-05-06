@@ -239,6 +239,22 @@ impl Parser {
         }
     }
 
+    /// Parse a pattern entry that may carry a default: `<pattern> [= expr]`.
+    /// inty has no notion of optional values at the type level — every
+    /// destructured property must exist on the source row — so the
+    /// default expression has no run-time or type effect under inty's
+    /// rules. We still parse it (so source files using defaults type-
+    /// check), then discard. The default expression is **not** type-
+    /// checked. (Function-parameter defaults, by contrast, do type-check
+    /// the default, because the parameter's type is otherwise free.)
+    fn parse_pattern_with_default(&mut self) -> Result<Pattern> {
+        let inner = self.parse_pattern()?;
+        if self.consume_if(&Token::Eq) {
+            let _default = self.parse_assignment_expression()?;
+        }
+        Ok(inner)
+    }
+
     fn parse_object_pattern(&mut self) -> Result<Pattern> {
         let start = self.current_span().start;
         self.expect(&Token::LBrace)?;
@@ -256,10 +272,19 @@ impl Parser {
             let entry_span = self.current_span();
             let source = self.expect_ident()?;
             let sub = if self.consume_if(&Token::Colon) {
-                self.parse_pattern()?
+                self.parse_pattern_with_default()?
             } else {
-                // Shorthand `{a}` is `{a: a}`.
-                Pattern::Ident(source.clone(), entry_span)
+                // Shorthand `{a}` is `{a: a}`. May carry a default —
+                // `{a = 1}` is `{a: a = 1}`, where the default applies
+                // to the binding `a`.
+                let ident_pat = Pattern::Ident(source.clone(), entry_span);
+                if self.consume_if(&Token::Eq) {
+                    // Default value on a destructuring shorthand
+                    // (`{a = 1}`). inty has no nullable model, so the
+                    // default has no type effect — parse and discard.
+                    let _default = self.parse_assignment_expression()?;
+                }
+                ident_pat
             };
             entries.push((source, sub, entry_span));
             if !self.consume_if(&Token::Comma) {
@@ -285,7 +310,7 @@ impl Parser {
                 // Per spec, rest must be the trailing element.
                 break;
             }
-            elems.push(self.parse_pattern()?);
+            elems.push(self.parse_pattern_with_default()?);
             if !self.consume_if(&Token::Comma) {
                 break;
             }
@@ -593,33 +618,70 @@ impl Parser {
                     span: Span::new(start, self.prev_span().end),
                 })
             }
-            Token::Function => {
-                // export function foo() {}
-                let func_start = self.current_span();
-                self.advance();
-                let name = self.expect_ident()?;
-                // Check for type annotation matching this function name
-                let type_annotation = self.try_get_type_annotation_for_function(func_start, &name);
-                self.expect(&Token::LParen)?;
-                let params = self.parse_parameters()?;
-                self.expect(&Token::RParen)?;
-                let body = Box::new(self.parse_function_body_block()?);
-                let func_span = Span::new(start, self.prev_span().end);
-
-                Ok(Stmt::Export {
-                    declaration: ExportDecl::Function {
-                        name,
-                        params,
-                        body,
-                        type_annotation,
-                        span: func_span,
-                    },
-                    span: Span::new(start, self.prev_span().end),
-                })
+            Token::Function => self.parse_export_function_declaration(start, false),
+            // `export async function foo() { ... }` — the `async` token is
+            // followed by `function`. Hand off to the same export-function
+            // path with the async flag set so the body gets wrapped in
+            // `Promise.resolve` exactly like a non-exported async function.
+            Token::Async
+                if matches!(
+                    self.tokens.get(self.pos + 1).map(|s| &s.value),
+                    Some(Token::Function)
+                ) =>
+            {
+                self.advance(); // consume `async`
+                self.parse_export_function_declaration(start, true)
             }
             Token::Default => {
                 // export default <function-expression-or-assignment-expression>
                 self.advance();
+                // `export default class { ... }` and
+                // `export default class extends X { ... }` aren't a single
+                // expression in mquickjs (classes are statements that
+                // desugar to factory functions). Synthesise a name and
+                // parse the class as a normal declaration; convert the
+                // resulting `Stmt::FunctionDecl` (the class factory) to
+                // an `Expr::Function` with the synthetic name and bind it
+                // through `ExportDecl::Default`, exactly like
+                // `export default function f() { ... }` does. The
+                // existing `class extends` rejection still fires from
+                // the class parser if applicable, with its gaps.md
+                // pointer attached.
+                if self.check(&Token::Class) {
+                    let synth_name = format!("$default_class${}", self.temp_counter);
+                    self.temp_counter += 1;
+                    let class_decl = self.parse_class_declaration_named(Some(synth_name.clone()))?;
+                    let value = match class_decl {
+                        Stmt::FunctionDecl {
+                            name,
+                            params,
+                            body,
+                            type_annotation,
+                            span,
+                        } => Expr::Function {
+                            name: Some(name),
+                            params,
+                            body,
+                            type_annotation,
+                            span,
+                        },
+                        // Class desugaring guarantees a FunctionDecl;
+                        // anything else means the desugarer changed.
+                        other => panic!(
+                            "class declaration did not desugar to FunctionDecl: {:?}",
+                            other
+                        ),
+                    };
+                    self.consume_semicolon();
+                    let decl_span = Span::new(start, self.prev_span().end);
+                    return Ok(Stmt::Export {
+                        declaration: ExportDecl::Default {
+                            value,
+                            span: decl_span,
+                        },
+                        span: decl_span,
+                    });
+                }
                 let value = if self.check(&Token::Function) {
                     self.parse_function_expression()?
                 } else {
@@ -745,9 +807,21 @@ impl Parser {
     /// literal. Any other kind of constructor statement errors out; users
     /// who need more should write the factory function directly.
     fn parse_class_declaration(&mut self) -> Result<Stmt> {
+        self.parse_class_declaration_named(None)
+    }
+
+    /// Parse a class declaration. If `forced_name` is `Some`, the
+    /// caller has already chosen the name (used by the
+    /// `export default class { ... }` arm to give an anonymous class
+    /// a synthetic identifier). Otherwise the next token must be an
+    /// identifier — the usual `class Foo { ... }` form.
+    fn parse_class_declaration_named(&mut self, forced_name: Option<String>) -> Result<Stmt> {
         let start = self.current_span().start;
         self.expect(&Token::Class)?;
-        let name = self.expect_ident()?;
+        let name = match forced_name {
+            Some(n) => n,
+            None => self.expect_ident()?,
+        };
 
         // Reject `extends Parent` for now; it'd need a real prototype chain
         // to match runtime semantics and inty has no inheritance.
@@ -755,7 +829,10 @@ impl Parser {
             let span = self.current_span();
             return Err(ParseError::UnexpectedToken {
                 found: "extends".to_string(),
-                expected: "{ (class inheritance is not supported)".to_string(),
+                expected: "{ (class inheritance is not supported — see \
+                    examples/spa/gaps.md § 'By design' for the \
+                    factory-function workaround)"
+                    .to_string(),
                 span,
             }
             .into());
@@ -1187,6 +1264,55 @@ impl Parser {
         None
     }
 
+    /// Parse `export function foo(...){ ... }` or, when `is_async` is
+    /// true, `export async function foo(...){ ... }`. Shared between
+    /// the two `parse_export_declaration` arms; the async path runs
+    /// the body through `wrap_body_in_promise_resolve` so the
+    /// exported function's return type ends up as `Promise<T>`,
+    /// matching the non-exported `async function` rule.
+    fn parse_export_function_declaration(
+        &mut self,
+        start: usize,
+        is_async: bool,
+    ) -> Result<Stmt> {
+        let func_start = self.current_span();
+        self.advance(); // consume `function`
+        let name = self.expect_ident()?;
+        let type_annotation = self.try_get_type_annotation_for_function(func_start, &name);
+        self.expect(&Token::LParen)?;
+        // Use `parse_parameters_with_prefix` so destructuring patterns
+        // and rest/default parameters work in `export function`
+        // declarations the same way they do for plain ones.
+        let (params, prefix) = self.parse_parameters_with_prefix()?;
+        self.expect(&Token::RParen)?;
+        if is_async {
+            // Tell `parse_function_body_block` to track an enclosing
+            // async context so `await` inside this body is legal.
+            self.next_fn_is_async = true;
+        }
+        let body_block = self.parse_function_body_block()?;
+        let body = Box::new(Self::prepend_param_destructuring(body_block, prefix));
+        let body = if is_async {
+            // Reuse the same Promise.resolve(IIFE) wrapping the
+            // non-exported async path uses, so inference produces
+            // `(...) => Promise<T>` without any new rules.
+            Self::wrap_body_in_promise_resolve(body, func_start)
+        } else {
+            body
+        };
+        let func_span = Span::new(start, self.prev_span().end);
+        Ok(Stmt::Export {
+            declaration: ExportDecl::Function {
+                name,
+                params,
+                body,
+                type_annotation,
+                span: func_span,
+            },
+            span: func_span,
+        })
+    }
+
     /// Wrap an `async function` declaration so its return type becomes
     /// `Promise<T>`. The body is lifted into an IIFE and handed to
     /// `Promise.resolve`, turning `async function foo(x) { return x + 1; }`
@@ -1322,6 +1448,34 @@ impl Parser {
                     // anchor its span at the pattern's start. Editors
                     // hovering on the pattern still see something.
                     params.push(Param::new(temp, pattern_span));
+                } else if self.check(&Token::DotDotDot) {
+                    // `...args` rest parameter. inty has no variadic
+                    // call shape, so we treat the rest binding as a
+                    // single regular parameter — its type ends up as
+                    // a fresh variable that the body's uses constrain
+                    // (typically to `T[]`). Callers that pass
+                    // individual arguments will error on arity, which
+                    // matches inty's "no variadic calls" stance. The
+                    // `...` token is consumed and discarded.
+                    self.advance();
+                    let name_span = self.current_span();
+                    let name = self.expect_ident()?;
+                    let actual_span = Span::new(
+                        name_span.start,
+                        name_span.start + name.len(),
+                    );
+                    params.push(Param::new(name, actual_span));
+                    // Rest param must be last per spec. Don't allow a
+                    // trailing comma to start another parameter.
+                    if self.consume_if(&Token::Comma) {
+                        return Err(ParseError::UnexpectedToken {
+                            found: ",".to_string(),
+                            expected: ") (rest parameter must be last)".to_string(),
+                            span: self.current_span(),
+                        }
+                        .into());
+                    }
+                    break;
                 } else {
                     let name_span = self.current_span();
                     let name = self.expect_ident()?;
@@ -1329,6 +1483,47 @@ impl Parser {
                         name_span.start,
                         name_span.start + name.len(),
                     );
+                    // `param = expr` — default value. inty has no
+                    // notion of optional arguments (call sites must
+                    // match arity exactly), so the default is purely a
+                    // type-level hint: it constrains the parameter's
+                    // type to match the default's type, and type-checks
+                    // the default expression. Lower to a dead `if
+                    // (false) { param = default; }` block at the start
+                    // of the body. The branch never executes at runtime
+                    // (so the default doesn't clobber the caller's
+                    // value when the dynamics interpreter runs the
+                    // function), but inference still walks into it,
+                    // which unifies the param's type variable with the
+                    // default's type via the assignment.
+                    if self.consume_if(&Token::Eq) {
+                        let default_expr = self.parse_assignment_expression()?;
+                        let default_span = default_expr.span();
+                        let assign = Stmt::Expr {
+                            expression: Expr::Assign {
+                                op: AssignOp::Assign,
+                                left: Box::new(Expr::Ident {
+                                    name: name.clone(),
+                                    span: actual_span,
+                                }),
+                                right: Box::new(default_expr),
+                                span: default_span,
+                            },
+                            span: default_span,
+                        };
+                        prefix.push(Stmt::If {
+                            test: Expr::Lit {
+                                value: Literal::Boolean(false),
+                                span: actual_span,
+                            },
+                            consequent: Box::new(Stmt::Block {
+                                body: vec![assign],
+                                span: default_span,
+                            }),
+                            alternate: None,
+                            span: default_span,
+                        });
+                    }
                     params.push(Param::new(name, actual_span));
                 }
 
@@ -1734,9 +1929,21 @@ impl Parser {
 
         let handler = if self.consume_if(&Token::Catch) {
             let catch_start = self.prev_span().start;
-            self.expect(&Token::LParen)?;
-            let param = self.expect_ident()?;
-            self.expect(&Token::RParen)?;
+            // ES2019 optional binding: `catch {}` is shorthand for
+            // `catch (e) {}` with the parameter unused. Synthesise a
+            // unique name so downstream inference doesn't try to use
+            // an empty string and the binding doesn't collide with
+            // user-written names.
+            let param = if self.check(&Token::LBrace) {
+                let synth = format!("$catch${}", self.temp_counter);
+                self.temp_counter += 1;
+                synth
+            } else {
+                self.expect(&Token::LParen)?;
+                let p = self.expect_ident()?;
+                self.expect(&Token::RParen)?;
+                p
+            };
             let body = Box::new(self.parse_block_statement()?);
 
             Some(CatchClause {
@@ -2296,7 +2503,26 @@ impl Parser {
 
         if !self.check(&Token::RParen) {
             loop {
-                args.push(self.parse_assignment_expression()?);
+                if self.check(&Token::DotDotDot) {
+                    // `...expr` spread argument. The runtime semantics
+                    // (flatten into N arguments) aren't representable
+                    // in inty's fixed-arity call model. We parse the
+                    // spread into an `Expr::Spread`; `infer_call` peels
+                    // the wrapper off and treats the inner expression
+                    // as a single argument, which gives a useful error
+                    // when arities mismatch but lets variadic-style
+                    // code parse.
+                    let spread_start = self.current_span().start;
+                    self.advance();
+                    let argument = self.parse_assignment_expression()?;
+                    let spread_span = Span::new(spread_start, self.prev_span().end);
+                    args.push(Expr::Spread {
+                        argument: Box::new(argument),
+                        span: spread_span,
+                    });
+                } else {
+                    args.push(self.parse_assignment_expression()?);
+                }
 
                 if !self.consume_if(&Token::Comma) {
                     break;
@@ -2583,6 +2809,26 @@ impl Parser {
                 body,
                 span: Span::new(start, self.prev_span().end),
             });
+        }
+
+        // Property shorthand: `{ name }` is `{ name: name }`. The key
+        // must be an identifier (string/number keys can't carry the
+        // implicit reference to a same-named binding). Triggers when
+        // the next token closes the entry (`,` or `}`) without an
+        // intervening `:`.
+        if let PropKey::Ident(name) = &key {
+            if self.check(&Token::Comma) || self.check(&Token::RBrace) {
+                let key_span = self.prev_span();
+                return Ok(PropDef::Property {
+                    key: key.clone(),
+                    value: Expr::Ident {
+                        name: name.clone(),
+                        span: key_span,
+                    },
+                    type_annotation: None,
+                    span: Span::new(start, self.prev_span().end),
+                });
+            }
         }
 
         // Per-field type annotation: `key /*: T */: value`. We look it up by

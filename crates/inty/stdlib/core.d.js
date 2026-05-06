@@ -36,10 +36,10 @@ const JSON;
 // These shadow the bare `Object` / `Array` constructors in the Rust initial
 // env, which means `new Object()` / `new Array()` no longer type-check —
 // use object/array literals (`{}` / `[]`) instead.
-/** const Object: {keys: (a) => String[]} */
+/** const Object: {keys: (a) => String[], values: (a) => b[], entries: (a) => b[][], assign: (a, b) => a, fromEntries: (a[][]) => b} */
 const Object;
 
-/** const Array: {isArray: (a) => Boolean} */
+/** const Array: {isArray: (a) => Boolean, from: (a) => b[], of: (a) => a[]} */
 const Array;
 
 // Promise constructor helpers. `resolve` and `reject` are both
@@ -60,3 +60,10 @@ const isNaN;
 
 /** const isFinite: (Number) => Boolean */
 const isFinite;
+
+// Base64 encoding/decoding. Web platform globals; Node has them since v16.
+/** const atob: (String) => String */
+const atob;
+
+/** const btoa: (String) => String */
+const btoa;
