@@ -271,18 +271,30 @@ impl InferState {
 
         // Handle built-in properties for arrays and strings
         match obj_type {
-            Type::Array(_) => {
-                match property {
-                    "length" => return Ok(Type::Number),
-                    // Array methods could be added here
-                    _ => {}
+            Type::Array(elem_ty) => {
+                if property == "length" {
+                    return Ok(Type::Number);
+                }
+                if let Some(ty) = crate::builtins::array_method_type(self, elem_ty, property) {
+                    return Ok(ty);
                 }
             }
             Type::String => {
-                match property {
-                    "length" => return Ok(Type::Number),
-                    // String methods could be added here
-                    _ => {}
+                if property == "length" {
+                    return Ok(Type::Number);
+                }
+                if let Some(ty) = crate::builtins::string_method_type(self, property) {
+                    return Ok(ty);
+                }
+            }
+            Type::Promise(inner_ty) => {
+                if let Some(ty) = crate::builtins::promise_method_type(self, inner_ty, property) {
+                    return Ok(ty);
+                }
+            }
+            Type::Regex => {
+                if let Some(ty) = crate::builtins::regex_method_type(self, property) {
+                    return Ok(ty);
                 }
             }
             Type::Row(row) => {
