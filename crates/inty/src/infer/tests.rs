@@ -1555,15 +1555,28 @@ fn test_no_warn_typeof_satisfiable_branch() {
 fn test_warn_strict_eq_literal_impossible_branch() {
     // Discriminated-union narrowing: the `triangle` arm can never
     // match the closed `"circle" | "square"` discriminator.
+    // The annotation is now required: with the row-tail
+    // substitution fix in place, an un-annotated `shape` would
+    // be inferred as a single closed row carrying *all* of
+    // `r`, `s`, `kind`, and the call below (which only supplies
+    // `kind` and `r`) would fail at the missing `s`. The
+    // annotation states the discriminated-union shape the
+    // function is really meant to handle.
+    // The annotation is required: with the row-tail substitution
+    // fix, an un-annotated `shape` is inferred as a single closed
+    // row carrying *all* of `r`, `s`, and `kind`, and any caller
+    // missing one of those would fail. The annotation states the
+    // discriminated-union shape the function is meant to handle.
+    // We don't make a call here — the test only cares about which
+    // warnings fire on the body's narrowing.
     let src = "\
+        /** function area(shape: {kind: \"circle\", r: Number} \
+                              | {kind: \"square\", s: Number}) => Number */\n\
         function area(shape) { \
             if (shape.kind === \"circle\") { return shape.r; } \
             else if (shape.kind === \"triangle\") { return 0; } \
             else { return shape.s; } \
-        } \
-        /** let c: {kind: \"circle\", r: Number} */ \
-        let c = {kind: \"circle\", r: 1}; \
-        area(c);";
+        }";
     let (_, _, state) = infer_program_with_state(src).unwrap();
     // The narrowing on the second arm depends on `area`'s parameter
     // being inferred to a closed-union shape. If inference doesn't
