@@ -149,7 +149,11 @@ impl<'a> TypeParser<'a> {
         Ok(Type::union(members))
     }
 
-    /// Parse a generic type like `<T>(x: T) => T`.
+    /// Parse a generic type like `<T>(x: T) => T` or `<T> {...}`.
+    /// Quantifier-then-function is the common form; quantifier-then-row
+    /// (`<a> { (a) => T, foo: ... }`) declares a polymorphic callable
+    /// row, used by the unified design's primitive-constructor stubs
+    /// (`String`, `Number`, `Boolean`) in core.d.js.
     fn parse_generic_type(&mut self) -> ParseResult<Type> {
         self.expect_char('<')?;
         self.skip_whitespace();
@@ -172,9 +176,12 @@ impl<'a> TypeParser<'a> {
         }
         self.expect_char('>')?;
 
-        // Parse the function type
+        // Parse the body — either a function type or a row type. Use
+        // `parse_simple_type` so any leaf-shape (and `[]` array
+        // suffixes) is acceptable; quantifier-then-arbitrary-shape is
+        // the principled extension and only the parser changes.
         self.skip_whitespace();
-        self.parse_func_type()
+        self.parse_simple_type()
     }
 
     /// Parse a function type or a grouped type in parentheses.

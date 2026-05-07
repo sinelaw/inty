@@ -101,20 +101,58 @@ fn test_infer_string_length() {
 
 #[test]
 fn test_infer_string_constructor() {
-    let ty = infer_expr_str("String(42)").unwrap();
+    // `String` / `Number` / `Boolean` live in core.d.js as callable
+    // rows under the unified design. The bare `initial_env` no longer
+    // declares them, so we go through the full stdlib-aware program
+    // path to exercise the constructor call.
+    let (_, env, state) =
+        infer_program_via_program_with_stdlib("var s = String(42);").unwrap();
+    let ty = state.apply_subst(&env.lookup("s").unwrap().body.ty);
     assert_eq!(ty, Type::String);
 }
 
 #[test]
 fn test_infer_number_constructor() {
-    let ty = infer_expr_str("Number(\"42\")").unwrap();
+    let (_, env, state) =
+        infer_program_via_program_with_stdlib("var n = Number(\"42\");").unwrap();
+    let ty = state.apply_subst(&env.lookup("n").unwrap().body.ty);
     assert_eq!(ty, Type::Number);
 }
 
 #[test]
 fn test_infer_boolean_constructor() {
-    let ty = infer_expr_str("Boolean(0)").unwrap();
+    let (_, env, state) =
+        infer_program_via_program_with_stdlib("var b = Boolean(0);").unwrap();
+    let ty = state.apply_subst(&env.lookup("b").unwrap().body.ty);
     assert_eq!(ty, Type::Boolean);
+}
+
+/// Helper that runs a program through the full stdlib-aware
+/// inference path. Used by tests that exercise builtin bindings
+/// (`String`, `Number`, `Boolean`, `Math`, `JSON`, `Promise`, …)
+/// declared in core.d.js / dom.d.js.
+fn infer_program_via_program_with_stdlib(
+    source: &str,
+) -> InferResult<(Type, TypeEnv, InferState)> {
+    let mut scanner = Scanner::new(source);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let type_annotations = scanner.type_annotations().to_vec();
+    let type_aliases = scanner.type_aliases().to_vec();
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
+    let mut program = parser.parse_program().unwrap();
+    program.type_aliases = type_aliases;
+
+    let (env, mut state) = crate::stdlib::initial_env_with_stdlib()?;
+    let (ty, env) = state.infer_program_with_env(&env, &program)?;
+    Ok((ty, env, state))
 }
 
 /// Helper to infer a program and return the final type and state.
