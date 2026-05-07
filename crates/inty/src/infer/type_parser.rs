@@ -407,12 +407,39 @@ impl<'a> TypeParser<'a> {
                 // Keyless call signature `(args) => ret` inside a row
                 // body is the type-level form for callable rows (TS
                 // `interface Foo { (a): R }`). Parse the function type
-                // and store under the reserved CALLABLE_KEY sentinel —
-                // see `examples/fizzy/design.md` § "Callable rows" and
+                // and store the bare `Type::Func` under the reserved
+                // CALLABLE_KEY sentinel. `parse_simple_type` returns
+                // an auto-wrapped callable row (`Row{<CALL>: Func}`)
+                // because top-level `(args) => ret` is a value type;
+                // here we need just the inner Func, so we unwrap the
+                // single CALLABLE_KEY field. See
+                // `examples/fizzy/design.md` § "Callable rows" and
                 // `crates/inty/src/types/mod.rs:CALLABLE_KEY`.
                 if self.peek_char() == Some('(') {
-                    let ty = self.parse_simple_type()?;
-                    props.push((crate::types::CALLABLE_KEY.to_string(), ty));
+                    let wrapped = self.parse_simple_type()?;
+                    let inner_func = match wrapped {
+                        Type::Row(row)
+                            if row.props.len() == 1
+                                && row
+                                    .props
+                                    .contains_key(&crate::types::PropName(
+                                        crate::types::CALLABLE_KEY.to_string(),
+                                    )) =>
+                        {
+                            row.props
+                                .into_iter()
+                                .next()
+                                .expect("contains_key just asserted")
+                                .1
+                        }
+                        // The constructor invariant says `Type::simple_func`
+                        // and friends always produce the wrapped form; if a
+                        // future change relaxes that, fall back to using
+                        // the type as-is so this arm doesn't silently
+                        // misbehave.
+                        other => other,
+                    };
+                    props.push((crate::types::CALLABLE_KEY.to_string(), inner_func));
                     self.skip_whitespace();
                     if self.peek_char() == Some('}') {
                         break;
