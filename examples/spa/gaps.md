@@ -11,7 +11,7 @@ what changed and why.
 |---|------------------------------------------------------|--------------|
 | 1 | No function hoisting                                 | *resolved*   |
 | 2 | `const x /*: T */;` runtime-unsafe                   | *resolved*   |
-| 3 | No nullability / optional types                      | open         |
+| 3 | No nullability / optional types                      | *resolved* (postfix `T?` desugars to `T \| Undefined`) |
 | 4 | No built-in DOM / `window` / event types             | *resolved*   |
 | 5 | No String methods                                    | *resolved*   |
 | 6 | No Array methods                                     | *resolved*   |
@@ -21,7 +21,7 @@ what changed and why.
 | 10| No ergonomic way to seed an empty typed collection   | *resolved*   |
 | 11| No arrow functions                                   | *resolved*   |
 | 12| No `let`                                             | *resolved*   |
-| 13| No destructuring / spread / rest                     | *resolved* (spread/rest open) |
+| 13| No destructuring / spread / rest                     | *resolved* (rest params, spread in calls, defaults) |
 | 14| No `class`                                           | *resolved* (no prototype chain — by design) |
 | 14| No `async`/`await`                                   | *resolved*   |
 | — | Inline `/*: T */` annotations not captured           | *resolved*   |
@@ -32,8 +32,16 @@ what changed and why.
 | — | No `.d.js` emit from a checked module                | *resolved*   |
 | — | `await` outside an async function                    | *resolved* (now errors at parse time) |
 | — | Duplicate `const` in the same scope                  | *resolved* (now errors) |
+| — | Constructor statics on primitives (`String.fromCharCode`, `Number.isInteger`, …) | *resolved* (callable rows) |
+| — | Function-with-properties idioms (`arr.map(String)`)  | *resolved* (callable rows + row poly) |
+| — | Private fields `#x`                                  | *resolved* (sentinel-keyed row entries; cross-instance access works) |
+| — | `get foo()` / `set foo(v)` accessors                 | *resolved* (lowered to fields) |
+| — | `delete o.a` silent unsoundness                      | *resolved* (now rejected at parse time) |
+| — | ASI before `return` / `break` / `continue` / `throw` / postfix `++`/`--` | *resolved* |
+| — | Bare-specifier imports (`@hotwired/stimulus`, `controllers/foo`) | *resolved* (`inty.json` paths/baseUrl) |
+| — | `Date` global                                         | *resolved* (single pragmatic signature) |
 | — | Arrow `this` inheritance / `let` per-iteration / `var` function-scope | **out of scope** (see "By design" below) |
-| — | `class extends` / `super` / static methods / private fields | **out of scope** (see "By design" below) |
+| — | `class extends` / `super` / static methods           | **out of scope** (see "By design" below) |
 
 ## Resolved
 
@@ -127,17 +135,19 @@ parses and the types fall out correctly.
 
 ## Open gaps
 
-### 3. No way to say "might be null"
+### 3. Nullability *(resolved — `T?` postfix sugar)*
 
-There are no union types and no optional properties, so there's no way
-to type `getElementById: (String) => Element | Null`. The shipped DOM
-library pretends `getElementById` always succeeds. At runtime this is
-fine for IDs we control, but it means inty cannot catch typos like
-`getElementById("todo-lsit")`.
+inty has unions and now exposes them as `T?` in annotations:
+`T?` desugars to `T | Undefined`. `?.` / `??` / `=== null` /
+`=== undefined` / `typeof === "undefined"` narrow through unions
+the same way `=== "circle"` narrows discriminator fields. The DOM
+stubs that previously pretended `getElementById` always succeeds
+can be migrated to `(String) => Element?` incrementally; the
+infrastructure is in place.
 
-Related: `arr.find(...)`, `obj[missingKey]`, `JSON.parse` of arbitrary
-input, any "not found" sentinel at all. This is the one gap that genuinely
-needs a type-system extension (unions, options, or an explicit `?T` sugar).
+For DOM APIs that return `null` (not `undefined`), users write
+the long form `Element | Null` — `T?` adds `Undefined` only,
+matching TypeScript's `?:` convention.
 
 ### 7. `String` and `String[]` collide under structural indexing
 

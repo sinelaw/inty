@@ -130,21 +130,29 @@ type checker's scope.
 
 ## Done
 
-Items in commit `1db1331` (Phase 0–2 of the earlier `plan.md`):
+All items in this design have shipped. Commit trail (most-recent first):
 
-- `export function` peer hoisting fixed.
-- `export async function` parses.
-- `export default class` parses (existing inheritance rejection still
-  fires with a gaps.md pointer).
-- Default parameter values, destructuring defaults, rest parameters,
-  spread in call arguments, `catch {}` without binding,
-  object property shorthand.
-- Stdlib expansion: `Object.{values,entries,assign,fromEntries}`,
-  `Array.{from,of}`, `atob`, `btoa`, `navigator`, `AbortController`,
-  `FormData`, `URLSearchParams`, `TextDecoder`, `TextEncoder`,
-  `CustomEvent`, `Event`, `customElements`, `visualViewport`,
-  `getComputedStyle`, `requestAnimationFrame`,
-  `cancelAnimationFrame`, ~80-field Element shape, `Regex.test/exec`
-  method dispatch.
+- `7896f0f` Stdlib: `Date` as a callable row.
+- `79fe115` Stdlib: `String` / `Number` / `Boolean` migrated to callable
+  rows in `core.d.js`.
+- `c53a2ee` Resolver: `inty.json` with `paths` / `baseUrl` (tsconfig-paths
+  style) + stub-package convention.
+- `e82df35` Parser: `get foo()` / `set foo(v)` accessors in class bodies.
+- `53e8a10` Parser: `#name` private fields lower to sentinel-keyed row
+  entries (cross-instance access works; class-only enforcement).
+- `f37023a` Parser: ASI for `return` / `break` / `continue` / `throw` /
+  postfix `++` / `--`.
+- `f645bae` Parser: `delete` rejected at parse time.
+- `c5f0cfd` Core: nullable union sugar `T?` → `T | Undefined`.
+- `81f0921` Core: unified callable-row design — `Type::Func` is
+  sub-component-only; functions are rows with a `<CALL>` field
+  everywhere.
+- `1db1331` Phase 0–2 of the earlier `plan.md`: `export function`
+  hoisting, `export async function`, `export default class`, default
+  params, destructuring defaults, rest params, spread in calls,
+  `catch {}` without binding, object property shorthand, large stdlib
+  expansion (`Regex.test/exec` dispatch, `navigator`, `AbortController`,
+  `FormData`, `URLSearchParams`, `TextDecoder`, `CustomEvent`,
+  `customElements`, ~80-field Element row, etc.).
 
 These ship; the design above is what comes next.

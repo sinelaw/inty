@@ -116,6 +116,48 @@ var response = requestBuilder.setUrl("/api/users").setMethod("POST").send();
 
 inty infers `setUrl` as `this: {url: String | c} => (String) => {url: String | c}` — the row variable `c` carries the rest of the builder along through the chain.
 
+### Callable Rows (Functions with Statics)
+
+Function values are rows. A plain function is a row carrying only an internal call signature; a constructor with statics is the same row plus extra named fields. So `String("hi")` and `String.fromCharCode(65)` both work uniformly: the call peels the row's call signature, the member access reads the named field — no special case for "constructor types."
+
+```javascript
+const c = String.fromCharCode(65);   // c : String
+const s = String(42);                // s : String
+const arr = [1, 2, 3];
+const stringified = arr.map(String); // stringified : String[]
+```
+
+The last line is the payoff: passing `String` (a row carrying a call signature plus statics) where `arr.map` expects a function works via plain row polymorphism. No subtyping rule, no callable-vs-row asymmetry — `Type::Func` is purely a sub-component of a row, never a top-level value type.
+
+In `.d.js` declarations, callable rows use a TS-style keyless call signature inside the row body:
+
+```javascript
+/** const String: <T> {
+        (T) => String,
+        fromCharCode: (Number) => String,
+        fromCodePoint: (Number) => String
+    } */
+const String;
+```
+
+### Nullable / Optional Values (Postfix `T?`)
+
+A postfix `?` in a type annotation desugars to `T | Undefined`. Composes with the existing union machinery — narrowing, `?.`, `??` — without introducing a new nominal type.
+
+```javascript
+/** function getNum(arr: Number[]) => Number? */
+function getNum(arr) {
+    return arr.find(function(n) { return n > 0; });
+}
+
+/** function safe(arr: Number[]) => Number */
+function safe(arr) {
+    return getNum(arr) ?? 0;
+}
+```
+
+For DOM-style APIs that return `null` (not `undefined`), write the long form `Element | Null` explicitly — `?` adds `Undefined` only, matching TypeScript's `?:` convention.
+
 ### Control-Flow Joins (Union Types)
 
 Branches of an `if`, ternary, or array literal that disagree in type are *joined* into a closed union. Reading a member or indexing into a union pushes the operation through every member.
@@ -184,6 +226,45 @@ var v: Number | Undefined
 var pick: Number
 ```
 
+### Class Bodies: Fields, Private Fields, Accessors
+
+Class declarations desugar to factory functions returning a row of
+methods + fields. `#name` private fields lower to a sentinel-keyed
+row entry that JS source can't tokenise — accessible from inside the
+class body via the parser's lowering, unreachable from outside. The
+type printer renders the sentinel back as `#name` so error messages
+stay readable.
+
+```javascript
+class Counter {
+  #count = 0;
+  inc() { this.#count = this.#count + 1; return this.#count; }
+  get current() { return this.#count; }
+}
+const c = new Counter();
+const n = c.inc();   // n : Number
+const v = c.current; // v : Number
+```
+
+Cross-instance private access works the same way:
+
+```javascript
+class Pair {
+  #x;
+  combineWith(other) { return this.#x + other.#x; }   // both peeled to the same sentinel
+}
+```
+
+Outside the class body, `obj.#name` is a parse-time error. Two
+unrelated classes that both declare `#x` share the storage key
+under the current pragmatic lowering — collisions are rare in
+practice; per-class suffix is a future option.
+
+`get foo() { … }` accessors lower to a regular field whose value
+is the body's IIFE — `obj.foo` reads its return type. `set foo(v)
+{ … }` is parse-accepted but the field is not declared from the
+setter (initialise via `this.foo = …` in the constructor).
+
 ### Modules (ES `import` / `export`)
 
 inty resolves `import` statements relative to the importing file's
@@ -213,6 +294,26 @@ imports (with renaming), `export default`, and re-exports
 (`export … from`, `export * from`, `export * as ns from`) are all
 supported. See [modules.md](modules.md) for the full design and
 `examples/modules/` for runnable fixtures.
+
+#### Path aliases and stub packages (`inty.json`)
+
+Bare specifiers (`@hotwired/stimulus`) and root-relative names
+(`controllers/foo`) resolve via an optional `inty.json` at any
+ancestor of the importing file. The format mirrors tsconfig-paths:
+
+```jsonc
+{
+  "baseUrl": "./src",
+  "paths": {
+    "@hotwired/stimulus": ["./inty-stubs/@hotwired/stimulus.d.js"],
+    "controllers/*":      ["./controllers/*"]
+  }
+}
+```
+
+Resolution order: direct relative/absolute → exact-match `paths` →
+wildcard `paths` → `baseUrl`. Third-party `.d.js` stubs live wherever
+the `paths` map points; inty doesn't ship npm-package types itself.
 
 ## Unsupported JavaScript Idioms
 
@@ -291,7 +392,7 @@ Error: Property 'age' not found in type {name: String}
    │             ╰──── Property 'age' not found in type {name: String}
 ```
 
-(Optional values exist for built-ins that explicitly return them, e.g. `Array.prototype.find` returns `T | undefined`. See the narrowing example above.)
+(Optional values exist for built-ins that explicitly return them, e.g. `Array.prototype.find` returns `T | undefined`. See the narrowing example above. Annotations can use the postfix `T?` sugar for `T | Undefined`: `/** function getUser(): User? */`.)
 
 **Narrowing requires an explicit union type.** `if (typeof x === "string")` only refines `x` if `x`'s type is already a union containing `String`. Without an annotation, the parameter is inferred from the branch bodies, and the condition can't widen it after the fact.
 
@@ -310,21 +411,24 @@ Quick reference for the JavaScript surface inty accepts:
 
 | Category       | What works                                                                                                |
 |----------------|-----------------------------------------------------------------------------------------------------------|
-| Literals       | template literals, regex literals                                                                         |
+| Literals       | template literals, regex literals, object property shorthand (`{a, b}`)                                   |
 | Variables      | `var`, `const`, `let` (treated as `var` — block scoping isn't modelled)                                   |
-| Functions      | declarations, expressions, arrow functions, method shorthand, getters/setters                             |
-| Destructuring  | object and array (desugared at parse time)                                                                |
+| Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
+| Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
-| Classes        | declarations only, desugared into factory functions; no inheritance, no `static` members                  |
-| Async          | `async`/`await`, desugared via `Promise.resolve`                                                          |
-| Modules        | ES `import`/`export` — see [Modules](#modules-es-import--export) above                                    |
-| Annotations    | inline `var x /*: T */` and doc-comment `/** var x: T */` — see [declare.md](declare.md)                  |
+| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`); no inheritance, no `static` members |
+| Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
+| Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`                                          |
+| ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |
+| Rejected       | `delete` (parse-time error pointing at workaround); `class extends`, `super`, `static` members            |
+| Modules        | ES `import`/`export` with `inty.json` paths/baseUrl — see [Modules](#modules-es-import--export) above     |
+| Annotations    | inline `var x /*: T */`, doc-comment `/** var x: T */`, postfix `T?` for `T \| Undefined` — see [declare.md](declare.md) |
 
 ## Future Work
 
-Some of the limitations above are annoying and may be worth supporting in some way or form. It would be nice to support nullable/optional-style union types directly on object properties, and to make `&&`/`||` flow narrowing-aware. It would require some work to avoid losing the principal typing property (every expression has a single unambiguous most general type).
+Class inheritance (`extends`, `super`) and `static` class members are deliberately out of scope — see [examples/spa/gaps.md § "By design"](examples/spa/gaps.md). The only structurally useful thing they unlock is library-specific instance-shape derivation (Stimulus-style `static targets` ↦ `this.fooTarget`), which is closer to TypeScript's mapped types than to row polymorphism and is also out of scope.
 
-Not yet supported: spread/rest parameters, class inheritance, static class members.
+Open: making `&&` / `||` flow-narrowing-aware so default-value patterns like `name || "Guest"` work without forcing operands' types to match. The principal-typing property would need a careful rule.
 
 ## Self-testing
 
