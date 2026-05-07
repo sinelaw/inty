@@ -404,6 +404,32 @@ impl<'a> TypeParser<'a> {
         if self.peek_char() != Some('}') {
             loop {
                 self.skip_whitespace();
+                // Keyless call signature `(args) => ret` inside a row
+                // body is the type-level form for callable rows (TS
+                // `interface Foo { (a): R }`). Parse the function type
+                // and store under the reserved CALLABLE_KEY sentinel —
+                // see `examples/fizzy/design.md` § "Callable rows" and
+                // `crates/inty/src/types/mod.rs:CALLABLE_KEY`.
+                if self.peek_char() == Some('(') {
+                    let ty = self.parse_simple_type()?;
+                    props.push((crate::types::CALLABLE_KEY.to_string(), ty));
+                    self.skip_whitespace();
+                    if self.peek_char() == Some('}') {
+                        break;
+                    }
+                    if self.peek_char() == Some(',') || self.peek_char() == Some(';') {
+                        self.pos += 1;
+                    } else {
+                        return Err(self.error(format!(
+                            "expected ',' or ';' between object-type properties"
+                        )));
+                    }
+                    self.skip_whitespace();
+                    if self.peek_char() == Some('}') {
+                        break;
+                    }
+                    continue;
+                }
                 // `readonly` is a TS modifier with no semantic effect
                 // under inty's structural typing — erase if present.
                 if self.input[self.pos..].starts_with("readonly")

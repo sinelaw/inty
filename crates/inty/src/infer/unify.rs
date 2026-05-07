@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 
 use crate::error::{IntyError, TypeError};
 use crate::lexer::Span;
-use crate::types::{PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef};
+use crate::types::{
+    PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef, CALLABLE_KEY,
+};
 
 use super::state::InferState;
 
@@ -200,6 +202,45 @@ impl InferState {
                 } else {
                     Err(self.unification_error(span, t1, t2))
                 }
+            }
+
+            // Callable-row coercion: a row with the reserved CALLABLE_KEY
+            // field acts as a function value. When unifying it with a
+            // function type (in either direction), peel out the call
+            // signature and unify with that. This is what makes
+            // `arr.map(String)` work via plain row polymorphism — the
+            // row-poly tail absorbs the row's other fields.
+            //
+            // Direction is one-way at the value-vs-shape level: rows can
+            // be coerced to functions, not the reverse, because a plain
+            // function carries no property bag. See examples/fizzy/design.md.
+            (
+                Type::Func {
+                    this_type,
+                    params,
+                    ret,
+                },
+                Type::Row(row),
+            )
+            | (
+                Type::Row(row),
+                Type::Func {
+                    this_type,
+                    params,
+                    ret,
+                },
+            ) if row.props.contains_key(&PropName(CALLABLE_KEY.to_string())) => {
+                let peeled = row
+                    .props
+                    .get(&PropName(CALLABLE_KEY.to_string()))
+                    .expect("contains_key just checked")
+                    .clone();
+                let func = Type::Func {
+                    this_type: this_type.clone(),
+                    params: params.clone(),
+                    ret: ret.clone(),
+                };
+                self.unify(span, &func, &peeled)
             }
 
             // Mismatch
