@@ -51,77 +51,14 @@ impl InferState {
         type_annotation: &Option<TypeAnnotation>,
         span: Span,
     ) -> InferResult<Type> {
-        // Fresh type for 'this'
         let this_type = self.fresh_type_var();
-
-        // Fresh types for parameters
-        let param_types: Vec<Type> = params
-            .iter()
-            .enumerate()
-            .map(|(idx, param)| {
-                let ty = self.fresh_type_var();
-                // Record origin for parameter types
-                if let Type::Var(var) = &ty {
-                    self.record_origin(
-                        var.clone(),
-                        crate::error::TypeOrigin::Parameter {
-                            param_name: param.name.clone(),
-                            param_index: idx,
-                            span,
-                        },
-                    );
-                }
-                ty
-            })
-            .collect();
-
-        // Fresh type for return
-        let ret_type = self.fresh_type_var();
-
-        // Create function type (needed for recursion)
-        let func_type = Type::func(this_type.clone(), param_types.clone(), ret_type.clone());
-
-        // If there's a type annotation, parse and unify with it
-        if let Some(annotation) = type_annotation {
-            let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-            let (annotated_type, var_map) =
-                parse_type_annotation_with_aliases(&annotation.content, annotation_span, self.next_var_id(), &self.type_aliases)?;
-            if let Some(&max) = var_map.values().max() {
-                self.bump_var_id_to(max + 1);
-            }
-
-            // Unify the function type with the annotated type
-            self.unify(annotation_span, &func_type, &annotated_type)?;
-        }
-
-        // Extend environment with parameters and this
-        let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
-
-        for (param, ty) in params.iter().zip(param_types.iter()) {
-            body_env = body_env.extend(param.name.clone(), TypeScheme::mono(ty.clone()));
-            // Record per-param type for the LSP / hover. Keyed by the
-            // param's name span so we can look it up at any reference
-            // to the parameter.
-            self.record_decl_type(param.span, ty.clone());
-        }
-
-        // If function is named, add it for recursion
-        if let Some(fn_name) = name {
-            body_env = body_env.extend(fn_name.to_string(), TypeScheme::mono(func_type.clone()));
-        }
-
-        // Infer body type
-        let (body_type, _) = self.infer_stmt(&body_env, body)?;
-
-        // Unify return type with body type
-        self.unify(span, &ret_type, &body_type)?;
-
-        // Return the function type with substitutions applied
-        Ok(self.apply_subst(&func_type))
+        self.infer_function_with_this(env, name, params, body, type_annotation, this_type, span)
     }
 
-    /// Infer the type of a function expression with a pre-specified 'this' type.
-    /// This is used for object literal methods to ensure all methods share the same 'this'.
+    /// Infer the type of a function expression with a pre-specified
+    /// `this` type. Object-literal methods use this to ensure every
+    /// method in the literal shares the same `this`; for free functions,
+    /// `infer_function` calls this with a fresh `this` variable.
     pub(in crate::infer) fn infer_function_with_this(
         &mut self,
         env: &TypeEnv,
@@ -132,13 +69,11 @@ impl InferState {
         this_type: Type,
         span: Span,
     ) -> InferResult<Type> {
-        // Fresh types for parameters
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()
             .map(|(idx, param)| {
                 let ty = self.fresh_type_var();
-                // Record origin for parameter types
                 if let Type::Var(var) = &ty {
                     self.record_origin(
                         var.clone(),
@@ -153,13 +88,13 @@ impl InferState {
             })
             .collect();
 
-        // Fresh type for return
         let ret_type = self.fresh_type_var();
 
-        // Create function type (needed for recursion)
+        // Build the function type up front so the body can refer to it
+        // (recursion via `name`) and so any annotation can be unified
+        // against it before the body is checked.
         let func_type = Type::func(this_type.clone(), param_types.clone(), ret_type.clone());
 
-        // If there's a type annotation, parse and unify with it
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
             let (annotated_type, var_map) =
@@ -168,30 +103,27 @@ impl InferState {
                 self.bump_var_id_to(max + 1);
             }
 
-            // Unify the function type with the annotated type
             self.unify(annotation_span, &func_type, &annotated_type)?;
         }
 
-        // Extend environment with parameters and this
         let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
 
         for (param, ty) in params.iter().zip(param_types.iter()) {
             body_env = body_env.extend(param.name.clone(), TypeScheme::mono(ty.clone()));
+            // Record per-param type for the LSP / hover. Keyed by the
+            // param's name span so we can look it up at any reference
+            // to the parameter.
             self.record_decl_type(param.span, ty.clone());
         }
 
-        // If function is named, add it for recursion
         if let Some(fn_name) = name {
             body_env = body_env.extend(fn_name.to_string(), TypeScheme::mono(func_type.clone()));
         }
 
-        // Infer body type
         let (body_type, _) = self.infer_stmt(&body_env, body)?;
 
-        // Unify return type with body type
         self.unify(span, &ret_type, &body_type)?;
 
-        // Return the function type with substitutions applied
         Ok(self.apply_subst(&func_type))
     }
 
@@ -217,7 +149,7 @@ impl InferState {
 
                 // Get method type from the object without re-inferring
                 let method_type =
-                    self.infer_member_from_type(&obj_type_applied, property, *member_span)?;
+                    self.infer_member_on_type(&obj_type_applied, property, *member_span)?;
 
                 (method_type, Some(obj_type_applied))
             }

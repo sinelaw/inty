@@ -69,21 +69,20 @@ fn warn_if_narrowing_unreachable(
 }
 
 impl InferState {
-    /// Infer the type of a conditional expression.
-    pub(in crate::infer) fn infer_conditional(
+    /// Type-check the test of an `if`/conditional and produce the
+    /// (consequent, alternate) environments after flow-sensitive
+    /// narrowing. If the test matches one of the recognised patterns
+    /// (`typeof x === ...`, `x === lit`, `x !== lit`, …), refine each
+    /// branch's env with the predicate and its negation; otherwise both
+    /// branches see the original env. Also fires the unreachable-branch
+    /// warning when narrowing collapses one side to `never`.
+    fn infer_branching_test(
         &mut self,
         env: &TypeEnv,
         test: &Expr,
-        consequent: &Expr,
-        alternate: &Expr,
-        span: Span,
-    ) -> InferResult<Type> {
+    ) -> InferResult<(TypeEnv, TypeEnv)> {
         let _test_type = self.infer_expr(env, test)?;
-
-        // Flow-sensitive narrowing: if the test is one of the recognised
-        // patterns (typeof / === / !==), refine the consequent's env with
-        // the predicate and the alternate's env with its negation.
-        let (cons_env, alt_env) = match try_extract_narrowing(test) {
+        let envs = match try_extract_narrowing(test) {
             Some((path, narrowing)) => {
                 let cons_env = apply_narrowing(self, env, &path, &narrowing);
                 let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
@@ -94,6 +93,19 @@ impl InferState {
             }
             None => (env.clone(), env.clone()),
         };
+        Ok(envs)
+    }
+
+    /// Infer the type of a conditional expression.
+    pub(in crate::infer) fn infer_conditional(
+        &mut self,
+        env: &TypeEnv,
+        test: &Expr,
+        consequent: &Expr,
+        alternate: &Expr,
+        span: Span,
+    ) -> InferResult<Type> {
+        let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
 
         let cons_type = self.infer_expr(&cons_env, consequent)?;
         let alt_type = self.infer_expr(&alt_env, alternate)?;
@@ -158,19 +170,7 @@ impl InferState {
         alternate: &Option<Box<Stmt>>,
         span: Span,
     ) -> InferResult<(Type, TypeEnv)> {
-        let _test_type = self.infer_expr(env, test)?;
-
-        let (cons_env, alt_env) = match try_extract_narrowing(test) {
-            Some((path, narrowing)) => {
-                let cons_env = apply_narrowing(self, env, &path, &narrowing);
-                let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
-                warn_if_narrowing_unreachable(
-                    self, env, &cons_env, &alt_env, &path, test.span(),
-                );
-                (cons_env, alt_env)
-            }
-            None => (env.clone(), env.clone()),
-        };
+        let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
 
         let (cons_type, _) = self.infer_stmt(&cons_env, consequent)?;
 
