@@ -230,6 +230,39 @@ impl<'a> Scanner<'a> {
             // Unicode identifier start
             _ if ch.is_alphabetic() => self.scan_identifier(),
 
+            // Private identifier `#name`. Used inside class bodies
+            // and on `this.#name` / `other.#name` member access. The
+            // class-body lowering in the parser rewrites these into
+            // sentinel-keyed row entries that JS source can't reach.
+            '#' => {
+                self.advance(); // consume `#`
+                let name_start = self.current_pos;
+                let Some((_, first)) = self.peek() else {
+                    return Err(LexError::UnexpectedCharacter {
+                        ch: '#',
+                        span: Span::new(start, self.current_pos),
+                    }
+                    .into());
+                };
+                if !(first.is_alphabetic() || first == '_' || first == '$') {
+                    return Err(LexError::UnexpectedCharacter {
+                        ch: '#',
+                        span: Span::new(start, self.current_pos),
+                    }
+                    .into());
+                }
+                self.advance();
+                while let Some((_, c)) = self.peek() {
+                    if c.is_alphanumeric() || c == '_' || c == '$' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let name = self.source[name_start..self.current_pos].to_string();
+                Token::PrivateIdent(name)
+            }
+
             _ => {
                 self.advance();
                 return Err(LexError::UnexpectedCharacter {

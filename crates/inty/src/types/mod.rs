@@ -36,3 +36,24 @@ pub const CALLABLE_KEY: &str = "\x01call\x01";
 pub fn is_callable_key(name: &PropName) -> bool {
     name.0 == CALLABLE_KEY
 }
+
+/// Prefix for private-field sentinel keys produced by the class-body
+/// lowering of `#name`. Starts with `\x02` so JS source can't tokenise
+/// it; the parser emits these names from `Token::PrivateIdent` only.
+/// See `examples/fizzy/design.md` § "Private fields".
+pub const PRIVATE_KEY_PREFIX: &str = "\x02priv:";
+
+/// True when the given property name is a private-field sentinel.
+/// Pretty-printed as `#name` instead of the raw byte form.
+pub fn is_private_key(name: &PropName) -> bool {
+    name.0.starts_with(PRIVATE_KEY_PREFIX) && name.0.ends_with('\x02')
+}
+
+/// Strip the sentinel framing from a private-field key, returning
+/// just the original `name` part. Used by the pretty printer to render
+/// `#name`.
+pub fn private_key_display(name: &PropName) -> Option<&str> {
+    let s = name.0.as_str();
+    let stripped = s.strip_prefix(PRIVATE_KEY_PREFIX)?;
+    stripped.strip_suffix('\x02')
+}
