@@ -2271,3 +2271,164 @@ fn export_default_class_extends_rejects_with_inheritance_error() {
         msg
     );
 }
+
+/// Two member accesses on the same parameter must both contribute their
+/// row constraints to the parameter's inferred type. The first `o.foo`
+/// access binds the parameter to `{foo: α | ρ₁}`; the second `o.bar`
+/// access then unifies that row with `{bar: β | ρ₂}`, which binds `ρ₁`
+/// to a row containing `bar`. Applying the substitution to the
+/// parameter type must follow that binding through the tail variable —
+/// otherwise the `bar` constraint is silently dropped, and the
+/// printed/generalised function type only mentions `foo`.
+#[test]
+fn row_subst_merges_bindings_through_open_tail() {
+    use crate::types::{PropName, Type};
+    let src = "function f(o) { var a = o.foo; var b = o.bar; }";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let scheme = env.lookup("f").unwrap();
+    let ty = state.apply_subst(scheme.ty());
+    let (_, params, _) = ty.as_callable().expect("f should be callable");
+    let param = state.apply_subst(&params[0]);
+    let row = match &param {
+        Type::Row(r) => r,
+        other => panic!("parameter should be a row, got {}", other),
+    };
+    assert!(
+        row.props.contains_key(&PropName("foo".to_string())),
+        "parameter row should mention `foo`, got {}",
+        param
+    );
+    assert!(
+        row.props.contains_key(&PropName("bar".to_string())),
+        "parameter row should mention `bar` (the second access dropped its constraint), got {}",
+        param
+    );
+}
+
+/// Soundness companion to `row_subst_merges_bindings_through_open_tail`:
+/// if the second member access's constraint is dropped, then calling
+/// `f({foo: 1})` is wrongly accepted even though `f` reads `o.bar`.
+#[test]
+fn row_subst_call_missing_field_is_rejected() {
+    let src = "function f(o) { var a = o.foo; var b = o.bar; } f({foo: 1});";
+    let result = infer_program_with_state(src);
+    assert!(
+        result.is_err(),
+        "calling f without `bar` should be a type error, but inference succeeded"
+    );
+}
+
+/// Metamorphic property: the set of row constraints a function imposes
+/// on its parameter must be invariant under reordering of the member
+/// accesses in its body. For accesses [A1..An] over distinct fields
+/// and a closed-row call argument, the call type-checks if and only
+/// if the argument supplies every Ai — and which of the Ai is "first"
+/// must not matter.
+///
+/// This catches the row-tail-substitution bug as an asymmetry: with
+/// the bug, `function f(o){o.a; o.b;}` accepts `f({a:1})` (b's
+/// constraint is dropped), while `function f(o){o.b; o.a;}` rejects
+/// it (a's constraint is dropped instead). Both should reject.
+#[test]
+fn metamorphic_member_access_order_invariant() {
+    let fields = ["foo", "bar", "baz"];
+
+    // Every ordered pair (a, b) of distinct fields. For each pair we
+    // build `function f(o){ o.a; o.b; }` and check that calls missing
+    // either field are rejected. The full set of pairs covers both
+    // orderings of every unordered pair, so any asymmetry surfaces as
+    // one of the two pairs failing the assertion.
+    for a in &fields {
+        for b in &fields {
+            if a == b {
+                continue;
+            }
+
+            // Call provides only `a` (missing `b`).
+            let missing_b = format!(
+                "function f(o) {{ var x = o.{}; var y = o.{}; }} f({{ {}: 1 }});",
+                a, b, a
+            );
+            assert!(
+                infer_program_with_state(&missing_b).is_err(),
+                "f(o){{o.{}; o.{};}} called with only `{}` should be rejected (missing `{}`)",
+                a, b, a, b
+            );
+
+            // Call provides only `b` (missing `a`).
+            let missing_a = format!(
+                "function f(o) {{ var x = o.{}; var y = o.{}; }} f({{ {}: 1 }});",
+                a, b, b
+            );
+            assert!(
+                infer_program_with_state(&missing_a).is_err(),
+                "f(o){{o.{}; o.{};}} called with only `{}` should be rejected (missing `{}`)",
+                a, b, b, a
+            );
+
+            // And the well-formed call providing both must succeed —
+            // proves the rejections above were the missing-field
+            // constraint, not some incidental error.
+            let both = format!(
+                "function f(o) {{ var x = o.{}; var y = o.{}; }} f({{ {}: 1, {}: 2 }});",
+                a, b, a, b
+            );
+            assert!(
+                infer_program_with_state(&both).is_ok(),
+                "f(o){{o.{}; o.{};}} called with both `{}` and `{}` should type-check",
+                a, b, a, b
+            );
+        }
+    }
+}
+
+/// Three-access version of the metamorphic property. Beyond the
+/// pairwise asymmetry, the bug compounds with each additional access:
+/// only the first one's constraint survives, so any call argument
+/// that satisfies that single field gets through. Verifying every
+/// permutation of three accesses ensures the row carries the full set
+/// regardless of order.
+#[test]
+fn metamorphic_three_member_accesses_order_invariant() {
+    let fields = ["foo", "bar", "baz"];
+
+    // Permutations of three distinct fields.
+    let perms: [[&str; 3]; 6] = [
+        ["foo", "bar", "baz"],
+        ["foo", "baz", "bar"],
+        ["bar", "foo", "baz"],
+        ["bar", "baz", "foo"],
+        ["baz", "foo", "bar"],
+        ["baz", "bar", "foo"],
+    ];
+
+    for perm in &perms {
+        // For each permutation, every "drop one field from the call"
+        // variant must be rejected. The position of the dropped field
+        // in the access order should not matter.
+        for missing in &fields {
+            let provided: Vec<&str> = fields.iter().copied().filter(|f| f != missing).collect();
+            let call_lit = provided
+                .iter()
+                .enumerate()
+                .map(|(i, f)| format!("{}: {}", f, i + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let body = perm
+                .iter()
+                .enumerate()
+                .map(|(i, f)| format!("var v{} = o.{};", i, f))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let src = format!(
+                "function f(o) {{ {} }} f({{ {} }});",
+                body, call_lit
+            );
+            assert!(
+                infer_program_with_state(&src).is_err(),
+                "access order [{}, {}, {}] missing `{}` should be rejected, but type-checked. Source: {}",
+                perm[0], perm[1], perm[2], missing, src
+            );
+        }
+    }
+}
