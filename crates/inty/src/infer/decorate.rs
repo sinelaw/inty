@@ -702,15 +702,20 @@ impl<'a> Decorator<'a> {
     }
 
     fn scheme_to_annotation(&mut self, scheme: &TypeScheme, span: Span) -> TypeAnnotation {
-        // Apply substitution to the scheme's type and predicates
-        let ty = self.state.apply_subst(&scheme.body.ty);
+        // Use the row-tail-merging substitution view so the
+        // displayed scheme reflects every field added to a row's
+        // tail by later property accesses. Plain `apply_subst` is
+        // shallow on tails for performance reasons (see
+        // `Subst::flatten`'s docs); printing is a boundary
+        // operation, so paying the deep walk here is fine.
+        let ty = self.state.main_subst.flatten(&scheme.body.ty);
         let preds: Vec<_> = scheme
             .body
             .preds
             .iter()
             .map(|p| TypePred {
                 class: p.class.clone(),
-                types: p.types.iter().map(|t| self.state.apply_subst(t)).collect(),
+                types: p.types.iter().map(|t| self.state.main_subst.flatten(t)).collect(),
             })
             .collect();
 
@@ -744,7 +749,7 @@ impl<'a> Decorator<'a> {
     }
 
     fn type_to_annotation(&mut self, ty: &Type, span: Span) -> TypeAnnotation {
-        let ty = self.state.apply_subst(ty);
+        let ty = self.state.main_subst.flatten(ty);
         let content = self.ctx.format_type(&ty);
         TypeAnnotation {
             name: "".to_string(),

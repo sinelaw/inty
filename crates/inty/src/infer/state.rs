@@ -417,7 +417,28 @@ impl InferState {
     }
 
     /// Extend the substitution with a new binding.
+    ///
+    /// `Subst::compose` keeps the existing binding on key
+    /// collision, which silently drops constraints when a row tail
+    /// variable acquires a *second* row constraint after `unify_rows`
+    /// already bound it from a *first* one. The fix can't live in
+    /// `compose` itself (`compose` runs on every existing binding on
+    /// every extend, so a deep merge there blows up combinatorially —
+    /// infernu's equivalent gets away with the same shape only
+    /// because Haskell laziness defers the work). Instead, the
+    /// caller of `extend_subst` is the right place to handle a
+    /// collision: unify the new value with the existing one, so the
+    /// substitution faithfully carries every constraint that was
+    /// posed.
     pub fn extend_subst(&mut self, var: TVarName, ty: Type) {
+        if let Some(existing) = self.main_subst.get(&var).cloned() {
+            // Already bound — unify so we don't lose either side.
+            let span = crate::lexer::Span::default();
+            // Failures here surface as normal type errors at the
+            // unify call that prompted the extension.
+            let _ = self.unify(span, &existing, &ty);
+            return;
+        }
         let singleton = Subst::singleton(var, ty);
         self.main_subst = singleton.compose(&self.main_subst);
     }
@@ -515,7 +536,15 @@ impl InferState {
         env_free_vars: &std::collections::HashSet<TVarName>,
         ty: &Type,
     ) -> TypeScheme {
-        let ty = self.apply_subst(ty);
+        // Flatten row tails through the substitution before
+        // computing free vars. `apply_subst` is shallow on tails
+        // for performance reasons; without flattening here, a
+        // function whose parameter row picked up extra fields via
+        // later property-access constraints would generalise to a
+        // scheme that's missing those fields, letting calls with
+        // incompatible argument shapes through. See
+        // `Subst::flatten` for the full story.
+        let ty = self.main_subst.flatten(ty);
         let ty_vars = ty.free_vars();
 
         // Sort by TVarName id so the scheme's quantification order is

@@ -99,6 +99,130 @@ impl Subst {
     pub fn iter(&self) -> impl Iterator<Item = (&TVarName, &Type)> {
         self.map.iter()
     }
+
+    /// Walk a type and merge every row tail variable that resolves
+    /// to a row in this substitution into the row's own props.
+    ///
+    /// `apply_subst` is intentionally shallow on row tails — it's
+    /// called by `Subst::compose` over every existing binding on
+    /// every `extend_subst`, so a deep merge there explodes
+    /// combinatorially on builder patterns and recursive
+    /// `this`-typed rows. The rule it skips ("when `ρ` is bound to
+    /// `Row(R)`, replace `RowTail::Open(ρ)` with `R`'s contents")
+    /// is needed for two things: the printer's view of a type, and
+    /// `generalize`'s computation of free variables. Both are
+    /// boundary operations that run once per type, not inside the
+    /// inference loop, so we do the merge lazily here.
+    ///
+    /// Cycles can exist on row tails because `unify_rows` extends
+    /// the substitution directly without going through
+    /// `var_bind`'s recursive-type wrapping. The local visited set
+    /// caps each chain at one full traversal.
+    pub fn flatten(&self, ty: &Type) -> Type {
+        let mut visited: HashSet<TVarName> = HashSet::new();
+        self.flatten_type(ty, &mut visited)
+    }
+
+    fn flatten_type(&self, ty: &Type, visited: &mut HashSet<TVarName>) -> Type {
+        match ty {
+            // Resolve variables here, not just at the top level —
+            // `Subst::compose` only fully applies the substitution
+            // to its own keys; deeply nested `Var(...)` inside
+            // rows-bound-to-rows can still point at unsubstituted
+            // variables.
+            //
+            // `visited` is insert-only across the whole flatten()
+            // call: each variable is expanded at most once. The
+            // structure produced is a DAG-collapse of the
+            // substitution graph, which is what we want for the
+            // boundary callers (printer, generalize). It also caps
+            // the work: with `n` vars in the substitution,
+            // flatten is O(n) instead of O(2^n) in the worst case
+            // through wide-fan-out rows.
+            Type::Var(name) => match self.get(name) {
+                None => ty.clone(),
+                Some(_) if !visited.insert(name.clone()) => ty.clone(),
+                Some(bound) => {
+                    let cloned = bound.clone();
+                    self.flatten_type(&cloned, visited)
+                }
+            },
+            Type::Row(row) => Type::Row(self.flatten_row(row, visited)),
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => Type::Func {
+                this_type: this_type
+                    .as_ref()
+                    .map(|t| Box::new(self.flatten_type(t, visited))),
+                params: params.iter().map(|p| self.flatten_type(p, visited)).collect(),
+                ret: Box::new(self.flatten_type(ret, visited)),
+            },
+            Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, visited))),
+            Type::Promise(inner) => Type::Promise(Box::new(self.flatten_type(inner, visited))),
+            Type::Map(value) => Type::Map(Box::new(self.flatten_type(value, visited))),
+            Type::Union(members) => {
+                Type::union(members.iter().map(|m| self.flatten_type(m, visited)))
+            }
+            Type::Named(id, args) => Type::Named(
+                *id,
+                args.iter().map(|a| self.flatten_type(a, visited)).collect(),
+            ),
+            // Module/Literal/primitives: nothing to flatten.
+            _ => ty.clone(),
+        }
+    }
+
+    fn flatten_row(&self, row: &RowType, visited: &mut HashSet<TVarName>) -> RowType {
+        let mut props: std::collections::BTreeMap<PropName, Type> = row
+            .props
+            .iter()
+            .map(|(k, v)| (k.clone(), self.flatten_type(v, visited)))
+            .collect();
+
+        let mut current_tail = row.tail.clone();
+        let tail = loop {
+            match current_tail {
+                RowTail::Closed => break RowTail::Closed,
+                RowTail::Recursive(id, args) => {
+                    break RowTail::Recursive(
+                        id,
+                        args.iter().map(|a| self.flatten_type(a, visited)).collect(),
+                    );
+                }
+                RowTail::Open(var) => {
+                    if !visited.insert(var.clone()) {
+                        break RowTail::Open(var);
+                    }
+                    match self.get(&var) {
+                        None => break RowTail::Open(var),
+                        Some(Type::Var(next_var)) => {
+                            current_tail = RowTail::Open(next_var.clone());
+                        }
+                        Some(Type::Row(other_row)) => {
+                            // Bindings in the substitution are kept
+                            // idempotent by `Subst::compose` (every
+                            // extend pushes the new singleton
+                            // through every existing value), so
+                            // `other_row`'s props don't need
+                            // re-substitution beyond what the
+                            // recursive `flatten_type` does for any
+                            // `Var` we encounter.
+                            for (k, v) in &other_row.props {
+                                let v_flat = self.flatten_type(v, visited);
+                                props.entry(k.clone()).or_insert(v_flat);
+                            }
+                            current_tail = other_row.tail.clone();
+                        }
+                        Some(_) => break RowTail::Open(var),
+                    }
+                }
+            }
+        };
+
+        RowType { props, tail }
+    }
 }
 
 impl IntoIterator for Subst {
@@ -205,6 +329,15 @@ impl Substitutable for Type {
 
 impl Substitutable for RowType {
     fn apply_subst(&self, subst: &Subst) -> Self {
+        // `apply_subst` stays shallow on purpose: it's invoked
+        // implicitly by `Subst::compose` on every existing binding
+        // every time a new binding is added during inference, so
+        // any deep work here amplifies into N² behaviour through
+        // the chained-method / builder shape. The full row-tail
+        // merge that Rémy unification's substitution semantics
+        // require is implemented by `Subst::flatten` and called
+        // only at the boundaries that need it (pretty-printing,
+        // generalisation).
         let props: std::collections::BTreeMap<PropName, Type> = self
             .props
             .iter()
@@ -213,23 +346,10 @@ impl Substitutable for RowType {
 
         let tail = match &self.tail {
             RowTail::Closed => RowTail::Closed,
-            RowTail::Open(var) => {
-                // If the row variable is substituted with a row type,
-                // we need to merge the rows
-                if let Some(ty) = subst.get(var) {
-                    match ty {
-                        Type::Row(_other_row) => {
-                            // This case is handled during unification
-                            // For now, just keep the open tail
-                            RowTail::Open(var.clone())
-                        }
-                        Type::Var(new_var) => RowTail::Open(new_var.clone()),
-                        _ => RowTail::Open(var.clone()),
-                    }
-                } else {
-                    RowTail::Open(var.clone())
-                }
-            }
+            RowTail::Open(var) => match subst.get(var) {
+                Some(Type::Var(new_var)) => RowTail::Open(new_var.clone()),
+                _ => RowTail::Open(var.clone()),
+            },
             RowTail::Recursive(id, args) => {
                 RowTail::Recursive(*id, args.iter().map(|a| a.apply_subst(subst)).collect())
             }
