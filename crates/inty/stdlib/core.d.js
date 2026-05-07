@@ -97,6 +97,45 @@ const isNaN;
 /** const isFinite: (Number) => Boolean */
 const isFinite;
 
+// Date constructor and prototype. Single pragmatic shape under the
+// unified callable-row design — call/new with a Number (ms) and use
+// the prototype methods via member access. Multi-arity construction
+// (`new Date(y, m, d)`) and string parsing (`new Date("2024-01-01")`)
+// aren't representable without overloading; users wrap those in a
+// typed helper. The instance type is closed; `valueOf` / `getTime`
+// give Number for arithmetic, `toISOString` / `toString` for display.
+/** const Date: {
+        (Number) => {
+            getFullYear: () => Number,
+            getMonth: () => Number,
+            getDate: () => Number,
+            getDay: () => Number,
+            getHours: () => Number,
+            getMinutes: () => Number,
+            getSeconds: () => Number,
+            getMilliseconds: () => Number,
+            getTime: () => Number,
+            getTimezoneOffset: () => Number,
+            getUTCFullYear: () => Number,
+            getUTCMonth: () => Number,
+            getUTCDate: () => Number,
+            getUTCHours: () => Number,
+            valueOf: () => Number,
+            toString: () => String,
+            toISOString: () => String,
+            toJSON: () => String,
+            toDateString: () => String,
+            toTimeString: () => String,
+            toLocaleDateString: () => String,
+            toLocaleTimeString: () => String,
+            toLocaleString: () => String
+        },
+        now: () => Number,
+        parse: (String) => Number,
+        UTC: (Number) => Number
+    } */
+const Date;
+
 // Base64 encoding/decoding. Web platform globals; Node has them since v16.
 /** const atob: (String) => String */
 const atob;
