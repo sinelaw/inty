@@ -284,12 +284,30 @@ impl<'a> TypeParser<'a> {
     fn parse_simple_type(&mut self) -> ParseResult<Type> {
         let mut ty = self.parse_primary_type()?;
 
-        // Parse array suffixes
+        // Parse array suffixes and the nullable postfix in any order.
+        // `T?` desugars to `T | Null | Undefined` per the unified
+        // design — reuses union narrowing and `?.` / `??` semantics
+        // without introducing a new nominal type.
         loop {
             self.skip_whitespace();
             if self.peek_char() == Some('[') && self.peek_char_at(1) == Some(']') {
                 self.pos += 2;
                 ty = Type::array(ty);
+            } else if self.peek_char() == Some('?') {
+                // Postfix `T?` desugars to `T | Undefined`, matching
+                // TS's optional convention (where `x?: T` adds
+                // `undefined`, not `null`). For DOM APIs that return
+                // `T | null` specifically (`getElementById` etc.),
+                // users write the long form. For the JS-native case
+                // (missing fields, `arr.find` returning nothing,
+                // `JSON.parse` failures), `?` is the right sugar
+                // because narrowing through `=== undefined` and `?.`
+                // / `??` works cleanly. Disambiguates from the TS
+                // object-property `x?: T` marker, which
+                // `parse_object_type` consumes before this loop sees
+                // it.
+                self.pos += 1;
+                ty = Type::union(vec![ty, Type::Undefined]);
             } else {
                 break;
             }
