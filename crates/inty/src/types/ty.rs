@@ -359,7 +359,38 @@ impl Type {
     }
 
     /// Create a function type with a specific `this` type.
+    ///
+    /// Under the unified callable-row design, function VALUES at top level
+    /// are always rows with a `<CALL>` field. This constructor returns the
+    /// wrapped form: `Row{<CALL>: Func{this, params, ret}, Closed}`. The
+    /// raw `Type::Func` enum variant is reserved for the field value
+    /// itself — never a top-level value type.
+    ///
+    /// Sub-component construction (the `Type::Func` that goes inside the
+    /// `<CALL>` field) uses `Type::raw_func` / `Type::raw_static_func`
+    /// instead.
     pub fn func(this_type: Type, params: Vec<Type>, ret: Type) -> Self {
+        Self::wrap_callable(Type::raw_func(this_type, params, ret))
+    }
+
+    /// Create a static function type (doesn't reference `this`), wrapped
+    /// in a callable row. Use this for built-in functions like Math.min
+    /// that ignore their receiver.
+    pub fn static_func(params: Vec<Type>, ret: Type) -> Self {
+        Self::wrap_callable(Type::raw_static_func(params, ret))
+    }
+
+    /// Create a simple function type (doesn't reference `this`),
+    /// wrapped in a callable row.
+    pub fn simple_func(params: Vec<Type>, ret: Type) -> Self {
+        Type::static_func(params, ret)
+    }
+
+    /// Raw function-type constructor with a `this`. Returns a bare
+    /// `Type::Func` — only valid as the value of `<CALL>` inside a
+    /// callable row, never as a top-level value type. Use `Type::func`
+    /// for top-level callables.
+    pub fn raw_func(this_type: Type, params: Vec<Type>, ret: Type) -> Self {
         Type::Func {
             this_type: Some(Box::new(this_type)),
             params,
@@ -367,9 +398,11 @@ impl Type {
         }
     }
 
-    /// Create a static function type (doesn't reference `this`).
-    /// Use this for built-in functions like Math.min that ignore their receiver.
-    pub fn static_func(params: Vec<Type>, ret: Type) -> Self {
+    /// Raw static function-type constructor. Returns a bare
+    /// `Type::Func` — only valid as the value of `<CALL>` inside a
+    /// callable row, never as a top-level value type. Use
+    /// `Type::static_func` for top-level callables.
+    pub fn raw_static_func(params: Vec<Type>, ret: Type) -> Self {
         Type::Func {
             this_type: None,
             params,
@@ -377,10 +410,24 @@ impl Type {
         }
     }
 
-    /// Create a simple function type (doesn't reference `this`).
-    /// Alias for static_func for backwards compatibility.
-    pub fn simple_func(params: Vec<Type>, ret: Type) -> Self {
-        Type::static_func(params, ret)
+    /// Wrap a `Type::Func` in a closed callable row.
+    ///
+    /// Function values at top level always carry their call signature
+    /// inside the row's reserved `<CALL>` field. The row's tail is
+    /// closed because a function value (from a JS function literal or a
+    /// `.d.js` annotation) doesn't have implicit additional fields. Call
+    /// sites that need to absorb a callable row's extras (e.g.,
+    /// `arr.map(String)` where String has statics) build an *open*
+    /// expected callable row via `InferState::callable_row_open`.
+    pub fn wrap_callable(func: Type) -> Self {
+        debug_assert!(
+            matches!(func, Type::Func { .. }),
+            "wrap_callable expects a raw Type::Func, got: {:?}",
+            func
+        );
+        let mut props = BTreeMap::new();
+        props.insert(PropName(super::CALLABLE_KEY.to_string()), func);
+        Type::Row(RowType::closed(props))
     }
 
     /// Create an array type.
@@ -505,8 +552,46 @@ impl Type {
     }
 
     /// Check if this is a function type.
+    /// True if this type represents a callable function value.
+    ///
+    /// Under the unified callable-row design, function values at top
+    /// level are rows carrying a `<CALL>` field. A bare `Type::Func` is
+    /// only valid as the value of that field — it never represents a
+    /// user-facing function value on its own. This predicate recognizes
+    /// both forms so callers can ask "is this a function?" without
+    /// caring about the encoding.
     pub fn is_func(&self) -> bool {
-        matches!(self, Type::Func { .. })
+        match self {
+            Type::Func { .. } => true,
+            Type::Row(row) => row.props.contains_key(&PropName(super::CALLABLE_KEY.to_string())),
+            _ => false,
+        }
+    }
+
+    /// Get the function components if this represents a function value
+    /// (either a bare `Type::Func` or a callable row carrying a
+    /// `<CALL>` field). For callable rows, only the call signature is
+    /// returned — extras on the row are ignored.
+    pub fn as_callable(&self) -> Option<(Option<&Type>, &[Type], &Type)> {
+        match self {
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => Some((this_type.as_deref(), params, ret)),
+            Type::Row(row) => {
+                let key = PropName(super::CALLABLE_KEY.to_string());
+                match row.props.get(&key)? {
+                    Type::Func {
+                        this_type,
+                        params,
+                        ret,
+                    } => Some((this_type.as_deref(), params, ret)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Check if this is a row/object type.

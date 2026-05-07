@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ac3f8c481973e94c418adb93c401da701361677cfaa47154642f31399570e64b # shrinks to ty = Array(Row(RowType { props: {PropName("\u{1}call\u{1}"): Func { this_type: None, params: [], ret: Number }}, tail: Closed }))
