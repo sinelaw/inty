@@ -115,7 +115,11 @@ fn build_program(op_name: &str, args: &[&str]) -> Option<String> {
         "unary -" => format!("-({})", args[0]),
         "unary +" => format!("+({})", args[0]),
         "!" | "~" => format!("{}({})", op_name, args[0]),
-        "typeof" | "void" | "delete" | "await" => format!("{} ({})", op_name, args[0]),
+        "typeof" | "void" | "await" => format!("{} ({})", op_name, args[0]),
+        // `delete` is rejected at parse time under the unified design
+        // (would need row-subtraction at the type level for soundness).
+        // Skip from blame synthesis — there's nothing to fuzz.
+        "delete" => return None,
         // ++/-- need an lvalue
         "++ (prefix)" => format!("var __x = {}; ++__x", args[0]),
         "-- (prefix)" => format!("var __x = {}; --__x", args[0]),
