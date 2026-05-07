@@ -1894,7 +1894,21 @@ impl Parser {
         let start = self.current_span().start;
         self.expect(&Token::Return)?;
 
-        let argument = if self.check(&Token::Semicolon) || self.is_at_end() {
+        // ASI: a line terminator between `return` and the next token
+        // ends the statement here, regardless of whether the following
+        // token could start an expression. This is what makes
+        //
+        //   if (reset) return
+        //   const x = 1;
+        //
+        // parse correctly — without ASI, `return const x = 1` is a
+        // parse error because `const` isn't an expression starter.
+        // The block-end and end-of-input cases are also covered.
+        let argument = if self.check(&Token::Semicolon)
+            || self.check(&Token::RBrace)
+            || self.is_at_end()
+            || self.line_terminator_before_current()
+        {
             None
         } else {
             Some(self.parse_expression()?)
@@ -1912,6 +1926,20 @@ impl Parser {
         let start = self.current_span().start;
         self.expect(&Token::Throw)?;
 
+        // ASI: `throw` is one of the few statements where a line
+        // terminator after the keyword is a syntax error in JS — it's
+        // actively rejected, not silently treated as `throw;` (because
+        // `throw;` itself is illegal). We mirror that: the next token
+        // must be on the same line.
+        if self.line_terminator_before_current() {
+            let span = self.current_span();
+            return Err(ParseError::UnexpectedToken {
+                found: "line terminator".to_string(),
+                expected: "expression on the same line as `throw`".to_string(),
+                span,
+            }
+            .into());
+        }
         let argument = self.parse_expression()?;
         self.consume_semicolon();
 
@@ -2027,7 +2055,11 @@ impl Parser {
         let start = self.current_span().start;
         self.expect(&Token::Break)?;
 
-        let label = if let Token::Ident(name) = self.current() {
+        // ASI: a line terminator between `break` and the label ends
+        // the statement immediately (no label).
+        let label = if self.line_terminator_before_current() {
+            None
+        } else if let Token::Ident(name) = self.current() {
             let name = name.clone();
             self.advance();
             Some(name)
@@ -2047,7 +2079,11 @@ impl Parser {
         let start = self.current_span().start;
         self.expect(&Token::Continue)?;
 
-        let label = if let Token::Ident(name) = self.current() {
+        // ASI: a line terminator between `continue` and the label ends
+        // the statement immediately (no label).
+        let label = if self.line_terminator_before_current() {
+            None
+        } else if let Token::Ident(name) = self.current() {
             let name = name.clone();
             self.advance();
             Some(name)
@@ -2326,7 +2362,12 @@ impl Parser {
     fn parse_postfix_expression(&mut self) -> Result<Expr> {
         let mut expr = self.parse_call_expression()?;
 
-        // Postfix ++/--
+        // Postfix ++/--. ASI: a line terminator between the operand
+        // and the operator causes a semicolon to be inserted, so the
+        // operator becomes a *prefix* on the next statement instead.
+        if self.line_terminator_before_current() {
+            return Ok(expr);
+        }
         match self.current() {
             Token::PlusPlus => {
                 let span = Span::new(expr.span().start, self.current_span().end);
@@ -3169,6 +3210,25 @@ impl Parser {
         } else {
             Span::default()
         }
+    }
+
+    /// True if the byte range between the previous token's end and the
+    /// current token's start contains a line terminator (LF / CR).
+    /// Used by the ASI rules in `parse_return` / `parse_break` /
+    /// `parse_continue` / `parse_throw` and by the postfix `++` / `--`
+    /// arm to decide whether the next token belongs to the same
+    /// statement.
+    fn line_terminator_before_current(&self) -> bool {
+        if self.source.is_empty() {
+            return false;
+        }
+        let prev_end = self.prev_span().end;
+        let cur_start = self.current_span().start;
+        if cur_start <= prev_end {
+            return false;
+        }
+        let between = &self.source.as_bytes()[prev_end.min(self.source.len())..cur_start.min(self.source.len())];
+        between.iter().any(|&b| b == b'\n' || b == b'\r')
     }
 
     fn advance(&mut self) {
