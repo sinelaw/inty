@@ -273,8 +273,12 @@ impl InferState {
         let this_type = self.fresh_type_var();
         let ret_type = self.fresh_type_var();
 
-        // Expected function type
-        let expected_func = Type::func(this_type.clone(), arg_types, ret_type.clone());
+        // Expected callable shape — an *open* callable row so the
+        // callee can carry additional fields (e.g. `String`, a
+        // constructor with statics). Row polymorphism's fresh tail
+        // absorbs whatever extras the callee happens to have.
+        let expected_func =
+            self.callable_row_open(Some(this_type.clone()), arg_types, ret_type.clone());
 
         // Unify callee with expected function type
         self.unify(span, &callee_type, &expected_func)?;
@@ -328,9 +332,11 @@ impl InferState {
         let result_type = self.fresh_type_var();
         let this_type = result_type.clone();
 
-        // Expected constructor type: (this, args...) -> result
-        // For 'new', the constructor should return something that becomes 'this'
-        let expected_func = Type::func(this_type, arg_types, result_type.clone());
+        // Expected constructor shape — an *open* callable row so the
+        // constructor value can carry additional static fields beyond
+        // the call signature (matches the unified callable-row design).
+        let expected_func =
+            self.callable_row_open(Some(this_type), arg_types, result_type.clone());
 
         self.unify(span, &callee_type, &expected_func)?;
 

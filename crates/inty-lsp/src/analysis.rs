@@ -355,7 +355,7 @@ impl Analysis {
                 // Function decls show only the return type, anchored
                 // after `)`, instead of repeating the whole signature
                 // after the function's name.
-                if let Type::Func { ret, .. } = &applied {
+                if let Some((_, _, ret)) = applied.as_callable() {
                     if let Some(pos) = close_paren_after(text, def_span.end) {
                         let mut ctx = PrettyContext::new();
                         hints.push(InlayHintData {
@@ -589,14 +589,12 @@ fn row_of(ty: &Type) -> Option<&RowType> {
     }
 }
 
-/// Pull the parameter list and return type out of a function type.
-/// `apply_subst` should already have been called on `ty`.
+/// Pull the parameter list and return type out of a function type
+/// (either bare `Type::Func` or a callable row carrying a `<CALL>`
+/// field). `apply_subst` should already have been called on `ty`.
 fn func_params(ty: &Type) -> Option<(Vec<Type>, Type)> {
-    if let Type::Func { params, ret, .. } = ty {
-        Some((params.clone(), (**ret).clone()))
-    } else {
-        None
-    }
+    let (_, params, ret) = ty.as_callable()?;
+    Some((params.to_vec(), ret.clone()))
 }
 
 /// Walk all `Expr::Call` nodes in the program and return a reference

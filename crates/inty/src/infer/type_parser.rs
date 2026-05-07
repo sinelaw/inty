@@ -878,14 +878,16 @@ mod tests {
     #[test]
     fn test_parse_nested_function() {
         let ty = parse("(f: (x: Number) => String) => Boolean");
-        match ty {
-            Type::Func { params, ret, .. } => {
-                assert_eq!(params.len(), 1);
-                assert!(matches!(params[0], Type::Func { .. }));
-                assert_eq!(*ret, Type::Boolean);
-            }
-            _ => panic!("expected function type"),
-        }
+        // Top-level `(args) => ret` parses as a callable row.
+        let (_, params, ret) = ty
+            .as_callable()
+            .expect("expected callable type");
+        assert_eq!(params.len(), 1);
+        assert!(
+            params[0].as_callable().is_some(),
+            "nested function param should also be callable"
+        );
+        assert_eq!(*ret, Type::Boolean);
     }
 
     #[test]
@@ -963,7 +965,10 @@ mod tests {
         let ty = parse("((x: Number) => String)[]");
         match ty {
             Type::Array(elem) => {
-                assert!(matches!(*elem, Type::Func { .. }));
+                assert!(
+                    elem.as_callable().is_some(),
+                    "element should be a callable type (Row{{<CALL>: …}})"
+                );
             }
             _ => panic!("expected array type"),
         }

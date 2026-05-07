@@ -259,6 +259,38 @@ impl InferState {
         Type::Var(self.fresh_flex())
     }
 
+    /// Build an *open* callable row representing an "expected callable
+    /// shape" with a fresh tail variable.
+    ///
+    /// Under the unified callable-row design, function VALUES (from JS
+    /// function literals, annotations, builtin signatures) are CLOSED
+    /// callable rows — `Row{<CALL>: Func, Closed}` — with no extras.
+    /// Function SHAPES (the "what fits here" type at a call site or as
+    /// a higher-order parameter) are OPEN callable rows so they accept
+    /// callable values that carry additional fields, like
+    /// `arr.map(String)` where `String` is a constructor with statics.
+    ///
+    /// This is the standard row-polymorphism pattern applied to the
+    /// `<CALL>` field. The fresh tail variable is later quantified by
+    /// the caller's scheme generalisation, so each instantiation
+    /// produces an independent tail.
+    pub fn callable_row_open(
+        &mut self,
+        this_type: Option<Type>,
+        params: Vec<Type>,
+        ret: Type,
+    ) -> Type {
+        use crate::types::{PropName, RowType, CALLABLE_KEY};
+        let func = match this_type {
+            Some(t) => Type::raw_func(t, params, ret),
+            None => Type::raw_static_func(params, ret),
+        };
+        let mut props = std::collections::BTreeMap::new();
+        props.insert(PropName(CALLABLE_KEY.to_string()), func);
+        let tail = self.fresh_flex();
+        Type::Row(RowType::open(props, tail))
+    }
+
     /// Get the next type variable ID (for type annotation parsing).
     pub fn next_var_id(&self) -> u32 {
         self.name_source

@@ -214,8 +214,12 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
         (Type::String, "string") => true,
         (Type::Boolean, "boolean") => true,
         (Type::Undefined, "undefined") => true,
-        (Type::Func { .. }, "function") => true,
-        (Type::Row(_), "object") | (Type::Array(_), "object") => true,
+        // Under the unified callable-row design, `typeof` "function"
+        // matches any value with a `<CALL>` field. Rows without
+        // `<CALL>` are plain objects.
+        (_, "function") if ty.is_func() => true,
+        (Type::Row(_), "object") if !ty.is_func() => true,
+        (Type::Array(_), "object") => true,
         (Type::Map(_), "object") | (Type::Promise(_), "object") => true,
         (Type::Module(_), "object") => true,
         (Type::Null, "object") => true,
@@ -236,7 +240,7 @@ fn typeof_definitely_matches(ty: &Type, name: &str) -> bool {
         (Type::String, "string") => true,
         (Type::Boolean, "boolean") => true,
         (Type::Undefined, "undefined") => true,
-        (Type::Func { .. }, "function") => true,
+        (_, "function") if ty.is_func() => true,
         (Type::Literal(LitValue::String(_)), "string") => true,
         (Type::Literal(LitValue::Number(_)), "number") => true,
         (Type::Literal(LitValue::Bool(_)), "boolean") => true,
