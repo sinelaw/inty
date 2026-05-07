@@ -241,19 +241,21 @@ impl InferState {
         self.infer_member_on_type(&obj_type, property, span)
     }
 
-    /// Look up a property on a (substituted) type. Used by `infer_member`
-    /// after evaluating the object expression, and recursively to elide
-    /// access against union members.
+    /// Look up a property on a (substituted) object type. Used by
+    /// `infer_member` after evaluating the object expression, by
+    /// optional-chain handling for each segment, by call-expression
+    /// handling to extract the method type without re-inferring the
+    /// receiver, and recursively for union elimination.
     pub(in crate::infer) fn infer_member_on_type(
         &mut self,
         obj_type: &Type,
         property: &str,
         span: Span,
     ) -> InferResult<Type> {
-        // Union elimination: read the property from every member and join
-        // the results. Fails if any member lacks the property at a
-        // compatible type. This is the load-bearing rule that lets users
-        // *do* something with a union after they've formed one.
+        // Union elimination: read the property from every member and
+        // join the results. Fails if any member lacks the property at
+        // a compatible type. This is the load-bearing rule that lets
+        // users *do* something with a union after they've formed one.
         if let Type::Union(members) = obj_type {
             let mut result: Option<Type> = None;
             for m in members {
@@ -264,12 +266,14 @@ impl InferState {
                     Some(acc) => self.join(span, &acc, &prop_ty),
                 });
             }
-            // The empty union (`never`) can be accessed at any property —
-            // it's unreachable. Synthesise `never` for the result.
+            // The empty union (`never`) can be accessed at any property
+            // — it's unreachable. Synthesise `never` for the result.
             return Ok(result.unwrap_or_else(Type::never));
         }
 
-        // Handle built-in properties for arrays and strings
+        // Built-in prototype methods on primitive carriers. Each match
+        // arm returns a fresh function type; polymorphic methods bind
+        // their type variables when the surrounding call unifies.
         match obj_type {
             Type::Array(elem_ty) => {
                 if property == "length" {
@@ -293,121 +297,30 @@ impl InferState {
                 }
             }
             Type::Regex => {
+                // Regex.prototype methods. `test` is a Boolean
+                // predicate; `match`/`exec` would return
+                // `match-info | Null` in JS, but inty has no nullable
+                // types — for now we type them optimistically (assume a
+                // match), letting downstream code that checks
+                // `=== null` fail to narrow.
                 if let Some(ty) = crate::builtins::regex_method_type(self, property) {
                     return Ok(ty);
                 }
             }
             Type::Row(row) => {
-                // If the property exists in the row, return its type directly
-                // This is more efficient and avoids creating unnecessary type variables
+                // Direct hit in the row's own props is the common case
+                // and avoids creating unnecessary type variables.
                 if let Some(prop_type) = row.props.get(&PropName(property.to_string())) {
                     return Ok(self.apply_subst(prop_type));
                 }
-                // If property not found and row is closed, this will fail in unification below
-            }
-            Type::Module(m) => {
-                if let Some(scheme) = m.exports.get(property) {
-                    let ty = self.instantiate(scheme);
-                    return Ok(self.apply_subst(&ty));
-                }
-                return Err(crate::error::TypeError::Module {
-                    message: format!(
-                        "module {:?} has no export named {:?}",
-                        m.source, property
-                    ),
-                    span,
-                }
-                .into());
-            }
-            _ => {}
-        }
-
-        // For type variables, create a row constraint
-        let result_type = self.fresh_type_var();
-
-        // Record origin for the property access result
-        if let Type::Var(var) = &result_type {
-            self.record_origin(
-                var.clone(),
-                crate::error::TypeOrigin::PropertyAccess {
-                    property: property.to_string(),
-                    span,
-                },
-            );
-        }
-
-        let row_var = self.fresh_flex();
-        let expected_row = Type::object_open([(property, result_type.clone())], row_var);
-
-        self.unify(span, obj_type, &expected_row)?;
-
-        Ok(self.apply_subst(&result_type))
-    }
-
-    /// Helper to infer member access from an already-inferred object type.
-    pub(in crate::infer) fn infer_member_from_type(
-        &mut self,
-        obj_type: &Type,
-        property: &str,
-        span: Span,
-    ) -> InferResult<Type> {
-        // Union elimination: read the property from every member and join.
-        if let Type::Union(members) = obj_type {
-            let mut result: Option<Type> = None;
-            for m in members {
-                let m_resolved = self.apply_subst(m);
-                let prop_ty = self.infer_member_from_type(&m_resolved, property, span)?;
-                result = Some(match result {
-                    None => prop_ty,
-                    Some(acc) => self.join(span, &acc, &prop_ty),
-                });
-            }
-            return Ok(result.unwrap_or_else(Type::never));
-        }
-
-        // Handle built-in properties for arrays and strings
-        match obj_type {
-            Type::Array(elem_ty) => {
-                if property == "length" {
-                    return Ok(Type::Number);
-                }
-                if let Some(ty) = crate::builtins::array_method_type(self, elem_ty, property) {
-                    return Ok(ty);
-                }
-            }
-            Type::String => {
-                if property == "length" {
-                    return Ok(Type::Number);
-                }
-                if let Some(ty) = crate::builtins::string_method_type(self, property) {
-                    return Ok(ty);
-                }
-            }
-            Type::Promise(inner_ty) => {
-                if let Some(ty) = crate::builtins::promise_method_type(self, inner_ty, property) {
-                    return Ok(ty);
-                }
-            }
-            Type::Regex => {
-                // Regex.prototype methods. `test` is a Boolean predicate;
-                // `match`/`exec` would return `match-info | Null` in JS,
-                // but inty has no nullable types — for now we type them
-                // optimistically (assume a match), letting downstream
-                // code that checks `=== null` fail to narrow.
-                if let Some(ty) = crate::builtins::regex_method_type(self, property) {
-                    return Ok(ty);
-                }
-            }
-            Type::Row(row) => {
-                // If the property exists in the row, return its type directly
-                if let Some(prop_type) = row.props.get(&PropName(property.to_string())) {
-                    return Ok(self.apply_subst(prop_type));
-                }
-                // Property not in this row's props - check the tail
+                // Otherwise the property may live in a row reached
+                // through the tail (e.g., a flex tail bound by an
+                // earlier unification to another row).
                 if let Some(prop_type) = self.lookup_property_in_row_tail(row, property) {
                     return Ok(self.apply_subst(&prop_type));
                 }
-                // If property not found and row is closed, this will fail in unification below
+                // If property still not found and row is closed, the
+                // unification fall-through below will report it.
             }
             Type::Module(m) => {
                 if let Some(scheme) = m.exports.get(property) {
@@ -426,7 +339,9 @@ impl InferState {
             _ => {}
         }
 
-        // For type variables, create a row constraint
+        // Fall through (type variables, open rows that don't yet name
+        // the property, etc.): pose the property access as a row
+        // constraint and let unification resolve it.
         let result_type = self.fresh_type_var();
 
         if let Type::Var(var) = &result_type {
