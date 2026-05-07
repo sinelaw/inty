@@ -42,6 +42,42 @@ const Object;
 /** const Array: {isArray: (a) => Boolean, from: (a) => b[], of: (a) => a[]} */
 const Array;
 
+// Primitive constructors as callable rows. The keyless `(a) => T`
+// signature inside the row is the call form (`String("hi")`); the
+// other entries are the well-known statics. The unified callable-row
+// design (examples/fizzy/design.md § "Callable rows") makes these
+// first-class without a special case in the type system.
+//
+// `<T>` quantifies the polymorphic argument so each call site
+// instantiates fresh. `String("hi")` types as String; `String(42)`
+// types as String — both work because the call signature is
+// `(T) => String` for some fresh T per use.
+
+/** const String: <T> {
+        (T) => String,
+        fromCharCode: (Number) => String,
+        fromCodePoint: (Number) => String
+    } */
+const String;
+
+/** const Number: <T> {
+        (T) => Number,
+        isInteger: (Number) => Boolean,
+        isFinite: (Number) => Boolean,
+        isNaN: (Number) => Boolean,
+        MAX_SAFE_INTEGER: Number,
+        MIN_SAFE_INTEGER: Number,
+        EPSILON: Number,
+        MAX_VALUE: Number,
+        MIN_VALUE: Number
+    } */
+const Number;
+
+/** const Boolean: <T> {
+        (T) => Boolean
+    } */
+const Boolean;
+
 // Promise constructor helpers. `resolve` and `reject` are both
 // polymorphic — each `Promise.resolve(x)` call instantiates T fresh —
 // which is exactly what the async desugaring needs to wrap the result

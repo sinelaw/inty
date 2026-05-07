@@ -41,32 +41,13 @@ pub fn initial_env() -> TypeEnv {
         )),
     );
 
-    // String constructor: converts any value to string
-    env = env.extend(
-        "String".to_string(),
-        TypeScheme::poly(
-            vec![TVarName::Flex(201)],
-            Type::simple_func(vec![Type::flex(201)], Type::String),
-        ),
-    );
-
-    // Number constructor: converts any value to number
-    env = env.extend(
-        "Number".to_string(),
-        TypeScheme::poly(
-            vec![TVarName::Flex(202)],
-            Type::simple_func(vec![Type::flex(202)], Type::Number),
-        ),
-    );
-
-    // Boolean constructor: converts any value to boolean
-    env = env.extend(
-        "Boolean".to_string(),
-        TypeScheme::poly(
-            vec![TVarName::Flex(203)],
-            Type::simple_func(vec![Type::flex(203)], Type::Boolean),
-        ),
-    );
+    // `String`, `Number`, `Boolean` constructors used to live here as
+    // polymorphic function bindings. Under the unified callable-row
+    // design they're declared in core.d.js as callable rows so they
+    // can carry static methods alongside the constructor signature
+    // (`String.fromCharCode`, `Number.isInteger`, etc.) without a
+    // special case in the type system. See examples/fizzy/design.md
+    // § "Callable rows" + the migration in core.d.js.
 
     env
 }
@@ -417,11 +398,13 @@ mod tests {
     #[test]
     fn test_initial_env() {
         let env = initial_env();
-        // Polymorphic primitives live in the Rust env; library-shaped
-        // bindings have moved to stdlib/*.d.js.
+        // `Array` and `Object` constructors stay in the Rust env
+        // (Array is polymorphic; both are special-cased by inference).
+        // `String` / `Number` / `Boolean` moved to core.d.js as
+        // callable rows so they can carry static methods alongside
+        // the constructor signature.
         assert!(env.lookup("Array").is_some());
-        assert!(env.lookup("String").is_some());
-        assert!(env.lookup("Number").is_some());
+        assert!(env.lookup("Object").is_some());
         assert!(env.lookup("undefined").is_some());
     }
 
