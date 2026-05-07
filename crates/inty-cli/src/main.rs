@@ -511,7 +511,7 @@ fn run_inference(
     // Parsing
     let type_annotations = scanner.type_annotations().to_vec();
     let type_aliases = scanner.type_aliases().to_vec();
-    let mut parser = Parser::new(tokens, type_annotations);
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
 
     let mut program = match parser.parse_program() {
         Ok(program) => program,
