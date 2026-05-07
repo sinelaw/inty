@@ -2272,7 +2272,24 @@ impl Parser {
             Token::BitNot => Some(UnaryOp::BitNot),
             Token::Typeof => Some(UnaryOp::Typeof),
             Token::Void => Some(UnaryOp::Void),
-            Token::Delete => Some(UnaryOp::Delete),
+            // `delete` is rejected at parse time. Sound row-subtraction
+            // would be the principled type-level fix and inty has no
+            // such operation. Without it, a successful `delete o.a`
+            // leaves `o`'s static row unchanged and later reads of
+            // `o.a` pass — silent unsoundness. Reject here and point
+            // at the row-literal-omission workaround.
+            Token::Delete => {
+                let span = self.current_span();
+                return Err(ParseError::UnexpectedToken {
+                    found: "delete".to_string(),
+                    expected: "expression (delete is not supported — \
+                        construct a new object literal omitting the \
+                        field instead, e.g. `const { a: _drop, ...rest } = o;`)"
+                        .to_string(),
+                    span,
+                }
+                .into());
+            }
             Token::Await => Some(UnaryOp::Await),
             Token::PlusPlus => Some(UnaryOp::PreInc),
             Token::MinusMinus => Some(UnaryOp::PreDec),
