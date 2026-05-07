@@ -8,6 +8,8 @@ description = "A static type checker for JavaScript"
 [dependencies]
 thiserror = "2"
 ariadne = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 proptest = "1"

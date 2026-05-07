@@ -471,33 +471,170 @@ fn load_module(
 /// Resolve a relative-or-absolute `source` path to an existing `.js` file
 /// under `base_dir`. Tries, in order: the literal path, the path with `.js`
 /// appended, and `.d.js` appended. Returns a canonicalised absolute path.
-fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
-    let raw = Path::new(source);
-    let candidate = if raw.is_absolute() {
-        raw.to_path_buf()
-    } else {
-        base_dir.join(raw)
-    };
+/// Configuration for path-alias / stub-package resolution. Loaded
+/// from the nearest `inty.json` ancestor of the importing file.
+/// Modelled after tsconfig-paths: `base_url` anchors all relative
+/// paths in the config; `paths` maps module-spec patterns to one or
+/// more candidate file paths.
+///
+/// Example:
+/// ```json
+/// {
+///   "baseUrl": "./app/javascript",
+///   "paths": {
+///     "@hotwired/stimulus": ["./inty-stubs/@hotwired/stimulus.d.js"],
+///     "controllers/*": ["./controllers/*"]
+///   }
+/// }
+/// ```
+#[derive(Debug, Default, serde::Deserialize)]
+struct IntyConfig {
+    #[serde(default, rename = "baseUrl")]
+    base_url: Option<String>,
+    #[serde(default)]
+    paths: std::collections::HashMap<String, Vec<String>>,
+    /// Path on disk to the directory that contained `inty.json`.
+    /// Filled in after parse so the path entries can be anchored
+    /// correctly.
+    #[serde(skip)]
+    config_dir: PathBuf,
+}
 
+/// Walk up from `base_dir` looking for `inty.json`. Returns the
+/// parsed config (with `config_dir` populated) if found, otherwise
+/// `None`. Errors during read or parse propagate so users see a
+/// real diagnostic rather than silent fallback to relative-only
+/// resolution.
+fn find_inty_config(base_dir: &Path) -> Result<Option<IntyConfig>, String> {
+    let mut here: Option<&Path> = Some(base_dir);
+    while let Some(dir) = here {
+        let candidate = dir.join("inty.json");
+        if candidate.is_file() {
+            let content = std::fs::read_to_string(&candidate)
+                .map_err(|e| format!("reading {}: {}", candidate.display(), e))?;
+            let mut cfg: IntyConfig = serde_json::from_str(&content)
+                .map_err(|e| format!("parsing {}: {}", candidate.display(), e))?;
+            cfg.config_dir = dir.to_path_buf();
+            return Ok(Some(cfg));
+        }
+        here = dir.parent();
+    }
+    Ok(None)
+}
+
+/// Anchor a config-relative path under the config's directory.
+fn anchor_under_config(cfg: &IntyConfig, raw: &str) -> PathBuf {
+    let p = Path::new(raw);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cfg.config_dir.join(p)
+    }
+}
+
+/// Try every (filename, suffix) shape we accept and return the
+/// canonical path of the first match. A miss returns Ok(None) so
+/// callers can fall through to the next resolution strategy.
+fn try_extensions(candidate: &Path) -> Option<PathBuf> {
     for suffix in ["", ".js", ".d.js"] {
         let with_suffix = if suffix.is_empty() {
-            candidate.clone()
+            candidate.to_path_buf()
         } else {
             candidate.with_extension(suffix.trim_start_matches('.'))
         };
         if with_suffix.is_file() {
-            return with_suffix
-                .canonicalize()
-                .map_err(|e| format!("canonicalising {}: {}", with_suffix.display(), e));
+            if let Ok(canon) = with_suffix.canonicalize() {
+                return Some(canon);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
+    // Direct relative / absolute resolution. Tried first so existing
+    // `./foo.js` style imports keep working with no config in sight.
+    let raw = Path::new(source);
+    let direct_candidate = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        base_dir.join(raw)
+    };
+    if let Some(p) = try_extensions(&direct_candidate) {
+        return Ok(p);
+    }
+
+    // Path-alias / baseUrl resolution via the nearest inty.json. This
+    // is what makes bare specifiers like `@hotwired/stimulus` and
+    // root-relative names like `controllers/foo` resolvable, given a
+    // user-supplied stub or layout config. See `IntyConfig` docs.
+    if let Some(cfg) = find_inty_config(base_dir)? {
+        // Exact-match path entries first: `"@hotwired/stimulus":
+        // ["./inty-stubs/..."]`.
+        if let Some(targets) = cfg.paths.get(source) {
+            for t in targets {
+                let anchored = anchor_under_config(&cfg, t);
+                if let Some(p) = try_extensions(&anchored) {
+                    return Ok(p);
+                }
+            }
+        }
+        // Wildcard path entries: `"controllers/*": ["./controllers/*"]`.
+        // Single `*` per pattern, matching tsconfig-paths convention.
+        for (pattern, targets) in &cfg.paths {
+            if let Some(rest) = wildcard_match(pattern, source) {
+                for t in targets {
+                    let resolved_template = t.replace('*', &rest);
+                    let anchored = anchor_under_config(&cfg, &resolved_template);
+                    if let Some(p) = try_extensions(&anchored) {
+                        return Ok(p);
+                    }
+                }
+            }
+        }
+        // Last-resort baseUrl: `import "controllers/foo"` with
+        // `baseUrl: "./app/javascript"` tries
+        // `./app/javascript/controllers/foo.js`. Skipped for module
+        // specs that look obviously like third-party packages
+        // (`@scope/name` or anything starting with `.`/`/`).
+        if let Some(base) = &cfg.base_url {
+            let base = anchor_under_config(&cfg, base);
+            let candidate = base.join(source);
+            if let Some(p) = try_extensions(&candidate) {
+                return Ok(p);
+            }
         }
     }
 
     Err(format!(
-        "no such file (tried {}, {}.js, {}.d.js)",
-        candidate.display(),
-        candidate.display(),
-        candidate.display()
+        "no such file (tried {}, {}.js, {}.d.js; also checked inty.json paths/baseUrl)",
+        direct_candidate.display(),
+        direct_candidate.display(),
+        direct_candidate.display()
     ))
+}
+
+/// Match `text` against a pattern containing at most one `*`. Returns
+/// the wildcard's matched segment if the pattern matches, or `None`.
+fn wildcard_match(pattern: &str, text: &str) -> Option<String> {
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        if text.starts_with(prefix) && text.ends_with(suffix) {
+            let start = prefix.len();
+            let end = text.len().saturating_sub(suffix.len());
+            if end >= start {
+                return Some(text[start..end].to_string());
+            }
+        }
+        None
+    } else {
+        // No wildcard — the exact-match branch above handles literal
+        // entries already; this branch is unused but kept for safety.
+        if pattern == text {
+            Some(String::new())
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
