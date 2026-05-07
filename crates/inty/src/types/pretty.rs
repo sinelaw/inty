@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Display, Write};
 
 use super::ty::{ClassName, LitValue, PropName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
-use super::CALLABLE_KEY;
+use super::{private_key_display, CALLABLE_KEY};
 
 /// True when this type prints as a bare function `(args) => ret` —
 /// either a raw `Type::Func` (only valid as a `<CALL>` field value, but
@@ -393,7 +393,14 @@ impl PrettyContext {
                 write!(w, ", ")?;
             }
             first = false;
-            write!(w, "{}: ", prop.0)?;
+            // Private-field sentinels render as `#name`, restoring the
+            // user-written form. The raw stored key contains control
+            // characters that would otherwise look broken in errors.
+            if let Some(name) = private_key_display(prop) {
+                write!(w, "#{}: ", name)?;
+            } else {
+                write!(w, "{}: ", prop.0)?;
+            }
             self.write_type(w, ty, false)?;
         }
 

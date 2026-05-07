@@ -49,6 +49,14 @@ pub struct Parser {
     /// (and immediately cleared) by that parser to decide whether the
     /// body it's about to read should start in an async context.
     next_fn_is_async: bool,
+    /// Lexical depth of `class { … }` bodies we're currently inside.
+    /// Private identifiers (`#name`) can only be referenced when this
+    /// is > 0; outside any class body, `#name` is a parse error
+    /// (matching ECMA-262's syntactic restriction). Nested function
+    /// expressions inside a class method don't reset the depth —
+    /// `this.#x` from inside a callback that's still inside the class
+    /// body is legal.
+    class_depth: usize,
     /// Original source text. Used to slice byte ranges out of the source
     /// when we need to reconstruct content the lexer didn't capture as a
     /// JSDoc annotation — currently only TS-style `field: T` annotations
@@ -76,6 +84,7 @@ impl Parser {
             temp_counter: 0,
             async_depth: 0,
             next_fn_is_async: false,
+            class_depth: 0,
             source,
         }
     }
@@ -84,6 +93,25 @@ impl Parser {
         let n = self.temp_counter;
         self.temp_counter += 1;
         format!("$destr${}", n)
+    }
+
+    /// Lower a private identifier `#name` to its on-the-row sentinel
+    /// key. The key starts with `\x02` (a control character that JS
+    /// source can't tokenise), so external code cannot reach the
+    /// field via member access. Same trick the callable-row design
+    /// uses for `<CALL>` (`\x01call\x01`). See
+    /// `examples/fizzy/design.md` § "Private fields".
+    ///
+    /// Cross-instance access (`other.#name` from inside a method)
+    /// works because the same lowering is applied at the access site
+    /// and the storage site, so both refer to the same sentinel
+    /// property. Cross-class collisions (two unrelated classes both
+    /// using `#x`) are accepted as a pragmatic trade-off — the
+    /// alternative (per-class sentinel suffix) requires threading a
+    /// "current class" context through the parser and the actual
+    /// collision rate in real code is negligible.
+    fn private_name(name: &str) -> String {
+        format!("\x02priv:{}\x02", name)
     }
 
     /// Parse an expression with 'in' disallowed as a binary operator
@@ -840,6 +868,11 @@ impl Parser {
 
         self.expect(&Token::LBrace)?;
 
+        // Track class nesting so `#name` references inside the body
+        // are allowed and references outside are rejected. Decrement
+        // after the body's closing `}` is consumed.
+        self.class_depth += 1;
+
         let mut ctor_params: Vec<Param> = Vec::new();
         let mut field_props: Vec<PropDef> = Vec::new();
         let mut method_props: Vec<PropDef> = Vec::new();
@@ -894,7 +927,17 @@ impl Parser {
                 }
             }
 
-            let key_name = self.expect_ident()?;
+            // Class members can carry a regular identifier *or* a
+            // private identifier (`#name`). Private members lower to
+            // sentinel-keyed row entries that JS source can't reach,
+            // matching `this.#name` / `other.#name` access lowering
+            // in the expression parser.
+            let key_name = if let Token::PrivateIdent(name) = self.current().clone() {
+                self.advance();
+                Self::private_name(&name)
+            } else {
+                self.expect_ident()?
+            };
             let key_span = self.prev_span();
 
             // Explicitly unsupported prefixes. `static` would need function-
@@ -1186,6 +1229,8 @@ impl Parser {
         }
 
         self.expect(&Token::RBrace)?;
+        // Done parsing this class body — restore the depth.
+        self.class_depth = self.class_depth.saturating_sub(1);
         let end = self.prev_span().end;
         let span = Span::new(start, end);
 
@@ -2456,7 +2501,15 @@ impl Parser {
                         span: Span::new(seg_start, self.prev_span().end),
                     });
                 } else {
-                    let property = self.expect_ident_or_keyword()?;
+                    // `?.foo` regular ident/keyword or `?.#name`
+                    // private. Same private-name sentinel lowering as
+                    // the non-optional dot arm.
+                    let property = if let Token::PrivateIdent(name) = self.current().clone() {
+                        self.advance();
+                        Self::private_name(&name)
+                    } else {
+                        self.expect_ident_or_keyword()?
+                    };
                     segments.push(crate::parser::ast::ChainSegment::Member {
                         property,
                         optional: true,
@@ -2482,7 +2535,28 @@ impl Parser {
                     };
                 }
             } else if self.consume_if(&Token::Dot) {
-                let property = self.expect_ident_or_keyword()?;
+                // `.foo` (regular ident or keyword) or `.#name`
+                // (private). Both lower into the same `Expr::Member`
+                // shape; private names go through the sentinel
+                // lowering so they can't be reached from outside the
+                // class body.
+                let property = if let Token::PrivateIdent(name) = self.current().clone() {
+                    if self.class_depth == 0 {
+                        let span = self.current_span();
+                        return Err(ParseError::UnexpectedToken {
+                            found: format!("#{}", name),
+                            expected: "identifier (private member access #name is only \
+                                allowed inside a class body)"
+                                .to_string(),
+                            span,
+                        }
+                        .into());
+                    }
+                    self.advance();
+                    Self::private_name(&name)
+                } else {
+                    self.expect_ident_or_keyword()?
+                };
                 if let Some(segments) = chain_segments.as_mut() {
                     segments.push(crate::parser::ast::ChainSegment::Member {
                         property,
@@ -2534,7 +2608,23 @@ impl Parser {
 
         loop {
             if self.consume_if(&Token::Dot) {
-                let property = self.expect_ident_or_keyword()?;
+                let property = if let Token::PrivateIdent(name) = self.current().clone() {
+                    if self.class_depth == 0 {
+                        let span = self.current_span();
+                        return Err(ParseError::UnexpectedToken {
+                            found: format!("#{}", name),
+                            expected: "identifier (private member access #name is only \
+                                allowed inside a class body)"
+                                .to_string(),
+                            span,
+                        }
+                        .into());
+                    }
+                    self.advance();
+                    Self::private_name(&name)
+                } else {
+                    self.expect_ident_or_keyword()?
+                };
                 expr = Expr::Member {
                     object: Box::new(expr),
                     property,

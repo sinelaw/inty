@@ -117,7 +117,15 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             if needs_wrap {
                 write!(w, ")")?;
             }
-            write!(w, ".{}", property)
+            // Render private-field sentinels back to their `#name`
+            // source form so the desugared output stays readable.
+            if let Some(name) = crate::types::private_key_display(
+                &crate::types::PropName(property.clone()),
+            ) {
+                write!(w, ".#{}", name)
+            } else {
+                write!(w, ".{}", property)
+            }
         }
 
         Expr::ComputedMember {
@@ -426,7 +434,16 @@ fn write_template_string(w: &mut impl Write, s: &str) -> fmt::Result {
 
 fn write_prop_key(w: &mut impl Write, key: &PropKey) -> fmt::Result {
     match key {
-        PropKey::Ident(s) => write!(w, "{}", s),
+        PropKey::Ident(s) => {
+            // Render private-field sentinels back to `#name`.
+            if let Some(name) = crate::types::private_key_display(
+                &crate::types::PropName(s.clone()),
+            ) {
+                write!(w, "#{}", name)
+            } else {
+                write!(w, "{}", s)
+            }
+        }
         PropKey::String(s) => write_string(w, s),
         PropKey::Number(n) => write!(w, "{}", n),
     }

@@ -98,6 +98,16 @@ pub enum Token {
     // Identifier
     Ident(std::string::String),
 
+    /// Private identifier: `#name`. Distinct from `Ident` so the
+    /// parser can recognise private fields and private member access
+    /// without re-tokenising. The `#` is consumed by the lexer; the
+    /// stored string is just the name part. Class-body lowering
+    /// rewrites these into sentinel-keyed row entries (see
+    /// `examples/fizzy/design.md` § "Private fields"). User JS source
+    /// can never produce the sentinel name directly, so external
+    /// access is impossible.
+    PrivateIdent(std::string::String),
+
     // Type annotation comment /*: ... */
     TypeAnnotation(std::string::String),
 
@@ -318,6 +328,7 @@ impl fmt::Display for Token {
             Token::TemplateTail(s) => write!(f, "}}{}`", s),
             Token::TemplateNoSub(s) => write!(f, "`{}`", s),
             Token::Ident(s) => write!(f, "{}", s),
+            Token::PrivateIdent(s) => write!(f, "#{}", s),
             Token::TypeAnnotation(s) => write!(f, "/*: {} */", s),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
