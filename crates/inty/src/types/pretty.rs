@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display, Write};
 
-use super::ty::{ClassName, LitValue, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
+use super::ty::{ClassName, LitValue, PropName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
+use super::CALLABLE_KEY;
 
 /// Context for pretty-printing, tracking variable names.
 pub struct PrettyContext {
@@ -341,10 +342,35 @@ impl PrettyContext {
 
     /// Write a row type.
     fn write_row<W: Write>(&mut self, w: &mut W, row: &RowType) -> fmt::Result {
+        // Callable rows render with the call signature first, without a
+        // key, mirroring the keyless `(args) => ret` syntax in `.d.js`
+        // type annotations. The CALLABLE_KEY field is reserved and
+        // unspeakable in JS source, so it never shows up under its raw
+        // name.
+        let callable_key = PropName(CALLABLE_KEY.to_string());
+        let callable = row.props.get(&callable_key);
+
+        // Special case: if the row has *only* the CALLABLE_KEY field and
+        // a closed tail, render as a plain function `(args) => ret`
+        // without surrounding braces. Keeps inferred function types
+        // readable.
+        if let Some(call_ty) = callable {
+            if row.props.len() == 1 && matches!(row.tail, RowTail::Closed) {
+                return self.write_type(w, call_ty, false);
+            }
+        }
+
         write!(w, "{{")?;
 
         let mut first = true;
+        if let Some(call_ty) = callable {
+            self.write_type(w, call_ty, false)?;
+            first = false;
+        }
         for (prop, ty) in &row.props {
+            if prop == &callable_key {
+                continue;
+            }
             if !first {
                 write!(w, ", ")?;
             }
