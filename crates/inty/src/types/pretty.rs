@@ -9,6 +9,24 @@ use std::fmt::{self, Display, Write};
 use super::ty::{ClassName, LitValue, PropName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
 use super::CALLABLE_KEY;
 
+/// True when this type prints as a bare function `(args) => ret` —
+/// either a raw `Type::Func` (only valid as a `<CALL>` field value, but
+/// the printer is defensive) or a callable row with no extras (the
+/// canonical "function value" shape under the unified design). Used to
+/// decide when surrounding parentheses are needed in compound contexts
+/// like `T[]` and `T | U`.
+fn prints_as_function(ty: &Type) -> bool {
+    match ty {
+        Type::Func { .. } => true,
+        Type::Row(row) => {
+            row.props.len() == 1
+                && row.props.contains_key(&PropName(CALLABLE_KEY.to_string()))
+                && matches!(row.tail, RowTail::Closed)
+        }
+        _ => false,
+    }
+}
+
 /// Context for pretty-printing, tracking variable names.
 pub struct PrettyContext {
     /// Mapping from type variable IDs to display names.
@@ -131,7 +149,7 @@ impl PrettyContext {
                 write!(w, " }}")
             }
             Type::Array(elem) => {
-                let needs_parens = matches!(**elem, Type::Func { .. } | Type::Union(_));
+                let needs_parens = prints_as_function(elem) || matches!(**elem, Type::Union(_));
                 if needs_parens {
                     write!(w, "(")?;
                 }
@@ -236,7 +254,7 @@ impl PrettyContext {
 
             Type::Array(elem) => {
                 // Wrap complex types in parentheses for clarity
-                let needs_parens = matches!(**elem, Type::Func { .. });
+                let needs_parens = prints_as_function(elem);
                 if needs_parens {
                     write!(w, "(")?;
                 }
@@ -300,7 +318,7 @@ impl PrettyContext {
                     }
                     // Parenthesise function members so `(A) => B | C` reads
                     // as `((A) => B) | C` rather than `(A) => (B | C)`.
-                    let needs_parens = matches!(m, Type::Func { .. });
+                    let needs_parens = prints_as_function(m);
                     if needs_parens {
                         write!(w, "(")?;
                     }

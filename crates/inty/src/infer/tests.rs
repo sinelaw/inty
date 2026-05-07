@@ -187,17 +187,15 @@ fn test_annotation_function_params() {
     .unwrap();
     let scheme = env.lookup("add").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    match ty {
-        Type::Func { params, ret, .. } => {
-            assert_eq!(params.len(), 2);
-            let p0 = state.apply_subst(&params[0]);
-            let p1 = state.apply_subst(&params[1]);
-            assert_eq!(p0, Type::Number);
-            assert_eq!(p1, Type::Number);
-            assert_eq!(*ret, Type::Number);
-        }
-        _ => panic!("expected function type"),
-    }
+    let (_, params, ret) = ty
+        .as_callable()
+        .expect("expected callable type for `add`");
+    assert_eq!(params.len(), 2);
+    let p0 = state.apply_subst(&params[0]);
+    let p1 = state.apply_subst(&params[1]);
+    assert_eq!(p0, Type::Number);
+    assert_eq!(p1, Type::Number);
+    assert_eq!(*ret, Type::Number);
 }
 
 #[test]
@@ -1037,7 +1035,7 @@ fn test_add_function_has_plus_constraint() {
     assert!(ty.is_func(), "add should be a function type");
 
     // Both parameters should be unified to the same type
-    if let Type::Func { params, .. } = &ty {
+    if let Some((_, params, _)) = ty.as_callable() {
         assert_eq!(params.len(), 2);
         assert_eq!(
             params[0], params[1],
@@ -1070,7 +1068,7 @@ fn test_map_function_indexable_unification() {
     // The type should be a function
     assert!(ty.is_func(), "map should be a function type");
 
-    if let Type::Func { params, ret, .. } = &ty {
+    if let Some((_, params, ret)) = ty.as_callable() {
         assert_eq!(params.len(), 2, "map should take 2 parameters");
 
         // Second param should be a function
@@ -1078,7 +1076,7 @@ fn test_map_function_indexable_unification() {
         assert!(fn_param.is_func(), "second param should be a function");
 
         // Return type should be an array
-        let ret_type = state.apply_subst(ret.as_ref());
+        let ret_type = state.apply_subst(ret);
         assert!(
             matches!(ret_type, Type::Array(_)),
             "return type should be an array, got: {:?}",
@@ -1086,10 +1084,10 @@ fn test_map_function_indexable_unification() {
         );
 
         // The fn's return type should match the result array's element type
-        if let (Type::Func { ret: fn_ret, .. }, Type::Array(result_elem)) =
-            (&fn_param, &ret_type)
+        if let (Some((_, _, fn_ret)), Type::Array(result_elem)) =
+            (fn_param.as_callable(), &ret_type)
         {
-            let fn_ret_type = state.apply_subst(fn_ret.as_ref());
+            let fn_ret_type = state.apply_subst(fn_ret);
             let result_elem_type = state.apply_subst(result_elem.as_ref());
             assert_eq!(
                 fn_ret_type, result_elem_type,
@@ -1132,61 +1130,51 @@ fn test_map_function_complete_type_signature() {
 
     let ty = state.apply_subst(&scheme.body.ty);
 
-    if let Type::Func { params, ret, .. } = &ty {
-        let arr_param = state.apply_subst(&params[0]);
-        let fn_param = state.apply_subst(&params[1]);
-        let ret_type = state.apply_subst(ret.as_ref());
+    let (_, params, ret) = ty.as_callable().expect("map should be a function type");
+    let arr_param = state.apply_subst(&params[0]);
+    let fn_param = state.apply_subst(&params[1]);
+    let ret_type = state.apply_subst(ret);
 
-        // arr should be an array type
-        assert!(
-            matches!(arr_param, Type::Array(_)),
-            "arr parameter should be Array type, got: {}",
-            arr_param
+    // arr should be an array type
+    assert!(
+        matches!(arr_param, Type::Array(_)),
+        "arr parameter should be Array type, got: {}",
+        arr_param
+    );
+
+    // fn should be a function type
+    assert!(
+        fn_param.is_func(),
+        "fn parameter should be a function type, got: {}",
+        fn_param
+    );
+
+    // ret should be an array type
+    assert!(
+        matches!(ret_type, Type::Array(_)),
+        "return type should be Array type, got: {}",
+        ret_type
+    );
+
+    if let (Type::Array(arr_elem), Some((_, fn_params, fn_ret)), Type::Array(result_elem)) =
+        (&arr_param, fn_param.as_callable(), &ret_type)
+    {
+        let arr_elem_type = state.apply_subst(arr_elem.as_ref());
+        let fn_input_type = state.apply_subst(&fn_params[0]);
+        let fn_ret_type = state.apply_subst(fn_ret);
+        let result_elem_type = state.apply_subst(result_elem.as_ref());
+
+        // arr element type should equal fn's input type
+        assert_eq!(
+            arr_elem_type, fn_input_type,
+            "arr element type should equal fn input type"
         );
 
-        // fn should be a function type
-        assert!(
-            fn_param.is_func(),
-            "fn parameter should be a function type, got: {}",
-            fn_param
+        // fn return type should equal result element type
+        assert_eq!(
+            fn_ret_type, result_elem_type,
+            "fn return type should equal result element type"
         );
-
-        // ret should be an array type
-        assert!(
-            matches!(ret_type, Type::Array(_)),
-            "return type should be Array type, got: {}",
-            ret_type
-        );
-
-        if let (
-            Type::Array(arr_elem),
-            Type::Func {
-                params: fn_params,
-                ret: fn_ret,
-                ..
-            },
-            Type::Array(result_elem),
-        ) = (&arr_param, &fn_param, &ret_type)
-        {
-            let arr_elem_type = state.apply_subst(arr_elem.as_ref());
-            let fn_input_type = state.apply_subst(&fn_params[0]);
-            let fn_ret_type = state.apply_subst(fn_ret.as_ref());
-            let result_elem_type = state.apply_subst(result_elem.as_ref());
-
-            // arr element type should equal fn's input type
-            assert_eq!(
-                arr_elem_type, fn_input_type,
-                "arr element type should equal fn input type"
-            );
-
-            // fn return type should equal result element type
-            assert_eq!(
-                fn_ret_type, result_elem_type,
-                "fn return type should equal result element type"
-            );
-        }
-    } else {
-        panic!("map should be a function type");
     }
 }
 
@@ -1211,7 +1199,7 @@ fn test_phase5_typeof_undefined_narrowing() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("f").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    if let Some((_, _, ret)) = ty.as_func() {
+    if let Some((_, _, ret)) = ty.as_callable() {
         let ret = state.apply_subst(ret);
         assert_eq!(ret, Type::Number);
     } else {
@@ -1229,7 +1217,7 @@ fn test_phase5_switch_on_string_literal_union() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("g").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    if let Some((_, _, ret)) = ty.as_func() {
+    if let Some((_, _, ret)) = ty.as_callable() {
         let ret = state.apply_subst(ret);
         assert_eq!(ret, Type::Number);
     } else {
@@ -1250,7 +1238,7 @@ fn test_phase5_discriminated_union_via_if() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("area").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    if let Some((_, _, ret)) = ty.as_func() {
+    if let Some((_, _, ret)) = ty.as_callable() {
         let ret = state.apply_subst(ret);
         assert_eq!(ret, Type::Number);
     } else {
@@ -1285,7 +1273,7 @@ fn test_phase5_discriminated_union_via_switch() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("area").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    if let Some((_, _, ret)) = ty.as_func() {
+    if let Some((_, _, ret)) = ty.as_callable() {
         let ret = state.apply_subst(ret);
         assert_eq!(ret, Type::Number);
     } else {
@@ -1406,7 +1394,7 @@ fn test_if_branches_form_union() {
     let scheme = env.lookup("pick").unwrap();
     let ty = state.apply_subst(scheme.ty());
     // The function's return should be a union of the two row shapes.
-    if let Some((_, _, ret)) = ty.as_func() {
+    if let Some((_, _, ret)) = ty.as_callable() {
         let ret = state.apply_subst(ret);
         assert!(
             matches!(ret, Type::Union(_)),
@@ -1426,7 +1414,7 @@ fn test_member_on_union_with_shared_field() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("getX").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    if let Some((_, _, ret)) = ty.as_func() {
+    if let Some((_, _, ret)) = ty.as_callable() {
         let ret = state.apply_subst(ret);
         assert_eq!(ret, Type::Number, "getX return type should be Number");
     } else {
@@ -1442,7 +1430,7 @@ fn test_member_on_union_disagreeing_field_joins() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("getX").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    if let Some((_, _, ret)) = ty.as_func() {
+    if let Some((_, _, ret)) = ty.as_callable() {
         let ret = state.apply_subst(ret);
         match ret {
             Type::Union(ref m) => {

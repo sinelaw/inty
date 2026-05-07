@@ -131,11 +131,10 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let result = self.fresh_type_var();
-        let expected = Type::Func {
-            this_type: None,
-            params: arg_types.to_vec(),
-            ret: Box::new(result.clone()),
-        };
+        // Expected callable shape — open callable row so the carrier
+        // can be any function-like value (plain function or
+        // constructor with statics). See state.rs::callable_row_open.
+        let expected = self.callable_row_open(None, arg_types.to_vec(), result.clone());
         self.unify(span, carrier, &expected)?;
         Ok(self.apply_subst(&result))
     }
