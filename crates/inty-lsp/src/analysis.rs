@@ -50,14 +50,16 @@ impl Analysis {
 
         // Parse.
         let type_annotations = scanner.type_annotations().to_vec();
+        let type_aliases = scanner.type_aliases().to_vec();
         let mut parser = Parser::new(tokens, type_annotations);
-        let program = match parser.parse_program() {
+        let mut program = match parser.parse_program() {
             Ok(p) => p,
             Err(e) => {
                 errors.push(e);
                 return Analysis::errors_only(errors);
             }
         };
+        program.type_aliases = type_aliases;
 
         // Resolve identifiers (independent of type inference). We pass
         // the text length so the module scope covers EOF — otherwise
@@ -987,5 +989,29 @@ fn consider(best: &mut Option<(String, Span)>, name: String, span: Span) {
     match best {
         Some((_, current)) if span_len(*current) <= span_len(span) => {}
         _ => *best = Some((name, span)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Analysis::check` is the entry point both the LSP server and the
+    /// wasm playground use. If aliases aren't collected from the scanner
+    /// here, every doc-comment `type Foo = ...` is silently dropped and
+    /// references to `Foo` degrade to a fresh type variable — programs
+    /// that should error type-check successfully.
+    #[test]
+    fn check_collects_type_aliases() {
+        let src = "\
+/** type Func = () => {id: String} */
+/** const func: Func */
+const func = function() { return {id: '123', name: 'hello'}; };";
+        let analysis = Analysis::check(src);
+        assert!(
+            !analysis.errors.is_empty(),
+            "expected excess-field rejection through nullary alias expansion, got {:?}",
+            analysis.errors
+        );
     }
 }
