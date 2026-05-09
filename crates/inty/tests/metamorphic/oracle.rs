@@ -164,7 +164,8 @@ pub fn assert_consistent(label: &str, p: &Program, q: &Program, cmp: &Comparison
             // ends up last should exclude themselves from this oracle,
             // not be "allowed" here.
             assert_eq!(
-                ok_p.program_ty, ok_q.program_ty,
+                ok_p.program_ty,
+                ok_q.program_ty,
                 "metamorphic property `{label}`: program-level type differs\n\
                  p:\n{}\np.type = {}\nq:\n{}\nq.type = {}\n",
                 print_program(p),
@@ -202,7 +203,8 @@ pub fn assert_consistent(label: &str, p: &Program, q: &Program, cmp: &Comparison
                     )
                 });
                 assert_eq!(
-                    left, right,
+                    left,
+                    right,
                     "metamorphic property `{label}`: types for renamed \
                      binding `{old}`→`{new}` differ\np:\n{}\nq:\n{}\n",
                     print_program(p),
@@ -213,7 +215,8 @@ pub fn assert_consistent(label: &str, p: &Program, q: &Program, cmp: &Comparison
             // Shared names: everything that's left must match by name
             // and printed type.
             assert_eq!(
-                p_bindings, q_bindings,
+                p_bindings,
+                q_bindings,
                 "metamorphic property `{label}`: shared-bindings map differs\n\
                  p:\n{}\nq:\n{}\np.bindings = {:#?}\nq.bindings = {:#?}\n",
                 print_program(p),

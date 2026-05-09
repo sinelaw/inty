@@ -107,10 +107,7 @@ pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     let b = Type::Boolean;
     Some(match method {
         "test" => Type::simple_func(vec![s.clone()], b.clone()),
-        "exec" => Type::simple_func(
-            vec![s.clone()],
-            Type::array(s.clone()),
-        ),
+        "exec" => Type::simple_func(vec![s.clone()], Type::array(s.clone())),
         "toString" => Type::simple_func(vec![], s.clone()),
         // Direct properties.
         "source" => s.clone(),
@@ -195,20 +192,14 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
         // Polymorphic: reduce carries an accumulator of a fresh type U.
         "reduce" => {
             let u_var = state.fresh_type_var();
-            let cb = state.callable_row_open(
-                None,
-                vec![u_var.clone(), elem.clone()],
-                u_var.clone(),
-            );
+            let cb =
+                state.callable_row_open(None, vec![u_var.clone(), elem.clone()], u_var.clone());
             Type::simple_func(vec![cb, u_var.clone()], u_var)
         }
         "reduceRight" => {
             let u_var = state.fresh_type_var();
-            let cb = state.callable_row_open(
-                None,
-                vec![u_var.clone(), elem.clone()],
-                u_var.clone(),
-            );
+            let cb =
+                state.callable_row_open(None, vec![u_var.clone(), elem.clone()], u_var.clone());
             Type::simple_func(vec![cb, u_var.clone()], u_var)
         }
         "toString" => Type::simple_func(vec![], s.clone()),
@@ -233,22 +224,15 @@ pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -
     Some(match method {
         "then" => {
             let u_var = state.fresh_type_var();
-            let cb = state.callable_row_open(
-                None,
-                vec![inner.clone()],
-                Type::promise(u_var.clone()),
-            );
+            let cb =
+                state.callable_row_open(None, vec![inner.clone()], Type::promise(u_var.clone()));
             Type::simple_func(vec![cb], Type::promise(u_var))
         }
         "catch" => {
             // (error -> Promise<T>) -> Promise<T>. error is a fresh var
             // since inty has no single "Error" type.
             let err_var = state.fresh_type_var();
-            let cb = state.callable_row_open(
-                None,
-                vec![err_var],
-                Type::promise(inner.clone()),
-            );
+            let cb = state.callable_row_open(None, vec![err_var], Type::promise(inner.clone()));
             Type::simple_func(vec![cb], Type::promise(inner.clone()))
         }
         "finally" => Type::simple_func(

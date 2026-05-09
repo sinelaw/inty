@@ -39,10 +39,7 @@ pub enum BundleError {
     /// I/O error reading a source file.
     Io { path: PathBuf, message: String },
     /// Parser or scanner rejected a source file.
-    Parse {
-        path: PathBuf,
-        message: String,
-    },
+    Parse { path: PathBuf, message: String },
     /// Import graph contains a cycle.
     ImportCycle { path: PathBuf },
     /// A relative import couldn't be resolved against the disk.
@@ -149,12 +146,11 @@ fn load_module(
                 specifier: spec.clone(),
             });
         }
-        let resolved = resolve_path(&base_dir, &spec).ok_or_else(|| {
-            BundleError::UnresolvedImport {
+        let resolved =
+            resolve_path(&base_dir, &spec).ok_or_else(|| BundleError::UnresolvedImport {
                 from: path.to_path_buf(),
                 specifier: spec.clone(),
-            }
-        })?;
+            })?;
         resolved_imports.push((spec.clone(), resolved.clone()));
         export_resolutions.insert(spec, resolved);
     }
@@ -173,21 +169,17 @@ fn load_module(
                     specifier: src.clone(),
                 });
             }
-            let resolved = resolve_path(&base_dir, src).ok_or_else(|| {
-                BundleError::UnresolvedImport {
+            let resolved =
+                resolve_path(&base_dir, src).ok_or_else(|| BundleError::UnresolvedImport {
                     from: path.to_path_buf(),
                     specifier: src.clone(),
-                }
-            })?;
+                })?;
             resolved_imports.push((src.clone(), resolved.clone()));
             export_resolutions.insert(src.clone(), resolved);
         }
     }
 
-    let import_targets: Vec<PathBuf> = resolved_imports
-        .iter()
-        .map(|(_, p)| p.clone())
-        .collect();
+    let import_targets: Vec<PathBuf> = resolved_imports.iter().map(|(_, p)| p.clone()).collect();
 
     // Recurse into dependencies BEFORE inserting this module, so a
     // back-edge caught by the `visiting` set fires as a cycle

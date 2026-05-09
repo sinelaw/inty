@@ -62,11 +62,7 @@ impl std::fmt::Display for EmitError {
             EmitError::Unsupported { message, path } => {
                 write!(f, "{}: {}", path.display(), message)
             }
-            EmitError::UnknownReexport {
-                from,
-                target,
-                name,
-            } => write!(
+            EmitError::UnknownReexport { from, target, name } => write!(
                 f,
                 "{} re-exports {:?} from {} but the target does not appear to export it",
                 from.display(),
@@ -90,8 +86,7 @@ pub fn emit_bundle(
 
     // Register every module's source for the source map. The index
     // returned is what we put in each mapping's source_id.
-    let mut source_ids: std::collections::HashMap<PathBuf, u32> =
-        std::collections::HashMap::new();
+    let mut source_ids: std::collections::HashMap<PathBuf, u32> = std::collections::HashMap::new();
     for path in order {
         if let Some(m) = graph.get(path) {
             let id = smap.add_source(&path.to_string_lossy());
@@ -152,11 +147,10 @@ pub fn emit_bundle(
             message: format!("source-map write failed: {}", e),
             path: entry.to_path_buf(),
         })?;
-    let source_map =
-        String::from_utf8(sm_buf).map_err(|e| EmitError::Unsupported {
-            message: format!("source map produced non-UTF-8 bytes: {}", e),
-            path: entry.to_path_buf(),
-        })?;
+    let source_map = String::from_utf8(sm_buf).map_err(|e| EmitError::Unsupported {
+        message: format!("source map produced non-UTF-8 bytes: {}", e),
+        path: entry.to_path_buf(),
+    })?;
 
     Ok(BundleOutput {
         code: buf.into_string(),
@@ -210,10 +204,7 @@ fn emit_module_body(
                         } => {
                             buf.line(&format!(
                                 "{}var {} = __mods[{}].{};",
-                                indent,
-                                local,
-                                target_lit,
-                                imported
+                                indent, local, target_lit, imported
                             ));
                         }
                         ImportSpecifier::Default { local, .. } => {
@@ -291,10 +282,7 @@ fn emit_export_decl(
                     .unwrap_or_else(|| "undefined".to_string());
                 buf.line(&format!("{}{} {} = {};", indent, kw, d.name, init));
                 if writes_exports {
-                    buf.line(&format!(
-                        "{}__exports.{} = {};",
-                        indent, d.name, d.name
-                    ));
+                    buf.line(&format!("{}__exports.{} = {};", indent, d.name, d.name));
                 }
             }
         }
@@ -339,10 +327,7 @@ fn emit_export_decl(
                         buf.line(&format!("{}{}", indent, line));
                     }
                     if writes_exports {
-                        buf.line(&format!(
-                            "{}__exports.default = {};",
-                            indent, fname
-                        ));
+                        buf.line(&format!("{}__exports.default = {};", indent, fname));
                     }
                 }
                 _ => {
@@ -356,7 +341,10 @@ fn emit_export_decl(
             }
         }
 
-        ExportDecl::List { specifiers, span: _ } => {
+        ExportDecl::List {
+            specifiers,
+            span: _,
+        } => {
             if writes_exports {
                 for s in specifiers {
                     buf.line(&format!(
@@ -372,15 +360,17 @@ fn emit_export_decl(
             source: spec,
             span: _,
         } => {
-            let target_path = module.specifier_resolution.get(spec).ok_or_else(|| {
-                EmitError::Unsupported {
-                    message: format!(
-                        "re-export {:?} has no resolved target — internal bundler bug",
-                        spec
-                    ),
-                    path: module.path.clone(),
-                }
-            })?;
+            let target_path =
+                module
+                    .specifier_resolution
+                    .get(spec)
+                    .ok_or_else(|| EmitError::Unsupported {
+                        message: format!(
+                            "re-export {:?} has no resolved target — internal bundler bug",
+                            spec
+                        ),
+                        path: module.path.clone(),
+                    })?;
             let target_lit = js_string(&target_path.to_string_lossy());
             match kind {
                 ExportFromKind::Named(specs) => {
@@ -509,17 +499,20 @@ impl Buffer {
 /// Add a single source-map mapping pointing the current output line
 /// at the source span. Column granularity is line-only for v1; the
 /// pretty printer doesn't expose per-token columns.
-fn add_mapping(
-    smap: &mut SourceMapBuilder,
-    buf: &Buffer,
-    source_id: u32,
-    span: inty::lexer::Span,
-) {
+fn add_mapping(smap: &mut SourceMapBuilder, buf: &Buffer, source_id: u32, span: inty::lexer::Span) {
     // Convert byte offset to (line, col) by scanning isn't free, but
     // mapping count is small (one per top-level statement) so we
     // just register the line at byte 0 and let consumers derive
     // columns from the source text.
-    smap.add_raw(buf.current_line(), 0, 0, span.start as u32, Some(source_id), None, false);
+    smap.add_raw(
+        buf.current_line(),
+        0,
+        0,
+        span.start as u32,
+        Some(source_id),
+        None,
+        false,
+    );
 }
 
 /// Quote a string as a JavaScript string literal. Handles the

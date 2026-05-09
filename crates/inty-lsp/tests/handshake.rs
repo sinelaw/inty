@@ -3,6 +3,7 @@
 
 use std::thread;
 
+use inty_lsp::Server;
 use lsp_server::{Connection, Message, Notification, Request, RequestId};
 use lsp_types::notification::{
     DidOpenTextDocument, Initialized, Notification as LspNotification, PublishDiagnostics,
@@ -19,7 +20,6 @@ use lsp_types::{
     SignatureHelpContext, SignatureHelpParams, SignatureHelpTriggerKind, TextDocumentIdentifier,
     TextDocumentItem, TextDocumentPositionParams, Uri, WorkDoneProgressParams, WorkspaceEdit,
 };
-use inty_lsp::Server;
 use serde::{de::DeserializeOwned, Serialize};
 
 fn boot() -> (Connection, thread::JoinHandle<()>) {
@@ -175,7 +175,10 @@ fn hover_returns_inferred_type() {
             HoverParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 0, character: 4 },
+                    position: Position {
+                        line: 0,
+                        character: 4,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
             },
@@ -221,7 +224,10 @@ fn hover_picks_shadowing_binding() {
             HoverParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 1, character: col },
+                    position: Position {
+                        line: 1,
+                        character: col,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
             },
@@ -254,7 +260,8 @@ fn hover_on_parameter_returns_param_type() {
     let u = uri("file:///param.js");
     // Pin the param type concretely with a function-level annotation so
     // the hover answer is unambiguous (otherwise `add` is polymorphic).
-    let src = "/** function add (Number, Number) => Number */\nfunction add(a, b) { return a + b; }\n";
+    let src =
+        "/** function add (Number, Number) => Number */\nfunction add(a, b) { return a + b; }\n";
     open_doc(&client, &u, src);
     let _ = drain_diagnostics(&client, &u);
 
@@ -267,7 +274,10 @@ fn hover_on_parameter_returns_param_type() {
             HoverParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 1, character: 13 },
+                    position: Position {
+                        line: 1,
+                        character: 13,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
             },
@@ -310,7 +320,10 @@ fn definition_returns_binding_site() {
             GotoDefinitionParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 1, character: 0 },
+                    position: Position {
+                        line: 1,
+                        character: 0,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
                 partial_result_params: PartialResultParams::default(),
@@ -349,7 +362,10 @@ fn rename_produces_workspace_edit_with_all_uses() {
             RenameParams {
                 text_document_position: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 0, character: 4 },
+                    position: Position {
+                        line: 0,
+                        character: 4,
+                    },
                 },
                 new_name: "y".to_string(),
                 work_done_progress_params: WorkDoneProgressParams::default(),
@@ -383,7 +399,10 @@ fn prepare_rename_returns_identifier_range() {
             40,
             TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: u.clone() },
-                position: Position { line: 0, character: 5 }, // inside `foo`
+                position: Position {
+                    line: 0,
+                    character: 5,
+                }, // inside `foo`
             },
         )))
         .unwrap();
@@ -414,7 +433,10 @@ fn completion_lists_visible_identifiers() {
             CompletionParams {
                 text_document_position: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 0, character: 30 },
+                    position: Position {
+                        line: 0,
+                        character: 30,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
                 partial_result_params: PartialResultParams::default(),
@@ -461,7 +483,10 @@ fn completion_after_dot_lists_object_fields() {
             CompletionParams {
                 text_document_position: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 1, character: 4 },
+                    position: Position {
+                        line: 1,
+                        character: 4,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
                 partial_result_params: PartialResultParams::default(),
@@ -501,7 +526,10 @@ fn signature_help_inside_function_call() {
             SignatureHelpParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 1, character: 7 },
+                    position: Position {
+                        line: 1,
+                        character: 7,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
                 context: Some(SignatureHelpContext {
@@ -546,8 +574,14 @@ fn inlay_hints_show_inferred_types() {
                 work_done_progress_params: WorkDoneProgressParams::default(),
                 text_document: TextDocumentIdentifier { uri: u.clone() },
                 range: Range {
-                    start: Position { line: 0, character: 0 },
-                    end: Position { line: 10, character: 0 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 10,
+                        character: 0,
+                    },
                 },
             },
         )))
@@ -592,7 +626,10 @@ fn signature_help_on_member_call() {
             SignatureHelpParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 0, character: 12 },
+                    position: Position {
+                        line: 0,
+                        character: 12,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
                 context: Some(SignatureHelpContext {
@@ -647,8 +684,13 @@ fn rename_propagates_to_importing_files() {
             81,
             RenameParams {
                 text_document_position: TextDocumentPositionParams {
-                    text_document: TextDocumentIdentifier { uri: lib_uri.clone() },
-                    position: Position { line: 0, character: 11 },
+                    text_document: TextDocumentIdentifier {
+                        uri: lib_uri.clone(),
+                    },
+                    position: Position {
+                        line: 0,
+                        character: 11,
+                    },
                 },
                 new_name: "bar".to_string(),
                 work_done_progress_params: WorkDoneProgressParams::default(),
@@ -717,7 +759,10 @@ fn hover_inside_function_body_picks_inner_expr() {
             HoverParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 0, character: col },
+                    position: Position {
+                        line: 0,
+                        character: col,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
             },
@@ -765,7 +810,10 @@ fn hover_on_function_name_still_works() {
             HoverParams {
                 text_document_position_params: TextDocumentPositionParams {
                     text_document: TextDocumentIdentifier { uri: u.clone() },
-                    position: Position { line: 0, character: col },
+                    position: Position {
+                        line: 0,
+                        character: col,
+                    },
                 },
                 work_done_progress_params: WorkDoneProgressParams::default(),
             },
@@ -828,7 +876,12 @@ fn diagnostics_include_unreachable_narrowing_warning() {
             )
         });
     assert_eq!(w.source.as_deref(), Some("inty"));
-    assert_eq!(w.code, Some(lsp_types::NumberOrString::String("InferWarning".to_string())));
+    assert_eq!(
+        w.code,
+        Some(lsp_types::NumberOrString::String(
+            "InferWarning".to_string()
+        ))
+    );
     // The else-if test sits on line 7 of the source above (0-indexed).
     assert_eq!(w.range.start.line, 7, "warning range: {:?}", w.range);
 

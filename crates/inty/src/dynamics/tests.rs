@@ -32,21 +32,30 @@ fn run(source: &str) -> Result<Value, Stuck> {
 fn assert_number(source: &str, expected: f64) {
     match run(source) {
         Ok(Value::Number(n)) => assert_eq!(n, expected, "src: {}", source),
-        other => panic!("expected Number({}), got {:?} for {}", expected, other, source),
+        other => panic!(
+            "expected Number({}), got {:?} for {}",
+            expected, other, source
+        ),
     }
 }
 
 fn assert_string(source: &str, expected: &str) {
     match run(source) {
         Ok(Value::String(s)) => assert_eq!(s, expected, "src: {}", source),
-        other => panic!("expected String({:?}), got {:?} for {}", expected, other, source),
+        other => panic!(
+            "expected String({:?}), got {:?} for {}",
+            expected, other, source
+        ),
     }
 }
 
 fn assert_bool(source: &str, expected: bool) {
     match run(source) {
         Ok(Value::Boolean(b)) => assert_eq!(b, expected, "src: {}", source),
-        other => panic!("expected Boolean({}), got {:?} for {}", expected, other, source),
+        other => panic!(
+            "expected Boolean({}), got {:?} for {}",
+            expected, other, source
+        ),
     }
 }
 
@@ -149,10 +158,7 @@ fn indexing() {
 fn call_and_new() {
     assert_number("(function(x) { return x + 1; })(5)", 6.0);
     // `new` returns the constructed object; we read a field set inside.
-    assert_number(
-        "function P(x) { this.x = x; } var p = new P(7); p.x",
-        7.0,
-    );
+    assert_number("function P(x) { this.x = x; } var p = new P(7); p.x", 7.0);
 }
 
 // ---------------------------------------------------------------------

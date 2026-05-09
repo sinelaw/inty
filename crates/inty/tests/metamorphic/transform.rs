@@ -61,8 +61,7 @@ pub fn t_intersperse_empty(p: &Program) -> (Program, Comparison) {
     if p.statements.len() < 2 {
         return (p.clone(), Comparison::identity());
     }
-    let is_result_setter =
-        |s: &Stmt| !matches!(s, Stmt::FunctionDecl { .. } | Stmt::Empty { .. });
+    let is_result_setter = |s: &Stmt| !matches!(s, Stmt::FunctionDecl { .. } | Stmt::Empty { .. });
 
     let mut out = Vec::with_capacity(p.statements.len() * 2);
     for (i, stmt) in p.statements.iter().enumerate() {
@@ -117,8 +116,7 @@ pub fn t_swap_first_independent_pair(p: &Program) -> Option<(Program, Comparison
     // last non-function-decl statement, and swapping two distinct
     // setters with only function decls trailing would change which
     // one is "last" and therefore which type the program reports.
-    let is_result_setter =
-        |s: &Stmt| !matches!(s, Stmt::FunctionDecl { .. } | Stmt::Empty { .. });
+    let is_result_setter = |s: &Stmt| !matches!(s, Stmt::FunctionDecl { .. } | Stmt::Empty { .. });
 
     for i in 0..n - 2 {
         let a = &p.statements[i];
@@ -197,10 +195,7 @@ pub fn t_alpha_rename_existing(p: &Program) -> Option<(Program, Comparison)> {
 
     let new = fresh_name("__metamorphic_renamed_", &names_in(p));
     let transformed = rename_all(p, &old, &new);
-    Some((
-        transformed,
-        Comparison::identity().with_rename(old, new),
-    ))
+    Some((transformed, Comparison::identity().with_rename(old, new)))
 }
 
 // -------------------------------------------------------------------------
@@ -297,11 +292,7 @@ pub fn build_destructure_pair(obj_src: &str, prop: &str) -> (String, String, Com
     // If this ever changes upstream, this test will break loudly; the
     // comparison spec names the temp explicitly rather than matching
     // by prefix to keep the test's expectation obvious.
-    let src_b = format!(
-        "var {{{prop}: x}} = {obj};",
-        prop = prop,
-        obj = obj_src,
-    );
+    let src_b = format!("var {{{prop}: x}} = {obj};", prop = prop, obj = obj_src,);
     let cmp = Comparison::identity()
         .with_p_only(vec!["__metamorphic_tmp".to_string()])
         .with_q_only(vec!["$destr$0".to_string()]);

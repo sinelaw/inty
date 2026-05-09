@@ -155,8 +155,8 @@ proptest! {
 
 #[cfg(test)]
 mod unit {
-    use super::*;
     use super::ast::{bound_names_in_stmt, names_in, rename_all};
+    use super::*;
     use inty::parser::ast::Stmt;
 
     fn p_from(src: &str) -> Program {
@@ -170,7 +170,10 @@ mod unit {
             CheckResult::Ok(ok) => {
                 assert!(ok.bindings.contains_key("a"));
                 assert!(ok.bindings.contains_key("b"));
-                assert!(!ok.bindings.contains_key("Math"), "stdlib names should be filtered out");
+                assert!(
+                    !ok.bindings.contains_key("Math"),
+                    "stdlib names should be filtered out"
+                );
             }
             CheckResult::Err => panic!("expected ok"),
         }
@@ -222,8 +225,8 @@ mod unit {
     fn swap_finds_non_final_pair() {
         // Need >= 3 statements because the last is off-limits.
         let p = p_from("var a = 1; var b = 2; var c = 0;");
-        let (q, _) = t_swap_first_independent_pair(&p)
-            .expect("(a, b) is an independent non-final pair");
+        let (q, _) =
+            t_swap_first_independent_pair(&p).expect("(a, b) is an independent non-final pair");
         if let Stmt::Var { declarations, .. } = &q.statements[0] {
             assert_eq!(declarations[0].name, "b");
         } else {
@@ -255,9 +258,9 @@ mod unit {
     #[test]
     fn bound_names_function_decl() {
         let s = match &p_from("function f(a, b) { return a; }").statements[0] {
-            Stmt::FunctionDecl { .. } => p_from("function f(a, b) { return a; }")
-                .statements[0]
-                .clone(),
+            Stmt::FunctionDecl { .. } => {
+                p_from("function f(a, b) { return a; }").statements[0].clone()
+            }
             _ => unreachable!(),
         };
         let bound = bound_names_in_stmt(&s);

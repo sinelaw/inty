@@ -152,8 +152,7 @@ impl InferState {
         // standard JS semantics for const. Synthesised destructuring
         // temps (`$destr$N`) are skipped — they're uniquely generated
         // per pattern and can't collide.
-        let mut const_names: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut const_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut result = Type::Undefined;
         let mut current_env = env.clone();
         let mut i = 0;
@@ -169,8 +168,7 @@ impl InferState {
                 // export function b(){...}` type-checks.
                 let start = i;
                 while i < stmts.len()
-                    && (is_function_like_decl(&stmts[i])
-                        || matches!(stmts[i], Stmt::Empty { .. }))
+                    && (is_function_like_decl(&stmts[i]) || matches!(stmts[i], Stmt::Empty { .. }))
                 {
                     i += 1;
                 }
@@ -179,9 +177,7 @@ impl InferState {
                 // the group-inference routine skips empties either way,
                 // but trimming avoids pointless iteration over them.
                 let mut end = i;
-                while end > start
-                    && matches!(stmts[end - 1], Stmt::Empty { .. })
-                {
+                while end > start && matches!(stmts[end - 1], Stmt::Empty { .. }) {
                     end -= 1;
                 }
                 if end == start {
@@ -442,7 +438,10 @@ impl InferState {
                         // directly into this module's exports table.
                         Ok((Type::Undefined, env.clone()))
                     }
-                    ExportDecl::List { specifiers, span: _ } => {
+                    ExportDecl::List {
+                        specifiers,
+                        span: _,
+                    } => {
                         // `export { a, b as c };` doesn't change types — the
                         // resolver reads the exported names from a separate
                         // table built by `modules::collect_exports`. All we

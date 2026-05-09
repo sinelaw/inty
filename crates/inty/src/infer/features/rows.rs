@@ -117,7 +117,10 @@ impl InferState {
                     props.insert(prop_name, self.fresh_type_var());
                 }
 
-                PropDef::Spread { argument, span: spread_span } => {
+                PropDef::Spread {
+                    argument,
+                    span: spread_span,
+                } => {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
                     let resolved = self.apply_subst(&arg_ty);
@@ -328,10 +331,7 @@ impl InferState {
                     return Ok(self.apply_subst(&ty));
                 }
                 return Err(crate::error::TypeError::Module {
-                    message: format!(
-                        "module {:?} has no export named {:?}",
-                        m.source, property
-                    ),
+                    message: format!("module {:?} has no export named {:?}", m.source, property),
                     span,
                 }
                 .into());
@@ -421,5 +421,4 @@ impl InferState {
             }
         }
     }
-
 }

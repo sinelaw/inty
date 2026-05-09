@@ -1,10 +1,10 @@
 //! Conversions between inty's byte spans and LSP positions, plus
 //! `IntyError` → `lsp_types::Diagnostic` mapping.
 
-use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
-use inty::error::{LexError, IntyError, ParseError, TypeError};
+use inty::error::{IntyError, LexError, ParseError, TypeError};
 use inty::infer::InferWarning;
 use inty::lexer::Span;
+use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 
 /// Convert a byte offset in `text` to an LSP `Position` (UTF-16 units).
 ///
@@ -162,7 +162,13 @@ mod tests {
     #[test]
     fn position_at_start() {
         let p = byte_to_position("hello", 0);
-        assert_eq!(p, Position { line: 0, character: 0 });
+        assert_eq!(
+            p,
+            Position {
+                line: 0,
+                character: 0
+            }
+        );
     }
 
     #[test]
@@ -170,9 +176,21 @@ mod tests {
         let text = "ab\ncd";
         // offset of 'c' is 3
         let p = byte_to_position(text, 3);
-        assert_eq!(p, Position { line: 1, character: 0 });
+        assert_eq!(
+            p,
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
         let p = byte_to_position(text, 4);
-        assert_eq!(p, Position { line: 1, character: 1 });
+        assert_eq!(
+            p,
+            Position {
+                line: 1,
+                character: 1
+            }
+        );
     }
 
     #[test]
@@ -180,7 +198,13 @@ mod tests {
         // U+1F600 (😀) is 4 bytes UTF-8 and 2 UTF-16 code units.
         let text = "a😀b";
         let p = byte_to_position(text, text.find('b').unwrap());
-        assert_eq!(p, Position { line: 0, character: 3 });
+        assert_eq!(
+            p,
+            Position {
+                line: 0,
+                character: 3
+            }
+        );
     }
 
     #[test]
@@ -195,14 +219,20 @@ mod tests {
     #[test]
     fn position_to_byte_clamps_past_line_end() {
         let text = "ab\ncd";
-        let pos = Position { line: 0, character: 99 };
+        let pos = Position {
+            line: 0,
+            character: 99,
+        };
         assert_eq!(position_to_byte(text, pos), Some(2));
     }
 
     #[test]
     fn position_to_byte_unknown_line() {
         let text = "ab";
-        let pos = Position { line: 5, character: 0 };
+        let pos = Position {
+            line: 5,
+            character: 0,
+        };
         assert_eq!(position_to_byte(text, pos), None);
     }
 }

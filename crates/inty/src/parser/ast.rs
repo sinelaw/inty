@@ -16,7 +16,10 @@ pub struct Param {
 
 impl Param {
     pub fn new(name: impl Into<String>, span: Span) -> Self {
-        Param { name: name.into(), span }
+        Param {
+            name: name.into(),
+            span,
+        }
     }
 }
 
@@ -300,10 +303,7 @@ pub enum PropDef {
     /// Spread: `...expr`. Merged into the row of the containing
     /// object literal at typing time with right-biased semantics —
     /// keys later in source order win on collision.
-    Spread {
-        argument: Expr,
-        span: Source,
-    },
+    Spread { argument: Expr, span: Source },
 }
 
 /// One step of an `OptionalChain`. `optional` is `true` when the
@@ -474,10 +474,7 @@ pub enum Expr {
     /// element or a call-argument list — typing rejects it elsewhere.
     /// (Object spread uses `PropDef::Spread`; rest patterns in
     /// destructuring are handled at the declarator level.)
-    Spread {
-        argument: Box<Expr>,
-        span: Source,
-    },
+    Spread { argument: Box<Expr>, span: Source },
 
     /// Synthetic node emitted when desugaring an array destructuring
     /// rest pattern: `const [head, ...tail] = xs` lowers to a

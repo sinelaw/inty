@@ -106,7 +106,10 @@ fn comprehensive() {
     for &op in ALL_BINOPS {
         let name = binop_name(op);
         let entry = lookup(name).unwrap_or_else(|| {
-            panic!("BinOp::{:?} (catalog name {:?}) has no catalog entry", op, name)
+            panic!(
+                "BinOp::{:?} (catalog name {:?}) has no catalog entry",
+                op, name
+            )
         });
         assert_eq!(entry.kind, OpKind::BinOp, "{:?} should be BinOp", op);
         assert!(

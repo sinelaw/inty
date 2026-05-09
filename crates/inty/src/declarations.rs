@@ -79,10 +79,7 @@ pub fn emit_declarations(module: &CheckedModule) -> String {
 /// `DeclarationFlavor::Ts`, output uses TypeScript syntax — one
 /// `declare const NAME: T;` line per export, suitable for a `.d.ts`
 /// file other TS tooling can consume.
-pub fn emit_declarations_with_flavor(
-    module: &CheckedModule,
-    flavor: DeclarationFlavor,
-) -> String {
+pub fn emit_declarations_with_flavor(module: &CheckedModule, flavor: DeclarationFlavor) -> String {
     let mut out = String::new();
     for entry in &module.exports {
         if let Some(scheme) = resolve_scheme(entry, &module.env) {
@@ -149,33 +146,21 @@ mod tests {
 
     #[test]
     fn emit_function() {
-        let env = make_env_with(
-            "id",
-            Type::simple_func(vec![Type::String], Type::String),
-        );
+        let env = make_env_with("id", Type::simple_func(vec![Type::String], Type::String));
         let exports = vec![ExportEntry {
             exported: "id".to_string(),
             binding: ExportBinding::Local("id".to_string()),
         }];
         let module = CheckedModule::new(env, exports);
         let out = emit_declarations(&module);
-        assert_eq!(
-            out,
-            "/** const id: (String) => String */\nconst id;\n"
-        );
+        assert_eq!(out, "/** const id: (String) => String */\nconst id;\n");
     }
 
     #[test]
     fn skips_internal_bindings() {
         let env = TypeEnv::empty()
-            .extend(
-                "exported".to_string(),
-                TypeScheme::mono(Type::Boolean),
-            )
-            .extend(
-                "internal".to_string(),
-                TypeScheme::mono(Type::Number),
-            );
+            .extend("exported".to_string(), TypeScheme::mono(Type::Boolean))
+            .extend("internal".to_string(), TypeScheme::mono(Type::Number));
         let exports = vec![ExportEntry {
             exported: "exported".to_string(),
             binding: ExportBinding::Local("exported".to_string()),
@@ -191,10 +176,7 @@ mod tests {
         // TS-flavor output uses `declare const NAME: T;` with
         // lowercase TS primitives and `;`-separated object types.
         let env = TypeEnv::empty()
-            .extend(
-                "answer".to_string(),
-                TypeScheme::mono(Type::Number),
-            )
+            .extend("answer".to_string(), TypeScheme::mono(Type::Number))
             .extend(
                 "cfg".to_string(),
                 TypeScheme::mono(Type::object([
@@ -213,8 +195,7 @@ mod tests {
             },
         ];
         let module = CheckedModule::new(env, exports);
-        let out =
-            emit_declarations_with_flavor(&module, DeclarationFlavor::Ts);
+        let out = emit_declarations_with_flavor(&module, DeclarationFlavor::Ts);
         assert!(out.contains("declare const answer: number;"));
         assert!(out.contains("declare const cfg:"));
         // TS-flavor row should use semicolons between fields.
@@ -253,8 +234,7 @@ mod tests {
 
         let mut state = InferState::new();
         let env = crate::builtins::initial_env();
-        let (module_env, exports) =
-            check_module(&mut state, env.clone(), &entry).unwrap();
+        let (module_env, exports) = check_module(&mut state, env.clone(), &entry).unwrap();
         let module = CheckedModule::new(module_env, exports);
         let emitted = emit_declarations(&module);
 
@@ -283,9 +263,6 @@ mod tests {
         }];
         let module = CheckedModule::new(env, exports);
         let out = emit_declarations(&module);
-        assert_eq!(
-            out,
-            "/** const fromOther: String */\nconst fromOther;\n"
-        );
+        assert_eq!(out, "/** const fromOther: String */\nconst fromOther;\n");
     }
 }

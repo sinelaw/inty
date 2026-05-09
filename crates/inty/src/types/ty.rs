@@ -563,7 +563,9 @@ impl Type {
     pub fn is_func(&self) -> bool {
         match self {
             Type::Func { .. } => true,
-            Type::Row(row) => row.props.contains_key(&PropName(super::CALLABLE_KEY.to_string())),
+            Type::Row(row) => row
+                .props
+                .contains_key(&PropName(super::CALLABLE_KEY.to_string())),
             _ => false,
         }
     }

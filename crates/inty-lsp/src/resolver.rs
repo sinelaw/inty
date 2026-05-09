@@ -27,7 +27,7 @@ use std::collections::HashMap;
 
 use inty::lexer::Span;
 use inty::parser::ast::{
-    Expr, ExportDecl, ForInLhs, ForInit, ImportSpecifier, Param, Program, PropDef, Stmt,
+    ExportDecl, Expr, ForInLhs, ForInit, ImportSpecifier, Param, Program, PropDef, Stmt,
     VarDeclarator, VarKind,
 };
 
@@ -124,7 +124,10 @@ impl Resolution {
 
     /// Span (and Def) of every use of a binding, for rename.
     pub fn uses_of(&self, def_span: Span) -> &[Span] {
-        self.uses_of.get(&def_span).map(Vec::as_slice).unwrap_or(&[])
+        self.uses_of
+            .get(&def_span)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Iterate every binding whose name span lies inside `[start,
@@ -288,7 +291,9 @@ impl Resolution {
                 }
             }
             Stmt::Expr { expression, .. } => self.visit_expr(expression, scope),
-            Stmt::Var { kind, declarations, .. } => {
+            Stmt::Var {
+                kind, declarations, ..
+            } => {
                 self.visit_var_decls(*kind, declarations, fn_scope, scope);
             }
             Stmt::Import { specifiers, .. } => {
@@ -303,11 +308,17 @@ impl Resolution {
                 }
             }
             Stmt::Export { declaration, .. } => match declaration {
-                ExportDecl::Var { kind, declarations, .. } => {
+                ExportDecl::Var {
+                    kind, declarations, ..
+                } => {
                     self.visit_var_decls(*kind, declarations, fn_scope, scope);
                 }
                 ExportDecl::Function {
-                    name, params, body, span, ..
+                    name,
+                    params,
+                    body,
+                    span,
+                    ..
                 } => {
                     let name_span = name_span_from_func(*span, name);
                     self.declare(fn_scope, name, name_span, DefKind::Function);
@@ -327,10 +338,8 @@ impl Resolution {
                     for spec in specifiers {
                         // The spec span covers `local` (or `local as
                         // exported`). The local sits at span.start.
-                        let local_span = Span::new(
-                            spec.span.start,
-                            spec.span.start + spec.local.len(),
-                        );
+                        let local_span =
+                            Span::new(spec.span.start, spec.span.start + spec.local.len());
                         if let Some(def_span) = self.lookup(scope, &spec.local) {
                             self.record_ref(local_span, def_span);
                         }
@@ -343,7 +352,10 @@ impl Resolution {
                 }
             },
             Stmt::If {
-                test, consequent, alternate, ..
+                test,
+                consequent,
+                alternate,
+                ..
             } => {
                 self.visit_expr(test, scope);
                 self.visit_stmt(consequent, fn_scope, scope);
@@ -356,7 +368,11 @@ impl Resolution {
                 self.visit_stmt(body, fn_scope, scope);
             }
             Stmt::For {
-                init, test, update, body, span,
+                init,
+                test,
+                update,
+                body,
+                span,
             } => {
                 // A `for (let i = 0; …)` introduces `i` in a per-loop
                 // scope. We always open a scope here so `let` lands in
@@ -384,7 +400,18 @@ impl Resolution {
                 }
                 self.visit_stmt(body, fn_scope, for_scope);
             }
-            Stmt::ForIn { left, right, body, span } | Stmt::ForOf { left, right, body, span } => {
+            Stmt::ForIn {
+                left,
+                right,
+                body,
+                span,
+            }
+            | Stmt::ForOf {
+                left,
+                right,
+                body,
+                span,
+            } => {
                 let for_scope = self.new_scope(Some(scope), *span);
                 match left {
                     ForInLhs::VarDecl(name, _, lhs_span) => {
@@ -404,7 +431,12 @@ impl Resolution {
                 }
             }
             Stmt::Throw { argument, .. } => self.visit_expr(argument, scope),
-            Stmt::Try { block, handler, finalizer, .. } => {
+            Stmt::Try {
+                block,
+                handler,
+                finalizer,
+                ..
+            } => {
                 self.visit_stmt(block, fn_scope, scope);
                 if let Some(h) = handler {
                     let catch_scope = self.new_scope(Some(scope), h.span);
@@ -415,7 +447,11 @@ impl Resolution {
                     self.visit_stmt(f, fn_scope, scope);
                 }
             }
-            Stmt::Switch { discriminant, cases, .. } => {
+            Stmt::Switch {
+                discriminant,
+                cases,
+                ..
+            } => {
                 self.visit_expr(discriminant, scope);
                 for c in cases {
                     if let Some(t) = &c.test {
@@ -428,7 +464,11 @@ impl Resolution {
             }
             Stmt::Labeled { body, .. } => self.visit_stmt(body, fn_scope, scope),
             Stmt::FunctionDecl {
-                name: _, params, body, span, ..
+                name: _,
+                params,
+                body,
+                span,
+                ..
             } => {
                 // The decl was already hoisted into `fn_scope`; we
                 // still walk the body to record nested decls/uses.
@@ -483,13 +523,17 @@ impl Resolution {
                 for p in properties {
                     match p {
                         PropDef::Property { value, .. } => self.visit_expr(value, scope),
-                        PropDef::Method { params, body, span, .. } => {
+                        PropDef::Method {
+                            params, body, span, ..
+                        } => {
                             self.visit_function_body(*span, params, body, scope);
                         }
                         PropDef::Getter { body, span, .. } => {
                             self.visit_function_body(*span, &[], body, scope);
                         }
-                        PropDef::Setter { param, body, span, .. } => {
+                        PropDef::Setter {
+                            param, body, span, ..
+                        } => {
                             // Setter has a single string param; we don't
                             // get a precise span for it from the parser
                             // (the AST stores just `param: String`), so
@@ -503,7 +547,11 @@ impl Resolution {
                 }
             }
             Expr::Function {
-                name, params, body, span, ..
+                name,
+                params,
+                body,
+                span,
+                ..
             } => {
                 // Function expression: optional name binds *inside* the
                 // function only. Declare it in the function scope after
@@ -511,11 +559,18 @@ impl Resolution {
                 self.visit_function_body_named(*span, name.as_deref(), params, body, scope);
             }
             Expr::Member { object, .. } => self.visit_expr(object, scope),
-            Expr::ComputedMember { object, property, .. } => {
+            Expr::ComputedMember {
+                object, property, ..
+            } => {
                 self.visit_expr(object, scope);
                 self.visit_expr(property, scope);
             }
-            Expr::Call { callee, arguments, .. } | Expr::New { callee, arguments, .. } => {
+            Expr::Call {
+                callee, arguments, ..
+            }
+            | Expr::New {
+                callee, arguments, ..
+            } => {
                 self.visit_expr(callee, scope);
                 for a in arguments {
                     self.visit_expr(a, scope);
@@ -531,7 +586,10 @@ impl Resolution {
                 self.visit_expr(right, scope);
             }
             Expr::Conditional {
-                test, consequent, alternate, ..
+                test,
+                consequent,
+                alternate,
+                ..
             } => {
                 self.visit_expr(test, scope);
                 self.visit_expr(consequent, scope);
@@ -575,13 +633,7 @@ impl Resolution {
         }
     }
 
-    fn visit_function_body(
-        &mut self,
-        span: Span,
-        params: &[Param],
-        body: &Stmt,
-        parent: ScopeId,
-    ) {
+    fn visit_function_body(&mut self, span: Span, params: &[Param], body: &Stmt, parent: ScopeId) {
         self.visit_function_body_named(span, None, params, body, parent);
     }
 
@@ -636,7 +688,11 @@ fn hoist_scope(stmts: &[Stmt], r: &mut Resolution, scope: ScopeId) {
 
 fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
     match stmt {
-        Stmt::Var { kind: VarKind::Var, declarations, .. } => {
+        Stmt::Var {
+            kind: VarKind::Var,
+            declarations,
+            ..
+        } => {
             // Only `var` hoists to the enclosing function scope.
             // `let`/`const` are block-scoped and bind in visit_stmt.
             for d in declarations {
@@ -652,7 +708,11 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
             r.declare(scope, name, name_span, DefKind::Function);
         }
         Stmt::Export { declaration, .. } => match declaration {
-            ExportDecl::Var { kind: VarKind::Var, declarations, .. } => {
+            ExportDecl::Var {
+                kind: VarKind::Var,
+                declarations,
+                ..
+            } => {
                 for d in declarations {
                     let name_span = name_span_from_decl(d);
                     r.declare(scope, &d.name, name_span, DefKind::Var);
@@ -665,12 +725,14 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
             }
             // Default / List / From don't introduce new local bindings,
             // so they have nothing to hoist.
-            ExportDecl::Default { .. }
-            | ExportDecl::List { .. }
-            | ExportDecl::From { .. } => {}
+            ExportDecl::Default { .. } | ExportDecl::List { .. } | ExportDecl::From { .. } => {}
         },
         Stmt::Block { body, .. } => hoist_scope(body, r, scope),
-        Stmt::If { consequent, alternate, .. } => {
+        Stmt::If {
+            consequent,
+            alternate,
+            ..
+        } => {
             hoist_stmt(consequent, r, scope);
             if let Some(a) = alternate {
                 hoist_stmt(a, r, scope);
@@ -694,7 +756,12 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
             }
             hoist_stmt(body, r, scope);
         }
-        Stmt::Try { block, handler, finalizer, .. } => {
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
             hoist_stmt(block, r, scope);
             if let Some(h) = handler {
                 hoist_stmt(&h.body, r, scope);
@@ -799,7 +866,8 @@ mod tests {
         let trailing_y = src.rfind("y;").unwrap();
         // Reference at offset `trailing_y` should not resolve.
         assert!(
-            r.def_of_use(Span::new(trailing_y, trailing_y + 1)).is_none(),
+            r.def_of_use(Span::new(trailing_y, trailing_y + 1))
+                .is_none(),
             "let y should not leak out of its block"
         );
     }
@@ -825,7 +893,8 @@ mod tests {
         let r = build(src);
         let trailing_k = src.rfind("k;").unwrap();
         assert!(
-            r.def_of_use(Span::new(trailing_k, trailing_k + 1)).is_none(),
+            r.def_of_use(Span::new(trailing_k, trailing_k + 1))
+                .is_none(),
             "const k should not leak out of its block"
         );
     }
@@ -898,7 +967,8 @@ mod tests {
         let r = build(src);
         let trailing_i = src.rfind("i;").unwrap();
         assert!(
-            r.def_of_use(Span::new(trailing_i, trailing_i + 1)).is_none(),
+            r.def_of_use(Span::new(trailing_i, trailing_i + 1))
+                .is_none(),
             "let i should not leak out of the for-loop"
         );
         // Sanity check: the `i` inside the body still resolves.

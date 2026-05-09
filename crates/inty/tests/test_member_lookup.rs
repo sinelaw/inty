@@ -166,4 +166,3 @@ fn array_method_via_optional_chain_typechecks() {
     ";
     check(src).expect("arr?.map should type-check via the optional-chain path");
 }
-

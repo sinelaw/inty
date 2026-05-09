@@ -105,24 +105,21 @@ fn test_infer_string_constructor() {
     // rows under the unified design. The bare `initial_env` no longer
     // declares them, so we go through the full stdlib-aware program
     // path to exercise the constructor call.
-    let (_, env, state) =
-        infer_program_via_program_with_stdlib("var s = String(42);").unwrap();
+    let (_, env, state) = infer_program_via_program_with_stdlib("var s = String(42);").unwrap();
     let ty = state.apply_subst(&env.lookup("s").unwrap().body.ty);
     assert_eq!(ty, Type::String);
 }
 
 #[test]
 fn test_infer_number_constructor() {
-    let (_, env, state) =
-        infer_program_via_program_with_stdlib("var n = Number(\"42\");").unwrap();
+    let (_, env, state) = infer_program_via_program_with_stdlib("var n = Number(\"42\");").unwrap();
     let ty = state.apply_subst(&env.lookup("n").unwrap().body.ty);
     assert_eq!(ty, Type::Number);
 }
 
 #[test]
 fn test_infer_boolean_constructor() {
-    let (_, env, state) =
-        infer_program_via_program_with_stdlib("var b = Boolean(0);").unwrap();
+    let (_, env, state) = infer_program_via_program_with_stdlib("var b = Boolean(0);").unwrap();
     let ty = state.apply_subst(&env.lookup("b").unwrap().body.ty);
     assert_eq!(ty, Type::Boolean);
 }
@@ -131,9 +128,7 @@ fn test_infer_boolean_constructor() {
 /// inference path. Used by tests that exercise builtin bindings
 /// (`String`, `Number`, `Boolean`, `Math`, `JSON`, `Promise`, …)
 /// declared in core.d.js / dom.d.js.
-fn infer_program_via_program_with_stdlib(
-    source: &str,
-) -> InferResult<(Type, TypeEnv, InferState)> {
+fn infer_program_via_program_with_stdlib(source: &str) -> InferResult<(Type, TypeEnv, InferState)> {
     let mut scanner = Scanner::new(source);
     let mut tokens = Vec::new();
     loop {
@@ -201,7 +196,8 @@ fn test_annotation_var_number() {
 
 #[test]
 fn test_annotation_var_string() {
-    let (_, env, state) = infer_program_with_state("/** var s: String */ var s = \"hello\";").unwrap();
+    let (_, env, state) =
+        infer_program_with_state("/** var s: String */ var s = \"hello\";").unwrap();
     let scheme = env.lookup("s").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
     assert_eq!(ty, Type::String);
@@ -225,9 +221,7 @@ fn test_annotation_function_params() {
     .unwrap();
     let scheme = env.lookup("add").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    let (_, params, ret) = ty
-        .as_callable()
-        .expect("expected callable type for `add`");
+    let (_, params, ret) = ty.as_callable().expect("expected callable type for `add`");
     assert_eq!(params.len(), 2);
     let p0 = state.apply_subst(&params[0]);
     let p1 = state.apply_subst(&params[1]);
@@ -640,8 +634,7 @@ fn test_simple_this_member_access() {
         };
         var result = obj.getValue();
     "#;
-    let (_, env, state) =
-        infer_program_with_state(source).expect("Should type-check successfully");
+    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
 
     // Get the inferred type for 'result' from the environment
     let result_scheme = env
@@ -674,8 +667,7 @@ fn test_chained_call_without_generalization() {
             }
         }.setValue(42).build();
     "#;
-    let (_, env, state) =
-        infer_program_with_state(source).expect("Should type-check successfully");
+    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
 
     let result_scheme = env
         .lookup("result")
@@ -706,8 +698,7 @@ fn test_builder_final_result_is_concrete() {
         };
         var result = builder.setValue(42).build();
     "#;
-    let (_, env, state) =
-        infer_program_with_state(source).expect("Should type-check successfully");
+    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
 
     // Get the inferred type for 'result' from the environment
     let result_scheme = env
@@ -820,8 +811,7 @@ fn test_monomorphic_function_declaration() {
         var greet;
         var result = greet("world");
     "#;
-    let (_, env, state) =
-        infer_program_with_state(source).expect("Should type-check successfully");
+    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
 
     let result_scheme = env.lookup("result").expect("Should have result");
     let result_type = state.apply_subst(&result_scheme.body.ty);
@@ -1039,8 +1029,7 @@ fn test_rank_n_annotated_polymorphic_field_rejects_less_polymorphic_rhs() {
 #[test]
 fn test_add_function_has_plus_constraint() {
     let source = "function add(a, b) { return a + b; }";
-    let (_, env, state) =
-        infer_program_with_state(source).expect("Should type-check successfully");
+    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
 
     let scheme = env.lookup("add").expect("Should have add function");
 
@@ -1097,8 +1086,7 @@ fn test_map_function_indexable_unification() {
             return result;
         }
     "#;
-    let (_, env, state) =
-        infer_program_with_state(source).expect("Should type-check successfully");
+    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
 
     let scheme = env.lookup("map").expect("Should have map function");
     let ty = state.apply_subst(&scheme.body.ty);
@@ -1151,8 +1139,7 @@ fn test_map_function_complete_type_signature() {
             return result;
         }
     "#;
-    let (_, env, state) =
-        infer_program_with_state(source).expect("Should type-check successfully");
+    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
 
     let scheme = env.lookup("map").expect("Should have map function");
 
@@ -1381,8 +1368,10 @@ fn test_phase6_non_exhaustive_switch_warns() {
                function g(s) { switch (s) { case \"a\": return 1; case \"b\": return 2; } return 0; }";
     let (_, _, state) = infer_program_with_state(src).unwrap();
     assert!(
-        state.warnings.iter().any(|w| w.message.contains("non-exhaustive")
-            && w.message.contains("\"c\"")),
+        state
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("non-exhaustive") && w.message.contains("\"c\"")),
         "expected non-exhaustive warning mentioning 'c', got: {:?}",
         state.warnings
     );
@@ -1665,11 +1654,7 @@ fn class_field_array_type() {
 
 fn assert_union_eq(actual: &Type, expected_members: &[Type]) {
     let want = Type::union(expected_members.iter().cloned());
-    assert_eq!(
-        actual, &want,
-        "expected {:?}, got {:?}",
-        want, actual
-    );
+    assert_eq!(actual, &want, "expected {:?}, got {:?}", want, actual);
 }
 
 #[test]
@@ -1791,10 +1776,7 @@ fn array_spread_mixed_types_unions() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("ys").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    assert_eq!(
-        ty,
-        Type::array(Type::union([Type::Number, Type::String]))
-    );
+    assert_eq!(ty, Type::array(Type::union([Type::Number, Type::String])));
 }
 
 #[test]
@@ -2154,7 +2136,11 @@ fn plain_functions_forward_reference_still_resolves() {
         function diff(x, y) { return bod(y) - bod(x); } \
         function bod(d) { return 1; }";
     let result = infer_program_via_program(src);
-    assert!(result.is_ok(), "plain forward ref regressed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "plain forward ref regressed: {:?}",
+        result.err()
+    );
 }
 
 /// Mixed group: a plain `function` and an `export function` share a
@@ -2195,7 +2181,11 @@ fn export_async_function_parses() {
         "export async function f(x) { return x; }".to_string(),
     );
     let result = parser.parse_program();
-    assert!(result.is_ok(), "export async function must parse: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "export async function must parse: {:?}",
+        result.err()
+    );
 }
 
 /// Phase 1.3 regression: a default parameter value constrains the
@@ -2206,7 +2196,11 @@ fn default_parameter_pins_param_type() {
         function throttle(fn, delay = 1000) { return delay; } \
         var n = throttle(function(){}, 500);";
     let result = infer_program_via_program(src);
-    assert!(result.is_ok(), "default param must work: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "default param must work: {:?}",
+        result.err()
+    );
 
     // Mismatched call site: passing a String for `delay` must error.
     let bad = "\
@@ -2255,7 +2249,11 @@ fn spread_call_arg_unwraps_array_element() {
         const arr = [1, 2, 3]; \
         const r = f(...arr);";
     let result = infer_program_via_program(src);
-    assert!(result.is_ok(), "spread in call must work: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "spread in call must work: {:?}",
+        result.err()
+    );
 }
 
 /// Phase 1.7 regression: `catch {}` without a binding parses.
@@ -2277,7 +2275,11 @@ fn catch_without_binding_parses() {
         "function f() { try { return 1; } catch {} }".to_string(),
     );
     let result = parser.parse_program();
-    assert!(result.is_ok(), "catch-no-bind must parse: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "catch-no-bind must parse: {:?}",
+        result.err()
+    );
 }
 
 /// Phase 1.9 (bonus) regression: object property shorthand `{a, b}`
@@ -2313,11 +2315,8 @@ fn export_default_class_extends_rejects_with_inheritance_error() {
             break;
         }
     }
-    let mut parser = Parser::with_source(
-        tokens,
-        scanner.type_annotations().to_vec(),
-        src.to_string(),
-    );
+    let mut parser =
+        Parser::with_source(tokens, scanner.type_annotations().to_vec(), src.to_string());
     let result = parser.parse_program();
     let err = result.err().expect("must error on extends");
     let msg = match err {
@@ -2411,7 +2410,10 @@ fn metamorphic_member_access_order_invariant() {
             assert!(
                 infer_program_with_state(&missing_b).is_err(),
                 "f(o){{o.{}; o.{};}} called with only `{}` should be rejected (missing `{}`)",
-                a, b, a, b
+                a,
+                b,
+                a,
+                b
             );
 
             // Call provides only `b` (missing `a`).
@@ -2422,7 +2424,10 @@ fn metamorphic_member_access_order_invariant() {
             assert!(
                 infer_program_with_state(&missing_a).is_err(),
                 "f(o){{o.{}; o.{};}} called with only `{}` should be rejected (missing `{}`)",
-                a, b, b, a
+                a,
+                b,
+                b,
+                a
             );
 
             // And the well-formed call providing both must succeed —
@@ -2435,7 +2440,10 @@ fn metamorphic_member_access_order_invariant() {
             assert!(
                 infer_program_with_state(&both).is_ok(),
                 "f(o){{o.{}; o.{};}} called with both `{}` and `{}` should type-check",
-                a, b, a, b
+                a,
+                b,
+                a,
+                b
             );
         }
     }
@@ -2479,10 +2487,7 @@ fn metamorphic_three_member_accesses_order_invariant() {
                 .map(|(i, f)| format!("var v{} = o.{};", i, f))
                 .collect::<Vec<_>>()
                 .join(" ");
-            let src = format!(
-                "function f(o) {{ {} }} f({{ {} }});",
-                body, call_lit
-            );
+            let src = format!("function f(o) {{ {} }} f({{ {} }});", body, call_lit);
             assert!(
                 infer_program_with_state(&src).is_err(),
                 "access order [{}, {}, {}] missing `{}` should be rejected, but type-checked. Source: {}",

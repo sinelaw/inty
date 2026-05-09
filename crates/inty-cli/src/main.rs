@@ -312,15 +312,13 @@ fn run_bundle(args: &[String]) -> ExitCode {
                 println!("stdout (no source map written).");
                 return ExitCode::SUCCESS;
             }
-            "-o" | "--output" => {
-                match iter.next() {
-                    Some(p) => out_path = Some(p.clone()),
-                    None => {
-                        eprintln!("error: -o requires a path argument");
-                        return ExitCode::from(2);
-                    }
+            "-o" | "--output" => match iter.next() {
+                Some(p) => out_path = Some(p.clone()),
+                None => {
+                    eprintln!("error: -o requires a path argument");
+                    return ExitCode::from(2);
                 }
-            }
+            },
             _ if arg.starts_with("--output=") => {
                 out_path = Some(arg["--output=".len()..].to_string());
             }
@@ -531,13 +529,7 @@ fn run_inference(
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let mut visiting = std::collections::HashSet::new();
-        match inty::modules::resolve_imports(
-            state,
-            env,
-            &program,
-            &base_dir,
-            &mut visiting,
-        ) {
+        match inty::modules::resolve_imports(state, env, &program, &base_dir, &mut visiting) {
             Ok(e) => e,
             Err(e) => {
                 errors.push(e);

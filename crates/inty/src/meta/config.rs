@@ -36,7 +36,10 @@ mod tests {
                    function g(s) { switch (s) { case \"a\": return 1; case \"b\": return 2; } return 0; }";
         let state = infer_with_config(src, InferConfig::default());
         assert!(
-            state.warnings.iter().any(|w| w.message.contains("non-exhaustive")),
+            state
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("non-exhaustive")),
             "default config should warn"
         );
     }
@@ -46,7 +49,10 @@ mod tests {
     fn disabled_exhaustiveness_warnings_are_silent() {
         let src = "/** function g(s: \"a\" | \"b\" | \"c\") => Number */\n\
                    function g(s) { switch (s) { case \"a\": return 1; case \"b\": return 2; } return 0; }";
-        let cfg = InferConfig { exhaustiveness_warnings: false, ..InferConfig::default() };
+        let cfg = InferConfig {
+            exhaustiveness_warnings: false,
+            ..InferConfig::default()
+        };
         let state = infer_with_config(src, cfg);
         assert!(
             state.warnings.is_empty(),

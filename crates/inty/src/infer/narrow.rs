@@ -187,7 +187,9 @@ fn refine_type(ty: &Type, narrowing: &Narrowing) -> Type {
             // For positive narrowings, sharpen the type when possible
             // (e.g. a String narrowed by `=== "a"` becomes `Literal("a")`).
             match narrowing {
-                Narrowing::Equals(lit) if matches!(ty, Type::String | Type::Number | Type::Boolean) => {
+                Narrowing::Equals(lit)
+                    if matches!(ty, Type::String | Type::Number | Type::Boolean) =>
+                {
                     Type::Literal(lit.clone())
                 }
                 _ => ty.clone(),
@@ -312,7 +314,10 @@ fn member_property_compatible(member_ty: &Type, steps: &[PropName], narrowing: &
 /// `===` differ. For `<value> == <literal>` in general, semantics
 /// diverge from `===` (e.g. `0 == ""`), so loose equality is rejected.
 pub fn try_extract_narrowing(test: &Expr) -> Option<(Path, Narrowing)> {
-    let Expr::Binary { op, left, right, .. } = test else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = test
+    else {
         return None;
     };
 
@@ -374,8 +379,7 @@ pub fn narrowing_collapsed_to_never(
     path: &Path,
 ) -> bool {
     let root = path.root_ident();
-    let (Some(before_scheme), Some(after_scheme)) =
-        (before.lookup(root), after.lookup(root))
+    let (Some(before_scheme), Some(after_scheme)) = (before.lookup(root), after.lookup(root))
     else {
         return false;
     };
@@ -405,14 +409,21 @@ fn try_typeof_string_pair(a: &Expr, b: &Expr) -> Option<(Path, String)> {
 
 fn typeof_path(e: &Expr) -> Option<Path> {
     match e {
-        Expr::Unary { op: UnaryOp::Typeof, argument, .. } => path_from_expr(argument),
+        Expr::Unary {
+            op: UnaryOp::Typeof,
+            argument,
+            ..
+        } => path_from_expr(argument),
         _ => None,
     }
 }
 
 fn string_literal(e: &Expr) -> Option<String> {
     match e {
-        Expr::Lit { value: Literal::String(s), .. } => Some(s.clone()),
+        Expr::Lit {
+            value: Literal::String(s),
+            ..
+        } => Some(s.clone()),
         _ => None,
     }
 }
@@ -424,9 +435,18 @@ pub fn literal_value_of(e: &Expr) -> Option<LitValue> {
 
 fn literal_value(e: &Expr) -> Option<LitValue> {
     match e {
-        Expr::Lit { value: Literal::String(s), .. } => Some(LitValue::String(s.clone())),
-        Expr::Lit { value: Literal::Number(n), .. } => Some(LitValue::Number(*n)),
-        Expr::Lit { value: Literal::Boolean(b), .. } => Some(LitValue::Bool(*b)),
+        Expr::Lit {
+            value: Literal::String(s),
+            ..
+        } => Some(LitValue::String(s.clone())),
+        Expr::Lit {
+            value: Literal::Number(n),
+            ..
+        } => Some(LitValue::Number(*n)),
+        Expr::Lit {
+            value: Literal::Boolean(b),
+            ..
+        } => Some(LitValue::Bool(*b)),
         _ => None,
     }
 }
@@ -437,7 +457,9 @@ fn literal_value(e: &Expr) -> Option<LitValue> {
 pub fn path_from_expr(e: &Expr) -> Option<Path> {
     match e {
         Expr::Ident { name, .. } => Some(Path::Ident(name.clone())),
-        Expr::Member { object, property, .. } => {
+        Expr::Member {
+            object, property, ..
+        } => {
             let parent = path_from_expr(object)?;
             Some(Path::Member(Box::new(parent), PropName(property.clone())))
         }
@@ -545,7 +567,10 @@ mod tests {
         let test = Expr::Binary {
             op: BinOp::EqEqEq,
             left: Box::new(Expr::Member {
-                object: Box::new(Expr::Ident { name: "shape".into(), span }),
+                object: Box::new(Expr::Ident {
+                    name: "shape".into(),
+                    span,
+                }),
                 property: "kind".into(),
                 span,
             }),
@@ -565,7 +590,10 @@ mod tests {
                 PropName("kind".into())
             )
         );
-        assert_eq!(narrowing, Narrowing::Equals(LitValue::String("circle".into())));
+        assert_eq!(
+            narrowing,
+            Narrowing::Equals(LitValue::String("circle".into()))
+        );
     }
 
     #[test]

@@ -46,12 +46,20 @@ pub static INDEXABLE_INSTANCES: &[InstanceDecl] = &[
     // dedicated TypeShape constructor.
     InstanceDecl {
         class: ClassName::Indexable,
-        inputs: &[TypeShape::Wildcard, TypeShape::Concrete(BaseType::Number), TypeShape::Wildcard],
+        inputs: &[
+            TypeShape::Wildcard,
+            TypeShape::Concrete(BaseType::Number),
+            TypeShape::Wildcard,
+        ],
     },
     // Map<E>[String] = E
     InstanceDecl {
         class: ClassName::Indexable,
-        inputs: &[TypeShape::Wildcard, TypeShape::Concrete(BaseType::String), TypeShape::Wildcard],
+        inputs: &[
+            TypeShape::Wildcard,
+            TypeShape::Concrete(BaseType::String),
+            TypeShape::Wildcard,
+        ],
     },
     // String[Number] = String
     InstanceDecl {

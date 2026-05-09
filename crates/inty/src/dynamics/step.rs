@@ -31,9 +31,19 @@ pub enum Stuck {
     UndefinedVariable(String),
     NotCallable(&'static str),
     NotIndexable(&'static str),
-    PropertyNotFound { kind: &'static str, property: String },
-    TypeMismatch { op: &'static str, expected: &'static str, got: &'static str },
-    ArityMismatch { expected: usize, got: usize },
+    PropertyNotFound {
+        kind: &'static str,
+        property: String,
+    },
+    TypeMismatch {
+        op: &'static str,
+        expected: &'static str,
+        got: &'static str,
+    },
+    ArityMismatch {
+        expected: usize,
+        got: usize,
+    },
     BadAssignmentTarget,
     NotImplemented(&'static str),
     /// An uncaught `throw`. The payload is the thrown value.
@@ -73,7 +83,10 @@ pub struct State {
 
 impl State {
     pub fn new(fuel: usize) -> Self {
-        State { heap: Heap::new(), fuel }
+        State {
+            heap: Heap::new(),
+            fuel,
+        }
     }
 
     pub fn alloc_var(&mut self, value: Value) -> Loc {
@@ -138,9 +151,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                                     }
                                 }
                                 _ => {
-                                    return Err(Stuck::NotImplemented(
-                                        "spread of non-array cell",
-                                    ));
+                                    return Err(Stuck::NotImplemented("spread of non-array cell"));
                                 }
                             },
                             _ => {
@@ -170,7 +181,9 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                         let v = eval_expr(state, env, value)?;
                         props.insert(name, v);
                     }
-                    PropDef::Method { key, params, body, .. } => {
+                    PropDef::Method {
+                        key, params, body, ..
+                    } => {
                         let name = prop_key_to_name(key);
                         let closure = Value::Closure(Closure {
                             name: None,
@@ -197,9 +210,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                                     }
                                 }
                                 _ => {
-                                    return Err(Stuck::NotImplemented(
-                                        "spread of non-object cell",
-                                    ));
+                                    return Err(Stuck::NotImplemented("spread of non-object cell"));
                                 }
                             },
                             _ => {
@@ -215,33 +226,45 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             Ok(Value::Object(loc))
         }
 
-        Expr::Function { name, params, body, .. } => Ok(Value::Closure(Closure {
+        Expr::Function {
+            name, params, body, ..
+        } => Ok(Value::Closure(Closure {
             name: name.clone(),
             params: params.iter().map(|p| p.name.clone()).collect(),
             body: body.clone(),
             env: env.clone(),
         })),
 
-        Expr::Member { object, property, .. } => {
+        Expr::Member {
+            object, property, ..
+        } => {
             let obj = eval_expr(state, env, object)?;
             read_member(&state.heap, &obj, property)
         }
 
-        Expr::ComputedMember { object, property, .. } => {
+        Expr::ComputedMember {
+            object, property, ..
+        } => {
             let obj = eval_expr(state, env, object)?;
             let idx = eval_expr(state, env, property)?;
             read_index(&state.heap, &obj, &idx)
         }
 
-        Expr::Call { callee, arguments, .. } => {
+        Expr::Call {
+            callee, arguments, ..
+        } => {
             // Method call: `obj.m(args)` binds `this` to obj.
             let (callee_val, this_val) = match callee.as_ref() {
-                Expr::Member { object, property, .. } => {
+                Expr::Member {
+                    object, property, ..
+                } => {
                     let obj = eval_expr(state, env, object)?;
                     let m = read_member(&state.heap, &obj, property)?;
                     (m, Some(obj))
                 }
-                Expr::ComputedMember { object, property, .. } => {
+                Expr::ComputedMember {
+                    object, property, ..
+                } => {
                     let obj = eval_expr(state, env, object)?;
                     let idx = eval_expr(state, env, property)?;
                     let m = read_index(&state.heap, &obj, &idx)?;
@@ -256,7 +279,9 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             apply(state, callee_val, this_val, args)
         }
 
-        Expr::New { callee, arguments, .. } => {
+        Expr::New {
+            callee, arguments, ..
+        } => {
             let callee_val = eval_expr(state, env, callee)?;
             let mut args = Vec::with_capacity(arguments.len());
             for a in arguments {
@@ -274,7 +299,11 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
 
         Expr::NewTarget { .. } => Ok(Value::Undefined),
 
-        Expr::Unary { op, argument, span: _ } => {
+        Expr::Unary {
+            op,
+            argument,
+            span: _,
+        } => {
             // `delete` and `typeof` need to inspect the syntactic form
             // before evaluating; both are ok with eager evaluation in
             // this minimal model.
@@ -282,7 +311,9 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             apply_unary(state, env, *op, argument, v)
         }
 
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             // `&&` and `||` short-circuit on the left operand.
             if matches!(op, BinOp::And | BinOp::Or) {
                 let l = eval_expr(state, env, left)?;
@@ -297,7 +328,9 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             apply_binary(*op, &l, &r)
         }
 
-        Expr::Assign { op, left, right, .. } => {
+        Expr::Assign {
+            op, left, right, ..
+        } => {
             let rhs = eval_expr(state, env, right)?;
             let new_value = match op {
                 AssignOp::Assign => rhs,
@@ -311,7 +344,12 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             Ok(new_value)
         }
 
-        Expr::Conditional { test, consequent, alternate, .. } => {
+        Expr::Conditional {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
             let t = eval_expr(state, env, test)?;
             if t.truthy() {
                 eval_expr(state, env, consequent)
@@ -359,11 +397,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             match v {
                 Value::Array(loc) => match state.heap.get(loc) {
                     Some(Cell::Array(items)) => {
-                        let tail: Vec<Value> = items
-                            .iter()
-                            .skip(*skip)
-                            .cloned()
-                            .collect();
+                        let tail: Vec<Value> = items.iter().skip(*skip).cloned().collect();
                         let new_loc = state.heap.alloc(Cell::Array(tail));
                         Ok(Value::Array(new_loc))
                     }
@@ -373,7 +407,9 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             }
         }
 
-        Expr::RestRow { source, excluded, .. } => {
+        Expr::RestRow {
+            source, excluded, ..
+        } => {
             // Copy all properties from the source object except those
             // listed in `excluded`. Preserves field iteration order
             // by re-using BTreeMap's natural ordering (which is what
@@ -405,7 +441,11 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             Ok(last)
         }
 
-        Expr::TemplateLiteral { quasis, expressions, .. } => {
+        Expr::TemplateLiteral {
+            quasis,
+            expressions,
+            ..
+        } => {
             let mut out = String::new();
             for (i, q) in quasis.iter().enumerate() {
                 out.push_str(q);
@@ -465,14 +505,20 @@ fn read_member(heap: &Heap, obj: &Value, property: &str) -> Result<Value, Stuck>
                 };
                 Ok(Value::Number(len as f64))
             } else {
-                Err(Stuck::PropertyNotFound { kind: "array", property: property.to_string() })
+                Err(Stuck::PropertyNotFound {
+                    kind: "array",
+                    property: property.to_string(),
+                })
             }
         }
         Value::String(s) => {
             if property == "length" {
                 Ok(Value::Number(s.chars().count() as f64))
             } else {
-                Err(Stuck::PropertyNotFound { kind: "string", property: property.to_string() })
+                Err(Stuck::PropertyNotFound {
+                    kind: "string",
+                    property: property.to_string(),
+                })
             }
         }
         _ => Err(Stuck::NotIndexable(obj.type_string())),
@@ -484,9 +530,7 @@ fn read_index(heap: &Heap, obj: &Value, index: &Value) -> Result<Value, Stuck> {
         (Value::Array(loc), Value::Number(n)) => {
             let idx = *n as usize;
             match heap.get(*loc) {
-                Some(Cell::Array(v)) => {
-                    Ok(v.get(idx).cloned().unwrap_or(Value::Undefined))
-                }
+                Some(Cell::Array(v)) => Ok(v.get(idx).cloned().unwrap_or(Value::Undefined)),
                 _ => Err(Stuck::NotImplemented("array loc not Array cell")),
             }
         }
@@ -588,7 +632,9 @@ fn assign_to(
                 _ => Err(Stuck::BadAssignmentTarget),
             }
         }
-        Expr::Member { object, property, .. } => {
+        Expr::Member {
+            object, property, ..
+        } => {
             let obj = eval_expr(state, env, object)?;
             match obj {
                 Value::Object(loc) => match state.heap.get_mut(loc) {
@@ -601,7 +647,9 @@ fn assign_to(
                 _ => Err(Stuck::BadAssignmentTarget),
             }
         }
-        Expr::ComputedMember { object, property, .. } => {
+        Expr::ComputedMember {
+            object, property, ..
+        } => {
             let obj = eval_expr(state, env, object)?;
             let idx = eval_expr(state, env, property)?;
             match (&obj, &idx) {
@@ -748,7 +796,12 @@ fn apply_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, Stuck> {
     }
 }
 
-fn num_op(l: &Value, r: &Value, name: &'static str, f: fn(f64, f64) -> f64) -> Result<Value, Stuck> {
+fn num_op(
+    l: &Value,
+    r: &Value,
+    name: &'static str,
+    f: fn(f64, f64) -> f64,
+) -> Result<Value, Stuck> {
     match (l, r) {
         (Value::Number(a), Value::Number(b)) => Ok(Value::Number(f(*a, *b))),
         _ => Err(Stuck::TypeMismatch {
@@ -759,7 +812,12 @@ fn num_op(l: &Value, r: &Value, name: &'static str, f: fn(f64, f64) -> f64) -> R
     }
 }
 
-fn bit_op(l: &Value, r: &Value, name: &'static str, f: fn(i32, i32) -> i32) -> Result<Value, Stuck> {
+fn bit_op(
+    l: &Value,
+    r: &Value,
+    name: &'static str,
+    f: fn(i32, i32) -> i32,
+) -> Result<Value, Stuck> {
     match (l, r) {
         (Value::Number(a), Value::Number(b)) => Ok(Value::Number(f(*a as i32, *b as i32) as f64)),
         _ => Err(Stuck::TypeMismatch {
@@ -836,7 +894,11 @@ pub fn eval_stmt(
             Ok((StmtOutcome::Normal(v), env.clone()))
         }
 
-        Stmt::Var { kind: _, declarations, .. } => {
+        Stmt::Var {
+            kind: _,
+            declarations,
+            ..
+        } => {
             let mut new_env = env.clone();
             for decl in declarations {
                 let v = match &decl.init {
@@ -849,7 +911,9 @@ pub fn eval_stmt(
             Ok((StmtOutcome::Normal(Value::Undefined), new_env))
         }
 
-        Stmt::FunctionDecl { name, params, body, .. } => {
+        Stmt::FunctionDecl {
+            name, params, body, ..
+        } => {
             let closure = Value::Closure(Closure {
                 name: Some(name.clone()),
                 params: params.iter().map(|p| p.name.clone()).collect(),
@@ -877,7 +941,12 @@ pub fn eval_stmt(
         Stmt::Break { label, .. } => Ok((StmtOutcome::Break(label.clone()), env.clone())),
         Stmt::Continue { label, .. } => Ok((StmtOutcome::Continue(label.clone()), env.clone())),
 
-        Stmt::If { test, consequent, alternate, .. } => {
+        Stmt::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
             let t = eval_expr(state, env, test)?;
             let outcome = if t.truthy() {
                 eval_stmt(state, env, consequent)?.0
@@ -910,10 +979,9 @@ pub fn eval_stmt(
                 state.tick()?;
                 match eval_stmt(state, env, body)?.0 {
                     StmtOutcome::Normal(_) | StmtOutcome::Continue(None) => {}
-                    StmtOutcome::Break(None) => return Ok((
-                        StmtOutcome::Normal(Value::Undefined),
-                        env.clone(),
-                    )),
+                    StmtOutcome::Break(None) => {
+                        return Ok((StmtOutcome::Normal(Value::Undefined), env.clone()))
+                    }
                     other => return Ok((other, env.clone())),
                 }
                 let t = eval_expr(state, env, test)?;
@@ -924,7 +992,13 @@ pub fn eval_stmt(
             Ok((StmtOutcome::Normal(Value::Undefined), env.clone()))
         }
 
-        Stmt::For { init, test, update, body, .. } => {
+        Stmt::For {
+            init,
+            test,
+            update,
+            body,
+            ..
+        } => {
             let mut loop_env = env.clone();
             if let Some(init) = init {
                 match init {
@@ -963,7 +1037,9 @@ pub fn eval_stmt(
             Ok((StmtOutcome::Normal(Value::Undefined), env.clone()))
         }
 
-        Stmt::ForIn { left, right, body, .. } => {
+        Stmt::ForIn {
+            left, right, body, ..
+        } => {
             let r = eval_expr(state, env, right)?;
             let keys: Vec<String> = match r {
                 Value::Object(loc) => match state.heap.get(loc) {
@@ -994,7 +1070,9 @@ pub fn eval_stmt(
             Ok((StmtOutcome::Normal(Value::Undefined), env.clone()))
         }
 
-        Stmt::ForOf { left, right, body, .. } => {
+        Stmt::ForOf {
+            left, right, body, ..
+        } => {
             let r = eval_expr(state, env, right)?;
             let elems: Vec<Value> = match r {
                 Value::Array(loc) => match state.heap.get(loc) {
@@ -1021,7 +1099,12 @@ pub fn eval_stmt(
             Ok((StmtOutcome::Normal(Value::Undefined), env.clone()))
         }
 
-        Stmt::Try { block, handler, finalizer, .. } => {
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
             let outcome = eval_stmt(state, env, block)?.0;
             let outcome = match outcome {
                 StmtOutcome::Throw(v) => match handler {
@@ -1043,7 +1126,11 @@ pub fn eval_stmt(
             Ok((outcome, env.clone()))
         }
 
-        Stmt::Switch { discriminant, cases, .. } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+            ..
+        } => {
             let d = eval_expr(state, env, discriminant)?;
             let mut matched = false;
             for case in cases {
@@ -1063,10 +1150,7 @@ pub fn eval_stmt(
                         match eval_stmt(state, env, s)?.0 {
                             StmtOutcome::Normal(_) => continue,
                             StmtOutcome::Break(None) => {
-                                return Ok((
-                                    StmtOutcome::Normal(Value::Undefined),
-                                    env.clone(),
-                                ));
+                                return Ok((StmtOutcome::Normal(Value::Undefined), env.clone()));
                             }
                             other => return Ok((other, env.clone())),
                         }
@@ -1110,14 +1194,19 @@ fn eval_block(
     // the loc we pre-allocated above. The closure captures `block_env`,
     // which already contains every var name in the scope.
     for s in body {
-        if let Stmt::FunctionDecl { name, params, body, .. } = s {
+        if let Stmt::FunctionDecl {
+            name, params, body, ..
+        } = s
+        {
             let closure = Value::Closure(Closure {
                 name: Some(name.clone()),
                 params: params.iter().map(|p| p.name.clone()).collect(),
                 body: body.clone(),
                 env: block_env.clone(),
             });
-            let loc = block_env.lookup(name).expect("function name was pre-allocated");
+            let loc = block_env
+                .lookup(name)
+                .expect("function name was pre-allocated");
             if let Some(Cell::Var(slot)) = state.heap.get_mut(loc) {
                 *slot = closure;
             }
@@ -1211,8 +1300,8 @@ pub fn run_program(
         StmtOutcome::Normal(v) => Ok(v),
         StmtOutcome::Return(v) => Ok(v),
         StmtOutcome::Throw(v) => Err(Stuck::UncaughtThrow(v)),
-        StmtOutcome::Break(_) | StmtOutcome::Continue(_) => Err(Stuck::NotImplemented(
-            "top-level break/continue",
-        )),
+        StmtOutcome::Break(_) | StmtOutcome::Continue(_) => {
+            Err(Stuck::NotImplemented("top-level break/continue"))
+        }
     }
 }

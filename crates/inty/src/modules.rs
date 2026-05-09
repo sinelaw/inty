@@ -93,9 +93,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::IntyError;
 use crate::infer::{InferState, TypeEnv};
-use crate::parser::ast::{
-    ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt,
-};
+use crate::parser::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt};
 use crate::parser::parse;
 use crate::types::{ModuleType, Type, TypeScheme};
 
@@ -227,12 +225,8 @@ fn compute_export_table(
                         span: *span,
                     }));
                 }
-                let (target_env, target_exports) = load_module(
-                    state,
-                    starting_env.clone(),
-                    &resolved_path,
-                    visiting,
-                )?;
+                let (target_env, target_exports) =
+                    load_module(state, starting_env.clone(), &resolved_path, visiting)?;
 
                 let resolve_target = |name: &str| -> Option<TypeScheme> {
                     target_exports
@@ -332,16 +326,12 @@ pub fn resolve_imports(
 
             if visiting.contains(&resolved_path) {
                 return Err(IntyError::Type(crate::error::TypeError::Module {
-                    message: format!(
-                        "circular import involving {}",
-                        resolved_path.display()
-                    ),
+                    message: format!("circular import involving {}", resolved_path.display()),
                     span: *span,
                 }));
             }
 
-            let (module_env, exports) =
-                load_module(state, env.clone(), &resolved_path, visiting)?;
+            let (module_env, exports) = load_module(state, env.clone(), &resolved_path, visiting)?;
 
             let lookup_export_scheme = |name: &str| -> Option<TypeScheme> {
                 exports
@@ -378,10 +368,7 @@ pub fn resolve_imports(
                         ImportSpecifier::Default { local, span } => {
                             let scheme = lookup_export_scheme("default").ok_or_else(|| {
                                 IntyError::Type(crate::error::TypeError::Module {
-                                    message: format!(
-                                        "module {:?} has no default export",
-                                        source
-                                    ),
+                                    message: format!("module {:?} has no default export", source),
                                     span: *span,
                                 })
                             })?;
@@ -395,8 +382,7 @@ pub fn resolve_imports(
                                 *span,
                                 source,
                             )?;
-                            env = env
-                                .extend(local.clone(), TypeScheme::mono(module_ty));
+                            env = env.extend(local.clone(), TypeScheme::mono(module_ty));
                         }
                     }
                 }
@@ -455,13 +441,7 @@ fn load_module(
         resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting)?;
     let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
 
-    let exports = compute_export_table(
-        state,
-        &starting_env,
-        &program,
-        &base_dir,
-        visiting,
-    )?;
+    let exports = compute_export_table(state, &starting_env, &program, &base_dir, visiting)?;
 
     visiting.remove(&canonical);
 
@@ -729,8 +709,7 @@ mod tests {
         let dir = tempdir();
         write_file(dir.path(), "lib.js", "export const x = 1;");
         write_file(dir.path(), "main.js", "import x from \"./lib.js\";");
-        let err = resolve(dir.path(), "main.js")
-            .expect_err("missing default export should error");
+        let err = resolve(dir.path(), "main.js").expect_err("missing default export should error");
         assert!(format!("{}", err).contains("default export"));
     }
 
@@ -792,13 +771,9 @@ mod tests {
     fn export_list_undeclared_local_errors() {
         let dir = tempdir();
         write_file(dir.path(), "lib.js", "export { ghost };");
-        write_file(
-            dir.path(),
-            "main.js",
-            "import { ghost } from \"./lib.js\";",
-        );
-        let err = resolve(dir.path(), "main.js")
-            .expect_err("exporting an undeclared local should error");
+        write_file(dir.path(), "main.js", "import { ghost } from \"./lib.js\";");
+        let err =
+            resolve(dir.path(), "main.js").expect_err("exporting an undeclared local should error");
         assert!(format!("{}", err).contains("not declared"));
     }
 
@@ -839,18 +814,13 @@ mod tests {
     #[test]
     fn namespace_preserves_polymorphism_across_uses() {
         let dir = tempdir();
-        write_file(
-            dir.path(),
-            "lib.js",
-            "export function id(x) { return x; }",
-        );
+        write_file(dir.path(), "lib.js", "export function id(x) { return x; }");
         write_file(
             dir.path(),
             "main.js",
             "import * as ns from \"./lib.js\"; var n = ns.id(1); var s = ns.id(\"hello\");",
         );
-        check(dir.path(), "main.js")
-            .expect("namespace polymorphism should resolve");
+        check(dir.path(), "main.js").expect("namespace polymorphism should resolve");
     }
 
     #[test]
@@ -982,11 +952,7 @@ mod tests {
             "inner.js",
             "export const a = 1; export const b = 2; export default 999;",
         );
-        write_file(
-            dir.path(),
-            "outer.js",
-            "export * from \"./inner.js\";",
-        );
+        write_file(dir.path(), "outer.js", "export * from \"./inner.js\";");
         write_file(
             dir.path(),
             "main.js",
@@ -1000,16 +966,8 @@ mod tests {
             "inner.js",
             "export const a = 1; export default 999;",
         );
-        write_file(
-            dir2.path(),
-            "outer.js",
-            "export * from \"./inner.js\";",
-        );
-        write_file(
-            dir2.path(),
-            "main.js",
-            "import x from \"./outer.js\";",
-        );
+        write_file(dir2.path(), "outer.js", "export * from \"./inner.js\";");
+        write_file(dir2.path(), "main.js", "import x from \"./outer.js\";");
         let err = check(dir2.path(), "main.js")
             .expect_err("`export *` must not propagate the target's default");
         assert!(format!("{}", err).contains("default"));
@@ -1059,11 +1017,7 @@ mod tests {
         check(dir.path(), "main.js").unwrap();
 
         let dir2 = tempdir();
-        write_file(
-            dir2.path(),
-            "inner.js",
-            "export default 42;",
-        );
+        write_file(dir2.path(), "inner.js", "export default 42;");
         write_file(
             dir2.path(),
             "outer.js",
@@ -1080,49 +1034,20 @@ mod tests {
     #[test]
     fn re_export_through_two_hops_works() {
         let dir = tempdir();
-        write_file(
-            dir.path(),
-            "a.js",
-            "export const value = 100;",
-        );
-        write_file(
-            dir.path(),
-            "b.js",
-            "export { value } from \"./a.js\";",
-        );
-        write_file(
-            dir.path(),
-            "c.js",
-            "export { value } from \"./b.js\";",
-        );
-        write_file(
-            dir.path(),
-            "main.js",
-            "import { value } from \"./c.js\";",
-        );
+        write_file(dir.path(), "a.js", "export const value = 100;");
+        write_file(dir.path(), "b.js", "export { value } from \"./a.js\";");
+        write_file(dir.path(), "c.js", "export { value } from \"./b.js\";");
+        write_file(dir.path(), "main.js", "import { value } from \"./c.js\";");
         check(dir.path(), "main.js").unwrap();
     }
 
     #[test]
     fn re_export_cycle_is_rejected() {
         let dir = tempdir();
-        write_file(
-            dir.path(),
-            "a.js",
-            "export * from \"./b.js\";",
-        );
-        write_file(
-            dir.path(),
-            "b.js",
-            "export * from \"./a.js\";",
-        );
-        write_file(
-            dir.path(),
-            "main.js",
-            "import { x } from \"./a.js\";",
-        );
-        let err = check(dir.path(), "main.js")
-            .expect_err("re-export cycle should error");
+        write_file(dir.path(), "a.js", "export * from \"./b.js\";");
+        write_file(dir.path(), "b.js", "export * from \"./a.js\";");
+        write_file(dir.path(), "main.js", "import { x } from \"./a.js\";");
+        let err = check(dir.path(), "main.js").expect_err("re-export cycle should error");
         assert!(format!("{}", err).contains("circular"));
     }
 
@@ -1139,11 +1064,7 @@ mod tests {
             "b.js",
             "import { y } from \"./a.js\"; export var x = y;",
         );
-        write_file(
-            dir.path(),
-            "main.js",
-            "import { y } from \"./a.js\";",
-        );
+        write_file(dir.path(), "main.js", "import { y } from \"./a.js\";");
         let err = resolve(dir.path(), "main.js").expect_err("cycle should error");
         assert!(format!("{}", err).contains("circular"));
     }

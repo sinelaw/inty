@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display, Write};
 
-use super::ty::{ClassName, LitValue, PropName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
+use super::ty::{
+    ClassName, LitValue, PropName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme,
+};
 use super::{private_key_display, CALLABLE_KEY};
 
 /// True when this type prints as a bare function `(args) => ret` —
@@ -90,12 +92,7 @@ impl PrettyContext {
         s
     }
 
-    fn write_type_ts<W: Write>(
-        &mut self,
-        w: &mut W,
-        ty: &Type,
-        in_func_arg: bool,
-    ) -> fmt::Result {
+    fn write_type_ts<W: Write>(&mut self, w: &mut W, ty: &Type, in_func_arg: bool) -> fmt::Result {
         match ty {
             Type::Number => write!(w, "number"),
             Type::String => write!(w, "string"),

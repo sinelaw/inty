@@ -90,14 +90,26 @@ impl InferState {
             }
 
             match seg {
-                ChainSegment::Member { property, span: seg_span, .. } => {
+                ChainSegment::Member {
+                    property,
+                    span: seg_span,
+                    ..
+                } => {
                     current = self.infer_member_on_type(&carrier, property, *seg_span)?;
                 }
-                ChainSegment::Computed { property, span: seg_span, .. } => {
+                ChainSegment::Computed {
+                    property,
+                    span: seg_span,
+                    ..
+                } => {
                     let key_ty = self.infer_expr(env, property)?;
                     current = self.index_into_type(&carrier, &key_ty, *seg_span)?;
                 }
-                ChainSegment::Call { arguments, span: seg_span, .. } => {
+                ChainSegment::Call {
+                    arguments,
+                    span: seg_span,
+                    ..
+                } => {
                     let mut arg_types = Vec::with_capacity(arguments.len());
                     for a in arguments {
                         arg_types.push(self.infer_expr(env, a)?);

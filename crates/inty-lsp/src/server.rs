@@ -140,7 +140,10 @@ impl Server {
         Ok(())
     }
 
-    fn handle_notification(&mut self, not: Notification) -> Result<(), Box<dyn Error + Sync + Send>> {
+    fn handle_notification(
+        &mut self,
+        not: Notification,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         let method = not.method.clone();
         if let Some(params) = cast_not::<DidOpenTextDocument>(&not)? {
             let uri = params.text_document.uri.clone();
@@ -251,11 +254,16 @@ impl Server {
         }))
     }
 
-    fn on_prepare_rename(&self, params: TextDocumentPositionParams) -> Option<PrepareRenameResponse> {
+    fn on_prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Option<PrepareRenameResponse> {
         let doc = self.documents.get(&params.text_document.uri)?;
         let offset = position_to_byte(&doc.text, params.position)?;
         let (_, hit_span) = doc.analysis.resolution.binding_at(offset)?;
-        Some(PrepareRenameResponse::Range(span_to_range(&doc.text, hit_span)))
+        Some(PrepareRenameResponse::Range(span_to_range(
+            &doc.text, hit_span,
+        )))
     }
 
     fn on_rename(&self, params: RenameParams) -> Option<WorkspaceEdit> {
@@ -492,7 +500,9 @@ fn resolve_module_uri(importer: &Uri, import_path: &str) -> Option<Uri> {
     let prefix = "file://";
     let path_part = imp_str.strip_prefix(prefix)?;
     // Strip optional empty authority `///` -> `/`. fluent_uri keeps it.
-    let path_part = path_part.strip_prefix('/').map(|s| format!("/{}", s))
+    let path_part = path_part
+        .strip_prefix('/')
+        .map(|s| format!("/{}", s))
         .unwrap_or_else(|| path_part.to_string());
     // Drop the file portion to get the directory.
     let dir_end = path_part.rfind('/')?;
@@ -551,12 +561,52 @@ fn is_valid_identifier(s: &str) -> bool {
 fn is_reserved_word(s: &str) -> bool {
     matches!(
         s,
-        "break" | "case" | "catch" | "class" | "const" | "continue" | "debugger" | "default"
-            | "delete" | "do" | "else" | "export" | "extends" | "finally" | "for" | "function"
-            | "if" | "import" | "in" | "instanceof" | "new" | "null" | "return" | "super"
-            | "switch" | "this" | "throw" | "true" | "false" | "try" | "typeof" | "var"
-            | "void" | "while" | "with" | "yield" | "let" | "static" | "enum" | "await"
-            | "implements" | "interface" | "package" | "private" | "protected" | "public"
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "export"
+            | "extends"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "false"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+            | "let"
+            | "static"
+            | "enum"
+            | "await"
+            | "implements"
+            | "interface"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
     )
 }
 
@@ -569,4 +619,3 @@ pub fn run_stdio() -> Result<(), Box<dyn Error + Sync + Send>> {
     threads.join()?;
     Ok(())
 }
-

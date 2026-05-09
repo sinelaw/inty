@@ -4,7 +4,7 @@ use std::io::Write;
 
 use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind, Source};
 
-use crate::error::{LexError, IntyError, ParseError, TypeError};
+use crate::error::{IntyError, LexError, ParseError, TypeError};
 use crate::infer::InferWarning;
 use crate::lexer::Span;
 
@@ -332,7 +332,11 @@ pub fn write_error<W: Write>(
             ),
             TypeError::Module { message, span } => (message.clone(), *span, None),
             TypeError::InvalidSyntax { message, span } => (message.clone(), *span, None),
-            TypeError::TypeMismatch { expected, found, span } => (
+            TypeError::TypeMismatch {
+                expected,
+                found,
+                span,
+            } => (
                 format!("Type mismatch: expected '{}', found '{}'", expected, found),
                 *span,
                 None,

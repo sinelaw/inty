@@ -19,11 +19,7 @@ enum Pattern {
     /// `{source: sub_pattern, ..., ...rest}`. Shorthand `{a}` stores
     /// `("a", Pattern::Ident("a"))`. The third tuple element holds
     /// the optional rest binding's name and span.
-    Object(
-        Vec<(String, Pattern, Span)>,
-        Option<(String, Span)>,
-        Span,
-    ),
+    Object(Vec<(String, Pattern, Span)>, Option<(String, Span)>, Span),
     /// `[sub_pattern, sub_pattern, ..., ...rest]`. The middle tuple
     /// holds the optional rest binding's name and span.
     Array(Vec<Pattern>, Option<(String, Span)>, Span),
@@ -161,12 +157,17 @@ impl Parser {
             // function declaration; `async` is consumed by the async-wrap
             // helper which rewrites every `return` inside the body so the
             // function's return type ends up as `Promise<T>`.
-            Token::Async if matches!(self.tokens.get(self.pos + 1).map(|s| &s.value), Some(Token::Function)) => {
+            Token::Async
+                if matches!(
+                    self.tokens.get(self.pos + 1).map(|s| &s.value),
+                    Some(Token::Function)
+                ) =>
+            {
                 self.advance(); // consume `async`
-                // Signal to the upcoming function parse that its body
-                // should start in an async context. The flag is a
-                // one-shot: the function parser reads and clears it
-                // before descending into the body.
+                                // Signal to the upcoming function parse that its body
+                                // should start in an async context. The flag is a
+                                // one-shot: the function parser reads and clears it
+                                // before descending into the body.
                 self.next_fn_is_async = true;
                 let decl_result = self.parse_function_declaration();
                 Ok(Self::make_async_function_decl(decl_result?))
@@ -389,8 +390,7 @@ impl Parser {
                     self.desugar_pattern(sub, access, kind, decls);
                 }
                 if let Some((rest_name, rest_span)) = rest {
-                    let excluded: Vec<String> =
-                        entries.iter().map(|(p, _, _)| p.clone()).collect();
+                    let excluded: Vec<String> = entries.iter().map(|(p, _, _)| p.clone()).collect();
                     let init = Expr::RestRow {
                         source: Box::new(Expr::Ident {
                             name: temp.clone(),
@@ -678,7 +678,8 @@ impl Parser {
                 if self.check(&Token::Class) {
                     let synth_name = format!("$default_class${}", self.temp_counter);
                     self.temp_counter += 1;
-                    let class_decl = self.parse_class_declaration_named(Some(synth_name.clone()))?;
+                    let class_decl =
+                        self.parse_class_declaration_named(Some(synth_name.clone()))?;
                     let value = match class_decl {
                         Stmt::FunctionDecl {
                             name,
@@ -1095,8 +1096,11 @@ impl Parser {
                                 type_end = self.current_span().end;
                                 self.advance();
                             }
-                            Token::Eq | Token::Semicolon | Token::RBrace
-                            | Token::Comma if depth <= 0 => break,
+                            Token::Eq | Token::Semicolon | Token::RBrace | Token::Comma
+                                if depth <= 0 =>
+                            {
+                                break
+                            }
                             _ => {
                                 type_end = self.current_span().end;
                                 self.advance();
@@ -1138,8 +1142,7 @@ impl Parser {
                 };
 
                 // Optional separator.
-                let _ = self.consume_if(&Token::Semicolon)
-                    || self.consume_if(&Token::Comma);
+                let _ = self.consume_if(&Token::Semicolon) || self.consume_if(&Token::Comma);
 
                 let member_span = Span::new(member_start, self.prev_span().end);
 
@@ -1155,9 +1158,8 @@ impl Parser {
                 // Resolve annotation: TS-style wins; JSDoc-style is the
                 // fallback. (Both are mutually exclusive in practice; a
                 // user who writes both gets the TS-style form.)
-                let annotation = ts_annotation.or_else(|| {
-                    self.try_get_type_annotation(self.current_span(), &key_name)
-                });
+                let annotation = ts_annotation
+                    .or_else(|| self.try_get_type_annotation(self.current_span(), &key_name));
 
                 match initializer {
                     Some(init) => {
@@ -1185,8 +1187,7 @@ impl Parser {
                         //      can later widen it via assignment if it
                         //      reaches that field at all.
                         if let Some(ann) = annotation {
-                            deferred_field_annotations
-                                .push((key_name.clone(), ann));
+                            deferred_field_annotations.push((key_name.clone(), ann));
                         }
                         field_props.push(PropDef::Property {
                             key: PropKey::Ident(key_name),
@@ -1207,18 +1208,15 @@ impl Parser {
             // PropDef::Setter so the object-literal machinery types the
             // result as the getter's return and the setter's assignment
             // target.
-            if (key_name == "get" || key_name == "set")
-                && matches!(self.current(), Token::Ident(_))
+            if (key_name == "get" || key_name == "set") && matches!(self.current(), Token::Ident(_))
             {
                 let is_setter = key_name == "set";
                 let accessor_name = self.expect_ident()?;
                 self.expect(&Token::LParen)?;
                 let (params, prefix) = self.parse_parameters_with_prefix()?;
                 self.expect(&Token::RParen)?;
-                let body = Self::prepend_param_destructuring(
-                    self.parse_function_body_block()?,
-                    prefix,
-                );
+                let body =
+                    Self::prepend_param_destructuring(self.parse_function_body_block()?, prefix);
                 let member_span = Span::new(member_start, self.prev_span().end);
                 let accessor = if is_setter {
                     if params.len() != 1 {
@@ -1414,11 +1412,7 @@ impl Parser {
     /// the body through `wrap_body_in_promise_resolve` so the
     /// exported function's return type ends up as `Promise<T>`,
     /// matching the non-exported `async function` rule.
-    fn parse_export_function_declaration(
-        &mut self,
-        start: usize,
-        is_async: bool,
-    ) -> Result<Stmt> {
+    fn parse_export_function_declaration(&mut self, start: usize, is_async: bool) -> Result<Stmt> {
         let func_start = self.current_span();
         self.advance(); // consume `function`
         let name = self.expect_ident()?;
@@ -1559,9 +1553,7 @@ impl Parser {
     /// a fresh temp name in the returned name list and emit the
     /// corresponding destructuring into `prefix_stmts`, which callers
     /// prepend to the function body.
-    fn parse_parameters_with_prefix(
-        &mut self,
-    ) -> Result<(Vec<Param>, Vec<Stmt>)> {
+    fn parse_parameters_with_prefix(&mut self) -> Result<(Vec<Param>, Vec<Stmt>)> {
         let mut params = Vec::new();
         let mut prefix = Vec::new();
 
@@ -1604,10 +1596,7 @@ impl Parser {
                     self.advance();
                     let name_span = self.current_span();
                     let name = self.expect_ident()?;
-                    let actual_span = Span::new(
-                        name_span.start,
-                        name_span.start + name.len(),
-                    );
+                    let actual_span = Span::new(name_span.start, name_span.start + name.len());
                     params.push(Param::new(name, actual_span));
                     // Rest param must be last per spec. Don't allow a
                     // trailing comma to start another parameter.
@@ -1623,10 +1612,7 @@ impl Parser {
                 } else {
                     let name_span = self.current_span();
                     let name = self.expect_ident()?;
-                    let actual_span = Span::new(
-                        name_span.start,
-                        name_span.start + name.len(),
-                    );
+                    let actual_span = Span::new(name_span.start, name_span.start + name.len());
                     // `param = expr` — default value. inty has no
                     // notion of optional arguments (call sites must
                     // match arity exactly), so the default is purely a
@@ -2485,7 +2471,8 @@ impl Parser {
                 let span = self.current_span();
                 return Err(ParseError::UnexpectedToken {
                     found: "await".to_string(),
-                    expected: "expression (await is only valid inside an async function)".to_string(),
+                    expected: "expression (await is only valid inside an async function)"
+                        .to_string(),
                     span,
                 }
                 .into());
@@ -3225,7 +3212,8 @@ impl Parser {
     fn looks_like_arrow_function(&self) -> bool {
         // Simple param: `ident =>`
         if matches!(self.current(), Token::Ident(_)) {
-            return self.tokens
+            return self
+                .tokens
                 .get(self.pos + 1)
                 .map(|s| matches!(s.value, Token::FatArrow))
                 .unwrap_or(false);
@@ -3248,7 +3236,8 @@ impl Parser {
                     Token::RParen => {
                         paren_depth -= 1;
                         if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
-                            return self.tokens
+                            return self
+                                .tokens
                                 .get(i + 1)
                                 .map(|s| matches!(s.value, Token::FatArrow))
                                 .unwrap_or(false);
@@ -3279,19 +3268,19 @@ impl Parser {
         let start = self.current_span().start;
 
         // Parse parameters.
-        let (params, prefix): (Vec<Param>, Vec<Stmt>) =
-            if matches!(self.current(), Token::Ident(_)) {
-                // Single-identifier form: `x => ...`
-                let name_span = self.current_span();
-                let name = self.expect_ident()?;
-                let span = Span::new(name_span.start, name_span.start + name.len());
-                (vec![Param::new(name, span)], vec![])
-            } else {
-                self.expect(&Token::LParen)?;
-                let result = self.parse_parameters_with_prefix()?;
-                self.expect(&Token::RParen)?;
-                result
-            };
+        let (params, prefix): (Vec<Param>, Vec<Stmt>) = if matches!(self.current(), Token::Ident(_))
+        {
+            // Single-identifier form: `x => ...`
+            let name_span = self.current_span();
+            let name = self.expect_ident()?;
+            let span = Span::new(name_span.start, name_span.start + name.len());
+            (vec![Param::new(name, span)], vec![])
+        } else {
+            self.expect(&Token::LParen)?;
+            let result = self.parse_parameters_with_prefix()?;
+            self.expect(&Token::RParen)?;
+            result
+        };
 
         self.expect(&Token::FatArrow)?;
 
@@ -3416,7 +3405,8 @@ impl Parser {
         if cur_start <= prev_end {
             return false;
         }
-        let between = &self.source.as_bytes()[prev_end.min(self.source.len())..cur_start.min(self.source.len())];
+        let between = &self.source.as_bytes()
+            [prev_end.min(self.source.len())..cur_start.min(self.source.len())];
         between.iter().any(|&b| b == b'\n' || b == b'\r')
     }
 
@@ -3566,7 +3556,11 @@ impl Parser {
 
     /// Try to get a type annotation that matches the name
     /// This is used for functions where the annotation appears before the function declaration
-    fn try_get_type_annotation_for_function(&mut self, before_span: Span, name: &str) -> Option<TypeAnnotation> {
+    fn try_get_type_annotation_for_function(
+        &mut self,
+        before_span: Span,
+        name: &str,
+    ) -> Option<TypeAnnotation> {
         // Look for a type annotation that ends before this position and matches the name
         while self.annotation_pos < self.type_annotations.len() {
             let ann = &self.type_annotations[self.annotation_pos];
@@ -3979,18 +3973,22 @@ mod tests {
                 }
             }
         }
-        panic!("class did not desugar to expected factory function shape: {:?}", stmt);
+        panic!(
+            "class did not desugar to expected factory function shape: {:?}",
+            stmt
+        );
     }
 
     #[test]
     fn class_fields_with_initializers_become_props() {
-        let props = parse_class_factory(
-            "class C { a = 0; b = \"hi\"; c = []; constructor() {} }",
-        );
+        let props = parse_class_factory("class C { a = 0; b = \"hi\"; c = []; constructor() {} }");
         let names: Vec<_> = props
             .iter()
             .filter_map(|p| match p {
-                PropDef::Property { key: PropKey::Ident(n), .. } => Some(n.clone()),
+                PropDef::Property {
+                    key: PropKey::Ident(n),
+                    ..
+                } => Some(n.clone()),
                 _ => None,
             })
             .collect();
@@ -4011,7 +4009,10 @@ mod tests {
         let names: Vec<_> = props
             .iter()
             .filter_map(|p| match p {
-                PropDef::Property { key: PropKey::Ident(n), .. } => Some(n.clone()),
+                PropDef::Property {
+                    key: PropKey::Ident(n),
+                    ..
+                } => Some(n.clone()),
                 _ => None,
             })
             .collect();
@@ -4024,17 +4025,20 @@ mod tests {
     fn class_ts_inline_annotation_attaches_to_field() {
         // The TS-style `: Number` annotation on a field declaration
         // becomes a TypeAnnotation whose name matches the field name.
-        let props = parse_class_factory(
-            "class C { count: Number = 0; constructor() {} }",
-        );
+        let props = parse_class_factory("class C { count: Number = 0; constructor() {} }");
         let count_prop = props
             .iter()
-            .find(|p| matches!(
-                p,
-                PropDef::Property { key: PropKey::Ident(n), .. } if n == "count"
-            ))
+            .find(|p| {
+                matches!(
+                    p,
+                    PropDef::Property { key: PropKey::Ident(n), .. } if n == "count"
+                )
+            })
             .expect("count field");
-        if let PropDef::Property { type_annotation, .. } = count_prop {
+        if let PropDef::Property {
+            type_annotation, ..
+        } = count_prop
+        {
             let ann = type_annotation.as_ref().expect("annotation present");
             assert_eq!(ann.name, "count");
             assert_eq!(ann.content.trim(), "Number");
@@ -4054,13 +4058,17 @@ mod tests {
         );
         let name_prop = props
             .iter()
-            .find(|p| matches!(
-                p,
-                PropDef::Property { key: PropKey::Ident(n), .. } if n == "name"
-            ))
+            .find(|p| {
+                matches!(
+                    p,
+                    PropDef::Property { key: PropKey::Ident(n), .. } if n == "name"
+                )
+            })
             .expect("name field");
         if let PropDef::Property {
-            value, type_annotation, ..
+            value,
+            type_annotation,
+            ..
         } = name_prop
         {
             assert!(matches!(value, Expr::Ident { .. }));
@@ -4074,9 +4082,7 @@ mod tests {
 
     #[test]
     fn class_duplicate_field_rejected() {
-        let result = parse(
-            "class C { a; a = 1; constructor() {} }",
-        );
+        let result = parse("class C { a; a = 1; constructor() {} }");
         let err = result.expect_err("duplicate field should error");
         let msg = format!("{:?}", err);
         assert!(msg.contains("duplicate field"), "got: {}", msg);
@@ -4086,17 +4092,20 @@ mod tests {
     fn class_field_array_type_annotation() {
         // Array brackets in the type don't terminate the type span
         // (depth-counting on `[ ]`).
-        let props = parse_class_factory(
-            "class C { items: Item[] = []; constructor() {} }",
-        );
+        let props = parse_class_factory("class C { items: Item[] = []; constructor() {} }");
         let prop = props
             .iter()
-            .find(|p| matches!(
-                p,
-                PropDef::Property { key: PropKey::Ident(n), .. } if n == "items"
-            ))
+            .find(|p| {
+                matches!(
+                    p,
+                    PropDef::Property { key: PropKey::Ident(n), .. } if n == "items"
+                )
+            })
             .expect("items field");
-        if let PropDef::Property { type_annotation, .. } = prop {
+        if let PropDef::Property {
+            type_annotation, ..
+        } = prop
+        {
             let ann = type_annotation.as_ref().expect("annotation");
             assert_eq!(ann.content.trim(), "Item[]");
         }

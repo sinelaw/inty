@@ -445,11 +445,9 @@ impl<'a> TypeParser<'a> {
                     let inner_func = match wrapped {
                         Type::Row(row)
                             if row.props.len() == 1
-                                && row
-                                    .props
-                                    .contains_key(&crate::types::PropName(
-                                        crate::types::CALLABLE_KEY.to_string(),
-                                    )) =>
+                                && row.props.contains_key(&crate::types::PropName(
+                                    crate::types::CALLABLE_KEY.to_string(),
+                                )) =>
                         {
                             row.props
                                 .into_iter()
@@ -568,9 +566,7 @@ impl<'a> TypeParser<'a> {
                 // `Promise<T>` — the inner type is required.
                 self.skip_whitespace();
                 if self.peek_char() != Some('<') {
-                    return Err(self.error(
-                        "expected '<T>' after 'Promise'".to_string(),
-                    ));
+                    return Err(self.error("expected '<T>' after 'Promise'".to_string()));
                 }
                 self.expect_char('<')?;
                 self.skip_whitespace();
@@ -632,8 +628,7 @@ impl<'a> TypeParser<'a> {
                         // corresponding argument type. For a nullary
                         // alias the subst is empty and the body is
                         // returned as-is.
-                        let mut subst: HashMap<u32, Type> =
-                            HashMap::with_capacity(args.len());
+                        let mut subst: HashMap<u32, Type> = HashMap::with_capacity(args.len());
                         for (p, a) in def.params.iter().zip(args.iter()) {
                             subst.insert(*p, a.clone());
                         }
@@ -810,7 +805,10 @@ fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
             this_type: this_type
                 .as_ref()
                 .map(|t| Box::new(substitute_alias_body(t, subst))),
-            params: params.iter().map(|p| substitute_alias_body(p, subst)).collect(),
+            params: params
+                .iter()
+                .map(|p| substitute_alias_body(p, subst))
+                .collect(),
             ret: Box::new(substitute_alias_body(ret, subst)),
         },
         Type::Union(members) => {
@@ -827,7 +825,9 @@ fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
                 RowTail::Open(v) => RowTail::Open(v.clone()),
                 RowTail::Recursive(id, args) => RowTail::Recursive(
                     *id,
-                    args.iter().map(|a| substitute_alias_body(a, subst)).collect(),
+                    args.iter()
+                        .map(|a| substitute_alias_body(a, subst))
+                        .collect(),
                 ),
             };
             Type::Row(RowType {
@@ -837,7 +837,9 @@ fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
         }
         Type::Named(id, args) => Type::Named(
             *id,
-            args.iter().map(|a| substitute_alias_body(a, subst)).collect(),
+            args.iter()
+                .map(|a| substitute_alias_body(a, subst))
+                .collect(),
         ),
         Type::Module(_) => ty.clone(),
     }
@@ -917,9 +919,7 @@ mod tests {
     fn test_parse_nested_function() {
         let ty = parse("(f: (x: Number) => String) => Boolean");
         // Top-level `(args) => ret` parses as a callable row.
-        let (_, params, ret) = ty
-            .as_callable()
-            .expect("expected callable type");
+        let (_, params, ret) = ty.as_callable().expect("expected callable type");
         assert_eq!(params.len(), 1);
         assert!(
             params[0].as_callable().is_some(),

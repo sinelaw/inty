@@ -22,18 +22,15 @@ pub const DOM: &str = include_str!("../stdlib/dom.d.js");
 ///
 /// Each entry is `(source, name-for-errors)`. Order matters: later libs
 /// can reference names from earlier ones.
-pub const DEFAULT_LIBS: &[(&str, &str)] = &[(CORE, "<stdlib/core.d.js>"), (DOM, "<stdlib/dom.d.js>")];
+pub const DEFAULT_LIBS: &[(&str, &str)] =
+    &[(CORE, "<stdlib/core.d.js>"), (DOM, "<stdlib/dom.d.js>")];
 
 /// Load a single declaration file into the given environment.
 ///
 /// Parses `source`, runs inference, and returns the resulting environment.
 /// The `InferState` is threaded through so that type variable IDs stay
 /// unique across the lib and the subsequent user program.
-pub fn load_lib(
-    state: &mut InferState,
-    env: TypeEnv,
-    source: &str,
-) -> Result<TypeEnv, IntyError> {
+pub fn load_lib(state: &mut InferState, env: TypeEnv, source: &str) -> Result<TypeEnv, IntyError> {
     let program = parse(source)?;
     let (_ty, new_env) = state.infer_program_with_env(&env, &program)?;
     Ok(new_env)

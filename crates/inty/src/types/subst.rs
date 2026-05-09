@@ -156,7 +156,10 @@ impl Subst {
                 this_type: this_type
                     .as_ref()
                     .map(|t| Box::new(self.flatten_type(t, visited))),
-                params: params.iter().map(|p| self.flatten_type(p, visited)).collect(),
+                params: params
+                    .iter()
+                    .map(|p| self.flatten_type(p, visited))
+                    .collect(),
                 ret: Box::new(self.flatten_type(ret, visited)),
             },
             Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, visited))),
@@ -305,9 +308,7 @@ impl Substitutable for Type {
 
             // Substitution can produce duplicates / nested unions, so
             // re-normalise via Type::union.
-            Type::Union(members) => {
-                Type::union(members.iter().map(|m| m.apply_subst(subst)))
-            }
+            Type::Union(members) => Type::union(members.iter().map(|m| m.apply_subst(subst))),
 
             // Modules: each export is a scheme; reuse TypeScheme's
             // substitution which already shadows quantified vars.

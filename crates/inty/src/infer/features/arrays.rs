@@ -47,7 +47,10 @@ impl InferState {
 
         for elem in elements.iter().flatten() {
             let elem_ty = match elem {
-                Expr::Spread { argument, span: spread_span } => {
+                Expr::Spread {
+                    argument,
+                    span: spread_span,
+                } => {
                     // The spread operand must be an array; its
                     // element type joins the accumulator.
                     let arg_ty = self.infer_expr(env, argument)?;

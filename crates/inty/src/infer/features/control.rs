@@ -86,9 +86,7 @@ impl InferState {
             Some((path, narrowing)) => {
                 let cons_env = apply_narrowing(self, env, &path, &narrowing);
                 let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
-                warn_if_narrowing_unreachable(
-                    self, env, &cons_env, &alt_env, &path, test.span(),
-                );
+                warn_if_narrowing_unreachable(self, env, &cons_env, &alt_env, &path, test.span());
                 (cons_env, alt_env)
             }
             None => (env.clone(), env.clone()),
@@ -146,7 +144,11 @@ impl InferState {
     }
 
     /// Bind a list of `for`-init declarators into the loop env.
-    fn bind_for_init_decls(&mut self, env: &TypeEnv, decls: &[VarDeclarator]) -> InferResult<TypeEnv> {
+    fn bind_for_init_decls(
+        &mut self,
+        env: &TypeEnv,
+        decls: &[VarDeclarator],
+    ) -> InferResult<TypeEnv> {
         let mut new_env = env.clone();
         for decl in decls {
             let var_type = if let Some(init_expr) = &decl.init {

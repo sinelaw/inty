@@ -183,9 +183,7 @@ impl InferState {
                 let op_name = if matches!(op, BinOp::And) { "&&" } else { "||" };
                 if let Err(mut err) = self.unify(span, &left_type, &right_type) {
                     // Add helpful context about the && or || operator
-                    if let IntyError::Type(TypeError::UnificationError { context, .. }) =
-                        &mut err
-                    {
+                    if let IntyError::Type(TypeError::UnificationError { context, .. }) = &mut err {
                         let msg = vec![
                             format!("In JavaScript, `{}` returns one of its operands", op_name),
                             "(not a boolean), so both operands must have".to_string(),

@@ -99,7 +99,6 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                 elements: elements.into_iter().map(Some).collect(),
                 span: span(),
             }),
-
             // Object literal with regular props
             prop::collection::vec((prop_key_strategy(), inner.clone()), 1..3).prop_map(|pairs| {
                 // Deduplicate by key so we don't emit `{k: 1, k: 2}` which
@@ -128,7 +127,6 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                     span: span(),
                 }
             }),
-
             // Member access: obj.prop
             (inner.clone(), prop_key_strategy()).prop_map(|(obj, key)| {
                 let property = match key {
@@ -141,7 +139,6 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                     span: span(),
                 }
             }),
-
             // Binary expression
             (binop_strategy(), inner.clone(), inner.clone()).prop_map(|(op, l, r)| {
                 Expr::Binary {
@@ -151,14 +148,12 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                     span: span(),
                 }
             }),
-
             // Unary expression
             inner.clone().prop_map(|arg| Expr::Unary {
                 op: UnaryOp::Not,
                 argument: Box::new(arg),
                 span: span(),
             }),
-
             // Conditional: a ? b : c
             (inner.clone(), inner.clone(), inner.clone()).prop_map(|(t, c, a)| {
                 Expr::Conditional {
@@ -168,32 +163,24 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                     span: span(),
                 }
             }),
-
             // Function call. Callee is a bare ident so the pretty-
             // printer doesn't have to parenthesise it — avoids a whole
             // class of round-trip ambiguity issues without losing
             // anything interesting about the inference behaviour.
             (ident_strategy(), prop::collection::vec(inner.clone(), 0..2)).prop_map(
                 |(name, args)| Expr::Call {
-                    callee: Box::new(Expr::Ident {
-                        name,
-                        span: span(),
-                    }),
+                    callee: Box::new(Expr::Ident { name, span: span() }),
                     arguments: args,
                     span: span(),
                 }
             ),
-
             // Function expression with 0-2 parameters and a single
             // return body. Keeping the body trivial (just `return e`)
             // dramatically raises the round-trip success rate — nested
             // control flow inside a function body is its own minefield
             // for pretty-printing and better tested separately.
-            (
-                prop::collection::vec(ident_strategy(), 0..2),
-                inner.clone()
-            )
-                .prop_map(|(params, body_expr)| {
+            (prop::collection::vec(ident_strategy(), 0..2), inner.clone()).prop_map(
+                |(params, body_expr)| {
                     let body = Stmt::Block {
                         body: vec![Stmt::Return {
                             argument: Some(body_expr),
@@ -208,7 +195,8 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                         type_annotation: None,
                         span: span(),
                     }
-                }),
+                }
+            ),
         ]
     })
 }
@@ -281,16 +269,13 @@ pub fn stmt_strategy() -> impl Strategy<Value = Stmt> {
                     span: span(),
                 }
             }),
-
         // Bare expression statement (ambiguity-free forms only)
         safe_stmt_expr_strategy().prop_map(|e| Stmt::Expr {
             expression: e,
             span: span(),
         }),
-
         // Empty statement (`;`)
         Just(Stmt::Empty { span: span() }),
-
         // Top-level function declaration
         (
             ident_strategy(),
@@ -312,7 +297,6 @@ pub fn stmt_strategy() -> impl Strategy<Value = Stmt> {
                     span: span(),
                 }
             }),
-
         // if with only a consequent (same stmt-position restriction)
         (expr_strategy(), safe_stmt_expr_strategy()).prop_map(|(test, body_expr)| {
             Stmt::If {

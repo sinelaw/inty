@@ -4,8 +4,8 @@ use crate::lexer::Span;
 use crate::parser::ast::{Expr, Literal};
 use crate::types::Type;
 
-use super::super::state::InferState;
 use super::super::env::TypeEnv;
+use super::super::state::InferState;
 use super::super::InferResult;
 
 impl InferState {

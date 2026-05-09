@@ -323,12 +323,7 @@ impl Analysis {
     ///
     /// `text` is the source the analysis was built from; we use it
     /// only to find the `)` byte offset for function declarations.
-    pub fn inlay_hints_in(
-        &self,
-        start: usize,
-        end: usize,
-        text: &str,
-    ) -> Vec<InlayHintData> {
+    pub fn inlay_hints_in(&self, start: usize, end: usize, text: &str) -> Vec<InlayHintData> {
         use crate::resolver::DefKind;
 
         let state = match self.state.as_ref() {
@@ -464,18 +459,22 @@ impl Analysis {
         };
         let mut out = Vec::new();
         for stmt in &program.statements {
-            if let Stmt::Import { specifiers, source, .. } = stmt {
+            if let Stmt::Import {
+                specifiers, source, ..
+            } = stmt
+            {
                 for spec in specifiers {
                     match spec {
-                        ImportSpecifier::Named { imported, local, span } => {
+                        ImportSpecifier::Named {
+                            imported,
+                            local,
+                            span,
+                        } => {
                             // The imported name starts at the spec
                             // span's start. For `foo as bar` that's
                             // `foo`; for `foo` it's `foo` (and equals
                             // the local).
-                            let imported_span = Span::new(
-                                span.start,
-                                span.start + imported.len(),
-                            );
+                            let imported_span = Span::new(span.start, span.start + imported.len());
                             // The local name spans the whole specifier
                             // — the resolver also keys off `span` for
                             // `DefKind::Import`. For a non-aliased
@@ -623,7 +622,12 @@ fn find_call<'a>(stmt: &'a Stmt, offset: usize, best: &mut Option<&'a Expr>) {
                 find_call(s, offset, best);
             }
         }
-        Stmt::If { test, consequent, alternate, .. } => {
+        Stmt::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
             find_call_expr(test, offset, best);
             find_call(consequent, offset, best);
             if let Some(a) = alternate {
@@ -635,7 +639,10 @@ fn find_call<'a>(stmt: &'a Stmt, offset: usize, best: &mut Option<&'a Expr>) {
             find_call(body, offset, best);
         }
         Stmt::For { body, .. } => find_call(body, offset, best),
-        Stmt::Return { argument: Some(e), .. } | Stmt::Throw { argument: e, .. } => {
+        Stmt::Return {
+            argument: Some(e), ..
+        }
+        | Stmt::Throw { argument: e, .. } => {
             find_call_expr(e, offset, best);
         }
         Stmt::FunctionDecl { body, .. } => find_call(body, offset, best),
@@ -661,7 +668,12 @@ fn find_call_expr<'a>(expr: &'a Expr, offset: usize, best: &mut Option<&'a Expr>
         return;
     }
     match expr {
-        Expr::Call { callee, arguments, .. } | Expr::New { callee, arguments, .. } => {
+        Expr::Call {
+            callee, arguments, ..
+        }
+        | Expr::New {
+            callee, arguments, ..
+        } => {
             find_call_expr(callee, offset, best);
             for a in arguments {
                 find_call_expr(a, offset, best);
@@ -673,11 +685,18 @@ fn find_call_expr<'a>(expr: &'a Expr, offset: usize, best: &mut Option<&'a Expr>
         }
         Expr::Unary { argument, .. } => find_call_expr(argument, offset, best),
         Expr::Member { object, .. } => find_call_expr(object, offset, best),
-        Expr::ComputedMember { object, property, .. } => {
+        Expr::ComputedMember {
+            object, property, ..
+        } => {
             find_call_expr(object, offset, best);
             find_call_expr(property, offset, best);
         }
-        Expr::Conditional { test, consequent, alternate, .. } => {
+        Expr::Conditional {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
             find_call_expr(test, offset, best);
             find_call_expr(consequent, offset, best);
             find_call_expr(alternate, offset, best);
@@ -708,11 +727,7 @@ fn find_call_expr<'a>(expr: &'a Expr, offset: usize, best: &mut Option<&'a Expr>
 ///
 /// Anything else (computed member, call returning a function, etc.)
 /// returns `None` and the LSP server reports no signature help.
-fn resolve_callee_type(
-    env: &TypeEnv,
-    state: &InferState,
-    expr: &Expr,
-) -> Option<(String, Type)> {
+fn resolve_callee_type(env: &TypeEnv, state: &InferState, expr: &Expr) -> Option<(String, Type)> {
     use inty::types::PropName;
     match expr {
         Expr::Ident { name, .. } => {
@@ -720,7 +735,9 @@ fn resolve_callee_type(
             let ty = state.apply_subst(&scheme.body.ty);
             Some((name.clone(), ty))
         }
-        Expr::Member { object, property, .. } => {
+        Expr::Member {
+            object, property, ..
+        } => {
             let (obj_label, obj_ty) = resolve_callee_type(env, state, object)?;
             let row = match &obj_ty {
                 Type::Row(r) => r,
@@ -871,7 +888,9 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             }
         }
         Stmt::Labeled { body, .. } => visit_stmt(body, offset, best),
-        Stmt::FunctionDecl { name, body, span, .. } => {
+        Stmt::FunctionDecl {
+            name, body, span, ..
+        } => {
             if span_contains(*span, offset) {
                 consider(best, name.clone(), *span);
             }
@@ -905,7 +924,9 @@ fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
             }
         }
         Expr::Member { object, .. } => visit_expr(object, offset, best),
-        Expr::ComputedMember { object, property, .. } => {
+        Expr::ComputedMember {
+            object, property, ..
+        } => {
             visit_expr(object, offset, best);
             visit_expr(property, offset, best);
         }

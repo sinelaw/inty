@@ -16,7 +16,13 @@ use super::super::InferResult;
 /// across exports type-check.
 fn function_decl_parts<'a>(
     stmt: &'a Stmt,
-) -> Option<(&'a str, &'a [Param], &'a Stmt, &'a Option<TypeAnnotation>, Span)> {
+) -> Option<(
+    &'a str,
+    &'a [Param],
+    &'a Stmt,
+    &'a Option<TypeAnnotation>,
+    Span,
+)> {
     match stmt {
         Stmt::FunctionDecl {
             name,
@@ -24,7 +30,13 @@ fn function_decl_parts<'a>(
             body,
             type_annotation,
             span,
-        } => Some((name.as_str(), params.as_slice(), body.as_ref(), type_annotation, *span)),
+        } => Some((
+            name.as_str(),
+            params.as_slice(),
+            body.as_ref(),
+            type_annotation,
+            *span,
+        )),
         Stmt::Export {
             declaration:
                 ExportDecl::Function {
@@ -35,7 +47,13 @@ fn function_decl_parts<'a>(
                     span,
                 },
             ..
-        } => Some((name.as_str(), params.as_slice(), body.as_ref(), type_annotation, *span)),
+        } => Some((
+            name.as_str(),
+            params.as_slice(),
+            body.as_ref(),
+            type_annotation,
+            *span,
+        )),
         _ => None,
     }
 }
@@ -97,8 +115,12 @@ impl InferState {
 
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-            let (annotated_type, var_map) =
-                parse_type_annotation_with_aliases(&annotation.content, annotation_span, self.next_var_id(), &self.type_aliases)?;
+            let (annotated_type, var_map) = parse_type_annotation_with_aliases(
+                &annotation.content,
+                annotation_span,
+                self.next_var_id(),
+                &self.type_aliases,
+            )?;
             if let Some(&max) = var_map.values().max() {
                 self.bump_var_id_to(max + 1);
             }
@@ -267,8 +289,7 @@ impl InferState {
         // Expected constructor shape — an *open* callable row so the
         // constructor value can carry additional static fields beyond
         // the call signature (matches the unified callable-row design).
-        let expected_func =
-            self.callable_row_open(Some(this_type), arg_types, result_type.clone());
+        let expected_func = self.callable_row_open(Some(this_type), arg_types, result_type.clone());
 
         self.unify(span, &callee_type, &expected_func)?;
 
@@ -299,14 +320,8 @@ impl InferState {
                     .expect("hoisted name must be in env")
                     .ty()
                     .clone();
-                let func_type = self.infer_function(
-                    &hoisted,
-                    Some(name),
-                    params,
-                    body,
-                    type_annotation,
-                    span,
-                )?;
+                let func_type =
+                    self.infer_function(&hoisted, Some(name), params, body, type_annotation, span)?;
                 self.unify(span, &func_var, &func_type)?;
                 // Key the recorded type by the *name* offset so the LSP
                 // resolver (which returns the name span for go-to-def)
@@ -319,10 +334,7 @@ impl InferState {
                     "function ".len()
                 };
                 let name_offset = span.start + keyword_len;
-                self.record_decl_type(
-                    Span::new(name_offset, name_offset + name.len()),
-                    func_type,
-                );
+                self.record_decl_type(Span::new(name_offset, name_offset + name.len()), func_type);
             }
         }
 

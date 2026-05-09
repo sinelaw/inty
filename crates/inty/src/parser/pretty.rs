@@ -89,7 +89,12 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             }
             write!(w, ")")?;
             if let Some(ann) = type_annotation {
-                write!(w, " /** function {}{} */", name.as_deref().unwrap_or(""), ann.content)?;
+                write!(
+                    w,
+                    " /** function {}{} */",
+                    name.as_deref().unwrap_or(""),
+                    ann.content
+                )?;
             }
             write!(w, " ")?;
             write_stmt(w, body, 0)?;
@@ -119,9 +124,9 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             }
             // Render private-field sentinels back to their `#name`
             // source form so the desugared output stays readable.
-            if let Some(name) = crate::types::private_key_display(
-                &crate::types::PropName(property.clone()),
-            ) {
+            if let Some(name) =
+                crate::types::private_key_display(&crate::types::PropName(property.clone()))
+            {
                 write!(w, ".#{}", name)
             } else {
                 write!(w, ".{}", property)
@@ -280,10 +285,14 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             write_expr(w, head, true)?;
             for seg in segments {
                 match seg {
-                    ChainSegment::Member { property, optional, .. } => {
+                    ChainSegment::Member {
+                        property, optional, ..
+                    } => {
                         write!(w, "{}{}", if *optional { "?." } else { "." }, property)?;
                     }
-                    ChainSegment::Computed { property, optional, .. } => {
+                    ChainSegment::Computed {
+                        property, optional, ..
+                    } => {
                         if *optional {
                             write!(w, "?.[")?;
                         } else {
@@ -292,7 +301,11 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
                         write_expr(w, property, false)?;
                         write!(w, "]")?;
                     }
-                    ChainSegment::Call { arguments, optional, .. } => {
+                    ChainSegment::Call {
+                        arguments,
+                        optional,
+                        ..
+                    } => {
                         if *optional {
                             write!(w, "?.")?;
                         }
@@ -327,13 +340,15 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             write_expr(w, source, true)?;
             write!(w, ".slice({})", skip)
         }
-        Expr::RestRow { source, excluded, .. } => {
+        Expr::RestRow {
+            source, excluded, ..
+        } => {
             // No clean inty surface form for object rest; emit a
             // placeholder that round-trips into something the parser
             // could re-accept if reformatted. Used only for decorate
             // output; the underlying typing rule is handled by
             // `Expr::RestRow`'s own arm.
-            write!(w, "/* {{...rest excluding [", )?;
+            write!(w, "/* {{...rest excluding [",)?;
             for (i, k) in excluded.iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
@@ -436,9 +451,9 @@ fn write_prop_key(w: &mut impl Write, key: &PropKey) -> fmt::Result {
     match key {
         PropKey::Ident(s) => {
             // Render private-field sentinels back to `#name`.
-            if let Some(name) = crate::types::private_key_display(
-                &crate::types::PropName(s.clone()),
-            ) {
+            if let Some(name) =
+                crate::types::private_key_display(&crate::types::PropName(s.clone()))
+            {
                 write!(w, "#{}", name)
             } else {
                 write!(w, "{}", s)

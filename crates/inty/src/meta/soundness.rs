@@ -83,11 +83,14 @@ pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
         // unary
         arb_number(depth - 1).prop_map(|a| format!("-({})", a)),
         // conditional with boolean test
-        (arb_boolean(depth - 1), arb_number(depth - 1), arb_number(depth - 1))
+        (
+            arb_boolean(depth - 1),
+            arb_number(depth - 1),
+            arb_number(depth - 1)
+        )
             .prop_map(|(t, a, b)| format!("({} ? {} : {})", t, a, b)),
         // identity application
-        arb_number(depth - 1)
-            .prop_map(|a| format!("(function(x) {{ return x; }})({})", a)),
+        arb_number(depth - 1).prop_map(|a| format!("(function(x) {{ return x; }})({})", a)),
     ]
     .boxed()
 }
@@ -106,7 +109,11 @@ pub fn arb_string(depth: u32) -> BoxedStrategy<String> {
         arb_string(0),
         (arb_string(depth - 1), arb_string(depth - 1))
             .prop_map(|(a, b)| format!("({} + {})", a, b)),
-        (arb_boolean(depth - 1), arb_string(depth - 1), arb_string(depth - 1))
+        (
+            arb_boolean(depth - 1),
+            arb_string(depth - 1),
+            arb_string(depth - 1)
+        )
             .prop_map(|(t, a, b)| format!("({} ? {} : {})", t, a, b)),
     ]
     .boxed()

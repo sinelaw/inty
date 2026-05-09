@@ -53,8 +53,7 @@ impl ModuleGraph {
     /// before recursing.
     pub fn dependency_order(&self, entry: &Path) -> Vec<PathBuf> {
         let mut order: Vec<PathBuf> = Vec::new();
-        let mut visited: std::collections::HashSet<PathBuf> =
-            std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         self.visit(entry, &mut visited, &mut order);
         order
     }

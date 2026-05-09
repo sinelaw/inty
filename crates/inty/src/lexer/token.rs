@@ -164,21 +164,21 @@ pub enum Token {
     MinusMinus, // --
 
     // Punctuation
-    LParen,    // (
-    RParen,    // )
-    LBrace,    // {
-    RBrace,    // }
-    LBracket,  // [
-    RBracket,  // ]
-    Comma,     // ,
-    Dot,       // .
-    DotDotDot, // ... (spread / rest)
-    Semicolon, // ;
-    Colon,     // :
-    Question,    // ?
-    QuestionDot, // ?. (optional chaining)
+    LParen,           // (
+    RParen,           // )
+    LBrace,           // {
+    RBrace,           // }
+    LBracket,         // [
+    RBracket,         // ]
+    Comma,            // ,
+    Dot,              // .
+    DotDotDot,        // ... (spread / rest)
+    Semicolon,        // ;
+    Colon,            // :
+    Question,         // ?
+    QuestionDot,      // ?. (optional chaining)
     QuestionQuestion, // ?? (nullish coalescing)
-    FatArrow,  // =>
+    FatArrow,         // =>
 
     // Special
     Eof,

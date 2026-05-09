@@ -715,7 +715,11 @@ impl<'a> Decorator<'a> {
             .iter()
             .map(|p| TypePred {
                 class: p.class.clone(),
-                types: p.types.iter().map(|t| self.state.main_subst.flatten(t)).collect(),
+                types: p
+                    .types
+                    .iter()
+                    .map(|t| self.state.main_subst.flatten(t))
+                    .collect(),
             })
             .collect();
 

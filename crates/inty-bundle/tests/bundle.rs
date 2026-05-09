@@ -43,7 +43,10 @@ fn bundles_named_imports() {
 
     let out = inty_bundle::bundle(&entry).expect("bundle ok");
     assert!(out.code.contains("__mods["), "missing __mods registry");
-    assert!(out.code.contains("__exports.answer"), "lib must export answer");
+    assert!(
+        out.code.contains("__exports.answer"),
+        "lib must export answer"
+    );
     assert!(out.code.contains("__exports.id"), "lib must export id");
     assert!(
         out.code.contains("var answer = __mods["),
@@ -89,16 +92,8 @@ fn bundles_namespace_import() {
 #[test]
 fn bundles_default_import() {
     let dir = make_tempdir("default");
-    write(
-        &dir,
-        "lib.js",
-        "export default 42;\n",
-    );
-    let entry = write(
-        &dir,
-        "app.js",
-        "import answer from \"./lib.js\";\n",
-    );
+    write(&dir, "lib.js", "export default 42;\n");
+    let entry = write(&dir, "app.js", "import answer from \"./lib.js\";\n");
 
     let out = inty_bundle::bundle(&entry).expect("bundle ok");
     assert!(
@@ -107,8 +102,7 @@ fn bundles_default_import() {
         out.code
     );
     assert!(
-        out.code.contains("var answer = __mods[")
-            && out.code.contains("].default"),
+        out.code.contains("var answer = __mods[") && out.code.contains("].default"),
         "default import should read .default: {}",
         out.code
     );
@@ -120,11 +114,7 @@ fn bundles_reexports() {
     let dir = make_tempdir("reexport");
     write(&dir, "a.js", "export var x = 1;\nexport var y = 2;\n");
     write(&dir, "b.js", "export { x, y as z } from \"./a.js\";\n");
-    let entry = write(
-        &dir,
-        "app.js",
-        "import { x, z } from \"./b.js\";\n",
-    );
+    let entry = write(&dir, "app.js", "import { x, z } from \"./b.js\";\n");
 
     let out = inty_bundle::bundle(&entry).expect("bundle ok");
     assert!(out.code.contains("__exports.x = __mods["));

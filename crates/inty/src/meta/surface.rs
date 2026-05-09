@@ -34,19 +34,25 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
         }),
         Expr::Function { body, .. } => is_surface_stmt(body),
         Expr::Member { object, .. } => is_surface_expr(object),
-        Expr::ComputedMember { object, property, .. } => {
-            is_surface_expr(object) && is_surface_expr(property)
+        Expr::ComputedMember {
+            object, property, ..
+        } => is_surface_expr(object) && is_surface_expr(property),
+        Expr::Call {
+            callee, arguments, ..
         }
-        Expr::Call { callee, arguments, .. } | Expr::New { callee, arguments, .. } => {
-            is_surface_expr(callee) && arguments.iter().all(is_surface_expr)
-        }
+        | Expr::New {
+            callee, arguments, ..
+        } => is_surface_expr(callee) && arguments.iter().all(is_surface_expr),
         Expr::Unary { argument, .. } => is_surface_expr(argument),
         Expr::Binary { left, right, .. } | Expr::Assign { left, right, .. } => {
             is_surface_expr(left) && is_surface_expr(right)
         }
-        Expr::Conditional { test, consequent, alternate, .. } => {
-            is_surface_expr(test) && is_surface_expr(consequent) && is_surface_expr(alternate)
-        }
+        Expr::Conditional {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => is_surface_expr(test) && is_surface_expr(consequent) && is_surface_expr(alternate),
         Expr::NullishCoalesce { left, right, .. } => {
             is_surface_expr(left) && is_surface_expr(right)
         }
@@ -79,10 +85,15 @@ pub fn is_surface_stmt(stmt: &Stmt) -> bool {
         Stmt::Empty { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => true,
         Stmt::Block { body, .. } => body.iter().all(is_surface_stmt),
         Stmt::Expr { expression, .. } => is_surface_expr(expression),
-        Stmt::Var { declarations, .. } => declarations.iter().all(|d| {
-            d.init.as_ref().map_or(true, is_surface_expr)
-        }),
-        Stmt::If { test, consequent, alternate, .. } => {
+        Stmt::Var { declarations, .. } => declarations
+            .iter()
+            .all(|d| d.init.as_ref().map_or(true, is_surface_expr)),
+        Stmt::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
             is_surface_expr(test)
                 && is_surface_stmt(consequent)
                 && alternate.as_ref().map_or(true, |s| is_surface_stmt(s))
@@ -90,11 +101,17 @@ pub fn is_surface_stmt(stmt: &Stmt) -> bool {
         Stmt::While { test, body, .. } | Stmt::DoWhile { test, body, .. } => {
             is_surface_expr(test) && is_surface_stmt(body)
         }
-        Stmt::For { init, test, update, body, .. } => {
+        Stmt::For {
+            init,
+            test,
+            update,
+            body,
+            ..
+        } => {
             init.as_ref().map_or(true, |i| match i {
-                ForInit::VarDecl(decls) => {
-                    decls.iter().all(|d| d.init.as_ref().map_or(true, is_surface_expr))
-                }
+                ForInit::VarDecl(decls) => decls
+                    .iter()
+                    .all(|d| d.init.as_ref().map_or(true, is_surface_expr)),
                 ForInit::Expr(e) => is_surface_expr(e),
             }) && test.as_ref().map_or(true, is_surface_expr)
                 && update.as_ref().map_or(true, is_surface_expr)
@@ -105,12 +122,21 @@ pub fn is_surface_stmt(stmt: &Stmt) -> bool {
         }
         Stmt::Return { argument, .. } => argument.as_ref().map_or(true, is_surface_expr),
         Stmt::Throw { argument, .. } => is_surface_expr(argument),
-        Stmt::Try { block, handler, finalizer, .. } => {
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
             is_surface_stmt(block)
                 && handler.as_ref().map_or(true, |c| is_surface_stmt(&c.body))
                 && finalizer.as_ref().map_or(true, |f| is_surface_stmt(f))
         }
-        Stmt::Switch { discriminant, cases, .. } => {
+        Stmt::Switch {
+            discriminant,
+            cases,
+            ..
+        } => {
             is_surface_expr(discriminant)
                 && cases.iter().all(|c| {
                     c.test.as_ref().map_or(true, is_surface_expr)

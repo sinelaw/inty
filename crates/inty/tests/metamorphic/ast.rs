@@ -326,7 +326,11 @@ fn rename_stmt(stmt: &Stmt, from: &str, to: &str) -> Stmt {
             declarations: declarations
                 .iter()
                 .map(|d| VarDeclarator {
-                    name: if d.name == from { to.to_string() } else { d.name.clone() },
+                    name: if d.name == from {
+                        to.to_string()
+                    } else {
+                        d.name.clone()
+                    },
                     init: d.init.as_ref().map(|e| rename_expr(e, from, to)),
                     type_annotation: d.type_annotation.clone(),
                     kind: d.kind,
@@ -342,10 +346,20 @@ fn rename_stmt(stmt: &Stmt, from: &str, to: &str) -> Stmt {
             type_annotation,
             span,
         } => Stmt::FunctionDecl {
-            name: if name == from { to.to_string() } else { name.clone() },
+            name: if name == from {
+                to.to_string()
+            } else {
+                name.clone()
+            },
             params: params
                 .iter()
-                .map(|p| if p.name == from { Param::new(to.to_string(), p.span) } else { p.clone() })
+                .map(|p| {
+                    if p.name == from {
+                        Param::new(to.to_string(), p.span)
+                    } else {
+                        p.clone()
+                    }
+                })
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             type_annotation: type_annotation.clone(),
@@ -395,7 +409,11 @@ fn rename_stmt(stmt: &Stmt, from: &str, to: &str) -> Stmt {
 fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
     match expr {
         Expr::Ident { name, span } => Expr::Ident {
-            name: if name == from { to.to_string() } else { name.clone() },
+            name: if name == from {
+                to.to_string()
+            } else {
+                name.clone()
+            },
             span: *span,
         },
         Expr::Array { elements, span } => Expr::Array {
@@ -406,7 +424,10 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
             span: *span,
         },
         Expr::Object { properties, span } => Expr::Object {
-            properties: properties.iter().map(|p| rename_prop(p, from, to)).collect(),
+            properties: properties
+                .iter()
+                .map(|p| rename_prop(p, from, to))
+                .collect(),
             span: *span,
         },
         Expr::Function {
@@ -421,7 +442,13 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
                 .map(|n| if n == from { to.to_string() } else { n.clone() }),
             params: params
                 .iter()
-                .map(|p| if p.name == from { Param::new(to.to_string(), p.span) } else { p.clone() })
+                .map(|p| {
+                    if p.name == from {
+                        Param::new(to.to_string(), p.span)
+                    } else {
+                        p.clone()
+                    }
+                })
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             type_annotation: type_annotation.clone(),
@@ -503,7 +530,10 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
             span: *span,
         },
         Expr::Sequence { expressions, span } => Expr::Sequence {
-            expressions: expressions.iter().map(|e| rename_expr(e, from, to)).collect(),
+            expressions: expressions
+                .iter()
+                .map(|e| rename_expr(e, from, to))
+                .collect(),
             span: *span,
         },
         Expr::TemplateLiteral {
@@ -512,7 +542,10 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
             span,
         } => Expr::TemplateLiteral {
             quasis: quasis.clone(),
-            expressions: expressions.iter().map(|e| rename_expr(e, from, to)).collect(),
+            expressions: expressions
+                .iter()
+                .map(|e| rename_expr(e, from, to))
+                .collect(),
             span: *span,
         },
         other => other.clone(),
@@ -543,7 +576,13 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             key: key.clone(),
             params: params
                 .iter()
-                .map(|p| if p.name == from { Param::new(to.to_string(), p.span) } else { p.clone() })
+                .map(|p| {
+                    if p.name == from {
+                        Param::new(to.to_string(), p.span)
+                    } else {
+                        p.clone()
+                    }
+                })
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             span: *span,
@@ -560,7 +599,11 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             span,
         } => PropDef::Setter {
             key: key.clone(),
-            param: if param == from { to.to_string() } else { param.clone() },
+            param: if param == from {
+                to.to_string()
+            } else {
+                param.clone()
+            },
             body: Box::new(rename_stmt(body, from, to)),
             span: *span,
         },
