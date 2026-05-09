@@ -16,7 +16,7 @@
 // call site. Callers can still chain methods on the result because of
 // row polymorphism.
 
-/** const document: {
+/** const document: <T>{
         getElementById: (String) => {
             value: String, textContent: String, innerHTML: String, outerHTML: String,
             className: String, id: String, hidden: Boolean, disabled: Boolean,
@@ -144,7 +144,7 @@
     } */
 const document;
 
-/** const window: {
+/** const window: <T>{
         innerWidth: Number,
         innerHeight: Number,
         scrollX: Number,
@@ -176,7 +176,7 @@ const window;
 // permission-gated subsystems; everything is non-nullable in inty's
 // type system, so callers that branch on availability must do so at
 // runtime, but the access itself type-checks.
-/** const navigator: {
+/** const navigator: <T, U>{
         userAgent: String,
         language: String,
         languages: String[],
@@ -202,12 +202,12 @@ const navigator;
 // AbortController. The signal it produces is opaque (T) because
 // modelling AbortSignal as a row that contains itself isn't possible
 // without self-recursion.
-/** const AbortController: () => {signal: T, abort: () => Undefined} */
+/** const AbortController: <T>() => {signal: T, abort: () => Undefined} */
 const AbortController;
 
 // FormData / URLSearchParams. Construct from a form Element or with no
 // arguments; both expose the same get/set/append surface.
-/** const FormData: (T) => {
+/** const FormData: <T>(T) => {
         get: (String) => String,
         getAll: (String) => String[],
         has: (String) => Boolean,
@@ -231,27 +231,27 @@ const URLSearchParams;
 // Text encoding/decoding. `encode`/`decode` cover the vast majority of
 // real-world uses; the streaming variants (`encodeInto`, `decode` with
 // options) are out of scope for this stdlib.
-/** const TextDecoder: () => {decode: (T) => String} */
+/** const TextDecoder: <T>() => {decode: (T) => String} */
 const TextDecoder;
 
-/** const TextEncoder: () => {encode: (String) => T} */
+/** const TextEncoder: <T>() => {encode: (String) => T} */
 const TextEncoder;
 
 // CustomEvent / Event. Constructors take an `init` row (`detail`,
 // `bubbles`, …); the resulting object exposes the read-only fields
 // the rest of the DOM expects on event objects. `target` is opaque
 // (T) since it could be any Element-shaped value.
-/** const CustomEvent: (String, T) => {type: String, detail: U, bubbles: Boolean, defaultPrevented: Boolean, target: V, currentTarget: V, preventDefault: () => Undefined, stopPropagation: () => Undefined, stopImmediatePropagation: () => Undefined} */
+/** const CustomEvent: <T, U, V>(String, T) => {type: String, detail: U, bubbles: Boolean, defaultPrevented: Boolean, target: V, currentTarget: V, preventDefault: () => Undefined, stopPropagation: () => Undefined, stopImmediatePropagation: () => Undefined} */
 const CustomEvent;
 
-/** const Event: (String) => {type: String, bubbles: Boolean, defaultPrevented: Boolean, target: V, currentTarget: V, preventDefault: () => Undefined, stopPropagation: () => Undefined, stopImmediatePropagation: () => Undefined} */
+/** const Event: <V>(String) => {type: String, bubbles: Boolean, defaultPrevented: Boolean, target: V, currentTarget: V, preventDefault: () => Undefined, stopPropagation: () => Undefined, stopImmediatePropagation: () => Undefined} */
 const Event;
 
 // Custom-element registry. `define` is the only widely-used method; the
 // constructor argument is opaque (T) because inty has no class
 // inheritance and can't represent the `extends HTMLElement` constraint
 // the platform requires.
-/** const customElements: {
+/** const customElements: <T>{
         define: (String, T) => Undefined,
         get: (String) => T,
         whenDefined: (String) => Promise<T>
@@ -276,7 +276,7 @@ const alert;
 // Window globals also available bare under `globalThis`. Most code
 // reaches them via `window.X`, but a few helpers (e.g. fizzy's
 // scroll_helpers) call `getComputedStyle(el)` directly.
-/** const getComputedStyle: (T) => {getPropertyValue: (String) => String} */
+/** const getComputedStyle: <T>(T) => {getPropertyValue: (String) => String} */
 const getComputedStyle;
 
 /** const requestAnimationFrame: ((Number) => Undefined) => Number */
@@ -289,5 +289,5 @@ const cancelAnimationFrame;
 // `Promise<T>` where T is polymorphic per call — callers usually
 // pass the parsed result to code that fixes its shape via further
 // property access.
-/** const fetch: (String) => Promise<{status: Number, ok: Boolean, statusText: String, url: String, json: () => Promise<T>, text: () => Promise<String>, headers: {get: (String) => String}}> */
+/** const fetch: <T>(String) => Promise<{status: Number, ok: Boolean, statusText: String, url: String, json: () => Promise<T>, text: () => Promise<String>, headers: {get: (String) => String}}> */
 const fetch;

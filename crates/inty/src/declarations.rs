@@ -25,7 +25,7 @@
 
 use crate::infer::TypeEnv;
 use crate::modules::{ExportBinding, ExportEntry, ExportTable};
-use crate::types::{PrettyContext, TypeScheme};
+use crate::types::{PrettyContext, QualType, TypeScheme};
 
 /// A fully type-checked module, ready for declaration emission.
 ///
@@ -101,7 +101,19 @@ fn resolve_scheme(entry: &ExportEntry, env: &TypeEnv) -> Option<TypeScheme> {
 
 fn emit_one(out: &mut String, name: &str, scheme: &TypeScheme) {
     let mut ctx = PrettyContext::new();
-    let body = ctx.format_type(&scheme.body.ty);
+    // Print the quantifier prefix (so re-parsing finds bound names
+    // for every type variable in the body) but drop type-class
+    // predicates: the annotation grammar doesn't accept `where`
+    // clauses yet, so a faithful printer would emit something the
+    // loader can't read back. The reloaded scheme loses the class
+    // constraint — same as the prior behaviour, where the scheme
+    // wasn't printed at all and every `a` reparsed as a fresh
+    // unconstrained variable.
+    let printable = TypeScheme {
+        vars: scheme.vars.clone(),
+        body: QualType::simple(scheme.body.ty.clone()),
+    };
+    let body = ctx.format_scheme(&printable);
     out.push_str("/** const ");
     out.push_str(name);
     out.push_str(": ");

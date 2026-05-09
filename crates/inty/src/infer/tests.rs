@@ -1945,7 +1945,7 @@ fn generic_alias_used_as_function_return_type() {
     // type unifies with the substituted alias body.
     let src = "\
         /** type Pair<T> = { first: T, second: T } */ \
-        /** const makePair: (T) => Pair<T> */ \
+        /** const makePair: <T>(T) => Pair<T> */ \
         const makePair; \
         var p = makePair(42); \
         var f = p.first;";
@@ -2033,6 +2033,46 @@ fn nullary_alias_to_primitive_substitutes() {
     assert!(
         infer_program_with_state(src).is_err(),
         "expected Number-vs-String mismatch via nullary primitive alias"
+    );
+}
+
+#[test]
+fn unknown_type_identifier_rejects() {
+    // A type identifier that isn't a primitive, an alias, or a
+    // quantifier-bound parameter must be rejected at annotation
+    // parse time. The previous "fall through to fresh type variable"
+    // behaviour silently accepted typos like `Stirng`.
+    let typoed_const = "\
+        /** const a: Stirng */ \
+        const a = 42;";
+    assert!(infer_program_with_state(typoed_const).is_err());
+
+    let typoed_param = "\
+        /** function f(x: Numbr) => Numbr */ \
+        function f(x) { return x; } \
+        const r = f(\"oops\");";
+    assert!(infer_program_with_state(typoed_param).is_err());
+}
+
+#[test]
+fn quantifier_bound_identifier_resolves() {
+    // Sanity check that the strict rule still admits the legitimate
+    // cases: an explicit `<T>` quantifier introduces `T` as a
+    // bindable type-variable name within its body.
+    let src = "\
+        /** const id: <T>(T) => T */ \
+        const id; \
+        const n = id(42); \
+        const s = id(\"hi\");";
+    let (_, env, state) =
+        infer_program_with_state(src).expect("explicit quantifier should bind T");
+    assert_eq!(
+        state.apply_subst(&env.lookup("n").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("s").unwrap().body.ty),
+        Type::String
     );
 }
 

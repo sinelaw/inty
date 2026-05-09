@@ -636,15 +636,22 @@ impl<'a> TypeParser<'a> {
                     }
                 }
 
-                // Check if it's a known type variable
+                // Check if it's a known type variable (bound by an
+                // enclosing `<T>` quantifier or by an alias's parameter
+                // list — see `preset_var` and `parse_generic_type`).
                 if let Some(&var_id) = self.type_vars.get(ident) {
                     Ok(Type::flex(var_id))
                 } else {
-                    // Treat as a new type variable
-                    let var_id = self.next_var_id;
-                    self.next_var_id += 1;
-                    self.type_vars.insert(ident.to_string(), var_id);
-                    Ok(Type::flex(var_id))
+                    // Unknown identifier: not a primitive, not an alias,
+                    // not a quantifier-bound parameter. Reject rather
+                    // than silently inventing a fresh existential, so
+                    // typos like `Stirng` and forgotten quantifiers
+                    // surface as errors at the annotation site.
+                    Err(self.error(format!(
+                        "unknown type '{}' — declare it with `/** type {} = ... */` \
+                         or bind it as a parameter (e.g. `<{}>(...) => ...`)",
+                        ident, ident, ident
+                    )))
                 }
             }
         }
