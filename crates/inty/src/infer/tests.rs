@@ -1991,21 +1991,67 @@ fn generic_alias_two_parameters() {
 
 #[test]
 fn alias_arity_mismatch_errors() {
-    // Calling a 1-arg alias with 0 args is a parse-time error from
-    // the type parser, surfaced as an inference error.
-    let src = "\
+    // Bare `Pair` (no `<…>`) for a 1-arg alias is also an arity
+    // mismatch — it should not silently degrade to a fresh type
+    // variable. Both forms below must error.
+    let zero_args = "\
         /** type Pair<T> = { first: T, second: T } */ \
         /** const p: Pair */ \
         const p;";
-    // Without `<...>`, `Pair` falls back to a fresh type variable
-    // (no error). The migration error is when args count differs.
-    let _ = infer_program_with_state(src);
+    assert!(infer_program_with_state(zero_args).is_err());
 
     let bad = "\
         /** type Pair<T> = { first: T, second: T } */ \
         /** const p: Pair<Number, String> */ \
         const p;";
     assert!(infer_program_with_state(bad).is_err());
+}
+
+#[test]
+fn nullary_alias_substitutes_in_const_annotation() {
+    // `type Func = () => {id: String}` — the alias has no
+    // parameters, and a bare reference (`func: Func`) should
+    // expand to its body. The body's row is closed, so the
+    // returned literal `{id: '123', name: 'hello'}` carrying an
+    // excess `name` field must NOT unify.
+    let src = "\
+        /** type Func = () => {id: String} */ \
+        /** const func: Func */ \
+        const func = function() { return {id: '123', name: 'hello'}; };";
+    assert!(
+        infer_program_with_state(src).is_err(),
+        "expected excess-field rejection via closed-row alias body"
+    );
+}
+
+#[test]
+fn nullary_alias_enforces_field_types() {
+    // The body says `id: String`; the literal returns `id: 42`.
+    // Bare alias reference must expand to the closed-row body so
+    // the type mismatch is caught.
+    let src = "\
+        /** type Func = () => {id: String} */ \
+        /** const func: Func */ \
+        const func = function() { return {id: 42}; };";
+    assert!(
+        infer_program_with_state(src).is_err(),
+        "expected Number-vs-String mismatch via expanded alias body"
+    );
+}
+
+#[test]
+fn nullary_alias_to_primitive_substitutes() {
+    // The simplest case: a bare alias to a primitive. `const x: S`
+    // followed by `x = 42` must reject because `S` resolves to
+    // `String`, not to a fresh type variable.
+    let src = "\
+        /** type S = String */ \
+        /** const x: S */ \
+        const x = 42;";
+    assert!(
+        infer_program_with_state(src).is_err(),
+        "expected Number-vs-String mismatch via nullary primitive alias"
+    );
 }
 
 #[test]

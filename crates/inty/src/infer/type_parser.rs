@@ -580,16 +580,21 @@ impl<'a> TypeParser<'a> {
                 Ok(Type::promise(inner))
             }
             _ => {
-                // Generic alias application `Foo<arg1, arg2, ...>` —
-                // only fires when the alias env has `Foo` registered
-                // AND the next non-whitespace char is `<`.
+                // Alias application — `Foo` for a nullary alias or
+                // `Foo<arg1, arg2, ...>` for a generic alias. A bare
+                // identifier that *is* a registered alias must expand
+                // (and arity-check), not silently degrade to a type
+                // variable; otherwise a typo'd or unparameterised alias
+                // would unify with anything.
                 if let Some(aliases) = self.aliases {
-                    let saved_pos = self.pos;
-                    self.skip_whitespace();
-                    if self.peek_char() == Some('<') {
-                        if let Some(def) = aliases.get(ident) {
+                    if let Some(def) = aliases.get(ident).cloned() {
+                        let saved_pos = self.pos;
+                        self.skip_whitespace();
+                        let has_arg_list = self.peek_char() == Some('<');
+
+                        let mut args: Vec<Type> = Vec::new();
+                        if has_arg_list {
                             self.expect_char('<')?;
-                            let mut args: Vec<Type> = Vec::new();
                             self.skip_whitespace();
                             if self.peek_char() != Some('>') {
                                 loop {
@@ -606,26 +611,34 @@ impl<'a> TypeParser<'a> {
                             }
                             self.skip_whitespace();
                             self.expect_char('>')?;
-                            if args.len() != def.params.len() {
-                                return Err(self.error(format!(
-                                    "type alias '{}' expects {} type argument(s), got {}",
-                                    ident,
-                                    def.params.len(),
-                                    args.len()
-                                )));
-                            }
-                            // Capture-avoiding substitution: clone the
-                            // body and replace each parameter var with
-                            // the corresponding argument type.
-                            let mut subst: HashMap<u32, Type> =
-                                HashMap::with_capacity(args.len());
-                            for (p, a) in def.params.iter().zip(args.iter()) {
-                                subst.insert(*p, a.clone());
-                            }
-                            return Ok(substitute_alias_body(&def.body, &subst));
+                        } else {
+                            // Restore position so the trailing context
+                            // (e.g. `|`, `,`, `)`) is left for the
+                            // caller's parser to consume.
+                            self.pos = saved_pos;
                         }
+
+                        if args.len() != def.params.len() {
+                            return Err(self.error(format!(
+                                "type alias '{}' expects {} type argument(s), got {}",
+                                ident,
+                                def.params.len(),
+                                args.len()
+                            )));
+                        }
+
+                        // Capture-avoiding substitution: clone the body
+                        // and replace each parameter var with the
+                        // corresponding argument type. For a nullary
+                        // alias the subst is empty and the body is
+                        // returned as-is.
+                        let mut subst: HashMap<u32, Type> =
+                            HashMap::with_capacity(args.len());
+                        for (p, a) in def.params.iter().zip(args.iter()) {
+                            subst.insert(*p, a.clone());
+                        }
+                        return Ok(substitute_alias_body(&def.body, &subst));
                     }
-                    self.pos = saved_pos;
                 }
 
                 // Check if it's a known type variable
