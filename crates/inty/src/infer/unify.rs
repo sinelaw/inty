@@ -454,7 +454,7 @@ impl InferState {
     }
 
     /// Create a unification error.
-    fn unification_error(&self, span: Span, t1: &Type, t2: &Type) -> IntyError {
+    pub(crate) fn unification_error(&self, span: Span, t1: &Type, t2: &Type) -> IntyError {
         let expected_origin = self
             .get_origin(t1)
             .cloned()

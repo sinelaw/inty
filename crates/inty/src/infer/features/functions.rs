@@ -200,28 +200,22 @@ impl InferState {
             }
         };
 
-        // Infer argument types. `...expr` (Expr::Spread) in argument
-        // position unwraps the inner array to its element type and is
-        // treated as a single argument — inty has no variadic call
-        // shape, so a spread can't expand into N arguments. Callers
-        // that rely on variadic semantics will see an arity error
-        // here; callers that want a single-arg function fed from an
-        // array's element will type-check correctly.
-        let arg_types: Vec<Type> = arguments
-            .iter()
-            .map(|arg| match arg {
-                Expr::Spread {
-                    argument,
-                    span: spread_span,
-                } => {
-                    let inner = self.infer_expr(env, argument)?;
-                    let elem = self.fresh_type_var();
-                    self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
-                    Ok(self.apply_subst(&elem))
-                }
-                _ => self.infer_expr(env, arg),
-            })
-            .collect::<InferResult<_>>()?;
+        // Bidirectional checking (Peyton Jones 2007 §4): pin down the
+        // callee's signature first with fresh parameter variables, then
+        // check each argument against its resolved parameter type via
+        // `subsume`. This pushes the expected param type into the
+        // argument's checking judgement so a value like
+        // `{kind: "circle", r: 10}` can match a discriminated-union arm
+        // through subsumption (S-UnionR) rather than failing because
+        // its top-level shape only equals one arm modulo literal
+        // widening — which `unify` alone can't see through.
+        //
+        // Synthesis order is unchanged for the spread case: an
+        // `...expr` argument is synthesised before we know the
+        // parameter type because we need to extract its element type.
+        let param_vars: Vec<Type> = (0..arguments.len())
+            .map(|_| self.fresh_type_var())
+            .collect();
 
         // Fresh types for this and return
         let this_type = self.fresh_type_var();
@@ -232,10 +226,41 @@ impl InferState {
         // constructor with statics). Row polymorphism's fresh tail
         // absorbs whatever extras the callee happens to have.
         let expected_func =
-            self.callable_row_open(Some(this_type.clone()), arg_types, ret_type.clone());
+            self.callable_row_open(Some(this_type.clone()), param_vars.clone(), ret_type.clone());
 
-        // Unify callee with expected function type
+        // Unify callee with expected function type. After this, each
+        // `param_vars[i]` is bound to the callee's i-th parameter
+        // type (which may itself contain unresolved variables for a
+        // polymorphic callee — those resolve as we check the args).
         self.unify(span, &callee_type, &expected_func)?;
+
+        // Check each argument against its resolved parameter type.
+        // `...expr` (Expr::Spread) in argument position unwraps the
+        // inner array to its element type and is treated as a single
+        // argument — inty has no variadic call shape, so a spread
+        // can't expand into N arguments. Callers that rely on
+        // variadic semantics will see an arity error from the unify
+        // above; callers that want a single-arg function fed from an
+        // array's element will type-check correctly.
+        for (arg, param) in arguments.iter().zip(param_vars.iter()) {
+            let expected = self.apply_subst(param);
+            match arg {
+                Expr::Spread {
+                    argument,
+                    span: spread_span,
+                } => {
+                    let inner = self.infer_expr(env, argument)?;
+                    let elem = self.fresh_type_var();
+                    self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
+                    let elem_resolved = self.apply_subst(&elem);
+                    self.subsume(*spread_span, &elem_resolved, &expected)?;
+                }
+                _ => {
+                    let arg_ty = self.infer_expr(env, arg)?;
+                    self.subsume(span, &arg_ty, &expected)?;
+                }
+            }
+        }
 
         // If this is a method call, also unify 'this' with the object type
         // This happens AFTER the main unification, so type variables in the

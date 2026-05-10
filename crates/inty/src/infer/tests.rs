@@ -1272,6 +1272,59 @@ fn test_phase5_discriminated_union_via_if() {
 }
 
 #[test]
+fn test_call_site_tagged_union_arg_via_subsume() {
+    // The README/web-examples tagged-union demo. Inference widens the
+    // object literal's `"circle"` field to `String` in synthesis mode,
+    // so the call site has to subsume `{kind: String, r: Number}` into
+    // the discriminated-union parameter via S-UnionR — exactly one arm
+    // (`{kind: "circle", r: Number}`) accepts it via field-level
+    // literal-vs-base unification.
+    let src = "\
+        /** function area(s: {kind: \"circle\", r: Number} \
+                            | {kind: \"square\", s: Number}) => Number */\n\
+        function area(shape) { \
+            if (shape.kind === \"circle\") { return shape.r; } \
+            else { return shape.s; } \
+        } \
+        var a = area({ kind: \"circle\", r: 10 }); \
+        var b = area({ kind: \"square\", s:  5 });";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let a = env.lookup("a").unwrap();
+    let b = env.lookup("b").unwrap();
+    assert_eq!(state.apply_subst(a.ty()), Type::Number);
+    assert_eq!(state.apply_subst(b.ty()), Type::Number);
+}
+
+#[test]
+fn test_call_site_tagged_union_no_matching_arm() {
+    // The same function, called with an object whose *shape* matches
+    // no arm. Neither `{kind, q}` row aligns with `{kind, r}` nor
+    // `{kind, s}`, so S-UnionR finds zero candidates and subsume
+    // reports a mismatch.
+    //
+    // (Intentionally not testing discriminator-value mismatch like
+    // `kind: "triangle"`: the existing literal-vs-base rule in unify
+    // widens any string literal to `String` during synthesis, so a
+    // wrong discriminator still subsumes via field-level
+    // literal-vs-base. Tightening that is a separate, larger change
+    // — fresh literal types, option 1 — and this test deliberately
+    // exercises only what subsume guarantees today.)
+    let src = "\
+        /** function area(s: {kind: \"circle\", r: Number} \
+                            | {kind: \"square\", s: Number}) => Number */\n\
+        function area(shape) { \
+            if (shape.kind === \"circle\") { return shape.r; } \
+            else { return shape.s; } \
+        } \
+        var t = area({ kind: \"circle\", q: 1 });";
+    let result = infer_program_with_state(src);
+    assert!(
+        result.is_err(),
+        "calling area with a shape matching no arm should fail",
+    );
+}
+
+#[test]
 fn test_phase5_discriminated_union_via_switch() {
     // function area(shape: {kind:"circle", r:Number}
     //                    | {kind:"square", s:Number}
