@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a1e3f01d818378505523e05743a5d655421796b50697d4531e327dc2a64010ec # shrinks to p = Program { statements: [Expr { expression: Lit { value: Boolean(true), span: Span { start: 0, end: 0 } }, span: Span { start: 0, end: 0 } }], span: Span { start: 0, end: 0 }, type_aliases: [] }
+cc 692d4c55c11edb99fee241a597f18c6c44beba0035ae75a745a0acd2ae94708c # shrinks to p = Program { statements: [Expr { expression: Lit { value: Boolean(true), span: Span { start: 0, end: 0 } }, span: Span { start: 0, end: 0 } }, FunctionDecl { name: "a", params: [], body: Block { body: [Return { argument: Some(Function { name: None, params: [], body: Block { body: [Return { argument: Some(Lit { value: Null, span: Span { start: 0, end: 0 } }), span: Span { start: 0, end: 0 } }], span: Span { start: 0, end: 0 } }, type_annotation: None, span: Span { start: 0, end: 0 } }), span: Span { start: 0, end: 0 } }], span: Span { start: 0, end: 0 } }, type_annotation: None, span: Span { start: 0, end: 0 } }], span: Span { start: 0, end: 0 }, type_aliases: [] }
