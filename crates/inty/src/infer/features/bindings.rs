@@ -398,6 +398,9 @@ impl InferState {
                 VarKind::Var | VarKind::Let if is_declaration => Mutability::Immutable,
                 VarKind::Var | VarKind::Let => Mutability::Mutable,
             };
+            // Also persist the generalised scheme so LSP/inlay hints
+            // can recover predicates after the scope is gone.
+            self.record_decl_scheme(decl.span, scheme.clone());
             new_env = new_env.extend_with_mutability(decl.name.clone(), scheme, mutability);
         }
 

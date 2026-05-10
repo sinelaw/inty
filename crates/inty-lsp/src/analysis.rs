@@ -152,20 +152,19 @@ impl Analysis {
         // final env at all.
         if let Some((def_span, hit_span)) = self.resolution.binding_at(byte_offset) {
             let def = self.resolution.def_at(def_span)?;
-            // For function decls and other generalised bindings, prefer
-            // the env-stored scheme so type-class constraints (`where
-            // Plus a`) and outer quantifiers appear. The decl_types
-            // map stores raw `Type` and loses both.
-            if matches!(def.kind, crate::resolver::DefKind::Function) {
-                if let Some(scheme) = env.lookup(&def.name) {
-                    let applied_scheme = state.apply_subst(scheme);
-                    let mut ctx = PrettyContext::new();
-                    return Some(HoverResult {
-                        name: def.name.clone(),
-                        span: hit_span,
-                        type_str: ctx.format_scheme(&applied_scheme),
-                    });
-                }
+            // Prefer the span-keyed scheme: it covers any generalised
+            // binding (function decl, `var f = function(...)`, etc.)
+            // and is shadow-correct, unlike a name-based env lookup.
+            // `decl_types` stores raw `Type` and loses both quantifiers
+            // and type-class predicates, so use it only as a fallback.
+            if let Some(scheme) = state.get_decl_scheme(def_span) {
+                let applied_scheme = state.apply_subst(scheme);
+                let mut ctx = PrettyContext::new();
+                return Some(HoverResult {
+                    name: def.name.clone(),
+                    span: hit_span,
+                    type_str: ctx.format_scheme(&applied_scheme),
+                });
             }
             if let Some(ty) = state.get_decl_type(def_span) {
                 let applied = state.apply_subst(ty);
@@ -363,31 +362,28 @@ impl Analysis {
             };
             let applied = state.apply_subst(ty);
 
+            // If the binding was generalised, recover its predicates
+            // (`where Plus a`) so overloaded operators stay visible.
+            let where_clause = state
+                .get_decl_scheme(def_span)
+                .map(|scheme| state.apply_subst(scheme))
+                .filter(|s| !s.body.preds.is_empty())
+                .map(|s| {
+                    let mut pctx = PrettyContext::new();
+                    format!(" where {}", pctx.format_preds(&s.body.preds))
+                })
+                .unwrap_or_default();
+
             if matches!(def.kind, DefKind::Function) {
                 // Function decls show only the return type, anchored
                 // after `)`, instead of repeating the whole signature
-                // after the function's name. If the generalised scheme
-                // carries class predicates (`where Plus a`), append
-                // them so overloaded operators are visible.
+                // after the function's name.
                 if let Some((_, _, ret)) = applied.as_callable() {
                     if let Some(pos) = close_paren_after(text, def_span.end) {
                         let mut ctx = PrettyContext::new();
-                        let ret_label = ctx.format_type(ret);
-                        let where_clause = self
-                            .final_env
-                            .as_ref()
-                            .and_then(|env| env.lookup(&def.name))
-                            .map(|scheme| state.apply_subst(scheme))
-                            .filter(|s| !s.body.preds.is_empty())
-                            .map(|s| {
-                                let mut pctx = PrettyContext::new();
-                                pctx.format_preds(&s.body.preds)
-                            })
-                            .map(|p| format!(" where {}", p))
-                            .unwrap_or_default();
                         hints.push(InlayHintData {
                             after_byte: pos,
-                            label: format!(" -> {}{}", ret_label, where_clause),
+                            label: format!(" -> {}{}", ctx.format_type(ret), where_clause),
                         });
                     }
                 }
@@ -397,7 +393,7 @@ impl Analysis {
             let mut ctx = PrettyContext::new();
             hints.push(InlayHintData {
                 after_byte: def_span.end,
-                label: format!(": {}", ctx.format_type(&applied)),
+                label: format!(": {}{}", ctx.format_type(&applied), where_clause),
             });
         }
         hints

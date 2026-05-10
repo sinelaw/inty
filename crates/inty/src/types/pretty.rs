@@ -3,7 +3,7 @@
 //! Provides human-readable string representations of types,
 //! type schemes, and related structures.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Write};
 
 use super::ty::{
@@ -447,9 +447,21 @@ impl PrettyContext {
 
     /// Write a type scheme.
     fn write_scheme<W: Write>(&mut self, w: &mut W, scheme: &TypeScheme) -> fmt::Result {
-        if !scheme.vars.is_empty() {
+        // The quantifier prefix should only mention vars that actually
+        // appear in the printed body or predicates. The body printer
+        // hides `this` when it's a bare type variable, so a scheme
+        // quantified over that var would otherwise show an orphan
+        // letter like `<a, b>(b) => b` for an `id`-style function.
+        let displayed_vars = displayed_vars_of_scheme(scheme);
+        let visible: Vec<&TVarName> = scheme
+            .vars
+            .iter()
+            .filter(|v| displayed_vars.contains(v))
+            .collect();
+
+        if !visible.is_empty() {
             write!(w, "<")?;
-            for (i, var) in scheme.vars.iter().enumerate() {
+            for (i, var) in visible.iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
                 }
@@ -496,6 +508,63 @@ impl Default for PrettyContext {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Type variables that the body printer hides — currently just bare
+/// `this` parameters on functions, which `write_type` skips unless
+/// they're concrete. We need to know about these so that
+/// `write_scheme` can drop them from the quantifier prefix instead
+/// of printing an orphan letter (`<a, b>(b) => b`).
+fn collect_hidden_this_vars(ty: &Type, hidden: &mut HashSet<TVarName>) {
+    match ty {
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => {
+            if let Some(t) = this_type {
+                if let Type::Var(v) = t.as_ref() {
+                    hidden.insert(v.clone());
+                }
+                collect_hidden_this_vars(t, hidden);
+            }
+            for p in params {
+                collect_hidden_this_vars(p, hidden);
+            }
+            collect_hidden_this_vars(ret, hidden);
+        }
+        Type::Array(elem) => collect_hidden_this_vars(elem, hidden),
+        Type::Promise(inner) => collect_hidden_this_vars(inner, hidden),
+        Type::Map(value) => collect_hidden_this_vars(value, hidden),
+        Type::Row(row) => {
+            for prop_ty in row.props.values() {
+                collect_hidden_this_vars(prop_ty, hidden);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Type variables that will actually appear in the printed form of
+/// `scheme` — i.e. the free vars of body and predicates, minus the
+/// hidden `this` vars. `write_scheme` filters the quantifier list
+/// against this set.
+fn displayed_vars_of_scheme(scheme: &TypeScheme) -> HashSet<TVarName> {
+    let mut used = scheme.body.ty.free_vars();
+    for p in &scheme.body.preds {
+        used.extend(p.free_vars());
+    }
+    let mut hidden = HashSet::new();
+    collect_hidden_this_vars(&scheme.body.ty, &mut hidden);
+    for p in &scheme.body.preds {
+        for t in &p.types {
+            collect_hidden_this_vars(t, &mut hidden);
+        }
+    }
+    for v in &hidden {
+        used.remove(v);
+    }
+    used
 }
 
 /// Display implementation for types using a fresh context.
@@ -590,5 +659,47 @@ mod tests {
         let s = scheme.to_string();
         assert!(s.contains("Plus"));
         assert!(s.contains("<a>"));
+    }
+
+    #[test]
+    fn scheme_drops_quantifier_for_hidden_this_var() {
+        // `function id(x) { return x; }` inferred type:
+        //     this: t0, (t1) => t1
+        // The body pretty-printer hides `this: t0` (bare tvar), so a
+        // scheme that quantifies over BOTH t0 and t1 would print as
+        // `<a, b>(b) => b` — an orphan `a` with nowhere to land. The
+        // quantifier prefix must skip the hidden-this var and only
+        // show `<a>(a) => a`.
+        let this_v = TVarName::Flex(0);
+        let body_v = TVarName::Flex(1);
+        let body = Type::func(
+            Type::Var(this_v.clone()),
+            vec![Type::Var(body_v.clone())],
+            Type::Var(body_v.clone()),
+        );
+        let scheme = TypeScheme::poly(vec![this_v, body_v], body);
+        let s = scheme.to_string();
+        assert_eq!(s, "<a>(a) => a", "got: {}", s);
+    }
+
+    #[test]
+    fn scheme_preserves_class_predicate_in_output() {
+        // `function add(x, y) { return x + y; }` → `<a> where Plus a => (a, a) => a`.
+        // Regression: the scheme printer must reach the `where` clause
+        // and not drop predicates when filtering the quantifier list.
+        let a = TVarName::Flex(0);
+        let body = Type::simple_func(
+            vec![Type::Var(a.clone()), Type::Var(a.clone())],
+            Type::Var(a.clone()),
+        );
+        let scheme = TypeScheme::qualified(
+            vec![a.clone()],
+            vec![TypePred::plus(Type::Var(a))],
+            body,
+        );
+        let s = scheme.to_string();
+        assert!(s.contains("<a>"), "missing <a> in {}", s);
+        assert!(s.contains("where Plus"), "missing predicate in {}", s);
+        assert!(s.contains("(a, a) => a"), "missing body in {}", s);
     }
 }

@@ -608,6 +608,106 @@ fn inlay_hints_show_inferred_types() {
 }
 
 #[test]
+fn hover_on_identity_function_shows_single_quantifier() {
+    // Regression: function inference allocates a `this` type variable
+    // that the body printer hides. If the scheme prints every
+    // quantifier mechanically, `function id(x) { return x; }` shows
+    // up as `<a, b>(b) => b` — an orphan `a` with nowhere to land.
+    // Should be `<a>(a) => a`.
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///id.js");
+    let src = "function id(x) { return x; }\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Cursor on the function name `id` (column 9 of "function id").
+    client
+        .sender
+        .send(Message::Request(req::<HoverRequest>(
+            90,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position {
+                        line: 0,
+                        character: 9,
+                    },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let hover: Option<Hover> = expect_response(&client, 90);
+    let value = match hover.expect("hover present").contents {
+        lsp_types::HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown contents"),
+    };
+    assert!(
+        value.contains("<a>"),
+        "expected single quantifier <a>: {}",
+        value
+    );
+    assert!(
+        !value.contains("<a,") && !value.contains(", b>"),
+        "no orphan quantifier expected: {}",
+        value
+    );
+    assert!(
+        value.contains("(a) => a"),
+        "expected body (a) => a: {}",
+        value
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
+fn hover_on_var_bound_polymorphic_function_includes_where_clause() {
+    // Regression: predicates must surface in hover for any
+    // generalised binding — not just `function` decls. A var-bound
+    // function that uses `+` should still display `where Plus a`.
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///addvar.js");
+    let src = "var add = function(x, y) { return x + y; };\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    // Cursor on `add` (column 4 of "var add").
+    client
+        .sender
+        .send(Message::Request(req::<HoverRequest>(
+            91,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: u.clone() },
+                    position: Position {
+                        line: 0,
+                        character: 4,
+                    },
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            },
+        )))
+        .unwrap();
+    let hover: Option<Hover> = expect_response(&client, 91);
+    let value = match hover.expect("hover present").contents {
+        lsp_types::HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown contents"),
+    };
+    assert!(
+        value.contains("where") && value.contains("Plus"),
+        "expected `where Plus` for var-bound add: {}",
+        value
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
 fn inlay_hint_for_overloaded_function_includes_where_clause() {
     let (client, handle) = boot();
     handshake(&client);
