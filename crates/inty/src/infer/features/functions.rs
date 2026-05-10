@@ -285,10 +285,22 @@ impl InferState {
         // If this is a method call, also unify 'this' with the object type
         // This happens AFTER the main unification, so type variables in the
         // method signature have already been connected to the return type.
+        // For a free call (no `obj_type_for_this`), pin `this` to
+        // `Undefined`: at runtime a free invocation has no receiver,
+        // so a callee whose body actually references `this.foo` —
+        // i.e. whose `this` was inferred to a concrete row — would
+        // crash. Unifying with `Undefined` is a no-op when the
+        // callee's `this` is still a fresh variable (truly
+        // `this`-agnostic functions are unaffected) and produces a
+        // type error when it's a concrete row, catching detached
+        // method calls like `var f = obj.m; f();` at type-check time.
         if let Some(obj_type) = obj_type_for_this {
             let obj_type_applied = self.apply_subst(&obj_type);
             let this_type_applied = self.apply_subst(&this_type);
             self.unify(span, &this_type_applied, &obj_type_applied)?;
+        } else {
+            let this_type_applied = self.apply_subst(&this_type);
+            self.unify(span, &this_type_applied, &Type::Undefined)?;
         }
 
         Ok(self.apply_subst(&ret_type))
