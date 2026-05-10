@@ -195,6 +195,21 @@ impl PrettyContext {
         s
     }
 
+    /// Format a list of type-class predicates as a comma-separated
+    /// string (e.g. `Plus a` or `Plus a, Indexable a b c`), without
+    /// any `where` keyword. Returns an empty string when `preds` is
+    /// empty.
+    pub fn format_preds(&mut self, preds: &[TypePred]) -> String {
+        let mut s = String::new();
+        for (i, pred) in preds.iter().enumerate() {
+            if i > 0 {
+                let _ = write!(s, ", ");
+            }
+            self.write_pred(&mut s, pred).unwrap();
+        }
+        s
+    }
+
     /// Write a type to the given writer.
     fn write_type<W: Write>(&mut self, w: &mut W, ty: &Type, in_func_arg: bool) -> fmt::Result {
         match ty {

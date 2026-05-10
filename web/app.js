@@ -27,6 +27,7 @@ let activeExampleId = null;
 let suppressDirty = false;
 
 const SIDEBAR_KEY = 'inty.sidebar';
+const ONBOARDED_KEY = 'inty.onboarded';
 const MOBILE_BREAKPOINT = 768;
 
 // ---- URL hash sync ----------------------------------------------------
@@ -185,6 +186,9 @@ async function initialize() {
 
         setupHover();
         runCheck();
+        // After the first render settles, run the onboarding tour
+        // exactly once per visitor — see playOnboarding().
+        requestAnimationFrame(() => requestAnimationFrame(maybePlayOnboarding));
     } catch (e) {
         console.error('Failed to initialize WASM:', e);
         statusEl.textContent = 'failed';
@@ -626,6 +630,129 @@ function setSidebarOpen(open, { persist = true } = {}) {
     if (inputEditor) {
         setTimeout(() => inputEditor.refresh(), 240);
     }
+}
+
+// ---- Onboarding tour ------------------------------------------------
+//
+// First-time visitors get a guided demo: a fake cursor drifts to the
+// "Hints on" toggle and clicks it twice, so they watch the inferred
+// types disappear (revealing plain JavaScript) and then reappear.
+// The point — the types are not in the code; inty added them.
+
+function maybePlayOnboarding() {
+    // Skip when the visitor arrived via a deep link — they came to see
+    // *that* snippet/example, not a generic tour.
+    if (window.location.hash || window.location.search) return;
+
+    try {
+        if (localStorage.getItem(ONBOARDED_KEY) === 'yes') return;
+    } catch (_) { /* private mode — still show */ }
+
+    // Skip on very small screens; the toggle and cursor compete for
+    // space and the demo lands awkwardly.
+    if (window.innerWidth < 480) {
+        try { localStorage.setItem(ONBOARDED_KEY, 'yes'); } catch (_) {}
+        return;
+    }
+    if (!hintsBtn || !hintsEnabled) return;
+
+    playOnboarding();
+}
+
+function playOnboarding() {
+    try { localStorage.setItem(ONBOARDED_KEY, 'yes'); } catch (_) {}
+
+    const cursor = document.getElementById('demo-cursor');
+    const captionEl = document.getElementById('demo-cursor-caption');
+    if (!cursor || !captionEl) return;
+
+    let aborted = false;
+    const cleanup = () => {
+        aborted = true;
+        cursor.classList.remove('visible', 'clicking', 'flip-caption');
+        captionEl.classList.remove('visible');
+        cursor.removeEventListener('transitionend', noop);
+        document.removeEventListener('keydown', abort, true);
+        document.removeEventListener('mousedown', abort, true);
+        document.removeEventListener('touchstart', abort, true);
+    };
+    const abort = () => cleanup();
+    function noop() {}
+    document.addEventListener('keydown', abort, true);
+    document.addEventListener('mousedown', abort, true);
+    document.addEventListener('touchstart', abort, true);
+
+    const setCaption = (html) => {
+        captionEl.innerHTML = html;
+    };
+    const moveTo = (x, y) => {
+        cursor.style.transform = `translate(${x}px, ${y}px)`;
+        // Flip caption to the cursor's other side near the right edge.
+        cursor.classList.toggle('flip-caption', x > window.innerWidth - 260);
+    };
+    const click = () => {
+        cursor.classList.add('clicking');
+        setTimeout(() => cursor.classList.remove('clicking'), 560);
+    };
+
+    const target = hintsBtn.getBoundingClientRect();
+    const targetX = target.left + target.width / 2 - 8;
+    const targetY = target.top + target.height / 2 - 4;
+
+    // Start a bit inside the editor so the path crosses the code.
+    const startX = Math.min(window.innerWidth * 0.45, targetX - 280);
+    const startY = Math.min(window.innerHeight * 0.55, targetY + 200);
+
+    moveTo(startX, startY);
+    setCaption(
+        '<span class="muted">These</span> ' +
+        '<span class="accent">: Number</span>, ' +
+        '<span class="accent">: String</span> ' +
+        '<span class="muted">aren\'t in your code —</span>'
+    );
+
+    // Tiny defer to let the initial transform paint before animating.
+    setTimeout(() => {
+        if (aborted) return;
+        cursor.classList.add('visible');
+        captionEl.classList.add('visible');
+
+        // Move to the Hints button.
+        setTimeout(() => {
+            if (aborted) return;
+            moveTo(targetX, targetY);
+
+            setTimeout(() => {
+                if (aborted) return;
+                // First click — hints OFF, plain JS revealed.
+                click();
+                hintsBtn.click();
+                setCaption(
+                    '<span class="muted">…</span> ' +
+                    '<span class="accent">inty added them.</span>'
+                );
+
+                setTimeout(() => {
+                    if (aborted) return;
+                    // Second click — hints back ON.
+                    click();
+                    hintsBtn.click();
+                    setCaption(
+                        '<span class="muted">Hover any binding to inspect its type.</span>'
+                    );
+
+                    setTimeout(() => {
+                        if (aborted) return;
+                        captionEl.classList.remove('visible');
+                        // Drift off-screen on the right.
+                        moveTo(targetX + 80, targetY + 120);
+                        cursor.classList.remove('visible');
+                        setTimeout(cleanup, 500);
+                    }, 2200);
+                }, 1700);
+            }, 950);
+        }, 80);
+    }, 30);
 }
 
 initialize();

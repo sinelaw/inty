@@ -608,6 +608,64 @@ fn inlay_hints_show_inferred_types() {
 }
 
 #[test]
+fn inlay_hint_for_overloaded_function_includes_where_clause() {
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///plus.js");
+    // `add(x, y)` uses `+` and is polymorphic in any addable type.
+    // Inty should infer `<a> where Plus a => (a, a) => a` — and the
+    // function's inlay hint should expose the `Plus a` constraint
+    // (otherwise readers see only `-> a` and miss the overloading).
+    let src = "function add(x, y) { return x + y; }\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    client
+        .sender
+        .send(Message::Request(req::<InlayHintRequest>(
+            81,
+            InlayHintParams {
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                text_document: TextDocumentIdentifier { uri: u.clone() },
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 5,
+                        character: 0,
+                    },
+                },
+            },
+        )))
+        .unwrap();
+    let hints: Option<Vec<InlayHint>> = expect_response(&client, 81);
+    let hints = hints.expect("inlay hints present");
+
+    let labels: Vec<String> = hints
+        .iter()
+        .map(|h| match &h.label {
+            lsp_types::InlayHintLabel::String(s) => s.clone(),
+            lsp_types::InlayHintLabel::LabelParts(parts) => {
+                parts.iter().map(|p| p.value.clone()).collect::<String>()
+            }
+        })
+        .collect();
+    let has_where_plus = labels
+        .iter()
+        .any(|l| l.contains("where") && l.contains("Plus"));
+    assert!(
+        has_where_plus,
+        "expected an inlay hint with `where Plus` among {:?}",
+        labels
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
 fn signature_help_on_member_call() {
     let (client, handle) = boot();
     handshake(&client);
