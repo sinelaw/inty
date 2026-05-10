@@ -238,8 +238,7 @@ impl InferState {
         }
 
         // Bind the variable
-        self.extend_subst(TVarName::Flex(var), ty.clone());
-        Ok(())
+        self.extend_subst(span, TVarName::Flex(var), ty.clone())
     }
 
     /// Unify an array type with a row type.
@@ -273,8 +272,7 @@ impl InferState {
             RowTail::Open(TVarName::Flex(id)) => {
                 // Open row - bind the tail to a closed empty row
                 // (arrays don't have additional arbitrary properties)
-                self.extend_subst(TVarName::Flex(*id), Type::Row(RowType::empty_closed()));
-                Ok(())
+                self.extend_subst(span, TVarName::Flex(*id), Type::Row(RowType::empty_closed()))
             }
             RowTail::Open(TVarName::Skolem(_)) => {
                 // Skolem tail can't be bound
@@ -362,11 +360,14 @@ impl InferState {
                     .collect();
 
                 if extra_props.is_empty() {
-                    self.extend_subst(TVarName::Flex(*id), Type::Row(RowType::empty_closed()));
+                    self.extend_subst(span, TVarName::Flex(*id), Type::Row(RowType::empty_closed()))
                 } else {
-                    self.extend_subst(TVarName::Flex(*id), Type::Row(RowType::closed(extra_props)));
+                    self.extend_subst(
+                        span,
+                        TVarName::Flex(*id),
+                        Type::Row(RowType::closed(extra_props)),
+                    )
                 }
-                Ok(())
             }
 
             (RowTail::Closed, RowTail::Open(TVarName::Flex(id))) => {
@@ -379,11 +380,14 @@ impl InferState {
                     .collect();
 
                 if extra_props.is_empty() {
-                    self.extend_subst(TVarName::Flex(*id), Type::Row(RowType::empty_closed()));
+                    self.extend_subst(span, TVarName::Flex(*id), Type::Row(RowType::empty_closed()))
                 } else {
-                    self.extend_subst(TVarName::Flex(*id), Type::Row(RowType::closed(extra_props)));
+                    self.extend_subst(
+                        span,
+                        TVarName::Flex(*id),
+                        Type::Row(RowType::closed(extra_props)),
+                    )
                 }
-                Ok(())
             }
 
             (RowTail::Open(TVarName::Flex(id1)), RowTail::Open(TVarName::Flex(id2))) => {
@@ -407,13 +411,15 @@ impl InferState {
 
                 // Bind both row variables
                 self.extend_subst(
+                    span,
                     TVarName::Flex(*id1),
                     Type::Row(RowType::open(extra1, fresh.clone())),
-                );
+                )?;
                 self.extend_subst(
+                    span,
                     TVarName::Flex(*id2),
                     Type::Row(RowType::open(extra2, fresh)),
-                );
+                )?;
 
                 Ok(())
             }
@@ -431,7 +437,7 @@ impl InferState {
     }
 
     /// Create a recursive type when occurs check detects a row cycle.
-    fn create_recursive_type(&mut self, _span: Span, var: TVarId, ty: &Type) -> UnifyResult<()> {
+    fn create_recursive_type(&mut self, span: Span, var: TVarId, ty: &Type) -> UnifyResult<()> {
         // Generate a new type ID
         let type_id = self.fresh_type_id();
 
@@ -453,9 +459,7 @@ impl InferState {
         self.register_named_type(def);
 
         // Bind the original variable to the recursive type
-        self.extend_subst(TVarName::Flex(var), rec_ref);
-
-        Ok(())
+        self.extend_subst(span, TVarName::Flex(var), rec_ref)
     }
 
     /// Create a unification error.

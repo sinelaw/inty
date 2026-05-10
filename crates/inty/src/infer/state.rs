@@ -598,18 +598,23 @@ impl InferState {
     /// caller of `extend_subst` is the right place to handle a
     /// collision: unify the new value with the existing one, so the
     /// substitution faithfully carries every constraint that was
-    /// posed.
-    pub fn extend_subst(&mut self, var: TVarName, ty: Type) {
+    /// posed. Errors from that unification are propagated to the
+    /// caller — silently dropping them lets a closed-row tail
+    /// re-bind to an arbitrary row constraint, masking
+    /// property-not-found errors at chained-method call sites.
+    pub fn extend_subst(
+        &mut self,
+        span: crate::lexer::Span,
+        var: TVarName,
+        ty: Type,
+    ) -> super::unify::UnifyResult<()> {
         if let Some(existing) = self.main_subst.get(&var).cloned() {
             // Already bound — unify so we don't lose either side.
-            let span = crate::lexer::Span::default();
-            // Failures here surface as normal type errors at the
-            // unify call that prompted the extension.
-            let _ = self.unify(span, &existing, &ty);
-            return;
+            return self.unify(span, &existing, &ty);
         }
         let singleton = Subst::singleton(var, ty);
         self.main_subst = singleton.compose(&self.main_subst);
+        Ok(())
     }
 
     /// Override a type variable binding in the substitution.
