@@ -106,8 +106,18 @@ impl InferState {
 
                 PropDef::Getter { key, body, span: _ } => {
                     let prop_name = self.prop_key_to_name(key);
-                    // Getter: infer body return type
-                    let (ret_type, _) = self.infer_stmt(env, body)?;
+                    // Bind `this` in the getter body to the shared
+                    // instance row so `this.foo` references see the
+                    // surrounding object's fields (same trick as
+                    // methods, but the getter's value type is just
+                    // the body's return type — there's no callable
+                    // wrapper).
+                    let getter_env = env.extend(
+                        "this".to_string(),
+                        TypeScheme::mono(shared_this.clone()),
+                    );
+                    let (body_type, _) = self.infer_stmt(&getter_env, body)?;
+                    let ret_type = body_type.widen_fresh_literals();
                     props.insert(prop_name, ret_type);
                 }
 

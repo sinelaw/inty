@@ -935,15 +935,11 @@ impl Parser {
             // `get` followed by a name (or `#name`) means an accessor;
             // `get` followed by `(` is a method literally named "get".
             //
-            // Lowering: a getter `get foo() { body }` becomes a field
-            // `foo` whose value is the body's IIFE — `(function() {
-            // body })()`. inty's class lowering doesn't model true
-            // runtime getters (call-on-access) — it pre-evaluates the
-            // body at construction time. The type-level result is
-            // identical (`foo: <body return type>`); the runtime
-            // observable behavior differs from real JS only for code
-            // that depends on per-access side effects, which inty
-            // doesn't model anyway.
+            // Lowering: a getter `get foo() { body }` becomes a real
+            // `PropDef::Getter` on the returned object literal — same
+            // emit path as object-literal getters. The type checker
+            // binds the body's `this` to the shared instance row, so
+            // `this.field` references are typed against the class.
             //
             // A setter `set foo(v) { body }` lowers to a field `foo`
             // whose value is just the parameter's default form — the
@@ -989,10 +985,9 @@ impl Parser {
                 let body = Box::new(self.parse_function_body_block()?);
                 let body_span = body.span();
                 if kind == "get" {
-                    // `get foo() { body }` → field `foo: <result of
-                    // (function() { body })()>`. Eager IIFE matches
-                    // the type-level result; runtime side effects
-                    // differ from real getters (see comment above).
+                    // `get foo() { body }` → real `PropDef::Getter`
+                    // on the emitted object literal. The type checker
+                    // binds `this` in the body to the instance row.
                     if !params.is_empty() {
                         return Err(ParseError::UnexpectedToken {
                             found: "parameter".to_string(),
@@ -1001,17 +996,7 @@ impl Parser {
                         }
                         .into());
                     }
-                    let iife = Expr::Call {
-                        callee: Box::new(Expr::Function {
-                            name: None,
-                            params: vec![],
-                            body,
-                            type_annotation: None,
-                            span: body_span,
-                        }),
-                        arguments: vec![],
-                        span: body_span,
-                    };
+                    let _ = body_span;
                     if !declared_field_names.insert(key_name.clone()) {
                         return Err(ParseError::UnexpectedToken {
                             found: format!("duplicate `{}`", key_name),
@@ -1021,10 +1006,9 @@ impl Parser {
                         }
                         .into());
                     }
-                    field_props.push(PropDef::Property {
+                    method_props.push(PropDef::Getter {
                         key: PropKey::Ident(key_name),
-                        value: iife,
-                        type_annotation: None,
+                        body,
                         span: Span::new(member_start, self.prev_span().end),
                     });
                     continue;
