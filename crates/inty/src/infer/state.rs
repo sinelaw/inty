@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use super::InferResult;
 use crate::error::TypeOrigin;
 use crate::lexer::Span;
 use crate::types::{
@@ -406,6 +407,71 @@ impl InferState {
         self.pending_constraints = saved_constraints;
 
         Self::normalise_union_members(vec![t1, t2])
+    }
+
+    /// Subsumption: succeed iff `sub` may be supplied where `sup` is
+    /// expected. This is *not* unification — it's the directed
+    /// "fits where" judgement used at call sites and other contexts
+    /// that have an expected shape.
+    ///
+    /// The rule set, in priority order:
+    /// 1. Try `unify`; on success commit. This covers HM equality,
+    ///    flex binding, and the existing literal-vs-base + union-
+    ///    membership shortcuts already baked into `unify`.
+    /// 2. **S-UnionR** (Pierce TAPL 15.7 / Dunfield 2014 §3): if
+    ///    `sup` is `⋃ τᵢ`, attempt `subsume(sub, τᵢ)` against each
+    ///    arm with substitution rollback. Commit only when *exactly
+    ///    one* arm subsumes — multiple-match silently picking the
+    ///    first is order-dependent and a known footgun. Zero or two-
+    ///    plus matches reports a unification error at `span`.
+    ///
+    /// Other subtyping rules (function variance, deep row width
+    /// subsumption beyond what `unify_rows` already does) are left
+    /// to grow into this judgement as use cases land.
+    pub fn subsume(&mut self, span: Span, sub: &Type, sup: &Type) -> InferResult<()> {
+        let sub = self.apply_subst(sub);
+        let sup = self.apply_subst(sup);
+
+        // Rule 1: try unify with rollback so a failed attempt has
+        // no observable side-effect on the substitution.
+        let saved_subst = self.main_subst.clone();
+        let saved_constraints = self.pending_constraints.clone();
+        if self.unify(span, &sub, &sup).is_ok() {
+            return Ok(());
+        }
+        self.main_subst = saved_subst;
+        self.pending_constraints = saved_constraints;
+
+        // Rule 2 (S-UnionR): pick a union arm.
+        if let Type::Union(members) = &sup {
+            let mut matching: Vec<usize> = Vec::new();
+            for (i, m) in members.iter().enumerate() {
+                let s_subst = self.main_subst.clone();
+                let s_constraints = self.pending_constraints.clone();
+                let m_resolved = self.apply_subst(m);
+                let ok = self.subsume(span, &sub, &m_resolved).is_ok();
+                // Roll back on every probe; we re-run on the chosen
+                // arm below so the committed substitution comes from
+                // a single, deliberate call.
+                self.main_subst = s_subst;
+                self.pending_constraints = s_constraints;
+                if ok {
+                    matching.push(i);
+                    if matching.len() > 1 {
+                        break;
+                    }
+                }
+            }
+            if matching.len() == 1 {
+                let chosen = self.apply_subst(&members[matching[0]]);
+                return self.subsume(span, &sub, &chosen);
+            }
+            // 0 → no arm fits; >1 → ambiguous. Both fall through to
+            // the same error; the diagnostic is best-effort and uses
+            // the original sub/sup pair so the user sees the union.
+        }
+
+        Err(self.unification_error(span, &sub, &sup))
     }
 
     /// Normalise a list of would-be union members applying the
