@@ -220,14 +220,42 @@ pub fn t_alpha_rename_existing(p: &Program) -> Option<(Program, Comparison)> {
 // has no this reference, so it's type-equivalent to `e` for everything
 // the type checker cares about (primitives, objects, arrays, functions).
 // This also avoids the Sequence-parens pretty-printer ambiguity.
+//
+// Caveat: a function boundary widens fresh literal returns (`return
+// 1` becomes `Number`, not `Lit("1")`), so wrapping the expression
+// statement that supplies the program-level type would change it.
+// The program type is the type of the last statement that *isn't* a
+// hoisted function-like decl (those are processed as a group and
+// don't bump the running result), so we skip wrapping the last such
+// expression statement — every other expression statement still
+// exercises the wrap.
 // -------------------------------------------------------------------------
 
+fn is_hoisted_decl(s: &Stmt) -> bool {
+    matches!(s, Stmt::FunctionDecl { .. } | Stmt::Empty { .. })
+}
+
 pub fn t_wrap_expr_statements(p: &Program) -> (Program, Comparison) {
+    // Index of the last expression statement that contributes to the
+    // program-level type (i.e., the last expression statement before
+    // any trailing run of hoisted decls / empty statements).
+    let mut skip_idx: Option<usize> = None;
+    for (i, s) in p.statements.iter().enumerate() {
+        if matches!(s, Stmt::Expr { .. }) {
+            // Only this expression statement is "the last expression
+            // statement that determines the program type" if every
+            // statement after it is hoisted / empty.
+            if p.statements[i + 1..].iter().all(is_hoisted_decl) {
+                skip_idx = Some(i);
+            }
+        }
+    }
     let statements: Vec<Stmt> = p
         .statements
         .iter()
-        .map(|s| match s {
-            Stmt::Expr { expression, span } => Stmt::Expr {
+        .enumerate()
+        .map(|(i, s)| match s {
+            Stmt::Expr { expression, span } if Some(i) != skip_idx => Stmt::Expr {
                 expression: wrap_in_iife(expression.clone(), *span),
                 span: *span,
             },
