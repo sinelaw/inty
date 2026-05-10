@@ -15,12 +15,22 @@ impl InferState {
         lit: &Literal,
         span: Span,
     ) -> InferResult<Type> {
+        // Synthesise singleton types for primitive literals. Widening
+        // to `Number`/`String`/`Boolean` happens at well-defined
+        // binding sites (var/let without annotation, function returns,
+        // operator results, joined array elements) — see
+        // `Type::widen_fresh_literals`. Keeping the singleton at
+        // synthesis lets contextual subsume rules (S-UnionR, row-arm
+        // matching) see the literal value, which closes a soundness
+        // gap where `String` could flow into a position expecting
+        // `Lit(s)` via the (now-removed) symmetric base-vs-literal
+        // unification rule.
         let ty = match lit {
             Literal::Null => Type::Null,
             Literal::Undefined => Type::Undefined,
-            Literal::Boolean(_) => Type::Boolean,
-            Literal::Number(_) => Type::Number,
-            Literal::String(_) => Type::String,
+            Literal::Boolean(b) => Type::lit_bool(*b),
+            Literal::Number(n) => Type::lit_number(*n),
+            Literal::String(s) => Type::lit_string(s.clone()),
             Literal::Regex { .. } => Type::Regex,
         };
 

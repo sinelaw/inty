@@ -38,20 +38,22 @@ fn infer_expr_str(source: &str) -> InferResult<Type> {
 
 #[test]
 fn test_infer_number() {
+    // Bare literals synthesise as singletons; widening happens at
+    // binding/return/operator-result sites.
     let ty = infer_expr_str("42").unwrap();
-    assert_eq!(ty, Type::Number);
+    assert_eq!(ty, Type::lit_number(42.0));
 }
 
 #[test]
 fn test_infer_string() {
     let ty = infer_expr_str("\"hello\"").unwrap();
-    assert_eq!(ty, Type::String);
+    assert_eq!(ty, Type::lit_string("hello"));
 }
 
 #[test]
 fn test_infer_boolean() {
     let ty = infer_expr_str("true").unwrap();
-    assert_eq!(ty, Type::Boolean);
+    assert_eq!(ty, Type::lit_bool(true));
 }
 
 #[test]
@@ -1293,6 +1295,106 @@ fn test_call_site_tagged_union_arg_via_subsume() {
     let b = env.lookup("b").unwrap();
     assert_eq!(state.apply_subst(a.ty()), Type::Number);
     assert_eq!(state.apply_subst(b.ty()), Type::Number);
+}
+
+#[test]
+fn unsound_string_into_literal_arm_rejected() {
+    // The end-to-end soundness regression. Before the literal-vs-base
+    // unify rule was made one-directional and `infer_literal` started
+    // synthesising singletons, this program type-checked: the
+    // checker accepted `String` flowing into the discriminator
+    // position `"circle" | "square"`, then narrowing assumed
+    // `shape.kind === "circle"` was decidable and let the body
+    // return `shape.r`. At runtime k = "circle", control flowed into
+    // the circle branch, and `shape.r` was undefined — a Number-typed
+    // binding holding undefined.
+    //
+    // After the fix: `var k = "circle"` widens to `String`. Calling
+    // area with `{kind: k, s: 5}` requires either arm to subsume it.
+    // Arm 1 fails by row-shape (keys differ); arm 2 needs
+    // `subsume(String, "square")`, which the directional S-LitBase
+    // (Lit ≤ Base only) rejects. Subsume reports a mismatch.
+    let src = "\
+        /** function area(s: {kind: \"circle\", r: Number} \
+                            | {kind: \"square\", s: Number}) => Number */\n\
+        function area(shape) { \
+            if (shape.kind === \"circle\") { return shape.r; } \
+            else { return shape.s; } \
+        } \
+        var k = \"circle\"; \
+        var oops = area({ kind: k, s: 5 });";
+    let result = infer_program_with_state(src);
+    assert!(
+        result.is_err(),
+        "soundness gap: String must not flow into a literal-typed \
+         discriminator position",
+    );
+}
+
+#[test]
+fn lit_widens_on_var_binding() {
+    // `var k = "circle"` widens at the binding site (no annotation
+    // ⇒ fresh-literal widening). The annotation is the escape hatch
+    // when callers want the singleton preserved.
+    let (_, env, state) = infer_program_with_state("var k = \"circle\";").unwrap();
+    let k_ty = state.apply_subst(&env.lookup("k").unwrap().body.ty);
+    assert_eq!(k_ty, Type::String);
+}
+
+#[test]
+fn lit_preserved_on_annotated_var() {
+    // With an annotation pinning the singleton, the var keeps its
+    // literal type — the var's annotation governs.
+    let src = "/** var c: {kind: \"circle\", r: Number} */ \
+               var c = { kind: \"circle\", r: 10 };";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let c_ty = state.apply_subst(&env.lookup("c").unwrap().body.ty);
+    if let Type::Row(row) = &c_ty {
+        let kind = row.props.get(&"kind".into()).unwrap();
+        assert_eq!(*kind, Type::lit_string("circle"));
+    } else {
+        panic!("expected row, got {:?}", c_ty);
+    }
+}
+
+#[test]
+fn annotated_var_then_call_with_tagged_union_succeeds() {
+    // Mirror of the README example but with `var c = ...; area(c)`
+    // instead of an inline call. The annotation on `c` keeps its
+    // singleton field types so the call resolves to the circle arm.
+    let src = "\
+        /** function area(s: {kind: \"circle\", r: Number} \
+                            | {kind: \"square\", s: Number}) => Number */\n\
+        function area(shape) { \
+            if (shape.kind === \"circle\") { return shape.r; } \
+            else { return shape.s; } \
+        } \
+        /** var c: {kind: \"circle\", r: Number} */ \
+        var c = { kind: \"circle\", r: 10 }; \
+        var n = area(c);";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    let n_ty = state.apply_subst(&env.lookup("n").unwrap().body.ty);
+    assert_eq!(n_ty, Type::Number);
+}
+
+#[test]
+fn unannotated_var_holding_object_widens_and_blocks_call() {
+    // Without the annotation: var widens recursively, fields become
+    // their bases, the call to `area` no longer matches any arm.
+    let src = "\
+        /** function area(s: {kind: \"circle\", r: Number} \
+                            | {kind: \"square\", s: Number}) => Number */\n\
+        function area(shape) { \
+            if (shape.kind === \"circle\") { return shape.r; } \
+            else { return shape.s; } \
+        } \
+        var c = { kind: \"circle\", r: 10 }; \
+        var n = area(c);";
+    let result = infer_program_with_state(src);
+    assert!(
+        result.is_err(),
+        "var c widens recursively; calling area(c) must require an annotation",
+    );
 }
 
 #[test]

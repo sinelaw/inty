@@ -34,20 +34,19 @@ impl InferState {
                 self.var_bind(span, *n, t)
             }
 
-            // Literal types unify with themselves and with their base.
-            // The literal-vs-base direction lets `var x: String = "hi"`
-            // type-check (annotation is `String`, value infers as
-            // `String`); the literal-vs-literal direction handles
-            // re-unifying inside a discriminator after narrowing.
+            // Literal types unify with themselves only. The directed
+            // `Lit ≤ Base` rule lives in `subsume` (S-LitBase) — see
+            // `state.rs`. Putting it here would make `unify`
+            // accept the unsound reverse direction `Base ≤ Lit`,
+            // which lets `String` flow into a position expecting a
+            // singleton like `"circle"` and breaks discriminated-
+            // union narrowing.
             (Type::Literal(l1), Type::Literal(l2)) => {
                 if l1 == l2 {
                     Ok(())
                 } else {
                     Err(self.unification_error(span, t1, t2))
                 }
-            }
-            (Type::Literal(l), other) | (other, Type::Literal(l)) if &l.base_type() == other => {
-                Ok(())
             }
 
             // Union ~ Union: if both sides are equal as sets (we already
@@ -64,6 +63,16 @@ impl InferState {
             // Union ~ T: succeed if T is a member of the union (after
             // subst). This is the bridge that lets `var x: T | undefined
             // = expr` accept an `expr` that infers as `T` or `undefined`.
+            //
+            // Only the *sound* `Lit ≤ Base` direction is honoured here:
+            // a literal value `other` can sit where a `Base` member is
+            // expected. The reverse — a `Base` value where a literal
+            // member is expected — is unsound (not every `String` is
+            // `"circle"`) and is intentionally rejected. Callers that
+            // legitimately need that direction (e.g. discriminated
+            // unions matched by row arms) go through `subsume`'s
+            // S-UnionR rule, which structurally distributes the
+            // value over the arms.
             (Type::Union(members), other) | (other, Type::Union(members)) => {
                 let mut matched = false;
                 for m in members {
@@ -72,15 +81,11 @@ impl InferState {
                         matched = true;
                         break;
                     }
-                    // Literal-into-base subsumption.
+                    // Literal-into-base subsumption: a literal value
+                    // can be supplied where the union has a base
+                    // member.
                     if let Type::Literal(lit) = other {
                         if m == lit.base_type() {
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if let Type::Literal(lit) = &m {
-                        if &lit.base_type() == other {
                             matched = true;
                             break;
                         }

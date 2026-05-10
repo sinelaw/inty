@@ -22,7 +22,7 @@ impl InferState {
 
         match op {
             UnaryOp::Neg | UnaryOp::Pos => {
-                self.unify(span, &arg_type, &Type::Number)?;
+                self.subsume(span, &arg_type, &Type::Number)?;
                 Ok(Type::Number)
             }
 
@@ -32,7 +32,7 @@ impl InferState {
             }
 
             UnaryOp::BitNot => {
-                self.unify(span, &arg_type, &Type::Number)?;
+                self.subsume(span, &arg_type, &Type::Number)?;
                 Ok(Type::Number)
             }
 
@@ -52,7 +52,7 @@ impl InferState {
             }
 
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
-                self.unify(span, &arg_type, &Type::Number)?;
+                self.subsume(span, &arg_type, &Type::Number)?;
                 Ok(Type::Number)
             }
 
@@ -110,25 +110,37 @@ impl InferState {
         match op {
             // Arithmetic (require numbers)
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
-                self.unify(span, &left_type, &Type::Number)?;
-                self.unify(span, &right_type, &Type::Number)?;
+                self.subsume(span, &left_type, &Type::Number)?;
+                self.subsume(span, &right_type, &Type::Number)?;
                 Ok(Type::Number)
             }
 
             // Plus is overloaded (Number or String)
             BinOp::Add => {
-                // Both operands must have the same Plus type
+                // Widen operands first so `1 + 2` resolves to Number
+                // rather than getting pinned to `Lit(1)` by the first
+                // subsume and then failing the second. The result of
+                // `+` is the operand's *base* type — the singleton
+                // is meaningless once arithmetic happens.
+                let left_widened = left_type.widen_fresh_literals();
+                let right_widened = right_type.widen_fresh_literals();
                 let result = self.fresh_type_var();
                 self.add_constraint(TypePred::plus(result.clone()), span);
-                self.unify(span, &left_type, &result)?;
-                self.unify(span, &right_type, &result)?;
+                self.subsume(span, &left_widened, &result)?;
+                self.subsume(span, &right_widened, &result)?;
                 Ok(self.apply_subst(&result))
             }
 
-            // Comparison (return boolean)
+            // Comparison (return boolean). The two operands need to
+            // sit in a common type so the comparison is well-defined.
+            // Widen both to their base first so `1 < 2` doesn't try
+            // to unify `Lit(1) ~ Lit(2)`, then check that one
+            // subsumes into the other (either direction is fine —
+            // `String < "a"` is meaningful in both orders).
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                // Comparisons work on numbers and strings
-                self.unify(span, &left_type, &right_type)?;
+                let left_widened = left_type.widen_fresh_literals();
+                let right_widened = right_type.widen_fresh_literals();
+                self.subsume_either(span, &left_widened, &right_widened)?;
                 Ok(Type::Boolean)
             }
 
@@ -171,17 +183,32 @@ impl InferState {
                         );
                     }
 
-                    self.unify(span, &left_type, &right_type)?;
+                    // `===` is total in JavaScript: comparing values
+                    // of disjoint types simply returns `false`.
+                    // Trying to enforce a "common type" via
+                    // subsume_either would reject `Lit("a") ===
+                    // Lit("b")` even though it's perfectly
+                    // well-defined (always false). The narrowing
+                    // analysis already emits an "always false"
+                    // warning for such cases — see
+                    // `warn_if_narrowing_unreachable`. So we don't
+                    // type-check the operands here; we just make
+                    // sure both sides type-check on their own
+                    // (which they did above) and produce Boolean.
+                    let _ = (left_subst, right_subst);
                 }
                 Ok(Type::Boolean)
             }
 
             // Logical
             BinOp::And | BinOp::Or => {
-                // && and || return one of their operands
-                // For type inference, we unify them and return that type
+                // && and || return one of their operands.
+                // Widen first so `true && false` doesn't try to
+                // unify `Lit(true) ~ Lit(false)`.
+                let left_type = left_type.widen_fresh_literals();
+                let right_type = right_type.widen_fresh_literals();
                 let op_name = if matches!(op, BinOp::And) { "&&" } else { "||" };
-                if let Err(mut err) = self.unify(span, &left_type, &right_type) {
+                if let Err(mut err) = self.subsume_either(span, &left_type, &right_type) {
                     // Add helpful context about the && or || operator
                     if let IntyError::Type(TypeError::UnificationError { context, .. }) = &mut err {
                         let msg = vec![
@@ -209,8 +236,8 @@ impl InferState {
             | BinOp::LShift
             | BinOp::RShift
             | BinOp::URShift => {
-                self.unify(span, &left_type, &Type::Number)?;
-                self.unify(span, &right_type, &Type::Number)?;
+                self.subsume(span, &left_type, &Type::Number)?;
+                self.subsume(span, &right_type, &Type::Number)?;
                 Ok(Type::Number)
             }
 

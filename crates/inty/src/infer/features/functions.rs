@@ -125,7 +125,10 @@ impl InferState {
                 self.bump_var_id_to(max + 1);
             }
 
-            self.unify(annotation_span, &func_type, &annotated_type)?;
+            // Function annotation: pins the function's signature to
+            // the declared one. Subsume rather than unify so a body
+            // annotated to return `String` can hold a literal.
+            self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 
         let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
@@ -144,7 +147,18 @@ impl InferState {
 
         let (body_type, _) = self.infer_stmt(&body_env, body)?;
 
-        self.unify(span, &ret_type, &body_type)?;
+        // Without an annotation pinning the return type, the inferred
+        // return is a fresh-literal widening site: `function f() {
+        // return "hi"; }` has return type `String`, not `Lit("hi")`,
+        // matching the behaviour at `var f = "hi"`. With an annotation
+        // the declared return governs and the body merely subsumes
+        // into it.
+        if type_annotation.is_some() {
+            self.subsume(span, &body_type, &ret_type)?;
+        } else {
+            let widened = body_type.widen_fresh_literals();
+            self.unify(span, &ret_type, &widened)?;
+        }
 
         Ok(self.apply_subst(&func_type))
     }
@@ -235,6 +249,13 @@ impl InferState {
         self.unify(span, &callee_type, &expected_func)?;
 
         // Check each argument against its resolved parameter type.
+        // `check_expr` is the bidirectional entry point: for object
+        // literals against a row/union-of-rows, it pushes the
+        // expected per-field types into the property values so
+        // singleton literal types survive (`{kind: "circle"}` keeps
+        // `kind: "circle"`, not the widened `kind: String`). For
+        // every other shape it falls back to synth + subsume.
+        //
         // `...expr` (Expr::Spread) in argument position unwraps the
         // inner array to its element type and is treated as a single
         // argument — inty has no variadic call shape, so a spread
@@ -256,8 +277,7 @@ impl InferState {
                     self.subsume(*spread_span, &elem_resolved, &expected)?;
                 }
                 _ => {
-                    let arg_ty = self.infer_expr(env, arg)?;
-                    self.subsume(span, &arg_ty, &expected)?;
+                    self.check_expr(env, arg, &expected)?;
                 }
             }
         }

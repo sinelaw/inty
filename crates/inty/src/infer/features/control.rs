@@ -109,8 +109,12 @@ impl InferState {
         let alt_type = self.infer_expr(&alt_env, alternate)?;
 
         // Branches that disagree in type are merged into a union rather
-        // than rejected — see InferState::join for details.
-        Ok(self.join(span, &cons_type, &alt_type))
+        // than rejected — see InferState::join for details. The
+        // joined result is then widened: `true ? 3 : 4` is `Number`,
+        // not `3 | 4`. (TS does the same: branch joins are
+        // synthesis-mode widening points unless the conditional is
+        // contextually typed.)
+        Ok(self.join(span, &cons_type, &alt_type).widen_fresh_literals())
     }
 
     /// Infer the type of a sequence expression.
@@ -263,7 +267,7 @@ impl InferState {
             }
             ForInLhs::Expr(expr) => {
                 let lhs_type = self.infer_expr(env, expr)?;
-                self.unify(span, &lhs_type, &Type::String)?;
+                self.subsume(span, &lhs_type, &Type::String)?;
                 env.clone()
             }
         };
@@ -295,7 +299,7 @@ impl InferState {
             }
             ForInLhs::Expr(expr) => {
                 let lhs_type = self.infer_expr(env, expr)?;
-                self.unify(span, &lhs_type, &elem_type)?;
+                self.subsume(span, &lhs_type, &elem_type)?;
                 env.clone()
             }
         };
@@ -350,7 +354,10 @@ impl InferState {
         for case in cases {
             let case_env = if let Some(test) = &case.test {
                 let test_type = self.infer_expr(env, test)?;
-                self.unify(span, &disc_type, &test_type)?;
+                // Symmetric "comparable" check, like `===`: the case
+                // test value is matched against the discriminator at
+                // runtime, so either may subsume the other.
+                self.subsume_either(span, &disc_type, &test_type)?;
 
                 // If the case test is a literal and we know the
                 // discriminator's path, the case body gets an env

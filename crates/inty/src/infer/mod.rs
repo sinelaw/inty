@@ -223,6 +223,63 @@ impl InferState {
         Ok((result, current_env))
     }
 
+    /// Bidirectional checking entry point: check that `expr` has type
+    /// `expected`. The default rule is "synth then subsume", which
+    /// covers HM-style equality plus the literal-vs-base
+    /// subsumption baked into [`InferState::subsume`]. The interesting
+    /// case is `Expr::Object` against a row or union of rows: rather
+    /// than synthesising an object literal whose primitive field
+    /// values get widened (the synthesis-mode behaviour in
+    /// `infer_object`), we push the expected per-field type into each
+    /// property value, preserving singleton literal types where the
+    /// expected type asks for them. This is what makes
+    /// `area({ kind: "circle", r: 10 })` type-check against a
+    /// discriminated-union parameter without any backtracking inside
+    /// `unify` — the synthesised arg already exactly equals the
+    /// matching arm.
+    ///
+    /// Falls back to synthesis + subsume whenever the expected type
+    /// is a fresh variable, a primitive, or anything else where
+    /// pushing-down has no purchase.
+    pub fn check_expr(
+        &mut self,
+        env: &TypeEnv,
+        expr: &Expr,
+        expected: &Type,
+    ) -> InferResult<Type> {
+        let expected = self.apply_subst(expected);
+        // Object-literal special case: dispatch to the contextual
+        // checking path that propagates per-field expected types.
+        if let Expr::Object { properties, span } = expr {
+            if let Some(ty) = self.try_check_object(env, properties, *span, &expected)? {
+                return Ok(ty);
+            }
+        }
+        // Default: synthesise, then subsume into expected.
+        // When the expected type is still a fresh flex variable
+        // (e.g. an un-instantiated polymorphic parameter), the
+        // subsume below will simply bind it to whatever the synth
+        // produced. Without widening here, that binding pins the
+        // var to a singleton like `Lit(1)`, and a *second* argument
+        // that shares the same var (because of a Plus / equality
+        // constraint, like `add(a: a, b: a) => a`) would then be
+        // forced to the *same* singleton — `add(1, 2)` would fail
+        // because `Lit(2) ≰ Lit(1)`. Widen here so the binding
+        // lands on the base type, matching what `var x = 1` would
+        // produce at a synthesis site.
+        let synth = self.infer_expr(env, expr)?;
+        let synth_for_bind = if matches!(
+            self.apply_subst(&expected),
+            Type::Var(crate::types::TVarName::Flex(_))
+        ) {
+            synth.widen_fresh_literals()
+        } else {
+            synth.clone()
+        };
+        self.subsume(expr.span(), &synth_for_bind, &expected)?;
+        Ok(self.apply_subst(&synth))
+    }
+
     /// Infer the type of an expression.
     pub fn infer_expr(&mut self, env: &TypeEnv, expr: &Expr) -> InferResult<Type> {
         match expr {
