@@ -239,6 +239,233 @@ html, body {
 }
 .github-link:hover .github-icon { filter: invert(1); }
 
+/* ---- Body (sidebar + main) ---- */
+.body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    position: relative;
+}
+
+.main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* ---- Sidebar ---- */
+.sidebar {
+    flex: 0 0 256px;
+    display: flex;
+    flex-direction: column;
+    background: rgba(15, 17, 28, 0.78);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+    transition: flex-basis 0.22s ease, opacity 0.18s ease;
+}
+.sidebar.collapsed {
+    flex-basis: 0;
+    opacity: 0;
+    pointer-events: none;
+    border-right-color: transparent;
+}
+
+.sidebar-header {
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    user-select: none;
+}
+.sidebar-title {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+}
+.sidebar-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.2px;
+}
+
+.tree {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 8px 6px 12px;
+    font-size: var(--fs-sm);
+}
+
+.tree-section + .tree-section { margin-top: 4px; }
+
+.tree-section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px 8px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.12s, color 0.12s;
+}
+.tree-section-header:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+}
+.tree-chevron {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    transition: transform 0.15s ease;
+    color: var(--text-muted);
+}
+.tree-chevron::before {
+    content: "";
+    display: block;
+    width: 0;
+    height: 0;
+    border-left: 5px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transform: translateY(1px);
+}
+.tree-section.open .tree-chevron { transform: rotate(90deg); }
+.tree-section-icon {
+    color: var(--accent);
+    font-size: 13px;
+    line-height: 1;
+}
+.tree-section-label { flex: 1; }
+.tree-section-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.tree-children {
+    display: none;
+    margin: 2px 0 6px;
+    padding-left: 14px;
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
+    margin-left: 13px;
+}
+.tree-section.open .tree-children { display: block; }
+
+.tree-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px 6px 6px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.12s, color 0.12s;
+}
+.tree-item:hover {
+    background: rgba(137, 180, 250, 0.08);
+    color: var(--text-primary);
+}
+.tree-item.active {
+    background: rgba(137, 180, 250, 0.16);
+    color: var(--accent);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+.tree-item-icon {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+.tree-item:hover .tree-item-icon,
+.tree-item.active .tree-item-icon { color: var(--accent); opacity: 1; }
+.tree-item-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.sidebar-footer {
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    min-height: 36px;
+    line-height: 1.4;
+}
+.dot-status {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+}
+.dot-status.active { background: var(--accent); box-shadow: 0 0 8px rgba(137, 180, 250, 0.6); }
+#example-blurb {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---- Sidebar toggle button ---- */
+.sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 10px 5px 8px;
+}
+.sidebar-toggle-icon {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2.5px;
+    width: 12px;
+}
+.sidebar-toggle-icon span {
+    display: block;
+    height: 1.5px;
+    background: currentColor;
+    border-radius: 1px;
+}
+.sidebar-toggle-icon span:nth-child(2) { width: 70%; }
+.sidebar-toggle-icon span:nth-child(3) { width: 85%; }
+
+/* Scrim shown only on mobile when sidebar is open over content */
+.sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+}
+.sidebar-scrim.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 /* ---- Editor ---- */
 .editor-container {
     flex: 1;
@@ -405,4 +632,29 @@ html, body {
     }
     .title-sub, .title-sep, .credits { display: none; }
     .chip { padding: 4px 10px; }
+
+    /* Sidebar overlays the editor on mobile */
+    .sidebar {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 10;
+        flex-basis: 280px;
+        max-width: 84vw;
+        box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
+        transform: translateX(0);
+        transition: transform 0.22s ease, opacity 0.18s ease;
+    }
+    .sidebar.collapsed {
+        transform: translateX(-100%);
+        flex-basis: 280px;
+        opacity: 1;
+        border-right-color: var(--border);
+    }
+    .sidebar-toggle-label { display: none; }
+}
+
+@media (max-width: 480px) {
+    .tree-item-label { font-size: 13px; }
 }

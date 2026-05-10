@@ -6,7 +6,7 @@
     <title>Inty - JavaScript Type Checker</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
-    <link rel="stylesheet" href="styles.css?v=14">
+    <link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
     <div class="backdrop">
@@ -33,6 +33,12 @@
                     <span class="credit-sep">·</span>
                     <a href="https://github.com/sinelaw/inty" target="_blank" rel="noopener noreferrer" class="credit-link">github.com/sinelaw/inty</a>
                 </span>
+                <button id="sidebar-toggle" class="chip sidebar-toggle" title="Show or hide the examples panel" aria-pressed="true">
+                    <span class="sidebar-toggle-icon" aria-hidden="true">
+                        <span></span><span></span><span></span>
+                    </span>
+                    <span class="sidebar-toggle-label">Examples</span>
+                </button>
                 <button id="hints-btn" class="chip" title="Show or hide inline type hints">Hints on</button>
                 <button id="share-btn" class="chip" title="Copy a link to this snippet">Share link</button>
                 <span class="status" id="status">Loading…</span>
@@ -42,18 +48,36 @@
             </div>
         </div>
 
-        <div class="editor-container">
-            <textarea id="input-editor"></textarea>
-        </div>
+        <div class="body">
+            <aside class="sidebar" id="sidebar" aria-label="Examples">
+                <div class="sidebar-header">
+                    <span class="sidebar-title">Examples</span>
+                    <span class="sidebar-hint">Click a file to load it</span>
+                </div>
+                <nav class="tree" id="tree" aria-label="Example files"></nav>
+                <div class="sidebar-footer">
+                    <span class="dot-status" id="example-status" aria-hidden="true"></span>
+                    <span id="example-blurb">Pick an example to begin</span>
+                </div>
+            </aside>
 
-        <div class="error-bar" id="error-panel">
-            <div class="error-bar-header">
-                <span id="error-summary">Errors</span>
-                <button id="close-errors" aria-label="Dismiss errors">×</button>
-            </div>
-            <div class="error-content" id="error-content"></div>
+            <main class="main">
+                <div class="editor-container">
+                    <textarea id="input-editor"></textarea>
+                </div>
+
+                <div class="error-bar" id="error-panel">
+                    <div class="error-bar-header">
+                        <span id="error-summary">Errors</span>
+                        <button id="close-errors" aria-label="Dismiss errors">×</button>
+                    </div>
+                    <div class="error-content" id="error-content"></div>
+                </div>
+            </main>
         </div>
     </div>
+
+    <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
 
     <div id="hover-tooltip" class="hover-tooltip" role="tooltip"></div>
 
@@ -61,7 +85,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
-    <script type="module" src="app.js?v=7"></script>
+    <script type="module" src="app.js?v=8"></script>
     <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0858f4857c744e418bce27f9577ea9d2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
