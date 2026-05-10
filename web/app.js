@@ -288,8 +288,9 @@ function renderInlayHints(source) {
         const pos = inputEditor.posFromIndex(charOffset);
         const widget = document.createElement('span');
         widget.className = 'inlay-hint';
-        // `label` already includes its prefix (`: T` or `-> Ret`).
-        widget.textContent = hint.label;
+        // `label` may include a leading space (CLI-friendly) — the
+        // pill chrome provides its own padding so strip it here.
+        widget.textContent = hint.label.replace(/^\s+/, '');
         const bm = inputEditor.setBookmark(pos, {
             widget,
             insertLeft: false,
