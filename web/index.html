@@ -6,7 +6,7 @@
     <title>Inty - JavaScript Type Checker</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
-    <link rel="stylesheet" href="styles.css?v=15">
+    <link rel="stylesheet" href="styles.css?v=16">
 </head>
 <body>
     <div class="backdrop">
@@ -81,11 +81,20 @@
 
     <div id="hover-tooltip" class="hover-tooltip" role="tooltip"></div>
 
+    <div id="demo-cursor" class="demo-cursor" aria-hidden="true">
+        <svg viewBox="0 0 24 24" class="demo-cursor-arrow">
+            <path d="M3 2 L3 18 L7.5 13.5 L10.5 21 L13.5 19.5 L10.5 12 L17 12 Z"
+                fill="#ffffff" stroke="#0a0c14" stroke-width="1.2" stroke-linejoin="round"/>
+        </svg>
+        <span class="demo-cursor-ring"></span>
+        <span class="demo-cursor-caption" id="demo-cursor-caption"></span>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
-    <script type="module" src="app.js?v=8"></script>
+    <script type="module" src="app.js?v=9"></script>
     <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0858f4857c744e418bce27f9577ea9d2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
