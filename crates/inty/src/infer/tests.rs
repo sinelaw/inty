@@ -547,6 +547,27 @@ fn test_method_chaining_returns_this() {
 }
 
 #[test]
+fn test_unknown_method_after_chain_is_rejected() {
+    // After a `return this` method call, accessing a property that
+    // doesn't exist on the receiver must still error. Previously
+    // `extend_subst` swallowed the unify failure when a row tail
+    // variable acquired a second binding, letting `.moo()` slide
+    // through with a fresh type variable for the result.
+    let source = r#"
+        var request = {
+            url: "",
+            setUrl: function(u) { this.url = u; return this; }
+        };
+        var response = request.setUrl("/api/users").moo();
+    "#;
+    let result = infer_program_with_state(source);
+    assert!(
+        result.is_err(),
+        "Calling an undefined method on the result of a chained `return this` call must fail"
+    );
+}
+
+#[test]
 fn test_method_call_on_chained_result() {
     // Calling a method on the result of chained method calls
     let source = r#"
