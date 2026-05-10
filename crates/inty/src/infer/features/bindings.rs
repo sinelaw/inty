@@ -281,15 +281,38 @@ impl InferState {
 
         match op {
             AssignOp::Assign => {
-                self.unify(span, &left_type, &right_type)?;
+                // RHS subsumes into LHS: the LHS already has its
+                // declared/widened type, the RHS is whatever the
+                // right expression synthesised. `Lit ≤ Base` lets a
+                // string literal flow into a `String`-typed binding.
+                //
+                // Special case: when the LHS is still an unbound flex
+                // variable (e.g. `var x;` then later `x = 42`), this
+                // assignment is effectively the binding's first
+                // initialisation. Widen the RHS so the variable lands
+                // on its base type, matching what `var x = 42` would
+                // give.
+                let lhs_resolved = self.apply_subst(&left_type);
+                let rhs_for_assign = if matches!(
+                    lhs_resolved,
+                    Type::Var(crate::types::TVarName::Flex(_))
+                ) {
+                    right_type.widen_fresh_literals()
+                } else {
+                    right_type.clone()
+                };
+                self.subsume(span, &rhs_for_assign, &left_type)?;
             }
 
             AssignOp::AddAssign => {
-                // Like +, could be number or string
+                // Like +: widen operands so `n += 1` doesn't get
+                // pinned to a singleton type.
+                let left_widened = left_type.widen_fresh_literals();
+                let right_widened = right_type.widen_fresh_literals();
                 let result = self.fresh_type_var();
                 self.add_constraint(TypePred::plus(result.clone()), span);
-                self.unify(span, &left_type, &result)?;
-                self.unify(span, &right_type, &result)?;
+                self.subsume(span, &left_widened, &result)?;
+                self.subsume(span, &right_widened, &result)?;
             }
 
             AssignOp::SubAssign
@@ -297,8 +320,8 @@ impl InferState {
             | AssignOp::DivAssign
             | AssignOp::ModAssign
             | AssignOp::PowAssign => {
-                self.unify(span, &left_type, &Type::Number)?;
-                self.unify(span, &right_type, &Type::Number)?;
+                self.subsume(span, &left_type, &Type::Number)?;
+                self.subsume(span, &right_type, &Type::Number)?;
             }
 
             AssignOp::LShiftAssign
@@ -307,8 +330,8 @@ impl InferState {
             | AssignOp::BitAndAssign
             | AssignOp::BitOrAssign
             | AssignOp::BitXorAssign => {
-                self.unify(span, &left_type, &Type::Number)?;
-                self.unify(span, &right_type, &Type::Number)?;
+                self.subsume(span, &left_type, &Type::Number)?;
+                self.subsume(span, &right_type, &Type::Number)?;
             }
         }
 
@@ -328,30 +351,56 @@ impl InferState {
             // Check if this is a declaration (no init, with type annotation)
             let is_declaration = decl.init.is_none() && decl.type_annotation.is_some();
 
-            let var_type = if let Some(init) = &decl.init {
-                self.infer_expr(&new_env, init)?
-            } else {
-                self.fresh_type_var()
-            };
-
-            // If there's a type annotation, parse and unify with it
-            let var_type = if let Some(annotation) = &decl.type_annotation {
+            // Parse the annotation up-front (if any) so we can use it
+            // as the *expected* type when checking the initialiser
+            // bidirectionally — that's how an object-literal RHS can
+            // keep its singleton field types when the annotation
+            // pins them.
+            let annotated_type: Option<(Type, Span)> = if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-                let (annotated_type, var_map) = parse_type_annotation_with_aliases(
+                let (ann_ty, var_map) = parse_type_annotation_with_aliases(
                     &annotation.content,
                     annotation_span,
                     self.next_var_id(),
                     &self.type_aliases,
                 )?;
-                // Reflect any IDs the parser allocated back into the
-                // state so subsequent fresh_flex doesn't collide.
                 if let Some(&max) = var_map.values().max() {
                     self.bump_var_id_to(max + 1);
                 }
-                self.unify(annotation_span, &var_type, &annotated_type)?;
-                self.apply_subst(&var_type)
+                Some((ann_ty, annotation_span))
             } else {
-                var_type
+                None
+            };
+
+            let var_type = match (&decl.init, &annotated_type) {
+                (Some(init), Some((ann_ty, _))) => {
+                    // Bidirectional check: pushes the annotation into
+                    // the initialiser so e.g. an object literal's
+                    // primitive fields keep their singleton types
+                    // when the annotation asks for them.
+                    self.check_expr(&new_env, init, ann_ty)?
+                }
+                (Some(init), None) => self.infer_expr(&new_env, init)?,
+                (None, _) => self.fresh_type_var(),
+            };
+
+            // If there was an annotation, the annotation governs the
+            // resulting type. Otherwise apply fresh-literal widening:
+            // `var k = "circle"` becomes `k : String`, not
+            // `k : "circle"`. The annotation is the escape hatch when
+            // the user wants to keep the singleton type.
+            let var_type = if let Some((ann_ty, ann_span)) = annotated_type {
+                // The check_expr above already enforced the
+                // subsumption when an init was present; for
+                // declaration-only forms we still need a sanity
+                // subsume against the fresh var (no-op here, but
+                // keeps the same diagnostic flow).
+                if decl.init.is_none() {
+                    self.subsume(ann_span, &var_type, &ann_ty)?;
+                }
+                self.apply_subst(&ann_ty)
+            } else {
+                var_type.widen_fresh_literals()
             };
 
             // Record the type for this declaration

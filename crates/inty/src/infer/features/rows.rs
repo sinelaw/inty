@@ -66,10 +66,20 @@ impl InferState {
                         // Annotation first: it's what the user wrote, so
                         // the error message reads as "expected <annotated>,
                         // found <value>".
-                        self.unify(ann_span, &annotated_type, &value_type)?;
+                        self.subsume(ann_span, &value_type, &annotated_type)?;
                         self.apply_subst(&annotated_type)
                     } else {
-                        value_type
+                        // Synthesis-mode object literal: widen primitive
+                        // singleton field values so e.g. `{value: 0}`
+                        // synthesises as `{value: Number}`. Without this,
+                        // mutation through methods (`this.value = v`)
+                        // would be pinned to the initial literal. The
+                        // bidirectional path (`check_object` from
+                        // `infer_call`) bypasses this widening so a
+                        // tagged-union argument like `{kind: "circle"}`
+                        // keeps its singleton field — that's what makes
+                        // discriminated unions work at call sites.
+                        value_type.widen_fresh_literals()
                     };
                     props.insert(prop_name, prop_type);
                 }
@@ -159,6 +169,143 @@ impl InferState {
 
         let _ = had_spread;
         Ok(self.apply_subst(&obj_type))
+    }
+
+    /// Bidirectional checking for an object literal against an
+    /// expected row (or union of rows). Returns `Ok(Some(ty))` when
+    /// the contextual rule applies, `Ok(None)` when the caller
+    /// should fall back to plain synthesis (e.g. expected is a fresh
+    /// var, a primitive, or anything other than a row/union of
+    /// rows). Errors are real type errors and propagate.
+    ///
+    /// The "checking" specifically means: each property value is
+    /// checked against the expected per-field type (`check_expr`),
+    /// not synthesised then subsumed. This propagates singleton
+    /// literal types into property values that the synthesis path
+    /// (`infer_object`) would have widened.
+    ///
+    /// Limitations: only handles plain `PropDef::Property` entries.
+    /// Methods, getters, setters, and spreads bail to the synthesis
+    /// fallback — if the user wants those, they'll go through the
+    /// synthesis-mode widening rule.
+    pub(in crate::infer) fn try_check_object(
+        &mut self,
+        env: &TypeEnv,
+        properties: &[PropDef],
+        span: Span,
+        expected: &Type,
+    ) -> InferResult<Option<Type>> {
+        // Distribute over a union: pick the unique arm whose row
+        // shape (key set) matches the literal's keys exactly.
+        if let Type::Union(members) = expected {
+            let lit_keys: std::collections::BTreeSet<PropName> = properties
+                .iter()
+                .filter_map(|p| match p {
+                    PropDef::Property { key, .. }
+                    | PropDef::Method { key, .. }
+                    | PropDef::Getter { key, .. }
+                    | PropDef::Setter { key, .. } => Some(self.prop_key_to_name(key)),
+                    PropDef::Spread { .. } => None,
+                })
+                .collect();
+            let mut chosen: Option<Type> = None;
+            let mut count = 0;
+            for m in members {
+                let m_resolved = self.apply_subst(m);
+                if let Type::Row(row) = &m_resolved {
+                    if row.is_closed()
+                        && row.props.keys().cloned().collect::<std::collections::BTreeSet<_>>()
+                            == lit_keys
+                    {
+                        count += 1;
+                        if count == 1 {
+                            chosen = Some(m_resolved.clone());
+                        } else {
+                            // Multiple shape-matching arms — defer
+                            // to synthesis, where S-UnionR with the
+                            // exactly-one disambiguator can sort it
+                            // out (or fail loudly).
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+            if let Some(arm) = chosen {
+                return self.try_check_object(env, properties, span, &arm);
+            }
+            return Ok(None);
+        }
+
+        // Single row case: push expected per-field types into each
+        // property value. Bail to synthesis on any complexity we
+        // don't model (methods, spreads, missing/extra keys).
+        let expected_row = match expected {
+            Type::Row(r) if r.is_closed() => r,
+            _ => return Ok(None),
+        };
+
+        let mut props: BTreeMap<PropName, Type> = BTreeMap::new();
+        for prop in properties {
+            match prop {
+                PropDef::Property {
+                    key,
+                    value,
+                    type_annotation,
+                    ..
+                } => {
+                    let prop_name = self.prop_key_to_name(key);
+                    let Some(expected_prop_ty) = expected_row.props.get(&prop_name).cloned()
+                    else {
+                        // Extra key not in expected row — let
+                        // synthesis fall through and produce its own
+                        // closed-row mismatch error.
+                        return Ok(None);
+                    };
+                    if let Some(ann) = type_annotation {
+                        // An inline annotation overrides the
+                        // contextual expected — we still check the
+                        // value against the user-stated type.
+                        let ann_span = Span::new(ann.span.start, ann.span.end);
+                        let (annotated_type, var_map) = parse_type_annotation_with_aliases(
+                            &ann.content,
+                            ann_span,
+                            self.next_var_id(),
+                            &self.type_aliases,
+                        )?;
+                        if let Some(&max) = var_map.values().max() {
+                            self.bump_var_id_to(max + 1);
+                        }
+                        let value_type = self.check_expr(env, value, &annotated_type)?;
+                        self.subsume(ann_span, &value_type, &expected_prop_ty)?;
+                        props.insert(prop_name, self.apply_subst(&annotated_type));
+                    } else {
+                        let value_type = self.check_expr(env, value, &expected_prop_ty)?;
+                        props.insert(prop_name, value_type);
+                    }
+                }
+                _ => {
+                    // Methods/getters/setters/spreads: synthesis
+                    // fallback knows how to handle them; we don't
+                    // (yet) push contextual types into method
+                    // bodies.
+                    return Ok(None);
+                }
+            }
+        }
+
+        // Make sure every expected key is present (closed row
+        // matching). Missing keys are a hard error here — we've
+        // already committed to checking-mode for the visible props.
+        if expected_row.props.keys().any(|k| !props.contains_key(k)) {
+            return Ok(None); // synthesis will produce the right error
+        }
+
+        let result = Type::Row(crate::types::RowType::closed(props));
+        // Final sanity check against the expected row — any
+        // outstanding constraints (e.g. from row-tail variables)
+        // resolve here.
+        self.subsume(span, &result, expected)?;
+        Ok(Some(self.apply_subst(&result)))
     }
 
     /// Infer `Expr::RestRow { source, excluded }` — the synthetic
@@ -255,6 +402,15 @@ impl InferState {
         property: &str,
         span: Span,
     ) -> InferResult<Type> {
+        // Singleton literal types are values of their base type — every
+        // operation defined on `String` is defined on `Lit("hi")`.
+        // Route property lookups through the base so e.g.
+        // `"hello".length` works after `infer_literal` started
+        // synthesising singletons.
+        if let Type::Literal(lit) = obj_type {
+            return self.infer_member_on_type(&lit.base_type(), property, span);
+        }
+
         // Union elimination: read the property from every member and
         // join the results. Fails if any member lacks the property at
         // a compatible type. This is the load-bearing rule that lets

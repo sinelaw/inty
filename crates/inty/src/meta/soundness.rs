@@ -43,10 +43,20 @@ impl SynthType {
     }
 
     fn matches_type(self, t: &Type) -> bool {
+        // Singleton literals are values of their base type — accept
+        // them where the corresponding base is expected. This mirrors
+        // the language semantics: `0` is a `Number`, `"a"` is a
+        // `String`, `true` is a `Boolean`. Without this, the soundness
+        // checker would see `0` typed as `Lit(0)` and fail the
+        // "synth equals expected" check after `infer_literal` started
+        // returning singletons.
         match (self, t) {
-            (SynthType::Number, Type::Number) => true,
-            (SynthType::String, Type::String) => true,
-            (SynthType::Boolean, Type::Boolean) => true,
+            (SynthType::Number, Type::Number)
+            | (SynthType::String, Type::String)
+            | (SynthType::Boolean, Type::Boolean) => true,
+            (SynthType::Number, Type::Literal(crate::types::LitValue::Number(_)))
+            | (SynthType::String, Type::Literal(crate::types::LitValue::String(_)))
+            | (SynthType::Boolean, Type::Literal(crate::types::LitValue::Bool(_))) => true,
             _ => false,
         }
     }

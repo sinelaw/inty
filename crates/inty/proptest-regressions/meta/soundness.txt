@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7c00c9a1df3f7a913d7a15ea3fe98c1f055be767eed8eae20864625e41a5e295 # shrinks to src = "\"\""
+cc 3b091101917f8bc9589a69636f3a14529a421a95f1ae8acf519f3cb0dd8991eb # shrinks to src = "true"
+cc f46e3367527b4a732bfb8e082efd9c864bd9156450d42e7a469eacc0056f24f5 # shrinks to src = "((0 < (0 - 0)) ? \"\" : \"\")"
+cc 9d7419ae7258a2d654a43367f03537906d4b46608f4e8edc300d662a55a11baa # shrinks to src = "(0 === ((4 + 1) - 1))"
+cc 73bb0d748d046bec9e72500e5a75572bbfffb7c3de29d8a4f40d2f56154fde5a # shrinks to src = "(function(x) { return x; })(((0 - 0) + (5 - 55)))"

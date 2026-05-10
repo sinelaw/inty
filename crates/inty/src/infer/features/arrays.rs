@@ -102,17 +102,17 @@ impl InferState {
         match &obj_type_resolved {
             Type::Array(elem_type) => {
                 // Array indexing: immediately unify index with Number and return element type
-                self.unify(span, &index_type, &Type::Number)?;
+                self.subsume(span, &index_type, &Type::Number)?;
                 Ok(elem_type.as_ref().clone())
             }
             Type::String => {
                 // String indexing: returns String
-                self.unify(span, &index_type, &Type::Number)?;
+                self.subsume(span, &index_type, &Type::Number)?;
                 Ok(Type::String)
             }
             Type::Map(value_type) => {
                 // Map indexing: unify index with String and return value type
-                self.unify(span, &index_type, &Type::String)?;
+                self.subsume(span, &index_type, &Type::String)?;
                 Ok(value_type.as_ref().clone())
             }
             Type::Row(row) => {
@@ -134,11 +134,11 @@ impl InferState {
                         self.rebind_var(var_name.clone(), Type::array(elem_type.clone()));
                     }
 
-                    self.unify(span, &index_type, &Type::Number)?;
+                    self.subsume(span, &index_type, &Type::Number)?;
                     Ok(elem_type)
                 } else {
                     // Regular object: use string indexing
-                    self.unify(span, &index_type, &Type::String)?;
+                    self.subsume(span, &index_type, &Type::String)?;
                     let result_type = self.fresh_type_var();
                     self.add_constraint(
                         TypePred::indexable(obj_type, index_type, result_type.clone()),
@@ -172,15 +172,15 @@ impl InferState {
     ) -> InferResult<Type> {
         match obj_type {
             Type::Array(elem_type) => {
-                self.unify(span, index_type, &Type::Number)?;
+                self.subsume(span, index_type, &Type::Number)?;
                 Ok(elem_type.as_ref().clone())
             }
             Type::String => {
-                self.unify(span, index_type, &Type::Number)?;
+                self.subsume(span, index_type, &Type::Number)?;
                 Ok(Type::String)
             }
             Type::Map(value_type) => {
-                self.unify(span, index_type, &Type::String)?;
+                self.subsume(span, index_type, &Type::String)?;
                 Ok(value_type.as_ref().clone())
             }
             _ => {

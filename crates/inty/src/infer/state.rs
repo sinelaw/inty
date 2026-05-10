@@ -432,6 +432,17 @@ impl InferState {
         let sub = self.apply_subst(sub);
         let sup = self.apply_subst(sup);
 
+        // Rule 0 (S-LitBase): `Lit(l) ≤ Base` is sound — every
+        // singleton is a value of its base. This rule used to live
+        // (symmetrically, hence unsoundly) in `unify`. It's a pure
+        // subsumption rule and lives here. The reverse direction
+        // `Base ≤ Lit` is intentionally absent.
+        if let Type::Literal(lit) = &sub {
+            if lit.base_type() == sup {
+                return Ok(());
+            }
+        }
+
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
         let saved_subst = self.main_subst.clone();
@@ -442,7 +453,59 @@ impl InferState {
         self.main_subst = saved_subst;
         self.pending_constraints = saved_constraints;
 
-        // Rule 2 (S-UnionR): pick a union arm.
+        // S-Row: structural row subsumption. With `Lit ≤ Base`
+        // removed from `unify`, two rows that differ only in
+        // a literal-vs-base position no longer unify directly —
+        // recurse here so e.g. `{kind: Lit("circle"), r: Lit(10)}
+        // ≤ {kind: Lit("circle"), r: Number}` succeeds via per-
+        // field subsumption.
+        if let (Type::Row(r1), Type::Row(r2)) = (&sub, &sup) {
+            if r1.is_closed()
+                && r2.is_closed()
+                && r1.props.len() == r2.props.len()
+                && r1.props.keys().eq(r2.props.keys())
+            {
+                let saved_subst = self.main_subst.clone();
+                let saved_constraints = self.pending_constraints.clone();
+                let mut all_ok = true;
+                for (k, sub_field) in &r1.props {
+                    let sup_field = r2.props.get(k).expect("keys checked equal");
+                    if self.subsume(span, sub_field, sup_field).is_err() {
+                        all_ok = false;
+                        break;
+                    }
+                }
+                if all_ok {
+                    return Ok(());
+                }
+                self.main_subst = saved_subst;
+                self.pending_constraints = saved_constraints;
+            }
+        }
+
+        // S-Array: covariant element subsumption.
+        if let (Type::Array(e1), Type::Array(e2)) = (&sub, &sup) {
+            let saved_subst = self.main_subst.clone();
+            let saved_constraints = self.pending_constraints.clone();
+            if self.subsume(span, e1, e2).is_ok() {
+                return Ok(());
+            }
+            self.main_subst = saved_subst;
+            self.pending_constraints = saved_constraints;
+        }
+
+        // Rule 2a (S-UnionL): a union value subsumes into `sup` iff
+        // every arm does. Sound by definition — a value of type
+        // ⋃τᵢ may be any τᵢ at runtime, so each must fit.
+        if let Type::Union(members) = &sub {
+            for m in members {
+                let m_resolved = self.apply_subst(m);
+                self.subsume(span, &m_resolved, &sup)?;
+            }
+            return Ok(());
+        }
+
+        // Rule 2b (S-UnionR): pick a union arm.
         if let Type::Union(members) = &sup {
             let mut matching: Vec<usize> = Vec::new();
             for (i, m) in members.iter().enumerate() {
@@ -472,6 +535,23 @@ impl InferState {
         }
 
         Err(self.unification_error(span, &sub, &sup))
+    }
+
+    /// "Either-direction" subsumption used by symmetric operators
+    /// like `===`, `!==`, and ordering comparisons, where the two
+    /// operands just need to have a common possible value — neither
+    /// flow-direction is privileged. Try `subsume(t1, t2)` then
+    /// `subsume(t2, t1)`; commit on the first one that succeeds, fail
+    /// with the original error if neither does.
+    pub fn subsume_either(&mut self, span: Span, t1: &Type, t2: &Type) -> InferResult<()> {
+        let saved_subst = self.main_subst.clone();
+        let saved_constraints = self.pending_constraints.clone();
+        if self.subsume(span, t1, t2).is_ok() {
+            return Ok(());
+        }
+        self.main_subst = saved_subst;
+        self.pending_constraints = saved_constraints;
+        self.subsume(span, t2, t1)
     }
 
     /// Normalise a list of would-be union members applying the

@@ -474,6 +474,70 @@ impl Type {
         Type::Literal(LitValue::Bool(b))
     }
 
+    /// Recursively widen singleton literal types to their base.
+    ///
+    /// Used at "fresh literal" widening points (mutable bindings without
+    /// an annotation, function returns without a declared return type,
+    /// joined array elements, etc.) to mirror TypeScript's notion of
+    /// fresh literal widening. The transformation:
+    ///
+    /// * `Lit("circle")` → `String`, `Lit(42)` → `Number`,
+    ///   `Lit(true)` → `Boolean`.
+    /// * Recurses through `Row` (each property value), `Array`, `Map`,
+    ///   `Promise`, `Union` (each member, then re-normalises so that
+    ///   `"a" | "b"` widens to `String` rather than the awkward
+    ///   `String | String`).
+    /// * Recurses through `Func` covariantly into the return type and
+    ///   contravariantly into parameters — a parameter typed `"a"`
+    ///   really means "only the literal `"a"` is acceptable", and
+    ///   widening it would change the function's contract, so we
+    ///   leave parameters alone. (TS makes the same call.)
+    /// * Type variables, named types, and modules are left alone.
+    ///   Widening through a substitution is the substitution's job.
+    pub fn widen_fresh_literals(&self) -> Self {
+        match self {
+            Type::Literal(lit) => lit.base_type(),
+            Type::Row(row) => {
+                let props = row
+                    .props
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.widen_fresh_literals()))
+                    .collect();
+                Type::Row(RowType {
+                    props,
+                    tail: row.tail.clone(),
+                })
+            }
+            Type::Array(elem) => Type::Array(Box::new(elem.widen_fresh_literals())),
+            Type::Map(v) => Type::Map(Box::new(v.widen_fresh_literals())),
+            Type::Promise(inner) => Type::Promise(Box::new(inner.widen_fresh_literals())),
+            Type::Union(members) => {
+                let widened: Vec<Type> =
+                    members.iter().map(|m| m.widen_fresh_literals()).collect();
+                Type::union(widened)
+            }
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => Type::Func {
+                this_type: this_type.clone(),
+                params: params.clone(),
+                ret: Box::new(ret.widen_fresh_literals()),
+            },
+            // Primitives, vars, named refs, modules: nothing to widen.
+            Type::Number
+            | Type::String
+            | Type::Boolean
+            | Type::Undefined
+            | Type::Null
+            | Type::Regex
+            | Type::Var(_)
+            | Type::Named(_, _)
+            | Type::Module(_) => self.clone(),
+        }
+    }
+
     /// The empty union, representing an unreachable / impossible value.
     pub fn never() -> Self {
         Type::Union(Vec::new())
