@@ -344,7 +344,7 @@ impl InferState {
         // receive the same polymorphism.
         let base_free = env.free_vars();
         for stmt in group {
-            if let Some((name, _, _, _, _)) = function_decl_parts(stmt) {
+            if let Some((name, _, _, _, span)) = function_decl_parts(stmt) {
                 let ty = hoisted
                     .lookup(name)
                     .expect("function must be in env after pass 1")
@@ -352,6 +352,16 @@ impl InferState {
                     .clone();
                 let ty = self.apply_subst(&ty);
                 let scheme = self.generalize(&base_free, &ty);
+                let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
+                    "export function ".len()
+                } else {
+                    "function ".len()
+                };
+                let name_offset = span.start + keyword_len;
+                self.record_decl_scheme(
+                    Span::new(name_offset, name_offset + name.len()),
+                    scheme.clone(),
+                );
                 hoisted = hoisted.extend(name.to_string(), scheme);
             }
         }
@@ -416,14 +426,13 @@ impl InferState {
         // Record the type at the *name* offset (not the `function`
         // keyword) so LSP go-to-def → hover lookups line up.
         let name_offset = span.start + "function ".len();
-        self.record_decl_type(
-            Span::new(name_offset, name_offset + name.len()),
-            func_type.clone(),
-        );
+        let name_span = Span::new(name_offset, name_offset + name.len());
+        self.record_decl_type(name_span, func_type.clone());
 
         // Generalize the function type
         let env_free = env.free_vars();
         let scheme = self.generalize(&env_free, &func_type);
+        self.record_decl_scheme(name_span, scheme.clone());
 
         Ok((Type::Undefined, env.extend(name.to_string(), scheme)))
     }

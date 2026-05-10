@@ -3,61 +3,12 @@
 //! After type inference, this module walks the AST and adds type annotations
 //! showing the inferred types for variables and functions.
 
-use std::collections::HashSet;
-
 use crate::lexer::Span;
 use crate::parser::ast::*;
-use crate::types::{PrettyContext, QualType, TVarName, Type, TypePred, TypeScheme};
+use crate::types::{PrettyContext, QualType, Type, TypePred, TypeScheme};
 
 use super::env::TypeEnv;
 use super::state::InferState;
-
-/// Collect all this_type variables that are hidden in display.
-/// The pretty printer hides this_type when it's a Var, so we shouldn't
-/// quantify over these variables in the type signature.
-fn collect_hidden_this_vars(ty: &Type) -> HashSet<TVarName> {
-    let mut hidden = HashSet::new();
-    collect_hidden_this_vars_impl(ty, &mut hidden);
-    hidden
-}
-
-fn collect_hidden_this_vars_impl(ty: &Type, hidden: &mut HashSet<TVarName>) {
-    match ty {
-        Type::Func {
-            this_type,
-            params,
-            ret,
-        } => {
-            // If this_type is a Var, it's hidden in display
-            if let Some(t) = this_type {
-                if let Type::Var(v) = t.as_ref() {
-                    hidden.insert(v.clone());
-                }
-                collect_hidden_this_vars_impl(t, hidden);
-            }
-            // Recurse into parameters and return type
-            for param in params {
-                collect_hidden_this_vars_impl(param, hidden);
-            }
-            collect_hidden_this_vars_impl(ret, hidden);
-        }
-        Type::Array(elem) => {
-            collect_hidden_this_vars_impl(elem, hidden);
-        }
-        Type::Promise(inner) => {
-            collect_hidden_this_vars_impl(inner, hidden);
-        }
-        Type::Map(value) => {
-            collect_hidden_this_vars_impl(value, hidden);
-        }
-        Type::Row(row) => {
-            for prop_ty in row.props.values() {
-                collect_hidden_this_vars_impl(prop_ty, hidden);
-            }
-        }
-        _ => {}
-    }
-}
 
 /// Decorate an AST with inferred type annotations.
 pub struct Decorator<'a> {
@@ -723,25 +674,11 @@ impl<'a> Decorator<'a> {
             })
             .collect();
 
-        // Only keep vars that are still free in the substituted type or predicates
-        let ty_vars = ty.free_vars();
-        let pred_vars: std::collections::HashSet<_> =
-            preds.iter().flat_map(|p| p.free_vars()).collect();
-        let used_vars: std::collections::HashSet<_> = ty_vars.union(&pred_vars).cloned().collect();
-
-        // Collect all hidden this_type variables (from outer function and any function parameters)
-        // These are hidden in display, so we shouldn't quantify over them
-        let hidden_this_vars = collect_hidden_this_vars(&ty);
-
-        let vars: Vec<_> = scheme
-            .vars
-            .iter()
-            .filter(|v| used_vars.contains(v) && !hidden_this_vars.contains(v))
-            .cloned()
-            .collect();
-
+        // `format_scheme` drops quantifiers that don't appear in the
+        // printed body or predicates (including hidden `this` vars),
+        // so we hand it the full scheme and let it do that filtering.
         let applied_scheme = TypeScheme {
-            vars,
+            vars: scheme.vars.clone(),
             body: QualType::with_preds(preds, ty),
         };
         let content = self.ctx.format_scheme(&applied_scheme);

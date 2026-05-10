@@ -93,6 +93,14 @@ pub struct InferState {
     /// Used for decorating the AST with type annotations.
     pub decl_types: HashMap<usize, Type>,
 
+    /// Generalised schemes for declarations whose binding was
+    /// generalised (`var`, `function`, etc. at top level or inside
+    /// nested scopes). Keyed by span start position, parallel to
+    /// `decl_types`. Lets the LSP/inlay-hint path surface type-class
+    /// predicates (`where Plus a`) even after the enclosing scope's
+    /// env has been discarded.
+    pub decl_schemes: HashMap<usize, TypeScheme>,
+
     /// Type origins for error reporting.
     pub type_origins: HashMap<TVarName, TypeOrigin>,
 
@@ -148,6 +156,7 @@ impl InferState {
             type_classes: HashMap::new(),
             pending_constraints: Vec::new(),
             decl_types: HashMap::new(),
+            decl_schemes: HashMap::new(),
             type_origins: HashMap::new(),
             warnings: Vec::new(),
             config,
@@ -238,6 +247,20 @@ impl InferState {
     /// Look up the inferred type for a declaration by span.
     pub fn get_decl_type(&self, span: Span) -> Option<&Type> {
         self.decl_types.get(&span.start)
+    }
+
+    /// Record the generalised scheme for a declaration at the given
+    /// span. Companion to [`record_decl_type`] — the type goes into
+    /// `decl_types`, the scheme (with quantifiers and predicates) goes
+    /// here. Monomorphic bindings don't need to call this.
+    pub fn record_decl_scheme(&mut self, span: Span, scheme: TypeScheme) {
+        self.decl_schemes.insert(span.start, scheme);
+    }
+
+    /// Look up the generalised scheme for a declaration by span.
+    /// Returns `None` for bindings that weren't generalised.
+    pub fn get_decl_scheme(&self, span: Span) -> Option<&TypeScheme> {
+        self.decl_schemes.get(&span.start)
     }
 
     /// Generate a fresh flexible type variable.
