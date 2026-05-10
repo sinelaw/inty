@@ -495,16 +495,31 @@ html, body {
 }
 .editor-container .CodeMirror-lines { padding-left: 8px !important; }
 
-/* ---- Inlay hints ---- */
+/* ---- Inlay hints ----
+   Rendered inline with the source as a *subtle* pill so readers see
+   at a glance that the annotation isn't part of the code itself. The
+   border is faint enough to fade into the editor, but the rounded
+   shape and slight tint clearly separate it from the JS tokens. */
 .inlay-hint {
-    display: inline;
+    display: inline-block;
     font-style: italic;
     color: var(--inlay);
-    opacity: 0.85;
+    background: rgba(130, 169, 217, 0.07);
+    border: 1px solid rgba(130, 169, 217, 0.22);
+    border-radius: 999px;
+    padding: 0 0.55em;
     margin: 0 0.05em 0 0.4em;
+    line-height: 1.25;
     pointer-events: none;
     user-select: none;
-    font-size: 0.92em;
+    font-size: 0.82em;
+    vertical-align: baseline;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.inlay-hint:hover {
+    background: rgba(130, 169, 217, 0.14);
+    border-color: rgba(130, 169, 217, 0.4);
+    opacity: 1;
 }
 
 /* ---- Hover tooltip ---- */
