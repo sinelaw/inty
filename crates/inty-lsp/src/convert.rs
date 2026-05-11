@@ -101,6 +101,7 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::OccursCheck { .. } => "OccursCheck",
             TypeError::UndefinedVariable { .. } => "UndefinedVariable",
             TypeError::PropertyNotFound { .. } => "PropertyNotFound",
+            TypeError::PresenceMismatch { .. } => "PresenceMismatch",
             TypeError::NotAFunction { .. } => "NotAFunction",
             TypeError::ArityMismatch { .. } => "ArityMismatch",
             TypeError::TypeAnnotationParse { .. } => "TypeAnnotationParse",

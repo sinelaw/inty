@@ -8,7 +8,9 @@ use crate::types::{FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Typ
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation_with_aliases;
+use super::super::type_parser::{
+    parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
+};
 use super::super::InferResult;
 
 impl InferState {
@@ -54,12 +56,15 @@ impl InferState {
                     // declaration's annotation is.
                     let prop_type = if let Some(ann) = type_annotation {
                         let ann_span = Span::new(ann.span.start, ann.span.end);
-                        let (annotated_type, var_map) = parse_type_annotation_with_aliases(
-                            &ann.content,
-                            ann_span,
-                            self.next_var_id(),
-                            &self.type_aliases,
-                        )?;
+                        let (annotated_type, var_map, next_pvar) =
+                            parse_type_annotation_with_pvars(
+                                &ann.content,
+                                ann_span,
+                                self.next_var_id(),
+                                self.next_pvar_id(),
+                                &self.type_aliases,
+                            )?;
+                        self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
@@ -277,12 +282,15 @@ impl InferState {
                         // contextual expected — we still check the
                         // value against the user-stated type.
                         let ann_span = Span::new(ann.span.start, ann.span.end);
-                        let (annotated_type, var_map) = parse_type_annotation_with_aliases(
-                            &ann.content,
-                            ann_span,
-                            self.next_var_id(),
-                            &self.type_aliases,
-                        )?;
+                        let (annotated_type, var_map, next_pvar) =
+                            parse_type_annotation_with_pvars(
+                                &ann.content,
+                                ann_span,
+                                self.next_var_id(),
+                                self.next_pvar_id(),
+                                &self.type_aliases,
+                            )?;
+                        self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
@@ -481,9 +489,12 @@ impl InferState {
                 // Direct hit in the row's own props is the common case
                 // and avoids creating unnecessary type variables.
                 if let Some(entry) = row.props.get(&PropName(property.to_string())) {
-                    // Phase 1c will reject access on a definitely-absent
-                    // field and force a `Pre` presence constraint on
-                    // presence-polymorphic ones.
+                    // Property access demands presence: unify the
+                    // field's presence with `Pre`. If the entry was
+                    // presence-polymorphic the variable gets pinned;
+                    // if it was already `Abs` we get a structured
+                    // presence-mismatch error.
+                    self.unify_presence(span, &entry.presence, &crate::types::Presence::Pre)?;
                     return Ok(self.apply_subst(&entry.ty));
                 }
                 // Otherwise the property may live in a row reached

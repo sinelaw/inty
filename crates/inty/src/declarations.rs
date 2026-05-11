@@ -111,6 +111,7 @@ fn emit_one(out: &mut String, name: &str, scheme: &TypeScheme) {
     // unconstrained variable.
     let printable = TypeScheme {
         vars: scheme.vars.clone(),
+        pvars: scheme.pvars.clone(),
         body: QualType::simple(scheme.body.ty.clone()),
     };
     let body = ctx.format_scheme(&printable);

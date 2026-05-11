@@ -2018,15 +2018,67 @@ fn array_destructuring_rest_gives_array_type() {
 // ----- P8: TS-flavor type-annotation extensions -----
 
 #[test]
-fn ts_optional_property_widens_to_union_with_undefined() {
-    // `{ name?: String }` parses as `{ name: String | Undefined }`.
+fn ts_optional_property_is_presence_polymorphic() {
+    // `{ name?: String }` parses as a row whose `name` field carries a
+    // fresh presence variable theta (Remy '94). Reading `o.name` forces
+    // theta := Pre, so the access yields just `String` — not `String |
+    // Undefined`. Optionality lives in the row, not in the value's type.
     let src = "\
         /** const o: { name?: String } */ \
         const o; \
         var n = o.name;";
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let n = state.apply_subst(&env.lookup("n").unwrap().body.ty);
-    assert_eq!(n, Type::union([Type::String, Type::Undefined]));
+    assert_eq!(n, Type::String);
+}
+
+// ----- Remy '94 presence polymorphism (optional row fields) -----
+
+#[test]
+fn optional_field_caller_may_omit() {
+    // A function whose parameter row marks `b` optional accepts both a
+    // caller that supplies it and a caller that does not. Generalising
+    // over the presence variable means each call gets a fresh theta;
+    // one binds Pre, the other binds Abs, and neither conflicts with
+    // the other.
+    let src = "\
+        /** function f(o: {a: Number, b?: String}) => Number */ \
+        function f(o) { return o.a; } \
+        var x = f({a: 1, b: \"hi\"}); \
+        var y = f({a: 2});";
+    let (_, env, state) = infer_program_with_state(src).unwrap();
+    assert_eq!(
+        state.apply_subst(&env.lookup("x").unwrap().body.ty),
+        Type::Number
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("y").unwrap().body.ty),
+        Type::Number
+    );
+}
+
+#[test]
+fn optional_field_extra_present_field_still_rejected_when_closed() {
+    // Presence polymorphism is orthogonal to closed-row strictness:
+    // unknown fields still don't fit a closed row. `c` here is not
+    // declared in the annotation at all, so the call must fail.
+    let src = "\
+        /** function f(o: {a: Number, b?: String}) => Number */ \
+        function f(o) { return o.a; } \
+        var z = f({a: 1, b: \"hi\", c: true});";
+    assert!(infer_program_with_state(src).is_err());
+}
+
+#[test]
+fn optional_field_read_inside_body_forces_present() {
+    // If the function body reads `o.b`, the body's typing pins
+    // theta := Pre, so the scheme is no longer presence-polymorphic
+    // and a caller that omits `b` fails to unify.
+    let src = "\
+        /** function f(o: {b?: String}) => String */ \
+        function f(o) { return o.b; } \
+        var z = f({});";
+    assert!(infer_program_with_state(src).is_err());
 }
 
 #[test]

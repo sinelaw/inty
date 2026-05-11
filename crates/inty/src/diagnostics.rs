@@ -265,6 +265,15 @@ pub fn write_error<W: Write>(
                 *span,
                 None,
             ),
+            TypeError::PresenceMismatch {
+                expected,
+                found,
+                span,
+            } => (
+                format!("Presence mismatch: expected {}, found {}", expected, found),
+                *span,
+                None,
+            ),
             TypeError::NotAFunction { ty, span } => {
                 (format!("Type '{}' is not a function", ty), *span, None)
             }

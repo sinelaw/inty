@@ -75,6 +75,10 @@ pub struct InferState {
     /// Counter for generating fresh type variables.
     name_source: TVarId,
 
+    /// Counter for generating fresh presence variables (Remy '94).
+    /// Lives in a namespace separate from `name_source`.
+    pvar_source: crate::types::PVarId,
+
     /// Current substitution from unification.
     pub main_subst: Subst,
 
@@ -151,6 +155,7 @@ impl InferState {
     pub fn with_config(config: InferConfig) -> Self {
         InferState {
             name_source: 0,
+            pvar_source: 0,
             main_subst: Subst::empty(),
             named_types: HashMap::new(),
             type_id_source: 0,
@@ -283,6 +288,20 @@ impl InferState {
         Type::Var(self.fresh_flex())
     }
 
+    /// Generate a fresh flexible presence variable (Remy '94).
+    pub fn fresh_pvar(&mut self) -> crate::types::PVarName {
+        let id = self.pvar_source;
+        self.pvar_source += 1;
+        crate::types::PVarName::Flex(id)
+    }
+
+    /// Generate a fresh rigid (skolem) presence variable for subsumption.
+    pub fn fresh_pvar_skolem(&mut self) -> crate::types::PVarName {
+        let id = self.pvar_source;
+        self.pvar_source += 1;
+        crate::types::PVarName::Skolem(id)
+    }
+
     /// Build an *open* callable row representing an "expected callable
     /// shape" with a fresh tail variable.
     ///
@@ -327,6 +346,19 @@ impl InferState {
     pub fn bump_var_id_to(&mut self, id: u32) {
         if id > self.name_source {
             self.name_source = id;
+        }
+    }
+
+    /// Get the next presence variable ID (for type annotation parsing).
+    pub fn next_pvar_id(&self) -> u32 {
+        self.pvar_source
+    }
+
+    /// Advance the pvar source past the given id, mirroring
+    /// `bump_var_id_to` for type variables.
+    pub fn bump_pvar_id_to(&mut self, id: u32) {
+        if id > self.pvar_source {
+            self.pvar_source = id;
         }
     }
 
@@ -620,6 +652,83 @@ impl InferState {
         Ok(())
     }
 
+    /// Bind a presence variable to a presence. Same collision-as-unify
+    /// discipline as `extend_subst` for type variables.
+    pub fn extend_subst_presence(
+        &mut self,
+        span: crate::lexer::Span,
+        pvar: crate::types::PVarName,
+        pres: crate::types::Presence,
+    ) -> super::unify::UnifyResult<()> {
+        // Resolve through any existing chain first to avoid trivially
+        // creating cycles.
+        let resolved = self
+            .main_subst
+            .resolve_presence(&crate::types::Presence::Var(pvar.clone()));
+        if !matches!(&resolved, crate::types::Presence::Var(v) if v == &pvar) {
+            // Already bound — unify with the new presence instead.
+            return self.unify_presence(span, &resolved, &pres);
+        }
+        // Occurs check: don't bind θ → Var(θ).
+        if let crate::types::Presence::Var(other) = &pres {
+            if other == &pvar {
+                return Ok(());
+            }
+        }
+        let mut singleton = Subst::empty();
+        singleton.insert_presence(pvar, pres);
+        self.main_subst = singleton.compose(&self.main_subst);
+        Ok(())
+    }
+
+    /// Unify two presences. Implements the Remy '94 presence-level
+    /// judgment: Pre~Pre and Abs~Abs are reflexive; Pre~Abs is an
+    /// error; Var(theta) unifies with the other side by binding theta.
+    pub fn unify_presence(
+        &mut self,
+        span: crate::lexer::Span,
+        p1: &crate::types::Presence,
+        p2: &crate::types::Presence,
+    ) -> super::unify::UnifyResult<()> {
+        use crate::types::Presence;
+        let p1 = self.main_subst.resolve_presence(p1);
+        let p2 = self.main_subst.resolve_presence(p2);
+        match (&p1, &p2) {
+            (Presence::Pre, Presence::Pre) | (Presence::Abs, Presence::Abs) => Ok(()),
+            (Presence::Pre, Presence::Abs) | (Presence::Abs, Presence::Pre) => {
+                Err(crate::error::TypeError::PresenceMismatch {
+                    expected: if matches!(p1, Presence::Pre) {
+                        "present"
+                    } else {
+                        "absent"
+                    }
+                    .to_string(),
+                    found: if matches!(p2, Presence::Pre) {
+                        "present"
+                    } else {
+                        "absent"
+                    }
+                    .to_string(),
+                    span,
+                }
+                .into())
+            }
+            (Presence::Var(v1), Presence::Var(v2)) if v1 == v2 => Ok(()),
+            (Presence::Var(v), other) | (other, Presence::Var(v)) if v.is_flex() => {
+                self.extend_subst_presence(span, v.clone(), other.clone())
+            }
+            // Two distinct skolem pvars, or a skolem ~ concrete:
+            // unification fails because the skolem was supposed to
+            // remain abstract.
+            _ => Err(crate::error::TypeError::PresenceMismatch {
+                expected: format!("{:?}", p1),
+                found: format!("{:?}", p2),
+                span,
+            }
+            .into()),
+        }
+    }
+
     /// Override a type variable binding in the substitution.
     /// Unlike extend_subst, this replaces any existing binding for the variable.
     /// Used when we discover a more specific type for a variable that was
@@ -662,7 +771,10 @@ impl InferState {
         self.type_classes.insert(class.name.clone(), class);
     }
 
-    /// Instantiate a type scheme with fresh flexible variables.
+    /// Instantiate a type scheme with fresh flexible variables (both
+    /// type and presence). Each use site sees independent presence
+    /// variables, so a scheme like `<θ>{x:Number, y:θ(String)} -> R`
+    /// can be called once supplying `y` and once omitting it.
     pub fn instantiate(&mut self, scheme: &TypeScheme) -> Type {
         if scheme.is_mono() {
             return scheme.body.ty.clone();
@@ -672,6 +784,10 @@ impl InferState {
         for var in &scheme.vars {
             let fresh = self.fresh_type_var();
             subst.insert(var.clone(), fresh);
+        }
+        for pvar in &scheme.pvars {
+            let fresh = self.fresh_pvar();
+            subst.insert_presence(pvar.clone(), crate::types::Presence::Var(fresh));
         }
 
         // Also instantiate predicates as pending constraints
@@ -688,7 +804,9 @@ impl InferState {
     }
 
     /// Skolemize a type scheme (for subsumption checking).
-    /// Returns the skolem variables and the body type.
+    /// Returns the skolem variables and the body type. Presence
+    /// variables are also skolemized; if a caller needs the skolem
+    /// pvars they can re-derive them from the substitution.
     pub fn skolemize(&mut self, scheme: &TypeScheme) -> (Vec<TVarName>, Type) {
         if scheme.is_mono() {
             return (vec![], scheme.body.ty.clone());
@@ -702,12 +820,21 @@ impl InferState {
             skolems.push(skolem.clone());
             subst.insert(var.clone(), Type::Var(skolem));
         }
+        for pvar in &scheme.pvars {
+            let skolem = self.fresh_pvar_skolem();
+            subst.insert_presence(
+                pvar.clone(),
+                crate::types::Presence::Var(skolem),
+            );
+        }
 
         (skolems, subst.apply(&scheme.body.ty))
     }
 
     /// Generalize a type over free variables not in the environment.
     /// Also collects relevant predicates from pending_constraints.
+    /// Generalizes over presence variables too (Remy '94), with the
+    /// same env-difference rule.
     pub fn generalize(
         &mut self,
         env_free_vars: &std::collections::HashSet<TVarName>,
@@ -723,6 +850,7 @@ impl InferState {
         // `Subst::flatten` for the full story.
         let ty = self.main_subst.flatten(ty);
         let ty_vars = ty.free_vars();
+        let pvars = ty.free_pvars();
 
         // Sort by TVarName id so the scheme's quantification order is
         // deterministic. `ty.free_vars()` returns a HashSet, whose
@@ -736,7 +864,17 @@ impl InferState {
             .collect();
         gen_vars.sort_by_key(|v| v.id());
 
-        if gen_vars.is_empty() {
+        // Presence variables: we don't track env-bound pvars (no flow
+        // makes them escape today), so we generalize every free flex
+        // pvar we see. If presence-bound env entries ever exist, this
+        // would need an env_free_pvars analogue.
+        let mut gen_pvars: Vec<crate::types::PVarName> = pvars
+            .into_iter()
+            .filter(|p| p.is_flex())
+            .collect();
+        gen_pvars.sort_by_key(|p| p.id());
+
+        if gen_vars.is_empty() && gen_pvars.is_empty() {
             TypeScheme::mono(ty)
         } else {
             // Collect predicates that involve the generalized variables
@@ -757,7 +895,7 @@ impl InferState {
             }
             self.pending_constraints = remaining_constraints;
 
-            TypeScheme::qualified(gen_vars, scheme_preds, ty)
+            TypeScheme::qualified_with_presence(gen_vars, gen_pvars, scheme_preds, ty)
         }
     }
 

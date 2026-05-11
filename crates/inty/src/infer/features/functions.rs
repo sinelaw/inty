@@ -6,7 +6,9 @@ use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation_with_aliases;
+use super::super::type_parser::{
+    parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
+};
 use super::super::InferResult;
 
 /// Borrow-able view of a function declaration that abstracts over
@@ -115,15 +117,17 @@ impl InferState {
 
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-            let (annotated_type, var_map) = parse_type_annotation_with_aliases(
+            let (annotated_type, var_map, next_pvar) = parse_type_annotation_with_pvars(
                 &annotation.content,
                 annotation_span,
                 self.next_var_id(),
+                self.next_pvar_id(),
                 &self.type_aliases,
             )?;
             if let Some(&max) = var_map.values().max() {
                 self.bump_var_id_to(max + 1);
             }
+            self.bump_pvar_id_to(next_pvar);
 
             // Function annotation: pins the function's signature to
             // the declared one. Subsume rather than unify so a body

@@ -708,11 +708,23 @@ impl Type {
         matches!(self, Type::Union(v) if v.is_empty())
     }
 
-    /// Create a closed object type with the given properties.
+    /// Create a closed object type with the given properties. Every
+    /// listed property is `Pre`. Use `object_entries` to mix presence
+    /// states.
     pub fn object(props: impl IntoIterator<Item = (impl Into<PropName>, Type)>) -> Self {
         let props: BTreeMap<PropName, Type> =
             props.into_iter().map(|(k, v)| (k.into(), v)).collect();
         Type::Row(RowType::closed(props))
+    }
+
+    /// Create a closed object type from explicit `FieldEntry` props
+    /// (i.e. presence + type per field).
+    pub fn object_entries(
+        props: impl IntoIterator<Item = (impl Into<PropName>, FieldEntry)>,
+    ) -> Self {
+        let props: BTreeMap<PropName, FieldEntry> =
+            props.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        Type::Row(RowType::closed_entries(props))
     }
 
     /// Create an open object type with the given properties.
@@ -856,6 +868,82 @@ impl Type {
         vars
     }
 
+    /// Collect the free *presence* variables in this type. Walks the
+    /// same shape as `free_vars` but reports `PVarName`s carried by
+    /// row field-entry presences.
+    pub fn free_pvars(&self) -> HashSet<PVarName> {
+        let mut pvars = HashSet::new();
+        self.collect_free_pvars(&mut pvars);
+        pvars
+    }
+
+    fn collect_free_pvars(&self, pvars: &mut HashSet<PVarName>) {
+        match self {
+            Type::Number
+            | Type::String
+            | Type::Boolean
+            | Type::Undefined
+            | Type::Null
+            | Type::Regex
+            | Type::Var(_)
+            | Type::Literal(_) => {}
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                if let Some(t) = this_type {
+                    t.collect_free_pvars(pvars);
+                }
+                for p in params {
+                    p.collect_free_pvars(pvars);
+                }
+                ret.collect_free_pvars(pvars);
+            }
+            Type::Row(row) => {
+                for entry in row.props.values() {
+                    if let Presence::Var(v) = &entry.presence {
+                        pvars.insert(v.clone());
+                    }
+                    entry.ty.collect_free_pvars(pvars);
+                }
+                if let RowTail::Recursive(_, args) = &row.tail {
+                    for a in args {
+                        a.collect_free_pvars(pvars);
+                    }
+                }
+            }
+            Type::Array(elem) | Type::Promise(elem) | Type::Map(elem) => {
+                elem.collect_free_pvars(pvars);
+            }
+            Type::Named(_, args) => {
+                for a in args {
+                    a.collect_free_pvars(pvars);
+                }
+            }
+            Type::Union(members) => {
+                for m in members {
+                    m.collect_free_pvars(pvars);
+                }
+            }
+            Type::Module(m) => {
+                for scheme in m.exports.values() {
+                    let mut inner = HashSet::new();
+                    scheme.body.ty.collect_free_pvars(&mut inner);
+                    for pred in &scheme.body.preds {
+                        for ty in &pred.types {
+                            ty.collect_free_pvars(&mut inner);
+                        }
+                    }
+                    for v in &scheme.pvars {
+                        inner.remove(v);
+                    }
+                    pvars.extend(inner);
+                }
+            }
+        }
+    }
+
     fn collect_free_vars(&self, vars: &mut HashSet<TVarName>) {
         match self {
             Type::Number
@@ -973,11 +1061,14 @@ impl QualType {
 }
 
 /// Type scheme: a universally quantified type.
-/// Represents ∀α₁...αₙ. Q => τ where Q is a set of predicates.
+/// Represents ∀α₁...αₙ β₁...βₘ. Q => τ where α's are type variables,
+/// β's are presence variables (Remy '94), and Q is a set of predicates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeScheme {
     /// Quantified type variables.
     pub vars: Vec<TVarName>,
+    /// Quantified presence variables.
+    pub pvars: Vec<PVarName>,
     /// The qualified type body.
     pub body: QualType,
 }
@@ -987,14 +1078,30 @@ impl TypeScheme {
     pub fn mono(ty: Type) -> Self {
         TypeScheme {
             vars: vec![],
+            pvars: vec![],
             body: QualType::simple(ty),
         }
     }
 
-    /// Create a type scheme with the given quantified variables.
+    /// Create a type scheme with the given quantified type variables
+    /// (no presence variables).
     pub fn poly(vars: Vec<TVarName>, ty: Type) -> Self {
         TypeScheme {
             vars,
+            pvars: vec![],
+            body: QualType::simple(ty),
+        }
+    }
+
+    /// Create a type scheme with both type and presence quantifiers.
+    pub fn poly_with_presence(
+        vars: Vec<TVarName>,
+        pvars: Vec<PVarName>,
+        ty: Type,
+    ) -> Self {
+        TypeScheme {
+            vars,
+            pvars,
             body: QualType::simple(ty),
         }
     }
@@ -1003,6 +1110,21 @@ impl TypeScheme {
     pub fn qualified(vars: Vec<TVarName>, preds: Vec<TypePred>, ty: Type) -> Self {
         TypeScheme {
             vars,
+            pvars: vec![],
+            body: QualType::with_preds(preds, ty),
+        }
+    }
+
+    /// Create a type scheme with predicates and presence quantifiers.
+    pub fn qualified_with_presence(
+        vars: Vec<TVarName>,
+        pvars: Vec<PVarName>,
+        preds: Vec<TypePred>,
+        ty: Type,
+    ) -> Self {
+        TypeScheme {
+            vars,
+            pvars,
             body: QualType::with_preds(preds, ty),
         }
     }
@@ -1014,7 +1136,7 @@ impl TypeScheme {
 
     /// Check if this is a monomorphic type (no quantified variables).
     pub fn is_mono(&self) -> bool {
-        self.vars.is_empty()
+        self.vars.is_empty() && self.pvars.is_empty()
     }
 
     /// Collect all free type variables (not including quantified ones).
@@ -1024,6 +1146,21 @@ impl TypeScheme {
             vars.remove(v);
         }
         vars
+    }
+
+    /// Collect free presence variables (not including the scheme's
+    /// own quantifiers).
+    pub fn free_pvars(&self) -> HashSet<PVarName> {
+        let mut pvars = self.body.ty.free_pvars();
+        for pred in &self.body.preds {
+            for ty in &pred.types {
+                pvars.extend(ty.free_pvars());
+            }
+        }
+        for v in &self.pvars {
+            pvars.remove(v);
+        }
+        pvars
     }
 }
 

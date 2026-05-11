@@ -253,6 +253,13 @@ pub enum TypeError {
         span: Span,
     },
 
+    #[error("Presence mismatch: expected {expected}, found {found}")]
+    PresenceMismatch {
+        expected: String,
+        found: String,
+        span: Span,
+    },
+
     #[error("Type {ty} is not a function")]
     NotAFunction { ty: String, span: Span },
 
@@ -313,6 +320,7 @@ impl TypeError {
             TypeError::OccursCheck { span, .. } => *span,
             TypeError::UndefinedVariable { span, .. } => *span,
             TypeError::PropertyNotFound { span, .. } => *span,
+            TypeError::PresenceMismatch { span, .. } => *span,
             TypeError::NotAFunction { span, .. } => *span,
             TypeError::ArityMismatch { span, .. } => *span,
             TypeError::TypeAnnotationParse { span, .. } => *span,

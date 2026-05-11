@@ -30,6 +30,11 @@ pub struct TypeParser<'a> {
     type_vars: HashMap<String, u32>,
     /// Next fresh type variable ID.
     next_var_id: u32,
+    /// Next fresh presence variable ID. Uses an offset to avoid
+    /// collision with the caller's pvar source: callers re-seed the
+    /// outer pvar source from this after parsing, the same pattern
+    /// `next_var_id` uses for type vars.
+    next_pvar_id: u32,
     /// Whether we're at the top level (quantifiers allowed).
     /// Set to false when parsing nested types (e.g., inside function parameters).
     allow_quantifiers: bool,
@@ -48,6 +53,7 @@ impl<'a> TypeParser<'a> {
             span,
             type_vars: HashMap::new(),
             next_var_id: start_var_id,
+            next_pvar_id: 0,
             allow_quantifiers: true, // Quantifiers allowed at top level
             aliases: None,
         }
@@ -67,9 +73,18 @@ impl<'a> TypeParser<'a> {
             span,
             type_vars: HashMap::new(),
             next_var_id: start_var_id,
+            next_pvar_id: 0,
             allow_quantifiers: true,
             aliases: Some(aliases),
         }
+    }
+
+    /// Allocate a fresh flexible presence variable. Used when an
+    /// annotation marks a field optional (`x?: T`).
+    fn fresh_pvar(&mut self) -> crate::types::PVarName {
+        let id = self.next_pvar_id;
+        self.next_pvar_id += 1;
+        crate::types::PVarName::Flex(id)
     }
 
     /// Pre-bind a type-variable name to a specific ID before parsing.
@@ -87,6 +102,18 @@ impl<'a> TypeParser<'a> {
     /// caller needs to keep its own counter in sync.
     pub fn next_var_id(&self) -> u32 {
         self.next_var_id
+    }
+
+    /// The next free presence-variable ID. Mirrors `next_var_id` for
+    /// the parallel pvar namespace.
+    pub fn next_pvar_id_value(&self) -> u32 {
+        self.next_pvar_id
+    }
+
+    /// Seed the pvar source so allocations don't collide with the
+    /// caller's outer counter. Must be called before `parse`.
+    pub fn seed_pvar_id(&mut self, start: u32) {
+        self.next_pvar_id = start;
     }
 
     /// Parse the entire type annotation.
@@ -420,7 +447,7 @@ impl<'a> TypeParser<'a> {
         self.expect_char('{')?;
         self.skip_whitespace();
 
-        let mut props = Vec::new();
+        let mut props: Vec<(String, crate::types::FieldEntry)> = Vec::new();
 
         // Object property types inherit the current allow_quantifiers context:
         // - At top level: { fn: <T>(x: T) => T } is valid Rank-1
@@ -463,7 +490,10 @@ impl<'a> TypeParser<'a> {
                         // misbehave.
                         other => other,
                     };
-                    props.push((crate::types::CALLABLE_KEY.to_string(), inner_func));
+                    props.push((
+                        crate::types::CALLABLE_KEY.to_string(),
+                        crate::types::FieldEntry::pre(inner_func),
+                    ));
                     self.skip_whitespace();
                     if self.peek_char() == Some('}') {
                         break;
@@ -494,7 +524,10 @@ impl<'a> TypeParser<'a> {
                 }
                 let name = self.parse_ident()?;
                 self.skip_whitespace();
-                // Optional property `x?: T` desugars to `x: T | Undefined`.
+                // Optional property `x?: T` allocates a fresh presence
+                // variable on the field (Remy '94) — the caller may
+                // omit it without forcing T | Undefined into the type.
+                // See README "Optional row fields" once phase 1d ships.
                 let optional = if self.peek_char() == Some('?') {
                     self.pos += 1;
                     self.skip_whitespace();
@@ -508,12 +541,13 @@ impl<'a> TypeParser<'a> {
                 // At top level, quantifiers are allowed: { fn: <T>(x: T) => T } is valid.
                 // Inside function params, they're not: (obj: { fn: <T>(x: T) => T }) => X is Rank-2.
                 let ty = self.parse_type()?;
-                let prop_ty = if optional {
-                    Type::union([ty, Type::Undefined])
+                let entry = if optional {
+                    let pvar = self.fresh_pvar();
+                    crate::types::FieldEntry::optional(pvar, ty)
                 } else {
-                    ty
+                    crate::types::FieldEntry::pre(ty)
                 };
-                props.push((name, prop_ty));
+                props.push((name, entry));
 
                 self.skip_whitespace();
                 if self.peek_char() == Some('}') {
@@ -538,7 +572,7 @@ impl<'a> TypeParser<'a> {
 
         self.expect_char('}')?;
 
-        Ok(Type::object(props))
+        Ok(Type::object_entries(props))
     }
 
     /// Convert an identifier to a type.
@@ -739,6 +773,11 @@ impl<'a> TypeParser<'a> {
 }
 
 /// Parse a type annotation string.
+///
+/// Returns the parsed type, the variable-name map, and the next free
+/// presence-variable ID consumed by the parser (so callers can bump
+/// their own pvar source in lockstep — `x?: T` allocates one fresh
+/// presence variable per optional field).
 pub fn parse_type_annotation(
     content: &str,
     span: Span,
@@ -760,6 +799,22 @@ pub fn parse_type_annotation_with_aliases(
     let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
     let ty = parser.parse()?;
     Ok((ty, parser.type_vars.clone()))
+}
+
+/// As [`parse_type_annotation_with_aliases`] but also accepts a
+/// pvar-id seed and returns the next free pvar id, so the caller can
+/// keep its own pvar counter in sync with the parser's allocations.
+pub fn parse_type_annotation_with_pvars(
+    content: &str,
+    span: Span,
+    start_var_id: u32,
+    start_pvar_id: u32,
+    aliases: &HashMap<String, AliasDef>,
+) -> ParseResult<(Type, HashMap<String, u32>, u32)> {
+    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
+    parser.seed_pvar_id(start_pvar_id);
+    let ty = parser.parse()?;
+    Ok((ty, parser.type_vars.clone(), parser.next_pvar_id_value()))
 }
 
 /// Map a rejected TS-style type name to a suggested inty
