@@ -23,7 +23,9 @@ pub use decorate::decorate_with_types;
 pub use env::TypeEnv;
 pub use narrow::{apply_narrowing, Narrowing, Path};
 pub use state::{InferConfig, InferState, InferWarning, PendingConstraint, TypeClass};
-pub use type_parser::{parse_type_annotation, parse_type_annotation_with_aliases};
+pub use type_parser::{
+    parse_type_annotation, parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
+};
 pub use unify::UnifyResult;
 
 use crate::error::{IntyError, TypeError};

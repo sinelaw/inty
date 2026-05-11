@@ -6,13 +6,16 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ty::{
-    FieldEntry, PropName, QualType, RowTail, RowType, TVarName, Type, TypePred, TypeScheme,
+    FieldEntry, PVarName, Presence, PropName, QualType, RowTail, RowType, TVarName, Type,
+    TypePred, TypeScheme,
 };
 
-/// A substitution mapping type variables to types.
+/// A substitution mapping type variables to types and presence
+/// variables to presences (Remy '94 — two domains for one substitution).
 #[derive(Clone, Debug, Default)]
 pub struct Subst {
     map: HashMap<TVarName, Type>,
+    presences: HashMap<PVarName, Presence>,
 }
 
 impl Subst {
@@ -20,6 +23,7 @@ impl Subst {
     pub fn empty() -> Self {
         Subst {
             map: HashMap::new(),
+            presences: HashMap::new(),
         }
     }
 
@@ -27,12 +31,15 @@ impl Subst {
     pub fn singleton(var: TVarName, ty: Type) -> Self {
         let mut map = HashMap::new();
         map.insert(var, ty);
-        Subst { map }
+        Subst {
+            map,
+            presences: HashMap::new(),
+        }
     }
 
-    /// Check if the substitution is empty.
+    /// Check if the substitution is empty in both domains.
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.map.is_empty() && self.presences.is_empty()
     }
 
     /// Get the type for a variable, if present.
@@ -40,24 +47,65 @@ impl Subst {
         self.map.get(var)
     }
 
-    /// Check if a variable is in the domain.
+    /// Get the presence binding for a presence variable, if present.
+    pub fn get_presence(&self, pvar: &PVarName) -> Option<&Presence> {
+        self.presences.get(pvar)
+    }
+
+    /// Check if a type variable is in the domain.
     pub fn contains(&self, var: &TVarName) -> bool {
         self.map.contains_key(var)
     }
 
-    /// Insert a mapping into the substitution.
+    /// Check if a presence variable is in the domain.
+    pub fn contains_presence(&self, pvar: &PVarName) -> bool {
+        self.presences.contains_key(pvar)
+    }
+
+    /// Insert a type mapping into the substitution.
     pub fn insert(&mut self, var: TVarName, ty: Type) {
         self.map.insert(var, ty);
     }
 
-    /// Remove a variable from the substitution.
+    /// Insert a presence mapping into the substitution.
+    pub fn insert_presence(&mut self, pvar: PVarName, pres: Presence) {
+        self.presences.insert(pvar, pres);
+    }
+
+    /// Remove a type variable from the substitution.
     pub fn remove(&mut self, var: &TVarName) {
         self.map.remove(var);
     }
 
-    /// Get the domain (set of variables) of this substitution.
+    /// Get the domain (set of type variables) of this substitution.
     pub fn domain(&self) -> HashSet<TVarName> {
         self.map.keys().cloned().collect()
+    }
+
+    /// Get the presence-variable domain.
+    pub fn presence_domain(&self) -> HashSet<PVarName> {
+        self.presences.keys().cloned().collect()
+    }
+
+    /// Resolve a presence chain through the substitution. Returns the
+    /// presence concrete or the first unbound variable.
+    pub fn resolve_presence(&self, pres: &Presence) -> Presence {
+        let mut current = pres.clone();
+        let mut visited: HashSet<PVarName> = HashSet::new();
+        loop {
+            match &current {
+                Presence::Pre | Presence::Abs => return current,
+                Presence::Var(v) => {
+                    if !visited.insert(v.clone()) {
+                        return current;
+                    }
+                    match self.presences.get(v) {
+                        Some(next) => current = next.clone(),
+                        None => return current,
+                    }
+                }
+            }
+        }
     }
 
     /// Compose two substitutions: (self ∘ other)(x) = self(other(x))
@@ -80,7 +128,35 @@ impl Subst {
             }
         }
 
-        Subst { map: result }
+        // Same composition rule on presences. Both maps live in
+        // separate namespaces so we never need to thread a presence
+        // through a type-map lookup or vice versa.
+        let mut presences = HashMap::new();
+        for (pvar, pres) in &other.presences {
+            presences.insert(pvar.clone(), self.apply_presence(pres));
+        }
+        for (pvar, pres) in &self.presences {
+            if !presences.contains_key(pvar) {
+                presences.insert(pvar.clone(), pres.clone());
+            }
+        }
+
+        Subst {
+            map: result,
+            presences,
+        }
+    }
+
+    /// Apply this substitution to a presence (shallow — one step of
+    /// presence-variable resolution).
+    pub fn apply_presence(&self, pres: &Presence) -> Presence {
+        match pres {
+            Presence::Pre | Presence::Abs => pres.clone(),
+            Presence::Var(v) => match self.presences.get(v) {
+                Some(bound) => bound.clone(),
+                None => pres.clone(),
+            },
+        }
     }
 
     /// Apply this substitution to a substitutable value.
@@ -94,7 +170,10 @@ impl Subst {
         for var in vars {
             map.remove(var);
         }
-        Subst { map }
+        Subst {
+            map,
+            presences: self.presences.clone(),
+        }
     }
 
     /// Iterate over the mappings.
@@ -187,7 +266,7 @@ impl Subst {
                 (
                     k.clone(),
                     FieldEntry {
-                        presence: e.presence.clone(),
+                        presence: self.resolve_presence(&e.presence),
                         ty: self.flatten_type(&e.ty, visited),
                     },
                 )
@@ -225,7 +304,7 @@ impl Subst {
                             for (k, e) in &other_row.props {
                                 let v_flat = self.flatten_type(&e.ty, visited);
                                 props.entry(k.clone()).or_insert(FieldEntry {
-                                    presence: e.presence.clone(),
+                                    presence: self.resolve_presence(&e.presence),
                                     ty: v_flat,
                                 });
                             }
@@ -254,6 +333,7 @@ impl FromIterator<(TVarName, Type)> for Subst {
     fn from_iter<T: IntoIterator<Item = (TVarName, Type)>>(iter: T) -> Self {
         Subst {
             map: iter.into_iter().collect(),
+            presences: HashMap::new(),
         }
     }
 }
@@ -394,11 +474,8 @@ impl Substitutable for RowType {
 
 impl Substitutable for FieldEntry {
     fn apply_subst(&self, subst: &Subst) -> Self {
-        // Phase 1: only the type component varies through type-var
-        // substitution. Presence variables get their own substitution
-        // domain in phase 1b; until then, presence is preserved as-is.
         FieldEntry {
-            presence: self.presence.clone(),
+            presence: subst.apply_presence(&self.presence),
             ty: self.ty.apply_subst(subst),
         }
     }
@@ -444,10 +521,15 @@ impl Substitutable for QualType {
 
 impl Substitutable for TypeScheme {
     fn apply_subst(&self, subst: &Subst) -> Self {
-        // Remove quantified variables from substitution
+        // Remove quantified type variables from substitution. We
+        // don't need to filter presence variables similarly: a
+        // generalized pvar in `self.pvars` couldn't be bound in the
+        // outer substitution unless it had leaked, which the
+        // env-difference rule in `generalize` prevents.
         let filtered_subst = subst.remove_vars(&self.vars);
         TypeScheme {
             vars: self.vars.clone(),
+            pvars: self.pvars.clone(),
             body: self.body.apply_subst(&filtered_subst),
         }
     }

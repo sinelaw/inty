@@ -9,7 +9,9 @@ use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation_with_aliases;
+use super::super::type_parser::{
+    parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
+};
 use super::super::InferResult;
 
 /// If `lhs` is an assignment target whose binding resolves to a polymorphic
@@ -358,12 +360,14 @@ impl InferState {
             // pins them.
             let annotated_type: Option<(Type, Span)> = if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-                let (ann_ty, var_map) = parse_type_annotation_with_aliases(
+                let (ann_ty, var_map, next_pvar) = parse_type_annotation_with_pvars(
                     &annotation.content,
                     annotation_span,
                     self.next_var_id(),
+                    self.next_pvar_id(),
                     &self.type_aliases,
                 )?;
+                self.bump_pvar_id_to(next_pvar);
                 if let Some(&max) = var_map.values().max() {
                     self.bump_var_id_to(max + 1);
                 }

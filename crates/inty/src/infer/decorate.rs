@@ -679,6 +679,7 @@ impl<'a> Decorator<'a> {
         // so we hand it the full scheme and let it do that filtering.
         let applied_scheme = TypeScheme {
             vars: scheme.vars.clone(),
+            pvars: scheme.pvars.clone(),
             body: QualType::with_preds(preds, ty),
         };
         let content = self.ctx.format_scheme(&applied_scheme);

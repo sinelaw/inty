@@ -301,37 +301,56 @@ impl InferState {
         all_props.sort();
         all_props.dedup();
 
-        // Unify common properties (type only — presence unification
-        // arrives in phase 1c; phase 1a preserves the prior semantics
-        // by ignoring presence, which is `Pre` everywhere).
+        // Walk every prop that appears on either side. The Remy '94
+        // judgment unifies fields pointwise on both presence and type:
+        //
+        //   present on both:  unify presences, unify types
+        //   only on r1:       if r2 is closed -> r1's presence must be Abs
+        //                     (so omitting it from a closed row is OK only
+        //                     when r1 also says it's absent / pres-poly);
+        //                     if r2 is open  -> the field flows into r2's
+        //                     tail with its current presence.
+        //   only on r2:       symmetric.
         for prop in &all_props {
             match (r1.props.get(prop), r2.props.get(prop)) {
                 (Some(e1), Some(e2)) => {
+                    self.unify_presence(span, &e1.presence, &e2.presence)?;
                     self.unify(span, &e1.ty, &e2.ty)?;
                 }
-                (Some(_), None) => {
-                    // Property in r1 but not r2
-                    // This is okay if r2 has an open tail
-                    if !matches!(r2.tail, RowTail::Open(_)) {
-                        return Err(TypeError::PropertyNotFound {
-                            prop: prop.0.clone(),
-                            obj_type: Type::Row(r2.clone()).to_string(),
-                            span,
+                (Some(e1), None) => match &r2.tail {
+                    RowTail::Closed => {
+                        // Field absent from r2 with no tail. To unify,
+                        // r1's presence must commit to Abs.
+                        if let Err(_) =
+                            self.unify_presence(span, &e1.presence, &crate::types::Presence::Abs)
+                        {
+                            return Err(TypeError::PropertyNotFound {
+                                prop: prop.0.clone(),
+                                obj_type: Type::Row(r2.clone()).to_string(),
+                                span,
+                            }
+                            .into());
                         }
-                        .into());
                     }
-                }
-                (None, Some(_)) => {
-                    // Property in r2 but not r1
-                    if !matches!(r1.tail, RowTail::Open(_)) {
-                        return Err(TypeError::PropertyNotFound {
-                            prop: prop.0.clone(),
-                            obj_type: Type::Row(r1.clone()).to_string(),
-                            span,
+                    RowTail::Open(_) | RowTail::Recursive(_, _) => {
+                        // Handled by the tail-extension below.
+                    }
+                },
+                (None, Some(e2)) => match &r1.tail {
+                    RowTail::Closed => {
+                        if let Err(_) =
+                            self.unify_presence(span, &e2.presence, &crate::types::Presence::Abs)
+                        {
+                            return Err(TypeError::PropertyNotFound {
+                                prop: prop.0.clone(),
+                                obj_type: Type::Row(r1.clone()).to_string(),
+                                span,
+                            }
+                            .into());
                         }
-                        .into());
                     }
-                }
+                    RowTail::Open(_) | RowTail::Recursive(_, _) => {}
+                },
                 (None, None) => unreachable!(),
             }
         }
@@ -339,14 +358,13 @@ impl InferState {
         // Unify tails
         match (&r1.tail, &r2.tail) {
             (RowTail::Closed, RowTail::Closed) => {
-                // Both closed, must have same properties (already checked)
-                if r1.props.len() != r2.props.len() {
-                    return Err(self.unification_error(
-                        span,
-                        &Type::Row(r1.clone()),
-                        &Type::Row(r2.clone()),
-                    ));
-                }
+                // Under presence polymorphism the per-field pass above
+                // is sufficient: any field present on one side and not
+                // the other has already been unified against `Abs` (or
+                // errored). A raw length comparison would reject pairs
+                // that the field-by-field unification accepts (e.g.,
+                // `{a}` against `{a, b?}` where `b`'s presence binds
+                // to `Abs`).
                 Ok(())
             }
 
