@@ -454,6 +454,7 @@ impl<'a> TypeParser<'a> {
                                 .next()
                                 .expect("contains_key just asserted")
                                 .1
+                                .ty
                         }
                         // The constructor invariant says `Type::simple_func`
                         // and friends always produce the wrapped form; if a
@@ -822,10 +823,18 @@ fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
             Type::union(members.iter().map(|m| substitute_alias_body(m, subst)))
         }
         Type::Row(row) => {
-            let new_props = row
+            let new_props: std::collections::BTreeMap<_, _> = row
                 .props
                 .iter()
-                .map(|(k, v)| (k.clone(), substitute_alias_body(v, subst)))
+                .map(|(k, e)| {
+                    (
+                        k.clone(),
+                        crate::types::FieldEntry {
+                            presence: e.presence.clone(),
+                            ty: substitute_alias_body(&e.ty, subst),
+                        },
+                    )
+                })
                 .collect();
             let new_tail = match &row.tail {
                 RowTail::Closed => RowTail::Closed,
@@ -1087,8 +1096,8 @@ mod tests {
                 r1.props
                     .iter()
                     .zip(r2.props.iter())
-                    .all(|((k1, v1), (k2, v2))| {
-                        k1 == k2 && types_structurally_equal(v1, v2, var_map)
+                    .all(|((k1, e1), (k2, e2))| {
+                        k1 == k2 && types_structurally_equal(&e1.ty, &e2.ty, var_map)
                     })
             }
 
@@ -1260,8 +1269,8 @@ mod proptests {
                 r1.props
                     .iter()
                     .zip(r2.props.iter())
-                    .all(|((k1, v1), (k2, v2))| {
-                        k1 == k2 && types_structurally_equal(v1, v2, var_map)
+                    .all(|((k1, e1), (k2, e2))| {
+                        k1 == k2 && types_structurally_equal(&e1.ty, &e2.ty, var_map)
                     })
             }
 

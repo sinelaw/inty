@@ -1372,7 +1372,7 @@ fn lit_preserved_on_annotated_var() {
     let c_ty = state.apply_subst(&env.lookup("c").unwrap().body.ty);
     if let Type::Row(row) = &c_ty {
         let kind = row.props.get(&"kind".into()).unwrap();
-        assert_eq!(*kind, Type::lit_string("circle"));
+        assert_eq!(kind.ty, Type::lit_string("circle"));
     } else {
         panic!("expected row, got {:?}", c_ty);
     }

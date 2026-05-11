@@ -40,6 +40,99 @@ impl TVarName {
     }
 }
 
+/// Unique identifier for presence variables.
+///
+/// Presence variables live in a namespace separate from type variables
+/// (`TVarName`). A row field's *presence* — whether the field is
+/// definitely present, definitely absent, or polymorphic — is tracked
+/// independently of its type. See `Presence`, `FieldEntry`, and the
+/// `Subst` presence map. The encoding follows Rémy, "Type Inference for
+/// Records in a Natural Extension of ML" (1994).
+pub type PVarId = u32;
+
+/// Presence variable name. Flexible vs skolem mirrors `TVarName` so the
+/// same generalization / subsumption discipline applies to presence.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum PVarName {
+    /// Flexible presence variable (unifiable).
+    Flex(PVarId),
+    /// Rigid presence variable (skolem).
+    Skolem(PVarId),
+}
+
+impl PVarName {
+    pub fn id(&self) -> PVarId {
+        match self {
+            PVarName::Flex(id) | PVarName::Skolem(id) => *id,
+        }
+    }
+
+    pub fn is_flex(&self) -> bool {
+        matches!(self, PVarName::Flex(_))
+    }
+}
+
+/// A row field's presence: definitely present, definitely absent, or
+/// polymorphic in presence. `Var(theta)` is what makes an "optional"
+/// field expressible without lifting it into the value's type — the
+/// caller may unify it with `Pre` (supplying the field) or `Abs`
+/// (omitting it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Presence {
+    Pre,
+    Abs,
+    Var(PVarName),
+}
+
+impl Presence {
+    pub fn is_abs(&self) -> bool {
+        matches!(self, Presence::Abs)
+    }
+    pub fn is_pre(&self) -> bool {
+        matches!(self, Presence::Pre)
+    }
+}
+
+/// One entry in a `RowType`'s props map: presence + type.
+///
+/// A field written in source has `presence = Pre`. A field declared
+/// optional in an annotation (`x?: T`) is assigned a fresh presence
+/// variable. `Abs` only arises through unification when a closed row
+/// constrains a polymorphic side's missing field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldEntry {
+    pub presence: Presence,
+    pub ty: Type,
+}
+
+impl FieldEntry {
+    /// Field is definitely present with the given type. The common case
+    /// for object literals and most stub declarations.
+    pub fn pre(ty: Type) -> Self {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+        }
+    }
+
+    /// Field is presence-polymorphic — caller may omit or supply it.
+    pub fn optional(pvar: PVarName, ty: Type) -> Self {
+        FieldEntry {
+            presence: Presence::Var(pvar),
+            ty,
+        }
+    }
+
+    /// Field is definitely absent. Mostly produced by unification, not
+    /// constructed directly.
+    pub fn absent(ty: Type) -> Self {
+        FieldEntry {
+            presence: Presence::Abs,
+            ty,
+        }
+    }
+}
+
 /// Type class names for constraint-based polymorphism.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ClassName {
@@ -179,30 +272,43 @@ pub enum RowTail {
 }
 
 /// Row type for structural typing of objects.
-/// Represents a set of properties with an optional tail for extensibility.
+/// Represents a set of properties (each with presence + type) and a
+/// tail that controls extensibility.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowType {
-    /// Properties with their types.
-    pub props: BTreeMap<PropName, Type>,
+    /// Field name -> (presence, type). See `FieldEntry`.
+    pub props: BTreeMap<PropName, FieldEntry>,
     /// Row tail for open/closed/recursive rows.
     pub tail: RowTail,
 }
 
 impl RowType {
-    /// Create a closed row with the given properties.
+    /// Create a closed row where every property is definitely present.
+    /// Convenience for the common case (object literals, most stubs).
     pub fn closed(props: BTreeMap<PropName, Type>) -> Self {
         RowType {
-            props,
+            props: props.into_iter().map(|(k, v)| (k, FieldEntry::pre(v))).collect(),
             tail: RowTail::Closed,
         }
     }
 
-    /// Create an open row with the given properties and row variable.
+    /// Create a closed row from a fully-specified entry map.
+    pub fn closed_entries(props: BTreeMap<PropName, FieldEntry>) -> Self {
+        RowType { props, tail: RowTail::Closed }
+    }
+
+    /// Create an open row where every listed property is definitely
+    /// present. Tail variable carries the unmentioned fields.
     pub fn open(props: BTreeMap<PropName, Type>, var: TVarName) -> Self {
         RowType {
-            props,
+            props: props.into_iter().map(|(k, v)| (k, FieldEntry::pre(v))).collect(),
             tail: RowTail::Open(var),
         }
+    }
+
+    /// Create an open row from a fully-specified entry map.
+    pub fn open_entries(props: BTreeMap<PropName, FieldEntry>, var: TVarName) -> Self {
+        RowType { props, tail: RowTail::Open(var) }
     }
 
     /// Create an empty open row.
@@ -221,12 +327,20 @@ impl RowType {
         }
     }
 
-    /// Get a property type by name.
+    /// Get a property's type by name, regardless of presence. Returns
+    /// `None` only when the field is not mentioned at all; an `Abs`
+    /// field still returns `Some(&ty)` — callers that care about
+    /// presence should use [`get_entry`].
     pub fn get_prop(&self, name: &PropName) -> Option<&Type> {
+        self.props.get(name).map(|e| &e.ty)
+    }
+
+    /// Get the full field entry (presence + type).
+    pub fn get_entry(&self, name: &PropName) -> Option<&FieldEntry> {
         self.props.get(name)
     }
 
-    /// Check if this row has a specific property.
+    /// Check if this row has a specific property in any presence state.
     pub fn has_prop(&self, name: &PropName) -> bool {
         self.props.contains_key(name)
     }
@@ -501,7 +615,15 @@ impl Type {
                 let props = row
                     .props
                     .iter()
-                    .map(|(k, v)| (k.clone(), v.widen_fresh_literals()))
+                    .map(|(k, e)| {
+                        (
+                            k.clone(),
+                            FieldEntry {
+                                presence: e.presence.clone(),
+                                ty: e.ty.widen_fresh_literals(),
+                            },
+                        )
+                    })
                     .collect();
                 Type::Row(RowType {
                     props,
@@ -647,7 +769,7 @@ impl Type {
             } => Some((this_type.as_deref(), params, ret)),
             Type::Row(row) => {
                 let key = PropName(super::CALLABLE_KEY.to_string());
-                match row.props.get(&key)? {
+                match &row.props.get(&key)?.ty {
                     Type::Func {
                         this_type,
                         params,
@@ -762,8 +884,8 @@ impl Type {
             }
 
             Type::Row(row) => {
-                for ty in row.props.values() {
-                    ty.collect_free_vars(vars);
+                for entry in row.props.values() {
+                    entry.ty.collect_free_vars(vars);
                 }
                 match &row.tail {
                     RowTail::Open(v) => {
