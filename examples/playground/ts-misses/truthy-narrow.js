@@ -7,10 +7,13 @@ function priceLabel(price) {
     else       { return "free"; }
 }
 
+// Inty infers `priceLabel(String) => String` — the `+` inside fixes
+// `price` to a String. Calling with the literal `0` then errors at
+// the call site:
+// var lbl = priceLabel(0);   // error!
+//
 // In TS, calling this with the literal `0` is fine — and silently
 // returns "free" for a perfectly valid price of zero.
 //
-// Inty: `+` here mixes String and Number anyway, so the bug
-// surfaces immediately at the operator. The deeper fix —
-// explicit `price === undefined` narrowing — is enforceable
-// because inty types optional values as a real union.
+// The deeper fix — explicit `price === undefined` narrowing — is
+// enforceable because inty types optional values as a real union.

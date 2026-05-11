@@ -11,7 +11,8 @@ var counter = {
 };
 
 var inc = counter.inc;
-// var oops = inc();          // ← uncomment: at runtime, TypeError.
-//                             //   Inty rejects at type-check time.
+// var oops = inc();   // error!
+// ↑ uncomment: at runtime, TypeError.
+//   Inty rejects at type-check time.
 
 var ok = counter.inc();

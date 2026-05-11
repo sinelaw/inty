@@ -1,0 +1,34 @@
+{
+  "default": "basics",
+  "sections": [
+    {
+      "id": "features",
+      "label": "Type System",
+      "items": [
+        { "id": "basics",          "label": "basics.js",          "blurb": "Inference for plain JavaScript",  "expect": "ok" },
+        { "id": "generics",        "label": "generics.js",        "blurb": "Parametric polymorphism",         "expect": "ok" },
+        { "id": "structural",      "label": "structural.js",      "blurb": "Row polymorphism — typed by shape", "expect": "ok" },
+        { "id": "overloading",     "label": "overloading.js",     "blurb": "Operator type classes",           "expect": "ok" },
+        { "id": "unions",          "label": "unions.js",          "blurb": "Control-flow joins",              "expect": "ok" },
+        { "id": "method-chaining", "label": "method-chaining.js", "blurb": "Equi-recursive builder types",    "expect": "ok" },
+        { "id": "tagged-unions",   "label": "tagged-unions.js",   "blurb": "Discriminated unions + narrowing", "expect": "ok" },
+        { "id": "nullable",        "label": "nullable.js",        "blurb": "Optional values, ??, narrowing",  "expect": "ok" },
+        { "id": "classes",         "label": "classes.js",         "blurb": "Class bodies + private fields",   "expect": "ok" },
+        { "id": "callable-rows",   "label": "callable-rows.js",   "blurb": "Functions are rows with statics", "expect": "ok" },
+        { "id": "higher-order",    "label": "higher-order.js",    "blurb": "First-class functions",           "expect": "ok" }
+      ]
+    },
+    {
+      "id": "ts-misses",
+      "label": "TS wouldn't catch this",
+      "items": [
+        { "id": "string-plus-number", "label": "string-plus-number.js", "blurb": "`+` silently coerces in TS",         "expect": "error" },
+        { "id": "or-fallback",        "label": "or-fallback.js",        "blurb": "Truthy fallback hides type changes", "expect": "ok"    },
+        { "id": "mixed-array",        "label": "mixed-array.js",        "blurb": "Mixed arrays look uniform in TS",    "expect": "error" },
+        { "id": "missing-prop",       "label": "missing-prop.js",       "blurb": "Reading a property that isn't there", "expect": "error" },
+        { "id": "this-leak",          "label": "this-leak.js",          "blurb": "Methods called without their receiver", "expect": "ok"  },
+        { "id": "truthy-narrow",      "label": "truthy-narrow.js",      "blurb": "0 and \"\" are falsy — silently",   "expect": "ok"    }
+      ]
+    }
+  ]
+}

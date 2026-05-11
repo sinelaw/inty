@@ -32,6 +32,7 @@ echo "Copying build artifacts to $TEMP_DIR..."
 cp web/index.html "$TEMP_DIR/"
 cp web/styles.css "$TEMP_DIR/"
 cp web/app.js "$TEMP_DIR/"
+cp web/examples.js "$TEMP_DIR/"
 cp -r web/pkg "$TEMP_DIR/"
 
 # Check if gh-pages branch exists
@@ -53,6 +54,7 @@ echo "Copying new build artifacts..."
 cp "$TEMP_DIR/index.html" .
 cp "$TEMP_DIR/styles.css" .
 cp "$TEMP_DIR/app.js" .
+cp "$TEMP_DIR/examples.js" .
 cp -r "$TEMP_DIR/pkg" .
 
 # Remove .gitignore from pkg to include all files
