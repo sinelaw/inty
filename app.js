@@ -5,6 +5,7 @@
 // render inlay hints and hover tooltips from its responses.
 
 import init, { Analysis } from './pkg/inty.js';
+import { EXAMPLES, findExample, DEFAULT_EXAMPLE_ID } from './examples.js';
 
 let wasmReady = false;
 let inputEditor = null;
@@ -18,6 +19,16 @@ let inlayBookmarks = [];
 let errorMarks = [];
 let lastHoverKey = null;
 let hintsEnabled = localStorage.getItem('inty.hints') !== 'off';
+
+// Which example is currently loaded — null when the editor holds a
+// custom snippet (after edits or when loaded from a shared #hash).
+let activeExampleId = null;
+// Suppress URL rewriting during programmatic setValue.
+let suppressDirty = false;
+
+const SIDEBAR_KEY = 'inty.sidebar';
+const ONBOARDED_KEY = 'inty.onboarded';
+const MOBILE_BREAKPOINT = 768;
 
 // ---- URL hash sync ----------------------------------------------------
 
@@ -46,12 +57,30 @@ function decodeFromHash(hash) {
 
 function setUrlHash(code) {
     const enc = encodeToHash(code);
-    if (enc) history.replaceState(null, '', '#' + enc);
+    if (!enc) return;
+    // A shared snippet wins over any ?ex= param — clear it.
+    const url = new URL(window.location.href);
+    url.searchParams.delete('ex');
+    url.hash = '#' + enc;
+    history.replaceState(null, '', url.toString());
 }
 
 function getCodeFromUrl() {
     const hash = window.location.hash.slice(1);
     return hash ? decodeFromHash(hash) : null;
+}
+
+function getExampleIdFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('ex');
+}
+
+function setUrlExample(id) {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set('ex', id);
+    else url.searchParams.delete('ex');
+    url.hash = '';
+    history.replaceState(null, '', url.toString());
 }
 
 // ---- UTF-16 (JS) <-> UTF-8 (Rust) offset mapping ---------------------
@@ -94,47 +123,6 @@ function byteToChar(byteOffset) {
     return lo;
 }
 
-// ---- Example code ----------------------------------------------------
-
-const EXAMPLE_CODE = `// Inty — full type inference for plain JavaScript.
-// Hover any binding to see its inferred type.
-
-// Overloaded \`+\` — works for any addable type
-function add(x, y) { return x + y; }
-var n = add(1, 2);
-
-// Generics — id<a>(a) => a
-function id(x) { return x; }
-var a = id(42);
-var b = id("hello");
-
-// Structural typing — any object with a \`name\` field works
-function getName(obj) { return obj.name; }
-var person = getName({ name: "Alice", age: 30 });
-var dog    = getName({ name: "Rover", breed: "Labrador" });
-
-// Method chaining — builder-style \`this\`
-var counter = {
-    n: 0,
-    inc: function() { this.n = this.n + 1; return this; }
-};
-var v = counter.inc().inc().n;
-
-// Union types from branches
-function tag(c) { return c ? 42 : "err"; }
-
-// Tagged unions — narrowed by the discriminator
-/** function area(s: {kind: "circle", r: Number}
-                 | {kind: "square", s: Number}) => Number */
-function area(shape) {
-    if (shape.kind === "circle") { return shape.r; }
-    else                         { return shape.s; }
-}
-
-// Try a type error:
-// var bad = add("hello", 42);
-`;
-
 // ---- DOM -------------------------------------------------------------
 
 const statusEl = document.getElementById('status');
@@ -145,10 +133,19 @@ const closeErrorsBtn = document.getElementById('close-errors');
 const tooltipEl = document.getElementById('hover-tooltip');
 const shareBtn = document.getElementById('share-btn');
 const hintsBtn = document.getElementById('hints-btn');
+const sidebarEl = document.getElementById('sidebar');
+const sidebarToggleBtn = document.getElementById('sidebar-toggle');
+const sidebarScrim = document.getElementById('sidebar-scrim');
+const treeEl = document.getElementById('tree');
+const exampleStatusDot = document.getElementById('example-status');
+const exampleBlurbEl = document.getElementById('example-blurb');
 
 // ---- Init ------------------------------------------------------------
 
 async function initialize() {
+    renderTree();
+    setupSidebar();
+
     try {
         await init();
         wasmReady = true;
@@ -169,21 +166,77 @@ async function initialize() {
             },
         );
 
+        // Resolve initial content. Precedence: shared snippet (#hash)
+        // > example query (?ex=) > default example.
         const urlCode = getCodeFromUrl();
-        inputEditor.setValue(urlCode || EXAMPLE_CODE);
-        // Drop the synthetic "load" edit so the first Ctrl+Z doesn't
-        // wipe the editor back to empty.
-        inputEditor.clearHistory();
+        if (urlCode) {
+            loadCustomCode(urlCode);
+        } else {
+            const id = getExampleIdFromUrl();
+            const found = id ? findExample(id) : null;
+            const target = found || findExample(DEFAULT_EXAMPLE_ID);
+            if (target) {
+                loadExample(target.item.id, { updateUrl: !!id });
+            } else {
+                loadCustomCode('');
+            }
+        }
 
-        inputEditor.on('change', scheduleCheck);
+        inputEditor.on('change', onEditorChange);
 
         setupHover();
         runCheck();
+        // After the first render settles, run the onboarding tour
+        // exactly once per visitor — see playOnboarding().
+        requestAnimationFrame(() => requestAnimationFrame(maybePlayOnboarding));
     } catch (e) {
         console.error('Failed to initialize WASM:', e);
         statusEl.textContent = 'failed';
         statusEl.classList.add('error');
     }
+}
+
+// ---- Editor content swapping ----------------------------------------
+
+function setEditorContent(code) {
+    if (!inputEditor) return;
+    suppressDirty = true;
+    inputEditor.setValue(code);
+    // Drop the synthetic "load" edit so the first Ctrl+Z doesn't
+    // wipe the editor back to empty.
+    inputEditor.clearHistory();
+    suppressDirty = false;
+}
+
+function loadExample(id, { updateUrl = true } = {}) {
+    const found = findExample(id);
+    if (!found) return;
+    activeExampleId = id;
+    setEditorContent(found.item.code);
+    if (updateUrl) setUrlExample(id);
+    updateActiveTreeItem();
+    updateExampleStatus(found);
+    runCheck();
+    // Auto-close the overlay sidebar after picking, on mobile.
+    if (window.innerWidth <= MOBILE_BREAKPOINT) setSidebarOpen(false);
+}
+
+function loadCustomCode(code) {
+    activeExampleId = null;
+    setEditorContent(code);
+    updateActiveTreeItem();
+    updateExampleStatus(null);
+}
+
+function onEditorChange() {
+    if (suppressDirty) {
+        scheduleCheck();
+        return;
+    }
+    // A real user edit. If we were displaying a named example, the
+    // editor is now off-script — drop the link but keep the example
+    // highlighted as "based on".
+    scheduleCheck();
 }
 
 function scheduleCheck() {
@@ -235,8 +288,9 @@ function renderInlayHints(source) {
         const pos = inputEditor.posFromIndex(charOffset);
         const widget = document.createElement('span');
         widget.className = 'inlay-hint';
-        // `label` already includes its prefix (`: T` or `-> Ret`).
-        widget.textContent = hint.label;
+        // `label` may include a leading space (CLI-friendly) — the
+        // pill chrome provides its own padding so strip it here.
+        widget.textContent = hint.label.replace(/^\s+/, '');
         const bm = inputEditor.setBookmark(pos, {
             widget,
             insertLeft: false,
@@ -421,10 +475,285 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('hashchange', () => {
     const urlCode = getCodeFromUrl();
     if (urlCode && inputEditor && urlCode !== inputEditor.getValue()) {
-        inputEditor.setValue(urlCode);
-        inputEditor.clearHistory();
+        loadCustomCode(urlCode);
         runCheck();
     }
 });
+
+window.addEventListener('popstate', () => {
+    const id = getExampleIdFromUrl();
+    if (id && id !== activeExampleId) {
+        loadExample(id, { updateUrl: false });
+    }
+});
+
+// ---- Sidebar / examples ---------------------------------------------
+
+function renderTree() {
+    if (!treeEl) return;
+    const openSections = readOpenSections();
+    treeEl.innerHTML = '';
+
+    EXAMPLES.forEach((section, idx) => {
+        const sectionEl = document.createElement('div');
+        sectionEl.className = 'tree-section';
+        sectionEl.dataset.sectionId = section.id;
+        // Open by default; remember closed state across reloads.
+        if (openSections[section.id] !== false) {
+            sectionEl.classList.add('open');
+        }
+
+        const folderGlyph = section.id === 'ts-misses' ? '⚠' : '▦';
+        const header = document.createElement('button');
+        header.className = 'tree-section-header';
+        header.type = 'button';
+        header.setAttribute('aria-expanded', 'true');
+        header.innerHTML =
+            `<span class="tree-chevron" aria-hidden="true"></span>` +
+            `<span class="tree-section-icon" aria-hidden="true">${folderGlyph}</span>` +
+            `<span class="tree-section-label">${escapeHtml(section.label)}</span>` +
+            `<span class="tree-section-count">${section.items.length}</span>`;
+
+        header.addEventListener('click', () => {
+            sectionEl.classList.toggle('open');
+            const open = sectionEl.classList.contains('open');
+            header.setAttribute('aria-expanded', String(open));
+            writeOpenSection(section.id, open);
+        });
+        sectionEl.appendChild(header);
+
+        const children = document.createElement('div');
+        children.className = 'tree-children';
+        section.items.forEach((item) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'tree-item';
+            btn.dataset.exampleId = item.id;
+            btn.title = item.blurb || item.label;
+            btn.innerHTML =
+                `<svg class="tree-item-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">` +
+                `<path d="M3 2.5h6.5L13 6v7.5H3z"/><path d="M9.25 2.5V6H13"/>` +
+                `</svg>` +
+                `<span class="tree-item-label">${escapeHtml(item.label)}</span>`;
+            btn.addEventListener('click', () => loadExample(item.id));
+            children.appendChild(btn);
+        });
+        sectionEl.appendChild(children);
+        treeEl.appendChild(sectionEl);
+    });
+}
+
+function readOpenSections() {
+    try {
+        return JSON.parse(localStorage.getItem('inty.sections') || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writeOpenSection(id, open) {
+    const s = readOpenSections();
+    s[id] = open;
+    try { localStorage.setItem('inty.sections', JSON.stringify(s)); } catch {}
+}
+
+function updateActiveTreeItem() {
+    if (!treeEl) return;
+    treeEl.querySelectorAll('.tree-item').forEach((el) => {
+        const active = el.dataset.exampleId === activeExampleId;
+        el.classList.toggle('active', active);
+        if (active) {
+            // Expand the section containing this item.
+            const section = el.closest('.tree-section');
+            if (section && !section.classList.contains('open')) {
+                section.classList.add('open');
+                const header = section.querySelector('.tree-section-header');
+                if (header) header.setAttribute('aria-expanded', 'true');
+            }
+            // Scroll into view if needed.
+            el.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function updateExampleStatus(found) {
+    if (!exampleBlurbEl || !exampleStatusDot) return;
+    if (found) {
+        exampleStatusDot.classList.add('active');
+        exampleBlurbEl.textContent = found.item.blurb || found.item.label;
+        exampleBlurbEl.title = found.item.blurb || found.item.label;
+    } else {
+        exampleStatusDot.classList.remove('active');
+        exampleBlurbEl.textContent = 'Custom snippet';
+        exampleBlurbEl.title = 'Editing a custom snippet';
+    }
+}
+
+function setupSidebar() {
+    if (!sidebarToggleBtn || !sidebarEl) return;
+
+    const stored = localStorage.getItem(SIDEBAR_KEY);
+    // Default: open on desktop, closed on mobile.
+    const startOpen = stored == null
+        ? window.innerWidth > MOBILE_BREAKPOINT
+        : stored === 'open';
+    setSidebarOpen(startOpen, { persist: false });
+
+    sidebarToggleBtn.addEventListener('click', () => {
+        const open = sidebarEl.classList.contains('collapsed');
+        setSidebarOpen(open);
+    });
+    if (sidebarScrim) {
+        sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
+    }
+}
+
+function setSidebarOpen(open, { persist = true } = {}) {
+    if (!sidebarEl) return;
+    sidebarEl.classList.toggle('collapsed', !open);
+    sidebarToggleBtn.setAttribute('aria-pressed', String(open));
+    sidebarToggleBtn.classList.toggle('off', !open);
+    const mobile = window.innerWidth <= MOBILE_BREAKPOINT;
+    if (sidebarScrim) {
+        if (mobile && open) {
+            sidebarScrim.hidden = false;
+            requestAnimationFrame(() => sidebarScrim.classList.add('visible'));
+        } else {
+            sidebarScrim.classList.remove('visible');
+            setTimeout(() => { if (!sidebarScrim.classList.contains('visible')) sidebarScrim.hidden = true; }, 200);
+        }
+    }
+    if (persist) {
+        try { localStorage.setItem(SIDEBAR_KEY, open ? 'open' : 'closed'); } catch {}
+    }
+    // CodeMirror needs a kick so its viewport recalculates after the
+    // editor pane width changes.
+    if (inputEditor) {
+        setTimeout(() => inputEditor.refresh(), 240);
+    }
+}
+
+// ---- Onboarding tour ------------------------------------------------
+//
+// First-time visitors get a guided demo: a fake cursor drifts to the
+// "Hints on" toggle and clicks it twice, so they watch the inferred
+// types disappear (revealing plain JavaScript) and then reappear.
+// The point — the types are not in the code; inty added them.
+
+function maybePlayOnboarding() {
+    // Skip when the visitor arrived via a deep link — they came to see
+    // *that* snippet/example, not a generic tour.
+    if (window.location.hash || window.location.search) return;
+
+    try {
+        if (localStorage.getItem(ONBOARDED_KEY) === 'yes') return;
+    } catch (_) { /* private mode — still show */ }
+
+    // Skip on very small screens; the toggle and cursor compete for
+    // space and the demo lands awkwardly.
+    if (window.innerWidth < 480) {
+        try { localStorage.setItem(ONBOARDED_KEY, 'yes'); } catch (_) {}
+        return;
+    }
+    if (!hintsBtn || !hintsEnabled) return;
+
+    playOnboarding();
+}
+
+function playOnboarding() {
+    try { localStorage.setItem(ONBOARDED_KEY, 'yes'); } catch (_) {}
+
+    const cursor = document.getElementById('demo-cursor');
+    const captionEl = document.getElementById('demo-cursor-caption');
+    if (!cursor || !captionEl) return;
+
+    let aborted = false;
+    const cleanup = () => {
+        aborted = true;
+        cursor.classList.remove('visible', 'clicking', 'flip-caption');
+        captionEl.classList.remove('visible');
+        cursor.removeEventListener('transitionend', noop);
+        document.removeEventListener('keydown', abort, true);
+        document.removeEventListener('mousedown', abort, true);
+        document.removeEventListener('touchstart', abort, true);
+    };
+    const abort = () => cleanup();
+    function noop() {}
+    document.addEventListener('keydown', abort, true);
+    document.addEventListener('mousedown', abort, true);
+    document.addEventListener('touchstart', abort, true);
+
+    const setCaption = (html) => {
+        captionEl.innerHTML = html;
+    };
+    const moveTo = (x, y) => {
+        cursor.style.transform = `translate(${x}px, ${y}px)`;
+        // Flip caption to the cursor's other side near the right edge.
+        cursor.classList.toggle('flip-caption', x > window.innerWidth - 260);
+    };
+    const click = () => {
+        cursor.classList.add('clicking');
+        setTimeout(() => cursor.classList.remove('clicking'), 560);
+    };
+
+    const target = hintsBtn.getBoundingClientRect();
+    const targetX = target.left + target.width / 2 - 8;
+    const targetY = target.top + target.height / 2 - 4;
+
+    // Start a bit inside the editor so the path crosses the code.
+    const startX = Math.min(window.innerWidth * 0.45, targetX - 280);
+    const startY = Math.min(window.innerHeight * 0.55, targetY + 200);
+
+    moveTo(startX, startY);
+    setCaption(
+        '<span class="muted">These</span> ' +
+        '<span class="accent">: Number</span>, ' +
+        '<span class="accent">: String</span> ' +
+        '<span class="muted">aren\'t in your code —</span>'
+    );
+
+    // Tiny defer to let the initial transform paint before animating.
+    setTimeout(() => {
+        if (aborted) return;
+        cursor.classList.add('visible');
+        captionEl.classList.add('visible');
+
+        // Move to the Hints button.
+        setTimeout(() => {
+            if (aborted) return;
+            moveTo(targetX, targetY);
+
+            setTimeout(() => {
+                if (aborted) return;
+                // First click — hints OFF, plain JS revealed.
+                click();
+                hintsBtn.click();
+                setCaption(
+                    '<span class="muted">…</span> ' +
+                    '<span class="accent">inty added them.</span>'
+                );
+
+                setTimeout(() => {
+                    if (aborted) return;
+                    // Second click — hints back ON.
+                    click();
+                    hintsBtn.click();
+                    setCaption(
+                        '<span class="muted">Hover any binding to inspect its type.</span>'
+                    );
+
+                    setTimeout(() => {
+                        if (aborted) return;
+                        captionEl.classList.remove('visible');
+                        // Drift off-screen on the right.
+                        moveTo(targetX + 80, targetY + 120);
+                        cursor.classList.remove('visible');
+                        setTimeout(cleanup, 500);
+                    }, 2200);
+                }, 1700);
+            }, 950);
+        }, 80);
+    }, 30);
+}
 
 initialize();
