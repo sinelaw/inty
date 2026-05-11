@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::lexer::Span;
 use crate::parser::ast::{Expr, PropDef, PropKey};
-use crate::types::{PropName, RowTail, RowType, TVarId, TVarName, Type, TypeScheme};
+use crate::types::{FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
@@ -31,7 +31,7 @@ impl InferState {
         // all methods are connected, avoiding infinite types during method chaining.
         let shared_this = self.fresh_type_var();
 
-        let mut props: BTreeMap<PropName, Type> = BTreeMap::new();
+        let mut props: BTreeMap<PropName, FieldEntry> = BTreeMap::new();
         let mut row_tail: RowTail = RowTail::Closed;
         // True if any spread was processed — even a closed-row spread
         // counts; the result is closed but `row_tail` may have been
@@ -81,7 +81,7 @@ impl InferState {
                         // discriminated unions work at call sites.
                         value_type.widen_fresh_literals()
                     };
-                    props.insert(prop_name, prop_type);
+                    props.insert(prop_name, FieldEntry::pre(prop_type));
                 }
 
                 PropDef::Method {
@@ -101,7 +101,7 @@ impl InferState {
                         shared_this.clone(),
                         *method_span,
                     )?;
-                    props.insert(prop_name, method_type);
+                    props.insert(prop_name, FieldEntry::pre(method_type));
                 }
 
                 PropDef::Getter { key, body, span: _ } => {
@@ -118,7 +118,7 @@ impl InferState {
                     );
                     let (body_type, _) = self.infer_stmt(&getter_env, body)?;
                     let ret_type = body_type.widen_fresh_literals();
-                    props.insert(prop_name, ret_type);
+                    props.insert(prop_name, FieldEntry::pre(ret_type));
                 }
 
                 PropDef::Setter {
@@ -134,7 +134,7 @@ impl InferState {
                     self.infer_stmt(&setter_env, body)?;
                     // For simplicity, we use the parameter type as the property type
                     // In a full implementation, we'd track getter/setter separately
-                    props.insert(prop_name, self.fresh_type_var());
+                    props.insert(prop_name, FieldEntry::pre(self.fresh_type_var()));
                 }
 
                 PropDef::Spread {
@@ -162,13 +162,13 @@ impl InferState {
         }
 
         let final_row = match row_tail {
-            RowTail::Open(var) => RowType::open(props, var),
+            RowTail::Open(var) => RowType::open_entries(props, var),
             // Closed and Recursive both produce a closed row at the
             // surface — Recursive doesn't arise from a fresh row
             // var introduced by spread inference, but if a user
             // spreads a recursive-typed value the result is still
             // soundly closed for the keys we know about.
-            _ => RowType::closed(props),
+            _ => RowType::closed_entries(props),
         };
         let obj_type = Type::Row(final_row);
 
@@ -264,7 +264,8 @@ impl InferState {
                     ..
                 } => {
                     let prop_name = self.prop_key_to_name(key);
-                    let Some(expected_prop_ty) = expected_row.props.get(&prop_name).cloned()
+                    let Some(expected_prop_ty) =
+                        expected_row.props.get(&prop_name).map(|e| e.ty.clone())
                     else {
                         // Extra key not in expected row — let
                         // synthesis fall through and produce its own
@@ -479,8 +480,11 @@ impl InferState {
             Type::Row(row) => {
                 // Direct hit in the row's own props is the common case
                 // and avoids creating unnecessary type variables.
-                if let Some(prop_type) = row.props.get(&PropName(property.to_string())) {
-                    return Ok(self.apply_subst(prop_type));
+                if let Some(entry) = row.props.get(&PropName(property.to_string())) {
+                    // Phase 1c will reject access on a definitely-absent
+                    // field and force a `Pre` presence constraint on
+                    // presence-polymorphic ones.
+                    return Ok(self.apply_subst(&entry.ty));
                 }
                 // Otherwise the property may live in a row reached
                 // through the tail (e.g., a flex tail bound by an
@@ -551,8 +555,8 @@ impl InferState {
                         match ty {
                             Type::Row(tail_row) => {
                                 // Check if property is in this row
-                                if let Some(prop_type) = tail_row.props.get(&prop_name) {
-                                    return Some(prop_type.clone());
+                                if let Some(entry) = tail_row.props.get(&prop_name) {
+                                    return Some(entry.ty.clone());
                                 }
                                 // Continue with this row's tail
                                 current_tail = &tail_row.tail;
@@ -567,8 +571,8 @@ impl InferState {
                                     self.main_subst.get(&TVarName::Flex(*next_id))
                                 {
                                     if let Type::Row(tail_row) = next_ty {
-                                        if let Some(prop_type) = tail_row.props.get(&prop_name) {
-                                            return Some(prop_type.clone());
+                                        if let Some(entry) = tail_row.props.get(&prop_name) {
+                                            return Some(entry.ty.clone());
                                         }
                                         current_tail = &tail_row.tail;
                                         continue;

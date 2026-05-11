@@ -279,8 +279,8 @@ fn member_property_compatible(member_ty: &Type, steps: &[PropName], narrowing: &
     match member_ty {
         Type::Row(row) => {
             let head = &steps[0];
-            if let Some(prop_ty) = row.props.get(head) {
-                member_property_compatible(prop_ty, &steps[1..], narrowing)
+            if let Some(entry) = row.props.get(head) {
+                member_property_compatible(&entry.ty, &steps[1..], narrowing)
             } else {
                 // Property is absent from this row's known fields.
                 // - If the row is open, we don't know — be conservative
@@ -476,8 +476,8 @@ pub fn lookup_path_type(ty: &Type, steps: &[PropName]) -> Option<Type> {
     }
     match ty {
         Type::Row(RowType { props, tail }) => {
-            if let Some(t) = props.get(&steps[0]) {
-                lookup_path_type(t, &steps[1..])
+            if let Some(entry) = props.get(&steps[0]) {
+                lookup_path_type(&entry.ty, &steps[1..])
             } else {
                 match tail {
                     RowTail::Open(_) | RowTail::Recursive(_, _) | RowTail::Closed => None,

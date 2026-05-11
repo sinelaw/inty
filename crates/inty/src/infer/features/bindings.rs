@@ -68,7 +68,7 @@ fn lhs_polytype(env: &TypeEnv, lhs: &Expr) -> Option<TypeScheme> {
                     _ => return None,
                 };
                 let prop_key = PropName((*prop).to_string());
-                cur_ty = row.props.get(&prop_key)?;
+                cur_ty = &row.props.get(&prop_key)?.ty;
             }
             let field_ty = cur_ty.clone();
             let field_free = field_ty.free_vars();

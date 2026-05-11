@@ -128,13 +128,13 @@ impl PrettyContext {
                 use super::ty::RowTail;
                 write!(w, "{{ ")?;
                 let mut first = true;
-                for (k, v) in &row.props {
+                for (k, e) in &row.props {
                     if !first {
                         write!(w, "; ")?;
                     }
                     first = false;
                     write!(w, "{}: ", k.0)?;
-                    self.write_type_ts(w, v, false)?;
+                    self.write_type_ts(w, &e.ty, false)?;
                 }
                 if let RowTail::Open(name) = &row.tail {
                     if !first {
@@ -384,36 +384,46 @@ impl PrettyContext {
         // a closed tail, render as a plain function `(args) => ret`
         // without surrounding braces. Keeps inferred function types
         // readable.
-        if let Some(call_ty) = callable {
+        if let Some(call_entry) = callable {
             if row.props.len() == 1 && matches!(row.tail, RowTail::Closed) {
-                return self.write_type(w, call_ty, false);
+                return self.write_type(w, &call_entry.ty, false);
             }
         }
 
         write!(w, "{{")?;
 
         let mut first = true;
-        if let Some(call_ty) = callable {
-            self.write_type(w, call_ty, false)?;
+        if let Some(call_entry) = callable {
+            self.write_type(w, &call_entry.ty, false)?;
             first = false;
         }
-        for (prop, ty) in &row.props {
+        for (prop, entry) in &row.props {
             if prop == &callable_key {
+                continue;
+            }
+            // Phase 1b will render `Abs` fields as omitted entirely and
+            // `Var(theta)` as `prop?: T`. For phase 1a all entries are
+            // `Pre`, so this stays equivalent to the old behaviour.
+            if matches!(entry.presence, crate::types::ty::Presence::Abs) {
                 continue;
             }
             if !first {
                 write!(w, ", ")?;
             }
             first = false;
+            let optional_marker = matches!(
+                entry.presence,
+                crate::types::ty::Presence::Var(_)
+            );
             // Private-field sentinels render as `#name`, restoring the
             // user-written form. The raw stored key contains control
             // characters that would otherwise look broken in errors.
             if let Some(name) = private_key_display(prop) {
-                write!(w, "#{}: ", name)?;
+                write!(w, "#{}{}: ", name, if optional_marker { "?" } else { "" })?;
             } else {
-                write!(w, "{}: ", prop.0)?;
+                write!(w, "{}{}: ", prop.0, if optional_marker { "?" } else { "" })?;
             }
-            self.write_type(w, ty, false)?;
+            self.write_type(w, &entry.ty, false)?;
         }
 
         match &row.tail {
@@ -537,8 +547,8 @@ fn collect_hidden_this_vars(ty: &Type, hidden: &mut HashSet<TVarName>) {
         Type::Promise(inner) => collect_hidden_this_vars(inner, hidden),
         Type::Map(value) => collect_hidden_this_vars(value, hidden),
         Type::Row(row) => {
-            for prop_ty in row.props.values() {
-                collect_hidden_this_vars(prop_ty, hidden);
+            for entry in row.props.values() {
+                collect_hidden_this_vars(&entry.ty, hidden);
             }
         }
         _ => {}

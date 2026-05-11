@@ -270,12 +270,12 @@ impl Analysis {
         let items: Vec<CompletionItem> = row
             .props
             .iter()
-            .map(|(name, prop_ty)| {
+            .map(|(name, entry)| {
                 let mut ctx = PrettyContext::new();
                 CompletionItem {
                     label: name.0.clone(),
                     kind: Some(CompletionItemKind::FIELD),
-                    detail: Some(ctx.format_type(prop_ty)),
+                    detail: Some(ctx.format_type(&entry.ty)),
                     ..Default::default()
                 }
             })
@@ -771,8 +771,8 @@ fn resolve_callee_type(env: &TypeEnv, state: &InferState, expr: &Expr) -> Option
                 Type::Row(r) => r,
                 _ => return None,
             };
-            let prop_ty = row.props.get(&PropName(property.clone()))?;
-            let applied = state.apply_subst(prop_ty);
+            let entry = row.props.get(&PropName(property.clone()))?;
+            let applied = state.apply_subst(&entry.ty);
             Some((format!("{}.{}", obj_label, property), applied))
         }
         _ => None,

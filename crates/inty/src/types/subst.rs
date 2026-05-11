@@ -5,7 +5,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::ty::{PropName, QualType, RowTail, RowType, TVarName, Type, TypePred, TypeScheme};
+use super::ty::{
+    FieldEntry, PropName, QualType, RowTail, RowType, TVarName, Type, TypePred, TypeScheme,
+};
 
 /// A substitution mapping type variables to types.
 #[derive(Clone, Debug, Default)]
@@ -178,10 +180,18 @@ impl Subst {
     }
 
     fn flatten_row(&self, row: &RowType, visited: &mut HashSet<TVarName>) -> RowType {
-        let mut props: std::collections::BTreeMap<PropName, Type> = row
+        let mut props: std::collections::BTreeMap<PropName, FieldEntry> = row
             .props
             .iter()
-            .map(|(k, v)| (k.clone(), self.flatten_type(v, visited)))
+            .map(|(k, e)| {
+                (
+                    k.clone(),
+                    FieldEntry {
+                        presence: e.presence.clone(),
+                        ty: self.flatten_type(&e.ty, visited),
+                    },
+                )
+            })
             .collect();
 
         let mut current_tail = row.tail.clone();
@@ -212,9 +222,12 @@ impl Subst {
                             // re-substitution beyond what the
                             // recursive `flatten_type` does for any
                             // `Var` we encounter.
-                            for (k, v) in &other_row.props {
-                                let v_flat = self.flatten_type(v, visited);
-                                props.entry(k.clone()).or_insert(v_flat);
+                            for (k, e) in &other_row.props {
+                                let v_flat = self.flatten_type(&e.ty, visited);
+                                props.entry(k.clone()).or_insert(FieldEntry {
+                                    presence: e.presence.clone(),
+                                    ty: v_flat,
+                                });
                             }
                             current_tail = other_row.tail.clone();
                         }
@@ -339,10 +352,10 @@ impl Substitutable for RowType {
         // require is implemented by `Subst::flatten` and called
         // only at the boundaries that need it (pretty-printing,
         // generalisation).
-        let props: std::collections::BTreeMap<PropName, Type> = self
+        let props: std::collections::BTreeMap<PropName, FieldEntry> = self
             .props
             .iter()
-            .map(|(k, v)| (k.clone(), v.apply_subst(subst)))
+            .map(|(k, e)| (k.clone(), e.apply_subst(subst)))
             .collect();
 
         let tail = match &self.tail {
@@ -361,8 +374,8 @@ impl Substitutable for RowType {
 
     fn free_vars(&self) -> HashSet<TVarName> {
         let mut vars = HashSet::new();
-        for ty in self.props.values() {
-            vars.extend(ty.free_vars());
+        for entry in self.props.values() {
+            vars.extend(entry.free_vars());
         }
         match &self.tail {
             RowTail::Open(var) => {
@@ -376,6 +389,22 @@ impl Substitutable for RowType {
             RowTail::Closed => {}
         }
         vars
+    }
+}
+
+impl Substitutable for FieldEntry {
+    fn apply_subst(&self, subst: &Subst) -> Self {
+        // Phase 1: only the type component varies through type-var
+        // substitution. Presence variables get their own substitution
+        // domain in phase 1b; until then, presence is preserved as-is.
+        FieldEntry {
+            presence: self.presence.clone(),
+            ty: self.ty.apply_subst(subst),
+        }
+    }
+
+    fn free_vars(&self) -> HashSet<TVarName> {
+        self.ty.free_vars()
     }
 }
 

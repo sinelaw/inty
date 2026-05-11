@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use crate::error::{IntyError, TypeError};
 use crate::lexer::Span;
-use crate::types::{PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef};
+use crate::types::{FieldEntry, PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef};
 
 use super::state::InferState;
 
@@ -245,11 +245,11 @@ impl InferState {
     /// Arrays have structural properties like `length: Number`.
     fn unify_array_with_row(&mut self, span: Span, elem: &Type, row: &RowType) -> UnifyResult<()> {
         // Check each property in the row against array's known properties
-        for (prop_name, prop_type) in &row.props {
+        for (prop_name, entry) in &row.props {
             match prop_name.0.as_str() {
                 "length" => {
                     // Array.length is Number
-                    self.unify(span, prop_type, &Type::Number)?;
+                    self.unify(span, &entry.ty, &Type::Number)?;
                 }
                 _ => {
                     // Unknown property - arrays don't have arbitrary properties
@@ -301,11 +301,13 @@ impl InferState {
         all_props.sort();
         all_props.dedup();
 
-        // Unify common properties
+        // Unify common properties (type only — presence unification
+        // arrives in phase 1c; phase 1a preserves the prior semantics
+        // by ignoring presence, which is `Pre` everywhere).
         for prop in &all_props {
             match (r1.props.get(prop), r2.props.get(prop)) {
-                (Some(t1), Some(t2)) => {
-                    self.unify(span, t1, t2)?;
+                (Some(e1), Some(e2)) => {
+                    self.unify(span, &e1.ty, &e2.ty)?;
                 }
                 (Some(_), None) => {
                     // Property in r1 but not r2
@@ -352,7 +354,7 @@ impl InferState {
 
             (RowTail::Open(TVarName::Flex(id)), RowTail::Closed) => {
                 // Bind the row variable to an empty row
-                let extra_props: BTreeMap<PropName, Type> = r2
+                let extra_props: BTreeMap<PropName, FieldEntry> = r2
                     .props
                     .iter()
                     .filter(|(k, _)| !r1.props.contains_key(*k))
@@ -365,14 +367,14 @@ impl InferState {
                     self.extend_subst(
                         span,
                         TVarName::Flex(*id),
-                        Type::Row(RowType::closed(extra_props)),
+                        Type::Row(RowType::closed_entries(extra_props)),
                     )
                 }
             }
 
             (RowTail::Closed, RowTail::Open(TVarName::Flex(id))) => {
                 // Symmetric case
-                let extra_props: BTreeMap<PropName, Type> = r1
+                let extra_props: BTreeMap<PropName, FieldEntry> = r1
                     .props
                     .iter()
                     .filter(|(k, _)| !r2.props.contains_key(*k))
@@ -385,7 +387,7 @@ impl InferState {
                     self.extend_subst(
                         span,
                         TVarName::Flex(*id),
-                        Type::Row(RowType::closed(extra_props)),
+                        Type::Row(RowType::closed_entries(extra_props)),
                     )
                 }
             }
@@ -395,14 +397,14 @@ impl InferState {
                 let fresh = self.fresh_flex();
 
                 // Calculate extra properties for each side
-                let extra1: BTreeMap<PropName, Type> = r2
+                let extra1: BTreeMap<PropName, FieldEntry> = r2
                     .props
                     .iter()
                     .filter(|(k, _)| !r1.props.contains_key(*k))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
 
-                let extra2: BTreeMap<PropName, Type> = r1
+                let extra2: BTreeMap<PropName, FieldEntry> = r1
                     .props
                     .iter()
                     .filter(|(k, _)| !r2.props.contains_key(*k))
@@ -413,12 +415,12 @@ impl InferState {
                 self.extend_subst(
                     span,
                     TVarName::Flex(*id1),
-                    Type::Row(RowType::open(extra1, fresh.clone())),
+                    Type::Row(RowType::open_entries(extra1, fresh.clone())),
                 )?;
                 self.extend_subst(
                     span,
                     TVarName::Flex(*id2),
-                    Type::Row(RowType::open(extra2, fresh)),
+                    Type::Row(RowType::open_entries(extra2, fresh)),
                 )?;
 
                 Ok(())

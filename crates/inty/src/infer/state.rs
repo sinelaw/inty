@@ -212,7 +212,7 @@ impl InferState {
             Type::Row(row) => row
                 .props
                 .values()
-                .find_map(|t| self.find_origin_in_type(t))
+                .find_map(|e| self.find_origin_in_type(&e.ty))
                 .or_else(|| {
                     if let RowTail::Open(var) = &row.tail {
                         self.type_origins.get(var)
@@ -470,7 +470,10 @@ impl InferState {
                 let mut all_ok = true;
                 for (k, sub_field) in &r1.props {
                     let sup_field = r2.props.get(k).expect("keys checked equal");
-                    if self.subsume(span, sub_field, sup_field).is_err() {
+                    if self
+                        .subsume(span, &sub_field.ty, &sup_field.ty)
+                        .is_err()
+                    {
                         all_ok = false;
                         break;
                     }
@@ -797,7 +800,7 @@ impl InferState {
             }
 
             Type::Row(row) => {
-                row.props.values().any(|t| self.occurs_in_impl(var, t))
+                row.props.values().any(|e| self.occurs_in_impl(var, &e.ty))
                     || matches!(&row.tail, RowTail::Open(TVarName::Flex(id)) if *id == var)
                     || matches!(&row.tail, RowTail::Recursive(_, args) if args.iter().any(|a| self.occurs_in_impl(var, a)))
             }
@@ -840,7 +843,7 @@ impl InferState {
                 // Check inside properties - we're now inside a row
                 row.props
                     .values()
-                    .any(|t| self.is_inside_row_type_impl(var, t, true))
+                    .any(|e| self.is_inside_row_type_impl(var, &e.ty, true))
             }
 
             Type::Func {
