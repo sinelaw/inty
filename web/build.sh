@@ -6,6 +6,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+echo "Generating web/examples.js from examples/playground/..."
+python3 "$PROJECT_ROOT/scripts/gen-examples.py"
+
 echo "Building Inty WASM module..."
 
 # Check if wasm-pack is installed

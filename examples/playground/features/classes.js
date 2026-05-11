@@ -16,4 +16,4 @@ var n = c.inc();           // Number
 var v = c.current;         // Number
 
 // Try this — uncomment to see the parse error:
-// var leak = c.#count;
+// var leak = c.#count;   // error!

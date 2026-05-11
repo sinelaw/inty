@@ -7,4 +7,4 @@ var sum    = add(1, 2);
 var concat = add("foo", "bar");
 
 // The call site picks the instance. Mixing them is a type error:
-// var bad = add(1, "two");   // ← uncomment to see the error
+// var bad = add(1, "two");   // error!
