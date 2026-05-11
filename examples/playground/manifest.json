@@ -13,6 +13,7 @@
         { "id": "method-chaining", "label": "method-chaining.js", "blurb": "Equi-recursive builder types",    "expect": "ok" },
         { "id": "tagged-unions",   "label": "tagged-unions.js",   "blurb": "Discriminated unions + narrowing", "expect": "ok" },
         { "id": "nullable",        "label": "nullable.js",        "blurb": "Optional values, ??, narrowing",  "expect": "ok" },
+        { "id": "optional-fields", "label": "optional-fields.js", "blurb": "Row-field presence polymorphism", "expect": "ok" },
         { "id": "classes",         "label": "classes.js",         "blurb": "Class bodies + private fields",   "expect": "ok" },
         { "id": "callable-rows",   "label": "callable-rows.js",   "blurb": "Functions are rows with statics", "expect": "ok" },
         { "id": "higher-order",    "label": "higher-order.js",    "blurb": "First-class functions",           "expect": "ok" }
