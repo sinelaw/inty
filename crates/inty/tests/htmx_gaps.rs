@@ -3,16 +3,18 @@
 //! `src/htmx.js`, ~5.3 kloc of plain JS — no TypeScript).
 //!
 //! Each test pins a minimal program that exercises one specific gap.
-//! All tests are marked `#[ignore]` because they encode the **desired**
-//! behaviour: they currently fail. Run them on demand with
+//! Tests for fixed gaps run by default and act as regression
+//! coverage; tests for still-open gaps are marked `#[ignore]` with
+//! a descriptive reason and can be exercised on demand with
 //!
 //!     cargo test -p inty --test htmx_gaps -- --ignored
 //!
-//! Removing the `#[ignore]` once the underlying gap is fixed turns
-//! each into a regression test.
+//! Gap status (see commits prefixed `parser:` / `tests:` for history):
 //!
-//! The companion documentation lives in the commit message that
-//! introduced this file — search the log for "htmx".
+//!   * Gap 1 — reserved word as member name: **fixed**
+//!   * Gap 2 — `for (const x in/of y)`:       **fixed**
+//!   * Gap 3 — `new Cls(...).member`:         **fixed**
+//!   * Gap 4 — hoisting beyond adjacent decls: open (needs design)
 
 use inty::parser::parse;
 use inty::stdlib::initial_env_with_stdlib;
@@ -48,13 +50,11 @@ fn type_checks(src: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "htmx gap 1: reserved word `async` not accepted in member-access position"]
 fn reserved_word_as_member_async_assignment() {
     parses("var o = {}; o.async = 1;").expect("should accept `async` as a member name");
 }
 
 #[test]
-#[ignore = "htmx gap 1: reserved word `async` not accepted in member-access read"]
 fn reserved_word_as_member_async_read() {
     parses("var o = {async: 1}; var x = o.async;")
         .expect("should accept `async` as a member name on read");
@@ -75,14 +75,12 @@ fn reserved_word_as_member_async_read() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "htmx gap 2: `for (const k in obj)` rejected; `let`/`var` work"]
 fn for_const_in() {
     parses("for (const k in {}) {}")
         .expect("should accept `const` as binder in for-in");
 }
 
 #[test]
-#[ignore = "htmx gap 2: `for (const k of arr)` rejected; `let`/`var` work"]
 fn for_const_of() {
     parses("for (const k of []) {}")
         .expect("should accept `const` as binder in for-of");
@@ -105,7 +103,6 @@ fn for_const_of() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "htmx gap 3: `new F().y` not parsed; only `var t = new F(); t.y` works"]
 fn new_then_member_same_line() {
     let src = "
         function F() { return {y: 1}; }
@@ -115,7 +112,6 @@ fn new_then_member_same_line() {
 }
 
 #[test]
-#[ignore = "htmx gap 3: `new F()\\n  .y` not parsed (same as same-line variant)"]
 fn new_then_member_next_line() {
     let src = "
         function F() { return {y: 1}; }
@@ -126,7 +122,6 @@ fn new_then_member_next_line() {
 }
 
 #[test]
-#[ignore = "htmx gap 3: `new F(args).m()` not parsed"]
 fn new_with_args_then_method_call() {
     let src = "
         function F(a) { return {m: function() { return a; }}; }
