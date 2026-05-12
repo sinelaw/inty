@@ -17,6 +17,9 @@
 //!   * Gap 3 — `new Cls(...).member`:         **fixed**
 //!   * Gap 4 — hoisting beyond adjacent decls: **fixed** via SCC
 //!     dependency analysis (see `docs/scc-inference.md`)
+//!   * Gap 5 — `delete o.k` aborted parsing: **fixed** via soft
+//!     `Type::Error` diagnostic at the delete site (no row subtraction;
+//!     the result is absorbed so downstream uses don't cascade)
 
 use inty::parser::parse;
 use inty::stdlib::initial_env_with_stdlib;
@@ -204,4 +207,44 @@ fn hoisting_iife_library_pattern() {
         var y = lib.run(1);
     ";
     type_checks(src).expect("IIFE library pattern should type-check");
+}
+
+// ---------------------------------------------------------------------------
+// Gap 5: `delete o.k` used to be a parse-time hard error, which aborted
+// inference at the first `delete` in the file. In htmx 2.x this is line
+// 1659: `delete internalData.onHandlers`. The fix accepts `delete` at
+// parse time and emits a *soft* diagnostic during inference (the result
+// is `Type::Error`, absorbed by downstream uses) so the rest of the file
+// continues to type-check.
+//
+// We don't claim `delete` is sound — the row algebra doesn't model
+// field subtraction. The diagnostic explicitly points at the safe
+// workaround (`{ k: _drop, ...rest } = o`).
+//
+// htmx site:  delete internalData.onHandlers   // src/htmx.js:1659
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delete_parses() {
+    parses("var o = {a: 1}; delete o.a;")
+        .expect("delete should parse — diagnostic is moved to inference time");
+}
+
+#[test]
+fn delete_in_middle_of_file_does_not_stop_inference() {
+    // Inference should keep going past the `delete` so later
+    // statements still get checked.
+    use inty::parser::parse;
+    use inty::stdlib::initial_env_with_stdlib;
+    let src = "
+        var o = {a: 1};
+        delete o.a;
+        var later = 1 + 2;
+    ";
+    let program = parse(src).expect("delete should parse");
+    let (env, mut state) = initial_env_with_stdlib().expect("stdlib");
+    let _ = state.infer_program_with_env(&env, &program);
+    // The delete emits a diagnostic; that's expected.
+    let errs = state.take_errors();
+    assert_eq!(errs.len(), 1, "expected exactly one diagnostic (for delete), got: {:?}", errs);
 }
