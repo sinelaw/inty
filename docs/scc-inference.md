@@ -7,6 +7,41 @@ motivation is gap 4 in [`crates/inty/tests/htmx_gaps.rs`](../crates/inty/tests/h
 (the IIFE library pattern used by htmx, jQuery, lodash, Day.js, etc.).
 Status: design only — no code yet.
 
+The guiding principle is **match ECMAScript strict-mode semantics
+exactly**. Every rule below is justified by what V8/JSC/SpiderMonkey
+actually do when given the same source. We use *strict* mode because
+ES modules are strict by default, htmx and friends open with
+`'use strict'`, and Annex B "sloppy mode" function-in-block semantics
+are an explicit web-compatibility hack that no new tooling should
+emulate.
+
+## What ECMAScript says about hoisting
+
+ES § 14 (Declarations and the Variable Statement), § 16 (Scripts and
+Modules), and § 9 (Executable Code and Execution Contexts) divide
+declarations into three categories with different visibility rules.
+
+| Form                       | Hoisted? | Value before init line | Use before init |
+|----------------------------|----------|------------------------|-----------------|
+| `function f() {…}` at top of function/script/module | Name **and** value hoisted to top of containing function/script/module | The function itself | OK — returns the function |
+| `function f() {…}` inside a block (`if`, `for`, …) in strict mode | Name and value hoisted to top of the **block**, not the enclosing function | The function itself (within the block) | OK *within the block*; outside the block, `f` doesn't exist |
+| `var x = e`                | Name hoisted to top of containing function/script/module | `undefined` | Reads `undefined`; calling `undefined()` is a TypeError |
+| `let x = e` / `const x = e`| Lexically scoped to enclosing block | TDZ (does not exist) | **ReferenceError** |
+| `class C {…}`              | Lexically scoped to enclosing block | TDZ            | **ReferenceError** |
+| `var f = function() {…}`   | Same as `var x = e`: name hoisted, value `undefined` | `undefined` | Calling `f()` before the line throws TypeError |
+
+The only declaration form that hoists *with its value* is
+`function`/`export function`. That's the only form inty should treat
+as hoistable.
+
+The block-vs-function-scope distinction matters: in strict mode,
+`function f` inside `if (cond) { … }` is **block-scoped**, not
+hoisted up to the enclosing function. inty already mirrors this
+because `Stmt::Block` recurses into `infer_stmt_list` with its own
+fresh scope — the SCC pre-pass runs per `infer_stmt_list` call, so
+block-scoped function decls stay confined to their block. No new
+logic needed; we just preserve today's recursion structure.
+
 ## Problem recap
 
 Today `infer_stmt_list` (in `src/infer/mod.rs`) walks statements
@@ -15,22 +50,40 @@ binding group. `infer_function_group` does textbook let-rec inference
 on each group: hoist names → infer all bodies → generalise. Any
 non-function statement between two `function` decls breaks the group,
 so a forward reference across the break fails with "Undefined
-variable". That's what blocks every htmx-shaped file.
+variable".
+
+This rejects programs that ECMAScript accepts. For example, every
+browser evaluates this without error:
+
+```js
+function a() { return b(); }
+const sep = 1;
+function b() { return 1; }
+a(); // 1
+```
+
+inty rejects it because `a`'s body sees `b` as undefined — `b`'s
+declaration is in a separate "group" after `const sep`. The htmx
+source hits this on its first interesting line and never recovers.
 
 The standard fix is dependency analysis: hoist *every* `function`
-declaration in a scope before inferring any body, then process
-mutually-recursive sub-groups (SCCs of the call graph) in topological
-order.
+declaration in a scope (as ECMAScript does) before inferring any
+body, then process mutually-recursive sub-groups (SCCs of the call
+graph) in topological order.
 
 ## Target rule
 
 In a scope with bindings B₁ … Bₙ in source order:
 
 1. Pre-pass — collect every **hoistable** binding into a name map
-   with a fresh monomorphic type variable. Hoistable = `function f`
-   declarations and `export function f` declarations (matches JS's
-   `function`-decl hoisting; `var`/`let`/`const` initialisers are
-   not hoistable because of TDZ / late-init).
+   with a fresh monomorphic type variable. Hoistable = exactly the
+   declaration forms that ECMAScript hoists with their value:
+   `function f` and `export function f` declarations at the immediate
+   statement-list level. `var`/`let`/`const` initialisers (including
+   `var f = function…`), `class` declarations, and `function` decls
+   nested inside `if`/`for`/`while`/`try`/etc. blocks all stay out
+   of the hoistable set — they're not value-hoisted by ECMAScript
+   either.
 2. Compute a directed graph over the hoistable names where `f → g`
    iff `f`'s body free-references `g`. Compute SCCs (Tarjan's),
    topologically order them.
@@ -47,7 +100,8 @@ In a scope with bindings B₁ … Bₙ in source order:
 Property we want: principal types per SCC (Hindley-Milner soundness
 + completeness for HM-restricted programs), and every JS program
 whose static call graph forms an acyclic-after-SCC structure
-type-checks regardless of source ordering.
+type-checks regardless of source ordering — matching strict-mode
+ECMAScript visibility exactly.
 
 ## What stays the same
 
@@ -159,81 +213,92 @@ referenced indices (intersection of free-identifier set with the
 hoistable name map). We don't need any inty types to do this; it's
 a graph algorithm over `usize` node ids.
 
-## Subtle points worth pinning before coding
+## Rules pinned by ECMAScript (no design choices required)
 
-### 1. Scope boundaries
+Each item below is settled by what the spec says and what V8/JSC/
+SpiderMonkey actually do; we just follow.
 
-Hoisting is **per function scope** in JS. inty's existing
-`infer_stmt_list` is called recursively from `Stmt::Block` and from
-`infer_function` (for function bodies). The pre-pass must collect
-only function decls *directly* in the current statement list — not
-those nested inside `if`/`for`/etc. blocks. Nested `function` decls
-inside blocks hoist to their *containing block* per ES2015 strict
-mode, but inty's current behaviour matches the "hoist to function"
-convention; we should keep that unchanged.
+### 1. Scope boundaries — per `infer_stmt_list` call
 
-**Decision needed**: confirm we want to hoist function decls inside
-`if`/`for` blocks to the immediate containing scope or to the
-containing function. Today's code hoists to the block (block is its
-own `infer_stmt_list` call). The pre-pass per call site preserves
-that, which is fine.
+ES § 9.2.10 (FunctionDeclarationInstantiation) hoists `function`
+declarations to the top of the **VariableEnvironment** of the
+enclosing function or script. For a block (`if`, `for`, `while`,
+…) in strict mode, ES § 14.2 + § 14.4 introduce a separate
+**LexicalEnvironment** for the block; function decls inside the
+block are bound there, not in the enclosing function. The
+behaviour, mirrored by every engine:
+
+```js
+'use strict';
+function outer() {
+  if (true) {
+    function inner() { return 1; }
+    inner();         // 1
+  }
+  return inner();    // ReferenceError: inner is not defined
+}
+```
+
+inty already matches this for free: `Stmt::Block` recurses into
+`infer_stmt_list` with a fresh inner scope, so the SCC pre-pass
+runs per-block. Function decls inside an `if`/`for`/`while`
+hoist to the immediate block, not to the surrounding function.
+**No change to the existing recursion structure.**
 
 ### 2. `var f = function() {…}` is *not* hoistable
 
-Even though `var f` is name-hoisted to `undefined`, the function
-value is only assigned when the line executes. A call to `f()`
-before the `var f = …` line is a runtime TypeError. Treating this
-as hoistable would type-check programs that crash. Decision: keep
-the current treatment — only `function` and `export function`
-declarations are hoistable.
+Per ES § 14.3.2 (VariableDeclaration) the binding is created at
+function-entry with the value `undefined`; the function value is
+only assigned when the assignment expression executes. Calling
+`f()` before the line is a runtime `TypeError: f is not a function`
+in every engine. Treating it as hoistable would type-check programs
+that the spec says crash. Stay out of the hoistable set.
+
+The same applies to `let f = function…` and `const f = function…`:
+both are TDZ before the line. Not hoistable.
 
 ### 3. Class declarations
 
-Once class declarations land in inty's scope (currently `class C {…}`
-is a value, not a hoisted decl), the same question applies. ES
-class declarations are TDZ — *not* hoisted. Keep them out of the
-hoistable set.
+Per ES § 15.7.10, class declarations are lexically scoped and
+TDZ before their declaration line. Engines throw
+`ReferenceError: Cannot access 'C' before initialization`. Not
+hoistable.
 
-### 4. Error spans and ordering
+### 4. `function` declarations inside blocks (the Annex B trap)
 
-A type error inside a late-in-source, early-in-topo SCC will get
-inferred before the user's mental source-order walk reaches it.
-Two options:
+ES Annex B.3.2 specifies the legacy web-compatibility semantics
+that sloppy-mode browsers implement: a `function f` inside a block
+gets *both* a block-scoped binding and a `var`-hoisted binding in
+the enclosing function, with cross-update on assignment. This is
+explicitly described in the spec as a hack for legacy code that
+"no new code should rely on."
 
-  (a) Collect all SCC errors, sort by source span, report in source
-      order. Matches user expectations; needs an error buffer.
-  (b) Report in topo order, accept that error spans may go
-      "backwards." Simpler; OCaml does this.
+Strict-mode programs (every ES module, anything starting with
+`'use strict'`) **do not** get Annex B; the function decl is
+strictly block-scoped. inty assumes strict mode throughout
+(consistent with treating ES modules as the default), so we
+implement only the strict rule: function decls inside blocks
+hoist to the block, never to the enclosing function.
 
-**Recommendation**: (a). inty already buffers parse errors
-internally; same shape works for type errors. Cost is one
-small refactor of the error path.
+### 5. TDZ diagnostics
 
-### 5. Cross-SCC type errors
+For `let` / `const` / `class`, ES specifies a `ReferenceError`
+on any access before the declaration line is reached. inty's
+current "Undefined variable" error catches the static cases
+because these forms aren't in the hoistable set — they're
+processed in source order, and a reference before the decl
+hits an env that doesn't contain the name yet. The SCC change
+preserves this exactly: only `function` decls hoist, everything
+else still flows source-order.
 
-If `f` (in SCC₁) calls `g` (in SCC₂), and SCC₂ has a type error,
-we want SCC₁ to still be inferred (best-effort). Standard practice:
-on an SCC failure, bind every member to `Type::Error` (a fresh
-sentinel) and continue. This avoids cascading errors. inty doesn't
-currently have a `Type::Error` sentinel; the simplest substitute is
-a fresh unconstrained TVar plus an error in the buffer, which
-preserves principal types for unrelated bindings.
+### 6. Interaction with the value restriction
 
-**Decision needed**: introduce a proper error type, or live with
-the TVar substitute.
+Inside one SCC: each member is initially monomorphic, gets
+generalised at the SCC boundary. `infer_function_group`'s pass 2
+already does this. No change.
 
-### 6. TDZ ("use before init") diagnostics
-
-Once `function` decls hoist freely, the existing "Undefined
-variable" error stops firing for forward references — which is
-the goal. But the same error currently doubles as a TDZ catch for
-`let`/`const`. We don't lose that: `let`/`const` are not in the
-hoistable set, so a use-before-decl of a `let` still hits the
-existing path. No action needed.
-
-The actual TDZ JS semantics for `function` decls inside blocks
-(strict mode) is more nuanced, but inty doesn't currently model
-strict-mode TDZ; out of scope.
+Between SCCs: a non-function statement between SCC₁ and SCC₂ flows
+in source order, can call into SCC₁'s generalised types, and SCC₂
 
 ### 7. Interaction with the value restriction
 
@@ -317,11 +382,13 @@ nested functions and destructuring); the rest is mechanical.
 ## What we deliberately don't do
 
 - **No general inter-binding SCC for `let`/`const`/`var`.** Only
-  function decls hoist. Mixing `const a = b; const b = a;` stays
-  an error (TDZ).
-- **No effort to match TC39's block-level function declaration
-  semantics.** inty's existing convention (hoist to nearest
-  statement-list) is preserved.
+  function decls hoist (ES § 9.2.10 + § 14.3); mixing
+  `const a = b; const b = a;` stays an error to match the TDZ
+  ReferenceError engines throw.
+- **No Annex B sloppy-mode function-in-block semantics.** Strict
+  mode only. Browsers in sloppy mode implement the legacy
+  cross-update behaviour described in ES Annex B.3.2; new tools
+  should not.
 - **No type-class generalisation beyond what
   `infer_function_group` already does.** SCC just decides *which*
   bindings share a generalisation point; the per-group logic is
@@ -331,13 +398,25 @@ nested functions and destructuring); the rest is mechanical.
 
 ## Open questions
 
-1. Free-identifier walker — bespoke new module, or do we already
-   have one I missed? (Quick grep says no, but worth a second look.)
-2. Error type sentinel — introduce now or defer? (Lean: defer; the
-   TVar substitute is fine for SCC failure cascades.)
-3. Should `var f = function() {…}` participate as a "weak" hoist —
-   visible only from later statements? Probably not worth the
-   complexity; the workaround (use `function f() {}`) is trivial.
-4. Performance: Tarjan is O(V+E); free-identifier walking is O(AST
-   size). Per-scope, both are dominated by inference itself.
+These are the remaining items that aren't pinned by ECMAScript and
+need a project-level decision:
+
+1. **Free-identifier walker location.** Bespoke new module under
+   `crates/inty/src/parser/`, or extend an existing AST visitor?
+   Quick grep shows no existing one; default to a new module unless
+   review surfaces something to reuse.
+2. **Error type sentinel.** Introduce a proper `Type::Error` now,
+   or use a fresh unconstrained TVar plus a buffered error as the
+   substitute? Lean: defer the proper sentinel. The TVar substitute
+   is sound (worst case: a downstream error references an
+   unconstrained var, which is at most an extra noisy diagnostic,
+   not a correctness bug).
+3. **Error-emit order.** Sort buffered errors by source span before
+   reporting, or report in SCC-topological order? Lean: source-span
+   sort. ES error semantics aren't relevant here — engines stop at
+   the first runtime error, but a type checker reports all
+   statically-detectable problems, so the question is purely
+   user-experience.
+4. **Performance.** Tarjan is O(V+E); free-identifier walking is
+   O(AST size). Per-scope, both are dominated by inference itself.
    No expected hotpath impact.
