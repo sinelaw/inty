@@ -1,6 +1,7 @@
 //! Parser module for mquickjs JavaScript source code.
 
 pub mod ast;
+pub mod free_idents;
 pub mod pretty;
 
 #[cfg(test)]
