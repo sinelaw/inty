@@ -76,6 +76,35 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    // Run the actual work on a worker thread with a much larger stack
+    // than the default 8 MB. inty's recursive `apply_subst` and
+    // `free_vars` walks consume ~13 stack frames per level of type
+    // nesting (BTreeMap collect / iterator machinery), so real-world
+    // JS that produces deep row types (htmx, jQuery, lodash) can
+    // overflow the default before any depth limit catches it. rustc
+    // does the same — see `RUST_MIN_STACK`. The depth limit in
+    // `Type::apply_subst` is the hard contract; this is the soft
+    // ceiling that lets legitimate deep code through without
+    // tripping it. 64 MB is well above what any benign file needs
+    // and well below what would dwarf the rest of the process.
+    //
+    // See `docs/scaling.md` for the architectural follow-up that
+    // would remove the need for either guard.
+    const WORKER_STACK_BYTES: usize = 64 * 1024 * 1024;
+    match std::thread::Builder::new()
+        .name("inty-worker".into())
+        .stack_size(WORKER_STACK_BYTES)
+        .spawn(main_impl)
+    {
+        Ok(handle) => handle.join().unwrap_or(ExitCode::from(2)),
+        Err(e) => {
+            eprintln!("failed to spawn worker thread: {}", e);
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn main_impl() -> ExitCode {
     let raw: Vec<String> = env::args().collect();
 
     // Sub-command dispatch: if argv[1] is `lsp`, hand off to the
