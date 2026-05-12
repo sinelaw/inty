@@ -1785,10 +1785,16 @@ impl Parser {
         self.expect(&Token::LParen)?;
 
         // Parse init.
-        let init_or_lhs = if self.check(&Token::Var) || self.check(&Token::Let) {
+        let init_or_lhs = if self.check(&Token::Var)
+            || self.check(&Token::Let)
+            || self.check(&Token::Const)
+        {
             let var_start = self.current_span().start;
-            let was_let = self.check(&Token::Let);
-            let kind = if was_let { VarKind::Let } else { VarKind::Var };
+            let kind = match self.current() {
+                Token::Let => VarKind::Let,
+                Token::Const => VarKind::Const,
+                _ => VarKind::Var,
+            };
             self.advance();
 
             // `for (let {a, b} of arr) { ... }` — a destructuring pattern
@@ -2511,9 +2517,12 @@ impl Parser {
     fn parse_call_expression(&mut self) -> Result<Expr> {
         let start = self.current_span().start;
 
-        // Handle 'new' expression
-        if self.consume_if(&Token::New) {
-            // Check for new.target
+        // `new` produces either a NewTarget meta-property or a `new X(...)`
+        // construction. After construction we fall through to the call/
+        // member chain loop below so trailing `.foo`, `[k]`, `(args)`, and
+        // `?.` segments compose normally (`new URL(p, b).pathname`,
+        // `new FormData(elt).forEach(...)`, etc.).
+        let mut expr = if self.consume_if(&Token::New) {
             if self.consume_if(&Token::Dot) {
                 self.expect_keyword("target")?;
                 return Ok(Expr::NewTarget {
@@ -2529,14 +2538,14 @@ impl Parser {
                 Vec::new()
             };
 
-            return Ok(Expr::New {
+            Expr::New {
                 callee: Box::new(callee),
                 arguments,
                 span: Span::new(start, self.prev_span().end),
-            });
-        }
-
-        let mut expr = self.parse_member_expression()?;
+            }
+        } else {
+            self.parse_member_expression()?
+        };
 
         // Handle call and member expressions, including optional-chain
         // links. Once we see the first `?.` the chain switches to an
@@ -3140,6 +3149,11 @@ impl Parser {
                 | Token::Export
                 | Token::From
                 | Token::As
+                | Token::Class
+                | Token::Extends
+                | Token::Super
+                | Token::Async
+                | Token::Await
         )
     }
 
