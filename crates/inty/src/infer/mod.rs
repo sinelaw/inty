@@ -30,7 +30,7 @@ pub use unify::UnifyResult;
 
 use crate::error::{IntyError, TypeError};
 use crate::parser::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
-use crate::types::Type;
+use crate::types::{Type, TypeScheme};
 
 /// Result type for inference operations.
 pub type InferResult<T> = Result<T, IntyError>;
@@ -135,15 +135,28 @@ impl InferState {
         Ok(())
     }
 
-    /// Infer a list of statements with function-declaration hoisting.
+    /// Infer a list of statements with ECMAScript-strict-mode function
+    /// declaration hoisting (ES § 9.2.10).
     ///
-    /// Groups adjacent `function` declarations into a single binding group
-    /// and processes them together (hoist → infer bodies → generalise) so
-    /// mutual recursion and forward references between peers in the same
-    /// group type-check correctly. Non-function statements break up the
-    /// groups and are inferred in the usual left-to-right order, which
-    /// matches JavaScript's evaluation order for anything that isn't a
-    /// `function` declaration.
+    /// Every `function` declaration in this scope is collected before
+    /// any body is inferred, regardless of source position. The
+    /// dependency graph between those decls (built from a free-
+    /// identifier analysis of each body, see
+    /// `parser::free_idents`) is decomposed into strongly-connected
+    /// components by Tarjan's algorithm. Each SCC is processed as
+    /// one mutually-recursive group via `infer_function_group`,
+    /// in topological order so a caller SCC always sees its callees'
+    /// generalised schemes. Non-function statements then flow in
+    /// source order against the fully-populated function env —
+    /// which matches what runtime semantics do, since by the time
+    /// any non-function statement executes, every `function` decl
+    /// in the scope is already visible.
+    ///
+    /// Forward references and mutual recursion between any pair of
+    /// function decls in the same scope type-check, regardless of
+    /// intervening non-function statements (the htmx / jQuery /
+    /// lodash IIFE library pattern). See `docs/scc-inference.md`
+    /// for the full design and the ECMAScript citations.
     pub(crate) fn infer_stmt_list(
         &mut self,
         env: &TypeEnv,
@@ -155,72 +168,110 @@ impl InferState {
         // temps (`$destr$N`) are skipped — they're uniquely generated
         // per pattern and can't collide.
         let mut const_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut result = Type::Undefined;
+
+        // Pass 1: compute the SCC partition of all hoistable function
+        // decls in this scope. Each inner Vec holds statement indices
+        // in source order; the outer Vec is in topological order.
+        let scc_groups = crate::infer::features::functions::compute_scc_groups(stmts);
+
+        // Pass 2: type-check each SCC in topological order.
+        // `infer_function_group` does the textbook let-rec inference
+        // (hoist names with fresh TVars, infer bodies in shared env,
+        // generalise at the boundary) — we just hand it one SCC at a
+        // time.
         let mut current_env = env.clone();
-        let mut i = 0;
-        while i < stmts.len() {
-            if is_function_like_decl(&stmts[i]) {
-                // Extend the group across intervening empty statements:
-                // `function f() {} ; function g() {}` should still let
-                // `f` and `g` see each other (JS hoists all function
-                // declarations in a scope to the top). Without this,
-                // a stray `;` silently breaks mutual recursion. Both
-                // plain and `export function` participate in the same
-                // group so that `export function a(){ return b(); }
-                // export function b(){...}` type-checks.
-                let start = i;
-                while i < stmts.len()
-                    && (is_function_like_decl(&stmts[i]) || matches!(stmts[i], Stmt::Empty { .. }))
-                {
-                    i += 1;
-                }
-                // Trim trailing empties so the slice handed to
-                // `infer_function_group` ends on a function-like decl —
-                // the group-inference routine skips empties either way,
-                // but trimming avoids pointless iteration over them.
-                let mut end = i;
-                while end > start && matches!(stmts[end - 1], Stmt::Empty { .. }) {
-                    end -= 1;
-                }
-                if end == start {
-                    // We only saw empties; fall through to the
-                    // regular path so each Empty is processed (sets
-                    // `result` to Undefined).
-                    i = start;
-                } else {
-                    current_env = self.infer_function_group(&current_env, &stmts[start..end])?;
-                    i = end;
-                    continue;
-                }
-            }
-            {
-                if let Stmt::Var {
-                    kind: VarKind::Const,
-                    declarations,
-                    ..
-                } = &stmts[i]
-                {
-                    for decl in declarations {
-                        if decl.name.starts_with("$destr$") {
-                            continue;
-                        }
-                        if !const_names.insert(decl.name.clone()) {
-                            return Err(TypeError::Module {
-                                message: format!(
-                                    "duplicate declaration of 'const {}' in the same scope",
-                                    decl.name
-                                ),
-                                span: decl.span,
-                            }
-                            .into());
+        let mut first_error: Option<crate::error::IntyError> = None;
+        for scc_indices in &scc_groups {
+            // Gather the SCC's statements in source order. Cloning
+            // is cheap relative to the inference work that follows.
+            let group_stmts: Vec<Stmt> =
+                scc_indices.iter().map(|&i| stmts[i].clone()).collect();
+            match self.infer_function_group(&current_env, &group_stmts) {
+                Ok(new_env) => current_env = new_env,
+                Err(err) => {
+                    // Best-effort recovery: bind every member of the
+                    // failed SCC to `Type::Error`. The user already
+                    // got one diagnostic (the original `err`);
+                    // downstream uses of these names propagate Error
+                    // silently through `unify`, `infer_member`,
+                    // `infer_call`, and the type-class solver. This
+                    // keeps unrelated SCCs and source-order
+                    // statements type-checking without cascading
+                    // noise. See `docs/scc-inference.md` § "Cross-SCC
+                    // type errors".
+                    for stmt in &group_stmts {
+                        if let Some((name, _, _, _, _)) =
+                            crate::infer::features::functions::function_decl_parts(stmt)
+                        {
+                            current_env = current_env
+                                .extend(name.to_string(), TypeScheme::mono(Type::Error));
                         }
                     }
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
                 }
-                let (ty, new_env) = self.infer_stmt(&current_env, &stmts[i])?;
-                result = ty;
-                current_env = new_env;
-                i += 1;
             }
+        }
+
+        // Pass 3: walk the statement list in source order. Function
+        // decls are skipped (already typed in Pass 2). Non-function
+        // statements are inferred normally against the now-fully-
+        // populated env.
+        let mut result = Type::Undefined;
+        for stmt in stmts {
+            if is_function_like_decl(stmt) {
+                continue;
+            }
+            if let Stmt::Var {
+                kind: VarKind::Const,
+                declarations,
+                ..
+            } = stmt
+            {
+                for decl in declarations {
+                    if decl.name.starts_with("$destr$") {
+                        continue;
+                    }
+                    if !const_names.insert(decl.name.clone()) {
+                        let err = TypeError::Module {
+                            message: format!(
+                                "duplicate declaration of 'const {}' in the same scope",
+                                decl.name
+                            ),
+                            span: decl.span,
+                        };
+                        if first_error.is_none() {
+                            first_error = Some(err.into());
+                            return Err(first_error.unwrap());
+                        }
+                        return Err(err.into());
+                    }
+                }
+            }
+            match self.infer_stmt(&current_env, stmt) {
+                Ok((ty, new_env)) => {
+                    result = ty;
+                    current_env = new_env;
+                }
+                Err(err) => {
+                    // Source-order recovery is harder than function-
+                    // decl recovery — a statement can introduce
+                    // arbitrary names through `var`/`let`/`const` —
+                    // so we surface the first error and stop. This
+                    // is the same behaviour the previous
+                    // adjacent-group code had for non-function
+                    // statements.
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                    break;
+                }
+            }
+        }
+
+        if let Some(err) = first_error {
+            return Err(err);
         }
         Ok((result, current_env))
     }

@@ -9,12 +9,14 @@
 //!
 //!     cargo test -p inty --test htmx_gaps -- --ignored
 //!
-//! Gap status (see commits prefixed `parser:` / `tests:` for history):
+//! Gap status (see commits prefixed `parser:` / `infer:` / `tests:`
+//! for history):
 //!
 //!   * Gap 1 — reserved word as member name: **fixed**
 //!   * Gap 2 — `for (const x in/of y)`:       **fixed**
 //!   * Gap 3 — `new Cls(...).member`:         **fixed**
-//!   * Gap 4 — hoisting beyond adjacent decls: open (needs design)
+//!   * Gap 4 — hoisting beyond adjacent decls: **fixed** via SCC
+//!     dependency analysis (see `docs/scc-inference.md`)
 
 use inty::parser::parse;
 use inty::stdlib::initial_env_with_stdlib;
@@ -165,7 +167,6 @@ fn new_with_args_then_method_call() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "htmx gap 4: hoisting limited to adjacent function decls; `const` between two decls breaks the group"]
 fn hoisting_through_intervening_const() {
     let src = "
         function a() { return b(); }
@@ -177,7 +178,6 @@ fn hoisting_through_intervening_const() {
 }
 
 #[test]
-#[ignore = "htmx gap 4: function expression inside object literal can't see later function decl in same scope"]
 fn hoisting_into_object_literal_property() {
     // Mirrors htmx's `const htmx = { values: function(...) { getInputValues(...) }, … };
     // function getInputValues(...) {...}` pattern.
@@ -192,7 +192,6 @@ fn hoisting_into_object_literal_property() {
 }
 
 #[test]
-#[ignore = "htmx gap 4: IIFE-wrapped library pattern (htmx, jQuery, lodash, …) not type-checkable"]
 fn hoisting_iife_library_pattern() {
     let src = "
         var lib = (function() {

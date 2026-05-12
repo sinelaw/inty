@@ -1,11 +1,15 @@
 # SCC-based binding inference
 
-Design sketch for replacing inty's adjacent-function-decl hoisting with
-dependency-driven strongly-connected-component (SCC) inference,
-following the standard approach from the ML/Haskell lineage. The
-motivation is gap 4 in [`crates/inty/tests/htmx_gaps.rs`](../crates/inty/tests/htmx_gaps.rs)
+Design for the dependency-driven strongly-connected-component (SCC)
+inference used in inty's `infer_stmt_list`, following the standard
+approach from the ML/Haskell lineage. The motivation was gap 4 in
+[`crates/inty/tests/htmx_gaps.rs`](../crates/inty/tests/htmx_gaps.rs)
 (the IIFE library pattern used by htmx, jQuery, lodash, Day.js, etc.).
-Status: design only — no code yet.
+Status: **implemented**. The free-identifier walker lives in
+`crates/inty/src/parser/free_idents.rs`; the SCC analysis and
+integration live in `crates/inty/src/infer/features/functions.rs`
+and `crates/inty/src/infer/mod.rs`. Best-effort recovery on SCC
+failure binds members to `Type::Error` (see `crates/inty/src/types/ty.rs`).
 
 The guiding principle is **match ECMAScript strict-mode semantics
 exactly**. Every rule below is justified by what V8/JSC/SpiderMonkey

@@ -1,7 +1,10 @@
 //! Function expressions, calls, `new`, and function declarations.
 
+use std::collections::HashMap;
+
 use crate::lexer::Span;
 use crate::parser::ast::{ExportDecl, Expr, Param, Stmt, TypeAnnotation};
+use crate::parser::free_idents::free_identifiers_in_function_body;
 use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
@@ -16,7 +19,7 @@ use super::super::InferResult;
 /// ExportDecl::Function }`. Hoisting and group inference need to treat
 /// both forms uniformly so peer forward references and mutual recursion
 /// across exports type-check.
-fn function_decl_parts<'a>(
+pub(in crate::infer) fn function_decl_parts<'a>(
     stmt: &'a Stmt,
 ) -> Option<(
     &'a str,
@@ -510,5 +513,278 @@ impl InferState {
         self.record_decl_scheme(name_span, scheme.clone());
 
         Ok((Type::Undefined, env.extend(name.to_string(), scheme)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SCC partition of hoistable function declarations
+//
+// Given a slice of statements representing one lexical scope, this returns
+// the strongly-connected components of the call graph between the
+// hoistable `function` declarations in source order, ordered
+// topologically (callees before callers). Each SCC's contents are
+// further sorted by source position so the inside-SCC inference order
+// matches the user's mental model.
+//
+// This is the foundation of dependency-driven binding inference (see
+// docs/scc-inference.md). The output drives infer_function_group
+// calls: each SCC is processed as one mutually-recursive group, with
+// earlier (callee) SCCs already generalised in the env by the time a
+// later (caller) SCC is inferred. Forward references and mutual
+// recursion that cross non-function statements (the htmx IIFE
+// library pattern) type-check.
+// ---------------------------------------------------------------------------
+
+/// One hoistable function decl identified during the SCC pre-pass.
+struct HoistableNode {
+    /// Index into the original `stmts` slice. Lets us recover the
+    /// `Stmt` after the SCC analysis has reordered things.
+    stmt_index: usize,
+    /// The function's declared name.
+    name: String,
+    /// Names referenced inside this function's body, scoped to the
+    /// outer environment (i.e., not bound locally by params, vars,
+    /// inner functions, etc.).
+    free: std::collections::HashSet<String>,
+}
+
+/// Compute strongly-connected components of the hoistable-function
+/// call graph in `stmts`, returned in topological order. Each inner
+/// `Vec<usize>` lists statement indices in source order.
+///
+/// Statements that aren't hoistable function declarations do not
+/// appear in the output. The caller is responsible for interleaving
+/// non-function statements with the SCC results.
+pub(in crate::infer) fn compute_scc_groups(stmts: &[Stmt]) -> Vec<Vec<usize>> {
+    // Pass 1: collect the hoistable function decls and their free
+    // identifiers.
+    let mut nodes: Vec<HoistableNode> = Vec::new();
+    let mut name_to_node: HashMap<String, usize> = HashMap::new();
+    for (i, stmt) in stmts.iter().enumerate() {
+        if let Some((name, params, body, _, _)) = function_decl_parts(stmt) {
+            let free = free_identifiers_in_function_body(Some(name), params, body);
+            let node_idx = nodes.len();
+            nodes.push(HoistableNode {
+                stmt_index: i,
+                name: name.to_string(),
+                free,
+            });
+            // Duplicate function names in the same scope are
+            // illegal but the parser accepts them; the last one
+            // wins in the dependency map. The duplicate-name
+            // diagnostic is handled elsewhere.
+            name_to_node.insert(name.to_string(), node_idx);
+        }
+    }
+
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+
+    // Pass 2: build the adjacency list. There's an edge i → j iff
+    // node i's body references the name of node j.
+    let n = nodes.len();
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, node) in nodes.iter().enumerate() {
+        for free_name in &node.free {
+            if let Some(&j) = name_to_node.get(free_name) {
+                if !adj[i].contains(&j) {
+                    adj[i].push(j);
+                }
+            }
+        }
+    }
+
+    // Pass 3: Tarjan's SCC algorithm. Iterative implementation to
+    // avoid blowing the stack on deep call chains (unlikely in
+    // practice — htmx's ~190 function decls give a depth ≤ ~190 —
+    // but the iterative form has the same complexity and is robust).
+    let sccs = tarjan_scc(&adj);
+
+    // Pass 4: translate back to statement indices and sort each SCC
+    // by source position. Tarjan emits in reverse topological order
+    // of the condensation graph (leaf SCCs first), which is exactly
+    // the order we want for inference (callees generalised before
+    // callers see them).
+    sccs.into_iter()
+        .map(|scc| {
+            let mut indices: Vec<usize> =
+                scc.into_iter().map(|node_id| nodes[node_id].stmt_index).collect();
+            indices.sort_unstable();
+            indices
+        })
+        .collect()
+}
+
+/// Tarjan's strongly-connected components algorithm. Iterative
+/// implementation so deep call graphs don't blow the system stack.
+///
+/// `adj` is the adjacency list of the dependency graph (node `i`'s
+/// out-edges point to other nodes it depends on). The returned
+/// `Vec<Vec<usize>>` lists SCCs in reverse topological order of the
+/// condensation — leaves first, roots last. That's exactly the
+/// order we want for binding inference: a caller's SCC sees its
+/// callees' SCCs already generalised in the environment.
+fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    enum Step {
+        /// First visit to `v` — assign index, push onto stack, then
+        /// try to descend into successors.
+        Enter(usize),
+        /// Returning to `v` after its `i`'th successor `child`
+        /// finished. Update lowlink, then try the next successor.
+        Resume { v: usize, i: usize, child: usize },
+    }
+
+    let n = adj.len();
+    let mut index: Vec<Option<usize>> = vec![None; n];
+    let mut lowlink: Vec<usize> = vec![0; n];
+    let mut on_stack: Vec<bool> = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut result: Vec<Vec<usize>> = Vec::new();
+    let mut next_index: usize = 0;
+    let mut work: Vec<Step> = Vec::new();
+
+    // Helper closure: try to descend into the `i`'th successor of
+    // `v`. If one needs to be explored, push the Resume frame for
+    // `v` and an Enter frame for the successor and return without
+    // closing. Otherwise close v (popping any SCC it roots).
+    let mut descend_or_close =
+        |mut i: usize,
+         v: usize,
+         index: &mut Vec<Option<usize>>,
+         lowlink: &mut Vec<usize>,
+         on_stack: &mut Vec<bool>,
+         stack: &mut Vec<usize>,
+         result: &mut Vec<Vec<usize>>,
+         work: &mut Vec<Step>| {
+            while i < adj[v].len() {
+                let w = adj[v][i];
+                if index[w].is_none() {
+                    work.push(Step::Resume { v, i, child: w });
+                    work.push(Step::Enter(w));
+                    return;
+                }
+                if on_stack[w] {
+                    lowlink[v] = lowlink[v].min(index[w].unwrap());
+                }
+                i += 1;
+            }
+            // No more successors — close v.
+            if Some(lowlink[v]) == index[v] {
+                let mut scc: Vec<usize> = Vec::new();
+                while let Some(w) = stack.pop() {
+                    on_stack[w] = false;
+                    scc.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                result.push(scc);
+            }
+        };
+
+    for root in 0..n {
+        if index[root].is_some() {
+            continue;
+        }
+        work.push(Step::Enter(root));
+        while let Some(step) = work.pop() {
+            match step {
+                Step::Enter(v) => {
+                    index[v] = Some(next_index);
+                    lowlink[v] = next_index;
+                    next_index += 1;
+                    stack.push(v);
+                    on_stack[v] = true;
+                    descend_or_close(
+                        0,
+                        v,
+                        &mut index,
+                        &mut lowlink,
+                        &mut on_stack,
+                        &mut stack,
+                        &mut result,
+                        &mut work,
+                    );
+                }
+                Step::Resume { v, i, child } => {
+                    lowlink[v] = lowlink[v].min(lowlink[child]);
+                    descend_or_close(
+                        i + 1,
+                        v,
+                        &mut index,
+                        &mut lowlink,
+                        &mut on_stack,
+                        &mut stack,
+                        &mut result,
+                        &mut work,
+                    );
+                }
+            }
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod scc_tests {
+    use super::*;
+
+    #[test]
+    fn singleton_no_edges() {
+        // a()  — no calls; one trivial SCC.
+        let sccs = tarjan_scc(&vec![Vec::new()]);
+        assert_eq!(sccs, vec![vec![0]]);
+    }
+
+    #[test]
+    fn linear_chain_produces_singleton_sccs_in_topo_order() {
+        // a → b → c (a calls b calls c).
+        // Expected output: [c], [b], [a] (callees first, then callers).
+        let adj = vec![vec![1], vec![2], vec![]];
+        let sccs = tarjan_scc(&adj);
+        assert_eq!(sccs, vec![vec![2], vec![1], vec![0]]);
+    }
+
+    #[test]
+    fn mutual_recursion_collapses_to_one_scc() {
+        // a ↔ b (mutual recursion). Both end up in the same SCC.
+        let adj = vec![vec![1], vec![0]];
+        let sccs = tarjan_scc(&adj);
+        assert_eq!(sccs.len(), 1);
+        let mut got = sccs[0].clone();
+        got.sort();
+        assert_eq!(got, vec![0, 1]);
+    }
+
+    #[test]
+    fn independent_and_recursive_split_correctly() {
+        // a (independent), b ↔ c (mutually recursive).
+        let adj = vec![vec![], vec![2], vec![1]];
+        let sccs = tarjan_scc(&adj);
+        assert_eq!(sccs.len(), 2);
+        // One singleton SCC {0}, one paired SCC {1, 2}.
+        let mut sizes: Vec<usize> = sccs.iter().map(|s| s.len()).collect();
+        sizes.sort();
+        assert_eq!(sizes, vec![1, 2]);
+    }
+
+    #[test]
+    fn self_loop_is_its_own_scc() {
+        // a → a.
+        let adj = vec![vec![0]];
+        let sccs = tarjan_scc(&adj);
+        assert_eq!(sccs, vec![vec![0]]);
+    }
+
+    #[test]
+    fn topo_order_caller_after_callee() {
+        // c is leaf, b calls c, a calls b. Expected order: c first, then b, then a.
+        let adj = vec![vec![1], vec![2], vec![]];
+        let sccs = tarjan_scc(&adj);
+        // c, b, a
+        assert_eq!(sccs[0], vec![2]);
+        assert_eq!(sccs[1], vec![1]);
+        assert_eq!(sccs[2], vec![0]);
     }
 }
