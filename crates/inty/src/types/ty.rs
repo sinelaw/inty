@@ -421,6 +421,22 @@ pub enum Type {
     /// the same type and two imports of different files don't unify even
     /// when their export shapes happen to coincide. See `modules.md` §2.
     Module(ModuleType),
+
+    /// Error sentinel produced by best-effort recovery in the inference
+    /// engine. When a binding fails to type-check we substitute
+    /// `Type::Error` for its type so downstream uses don't cascade —
+    /// `Error` unifies trivially with anything, every operation
+    /// (member access, call, operator) on `Error` produces `Error`, and
+    /// the type-class solver treats `Error` as satisfying every
+    /// constraint. The user already saw one diagnostic for the original
+    /// failure; subsequent references should stay quiet.
+    ///
+    /// `Type::Error` is never written by users (no surface syntax
+    /// produces it). It only appears as a substitution applied by the
+    /// recovery path; the pretty printer renders it as `<error>` so
+    /// any leaked occurrence is obvious in test output and `--annotate`
+    /// dumps.
+    Error,
 }
 
 /// Body of `Type::Module`. A module is identified nominally (by source
@@ -647,7 +663,9 @@ impl Type {
                 params: params.clone(),
                 ret: Box::new(ret.widen_fresh_literals()),
             },
-            // Primitives, vars, named refs, modules: nothing to widen.
+            // Primitives, vars, named refs, modules, error: nothing
+            // to widen. `Error` is opaque — widening through it
+            // would generate noise from a binding that already failed.
             Type::Number
             | Type::String
             | Type::Boolean
@@ -656,7 +674,8 @@ impl Type {
             | Type::Regex
             | Type::Var(_)
             | Type::Named(_, _)
-            | Type::Module(_) => self.clone(),
+            | Type::Module(_)
+            | Type::Error => self.clone(),
         }
     }
 
@@ -886,7 +905,8 @@ impl Type {
             | Type::Null
             | Type::Regex
             | Type::Var(_)
-            | Type::Literal(_) => {}
+            | Type::Literal(_)
+            | Type::Error => {}
             Type::Func {
                 this_type,
                 params,
@@ -951,7 +971,8 @@ impl Type {
             | Type::Boolean
             | Type::Undefined
             | Type::Null
-            | Type::Regex => {}
+            | Type::Regex
+            | Type::Error => {}
 
             Type::Var(name) => {
                 vars.insert(name.clone());
@@ -1197,6 +1218,7 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Named(id, _) => (14, format!("{}", id)),
         Type::Union(_) => (15, String::new()),
         Type::Module(m) => (16, m.source.clone()),
+        Type::Error => (17, String::new()),
     }
 }
 

@@ -413,6 +413,10 @@ impl Substitutable for Type {
                     .map(|(k, scheme)| (k.clone(), scheme.apply_subst(subst)))
                     .collect(),
             }),
+
+            // Error sentinel: substitution is the identity. The
+            // binding already failed; nothing here can change.
+            Type::Error => Type::Error,
         }
     }
 

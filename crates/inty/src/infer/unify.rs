@@ -26,6 +26,15 @@ impl InferState {
 
     fn unify_impl(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
         match (t1, t2) {
+            // Error sentinel absorbs anything. A binding whose
+            // inference failed gets `Type::Error`; we don't want
+            // *every* downstream use site to also fail. Unifying
+            // `Error` with anything succeeds silently — no
+            // substitution emitted, no constraint added.
+            // The original error has already been reported by the
+            // recovery point; cascading is the noise we're avoiding.
+            (Type::Error, _) | (_, Type::Error) => Ok(()),
+
             // Same variable
             (Type::Var(v1), Type::Var(v2)) if v1 == v2 => Ok(()),
 

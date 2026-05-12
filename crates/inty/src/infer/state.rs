@@ -920,7 +920,8 @@ impl InferState {
             | Type::Boolean
             | Type::Undefined
             | Type::Null
-            | Type::Regex => false,
+            | Type::Regex
+            | Type::Error => false,
 
             Type::Var(TVarName::Flex(id)) => *id == var,
             Type::Var(TVarName::Skolem(_)) => false,
