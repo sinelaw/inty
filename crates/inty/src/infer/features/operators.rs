@@ -47,8 +47,30 @@ impl InferState {
             }
 
             UnaryOp::Delete => {
-                // delete returns boolean
-                Ok(Type::Boolean)
+                // `delete o.k` has no sound counterpart in inty's row
+                // algebra: a successful delete leaves `o`'s static row
+                // unchanged, so a later read of `o.k` would pass
+                // type-checking but fail at runtime. Emit a soft
+                // diagnostic at the delete site and return
+                // `Type::Error`, which is absorbed by anything
+                // downstream (member access, calls, type-class
+                // constraints) and prevents the spurious "well-typed"
+                // signal that pure parse-acceptance would imply. The
+                // diagnostic joins `state.errors`; inference of the
+                // surrounding statement still succeeds so the rest of
+                // the file gets checked.
+                let _ = arg_type;
+                self.push_error(
+                    TypeError::InvalidSyntax {
+                        message: "delete is not supported — construct a new \
+                            object literal omitting the field instead, e.g. \
+                            `const { a: _drop, ...rest } = o;`"
+                            .to_string(),
+                        span,
+                    }
+                    .into(),
+                );
+                Ok(Type::Error)
             }
 
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
