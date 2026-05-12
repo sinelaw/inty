@@ -84,12 +84,20 @@ impl Analysis {
             }
         };
 
-        // Infer.
-        match state.infer_program_with_env(&env, &program) {
+        // Infer. The `Type::Error` recovery path lets inference
+        // continue past a failing statement, so `state.errors` may
+        // contain multiple diagnostics even though the public API
+        // only returns the first via `Result::Err`. Drain the
+        // accumulated list so every diagnostic surfaces as an LSP
+        // squiggly, not just the first.
+        let infer_result = state.infer_program_with_env(&env, &program);
+        let collected = state.take_errors();
+        match infer_result {
             Ok((_ty, final_env)) => {
                 if let Err(e) = state.resolve_constraints() {
                     errors.push(e);
                 }
+                errors.extend(collected);
                 Analysis {
                     errors,
                     program: Some(program),
@@ -98,8 +106,10 @@ impl Analysis {
                     resolution,
                 }
             }
-            Err(e) => {
-                errors.push(e);
+            Err(_first) => {
+                // `_first` is the head of `collected`; use the
+                // accumulated list as-is to avoid duplicating it.
+                errors.extend(collected);
                 Analysis {
                     errors,
                     program: Some(program),
@@ -1037,6 +1047,32 @@ const func = function() { return {id: '123', name: 'hello'}; };";
         assert!(
             !analysis.errors.is_empty(),
             "expected excess-field rejection through nullary alias expansion, got {:?}",
+            analysis.errors
+        );
+    }
+
+    /// `Analysis::check` must drain every diagnostic the inference
+    /// recovery path accumulated, not just the first. The LSP turns
+    /// each into a squiggly; if we returned only one, the user would
+    /// fix-recompile-fix-recompile in a loop.
+    #[test]
+    fn check_returns_every_accumulated_error() {
+        let src = "var a = missingOne; var b = missingTwo; var c = missingThree;";
+        let analysis = Analysis::check(src);
+        let undef_count = analysis
+            .errors
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    IntyError::Type(inty::error::TypeError::UndefinedVariable { .. })
+                )
+            })
+            .count();
+        assert!(
+            undef_count >= 3,
+            "expected three UndefinedVariable diagnostics, got {}: {:?}",
+            undef_count,
             analysis.errors
         );
     }
