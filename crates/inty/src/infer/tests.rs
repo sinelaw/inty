@@ -2764,3 +2764,220 @@ fn metamorphic_three_member_accesses_order_invariant() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// `Type::Error` semantics
+//
+// The error sentinel is produced by best-effort recovery in the inference
+// engine (used by the upcoming SCC partition logic: an SCC that fails to
+// infer binds each of its members to `Type::Error` so downstream SCCs
+// continue without cascading). These tests pin the four rules `Error`
+// must satisfy: it unifies trivially with anything, member access on
+// it produces `Error`, calling it produces `Error`, and the type-class
+// solver treats it as satisfying every constraint.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_unifies_trivially_with_concrete() {
+    let mut state = InferState::new();
+    let span = crate::lexer::Span::new(0, 0);
+    // Error on the left, concrete on the right.
+    state.unify(span, &Type::Error, &Type::Number).expect("Error ~ Number must succeed");
+    state.unify(span, &Type::Error, &Type::String).expect("Error ~ String must succeed");
+    // Error on the right, concrete on the left.
+    state.unify(span, &Type::Boolean, &Type::Error).expect("Boolean ~ Error must succeed");
+    state.unify(span, &Type::Undefined, &Type::Error).expect("Undefined ~ Error must succeed");
+}
+
+#[test]
+fn error_unifies_with_compound_types() {
+    let mut state = InferState::new();
+    let span = crate::lexer::Span::new(0, 0);
+    let func = Type::simple_func(vec![Type::Number], Type::String);
+    state.unify(span, &Type::Error, &func).expect("Error ~ Func must succeed");
+    let arr = Type::Array(Box::new(Type::Number));
+    state.unify(span, &arr, &Type::Error).expect("Array ~ Error must succeed");
+}
+
+#[test]
+fn error_unifies_with_flex_var_without_binding_it() {
+    // Specifically: unifying Error with a fresh var should not bind
+    // the var to Error (which would propagate Error to every site
+    // that shares the var). The current rule is to short-circuit
+    // before var_bind, leaving the var unconstrained.
+    let mut state = InferState::new();
+    let span = crate::lexer::Span::new(0, 0);
+    let v = state.fresh_type_var();
+    state.unify(span, &Type::Error, &v).expect("Error ~ Var must succeed");
+    // The var should still be a free type variable, not bound to Error.
+    let resolved = state.apply_subst(&v);
+    assert!(
+        matches!(resolved, Type::Var(_)),
+        "expected var to remain free, got {:?}",
+        resolved
+    );
+}
+
+#[test]
+fn error_member_access_produces_error() {
+    let mut state = InferState::new();
+    let span = crate::lexer::Span::new(0, 0);
+    let result = state
+        .infer_member_on_type(&Type::Error, "anyfield", span)
+        .expect("member access on Error must succeed");
+    assert_eq!(result, Type::Error);
+}
+
+#[test]
+fn error_apply_subst_is_identity() {
+    let mut state = InferState::new();
+    let v = state.fresh_type_var();
+    // Even with a substitution that binds the var, Error itself
+    // shouldn't change.
+    let span = crate::lexer::Span::new(0, 0);
+    state.unify(span, &v, &Type::Number).unwrap();
+    assert_eq!(state.apply_subst(&Type::Error), Type::Error);
+}
+
+#[test]
+fn error_free_vars_is_empty() {
+    assert!(Type::Error.free_vars().is_empty());
+}
+
+#[test]
+fn error_renders_as_sentinel_string() {
+    let mut ctx = crate::types::PrettyContext::new();
+    assert_eq!(ctx.format_type(&Type::Error), "<error>");
+}
+
+#[test]
+fn error_satisfies_plus_constraint() {
+    use crate::types::TypePred;
+    let mut state = InferState::new();
+    let span = crate::lexer::Span::new(0, 0);
+    state.add_constraint(TypePred::plus(Type::Error), span);
+    state
+        .resolve_constraints()
+        .expect("Plus Error must resolve trivially");
+}
+
+#[test]
+fn error_satisfies_indexable_constraint() {
+    use crate::types::TypePred;
+    let mut state = InferState::new();
+    let span = crate::lexer::Span::new(0, 0);
+    // Indexable Error _ _ — should resolve regardless of the
+    // index/element components.
+    state.add_constraint(
+        TypePred::indexable(Type::Error, Type::Number, Type::String),
+        span,
+    );
+    state
+        .resolve_constraints()
+        .expect("Indexable on Error must resolve trivially");
+}
+
+#[test]
+fn error_call_propagates_through_call() {
+    // End-to-end: a binding manually substituted to Error is called;
+    // the call result should be Error, not propagate constraint
+    // failures through the parameter inference.
+    use crate::parser::ast::Stmt;
+    let mut state = InferState::new();
+    let env = initial_env();
+    // Build an env where `f` is Error.
+    let env = env.extend("f".to_string(), crate::types::TypeScheme::mono(Type::Error));
+    let src = "f(1, 2, 3)";
+    let mut scanner = Scanner::new(src);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let type_annotations = scanner.type_annotations().to_vec();
+    let mut parser = Parser::with_source(tokens, type_annotations, src.to_string());
+    let program = parser.parse_program().unwrap();
+    let expr = match &program.statements[0] {
+        Stmt::Expr { expression, .. } => expression.clone(),
+        _ => panic!(),
+    };
+    let result = state.infer_expr(&env, &expr).expect("Error(...) must succeed");
+    let resolved = state.apply_subst(&result);
+    assert_eq!(resolved, Type::Error);
+}
+
+#[test]
+fn error_member_chain_propagates() {
+    // Chained member access on an Error binding stays Error all the
+    // way through — no diagnostics emitted at any of the segments.
+    use crate::parser::ast::Stmt;
+    let mut state = InferState::new();
+    let env = initial_env();
+    let env = env.extend("broken".to_string(), crate::types::TypeScheme::mono(Type::Error));
+    let src = "broken.a.b.c";
+    let mut scanner = Scanner::new(src);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let type_annotations = scanner.type_annotations().to_vec();
+    let mut parser = Parser::with_source(tokens, type_annotations, src.to_string());
+    let program = parser.parse_program().unwrap();
+    let expr = match &program.statements[0] {
+        Stmt::Expr { expression, .. } => expression.clone(),
+        _ => panic!(),
+    };
+    let result = state.infer_expr(&env, &expr).expect("chained access on Error must succeed");
+    assert_eq!(state.apply_subst(&result), Type::Error);
+}
+
+#[test]
+fn error_does_not_cascade_to_unrelated_bindings() {
+    // The motivating use case: one binding fails (we substitute it
+    // with Error), but other bindings in the same program continue
+    // to type-check normally.
+    let mut state = InferState::new();
+    let env = initial_env();
+    let env = env.extend("broken".to_string(), crate::types::TypeScheme::mono(Type::Error));
+
+    // Build a program that uses `broken` *and* an unrelated valid
+    // binding. The unrelated path must still infer correctly.
+    let src = "var a = broken.field + 1; var b = 42 + 1;";
+    let mut scanner = Scanner::new(src);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let type_annotations = scanner.type_annotations().to_vec();
+    let type_aliases = scanner.type_aliases().to_vec();
+    let mut parser = Parser::with_source(tokens, type_annotations, src.to_string());
+    let mut program = parser.parse_program().unwrap();
+    program.type_aliases = type_aliases;
+    let (_, env_after) = state
+        .infer_program_with_env(&env, &program)
+        .expect("program with Error binding must still type-check");
+    state.resolve_constraints().expect("constraints must resolve");
+    // `a` involves Error.field + 1 → Error + Number → resolves OK (Plus Error trivially).
+    let a_ty = state.apply_subst(&env_after.lookup("a").unwrap().body.ty);
+    // The result is whatever the `+` operator produced; since one
+    // operand is Error, no diagnostic was emitted. We don't assert
+    // the exact type — only that we reached here without an error.
+    let _ = a_ty;
+    // `b` is unrelated and must type-check to Number.
+    let b_ty = state.apply_subst(&env_after.lookup("b").unwrap().body.ty);
+    assert_eq!(b_ty, Type::Number, "unrelated `b` should be Number");
+}

@@ -218,6 +218,20 @@ impl InferState {
             }
         };
 
+        // Error sentinel propagates through calls. If the callee
+        // already failed to infer, every `Error(args)` site
+        // re-produces `Error` so a single upstream failure doesn't
+        // spawn one diagnostic per call site.
+        if matches!(self.apply_subst(&callee_type), Type::Error) {
+            // Still walk the argument expressions so any standalone
+            // type errors *inside* them surface — recovery is
+            // best-effort, not silence-everything.
+            for arg in arguments {
+                let _ = self.infer_expr(env, arg);
+            }
+            return Ok(Type::Error);
+        }
+
         // Bidirectional checking (Peyton Jones 2007 §4): pin down the
         // callee's signature first with fresh parameter variables, then
         // check each argument against its resolved parameter type via

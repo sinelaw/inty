@@ -421,6 +421,16 @@ impl InferState {
         property: &str,
         span: Span,
     ) -> InferResult<Type> {
+        // Error sentinel propagates through member access. A binding
+        // that already failed produces `Type::Error`; any `.foo` /
+        // `.bar` reached from it is also `Error`, so subsequent uses
+        // don't generate noise.
+        if matches!(obj_type, Type::Error) {
+            let _ = property;
+            let _ = span;
+            return Ok(Type::Error);
+        }
+
         // Singleton literal types are values of their base type — every
         // operation defined on `String` is defined on `Lit("hi")`.
         // Route property lookups through the base so e.g.

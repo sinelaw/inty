@@ -185,6 +185,7 @@ impl PrettyContext {
                 Ok(())
             }
             Type::Module(_) => self.write_type(w, ty, in_func_arg),
+            Type::Error => write!(w, "<error>"),
         }
     }
 
@@ -344,6 +345,8 @@ impl PrettyContext {
                 }
                 Ok(())
             }
+
+            Type::Error => write!(w, "<error>"),
         }
     }
 

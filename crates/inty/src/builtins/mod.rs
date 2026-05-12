@@ -258,6 +258,13 @@ impl InferState {
 
     /// Resolve a single type class constraint.
     fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
+        // Error sentinel satisfies every constraint trivially. The
+        // type that flowed in already failed inference; making its
+        // dependent uses fail their type-class checks too would
+        // produce one noise diagnostic per use site.
+        if pred.types.iter().any(|t| matches!(self.apply_subst(t), Type::Error)) {
+            return Ok(());
+        }
         match pred.class {
             ClassName::Plus => self.resolve_plus(&pred.types[0], span),
             ClassName::Indexable => {
@@ -272,6 +279,10 @@ impl InferState {
 
         match &ty {
             Type::Number | Type::String => Ok(()),
+
+            // Error satisfies trivially; the original failure was
+            // already reported.
+            Type::Error => Ok(()),
 
             Type::Var(TVarName::Flex(_)) => {
                 // Keep the constraint - don't default to Number

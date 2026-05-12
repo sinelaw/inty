@@ -498,7 +498,7 @@ impl State {
             }
             Stmt::Labeled { body, .. } => self.visit_stmt(body),
             Stmt::FunctionDecl {
-                name, params, body, ..
+                name: _, params, body, ..
             } => {
                 // The function's name is already bound in the
                 // enclosing scope by collect_block_bindings.
