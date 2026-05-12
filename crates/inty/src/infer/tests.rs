@@ -2380,6 +2380,130 @@ fn infer_program_via_program(source: &str) -> InferResult<(Type, TypeEnv, InferS
     Ok((ty, env, state))
 }
 
+// ---------------------------------------------------------------------------
+// SCC-based binding inference (docs/scc-inference.md)
+//
+// Each test pins one behaviour of the dependency-driven hoisting
+// analysis that replaces adjacent-only function-decl grouping.
+// ---------------------------------------------------------------------------
+
+/// Forward reference across an intervening `const` declaration —
+/// previously rejected as "Undefined variable" because the const
+/// broke the binding group. With SCC inference, the const is just
+/// processed in source order against the fully-hoisted function
+/// env. Mirrors the htmx pattern.
+#[test]
+fn scc_forward_ref_through_intervening_const() {
+    let src = "
+        function a() { return b(); }
+        const sep = 1;
+        function b() { return 1; }
+        var x = a();
+    ";
+    let (_, env, state) = infer_program_via_program(src).expect("must type-check");
+    let x_ty = state.apply_subst(&env.lookup("x").unwrap().body.ty);
+    assert_eq!(x_ty, Type::Number);
+}
+
+/// Forward reference from inside an object-literal property to a
+/// later function decl. This is the inner structure of the htmx
+/// `const htmx = { values: function(...){ getInputValues(...) } };
+/// function getInputValues(...){}` pattern.
+#[test]
+fn scc_forward_ref_into_object_literal_property() {
+    let src = "
+        const api = {
+            run: function(x) { return helper(x); }
+        };
+        function helper(x) { return x; }
+        var y = api.run(42);
+    ";
+    let (_, env, state) = infer_program_via_program(src).expect("must type-check");
+    let y_ty = state.apply_subst(&env.lookup("y").unwrap().body.ty);
+    assert_eq!(y_ty, Type::Number);
+}
+
+/// Mutual recursion produces one shared SCC. The pair `up` and
+/// `down` cross-reference each other; the SCC analysis must put
+/// them in the same group so peer references resolve. The test
+/// asserts the program type-checks; the inferred return type of
+/// the recursive cycle is implementation-detail (it ends up as a
+/// fresh flex var when the base-case branch returns a singleton
+/// `0` and both arms only ever flow through the recursion).
+#[test]
+fn scc_mutual_recursion_collapses_to_one_group() {
+    let src = "
+        function up(n)   { if (n <= 0) { return 0; } return down(n - 1); }
+        function down(n) { if (n <= 0) { return 0; } return up(n - 1); }
+        var x = up(4);
+        var y = down(7);
+    ";
+    let result = infer_program_via_program(src);
+    assert!(
+        result.is_ok(),
+        "mutually-recursive `up`/`down` must type-check: {:?}",
+        result.err()
+    );
+}
+
+/// Non-recursive callee in its own SCC keeps its polymorphism, so a
+/// later caller can use it at two different instantiations. This is
+/// the principal-types property — adjacent grouping forced both call
+/// sites to share a TVar; SCC isolation lets them instantiate
+/// independently.
+#[test]
+fn scc_polymorphic_callee_used_at_two_types() {
+    let src = "
+        function caller() {
+            var a = id(1);
+            var b = id(\"hi\");
+            return a;
+        }
+        function id(x) { return x; }
+        var r = caller();
+    ";
+    let (_, env, state) = infer_program_via_program(src).expect("must type-check");
+    let r_ty = state.apply_subst(&env.lookup("r").unwrap().body.ty);
+    assert_eq!(r_ty, Type::Number);
+}
+
+/// Three-function dependency chain `a → b → c`, no cycles. Each
+/// becomes its own singleton SCC, processed in topological order
+/// (callees first). `c` is polymorphic; `b` and `a` see its
+/// generalised scheme. The chained call should type correctly.
+#[test]
+fn scc_topological_order_caller_after_callee() {
+    let src = "
+        function a() { return b(1) + 1; }
+        function b(n) { return c(n) + 1; }
+        function c(n) { return n; }
+        var out = a();
+    ";
+    let (_, env, state) = infer_program_via_program(src).expect("must type-check");
+    let out_ty = state.apply_subst(&env.lookup("out").unwrap().body.ty);
+    assert_eq!(out_ty, Type::Number);
+}
+
+/// IIFE library pattern — the gap-4c shape that motivated the SCC
+/// refactor. A function declared *after* an object literal whose
+/// property body references it.
+#[test]
+fn scc_iife_library_pattern() {
+    let src = "
+        var lib = (function() {
+            const api = {
+                run: function(x) { return helper(x); }
+            };
+            function helper(x) { return x; }
+            return api;
+        })();
+        var y = lib.run(42);
+    ";
+    let (_, env, state) = infer_program_via_program(src).expect("must type-check");
+    let y_ty = state.apply_subst(&env.lookup("y").unwrap().body.ty);
+    assert_eq!(y_ty, Type::Number);
+}
+
 /// Phase 0.1 regression: `export function` declarations must hoist as a
 /// peer group so forward references and mutual recursion across exports
 /// resolve, exactly like plain `function` declarations already do.
