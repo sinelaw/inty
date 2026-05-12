@@ -49,6 +49,49 @@ pub(crate) fn is_function_like_decl(stmt: &Stmt) -> bool {
     )
 }
 
+/// Source-order recovery after a `Stmt` fails inference. Binds every
+/// name the statement *would have* introduced (`var x`, `const y`,
+/// `function f`, the equivalent `export` wrappers) to `Type::Error`
+/// in `env`. Statements that don't introduce names (Expr, If, While,
+/// Throw, ...) leave the env unchanged. `Type::Error` unifies trivially
+/// with anything that doesn't bind free vars and propagates through
+/// member access / calls / type-class constraints, so later
+/// references don't trigger cascading "undefined variable" or
+/// unification errors — they're absorbed by the sentinel and the
+/// original error stays the only diagnostic for this site.
+fn bind_failed_stmt_names_to_error(env: &TypeEnv, stmt: &Stmt) -> TypeEnv {
+    let mut out = env.clone();
+    let declarators = match stmt {
+        Stmt::Var { declarations, .. } => Some(declarations.as_slice()),
+        Stmt::Export {
+            declaration: ExportDecl::Var { declarations, .. },
+            ..
+        } => Some(declarations.as_slice()),
+        _ => None,
+    };
+    if let Some(decls) = declarators {
+        for decl in decls {
+            if decl.name.starts_with("$destr$") {
+                continue;
+            }
+            out = out.extend(decl.name.clone(), TypeScheme::mono(Type::Error));
+        }
+        return out;
+    }
+    let fn_name = match stmt {
+        Stmt::FunctionDecl { name, .. } => Some(name),
+        Stmt::Export {
+            declaration: ExportDecl::Function { name, .. },
+            ..
+        } => Some(name),
+        _ => None,
+    };
+    if let Some(name) = fn_name {
+        out = out.extend(name.clone(), TypeScheme::mono(Type::Error));
+    }
+    out
+}
+
 impl InferState {
     /// Infer the type of a program.
     pub fn infer_program(&mut self, env: &TypeEnv, program: &Program) -> InferResult<Type> {
@@ -180,7 +223,7 @@ impl InferState {
         // generalise at the boundary) — we just hand it one SCC at a
         // time.
         let mut current_env = env.clone();
-        let mut first_error: Option<crate::error::IntyError> = None;
+        let errors_at_entry = self.errors.len();
         for scc_indices in &scc_groups {
             // Gather the SCC's statements in source order. Cloning
             // is cheap relative to the inference work that follows.
@@ -207,9 +250,7 @@ impl InferState {
                                 .extend(name.to_string(), TypeScheme::mono(Type::Error));
                         }
                     }
-                    if first_error.is_none() {
-                        first_error = Some(err);
-                    }
+                    self.push_error(err);
                 }
             }
         }
@@ -217,7 +258,11 @@ impl InferState {
         // Pass 3: walk the statement list in source order. Function
         // decls are skipped (already typed in Pass 2). Non-function
         // statements are inferred normally against the now-fully-
-        // populated env.
+        // populated env. On failure, recover by binding any names the
+        // statement *would have* introduced to `Type::Error` so later
+        // statements in the same scope can still type-check; downstream
+        // uses propagate `Error` silently through unification, member
+        // access, and call inference.
         let mut result = Type::Undefined;
         for stmt in stmts {
             if is_function_like_decl(stmt) {
@@ -241,11 +286,7 @@ impl InferState {
                             ),
                             span: decl.span,
                         };
-                        if first_error.is_none() {
-                            first_error = Some(err.into());
-                            return Err(first_error.unwrap());
-                        }
-                        return Err(err.into());
+                        self.push_error(err.into());
                     }
                 }
             }
@@ -255,23 +296,25 @@ impl InferState {
                     current_env = new_env;
                 }
                 Err(err) => {
-                    // Source-order recovery is harder than function-
-                    // decl recovery — a statement can introduce
-                    // arbitrary names through `var`/`let`/`const` —
-                    // so we surface the first error and stop. This
-                    // is the same behaviour the previous
-                    // adjacent-group code had for non-function
-                    // statements.
-                    if first_error.is_none() {
-                        first_error = Some(err);
-                    }
-                    break;
+                    // Source-order recovery: bind any names the
+                    // statement would have introduced to `Type::Error`
+                    // so later references don't cascade into new
+                    // "undefined variable" noise. Statements that
+                    // don't bind names (Expr, If, While, ...) just
+                    // get skipped — the env is unchanged.
+                    current_env = bind_failed_stmt_names_to_error(&current_env, stmt);
+                    self.push_error(err);
                 }
             }
         }
 
-        if let Some(err) = first_error {
-            return Err(err);
+        // If we accumulated any errors in this `infer_stmt_list` call
+        // (or one nested inside the bodies of statements we just
+        // walked), surface the first new one. Callers that want every
+        // error drain `state.errors` after the top-level inference
+        // completes.
+        if self.errors.len() > errors_at_entry {
+            return Err(self.errors[errors_at_entry].clone());
         }
         Ok((result, current_env))
     }

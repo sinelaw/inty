@@ -3105,3 +3105,172 @@ fn error_does_not_cascade_to_unrelated_bindings() {
     let b_ty = state.apply_subst(&env_after.lookup("b").unwrap().body.ty);
     assert_eq!(b_ty, Type::Number, "unrelated `b` should be Number");
 }
+
+// ---------------------------------------------------------------------------
+// Multi-error reporting: the `infer_stmt_list` recovery path accumulates
+// every error it encounters in `state.errors`, so the CLI / LSP can
+// surface them all in one run instead of forcing the user into a
+// fix-recompile-fix loop. The public API still returns the first error
+// via `Result::Err` for backwards compatibility.
+// ---------------------------------------------------------------------------
+
+/// Parse a source string using the same lexer + parser as the binary
+/// pipeline. Helper for the multi-error tests below.
+fn parse_for_multi_error_test(source: &str) -> crate::parser::ast::Program {
+    let mut scanner = Scanner::new(source);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token().unwrap();
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let type_annotations = scanner.type_annotations().to_vec();
+    let type_aliases = scanner.type_aliases().to_vec();
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
+    let mut program = parser.parse_program().unwrap();
+    program.type_aliases = type_aliases;
+    program
+}
+
+#[test]
+fn multi_error_two_independent_undefined_vars() {
+    // Two `var` initialisers each reference an undefined name. Pre-
+    // recovery, only the first one was reported; now both should land
+    // in `state.errors` and the second binding should be recoverable
+    // (bound to `Type::Error`) so any later code referring to it
+    // doesn't add a third unrelated error.
+    let program = parse_for_multi_error_test(
+        "var a = doesNotExistOne; var b = doesNotExistTwo; var c = b;",
+    );
+    let mut state = InferState::new();
+    let env = initial_env();
+    let _ = state.infer_program_with_env(&env, &program);
+    let errs = state.take_errors();
+    assert!(
+        errs.len() >= 2,
+        "expected at least two errors, got {}: {:?}",
+        errs.len(),
+        errs
+    );
+    // `a` and `b` should both end up as Error in the final env so a
+    // third declaration that references one of them doesn't trigger
+    // a cascading "undefined variable" error.
+    let undef_count = errs
+        .iter()
+        .filter(|e| matches!(e, crate::error::IntyError::Type(TypeError::UndefinedVariable { .. })))
+        .count();
+    assert!(undef_count >= 2, "expected at least two UndefinedVariable errors, got: {:?}", errs);
+}
+
+#[test]
+fn multi_error_first_error_returned_matches_accumulated() {
+    // The error returned via `Result::Err` must be byte-for-byte the
+    // same diagnostic that lands at the head of `state.errors`. This
+    // is what keeps existing single-error callers stable while
+    // multi-error consumers drain the accumulated list.
+    let program = parse_for_multi_error_test("var x = nope1; var y = nope2;");
+    let mut state = InferState::new();
+    let env = initial_env();
+    let err = state
+        .infer_program_with_env(&env, &program)
+        .expect_err("missing names must error");
+    let errs = state.take_errors();
+    assert!(!errs.is_empty(), "errors should be accumulated");
+    assert_eq!(
+        format!("{:?}", err),
+        format!("{:?}", errs[0]),
+        "Result::Err should match state.errors[0]"
+    );
+}
+
+#[test]
+fn multi_error_clean_program_accumulates_nothing() {
+    // No errors should accumulate when a program type-checks cleanly.
+    // This pins the invariant that recovery never *adds* spurious
+    // entries to `state.errors`.
+    let program = parse_for_multi_error_test("var x = 1; var y = 2; var z = x + y;");
+    let mut state = InferState::new();
+    let env = initial_env();
+    state
+        .infer_program_with_env(&env, &program)
+        .expect("clean program must type-check");
+    assert!(
+        state.take_errors().is_empty(),
+        "no errors should be accumulated for a clean program"
+    );
+}
+
+#[test]
+fn multi_error_failing_var_binds_name_to_error() {
+    // After a `var x = <bad>` fails, `x` should be bound to
+    // `Type::Error` in the env so a later reference doesn't cascade
+    // into a fresh "undefined variable" error. The original error is
+    // the only one surfaced for `x`; the later read of `x` is
+    // silently absorbed.
+    let program = parse_for_multi_error_test("var x = undefinedName; var y = x;");
+    let mut state = InferState::new();
+    let env = initial_env();
+    let _ = state.infer_program_with_env(&env, &program);
+    let errs = state.take_errors();
+    // Exactly one error: the original UndefinedVariable for
+    // `undefinedName`. The read of `x` on the second statement must
+    // not produce another.
+    let undef_for_x = errs
+        .iter()
+        .any(|e| matches!(e, crate::error::IntyError::Type(TypeError::UndefinedVariable { name, .. }) if name == "x"));
+    assert!(!undef_for_x, "reading recovered `x` should not error: {:?}", errs);
+}
+
+#[test]
+fn multi_error_cross_scc_and_source_order_both_collected() {
+    // A failing SCC plus a failing source-order statement should
+    // *both* land in state.errors. This exercises the combined
+    // Pass 2 + Pass 3 recovery.
+    //
+    // SCC failure: `bad` calls a non-existent name `noSuchThing`.
+    // Source-order failure: a later `var` references another missing name.
+    let program = parse_for_multi_error_test(
+        "function bad() { return noSuchThing(); }
+         var here = alsoMissing;",
+    );
+    let mut state = InferState::new();
+    let env = initial_env();
+    let _ = state.infer_program_with_env(&env, &program);
+    let errs = state.take_errors();
+    assert!(
+        errs.len() >= 2,
+        "expected at least two errors (one from SCC, one from source order), got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn multi_error_duplicate_const_no_longer_aborts() {
+    // The duplicate-`const`-in-the-same-scope diagnostic used to
+    // `return Err(...)` immediately. With multi-error recovery it
+    // joins `state.errors` and inference continues.
+    let program = parse_for_multi_error_test(
+        "const dup = 1; const dup = 2; var after = somethingElseMissing;",
+    );
+    let mut state = InferState::new();
+    let env = initial_env();
+    let _ = state.infer_program_with_env(&env, &program);
+    let errs = state.take_errors();
+    let has_dup = errs.iter().any(|e| {
+        matches!(e, crate::error::IntyError::Type(TypeError::Module { message, .. })
+            if message.contains("duplicate declaration"))
+    });
+    let has_undef = errs.iter().any(|e| {
+        matches!(e, crate::error::IntyError::Type(TypeError::UndefinedVariable { name, .. })
+            if name == "somethingElseMissing")
+    });
+    assert!(has_dup, "expected duplicate-const error, got: {:?}", errs);
+    assert!(
+        has_undef,
+        "expected later undefined-variable error to still surface, got: {:?}",
+        errs
+    );
+}

@@ -133,7 +133,7 @@ impl TypeOrigin {
 pub type Result<T> = std::result::Result<T, IntyError>;
 
 /// Main error type for inty.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum IntyError {
     #[error("Lexer error: {0}")]
     Lex(#[from] LexError),
@@ -146,7 +146,7 @@ pub enum IntyError {
 }
 
 /// Lexer errors.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum LexError {
     #[error("Unexpected character '{ch}'")]
     UnexpectedCharacter { ch: char, span: Span },
@@ -181,7 +181,7 @@ impl LexError {
 }
 
 /// Parser errors.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum ParseError {
     #[error("Unexpected token '{found}', expected {expected}")]
     UnexpectedToken {
@@ -228,7 +228,7 @@ impl ParseError {
 }
 
 /// Type checking errors.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum TypeError {
     #[error("Cannot unify types: expected {expected}, found {found}")]
     UnificationError {
