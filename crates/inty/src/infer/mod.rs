@@ -105,12 +105,42 @@ impl InferState {
         env: &TypeEnv,
         program: &Program,
     ) -> InferResult<(Type, TypeEnv)> {
+        // Clear any stale apply_subst overflow flag from a previous
+        // run on a different program. The flag is thread-local so a
+        // prior overflow elsewhere would otherwise contaminate this
+        // run's diagnostics.
+        let _ = crate::types::subst::take_apply_subst_overflow();
+
         // Load any user-defined generic type aliases before
         // checking the program. Aliases are not nominal — referring
         // to `Foo<X>` is exactly equivalent to inlining `Foo`'s body
         // with the type argument substituted.
         self.load_type_aliases(&program.type_aliases)?;
-        self.infer_stmt_list(env, &program.statements)
+        let result = self.infer_stmt_list(env, &program.statements);
+
+        // If `Type::apply_subst` hit its recursion-depth cap during
+        // this run (see `docs/scaling.md`), surface a clean
+        // diagnostic. The walk has already substituted the offending
+        // sites with `Type::Error`, so inference completed without a
+        // SIGSEGV — but the user needs to know their input pushed
+        // past inty's current scaling limit.
+        if crate::types::subst::take_apply_subst_overflow() {
+            let span = crate::lexer::Span::new(0, 0);
+            self.push_error(
+                crate::error::TypeError::Module {
+                    message: "type checker hit its recursion-depth cap on \
+                        a deeply nested type (see docs/scaling.md). Inference \
+                        continued past the limit by substituting `<error>` \
+                        for the affected subtree; downstream diagnostics may \
+                        be incomplete."
+                        .to_string(),
+                    span,
+                }
+                .into(),
+            );
+        }
+
+        result
     }
 
     /// Parse each declared type alias's body once, with the alias's
