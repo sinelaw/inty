@@ -4,7 +4,7 @@
 //! and pretty-printing for the HMF-based type inference system.
 
 mod pretty;
-mod subst;
+pub mod subst;
 mod ty;
 
 pub use pretty::PrettyContext;

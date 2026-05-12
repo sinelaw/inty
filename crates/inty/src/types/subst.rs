@@ -3,12 +3,85 @@
 //! Implements the substitution data structure and the Substitutable trait
 //! for applying substitutions to types, type schemes, and other structures.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use super::ty::{
     FieldEntry, PVarName, Presence, PropName, QualType, RowTail, RowType, TVarName, Type,
     TypePred, TypeScheme,
 };
+
+/// Default cap on the recursion depth of `Type::apply_subst`. Past
+/// this, the walk bails to `Type::Error` and sets the thread-local
+/// [`APPLY_SUBST_OVERFLOWED`] flag so the inference driver can surface
+/// a clean diagnostic. See `docs/scaling.md` for the rationale: the
+/// real fix is destructive unification + interning; this limit only
+/// converts a SIGSEGV on adversarial input into a controlled error.
+///
+/// 256 leaves headroom on the default Linux 8 MB stack
+/// (~13 frames per nesting level × ~200 B per frame ≈ 660 KB at the
+/// limit) and is well above the depth any reasonable JS produces.
+/// The effective cap can be lowered by tests via
+/// [`set_apply_subst_depth_limit_for_test`].
+const DEFAULT_APPLY_SUBST_DEPTH: usize = 256;
+
+thread_local! {
+    /// Current recursion depth of `Type::apply_subst`. Bumped via the
+    /// `ApplySubstGuard` RAII; reset to 0 when no walk is active.
+    static APPLY_SUBST_DEPTH: Cell<usize> = const { Cell::new(0) };
+    /// Effective depth cap. Defaults to [`DEFAULT_APPLY_SUBST_DEPTH`].
+    /// Lowered by tests via [`set_apply_subst_depth_limit_for_test`]
+    /// so the integration tests can drive the limit with shallow
+    /// types (the parser itself recurses on deeply nested literals,
+    /// so we can't fabricate a real 256-deep type via source).
+    static APPLY_SUBST_LIMIT: Cell<usize> = const { Cell::new(DEFAULT_APPLY_SUBST_DEPTH) };
+    /// Set to `true` whenever the depth limit was hit during the most
+    /// recent inference run. The driver (`infer_program_with_env`)
+    /// reads and clears this after the call to surface a clean
+    /// diagnostic in place of the SIGSEGV the runaway recursion would
+    /// otherwise cause.
+    static APPLY_SUBST_OVERFLOWED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Returns true and clears the flag if a depth-limit overflow
+/// happened in `Type::apply_subst` since the flag was last read.
+pub fn take_apply_subst_overflow() -> bool {
+    APPLY_SUBST_OVERFLOWED.with(|f| f.replace(false))
+}
+
+/// Lower the per-thread depth cap. Returns the previous value so the
+/// caller can restore it. Tests only; production code should leave
+/// the default in place.
+#[doc(hidden)]
+pub fn set_apply_subst_depth_limit_for_test(limit: usize) -> usize {
+    APPLY_SUBST_LIMIT.with(|l| l.replace(limit))
+}
+
+/// RAII guard: increments [`APPLY_SUBST_DEPTH`] on construction
+/// (returning `None` if the limit was reached), decrements on drop.
+struct ApplySubstGuard;
+
+impl ApplySubstGuard {
+    fn try_enter() -> Option<Self> {
+        APPLY_SUBST_DEPTH.with(|d| {
+            let cur = d.get();
+            let limit = APPLY_SUBST_LIMIT.with(|l| l.get());
+            if cur >= limit {
+                APPLY_SUBST_OVERFLOWED.with(|f| f.set(true));
+                None
+            } else {
+                d.set(cur + 1);
+                Some(ApplySubstGuard)
+            }
+        })
+    }
+}
+
+impl Drop for ApplySubstGuard {
+    fn drop(&mut self) {
+        APPLY_SUBST_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
 
 /// A substitution mapping type variables to types and presence
 /// variables to presences (Remy '94 — two domains for one substitution).
@@ -349,6 +422,15 @@ pub trait Substitutable {
 
 impl Substitutable for Type {
     fn apply_subst(&self, subst: &Subst) -> Self {
+        // Bail to `Type::Error` past the depth limit. `Type::Error`
+        // is the existing best-effort recovery sentinel (it unifies
+        // trivially and absorbs downstream operations), so a deep
+        // walk that hits the cap degrades gracefully instead of
+        // overflowing the stack. The driver picks up the flag and
+        // emits a diagnostic; see `docs/scaling.md`.
+        let Some(_guard) = ApplySubstGuard::try_enter() else {
+            return Type::Error;
+        };
         match self {
             // Primitives are unchanged
             Type::Number => Type::Number,
@@ -644,5 +726,81 @@ mod tests {
 
         // The quantified a0 should be unchanged, a1 is not in domain
         assert_eq!(result.vars, vec![TVarName::Flex(0)]);
+    }
+
+    /// Build a Type::Array nested `depth` times around `Type::Number`.
+    /// Each `Array` layer recurses through `Type::apply_subst`, so this
+    /// is a clean knob for exercising the depth limit.
+    fn deep_array(depth: usize) -> Type {
+        let mut ty = Type::Number;
+        for _ in 0..depth {
+            ty = Type::Array(Box::new(ty));
+        }
+        ty
+    }
+
+    /// RAII helper for tests that lower the cap. Restores the
+    /// previous limit on drop so the rest of the test process keeps
+    /// using the default.
+    struct DepthLimitScope(usize);
+    impl DepthLimitScope {
+        fn new(limit: usize) -> Self {
+            let prev = set_apply_subst_depth_limit_for_test(limit);
+            Self(prev)
+        }
+    }
+    impl Drop for DepthLimitScope {
+        fn drop(&mut self) {
+            set_apply_subst_depth_limit_for_test(self.0);
+        }
+    }
+
+    #[test]
+    fn apply_subst_below_limit_is_unchanged() {
+        let _scope = DepthLimitScope::new(32);
+        let _ = take_apply_subst_overflow(); // clear stale flag
+        let ty = deep_array(10);
+        let result = Subst::empty().apply(&ty);
+        assert_eq!(result, ty);
+        assert!(!take_apply_subst_overflow(), "should not overflow well below the cap");
+    }
+
+    #[test]
+    fn apply_subst_at_limit_returns_error_and_sets_flag() {
+        let _scope = DepthLimitScope::new(32);
+        let _ = take_apply_subst_overflow(); // clear stale flag
+        let ty = deep_array(64);
+        let _result = Subst::empty().apply(&ty);
+        assert!(
+            take_apply_subst_overflow(),
+            "overflow flag must be set past the depth cap"
+        );
+    }
+
+    #[test]
+    fn apply_subst_overflow_flag_clears_after_read() {
+        let _scope = DepthLimitScope::new(32);
+        let _ = take_apply_subst_overflow();
+        let ty = deep_array(64);
+        let _ = Subst::empty().apply(&ty);
+        assert!(take_apply_subst_overflow());
+        // Second read is now false.
+        assert!(!take_apply_subst_overflow());
+    }
+
+    #[test]
+    fn apply_subst_depth_resets_between_runs() {
+        // The depth counter must come back to 0 after a run, so the
+        // next call starts fresh. We exercise this by running an
+        // overflowing walk and then a shallow one: if the counter
+        // leaked, the shallow walk would also see the cap.
+        let _scope = DepthLimitScope::new(32);
+        let _ = take_apply_subst_overflow();
+        let _ = Subst::empty().apply(&deep_array(64));
+        let _ = take_apply_subst_overflow(); // clear
+
+        let shallow = Subst::empty().apply(&deep_array(10));
+        assert_eq!(shallow, deep_array(10));
+        assert!(!take_apply_subst_overflow(), "shallow walk after overflow must not retrigger");
     }
 }

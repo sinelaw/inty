@@ -3274,3 +3274,135 @@ fn multi_error_duplicate_const_no_longer_aborts() {
         errs
     );
 }
+
+// ---------------------------------------------------------------------------
+// Recursion-depth limit on `Type::apply_subst`. See `docs/scaling.md`.
+// The cap protects against SIGSEGV on adversarial input; the
+// integration test below confirms a diagnostic surfaces cleanly
+// instead of a crash when an overflow happens inside inference.
+// ---------------------------------------------------------------------------
+
+/// Build a source string `var x = { a: { a: { a: ... 1 } } }` nested
+/// `depth` times. Each `{a: ...}` adds one Row layer to the inferred
+/// type, so inference produces a Type::Row whose `a` field's type is
+/// itself a Row whose `a` field's type is ... — exactly the recursive
+/// shape `Type::apply_subst` walks. Used (with a lowered depth cap)
+/// to drive the limit from inside `infer_program_with_env` without
+/// fighting the parser, which is itself recursive on deep literals.
+fn nested_object_literal_source(depth: usize) -> String {
+    let mut src = String::from("var x = ");
+    for _ in 0..depth {
+        src.push_str("{a: ");
+    }
+    src.push('1');
+    for _ in 0..depth {
+        src.push('}');
+    }
+    src.push(';');
+    src
+}
+
+/// RAII helper that lowers the apply_subst depth cap for the
+/// duration of one test and restores it on drop.
+struct DepthLimitScope(usize);
+impl DepthLimitScope {
+    fn new(limit: usize) -> Self {
+        let prev = crate::types::subst::set_apply_subst_depth_limit_for_test(limit);
+        Self(prev)
+    }
+}
+impl Drop for DepthLimitScope {
+    fn drop(&mut self) {
+        crate::types::subst::set_apply_subst_depth_limit_for_test(self.0);
+    }
+}
+
+#[test]
+fn apply_subst_overflow_surfaces_clean_diagnostic() {
+    // Drive `apply_subst` past the cap from inside inference using
+    // a shallow object-literal value plus a deliberately tiny cap.
+    // The walk bails to `Type::Error` and the driver pushes a clean
+    // "recursion-depth cap" diagnostic — the user-facing payoff of
+    // the depth limit. Never a SIGSEGV, always a clean message. The
+    // 3-deep source is shallow enough that the test thread's small
+    // stack handles it comfortably; cap=2 still trips during
+    // apply_subst because each row layer recurses through the type
+    // tree.
+    let _scope = DepthLimitScope::new(2);
+    let src = nested_object_literal_source(3);
+    let program = parse_for_multi_error_test(&src);
+    let mut state = InferState::new();
+    let env = initial_env();
+    let _ = state.infer_program_with_env(&env, &program);
+    let errs = state.take_errors();
+    let has_overflow_diag = errs.iter().any(|e| {
+        matches!(e, crate::error::IntyError::Type(TypeError::Module { message, .. })
+            if message.contains("recursion-depth cap"))
+    });
+    assert!(
+        has_overflow_diag,
+        "expected the apply_subst overflow to surface as a clean diagnostic, got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn apply_subst_overflow_flag_does_not_leak_between_runs() {
+    // Run 1 trips the cap and surfaces the diagnostic. Run 2 on a
+    // shallow program with fresh state must NOT see the stale flag
+    // — the driver clears it at the start of every call.
+    let _scope = DepthLimitScope::new(2);
+
+    let program = parse_for_multi_error_test(&nested_object_literal_source(3));
+    let mut state = InferState::new();
+    let env = initial_env();
+    let _ = state.infer_program_with_env(&env, &program);
+    let errs = state.take_errors();
+    assert!(
+        errs.iter().any(|e| matches!(
+            e,
+            crate::error::IntyError::Type(TypeError::Module { message, .. })
+                if message.contains("recursion-depth cap")
+        )),
+        "run 1 should see the diagnostic, got: {:?}",
+        errs
+    );
+
+    // Run 2: fresh state, shallow program, no diagnostic.
+    let program = parse_for_multi_error_test("var y = 1;");
+    let mut state = InferState::new();
+    let env = initial_env();
+    state
+        .infer_program_with_env(&env, &program)
+        .expect("clean program in run 2");
+    let errs = state.take_errors();
+    assert!(
+        errs.is_empty(),
+        "run 2 must not see the stale flag, got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn modestly_deep_program_does_not_trigger_overflow_diagnostic() {
+    // Regression: legitimate code must not trip the diagnostic. A
+    // 2-deep nested literal under the default 256 cap (no scope
+    // override) is comfortably under the limit.
+    let src = nested_object_literal_source(2);
+    let program = parse_for_multi_error_test(&src);
+    let mut state = InferState::new();
+    let env = initial_env();
+    state
+        .infer_program_with_env(&env, &program)
+        .expect("modestly-deep literal should type-check");
+    let errs = state.take_errors();
+    assert!(
+        !errs.iter().any(|e| matches!(
+            e,
+            crate::error::IntyError::Type(TypeError::Module { message, .. })
+                if message.contains("recursion-depth cap")
+        )),
+        "shallow program must not trigger overflow diagnostic, got: {:?}",
+        errs
+    );
+}
