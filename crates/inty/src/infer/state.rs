@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use super::InferResult;
-use crate::error::TypeOrigin;
+use crate::error::{IntyError, TypeOrigin};
 use crate::lexer::Span;
 use crate::types::{
     ClassName, LitValue, RowTail, Subst, Substitutable, TVarId, TVarName, Type, TypeDef, TypeId,
@@ -114,6 +114,15 @@ pub struct InferState {
     /// over them after inference completes.
     pub warnings: Vec<InferWarning>,
 
+    /// Errors accumulated during inference. The `Type::Error` recovery
+    /// path lets `infer_stmt_list` keep going after a failed
+    /// statement, so multiple errors can surface from a single
+    /// inference run. The public `infer_program*` API still returns
+    /// the first error via `Result::Err` for backwards compatibility;
+    /// consumers wanting the full set (e.g. the CLI) drain this vec
+    /// after the call completes.
+    pub errors: Vec<IntyError>,
+
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
 
@@ -165,9 +174,26 @@ impl InferState {
             decl_schemes: HashMap::new(),
             type_origins: HashMap::new(),
             warnings: Vec::new(),
+            errors: Vec::new(),
             config,
             type_aliases: HashMap::new(),
         }
+    }
+
+    /// Record an inference error and continue. Used by `infer_stmt_list`
+    /// when `Type::Error` recovery lets us keep type-checking past a
+    /// failing statement. The first call's error is what the public
+    /// `infer_program*` API returns via `Err`; later errors are only
+    /// visible to callers that drain `errors` after the run.
+    pub fn push_error(&mut self, err: IntyError) {
+        self.errors.push(err);
+    }
+
+    /// Drain accumulated errors, leaving the state empty. The CLI calls
+    /// this after `infer_program_with_env` to report every error,
+    /// not just the first.
+    pub fn take_errors(&mut self) -> Vec<IntyError> {
+        std::mem::take(&mut self.errors)
     }
 
     /// Push a non-fatal warning. Called from inference paths that detect

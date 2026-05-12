@@ -540,12 +540,24 @@ fn run_inference(
         env
     };
 
-    // Type inference
-    match state.infer_program_with_env(&env, &program) {
+    // Type inference. The Type::Error recovery path lets inference
+    // continue past a failing statement, so `state.errors` may
+    // contain multiple diagnostics even though the public API only
+    // returns the first via `Result::Err`. Report every accumulated
+    // error to the user.
+    let infer_result = state.infer_program_with_env(&env, &program);
+    let collected = state.take_errors();
+    match infer_result {
         Ok((result_type, final_env)) => {
             // Resolve type class constraints
             if let Err(e) = state.resolve_constraints() {
+                errors.extend(collected);
                 errors.push(e);
+                return Err(errors);
+            }
+
+            if !collected.is_empty() {
+                errors.extend(collected);
                 return Err(errors);
             }
 
@@ -561,8 +573,10 @@ fn run_inference(
 
             Ok(())
         }
-        Err(e) => {
-            errors.push(e);
+        Err(_first) => {
+            // `_first` is also at the head of `collected`, so use the
+            // accumulated list as-is to avoid duplicating it.
+            errors.extend(collected);
             Err(errors)
         }
     }
