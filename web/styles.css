@@ -744,6 +744,7 @@ html, body {
         flex-basis: 280px;
         max-width: 84vw;
         box-shadow: 8px 0 24px rgba(0, 0, 0, 0.5);
+        background: #0f111c;
         transform: translateX(0);
         transition: transform 0.22s ease, opacity 0.18s ease;
     }
