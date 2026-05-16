@@ -356,8 +356,23 @@ impl Analysis {
             Some(s) => s,
             None => return Vec::new(),
         };
+        // One PrettyContext for every hint in this range: type
+        // variables with the same id render to the same letter
+        // across hints, so `obj: {x: a, …}` and `var x: a` line up,
+        // and two unused params with independent fresh vars get
+        // distinct letters instead of both showing `: a`. The body
+        // type and the `where`-clause also share it within a single
+        // hint, so `: a where Plus a` agrees with itself.
+        let mut ctx = PrettyContext::new();
         let mut hints = Vec::new();
-        for (def_span, def) in self.resolution.defs_in_range(start, end) {
+        // Walk defs in source order so letter assignment is
+        // deterministic and matches reading order — `defs_in_range`
+        // iterates a `HashMap`, which would otherwise shuffle the
+        // hint-to-letter mapping on every edit.
+        let mut ordered: Vec<(Span, &crate::resolver::Def)> =
+            self.resolution.defs_in_range(start, end).collect();
+        ordered.sort_by_key(|(s, _)| (s.start, s.end));
+        for (def_span, def) in ordered {
             if matches!(def.kind, DefKind::Catch | DefKind::Import) {
                 continue;
             }
@@ -372,38 +387,28 @@ impl Analysis {
             };
             let applied = state.flatten_type(ty);
 
-            // If the binding was generalised, recover its predicates
-            // (`where Plus a`) so overloaded operators stay visible.
-            let where_clause = state
-                .get_decl_scheme(def_span)
-                .map(|scheme| state.flatten_scheme(scheme))
-                .filter(|s| !s.body.preds.is_empty())
-                .map(|s| {
-                    let mut pctx = PrettyContext::new();
-                    format!(" where {}", pctx.format_preds(&s.body.preds))
-                })
-                .unwrap_or_default();
-
             if matches!(def.kind, DefKind::Function) {
                 // Function decls show only the return type, anchored
                 // after `)`, instead of repeating the whole signature
                 // after the function's name.
                 if let Some((_, _, ret)) = applied.as_callable() {
                     if let Some(pos) = close_paren_after(text, def_span.end) {
-                        let mut ctx = PrettyContext::new();
+                        let ret_str = ctx.format_type(ret);
+                        let where_clause = where_clause_for(state, def_span, &mut ctx);
                         hints.push(InlayHintData {
                             after_byte: pos,
-                            label: format!(" -> {}{}", ctx.format_type(ret), where_clause),
+                            label: format!(" -> {}{}", ret_str, where_clause),
                         });
                     }
                 }
                 continue;
             }
 
-            let mut ctx = PrettyContext::new();
+            let body_str = ctx.format_type(&applied);
+            let where_clause = where_clause_for(state, def_span, &mut ctx);
             hints.push(InlayHintData {
                 after_byte: def_span.end,
-                label: format!(": {}{}", ctx.format_type(&applied), where_clause),
+                label: format!(": {}{}", body_str, where_clause),
             });
         }
         hints
@@ -416,6 +421,25 @@ impl Analysis {
 pub struct InlayHintData {
     pub after_byte: usize,
     pub label: String,
+}
+
+/// If the binding at `def_span` was generalised with predicates,
+/// return ` where ...` formatted via the *given* `PrettyContext` so
+/// the letters in the where-clause match the body's letters in the
+/// same hint. Empty string when there's no scheme or no predicates.
+fn where_clause_for(
+    state: &InferState,
+    def_span: Span,
+    ctx: &mut PrettyContext,
+) -> String {
+    let Some(scheme) = state.get_decl_scheme(def_span) else {
+        return String::new();
+    };
+    let flat = state.flatten_scheme(scheme);
+    if flat.body.preds.is_empty() {
+        return String::new();
+    }
+    format!(" where {}", ctx.format_preds(&flat.body.preds))
 }
 
 /// Starting at `name_end`, skip whitespace, then walk a balanced

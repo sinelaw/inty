@@ -766,6 +766,94 @@ fn inlay_hint_for_overloaded_function_includes_where_clause() {
 }
 
 #[test]
+fn inlay_hints_use_consistent_letters_per_function() {
+    // Regression: each inlay hint built its own `PrettyContext`, so
+    // every binding got a letter starting from `a`. With
+    // `function ob(obj, arg1, arg2) { var x = obj.x; var y = obj.y;
+    // return x + y; }`, `obj`, `arg1`, `arg2`, `x`, `y`, and the
+    // return type all showed `: a` even though they're different
+    // type variables. A shared context across the hints in one
+    // request makes equal-letter == equal-var: arg1/arg2 get fresh
+    // distinct letters, while the addable Plus var appears as the
+    // same letter on `obj.x`, `obj.y`, `var x`, `var y`, and `->`.
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///rowparam2.js");
+    let src = "function ob(obj, arg1, arg2) { var x = obj.x; var y = obj.y; return x + y; }\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    client
+        .sender
+        .send(Message::Request(req::<InlayHintRequest>(
+            83,
+            InlayHintParams {
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                text_document: TextDocumentIdentifier { uri: u.clone() },
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 5,
+                        character: 0,
+                    },
+                },
+            },
+        )))
+        .unwrap();
+    let hints: Option<Vec<InlayHint>> = expect_response(&client, 83);
+    let hints = hints.expect("inlay hints present");
+
+    let by_pos: std::collections::HashMap<(u32, u32), String> = hints
+        .iter()
+        .map(|h| {
+            let label = match &h.label {
+                lsp_types::InlayHintLabel::String(s) => s.clone(),
+                lsp_types::InlayHintLabel::LabelParts(parts) => {
+                    parts.iter().map(|p| p.value.clone()).collect::<String>()
+                }
+            };
+            ((h.position.line, h.position.character), label)
+        })
+        .collect();
+    // Pull the per-binding labels by source position.
+    let obj = by_pos.get(&(0, 15)).expect("obj hint");
+    let arg1 = by_pos.get(&(0, 21)).expect("arg1 hint");
+    let arg2 = by_pos.get(&(0, 27)).expect("arg2 hint");
+
+    // arg1 and arg2 are independent free vars — must not share a letter.
+    let arg1_letter = arg1.trim_start_matches(':').trim().to_string();
+    let arg2_letter = arg2.trim_start_matches(':').trim().to_string();
+    assert_ne!(
+        arg1_letter, arg2_letter,
+        "arg1 and arg2 share a letter ({:?}) — different vars must render distinctly",
+        arg1_letter
+    );
+    // Neither should reuse the row's field letter from obj.
+    // Extract the `a` from `obj: {x: a, y: a | b}`.
+    let xy_letter = obj
+        .split("x:")
+        .nth(1)
+        .and_then(|s| s.split([',', ' ']).find(|t| !t.is_empty()))
+        .unwrap_or("");
+    assert_ne!(
+        arg1_letter, xy_letter,
+        "arg1's letter collides with the row's field-type letter: arg1={:?} obj={:?}",
+        arg1_letter, obj
+    );
+    assert_ne!(
+        arg2_letter, xy_letter,
+        "arg2's letter collides with the row's field-type letter: arg2={:?} obj={:?}",
+        arg2_letter, obj
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
 fn inlay_hint_for_row_param_lists_every_accessed_field() {
     // Regression: the inlay hint for a parameter whose row picks up
     // fields via later property accesses was using the shallow
