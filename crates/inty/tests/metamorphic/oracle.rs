@@ -21,7 +21,6 @@ use inty::infer::{InferState, TypeEnv};
 use inty::parser::ast::Program;
 use inty::parser::pretty::print_program;
 use inty::stdlib::initial_env_with_stdlib;
-use inty::types::PrettyContext;
 
 /// Successful check result. `program_ty` is the top-level program's
 /// type; `bindings` is the set of bindings the program *introduced*
@@ -52,14 +51,15 @@ pub fn check(program: &Program) -> CheckResult {
 fn run_check(env: TypeEnv, state: &mut InferState, program: &Program) -> CheckResult {
     // Snapshot the starting env so we can later filter out everything
     // stdlib already supplied — we only care about what the program
-    // introduced or shadowed.
+    // introduced or shadowed. Print via the canonical
+    // `display_scheme` path so the strings used as the oracle's
+    // identity for each binding are alpha-rename-stable: tidy
+    // renumbers tvars in traversal order, so the printed form
+    // doesn't depend on the raw IDs the allocator handed out.
     let base_names: HashSet<String> = env.names().cloned().collect();
     let base_schemes: BTreeMap<String, String> = env
         .iter()
-        .map(|(name, scheme)| {
-            let mut ctx = PrettyContext::new();
-            (name.clone(), ctx.format_scheme(scheme))
-        })
+        .map(|(name, scheme)| (name.clone(), state.display_scheme(scheme).to_string()))
         .collect();
 
     let (program_ty, final_env) = match state.infer_program_with_env(&env, program) {
@@ -70,19 +70,16 @@ fn run_check(env: TypeEnv, state: &mut InferState, program: &Program) -> CheckRe
         return CheckResult::Err;
     }
 
-    let mut ctx = PrettyContext::new();
-    let program_ty = ctx.format_type(&state.apply_subst(&program_ty));
+    let program_ty = state.display_type(&program_ty).to_string();
 
-    // For each name in the final env, decide whether it belongs in the
-    // result: names the program added are always included; stdlib names
-    // are included only if their scheme changed (the program shadowed
-    // them). Each binding gets a fresh PrettyContext so its printed
-    // representation is self-contained — no cross-binding numbering
-    // dependency.
+    // For each name in the final env, decide whether it belongs in
+    // the result: names the program added are always included;
+    // stdlib names are included only if their scheme changed (the
+    // program shadowed them). Each binding renders independently
+    // via tidy, so its string is self-contained.
     let mut bindings = BTreeMap::new();
     for (name, scheme) in final_env.iter() {
-        let mut ctx = PrettyContext::new();
-        let printed = ctx.format_scheme(scheme);
+        let printed = state.display_scheme(scheme).to_string();
         if base_names.contains(name) {
             if base_schemes.get(name) != Some(&printed) {
                 bindings.insert(name.clone(), printed);

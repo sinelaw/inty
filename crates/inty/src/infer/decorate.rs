@@ -11,17 +11,18 @@ use super::env::TypeEnv;
 use super::state::InferState;
 
 /// Decorate an AST with inferred type annotations.
+///
+/// Holds no mutable display state: each annotation goes through
+/// [`InferState::display_type`] / [`InferState::display_scheme`],
+/// which produce already-tidied values that print the same with a
+/// fresh [`PrettyContext`].
 pub struct Decorator<'a> {
     state: &'a InferState,
-    ctx: PrettyContext,
 }
 
 impl<'a> Decorator<'a> {
     pub fn new(state: &'a InferState) -> Self {
-        Self {
-            state,
-            ctx: PrettyContext::new(),
-        }
+        Self { state }
     }
 
     /// Decorate a program with inferred types.
@@ -653,24 +654,26 @@ impl<'a> Decorator<'a> {
     }
 
     fn scheme_to_annotation(&mut self, scheme: &TypeScheme, span: Span) -> TypeAnnotation {
-        // `format_scheme` drops quantifiers that don't appear in the
-        // printed body or predicates (including hidden `this` vars),
-        // so hand it the full (flattened) scheme and let it filter.
-        let applied_scheme = self.state.flatten_scheme(scheme);
-        let content = self.ctx.format_scheme(&applied_scheme);
+        // `display_scheme` flattens *and* tidies, so the resulting
+        // scheme carries canonical, traversal-ordered IDs. A fresh
+        // `PrettyContext` per annotation now produces the same
+        // letters another caller would for the same scheme — the
+        // mutable letter map is no longer load-bearing.
+        let displayed = self.state.display_scheme(scheme);
+        let mut ctx = PrettyContext::new();
         TypeAnnotation {
             name: "".to_string(),
-            content,
+            content: ctx.format_scheme(&displayed),
             span,
         }
     }
 
     fn type_to_annotation(&mut self, ty: &Type, span: Span) -> TypeAnnotation {
-        let ty = self.state.flatten_type(ty);
-        let content = self.ctx.format_type(&ty);
+        let displayed = self.state.display_type(ty);
+        let mut ctx = PrettyContext::new();
         TypeAnnotation {
             name: "".to_string(),
-            content,
+            content: ctx.format_type(&displayed),
             span,
         }
     }

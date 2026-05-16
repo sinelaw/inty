@@ -5,10 +5,12 @@
 
 mod pretty;
 pub mod subst;
+mod tidy;
 mod ty;
 
 pub use pretty::PrettyContext;
 pub use subst::{Subst, Substitutable};
+pub use tidy::TidyEnv;
 pub use ty::{
     ClassName, FieldEntry, LitValue, ModuleType, PVarId, PVarName, Presence, PropName, QualType,
     RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId, TypePred, TypeScheme,

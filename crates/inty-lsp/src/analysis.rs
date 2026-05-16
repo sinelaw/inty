@@ -168,33 +168,27 @@ impl Analysis {
             // `decl_types` stores raw `Type` and loses both quantifiers
             // and type-class predicates, so use it only as a fallback.
             if let Some(scheme) = state.get_decl_scheme(def_span) {
-                let applied_scheme = state.flatten_scheme(scheme);
-                let mut ctx = PrettyContext::new();
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str: ctx.format_scheme(&applied_scheme),
+                    type_str: format_scheme(state.display_scheme(scheme)),
                 });
             }
             if let Some(ty) = state.get_decl_type(def_span) {
-                let applied = state.flatten_type(ty);
-                let mut ctx = PrettyContext::new();
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str: ctx.format_type(&applied),
+                    type_str: format_type(state.display_type(ty)),
                 });
             }
             // Resolver knows the def but inference didn't record a
             // type for it. Fall back to env lookup by name — catches
             // catch params and similar.
             if let Some(scheme) = env.lookup(&def.name) {
-                let applied_scheme = state.flatten_scheme(scheme);
-                let mut ctx = PrettyContext::new();
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str: ctx.format_scheme(&applied_scheme),
+                    type_str: format_scheme(state.display_scheme(scheme)),
                 });
             }
         }
@@ -205,12 +199,10 @@ impl Analysis {
         let program = self.program.as_ref()?;
         let (name, span) = find_identifier(program, byte_offset)?;
         let scheme = env.lookup(&name)?;
-        let applied_scheme = state.flatten_scheme(scheme);
-        let mut ctx = PrettyContext::new();
         Some(HoverResult {
             name,
             span,
-            type_str: ctx.format_scheme(&applied_scheme),
+            type_str: format_scheme(state.display_scheme(scheme)),
         })
     }
 
@@ -221,9 +213,7 @@ impl Analysis {
         let env = self.final_env.as_ref()?;
         let state = self.state.as_ref()?;
         let scheme = env.lookup(name)?;
-        let applied = state.flatten_scheme(scheme);
-        let mut ctx = PrettyContext::new();
-        Some(ctx.format_scheme(&applied))
+        Some(format_scheme(state.display_scheme(scheme)))
     }
 
     /// If the byte just before `offset` is `.` and the preceding
@@ -275,19 +265,18 @@ impl Analysis {
         let env = self.final_env.as_ref()?;
         let state = self.state.as_ref()?;
         let scheme = env.lookup(obj_name)?;
-        let ty = state.flatten_type(&scheme.body.ty);
-        let row = row_of(&ty)?;
+        // Tidy the whole row at once so two fields whose types
+        // share a tvar get the same letter in the completion list.
+        let row_ty = state.display_type(&scheme.body.ty);
+        let row = row_of(&row_ty)?;
         let items: Vec<CompletionItem> = row
             .props
             .iter()
-            .map(|(name, entry)| {
-                let mut ctx = PrettyContext::new();
-                CompletionItem {
-                    label: name.0.clone(),
-                    kind: Some(CompletionItemKind::FIELD),
-                    detail: Some(ctx.format_type(&entry.ty)),
-                    ..Default::default()
-                }
+            .map(|(name, entry)| CompletionItem {
+                label: name.0.clone(),
+                kind: Some(CompletionItemKind::FIELD),
+                detail: Some(format_type(entry.ty.clone())),
+                ..Default::default()
             })
             .collect();
         Some(items)
@@ -313,6 +302,11 @@ impl Analysis {
         // shapes (computed members, calls returning functions) we
         // punt on for v1.
         let (callee_label, callee_ty) = resolve_callee_type(env, state, callee_expr)?;
+        // Tidy the callee's whole function type as one unit so
+        // params and the return share canonical IDs — `(a, a) =>
+        // a` reads as one type, not three independently-tidied
+        // pieces.
+        let callee_ty = state.display_type(&callee_ty);
         let (params, ret) = func_params(&callee_ty)?;
 
         // Find the `(` opening the argument list after the callee.
@@ -321,9 +315,8 @@ impl Analysis {
         let search_end = call_span.end.min(bytes.len());
         let paren_open = (search_start..search_end).find(|&i| bytes[i] == b'(')?;
 
-        let mut ctx = PrettyContext::new();
-        let param_labels: Vec<String> = params.iter().map(|p| ctx.format_type(p)).collect();
-        let ret_label = ctx.format_type(&ret);
+        let param_labels: Vec<String> = params.iter().map(|p| format_type(p.clone())).collect();
+        let ret_label = format_type(ret.clone());
         let signature_label = format!(
             "{}({}): {}",
             callee_label,
@@ -356,19 +349,18 @@ impl Analysis {
             Some(s) => s,
             None => return Vec::new(),
         };
-        // One PrettyContext for every hint in this range: type
-        // variables with the same id render to the same letter
-        // across hints, so `obj: {x: a, …}` and `var x: a` line up,
-        // and two unused params with independent fresh vars get
-        // distinct letters instead of both showing `: a`. The body
-        // type and the `where`-clause also share it within a single
-        // hint, so `: a where Plus a` agrees with itself.
-        let mut ctx = PrettyContext::new();
+        // One `TidyEnv` for every hint in this range so a tvar
+        // shared by two bindings gets the same canonical ID — and
+        // therefore the same letter — across hints. Each hint
+        // still uses a fresh `PrettyContext`; that context's
+        // letter-assignment state is no longer load-bearing
+        // because tidy has already canonicalised the IDs.
+        let mut tidy = inty::types::TidyEnv::new();
         let mut hints = Vec::new();
-        // Walk defs in source order so letter assignment is
-        // deterministic and matches reading order — `defs_in_range`
-        // iterates a `HashMap`, which would otherwise shuffle the
-        // hint-to-letter mapping on every edit.
+        // Walk defs in source order so the tidy env assigns IDs
+        // in reading order — `defs_in_range` iterates a `HashMap`,
+        // which would otherwise shuffle the ID-to-letter mapping
+        // on every edit.
         let mut ordered: Vec<(Span, &crate::resolver::Def)> =
             self.resolution.defs_in_range(start, end).collect();
         ordered.sort_by_key(|(s, _)| (s.start, s.end));
@@ -385,7 +377,7 @@ impl Analysis {
                 Some(t) => t,
                 None => continue,
             };
-            let applied = state.flatten_type(ty);
+            let applied = state.display_type_in(&mut tidy, ty);
 
             if matches!(def.kind, DefKind::Function) {
                 // Function decls show only the return type, anchored
@@ -393,22 +385,20 @@ impl Analysis {
                 // after the function's name.
                 if let Some((_, _, ret)) = applied.as_callable() {
                     if let Some(pos) = close_paren_after(text, def_span.end) {
-                        let ret_str = ctx.format_type(ret);
-                        let where_clause = where_clause_for(state, def_span, &mut ctx);
+                        let where_clause = where_clause_for(state, def_span, &mut tidy);
                         hints.push(InlayHintData {
                             after_byte: pos,
-                            label: format!(" -> {}{}", ret_str, where_clause),
+                            label: format!(" -> {}{}", format_type(ret.clone()), where_clause),
                         });
                     }
                 }
                 continue;
             }
 
-            let body_str = ctx.format_type(&applied);
-            let where_clause = where_clause_for(state, def_span, &mut ctx);
+            let where_clause = where_clause_for(state, def_span, &mut tidy);
             hints.push(InlayHintData {
                 after_byte: def_span.end,
-                label: format!(": {}{}", body_str, where_clause),
+                label: format!(": {}{}", format_type(applied), where_clause),
             });
         }
         hints
@@ -424,22 +414,38 @@ pub struct InlayHintData {
 }
 
 /// If the binding at `def_span` was generalised with predicates,
-/// return ` where ...` formatted via the *given* `PrettyContext` so
-/// the letters in the where-clause match the body's letters in the
-/// same hint. Empty string when there's no scheme or no predicates.
+/// return ` where ...` tidied into the shared `tidy` env so the
+/// letters in the where-clause line up with the body's letters in
+/// the same hint and with every other hint built from the same
+/// env. Empty string when there's no scheme or no predicates.
 fn where_clause_for(
     state: &InferState,
     def_span: Span,
-    ctx: &mut PrettyContext,
+    tidy: &mut inty::types::TidyEnv,
 ) -> String {
     let Some(scheme) = state.get_decl_scheme(def_span) else {
         return String::new();
     };
-    let flat = state.flatten_scheme(scheme);
-    if flat.body.preds.is_empty() {
+    let displayed = state.display_scheme_in(tidy, scheme);
+    if displayed.body.preds.is_empty() {
         return String::new();
     }
-    format!(" where {}", ctx.format_preds(&flat.body.preds))
+    let mut ctx = PrettyContext::new();
+    format!(" where {}", ctx.format_preds(&displayed.body.preds))
+}
+
+/// Format a tidied `Type` with a fresh `PrettyContext`. The context's
+/// letter map is per-call because the input is already canonical —
+/// see [`inty::types::TidyEnv`].
+fn format_type(ty: Type) -> String {
+    let mut ctx = PrettyContext::new();
+    ctx.format_type(&ty)
+}
+
+/// Format a tidied `TypeScheme` with a fresh `PrettyContext`.
+fn format_scheme(scheme: inty::types::TypeScheme) -> String {
+    let mut ctx = PrettyContext::new();
+    ctx.format_scheme(&scheme)
 }
 
 /// Starting at `name_end`, skip whitespace, then walk a balanced

@@ -12,8 +12,8 @@ use super::InferResult;
 use crate::error::{IntyError, TypeOrigin};
 use crate::lexer::Span;
 use crate::types::{
-    ClassName, LitValue, QualType, RowTail, Subst, Substitutable, TVarId, TVarName, Type, TypeDef,
-    TypeId, TypePred, TypeScheme,
+    ClassName, LitValue, QualType, RowTail, Subst, Substitutable, TVarId, TVarName, TidyEnv, Type,
+    TypeDef, TypeId, TypePred, TypeScheme,
 };
 
 /// Type class definition with instances.
@@ -420,7 +420,7 @@ impl InferState {
             .preds
             .iter()
             .map(|p| TypePred {
-                class: p.class.clone(),
+                class: p.class,
                 types: p
                     .types
                     .iter()
@@ -433,6 +433,38 @@ impl InferState {
             pvars: scheme.pvars.clone(),
             body: QualType::with_preds(preds, ty),
         }
+    }
+
+    /// Canonical display form of a type: flatten through the
+    /// substitution, then tidy with a fresh [`TidyEnv`] so the
+    /// resulting `Type` carries small, traversal-ordered IDs. Any
+    /// printer (CLI decorator, LSP hover, error message) handed
+    /// this value produces the same string with no shared state.
+    pub fn display_type(&self, ty: &Type) -> Type {
+        let mut env = TidyEnv::new();
+        env.tidy_type(&self.flatten_type(ty))
+    }
+
+    /// Canonical display form of a scheme. See [`Self::display_type`].
+    pub fn display_scheme(&self, scheme: &TypeScheme) -> TypeScheme {
+        let mut env = TidyEnv::new();
+        env.tidy_scheme(&self.flatten_scheme(scheme))
+    }
+
+    /// Flatten + tidy `ty` into the supplied [`TidyEnv`]. Use this
+    /// when you need *within-scope* consistency across several
+    /// types — e.g. a function's scheme together with every
+    /// binding inside it. Each call shares IDs the env has already
+    /// assigned, so the same underlying tvar always tidies to the
+    /// same canonical ID across calls.
+    pub fn display_type_in(&self, env: &mut TidyEnv, ty: &Type) -> Type {
+        env.tidy_type(&self.flatten_type(ty))
+    }
+
+    /// Flatten + tidy a scheme into the supplied env. Companion to
+    /// [`Self::display_type_in`].
+    pub fn display_scheme_in(&self, env: &mut TidyEnv, scheme: &TypeScheme) -> TypeScheme {
+        env.tidy_scheme(&self.flatten_scheme(scheme))
     }
 
     /// Join two types into their least upper bound.

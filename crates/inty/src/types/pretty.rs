@@ -3,7 +3,7 @@
 //! Provides human-readable string representations of types,
 //! type schemes, and related structures.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Write};
 
 use super::ty::{
@@ -29,44 +29,38 @@ fn prints_as_function(ty: &Type) -> bool {
     }
 }
 
-/// Context for pretty-printing, tracking variable names.
-pub struct PrettyContext {
-    /// Mapping from type variable IDs to display names.
-    var_names: HashMap<u32, String>,
-    /// Counter for generating fresh names.
-    next_name: usize,
-}
+/// Stateless pretty-printer.
+///
+/// Variable IDs are rendered directly as letters (`0 → a`, `25 → z`,
+/// `26 → a0`, …), so the output is a pure function of the input
+/// type. Coordination between callers — making sure two formatted
+/// fragments use consistent letters for the same tvar — is the job
+/// of [`crate::types::TidyEnv`], which runs *before* printing and
+/// canonicalises variable IDs into the type itself. The legacy
+/// mutable letter map is gone; `PrettyContext` is now effectively
+/// a unit type, kept as a zero-sized struct so existing `.format_*`
+/// method calls keep working without churn.
+pub struct PrettyContext;
 
 impl PrettyContext {
-    /// Create a new pretty-printing context.
+    /// Create a pretty-printing context. Stateless — every instance
+    /// is interchangeable; the only reason to keep multiple is
+    /// ergonomic.
     pub fn new() -> Self {
-        PrettyContext {
-            var_names: HashMap::new(),
-            next_name: 0,
-        }
+        PrettyContext
     }
 
-    /// Get or generate a name for a type variable.
+    /// Render a tvar's integer ID as a display letter. After tidy
+    /// produces small, traversal-ordered IDs, this is the identity
+    /// of the canonical form: `0 → a`, `1 → b`, …, `26 → a0`.
+    /// Untidied types with large IDs print as numbered letters
+    /// (`b5`, `c12`, …); that's recoverable but ugly, so callers
+    /// that care about readability should tidy first.
     fn get_var_name(&mut self, id: u32) -> String {
-        if let Some(name) = self.var_names.get(&id) {
-            return name.clone();
-        }
-
-        let name = self.generate_name();
-        self.var_names.insert(id, name.clone());
-        name
-    }
-
-    /// Generate the next fresh variable name.
-    fn generate_name(&mut self) -> String {
-        let idx = self.next_name;
-        self.next_name += 1;
-
+        let idx = id as usize;
         if idx < 26 {
-            // a, b, c, ..., z
             char::from(b'a' + idx as u8).to_string()
         } else {
-            // a1, b1, ..., z1, a2, ...
             let letter = char::from(b'a' + (idx % 26) as u8);
             let num = idx / 26;
             format!("{}{}", letter, num)
@@ -583,15 +577,23 @@ fn displayed_vars_of_scheme(scheme: &TypeScheme) -> HashSet<TVarName> {
 /// Display implementation for types using a fresh context.
 impl Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Tidy before printing so the Display impl produces the
+        // canonical letters regardless of the raw IDs the type
+        // carries. Callers that already need shared letters across
+        // several Display calls should construct a [`TidyEnv`] and
+        // run the values through it themselves before calling
+        // [`PrettyContext::format_type`].
+        let tidied = crate::types::TidyEnv::new().tidy_type(self);
         let mut ctx = PrettyContext::new();
-        write!(f, "{}", ctx.format_type(self))
+        write!(f, "{}", ctx.format_type(&tidied))
     }
 }
 
 impl Display for TypeScheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tidied = crate::types::TidyEnv::new().tidy_scheme(self);
         let mut ctx = PrettyContext::new();
-        write!(f, "{}", ctx.format_scheme(self))
+        write!(f, "{}", ctx.format_scheme(&tidied))
     }
 }
 
