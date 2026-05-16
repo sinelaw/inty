@@ -766,6 +766,70 @@ fn inlay_hint_for_overloaded_function_includes_where_clause() {
 }
 
 #[test]
+fn inlay_hint_for_row_param_lists_every_accessed_field() {
+    // Regression: the inlay hint for a parameter whose row picks up
+    // fields via later property accesses was using the shallow
+    // `apply_subst` view, which leaves row tails unmerged. With
+    // `function objs(obj) { let x = obj.x; let y = obj.y; return x +
+    // y; }` the hint for `obj` showed only `x` because the tail var
+    // bound to a row containing `y` wasn't followed. Boundary code
+    // (printer / LSP) must use `flatten_type` instead.
+    let (client, handle) = boot();
+    handshake(&client);
+
+    let u = uri("file:///rowparam.js");
+    let src = "function objs(obj) { let x = obj.x; let y = obj.y; return x + y; }\n";
+    open_doc(&client, &u, src);
+    let _ = drain_diagnostics(&client, &u);
+
+    client
+        .sender
+        .send(Message::Request(req::<InlayHintRequest>(
+            82,
+            InlayHintParams {
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                text_document: TextDocumentIdentifier { uri: u.clone() },
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 5,
+                        character: 0,
+                    },
+                },
+            },
+        )))
+        .unwrap();
+    let hints: Option<Vec<InlayHint>> = expect_response(&client, 82);
+    let hints = hints.expect("inlay hints present");
+
+    let labels: Vec<String> = hints
+        .iter()
+        .map(|h| match &h.label {
+            lsp_types::InlayHintLabel::String(s) => s.clone(),
+            lsp_types::InlayHintLabel::LabelParts(parts) => {
+                parts.iter().map(|p| p.value.clone()).collect::<String>()
+            }
+        })
+        .collect();
+    // The hint anchored just after `obj` should mention both `x` and
+    // `y` (in some row of the form `{x: …, y: …}`).
+    let obj_hint = labels
+        .iter()
+        .find(|l| l.contains('{') && l.contains("x:"))
+        .unwrap_or_else(|| panic!("no row-typed hint found among {:?}", labels));
+    assert!(
+        obj_hint.contains("y:"),
+        "row param hint missing `y:` — got {:?}",
+        obj_hint
+    );
+
+    shutdown(client, handle);
+}
+
+#[test]
 fn signature_help_on_member_call() {
     let (client, handle) = boot();
     handshake(&client);

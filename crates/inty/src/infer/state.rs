@@ -12,8 +12,8 @@ use super::InferResult;
 use crate::error::{IntyError, TypeOrigin};
 use crate::lexer::Span;
 use crate::types::{
-    ClassName, LitValue, RowTail, Subst, Substitutable, TVarId, TVarName, Type, TypeDef, TypeId,
-    TypePred, TypeScheme,
+    ClassName, LitValue, QualType, RowTail, Subst, Substitutable, TVarId, TVarName, Type, TypeDef,
+    TypeId, TypePred, TypeScheme,
 };
 
 /// Type class definition with instances.
@@ -398,6 +398,41 @@ impl InferState {
     /// Apply the current substitution to a type.
     pub fn apply_subst<T: Substitutable>(&self, t: &T) -> T {
         self.main_subst.apply(t)
+    }
+
+    /// Boundary-view of a type: like `apply_subst`, but also merges
+    /// row tails that resolve to a row through the substitution.
+    /// `apply_subst` is shallow on tails for performance during
+    /// inference; callers that need the printable shape of a type
+    /// (LSP hover/inlay hints, decorate.rs) want this instead. See
+    /// `Subst::flatten` for the full rationale.
+    pub fn flatten_type(&self, ty: &Type) -> Type {
+        self.main_subst.flatten(ty)
+    }
+
+    /// Boundary-view of a scheme: flattens the body type and every
+    /// type inside each predicate. Companion to
+    /// [`Self::flatten_type`].
+    pub fn flatten_scheme(&self, scheme: &TypeScheme) -> TypeScheme {
+        let ty = self.main_subst.flatten(&scheme.body.ty);
+        let preds: Vec<TypePred> = scheme
+            .body
+            .preds
+            .iter()
+            .map(|p| TypePred {
+                class: p.class.clone(),
+                types: p
+                    .types
+                    .iter()
+                    .map(|t| self.main_subst.flatten(t))
+                    .collect(),
+            })
+            .collect();
+        TypeScheme {
+            vars: scheme.vars.clone(),
+            pvars: scheme.pvars.clone(),
+            body: QualType::with_preds(preds, ty),
+        }
     }
 
     /// Join two types into their least upper bound.

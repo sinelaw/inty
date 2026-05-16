@@ -168,7 +168,7 @@ impl Analysis {
             // `decl_types` stores raw `Type` and loses both quantifiers
             // and type-class predicates, so use it only as a fallback.
             if let Some(scheme) = state.get_decl_scheme(def_span) {
-                let applied_scheme = state.apply_subst(scheme);
+                let applied_scheme = state.flatten_scheme(scheme);
                 let mut ctx = PrettyContext::new();
                 return Some(HoverResult {
                     name: def.name.clone(),
@@ -177,7 +177,7 @@ impl Analysis {
                 });
             }
             if let Some(ty) = state.get_decl_type(def_span) {
-                let applied = state.apply_subst(ty);
+                let applied = state.flatten_type(ty);
                 let mut ctx = PrettyContext::new();
                 return Some(HoverResult {
                     name: def.name.clone(),
@@ -189,7 +189,7 @@ impl Analysis {
             // type for it. Fall back to env lookup by name — catches
             // catch params and similar.
             if let Some(scheme) = env.lookup(&def.name) {
-                let applied_scheme = state.apply_subst(scheme);
+                let applied_scheme = state.flatten_scheme(scheme);
                 let mut ctx = PrettyContext::new();
                 return Some(HoverResult {
                     name: def.name.clone(),
@@ -205,7 +205,7 @@ impl Analysis {
         let program = self.program.as_ref()?;
         let (name, span) = find_identifier(program, byte_offset)?;
         let scheme = env.lookup(&name)?;
-        let applied_scheme = state.apply_subst(scheme);
+        let applied_scheme = state.flatten_scheme(scheme);
         let mut ctx = PrettyContext::new();
         Some(HoverResult {
             name,
@@ -221,7 +221,7 @@ impl Analysis {
         let env = self.final_env.as_ref()?;
         let state = self.state.as_ref()?;
         let scheme = env.lookup(name)?;
-        let applied = state.apply_subst(scheme);
+        let applied = state.flatten_scheme(scheme);
         let mut ctx = PrettyContext::new();
         Some(ctx.format_scheme(&applied))
     }
@@ -275,7 +275,7 @@ impl Analysis {
         let env = self.final_env.as_ref()?;
         let state = self.state.as_ref()?;
         let scheme = env.lookup(obj_name)?;
-        let ty = state.apply_subst(&scheme.body.ty);
+        let ty = state.flatten_type(&scheme.body.ty);
         let row = row_of(&ty)?;
         let items: Vec<CompletionItem> = row
             .props
@@ -370,13 +370,13 @@ impl Analysis {
                 Some(t) => t,
                 None => continue,
             };
-            let applied = state.apply_subst(ty);
+            let applied = state.flatten_type(ty);
 
             // If the binding was generalised, recover its predicates
             // (`where Plus a`) so overloaded operators stay visible.
             let where_clause = state
                 .get_decl_scheme(def_span)
-                .map(|scheme| state.apply_subst(scheme))
+                .map(|scheme| state.flatten_scheme(scheme))
                 .filter(|s| !s.body.preds.is_empty())
                 .map(|s| {
                     let mut pctx = PrettyContext::new();
@@ -770,7 +770,7 @@ fn resolve_callee_type(env: &TypeEnv, state: &InferState, expr: &Expr) -> Option
     match expr {
         Expr::Ident { name, .. } => {
             let scheme = env.lookup(name)?;
-            let ty = state.apply_subst(&scheme.body.ty);
+            let ty = state.flatten_type(&scheme.body.ty);
             Some((name.clone(), ty))
         }
         Expr::Member {
@@ -782,7 +782,7 @@ fn resolve_callee_type(env: &TypeEnv, state: &InferState, expr: &Expr) -> Option
                 _ => return None,
             };
             let entry = row.props.get(&PropName(property.clone()))?;
-            let applied = state.apply_subst(&entry.ty);
+            let applied = state.flatten_type(&entry.ty);
             Some((format!("{}.{}", obj_label, property), applied))
         }
         _ => None,

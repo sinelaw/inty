@@ -5,7 +5,7 @@
 
 use crate::lexer::Span;
 use crate::parser::ast::*;
-use crate::types::{PrettyContext, QualType, Type, TypePred, TypeScheme};
+use crate::types::{PrettyContext, Type, TypeScheme};
 
 use super::env::TypeEnv;
 use super::state::InferState;
@@ -653,35 +653,10 @@ impl<'a> Decorator<'a> {
     }
 
     fn scheme_to_annotation(&mut self, scheme: &TypeScheme, span: Span) -> TypeAnnotation {
-        // Use the row-tail-merging substitution view so the
-        // displayed scheme reflects every field added to a row's
-        // tail by later property accesses. Plain `apply_subst` is
-        // shallow on tails for performance reasons (see
-        // `Subst::flatten`'s docs); printing is a boundary
-        // operation, so paying the deep walk here is fine.
-        let ty = self.state.main_subst.flatten(&scheme.body.ty);
-        let preds: Vec<_> = scheme
-            .body
-            .preds
-            .iter()
-            .map(|p| TypePred {
-                class: p.class.clone(),
-                types: p
-                    .types
-                    .iter()
-                    .map(|t| self.state.main_subst.flatten(t))
-                    .collect(),
-            })
-            .collect();
-
         // `format_scheme` drops quantifiers that don't appear in the
         // printed body or predicates (including hidden `this` vars),
-        // so we hand it the full scheme and let it do that filtering.
-        let applied_scheme = TypeScheme {
-            vars: scheme.vars.clone(),
-            pvars: scheme.pvars.clone(),
-            body: QualType::with_preds(preds, ty),
-        };
+        // so hand it the full (flattened) scheme and let it filter.
+        let applied_scheme = self.state.flatten_scheme(scheme);
         let content = self.ctx.format_scheme(&applied_scheme);
         TypeAnnotation {
             name: "".to_string(),
@@ -691,7 +666,7 @@ impl<'a> Decorator<'a> {
     }
 
     fn type_to_annotation(&mut self, ty: &Type, span: Span) -> TypeAnnotation {
-        let ty = self.state.main_subst.flatten(ty);
+        let ty = self.state.flatten_type(ty);
         let content = self.ctx.format_type(&ty);
         TypeAnnotation {
             name: "".to_string(),
