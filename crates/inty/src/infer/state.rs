@@ -554,6 +554,25 @@ impl InferState {
         self.main_subst = snap.subst;
         self.pending_constraints = snap.constraints;
         self.var_table.restore(snap.trail);
+        // Post-restore probe (debug only): the var_table and
+        // main_subst should still agree on every key that survives
+        // the rollback. Spot-check a handful — full-table sweep
+        // would be quadratic in the var count.
+        #[cfg(debug_assertions)]
+        self.assert_mirror_consistent_sample();
+    }
+
+    /// Debug-only spot-check on the mirror invariant. Samples a
+    /// handful of variables from `main_subst`'s domain and verifies
+    /// `zonk(Var(α))` and `apply_subst(Var(α))` agree structurally.
+    /// Used at restore-snapshot boundaries to catch drift introduced
+    /// by a faulty rollback.
+    #[cfg(debug_assertions)]
+    fn assert_mirror_consistent_sample(&mut self) {
+        let domain: Vec<TVarName> = self.main_subst.domain().into_iter().take(8).collect();
+        for var in domain {
+            self.assert_mirror_consistent(&var);
+        }
     }
 
     /// Boundary-view of a type: like `apply_subst`, but also merges
@@ -1013,15 +1032,20 @@ impl InferState {
                     self.var_table.link_to_root(root_b, root_a);
                 }
                 (Resolution::Bound(_), Resolution::Bound(_)) => {
-                    // Both already bound to a structured type. We
-                    // can't reconcile here without recursing through
-                    // `unify`, which the caller is in the middle of.
-                    // Skip the mirror update; main_subst's collision
-                    // check (`resolve` at the top of `extend_subst`)
-                    // already handled the semantic unification. The
-                    // drift is benign — readers that haven't
-                    // migrated still see the right answer via
-                    // `main_subst`.
+                    // Both roots already bound. extend_subst's
+                    // `resolve(&var)` at the call site is supposed
+                    // to have caught this and recursed via `unify`
+                    // — every code path that reaches mirror_extend
+                    // should have a fresh, never-bound key on at
+                    // least one side. If we ever observe this in
+                    // practice, the mirror has drifted.
+                    debug_assert!(
+                        false,
+                        "mirror_extend both-Bound: var_table has both roots bound \
+                         but extend_subst's `resolve` didn't intercept. This \
+                         indicates the var_table has aliased variables that \
+                         main_subst does not — a real drift bug."
+                    );
                 }
                 _ => {}
             }
@@ -1033,8 +1057,22 @@ impl InferState {
             Resolution::Unbound { .. } => {
                 self.var_table.bind(root, ty.clone());
             }
-            Resolution::Bound(_) | Resolution::Link(_) => {
-                // Skip; see comment above.
+            Resolution::Bound(_) => {
+                // Reachable only if some prior `mirror_extend` (via
+                // another alias of `id`) bound this root, but
+                // `main_subst.resolve(&var)` at the call site
+                // didn't see the alias in main_subst — a drift.
+                debug_assert!(
+                    false,
+                    "mirror_extend Var-to-struct: root already Bound \
+                     but extend_subst's `resolve` didn't intercept. \
+                     Drift between var_table and main_subst."
+                );
+            }
+            Resolution::Link(_) => {
+                // `find` returns a root; `root_resolution(root)` can
+                // never yield Link. Defensive.
+                debug_assert!(false, "find returned a Link root");
             }
         }
     }

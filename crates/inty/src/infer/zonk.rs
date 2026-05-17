@@ -132,11 +132,27 @@ fn zonk_with_visited(
                 Resolution::Unbound { .. } => Type::Var(TVarName::Flex(root)),
                 Resolution::Bound(bound) => {
                     // Decycle: if we're already mid-expanding `root`,
-                    // return the variable verbatim. Only entered for
-                    // the Bound arm — Unbound roots can't loop. The
-                    // common case (no cycle) skips the
-                    // visited-tracking work entirely.
+                    // return the variable verbatim. Inty's normal
+                    // path converts equi-recursive bindings to
+                    // nominal `Type::Named` references in
+                    // `var_bind` / `create_recursive_type`, so a
+                    // well-formed table never holds a cycle on
+                    // directly-bound variables. If this branch
+                    // fires in production it means a binding
+                    // slipped through that conversion — a real
+                    // bug, not a benign defensive case.
                     if !visited.insert(root) {
+                        debug_assert!(
+                            false,
+                            "zonk cycle: re-entered Bound root {} \
+                             during expansion. The mirror has a \
+                             structural cycle that `apply_subst` \
+                             would also overflow on — investigate \
+                             `var_bind` / `create_recursive_type` \
+                             for the missing equi-recursive \
+                             conversion.",
+                            root
+                        );
                         return Type::Var(TVarName::Flex(root));
                     }
                     let bound = bound.clone();
