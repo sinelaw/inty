@@ -744,8 +744,23 @@ impl InferState {
             // Already bound — unify so we don't lose either side.
             return self.unify(span, &existing, &ty);
         }
-        let singleton = Subst::singleton(var, ty);
-        self.main_subst = singleton.compose(&self.main_subst);
+        // Direct insert — no `Subst::compose` walk over the existing
+        // substitution. The textbook Damas-Milner formulation
+        // composes to keep the substitution idempotent (every RHS
+        // already substituted-through), at O(N·S) per extend. We
+        // skip that eager propagation: `Subst::resolve`'s path
+        // compression collapses Var-chains on lookup, and
+        // `apply_subst`'s recursive Var arm follows them
+        // structurally — together they give the same observable
+        // behaviour as compose, lazily, at O(α(N)) amortised per
+        // lookup. This is the substitution-side half of destructive
+        // unification (cf. OCaml `Btype`, GHC `TcMType`, rustc
+        // `rustc_infer::infer::InferCtxt`); the type-variable
+        // identity is still HashMap-keyed rather than a true
+        // union-find table with rank, but the asymptotic cost
+        // savings are the same. See
+        // docs/destructive-unification-plan.md.
+        self.main_subst.insert(var, ty);
         Ok(())
     }
 
@@ -772,9 +787,10 @@ impl InferState {
                 return Ok(());
             }
         }
-        let mut singleton = Subst::empty();
-        singleton.insert_presence(pvar, pres);
-        self.main_subst = singleton.compose(&self.main_subst);
+        // Direct insert — same destructive-unification discipline as
+        // `extend_subst` above; presence chains are followed lazily
+        // by `resolve_presence`.
+        self.main_subst.insert_presence(pvar, pres);
         Ok(())
     }
 

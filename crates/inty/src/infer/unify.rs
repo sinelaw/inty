@@ -452,9 +452,6 @@ impl InferState {
                     return Ok(());
                 }
 
-                // Both open, create a fresh row variable for the common tail
-                let fresh = self.fresh_flex();
-
                 // Calculate extra properties for each side
                 let extra1: BTreeMap<PropName, FieldEntry> = r2
                     .props
@@ -469,6 +466,33 @@ impl InferState {
                     .filter(|(k, _)| !r2.props.contains_key(*k))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
+
+                // Fast path: when both rows have the same prop set
+                // (extras both empty), the standard Rémy fresh-tail
+                // dance reduces to bookkeeping — we'd allocate a
+                // fresh `γ` and bind `root1 → Row{∅, γ}`,
+                // `root2 → Row{∅, γ}` purely to record that root1
+                // and root2 now share an unknown extension. Just
+                // union them instead: `root1 → Var(root2)` makes
+                // them members of the same equivalence class with
+                // one fewer variable. This is the union-find merge
+                // operation (Tarjan 1975) and converts the htmx
+                // divergence cycle — which spent its time
+                // re-allocating γ's for repeatedly-unified copies
+                // of the same htmx row — into a constant-time
+                // operation.
+                if extra1.is_empty() && extra2.is_empty() {
+                    self.extend_subst(
+                        span,
+                        TVarName::Flex(root1),
+                        Type::Var(TVarName::Flex(root2)),
+                    )?;
+                    return Ok(());
+                }
+
+                // Both open with at least one side extending the
+                // other: standard Rémy fresh-tail dance.
+                let fresh = self.fresh_flex();
 
                 // Bind both row variables. Use the path-compressed
                 // roots rather than the original ids so the binding
