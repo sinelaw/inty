@@ -60,15 +60,42 @@ use super::var_table::{Resolution, VarTable};
 /// the destructive-unification migration may produce mid-flight —
 /// degrades to a harmless un-resolved variable rather than a SIGSEGV.
 pub fn zonk(table: &mut VarTable, ty: &Type) -> Type {
-    let mut visited: std::collections::HashSet<TVarId> = std::collections::HashSet::new();
+    let mut visited: Visited = Visited::new();
     zonk_with_visited(table, ty, &mut visited)
 }
 
-fn zonk_with_visited(
-    table: &mut VarTable,
-    ty: &Type,
-    visited: &mut std::collections::HashSet<TVarId>,
-) -> Type {
+/// Per-zonk-call visited-set. Stack-allocated for the common-case
+/// shallow walk (most zonk calls touch < 8 variables) and falls back
+/// to a heap-allocated Vec for deeper recursions. Linear scan instead
+/// of a `HashSet` lookup wins on cardinalities < ~32, which is every
+/// zonk call we've measured on the htmx workload.
+struct Visited {
+    items: Vec<TVarId>,
+}
+
+impl Visited {
+    fn new() -> Self {
+        Visited { items: Vec::new() }
+    }
+    /// Returns `true` if `id` was newly inserted (i.e. not already
+    /// in the set), `false` if it was already there.
+    fn insert(&mut self, id: TVarId) -> bool {
+        if self.items.contains(&id) {
+            false
+        } else {
+            self.items.push(id);
+            true
+        }
+    }
+    fn remove(&mut self, id: TVarId) {
+        // O(n) but `n` is tiny — typically 1.
+        if let Some(pos) = self.items.iter().position(|&x| x == id) {
+            self.items.swap_remove(pos);
+        }
+    }
+}
+
+fn zonk_with_visited(table: &mut VarTable, ty: &Type, visited: &mut Visited) -> Type {
     let Some(_guard) = ApplySubstGuard::try_enter() else {
         return Type::Error;
     };
@@ -91,38 +118,33 @@ fn zonk_with_visited(
             let Some(root) = table.find_if_present(*id) else {
                 return ty.clone();
             };
-            // Decycle: if we're already mid-expanding `root`, return
-            // the variable verbatim. A well-formed inty substitution
-            // hits this only when zonk is called on a type that
-            // *itself* loops through a malformed mirror entry; the
-            // normal path goes through nominal `Type::Named`.
-            if !visited.insert(root) {
-                return Type::Var(TVarName::Flex(*id));
-            }
-            let result = match table.root_resolution(root) {
+            match table.root_resolution(root) {
                 // Free root: use the equivalence-class root id. This
                 // mirrors `Subst::apply_subst`'s "follow the chain to
                 // its endpoint" behaviour — for an aliased pair like
                 // `unify(α, β)`, both zonk to the surviving root so
-                // downstream `==` checks (the trampoline for unify
-                // proper, occurs-check, etc.) treat them as equal.
-                // It does mean unbound free variables may be displayed
-                // under a different letter than the user wrote; the
-                // pretty-printer's id-letter renumbering pass handles
-                // that at the boundary.
+                // downstream `==` checks treat them as equal.
                 Resolution::Unbound { .. } => Type::Var(TVarName::Flex(root)),
                 Resolution::Bound(bound) => {
+                    // Decycle: if we're already mid-expanding `root`,
+                    // return the variable verbatim. Only entered for
+                    // the Bound arm — Unbound roots can't loop. The
+                    // common case (no cycle) skips the
+                    // visited-tracking work entirely.
+                    if !visited.insert(root) {
+                        return Type::Var(TVarName::Flex(root));
+                    }
                     let bound = bound.clone();
-                    zonk_with_visited(table, &bound, visited)
+                    let result = zonk_with_visited(table, &bound, visited);
+                    visited.remove(root);
+                    result
                 }
                 Resolution::Link(_) => {
                     // `find` returned a root, so `root_resolution`
                     // can't yield Link. Defensive.
                     ty.clone()
                 }
-            };
-            visited.remove(&root);
-            result
+            }
         }
         Type::Func {
             this_type,
@@ -171,15 +193,11 @@ fn zonk_with_visited(
 /// (that's `Subst::flatten`'s job at the boundary callers). This
 /// keeps zonk-on-rows O(props), matching the cost target.
 pub fn zonk_row(table: &mut VarTable, row: &RowType) -> RowType {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = Visited::new();
     zonk_row_with_visited(table, row, &mut visited)
 }
 
-fn zonk_row_with_visited(
-    table: &mut VarTable,
-    row: &RowType,
-    visited: &mut std::collections::HashSet<TVarId>,
-) -> RowType {
+fn zonk_row_with_visited(table: &mut VarTable, row: &RowType, visited: &mut Visited) -> RowType {
     let props: std::collections::BTreeMap<PropName, FieldEntry> = row
         .props
         .iter()
