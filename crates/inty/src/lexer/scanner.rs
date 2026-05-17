@@ -2,7 +2,7 @@
 
 use super::token::{Span, Spanned, Token};
 use crate::error::{LexError, Result};
-use crate::parser::ast::{TypeAlias, TypeAnnotation};
+use crate::parser::ast::{AnnotationKind, TypeAlias, TypeAnnotation};
 
 /// The lexer/scanner for mquickjs source code.
 pub struct Scanner<'a> {
@@ -337,6 +337,7 @@ impl<'a> Scanner<'a> {
                                         name,
                                         content: content.trim().to_string(),
                                         span: Span::new(start, self.current_pos),
+                                        kind: AnnotationKind::Inline,
                                     });
                                 }
                                 continue;
@@ -391,7 +392,14 @@ impl<'a> Scanner<'a> {
                                 }
                             }
 
-                            // Regular comment - skip until */
+                            // Regular doc comment — capture the body so
+                            // we can scan it for JSDoc `@type` tags
+                            // (TypeScript convention; htmx and many other
+                            // single-file JS libs lean on it for typing
+                            // null-initialised public-API fields). We
+                            // still need to walk to `*/` either way.
+                            let body_start = self.current_pos;
+                            let mut body = String::new();
                             loop {
                                 match self.peek() {
                                     Some((_, '*')) => {
@@ -400,8 +408,10 @@ impl<'a> Scanner<'a> {
                                             self.advance();
                                             break;
                                         }
+                                        body.push('*');
                                     }
-                                    Some(_) => {
+                                    Some((_, ch)) => {
+                                        body.push(ch);
                                         self.advance();
                                     }
                                     None => {
@@ -411,6 +421,20 @@ impl<'a> Scanner<'a> {
                                         .into());
                                     }
                                 }
+                            }
+                            let _ = body_start;
+                            if let Some(content) = extract_jsdoc_type_tag(&body) {
+                                // Empty `name` is the sentinel the parser
+                                // uses to attach this annotation to the
+                                // next named binding or property —
+                                // JSDoc `@type` always attaches forward,
+                                // unlike the inline `/*: T */` form.
+                                self.type_annotations.push(TypeAnnotation {
+                                    name: String::new(),
+                                    content,
+                                    span: Span::new(start, self.current_pos),
+                                    kind: AnnotationKind::JsDoc,
+                                });
                             }
                         }
                         _ => break,
@@ -1267,6 +1291,7 @@ impl<'a> Scanner<'a> {
                 name: name.trim().to_string(),
                 content: content.trim().to_string(),
                 span: Span::new(start, self.current_pos + 2),
+                kind: AnnotationKind::Inline,
             });
 
             self.skip_whitespace();
@@ -1304,6 +1329,7 @@ impl<'a> Scanner<'a> {
             name: name.trim().to_string(),
             content: content.trim().to_string(),
             span: Span::new(start, self.current_pos + 2),
+            kind: AnnotationKind::Inline,
         });
 
         self.consume_comment_end();
@@ -1400,6 +1426,127 @@ impl<'a> Scanner<'a> {
     pub fn type_annotations(&self) -> &[TypeAnnotation] {
         &self.type_annotations
     }
+}
+
+/// Extract the type expression following the first `@type` tag inside
+/// the body of a `/** ... */` doc comment. The body excludes the
+/// opening `/**` and closing `*/`; line-leading `*` decorations are
+/// still present and stripped per-line on multi-line braced forms.
+///
+/// Two forms are accepted, matching the JSDoc / TypeScript convention:
+///
+///   * Braced: `@type {T}` — `T` extends until the matching `}`.
+///   * Bare:   `@type T`   — `T` extends to end of line (or next `@tag`).
+///
+/// Returns `None` if no well-formed `@type` tag is found. The match is
+/// preceded by start-of-body / whitespace / `*` so a stray "@type" in
+/// prose ("the @type tag is documented at…") doesn't false-positive.
+fn extract_jsdoc_type_tag(body: &str) -> Option<String> {
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i + 5 <= bytes.len() {
+        if &bytes[i..i + 5] != b"@type" {
+            i += 1;
+            continue;
+        }
+        // Must be at body start or preceded by whitespace / `*`.
+        let prefix_ok = if i == 0 {
+            true
+        } else {
+            let prev = bytes[i - 1];
+            prev == b' ' || prev == b'\t' || prev == b'\n' || prev == b'\r' || prev == b'*'
+        };
+        // Must be followed by whitespace or `{` so we don't match
+        // `@typeof`, `@typescript`, etc.
+        let after_idx = i + 5;
+        let suffix_ok = match bytes.get(after_idx).copied() {
+            Some(c) => c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' || c == b'{',
+            None => false,
+        };
+        if !prefix_ok || !suffix_ok {
+            i += 5;
+            continue;
+        }
+        // Skip whitespace after `@type`.
+        let mut j = after_idx;
+        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t') {
+            j += 1;
+        }
+        if j >= bytes.len() {
+            return None;
+        }
+        if bytes[j] == b'{' {
+            // Braced form. Read until the matching `}`, counting nesting
+            // so `@type {{x: T}}` (a 1-property object literal inside
+            // the JSDoc braces) parses cleanly.
+            let mut depth = 1i32;
+            j += 1;
+            let start = j;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                if depth == 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if depth != 0 {
+                return None;
+            }
+            let raw = &body[start..j];
+            return Some(strip_doc_decoration(raw));
+        } else {
+            // Bare form: read until newline (or next `@`).
+            let start = j;
+            while j < bytes.len() && bytes[j] != b'\n' && bytes[j] != b'\r' {
+                if bytes[j] == b'@' && j > start {
+                    break;
+                }
+                j += 1;
+            }
+            let raw = body[start..j].trim().trim_end_matches('*').trim();
+            if raw.is_empty() {
+                return None;
+            }
+            return Some(raw.to_string());
+        }
+    }
+    None
+}
+
+/// Strip per-line `*` decorations that JSDoc readers conventionally
+/// insert at column 1 of every continuation line:
+///
+/// ```text
+///     /**
+///      * @type {{
+///      *   foo: number,
+///      *   bar: string
+///      * }}
+///      */
+/// ```
+///
+/// The captured body sees `\n     *   foo: number,…` on each continuation
+/// line; we rebuild it as `\n   foo: number,…` so the type parser sees
+/// a clean expression.
+fn strip_doc_decoration(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut first_line = true;
+    for line in s.lines() {
+        if first_line {
+            out.push_str(line.trim());
+            first_line = false;
+        } else {
+            out.push(' ');
+            let trimmed = line.trim_start();
+            let trimmed = trimmed.strip_prefix('*').unwrap_or(trimmed);
+            out.push_str(trimmed.trim());
+        }
+    }
+    out.trim().to_string()
 }
 
 #[cfg(test)]
@@ -1514,6 +1661,70 @@ mod tests {
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0].name, "x");
         assert_eq!(annotations[0].content, "Number");
+    }
+
+    #[test]
+    fn jsdoc_at_type_braced() {
+        assert_eq!(
+            extract_jsdoc_type_tag(" @type {Number} "),
+            Some("Number".to_string())
+        );
+    }
+
+    #[test]
+    fn jsdoc_at_type_bare() {
+        assert_eq!(
+            extract_jsdoc_type_tag(" @type boolean\n"),
+            Some("boolean".to_string())
+        );
+    }
+
+    #[test]
+    fn jsdoc_at_type_typeof() {
+        assert_eq!(
+            extract_jsdoc_type_tag(" @type {typeof helper}"),
+            Some("typeof helper".to_string())
+        );
+    }
+
+    #[test]
+    fn jsdoc_at_type_multiline_braced() {
+        let body = "\n * @type {{\n *   x: Number,\n *   y: String\n * }}\n ";
+        assert_eq!(
+            extract_jsdoc_type_tag(body),
+            Some("{ x: Number, y: String }".to_string())
+        );
+    }
+
+    #[test]
+    fn jsdoc_at_type_skips_non_tag_occurrence() {
+        // `@type` mid-word ("@typeof") and inside a sentence ("the @type
+        // tag") shouldn't false-positive.
+        assert_eq!(extract_jsdoc_type_tag(" @typeof Foo"), None);
+        // "the@type" — no whitespace prefix — also rejected.
+        assert_eq!(extract_jsdoc_type_tag("see the@type tag"), None);
+    }
+
+    #[test]
+    fn jsdoc_at_type_with_following_tags() {
+        let body = " @type Number\n * @default 0\n ";
+        assert_eq!(
+            extract_jsdoc_type_tag(body),
+            Some("Number".to_string())
+        );
+    }
+
+    #[test]
+    fn jsdoc_at_type_attaches_to_next_field() {
+        let src = "var o = { /** @type {Number} */ count: null };";
+        let (_tokens, annotations, _) = Scanner::new(src).tokenize().unwrap();
+        let jsdoc_anns: Vec<_> = annotations
+            .iter()
+            .filter(|a| a.kind == AnnotationKind::JsDoc)
+            .collect();
+        assert_eq!(jsdoc_anns.len(), 1, "got {:?}", annotations);
+        assert_eq!(jsdoc_anns[0].name, "");
+        assert_eq!(jsdoc_anns[0].content, "Number");
     }
 
     #[test]

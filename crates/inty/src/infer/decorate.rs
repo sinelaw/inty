@@ -665,6 +665,7 @@ impl<'a> Decorator<'a> {
             name: "".to_string(),
             content: ctx.format_scheme(&displayed),
             span,
+            kind: crate::parser::ast::AnnotationKind::Inline,
         }
     }
 
@@ -675,6 +676,7 @@ impl<'a> Decorator<'a> {
             name: "".to_string(),
             content: ctx.format_type(&displayed),
             span,
+            kind: crate::parser::ast::AnnotationKind::Inline,
         }
     }
 }
