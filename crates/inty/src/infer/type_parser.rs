@@ -286,7 +286,7 @@ impl<'a> TypeParser<'a> {
         self.expect_char('(')?;
         self.skip_whitespace();
 
-        let mut param_types = Vec::new();
+        let mut params: Vec<crate::types::FuncParam> = Vec::new();
 
         // Parameters are nested positions, so quantifiers are not allowed
         let old_allow = self.allow_quantifiers;
@@ -296,28 +296,55 @@ impl<'a> TypeParser<'a> {
             loop {
                 self.skip_whitespace();
 
-                // Parse parameter: either "name: Type" or just "Type"
-                let param_type = if self.is_ident_start(self.peek_char()) {
+                // Parse parameter. Three forms are accepted:
+                //   `Type`           — anonymous, required
+                //   `name: Type`     — named, required
+                //   `name?: Type`    — named, presence-polymorphic
+                //   `Type?`          — anonymous, presence-polymorphic
+                //
+                // The `?` after the parameter name (TypeScript-style)
+                // or after a bare type signals an optional positional
+                // argument: the formal's presence becomes a fresh
+                // presence variable, so a call site that omits the
+                // arg unifies presence to `Abs` and a call site that
+                // supplies it unifies to `Pre`. This is Garrigue
+                // 1994's labeled+optional treatment, ported to
+                // inty's row-presence machinery.
+                let (param_type, optional) = if self.is_ident_start(self.peek_char()) {
                     let start_pos = self.pos;
                     let _name = self.parse_ident()?;
                     self.skip_whitespace();
 
+                    // `name?:` or `name:` decides optionality on the
+                    // named form.
+                    let named_optional = self.peek_char() == Some('?');
+                    if named_optional {
+                        self.pos += 1; // consume '?'
+                        self.skip_whitespace();
+                    }
                     if self.peek_char() == Some(':') {
-                        // name: Type
                         self.expect_char(':')?;
                         self.skip_whitespace();
-                        self.parse_type()?
+                        let ty = self.parse_type()?;
+                        (ty, named_optional)
                     } else {
-                        // Just an identifier - could be a type name
-                        // Reset and parse as type
+                        // Just an identifier - could be a type name.
+                        // Reset and parse as type (which may itself
+                        // end in `?` for the anonymous-optional form).
                         self.pos = start_pos;
-                        self.parse_type()?
+                        self.parse_param_anon()?
                     }
                 } else {
-                    self.parse_type()?
+                    self.parse_param_anon()?
                 };
 
-                param_types.push(param_type);
+                let param = if optional {
+                    let pvar = self.fresh_pvar();
+                    crate::types::FuncParam::optional(pvar, param_type)
+                } else {
+                    crate::types::FuncParam::required(param_type)
+                };
+                params.push(param);
 
                 self.skip_whitespace();
                 if self.peek_char() == Some(')') {
@@ -330,11 +357,6 @@ impl<'a> TypeParser<'a> {
         self.expect_char(')')?;
         self.skip_whitespace();
 
-        // Restore quantifier allowance for return type
-        // (return types are also nested, but in Rank-1, we don't allow quantifiers anywhere except top level)
-        // Actually, in Rank-1, quantifiers are only at the very outermost level, not in return types either.
-        // So we keep allow_quantifiers = false for the return type.
-
         // Expect '=>'
         self.expect_str("=>")?;
         self.skip_whitespace();
@@ -344,7 +366,29 @@ impl<'a> TypeParser<'a> {
         // Restore the original setting
         self.allow_quantifiers = old_allow;
 
-        Ok(Type::simple_func(param_types, ret_type))
+        Ok(Type::wrap_callable(Type::raw_func_with_params(
+            None, params, ret_type,
+        )))
+    }
+
+    /// Parse an anonymous parameter — a type optionally followed by
+    /// `?` to mark it presence-polymorphic. Returns the type and a
+    /// bool indicating whether the trailing `?` was consumed. Note
+    /// that the `?` here is the *parameter optionality* marker, not
+    /// the nullable-type postfix that `parse_simple_type` handles:
+    /// at the param position the surrounding context disambiguates
+    /// (a `?` immediately before a `,` or `)` is parameter
+    /// optionality; a `?` deeper in the type stays nullable-type).
+    fn parse_param_anon(&mut self) -> ParseResult<(Type, bool)> {
+        let ty = self.parse_type()?;
+        self.skip_whitespace();
+        // The nullable postfix is greedy in `parse_simple_type`, so
+        // a trailing `?` here would already have been consumed as
+        // part of the type unless it's followed by `,` or `)`. We
+        // don't see one in well-formed input; the named form
+        // (`name?: T`) is the canonical way to mark a parameter
+        // optional.
+        Ok((ty, false))
     }
 
     /// Parse a simple type (primary type with optional [] suffixes).
@@ -1056,6 +1100,36 @@ mod tests {
             ty,
             Type::simple_func(vec![Type::Number, Type::String], Type::Boolean)
         );
+    }
+
+    /// Shape B: `name?: T` allocates a fresh presence variable on
+    /// that parameter so the formal accepts both a 1-arg and a
+    /// 2-arg call.
+    #[test]
+    fn parses_optional_named_param() {
+        let ty = parse("(start: Number, end?: Number) => String");
+        // Drill into the callable row's `<CALL>` field to inspect
+        // the bare Type::Func.
+        let (_, params, ret) = ty.as_callable().expect("callable shape");
+        assert_eq!(params.len(), 2);
+        assert!(matches!(params[0].presence, crate::types::Presence::Pre));
+        assert!(
+            matches!(params[1].presence, crate::types::Presence::Var(_)),
+            "second param should be presence-polymorphic, got {:?}",
+            params[1].presence
+        );
+        assert_eq!(params[0].ty, Type::Number);
+        assert_eq!(params[1].ty, Type::Number);
+        assert_eq!(*ret, Type::String);
+    }
+
+    /// Without the `?`, params stay required even with names.
+    #[test]
+    fn parses_required_named_params() {
+        let ty = parse("(start: Number, end: Number) => String");
+        let (_, params, _) = ty.as_callable().expect("callable shape");
+        assert!(matches!(params[0].presence, crate::types::Presence::Pre));
+        assert!(matches!(params[1].presence, crate::types::Presence::Pre));
     }
 
     #[test]

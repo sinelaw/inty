@@ -693,6 +693,106 @@ mod tests {
         assert!(state.unify(span, &f1, &f2).is_err());
     }
 
+    /// Shape B: a callee with a presence-polymorphic trailing param
+    /// unifies with a call site that supplies fewer or more
+    /// arguments. The presence variable binds to `Abs` (caller omits
+    /// the optional arg) or `Pre` (caller supplies it). Matches
+    /// Garrigue 1994's labeled+optional argument unification.
+    #[test]
+    fn optional_param_unifies_with_short_call() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+
+        // callee: (Number, Number with presence φ) => String
+        let phi = state.fresh_pvar();
+        let callee = crate::types::Type::raw_func_with_params(
+            None,
+            vec![
+                crate::types::FuncParam::required(crate::types::Type::Number),
+                crate::types::FuncParam::optional(phi.clone(), crate::types::Type::Number),
+            ],
+            crate::types::Type::String,
+        );
+        let callee = Type::wrap_callable(callee);
+
+        // call site: (Number) => ret (1 arg supplied)
+        let ret = state.fresh_type_var();
+        let call_shape = state.callable_row_open(None, vec![Type::Number], ret.clone());
+
+        assert!(
+            state.unify(span, &callee, &call_shape).is_ok(),
+            "1-arg call against (a, b?) => c must succeed"
+        );
+        // The presence variable should have resolved to Abs.
+        let resolved_phi = state
+            .main_subst
+            .resolve_presence(&crate::types::Presence::Var(phi.clone()));
+        assert_eq!(
+            resolved_phi,
+            crate::types::Presence::Abs,
+            "trailing optional param's presence should be Abs after a short call"
+        );
+        // And the return type should have unified to String.
+        assert_eq!(state.zonk(&ret), Type::String);
+    }
+
+    #[test]
+    fn optional_param_unifies_with_full_call() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+
+        // callee: (Number, Number with presence φ) => String
+        let phi = state.fresh_pvar();
+        let callee = crate::types::Type::raw_func_with_params(
+            None,
+            vec![
+                crate::types::FuncParam::required(crate::types::Type::Number),
+                crate::types::FuncParam::optional(phi.clone(), crate::types::Type::Number),
+            ],
+            crate::types::Type::String,
+        );
+        let callee = Type::wrap_callable(callee);
+
+        // call site: (Number, Number) => ret (2 args supplied)
+        let ret = state.fresh_type_var();
+        let call_shape = state.callable_row_open(
+            None,
+            vec![Type::Number, Type::Number],
+            ret.clone(),
+        );
+
+        assert!(
+            state.unify(span, &callee, &call_shape).is_ok(),
+            "2-arg call against (a, b?) => c must succeed"
+        );
+        // φ resolves to Pre.
+        let resolved_phi = state
+            .main_subst
+            .resolve_presence(&crate::types::Presence::Var(phi));
+        assert_eq!(resolved_phi, crate::types::Presence::Pre);
+        assert_eq!(state.zonk(&ret), Type::String);
+    }
+
+    #[test]
+    fn required_param_rejects_short_call() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+
+        // callee: (Number, Number) => String — both Pre
+        let callee = Type::simple_func(
+            vec![crate::types::Type::Number, crate::types::Type::Number],
+            crate::types::Type::String,
+        );
+
+        let ret = state.fresh_type_var();
+        let call_shape = state.callable_row_open(None, vec![Type::Number], ret);
+
+        assert!(
+            state.unify(span, &callee, &call_shape).is_err(),
+            "1-arg call against (a, b) => c must error — second param is required"
+        );
+    }
+
     #[test]
     fn test_unify_closed_rows() {
         let mut state = InferState::new();
