@@ -315,6 +315,27 @@ pub fn zonk_scheme(table: &mut VarTable, subst: &Subst, scheme: &TypeScheme) -> 
     }
 }
 
+// TODO(destructive-unification): unify `zonk_filtered` with
+// `zonk_with_visited` by threading `quantified: &[TVarName]` (empty
+// by default) through the main walker. Today the two paths have
+// asymmetric safety margins for the same failure modes:
+//
+// - `zonk_with_visited` uses `find_if_present`, which tolerates
+//   ids past the table's high-water mark by leaving the variable
+//   alone. `zonk_filtered` calls `root_resolution` directly, which
+//   would panic on an out-of-range id.
+// - `zonk_with_visited` carries a `Visited` set so a mirror/UF
+//   drift that produced a cycle would degrade to
+//   `Type::Var(root)`. `zonk_filtered` lacks it; a cycle would
+//   recurse until `ApplySubstGuard` caps depth and returns
+//   `Type::Error`.
+//
+// Neither fires today: well-formed schemes (built by `generalize`)
+// keep free synthetic ids inside `scheme.vars`, and the mirror
+// invariant probe rules out cycles in debug builds. But the
+// asymmetry is a maintainability hazard — a future builtin or
+// invariant slip would surface as a panic in scheme zonking while
+// type zonking absorbs it silently.
 fn zonk_filtered(
     table: &mut VarTable,
     subst: &Subst,
