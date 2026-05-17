@@ -16,7 +16,8 @@
         { "id": "optional-fields", "label": "optional-fields.js", "blurb": "Row-field presence polymorphism", "expect": "ok" },
         { "id": "classes",         "label": "classes.js",         "blurb": "Class bodies + private fields",   "expect": "ok" },
         { "id": "callable-rows",   "label": "callable-rows.js",   "blurb": "Functions are rows with statics", "expect": "ok" },
-        { "id": "higher-order",    "label": "higher-order.js",    "blurb": "First-class functions",           "expect": "ok" }
+        { "id": "higher-order",    "label": "higher-order.js",    "blurb": "First-class functions",           "expect": "ok" },
+        { "id": "jsdoc-at-type",   "label": "jsdoc-at-type.js",   "blurb": "JSDoc @type on object fields",    "expect": "ok" }
       ]
     },
     {
