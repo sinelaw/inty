@@ -326,3 +326,135 @@ pub fn build_destructure_pair(obj_src: &str, prop: &str) -> (String, String, Com
         .with_q_only(vec!["$destr$0".to_string()]);
     (src_a, src_b, cmp)
 }
+
+// -------------------------------------------------------------------------
+// Forward-reference reorder.
+//
+// Pre-hoisting top-level Var/Let/Const declarations (commit 472cccb)
+// means a function body can reference a name that appears *later* in
+// source order and still type-check, matching the JS/TS hoisting
+// model. The metamorphic property is: moving a referenced
+// `var`/`let`/`const` from before a function-decl that uses it to
+// *after* that function-decl should not change the inferred types.
+//
+// Both directions of the swap should preserve check results. This
+// transform exercises the "move down" direction (data decl appears
+// earlier in `p` than in `q`), which is the harder direction —
+// without hoisting, `q` would fail with "Undefined variable" inside
+// the function body.
+// -------------------------------------------------------------------------
+
+/// Find the first `(var_idx, fn_idx)` pair where:
+///   - `var_idx < fn_idx`
+///   - statement at `var_idx` is a non-destructuring `var`/`let`/`const`
+///     binding exactly one name (no shadowing complications)
+///   - statement at `fn_idx` is a `function` declaration that
+///     references the var-bound name
+///   - no statement between them rebinds or references the name
+///     in a way that would change with reordering
+///
+/// Returns `q` with the var decl moved to just after the function
+/// decl, and an identity comparison.
+pub fn t_move_data_decl_after_first_user(p: &Program) -> Option<(Program, Comparison)> {
+    use inty::parser::ast::{ExportDecl, Stmt, VarDeclarator};
+
+    fn single_binding<'a>(s: &'a Stmt) -> Option<(&'a VarDeclarator, bool)> {
+        // Returns (declarator, is_export). Only single-name, non-destructuring
+        // forms qualify; multi-decl `var a = 1, b = 2;` is skipped because
+        // the move would split it.
+        match s {
+            Stmt::Var { declarations, .. } if declarations.len() == 1 => {
+                let d = &declarations[0];
+                if d.name.starts_with("$destr$") {
+                    return None;
+                }
+                Some((d, false))
+            }
+            Stmt::Export {
+                declaration: ExportDecl::Var { declarations, .. },
+                ..
+            } if declarations.len() == 1 => {
+                let d = &declarations[0];
+                if d.name.starts_with("$destr$") {
+                    return None;
+                }
+                Some((d, true))
+            }
+            _ => None,
+        }
+    }
+
+    let n = p.statements.len();
+    for var_idx in 0..n.saturating_sub(1) {
+        let Some((decl, _is_export)) = single_binding(&p.statements[var_idx]) else {
+            continue;
+        };
+        let name = decl.name.clone();
+
+        // Find the first function decl after var_idx that *references*
+        // this name in its body. Function-decl-form only (not function
+        // expressions assigned to a var) because the SCC pass treats
+        // function decls specially.
+        for fn_idx in (var_idx + 1)..n {
+            let fn_stmt = &p.statements[fn_idx];
+            let is_fn_decl = matches!(fn_stmt, Stmt::FunctionDecl { .. })
+                || matches!(
+                    fn_stmt,
+                    Stmt::Export {
+                        declaration: ExportDecl::Function { .. },
+                        ..
+                    }
+                );
+            if !is_fn_decl {
+                continue;
+            }
+            let refs = referenced_names_in_stmt(fn_stmt);
+            if !refs.contains(&name) {
+                continue;
+            }
+
+            // Check no intermediate statement rebinds or references
+            // the name. Rebinding would change which initialiser the
+            // function sees after the move; an intermediate reference
+            // would observe the un-initialised hoisted variable post-
+            // move, which is a real TDZ-style difference.
+            let between_ok = p.statements[var_idx + 1..fn_idx]
+                .iter()
+                .chain(p.statements[fn_idx + 1..].iter().take(1))
+                .all(|s| {
+                    !bound_names_in_stmt(s).contains(&name)
+                        && !referenced_names_in_stmt(s).contains(&name)
+                });
+            if !between_ok {
+                continue;
+            }
+            // Also: nothing after the function uses the name before
+            // the function would have completed type-checking it.
+            // Conservatively skip if any non-function-decl statement
+            // between var and fn references the name.
+            let no_uses_before_fn = p.statements[var_idx + 1..fn_idx]
+                .iter()
+                .all(|s| !referenced_names_in_stmt(s).contains(&name));
+            if !no_uses_before_fn {
+                continue;
+            }
+
+            // Build q by moving the var decl from `var_idx` to just
+            // after `fn_idx`.
+            let mut statements = p.statements.clone();
+            let var_stmt = statements.remove(var_idx);
+            // After removal, the function-decl that was at fn_idx is
+            // now at fn_idx - 1. Insert the var decl just after it.
+            statements.insert(fn_idx, var_stmt);
+            return Some((
+                Program {
+                    statements,
+                    span: span(),
+                    type_aliases: Vec::new(),
+                },
+                Comparison::identity(),
+            ));
+        }
+    }
+    None
+}

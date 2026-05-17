@@ -34,8 +34,9 @@ use oracle::CheckResult;
 use oracle::{assert_consistent, check};
 use strategy::program_strategy;
 use transform::{
-    build_destructure_pair, t_alpha_rename_existing, t_intersperse_empty, t_prepend_dead_var,
-    t_prepend_empty, t_swap_first_independent_pair, t_wrap_expr_statements,
+    build_destructure_pair, t_alpha_rename_existing, t_intersperse_empty,
+    t_move_data_decl_after_first_user, t_prepend_dead_var, t_prepend_empty,
+    t_swap_first_independent_pair, t_wrap_expr_statements,
 };
 
 // Round-trip sanity: every generated program must pretty-print and
@@ -109,6 +110,24 @@ proptest! {
         let (q, cmp) = t_wrap_expr_statements(&p);
         prop_assume!(round_trips(&q));
         assert_consistent("wrap_expr_statements", &p, &q, &cmp);
+    }
+
+    // Pre-hoist forward-reference guard. Moving a top-level
+    // var/let/const decl from before a function-decl that uses it to
+    // after that function-decl should preserve types, because the
+    // hoist pass at infer_stmt_list pre-binds every top-level data
+    // name. If the hoist regresses, this property fails immediately
+    // on any generated program that contains such a (var, function-
+    // referencing-var) pair.
+    #[test]
+    fn prop_move_data_decl_after_user(p in program_strategy()) {
+        prop_assume!(round_trips(&p));
+        let (q, cmp) = match t_move_data_decl_after_first_user(&p) {
+            Some(pair) => pair,
+            None => return Ok(()),
+        };
+        prop_assume!(round_trips(&q));
+        assert_consistent("move_data_decl_after_first_user", &p, &q, &cmp);
     }
 }
 
@@ -253,6 +272,37 @@ mod unit {
         let p_a = parse(&src_a).unwrap();
         let p_b = parse(&src_b).unwrap();
         assert_consistent("destructure_equivalent (concrete)", &p_a, &p_b, &cmp);
+    }
+
+    // Forward-reference reorder: explicit case the random generator
+    // would have to be lucky to hit. A function decl references a
+    // const that, in `q`, appears *after* the function decl. With
+    // the pre-hoist this must type-check identically to `p`.
+    #[test]
+    fn move_data_decl_concrete_iife_shape() {
+        let p = p_from(
+            "var lib = {x: 1};\n\
+             function helper() { return lib.x; }\n\
+             var result = helper();",
+        );
+        let (q, cmp) = t_move_data_decl_after_first_user(&p)
+            .expect("p has a var-then-function-referencing-it pair");
+        // Sanity-check the transform put the var in the right place:
+        // helper should now appear *before* `var lib`.
+        match &q.statements[0] {
+            Stmt::FunctionDecl { name, .. } => assert_eq!(name, "helper"),
+            other => panic!("expected helper first, got {:?}", other),
+        }
+        assert_consistent("move_data_decl_after_first_user (concrete)", &p, &q, &cmp);
+    }
+
+    #[test]
+    fn move_data_decl_handles_no_candidate() {
+        // No function-decl referencing a top-level var → transform
+        // returns None. Guards against the generator's
+        // `prop_assume!(...)` path.
+        let p = p_from("var a = 1; var b = a + 2;");
+        assert!(t_move_data_decl_after_first_user(&p).is_none());
     }
 
     #[test]

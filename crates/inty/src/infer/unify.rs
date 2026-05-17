@@ -765,4 +765,148 @@ mod tests {
 
         assert!(state.unify(span, &arr, &row).is_err());
     }
+
+    // --- Row-tail union shortcut (commit ae453b4) -----------------
+    //
+    // `unify_rows` `(Open α, Open β)` short-circuits to `α → Var(β)`
+    // when both rows have the same prop names (extras are empty).
+    // The literature-correct invariant is observable equality post-
+    // unification: regardless of whether we allocated a fresh γ for
+    // the common tail or just unioned the two tail vars, every
+    // observer must see the two original rows resolve to the same
+    // type. These tests pin that invariant.
+
+    fn row_with_tail(
+        props: &[(&str, crate::types::Type)],
+        tail_id: crate::types::TVarId,
+    ) -> crate::types::RowType {
+        let entries: std::collections::BTreeMap<
+            crate::types::PropName,
+            crate::types::FieldEntry,
+        > = props
+            .iter()
+            .map(|(k, t)| {
+                (
+                    crate::types::PropName((*k).to_string()),
+                    crate::types::FieldEntry {
+                        presence: crate::types::Presence::Pre,
+                        ty: t.clone(),
+                    },
+                )
+            })
+            .collect();
+        crate::types::RowType::open_entries(
+            entries,
+            crate::types::TVarName::Flex(tail_id),
+        )
+    }
+
+    #[test]
+    fn unify_open_open_same_shape_makes_rows_equal() {
+        // Two rows with the same prop names and different open
+        // tails. After unify_rows, applying the substitution to
+        // either row must produce the same Type.
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+
+        let r1 = Type::Row(row_with_tail(
+            &[("a", Type::Number), ("b", Type::String)],
+            0,
+        ));
+        let r2 = Type::Row(row_with_tail(
+            &[("a", Type::Number), ("b", Type::String)],
+            1,
+        ));
+
+        state.unify(span, &r1, &r2).expect("same-shape rows unify");
+
+        let r1_after = state.apply_subst(&r1);
+        let r2_after = state.apply_subst(&r2);
+
+        // The internal representation can vary (one tail might be
+        // an alias of the other), but the resolved Types must be
+        // equal under the substitution. `flatten_type` reads the
+        // chain to fixed point — that's the observer the rest of
+        // the system uses at boundaries.
+        let f1 = state.flatten_type(&r1_after);
+        let f2 = state.flatten_type(&r2_after);
+        assert_eq!(f1, f2, "rows must resolve to the same type");
+    }
+
+    #[test]
+    fn unify_open_open_same_shape_field_types_propagate() {
+        // After the union, constraining one row's field type must
+        // propagate to the other's. Bind α (in r1's `a` slot) to
+        // a fresh tvar, then unify r2's `a` slot with Number — and
+        // assert that the first tvar resolves to Number too.
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+
+        // Use fresh tvars so InferState's id counter stays consistent.
+        let tail1 = state.fresh_flex();
+        let tail2 = state.fresh_flex();
+        let field_a_name = state.fresh_flex();
+        let field_a = Type::Var(field_a_name);
+
+        let r1 = Type::Row(crate::types::RowType::open_entries(
+            std::iter::once((
+                crate::types::PropName("a".to_string()),
+                crate::types::FieldEntry {
+                    presence: crate::types::Presence::Pre,
+                    ty: field_a.clone(),
+                },
+            ))
+            .collect(),
+            tail1,
+        ));
+        let r2 = Type::Row(crate::types::RowType::open_entries(
+            std::iter::once((
+                crate::types::PropName("a".to_string()),
+                crate::types::FieldEntry {
+                    presence: crate::types::Presence::Pre,
+                    ty: Type::Number,
+                },
+            ))
+            .collect(),
+            tail2,
+        ));
+
+        state.unify(span, &r1, &r2).expect("same-shape rows unify");
+
+        // field_a was the type of r1's `a` field; it must have
+        // unified with Number through the shared prop loop.
+        assert_eq!(state.apply_subst(&field_a), Type::Number);
+    }
+
+    #[test]
+    fn unify_open_open_different_shape_allocates_fresh() {
+        // The shortcut only fires when both extras are empty. When
+        // they're not, the Rémy fresh-tail dance has to run —
+        // verify both rows still resolve compatibly.
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+
+        let r1 = Type::Row(row_with_tail(&[("a", Type::Number)], 0));
+        let r2 = Type::Row(row_with_tail(&[("b", Type::String)], 1));
+
+        state
+            .unify(span, &r1, &r2)
+            .expect("rows with disjoint props unify via tail extension");
+
+        // After unification, both rows must have observable types
+        // that agree on every common field. We use flatten_type to
+        // see the merged shape from either side.
+        let f1 = state.flatten_type(&r1);
+        let f2 = state.flatten_type(&r2);
+
+        // Both should be Row types and report `a: Number` and
+        // `b: String` after the tail extension.
+        let (props1, props2) = match (&f1, &f2) {
+            (Type::Row(rr1), Type::Row(rr2)) => (rr1.props.clone(), rr2.props.clone()),
+            _ => panic!("expected both sides to be Row, got {:?} and {:?}", f1, f2),
+        };
+        assert_eq!(props1, props2, "merged row shape must match on both sides");
+        assert!(props1.contains_key(&crate::types::PropName("a".to_string())));
+        assert!(props1.contains_key(&crate::types::PropName("b".to_string())));
+    }
 }
