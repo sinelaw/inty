@@ -94,17 +94,35 @@ pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> 
         // arity errors. `str.slice(-2)` and `str.slice(0, -2)` both
         // appear within the same file.
         "slice" => optional_last(state, vec![n.clone()], n.clone(), s.clone()),
-        "split" => optional_last(
-            state,
-            vec![s.clone()],
-            n.clone(),
-            Type::array(s.clone()),
-        ),
+        // `split(separator, limit?)`. `separator` is `String | Regex`
+        // per ECMAScript. Inlined construction rather than the
+        // `optional_last` helper since the first arg is a union and
+        // the helper assumes a single concrete type per position.
+        "split" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![
+                    FuncParam::required(Type::union(vec![s.clone(), Type::Regex])),
+                    FuncParam::optional(pvar, n.clone()),
+                ],
+                Type::array(s.clone()),
+            )
+        }
         "trim" => Type::simple_func(vec![], s.clone()),
         "trimStart" => Type::simple_func(vec![], s.clone()),
         "trimEnd" => Type::simple_func(vec![], s.clone()),
-        "replace" => Type::simple_func(vec![s.clone(), s.clone()], s.clone()),
-        "replaceAll" => Type::simple_func(vec![s.clone(), s.clone()], s.clone()),
+        // `String.prototype.replace(pattern, replacement)`. `pattern`
+        // is `String | Regex` per the ECMAScript spec; htmx hits the
+        // Regex form for HTML scrubbing. Replacement could also be a
+        // function in real JS but inty doesn't model that overload.
+        "replace" => Type::simple_func(
+            vec![Type::union(vec![s.clone(), Type::Regex]), s.clone()],
+            s.clone(),
+        ),
+        "replaceAll" => Type::simple_func(
+            vec![Type::union(vec![s.clone(), Type::Regex]), s.clone()],
+            s.clone(),
+        ),
         "toUpperCase" => Type::simple_func(vec![], s.clone()),
         "toLowerCase" => Type::simple_func(vec![], s.clone()),
         "charAt" => Type::simple_func(vec![n.clone()], s.clone()),
