@@ -106,6 +106,9 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::ArityMismatch { .. } => "ArityMismatch",
             TypeError::TypeAnnotationParse { .. } => "TypeAnnotationParse",
             TypeError::Rank1Restriction { .. } => "Rank1Restriction",
+            TypeError::OptionalParameterFollowedByRequired { .. } => {
+                "OptionalParameterFollowedByRequired"
+            }
             TypeError::ConstraintNotSatisfied { .. } => "ConstraintNotSatisfied",
             TypeError::EscapedSkolem { .. } => "EscapedSkolem",
             TypeError::AmbiguousType { .. } => "AmbiguousType",

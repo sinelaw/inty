@@ -276,6 +276,26 @@ pub enum TypeError {
     #[error("Rank-1 restriction: type parameters not allowed in nested position")]
     Rank1Restriction { span: Span },
 
+    /// Required parameter follows an optional one — TypeScript
+    /// ts(1016) equivalent. Carries the offending position pair
+    /// so the diagnostic can point at it. Distinct from
+    /// `TypeAnnotationParse` so the type parser's
+    /// backtrack-to-grouped-type fallback (`parse_func_or_grouped`)
+    /// can recognise it as committed-function-type-diagnostic and
+    /// not retry as a grouped expression — see the matching arm
+    /// in `parse_func_or_grouped`.
+    #[error(
+        "required parameter at position {required_idx} cannot follow optional \
+         parameter at position {optional_idx} — positional calls can't omit a \
+         middle argument; reorder so optional params come last, or make the \
+         trailing ones optional too"
+    )]
+    OptionalParameterFollowedByRequired {
+        optional_idx: usize,
+        required_idx: usize,
+        span: Span,
+    },
+
     #[error("Type class constraint not satisfied: {class} {ty}")]
     ConstraintNotSatisfied {
         class: String,
@@ -325,6 +345,7 @@ impl TypeError {
             TypeError::ArityMismatch { span, .. } => *span,
             TypeError::TypeAnnotationParse { span, .. } => *span,
             TypeError::Rank1Restriction { span } => *span,
+            TypeError::OptionalParameterFollowedByRequired { span, .. } => *span,
             TypeError::ConstraintNotSatisfied { span, .. } => *span,
             TypeError::EscapedSkolem { span } => *span,
             TypeError::AmbiguousType { span } => *span,
