@@ -240,6 +240,33 @@ impl VarTable {
         self.cells[root as usize].clone()
     }
 
+    /// Like [`Self::find`] but returns `None` when `id` is past
+    /// the table's high-water mark — i.e. when the caller is asking
+    /// about a variable that was never `fresh`-allocated. Used by
+    /// `zonk` so that walking a type containing a synthetic ID
+    /// (tests, builtin stubs that bake ids into `Type` literals)
+    /// degrades to "leave the variable alone" rather than indexing
+    /// out of bounds. The id space is dense for ids `<= len`, so
+    /// "out of range" reliably identifies a never-allocated id.
+    pub fn find_if_present(&mut self, id: TVarId) -> Option<TVarId> {
+        if (id as usize) < self.cells.len() {
+            Some(self.find(id))
+        } else {
+            None
+        }
+    }
+
+    /// Tolerant variant of [`Self::root_resolution`] for read-only
+    /// callers like `zonk`. Returns `None` when `id` is out of
+    /// range; the caller should treat that as "leave the variable
+    /// as-is" rather than padding the table (zonk takes `&mut`
+    /// only because `find` needs it for path compression, not
+    /// because it should mutate the table's domain).
+    pub fn root_resolution_if_present(&mut self, id: TVarId) -> Option<Resolution> {
+        let root = self.find_if_present(id)?;
+        Some(self.cells[root as usize].clone())
+    }
+
     /// Bind `id`'s root to the structured type `ty`. The root must
     /// currently be `Unbound`; binding an already-`Bound` root or a
     /// non-flex (skolem) is a caller bug. Trail-logs the prior
@@ -280,6 +307,37 @@ impl VarTable {
         let prev = self.cells[root as usize].clone();
         self.trail.push((root, prev));
         self.cells[root as usize] = Resolution::Bound(ty);
+    }
+
+    /// Point `child`'s root cell at `parent`'s root, making the two
+    /// equivalence classes one. Unlike [`Self::union`], this does
+    /// not require either root to be `Unbound`: it's the right
+    /// primitive for "two variables are aliases, and one already
+    /// resolved" — the resolved side keeps its `Bound(_)` and the
+    /// other side becomes a `Link` to it, so zonk follows exactly
+    /// one source of truth per equivalence class.
+    ///
+    /// Both `child` and `parent` must be the result of a prior
+    /// `find` (i.e. roots); calling with arbitrary ids is a caller
+    /// bug. If they are already the same root the call is a no-op.
+    /// Trail-logs the prior state of `child`.
+    pub fn link_to_root(&mut self, child: TVarId, parent: TVarId) {
+        if child == parent {
+            return;
+        }
+        debug_assert!(
+            !matches!(self.cells[child as usize], Resolution::Link(_)),
+            "link_to_root: child {} is not a root",
+            child
+        );
+        debug_assert!(
+            !matches!(self.cells[parent as usize], Resolution::Link(_)),
+            "link_to_root: parent {} is not a root",
+            parent
+        );
+        let prev = self.cells[child as usize].clone();
+        self.trail.push((child, prev));
+        self.cells[child as usize] = Resolution::Link(parent);
     }
 
     /// Union the equivalence classes of `a` and `b`. Both must be
