@@ -139,3 +139,104 @@ const atob;
 
 /** const btoa: (String) => String */
 const btoa;
+
+// Numeric constants and globals. `undefined` is already bound in the
+// Rust initial env (builtins/mod.rs) but `NaN` and `Infinity` are not.
+/** const NaN: Number */
+const NaN;
+
+/** const Infinity: Number */
+const Infinity;
+
+// Error constructors. The standard JS Error hierarchy collapses to a
+// single shape here because inty has no nominal types — every Error
+// instance has the same `name` / `message` / `stack` row. Callers can
+// still throw and catch any of them; they unify structurally.
+/** const Error: <T>(String) => {name: String, message: String, stack: String} */
+const Error;
+
+/** const TypeError: <T>(String) => {name: String, message: String, stack: String} */
+const TypeError;
+
+/** const RangeError: <T>(String) => {name: String, message: String, stack: String} */
+const RangeError;
+
+/** const SyntaxError: <T>(String) => {name: String, message: String, stack: String} */
+const SyntaxError;
+
+/** const ReferenceError: <T>(String) => {name: String, message: String, stack: String} */
+const ReferenceError;
+
+// RegExp constructor. Returns the primitive `Regex` type, which inty
+// already understands (`/foo/g` literals carry it natively). The two-
+// argument form covers both `new RegExp(pattern)` and `new RegExp(pat, flags)`
+// — for the one-argument call, callers pass `""` (empty flags).
+/** const RegExp: (String, String) => Regex */
+const RegExp;
+
+// Keyed collections. Map and Set are widely used in htmx-class code
+// for caching and deduplication; WeakMap is used for DOM-keyed metadata.
+// `<K, V>` quantifies fresh per construction.
+/** const Map: <K, V>() => {
+        get: (K) => V,
+        set: (K, V) => Undefined,
+        has: (K) => Boolean,
+        delete: (K) => Boolean,
+        clear: () => Undefined,
+        forEach: ((V, K) => Undefined) => Undefined,
+        size: Number
+    } */
+const Map;
+
+/** const Set: <T>() => {
+        add: (T) => Undefined,
+        has: (T) => Boolean,
+        delete: (T) => Boolean,
+        clear: () => Undefined,
+        forEach: ((T) => Undefined) => Undefined,
+        size: Number
+    } */
+const Set;
+
+/** const WeakMap: <K, V>() => {
+        get: (K) => V,
+        set: (K, V) => Undefined,
+        has: (K) => Boolean,
+        delete: (K) => Boolean
+    } */
+const WeakMap;
+
+/** const WeakSet: <T>() => {
+        add: (T) => Undefined,
+        has: (T) => Boolean,
+        delete: (T) => Boolean
+    } */
+const WeakSet;
+
+// Proxy. The handler shape is opaque (H) — modelling all the trap
+// signatures correctly requires variadic arguments and self-reference,
+// neither of which inty has. The result row is whatever T the target
+// already had, since Proxy is supposed to be transparent.
+/** const Proxy: <T, H>(T, H) => T */
+const Proxy;
+
+// URI encode/decode. Web platform globals.
+/** const encodeURIComponent: (String) => String */
+const encodeURIComponent;
+
+/** const decodeURIComponent: (String) => String */
+const decodeURIComponent;
+
+/** const encodeURI: (String) => String */
+const encodeURI;
+
+/** const decodeURI: (String) => String */
+const decodeURI;
+
+// Dynamic-evaluation primitives. inty can't type their effects beyond
+// "returns something" — callers carry the burden.
+/** const eval: <T>(String) => T */
+const eval;
+
+/** const Function: <T>(String) => T */
+const Function;
