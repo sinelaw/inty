@@ -203,7 +203,7 @@ impl InferState {
                             // <annotated>, found <value>".
                             self.subsume(ann_span, &value_type, &annotated_type)?;
                         }
-                        self.apply_subst(&annotated_type)
+                        self.zonk(&annotated_type)
                     } else {
                         // Synthesis-mode object literal: widen primitive
                         // singleton field values so e.g. `{value: 0}`
@@ -279,7 +279,7 @@ impl InferState {
                 } => {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
-                    let resolved = self.apply_subst(&arg_ty);
+                    let resolved = self.zonk(&arg_ty);
                     let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
                     // Right-biased merge: this spread's properties
                     // overwrite anything earlier — including the
@@ -314,7 +314,7 @@ impl InferState {
         self.unify(span, &shared_this, &obj_type)?;
 
         let _ = had_spread;
-        Ok(self.apply_subst(&obj_type))
+        Ok(self.zonk(&obj_type))
     }
 
     /// Bidirectional checking for an object literal against an
@@ -357,7 +357,7 @@ impl InferState {
             let mut chosen: Option<Type> = None;
             let mut count = 0;
             for m in members {
-                let m_resolved = self.apply_subst(m);
+                let m_resolved = self.zonk(m);
                 if let Type::Row(row) = &m_resolved {
                     if row.is_closed()
                         && row.props.keys().cloned().collect::<std::collections::BTreeSet<_>>()
@@ -459,7 +459,7 @@ impl InferState {
                             let value_type = self.check_expr(env, value, &annotated_type)?;
                             self.subsume(ann_span, &value_type, &expected_prop_ty)?;
                         }
-                        props.insert(prop_name, self.apply_subst(&annotated_type));
+                        props.insert(prop_name, self.zonk(&annotated_type));
                     } else {
                         let value_type = self.check_expr(env, value, &expected_prop_ty)?;
                         props.insert(prop_name, value_type);
@@ -487,7 +487,7 @@ impl InferState {
         // outstanding constraints (e.g. from row-tail variables)
         // resolve here.
         self.subsume(span, &result, expected)?;
-        Ok(Some(self.apply_subst(&result)))
+        Ok(Some(self.zonk(&result)))
     }
 
     /// Infer `Expr::RestRow { source, excluded }` — the synthetic
@@ -523,7 +523,7 @@ impl InferState {
     /// a free type variable, unify it with a fresh open row.
     /// Otherwise reject with a span-anchored diagnostic.
     fn coerce_to_row(&mut self, ty: &Type, span: Span) -> InferResult<RowType> {
-        let resolved = self.apply_subst(ty);
+        let resolved = self.zonk(ty);
         match resolved {
             Type::Row(row) => Ok(row),
             Type::Var(_) => {
@@ -569,7 +569,7 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
-        let obj_type = self.apply_subst(&obj_type);
+        let obj_type = self.zonk(&obj_type);
         self.infer_member_on_type(&obj_type, property, span)
     }
 
@@ -610,7 +610,7 @@ impl InferState {
         if let Type::Union(members) = obj_type {
             let mut result: Option<Type> = None;
             for m in members {
-                let m_resolved = self.apply_subst(m);
+                let m_resolved = self.zonk(m);
                 let prop_ty = self.infer_member_on_type(&m_resolved, property, span)?;
                 result = Some(match result {
                     None => prop_ty,
@@ -668,13 +668,13 @@ impl InferState {
                     // if it was already `Abs` we get a structured
                     // presence-mismatch error.
                     self.unify_presence(span, &entry.presence, &crate::types::Presence::Pre)?;
-                    return Ok(self.apply_subst(&entry.ty));
+                    return Ok(self.zonk(&entry.ty));
                 }
                 // Otherwise the property may live in a row reached
                 // through the tail (e.g., a flex tail bound by an
                 // earlier unification to another row).
                 if let Some(prop_type) = self.lookup_property_in_row_tail(row, property) {
-                    return Ok(self.apply_subst(&prop_type));
+                    return Ok(self.zonk(&prop_type));
                 }
                 // If property still not found and row is closed, the
                 // unification fall-through below will report it.
@@ -682,7 +682,7 @@ impl InferState {
             Type::Module(m) => {
                 if let Some(scheme) = m.exports.get(property) {
                     let ty = self.instantiate(scheme);
-                    return Ok(self.apply_subst(&ty));
+                    return Ok(self.zonk(&ty));
                 }
                 return Err(crate::error::TypeError::Module {
                     message: format!("module {:?} has no export named {:?}", m.source, property),
@@ -713,7 +713,7 @@ impl InferState {
 
         self.unify(span, obj_type, &expected_row)?;
 
-        Ok(self.apply_subst(&result_type))
+        Ok(self.zonk(&result_type))
     }
 
     /// Look up a property by following row tail chains.

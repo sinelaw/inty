@@ -269,13 +269,13 @@ impl InferState {
                         if !v.is_flex() {
                             continue;
                         }
-                        let after = self.apply_subst(&Type::Var(v.clone()));
+                        let after = self.zonk(&Type::Var(v.clone()));
                         if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
                             return Err(TypeError::EscapedSkolem { span }.into());
                         }
                     }
                 }
-                return Ok(self.apply_subst(&expected_ty));
+                return Ok(self.zonk(&expected_ty));
             }
         }
 
@@ -294,7 +294,7 @@ impl InferState {
                 // initialisation. Widen the RHS so the variable lands
                 // on its base type, matching what `var x = 42` would
                 // give.
-                let lhs_resolved = self.apply_subst(&left_type);
+                let lhs_resolved = self.zonk(&left_type);
                 let rhs_for_assign = if matches!(
                     lhs_resolved,
                     Type::Var(crate::types::TVarName::Flex(_))
@@ -337,7 +337,7 @@ impl InferState {
             }
         }
 
-        Ok(self.apply_subst(&left_type))
+        Ok(self.zonk(&left_type))
     }
 
     /// Handle a `var` / `let` / `const` declaration statement.
@@ -402,7 +402,7 @@ impl InferState {
                 if decl.init.is_none() {
                     self.subsume(ann_span, &var_type, &ann_ty)?;
                 }
-                self.apply_subst(&ann_ty)
+                self.zonk(&ann_ty)
             } else {
                 var_type.widen_fresh_literals()
             };

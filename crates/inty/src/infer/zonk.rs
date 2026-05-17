@@ -100,14 +100,17 @@ fn zonk_with_visited(
                 return Type::Var(TVarName::Flex(*id));
             }
             let result = match table.root_resolution(root) {
-                // Free root: preserve the *original* id (not the
-                // root) so the output matches `Subst::apply_subst`
-                // bit-for-bit. The Union-Find aliasing is internal
-                // bookkeeping; the surface type uses the name the
-                // caller already had. (Renaming would be observable
-                // through `==`-style equality checks that
-                // downstream code performs on type variables.)
-                Resolution::Unbound { .. } => Type::Var(TVarName::Flex(*id)),
+                // Free root: use the equivalence-class root id. This
+                // mirrors `Subst::apply_subst`'s "follow the chain to
+                // its endpoint" behaviour — for an aliased pair like
+                // `unify(α, β)`, both zonk to the surviving root so
+                // downstream `==` checks (the trampoline for unify
+                // proper, occurs-check, etc.) treat them as equal.
+                // It does mean unbound free variables may be displayed
+                // under a different letter than the user wrote; the
+                // pretty-printer's id-letter renumbering pass handles
+                // that at the boundary.
+                Resolution::Unbound { .. } => Type::Var(TVarName::Flex(root)),
                 Resolution::Bound(bound) => {
                     let bound = bound.clone();
                     zonk_with_visited(table, &bound, visited)
@@ -195,13 +198,13 @@ fn zonk_row_with_visited(
         RowTail::Open(TVarName::Skolem(_)) => row.tail.clone(),
         RowTail::Open(TVarName::Flex(id)) => {
             // Same tolerant lookup as the type-var case: synthetic
-            // ids past the table's range stay as-is, and unbound
-            // roots keep the caller's id rather than the
-            // Union-Find root (matches `RowType::apply_subst`).
+            // ids past the table's range stay as-is. Unbound roots
+            // resolve to the Union-Find root id (matches
+            // `Subst::apply_subst`'s chain-following endpoint).
             match table.find_if_present(*id) {
                 None => row.tail.clone(),
                 Some(root) => match table.root_resolution(root) {
-                    Resolution::Unbound { .. } => RowTail::Open(TVarName::Flex(*id)),
+                    Resolution::Unbound { .. } => RowTail::Open(TVarName::Flex(root)),
                     Resolution::Bound(_) => {
                         // Tail bound to a structured type — shallow zonk
                         // leaves the surface tail as the original variable
@@ -372,22 +375,26 @@ mod tests {
 
     /// Build a `Subst` mirroring a `VarTable`. Insertion discipline:
     ///
-    /// - For each id whose root is `Bound(t)`: insert `(id, t)`. Every
-    ///   member of the equivalence class points directly at the bound
-    ///   value, so `apply_subst` on any class member returns the
-    ///   bound type in one hop (matching `zonk`).
-    /// - For Unbound classes: no entry. Both `apply_subst` and `zonk`
-    ///   return the variable unchanged for free ids.
+    /// - If `find(id) != id` (id is a non-root in some equivalence
+    ///   class), insert `(id, Var(root))`. `apply_subst` then chases
+    ///   `id → Var(root)` and lands at the same place `zonk` does.
+    /// - If `find(id) == id` and the root is `Bound(t)`, insert
+    ///   `(id, t)`. Aliased members reach `t` via their `(id,
+    ///   Var(root))` chain entry; the root reaches `t` directly.
+    /// - If `find(id) == id` and the root is `Unbound`, no entry.
+    ///   Both `apply_subst` and `zonk` return the variable unchanged.
     ///
-    /// The key property the test pins is `zonk(table, t) ==
-    /// subst_from_table(&table).apply(t)` for any non-cyclic
-    /// workload. Both should preserve the original id of free
-    /// variables; both should fully resolve bound ones.
+    /// The key property `zonk_matches_apply_subst_on_random_workloads`
+    /// pins is `zonk(table, t) == subst_from_table(&table).apply(t)`.
     fn subst_from_table(table: &mut VarTable) -> Subst {
         let mut s = Subst::empty();
         for id in 0..table.len() as TVarId {
+            let root = table.find(id);
+            if root != id {
+                s.insert(TVarName::Flex(id), Type::Var(TVarName::Flex(root)));
+            }
             if let Resolution::Bound(ty) = table.root_resolution(id) {
-                s.insert(TVarName::Flex(id), ty.clone());
+                s.insert(TVarName::Flex(root), ty.clone());
             }
         }
         s
