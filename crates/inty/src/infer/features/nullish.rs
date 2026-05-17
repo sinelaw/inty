@@ -34,7 +34,7 @@ impl InferState {
     ) -> InferResult<Type> {
         let left_ty = self.infer_expr(env, left)?;
         let right_ty = self.infer_expr(env, right)?;
-        let left_resolved = self.apply_subst(&left_ty);
+        let left_resolved = self.zonk(&left_ty);
 
         let (non_nullish, had_nullish) = strip_nullish(&left_resolved);
         if had_nullish {
@@ -58,7 +58,7 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let head_ty = self.infer_expr(env, head)?;
-        let head_resolved = self.apply_subst(&head_ty);
+        let head_resolved = self.zonk(&head_ty);
         let (mut current, head_was_nullable) = strip_nullish(&head_resolved);
 
         // The chain's result is `T_last | Undefined` only when at
@@ -148,7 +148,7 @@ impl InferState {
         // constructor with statics). See state.rs::callable_row_open.
         let expected = self.callable_row_open(None, arg_types.to_vec(), result.clone());
         self.unify(span, carrier, &expected)?;
-        Ok(self.apply_subst(&result))
+        Ok(self.zonk(&result))
     }
 }
 

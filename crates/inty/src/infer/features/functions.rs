@@ -167,7 +167,7 @@ impl InferState {
             self.unify(span, &ret_type, &widened)?;
         }
 
-        Ok(self.apply_subst(&func_type))
+        Ok(self.zonk(&func_type))
     }
 
     /// Infer the type of a function call.
@@ -188,7 +188,7 @@ impl InferState {
             } => {
                 // Infer object once
                 let obj_type = self.infer_expr(env, object)?;
-                let obj_type_applied = self.apply_subst(&obj_type);
+                let obj_type_applied = self.zonk(&obj_type);
 
                 // Get method type from the object without re-inferring
                 let method_type =
@@ -203,7 +203,7 @@ impl InferState {
             } => {
                 // Infer object once
                 let obj_type = self.infer_expr(env, object)?;
-                let obj_type_applied = self.apply_subst(&obj_type);
+                let obj_type_applied = self.zonk(&obj_type);
 
                 // Get computed member type
                 let index_type = self.infer_expr(env, property)?;
@@ -225,7 +225,7 @@ impl InferState {
         // already failed to infer, every `Error(args)` site
         // re-produces `Error` so a single upstream failure doesn't
         // spawn one diagnostic per call site.
-        if matches!(self.apply_subst(&callee_type), Type::Error) {
+        if matches!(self.zonk(&callee_type), Type::Error) {
             // Still walk the argument expressions so any standalone
             // type errors *inside* them surface — recovery is
             // best-effort, not silence-everything.
@@ -285,7 +285,7 @@ impl InferState {
         // above; callers that want a single-arg function fed from an
         // array's element will type-check correctly.
         for (arg, param) in arguments.iter().zip(param_vars.iter()) {
-            let expected = self.apply_subst(param);
+            let expected = self.zonk(param);
             match arg {
                 Expr::Spread {
                     argument,
@@ -294,7 +294,7 @@ impl InferState {
                     let inner = self.infer_expr(env, argument)?;
                     let elem = self.fresh_type_var();
                     self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
-                    let elem_resolved = self.apply_subst(&elem);
+                    let elem_resolved = self.zonk(&elem);
                     self.subsume(*spread_span, &elem_resolved, &expected)?;
                 }
                 _ => {
@@ -316,15 +316,15 @@ impl InferState {
         // type error when it's a concrete row, catching detached
         // method calls like `var f = obj.m; f();` at type-check time.
         if let Some(obj_type) = obj_type_for_this {
-            let obj_type_applied = self.apply_subst(&obj_type);
-            let this_type_applied = self.apply_subst(&this_type);
+            let obj_type_applied = self.zonk(&obj_type);
+            let this_type_applied = self.zonk(&this_type);
             self.unify(span, &this_type_applied, &obj_type_applied)?;
         } else {
-            let this_type_applied = self.apply_subst(&this_type);
+            let this_type_applied = self.zonk(&this_type);
             self.unify(span, &this_type_applied, &Type::Undefined)?;
         }
 
-        Ok(self.apply_subst(&ret_type))
+        Ok(self.zonk(&ret_type))
     }
 
     /// Infer the type of a new expression.
@@ -354,7 +354,7 @@ impl InferState {
                     let inner = self.infer_expr(env, argument)?;
                     let elem = self.fresh_type_var();
                     self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
-                    Ok(self.apply_subst(&elem))
+                    Ok(self.zonk(&elem))
                 }
                 _ => self.infer_expr(env, arg),
             })
@@ -371,7 +371,7 @@ impl InferState {
 
         self.unify(span, &callee_type, &expected_func)?;
 
-        Ok(self.apply_subst(&result_type))
+        Ok(self.zonk(&result_type))
     }
 
     /// Infer a run of adjacent `function` declarations as a single
@@ -428,7 +428,7 @@ impl InferState {
                     .expect("function must be in env after pass 1")
                     .ty()
                     .clone();
-                let ty = self.apply_subst(&ty);
+                let ty = self.zonk(&ty);
                 let scheme = self.generalize(&base_free, &ty);
                 let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
                     "export function ".len()

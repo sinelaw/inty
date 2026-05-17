@@ -23,7 +23,7 @@ impl InferState {
         let elem_var = self.fresh_type_var();
         let array_ty = Type::array(elem_var.clone());
         self.unify(span, &source_ty, &array_ty)?;
-        Ok(self.apply_subst(&array_ty))
+        Ok(self.zonk(&array_ty))
     }
 
     /// Infer the type of an array literal.
@@ -57,14 +57,14 @@ impl InferState {
                     let elem_var = self.fresh_type_var();
                     let expected = Type::array(elem_var.clone());
                     self.unify(*spread_span, &arg_ty, &expected)?;
-                    self.apply_subst(&elem_var)
+                    self.zonk(&elem_var)
                 }
                 other => self.infer_expr(env, other)?,
             };
             acc = self.join(span, &acc, &elem_ty);
         }
 
-        Ok(Type::array(self.apply_subst(&acc)))
+        Ok(Type::array(self.zonk(&acc)))
     }
 
     /// Infer the type of a computed member access (obj[expr]).
@@ -79,13 +79,13 @@ impl InferState {
         let index_type = self.infer_expr(env, property)?;
 
         // Apply substitution to see if we know the object type
-        let obj_type_resolved = self.apply_subst(&obj_type);
+        let obj_type_resolved = self.zonk(&obj_type);
 
         // Union elimination on indexing: index every member and join.
         if let Type::Union(members) = &obj_type_resolved {
             let mut result: Option<Type> = None;
             for m in members {
-                let m_resolved = self.apply_subst(m);
+                let m_resolved = self.zonk(m);
                 // We re-derive the index by re-using the same `index_type`
                 // expression — it's already been inferred once at the top
                 // and unification against multiple member types is fine.

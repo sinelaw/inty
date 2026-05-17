@@ -85,7 +85,7 @@ impl InferState {
                 // the shape `Promise<T>` pins it down either way.
                 let inner = self.fresh_type_var();
                 self.unify(span, &arg_type, &Type::promise(inner.clone()))?;
-                Ok(self.apply_subst(&inner))
+                Ok(self.zonk(&inner))
             }
         }
     }
@@ -150,7 +150,7 @@ impl InferState {
                 self.add_constraint(TypePred::plus(result.clone()), span);
                 self.subsume(span, &left_widened, &result)?;
                 self.subsume(span, &right_widened, &result)?;
-                Ok(self.apply_subst(&result))
+                Ok(self.zonk(&result))
             }
 
             // Comparison (return boolean). The two operands need to
@@ -178,8 +178,8 @@ impl InferState {
                     };
 
                     // Apply substitution to get the actual type variables
-                    let left_subst = self.apply_subst(&left_type);
-                    let right_subst = self.apply_subst(&right_type);
+                    let left_subst = self.zonk(&left_type);
+                    let right_subst = self.zonk(&right_type);
 
                     // If left side is a variable, record comparison origin
                     if let Type::Var(var) = &left_subst {
@@ -248,7 +248,7 @@ impl InferState {
                     }
                     return Err(err);
                 }
-                Ok(self.apply_subst(&left_type))
+                Ok(self.zonk(&left_type))
             }
 
             // Bitwise

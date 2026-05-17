@@ -460,7 +460,7 @@ impl InferState {
         expr: &Expr,
         expected: &Type,
     ) -> InferResult<Type> {
-        let expected = self.apply_subst(expected);
+        let expected = self.zonk(expected);
         // Object-literal special case: dispatch to the contextual
         // checking path that propagates per-field expected types.
         if let Expr::Object { properties, span } = expr {
@@ -482,7 +482,7 @@ impl InferState {
         // produce at a synthesis site.
         let synth = self.infer_expr(env, expr)?;
         let synth_for_bind = if matches!(
-            self.apply_subst(&expected),
+            self.zonk(&expected),
             Type::Var(crate::types::TVarName::Flex(_))
         ) {
             synth.widen_fresh_literals()
@@ -490,7 +490,7 @@ impl InferState {
             synth.clone()
         };
         self.subsume(expr.span(), &synth_for_bind, &expected)?;
-        Ok(self.apply_subst(&synth))
+        Ok(self.zonk(&synth))
     }
 
     /// Infer the type of an expression.

@@ -445,8 +445,26 @@ impl InferState {
     }
 
     /// Apply the current substitution to a type.
+    ///
+    /// `Type` callers (the common case) are routed through
+    /// [`crate::infer::zonk::zonk`], which reads from the Union-Find
+    /// `var_table` with Tarjan path compression. Non-Type callers
+    /// (`Vec<Type>`, `Option<Type>`, `TypeScheme`, …) still go
+    /// through the HashMap `main_subst`; flipping those is the
+    /// remainder of Step 3 in
+    /// `docs/destructive-unification-plan.md`.
     pub fn apply_subst<T: Substitutable>(&self, t: &T) -> T {
         self.main_subst.apply(t)
+    }
+
+    /// Type-only zonk through the Union-Find variable table. This
+    /// is the destructive-unification replacement for
+    /// `apply_subst(&Type)`. Prefer this over `apply_subst` at
+    /// hot-path sites; the asymptotic cost is α(n) per variable
+    /// lookup instead of HashMap-chain-length, and the win
+    /// compounds in tight loops like `unify`.
+    pub fn zonk(&mut self, t: &Type) -> Type {
+        super::zonk::zonk(&mut self.var_table, t)
     }
 
     /// Snapshot the inference state for speculative work.
@@ -561,8 +579,8 @@ impl InferState {
     /// substitution is rolled back and a union is returned. This means
     /// `join` is safe to call speculatively at branch boundaries.
     pub fn join(&mut self, span: Span, t1: &Type, t2: &Type) -> Type {
-        let t1 = self.apply_subst(t1);
-        let t2 = self.apply_subst(t2);
+        let t1 = self.zonk(t1);
+        let t2 = self.zonk(t2);
 
         if t1 == t2 {
             return t1;
@@ -604,7 +622,7 @@ impl InferState {
         let snap = self.snapshot_inference();
 
         if self.unify(span, &t1, &t2).is_ok() {
-            return self.apply_subst(&t1);
+            return self.zonk(&t1);
         }
 
         self.restore_snapshot(snap);
@@ -632,8 +650,8 @@ impl InferState {
     /// subsumption beyond what `unify_rows` already does) are left
     /// to grow into this judgement as use cases land.
     pub fn subsume(&mut self, span: Span, sub: &Type, sup: &Type) -> InferResult<()> {
-        let sub = self.apply_subst(sub);
-        let sup = self.apply_subst(sup);
+        let sub = self.zonk(sub);
+        let sup = self.zonk(sup);
 
         // Rule 0 (S-LitBase): `Lit(l) ≤ Base` is sound — every
         // singleton is a value of its base. This rule used to live
@@ -699,7 +717,7 @@ impl InferState {
         // ⋃τᵢ may be any τᵢ at runtime, so each must fit.
         if let Type::Union(members) = &sub {
             for m in members {
-                let m_resolved = self.apply_subst(m);
+                let m_resolved = self.zonk(m);
                 self.subsume(span, &m_resolved, &sup)?;
             }
             return Ok(());
@@ -710,7 +728,7 @@ impl InferState {
             let mut matching: Vec<usize> = Vec::new();
             for (i, m) in members.iter().enumerate() {
                 let snap = self.snapshot_inference();
-                let m_resolved = self.apply_subst(m);
+                let m_resolved = self.zonk(m);
                 let ok = self.subsume(span, &sub, &m_resolved).is_ok();
                 // Roll back on every probe; we re-run on the chosen
                 // arm below so the committed substitution comes from
@@ -724,7 +742,7 @@ impl InferState {
                 }
             }
             if matching.len() == 1 {
-                let chosen = self.apply_subst(&members[matching[0]]);
+                let chosen = self.zonk(&members[matching[0]]);
                 return self.subsume(span, &sub, &chosen);
             }
             // 0 → no arm fits; >1 → ambiguous. Both fall through to
@@ -875,7 +893,17 @@ impl InferState {
             // the invariant by linking rather than duplicating.
             match (&res_a, &res_b) {
                 (Resolution::Unbound { .. }, Resolution::Unbound { .. }) => {
-                    self.var_table.union(id, *other);
+                    // Bias: point LHS → RHS. `extend_subst(α,
+                    // Var(β))` is a directed binding in
+                    // `main_subst` (`α → Var(β)`), so its chain
+                    // endpoint via `apply_subst` is β. To keep
+                    // `zonk` equivalent we make β the surviving
+                    // root, not whichever rank picks. The union-
+                    // by-rank optimisation costs us a constant
+                    // factor here; the equivalence with
+                    // `apply_subst` is worth more than the α(n)
+                    // tightness on the chain length.
+                    self.var_table.link_to_root(root_a, root_b);
                 }
                 (Resolution::Unbound { .. }, Resolution::Bound(_)) => {
                     // root_a is free, root_b owns the value. Link
@@ -1172,6 +1200,13 @@ impl InferState {
     }
 
     /// Apply substitution to a predicate.
+    ///
+    /// Reads through `main_subst` rather than `zonk` because this
+    /// runs from a `&self` context (the type-class solver holds an
+    /// immutable borrow of the constraint list across the call). The
+    /// mirror keeps both views equivalent; correctness is identical.
+    /// Migrating this off `main_subst` is a follow-up that requires
+    /// restructuring the solver loop.
     fn apply_subst_pred(&self, pred: &TypePred) -> TypePred {
         TypePred {
             class: pred.class.clone(),

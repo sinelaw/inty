@@ -184,7 +184,7 @@ impl InferState {
             let (alt_type, _) = self.infer_stmt(&alt_env, alt)?;
             self.join(span, &cons_type, &alt_type)
         } else {
-            self.apply_subst(&cons_type)
+            self.zonk(&cons_type)
         };
 
         Ok((result, env.clone()))
@@ -293,7 +293,7 @@ impl InferState {
 
         let loop_env = match left {
             ForInLhs::VarDecl(name, _, decl_span) => {
-                let var_type = self.apply_subst(&elem_type);
+                let var_type = self.zonk(&elem_type);
                 self.record_decl_type(*decl_span, var_type.clone());
                 env.extend(name.clone(), TypeScheme::mono(var_type))
             }

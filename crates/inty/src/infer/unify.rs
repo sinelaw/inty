@@ -97,7 +97,7 @@ impl InferState {
             (Type::Union(members), other) | (other, Type::Union(members)) => {
                 let mut matched = false;
                 for m in members {
-                    let m = self.apply_subst(m);
+                    let m = self.zonk(m);
                     if &m == other {
                         matched = true;
                         break;
@@ -629,7 +629,7 @@ mod tests {
         assert!(state.unify(span, &var, &Type::Number).is_ok());
 
         // After unification, applying subst should give Number
-        assert_eq!(state.apply_subst(&var), Type::Number);
+        assert_eq!(state.zonk(&var), Type::Number);
     }
 
     #[test]
@@ -643,7 +643,7 @@ mod tests {
         assert!(state.unify(span, &v1, &v2).is_ok());
 
         // Both should resolve to the same type after unification
-        assert_eq!(state.apply_subst(&v1), state.apply_subst(&v2));
+        assert_eq!(state.zonk(&v1), state.zonk(&v2));
     }
 
     #[test]
@@ -657,7 +657,7 @@ mod tests {
         assert!(state.unify(span, &f1, &f2).is_ok());
 
         // a0 should be bound to String
-        assert_eq!(state.apply_subst(&Type::flex(0)), Type::String);
+        assert_eq!(state.zonk(&Type::flex(0)), Type::String);
     }
 
     #[test]
@@ -694,7 +694,7 @@ mod tests {
         assert!(state.unify(span, &r1, &r2).is_ok());
 
         // The row variable should be bound to {y: String}
-        let row_var = state.apply_subst(&Type::flex(0));
+        let row_var = state.zonk(&Type::flex(0));
         if let Type::Row(row) = row_var {
             assert!(row.has_prop(&"y".into()));
         } else {
@@ -733,7 +733,7 @@ mod tests {
         assert!(state.unify(span, &arr, &row).is_ok());
 
         // The row variable should be bound to an empty closed row
-        let row_var = state.apply_subst(&Type::flex(0));
+        let row_var = state.zonk(&Type::flex(0));
         if let Type::Row(row) = row_var {
             assert!(row.props.is_empty());
             assert!(matches!(row.tail, RowTail::Closed));
@@ -832,8 +832,8 @@ mod tests {
 
         state.unify(span, &r1, &r2).expect("same-shape rows unify");
 
-        let r1_after = state.apply_subst(&r1);
-        let r2_after = state.apply_subst(&r2);
+        let r1_after = state.zonk(&r1);
+        let r2_after = state.zonk(&r2);
 
         // The internal representation can vary (one tail might be
         // an alias of the other), but the resolved Types must be
@@ -887,7 +887,7 @@ mod tests {
 
         // field_a was the type of r1's `a` field; it must have
         // unified with Number through the shared prop loop.
-        assert_eq!(state.apply_subst(&field_a), Type::Number);
+        assert_eq!(state.zonk(&field_a), Type::Number);
     }
 
     #[test]
