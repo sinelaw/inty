@@ -267,6 +267,20 @@ impl VarTable {
         Some(self.cells[root as usize].clone())
     }
 
+    /// Read the cell at `id` without chasing or compressing. Returns
+    /// the literal `Resolution` stored there: `Link(parent)`,
+    /// `Bound(_)`, or `Unbound`. `None` if `id` is past the high-
+    /// water mark.
+    ///
+    /// The "one hop" primitive `RowType::apply_subst` needs: it
+    /// resolves a row tail variable by looking up the immediate
+    /// binding without recursing further. `zonk_row` mirrors that
+    /// behaviour via this method so its row-tail output is
+    /// bit-for-bit equivalent to `apply_subst`'s.
+    pub fn peek(&self, id: TVarId) -> Option<&Resolution> {
+        self.cells.get(id as usize)
+    }
+
     /// Bind `id`'s root to the structured type `ty`. The root must
     /// currently be `Unbound`; binding an already-`Bound` root or a
     /// non-flex (skolem) is a caller bug. Trail-logs the prior
