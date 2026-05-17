@@ -9,9 +9,7 @@ use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};
 use super::super::state::InferState;
-use super::super::type_parser::{
-    parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
-};
+use super::super::type_parser::parse_type_annotation_with_pvars;
 use super::super::InferResult;
 
 /// If `lhs` is an assignment target whose binding resolves to a polymorphic
