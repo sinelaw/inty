@@ -7,7 +7,8 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Write};
 
 use super::ty::{
-    ClassName, LitValue, PropName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme,
+    ClassName, LitValue, Presence, PropName, RowTail, RowType, TVarName, Type, TypePred,
+    TypeScheme,
 };
 use super::{private_key_display, CALLABLE_KEY};
 
@@ -108,8 +109,12 @@ impl PrettyContext {
                     if i > 0 {
                         write!(w, ", ")?;
                     }
-                    write!(w, "_a{}: ", i)?;
-                    self.write_type_ts(w, p, false)?;
+                    write!(w, "_a{}", i)?;
+                    if !matches!(p.presence, Presence::Pre) {
+                        write!(w, "?")?;
+                    }
+                    write!(w, ": ")?;
+                    self.write_type_ts(w, &p.ty, false)?;
                 }
                 write!(w, ") => ")?;
                 self.write_type_ts(w, ret, false)?;
@@ -246,7 +251,20 @@ impl PrettyContext {
                     if i > 0 {
                         write!(w, ", ")?;
                     }
-                    self.write_type(w, param, false)?;
+                    self.write_type(w, &param.ty, false)?;
+                    // Surface optionality on the type — `?` follows
+                    // the type in inty's source syntax so an
+                    // optional `Number` prints as `Number?`. Skip
+                    // the suffix for `Presence::Pre` (the common
+                    // case) and for `Presence::Abs` (which makes
+                    // the param effectively absent — the printer
+                    // could omit it entirely but the position is
+                    // still part of the signature and surface
+                    // syntax doesn't have a representation for
+                    // "absent slot in the middle").
+                    if !matches!(param.presence, Presence::Pre) {
+                        write!(w, "?")?;
+                    }
                 }
                 write!(w, ") => ")?;
                 self.write_type(w, ret, false)?;
@@ -536,7 +554,7 @@ fn collect_hidden_this_vars(ty: &Type, hidden: &mut HashSet<TVarName>) {
                 collect_hidden_this_vars(t, hidden);
             }
             for p in params {
-                collect_hidden_this_vars(p, hidden);
+                collect_hidden_this_vars(&p.ty, hidden);
             }
             collect_hidden_this_vars(ret, hidden);
         }

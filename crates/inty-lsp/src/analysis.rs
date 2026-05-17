@@ -661,7 +661,11 @@ fn row_of(ty: &Type) -> Option<&RowType> {
 /// field). `apply_subst` should already have been called on `ty`.
 fn func_params(ty: &Type) -> Option<(Vec<Type>, Type)> {
     let (_, params, ret) = ty.as_callable()?;
-    Some((params.to_vec(), ret.clone()))
+    // Drop presence info here — the LSP's signature help only
+    // surfaces the parameter types as a flat list. Optional params
+    // still appear in the list; the optional `?` marker is
+    // formatted into the type's display string by `PrettyContext`.
+    Some((params.iter().map(|p| p.ty.clone()).collect(), ret.clone()))
 }
 
 /// Walk all `Expr::Call` nodes in the program and return a reference

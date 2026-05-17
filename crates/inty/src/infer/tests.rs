@@ -225,8 +225,8 @@ fn test_annotation_function_params() {
     let ty = state.apply_subst(&scheme.body.ty);
     let (_, params, ret) = ty.as_callable().expect("expected callable type for `add`");
     assert_eq!(params.len(), 2);
-    let p0 = state.apply_subst(&params[0]);
-    let p1 = state.apply_subst(&params[1]);
+    let p0 = state.apply_subst(&params[0].ty);
+    let p1 = state.apply_subst(&params[1].ty);
     assert_eq!(p0, Type::Number);
     assert_eq!(p1, Type::Number);
     assert_eq!(*ret, Type::Number);
@@ -1121,7 +1121,7 @@ fn test_map_function_indexable_unification() {
         assert_eq!(params.len(), 2, "map should take 2 parameters");
 
         // Second param should be a function
-        let fn_param = state.apply_subst(&params[1]);
+        let fn_param = state.apply_subst(&params[1].ty);
         assert!(fn_param.is_func(), "second param should be a function");
 
         // Return type should be an array
@@ -1179,8 +1179,8 @@ fn test_map_function_complete_type_signature() {
     let ty = state.apply_subst(&scheme.body.ty);
 
     let (_, params, ret) = ty.as_callable().expect("map should be a function type");
-    let arr_param = state.apply_subst(&params[0]);
-    let fn_param = state.apply_subst(&params[1]);
+    let arr_param = state.apply_subst(&params[0].ty);
+    let fn_param = state.apply_subst(&params[1].ty);
     let ret_type = state.apply_subst(ret);
 
     // arr should be an array type
@@ -1208,7 +1208,7 @@ fn test_map_function_complete_type_signature() {
         (&arr_param, fn_param.as_callable(), &ret_type)
     {
         let arr_elem_type = state.apply_subst(arr_elem.as_ref());
-        let fn_input_type = state.apply_subst(&fn_params[0]);
+        let fn_input_type = state.apply_subst(&fn_params[0].ty);
         let fn_ret_type = state.apply_subst(fn_ret);
         let result_elem_type = state.apply_subst(result_elem.as_ref());
 
@@ -2738,7 +2738,7 @@ fn row_subst_merges_bindings_through_open_tail() {
     let scheme = env.lookup("f").unwrap();
     let ty = state.apply_subst(scheme.ty());
     let (_, params, _) = ty.as_callable().expect("f should be callable");
-    let param = state.apply_subst(&params[0]);
+    let param = state.apply_subst(&params[0].ty);
     let row = match &param {
         Type::Row(r) => r,
         other => panic!("parameter should be a row, got {}", other),

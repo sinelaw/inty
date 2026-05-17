@@ -130,7 +130,13 @@ impl TidyEnv {
                 } else {
                     None
                 };
-                let params = params.iter().map(|p| self.tidy_type(p)).collect();
+                let params = params
+                    .iter()
+                    .map(|p| super::ty::FuncParam {
+                        presence: p.presence.clone(),
+                        ty: self.tidy_type(&p.ty),
+                    })
+                    .collect();
                 let ret = Box::new(self.tidy_type(ret));
                 let this_final = match (this_hidden, this_type) {
                     (true, Some(t)) => Some(Box::new(self.tidy_type(t))),
@@ -252,8 +258,8 @@ mod tests {
         let ty = Type::Func {
             this_type: None,
             params: vec![
-                Type::Var(TVarName::Flex(7)),
-                Type::Var(TVarName::Flex(12)),
+                crate::types::FuncParam::required(Type::Var(TVarName::Flex(7))),
+                crate::types::FuncParam::required(Type::Var(TVarName::Flex(12))),
             ],
             ret: Box::new(Type::Var(TVarName::Flex(7))),
         };
@@ -265,8 +271,8 @@ mod tests {
         let expected = Type::Func {
             this_type: None,
             params: vec![
-                Type::Var(TVarName::Flex(0)),
-                Type::Var(TVarName::Flex(1)),
+                crate::types::FuncParam::required(Type::Var(TVarName::Flex(0))),
+                crate::types::FuncParam::required(Type::Var(TVarName::Flex(1))),
             ],
             ret: Box::new(Type::Var(TVarName::Flex(0))),
         };
@@ -307,8 +313,8 @@ mod tests {
                 Type::Func {
                     this_type: None,
                     params: vec![
-                        Type::Var(TVarName::Flex(5)),
-                        Type::Var(TVarName::Flex(1)),
+                        crate::types::FuncParam::required(Type::Var(TVarName::Flex(5))),
+                        crate::types::FuncParam::required(Type::Var(TVarName::Flex(1))),
                     ],
                     ret: Box::new(Type::Var(TVarName::Flex(9))),
                 },
@@ -327,8 +333,8 @@ mod tests {
         );
         match &tidied.body.ty {
             Type::Func { params, ret, .. } => {
-                assert_eq!(params[0], Type::Var(TVarName::Flex(1)));
-                assert_eq!(params[1], Type::Var(TVarName::Flex(2)));
+                assert_eq!(params[0].ty, Type::Var(TVarName::Flex(1)));
+                assert_eq!(params[1].ty, Type::Var(TVarName::Flex(2)));
                 assert_eq!(**ret, Type::Var(TVarName::Flex(0)));
             }
             _ => panic!("expected Func"),

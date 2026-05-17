@@ -158,19 +158,41 @@ impl InferState {
                     }
                 }
 
-                // Unify parameter counts
-                if params1.len() != params2.len() {
-                    return Err(TypeError::ArityMismatch {
-                        expected: params1.len(),
-                        found: params2.len(),
-                        span,
+                // Unify parameters position-wise. Per-param presence
+                // (Shape B per the destructive-unification follow-up:
+                // see Garrigue 1994 "Labeled and optional arguments
+                // for OCaml") lets two functions with different
+                // arities unify when the surplus positions are
+                // marked Abs / presence-polymorphic. Walk both lists
+                // up to the longer length; positions present on only
+                // one side require that side's presence to unify
+                // with Abs.
+                let n = params1.len().max(params2.len());
+                for i in 0..n {
+                    match (params1.get(i), params2.get(i)) {
+                        (Some(p1), Some(p2)) => {
+                            self.unify_presence(span, &p1.presence, &p2.presence)?;
+                            self.unify(span, &p1.ty, &p2.ty)?;
+                        }
+                        (Some(p1), None) => {
+                            // Surplus formal on the left side: its
+                            // presence must reduce to Abs for the
+                            // shorter side to be callable here.
+                            self.unify_presence(
+                                span,
+                                &p1.presence,
+                                &crate::types::Presence::Abs,
+                            )?;
+                        }
+                        (None, Some(p2)) => {
+                            self.unify_presence(
+                                span,
+                                &p2.presence,
+                                &crate::types::Presence::Abs,
+                            )?;
+                        }
+                        (None, None) => unreachable!(),
                     }
-                    .into());
-                }
-
-                // Unify parameters (contravariant, but we unify for now)
-                for (p1, p2) in params1.iter().zip(params2.iter()) {
-                    self.unify(span, p1, p2)?;
                 }
 
                 // Unify return types

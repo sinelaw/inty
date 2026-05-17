@@ -177,7 +177,10 @@ fn zonk_with_visited(
                 .map(|t| Box::new(zonk_with_visited(table, subst, t, visited))),
             params: params
                 .iter()
-                .map(|p| zonk_with_visited(table, subst, p, visited))
+                .map(|p| crate::types::FuncParam {
+                    presence: subst.apply_presence(&p.presence),
+                    ty: zonk_with_visited(table, subst, &p.ty, visited),
+                })
                 .collect(),
             ret: Box::new(zonk_with_visited(table, subst, ret, visited)),
         },
@@ -368,7 +371,10 @@ fn zonk_filtered(
         Type::Literal(lit) => Type::Literal(lit.clone()),
         Type::Func { this_type, params, ret } => Type::Func {
             this_type: this_type.as_ref().map(|t| Box::new(zonk_filtered(table, subst, t, quantified))),
-            params: params.iter().map(|p| zonk_filtered(table, subst, p, quantified)).collect(),
+            params: params.iter().map(|p| crate::types::FuncParam {
+                presence: subst.apply_presence(&p.presence),
+                ty: zonk_filtered(table, subst, &p.ty, quantified),
+            }).collect(),
             ret: Box::new(zonk_filtered(table, subst, ret, quantified)),
         },
         Type::Row(row) => Type::Row(zonk_row_filtered(table, subst, row, quantified)),
