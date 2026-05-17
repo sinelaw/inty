@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use super::var_table::{TrailMark, VarTable};
 use super::InferResult;
 use crate::error::{IntyError, TypeOrigin};
 use crate::lexer::Span;
@@ -82,6 +83,17 @@ pub struct InferState {
     /// Current substitution from unification.
     pub main_subst: Subst,
 
+    /// Union-Find variable table mirroring `main_subst` (Step 2 of
+    /// `docs/destructive-unification-plan.md`). Every write to
+    /// `main_subst` (`extend_subst`, `rebind_var`) is mirrored here;
+    /// every rollback site (`subsume`, `subsume_either`, `join`)
+    /// snapshots the trail alongside cloning `main_subst` and
+    /// restores both on failure. Reads still go through `main_subst`
+    /// — Step 3 of the plan flips them over to
+    /// `crate::infer::zonk::zonk(&mut state.var_table, ...)`,
+    /// dropping `main_subst` when every reader has migrated.
+    pub var_table: VarTable,
+
     /// Named type definitions for recursive types.
     pub named_types: HashMap<TypeId, TypeDef>,
 
@@ -136,6 +148,16 @@ pub struct InferState {
     pub type_aliases: HashMap<String, AliasDef>,
 }
 
+/// State captured by [`InferState::snapshot_inference`] and consumed
+/// by [`InferState::restore_snapshot`]. Crate-private so the
+/// snapshot/restore pair is the only way to use it.
+#[derive(Debug, Clone)]
+pub(crate) struct InferSnapshot {
+    pub(crate) subst: Subst,
+    pub(crate) constraints: Vec<PendingConstraint>,
+    pub(crate) trail: TrailMark,
+}
+
 /// A parsed generic type alias. Treated as not-nominal: applying
 /// `Foo<X>` produces the same type as inlining `Foo`'s body with
 /// `X` substituted for the parameter, so unification is unaware of
@@ -166,6 +188,7 @@ impl InferState {
             name_source: 0,
             pvar_source: 0,
             main_subst: Subst::empty(),
+            var_table: VarTable::new(),
             named_types: HashMap::new(),
             type_id_source: 0,
             type_classes: HashMap::new(),
@@ -296,16 +319,35 @@ impl InferState {
     }
 
     /// Generate a fresh flexible type variable.
+    ///
+    /// Also reserves an `Unbound` cell in [`Self::var_table`] keyed
+    /// at the same `TVarId` so the Union-Find mirror of `main_subst`
+    /// stays dense. `name_source` is incremented alongside
+    /// `var_table.fresh()`; the two counters are invariant-equal.
     pub fn fresh_flex(&mut self) -> TVarName {
-        let id = self.name_source;
-        self.name_source += 1;
+        let id = self.var_table.fresh();
+        debug_assert_eq!(
+            id, self.name_source,
+            "var_table id must match name_source"
+        );
+        self.name_source = id + 1;
         TVarName::Flex(id)
     }
 
     /// Generate a fresh skolem (rigid) type variable.
+    ///
+    /// Skolems are never looked up via the table — they're rigid by
+    /// construction — but they share the `TVarId` namespace with
+    /// flex variables, so we reserve a cell to keep the namespace
+    /// dense. The cell stays `Unbound` for the life of the
+    /// inference run and is never read.
     pub fn fresh_skolem(&mut self) -> TVarName {
-        let id = self.name_source;
-        self.name_source += 1;
+        let id = self.var_table.fresh();
+        debug_assert_eq!(
+            id, self.name_source,
+            "var_table id must match name_source"
+        );
+        self.name_source = id + 1;
         TVarName::Skolem(id)
     }
 
@@ -369,7 +411,14 @@ impl InferState {
     /// `fresh_flex` calls don't collide. Used after a type-parser
     /// invocation that may have allocated its own ids beyond the
     /// state's view.
+    ///
+    /// Pads `var_table` with `Unbound` cells to match. The cells
+    /// for the gap are never explicitly bound; they exist solely so
+    /// `var_table.cells.len()` stays equal to `name_source`.
     pub fn bump_var_id_to(&mut self, id: u32) {
+        while self.var_table.len() < id as usize {
+            self.var_table.fresh();
+        }
         if id > self.name_source {
             self.name_source = id;
         }
@@ -398,6 +447,37 @@ impl InferState {
     /// Apply the current substitution to a type.
     pub fn apply_subst<T: Substitutable>(&self, t: &T) -> T {
         self.main_subst.apply(t)
+    }
+
+    /// Snapshot the inference state for speculative work.
+    ///
+    /// Captures everything a rollback needs to restore:
+    ///   - `main_subst` is cloned (Step 2 lives with the clone cost
+    ///     — Step 3+ moves reads to `var_table` and drops the
+    ///     clone),
+    ///   - `pending_constraints` is cloned (the type-class solver
+    ///     adds predicates that must not survive a failed branch),
+    ///   - `var_table` records a trail mark; on restore the trail
+    ///     pops back to it.
+    ///
+    /// Pair with [`Self::restore_snapshot`]. This is the canonical
+    /// rollback discipline used by `subsume`, `subsume_either`,
+    /// `join`, and the row-subsume / array-subsume sub-rules; every
+    /// speculative path goes through it so the trail and the
+    /// HashMap mirror stay in lockstep.
+    pub(crate) fn snapshot_inference(&self) -> InferSnapshot {
+        InferSnapshot {
+            subst: self.main_subst.clone(),
+            constraints: self.pending_constraints.clone(),
+            trail: self.var_table.snapshot(),
+        }
+    }
+
+    /// Restore a snapshot taken by [`Self::snapshot_inference`].
+    pub(crate) fn restore_snapshot(&mut self, snap: InferSnapshot) {
+        self.main_subst = snap.subst;
+        self.pending_constraints = snap.constraints;
+        self.var_table.restore(snap.trail);
     }
 
     /// Boundary-view of a type: like `apply_subst`, but also merges
@@ -521,15 +601,13 @@ impl InferState {
         // Try to unify with rollback. We restore the substitution and the
         // pending-constraints list on failure so a join attempt has no
         // observable side-effect when it falls back to the union path.
-        let saved_subst = self.main_subst.clone();
-        let saved_constraints = self.pending_constraints.clone();
+        let snap = self.snapshot_inference();
 
         if self.unify(span, &t1, &t2).is_ok() {
             return self.apply_subst(&t1);
         }
 
-        self.main_subst = saved_subst;
-        self.pending_constraints = saved_constraints;
+        self.restore_snapshot(snap);
 
         Self::normalise_union_members(vec![t1, t2])
     }
@@ -570,13 +648,11 @@ impl InferState {
 
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
-        let saved_subst = self.main_subst.clone();
-        let saved_constraints = self.pending_constraints.clone();
+        let snap = self.snapshot_inference();
         if self.unify(span, &sub, &sup).is_ok() {
             return Ok(());
         }
-        self.main_subst = saved_subst;
-        self.pending_constraints = saved_constraints;
+        self.restore_snapshot(snap);
 
         // S-Row: structural row subsumption. With `Lit ≤ Base`
         // removed from `unify`, two rows that differ only in
@@ -590,8 +666,7 @@ impl InferState {
                 && r1.props.len() == r2.props.len()
                 && r1.props.keys().eq(r2.props.keys())
             {
-                let saved_subst = self.main_subst.clone();
-                let saved_constraints = self.pending_constraints.clone();
+                let snap = self.snapshot_inference();
                 let mut all_ok = true;
                 for (k, sub_field) in &r1.props {
                     let sup_field = r2.props.get(k).expect("keys checked equal");
@@ -606,20 +681,17 @@ impl InferState {
                 if all_ok {
                     return Ok(());
                 }
-                self.main_subst = saved_subst;
-                self.pending_constraints = saved_constraints;
+                self.restore_snapshot(snap);
             }
         }
 
         // S-Array: covariant element subsumption.
         if let (Type::Array(e1), Type::Array(e2)) = (&sub, &sup) {
-            let saved_subst = self.main_subst.clone();
-            let saved_constraints = self.pending_constraints.clone();
+            let snap = self.snapshot_inference();
             if self.subsume(span, e1, e2).is_ok() {
                 return Ok(());
             }
-            self.main_subst = saved_subst;
-            self.pending_constraints = saved_constraints;
+            self.restore_snapshot(snap);
         }
 
         // Rule 2a (S-UnionL): a union value subsumes into `sup` iff
@@ -637,15 +709,13 @@ impl InferState {
         if let Type::Union(members) = &sup {
             let mut matching: Vec<usize> = Vec::new();
             for (i, m) in members.iter().enumerate() {
-                let s_subst = self.main_subst.clone();
-                let s_constraints = self.pending_constraints.clone();
+                let snap = self.snapshot_inference();
                 let m_resolved = self.apply_subst(m);
                 let ok = self.subsume(span, &sub, &m_resolved).is_ok();
                 // Roll back on every probe; we re-run on the chosen
                 // arm below so the committed substitution comes from
                 // a single, deliberate call.
-                self.main_subst = s_subst;
-                self.pending_constraints = s_constraints;
+                self.restore_snapshot(snap);
                 if ok {
                     matching.push(i);
                     if matching.len() > 1 {
@@ -672,13 +742,11 @@ impl InferState {
     /// `subsume(t2, t1)`; commit on the first one that succeeds, fail
     /// with the original error if neither does.
     pub fn subsume_either(&mut self, span: Span, t1: &Type, t2: &Type) -> InferResult<()> {
-        let saved_subst = self.main_subst.clone();
-        let saved_constraints = self.pending_constraints.clone();
+        let snap = self.snapshot_inference();
         if self.subsume(span, t1, t2).is_ok() {
             return Ok(());
         }
-        self.main_subst = saved_subst;
-        self.pending_constraints = saved_constraints;
+        self.restore_snapshot(snap);
         self.subsume(span, t2, t1)
     }
 
@@ -760,8 +828,76 @@ impl InferState {
         // union-find table with rank, but the asymptotic cost
         // savings are the same. See
         // docs/destructive-unification-plan.md.
+        // Mirror the binding into the Union-Find table so reads
+        // through `crate::infer::zonk` see the same view as reads
+        // through `apply_subst`. Step 3 will flip the reads over.
+        self.mirror_extend(&var, &ty);
         self.main_subst.insert(var, ty);
         Ok(())
+    }
+
+    /// Mirror an `extend_subst` write into the Union-Find table.
+    /// Always called *before* the corresponding `main_subst.insert`,
+    /// so the contracts of `bind` / `union` apply: the root must be
+    /// `Unbound`. The collision case is handled by `extend_subst`'s
+    /// caller running `resolve(var)` first.
+    fn mirror_extend(&mut self, var: &TVarName, ty: &Type) {
+        use super::var_table::Resolution;
+        // Only flex variables ever appear as the LHS of a binding in
+        // this codebase — `unify`'s `var_bind` rule only fires on
+        // `Flex(_)`. Skolems on the LHS would be a caller bug.
+        let id = match var {
+            TVarName::Flex(id) => *id,
+            TVarName::Skolem(_) => return,
+        };
+        // Some test paths synthesise variable ids directly without
+        // going through `fresh_flex`. Pad the table so the index is
+        // in range; padding cells are `Unbound { level: 0 }` which is
+        // the right starting point for a never-allocated variable.
+        self.var_table.ensure_id(id);
+        if let Type::Var(TVarName::Flex(other)) = ty {
+            self.var_table.ensure_id(*other);
+            let root_a = self.var_table.find(id);
+            let root_b = self.var_table.find(*other);
+            if root_a == root_b {
+                return; // already in the same class
+            }
+            let res_a = self.var_table.root_resolution(root_a);
+            let res_b = self.var_table.root_resolution(root_b);
+            match (res_a, res_b) {
+                (Resolution::Unbound { .. }, Resolution::Unbound { .. }) => {
+                    self.var_table.union(id, *other);
+                }
+                (Resolution::Unbound { .. }, Resolution::Bound(t)) => {
+                    self.var_table.bind(root_a, t);
+                }
+                (Resolution::Bound(t), Resolution::Unbound { .. }) => {
+                    self.var_table.bind(root_b, t);
+                }
+                (Resolution::Bound(_), Resolution::Bound(_)) => {
+                    // Both already bound to a structured type. We
+                    // can't reconcile here without recursing through
+                    // `unify`, which the caller is in the middle of.
+                    // The mirror skips this case; main_subst's
+                    // collision check (`resolve` at the top of
+                    // `extend_subst`) already handled the semantic
+                    // unification. The drift is benign — var_table
+                    // is not yet a source of truth for reads.
+                }
+                _ => {}
+            }
+            return;
+        }
+        // Variable-to-structured: bind the root iff still free.
+        let root = self.var_table.find(id);
+        match self.var_table.root_resolution(root) {
+            Resolution::Unbound { .. } => {
+                self.var_table.bind(root, ty.clone());
+            }
+            Resolution::Bound(_) | Resolution::Link(_) => {
+                // Skip; see comment above.
+            }
+        }
     }
 
     /// Bind a presence variable to a presence. Same collision-as-unify
@@ -847,6 +983,16 @@ impl InferState {
     /// Used when we discover a more specific type for a variable that was
     /// previously bound to a less specific type (e.g., Row -> Array).
     pub fn rebind_var(&mut self, var: TVarName, ty: Type) {
+        // Mirror into the var_table by direct cell-rewrite. We can't
+        // use `bind` here because the root may already be `Bound`
+        // (that's exactly why `rebind_var` exists). Rewrite the
+        // root's cell, trail-logging the previous state so a future
+        // rollback restores it.
+        if let TVarName::Flex(id) = &var {
+            self.var_table.ensure_id(*id);
+            let root = self.var_table.find(*id);
+            self.var_table.force_bind_root(root, ty.clone());
+        }
         self.main_subst.insert(var, ty);
     }
 

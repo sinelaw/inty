@@ -129,6 +129,26 @@ impl VarTable {
         self.cells.len()
     }
 
+    /// Pad the table with `Unbound` cells up to (and including) `id`.
+    /// Used by callers that synthesize a `TVarId` outside the
+    /// `fresh()` allocator (e.g. tests, or `bump_var_id_to` skipping
+    /// over ids the type parser claimed). After this call,
+    /// `cells.len() > id`, so any cell-indexed op is safe.
+    ///
+    /// Padding writes go straight to `cells`; they are *not* trailed
+    /// because there's nothing to undo — every cell starts `Unbound`
+    /// at the table's invariant zero level. Tests that fabricate
+    /// ids past the high-water mark may end up with cells whose
+    /// level is 0 regardless of `current_level`; that's fine, only
+    /// real-inference `fresh` calls need the level for
+    /// generalisation.
+    pub fn ensure_id(&mut self, id: TVarId) {
+        let needed = id as usize + 1;
+        while self.cells.len() < needed {
+            self.cells.push(Resolution::Unbound { level: 0, rank: 0 });
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
@@ -236,6 +256,28 @@ impl VarTable {
             "bind() called on non-Unbound root {:?}",
             prev
         );
+        self.trail.push((root, prev));
+        self.cells[root as usize] = Resolution::Bound(ty);
+    }
+
+    /// Overwrite a root cell to `Bound(ty)`, regardless of its
+    /// current state. Trail-logs the prior state so a subsequent
+    /// `restore` reverts the change.
+    ///
+    /// This is the escape hatch for `InferState::rebind_var` —
+    /// callers that need to *replace* an already-bound type rather
+    /// than fail. Production code should prefer `bind`, which
+    /// debug_asserts that the root is `Unbound` and so catches
+    /// mistakes. Tests are the only other user.
+    ///
+    /// Panics in debug builds if `id` is not the root of its
+    /// equivalence class — call `find(id)` first.
+    pub fn force_bind_root(&mut self, root: TVarId, ty: Type) {
+        debug_assert!(
+            !matches!(self.cells[root as usize], Resolution::Link(_)),
+            "force_bind_root called on non-root"
+        );
+        let prev = self.cells[root as usize].clone();
         self.trail.push((root, prev));
         self.cells[root as usize] = Resolution::Bound(ty);
     }
