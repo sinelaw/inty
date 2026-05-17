@@ -9,9 +9,7 @@ use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
-use super::super::type_parser::{
-    parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
-};
+use super::super::type_parser::parse_type_annotation_with_pvars;
 use super::super::InferResult;
 
 /// Borrow-able view of a function declaration that abstracts over
@@ -540,8 +538,6 @@ struct HoistableNode {
     /// Index into the original `stmts` slice. Lets us recover the
     /// `Stmt` after the SCC analysis has reordered things.
     stmt_index: usize,
-    /// The function's declared name.
-    name: String,
     /// Names referenced inside this function's body, scoped to the
     /// outer environment (i.e., not bound locally by params, vars,
     /// inner functions, etc.).
@@ -566,7 +562,6 @@ pub(in crate::infer) fn compute_scc_groups(stmts: &[Stmt]) -> Vec<Vec<usize>> {
             let node_idx = nodes.len();
             nodes.push(HoistableNode {
                 stmt_index: i,
-                name: name.to_string(),
                 free,
             });
             // Duplicate function names in the same scope are
@@ -648,7 +643,7 @@ fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     // `v`. If one needs to be explored, push the Resume frame for
     // `v` and an Enter frame for the successor and return without
     // closing. Otherwise close v (popping any SCC it roots).
-    let mut descend_or_close =
+    let descend_or_close =
         |mut i: usize,
          v: usize,
          index: &mut Vec<Option<usize>>,

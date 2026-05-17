@@ -29,8 +29,8 @@
 
 use crate::types::subst::ApplySubstGuard;
 use crate::types::{
-    FieldEntry, ModuleType, Presence, PropName, QualType, RowTail, RowType, Subst, TVarId, TVarName,
-    Type, TypePred, TypeScheme,
+    FieldEntry, ModuleType, PropName, QualType, RowTail, RowType, Subst, TVarId, TVarName, Type,
+    TypePred, TypeScheme,
 };
 
 use super::var_table::{Resolution, VarTable};
@@ -216,11 +216,6 @@ fn zonk_with_visited(
 /// don't merge bound row-tail variables back into the prop map here
 /// (that's `Subst::flatten`'s job at the boundary callers). This
 /// keeps zonk-on-rows O(props), matching the cost target.
-pub fn zonk_row(table: &mut VarTable, subst: &Subst, row: &RowType) -> RowType {
-    let mut visited = Visited::new();
-    zonk_row_with_visited(table, subst, row, &mut visited)
-}
-
 fn zonk_row_with_visited(
     table: &mut VarTable,
     subst: &Subst,
@@ -287,22 +282,6 @@ fn zonk_row_with_visited(
     RowType { props, tail }
 }
 
-/// Zonk a type predicate (the head of a type-class constraint).
-pub fn zonk_pred(table: &mut VarTable, subst: &Subst, pred: &TypePred) -> TypePred {
-    TypePred {
-        class: pred.class.clone(),
-        types: pred.types.iter().map(|t| zonk(table, subst, t)).collect(),
-    }
-}
-
-/// Zonk a qualified type.
-pub fn zonk_qual(table: &mut VarTable, subst: &Subst, q: &QualType) -> QualType {
-    QualType {
-        preds: q.preds.iter().map(|p| zonk_pred(table, subst, p)).collect(),
-        ty: zonk(table, subst, &q.ty),
-    }
-}
-
 /// Zonk a type scheme. Quantified vars are *not* looked up in the
 /// table (they shadow the outer scope) — mirrors how
 /// `TypeScheme::apply_subst` filters out the quantified set.
@@ -348,15 +327,15 @@ fn zonk_filtered(
     match ty {
         Type::Var(name) if quantified.contains(name) => Type::Var(name.clone()),
         Type::Var(TVarName::Flex(id)) => {
+            // `root_resolution` chases links internally, so we never
+            // see `Resolution::Link` here. If the canonical root is
+            // in `quantified`, the variable stays opaque; if it's
+            // free, we return the canonical root id either way (same
+            // policy as the non-filtered walker).
             match table.root_resolution(*id) {
                 Resolution::Unbound { .. } => {
                     let root = table.find(*id);
-                    let canonical = TVarName::Flex(root);
-                    if quantified.contains(&canonical) {
-                        Type::Var(canonical)
-                    } else {
-                        Type::Var(canonical)
-                    }
+                    Type::Var(TVarName::Flex(root))
                 }
                 Resolution::Bound(bound) => {
                     let bound = bound.clone();
