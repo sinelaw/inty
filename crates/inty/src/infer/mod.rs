@@ -242,6 +242,55 @@ impl InferState {
         // per pattern and can't collide.
         let mut const_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        // Pre-pass: hoist top-level `var` / `let` / `const` names so
+        // hoisted function declarations (Pass 2 below) can reference
+        // them even when the declaration appears later in source
+        // order. This matches the IIFE-with-forward-declared-methods
+        // pattern that htmx / jQuery / lodash use:
+        //
+        //     const lib = { foo: null, bar: null };
+        //     function helper() { return lib.foo; }   // sees `lib`
+        //     lib.foo = function() { return helper(); };
+        //
+        // Each hoisted name is pre-bound to a fresh type variable.
+        // When the corresponding Var statement is inferred in Pass 3,
+        // we unify the hoisted variable with the actual inferred
+        // type so any function body that referenced the hoisted form
+        // ends up resolving to the real type via the substitution.
+        //
+        // This is what TypeScript / Flow do for typing purposes —
+        // TDZ violations remain runtime-only and are not enforced
+        // here.
+        let mut hoisted_data: std::collections::HashMap<String, Type> =
+            std::collections::HashMap::new();
+        let collect_hoists = |hoisted_data: &mut std::collections::HashMap<String, Type>,
+                              state: &mut Self,
+                              declarations: &[VarDeclarator]| {
+            for decl in declarations {
+                if decl.name.starts_with("$destr$") {
+                    continue;
+                }
+                hoisted_data
+                    .entry(decl.name.clone())
+                    .or_insert_with(|| state.fresh_type_var());
+            }
+        };
+        for stmt in stmts {
+            match stmt {
+                Stmt::Var { declarations, .. } => {
+                    collect_hoists(&mut hoisted_data, self, declarations);
+                }
+                Stmt::Export {
+                    declaration:
+                        crate::parser::ast::ExportDecl::Var { declarations, .. },
+                    ..
+                } => {
+                    collect_hoists(&mut hoisted_data, self, declarations);
+                }
+                _ => {}
+            }
+        }
+
         // Pass 1: compute the SCC partition of all hoistable function
         // decls in this scope. Each inner Vec holds statement indices
         // in source order; the outer Vec is in topological order.
@@ -253,6 +302,9 @@ impl InferState {
         // generalise at the boundary) — we just hand it one SCC at a
         // time.
         let mut current_env = env.clone();
+        for (name, ty) in &hoisted_data {
+            current_env = current_env.extend(name.clone(), TypeScheme::mono(ty.clone()));
+        }
         let errors_at_entry = self.errors.len();
         for scc_indices in &scc_groups {
             // Gather the SCC's statements in source order. Cloning
@@ -324,6 +376,39 @@ impl InferState {
                 Ok((ty, new_env)) => {
                     result = ty;
                     current_env = new_env;
+                    // If this statement bound a name we pre-hoisted,
+                    // unify the hoisted variable with the actual
+                    // inferred type. The hoisted variable may already
+                    // carry constraints from function bodies in
+                    // Pass 2 that referenced the name before its
+                    // declaration; unifying propagates the real type
+                    // to those references via the substitution.
+                    let unify_hoisted = |state: &mut Self,
+                                         declarations: &[VarDeclarator]| {
+                        for decl in declarations {
+                            if let Some(hoisted) = hoisted_data.get(&decl.name) {
+                                if let Some(scheme) = current_env.lookup(&decl.name) {
+                                    let actual = scheme.body.ty.clone();
+                                    if let Err(e) = state.unify(decl.span, hoisted, &actual) {
+                                        state.push_error(e);
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    match stmt {
+                        Stmt::Var { declarations, .. } => {
+                            unify_hoisted(self, declarations);
+                        }
+                        Stmt::Export {
+                            declaration:
+                                crate::parser::ast::ExportDecl::Var { declarations, .. },
+                            ..
+                        } => {
+                            unify_hoisted(self, declarations);
+                        }
+                        _ => {}
+                    }
                 }
                 Err(err) => {
                     // Source-order recovery: bind any names the
