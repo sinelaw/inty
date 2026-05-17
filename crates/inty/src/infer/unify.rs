@@ -31,8 +31,8 @@ impl InferState {
     /// (`infernu/Decycle.hs` discipline) so any structural cycle in
     /// the mirror degrades to a free variable rather than a SIGSEGV.
     pub fn unify(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
-        let t1 = super::zonk::zonk(&mut self.var_table, t1);
-        let t2 = super::zonk::zonk(&mut self.var_table, t2);
+        let t1 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t1);
+        let t2 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t2);
         self.unify_impl(span, &t1, &t2)
     }
 

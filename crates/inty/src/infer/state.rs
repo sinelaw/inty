@@ -10,6 +10,64 @@ use std::collections::HashMap;
 
 use super::var_table::{TrailMark, VarTable};
 use super::InferResult;
+
+/// Erase flex-var ids and presence-var ids to a single canonical
+/// form so two types that differ only in unification-variable
+/// naming compare equal. Used by the debug-only mirror-invariant
+/// probe in [`InferState::assert_mirror_consistent`]; production
+/// builds don't reference it.
+#[cfg(debug_assertions)]
+fn structural_norm(ty: &Type) -> Type {
+    match ty {
+        Type::Var(TVarName::Flex(_)) => Type::Var(TVarName::Flex(0)),
+        Type::Var(TVarName::Skolem(id)) => Type::Var(TVarName::Skolem(*id)),
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: this_type.as_ref().map(|t| Box::new(structural_norm(t))),
+            params: params.iter().map(structural_norm).collect(),
+            ret: Box::new(structural_norm(ret)),
+        },
+        Type::Row(row) => Type::Row(crate::types::RowType {
+            props: row
+                .props
+                .iter()
+                .map(|(k, e)| {
+                    (
+                        k.clone(),
+                        crate::types::FieldEntry {
+                            // Normalise presence to either Pre/Abs
+                            // or a single canonical Var so the probe
+                            // doesn't fire on differently-named
+                            // presence vars.
+                            presence: match &e.presence {
+                                crate::types::Presence::Var(_) => crate::types::Presence::Var(
+                                    crate::types::PVarName::Flex(0),
+                                ),
+                                other => other.clone(),
+                            },
+                            ty: structural_norm(&e.ty),
+                        },
+                    )
+                })
+                .collect(),
+            tail: match &row.tail {
+                crate::types::RowTail::Open(TVarName::Flex(_)) => {
+                    crate::types::RowTail::Open(TVarName::Flex(0))
+                }
+                other => other.clone(),
+            },
+        }),
+        Type::Array(elem) => Type::Array(Box::new(structural_norm(elem))),
+        Type::Promise(inner) => Type::Promise(Box::new(structural_norm(inner))),
+        Type::Map(value) => Type::Map(Box::new(structural_norm(value))),
+        Type::Named(id, args) => Type::Named(*id, args.iter().map(structural_norm).collect()),
+        Type::Union(members) => Type::Union(members.iter().map(structural_norm).collect()),
+        other => other.clone(),
+    }
+}
 use crate::error::{IntyError, TypeOrigin};
 use crate::lexer::Span;
 use crate::types::{
@@ -464,7 +522,7 @@ impl InferState {
     /// lookup instead of HashMap-chain-length, and the win
     /// compounds in tight loops like `unify`.
     pub fn zonk(&mut self, t: &Type) -> Type {
-        super::zonk::zonk(&mut self.var_table, t)
+        super::zonk::zonk(&mut self.var_table, &self.main_subst, t)
     }
 
     /// Snapshot the inference state for speculative work.
@@ -850,8 +908,48 @@ impl InferState {
         // through `crate::infer::zonk` see the same view as reads
         // through `apply_subst`. Step 3 will flip the reads over.
         self.mirror_extend(&var, &ty);
-        self.main_subst.insert(var, ty);
+        self.main_subst.insert(var.clone(), ty.clone());
+        // Invariant probe (debug only): after every binding, the
+        // Union-Find table and the HashMap must agree on the
+        // chain endpoint for `var`. apply_subst follows the chain
+        // through main_subst; zonk-on-Type chases through the
+        // table. The two must land at the same flex root (modulo
+        // shallow row-tail semantics, which we don't probe here
+        // — see `zonk_row_with_visited` for why row tails can
+        // legitimately diverge in representation).
+        #[cfg(debug_assertions)]
+        self.assert_mirror_consistent(&var);
         Ok(())
+    }
+
+    /// Debug-only: verify that `zonk(Var(var))` and
+    /// `apply_subst(Var(var))` agree on the chain endpoint
+    /// (modulo intermediate variable id). The check is intentionally
+    /// non-strict on row tails because `RowType::apply_subst` is
+    /// shallow-on-one-hop while `zonk` chases through `find` to the
+    /// root; the two representations are observationally equivalent
+    /// for downstream unification but not bit-for-bit equal.
+    #[cfg(debug_assertions)]
+    fn assert_mirror_consistent(&mut self, var: &TVarName) {
+        let TVarName::Flex(_) = var else { return };
+        let ty_var = Type::Var(var.clone());
+        let via_subst = self.main_subst.apply(&ty_var);
+        let via_zonk = super::zonk::zonk(&mut self.var_table, &self.main_subst, &ty_var);
+        // If either side reached a non-Var (a structured type), the
+        // structures must match exactly. If both sides remain a Var,
+        // they should at minimum be in the same equivalence class
+        // — but we can't check that without a costly walk. For now,
+        // assert structural equality except on row tails (which the
+        // shallow/find divergence makes flaky).
+        if matches!(&via_subst, Type::Var(_)) && matches!(&via_zonk, Type::Var(_)) {
+            return; // both still free; can't probe further cheaply
+        }
+        debug_assert_eq!(
+            structural_norm(&via_subst),
+            structural_norm(&via_zonk),
+            "mirror invariant: zonk/apply_subst disagree on bound chain for {:?}",
+            var
+        );
     }
 
     /// Mirror an `extend_subst` write into the Union-Find table.

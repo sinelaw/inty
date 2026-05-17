@@ -29,8 +29,8 @@
 
 use crate::types::subst::ApplySubstGuard;
 use crate::types::{
-    FieldEntry, ModuleType, PropName, QualType, RowTail, RowType, TVarId, TVarName, Type, TypePred,
-    TypeScheme,
+    FieldEntry, ModuleType, Presence, PropName, QualType, RowTail, RowType, Subst, TVarId, TVarName,
+    Type, TypePred, TypeScheme,
 };
 
 use super::var_table::{Resolution, VarTable};
@@ -59,9 +59,9 @@ use super::var_table::{Resolution, VarTable};
 /// drift between the HashMap mirror and the Union-Find table — which
 /// the destructive-unification migration may produce mid-flight —
 /// degrades to a harmless un-resolved variable rather than a SIGSEGV.
-pub fn zonk(table: &mut VarTable, ty: &Type) -> Type {
+pub fn zonk(table: &mut VarTable, subst: &Subst, ty: &Type) -> Type {
     let mut visited: Visited = Visited::new();
-    zonk_with_visited(table, ty, &mut visited)
+    zonk_with_visited(table, subst, ty, &mut visited)
 }
 
 /// Per-zonk-call visited-set. Stack-allocated for the common-case
@@ -95,7 +95,12 @@ impl Visited {
     }
 }
 
-fn zonk_with_visited(table: &mut VarTable, ty: &Type, visited: &mut Visited) -> Type {
+fn zonk_with_visited(
+    table: &mut VarTable,
+    subst: &Subst,
+    ty: &Type,
+    visited: &mut Visited,
+) -> Type {
     let Some(_guard) = ApplySubstGuard::try_enter() else {
         return Type::Error;
     };
@@ -135,7 +140,7 @@ fn zonk_with_visited(table: &mut VarTable, ty: &Type, visited: &mut Visited) -> 
                         return Type::Var(TVarName::Flex(root));
                     }
                     let bound = bound.clone();
-                    let result = zonk_with_visited(table, &bound, visited);
+                    let result = zonk_with_visited(table, subst, &bound, visited);
                     visited.remove(root);
                     result
                 }
@@ -153,36 +158,36 @@ fn zonk_with_visited(table: &mut VarTable, ty: &Type, visited: &mut Visited) -> 
         } => Type::Func {
             this_type: this_type
                 .as_ref()
-                .map(|t| Box::new(zonk_with_visited(table, t, visited))),
+                .map(|t| Box::new(zonk_with_visited(table, subst, t, visited))),
             params: params
                 .iter()
-                .map(|p| zonk_with_visited(table, p, visited))
+                .map(|p| zonk_with_visited(table, subst, p, visited))
                 .collect(),
-            ret: Box::new(zonk_with_visited(table, ret, visited)),
+            ret: Box::new(zonk_with_visited(table, subst, ret, visited)),
         },
-        Type::Row(row) => Type::Row(zonk_row_with_visited(table, row, visited)),
-        Type::Array(elem) => Type::Array(Box::new(zonk_with_visited(table, elem, visited))),
+        Type::Row(row) => Type::Row(zonk_row_with_visited(table, subst, row, visited)),
+        Type::Array(elem) => Type::Array(Box::new(zonk_with_visited(table, subst, elem, visited))),
         Type::Promise(inner) => {
-            Type::Promise(Box::new(zonk_with_visited(table, inner, visited)))
+            Type::Promise(Box::new(zonk_with_visited(table, subst, inner, visited)))
         }
-        Type::Map(value) => Type::Map(Box::new(zonk_with_visited(table, value, visited))),
+        Type::Map(value) => Type::Map(Box::new(zonk_with_visited(table, subst, value, visited))),
         Type::Named(id, args) => Type::Named(
             *id,
             args.iter()
-                .map(|a| zonk_with_visited(table, a, visited))
+                .map(|a| zonk_with_visited(table, subst, a, visited))
                 .collect(),
         ),
         Type::Union(members) => Type::union(
             members
                 .iter()
-                .map(|m| zonk_with_visited(table, m, visited)),
+                .map(|m| zonk_with_visited(table, subst, m, visited)),
         ),
         Type::Module(m) => Type::Module(ModuleType {
             source: m.source.clone(),
             exports: m
                 .exports
                 .iter()
-                .map(|(k, scheme)| (k.clone(), zonk_scheme(table, scheme)))
+                .map(|(k, scheme)| (k.clone(), zonk_scheme(table, subst, scheme)))
                 .collect(),
         }),
     }
@@ -192,12 +197,17 @@ fn zonk_with_visited(table: &mut VarTable, ty: &Type, visited: &mut Visited) -> 
 /// don't merge bound row-tail variables back into the prop map here
 /// (that's `Subst::flatten`'s job at the boundary callers). This
 /// keeps zonk-on-rows O(props), matching the cost target.
-pub fn zonk_row(table: &mut VarTable, row: &RowType) -> RowType {
+pub fn zonk_row(table: &mut VarTable, subst: &Subst, row: &RowType) -> RowType {
     let mut visited = Visited::new();
-    zonk_row_with_visited(table, row, &mut visited)
+    zonk_row_with_visited(table, subst, row, &mut visited)
 }
 
-fn zonk_row_with_visited(table: &mut VarTable, row: &RowType, visited: &mut Visited) -> RowType {
+fn zonk_row_with_visited(
+    table: &mut VarTable,
+    subst: &Subst,
+    row: &RowType,
+    visited: &mut Visited,
+) -> RowType {
     let props: std::collections::BTreeMap<PropName, FieldEntry> = row
         .props
         .iter()
@@ -205,8 +215,17 @@ fn zonk_row_with_visited(table: &mut VarTable, row: &RowType, visited: &mut Visi
             (
                 k.clone(),
                 FieldEntry {
-                    presence: e.presence.clone(),
-                    ty: zonk_with_visited(table, &e.ty, visited),
+                    // Resolve the presence variable through the
+                    // (still HashMap-backed) presence subst.
+                    // `Subst::apply_presence` is a single hop,
+                    // matching `FieldEntry::apply_subst`'s
+                    // behaviour exactly. Presence has its own
+                    // subst domain (Remy '94, two domains for one
+                    // substitution); migrating it to a Union-Find
+                    // table mirroring `var_table` is a separate
+                    // step in the destructive-unification plan.
+                    presence: subst.apply_presence(&e.presence),
+                    ty: zonk_with_visited(table, subst, &e.ty, visited),
                 },
             )
         })
@@ -215,30 +234,34 @@ fn zonk_row_with_visited(table: &mut VarTable, row: &RowType, visited: &mut Visi
         RowTail::Closed => RowTail::Closed,
         RowTail::Open(TVarName::Skolem(_)) => row.tail.clone(),
         RowTail::Open(TVarName::Flex(id)) => {
-            // Same tolerant lookup as the type-var case: synthetic
-            // ids past the table's range stay as-is. Unbound roots
-            // resolve to the Union-Find root id (matches
-            // `Subst::apply_subst`'s chain-following endpoint).
+            // Chase the row tail variable through `find` to its
+            // equivalence-class root. This is stronger than
+            // `RowType::apply_subst`'s "single HashMap lookup"
+            // behaviour, which returns whatever's stored at the
+            // current step — possibly an intermediate id if
+            // `Subst::resolve` hasn't compressed the chain yet,
+            // possibly the endpoint if it has. Going to the root
+            // makes zonk's output deterministic regardless of how
+            // compressed `main_subst` is.
+            //
+            // Tails bound to structured types stay as the surface
+            // variable: the deep-merge case is `Subst::flatten`,
+            // called only at boundary readers (pretty-printer,
+            // generalize) — same shallow-on-bound-tails policy as
+            // `RowType::apply_subst`.
             match table.find_if_present(*id) {
                 None => row.tail.clone(),
                 Some(root) => match table.root_resolution(root) {
                     Resolution::Unbound { .. } => RowTail::Open(TVarName::Flex(root)),
-                    Resolution::Bound(_) => {
-                        // Tail bound to a structured type — shallow zonk
-                        // leaves the surface tail as the original variable
-                        // (matches today's `RowType::apply_subst` shallow
-                        // behaviour). The deep-merge case is the
-                        // `Subst::flatten` path called at boundaries.
-                        RowTail::Open(TVarName::Flex(*id))
-                    }
-                    Resolution::Link(_) => row.tail.clone(),
+                    Resolution::Bound(_) => RowTail::Open(TVarName::Flex(root)),
+                    Resolution::Link(_) => RowTail::Open(TVarName::Flex(root)),
                 },
             }
         }
         RowTail::Recursive(id, args) => RowTail::Recursive(
             *id,
             args.iter()
-                .map(|a| zonk_with_visited(table, a, visited))
+                .map(|a| zonk_with_visited(table, subst, a, visited))
                 .collect(),
         ),
     };
@@ -246,25 +269,25 @@ fn zonk_row_with_visited(table: &mut VarTable, row: &RowType, visited: &mut Visi
 }
 
 /// Zonk a type predicate (the head of a type-class constraint).
-pub fn zonk_pred(table: &mut VarTable, pred: &TypePred) -> TypePred {
+pub fn zonk_pred(table: &mut VarTable, subst: &Subst, pred: &TypePred) -> TypePred {
     TypePred {
         class: pred.class.clone(),
-        types: pred.types.iter().map(|t| zonk(table, t)).collect(),
+        types: pred.types.iter().map(|t| zonk(table, subst, t)).collect(),
     }
 }
 
 /// Zonk a qualified type.
-pub fn zonk_qual(table: &mut VarTable, q: &QualType) -> QualType {
+pub fn zonk_qual(table: &mut VarTable, subst: &Subst, q: &QualType) -> QualType {
     QualType {
-        preds: q.preds.iter().map(|p| zonk_pred(table, p)).collect(),
-        ty: zonk(table, &q.ty),
+        preds: q.preds.iter().map(|p| zonk_pred(table, subst, p)).collect(),
+        ty: zonk(table, subst, &q.ty),
     }
 }
 
 /// Zonk a type scheme. Quantified vars are *not* looked up in the
 /// table (they shadow the outer scope) — mirrors how
 /// `TypeScheme::apply_subst` filters out the quantified set.
-pub fn zonk_scheme(table: &mut VarTable, scheme: &TypeScheme) -> TypeScheme {
+pub fn zonk_scheme(table: &mut VarTable, subst: &Subst, scheme: &TypeScheme) -> TypeScheme {
     // Quantified flex vars must not be substituted; temporarily
     // mark them. We achieve this by checking `scheme.vars` membership
     // on each `Type::Var` lookup. The simplest way to do that without
@@ -281,11 +304,11 @@ pub fn zonk_scheme(table: &mut VarTable, scheme: &TypeScheme) -> TypeScheme {
                 types: p
                     .types
                     .iter()
-                    .map(|t| zonk_filtered(table, t, &scheme.vars))
+                    .map(|t| zonk_filtered(table, subst, t, &scheme.vars))
                     .collect(),
             })
             .collect(),
-        ty: zonk_filtered(table, &scheme.body.ty, &scheme.vars),
+        ty: zonk_filtered(table, subst, &scheme.body.ty, &scheme.vars),
     };
     TypeScheme {
         vars: scheme.vars.clone(),
@@ -294,7 +317,12 @@ pub fn zonk_scheme(table: &mut VarTable, scheme: &TypeScheme) -> TypeScheme {
     }
 }
 
-fn zonk_filtered(table: &mut VarTable, ty: &Type, quantified: &[TVarName]) -> Type {
+fn zonk_filtered(
+    table: &mut VarTable,
+    subst: &Subst,
+    ty: &Type,
+    quantified: &[TVarName],
+) -> Type {
     let Some(_guard) = ApplySubstGuard::try_enter() else {
         return Type::Error;
     };
@@ -313,7 +341,7 @@ fn zonk_filtered(table: &mut VarTable, ty: &Type, quantified: &[TVarName]) -> Ty
                 }
                 Resolution::Bound(bound) => {
                     let bound = bound.clone();
-                    zonk_filtered(table, &bound, quantified)
+                    zonk_filtered(table, subst, &bound, quantified)
                 }
                 Resolution::Link(_) => ty.clone(),
             }
@@ -323,32 +351,33 @@ fn zonk_filtered(table: &mut VarTable, ty: &Type, quantified: &[TVarName]) -> Ty
         | Type::Regex | Type::Error => ty.clone(),
         Type::Literal(lit) => Type::Literal(lit.clone()),
         Type::Func { this_type, params, ret } => Type::Func {
-            this_type: this_type.as_ref().map(|t| Box::new(zonk_filtered(table, t, quantified))),
-            params: params.iter().map(|p| zonk_filtered(table, p, quantified)).collect(),
-            ret: Box::new(zonk_filtered(table, ret, quantified)),
+            this_type: this_type.as_ref().map(|t| Box::new(zonk_filtered(table, subst, t, quantified))),
+            params: params.iter().map(|p| zonk_filtered(table, subst, p, quantified)).collect(),
+            ret: Box::new(zonk_filtered(table, subst, ret, quantified)),
         },
-        Type::Row(row) => Type::Row(zonk_row_filtered(table, row, quantified)),
-        Type::Array(elem) => Type::Array(Box::new(zonk_filtered(table, elem, quantified))),
-        Type::Promise(inner) => Type::Promise(Box::new(zonk_filtered(table, inner, quantified))),
-        Type::Map(value) => Type::Map(Box::new(zonk_filtered(table, value, quantified))),
+        Type::Row(row) => Type::Row(zonk_row_filtered(table, subst, row, quantified)),
+        Type::Array(elem) => Type::Array(Box::new(zonk_filtered(table, subst, elem, quantified))),
+        Type::Promise(inner) => Type::Promise(Box::new(zonk_filtered(table, subst, inner, quantified))),
+        Type::Map(value) => Type::Map(Box::new(zonk_filtered(table, subst, value, quantified))),
         Type::Named(id, args) => Type::Named(
             *id,
-            args.iter().map(|a| zonk_filtered(table, a, quantified)).collect(),
+            args.iter().map(|a| zonk_filtered(table, subst, a, quantified)).collect(),
         ),
         Type::Union(members) => Type::union(
-            members.iter().map(|m| zonk_filtered(table, m, quantified)),
+            members.iter().map(|m| zonk_filtered(table, subst, m, quantified)),
         ),
         Type::Module(m) => Type::Module(ModuleType {
             source: m.source.clone(),
             // Don't recurse into inner schemes here: they have their
             // own quantifier set. Zonk them fresh.
-            exports: m.exports.iter().map(|(k, s)| (k.clone(), zonk_scheme(table, s))).collect(),
+            exports: m.exports.iter().map(|(k, s)| (k.clone(), zonk_scheme(table, subst, s))).collect(),
         }),
     }
 }
 
 fn zonk_row_filtered(
     table: &mut VarTable,
+    subst: &Subst,
     row: &RowType,
     quantified: &[TVarName],
 ) -> RowType {
@@ -360,7 +389,7 @@ fn zonk_row_filtered(
                 k.clone(),
                 FieldEntry {
                     presence: e.presence.clone(),
-                    ty: zonk_filtered(table, &e.ty, quantified),
+                    ty: zonk_filtered(table, subst, &e.ty, quantified),
                 },
             )
         })
@@ -380,7 +409,7 @@ fn zonk_row_filtered(
         RowTail::Open(skolem) => RowTail::Open(skolem.clone()),
         RowTail::Recursive(id, args) => RowTail::Recursive(
             *id,
-            args.iter().map(|a| zonk_filtered(table, a, quantified)).collect(),
+            args.iter().map(|a| zonk_filtered(table, subst, a, quantified)).collect(),
         ),
     };
     RowType { props, tail }
@@ -427,7 +456,7 @@ mod tests {
         table.bind(a, Type::Number);
         let ty = Type::Var(TVarName::Flex(a));
 
-        let zonked = zonk(&mut table, &ty);
+        let zonked = zonk(&mut table, &Subst::empty(), &ty);
         assert_eq!(zonked, Type::Number);
 
         // Same via apply_subst.
@@ -448,7 +477,7 @@ mod tests {
         table.bind(a, Type::String);
 
         for id in [a, b, c] {
-            let zonked = zonk(&mut table, &Type::Var(TVarName::Flex(id)));
+            let zonked = zonk(&mut table, &Subst::empty(), &Type::Var(TVarName::Flex(id)));
             assert_eq!(zonked, Type::String);
         }
     }
@@ -458,7 +487,7 @@ mod tests {
     fn zonk_leaves_unbound_alone() {
         let mut table = VarTable::new();
         let a = table.fresh();
-        let zonked = zonk(&mut table, &Type::Var(TVarName::Flex(a)));
+        let zonked = zonk(&mut table, &Subst::empty(), &Type::Var(TVarName::Flex(a)));
         assert_eq!(zonked, Type::Var(TVarName::Flex(a)));
     }
 
@@ -467,7 +496,7 @@ mod tests {
     fn zonk_leaves_skolems_alone() {
         let mut table = VarTable::new();
         let skolem = Type::Var(TVarName::Skolem(42));
-        let zonked = zonk(&mut table, &skolem);
+        let zonked = zonk(&mut table, &Subst::empty(), &skolem);
         assert_eq!(zonked, skolem);
     }
 
@@ -479,7 +508,7 @@ mod tests {
         let a = table.fresh();
         table.bind(a, Type::Number);
         let ty = Type::simple_func(vec![Type::Var(TVarName::Flex(a))], Type::Var(TVarName::Flex(a)));
-        let zonked = zonk(&mut table, &ty);
+        let zonked = zonk(&mut table, &Subst::empty(), &ty);
         assert_eq!(zonked, Type::simple_func(vec![Type::Number], Type::Number));
     }
 
@@ -490,14 +519,14 @@ mod tests {
         let a = table.fresh();
         table.bind(a, Type::Boolean);
         let arr = Type::Array(Box::new(Type::Var(TVarName::Flex(a))));
-        assert_eq!(zonk(&mut table, &arr), Type::Array(Box::new(Type::Boolean)));
+        assert_eq!(zonk(&mut table, &Subst::empty(), &arr), Type::Array(Box::new(Type::Boolean)));
         let prom = Type::Promise(Box::new(Type::Var(TVarName::Flex(a))));
         assert_eq!(
-            zonk(&mut table, &prom),
+            zonk(&mut table, &Subst::empty(), &prom),
             Type::Promise(Box::new(Type::Boolean))
         );
         let m = Type::Map(Box::new(Type::Var(TVarName::Flex(a))));
-        assert_eq!(zonk(&mut table, &m), Type::Map(Box::new(Type::Boolean)));
+        assert_eq!(zonk(&mut table, &Subst::empty(), &m), Type::Map(Box::new(Type::Boolean)));
     }
 
     /// Bound chains through other binds: α → Number, β bound to
@@ -510,7 +539,7 @@ mod tests {
         table.bind(a, Type::Number);
         table.bind(b, Type::Array(Box::new(Type::Var(TVarName::Flex(a)))));
 
-        let zonked = zonk(&mut table, &Type::Var(TVarName::Flex(b)));
+        let zonked = zonk(&mut table, &Subst::empty(), &Type::Var(TVarName::Flex(b)));
         assert_eq!(zonked, Type::Array(Box::new(Type::Number)));
     }
 
@@ -565,7 +594,7 @@ mod tests {
             // Probe with a few synthesised types referencing the vars.
             for &id in &ids {
                 let probe = Type::Var(TVarName::Flex(id));
-                let z = zonk(&mut table, &probe);
+                let z = zonk(&mut table, &Subst::empty(), &probe);
                 let s = subst.apply(&probe);
                 assert_eq!(
                     z, s,
@@ -579,7 +608,7 @@ mod tests {
                     vec![Type::Var(TVarName::Flex(ids[0]))],
                     Type::Array(Box::new(Type::Var(TVarName::Flex(ids[1])))),
                 );
-                assert_eq!(zonk(&mut table, &probe), subst.apply(&probe));
+                assert_eq!(zonk(&mut table, &Subst::empty(), &probe), subst.apply(&probe));
             }
         }
     }
@@ -595,7 +624,7 @@ mod tests {
             Type::Var(TVarName::Flex(a)),
             Type::String,
         ]);
-        let zonked = zonk(&mut table, &probe);
+        let zonked = zonk(&mut table, &Subst::empty(), &probe);
         let expected = Type::union(vec![Type::Number, Type::String]);
         assert_eq!(zonked, expected);
     }
