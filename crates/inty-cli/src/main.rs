@@ -164,7 +164,34 @@ fn main() -> ExitCode {
         Err(code) => return code,
     };
 
-    let result = run_inference(&mut state, env, &source, &filename);
+    // Run inference on a worker thread with a 64 MB stack. The
+    // default 8 MB Linux main-thread stack isn't enough for the
+    // existing depth-cap guards in `Type::apply_subst` to fire
+    // before the OS guard page does on htmx-class single-file
+    // libraries (gdb-confirmed: the SIGSEGV lands during
+    // `Type::apply_subst -> RowType::apply_subst -> FieldEntry::apply_subst`
+    // recursion through the htmx IIFE result type). 64 MB matches
+    // the budget documented in docs/scaling.md and is enough for
+    // every input the existing test suite exercises; htmx itself
+    // still hits the underlying O(N*S*K) substitution cost
+    // (`docs/scaling.md`, `docs/destructive-unification-plan.md`)
+    // and times out rather than crashes — converting a SIGSEGV
+    // into a controlled wall-clock failure is the minimal "avoid
+    // the crash" contract here, not full htmx support.
+    let (result, thread_state) = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn({
+            let source = source.clone();
+            let filename = filename.clone();
+            move || {
+                let result = run_inference(&mut state, env, &source, &filename);
+                (result, state)
+            }
+        })
+        .expect("spawn inference worker")
+        .join()
+        .expect("inference worker panicked");
+    let state = thread_state;
 
     for warning in &state.warnings {
         report_warning(&filename, &source, warning);
