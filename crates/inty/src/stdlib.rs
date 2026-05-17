@@ -85,4 +85,51 @@ mod tests {
         assert!(env.lookup("window").is_some());
         assert!(env.lookup("setTimeout").is_some());
     }
+
+    /// The `Element<T>` alias added to `dom.d.js` should be usable from
+    /// user code as a function-parameter annotation. Pins the typical
+    /// htmx-class pattern: a helper takes a DOM element parameter and
+    /// chains methods on it. Before the alias, users had to inline the
+    /// ~70-field row at every annotation site; with it, `Element<a>`
+    /// suffices.
+    #[test]
+    fn element_alias_is_usable_in_function_annotations() {
+        use crate::parser::parse;
+        let (env, mut state) = initial_env_with_stdlib().unwrap();
+        let src = "\
+            /** function hasFooClass<T>(elt: Element<T>) => Boolean */ \
+            function hasFooClass(elt) { return elt.classList.contains(\"foo\"); } \
+            /** function elementId<T>(elt: Element<T>) => String */ \
+            function elementId(elt) { return elt.id; }";
+        let mut program = parse(src).expect("source must parse");
+        // The dom.d.js stdlib already registered the `Element<T>` alias
+        // on `state.type_aliases` during `initial_env_with_stdlib`; the
+        // user-program parse doesn't introduce additional aliases.
+        program.type_aliases = Vec::new();
+        let result = state.infer_program_with_env(&env, &program);
+        assert!(
+            result.is_ok(),
+            "Element<T> alias should accept method chaining, got: {:?}",
+            result.err()
+        );
+    }
+
+    /// `Node<T>` for the smaller (non-Element) node case. Used for
+    /// document fragments, text nodes, etc.
+    #[test]
+    fn node_alias_is_usable_in_function_annotations() {
+        use crate::parser::parse;
+        let (env, mut state) = initial_env_with_stdlib().unwrap();
+        let src = "\
+            /** function nodeName<T>(n: Node<T>) => String */ \
+            function nodeName(n) { return n.nodeName; }";
+        let mut program = parse(src).expect("source must parse");
+        program.type_aliases = Vec::new();
+        let result = state.infer_program_with_env(&env, &program);
+        assert!(
+            result.is_ok(),
+            "Node<T> alias should accept .nodeName, got: {:?}",
+            result.err()
+        );
+    }
 }
