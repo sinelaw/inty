@@ -855,4 +855,139 @@ mod tests {
         assert_eq!(shallow, deep_array(10));
         assert!(!take_apply_subst_overflow(), "shallow walk after overflow must not retrigger");
     }
+
+    // --- Subst::resolve (Tarjan path compression) -----------------
+    //
+    // These tests pin the observable behaviour of `resolve`:
+    //
+    //   1. **Endpoint correctness.** A chain α → β → γ → t resolves
+    //      to `t` (the chain's first non-`Var` endpoint), or to a
+    //      `Type::Var(root)` if the chain ends at an unbound root.
+    //   2. **Idempotence.** Calling `resolve(k)` twice returns the
+    //      same value, and the second call performs no rewrites
+    //      (because the first one already compressed the path).
+    //   3. **`apply` invariance.** Resolving a path doesn't change
+    //      what `apply` produces for any type — only how cheaply it
+    //      gets there. This is the key invariant that justifies
+    //      destructive substitution: if `resolve` ever produced a
+    //      different `apply` result, we'd silently observe wrong
+    //      types downstream.
+    //   4. **Cycle safety.** A malformed substitution with a Var
+    //      cycle (occurs-check should have prevented it, but the
+    //      data structure doesn't enforce that) must not loop.
+
+    fn flex(id: u32) -> TVarName {
+        TVarName::Flex(id)
+    }
+
+    #[test]
+    fn resolve_returns_chain_endpoint() {
+        // α → β → γ → Number
+        let mut s = Subst::empty();
+        s.insert(flex(0), Type::Var(flex(1)));
+        s.insert(flex(1), Type::Var(flex(2)));
+        s.insert(flex(2), Type::Number);
+
+        assert_eq!(s.resolve(&flex(0)), Some(Type::Number));
+    }
+
+    #[test]
+    fn resolve_returns_unbound_root_var() {
+        // α → β  (β unbound)
+        let mut s = Subst::empty();
+        s.insert(flex(0), Type::Var(flex(1)));
+
+        assert_eq!(s.resolve(&flex(0)), Some(Type::Var(flex(1))));
+        // The unbound endpoint must not be in the map afterwards
+        // (path compression writes through every entry on the chain,
+        // but stops at the endpoint).
+        assert!(!s.map.contains_key(&flex(1)));
+    }
+
+    #[test]
+    fn resolve_compresses_chain() {
+        // α → β → γ → Number; after resolving α once, every
+        // intermediate entry now points directly at Number.
+        let mut s = Subst::empty();
+        s.insert(flex(0), Type::Var(flex(1)));
+        s.insert(flex(1), Type::Var(flex(2)));
+        s.insert(flex(2), Type::Number);
+
+        let _ = s.resolve(&flex(0));
+
+        assert_eq!(s.map.get(&flex(0)), Some(&Type::Number));
+        assert_eq!(s.map.get(&flex(1)), Some(&Type::Number));
+        assert_eq!(s.map.get(&flex(2)), Some(&Type::Number));
+    }
+
+    #[test]
+    fn resolve_is_idempotent() {
+        let mut s = Subst::empty();
+        s.insert(flex(0), Type::Var(flex(1)));
+        s.insert(flex(1), Type::Var(flex(2)));
+        s.insert(flex(2), Type::String);
+
+        let first = s.resolve(&flex(0));
+        let snapshot = s.map.clone();
+        let second = s.resolve(&flex(0));
+
+        assert_eq!(first, second);
+        // The second call should be a no-op on the storage: every
+        // entry on the chain already points at the endpoint.
+        assert_eq!(s.map, snapshot);
+    }
+
+    #[test]
+    fn resolve_preserves_apply_behaviour() {
+        // The whole point of destructive path compression is that
+        // `apply` is unchanged. Build a chain, snapshot `apply`
+        // results for several types, run `resolve` on each chain
+        // variable, then assert the post-resolve `apply` still
+        // produces the same output.
+        let mut s = Subst::empty();
+        s.insert(flex(0), Type::Var(flex(1)));
+        s.insert(flex(1), Type::Var(flex(2)));
+        s.insert(flex(2), Type::Number);
+        s.insert(flex(3), Type::Var(flex(0))); // chain into chain
+        s.insert(flex(4), Type::Var(flex(3)));
+
+        let test_types = vec![
+            Type::Var(flex(0)),
+            Type::Var(flex(3)),
+            Type::Var(flex(4)),
+            Type::Array(Box::new(Type::Var(flex(2)))),
+            Type::simple_func(vec![Type::Var(flex(1))], Type::Var(flex(4))),
+        ];
+        let before: Vec<Type> = test_types.iter().map(|t| s.apply(t)).collect();
+
+        for id in 0..=4 {
+            let _ = s.resolve(&flex(id));
+        }
+
+        let after: Vec<Type> = test_types.iter().map(|t| s.apply(t)).collect();
+        assert_eq!(before, after, "resolve changed apply's output");
+    }
+
+    #[test]
+    fn resolve_breaks_cycles_defensively() {
+        // Malformed substitution with a Var cycle. occurs-check is
+        // supposed to prevent this, but the data structure doesn't
+        // enforce it — so resolve must not loop.
+        let mut s = Subst::empty();
+        s.insert(flex(0), Type::Var(flex(1)));
+        s.insert(flex(1), Type::Var(flex(2)));
+        s.insert(flex(2), Type::Var(flex(0))); // closes the cycle
+
+        let result = s.resolve(&flex(0));
+        // We don't pin the exact return value (any of the three vars
+        // is acceptable). Just that the call terminates.
+        assert!(matches!(result, Some(Type::Var(_))));
+    }
+
+    #[test]
+    fn resolve_returns_none_for_unbound() {
+        let mut s = Subst::empty();
+        s.insert(flex(0), Type::Number);
+        assert_eq!(s.resolve(&flex(99)), None);
+    }
 }
