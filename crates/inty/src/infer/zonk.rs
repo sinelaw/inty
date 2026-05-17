@@ -29,7 +29,7 @@
 
 use crate::types::subst::ApplySubstGuard;
 use crate::types::{
-    FieldEntry, ModuleType, PropName, QualType, RowTail, RowType, TVarName, Type, TypePred,
+    FieldEntry, ModuleType, PropName, QualType, RowTail, RowType, TVarId, TVarName, Type, TypePred,
     TypeScheme,
 };
 
@@ -44,14 +44,34 @@ use super::var_table::{Resolution, VarTable};
 /// Bounded by the per-thread depth cap shared with `Type::apply_subst`
 /// (see `crates/inty/src/types/subst.rs`). Past the cap, returns
 /// `Type::Error` and sets the overflow flag for the driver to surface.
+///
+/// ## Cycle handling
+///
+/// Inty's normal inference path converts equi-recursive bindings to
+/// nominal `Type::Named` references in `var_bind` / `create_recursive
+/// _type`, so a well-formed substitution never holds a cycle on
+/// directly-bound variables. The zonk walker additionally carries a
+/// per-call `visited` set of variable roots: if a recursive resolution
+/// would re-enter a root we're already mid-expanding, we return
+/// `Type::Var(Flex(root))` (the variable unchanged) rather than
+/// looping. This is the infernu-`Decycle` discipline (port of
+/// `src/Infernu/Decycle.hs`), used here as defence-in-depth so a
+/// drift between the HashMap mirror and the Union-Find table — which
+/// the destructive-unification migration may produce mid-flight —
+/// degrades to a harmless un-resolved variable rather than a SIGSEGV.
 pub fn zonk(table: &mut VarTable, ty: &Type) -> Type {
+    let mut visited: std::collections::HashSet<TVarId> = std::collections::HashSet::new();
+    zonk_with_visited(table, ty, &mut visited)
+}
+
+fn zonk_with_visited(
+    table: &mut VarTable,
+    ty: &Type,
+    visited: &mut std::collections::HashSet<TVarId>,
+) -> Type {
     let Some(_guard) = ApplySubstGuard::try_enter() else {
         return Type::Error;
     };
-    zonk_inner(table, ty)
-}
-
-fn zonk_inner(table: &mut VarTable, ty: &Type) -> Type {
     match ty {
         Type::Number => Type::Number,
         Type::String => Type::String,
@@ -62,41 +82,76 @@ fn zonk_inner(table: &mut VarTable, ty: &Type) -> Type {
         Type::Error => Type::Error,
         Type::Literal(lit) => Type::Literal(lit.clone()),
         Type::Var(TVarName::Skolem(_)) => ty.clone(),
-        Type::Var(TVarName::Flex(id)) => match table.root_resolution(*id) {
-            Resolution::Unbound { .. } => {
-                let root = table.find(*id);
-                Type::Var(TVarName::Flex(root))
+        Type::Var(TVarName::Flex(id)) => {
+            // Tolerant lookup: synthetic ids baked into builtin
+            // stubs and test fixtures may sit outside the table's
+            // dense `fresh()`-allocated range. Treat those as
+            // unbound (the variable stays as-is) rather than
+            // indexing out of bounds.
+            let Some(root) = table.find_if_present(*id) else {
+                return ty.clone();
+            };
+            // Decycle: if we're already mid-expanding `root`, return
+            // the variable verbatim. A well-formed inty substitution
+            // hits this only when zonk is called on a type that
+            // *itself* loops through a malformed mirror entry; the
+            // normal path goes through nominal `Type::Named`.
+            if !visited.insert(root) {
+                return Type::Var(TVarName::Flex(*id));
             }
-            Resolution::Bound(bound) => {
-                // Re-zonk: a binding may itself contain flex variables that
-                // resolved further. The depth guard above bounds the
-                // recursion.
-                let bound = bound.clone();
-                zonk(table, &bound)
-            }
-            Resolution::Link(_) => {
-                // `root_resolution` already chases past Links; reaching
-                // here would be a bug in `VarTable::find`. Defensive.
-                ty.clone()
-            }
-        },
+            let result = match table.root_resolution(root) {
+                // Free root: preserve the *original* id (not the
+                // root) so the output matches `Subst::apply_subst`
+                // bit-for-bit. The Union-Find aliasing is internal
+                // bookkeeping; the surface type uses the name the
+                // caller already had. (Renaming would be observable
+                // through `==`-style equality checks that
+                // downstream code performs on type variables.)
+                Resolution::Unbound { .. } => Type::Var(TVarName::Flex(*id)),
+                Resolution::Bound(bound) => {
+                    let bound = bound.clone();
+                    zonk_with_visited(table, &bound, visited)
+                }
+                Resolution::Link(_) => {
+                    // `find` returned a root, so `root_resolution`
+                    // can't yield Link. Defensive.
+                    ty.clone()
+                }
+            };
+            visited.remove(&root);
+            result
+        }
         Type::Func {
             this_type,
             params,
             ret,
         } => Type::Func {
-            this_type: this_type.as_ref().map(|t| Box::new(zonk(table, t))),
-            params: params.iter().map(|p| zonk(table, p)).collect(),
-            ret: Box::new(zonk(table, ret)),
+            this_type: this_type
+                .as_ref()
+                .map(|t| Box::new(zonk_with_visited(table, t, visited))),
+            params: params
+                .iter()
+                .map(|p| zonk_with_visited(table, p, visited))
+                .collect(),
+            ret: Box::new(zonk_with_visited(table, ret, visited)),
         },
-        Type::Row(row) => Type::Row(zonk_row(table, row)),
-        Type::Array(elem) => Type::Array(Box::new(zonk(table, elem))),
-        Type::Promise(inner) => Type::Promise(Box::new(zonk(table, inner))),
-        Type::Map(value) => Type::Map(Box::new(zonk(table, value))),
-        Type::Named(id, args) => {
-            Type::Named(*id, args.iter().map(|a| zonk(table, a)).collect())
+        Type::Row(row) => Type::Row(zonk_row_with_visited(table, row, visited)),
+        Type::Array(elem) => Type::Array(Box::new(zonk_with_visited(table, elem, visited))),
+        Type::Promise(inner) => {
+            Type::Promise(Box::new(zonk_with_visited(table, inner, visited)))
         }
-        Type::Union(members) => Type::union(members.iter().map(|m| zonk(table, m))),
+        Type::Map(value) => Type::Map(Box::new(zonk_with_visited(table, value, visited))),
+        Type::Named(id, args) => Type::Named(
+            *id,
+            args.iter()
+                .map(|a| zonk_with_visited(table, a, visited))
+                .collect(),
+        ),
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|m| zonk_with_visited(table, m, visited)),
+        ),
         Type::Module(m) => Type::Module(ModuleType {
             source: m.source.clone(),
             exports: m
@@ -113,6 +168,15 @@ fn zonk_inner(table: &mut VarTable, ty: &Type) -> Type {
 /// (that's `Subst::flatten`'s job at the boundary callers). This
 /// keeps zonk-on-rows O(props), matching the cost target.
 pub fn zonk_row(table: &mut VarTable, row: &RowType) -> RowType {
+    let mut visited = std::collections::HashSet::new();
+    zonk_row_with_visited(table, row, &mut visited)
+}
+
+fn zonk_row_with_visited(
+    table: &mut VarTable,
+    row: &RowType,
+    visited: &mut std::collections::HashSet<TVarId>,
+) -> RowType {
     let props: std::collections::BTreeMap<PropName, FieldEntry> = row
         .props
         .iter()
@@ -121,7 +185,7 @@ pub fn zonk_row(table: &mut VarTable, row: &RowType) -> RowType {
                 k.clone(),
                 FieldEntry {
                     presence: e.presence.clone(),
-                    ty: zonk(table, &e.ty),
+                    ty: zonk_with_visited(table, &e.ty, visited),
                 },
             )
         })
@@ -129,24 +193,33 @@ pub fn zonk_row(table: &mut VarTable, row: &RowType) -> RowType {
     let tail = match &row.tail {
         RowTail::Closed => RowTail::Closed,
         RowTail::Open(TVarName::Skolem(_)) => row.tail.clone(),
-        RowTail::Open(TVarName::Flex(id)) => match table.root_resolution(*id) {
-            Resolution::Unbound { .. } => {
-                let root = table.find(*id);
-                RowTail::Open(TVarName::Flex(root))
+        RowTail::Open(TVarName::Flex(id)) => {
+            // Same tolerant lookup as the type-var case: synthetic
+            // ids past the table's range stay as-is, and unbound
+            // roots keep the caller's id rather than the
+            // Union-Find root (matches `RowType::apply_subst`).
+            match table.find_if_present(*id) {
+                None => row.tail.clone(),
+                Some(root) => match table.root_resolution(root) {
+                    Resolution::Unbound { .. } => RowTail::Open(TVarName::Flex(*id)),
+                    Resolution::Bound(_) => {
+                        // Tail bound to a structured type — shallow zonk
+                        // leaves the surface tail as the original variable
+                        // (matches today's `RowType::apply_subst` shallow
+                        // behaviour). The deep-merge case is the
+                        // `Subst::flatten` path called at boundaries.
+                        RowTail::Open(TVarName::Flex(*id))
+                    }
+                    Resolution::Link(_) => row.tail.clone(),
+                },
             }
-            Resolution::Bound(_) => {
-                // Tail bound to a structured type — shallow zonk
-                // leaves the surface tail as the original variable
-                // (matches today's `RowType::apply_subst` shallow
-                // behaviour). The deep-merge case is the
-                // `Subst::flatten` path called at boundaries.
-                RowTail::Open(TVarName::Flex(*id))
-            }
-            Resolution::Link(_) => row.tail.clone(),
-        },
-        RowTail::Recursive(id, args) => {
-            RowTail::Recursive(*id, args.iter().map(|a| zonk(table, a)).collect())
         }
+        RowTail::Recursive(id, args) => RowTail::Recursive(
+            *id,
+            args.iter()
+                .map(|a| zonk_with_visited(table, a, visited))
+                .collect(),
+        ),
     };
     RowType { props, tail }
 }
@@ -297,34 +370,24 @@ mod tests {
     use super::*;
     use crate::types::{Subst, Substitutable, TVarId};
 
-    /// Build a `Subst` mirroring a `VarTable`: for every variable
-    /// whose root is `Bound(t)`, insert `(id -> zonk(t))`; for every
-    /// `Link(_)`, insert `(id -> Var(Flex(root)))`. The point is to
-    /// produce a substitution that, applied with the existing
-    /// `apply_subst`, gives the same result `zonk` does.
+    /// Build a `Subst` mirroring a `VarTable`. Insertion discipline:
+    ///
+    /// - For each id whose root is `Bound(t)`: insert `(id, t)`. Every
+    ///   member of the equivalence class points directly at the bound
+    ///   value, so `apply_subst` on any class member returns the
+    ///   bound type in one hop (matching `zonk`).
+    /// - For Unbound classes: no entry. Both `apply_subst` and `zonk`
+    ///   return the variable unchanged for free ids.
+    ///
+    /// The key property the test pins is `zonk(table, t) ==
+    /// subst_from_table(&table).apply(t)` for any non-cyclic
+    /// workload. Both should preserve the original id of free
+    /// variables; both should fully resolve bound ones.
     fn subst_from_table(table: &mut VarTable) -> Subst {
         let mut s = Subst::empty();
         for id in 0..table.len() as TVarId {
-            match table.root_resolution(id) {
-                Resolution::Unbound { .. } => {
-                    let root = table.find(id);
-                    if root != id {
-                        s.insert(TVarName::Flex(id), Type::Var(TVarName::Flex(root)));
-                    }
-                    // Unbound root: no entry in the subst.
-                }
-                Resolution::Bound(ty) => {
-                    // Insert the bound type for `id`'s root; non-root
-                    // ids get a link entry handled by the Link arm
-                    // (via find returning root). For root binding,
-                    // associate the root id with the bound type.
-                    let root = table.find(id);
-                    s.insert(TVarName::Flex(root), ty.clone());
-                    if root != id {
-                        s.insert(TVarName::Flex(id), Type::Var(TVarName::Flex(root)));
-                    }
-                }
-                Resolution::Link(_) => unreachable!("root_resolution skips Link"),
+            if let Resolution::Bound(ty) = table.root_resolution(id) {
+                s.insert(TVarName::Flex(id), ty.clone());
             }
         }
         s

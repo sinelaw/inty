@@ -18,9 +18,21 @@ pub type UnifyResult<T> = Result<T, IntyError>;
 
 impl InferState {
     /// Unify two types, updating the substitution.
+    ///
+    /// The two operands are resolved through the Union-Find variable
+    /// table (`crate::infer::zonk`) before structural matching.
+    /// This is the destructive-unification half of Step 2 in
+    /// `docs/destructive-unification-plan.md`: `zonk` uses
+    /// path-compressing `find` rather than HashMap chain-chasing,
+    /// so a chain `α → β → γ → T` collapses to a single hop on the
+    /// first lookup. The HashMap mirror (`main_subst`) is kept in
+    /// sync at every binding by `mirror_extend`; this site is the
+    /// first read to migrate. `zonk` carries a visited-set
+    /// (`infernu/Decycle.hs` discipline) so any structural cycle in
+    /// the mirror degrades to a free variable rather than a SIGSEGV.
     pub fn unify(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
-        let t1 = self.apply_subst(t1);
-        let t2 = self.apply_subst(t2);
+        let t1 = super::zonk::zonk(&mut self.var_table, t1);
+        let t2 = super::zonk::zonk(&mut self.var_table, t2);
         self.unify_impl(span, &t1, &t2)
     }
 

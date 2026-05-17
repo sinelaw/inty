@@ -864,25 +864,38 @@ impl InferState {
             }
             let res_a = self.var_table.root_resolution(root_a);
             let res_b = self.var_table.root_resolution(root_b);
-            match (res_a, res_b) {
+            // Invariant we enforce on the mirror: at most one cell
+            // in any equivalence class carries the structured
+            // `Bound(_)` value; every other class member is a
+            // `Link` to it. This is what keeps `zonk` cycle-free
+            // for non-pathological inputs — if we instead *copied*
+            // the bound value into both roots, two cells could end
+            // up bound to types that mutually reference each other
+            // and zonk would loop. The four cases below preserve
+            // the invariant by linking rather than duplicating.
+            match (&res_a, &res_b) {
                 (Resolution::Unbound { .. }, Resolution::Unbound { .. }) => {
                     self.var_table.union(id, *other);
                 }
-                (Resolution::Unbound { .. }, Resolution::Bound(t)) => {
-                    self.var_table.bind(root_a, t);
+                (Resolution::Unbound { .. }, Resolution::Bound(_)) => {
+                    // root_a is free, root_b owns the value. Link
+                    // root_a → root_b so the value stays in exactly
+                    // one cell.
+                    self.var_table.link_to_root(root_a, root_b);
                 }
-                (Resolution::Bound(t), Resolution::Unbound { .. }) => {
-                    self.var_table.bind(root_b, t);
+                (Resolution::Bound(_), Resolution::Unbound { .. }) => {
+                    self.var_table.link_to_root(root_b, root_a);
                 }
                 (Resolution::Bound(_), Resolution::Bound(_)) => {
                     // Both already bound to a structured type. We
                     // can't reconcile here without recursing through
                     // `unify`, which the caller is in the middle of.
-                    // The mirror skips this case; main_subst's
-                    // collision check (`resolve` at the top of
-                    // `extend_subst`) already handled the semantic
-                    // unification. The drift is benign — var_table
-                    // is not yet a source of truth for reads.
+                    // Skip the mirror update; main_subst's collision
+                    // check (`resolve` at the top of `extend_subst`)
+                    // already handled the semantic unification. The
+                    // drift is benign — readers that haven't
+                    // migrated still see the right answer via
+                    // `main_subst`.
                 }
                 _ => {}
             }
