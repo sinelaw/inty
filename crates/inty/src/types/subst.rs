@@ -59,10 +59,16 @@ pub fn set_apply_subst_depth_limit_for_test(limit: usize) -> usize {
 
 /// RAII guard: increments [`APPLY_SUBST_DEPTH`] on construction
 /// (returning `None` if the limit was reached), decrements on drop.
-struct ApplySubstGuard;
+///
+/// Exposed at `pub(crate)` so the new destructive-unification path
+/// (`crate::infer::zonk`) shares the same depth bookkeeping —
+/// otherwise a zonk-deep walk would not interact with the existing
+/// "type too deep" diagnostic surfaced by
+/// `infer_program_with_env`.
+pub(crate) struct ApplySubstGuard;
 
 impl ApplySubstGuard {
-    fn try_enter() -> Option<Self> {
+    pub(crate) fn try_enter() -> Option<Self> {
         APPLY_SUBST_DEPTH.with(|d| {
             let cur = d.get();
             let limit = APPLY_SUBST_LIMIT.with(|l| l.get());
