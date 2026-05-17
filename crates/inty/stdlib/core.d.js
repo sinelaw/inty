@@ -82,7 +82,7 @@ const Boolean;
 /** const Promise: <T, E>{resolve: (T) => Promise<T>, reject: (E) => Promise<T>, all: (Promise<T>[]) => Promise<T[]>} */
 const Promise;
 
-/** const parseInt: (String) => Number */
+/** const parseInt: (s: String, radix?: Number) => Number */
 const parseInt;
 
 /** const parseFloat: (String) => Number */

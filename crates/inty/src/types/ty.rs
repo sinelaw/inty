@@ -564,6 +564,14 @@ impl Type {
         Type::static_func(params, ret)
     }
 
+    /// Create a static function type (no `this`) with a fully-
+    /// specified parameter list, wrapped in a callable row. Used by
+    /// stdlib declarations that mark trailing parameters optional
+    /// via `FuncParam::optional(fresh_pvar, ty)`.
+    pub fn simple_func_with_params(params: Vec<FuncParam>, ret: Type) -> Self {
+        Self::wrap_callable(Type::raw_func_with_params(None, params, ret))
+    }
+
     /// Raw function-type constructor with a `this`. Returns a bare
     /// `Type::Func` — only valid as the value of `<CALL>` inside a
     /// callable row, never as a top-level value type. Use `Type::func`
