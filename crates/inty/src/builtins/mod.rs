@@ -62,16 +62,44 @@ pub fn initial_env() -> TypeEnv {
 /// Used from `infer_member_from_type` when a property is accessed on a
 /// value of type `String`.
 pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
+    use crate::types::FuncParam;
     let n = Type::Number;
     let s = Type::String;
     let b = Type::Boolean;
+    // Helper: build a function signature where the final parameter is
+    // presence-polymorphic. Each call allocates a fresh `PVarName` so
+    // distinct invocations of the same method (e.g. `s1.slice(1)` and
+    // `s2.slice(0, 4)`) bind independently.
+    let optional_last = |state: &mut InferState,
+                         required: Vec<Type>,
+                         optional: Type,
+                         ret: Type|
+     -> Type {
+        let pvar = state.fresh_pvar();
+        let mut params: Vec<FuncParam> = required.into_iter().map(FuncParam::required).collect();
+        params.push(FuncParam::optional(pvar, optional));
+        Type::simple_func_with_params(params, ret)
+    };
     Some(match method {
-        "indexOf" => Type::simple_func(vec![s.clone()], n.clone()),
-        "lastIndexOf" => Type::simple_func(vec![s.clone()], n.clone()),
-        "substring" => Type::simple_func(vec![n.clone(), n.clone()], s.clone()),
-        "substr" => Type::simple_func(vec![n.clone(), n.clone()], s.clone()),
-        "slice" => Type::simple_func(vec![n.clone(), n.clone()], s.clone()),
-        "split" => Type::simple_func(vec![s.clone()], Type::array(s.clone())),
+        // `indexOf(searchValue, fromIndex?)` per ECMAScript §22.1.3.8.
+        // htmx hits this through chained calls without ever passing
+        // the second arg, but `String.prototype.indexOf` accepts it.
+        "indexOf" => optional_last(state, vec![s.clone()], n.clone(), n.clone()),
+        "lastIndexOf" => optional_last(state, vec![s.clone()], n.clone(), n.clone()),
+        // `substring(start, end?)`. htmx uses both 1-arg and 2-arg
+        // forms in different files.
+        "substring" => optional_last(state, vec![n.clone()], n.clone(), s.clone()),
+        "substr" => optional_last(state, vec![n.clone()], n.clone(), s.clone()),
+        // `slice(start, end?)` — the single biggest source of htmx
+        // arity errors. `str.slice(-2)` and `str.slice(0, -2)` both
+        // appear within the same file.
+        "slice" => optional_last(state, vec![n.clone()], n.clone(), s.clone()),
+        "split" => optional_last(
+            state,
+            vec![s.clone()],
+            n.clone(),
+            Type::array(s.clone()),
+        ),
         "trim" => Type::simple_func(vec![], s.clone()),
         "trimStart" => Type::simple_func(vec![], s.clone()),
         "trimEnd" => Type::simple_func(vec![], s.clone()),
@@ -81,12 +109,16 @@ pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> 
         "toLowerCase" => Type::simple_func(vec![], s.clone()),
         "charAt" => Type::simple_func(vec![n.clone()], s.clone()),
         "charCodeAt" => Type::simple_func(vec![n.clone()], n.clone()),
-        "startsWith" => Type::simple_func(vec![s.clone()], b.clone()),
-        "endsWith" => Type::simple_func(vec![s.clone()], b.clone()),
-        "includes" => Type::simple_func(vec![s.clone()], b.clone()),
+        // `startsWith(searchString, position?)` per §22.1.3.21;
+        // `endsWith(searchString, length?)` per §22.1.3.6.
+        "startsWith" => optional_last(state, vec![s.clone()], n.clone(), b.clone()),
+        "endsWith" => optional_last(state, vec![s.clone()], n.clone(), b.clone()),
+        "includes" => optional_last(state, vec![s.clone()], n.clone(), b.clone()),
         "repeat" => Type::simple_func(vec![n.clone()], s.clone()),
-        "padStart" => Type::simple_func(vec![n.clone(), s.clone()], s.clone()),
-        "padEnd" => Type::simple_func(vec![n.clone(), s.clone()], s.clone()),
+        // `padStart(targetLength, padString?)`. The default
+        // padString is a single space; callers commonly omit it.
+        "padStart" => optional_last(state, vec![n.clone()], s.clone(), s.clone()),
+        "padEnd" => optional_last(state, vec![n.clone()], s.clone(), s.clone()),
         "concat" => Type::simple_func(vec![s.clone()], s.clone()),
         "toString" => Type::simple_func(vec![], s.clone()),
         _ => {
@@ -132,6 +164,7 @@ pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
 /// from the caller's `InferState`; unification during the surrounding
 /// call expression binds them.
 pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
+    use crate::types::FuncParam;
     let n = Type::Number;
     let s = Type::String;
     let b = Type::Boolean;
@@ -142,12 +175,50 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
         "pop" => Type::simple_func(vec![], elem.clone()),
         "shift" => Type::simple_func(vec![], elem.clone()),
         "unshift" => Type::simple_func(vec![elem.clone()], n.clone()),
-        "indexOf" => Type::simple_func(vec![elem.clone()], n.clone()),
-        "lastIndexOf" => Type::simple_func(vec![elem.clone()], n.clone()),
-        "includes" => Type::simple_func(vec![elem.clone()], b.clone()),
-        "slice" => Type::simple_func(vec![n.clone(), n.clone()], arr.clone()),
+        // `Array.prototype.indexOf(searchElement, fromIndex?)`.
+        "indexOf" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::required(elem.clone()), FuncParam::optional(pvar, n.clone())],
+                n.clone(),
+            )
+        }
+        "lastIndexOf" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::required(elem.clone()), FuncParam::optional(pvar, n.clone())],
+                n.clone(),
+            )
+        }
+        "includes" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::required(elem.clone()), FuncParam::optional(pvar, n.clone())],
+                b.clone(),
+            )
+        }
+        // `Array.prototype.slice(start?, end?)` — both optional.
+        // Two presence vars, one per optional position. Note this is
+        // a different shape from `String.prototype.slice` (which has
+        // a required first arg in practical usage and inty's model).
+        "slice" => {
+            let p1 = state.fresh_pvar();
+            let p2 = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::optional(p1, n.clone()), FuncParam::optional(p2, n.clone())],
+                arr.clone(),
+            )
+        }
         "concat" => Type::simple_func(vec![arr.clone()], arr.clone()),
-        "join" => Type::simple_func(vec![s.clone()], s.clone()),
+        // `Array.prototype.join(separator?)` — separator defaults to
+        // ','. Most array→string conversions in real code omit it.
+        "join" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::optional(pvar, s.clone())],
+                s.clone(),
+            )
+        }
         "reverse" => Type::simple_func(vec![], arr.clone()),
         "sort" => Type::simple_func(vec![], arr.clone()),
         "fill" => Type::simple_func(vec![elem.clone()], arr.clone()),
