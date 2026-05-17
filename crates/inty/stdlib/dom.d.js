@@ -15,6 +15,84 @@
 // thing" like `cloneNode` or `closest` get a fresh row variable T per
 // call site. Callers can still chain methods on the result because of
 // row polymorphism.
+//
+// `Element<T>` and `Node<T>` below are the reusable forms of the inline
+// row that `getElementById` / `createElement` / `querySelector` etc.
+// produce. The `<T>` parameter is the "Element-like return type" for
+// methods that hand back another element (`closest`, `cloneNode`,
+// `appendChild`, `parentElement`, …). Users who annotate
+// `function f(elt: Element<a>) => ...` get the same chaining behaviour
+// the inline row supports, without spelling out the ~70-field row at
+// every annotation site. `Node<T>` is the same shape minus the methods
+// htmx-class code only ever calls on Element-shaped values; provided
+// for completeness so non-Element nodes (text, comments, fragments)
+// can be annotated narrowly.
+
+/** type Element<T> = {
+    value: String, textContent: String, innerHTML: String, outerHTML: String,
+    className: String, id: String, hidden: Boolean, disabled: Boolean,
+    checked: Boolean, autofocus: Boolean, loading: String, tabIndex: Number,
+    offsetWidth: Number, offsetHeight: Number, offsetTop: Number, offsetLeft: Number,
+    scrollWidth: Number, scrollHeight: Number, scrollTop: Number, scrollLeft: Number,
+    clientWidth: Number, clientHeight: Number, nodeName: String, tagName: String,
+    onclick: () => Undefined, oninput: () => Undefined, onchange: () => Undefined,
+    onkeydown: ({key: String}) => Undefined, onkeyup: ({key: String}) => Undefined,
+    onsubmit: () => Undefined, onload: () => Undefined,
+    classList: {
+        add: (String) => Undefined, remove: (String) => Undefined,
+        toggle: (String) => Boolean, contains: (String) => Boolean,
+        replace: (String, String) => Boolean
+    },
+    setAttribute: (String, String) => Undefined,
+    getAttribute: (String) => String,
+    hasAttribute: (String) => Boolean,
+    removeAttribute: (String) => Undefined,
+    toggleAttribute: (String) => Boolean,
+    addEventListener: (String, (T) => Undefined) => Undefined,
+    removeEventListener: (String, (T) => Undefined) => Undefined,
+    dispatchEvent: (T) => Boolean,
+    querySelector: (String) => T,
+    querySelectorAll: (String) => T[],
+    closest: (String) => T,
+    matches: (String) => Boolean,
+    contains: (T) => Boolean,
+    cloneNode: (Boolean) => T,
+    appendChild: (T) => T,
+    removeChild: (T) => T,
+    replaceChild: (T, T) => T,
+    insertBefore: (T, T) => T,
+    before: (T) => Undefined, after: (T) => Undefined,
+    append: (T) => Undefined, prepend: (T) => Undefined,
+    remove: () => Undefined, replaceWith: (T) => Undefined,
+    getBoundingClientRect: () => {top: Number, right: Number, bottom: Number, left: Number, width: Number, height: Number, x: Number, y: Number},
+    scrollIntoView: () => Undefined,
+    focus: () => Undefined, blur: () => Undefined,
+    click: () => Undefined,
+    submit: () => Undefined, requestSubmit: () => Undefined, reset: () => Undefined,
+    showModal: () => Undefined, show: () => Undefined, close: () => Undefined,
+    open: Boolean,
+    children: T[], parentElement: T,
+    firstElementChild: T, lastElementChild: T,
+    nextElementSibling: T, previousElementSibling: T,
+    style: {
+        setProperty: (String, String) => Undefined,
+        removeProperty: (String) => String,
+        getPropertyValue: (String) => String
+    },
+    form: T
+} */
+
+/** type Node<T> = {
+    nodeName: String, textContent: String,
+    parentElement: T, parentNode: T,
+    appendChild: (T) => T, removeChild: (T) => T,
+    insertBefore: (T, T) => T, replaceChild: (T, T) => T,
+    cloneNode: (Boolean) => T,
+    contains: (T) => Boolean,
+    addEventListener: (String, (T) => Undefined) => Undefined,
+    removeEventListener: (String, (T) => Undefined) => Undefined,
+    dispatchEvent: (T) => Boolean
+} */
 
 /** const document: <T>{
         getElementById: (String) => {
