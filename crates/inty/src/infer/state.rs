@@ -27,7 +27,13 @@ fn structural_norm(ty: &Type) -> Type {
             ret,
         } => Type::Func {
             this_type: this_type.as_ref().map(|t| Box::new(structural_norm(t))),
-            params: params.iter().map(structural_norm).collect(),
+            params: params
+                .iter()
+                .map(|p| crate::types::FuncParam {
+                    presence: p.presence.clone(),
+                    ty: structural_norm(&p.ty),
+                })
+                .collect(),
             ret: Box::new(structural_norm(ret)),
         },
         Type::Row(row) => Type::Row(crate::types::RowType {
@@ -319,7 +325,7 @@ impl InferState {
             } => this_type
                 .as_ref()
                 .and_then(|t| self.find_origin_in_type(t))
-                .or_else(|| params.iter().find_map(|p| self.find_origin_in_type(p)))
+                .or_else(|| params.iter().find_map(|p| self.find_origin_in_type(&p.ty)))
                 .or_else(|| self.find_origin_in_type(ret)),
             Type::Row(row) => row
                 .props
@@ -1377,7 +1383,7 @@ impl InferState {
                 this_type
                     .as_ref()
                     .map_or(false, |t| self.occurs_in_impl(var, t))
-                    || params.iter().any(|p| self.occurs_in_impl(var, p))
+                    || params.iter().any(|p| self.occurs_in_impl(var, &p.ty))
                     || self.occurs_in_impl(var, ret)
             }
 
@@ -1440,7 +1446,7 @@ impl InferState {
                     .map_or(false, |t| self.is_inside_row_type_impl(var, t, in_row))
                     || params
                         .iter()
-                        .any(|p| self.is_inside_row_type_impl(var, p, in_row))
+                        .any(|p| self.is_inside_row_type_impl(var, &p.ty, in_row))
                     || self.is_inside_row_type_impl(var, ret, in_row)
             }
 

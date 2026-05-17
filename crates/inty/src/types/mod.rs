@@ -12,8 +12,8 @@ pub use pretty::PrettyContext;
 pub use subst::{Subst, Substitutable};
 pub use tidy::TidyEnv;
 pub use ty::{
-    ClassName, FieldEntry, LitValue, ModuleType, PVarId, PVarName, Presence, PropName, QualType,
-    RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId, TypePred, TypeScheme,
+    ClassName, FieldEntry, FuncParam, LitValue, ModuleType, PVarId, PVarName, Presence, PropName,
+    QualType, RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId, TypePred, TypeScheme,
 };
 
 /// Reserved property name for the call signature of a callable row.

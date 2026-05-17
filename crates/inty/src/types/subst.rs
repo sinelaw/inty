@@ -370,7 +370,10 @@ impl Subst {
                     .map(|t| Box::new(self.flatten_type(t, visited))),
                 params: params
                     .iter()
-                    .map(|p| self.flatten_type(p, visited))
+                    .map(|p| super::ty::FuncParam {
+                        presence: self.resolve_presence(&p.presence),
+                        ty: self.flatten_type(&p.ty, visited),
+                    })
                     .collect(),
                 ret: Box::new(self.flatten_type(ret, visited)),
             },
@@ -515,7 +518,13 @@ impl Substitutable for Type {
                 ret,
             } => Type::Func {
                 this_type: this_type.as_ref().map(|t| Box::new(t.apply_subst(subst))),
-                params: params.iter().map(|p| p.apply_subst(subst)).collect(),
+                params: params
+                    .iter()
+                    .map(|p| super::ty::FuncParam {
+                        presence: subst.apply_presence(&p.presence),
+                        ty: p.ty.apply_subst(subst),
+                    })
+                    .collect(),
                 ret: Box::new(ret.apply_subst(subst)),
             },
 

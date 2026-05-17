@@ -960,7 +960,10 @@ fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
                 .map(|t| Box::new(substitute_alias_body(t, subst))),
             params: params
                 .iter()
-                .map(|p| substitute_alias_body(p, subst))
+                .map(|p| crate::types::FuncParam {
+                    presence: p.presence.clone(),
+                    ty: substitute_alias_body(&p.ty, subst),
+                })
                 .collect(),
             ret: Box::new(substitute_alias_body(ret, subst)),
         },
@@ -1083,7 +1086,7 @@ mod tests {
         let (_, params, ret) = ty.as_callable().expect("expected callable type");
         assert_eq!(params.len(), 1);
         assert!(
-            params[0].as_callable().is_some(),
+            params[0].ty.as_callable().is_some(),
             "nested function param should also be callable"
         );
         assert_eq!(*ret, Type::Boolean);
@@ -1230,7 +1233,10 @@ mod tests {
                     && p1
                         .iter()
                         .zip(p2.iter())
-                        .all(|(a, b)| types_structurally_equal(a, b, var_map))
+                        .all(|(a, b)| {
+                            a.presence == b.presence
+                                && types_structurally_equal(&a.ty, &b.ty, var_map)
+                        })
                     && types_structurally_equal(r1, r2, var_map)
             }
 
@@ -1403,7 +1409,10 @@ mod proptests {
                     && p1
                         .iter()
                         .zip(p2.iter())
-                        .all(|(a, b)| types_structurally_equal(a, b, var_map))
+                        .all(|(a, b)| {
+                            a.presence == b.presence
+                                && types_structurally_equal(&a.ty, &b.ty, var_map)
+                        })
                     && types_structurally_equal(r1, r2, var_map)
             }
 

@@ -93,6 +93,46 @@ impl Presence {
     }
 }
 
+/// One positional parameter of a `Type::Func`, carrying its presence
+/// alongside its type.
+///
+/// `Presence::Pre` is required (the vast majority of params).
+/// `Presence::Var(φ)` is polymorphic — the stdlib uses this to model
+/// JavaScript's optional trailing args, e.g. `slice(start, end?)`. A
+/// call site with N args unifies position-wise: surplus formal
+/// params (formal.len() > N) must have a presence that unifies with
+/// `Abs`. See `unify_impl`'s function arm for the rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FuncParam {
+    pub presence: Presence,
+    pub ty: Type,
+}
+
+impl FuncParam {
+    /// Required parameter — the default. Equivalent to the
+    /// pre-Shape-B representation where every parameter was just a
+    /// `Type`.
+    pub fn required(ty: Type) -> Self {
+        FuncParam {
+            presence: Presence::Pre,
+            ty,
+        }
+    }
+
+    /// Presence-polymorphic parameter. Used by the stdlib declarations
+    /// for JavaScript built-ins that accept an optional trailing
+    /// argument (`String.prototype.slice`, `padStart`, `replace`'s
+    /// limit, etc.). Each declaration site allocates a fresh
+    /// presence variable so per-call inference can bind it
+    /// independently.
+    pub fn optional(pvar: PVarName, ty: Type) -> Self {
+        FuncParam {
+            presence: Presence::Var(pvar),
+            ty,
+        }
+    }
+}
+
 /// One entry in a `RowType`'s props map: presence + type.
 ///
 /// A field written in source has `presence = Pre`. A field declared
@@ -382,9 +422,17 @@ pub enum Type {
     /// The this_type captures the type of `this` inside the function.
     /// - None: function doesn't reference `this` (static function)
     /// - Some(T): function references `this` with type T
+    ///
+    /// Each parameter carries a `Presence` alongside its type, modelling
+    /// optional positional arguments à la Garrigue 1994 ("Labeled and
+    /// optional arguments for OCaml"). `Presence::Pre` is the required
+    /// case (the vast majority of inty functions); `Presence::Abs` is
+    /// an unreachable annotation form; `Presence::Var(φ)` is the
+    /// polymorphic case that lets a single stdlib decl like
+    /// `slice(start, end?)` accept both 1-arg and 2-arg calls.
     Func {
         this_type: Option<Box<Type>>,
-        params: Vec<Type>,
+        params: Vec<FuncParam>,
         ret: Box<Type>,
     },
 
@@ -520,9 +568,29 @@ impl Type {
     /// `Type::Func` — only valid as the value of `<CALL>` inside a
     /// callable row, never as a top-level value type. Use `Type::func`
     /// for top-level callables.
+    ///
+    /// Every parameter is marked `Presence::Pre` (required). For
+    /// declarations that need optional params, build the
+    /// `Vec<FuncParam>` directly and use [`Type::raw_func_with_params`].
     pub fn raw_func(this_type: Type, params: Vec<Type>, ret: Type) -> Self {
         Type::Func {
             this_type: Some(Box::new(this_type)),
+            params: params.into_iter().map(FuncParam::required).collect(),
+            ret: Box::new(ret),
+        }
+    }
+
+    /// Like [`Self::raw_func`] but takes a fully-specified parameter
+    /// list, so optional parameters can be expressed. Used by the
+    /// stdlib's optional-arg declarations and by the type parser's
+    /// `name?: T` syntax.
+    pub fn raw_func_with_params(
+        this_type: Option<Type>,
+        params: Vec<FuncParam>,
+        ret: Type,
+    ) -> Self {
+        Type::Func {
+            this_type: this_type.map(Box::new),
             params,
             ret: Box::new(ret),
         }
@@ -535,7 +603,7 @@ impl Type {
     pub fn raw_static_func(params: Vec<Type>, ret: Type) -> Self {
         Type::Func {
             this_type: None,
-            params,
+            params: params.into_iter().map(FuncParam::required).collect(),
             ret: Box::new(ret),
         }
     }
@@ -791,7 +859,7 @@ impl Type {
     /// (either a bare `Type::Func` or a callable row carrying a
     /// `<CALL>` field). For callable rows, only the call signature is
     /// returned — extras on the row are ignored.
-    pub fn as_callable(&self) -> Option<(Option<&Type>, &[Type], &Type)> {
+    pub fn as_callable(&self) -> Option<(Option<&Type>, &[FuncParam], &Type)> {
         match self {
             Type::Func {
                 this_type,
@@ -869,7 +937,7 @@ impl Type {
 
     /// Get the function components if this is a Func.
     /// Returns (this_type, params, ret) where this_type is None for static functions.
-    pub fn as_func(&self) -> Option<(Option<&Type>, &[Type], &Type)> {
+    pub fn as_func(&self) -> Option<(Option<&Type>, &[FuncParam], &Type)> {
         match self {
             Type::Func {
                 this_type,
@@ -916,7 +984,10 @@ impl Type {
                     t.collect_free_pvars(pvars);
                 }
                 for p in params {
-                    p.collect_free_pvars(pvars);
+                    if let Presence::Var(v) = &p.presence {
+                        pvars.insert(v.clone());
+                    }
+                    p.ty.collect_free_pvars(pvars);
                 }
                 ret.collect_free_pvars(pvars);
             }
@@ -987,7 +1058,7 @@ impl Type {
                     this.collect_free_vars(vars);
                 }
                 for p in params {
-                    p.collect_free_vars(vars);
+                    p.ty.collect_free_vars(vars);
                 }
                 ret.collect_free_vars(vars);
             }
