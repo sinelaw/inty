@@ -18,6 +18,20 @@ use super::state::AliasDef;
 /// Result type for type annotation parsing.
 pub type ParseResult<T> = Result<T, TypeError>;
 
+/// Pre-resolved JSDoc `typeof X` lookup table. The inference caller
+/// pre-instantiates each `typeof` reference (so fresh-var allocation
+/// happens against the outer counter, in the same range the rest of
+/// the annotation will allocate from) and hands the parser a map from
+/// the bare identifier `X` to the instantiated type.
+///
+/// JSDoc's `typeof X` (TypeScript convention) refers to the *value*
+/// type of `X`, which is the scheme instantiated to a mono type. We
+/// follow that convention — the result of a `typeof` use is always a
+/// monomorphic snapshot of the named binding's scheme, not a re-bound
+/// polymorphic scheme. Pre-instantiation cleanly bypasses borrow
+/// problems with threading `&mut InferState` through the parser.
+pub type TypeOfTable = HashMap<String, Type>;
+
 /// Parser for type annotation strings.
 pub struct TypeParser<'a> {
     /// The input string.
@@ -42,6 +56,13 @@ pub struct TypeParser<'a> {
     /// scope. When `Foo<args>` is parsed and `Foo` is an alias, the
     /// args are substituted into a fresh copy of the alias body.
     aliases: Option<&'a HashMap<String, AliasDef>>,
+    /// Pre-built lookup for JSDoc `typeof X`. Built at the call site
+    /// (see `rows.rs::infer_object`) by scanning the annotation
+    /// content for `typeof IDENT` substrings and pre-instantiating
+    /// each one against the outer inference scope. None when no
+    /// resolver context is available (alias-body parsing, free-form
+    /// type-string parsing in unit tests).
+    typeof_table: Option<&'a TypeOfTable>,
 }
 
 impl<'a> TypeParser<'a> {
@@ -56,6 +77,7 @@ impl<'a> TypeParser<'a> {
             next_pvar_id: 0,
             allow_quantifiers: true, // Quantifiers allowed at top level
             aliases: None,
+            typeof_table: None,
         }
     }
 
@@ -76,7 +98,18 @@ impl<'a> TypeParser<'a> {
             next_pvar_id: 0,
             allow_quantifiers: true,
             aliases: Some(aliases),
+            typeof_table: None,
         }
+    }
+
+    /// Install a [`TypeOfTable`] used to resolve `typeof X` to the
+    /// pre-instantiated type of `X` from the calling inference scope.
+    /// Must be called before `parse`. The table borrows from the
+    /// caller's stack frame; the parser holds it only for the
+    /// duration of one annotation parse.
+    pub fn with_typeof(mut self, table: &'a TypeOfTable) -> Self {
+        self.typeof_table = Some(table);
+        self
     }
 
     /// Allocate a fresh flexible presence variable. Used when an
@@ -364,10 +397,43 @@ impl<'a> TypeParser<'a> {
             Some(c) if c.is_ascii_digit() || c == '-' => self.parse_number_literal_type(),
             Some(c) if self.is_ident_start(Some(c)) => {
                 let ident = self.parse_ident()?;
+                // JSDoc `typeof X` (TypeScript convention) resolves to
+                // the *value* type of the binding `X` from the
+                // enclosing scope, instantiated to a mono type. We
+                // accept it as a leading-keyword primitive; if no
+                // resolver was supplied (alias bodies, type aliases at
+                // top-level), `typeof` is rejected with a hint instead
+                // of silently degrading to a row property.
+                if ident == "typeof" {
+                    self.skip_whitespace();
+                    let target = self.parse_ident()?;
+                    return self.resolve_typeof(&target);
+                }
                 self.ident_to_type(&ident)
             }
             Some(c) => Err(self.error(format!("unexpected character '{}'", c))),
             None => Err(self.error("unexpected end of type annotation".to_string())),
+        }
+    }
+
+    /// Resolve `typeof NAME` to the pre-instantiated type from the
+    /// enclosing scope. Falls back to a parse error if no table was
+    /// installed (alias-body or top-level annotation parsing) or
+    /// `NAME` wasn't pre-resolved at the call site.
+    fn resolve_typeof(&mut self, name: &str) -> ParseResult<Type> {
+        let Some(table) = self.typeof_table else {
+            return Err(self.error(
+                "`typeof X` requires an enclosing inference scope — this position only supports \
+                 alias-body type expressions"
+                    .to_string(),
+            ));
+        };
+        match table.get(name) {
+            Some(ty) => Ok(ty.clone()),
+            None => Err(self.error(format!(
+                "`typeof {}`: '{}' is not a value in scope",
+                name, name
+            ))),
         }
     }
 
@@ -812,6 +878,29 @@ pub fn parse_type_annotation_with_pvars(
     aliases: &HashMap<String, AliasDef>,
 ) -> ParseResult<(Type, HashMap<String, u32>, u32)> {
     let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
+    parser.seed_pvar_id(start_pvar_id);
+    let ty = parser.parse()?;
+    Ok((ty, parser.type_vars.clone(), parser.next_pvar_id_value()))
+}
+
+/// As [`parse_type_annotation_with_pvars`] but also installs a
+/// [`TypeOfTable`] so the annotation can reference the surrounding
+/// scope through `typeof Name`. The caller pre-instantiates each
+/// `typeof` reference (allocating fresh IDs from its own counter,
+/// which it advances accordingly before calling this function). The
+/// table is consulted directly by the parser. Returns the parsed
+/// type, the type-variable map, and the next free pvar id so the
+/// caller can keep its pvar counter in sync.
+pub fn parse_type_annotation_with_typeof(
+    content: &str,
+    span: Span,
+    start_var_id: u32,
+    start_pvar_id: u32,
+    aliases: &HashMap<String, AliasDef>,
+    typeof_table: &TypeOfTable,
+) -> ParseResult<(Type, HashMap<String, u32>, u32)> {
+    let mut parser =
+        TypeParser::with_aliases(content, span, start_var_id, aliases).with_typeof(typeof_table);
     parser.seed_pvar_id(start_pvar_id);
     let ty = parser.parse()?;
     Ok((ty, parser.type_vars.clone(), parser.next_pvar_id_value()))

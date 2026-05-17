@@ -1,19 +1,101 @@
 //! Object literals, member access, and row polymorphism.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::lexer::Span;
-use crate::parser::ast::{Expr, PropDef, PropKey};
+use crate::parser::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
 use crate::types::{FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
-use super::super::type_parser::{
-    parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
-};
+use super::super::type_parser::{parse_type_annotation_with_typeof, TypeOfTable};
 use super::super::InferResult;
 
+/// Render a [`TypeError`] from the annotation parser as a short
+/// warning message. We keep just the human-readable text; the span
+/// is supplied separately when the warning is logged.
+fn format_parse_error(e: &crate::error::TypeError) -> String {
+    use crate::error::TypeError;
+    match e {
+        TypeError::TypeAnnotationParse { message, .. } => message.clone(),
+        other => format!("{}", other),
+    }
+}
+
+/// Scan a type-annotation content string for `typeof IDENT` references
+/// and return the bare identifiers in source order. Whitespace-only
+/// matches and identifiers that appear inside string-literal type
+/// expressions are accepted as false positives — they don't cause
+/// harm (we'd attempt a lookup, find nothing, and the parser would
+/// error at parse time, which is the desired behaviour).
+///
+/// JSDoc / TS convention requires `typeof` as a keyword preceding the
+/// identifier with at least one whitespace separator. We match that
+/// shape so `typeofKey: T` (a row property literally named `typeofKey`)
+/// doesn't false-positive.
+fn collect_typeof_names(content: &str) -> Vec<String> {
+    let bytes = content.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 6 < bytes.len() {
+        if &bytes[i..i + 6] != b"typeof" {
+            i += 1;
+            continue;
+        }
+        let prefix_ok = i == 0
+            || matches!(
+                bytes[i - 1],
+                b' ' | b'\t' | b'\n' | b'\r' | b'(' | b',' | b'|' | b'<' | b'{'
+            );
+        let after = bytes[i + 6];
+        let suffix_ok = matches!(after, b' ' | b'\t' | b'\n' | b'\r');
+        if !prefix_ok || !suffix_ok {
+            i += 6;
+            continue;
+        }
+        let mut j = i + 6;
+        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+            j += 1;
+        }
+        let id_start = j;
+        while j < bytes.len()
+            && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'$')
+        {
+            j += 1;
+        }
+        if j > id_start {
+            out.push(content[id_start..j].to_string());
+        }
+        i = j.max(i + 6);
+    }
+    out
+}
+
 impl InferState {
+    /// Pre-instantiate every `typeof X` reference found in `content`
+    /// into a lookup table the type parser consults at parse time.
+    /// Identifiers absent from `env` are silently skipped — the parser
+    /// will then produce a clean `is not a value in scope` error
+    /// pointing at the annotation span (better than failing in the
+    /// scanner where we have less context).
+    pub(in crate::infer) fn build_typeof_table(
+        &mut self,
+        env: &TypeEnv,
+        content: &str,
+    ) -> TypeOfTable {
+        let mut table: TypeOfTable = HashMap::new();
+        for name in collect_typeof_names(content) {
+            if table.contains_key(&name) {
+                continue;
+            }
+            if let Some(scheme) = env.lookup(&name).cloned() {
+                let ty = self.instantiate(&scheme);
+                table.insert(name, ty);
+            }
+        }
+        table
+    }
+
     /// Infer the type of an object literal.
     ///
     /// Properties are walked in source order. Object spreads
@@ -56,22 +138,71 @@ impl InferState {
                     // declaration's annotation is.
                     let prop_type = if let Some(ann) = type_annotation {
                         let ann_span = Span::new(ann.span.start, ann.span.end);
-                        let (annotated_type, var_map, next_pvar) =
-                            parse_type_annotation_with_pvars(
-                                &ann.content,
-                                ann_span,
-                                self.next_var_id(),
-                                self.next_pvar_id(),
-                                &self.type_aliases,
-                            )?;
+                        // Pre-instantiate any `typeof X` references so
+                        // the parser sees a flat lookup table; saves
+                        // threading `&mut InferState` into the parser.
+                        let typeof_table = self.build_typeof_table(env, &ann.content);
+                        let parse_result = parse_type_annotation_with_typeof(
+                            &ann.content,
+                            ann_span,
+                            self.next_var_id(),
+                            self.next_pvar_id(),
+                            &self.type_aliases,
+                            &typeof_table,
+                        );
+                        let is_jsdoc = ann.kind == AnnotationKind::JsDoc;
+                        let (annotated_type, var_map, next_pvar) = match parse_result {
+                            Ok(triple) => triple,
+                            Err(e) if is_jsdoc => {
+                                // JSDoc annotations are best-effort hints
+                                // (TypeScript ignores unrecognised JSDoc
+                                // tags); a `@type` that references a
+                                // TypeScript-only alias inty doesn't
+                                // model shouldn't fail the whole field.
+                                // Surface the parse failure as a
+                                // non-fatal warning and fall back to the
+                                // value's synthesised type.
+                                self.warn(
+                                    ann_span,
+                                    format!(
+                                        "ignoring `@type` annotation: {}",
+                                        format_parse_error(&e)
+                                    ),
+                                );
+                                let inferred = value_type.widen_fresh_literals();
+                                props.insert(prop_name, FieldEntry::pre(inferred));
+                                continue;
+                            }
+                            Err(e) => return Err(e.into()),
+                        };
                         self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
-                        // Annotation first: it's what the user wrote, so
-                        // the error message reads as "expected <annotated>,
-                        // found <value>".
-                        self.subsume(ann_span, &value_type, &annotated_type)?;
+                        // TypeScript's JSDoc convention is to allow a
+                        // `null` / `undefined` placeholder initialiser
+                        // for a `@type`-annotated field — the field is
+                        // declared *as if* it were the annotated type
+                        // and filled in by later assignment, exactly
+                        // the htmx public-API pattern. We mirror that:
+                        // when the source-side syntax is `@type` and
+                        // the value is a literal placeholder, skip the
+                        // subsume check. Inline `/*: T */` annotations
+                        // and non-placeholder values still check
+                        // normally so honest mismatches surface.
+                        let is_placeholder = matches!(
+                            value,
+                            Expr::Lit {
+                                value: Literal::Null | Literal::Undefined,
+                                ..
+                            }
+                        );
+                        if !(is_jsdoc && is_placeholder) {
+                            // Annotation first: it's what the user wrote,
+                            // so the error message reads as "expected
+                            // <annotated>, found <value>".
+                            self.subsume(ann_span, &value_type, &annotated_type)?;
+                        }
                         self.apply_subst(&annotated_type)
                     } else {
                         // Synthesis-mode object literal: widen primitive
@@ -280,22 +411,54 @@ impl InferState {
                     if let Some(ann) = type_annotation {
                         // An inline annotation overrides the
                         // contextual expected — we still check the
-                        // value against the user-stated type.
+                        // value against the user-stated type, with
+                        // the same JSDoc-placeholder relaxation as
+                        // the synthesis arm (see `infer_object`).
                         let ann_span = Span::new(ann.span.start, ann.span.end);
-                        let (annotated_type, var_map, next_pvar) =
-                            parse_type_annotation_with_pvars(
-                                &ann.content,
-                                ann_span,
-                                self.next_var_id(),
-                                self.next_pvar_id(),
-                                &self.type_aliases,
-                            )?;
+                        let typeof_table = self.build_typeof_table(env, &ann.content);
+                        let is_jsdoc = ann.kind == AnnotationKind::JsDoc;
+                        let parse_result = parse_type_annotation_with_typeof(
+                            &ann.content,
+                            ann_span,
+                            self.next_var_id(),
+                            self.next_pvar_id(),
+                            &self.type_aliases,
+                            &typeof_table,
+                        );
+                        let (annotated_type, var_map, next_pvar) = match parse_result {
+                            Ok(triple) => triple,
+                            Err(e) if is_jsdoc => {
+                                self.warn(
+                                    ann_span,
+                                    format!(
+                                        "ignoring `@type` annotation: {}",
+                                        format_parse_error(&e)
+                                    ),
+                                );
+                                let value_type = self.check_expr(env, value, &expected_prop_ty)?;
+                                props.insert(prop_name, value_type);
+                                continue;
+                            }
+                            Err(e) => return Err(e.into()),
+                        };
                         self.bump_pvar_id_to(next_pvar);
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
-                        let value_type = self.check_expr(env, value, &annotated_type)?;
-                        self.subsume(ann_span, &value_type, &expected_prop_ty)?;
+                        let is_placeholder = matches!(
+                            value,
+                            Expr::Lit {
+                                value: Literal::Null | Literal::Undefined,
+                                ..
+                            }
+                        );
+                        if is_jsdoc && is_placeholder {
+                            // Skip the inner check — placeholder accepts.
+                            self.subsume(ann_span, &annotated_type, &expected_prop_ty)?;
+                        } else {
+                            let value_type = self.check_expr(env, value, &annotated_type)?;
+                            self.subsume(ann_span, &value_type, &expected_prop_ty)?;
+                        }
                         props.insert(prop_name, self.apply_subst(&annotated_type));
                     } else {
                         let value_type = self.check_expr(env, value, &expected_prop_ty)?;

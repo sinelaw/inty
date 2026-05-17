@@ -1116,6 +1116,7 @@ impl Parser {
                         name: key_name.clone(),
                         content,
                         span: Span::new(type_start, type_end),
+                        kind: AnnotationKind::Inline,
                     });
                 }
 
@@ -2964,6 +2965,14 @@ impl Parser {
     fn parse_property_definition(&mut self) -> Result<PropDef> {
         let start = self.current_span().start;
 
+        // JSDoc `@type` annotation directly preceding this property.
+        // Recorded by the scanner with an empty name + JsDoc kind so we
+        // attach it to the NEXT named binding rather than the previous
+        // one (the inline `/*: T */` form attaches backwards). Captured
+        // here unconditionally so spreads and methods can still pick it
+        // up if needed; today we only thread it through Property nodes.
+        let pending_jsdoc = self.try_get_jsdoc_type_annotation(self.current_span());
+
         // `...expr` spread element. Right-bias is implicit in the
         // typing rule: properties later in source order win.
         if self.check(&Token::DotDotDot) {
@@ -3043,7 +3052,7 @@ impl Parser {
                         name: name.clone(),
                         span: key_span,
                     },
-                    type_annotation: None,
+                    type_annotation: pending_jsdoc,
                     span: Span::new(start, self.prev_span().end),
                 });
             }
@@ -3051,12 +3060,16 @@ impl Parser {
 
         // Per-field type annotation: `key /*: T */: value`. We look it up by
         // the key name *before* consuming the colon, so the scanner's
-        // `last_ident = key` at the time of the `/*:` lines up.
-        let type_annotation = if let PropKey::Ident(name) = &key {
+        // `last_ident = key` at the time of the `/*:` lines up. The
+        // inline form wins over a preceding JSDoc `@type` if both are
+        // present (the user is being more specific) — that's the same
+        // tie-break the class-body field parser uses (see line ~1146).
+        let inline_annotation = if let PropKey::Ident(name) = &key {
             self.try_get_type_annotation(self.current_span(), name)
         } else {
             None
         };
+        let type_annotation = inline_annotation.or(pending_jsdoc);
 
         // Regular property
         self.expect(&Token::Colon)?;
@@ -3528,11 +3541,7 @@ impl Parser {
             if ann.span.end <= before_span.start {
                 if ann.name == name {
                     self.annotation_pos += 1;
-                    return Some(TypeAnnotation {
-                        name: ann.name.clone(),
-                        content: ann.content.clone(),
-                        span: ann.span,
-                    });
+                    return Some(ann.clone());
                 }
                 // Skip annotations that don't match
                 self.annotation_pos += 1;
@@ -3556,17 +3565,35 @@ impl Parser {
             if ann.span.end <= before_span.start {
                 if ann.name == name {
                     self.annotation_pos += 1;
-                    return Some(TypeAnnotation {
-                        name: ann.name.clone(),
-                        content: ann.content.clone(),
-                        span: ann.span,
-                    });
+                    return Some(ann.clone());
                 }
                 // Skip annotations that don't match
                 self.annotation_pos += 1;
                 continue;
             }
             break;
+        }
+        None
+    }
+
+    /// Try to get a JSDoc `@type` annotation (recorded by the scanner
+    /// with `kind = JsDoc` and an empty `name`, signifying "attaches
+    /// to the next binding") that ends before the given position.
+    /// Consumes the annotation if found, returning it for the caller
+    /// to attach to whichever property / declarator opens next.
+    fn try_get_jsdoc_type_annotation(&mut self, before_span: Span) -> Option<TypeAnnotation> {
+        while self.annotation_pos < self.type_annotations.len() {
+            let ann = &self.type_annotations[self.annotation_pos];
+            if ann.span.end > before_span.start {
+                break;
+            }
+            if ann.kind == AnnotationKind::JsDoc && ann.name.is_empty() {
+                self.annotation_pos += 1;
+                return Some(ann.clone());
+            }
+            // Non-JSDoc annotation that didn't match by name at its
+            // expected attach point — skip so we keep scanning.
+            self.annotation_pos += 1;
         }
         None
     }

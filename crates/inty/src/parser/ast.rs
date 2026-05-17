@@ -333,12 +333,31 @@ pub enum ChainSegment {
     },
 }
 
+/// Where the annotation came from. Affects how inference treats the
+/// initialiser. `Inline` annotations (TS-style `field: T` and the
+/// inty-native `/*: T */`) check that the initialiser subsumes the
+/// annotated type. `JsDoc` annotations (`/** @type {T} */`) follow
+/// TypeScript's JSDoc semantics: a literal `null` / `undefined`
+/// initialiser is treated as a placeholder and skipped — the
+/// declaration is what types the field, not the seed value. This
+/// matches the htmx-style `/** @type {typeof helper} */ field: null`
+/// pattern that fills the field via later assignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnnotationKind {
+    /// `/*: T */`, TS-style `field: T`, or `/** name: T */` doc form.
+    #[default]
+    Inline,
+    /// `/** @type {T} */` doc form attached to the next binding.
+    JsDoc,
+}
+
 /// Type annotation from comments: /** name: Type */
 #[derive(Debug, Clone)]
 pub struct TypeAnnotation {
     pub name: String,
     pub content: String,
     pub span: Source,
+    pub kind: AnnotationKind,
 }
 
 /// User-defined generic type alias parsed from a doc comment of the
