@@ -308,6 +308,25 @@ pub fn write_error<W: Write>(
                         .to_string(),
                 ),
             ),
+            TypeError::OptionalParameterFollowedByRequired {
+                optional_idx,
+                required_idx,
+                span,
+            } => (
+                format!(
+                    "Required parameter at position {} cannot follow optional parameter at \
+                     position {}",
+                    required_idx, optional_idx
+                ),
+                *span,
+                Some(
+                    "JavaScript calls are positional; an omitted middle argument is \
+                     indistinguishable from a missing tail. Reorder the parameter list so \
+                     every optional parameter sits after every required one, or mark the \
+                     trailing parameter optional too."
+                        .to_string(),
+                ),
+            ),
             TypeError::EscapedSkolem { span } => (
                 "Escaped skolem variable: type is not polymorphic enough".to_string(),
                 *span,

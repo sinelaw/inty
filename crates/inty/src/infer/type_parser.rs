@@ -253,10 +253,21 @@ impl<'a> TypeParser<'a> {
         match self.try_parse_func_type() {
             Ok(ty) => Ok(ty),
             Err(e) => {
-                // Don't backtrack for Rank-1 restriction errors - they indicate
-                // we've successfully identified this as a function type but the
-                // nested type is invalid (would be Rank-2 or higher).
-                if matches!(e, TypeError::Rank1Restriction { .. }) {
+                // Don't backtrack for errors that committed to the
+                // function-type interpretation — Rank-1 is one
+                // such case (we identified the function shape but
+                // the nested type was Rank-2+); the optional-after-
+                // required check is another (we parsed the full
+                // signature and rejected it on a semantic ground).
+                // Both surface their dedicated variants so
+                // backtracking to grouped-type would replace a
+                // precise diagnostic with a confusing "unknown
+                // type 'a'" from re-parsing the leftover input.
+                if matches!(
+                    e,
+                    TypeError::Rank1Restriction { .. }
+                        | TypeError::OptionalParameterFollowedByRequired { .. }
+                ) {
                     return Err(e);
                 }
                 // Backtrack and try as grouped type for syntax errors
@@ -357,7 +368,18 @@ impl<'a> TypeParser<'a> {
         self.expect_char(')')?;
         self.skip_whitespace();
 
-        // Expect '=>'
+        // Expect '=>'. From this point on we're committed to a
+        // function type — any error returned is a function-type
+        // diagnostic, not a "this might be a grouped type, try
+        // again" backtrackable parse failure. That distinction
+        // matters for the ts(1016)-style check below: the wrapper
+        // `parse_func_or_grouped` backtracks on any error from
+        // `parse_func_type` and falls back to `parse_grouped_type`,
+        // which would re-parse our well-formed function-with-bad-
+        // optionality as a degenerate grouped expression and
+        // surface a confusing "unknown type 'a'" error instead of
+        // the real diagnostic. Running the check after `=>` is
+        // matched puts it past the backtrack point.
         self.expect_str("=>")?;
         self.skip_whitespace();
 
@@ -365,6 +387,40 @@ impl<'a> TypeParser<'a> {
 
         // Restore the original setting
         self.allow_quantifiers = old_allow;
+
+        // Reject "required after optional" — `(a?: T, b: U) => V`
+        // and `(a: T, b?: U, c: V) => W` are TypeScript ts(1016)
+        // errors for good reason: under positional-only calling
+        // (which is all JavaScript supports), the trailing
+        // required parameter forces every legal call to supply
+        // the optional one too, silently neutering the `?`.
+        // Garrigue 1994 §3.3 allows this shape only when labeled
+        // arguments disambiguate the missing slot; inty has no
+        // labels, so the OCaml escape hatch doesn't apply and we
+        // follow the TypeScript convention. Surface as the
+        // dedicated `OptionalParameterFollowedByRequired` variant
+        // so the `parse_func_or_grouped` wrapper recognises the
+        // diagnostic as committed-function-type and doesn't
+        // backtrack to retry as a grouped expression.
+        let mut seen_optional = None;
+        for (idx, p) in params.iter().enumerate() {
+            match &p.presence {
+                crate::types::Presence::Pre => {
+                    if let Some(opt_idx) = seen_optional {
+                        return Err(TypeError::OptionalParameterFollowedByRequired {
+                            optional_idx: opt_idx,
+                            required_idx: idx,
+                            span: self.span,
+                        });
+                    }
+                }
+                crate::types::Presence::Var(_) | crate::types::Presence::Abs => {
+                    if seen_optional.is_none() {
+                        seen_optional = Some(idx);
+                    }
+                }
+            }
+        }
 
         Ok(Type::wrap_callable(Type::raw_func_with_params(
             None, params, ret_type,
@@ -1130,6 +1186,55 @@ mod tests {
         let (_, params, _) = ty.as_callable().expect("callable shape");
         assert!(matches!(params[0].presence, crate::types::Presence::Pre));
         assert!(matches!(params[1].presence, crate::types::Presence::Pre));
+    }
+
+    /// Optional-then-required is rejected at parse time via the
+    /// dedicated `OptionalParameterFollowedByRequired` variant —
+    /// matches TypeScript ts(1016). Tests both the leading-
+    /// optional case and the optional-in-the-middle case.
+    #[test]
+    fn rejects_required_after_optional() {
+        let src = "(a?: Number, b: Number) => String";
+        let err = parse_type_annotation(src, Span::new(0, src.len()), 1000).unwrap_err();
+        match err {
+            crate::error::TypeError::OptionalParameterFollowedByRequired {
+                optional_idx,
+                required_idx,
+                ..
+            } => {
+                assert_eq!(optional_idx, 0);
+                assert_eq!(required_idx, 1);
+            }
+            other => panic!("expected OptionalParameterFollowedByRequired, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rejects_required_after_optional_middle() {
+        let src = "(a: Number, b?: Number, c: Number) => String";
+        let err = parse_type_annotation(src, Span::new(0, src.len()), 1000).unwrap_err();
+        match err {
+            crate::error::TypeError::OptionalParameterFollowedByRequired {
+                optional_idx,
+                required_idx,
+                ..
+            } => {
+                assert_eq!(optional_idx, 1);
+                assert_eq!(required_idx, 2);
+            }
+            other => panic!("expected OptionalParameterFollowedByRequired, got: {:?}", other),
+        }
+    }
+
+    /// Multiple trailing optionals are fine — the canonical case
+    /// for stdlib decls like `replace(pattern, replacement, limit?)`.
+    #[test]
+    fn accepts_multiple_trailing_optionals() {
+        let ty = parse("(a: Number, b?: Number, c?: Number) => String");
+        let (_, params, _) = ty.as_callable().expect("callable shape");
+        assert!(matches!(params[0].presence, crate::types::Presence::Pre));
+        assert!(matches!(params[1].presence, crate::types::Presence::Var(_)));
+        assert!(matches!(params[2].presence, crate::types::Presence::Var(_)));
     }
 
     #[test]
