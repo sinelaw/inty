@@ -79,7 +79,13 @@
         removeProperty: (String) => String,
         getPropertyValue: (String) => String
     },
-    form: T
+    form: T,
+    getRootNode: ({composed: Boolean}) => T,
+    compareDocumentPosition: (T) => Number,
+    async: Boolean,
+    nonce: String,
+    src: String,
+    defer: Boolean
 } */
 
 /** type Node<T> = {
@@ -146,7 +152,10 @@
                 removeProperty: (String) => String,
                 getPropertyValue: (String) => String
             },
-            form: T
+            form: T,
+            getRootNode: ({composed: Boolean}) => T,
+            compareDocumentPosition: (T) => Number,
+            async: Boolean, nonce: String, src: String, defer: Boolean
         },
         createElement: (String) => {
             value: String, textContent: String, innerHTML: String, outerHTML: String,
@@ -199,8 +208,12 @@
                 removeProperty: (String) => String,
                 getPropertyValue: (String) => String
             },
-            form: T
+            form: T,
+            getRootNode: ({composed: Boolean}) => T,
+            compareDocumentPosition: (T) => Number,
+            async: Boolean, nonce: String, src: String, defer: Boolean
         },
+        createDocumentFragment: () => T,
         querySelector: (String) => T,
         querySelectorAll: (String) => T[],
         addEventListener: (String, (T) => Undefined) => Undefined,
@@ -284,7 +297,9 @@ const document;
         alert: (String) => Undefined,
         confirm: (String) => Boolean,
         prompt: (String) => String,
-        matchMedia: (String) => {matches: Boolean, addEventListener: (String, (T) => Undefined) => Undefined}
+        matchMedia: (String) => {matches: Boolean, addEventListener: (String, (T) => Undefined) => Undefined},
+        onpopstate: (T) => Undefined,
+        origin: String
     } */
 const window;
 
@@ -483,7 +498,10 @@ const localStorage;
 // `new URL(href)`. The two-argument `new URL(href, base)` form is out
 // of scope under the unified callable-row design — callers compose
 // the absolute href first.
-/** const URL: (String) => {
+// `URL` per the WHATWG URL spec. Accepts an optional second `base`
+// argument used to resolve a relative URL against an absolute one;
+// htmx's `normalizePath` uses both 1-arg and 2-arg forms.
+/** const URL: (url: String, base?: String) => {
         href: String,
         protocol: String,
         host: String,
@@ -641,10 +659,36 @@ const HTMLScriptElement;
 /** const HTMLTemplateElement: {} */
 const HTMLTemplateElement;
 
-/** const Node: {} */
+// `Node` is used both as an `instanceof` operand and as a holder for
+// the document-position constants (`Node.DOCUMENT_POSITION_PRECEDING`
+// etc.) that `compareDocumentPosition` returns. Carry the constants
+// here so `node.compareDocumentPosition(other) === Node.DOCUMENT_POSITION_*`
+// expressions type-check. Values are the actual bit positions per
+// DOM Living Standard §4.4.
+/** const Node: {
+        ELEMENT_NODE: Number,
+        TEXT_NODE: Number,
+        COMMENT_NODE: Number,
+        DOCUMENT_NODE: Number,
+        DOCUMENT_FRAGMENT_NODE: Number,
+        DOCUMENT_POSITION_DISCONNECTED: Number,
+        DOCUMENT_POSITION_PRECEDING: Number,
+        DOCUMENT_POSITION_FOLLOWING: Number,
+        DOCUMENT_POSITION_CONTAINS: Number,
+        DOCUMENT_POSITION_CONTAINED_BY: Number,
+        DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: Number
+    } */
 const Node;
 
-/** const Document: {} */
+// `Document` carries the modern static `parseHTMLUnsafe` factory
+// (HTML Living Standard, 2024+) in addition to its instanceof use.
+// The return type is opaque (T) since the produced Document carries
+// the same row shape as `document` but inty can't yet express that
+// shared identity without recursion; users get back a row variable
+// they can chain methods on via row polymorphism.
+/** const Document: <T>{
+        parseHTMLUnsafe: (String) => T
+    } */
 const Document;
 
 /** const DocumentFragment: {} */
