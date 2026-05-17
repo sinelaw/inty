@@ -24,20 +24,22 @@ use std::time::{Duration, Instant};
 
 use inty::parser::parse;
 use inty::stdlib::initial_env_with_stdlib;
+use inty::worker::INFERENCE_STACK_SIZE;
 
 /// Wall-clock budget for the fixture. Generous relative to actual
 /// runtime so a slow CI machine doesn't false-positive, but tight
 /// enough that an asymptotic regression trips it.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Run `inty` inference on the fixture in a worker thread with the
-/// same 64 MB stack the CLI uses (see `crates/inty-cli/src/main.rs`).
-/// Return once inference finishes, or panic on timeout.
+/// Run `inty` inference on the fixture in a worker thread sized
+/// the same as the production CLI / LSP path
+/// (`INFERENCE_STACK_SIZE` from `inty::worker`). Return once
+/// inference finishes, or panic on timeout.
 fn run_with_timeout(source: String) {
     let (tx, rx) = mpsc::channel::<()>();
     let started = Instant::now();
     let handle = thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
+        .stack_size(INFERENCE_STACK_SIZE)
         .spawn(move || {
             let program = parse(&source).expect("fixture must parse");
             let (env, mut state) = initial_env_with_stdlib().expect("stdlib must load");
@@ -101,7 +103,7 @@ fn iife_forward_reference_terminates_and_checks() {
     );
     let (tx, rx) = mpsc::channel::<bool>();
     let handle = thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
+        .stack_size(INFERENCE_STACK_SIZE)
         .spawn(move || {
             let program = parse(&source).expect("source must parse");
             let (env, mut state) = initial_env_with_stdlib().expect("stdlib");

@@ -164,33 +164,17 @@ fn main() -> ExitCode {
         Err(code) => return code,
     };
 
-    // Run inference on a worker thread with a 64 MB stack. The
-    // default 8 MB Linux main-thread stack isn't enough for the
-    // existing depth-cap guards in `Type::apply_subst` to fire
-    // before the OS guard page does on htmx-class single-file
-    // libraries (gdb-confirmed: the SIGSEGV lands during
-    // `Type::apply_subst -> RowType::apply_subst -> FieldEntry::apply_subst`
-    // recursion through the htmx IIFE result type). 64 MB matches
-    // the budget documented in docs/scaling.md and is enough for
-    // every input the existing test suite exercises; htmx itself
-    // still hits the underlying O(N*S*K) substitution cost
-    // (`docs/scaling.md`, `docs/destructive-unification-plan.md`)
-    // and times out rather than crashes — converting a SIGSEGV
-    // into a controlled wall-clock failure is the minimal "avoid
-    // the crash" contract here, not full htmx support.
-    let (result, thread_state) = std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn({
-            let source = source.clone();
-            let filename = filename.clone();
-            move || {
-                let result = run_inference(&mut state, env, &source, &filename);
-                (result, state)
-            }
-        })
-        .expect("spawn inference worker")
-        .join()
-        .expect("inference worker panicked");
+    // Route inference through the shared worker helper. See
+    // `inty::worker` for the rationale (8 MB Linux main-thread
+    // stack vs. inty's depth-cap headroom on htmx-class input).
+    let (result, thread_state) = inty::worker::run_with_inference_stack("inty-cli-infer", {
+        let source = source.clone();
+        let filename = filename.clone();
+        move || {
+            let result = run_inference(&mut state, env, &source, &filename);
+            (result, state)
+        }
+    });
     let state = thread_state;
 
     for warning in &state.warnings {
@@ -298,21 +282,29 @@ fn run_declarations(args: &[String]) -> ExitCode {
         }
     };
 
-    let (module_env, exports) =
-        match inty::modules::check_module(&mut state, env, std::path::Path::new(&path)) {
-            Ok(r) => r,
-            Err(e) => {
-                let source = fs::read_to_string(&path).unwrap_or_default();
-                report_err(&path, &source, &e);
-                return ExitCode::from(1);
-            }
-        };
-
-    if let Err(e) = state.resolve_constraints() {
-        let source = fs::read_to_string(&path).unwrap_or_default();
-        report_err(&path, &source, &e);
-        return ExitCode::from(1);
-    }
+    // check_module + resolve_constraints together are the heavy
+    // inference path. Route through the worker helper so htmx-class
+    // entry modules get the same 64 MB stack the `inty <file>` path
+    // gets (`crates/inty/src/worker.rs` for the rationale).
+    let path_for_thread = path.clone();
+    let check_result = inty::worker::run_with_inference_stack("inty-cli-decl", move || {
+        let check =
+            inty::modules::check_module(&mut state, env, std::path::Path::new(&path_for_thread));
+        match check {
+            Ok((module_env, exports)) => state
+                .resolve_constraints()
+                .map(|()| (module_env, exports)),
+            Err(e) => Err(e),
+        }
+    });
+    let (module_env, exports) = match check_result {
+        Ok(r) => r,
+        Err(e) => {
+            let source = fs::read_to_string(&path).unwrap_or_default();
+            report_err(&path, &source, &e);
+            return ExitCode::from(1);
+        }
+    };
 
     let module = inty::declarations::CheckedModule::new(module_env, exports);
     print!(
@@ -373,24 +365,34 @@ fn run_bundle(args: &[String]) -> ExitCode {
 
     // Type-check the entry first. The bundler assumes the program
     // type-checks and won't surface a useful error if it doesn't.
-    let (env, mut state) = match initial_env_with_stdlib() {
+    let (env, state) = match initial_env_with_stdlib() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error loading stdlib: {}", e);
             return ExitCode::from(1);
         }
     };
+    // Run inference on the worker helper. `inty bundle` is just as
+    // exposed to htmx-class single-file inputs as `inty <file>`
+    // (see `crates/inty/src/worker.rs`); using a 64 MB stack here
+    // matches the other CLI subcommands and avoids the SIGSEGV
+    // failure mode on the bundler's check_module path.
+    let entry_for_thread = entry.clone();
+    let check_result = inty::worker::run_with_inference_stack("inty-cli-bundle", move || {
+        let mut state = state;
+        let entry_path = std::path::Path::new(&entry_for_thread);
+        if let Err(e) = inty::modules::check_module(&mut state, env, entry_path) {
+            return Err(e);
+        }
+        state.resolve_constraints()
+    });
+    if let Err(e) = check_result {
+        let entry_path = std::path::Path::new(&entry);
+        let source = fs::read_to_string(entry_path).unwrap_or_default();
+        print_error_plain(&entry, &source, &e);
+        return ExitCode::from(1);
+    }
     let entry_path = std::path::Path::new(&entry);
-    if let Err(e) = inty::modules::check_module(&mut state, env, entry_path) {
-        let source = fs::read_to_string(entry_path).unwrap_or_default();
-        print_error_plain(&entry, &source, &e);
-        return ExitCode::from(1);
-    }
-    if let Err(e) = state.resolve_constraints() {
-        let source = fs::read_to_string(entry_path).unwrap_or_default();
-        print_error_plain(&entry, &source, &e);
-        return ExitCode::from(1);
-    }
 
     // Now bundle.
     let out = match inty_bundle::bundle(entry_path) {

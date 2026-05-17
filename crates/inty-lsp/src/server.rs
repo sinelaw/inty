@@ -177,7 +177,20 @@ impl Server {
         uri: Uri,
         text: String,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
-        let analysis = Analysis::check(&text);
+        // Run the heavy check on a worker thread with a 64 MB stack.
+        // The LSP server lives in whatever stack the editor's
+        // launcher hands it (8 MB on Linux, smaller on some
+        // editor-embedded transports), which isn't enough headroom
+        // for the existing `Type::apply_subst` depth cap to fire
+        // before the OS guard page on htmx-class single-file
+        // documents. See `crates/inty/src/worker.rs` for the
+        // rationale shared with the CLI subcommands.
+        let analysis = {
+            let text = text.clone();
+            inty::worker::run_with_inference_stack("inty-lsp-infer", move || {
+                Analysis::check(&text)
+            })
+        };
         let mut diagnostics: Vec<Diagnostic> = analysis
             .errors
             .iter()
