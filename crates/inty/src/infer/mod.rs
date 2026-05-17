@@ -15,6 +15,8 @@ mod narrow;
 mod state;
 mod type_parser;
 mod unify;
+mod var_table;
+mod zonk;
 
 #[cfg(test)]
 mod tests;
