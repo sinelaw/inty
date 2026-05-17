@@ -420,6 +420,38 @@ impl InferState {
             }
 
             (RowTail::Open(TVarName::Flex(id1)), RowTail::Open(TVarName::Flex(id2))) => {
+                // Path-compress both tail vars to their union-find
+                // roots. The existing v1 == v2 short-circuit at
+                // RowTail::Open(v1) | RowTail::Open(v2) above only
+                // catches the trivially-equal case. Two tail vars
+                // that *transitively* reference the same root via a
+                // Var → Var → … chain in the substitution would
+                // otherwise fall into the fresh-tail dance below,
+                // bind both ends, and on the next collision re-enter
+                // unify_rows on the resulting rows with two *new*
+                // fresh tails — the htmx divergence cycle observed
+                // in gdb. Catching "same equivalence class" here
+                // short-circuits that loop the same way the v1 == v2
+                // check does for the trivial case.
+                let root1 = match self.main_subst.resolve(&TVarName::Flex(*id1)) {
+                    Some(Type::Var(TVarName::Flex(r))) => r,
+                    None => *id1,
+                    // If the chain ends at a structural type or a
+                    // skolem, fall through to the fresh-tail dance
+                    // with the original ids; the next unification
+                    // step will handle the structural case via the
+                    // normal Var-vs-structure path.
+                    _ => *id1,
+                };
+                let root2 = match self.main_subst.resolve(&TVarName::Flex(*id2)) {
+                    Some(Type::Var(TVarName::Flex(r))) => r,
+                    None => *id2,
+                    _ => *id2,
+                };
+                if root1 == root2 {
+                    return Ok(());
+                }
+
                 // Both open, create a fresh row variable for the common tail
                 let fresh = self.fresh_flex();
 
@@ -438,15 +470,18 @@ impl InferState {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
 
-                // Bind both row variables
+                // Bind both row variables. Use the path-compressed
+                // roots rather than the original ids so the binding
+                // lands on the canonical representative of each
+                // equivalence class.
                 self.extend_subst(
                     span,
-                    TVarName::Flex(*id1),
+                    TVarName::Flex(root1),
                     Type::Row(RowType::open_entries(extra1, fresh.clone())),
                 )?;
                 self.extend_subst(
                     span,
-                    TVarName::Flex(*id2),
+                    TVarName::Flex(root2),
                     Type::Row(RowType::open_entries(extra2, fresh)),
                 )?;
 

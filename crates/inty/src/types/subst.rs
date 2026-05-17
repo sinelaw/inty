@@ -120,6 +120,58 @@ impl Subst {
         self.map.get(var)
     }
 
+    /// Path-compressing lookup. Chases `Type::Var → Type::Var → …`
+    /// chains, rewriting every entry on the visited path to point
+    /// directly at the chain's endpoint. Subsequent lookups of any
+    /// variable on the chased path resolve in one hop.
+    ///
+    /// This is Tarjan path compression (Tarjan 1975, "Efficiency of
+    /// a Good but Not Linear Set Union Algorithm"). The chain ends
+    /// at either a structural type or an unbound variable; that
+    /// endpoint becomes the new value of every entry on the path.
+    /// Defensively bounded by a `visited` set so a malformed
+    /// substitution (post-occurs-check this shouldn't happen) can't
+    /// loop here.
+    pub fn resolve(&mut self, var: &TVarName) -> Option<Type> {
+        let first = self.map.get(var)?.clone();
+        if !matches!(first, Type::Var(_)) {
+            return Some(first);
+        }
+
+        let mut chain: Vec<TVarName> = vec![var.clone()];
+        let mut current = first;
+        let mut visited: HashSet<TVarName> = HashSet::new();
+        visited.insert(var.clone());
+
+        loop {
+            let next_name = match &current {
+                Type::Var(v) => v.clone(),
+                _ => break,
+            };
+            if !visited.insert(next_name.clone()) {
+                // Cycle (shouldn't happen post-occurs-check).
+                // Leave the chain as-is; don't rewrite.
+                return Some(current);
+            }
+            match self.map.get(&next_name).cloned() {
+                Some(next) => {
+                    chain.push(next_name);
+                    current = next;
+                }
+                None => break, // unbound root
+            }
+        }
+
+        // Path compression: point every entry on the chain at
+        // `current`. Skip the final entry if it's the endpoint
+        // itself (we don't want to write a binding for an unbound
+        // variable).
+        for k in &chain {
+            self.map.insert(k.clone(), current.clone());
+        }
+        Some(current)
+    }
+
     /// Get the presence binding for a presence variable, if present.
     pub fn get_presence(&self, pvar: &PVarName) -> Option<&Presence> {
         self.presences.get(pvar)

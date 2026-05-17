@@ -736,7 +736,11 @@ impl InferState {
         var: TVarName,
         ty: Type,
     ) -> super::unify::UnifyResult<()> {
-        if let Some(existing) = self.main_subst.get(&var).cloned() {
+        // Path-compressing lookup. `resolve` chases Var → Var → …
+        // chains and rewrites every visited entry to point at the
+        // chain endpoint (Tarjan 1975). Subsequent collision checks
+        // on any variable along that chain resolve in O(1).
+        if let Some(existing) = self.main_subst.resolve(&var) {
             // Already bound — unify so we don't lose either side.
             return self.unify(span, &existing, &ty);
         }
