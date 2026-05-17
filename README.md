@@ -1,10 +1,16 @@
 # inty
 
-Inty is a type checker for JavaScript with full type inference. Inty works on vanilla JavaScript without any type annotations, and does not require transpilation or other build steps. The JavaScript code you check with inty is just plain JavaScript and runs as-is in any browser or JavaScript runtime.
+Inty is a type checker for JavaScript with full type inference. Inty works on *vanilla JavaScript* - no transpilation, no added syntax. The JavaScript code you check with inty is just plain JavaScript and runs as-is in any browser or JavaScript runtime. 
 
-The type system was designed to cover JavaScript while deliberately leaving out (prohibiting) parts of the language that are dynamic, unsafe, or just too hard to model in a type system reasonably.
+Inty uses type inference to understand your JavaScript code without explicitly specifying types. You can also use type annotations in a comment to force a type for an expression.
+
+The type system was designed to cover most of JavaScript, while deliberately leaving out (prohibiting) parts of the language that are "too dynamic", or considered generally harmful.
+
+inty is available as a CLI, an LSP server, and a WASM library.
 
 Try it online at: https://sinelaw.github.io/inty/
+
+inty is based on [infernu](https://github.com/sinelaw/infernu).
 
 ## Usage
 
@@ -23,110 +29,17 @@ inty path/to/file.js
 
 Run `inty --help` for the full set of options.
 
-An experimental work-in-progress LSP server is included (`inty lsp`). A minimal VS Code adapter lives in [`editors/vscode/`](editors/vscode/) — run [`editors/vscode/install.sh`](editors/vscode/install.sh) to build, package, and install it in one step.
-
-### Type Annotation Syntax
-
-Annotations are optional — every type is inferred — but can be written for documentation, narrowing (see [Sum Types](#sum-types-discriminated-unions--narrowing-predicate-refinement) below), or to declare ambient bindings in `.d.js` stubs. Two surface forms:
-
-- **Doc-comment statement** preceding a declaration: `/** var x: T */`, `/** function f(...) => T */`, `/** const c: T */`, `/** type Name = ... */`.
-- **Inline trailing comment** on a binder or parameter: `var x /*: T */ = 1`, `function f(x /*: Number */) { ... }`.
-
-#### Primitive and compound types
-
-```javascript
-/** var n: Number */
-/** var s: String */
-/** var b: Boolean */
-/** var arr: Number[] */              // Array shorthand
-/** var maybe: Number? */             // postfix `?` desugars to `T | Undefined`
-/** var u: Number | String */         // union
-/** var pt: {x: Number, y: Number} */ // record (closed row)
-```
-
-Built-in type names: `Number`, `String`, `Boolean`, `Null`, `Undefined`. Unknown identifiers are rejected (typos like `Stirng` are an error, not a fresh variable).
-
-#### Function types
-
-A function-type annotation is `(P1, P2, ...) => R`. Parameter names are optional. For functions, both forms below are accepted:
-
-```javascript
-/** function add(x: Number, y: Number) => Number */
-function add(x, y) { return x + y; }
-
-/** const inc: (Number) => Number */
-const inc = function(k) { return k + 1; };
-```
-
-Methods are written as plain fields holding a function; `this` is inferred via row polymorphism (no explicit `this:` annotation):
-
-```javascript
-var builder = {
-    value: 0,
-    setValue: function(v) { this.value = v; return this; },
-    get:      function()  { return this.value; }
-};
-```
-
-#### Type parameters (generics)
-
-Quantifiers go at the outermost level (Rank-1):
-
-```javascript
-/** const id: <T>(T) => T */
-const id = function(x) { return x; };
-```
-
-Constraints are not written explicitly: type-class obligations like `Plus a` are inferred from operator use, not declared.
-
-#### Type aliases
-
-`/** type Name<P1, P2, ...> = Body */` declares a generic, structural alias. It is substituted at use; aliases are not nominal, so `Pair<Number>` and `{first: Number, second: Number}` are interchangeable.
-
-```javascript
-/** type Pair<T> = { first: T, second: T } */
-
-/** const p: Pair<Number> */
-const p = {first: 1, second: 2};
-
-/** type Mapping<K, V> = { key: K, value: V } */
-
-/** const makePair: <T>(T) => Pair<T> */
-const makePair = function(x) { return {first: x, second: x}; };
-```
-
-Nullary aliases are allowed and expanded at use (a bare `Func` resolves to the body, not a fresh variable):
-
-```javascript
-/** type S = String */
-/** type Func = () => {id: String} */
-```
-
-Arity is enforced — `Pair` (no args) or `Pair<A, B>` for the 1-parameter alias above are both errors.
-
-#### Callable rows (functions with statics)
-
-A row may carry a keyless call signature plus named fields. Used for things like `String` and `JSON` in stubs:
-
-```javascript
-/** const String: <T>{
-        (T) => String,
-        fromCharCode: (Number) => String
-    } */
-const String;
-```
-
-See `crates/inty/stdlib/core.d.js` for more `.d.js` examples (`Math`, `Object`, `Array`, `Promise`, etc.).
+The LSP server is included as a CLI command (`inty lsp`). A minimal VS Code adapter lives in [`editors/vscode/`](editors/vscode/) — run [`editors/vscode/install.sh`](editors/vscode/install.sh) to build, package, and install it in one step.
 
 ## How does it compare to TypeScript?
 
-|                    | TypeScript                                                  | Inty                                                                                       |
-| ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **Build step**     | Transpiles to JavaScript                                    | A pure type checker — no transpilation needed                                              |
-| **Relation to JS** | A superset (sometimes) of JavaScript                        | A subset of JavaScript, deliberately discarding the "bad parts" of the language            |
-| **Typing style**   | Gradual typing; requires type decorations and annotations   | Strictly static typing with full type inference — annotations are NOT required, but are supported and encouraged for readability |
+|                    | TypeScript                           | **Inty**                                                |
+| ------------------ | ------------------------------------ | ------------------------------------------------------- |
+| **Build step**     | Transpiles to JavaScript             | A pure type checker — no transpilation, vanilla JS      |
+| **Relation to JS** | A superset (sometimes) of JavaScript | A subset of JavaScript, deliberately discarding the "bad parts" of the language |
+| **Typing style**   | Gradual typing, requires annotations | Strictly full static typing, type inference, annotations are optional |
 
-Their type systems are not identical — a more detailed comparison will be added here. For one, there is no `any` type in inty. null/undefined are allowed only via union types.
+There is no `any` type in inty. `null`/`undefined` are explicit via union types.
 
 ## Strict by Design
 
@@ -497,6 +410,102 @@ function f(x) {
     else                        { return x; }
 }
 ```
+
+
+### Type Annotation Syntax
+
+Type annotations are optional — every type is inferred — but can be written for documentation, narrowing (see [Sum Types](#sum-types-discriminated-unions--narrowing-predicate-refinement) below), or to declare ambient bindings in `.d.js` stubs. Some higher-ranked types *require* a type annotation, but I'm hoping these turn out to be rarely needed.
+
+Two forms of type annotations:
+
+- **Doc-comment statement** preceding a declaration: `/** var x: T */`, `/** function f(...) => T */`, `/** const c: T */`, `/** type Name = ... */`.
+- **Inline trailing comment** on a binder or parameter: `var x /*: T */ = 1`, `function f(x /*: Number */) { ... }`.
+
+#### Primitive and compound types
+
+```javascript
+/** var n: Number */
+/** var s: String */
+/** var b: Boolean */
+/** var arr: Number[] */              // Array shorthand
+/** var maybe: Number? */             // postfix `?` desugars to `T | Undefined`
+/** var u: Number | String */         // union
+/** var pt: {x: Number, y: Number} */ // record (closed row)
+```
+
+Built-in type names: `Number`, `String`, `Boolean`, `Null`, `Undefined`. Unknown identifiers are rejected (typos like `Stirng` are an error, not a fresh variable).
+
+#### Function types
+
+A function-type annotation is `(P1, P2, ...) => R`. Parameter names are optional. For functions, both forms below are accepted:
+
+```javascript
+/** function add(x: Number, y: Number) => Number */
+function add(x, y) { return x + y; }
+
+/** const inc: (Number) => Number */
+const inc = function(k) { return k + 1; };
+```
+
+Methods are written as plain fields holding a function; `this` is inferred via row polymorphism (no explicit `this:` annotation):
+
+```javascript
+var builder = {
+    value: 0,
+    setValue: function(v) { this.value = v; return this; },
+    get:      function()  { return this.value; }
+};
+```
+
+#### Type parameters (generics)
+
+Quantifiers go at the outermost level (Rank-1):
+
+```javascript
+/** const id: <T>(T) => T */
+const id = function(x) { return x; };
+```
+
+Constraints are not written explicitly: type-class obligations like `Plus a` are inferred from operator use, not declared.
+
+#### Type aliases
+
+`/** type Name<P1, P2, ...> = Body */` declares a generic, structural alias. It is substituted at use; aliases are not nominal, so `Pair<Number>` and `{first: Number, second: Number}` are interchangeable.
+
+```javascript
+/** type Pair<T> = { first: T, second: T } */
+
+/** const p: Pair<Number> */
+const p = {first: 1, second: 2};
+
+/** type Mapping<K, V> = { key: K, value: V } */
+
+/** const makePair: <T>(T) => Pair<T> */
+const makePair = function(x) { return {first: x, second: x}; };
+```
+
+Nullary aliases are allowed and expanded at use (a bare `Func` resolves to the body, not a fresh variable):
+
+```javascript
+/** type S = String */
+/** type Func = () => {id: String} */
+```
+
+Arity is enforced — `Pair` (no args) or `Pair<A, B>` for the 1-parameter alias above are both errors.
+
+#### Callable rows (functions with statics)
+
+A row may carry a keyless call signature plus named fields. Used for things like `String` and `JSON` in stubs:
+
+```javascript
+/** const String: <T>{
+        (T) => String,
+        fromCharCode: (Number) => String
+    } */
+const String;
+```
+
+See `crates/inty/stdlib/core.d.js` for more `.d.js` examples (`Math`, `Object`, `Array`, `Promise`, etc.).
 
 ## Supported Syntax
 
