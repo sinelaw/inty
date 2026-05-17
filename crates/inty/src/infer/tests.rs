@@ -3406,3 +3406,120 @@ fn modestly_deep_program_does_not_trigger_overflow_diagnostic() {
         errs
     );
 }
+
+// ----- Shape B: annotated param + stdlib optional params -----
+
+/// Pins the user-visible win of Shape B phase 4 on the canonical
+/// htmx-shaped pattern: a function takes a parameter annotated as
+/// `String` and calls the stdlib's `String.prototype.slice` with
+/// mixed arities in the same body. Without phase 4 (or without the
+/// annotation), `slice` is declared `(Number, Number) => String`
+/// and the 1-arg call errors with "Arity mismatch: expected 2,
+/// found 1". With phase 4 AND the annotation, the 1-arg call binds
+/// the presence variable to `Abs` and the 2-arg call binds it to
+/// `Pre` — both type-check.
+///
+/// This is the shape that htmx's `getTimeoutInterval` (line 380 of
+/// htmx.js) hits, distilled to avoid stdlib globals that the bare
+/// test harness doesn't load.
+#[test]
+fn annotated_string_param_accepts_mixed_arity_slice() {
+    let src = "\
+        /** function getSuffix(str: String) => String */ \
+        function getSuffix(str) { \
+            if (str.slice(-2) == \"ms\") { return str.slice(0, -2); } \
+            if (str.slice(-1) == \"s\")  { return str.slice(0, -1); } \
+            return str; \
+        }";
+    let result = infer_program_with_state(src);
+    assert!(
+        result.is_ok(),
+        "annotated-String param + mixed-arity stdlib slice should type-check, got: {:?}",
+        result.err()
+    );
+    let (_, _, state) = result.unwrap();
+    let errs: Vec<_> = state
+        .errors
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                crate::error::IntyError::Type(TypeError::Module { .. })
+            )
+        })
+        .collect();
+    assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
+}
+
+/// Same pattern with `padStart`'s optional second arg. Pins that the
+/// optional-trailing-arg decl handles the "omit the optional"
+/// direction even when the value is annotated.
+#[test]
+fn annotated_string_param_accepts_padstart_omitting_optional() {
+    let src = "\
+        /** function rightPad(s: String) => String */ \
+        function rightPad(s) { return s.padStart(4); }";
+    let result = infer_program_with_state(src);
+    assert!(
+        result.is_ok(),
+        "padStart(target) should accept the omitted-padString form, got: {:?}",
+        result.err()
+    );
+}
+
+/// `Array.prototype.indexOf` has both args optional in the stdlib
+/// decl (`indexOf(elem, fromIndex?)`). Test both the 1-arg and
+/// 2-arg call shapes on the same annotated array param.
+#[test]
+fn annotated_array_param_accepts_optional_index_of() {
+    let src = "\
+        /** function searchTwice(arr: Number[], needle: Number) => Boolean */ \
+        function searchTwice(arr, needle) { \
+            var first  = arr.indexOf(needle); \
+            var second = arr.indexOf(needle, first + 1); \
+            return first < second; \
+        }";
+    let result = infer_program_with_state(src);
+    assert!(
+        result.is_ok(),
+        "Array.indexOf with mixed arity should type-check, got: {:?}",
+        result.err()
+    );
+}
+
+/// The inferred-row regression case: without annotation, the *first*
+/// call commits `str`'s row to a 1-arg slice, and the second call
+/// fails. This test pins inty's *current* behaviour on
+/// unannotated inferred rows — see the PR description and
+/// `docs/destructive-unification-plan.md`'s open follow-ups for the
+/// HMX-style constraint-based inference that would fix this. The
+/// test exists so a future improvement that closes this gap shows
+/// up as a clean test change.
+#[test]
+fn unannotated_param_mixed_arity_slice_still_errors() {
+    let src = "\
+        function getSuffix(str) { \
+            if (str.slice(-2) == \"ms\") { return str.slice(0, -2); } \
+            return str; \
+        }";
+    // The inference may surface the error either as a `Result::Err`
+    // returned from `infer_program_with_state` (when the first
+    // failing statement aborts the run) or as an accumulated entry
+    // in `state.errors` (when `Type::Error` recovery let inference
+    // continue). Either is a valid current behaviour; the assertion
+    // is that *some* type error fires.
+    let typed_err = match infer_program_with_state(src) {
+        Err(_) => true,
+        Ok((_, _, state)) => state.errors.iter().any(|e| {
+            !matches!(
+                e,
+                crate::error::IntyError::Type(TypeError::Module { .. })
+            )
+        }),
+    };
+    assert!(
+        typed_err,
+        "unannotated inferred-row case should still error today — \
+         see PR #29 / docs for HMX-style follow-up"
+    );
+}
