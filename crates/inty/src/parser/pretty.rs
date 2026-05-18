@@ -1004,6 +1004,9 @@ fn assign_op_str(op: AssignOp) -> &'static str {
         AssignOp::BitAndAssign => "&=",
         AssignOp::BitOrAssign => "|=",
         AssignOp::BitXorAssign => "^=",
+        AssignOp::NullishAssign => "??=",
+        AssignOp::LogicalAndAssign => "&&=",
+        AssignOp::LogicalOrAssign => "||=",
     }
 }
 

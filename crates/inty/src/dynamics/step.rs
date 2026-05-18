@@ -331,6 +331,32 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         Expr::Assign {
             op, left, right, ..
         } => {
+            // Short-circuit assignment (`??=`, `||=`, `&&=`): evaluate
+            // LHS first, decide whether to fire, then evaluate RHS
+            // only when needed. RHS evaluation must be conditional —
+            // `a ??= expensive()` is observable when `expensive` has
+            // side effects.
+            if matches!(
+                op,
+                AssignOp::NullishAssign
+                    | AssignOp::LogicalAndAssign
+                    | AssignOp::LogicalOrAssign
+            ) {
+                let cur = eval_expr(state, env, left)?;
+                let should_assign = match op {
+                    AssignOp::NullishAssign => matches!(cur, Value::Null | Value::Undefined),
+                    AssignOp::LogicalAndAssign => cur.truthy(),
+                    AssignOp::LogicalOrAssign => !cur.truthy(),
+                    _ => unreachable!(),
+                };
+                if should_assign {
+                    let rhs = eval_expr(state, env, right)?;
+                    assign_to(state, env, left, rhs.clone())?;
+                    return Ok(rhs);
+                }
+                return Ok(cur);
+            }
+
             let rhs = eval_expr(state, env, right)?;
             let new_value = match op {
                 AssignOp::Assign => rhs,
@@ -598,6 +624,11 @@ fn apply(
 fn compound_to_binop(op: AssignOp) -> BinOp {
     match op {
         AssignOp::Assign => unreachable!("Assign handled separately"),
+        AssignOp::NullishAssign
+        | AssignOp::LogicalAndAssign
+        | AssignOp::LogicalOrAssign => {
+            unreachable!("short-circuit assignment handled separately")
+        }
         AssignOp::AddAssign => BinOp::Add,
         AssignOp::SubAssign => BinOp::Sub,
         AssignOp::MulAssign => BinOp::Mul,

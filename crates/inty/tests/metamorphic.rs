@@ -34,8 +34,8 @@ use oracle::CheckResult;
 use oracle::{assert_consistent, check};
 use strategy::program_strategy;
 use transform::{
-    build_destructure_pair, t_alpha_rename_existing, t_intersperse_empty,
-    t_move_data_decl_after_first_user, t_prepend_dead_var, t_prepend_empty,
+    build_destructure_pair, build_logical_assign_pair, t_alpha_rename_existing,
+    t_intersperse_empty, t_move_data_decl_after_first_user, t_prepend_dead_var, t_prepend_empty,
     t_swap_first_independent_pair, t_wrap_expr_statements,
 };
 
@@ -167,6 +167,49 @@ proptest! {
 }
 
 // -------------------------------------------------------------------------
+// Logical-assignment desugar equivalence.
+//
+// `a ??= b` / `a ||= b` / `a &&= b` should produce the same inferred
+// types as their non-short-circuiting desugaring `a = a ?? b` / `a || b`
+// / `a && b`. The runtime side differs (RHS evaluation is conditional)
+// but inty's checker doesn't model effect-tracking, so at the type
+// level they must match.
+//
+// The generator doesn't produce logical-assignment ops, so this lives
+// as a parameterised pair-of-source-programs test against a small
+// hand-picked combination matrix.
+// -------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 32,
+        max_shrink_iters: 256,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_logical_assign_desugar_equiv(
+        op in proptest::sample::select(vec![
+            "??=".to_string(),
+            "||=".to_string(),
+            "&&=".to_string(),
+        ]),
+        pair in proptest::sample::select(vec![
+            ("1", "2"),
+            ("0", "5"),
+            ("\"hi\"", "\"world\""),
+            ("true", "false"),
+        ]),
+    ) {
+        let (init, rhs) = pair;
+        let (src_a, src_b, cmp) = build_logical_assign_pair(&op, init, rhs);
+        let p_a = parse(&src_a).unwrap_or_else(|e| panic!("src_a failed to parse: {:?}\nsrc: {}", e, src_a));
+        let p_b = parse(&src_b).unwrap_or_else(|e| panic!("src_b failed to parse: {:?}\nsrc: {}", e, src_b));
+        assert_consistent("logical_assign_desugar", &p_a, &p_b, &cmp);
+    }
+}
+
+// -------------------------------------------------------------------------
 // Hand-written sanity tests. These guard the transformations themselves
 // against silly bugs so random failures get attributed to the checker
 // rather than the test harness.
@@ -203,6 +246,33 @@ mod unit {
         let p = p_from("var a = 1;");
         let (q, cmp) = t_prepend_empty(&p);
         assert_consistent("prepend_empty (concrete)", &p, &q, &cmp);
+    }
+
+    #[test]
+    fn logical_assign_desugar_concrete() {
+        // Deterministic regressions for the three logical-assignment
+        // ops against their non-short-circuiting desugarings. Locks
+        // in the type-equivalence invariant independently of the
+        // proptest seed.
+        for (op, init, rhs) in [
+            ("??=", "1", "2"),
+            ("??=", "\"hi\"", "\"world\""),
+            ("??=", "true", "false"),
+            ("||=", "0", "5"),
+            ("||=", "\"\"", "\"x\""),
+            ("&&=", "1", "2"),
+            ("&&=", "true", "false"),
+        ] {
+            let (src_a, src_b, cmp) = build_logical_assign_pair(op, init, rhs);
+            let p_a = p_from(&src_a);
+            let p_b = p_from(&src_b);
+            assert_consistent(
+                &format!("logical_assign_desugar ({op} {init} {rhs})"),
+                &p_a,
+                &p_b,
+                &cmp,
+            );
+        }
     }
 
     #[test]

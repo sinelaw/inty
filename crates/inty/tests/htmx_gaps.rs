@@ -23,6 +23,10 @@
 //!   * Gap 6 — `async` arrow function: **fixed** by extending the
 //!     arrow-head lookahead and reusing the same `Promise.resolve`
 //!     wrap that `async function` declarations use
+//!   * Gap 7 — ES2021 logical-assignment ops (`??=`, `||=`, `&&=`):
+//!     **fixed** by adding first-class `AssignOp` variants. Lexer
+//!     emits new tokens; inference treats them like `=`; dynamics
+//!     short-circuits the RHS
 
 use inty::parser::parse;
 use inty::stdlib::initial_env_with_stdlib;
@@ -324,6 +328,87 @@ fn await_inside_non_async_arrow_still_rejected() {
 fn async_arrow_no_params() {
     parses("var f = async () => 1;")
         .expect("async arrow with zero parameters should parse");
+}
+
+// ---------------------------------------------------------------------------
+// Gap 7: ES2021 logical-assignment operators (`??=`, `||=`, `&&=`) were
+// not tokenised. `localKeys ??= …` (acorn-loose `compiler/havoc.js:8`)
+// lexed as `??` then `=`, so the parser dived into nullish-coalesce and
+// tripped on the `=` where it expected the RHS expression.
+//
+// Fix: first-class `AssignOp` variants. Inference reuses the same
+// subsumption/skolemize path as `=`, because the type constraint is
+// identical — the runtime test only decides whether the store fires,
+// not what the store's type would be. Dynamics short-circuits RHS
+// evaluation.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn nullish_assign_typechecks() {
+    type_checks(
+        "var x = 'init';
+        x ??= 'later';",
+    )
+    .expect("`??=` should type-check when LHS and RHS unify");
+}
+
+#[test]
+fn logical_or_assign_typechecks() {
+    type_checks(
+        "var n = 0;
+        n ||= 5;",
+    )
+    .expect("`||=` should type-check on Number");
+}
+
+#[test]
+fn logical_and_assign_typechecks() {
+    type_checks(
+        "var t = 1;
+        t &&= 2;",
+    )
+    .expect("`&&=` should type-check on Number");
+}
+
+#[test]
+fn logical_assign_on_member() {
+    // Member targets work too — `o.count ||= 10` parses as a regular
+    // assignment with a member LHS.
+    type_checks(
+        "var o = { count: 0 };
+        o.count ||= 10;",
+    )
+    .expect("`||=` on a member target should type-check");
+}
+
+#[test]
+fn logical_assign_type_mismatch_rejected() {
+    // The short-circuit ops constrain LHS and RHS to the same type,
+    // exactly like `=`. A type mismatch must be flagged.
+    assert!(
+        type_checks(
+            "var s = 'x';
+            s ??= 5;"
+        )
+        .is_err(),
+        "`??=` should reject String LHS with Number RHS"
+    );
+    assert!(
+        type_checks(
+            "var n = 1;
+            n ||= 'y';"
+        )
+        .is_err(),
+        "`||=` should reject Number LHS with String RHS"
+    );
+    assert!(
+        type_checks(
+            "var b = 0;
+            b &&= 'y';"
+        )
+        .is_err(),
+        "`&&=` should reject Number LHS with String RHS"
+    );
 }
 
 #[test]
