@@ -3209,14 +3209,23 @@ impl Parser {
     }
 
     /// Lookahead: is the token stream at this point the head of an arrow
-    /// function? Accepts `ident =>`, `() =>`, and `(ident [, ident]*) =>`.
-    /// Does not consume anything.
+    /// function? Accepts `ident =>`, `() =>`, and `(ident [, ident]*) =>`,
+    /// plus the same forms prefixed with `async`. Does not consume
+    /// anything. `async` is a reserved keyword in this lexer, so there's
+    /// no ambiguity with a value bound to `async`.
     fn looks_like_arrow_function(&self) -> bool {
+        let head_offset = if matches!(self.current(), Token::Async) {
+            1
+        } else {
+            0
+        };
+        let head = self.tokens.get(self.pos + head_offset).map(|s| &s.value);
+
         // Simple param: `ident =>`
-        if matches!(self.current(), Token::Ident(_)) {
+        if matches!(head, Some(Token::Ident(_))) {
             return self
                 .tokens
-                .get(self.pos + 1)
+                .get(self.pos + head_offset + 1)
                 .map(|s| matches!(s.value, Token::FatArrow))
                 .unwrap_or(false);
         }
@@ -3227,8 +3236,8 @@ impl Parser {
         // else. Pattern parameters (`({x})`, `([a, b])`) go through here
         // just fine — the inner braces/brackets are balanced like any
         // other group.
-        if matches!(self.current(), Token::LParen) {
-            let mut i = self.pos + 1;
+        if matches!(head, Some(Token::LParen)) {
+            let mut i = self.pos + head_offset + 1;
             let mut paren_depth: i32 = 1;
             let mut brace_depth: i32 = 0;
             let mut bracket_depth: i32 = 0;
@@ -3266,8 +3275,19 @@ impl Parser {
     ///
     /// Lowers to `Expr::Function`: a block body becomes the function body
     /// directly, an expression body becomes a synthesised `return <expr>;`.
+    /// An `async` prefix lifts the body into an IIFE handed to
+    /// `Promise.resolve`, matching the rewrite that
+    /// [`Self::make_async_function_decl`] applies to async function
+    /// declarations.
     fn parse_arrow_function(&mut self) -> Result<Expr> {
         let start = self.current_span().start;
+
+        // Optional `async` prefix. `looks_like_arrow_function` has
+        // already confirmed an arrow head follows.
+        if matches!(self.current(), Token::Async) {
+            self.advance();
+            self.next_fn_is_async = true;
+        }
 
         // Parse parameters.
         let (params, prefix): (Vec<Param>, Vec<Stmt>) = if matches!(self.current(), Token::Ident(_))
@@ -3318,12 +3338,19 @@ impl Parser {
 
         self.async_depth = saved_async;
 
+        let span = Span::new(start, self.prev_span().end);
+        let body = if is_async {
+            Self::wrap_body_in_promise_resolve(body, span)
+        } else {
+            body
+        };
+
         Ok(Expr::Function {
             name: None,
             params,
             body,
             type_annotation: None,
-            span: Span::new(start, self.prev_span().end),
+            span,
         })
     }
 
