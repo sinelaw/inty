@@ -20,6 +20,9 @@
 //!   * Gap 5 — `delete o.k` aborted parsing: **fixed** via soft
 //!     `Type::Error` diagnostic at the delete site (no row subtraction;
 //!     the result is absorbed so downstream uses don't cascade)
+//!   * Gap 6 — `async` arrow function: **fixed** by extending the
+//!     arrow-head lookahead and reusing the same `Promise.resolve`
+//!     wrap that `async function` declarations use
 
 use inty::parser::parse;
 use inty::stdlib::initial_env_with_stdlib;
@@ -228,6 +231,99 @@ fn hoisting_iife_library_pattern() {
 fn delete_parses() {
     parses("var o = {a: 1}; delete o.a;")
         .expect("delete should parse — diagnostic is moved to inference time");
+}
+
+// ---------------------------------------------------------------------------
+// Gap 6: `async` arrow functions weren't recognised. The lookahead in
+// `looks_like_arrow_function` only matched `ident =>` and `( ... ) =>`,
+// so a leading `async` fell through to `parse_primary_expression`,
+// which has no arm for `Token::Async` and produced
+// `Unexpected token: found 'async', expected expression`.
+//
+// Real-world site:  acorn-loose `compiler/parse.js`:
+//     const loadParser = async (fallbackParser = 'acorn', forceParser) => { ... }
+//
+// Fix: extend the lookahead to step past an optional `async`, and have
+// `parse_arrow_function` consume that prefix, set the `next_fn_is_async`
+// flag, and wrap the resulting body in `Promise.resolve(...)` with the
+// same helper used for `async function` declarations.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn async_arrow_parens_with_defaults() {
+    // The exact shape from acorn-loose.
+    type_checks(
+        "const loadParser = async (fallbackParser = 'acorn', forceParser) => {
+            return fallbackParser;
+        };
+        var p = loadParser('acorn', 'x');",
+    )
+    .expect("async arrow with parenthesised params + default should type-check");
+}
+
+#[test]
+fn async_arrow_single_ident_param() {
+    // `async x => x` — single-identifier shorthand.
+    type_checks(
+        "const f = async x => x;
+        var p = f(7);",
+    )
+    .expect("async single-ident arrow should type-check");
+}
+
+#[test]
+fn async_arrow_block_body_with_await() {
+    // `await` inside an async arrow's block body must be legal and must
+    // produce the inner T of a `Promise<T>`.
+    type_checks(
+        "async function inner() { return 1; }
+        const f = async () => {
+            var x = await inner();
+            return x + 1;
+        };
+        var p = f();",
+    )
+    .expect("async arrow block body should permit await");
+}
+
+#[test]
+fn async_arrow_call_returns_promise() {
+    // Calling an async arrow yields `Promise<T>`. We check via .then,
+    // which is only defined on `Promise<T>` — if the call site's type
+    // weren't a Promise this wouldn't type-check.
+    type_checks(
+        "const f = async () => 42;
+        var p = f();
+        var chained = p.then(function(n) { return Promise.resolve(n + 1); });",
+    )
+    .expect("async arrow result should be a Promise<T>");
+}
+
+#[test]
+fn await_inside_non_async_arrow_still_rejected() {
+    // The arrow's own async context — *not* an enclosing async
+    // function — determines whether `await` is legal in its body.
+    // The lookahead change must not loosen this.
+    use inty::parser::parse;
+    assert!(
+        parse(
+            "async function outer() {
+                const f = () => {
+                    var x = await Promise.resolve(1);
+                    return x;
+                };
+                return f();
+            }"
+        )
+        .is_err(),
+        "await inside a non-async arrow nested in an async function should still be a parse error"
+    );
+}
+
+#[test]
+fn async_arrow_no_params() {
+    parses("var f = async () => 1;")
+        .expect("async arrow with zero parameters should parse");
 }
 
 #[test]
