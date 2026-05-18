@@ -307,6 +307,42 @@ fn wrap_in_iife(expr: Expr, s: Span) -> Expr {
 // using the `{prop: x} = obj` destructuring sugar.
 // -------------------------------------------------------------------------
 
+// -------------------------------------------------------------------------
+// Logical-assignment desugar equivalence.
+//
+// `a ??= b` differs from `a = a ?? b` only in short-circuit evaluation
+// (RHS skipped when LHS test fails). The two forms must produce the
+// same inferred types — that's the type-level invariant we're pinning.
+// Same for `||=` / `||` and `&&=` / `&&`.
+//
+// We don't claim it as a per-expression rewrite inside `transform.rs`
+// because the source-pair shape is simpler to reason about and the
+// generator's `program_strategy()` doesn't emit logical-assignment ops
+// itself (so a generic transform would have nothing to apply to).
+// -------------------------------------------------------------------------
+
+/// Build two equivalent source snippets:
+///   `var x = <init>; x <op> <rhs>;`     (logical-assignment form)
+///   `var x = <init>; x = x <bin> <rhs>;` (manually-desugared form)
+///
+/// `op` is one of `"??="`, `"||="`, `"&&="`; the corresponding
+/// short-circuit binary op (`??`, `||`, `&&`) is selected automatically.
+pub fn build_logical_assign_pair(
+    op: &str,
+    init: &str,
+    rhs: &str,
+) -> (String, String, Comparison) {
+    let bin = match op {
+        "??=" => "??",
+        "||=" => "||",
+        "&&=" => "&&",
+        other => panic!("build_logical_assign_pair: unknown op `{other}`"),
+    };
+    let src_a = format!("var x = {init}; x {op} {rhs};");
+    let src_b = format!("var x = {init}; x = x {bin} {rhs};");
+    (src_a, src_b, Comparison::identity())
+}
+
 /// Build two equivalent source snippets. Returns the pair plus a
 /// comparison that ignores the differently-named temp bindings each
 /// side introduces.

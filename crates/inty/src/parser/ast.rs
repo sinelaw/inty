@@ -256,6 +256,13 @@ pub enum AssignOp {
     BitAndAssign,  // &=
     BitOrAssign,   // |=
     BitXorAssign,  // ^=
+    // Short-circuit assignment (ES2021). RHS is only evaluated and
+    // assigned when the LHS test passes; the result is the value of
+    // whichever side was selected. Type-wise they constrain LHS and
+    // RHS to the same type, exactly like plain `=`.
+    NullishAssign,    // ??=
+    LogicalAndAssign, // &&=
+    LogicalOrAssign,  // ||=
 }
 
 /// Property key in object literals

@@ -161,7 +161,13 @@ impl<'a> Scanner<'a> {
                     }
                     Some((_, '?')) => {
                         self.advance(); // ?
-                        Token::QuestionQuestion
+                        // ES2021 logical-assignment `??=`.
+                        if matches!(self.peek(), Some((_, '='))) {
+                            self.advance(); // =
+                            Token::QuestionQuestionEq
+                        } else {
+                            Token::QuestionQuestion
+                        }
                     }
                     _ => Token::Question,
                 }
@@ -679,7 +685,13 @@ impl<'a> Scanner<'a> {
         match self.peek() {
             Some((_, '&')) => {
                 self.advance();
-                Token::And
+                // ES2021 logical-assignment `&&=`.
+                if matches!(self.peek(), Some((_, '='))) {
+                    self.advance();
+                    Token::AndEq
+                } else {
+                    Token::And
+                }
             }
             Some((_, '=')) => {
                 self.advance();
@@ -694,7 +706,13 @@ impl<'a> Scanner<'a> {
         match self.peek() {
             Some((_, '|')) => {
                 self.advance();
-                Token::Or
+                // ES2021 logical-assignment `||=`.
+                if matches!(self.peek(), Some((_, '='))) {
+                    self.advance();
+                    Token::OrEq
+                } else {
+                    Token::Or
+                }
             }
             Some((_, '=')) => {
                 self.advance();

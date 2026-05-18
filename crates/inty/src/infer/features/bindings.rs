@@ -250,7 +250,18 @@ impl InferState {
         // binding's stored scheme stays unchanged, so later uses
         // re-instantiate at the original (now-stale) polymorphism and
         // produce inferred types that disagree with runtime values.
-        if matches!(op, AssignOp::Assign) {
+        // Logical-assignment ops (`??=`, `&&=`, `||=`) constrain LHS and
+        // RHS to the same type just like plain `=` — the only runtime
+        // difference is short-circuiting on the LHS test, which doesn't
+        // affect typing. Route them through the same polytype
+        // skolemize/escape path that `=` uses.
+        if matches!(
+            op,
+            AssignOp::Assign
+                | AssignOp::NullishAssign
+                | AssignOp::LogicalAndAssign
+                | AssignOp::LogicalOrAssign
+        ) {
             if let Some(expected) = lhs_polytype(env, left) {
                 let env_free_before = env.free_vars();
                 let (skolems, expected_ty) = self.skolemize(&expected);
@@ -280,7 +291,10 @@ impl InferState {
         let left_type = self.infer_expr(env, left)?;
 
         match op {
-            AssignOp::Assign => {
+            AssignOp::Assign
+            | AssignOp::NullishAssign
+            | AssignOp::LogicalAndAssign
+            | AssignOp::LogicalOrAssign => {
                 // RHS subsumes into LHS: the LHS already has its
                 // declared/widened type, the RHS is whatever the
                 // right expression synthesised. `Lit ≤ Base` lets a
@@ -292,6 +306,11 @@ impl InferState {
                 // initialisation. Widen the RHS so the variable lands
                 // on its base type, matching what `var x = 42` would
                 // give.
+                //
+                // The short-circuit ops (`??=`, `&&=`, `||=`) share
+                // this rule: at the type level they look identical to
+                // `=`, the runtime test only decides whether the
+                // assignment actually fires.
                 let lhs_resolved = self.zonk(&left_type);
                 let rhs_for_assign = if matches!(
                     lhs_resolved,

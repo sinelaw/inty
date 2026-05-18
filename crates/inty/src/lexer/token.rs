@@ -158,6 +158,10 @@ pub enum Token {
     BitAndEq,   // &=
     BitOrEq,    // |=
     BitXorEq,   // ^=
+    // Logical assignment (ES2021). `??` / `&&` / `||` followed by `=`.
+    QuestionQuestionEq, // ??=
+    AndEq,              // &&=
+    OrEq,               // ||=
 
     // Increment/Decrement
     PlusPlus,   // ++
@@ -367,6 +371,9 @@ impl fmt::Display for Token {
             Token::BitAndEq => write!(f, "&="),
             Token::BitOrEq => write!(f, "|="),
             Token::BitXorEq => write!(f, "^="),
+            Token::QuestionQuestionEq => write!(f, "??="),
+            Token::AndEq => write!(f, "&&="),
+            Token::OrEq => write!(f, "||="),
             Token::PlusPlus => write!(f, "++"),
             Token::MinusMinus => write!(f, "--"),
             Token::LParen => write!(f, "("),

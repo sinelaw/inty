@@ -2320,6 +2320,9 @@ impl Parser {
             Token::BitAndEq => Some(AssignOp::BitAndAssign),
             Token::BitOrEq => Some(AssignOp::BitOrAssign),
             Token::BitXorEq => Some(AssignOp::BitXorAssign),
+            Token::QuestionQuestionEq => Some(AssignOp::NullishAssign),
+            Token::AndEq => Some(AssignOp::LogicalAndAssign),
+            Token::OrEq => Some(AssignOp::LogicalOrAssign),
             _ => None,
         }
     }
