@@ -227,6 +227,27 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
                 arr.clone(),
             )
         }
+        // `Array.prototype.splice(start, deleteCount?, ...items): T[]`.
+        // inty's `FuncParam` model has no true variadic, so we approximate
+        // the variadic tail with a single optional `item: T` position.
+        // That covers `splice(start)`, `splice(start, n)`, and
+        // `splice(start, n, item)` — i.e. the three forms that account
+        // for nearly every real-world call. Inserting two or more items
+        // in a single call wouldn't type-check under this stub; in
+        // practice those are rare and can be split into multiple calls.
+        // Same pragmatic trade-off as `concat` above.
+        "splice" => {
+            let p_delete = state.fresh_pvar();
+            let p_item = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![
+                    FuncParam::required(n.clone()),
+                    FuncParam::optional(p_delete, n.clone()),
+                    FuncParam::optional(p_item, elem.clone()),
+                ],
+                arr.clone(),
+            )
+        }
         "concat" => Type::simple_func(vec![arr.clone()], arr.clone()),
         // `Array.prototype.join(separator?)` — separator defaults to
         // ','. Most array→string conversions in real code omit it.

@@ -27,6 +27,11 @@
 //!     **fixed** by adding first-class `AssignOp` variants. Lexer
 //!     emits new tokens; inference treats them like `=`; dynamics
 //!     short-circuits the RHS
+//!   * Gap 8 — `Array.prototype.splice` missing from stdlib: **fixed**
+//!     by adding a `(start, deleteCount?, item?) => T[]` stub in
+//!     `builtins::array_method_type`. Approximates the real variadic
+//!     `(start, deleteCount?, ...items)` with one optional item slot,
+//!     which covers nearly every real-world call shape
 
 use inty::parser::parse;
 use inty::stdlib::initial_env_with_stdlib;
@@ -408,6 +413,76 @@ fn logical_assign_type_mismatch_rejected() {
         )
         .is_err(),
         "`&&=` should reject Number LHS with String RHS"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Gap 8: `Array.prototype.splice` not declared.
+//
+// Real-world site: acorn-loose `compiler/havoc.js:71`:
+//     wasm.splice(i + 1, 0, Opcodes.i32_from);
+//
+// inty has no rest-parameter type, so the stub approximates the real
+// `(start, deleteCount?, ...items): T[]` signature with one optional
+// item position: `(start: Number, deleteCount?: Number, item?: T): T[]`.
+// Same pragmatic trade-off as `concat`, which is also declared with a
+// single fixed arg.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn splice_three_arg_drop_and_insert() {
+    // The exact shape from acorn-loose's `compiler/havoc.js:71`.
+    type_checks(
+        "var wasm = [1, 2, 3];
+        var i = 0;
+        wasm.splice(i + 1, 0, 99);",
+    )
+    .expect("3-arg `splice(start, deleteCount, item)` should type-check");
+}
+
+#[test]
+fn splice_two_arg_drop_n() {
+    type_checks(
+        "var a = [1, 2, 3, 4];
+        var removed = a.splice(1, 2);",
+    )
+    .expect("2-arg `splice(start, deleteCount)` should type-check");
+}
+
+#[test]
+fn splice_one_arg_drop_from_start() {
+    type_checks(
+        "var b = ['x', 'y', 'z'];
+        var tail = b.splice(1);",
+    )
+    .expect("1-arg `splice(start)` should type-check");
+}
+
+#[test]
+fn splice_returns_array_of_element_type() {
+    // The return value must be `T[]` for the underlying `T[]`.
+    // We assert that by feeding the result back into a position
+    // that requires `Number`.
+    type_checks(
+        "var a = [10, 20, 30];
+        var removed = a.splice(0, 1);
+        var first = removed[0];
+        var doubled = first * 2;",
+    )
+    .expect("`splice` result should be usable as the array's element type");
+}
+
+#[test]
+fn splice_rejects_wrong_element_type() {
+    // Inserting an element of the wrong type must be a type error —
+    // the optional `item` parameter shares the array's element type.
+    assert!(
+        type_checks(
+            "var a = [1, 2, 3];
+            a.splice(1, 0, 'not a number');"
+        )
+        .is_err(),
+        "`splice` must reject an inserted element of the wrong type"
     );
 }
 
