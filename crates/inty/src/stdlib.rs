@@ -10,7 +10,7 @@
 use crate::builtins::initial_env;
 use crate::error::IntyError;
 use crate::infer::{InferState, TypeEnv};
-use crate::parser::parse;
+use crate::frontends::javascript::parse;
 
 /// Core built-ins: console, Math, parseInt, parseFloat, isNaN, isFinite.
 pub const CORE: &str = include_str!("../stdlib/core.d.js");
@@ -94,7 +94,7 @@ mod tests {
     /// suffices.
     #[test]
     fn element_alias_is_usable_in_function_annotations() {
-        use crate::parser::parse;
+        use crate::frontends::javascript::parse;
         let (env, mut state) = initial_env_with_stdlib().unwrap();
         let src = "\
             /** function hasFooClass<T>(elt: Element<T>) => Boolean */ \
@@ -118,7 +118,7 @@ mod tests {
     /// document fragments, text nodes, etc.
     #[test]
     fn node_alias_is_usable_in_function_annotations() {
-        use crate::parser::parse;
+        use crate::frontends::javascript::parse;
         let (env, mut state) = initial_env_with_stdlib().unwrap();
         let src = "\
             /** function nodeName<T>(n: Node<T>) => String */ \

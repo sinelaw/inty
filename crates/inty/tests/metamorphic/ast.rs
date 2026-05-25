@@ -4,8 +4,8 @@
 
 use std::collections::HashSet;
 
-use inty::lexer::Span;
-use inty::parser::ast::*;
+use inty::span::Span;
+use inty::ast::*;
 
 // -------------------------------------------------------------------------
 // Small constructors — cut down on boilerplate when building expected ASTs
@@ -201,7 +201,7 @@ pub fn names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
             names_in_expr(right, out);
         }
         Expr::OptionalChain { head, segments, .. } => {
-            use inty::parser::ast::ChainSegment;
+            use inty::ast::ChainSegment;
             names_in_expr(head, out);
             for seg in segments {
                 match seg {

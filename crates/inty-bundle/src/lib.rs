@@ -24,7 +24,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use inty::parser::ast::{ExportDecl, ImportSpecifier, Program, Stmt};
+use inty::ast::{ExportDecl, ImportSpecifier, Program, Stmt};
 
 mod emit;
 mod graph;
@@ -125,7 +125,7 @@ fn load_module(
         message: e.to_string(),
     })?;
 
-    let program = inty::parser::parse(&source).map_err(|e| BundleError::Parse {
+    let program = inty::frontends::javascript::parse(&source).map_err(|e| BundleError::Parse {
         path: path.to_path_buf(),
         message: format!("{:?}", e),
     })?;
@@ -207,7 +207,7 @@ fn collect_imports(program: &Program) -> Vec<String> {
             Stmt::Import { source, .. } => {
                 let _ = ImportSpecifier::Default {
                     local: String::new(),
-                    span: inty::lexer::Span::new(0, 0),
+                    span: inty::span::Span::new(0, 0),
                 };
                 out.push(source.clone());
             }

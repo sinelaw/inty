@@ -3,7 +3,7 @@
 
 use inty::error::{IntyError, LexError, ParseError, TypeError};
 use inty::infer::InferWarning;
-use inty::lexer::Span;
+use inty::span::Span;
 use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 
 /// Convert a byte offset in `text` to an LSP `Position` (UTF-16 units).
@@ -95,6 +95,7 @@ fn error_code(err: &IntyError) -> &'static str {
             ParseError::BreakOutsideLoop { .. } => "BreakOutsideLoop",
             ParseError::ContinueOutsideLoop { .. } => "ContinueOutsideLoop",
             ParseError::ReturnOutsideFunction { .. } => "ReturnOutsideFunction",
+            ParseError::Unsupported { .. } => "Unsupported",
         },
         IntyError::Type(e) => match e {
             TypeError::UnificationError { .. } => "UnificationError",

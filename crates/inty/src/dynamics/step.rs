@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::parser::ast::{
+use crate::ast::{
     AssignOp, BinOp, Expr, ForInLhs, ForInit, Literal, PropDef, PropKey, Stmt, UnaryOp,
 };
 use crate::types::PropName;
@@ -1283,18 +1283,18 @@ fn declared_names(stmt: &Stmt) -> Vec<&str> {
         Stmt::Var { declarations, .. } => declarations.iter().map(|d| d.name.as_str()).collect(),
         Stmt::FunctionDecl { name, .. } => vec![name.as_str()],
         Stmt::Export { declaration, .. } => match declaration {
-            crate::parser::ast::ExportDecl::Var { declarations, .. } => {
+            crate::ast::ExportDecl::Var { declarations, .. } => {
                 declarations.iter().map(|d| d.name.as_str()).collect()
             }
-            crate::parser::ast::ExportDecl::Function { name, .. } => vec![name.as_str()],
-            crate::parser::ast::ExportDecl::Default { value, .. } => match value {
-                crate::parser::ast::Expr::Function {
+            crate::ast::ExportDecl::Function { name, .. } => vec![name.as_str()],
+            crate::ast::ExportDecl::Default { value, .. } => match value {
+                crate::ast::Expr::Function {
                     name: Some(name), ..
                 } => vec![name.as_str(), "default"],
                 _ => vec!["default"],
             },
-            crate::parser::ast::ExportDecl::List { .. } => Vec::new(),
-            crate::parser::ast::ExportDecl::From { .. } => Vec::new(),
+            crate::ast::ExportDecl::List { .. } => Vec::new(),
+            crate::ast::ExportDecl::From { .. } => Vec::new(),
         },
         _ => Vec::new(),
     }
@@ -1324,7 +1324,7 @@ fn bind_for_lhs(
 pub fn run_program(
     state: &mut State,
     env: &RuntimeEnv,
-    program: &crate::parser::ast::Program,
+    program: &crate::ast::Program,
 ) -> Result<Value, Stuck> {
     let (outcome, _) = eval_block(state, env, &program.statements)?;
     match outcome {

@@ -19,8 +19,8 @@
 //! the chain inherits the `Undefined` carry.
 
 use crate::infer::{InferResult, InferState, TypeEnv};
-use crate::lexer::Span;
-use crate::parser::ast::{ChainSegment, Expr};
+use crate::span::Span;
+use crate::ast::{ChainSegment, Expr};
 use crate::types::Type;
 
 impl InferState {

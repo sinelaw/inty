@@ -48,7 +48,7 @@
 
 use std::collections::HashSet;
 
-use super::ast::{
+use super::{
     CatchClause, ChainSegment, ExportDecl, Expr, ForInLhs, ForInit, ImportSpecifier, Param,
     PropDef, Stmt, SwitchCase, VarDeclarator, VarKind,
 };
@@ -702,7 +702,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::frontends::javascript::parse;
 
     fn free_in(src: &str) -> Vec<String> {
         let program = parse(src).expect("parse");

@@ -5,9 +5,10 @@ use lsp_types::{CompletionItem, CompletionItemKind};
 
 use inty::error::IntyError;
 use inty::infer::{InferState, InferWarning, TypeEnv};
-use inty::lexer::{Scanner, Span, Token};
-use inty::parser::ast::{Expr, ImportSpecifier, Program, Stmt};
-use inty::parser::Parser;
+use inty::ast::{Expr, ImportSpecifier, Program, Stmt};
+use inty::frontends::javascript::lexer::{Scanner, Token};
+use inty::frontends::javascript::parser::Parser;
+use inty::span::Span;
 use inty::stdlib::initial_env_with_stdlib;
 use inty::types::{PrettyContext, RowType, Type};
 
@@ -897,7 +898,7 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             ..
         } => {
             if let Some(init) = init {
-                use inty::parser::ast::ForInit;
+                use inty::ast::ForInit;
                 match init {
                     ForInit::VarDecl(decls) => {
                         for d in decls {
@@ -984,7 +985,7 @@ fn visit_expr(expr: &Expr, offset: usize, best: &mut Option<(String, Span)>) {
             }
         }
         Expr::Object { properties, .. } => {
-            use inty::parser::ast::PropDef;
+            use inty::ast::PropDef;
             for p in properties {
                 match p {
                     PropDef::Property { value, .. } => visit_expr(value, offset, best),

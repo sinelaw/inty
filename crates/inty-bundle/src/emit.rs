@@ -22,8 +22,8 @@
 
 use std::path::{Path, PathBuf};
 
-use inty::parser::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Stmt, VarKind};
-use inty::parser::pretty;
+use inty::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Stmt, VarKind};
+use inty::ast::pretty;
 use sourcemap::SourceMapBuilder;
 
 use crate::graph::{Module, ModuleGraph};
@@ -499,7 +499,7 @@ impl Buffer {
 /// Add a single source-map mapping pointing the current output line
 /// at the source span. Column granularity is line-only for v1; the
 /// pretty printer doesn't expose per-token columns.
-fn add_mapping(smap: &mut SourceMapBuilder, buf: &Buffer, source_id: u32, span: inty::lexer::Span) {
+fn add_mapping(smap: &mut SourceMapBuilder, buf: &Buffer, source_id: u32, span: inty::span::Span) {
     // Convert byte offset to (line, col) by scanning isn't free, but
     // mapping count is small (one per top-level statement) so we
     // just register the line at byte 0 and let consumers derive

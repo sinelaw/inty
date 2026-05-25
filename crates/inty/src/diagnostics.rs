@@ -6,7 +6,7 @@ use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind, Sou
 
 use crate::error::{IntyError, LexError, ParseError, TypeError};
 use crate::infer::InferWarning;
-use crate::lexer::Span;
+use crate::span::Span;
 
 /// Ariadne interprets label offsets as character (Unicode scalar) indices,
 /// not byte offsets. Inty's lexer tracks positions in bytes, so every
@@ -242,6 +242,9 @@ pub fn write_error<W: Write>(
             ParseError::ReturnOutsideFunction { span } => {
                 ("'return' outside of function".to_string(), *span, None)
             }
+            ParseError::Unsupported { feature, span } => {
+                (format!("Unsupported construct: {}", feature), *span, None)
+            }
         },
 
         IntyError::Type(e) => match e {
@@ -396,7 +399,7 @@ pub fn write_error<W: Write>(
 mod tests {
     use super::*;
     use crate::error::TypeError;
-    use crate::lexer::Span;
+    use crate::span::Span;
 
     #[test]
     fn byte_to_char_offset_handles_multi_byte_chars() {

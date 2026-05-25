@@ -1,15 +1,12 @@
 //! Parser module for mquickjs JavaScript source code.
 
-pub mod ast;
-pub mod free_idents;
-pub mod pretty;
-
 #[cfg(test)]
 mod proptests;
 
+use crate::ast::*;
 use crate::error::{ParseError, Result};
-use crate::lexer::{Span, Spanned, Token};
-use ast::*;
+use crate::frontends::javascript::lexer::Token;
+use crate::span::{Span, Spanned};
 
 /// Parser-internal destructuring pattern. Not part of the public AST —
 /// every pattern is immediately lowered to ordinary declarators via
@@ -2547,7 +2544,7 @@ impl Parser {
         // `OptionalChain` accumulator and all subsequent `.x` / `[k]` /
         // `(args)` and `?.` segments fold into it so the short-circuit
         // propagates over the whole tail.
-        let mut chain_segments: Option<Vec<crate::parser::ast::ChainSegment>> = None;
+        let mut chain_segments: Option<Vec<crate::ast::ChainSegment>> = None;
 
         loop {
             // `?.` — the chain switch. Subsequent forms get folded into
@@ -2561,7 +2558,7 @@ impl Parser {
                 let seg_start = self.prev_span().start;
                 if self.consume_if(&Token::LParen) {
                     let arguments = self.parse_arguments()?;
-                    segments.push(crate::parser::ast::ChainSegment::Call {
+                    segments.push(crate::ast::ChainSegment::Call {
                         arguments,
                         optional: true,
                         span: Span::new(seg_start, self.prev_span().end),
@@ -2569,7 +2566,7 @@ impl Parser {
                 } else if self.consume_if(&Token::LBracket) {
                     let property = self.parse_expression()?;
                     self.expect(&Token::RBracket)?;
-                    segments.push(crate::parser::ast::ChainSegment::Computed {
+                    segments.push(crate::ast::ChainSegment::Computed {
                         property: Box::new(property),
                         optional: true,
                         span: Span::new(seg_start, self.prev_span().end),
@@ -2584,7 +2581,7 @@ impl Parser {
                     } else {
                         self.expect_ident_or_keyword()?
                     };
-                    segments.push(crate::parser::ast::ChainSegment::Member {
+                    segments.push(crate::ast::ChainSegment::Member {
                         property,
                         optional: true,
                         span: Span::new(seg_start, self.prev_span().end),
@@ -2596,7 +2593,7 @@ impl Parser {
             if self.consume_if(&Token::LParen) {
                 let arguments = self.parse_arguments()?;
                 if let Some(segments) = chain_segments.as_mut() {
-                    segments.push(crate::parser::ast::ChainSegment::Call {
+                    segments.push(crate::ast::ChainSegment::Call {
                         arguments,
                         optional: false,
                         span: Span::new(start, self.prev_span().end),
@@ -2632,7 +2629,7 @@ impl Parser {
                     self.expect_ident_or_keyword()?
                 };
                 if let Some(segments) = chain_segments.as_mut() {
-                    segments.push(crate::parser::ast::ChainSegment::Member {
+                    segments.push(crate::ast::ChainSegment::Member {
                         property,
                         optional: false,
                         span: Span::new(start, self.prev_span().end),
@@ -2648,7 +2645,7 @@ impl Parser {
                 let property = self.parse_expression()?;
                 self.expect(&Token::RBracket)?;
                 if let Some(segments) = chain_segments.as_mut() {
-                    segments.push(crate::parser::ast::ChainSegment::Computed {
+                    segments.push(crate::ast::ChainSegment::Computed {
                         property: Box::new(property),
                         optional: false,
                         span: Span::new(start, self.prev_span().end),
@@ -3631,7 +3628,7 @@ impl Parser {
 
 /// Parse source code into an AST
 pub fn parse(source: &str) -> Result<Program> {
-    use crate::lexer::Scanner;
+    use crate::frontends::javascript::lexer::Scanner;
 
     let scanner = Scanner::new(source);
     let (tokens, type_annotations, type_aliases) = scanner.tokenize()?;

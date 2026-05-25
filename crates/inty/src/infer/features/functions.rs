@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::lexer::Span;
-use crate::parser::ast::{ExportDecl, Expr, Param, Stmt, TypeAnnotation};
-use crate::parser::free_idents::free_identifiers_in_function_body;
+use crate::span::Span;
+use crate::ast::{ExportDecl, Expr, Param, Stmt, TypeAnnotation};
+use crate::ast::free_idents::free_identifiers_in_function_body;
 use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;

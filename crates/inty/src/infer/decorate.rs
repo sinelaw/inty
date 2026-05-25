@@ -3,8 +3,8 @@
 //! After type inference, this module walks the AST and adds type annotations
 //! showing the inferred types for variables and functions.
 
-use crate::lexer::Span;
-use crate::parser::ast::*;
+use crate::span::Span;
+use crate::ast::*;
 use crate::types::{PrettyContext, Type, TypeScheme};
 
 use super::env::TypeEnv;
@@ -665,7 +665,7 @@ impl<'a> Decorator<'a> {
             name: "".to_string(),
             content: ctx.format_scheme(&displayed),
             span,
-            kind: crate::parser::ast::AnnotationKind::Inline,
+            kind: crate::ast::AnnotationKind::Inline,
         }
     }
 
@@ -676,7 +676,7 @@ impl<'a> Decorator<'a> {
             name: "".to_string(),
             content: ctx.format_type(&displayed),
             span,
-            kind: crate::parser::ast::AnnotationKind::Inline,
+            kind: crate::ast::AnnotationKind::Inline,
         }
     }
 }

@@ -27,7 +27,7 @@ mod transform;
 
 use proptest::prelude::*;
 
-use inty::parser::{ast::Program, parse, pretty::print_program};
+use inty::ast::Program; use inty::ast::pretty::print_program; use inty::frontends::javascript::parse;
 
 #[cfg(test)]
 use oracle::CheckResult;
@@ -219,7 +219,7 @@ proptest! {
 mod unit {
     use super::ast::{bound_names_in_stmt, names_in, rename_all};
     use super::*;
-    use inty::parser::ast::Stmt;
+    use inty::ast::Stmt;
 
     fn p_from(src: &str) -> Program {
         parse(src).expect("source must parse")

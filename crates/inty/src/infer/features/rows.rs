@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::lexer::Span;
-use crate::parser::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
+use crate::span::Span;
+use crate::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
 use crate::types::{FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypeScheme};
 
 use super::super::env::TypeEnv;

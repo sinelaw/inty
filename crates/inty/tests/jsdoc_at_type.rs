@@ -26,7 +26,7 @@
 //!      SCC inference hoists `Helper` before the annotated object
 //!      literal is processed.
 
-use inty::parser::parse;
+use inty::frontends::javascript::parse;
 use inty::stdlib::initial_env_with_stdlib;
 
 fn check(src: &str) -> Result<String, String> {

@@ -19,7 +19,7 @@
 //! the program type-checks; the specific inferred type strings are not
 //! asserted because they include fresh type-variable identifiers.
 
-use inty::parser::parse;
+use inty::frontends::javascript::parse;
 use inty::stdlib::initial_env_with_stdlib;
 
 /// Type-check `src` and return the inferred top-level type as a string,

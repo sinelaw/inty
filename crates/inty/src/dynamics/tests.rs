@@ -5,11 +5,11 @@
 
 use super::*;
 
-use crate::lexer::{Scanner, Token};
+use crate::frontends::javascript::lexer::{Scanner, Token};
 use crate::operators::{OpKind, OPERATORS};
-use crate::parser::Parser;
+use crate::frontends::javascript::parser::Parser;
 
-fn parse_program(source: &str) -> crate::parser::ast::Program {
+fn parse_program(source: &str) -> crate::ast::Program {
     let mut scanner = Scanner::new(source);
     let mut tokens = Vec::new();
     loop {

@@ -1,7 +1,7 @@
 //! Conditional/sequence expressions and control-flow statements.
 
-use crate::lexer::Span;
-use crate::parser::ast::{CatchClause, Expr, ForInLhs, ForInit, Stmt, SwitchCase, VarDeclarator};
+use crate::span::Span;
+use crate::ast::{CatchClause, Expr, ForInLhs, ForInit, Stmt, SwitchCase, VarDeclarator};
 use crate::types::{Type, TypeScheme};
 
 use super::super::env::TypeEnv;

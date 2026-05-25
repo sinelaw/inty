@@ -23,7 +23,7 @@
 use crate::types::{LitValue, PropName, RowTail, RowType, Type, TypeScheme};
 
 use super::env::TypeEnv;
-use crate::parser::ast::{BinOp, Expr, Literal, UnaryOp};
+use crate::ast::{BinOp, Expr, Literal, UnaryOp};
 
 /// A `Path` names something that can be narrowed: a local identifier, or
 /// a (possibly nested) property access off one.
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn test_extract_narrowing_for_member_eq_literal() {
         // shape.kind === "circle" — does the predicate detector find it?
-        let span = crate::lexer::Span::new(0, 0);
+        let span = crate::span::Span::new(0, 0);
         let test = Expr::Binary {
             op: BinOp::EqEqEq,
             left: Box::new(Expr::Member {

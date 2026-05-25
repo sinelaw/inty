@@ -93,8 +93,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::IntyError;
 use crate::infer::{InferState, TypeEnv};
-use crate::parser::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt};
-use crate::parser::parse;
+use crate::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt};
+use crate::frontends::javascript::parse;
 use crate::types::{ModuleType, Type, TypeScheme};
 
 /// One entry of a module's export table.
@@ -136,7 +136,7 @@ fn build_namespace_type(
     source_id: String,
     module_env: &TypeEnv,
     exports: &ExportTable,
-    err_span: crate::lexer::Span,
+    err_span: crate::span::Span,
     err_source: &str,
 ) -> Result<Type, IntyError> {
     let mut export_schemes: BTreeMap<String, TypeScheme> = BTreeMap::new();
@@ -421,7 +421,7 @@ fn load_module(
     let source = std::fs::read_to_string(path).map_err(|e| {
         IntyError::Type(crate::error::TypeError::Module {
             message: format!("failed to read {}: {}", path.display(), e),
-            span: crate::lexer::Span::new(0, 0),
+            span: crate::span::Span::new(0, 0),
         })
     })?;
 

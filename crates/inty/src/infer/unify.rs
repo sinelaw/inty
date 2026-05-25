@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::{IntyError, TypeError};
-use crate::lexer::Span;
+use crate::span::Span;
 use crate::types::{FieldEntry, PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef};
 
 use super::state::InferState;

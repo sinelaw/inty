@@ -8,8 +8,9 @@ use std::process::ExitCode;
 use inty::diagnostics::{print_error, print_error_plain, print_warning, print_warning_plain};
 use inty::error::IntyError;
 use inty::infer::{decorate_with_types, InferState, InferWarning, TypeEnv};
-use inty::lexer::{Scanner, Token};
-use inty::parser::{pretty::print_program, Parser};
+use inty::ast::pretty::print_program;
+use inty::frontends::javascript::lexer::{Scanner, Token};
+use inty::frontends::javascript::parser::Parser;
 use inty::stdlib::{initial_env_with_stdlib, load_lib};
 use inty::types::PrettyContext;
 

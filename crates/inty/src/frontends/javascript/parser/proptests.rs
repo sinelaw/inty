@@ -2,10 +2,11 @@
 
 use proptest::prelude::*;
 
-use super::ast::*;
-use super::pretty::print_program;
 use super::Parser;
-use crate::lexer::{Scanner, Span};
+use crate::ast::pretty::print_program;
+use crate::ast::*;
+use crate::frontends::javascript::lexer::Scanner;
+use crate::span::Span;
 
 fn span() -> Span {
     Span::new(0, 0)
@@ -22,7 +23,7 @@ fn ident_strategy() -> impl Strategy<Value = String> {
             // e.g. `as`, `let`, `const`, `class`, `import`, `export`,
             // `from` were all missing, producing spurious round-trip
             // failures whenever the generator picked one of those names).
-            if crate::lexer::Token::keyword(s).is_some() {
+            if crate::frontends::javascript::lexer::Token::keyword(s).is_some() {
                 return false;
             }
             // These are regular identifiers at the lexer level (they
@@ -484,7 +485,7 @@ fn programs_equal(a: &Program, b: &Program) -> bool {
 }
 
 fn parse_source(src: &str) -> Result<Program, String> {
-    use crate::lexer::Token;
+    use crate::frontends::javascript::lexer::Token;
 
     let mut scanner = Scanner::new(src);
     let mut tokens = Vec::new();

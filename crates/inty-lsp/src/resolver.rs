@@ -25,8 +25,8 @@
 
 use std::collections::HashMap;
 
-use inty::lexer::Span;
-use inty::parser::ast::{
+use inty::span::Span;
+use inty::ast::{
     ExportDecl, Expr, ForInLhs, ForInit, ImportSpecifier, Param, Program, PropDef, Stmt,
     VarDeclarator, VarKind,
 };
@@ -604,7 +604,7 @@ impl Resolution {
                 self.visit_expr(source, scope)
             }
             Expr::OptionalChain { head, segments, .. } => {
-                use inty::parser::ast::ChainSegment;
+                use inty::ast::ChainSegment;
                 self.visit_expr(head, scope);
                 for seg in segments {
                     match seg {
@@ -805,7 +805,7 @@ fn span_contains(span: Span, offset: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inty::parser::parse;
+    use inty::frontends::javascript::parse;
 
     fn build(src: &str) -> Resolution {
         let program = parse(src).expect("parse");

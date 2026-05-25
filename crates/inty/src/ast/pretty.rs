@@ -2,7 +2,7 @@
 
 use std::fmt::{self, Write};
 
-use super::ast::*;
+use super::*;
 
 /// Pretty print an expression to JavaScript source.
 pub fn print_expr(expr: &Expr) -> String {
@@ -278,7 +278,7 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
         }
 
         Expr::OptionalChain { head, segments, .. } => {
-            use crate::parser::ast::ChainSegment;
+            use crate::ast::ChainSegment;
             if needs_parens {
                 write!(w, "(")?;
             }
@@ -1013,7 +1013,7 @@ fn assign_op_str(op: AssignOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::Span;
+    use crate::span::Span;
 
     fn span() -> Span {
         Span::new(0, 0)

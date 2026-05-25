@@ -18,8 +18,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use inty::infer::{InferState, TypeEnv};
-use inty::parser::ast::Program;
-use inty::parser::pretty::print_program;
+use inty::ast::Program;
+use inty::ast::pretty::print_program;
 use inty::stdlib::initial_env_with_stdlib;
 
 /// Successful check result. `program_ty` is the top-level program's

@@ -10,7 +10,7 @@
 
 use std::fmt;
 
-use crate::parser::ast::Stmt;
+use crate::ast::Stmt;
 
 use super::env::RuntimeEnv;
 use super::heap::Loc;
