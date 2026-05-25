@@ -261,8 +261,14 @@ impl Lexer {
             }
         }
         match self.peek() {
-            None | Some('\n') => {
-                // blank line: consume the newline if present
+            None => {
+                // end of input: let the main loop observe EOF and stop.
+                // (Returning `true` here would spin, since there's nothing
+                // left to consume.)
+                return Ok(false);
+            }
+            Some('\n') => {
+                // blank line: consume the newline
                 self.bump();
                 return Ok(true);
             }

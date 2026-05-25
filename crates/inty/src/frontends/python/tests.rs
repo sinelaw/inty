@@ -176,6 +176,13 @@ fn rejects_tabs() {
     assert!(parse_source("if a:\n\tx = 1").is_err());
 }
 
+#[test]
+fn trailing_newline_terminates() {
+    // A file ending in a newline must not spin the lexer at EOF.
+    assert_eq!(parse("x = 1\ny = 2\n").len(), 2);
+    assert_eq!(parse("def f(a):\n    return a\n").len(), 1);
+}
+
 // ---- end-to-end inference ----
 
 #[test]
