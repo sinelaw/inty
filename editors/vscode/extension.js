@@ -83,9 +83,13 @@ function startClient(context) {
   };
 
   const clientOptions = {
-    documentSelector: [{ scheme: "file", language: "javascript" }],
+    documentSelector: [
+      { scheme: "file", language: "javascript" },
+      { scheme: "file", language: "lua" },
+      { scheme: "file", language: "python" },
+    ],
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.js"),
+      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{js,lua,py}"),
     },
     outputChannel: log,
     traceOutputChannel: log,

@@ -166,6 +166,19 @@ fn first_expr_in(src: &str) -> Expr {
     }
 }
 
+#[test]
+fn string_subscript_is_field_access() {
+    // `t["name"]` lowers to a `.name` member read; `t[i]` stays dynamic.
+    match first_expr_in("local v = t[\"name\"]") {
+        Expr::Member { property, .. } => assert_eq!(property, "name"),
+        other => panic!("expected member, got {:?}", other),
+    }
+    assert!(matches!(
+        first_expr_in("local v = t[i]"),
+        Expr::ComputedMember { .. }
+    ));
+}
+
 // ---- rejections (limited subset) ----
 
 #[test]

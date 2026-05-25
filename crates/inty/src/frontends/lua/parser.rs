@@ -735,10 +735,24 @@ impl Parser {
                     self.advance();
                     let index = self.expr()?;
                     self.expect(&Tok::RBracket, "']'")?;
-                    e = Expr::ComputedMember {
-                        object: Box::new(e),
-                        property: Box::new(index),
-                        span: Span::new(start, self.prev_span().end),
+                    let span = Span::new(start, self.prev_span().end);
+                    // A string-literal key (`t["name"]`) is a field access,
+                    // which the type system resolves on rows; other keys
+                    // stay dynamic indexing.
+                    e = match index {
+                        Expr::Lit {
+                            value: Literal::String(name),
+                            ..
+                        } => Expr::Member {
+                            object: Box::new(e),
+                            property: name,
+                            span,
+                        },
+                        _ => Expr::ComputedMember {
+                            object: Box::new(e),
+                            property: Box::new(index),
+                            span,
+                        },
                     };
                 }
                 Tok::Colon => {

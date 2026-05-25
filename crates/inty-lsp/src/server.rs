@@ -185,10 +185,14 @@ impl Server {
         // before the OS guard page on htmx-class single-file
         // documents. See `crates/inty/src/worker.rs` for the
         // rationale shared with the CLI subcommands.
+        // Pick the frontend from the document URI's extension; default to
+        // JavaScript for anything unrecognised.
+        let lang = inty::frontends::Language::from_path(uri.as_str())
+            .unwrap_or(inty::frontends::Language::JavaScript);
         let analysis = {
             let text = text.clone();
             inty::worker::run_with_inference_stack("inty-lsp-infer", move || {
-                Analysis::check(&text)
+                Analysis::check_lang(&text, lang)
             })
         };
         let mut diagnostics: Vec<Diagnostic> = analysis
