@@ -11,6 +11,7 @@ use inty::infer::{decorate_with_types, InferState, InferWarning, TypeEnv};
 use inty::ast::pretty::print_program;
 use inty::frontends::javascript::lexer::{Scanner, Token};
 use inty::frontends::javascript::parser::Parser;
+use inty::frontends::Language;
 use inty::stdlib::{initial_env_with_stdlib, load_lib};
 use inty::types::PrettyContext;
 
@@ -128,6 +129,10 @@ fn main() -> ExitCode {
         }
     };
 
+    // Pick the frontend from the file extension; default to JavaScript
+    // (also covers stdin, which has no extension).
+    let lang = Language::from_path(&filename).unwrap_or(Language::JavaScript);
+
     // Build the initial env. Default: load embedded stdlib (core + dom). The
     // same InferState is threaded through so fresh type var IDs never clash
     // between the libs and the user program.
@@ -172,7 +177,7 @@ fn main() -> ExitCode {
         let source = source.clone();
         let filename = filename.clone();
         move || {
-            let result = run_inference(&mut state, env, &source, &filename);
+            let result = run_inference(&mut state, env, &source, &filename, lang);
             (result, state)
         }
     });
@@ -504,56 +509,61 @@ AUTHOR:
     );
 }
 
+/// Lex and parse JavaScript, threading JSDoc type annotations and aliases
+/// off the scanner into the program (the other frontends don't have them).
+fn parse_javascript(source: &str) -> Result<inty::ast::Program, IntyError> {
+    let mut scanner = Scanner::new(source);
+    let mut tokens = Vec::new();
+    loop {
+        let tok = scanner.next_token()?;
+        let is_eof = matches!(tok.value, Token::Eof);
+        tokens.push(tok);
+        if is_eof {
+            break;
+        }
+    }
+    let type_annotations = scanner.type_annotations().to_vec();
+    let type_aliases = scanner.type_aliases().to_vec();
+    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
+    let mut program = parser.parse_program()?;
+    program.type_aliases = type_aliases;
+    Ok(program)
+}
+
 fn run_inference(
     state: &mut InferState,
     env: TypeEnv,
     source: &str,
     filename: &str,
+    lang: Language,
 ) -> Result<(), Vec<IntyError>> {
     let mut errors = Vec::new();
 
-    // Lexing
-    let mut scanner = Scanner::new(source);
-    let mut tokens = Vec::new();
-
-    loop {
-        match scanner.next_token() {
-            Ok(tok) => {
-                let is_eof = matches!(tok.value, Token::Eof);
-                tokens.push(tok);
-                if is_eof {
-                    break;
-                }
-            }
+    // Parsing — dispatch on the frontend. JavaScript keeps its bespoke
+    // path (JSDoc type annotations and aliases come off the lexer); the
+    // other frontends lower straight to the shared AST.
+    let program = match lang {
+        Language::JavaScript => match parse_javascript(source) {
+            Ok(p) => p,
             Err(e) => {
                 errors.push(e);
-                break;
+                return Err(errors);
             }
-        }
-    }
-
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-
-    // Parsing
-    let type_annotations = scanner.type_annotations().to_vec();
-    let type_aliases = scanner.type_aliases().to_vec();
-    let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
-
-    let mut program = match parser.parse_program() {
-        Ok(program) => program,
-        Err(e) => {
-            errors.push(e);
-            return Err(errors);
-        }
+        },
+        other => match inty::frontends::parse(other, source) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(e);
+                return Err(errors);
+            }
+        },
     };
-    program.type_aliases = type_aliases;
 
     // Resolve any `import "./foo.js"` statements relative to the file's
-    // parent directory before inferring the program itself. For stdin
-    // (filename == "<stdin>") we skip resolution since there's no path.
-    let env = if filename != "<stdin>" {
+    // parent directory before inferring the program itself. Only the
+    // JavaScript frontend has module imports; for stdin (no path) and the
+    // other frontends we skip resolution.
+    let env = if lang == Language::JavaScript && filename != "<stdin>" {
         let base_dir = std::path::Path::new(filename)
             .parent()
             .map(|p| p.to_path_buf())
@@ -597,9 +607,13 @@ fn run_inference(
             println!("// Program type: {}", ctx.format_type(&final_type));
             println!();
 
-            // Decorate the AST with inferred types and print it
-            let decorated = decorate_with_types(&program, &final_env, state);
-            print!("{}", print_program(&decorated));
+            // The decorator re-emits the source as JavaScript, so it only
+            // makes sense for the JavaScript frontend. For other languages
+            // the program type above is the result.
+            if lang == Language::JavaScript {
+                let decorated = decorate_with_types(&program, &final_env, state);
+                print!("{}", print_program(&decorated));
+            }
 
             Ok(())
         }
