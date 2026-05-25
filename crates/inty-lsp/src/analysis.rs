@@ -8,6 +8,7 @@ use inty::infer::{InferState, InferWarning, TypeEnv};
 use inty::ast::{Expr, ImportSpecifier, Program, Stmt};
 use inty::frontends::javascript::lexer::{Scanner, Token};
 use inty::frontends::javascript::parser::Parser;
+use inty::frontends::Language;
 use inty::span::Span;
 use inty::stdlib::initial_env_with_stdlib;
 use inty::types::{PrettyContext, RowType, Type};
@@ -25,42 +26,60 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// Lex, parse, and infer `text`. Always returns an `Analysis`; on any
-    /// error the relevant fields are left empty.
+    /// Lex, parse, and infer `text` as JavaScript. Always returns an
+    /// `Analysis`; on any error the relevant fields are left empty.
     pub fn check(text: &str) -> Self {
+        Self::check_lang(text, Language::JavaScript)
+    }
+
+    /// Like [`Analysis::check`], but for an explicit frontend. The
+    /// JavaScript path carries JSDoc type annotations/aliases off the
+    /// lexer; the other frontends lower straight to the shared AST.
+    pub fn check_lang(text: &str, lang: Language) -> Self {
         let mut errors = Vec::new();
 
-        // Lex.
-        let mut scanner = Scanner::new(text);
-        let mut tokens = Vec::new();
-        loop {
-            match scanner.next_token() {
-                Ok(tok) => {
-                    let is_eof = matches!(tok.value, Token::Eof);
-                    tokens.push(tok);
-                    if is_eof {
-                        break;
+        let program = match lang {
+            Language::JavaScript => {
+                // Lex.
+                let mut scanner = Scanner::new(text);
+                let mut tokens = Vec::new();
+                loop {
+                    match scanner.next_token() {
+                        Ok(tok) => {
+                            let is_eof = matches!(tok.value, Token::Eof);
+                            tokens.push(tok);
+                            if is_eof {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            return Analysis::errors_only(errors);
+                        }
                     }
                 }
+                // Parse.
+                let type_annotations = scanner.type_annotations().to_vec();
+                let type_aliases = scanner.type_aliases().to_vec();
+                let mut parser = Parser::new(tokens, type_annotations);
+                let mut program = match parser.parse_program() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        errors.push(e);
+                        return Analysis::errors_only(errors);
+                    }
+                };
+                program.type_aliases = type_aliases;
+                program
+            }
+            other => match inty::frontends::parse(other, text) {
+                Ok(p) => p,
                 Err(e) => {
                     errors.push(e);
                     return Analysis::errors_only(errors);
                 }
-            }
-        }
-
-        // Parse.
-        let type_annotations = scanner.type_annotations().to_vec();
-        let type_aliases = scanner.type_aliases().to_vec();
-        let mut parser = Parser::new(tokens, type_annotations);
-        let mut program = match parser.parse_program() {
-            Ok(p) => p,
-            Err(e) => {
-                errors.push(e);
-                return Analysis::errors_only(errors);
-            }
+            },
         };
-        program.type_aliases = type_aliases;
 
         // Resolve identifiers (independent of type inference). We pass
         // the text length so the module scope covers EOF — otherwise
@@ -1110,5 +1129,32 @@ const func = function() { return {id: '123', name: 'hello'}; };";
             undef_count,
             analysis.errors
         );
+    }
+
+    /// `check_lang` routes to the right frontend: a Lua document parses
+    /// and type-checks, and a Lua type error surfaces as a diagnostic.
+    #[test]
+    fn check_lang_dispatches_to_lua() {
+        let ok = Analysis::check_lang(
+            "local function add(a, b) return a + b end\nlocal n = add(1, 2)",
+            Language::Lua,
+        );
+        assert!(ok.errors.is_empty(), "expected ok, got {:?}", ok.errors);
+
+        let bad = Analysis::check_lang("local x = 1 + \"oops\"", Language::Lua);
+        assert!(!bad.errors.is_empty(), "expected a type error");
+    }
+
+    /// Likewise for Python, including indentation-driven blocks.
+    #[test]
+    fn check_lang_dispatches_to_python() {
+        let ok = Analysis::check_lang(
+            "def add(a, b):\n    return a + b\n\nn = add(1, 2)\n",
+            Language::Python,
+        );
+        assert!(ok.errors.is_empty(), "expected ok, got {:?}", ok.errors);
+
+        let bad = Analysis::check_lang("x = 1 + \"oops\"\n", Language::Python);
+        assert!(!bad.errors.is_empty(), "expected a type error");
     }
 }

@@ -1,7 +1,7 @@
 {
   "name": "inty-lsp",
   "displayName": "inty",
-  "description": "VS Code integration for the inty language server — hover types, go-to-definition, rename, completion, signature help, inlay hints, and live diagnostics for JavaScript.",
+  "description": "VS Code integration for the inty language server — hover types, go-to-definition, rename, completion, signature help, inlay hints, and live diagnostics for JavaScript, Lua, and Python.",
   "publisher": "local",
   "version": "0.0.3",
   "engines": {
@@ -15,6 +15,8 @@
   "main": "./extension.js",
   "activationEvents": [
     "onLanguage:javascript",
+    "onLanguage:lua",
+    "onLanguage:python",
     "onStartupFinished"
   ],
   "contributes": {

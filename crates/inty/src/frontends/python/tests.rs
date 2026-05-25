@@ -137,6 +137,16 @@ fn list_and_dict() {
 }
 
 #[test]
+fn string_subscript_is_field_access() {
+    // `d["name"]` lowers to a `.name` member read; `d[i]` stays dynamic.
+    match init_of("v = d[\"name\"]") {
+        Expr::Member { property, .. } => assert_eq!(property, "name"),
+        other => panic!("expected member, got {:?}", other),
+    }
+    assert!(matches!(init_of("v = d[i]"), Expr::ComputedMember { .. }));
+}
+
+#[test]
 fn inline_suite() {
     match &parse("if a: x = 1")[0] {
         Stmt::If { consequent, .. } => assert!(matches!(**consequent, Stmt::Block { .. })),
