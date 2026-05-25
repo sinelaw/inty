@@ -1,7 +1,7 @@
 //! Catalog comprehensiveness and consistency tests.
 
 use super::*;
-use crate::parser::ast::{BinOp, UnaryOp};
+use crate::ast::{BinOp, UnaryOp};
 
 /// Every BinOp variant — kept in sync with the AST by the
 /// `binops_exhaustive` match below, which fails to compile if a new

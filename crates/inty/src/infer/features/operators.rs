@@ -1,8 +1,8 @@
 //! Unary and binary operators.
 
 use crate::error::{IntyError, TypeError};
-use crate::lexer::Span;
-use crate::parser::ast::{BinOp, Expr, UnaryOp};
+use crate::span::Span;
+use crate::ast::{BinOp, Expr, UnaryOp};
 use crate::types::{Type, TypePred};
 
 use super::super::env::TypeEnv;

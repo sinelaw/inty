@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use crate::error::TypeError;
-use crate::lexer::Span;
-use crate::parser::ast::{AssignOp, Expr, PropDef, VarDeclarator, VarKind};
+use crate::span::Span;
+use crate::ast::{AssignOp, Expr, PropDef, VarDeclarator, VarKind};
 use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};

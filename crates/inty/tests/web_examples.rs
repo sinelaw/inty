@@ -22,7 +22,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use inty::parser::parse;
+use inty::frontends::javascript::parse;
 use inty::stdlib::initial_env_with_stdlib;
 
 #[derive(Debug, Deserialize)]

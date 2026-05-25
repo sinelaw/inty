@@ -9,18 +9,19 @@
 //! - **Full type inference** with first-class polymorphism
 //! - **Type annotations in comments** using `/*: Type */` syntax
 
+pub mod ast;
 pub mod builtins;
 pub mod classes;
 pub mod declarations;
 pub mod diagnostics;
 pub mod dynamics;
 pub mod error;
+pub mod frontends;
 pub mod infer;
-pub mod lexer;
 pub mod meta;
 pub mod modules;
 pub mod operators;
-pub mod parser;
+pub mod span;
 pub mod stdlib;
 pub mod types;
 pub mod worker;

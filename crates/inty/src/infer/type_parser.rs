@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use crate::error::TypeError;
-use crate::lexer::Span;
+use crate::span::Span;
 use crate::types::{LitValue, Type};
 
 use super::state::AliasDef;

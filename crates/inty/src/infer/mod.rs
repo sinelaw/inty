@@ -31,7 +31,7 @@ pub use type_parser::{
 pub use unify::UnifyResult;
 
 use crate::error::{IntyError, TypeError};
-use crate::parser::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
+use crate::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
 use crate::types::{Type, TypeScheme};
 
 /// Result type for inference operations.
@@ -127,7 +127,7 @@ impl InferState {
         // SIGSEGV — but the user needs to know their input pushed
         // past inty's current scaling limit.
         if crate::types::subst::take_apply_subst_overflow() {
-            let span = crate::lexer::Span::new(0, 0);
+            let span = crate::span::Span::new(0, 0);
             self.push_error(
                 crate::error::TypeError::Module {
                     message: "type checker hit its recursion-depth cap on \
@@ -151,7 +151,7 @@ impl InferState {
     /// for those parameter IDs.
     pub fn load_type_aliases(
         &mut self,
-        aliases: &[crate::parser::ast::TypeAlias],
+        aliases: &[crate::ast::TypeAlias],
     ) -> InferResult<()> {
         use crate::infer::state::AliasDef;
         use crate::types::TVarName;
@@ -284,7 +284,7 @@ impl InferState {
                 }
                 Stmt::Export {
                     declaration:
-                        crate::parser::ast::ExportDecl::Var { declarations, .. },
+                        crate::ast::ExportDecl::Var { declarations, .. },
                     ..
                 } => {
                     collect_hoists(&mut hoisted_data, self, declarations);
@@ -404,7 +404,7 @@ impl InferState {
                         }
                         Stmt::Export {
                             declaration:
-                                crate::parser::ast::ExportDecl::Var { declarations, .. },
+                                crate::ast::ExportDecl::Var { declarations, .. },
                             ..
                         } => {
                             unify_hoisted(self, declarations);

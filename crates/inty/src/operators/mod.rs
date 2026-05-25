@@ -14,7 +14,7 @@
 //! source of behaviour. Adjust the catalog, or mark the arm with a
 //! `notes` exemption that phase 4 skips.
 
-use crate::parser::ast::{BinOp, UnaryOp};
+use crate::ast::{BinOp, UnaryOp};
 use crate::types::ClassName;
 
 /// Atomic types referenced by typing arms. A closed set distinct from

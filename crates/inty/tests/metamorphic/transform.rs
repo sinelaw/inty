@@ -3,8 +3,8 @@
 //! how the transformation renamed / introduced / removed bindings, so
 //! the oracle can assert the appropriate equivalence.
 
-use inty::lexer::Span;
-use inty::parser::ast::*;
+use inty::span::Span;
+use inty::ast::*;
 
 use super::ast::{
     bound_names_in_stmt, empty_stmt, fresh_name, names_in, num_lit, referenced_names_in_stmt,
@@ -392,7 +392,7 @@ pub fn build_destructure_pair(obj_src: &str, prop: &str) -> (String, String, Com
 /// Returns `q` with the var decl moved to just after the function
 /// decl, and an identity comparison.
 pub fn t_move_data_decl_after_first_user(p: &Program) -> Option<(Program, Comparison)> {
-    use inty::parser::ast::{ExportDecl, Stmt, VarDeclarator};
+    use inty::ast::{ExportDecl, Stmt, VarDeclarator};
 
     fn single_binding<'a>(s: &'a Stmt) -> Option<(&'a VarDeclarator, bool)> {
         // Returns (declarator, is_export). Only single-name, non-destructuring

@@ -1,6 +1,6 @@
 //! Error types for the inty type checker.
 
-use crate::lexer::Span;
+use crate::span::Span;
 use thiserror::Error;
 
 /// Describes where a type came from in the source code
@@ -210,6 +210,9 @@ pub enum ParseError {
 
     #[error("'return' outside of function")]
     ReturnOutsideFunction { span: Span },
+
+    #[error("unsupported construct: {feature}")]
+    Unsupported { feature: String, span: Span },
 }
 
 impl ParseError {
@@ -223,6 +226,7 @@ impl ParseError {
             ParseError::BreakOutsideLoop { span } => *span,
             ParseError::ContinueOutsideLoop { span } => *span,
             ParseError::ReturnOutsideFunction { span } => *span,
+            ParseError::Unsupported { span, .. } => *span,
         }
     }
 }

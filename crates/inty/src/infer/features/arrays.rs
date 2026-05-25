@@ -1,7 +1,7 @@
 //! Array literals and indexing.
 
-use crate::lexer::Span;
-use crate::parser::ast::Expr;
+use crate::span::Span;
+use crate::ast::Expr;
 use crate::types::{RowTail, TVarName, Type, TypePred};
 
 use super::super::env::TypeEnv;

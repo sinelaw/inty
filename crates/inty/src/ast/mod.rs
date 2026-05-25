@@ -1,6 +1,15 @@
-//! Abstract Syntax Tree definitions for mquickjs.
+//! Shared Abstract Syntax Tree.
+//!
+//! This is the language-neutral core that every frontend lowers into and
+//! that inference and the operational semantics consume. The node set is
+//! JavaScript-flavoured for historical reasons, but the Lua and Python
+//! frontends desugar their surface syntax onto these same nodes (rejecting
+//! constructs that don't map cleanly — see each frontend module).
 
-use crate::lexer::Span;
+pub mod free_idents;
+pub mod pretty;
+
+use crate::span::Span;
 
 /// One function/method parameter, with its source span.
 ///

@@ -12,7 +12,7 @@
 //! be added with one match arm here, and the generator/property test
 //! gates on the predicate to refuse to feed them in.
 
-use crate::parser::ast::{Expr, Stmt};
+use crate::ast::{Expr, Stmt};
 
 /// True if `expr` is built entirely from parser-surface AST forms. Use
 /// this to gate inputs to the well-typed-term generator and the blame
@@ -26,11 +26,11 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
             None => true,
         }),
         Expr::Object { properties, .. } => properties.iter().all(|p| match p {
-            crate::parser::ast::PropDef::Property { value, .. } => is_surface_expr(value),
-            crate::parser::ast::PropDef::Method { body, .. } => is_surface_stmt(body),
-            crate::parser::ast::PropDef::Getter { body, .. } => is_surface_stmt(body),
-            crate::parser::ast::PropDef::Setter { body, .. } => is_surface_stmt(body),
-            crate::parser::ast::PropDef::Spread { argument, .. } => is_surface_expr(argument),
+            crate::ast::PropDef::Property { value, .. } => is_surface_expr(value),
+            crate::ast::PropDef::Method { body, .. } => is_surface_stmt(body),
+            crate::ast::PropDef::Getter { body, .. } => is_surface_stmt(body),
+            crate::ast::PropDef::Setter { body, .. } => is_surface_stmt(body),
+            crate::ast::PropDef::Spread { argument, .. } => is_surface_expr(argument),
         }),
         Expr::Function { body, .. } => is_surface_stmt(body),
         Expr::Member { object, .. } => is_surface_expr(object),
@@ -59,11 +59,11 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
         Expr::OptionalChain { head, segments, .. } => {
             is_surface_expr(head)
                 && segments.iter().all(|s| match s {
-                    crate::parser::ast::ChainSegment::Member { .. } => true,
-                    crate::parser::ast::ChainSegment::Computed { property, .. } => {
+                    crate::ast::ChainSegment::Member { .. } => true,
+                    crate::ast::ChainSegment::Computed { property, .. } => {
                         is_surface_expr(property)
                     }
-                    crate::parser::ast::ChainSegment::Call { arguments, .. } => {
+                    crate::ast::ChainSegment::Call { arguments, .. } => {
                         arguments.iter().all(is_surface_expr)
                     }
                 })
@@ -80,7 +80,7 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
 
 /// True if `stmt` is built entirely from parser-surface AST forms.
 pub fn is_surface_stmt(stmt: &Stmt) -> bool {
-    use crate::parser::ast::{ExportDecl, ForInit};
+    use crate::ast::{ExportDecl, ForInit};
     match stmt {
         Stmt::Empty { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => true,
         Stmt::Block { body, .. } => body.iter().all(is_surface_stmt),
@@ -161,10 +161,10 @@ pub fn is_surface_stmt(stmt: &Stmt) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::{Scanner, Token};
-    use crate::parser::Parser;
+    use crate::frontends::javascript::lexer::{Scanner, Token};
+    use crate::frontends::javascript::parser::Parser;
 
-    fn parse(src: &str) -> crate::parser::ast::Program {
+    fn parse(src: &str) -> crate::ast::Program {
         let mut scanner = Scanner::new(src);
         let mut tokens = Vec::new();
         loop {

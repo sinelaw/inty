@@ -12,9 +12,9 @@
 //! catalog already documents that they can't be fully modeled).
 
 use crate::dynamics::{run_to_end_with_fuel, Stuck};
-use crate::lexer::{Scanner, Token};
+use crate::frontends::javascript::lexer::{Scanner, Token};
 use crate::operators::{BaseType, OpInfo, OpKind, TypeShape, TypingArm};
-use crate::parser::Parser;
+use crate::frontends::javascript::parser::Parser;
 use crate::types::ClassName;
 
 /// `(operator name, configuration snapshot, input shape)` describing a

@@ -2,7 +2,7 @@
 
 use super::token::{Span, Spanned, Token};
 use crate::error::{LexError, Result};
-use crate::parser::ast::{AnnotationKind, TypeAlias, TypeAnnotation};
+use crate::ast::{AnnotationKind, TypeAlias, TypeAnnotation};
 
 /// The lexer/scanner for mquickjs source code.
 pub struct Scanner<'a> {

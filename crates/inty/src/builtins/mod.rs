@@ -7,7 +7,7 @@
 
 use crate::error::{IntyError, TypeError};
 use crate::infer::{InferState, TypeEnv};
-use crate::lexer::Span;
+use crate::span::Span;
 use crate::types::{ClassName, RowType, TVarName, Type, TypePred, TypeScheme};
 
 /// Create the initial type environment with built-in bindings.

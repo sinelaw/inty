@@ -28,7 +28,7 @@
 //!     emits new tokens; inference treats them like `=`; dynamics
 //!     short-circuits the RHS
 
-use inty::parser::parse;
+use inty::frontends::javascript::parse;
 use inty::stdlib::initial_env_with_stdlib;
 
 /// Parse-only check. Returns Ok(()) iff the parser accepts the input.
@@ -308,7 +308,7 @@ fn await_inside_non_async_arrow_still_rejected() {
     // The arrow's own async context — *not* an enclosing async
     // function — determines whether `await` is legal in its body.
     // The lookahead change must not loosen this.
-    use inty::parser::parse;
+    use inty::frontends::javascript::parse;
     assert!(
         parse(
             "async function outer() {
@@ -415,7 +415,7 @@ fn logical_assign_type_mismatch_rejected() {
 fn delete_in_middle_of_file_does_not_stop_inference() {
     // Inference should keep going past the `delete` so later
     // statements still get checked.
-    use inty::parser::parse;
+    use inty::frontends::javascript::parse;
     use inty::stdlib::initial_env_with_stdlib;
     let src = "
         var o = {a: 1};

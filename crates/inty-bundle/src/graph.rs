@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use inty::parser::ast::Program;
+use inty::ast::Program;
 
 #[derive(Debug)]
 pub struct Module {

@@ -22,7 +22,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use inty::parser::parse;
+use inty::frontends::javascript::parse;
 use inty::stdlib::initial_env_with_stdlib;
 use inty::worker::INFERENCE_STACK_SIZE;
 

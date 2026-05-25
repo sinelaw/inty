@@ -4,8 +4,8 @@ use super::env::Mutability;
 use super::*;
 
 use crate::builtins::initial_env;
-use crate::lexer::{Scanner, Token};
-use crate::parser::Parser;
+use crate::frontends::javascript::lexer::{Scanner, Token};
+use crate::frontends::javascript::parser::Parser;
 use crate::types::Type;
 
 fn infer_expr_str(source: &str) -> InferResult<Type> {
@@ -27,7 +27,7 @@ fn infer_expr_str(source: &str) -> InferResult<Type> {
 
     // Get the first expression statement
     let expr = match &program.statements[0] {
-        crate::parser::ast::Stmt::Expr { expression, .. } => expression.clone(),
+        crate::ast::Stmt::Expr { expression, .. } => expression.clone(),
         _ => panic!("Expected expression statement"),
     };
 
@@ -2904,7 +2904,7 @@ fn metamorphic_three_member_accesses_order_invariant() {
 #[test]
 fn error_unifies_trivially_with_concrete() {
     let mut state = InferState::new();
-    let span = crate::lexer::Span::new(0, 0);
+    let span = crate::span::Span::new(0, 0);
     // Error on the left, concrete on the right.
     state.unify(span, &Type::Error, &Type::Number).expect("Error ~ Number must succeed");
     state.unify(span, &Type::Error, &Type::String).expect("Error ~ String must succeed");
@@ -2916,7 +2916,7 @@ fn error_unifies_trivially_with_concrete() {
 #[test]
 fn error_unifies_with_compound_types() {
     let mut state = InferState::new();
-    let span = crate::lexer::Span::new(0, 0);
+    let span = crate::span::Span::new(0, 0);
     let func = Type::simple_func(vec![Type::Number], Type::String);
     state.unify(span, &Type::Error, &func).expect("Error ~ Func must succeed");
     let arr = Type::Array(Box::new(Type::Number));
@@ -2930,7 +2930,7 @@ fn error_unifies_with_flex_var_without_binding_it() {
     // that shares the var). The current rule is to short-circuit
     // before var_bind, leaving the var unconstrained.
     let mut state = InferState::new();
-    let span = crate::lexer::Span::new(0, 0);
+    let span = crate::span::Span::new(0, 0);
     let v = state.fresh_type_var();
     state.unify(span, &Type::Error, &v).expect("Error ~ Var must succeed");
     // The var should still be a free type variable, not bound to Error.
@@ -2945,7 +2945,7 @@ fn error_unifies_with_flex_var_without_binding_it() {
 #[test]
 fn error_member_access_produces_error() {
     let mut state = InferState::new();
-    let span = crate::lexer::Span::new(0, 0);
+    let span = crate::span::Span::new(0, 0);
     let result = state
         .infer_member_on_type(&Type::Error, "anyfield", span)
         .expect("member access on Error must succeed");
@@ -2958,7 +2958,7 @@ fn error_apply_subst_is_identity() {
     let v = state.fresh_type_var();
     // Even with a substitution that binds the var, Error itself
     // shouldn't change.
-    let span = crate::lexer::Span::new(0, 0);
+    let span = crate::span::Span::new(0, 0);
     state.unify(span, &v, &Type::Number).unwrap();
     assert_eq!(state.apply_subst(&Type::Error), Type::Error);
 }
@@ -2978,7 +2978,7 @@ fn error_renders_as_sentinel_string() {
 fn error_satisfies_plus_constraint() {
     use crate::types::TypePred;
     let mut state = InferState::new();
-    let span = crate::lexer::Span::new(0, 0);
+    let span = crate::span::Span::new(0, 0);
     state.add_constraint(TypePred::plus(Type::Error), span);
     state
         .resolve_constraints()
@@ -2989,7 +2989,7 @@ fn error_satisfies_plus_constraint() {
 fn error_satisfies_indexable_constraint() {
     use crate::types::TypePred;
     let mut state = InferState::new();
-    let span = crate::lexer::Span::new(0, 0);
+    let span = crate::span::Span::new(0, 0);
     // Indexable Error _ _ — should resolve regardless of the
     // index/element components.
     state.add_constraint(
@@ -3006,7 +3006,7 @@ fn error_call_propagates_through_call() {
     // End-to-end: a binding manually substituted to Error is called;
     // the call result should be Error, not propagate constraint
     // failures through the parameter inference.
-    use crate::parser::ast::Stmt;
+    use crate::ast::Stmt;
     let mut state = InferState::new();
     let env = initial_env();
     // Build an env where `f` is Error.
@@ -3038,7 +3038,7 @@ fn error_call_propagates_through_call() {
 fn error_member_chain_propagates() {
     // Chained member access on an Error binding stays Error all the
     // way through — no diagnostics emitted at any of the segments.
-    use crate::parser::ast::Stmt;
+    use crate::ast::Stmt;
     let mut state = InferState::new();
     let env = initial_env();
     let env = env.extend("broken".to_string(), crate::types::TypeScheme::mono(Type::Error));
@@ -3116,7 +3116,7 @@ fn error_does_not_cascade_to_unrelated_bindings() {
 
 /// Parse a source string using the same lexer + parser as the binary
 /// pipeline. Helper for the multi-error tests below.
-fn parse_for_multi_error_test(source: &str) -> crate::parser::ast::Program {
+fn parse_for_multi_error_test(source: &str) -> crate::ast::Program {
     let mut scanner = Scanner::new(source);
     let mut tokens = Vec::new();
     loop {

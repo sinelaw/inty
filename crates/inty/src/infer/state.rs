@@ -75,7 +75,7 @@ fn structural_norm(ty: &Type) -> Type {
     }
 }
 use crate::error::{IntyError, TypeOrigin};
-use crate::lexer::Span;
+use crate::span::Span;
 use crate::types::{
     ClassName, LitValue, QualType, RowTail, Subst, Substitutable, TVarId, TVarName, TidyEnv, Type,
     TypeDef, TypeId, TypePred, TypeScheme,
@@ -901,7 +901,7 @@ impl InferState {
     /// property-not-found errors at chained-method call sites.
     pub fn extend_subst(
         &mut self,
-        span: crate::lexer::Span,
+        span: crate::span::Span,
         var: TVarName,
         ty: Type,
     ) -> super::unify::UnifyResult<()> {
@@ -1087,7 +1087,7 @@ impl InferState {
     /// discipline as `extend_subst` for type variables.
     pub fn extend_subst_presence(
         &mut self,
-        span: crate::lexer::Span,
+        span: crate::span::Span,
         pvar: crate::types::PVarName,
         pres: crate::types::Presence,
     ) -> super::unify::UnifyResult<()> {
@@ -1118,7 +1118,7 @@ impl InferState {
     /// error; Var(theta) unifies with the other side by binding theta.
     pub fn unify_presence(
         &mut self,
-        span: crate::lexer::Span,
+        span: crate::span::Span,
         p1: &crate::types::Presence,
         p2: &crate::types::Presence,
     ) -> super::unify::UnifyResult<()> {
