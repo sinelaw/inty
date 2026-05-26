@@ -327,6 +327,44 @@ fn default_param_is_marked_optional() {
 }
 
 #[test]
+fn default_carries_type_constraint_except_none() {
+    match &parse("def f(a, b=1, c=None):\n    return a")[0] {
+        Stmt::FunctionDecl { params, .. } => {
+            // a: required, no default constraint.
+            assert!(!params[0].optional && params[0].default.is_none());
+            // b=1: optional and constrains the type.
+            assert!(params[1].optional && params[1].default.is_some());
+            // c=None: optional but imposes no type constraint.
+            assert!(params[2].optional && params[2].default.is_none());
+        }
+        other => panic!("expected function decl, got {:?}", other),
+    }
+}
+
+#[test]
+fn non_none_default_constrains_param_type() {
+    // `y=1` makes y a Number: omitting it infers Number, and a
+    // wrong-typed argument is rejected.
+    assert!(
+        check("def f(y=1):\n    return y\nx = f()\nr = x + 1\n").is_empty(),
+        "omitted default should give y its Number type"
+    );
+    assert!(
+        !check("def f(y=1):\n    return y\nf(\"hi\")\n").is_empty(),
+        "a String argument must be rejected against a Number default"
+    );
+}
+
+#[test]
+fn none_default_imposes_no_constraint() {
+    // `=None` is Python's idiomatic optional: it accepts any value.
+    let errs = check(
+        "def conn(timeout=None):\n    return 1\nconn()\nconn(30)\nconn(\"x\")\n",
+    );
+    assert!(errs.is_empty(), "=None should accept any argument, got {:?}", errs);
+}
+
+#[test]
 fn default_param_may_be_omitted_or_supplied() {
     let errs = check("def f(a, b=1):\n    return a\nx = f(10)\ny = f(10, 20)\n");
     assert!(errs.is_empty(), "omitting/supplying a default should both check, got {:?}", errs);
