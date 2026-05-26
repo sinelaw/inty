@@ -7,10 +7,12 @@ mod pretty;
 pub mod subst;
 mod tidy;
 mod ty;
+mod type_ast;
 
 pub use pretty::PrettyContext;
 pub use subst::{Subst, Substitutable};
 pub use tidy::TidyEnv;
+pub use type_ast::TypeAst;
 pub use ty::{
     ClassName, FieldEntry, FuncParam, LitValue, ModuleType, PVarId, PVarName, Presence, PropName,
     QualType, RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId, TypePred, TypeScheme,
