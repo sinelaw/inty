@@ -34,6 +34,9 @@ pub enum Tok {
     None,
     Lambda,
     Is,
+    Import,
+    From,
+    As,
     /// A reserved word we recognise but deliberately don't support; the
     /// parser turns it into a clear `Unsupported` diagnostic.
     Reserved(String),
@@ -129,7 +132,10 @@ impl Tok {
             "None" => Tok::None,
             "lambda" => Tok::Lambda,
             "is" => Tok::Is,
-            "import" | "from" | "as" | "with" | "try" | "except" | "finally"
+            "import" => Tok::Import,
+            "from" => Tok::From,
+            "as" => Tok::As,
+            "with" | "try" | "except" | "finally"
             | "raise" | "global" | "nonlocal" | "del" | "assert" | "yield" | "async"
             | "await" => Tok::Reserved(s.to_string()),
             _ => return None,
