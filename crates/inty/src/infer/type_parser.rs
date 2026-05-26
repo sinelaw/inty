@@ -824,11 +824,19 @@ impl<'a> TypeParser<'a> {
                             )));
                         }
 
-                        // Capture-avoiding substitution: clone the body
-                        // and replace each parameter var with the
-                        // corresponding argument type. For a nullary
-                        // alias the subst is empty and the body is
-                        // returned as-is.
+                        // Nominal alias: produce a branded reference
+                        // `Type::Named(id, args)` rather than inlining
+                        // the representation, so the type retains its
+                        // identity through unification.
+                        if let Some(id) = def.nominal_id {
+                            return Ok(Type::Named(id, args));
+                        }
+
+                        // Structural alias: capture-avoiding
+                        // substitution — clone the body and replace each
+                        // parameter var with the corresponding argument
+                        // type. For a nullary alias the subst is empty
+                        // and the body is returned as-is.
                         let mut subst: HashMap<u32, Type> = HashMap::with_capacity(args.len());
                         for (p, a) in def.params.iter().zip(args.iter()) {
                             subst.insert(*p, a.clone());

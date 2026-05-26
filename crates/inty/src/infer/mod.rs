@@ -118,7 +118,10 @@ impl InferState {
         // to `Foo<X>` is exactly equivalent to inlining `Foo`'s body
         // with the type argument substituted.
         self.load_type_aliases(&program.type_aliases)?;
-        let result = self.infer_stmt_list(env, &program.statements);
+        // Inject constructors for declared nominal types before checking
+        // the body, so `Name(repr)` resolves to a branded value.
+        let env = self.nominal_constructor_env(env, &program.type_aliases);
+        let result = self.infer_stmt_list(&env, &program.statements);
 
         // If `Type::apply_subst` hit its recursion-depth cap during
         // this run (see `docs/scaling.md`), surface a clean
@@ -154,31 +157,70 @@ impl InferState {
         aliases: &[crate::ast::TypeAlias],
     ) -> InferResult<()> {
         use crate::infer::state::AliasDef;
-        use crate::types::TVarName;
+        use crate::types::{TVarName, TypeDef};
 
-        // Two-pass: first reserve a placeholder for every alias so
-        // each body can see its peers (mutual references are
-        // allowed, even though direct self-recursion isn't yet
-        // expanded). Then parse each body with the env populated.
+        // Pass 1: reserve a slot for every alias so each body can see
+        // its peers (mutual references). For *nominal* aliases we also
+        // allocate the brand id and parameter ids up front, so a
+        // nominal body can refer to the type recursively (e.g. a class
+        // method returning `Self`) and resolve to the right
+        // `Type::Named(id, …)`.
+        let mut nominal_param_ids: std::collections::HashMap<String, Vec<u32>> =
+            std::collections::HashMap::new();
         for alias in aliases {
+            let nominal_id = if alias.nominal {
+                Some(self.fresh_type_id())
+            } else {
+                None
+            };
+            let params: Vec<u32> = if alias.nominal {
+                let ids: Vec<u32> = alias
+                    .params
+                    .iter()
+                    .map(|_| {
+                        let TVarName::Flex(id) = self.fresh_flex() else {
+                            unreachable!("fresh_flex returns Flex");
+                        };
+                        id
+                    })
+                    .collect();
+                nominal_param_ids.insert(alias.name.clone(), ids.clone());
+                ids
+            } else {
+                Vec::new()
+            };
             self.type_aliases.insert(
                 alias.name.clone(),
                 AliasDef {
-                    params: Vec::new(),
+                    params,
                     body: Type::Undefined,
+                    nominal_id,
                 },
             );
         }
 
+        // Pass 2: parse each body with the alias env visible.
         for alias in aliases {
-            // Allocate one genuinely fresh type-var ID per parameter.
-            let mut param_ids: Vec<u32> = Vec::with_capacity(alias.params.len());
-            for _ in &alias.params {
-                let TVarName::Flex(id) = self.fresh_flex() else {
-                    unreachable!("fresh_flex returns Flex");
-                };
-                param_ids.push(id);
-            }
+            // Reuse the pass-1 parameter ids for nominal aliases (so
+            // recursive references line up); allocate fresh ids for
+            // structural aliases as before.
+            let param_ids: Vec<u32> = if alias.nominal {
+                nominal_param_ids
+                    .get(&alias.name)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                alias
+                    .params
+                    .iter()
+                    .map(|_| {
+                        let TVarName::Flex(id) = self.fresh_flex() else {
+                            unreachable!("fresh_flex returns Flex");
+                        };
+                        id
+                    })
+                    .collect()
+            };
 
             // Parse the body with the alias env visible (so other
             // alias references resolve), seeding type_vars with our
@@ -199,15 +241,66 @@ impl InferState {
             };
             self.bump_var_id_to(body.1);
 
+            let nominal_id = self
+                .type_aliases
+                .get(&alias.name)
+                .and_then(|d| d.nominal_id);
+
+            // For a nominal alias, register the brand's representation
+            // in the named-type registry so `unify`/member-access can
+            // see through it.
+            if let Some(id) = nominal_id {
+                let tvar_params: Vec<TVarName> =
+                    param_ids.iter().map(|i| TVarName::Flex(*i)).collect();
+                self.register_named_type(TypeDef::nominal(
+                    id,
+                    alias.name.clone(),
+                    tvar_params,
+                    body.0.clone(),
+                ));
+            }
+
             self.type_aliases.insert(
                 alias.name.clone(),
                 AliasDef {
                     params: param_ids,
                     body: body.0,
+                    nominal_id,
                 },
             );
         }
         Ok(())
+    }
+
+    /// Extend `base` with a value-level constructor for each declared
+    /// nominal alias. `nominal type Name<P> = Repr` injects
+    /// `Name: <P>(Repr) => Name`, the only way to *introduce* a branded
+    /// value (mirroring how calling a Python class is the only way to
+    /// mint an instance). Reads see through the brand; identity does not.
+    fn nominal_constructor_env(
+        &self,
+        base: &TypeEnv,
+        aliases: &[crate::ast::TypeAlias],
+    ) -> TypeEnv {
+        use crate::types::{TVarName, TypeScheme};
+        let mut env = base.clone();
+        for alias in aliases {
+            if !alias.nominal {
+                continue;
+            }
+            let Some(def) = self.type_aliases.get(&alias.name) else {
+                continue;
+            };
+            let Some(id) = def.nominal_id else { continue };
+            let args: Vec<Type> = def.params.iter().map(|i| Type::flex(*i)).collect();
+            let named = Type::Named(id, args);
+            let ctor = Type::simple_func(vec![def.body.clone()], named);
+            let vars: Vec<TVarName> = def.params.iter().map(|i| TVarName::Flex(*i)).collect();
+            let pvars: Vec<_> = ctor.free_pvars().into_iter().collect();
+            let scheme = TypeScheme::poly_with_presence(vars, pvars, ctor);
+            env = env.extend(alias.name.clone(), scheme);
+        }
+        env
     }
 
     /// Infer a list of statements with ECMAScript-strict-mode function

@@ -371,7 +371,20 @@ impl<'a> Scanner<'a> {
                                     }
                                     Some("type") => {
                                         self.advance_keyword("type");
-                                        self.parse_type_alias(start);
+                                        self.parse_type_alias(start, false);
+                                        continue;
+                                    }
+                                    Some("nominal") => {
+                                        self.advance_keyword("nominal");
+                                        self.skip_whitespace();
+                                        // `nominal type Name = …`. The
+                                        // `type` keyword is required;
+                                        // anything else is a malformed
+                                        // annotation we quietly drop.
+                                        if self.peek_keyword().as_deref() == Some("type") {
+                                            self.advance_keyword("type");
+                                            self.parse_type_alias(start, true);
+                                        }
                                         continue;
                                     }
                                     Some("export") => {
@@ -1357,7 +1370,7 @@ impl<'a> Scanner<'a> {
     /// name, parameter list (possibly empty for `type Foo = ...`),
     /// and body string. The body is re-parsed at inference time so
     /// the parameter names can map to fresh type-variable IDs.
-    fn parse_type_alias(&mut self, start: usize) {
+    fn parse_type_alias(&mut self, start: usize, nominal: bool) {
         self.skip_whitespace();
 
         let name = self.read_identifier();
@@ -1413,6 +1426,7 @@ impl<'a> Scanner<'a> {
             params,
             body: body.trim().to_string(),
             span,
+            nominal,
         });
 
         self.consume_comment_end();

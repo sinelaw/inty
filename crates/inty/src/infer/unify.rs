@@ -601,9 +601,18 @@ impl InferState {
             .cloned()
             .or_else(|| self.find_origin_through_subst(t2));
 
+        // Render brands by their declared name so a mismatch reads
+        // `UserId` vs `OrderId` rather than `μ3` vs `μ4`.
+        let nominal_names: std::collections::HashMap<_, _> = self
+            .named_types
+            .iter()
+            .filter_map(|(id, def)| def.name.clone().map(|n| (*id, n)))
+            .collect();
+        let mut ctx = crate::types::PrettyContext::with_nominal_names(nominal_names);
+
         TypeError::UnificationError {
-            expected: t1.to_string(),
-            found: t2.to_string(),
+            expected: ctx.format_type(t1),
+            found: ctx.format_type(t2),
             span,
             context: None,
             expected_origin,
