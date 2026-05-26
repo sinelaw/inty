@@ -20,7 +20,7 @@ use super::lexer::{tokenize, Tok};
 use crate::error::Result;
 use crate::infer::InferState;
 use crate::span::Spanned;
-use crate::types::{FuncParam, PropName, Type, TypeScheme};
+use crate::types::{FuncParam, LitValue, PropName, Type, TypeScheme};
 
 /// The result of reading a `.pyi`: directly-declared exports plus the
 /// re-export requests (`from X import …`) the caller must resolve and
@@ -651,6 +651,15 @@ impl StubReader<'_> {
 
     /// `NAME [ args ]` — a subscripted (generic) type.
     fn parse_generic(&mut self, head: &str) -> Type {
+        // Forms that need raw access to their subscript tokens (literal
+        // members, the nested Callable param list) are handled before the
+        // generic argument flattening.
+        if head == "Literal" {
+            return self.parse_literal_args();
+        }
+        if head == "Callable" {
+            return self.parse_callable_args();
+        }
         let args = self.parse_type_args();
         match head {
             "list" | "List" | "Sequence" | "Iterable" | "Iterator" | "MutableSequence"
@@ -682,15 +691,114 @@ impl StubReader<'_> {
                 // Erase the wrapper, keep the first argument.
                 args.into_iter().next().unwrap_or_else(|| self.opaque())
             }
-            "Literal" => {
-                // Literal members were captured opaque by parse_type_args
-                // (they aren't type names); fall back to opaque union.
-                self.opaque()
-            }
-            "Callable" => self.opaque(), // refined below in parse_type_args path
+            // `Literal` / `Callable` handled before arg flattening above.
             // Unknown generic (a user class with params, Protocol, etc.):
             // opaque.
             _ => self.opaque(),
+        }
+    }
+
+    /// `Literal[ m, … ]` → a union of singleton-literal types
+    /// (`Literal["a", "b"]` → `"a" | "b"`, `Literal[1, 2]` → `1 | 2`,
+    /// `Literal[True]` → `true`). Members that aren't plain literals
+    /// (e.g. `Literal[Color.RED]`) degrade to opaque.
+    fn parse_literal_args(&mut self) -> Type {
+        if !self.eat(&Tok::LBracket) {
+            return self.opaque();
+        }
+        let mut members = Vec::new();
+        while !self.check(&Tok::RBracket) && !self.at_eof() {
+            let member = match self.cur().clone() {
+                Tok::Str(s) => {
+                    self.advance();
+                    Type::Literal(LitValue::String(s))
+                }
+                Tok::Number(n) => {
+                    self.advance();
+                    Type::Literal(LitValue::Number(n))
+                }
+                Tok::True => {
+                    self.advance();
+                    Type::Literal(LitValue::Bool(true))
+                }
+                Tok::False => {
+                    self.advance();
+                    Type::Literal(LitValue::Bool(false))
+                }
+                Tok::None => {
+                    self.advance();
+                    Type::Null
+                }
+                _ => {
+                    // Enum member, expression, etc.: consume to the next
+                    // separator and model opaque.
+                    self.skip_to_arg_end();
+                    self.opaque()
+                }
+            };
+            members.push(member);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.eat(&Tok::RBracket);
+        match members.len() {
+            0 => self.opaque(),
+            1 => members.pop().unwrap(),
+            _ => Type::union(members),
+        }
+    }
+
+    /// `Callable[[A, B], R]` → `(A, B) => R`. `Callable[..., R]` (arbitrary
+    /// args, which inty can't express) and malformed forms degrade to
+    /// opaque so over-broad callables still accept any call.
+    fn parse_callable_args(&mut self) -> Type {
+        if !self.eat(&Tok::LBracket) {
+            return self.opaque();
+        }
+        // First argument: a `[A, B]` parameter list, or `...` (Ellipsis).
+        let params = if self.check(&Tok::LBracket) {
+            Some(self.parse_type_args())
+        } else {
+            // `...` or anything else → arbitrary args.
+            while !self.check(&Tok::Comma) && !self.check(&Tok::RBracket) && !self.at_eof() {
+                self.advance();
+            }
+            None
+        };
+        self.eat(&Tok::Comma);
+        // Second argument: the return type.
+        let ret = if self.check(&Tok::RBracket) {
+            self.opaque()
+        } else {
+            self.parse_type()
+        };
+        self.eat(&Tok::RBracket);
+
+        match params {
+            Some(ps) => {
+                let fps = ps.into_iter().map(FuncParam::required).collect();
+                Type::wrap_callable(Type::raw_func_with_params(None, fps, ret))
+            }
+            None => self.opaque(),
+        }
+    }
+
+    /// Skip a single subscript argument's tokens up to a top-level `,` or
+    /// the closing `]`.
+    fn skip_to_arg_end(&mut self) {
+        let mut depth = 0i32;
+        loop {
+            match self.cur() {
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBrace => depth -= 1,
+                Tok::RBracket if depth == 0 => break,
+                Tok::RBracket => depth -= 1,
+                Tok::Comma if depth == 0 => break,
+                Tok::Eof | Tok::Newline => break,
+                _ => {}
+            }
+            self.advance();
         }
     }
 
