@@ -41,6 +41,7 @@ impl<'a> Decorator<'a> {
             statements: decorated_stmts,
             span: program.span,
             type_aliases: program.type_aliases.clone(),
+            class_brands: program.class_brands.clone(),
         }
     }
 

@@ -199,6 +199,7 @@ fn program_strategy() -> impl Strategy<Value = Program> {
         statements,
         span: span(),
         type_aliases: Vec::new(),
+        class_brands: Vec::new(),
     })
 }
 
@@ -514,6 +515,7 @@ proptest! {
             statements: vec![Stmt::Expr { expression: expr.clone(), span: span() }],
             span: span(),
             type_aliases: Vec::new(),
+        class_brands: Vec::new(),
         };
 
         // Pretty print
@@ -542,6 +544,7 @@ proptest! {
             statements: vec![stmt.clone()],
             span: span(),
             type_aliases: Vec::new(),
+        class_brands: Vec::new(),
         };
 
         let source = print_program(&program);

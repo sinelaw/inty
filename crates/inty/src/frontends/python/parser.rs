@@ -25,6 +25,10 @@ pub struct Parser {
     /// body. When set, references to that name lower to `Expr::This`, so
     /// Python's explicit `self` maps onto inty's `this` row-polymorphism.
     self_name: Option<String>,
+    /// Names of the factory functions that `class` declarations lowered
+    /// to, in declaration order. Surfaced on `Program::class_brands` so
+    /// inference brands each one's inferred instance row nominally.
+    class_names: Vec<String>,
 }
 
 impl Parser {
@@ -35,6 +39,7 @@ impl Parser {
             temp: 0,
             scopes: vec![HashSet::new()],
             self_name: None,
+            class_names: Vec::new(),
         }
     }
 
@@ -144,6 +149,7 @@ impl Parser {
             statements,
             span: Span::new(start, self.prev_span().end),
             type_aliases: Vec::new(),
+            class_brands: std::mem::take(&mut self.class_names),
         })
     }
 
@@ -702,6 +708,7 @@ impl Parser {
             span,
         });
 
+        self.class_names.push(name.clone());
         Ok(Stmt::FunctionDecl {
             name,
             params: ctor_params,

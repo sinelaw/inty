@@ -22,6 +22,18 @@ fn check(src: &str) -> Vec<String> {
     state.errors.iter().map(|e| format!("{:?}", e)).collect()
 }
 
+/// Like `check`, but runs the whole-program path so class factories get
+/// branded nominally (the per-statement `check` skips brand setup).
+fn check_program(src: &str) -> Vec<String> {
+    let program = parse_source(src).expect("parse failed");
+    let mut state = InferState::new();
+    let env = initial_env();
+    if let Err(e) = state.infer_program_with_env(&env, &program) {
+        return vec![format!("{:?}", e)];
+    }
+    state.errors.iter().map(|e| format!("{:?}", e)).collect()
+}
+
 fn init_of(src: &str) -> Expr {
     match &parse(src)[0] {
         Stmt::Var { declarations, .. } => declarations[0].init.clone().unwrap(),
@@ -232,6 +244,82 @@ fn class_method_this_field_type_is_enforced() {
     assert!(
         !errs.is_empty(),
         "String field + Number should be a type error"
+    );
+}
+
+#[test]
+fn branded_class_instance_methods_still_typecheck() {
+    // Branding must stay transparent for field/method access.
+    let errs = check_program(
+        "class Point:\n\
+         \x20   def __init__(self, x, y):\n\
+         \x20       self.x = x\n\
+         \x20       self.y = y\n\
+         \x20   def sum(self):\n\
+         \x20       return self.x + self.y\n\
+         p = Point(1, 2)\n\
+         s = p.sum()\n",
+    );
+    assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
+}
+
+#[test]
+fn structurally_identical_classes_are_distinct_brands() {
+    // `A` and `B` have identical shape but are different nominal types,
+    // so unifying their instances (here, by reassigning one binding)
+    // must fail.
+    let errs = check_program(
+        "class A:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         class B:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         v = A(1)\n\
+         v = B(1)\n",
+    );
+    assert!(
+        !errs.is_empty(),
+        "two distinct class brands must not unify, got no errors"
+    );
+}
+
+#[test]
+fn same_class_reassignment_unifies() {
+    let errs = check_program(
+        "class A:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         v = A(1)\n\
+         v = A(2)\n",
+    );
+    assert!(errs.is_empty(), "same-brand reassignment should unify, got {:?}", errs);
+}
+
+#[test]
+fn generic_class_brands_per_instantiation() {
+    // `Box(1)` is `Box<Number>`, `Box("hi")` is `Box<String>` — the
+    // brand is parameterised, and field access sees through to the
+    // representation, so the String field + Number is a type error.
+    let ok = check_program(
+        "class Box:\n\
+         \x20   def __init__(self, v):\n\
+         \x20       self.value = v\n\
+         b = Box(1)\n\
+         n = b.value + 1\n",
+    );
+    assert!(ok.is_empty(), "Box<Number>.value + 1 should be fine, got {:?}", ok);
+
+    let bad = check_program(
+        "class Box:\n\
+         \x20   def __init__(self, v):\n\
+         \x20       self.value = v\n\
+         b = Box(\"hi\")\n\
+         n = b.value + 1\n",
+    );
+    assert!(
+        !bad.is_empty(),
+        "Box<String>.value + Number should be a type error"
     );
 }
 
