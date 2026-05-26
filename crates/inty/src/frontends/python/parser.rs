@@ -484,15 +484,24 @@ impl Parser {
         Ok(out)
     }
 
-    /// Skip a type annotation: tokens up to a top-level `=`, NEWLINE, or
-    /// `;` (annotations are not mapped onto inty types in this subset).
+    /// Skip a type annotation: tokens up to a top-level `=`, `:`, NEWLINE,
+    /// or `;` (annotations are not mapped onto inty types in this subset).
+    ///
+    /// Stopping at a top-level `:` matters for a **return** annotation:
+    /// `def f() -> T:` must leave the `def` header's terminating colon for
+    /// the caller's `expect(':')`. A `:` never occurs at the top level
+    /// inside the other annotation positions (a variable's or field's own
+    /// `:` is already consumed before this runs, and a type's internal
+    /// colons — slices, dict displays — sit inside brackets at depth > 0).
     fn skip_annotation(&mut self) {
         let mut depth = 0i32;
         loop {
             match self.cur() {
                 Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
                 Tok::RParen | Tok::RBracket | Tok::RBrace => depth -= 1,
-                Tok::Assign | Tok::Newline | Tok::Semi | Tok::Eof if depth <= 0 => break,
+                Tok::Assign | Tok::Colon | Tok::Newline | Tok::Semi | Tok::Eof if depth <= 0 => {
+                    break
+                }
                 _ => {}
             }
             self.advance();

@@ -279,6 +279,42 @@ fn relative_from_import_keeps_leading_dots() {
 }
 
 #[test]
+fn return_annotation_does_not_eat_the_def_colon() {
+    // `def f(...) -> T:` must parse: the return-annotation skip must stop
+    // at the header's `:` rather than consuming it. Regression for
+    // "Unexpected token: found 'newline', expected ':'".
+    match &parse("def f(s):\n    return s")[0] {
+        Stmt::FunctionDecl { name, .. } => assert_eq!(name, "f"),
+        other => panic!("expected function decl, got {:?}", other),
+    }
+    match &parse("def f(s: str) -> str:\n    return s")[0] {
+        Stmt::FunctionDecl { name, params, .. } => {
+            assert_eq!(name, "f");
+            assert_eq!(params.len(), 1);
+        }
+        other => panic!("expected function decl, got {:?}", other),
+    }
+    // A docstring as the first body statement (the shape that first
+    // surfaced the bug) must also parse.
+    assert!(matches!(
+        &parse("def g(n: int) -> int:\n    \"\"\"doc\"\"\"\n    return n")[0],
+        Stmt::FunctionDecl { .. }
+    ));
+    // And a method with a return annotation inside a class.
+    assert!(matches!(
+        &parse("class C:\n    def m(self) -> int:\n        return 1")[0],
+        Stmt::FunctionDecl { .. }
+    ));
+}
+
+#[test]
+fn return_annotated_function_typechecks() {
+    // The annotation is erased, but the function must infer normally.
+    let errs = check("def inc(x: int) -> int:\n    return x + 1\nr = inc(41)\n");
+    assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
+}
+
+#[test]
 fn decorated_def_parses_ignoring_decorator() {
     // `@deco` lines are consumed; the decorated def still parses.
     match &parse("@staticmethod\ndef f(a):\n    return a")[0] {
