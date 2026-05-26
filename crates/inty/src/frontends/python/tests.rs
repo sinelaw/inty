@@ -400,6 +400,45 @@ fn rejects_class_inheritance() {
 }
 
 #[test]
+fn param_annotation_is_captured() {
+    use crate::types::TypeAst;
+    match &parse("def f(a: int, b):\n    return a")[0] {
+        Stmt::FunctionDecl { params, .. } => {
+            assert!(matches!(params[0].type_ast, Some(TypeAst::Number)));
+            assert!(params[1].type_ast.is_none());
+        }
+        other => panic!("expected function decl, got {:?}", other),
+    }
+}
+
+#[test]
+fn param_annotation_is_checked() {
+    // An annotated parameter pins its type: a wrong-typed argument is
+    // rejected, a matching one is accepted.
+    assert!(
+        !check("def f(x: int):\n    return x\nf(\"hi\")\n").is_empty(),
+        "String argument against `int` parameter must fail"
+    );
+    assert!(
+        check("def f(x: int):\n    return x\nr = f(5)\n").is_empty(),
+        "matching argument should check"
+    );
+    // Container annotations are enforced too.
+    assert!(
+        !check("def f(xs: list[int]):\n    return xs\nf(\"nope\")\n").is_empty(),
+        "String against `list[int]` parameter must fail"
+    );
+}
+
+#[test]
+fn unmodelled_param_annotation_imposes_no_constraint() {
+    // An unknown/unmodelled annotation lowers to a fresh variable, so it
+    // never produces a false positive.
+    let errs = check("def f(x: SomeProtocol):\n    return 1\nf(\"anything\")\nf(5)\n");
+    assert!(errs.is_empty(), "unmodelled annotation should not constrain, got {:?}", errs);
+}
+
+#[test]
 fn class_instance_method_and_fields_typecheck() {
     let errs = check(
         "class Point:\n\

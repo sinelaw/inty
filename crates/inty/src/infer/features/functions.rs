@@ -140,6 +140,14 @@ impl InferState {
         // carry no `default` expression by construction, so they impose
         // no constraint — Python's idiomatic optional parameter.
         for (param, ty) in params.iter().zip(param_types.iter()) {
+            // An explicit annotation (`def f(x: int)`) pins the
+            // parameter's type. Lowered from the shared TypeAst IR;
+            // unmodelled annotations lower to a fresh variable and so
+            // impose no constraint (never a false positive).
+            if let Some(type_ast) = &param.type_ast {
+                let annotated = self.lower_type_ast(type_ast);
+                self.unify(param.span, ty, &annotated)?;
+            }
             if let Some(default) = &param.default {
                 let default_type = self.infer_expr(env, default)?;
                 let widened = default_type.widen_fresh_literals();
