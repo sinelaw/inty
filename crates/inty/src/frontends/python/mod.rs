@@ -29,6 +29,7 @@ mod lexer;
 pub mod modules;
 mod parser;
 pub mod pyi;
+pub mod type_expr;
 
 use crate::ast::Program;
 use crate::error::Result;

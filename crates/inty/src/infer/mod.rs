@@ -11,6 +11,7 @@
 mod decorate;
 mod env;
 mod features;
+mod lower;
 mod narrow;
 mod state;
 mod type_parser;
