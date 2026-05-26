@@ -210,6 +210,19 @@ pub struct InferState {
     /// the body cloning structure, and substitute argument types in
     /// for the parameters.
     pub type_aliases: HashMap<String, AliasDef>,
+
+    /// Names of factory functions a frontend lowered a `class` to and
+    /// which should be branded nominally (from `Program::class_brands`).
+    /// When a function decl in this set is generalised, its inferred
+    /// return row is wrapped in a fresh brand. Empty unless a frontend
+    /// emits nominal classes.
+    pub class_brand_names: std::collections::HashSet<String>,
+
+    /// Brand ids minted for each nominal class, keyed by class name.
+    /// Populated as factories are branded; lets `isinstance`-style
+    /// checks map a class name back to its brand. See
+    /// `docs/pyi-import-mapping.md` §8.
+    pub class_brand_ids: HashMap<String, TypeId>,
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -269,6 +282,8 @@ impl InferState {
             errors: Vec::new(),
             config,
             type_aliases: HashMap::new(),
+            class_brand_names: std::collections::HashSet::new(),
+            class_brand_ids: HashMap::new(),
         }
     }
 

@@ -315,8 +315,19 @@ impl InferState {
         // method calls like `var f = obj.m; f();` at type-check time.
         if let Some(obj_type) = obj_type_for_this {
             let obj_type_applied = self.zonk(&obj_type);
+            // A nominal brand is transparent for method-receiver binding,
+            // just as it is for field access: unroll it to its
+            // representation row so the method body's `this`-row unifies
+            // against the instance shape. The receiver's own type stays
+            // nominal everywhere else.
+            let obj_for_this = match &obj_type_applied {
+                Type::Named(id, args) if self.is_nominal_type(*id) => self
+                    .unroll_named(*id, args)
+                    .unwrap_or_else(|| obj_type_applied.clone()),
+                _ => obj_type_applied.clone(),
+            };
             let this_type_applied = self.zonk(&this_type);
-            self.unify(span, &this_type_applied, &obj_type_applied)?;
+            self.unify(span, &this_type_applied, &obj_for_this)?;
         } else {
             let this_type_applied = self.zonk(&this_type);
             self.unify(span, &this_type_applied, &Type::Undefined)?;
@@ -427,6 +438,14 @@ impl InferState {
                     .ty()
                     .clone();
                 let ty = self.zonk(&ty);
+                // A factory lowered from a `class` gets its inferred
+                // return row branded nominally, so two structurally
+                // identical classes stay distinct types.
+                let ty = if self.class_brand_names.contains(name) {
+                    self.brand_class_factory(name, &ty, &base_free)
+                } else {
+                    ty
+                };
                 let scheme = self.generalize(&base_free, &ty);
                 let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
                     "export function ".len()
@@ -443,6 +462,79 @@ impl InferState {
         }
 
         Ok(hoisted)
+    }
+
+    /// Wrap a class factory's inferred return row in a fresh nominal
+    /// brand. `ty` is the factory's callable-row type
+    /// (`{ <CALL>: (params) => Row }`); the result is the same callable
+    /// row with its return type replaced by `Named(id, [vars])` after
+    /// registering a nominal `TypeDef` whose representation is the
+    /// original return row. Type vars of the row that would be
+    /// generalised (free in the row but not in the surrounding env)
+    /// become the brand's parameters, so a generic class like
+    /// `class Box: self.value = v` brands per instantiation
+    /// (`Box(1): Box<Number>`, `Box("x"): Box<String>`). Field and
+    /// method access see *through* the brand to this representation;
+    /// only identity is opaque. See `docs/pyi-import-mapping.md` §8.
+    fn brand_class_factory(
+        &mut self,
+        name: &str,
+        ty: &Type,
+        env_free: &std::collections::HashSet<crate::types::TVarName>,
+    ) -> Type {
+        use crate::types::{FieldEntry, PropName, RowType, TVarName, TypeDef, CALLABLE_KEY};
+
+        // Navigate to the callable row's `<CALL>` field.
+        let Type::Row(row) = ty else { return ty.clone() };
+        let call_key = PropName(CALLABLE_KEY.to_string());
+        let Some(call_entry) = row.props.get(&call_key) else {
+            return ty.clone();
+        };
+        let Type::Func {
+            this_type,
+            params,
+            ret,
+        } = &call_entry.ty
+        else {
+            return ty.clone();
+        };
+
+        // Generalised type vars of the return row become brand params.
+        let mut brand_vars: Vec<TVarName> = ret
+            .free_vars()
+            .into_iter()
+            .filter(|v| v.is_flex() && !env_free.contains(v))
+            .collect();
+        brand_vars.sort_by_key(|v| v.id());
+
+        let id = self.fresh_type_id();
+        self.register_named_type(TypeDef::nominal(
+            id,
+            name.to_string(),
+            brand_vars.clone(),
+            (**ret).clone(),
+        ));
+        self.class_brand_ids.insert(name.to_string(), id);
+
+        let args: Vec<Type> = brand_vars.iter().map(|v| Type::var(v.clone())).collect();
+        let branded_func = Type::Func {
+            this_type: this_type.clone(),
+            params: params.clone(),
+            ret: Box::new(Type::Named(id, args)),
+        };
+
+        let mut new_props = row.props.clone();
+        new_props.insert(
+            call_key,
+            FieldEntry {
+                presence: call_entry.presence.clone(),
+                ty: branded_func,
+            },
+        );
+        Type::Row(RowType {
+            props: new_props,
+            tail: row.tail.clone(),
+        })
     }
 
     /// Pre-bind every top-level `function` declaration in `stmts` to a fresh

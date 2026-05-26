@@ -153,6 +153,13 @@ pub struct Program {
     /// from `/** type Foo<T> = body */` doc comments. Inference
     /// loads them into the alias env before checking statements.
     pub type_aliases: Vec<TypeAlias>,
+    /// Names of top-level factory functions that a frontend lowered a
+    /// `class` to and which should be branded *nominally*: inference
+    /// rewrites each one's inferred return row into a fresh brand so two
+    /// structurally identical classes stay distinct. Empty for frontends
+    /// (or programs) with no nominal classes. See
+    /// `docs/pyi-import-mapping.md` §8.
+    pub class_brands: Vec<String>,
 }
 
 /// Literal values

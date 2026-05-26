@@ -121,6 +121,9 @@ impl InferState {
         // Inject constructors for declared nominal types before checking
         // the body, so `Name(repr)` resolves to a branded value.
         let env = self.nominal_constructor_env(env, &program.type_aliases);
+        // Record which factory functions to brand nominally (classes).
+        self.class_brand_names
+            .extend(program.class_brands.iter().cloned());
         let result = self.infer_stmt_list(&env, &program.statements);
 
         // If `Type::apply_subst` hit its recursion-depth cap during

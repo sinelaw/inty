@@ -391,16 +391,31 @@ The **type-system core and a declared surface are implemented** (reusing the
 This delivers nominal types for `.d.js`-style annotation/stub surfaces — the
 form a future `.pyi` reader would emit.
 
-The **Python frontend now parses `class`** and lowers it to a factory function
-returning a *structural* instance row (`self` maps to inty's `this`;
-`__init__` params become the factory's constructor params and its
-`self.X = …` lines become fields; methods become row methods). Inheritance is
-rejected (instances are structural). This is the "structural classes first"
-step. One piece remains to make Python classes *nominal*: a class brand wraps
-an *inferred* instance row, whereas the implemented declared surface wraps a
-*declared* representation — so a "brand wraps an inferred row" path (brand the
-factory's inferred return row) plus `isinstance` brand-narrowing is still
-needed.
+The **Python frontend parses `class`** and lowers it to a factory function
+returning the instance row (`self` maps to inty's `this`; `__init__` params
+become the factory's constructor params and its `self.X = …` lines become
+fields; methods become row methods). Inheritance is rejected.
+
+Python classes are now **nominal**. The "brand wraps an *inferred* row" path
+is implemented: the frontend lists each class factory on
+`Program::class_brands`, and at the generalisation boundary
+(`infer_function_group`) inference wraps that factory's inferred return row in
+a fresh `TypeDef::nominal`. The brand's parameters are exactly the row's
+generalised type variables, so a generic class brands per instantiation
+(`Box(1): Box<Number>`, `Box("x"): Box<String>`). Two structurally identical
+classes are distinct types — unifying their instances reports e.g.
+`A<Number>` vs `B<Number>`. Brands stay **transparent for access**: field
+reads (`infer_member_on_type`) *and* method-receiver `this`-binding
+(`infer_call`) unroll the brand to its representation row, so `p.x` and
+`p.method()` type exactly as they did structurally; only *identity* is opaque.
+
+The remaining piece is **`isinstance` brand-narrowing**: recognising
+`isinstance(x, Dog)` as a flow-sensitive narrowing to the `Dog` brand. That
+needs (a) an `isinstance` builtin so the call type-checks, (b) a new
+`Narrowing::IsInstance(TypeId)` that maps the class-name argument to its brand
+id via `InferState::class_brand_ids`, and (c) brand-aware union filtering in
+`narrow.rs`. It's deferred until there's a union-producing surface (e.g.
+annotated `Dog | Cat` parameters) for it to act on.
 
 ### 8.4 What is genuinely new (the remaining design work)
 

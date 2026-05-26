@@ -323,5 +323,6 @@ pub fn program_strategy() -> impl Strategy<Value = Program> {
         statements,
         span: span(),
         type_aliases: Vec::new(),
+        class_brands: Vec::new(),
     })
 }

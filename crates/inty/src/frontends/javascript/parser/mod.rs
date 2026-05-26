@@ -136,6 +136,7 @@ impl Parser {
             statements,
             span: Span::new(start, end),
             type_aliases: Vec::new(),
+            class_brands: Vec::new(),
         })
     }
 
