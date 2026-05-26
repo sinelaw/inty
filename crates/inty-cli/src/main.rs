@@ -601,8 +601,10 @@ fn run_inference(
                 return Err(errors);
             }
 
-            // Print the program type
-            let mut ctx = PrettyContext::new();
+            // Print the program type, rendering nominal brands by their
+            // declared name (`Box<Number>`) rather than the internal
+            // `μ<id>` form.
+            let mut ctx = PrettyContext::with_nominal_names(state.nominal_names());
             let final_type = state.apply_subst(&result_type);
             println!("// Program type: {}", ctx.format_type(&final_type));
             println!();

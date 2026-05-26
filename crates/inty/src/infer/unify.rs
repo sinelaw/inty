@@ -603,12 +603,7 @@ impl InferState {
 
         // Render brands by their declared name so a mismatch reads
         // `UserId` vs `OrderId` rather than `μ3` vs `μ4`.
-        let nominal_names: std::collections::HashMap<_, _> = self
-            .named_types
-            .iter()
-            .filter_map(|(id, def)| def.name.clone().map(|n| (*id, n)))
-            .collect();
-        let mut ctx = crate::types::PrettyContext::with_nominal_names(nominal_names);
+        let mut ctx = crate::types::PrettyContext::with_nominal_names(self.nominal_names());
 
         TypeError::UnificationError {
             expected: ctx.format_type(t1),
