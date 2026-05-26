@@ -469,6 +469,45 @@ fn unmodelled_return_annotation_imposes_no_constraint() {
 }
 
 #[test]
+fn variable_annotation_is_checked() {
+    assert!(!check("x: int = \"s\"\n").is_empty(), "int annotation vs String init must fail");
+    assert!(check("x: int = 5\n").is_empty(), "matching variable annotation should check");
+    assert!(!check("xs: list[int] = \"nope\"\n").is_empty(), "container annotation enforced");
+}
+
+#[test]
+fn unmodelled_variable_annotation_imposes_no_constraint() {
+    let errs = check("x: SomeType = 5\ny: SomeType = \"s\"\n");
+    assert!(errs.is_empty(), "unmodelled variable annotation should not constrain, got {:?}", errs);
+}
+
+#[test]
+fn class_method_param_annotation_is_checked() {
+    let errs = check(
+        "class C:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.v = 1\n\
+         \x20   def m(self, x: int):\n\
+         \x20       return x\n\
+         c = C()\n\
+         c.m(\"s\")\n",
+    );
+    assert!(!errs.is_empty(), "String arg against annotated `int` method param must fail");
+}
+
+#[test]
+fn class_method_return_annotation_is_checked() {
+    let errs = check(
+        "class C:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.v = 1\n\
+         \x20   def m(self) -> str:\n\
+         \x20       return 123\n",
+    );
+    assert!(!errs.is_empty(), "Number body against `-> str` method must fail");
+}
+
+#[test]
 fn class_instance_method_and_fields_typecheck() {
     let errs = check(
         "class Point:\n\

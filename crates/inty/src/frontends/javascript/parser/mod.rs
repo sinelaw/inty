@@ -364,6 +364,7 @@ impl Parser {
                     name: name.clone(),
                     init: Some(source),
                     type_annotation: None,
+                    type_ast: None,
                     kind,
                     span: *span,
                 });
@@ -374,6 +375,7 @@ impl Parser {
                     name: temp.clone(),
                     init: Some(source),
                     type_annotation: None,
+                    type_ast: None,
                     kind,
                     span: *span,
                 });
@@ -402,6 +404,7 @@ impl Parser {
                         name: rest_name.clone(),
                         init: Some(init),
                         type_annotation: None,
+                        type_ast: None,
                         kind,
                         span: *rest_span,
                     });
@@ -413,6 +416,7 @@ impl Parser {
                     name: temp.clone(),
                     init: Some(source),
                     type_annotation: None,
+                    type_ast: None,
                     kind,
                     span: *span,
                 });
@@ -444,6 +448,7 @@ impl Parser {
                         name: rest_name.clone(),
                         init: Some(init),
                         type_annotation: None,
+                        type_ast: None,
                         kind,
                         span: *rest_span,
                     });
@@ -486,6 +491,7 @@ impl Parser {
             name,
             init,
             type_annotation,
+            type_ast: None,
             kind,
             span: Span::new(start, end),
         })
@@ -1303,6 +1309,7 @@ impl Parser {
                     key: PropKey::Ident(key_name),
                     params,
                     body: Box::new(body_stmt),
+                    return_type_ast: None,
                     span: member_span,
                 });
             }
@@ -1936,6 +1943,7 @@ impl Parser {
                 name,
                 init,
                 type_annotation,
+                type_ast: None,
                 kind,
                 // Match `parse_var_declarator`: declarator span starts at
                 // the name, not the `let`/`var` keyword. `name_span_from_decl`
@@ -3040,6 +3048,7 @@ impl Parser {
                 key,
                 params,
                 body,
+                return_type_ast: None,
                 span: Span::new(start, self.prev_span().end),
             });
         }

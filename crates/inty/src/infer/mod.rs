@@ -876,6 +876,7 @@ impl InferState {
                                         name: "default".to_string(),
                                         init: Some(value.clone()),
                                         type_annotation: None,
+                                        type_ast: None,
                                         kind: VarKind::Const,
                                         span: *span,
                                     }],

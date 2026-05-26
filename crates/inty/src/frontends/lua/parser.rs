@@ -263,6 +263,7 @@ impl Parser {
                     name,
                     init: None,
                     type_annotation: None,
+                    type_ast: None,
                     kind,
                     span,
                 })
@@ -284,6 +285,7 @@ impl Parser {
                         name,
                         init: Some(e),
                         type_annotation: None,
+                        type_ast: None,
                         kind,
                         span,
                     })
@@ -507,6 +509,7 @@ impl Parser {
             name,
             init: Some(from),
             type_annotation: None,
+            type_ast: None,
             kind: VarKind::Let,
             span,
         }]);
@@ -591,6 +594,7 @@ impl Parser {
                     name: t.clone(),
                     init: Some(v),
                     type_annotation: None,
+                    type_ast: None,
                     kind: VarKind::Let,
                     span,
                 }],

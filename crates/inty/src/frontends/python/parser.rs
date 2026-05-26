@@ -267,14 +267,19 @@ impl Parser {
         // annotated: `target: T [= value]`
         if self.check(&Tok::Colon) {
             self.advance();
-            self.skip_annotation();
+            let type_ast = Some(self.parse_type_ast());
             let name = self.as_simple_name(&first)?;
             let init = if self.eat(&Tok::Assign) {
                 Some(self.expr()?)
             } else {
                 None
             };
-            return Ok(self.declare_or_assign_single(name, init, Span::new(start, self.prev_span().end)));
+            return Ok(self.declare_or_assign_single(
+                name,
+                init,
+                type_ast,
+                Span::new(start, self.prev_span().end),
+            ));
         }
 
         // augmented: `target op= value`
@@ -337,7 +342,7 @@ impl Parser {
         if targets.len() == 1 {
             let t = &targets[0];
             if let Some(name) = self.bare_name(t) {
-                return Ok(self.declare_or_assign_single(name, Some(value), span));
+                return Ok(self.declare_or_assign_single(name, Some(value), None, span));
             }
             if !t.is_valid_assignment_target() {
                 return Err(ParseError::InvalidAssignmentTarget { span: t.span() }.into());
@@ -360,6 +365,7 @@ impl Parser {
                 name: tmp.clone(),
                 init: Some(value),
                 type_annotation: None,
+                type_ast: None,
                 kind: VarKind::Var,
                 span,
             }],
@@ -397,6 +403,7 @@ impl Parser {
                     name: t.clone(),
                     init: Some(v),
                     type_annotation: None,
+                    type_ast: None,
                     kind: VarKind::Var,
                     span,
                 }],
@@ -413,7 +420,7 @@ impl Parser {
     /// Assign `value` to a target, declaring it first if it's a new name.
     fn assign_target(&mut self, target: Expr, value: Expr, span: Span) -> Result<Stmt> {
         if let Some(name) = self.bare_name(&target) {
-            return Ok(self.declare_or_assign_single(name, Some(value), span));
+            return Ok(self.declare_or_assign_single(name, Some(value), None, span));
         }
         if !target.is_valid_assignment_target() {
             return Err(ParseError::InvalidAssignmentTarget { span: target.span() }.into());
@@ -431,7 +438,13 @@ impl Parser {
 
     /// First assignment to a bare name becomes a hoisted `var` declaration;
     /// subsequent ones become assignments.
-    fn declare_or_assign_single(&mut self, name: String, init: Option<Expr>, span: Span) -> Stmt {
+    fn declare_or_assign_single(
+        &mut self,
+        name: String,
+        init: Option<Expr>,
+        type_ast: Option<TypeAst>,
+        span: Span,
+    ) -> Stmt {
         if self.declared(&name) {
             // already declared; if there's no value it's a no-op annotation.
             match init {
@@ -457,6 +470,7 @@ impl Parser {
                     name,
                     init,
                     type_annotation: None,
+                    type_ast,
                     kind: VarKind::Var,
                     span,
                 }],
@@ -686,9 +700,11 @@ impl Parser {
                             }
                             let pspan = self.cur_span();
                             let pname = self.expect_name("parameter name")?;
-                            if self.eat(&Tok::Colon) {
-                                self.skip_param_annotation();
-                            }
+                            let type_ast = if self.eat(&Tok::Colon) {
+                                Some(self.parse_type_ast())
+                            } else {
+                                None
+                            };
                             let default = if self.eat(&Tok::Assign) {
                                 Some(self.expr()?)
                             } else {
@@ -697,10 +713,9 @@ impl Parser {
                             if idx == 0 {
                                 self_param = Some(pname);
                             } else {
-                                // Method parameter annotation checking is a
-                                // follow-up; only top-level `def` params are
-                                // checked for now.
-                                params.push(Self::param_from_default(pname, pspan, default, None));
+                                params.push(Self::param_from_default(
+                                    pname, pspan, default, type_ast,
+                                ));
                             }
                             idx += 1;
                             if !self.eat(&Tok::Comma) {
@@ -709,9 +724,11 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen, "')'")?;
-                    if self.eat(&Tok::Arrow) {
-                        self.skip_annotation();
-                    }
+                    let return_type_ast = if self.eat(&Tok::Arrow) {
+                        Some(self.parse_type_ast())
+                    } else {
+                        None
+                    };
                     self.expect(&Tok::Colon, "':'")?;
 
                     // Parse the body with `self` lowered to `this`.
@@ -739,6 +756,7 @@ impl Parser {
                             key: PropKey::Ident(mname),
                             params,
                             body,
+                            return_type_ast,
                             span: Span::new(mspan.start, self.prev_span().end),
                         });
                     }
@@ -982,23 +1000,6 @@ impl Parser {
         let (ast, new_pos) = super::type_expr::parse_type(&self.toks, self.pos);
         self.pos = new_pos;
         ast
-    }
-
-    /// Skip a parameter annotation: up to a top-level `,` or `)`.
-    fn skip_param_annotation(&mut self) {
-        let mut depth = 0i32;
-        loop {
-            match self.cur() {
-                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
-                Tok::RBracket | Tok::RBrace => depth -= 1,
-                Tok::RParen if depth == 0 => break,
-                Tok::RParen => depth -= 1,
-                Tok::Comma | Tok::Assign if depth <= 0 => break,
-                Tok::Eof | Tok::Newline => break,
-                _ => {}
-            }
-            self.advance();
-        }
     }
 
     fn if_stmt(&mut self) -> Result<Stmt> {

@@ -81,6 +81,7 @@ impl<'a> Decorator<'a> {
                             name: decl.name.clone(),
                             init: decl.init.as_ref().map(|e| self.decorate_expr(e, env)),
                             type_annotation: annotation,
+                            type_ast: None,
                             kind: decl.kind,
                             span: decl.span,
                         }
@@ -230,6 +231,7 @@ impl<'a> Decorator<'a> {
                                     name: d.name.clone(),
                                     init: d.init.as_ref().map(|e| self.decorate_expr(e, env)),
                                     type_annotation: annotation,
+                                    type_ast: None,
                                     kind: d.kind,
                                     span: d.span,
                                 }
@@ -642,11 +644,13 @@ impl<'a> Decorator<'a> {
                 key,
                 params,
                 body,
+                return_type_ast,
                 span,
             } => PropDef::Method {
                 key: key.clone(),
                 params: params.clone(),
                 body: Box::new(self.decorate_stmt(body, env).0),
+                return_type_ast: return_type_ast.clone(),
                 span: *span,
             },
             PropDef::Spread { argument, span } => PropDef::Spread {

@@ -365,6 +365,10 @@ pub enum PropDef {
         key: PropKey,
         params: Vec<Param>,
         body: Box<Stmt>,
+        /// Declared return type (Python `def m(self) -> T`), as the
+        /// shared [`crate::types::TypeAst`] IR. Only the Python frontend
+        /// sets this; JS object/class methods leave it `None`.
+        return_type_ast: Option<crate::types::TypeAst>,
         span: Source,
     },
     /// Spread: `...expr`. Merged into the row of the containing
@@ -659,6 +663,10 @@ pub struct VarDeclarator {
     pub name: String,
     pub init: Option<Expr>,
     pub type_annotation: Option<TypeAnnotation>,
+    /// Declared type from a Python variable annotation (`x: int = …`),
+    /// as the shared [`crate::types::TypeAst`] IR. Only the Python
+    /// frontend sets this; other frontends leave it `None`.
+    pub type_ast: Option<crate::types::TypeAst>,
     pub kind: VarKind,
     pub span: Source,
 }

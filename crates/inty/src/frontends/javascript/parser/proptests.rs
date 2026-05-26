@@ -179,6 +179,7 @@ fn stmt_strategy() -> impl Strategy<Value = Stmt> {
                 name,
                 init,
                 type_annotation: None,
+                type_ast: None,
                 kind: VarKind::Var,
                 span: span(),
             }],
