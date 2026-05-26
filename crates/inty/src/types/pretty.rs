@@ -41,14 +41,30 @@ fn prints_as_function(ty: &Type) -> bool {
 /// mutable letter map is gone; `PrettyContext` is now effectively
 /// a unit type, kept as a zero-sized struct so existing `.format_*`
 /// method calls keep working without churn.
-pub struct PrettyContext;
+pub struct PrettyContext {
+    /// Display names for nominal types, keyed by their `TypeId`. When a
+    /// `Type::Named(id, _)` is a declared brand, rendering it as the
+    /// user's name (`UserId`) rather than the internal `μ<id>` makes
+    /// brand-mismatch diagnostics legible. Empty by default; callers
+    /// with access to the named-type registry seed it via
+    /// [`PrettyContext::with_nominal_names`].
+    nominal_names: std::collections::HashMap<crate::types::TypeId, String>,
+}
 
 impl PrettyContext {
-    /// Create a pretty-printing context. Stateless — every instance
-    /// is interchangeable; the only reason to keep multiple is
-    /// ergonomic.
+    /// Create a pretty-printing context. Stateless apart from the
+    /// (usually empty) nominal-name map.
     pub fn new() -> Self {
-        PrettyContext
+        PrettyContext {
+            nominal_names: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Create a context that renders the given nominal `TypeId`s by name.
+    pub fn with_nominal_names(
+        nominal_names: std::collections::HashMap<crate::types::TypeId, String>,
+    ) -> Self {
+        PrettyContext { nominal_names }
     }
 
     /// Render a tvar's integer ID as a display letter. After tidy
@@ -303,7 +319,10 @@ impl PrettyContext {
             }
 
             Type::Named(id, args) => {
-                write!(w, "μ{}", id)?;
+                match self.nominal_names.get(id) {
+                    Some(name) => write!(w, "{}", name)?,
+                    None => write!(w, "μ{}", id)?,
+                }
                 if !args.is_empty() {
                     write!(w, "<")?;
                     for (i, arg) in args.iter().enumerate() {

@@ -387,6 +387,12 @@ pub struct TypeAlias {
     pub params: Vec<String>,
     pub body: String,
     pub span: Source,
+    /// `true` when declared `nominal type Name = …`. A nominal alias is
+    /// a *branded* type: references to it produce `Type::Named` with a
+    /// fresh id rather than inlining the body, and a value-level
+    /// constructor `Name: (Repr) => Name` is injected. A plain `type`
+    /// alias (`nominal == false`) is structural and inlined at use.
+    pub nominal: bool,
 }
 
 /// Expression AST node

@@ -232,6 +232,11 @@ pub struct AliasDef {
     pub params: Vec<u32>,
     /// Parsed body type with `params` appearing as `Type::flex(id)`.
     pub body: Type,
+    /// When `Some(id)`, this alias is a declared *nominal* type:
+    /// references resolve to `Type::Named(id, args)` (brand identity)
+    /// instead of inlining `body`. `body` is then the representation
+    /// the brand wraps. `None` for ordinary structural aliases.
+    pub nominal_id: Option<crate::types::TypeId>,
 }
 
 impl Default for InferState {
