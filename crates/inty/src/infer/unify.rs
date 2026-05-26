@@ -216,9 +216,10 @@ impl InferState {
             // Maps
             (Type::Map(v1), Type::Map(v2)) => self.unify(span, v1, v2),
 
-            // Named types (recursive)
+            // Same named type (recursive or nominal): unify arguments
+            // invariantly. For nominal types this is the *only* way they
+            // unify — identical brand id, matching args.
             (Type::Named(id1, args1), Type::Named(id2, args2)) if id1 == id2 => {
-                // Same recursive type, unify arguments
                 if args1.len() != args2.len() {
                     return Err(self.unification_error(span, t1, t2));
                 }
@@ -228,9 +229,18 @@ impl InferState {
                 Ok(())
             }
 
-            // Named vs non-named: unroll the named type
+            // Named vs anything else (including a *different* named type).
             (Type::Named(id, args), other) | (other, Type::Named(id, args)) => {
-                if let Some(unrolled) = self.unroll_named(*id, args) {
+                if self.is_nominal_type(*id) {
+                    // Nominal types have brand identity: they unify only
+                    // with the same id (handled above), never by
+                    // unrolling to their representation. So `UserId` and
+                    // `Number` — or two distinct nominals with identical
+                    // representation — stay distinct. (Transparent field
+                    // access still unrolls; see `infer_member_on_type`.)
+                    Err(self.unification_error(span, t1, t2))
+                } else if let Some(unrolled) = self.unroll_named(*id, args) {
+                    // Equi-recursive type: unroll and unify structurally.
                     self.unify(span, &unrolled, other)
                 } else {
                     Err(self.unification_error(span, t1, t2))
@@ -572,11 +582,7 @@ impl InferState {
         subst.insert(TVarName::Flex(var), rec_ref.clone());
         let body = subst.apply(ty);
 
-        let def = TypeDef {
-            id: type_id,
-            params: vec![],
-            body,
-        };
+        let def = TypeDef::recursive(type_id, vec![], body);
 
         self.register_named_type(def);
 
@@ -1042,5 +1048,76 @@ mod tests {
         assert_eq!(props1, props2, "merged row shape must match on both sides");
         assert!(props1.contains_key(&crate::types::PropName("a".to_string())));
         assert!(props1.contains_key(&crate::types::PropName("b".to_string())));
+    }
+
+    // === Nominal types ===
+    //
+    // A nominal type carries brand identity: it unifies only with the
+    // same brand id, never with its representation or with a distinct
+    // brand of identical shape. Field access still sees through to the
+    // representation. See `docs/pyi-import-mapping.md` §8.
+
+    use crate::types::TypeDef;
+
+    /// Declare a nominal type with the given representation and return a
+    /// nullary reference to it.
+    fn declare_nominal(state: &mut InferState, name: &str, repr: Type) -> Type {
+        let id = state.fresh_type_id();
+        state.register_named_type(TypeDef::nominal(id, name, vec![], repr));
+        Type::Named(id, vec![])
+    }
+
+    #[test]
+    fn nominal_unifies_with_itself() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let user_id = declare_nominal(&mut state, "UserId", Type::Number);
+        assert!(state.unify(span, &user_id, &user_id.clone()).is_ok());
+    }
+
+    #[test]
+    fn nominal_does_not_unify_with_its_representation() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let user_id = declare_nominal(&mut state, "UserId", Type::Number);
+        // The whole point of a brand: a raw Number is not a UserId.
+        assert!(state.unify(span, &user_id, &Type::Number).is_err());
+        assert!(state.unify(span, &Type::Number, &user_id).is_err());
+    }
+
+    #[test]
+    fn distinct_nominals_with_same_shape_do_not_unify() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let user_id = declare_nominal(&mut state, "UserId", Type::Number);
+        let order_id = declare_nominal(&mut state, "OrderId", Type::Number);
+        assert!(state.unify(span, &user_id, &order_id).is_err());
+    }
+
+    #[test]
+    fn nominal_field_access_sees_through_to_representation() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        // nominal Point = {x: Number, y: Number}
+        let repr = Type::object([("x", Type::Number), ("y", Type::Number)]);
+        let point = declare_nominal(&mut state, "Point", repr);
+        // `p.x` reads through the brand to the representation row.
+        let x_ty = state
+            .infer_member_on_type(&point, "x", span)
+            .expect("transparent field access on nominal type");
+        assert_eq!(state.zonk(&x_ty), Type::Number);
+    }
+
+    #[test]
+    fn equirecursive_named_still_unrolls() {
+        // Regression guard: the nominal change must not disturb the
+        // equi-recursive path. A non-nominal named type still unifies
+        // structurally with its representation.
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let id = state.fresh_type_id();
+        state.register_named_type(TypeDef::recursive(id, vec![], Type::Number));
+        let named = Type::Named(id, vec![]);
+        assert!(state.unify(span, &named, &Type::Number).is_ok());
     }
 }

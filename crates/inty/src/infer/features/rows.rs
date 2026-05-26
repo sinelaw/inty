@@ -690,6 +690,18 @@ impl InferState {
                 }
                 .into());
             }
+            // Nominal types have brand identity but *transparent* field
+            // access: unroll to the representation (e.g. a class's
+            // instance row) and read the property from there. The value's
+            // type stays nominal everywhere else — only this read sees
+            // through. Equi-recursive named types are intentionally left
+            // to the row-constraint fall-through below, which already
+            // handles them by unrolling during unification.
+            Type::Named(id, args) if self.is_nominal_type(*id) => {
+                if let Some(unrolled) = self.unroll_named(*id, args) {
+                    return self.infer_member_on_type(&unrolled, property, span);
+                }
+            }
             _ => {}
         }
 

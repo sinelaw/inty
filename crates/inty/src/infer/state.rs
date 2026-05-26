@@ -1189,6 +1189,13 @@ impl InferState {
         self.named_types.get(&id)
     }
 
+    /// Whether `id` refers to a declared nominal (branded) type rather
+    /// than an auto-generated equi-recursive type. Drives unification:
+    /// nominal types never unroll for identity.
+    pub fn is_nominal_type(&self, id: TypeId) -> bool {
+        self.named_types.get(&id).is_some_and(|d| d.nominal)
+    }
+
     /// Unroll a named recursive type by substituting its definition.
     pub fn unroll_named(&self, id: TypeId, args: &[Type]) -> Option<Type> {
         let def = self.named_types.get(&id)?;
