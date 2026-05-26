@@ -26,6 +26,13 @@ pub struct Param {
     /// parameters a presence-polymorphic type so a shorter argument list
     /// type-checks. Defaults to `false`.
     pub optional: bool,
+    /// The default value's expression, when it should *constrain* the
+    /// parameter's type — inference unifies the parameter with the
+    /// (widened) type of this expression. `None` for a required
+    /// parameter and, deliberately, for a bare `=None` default (Python's
+    /// idiomatic optional, which carries no useful type). Defaults to
+    /// `None`.
+    pub default: Option<Box<Expr>>,
 }
 
 impl Param {
@@ -34,15 +41,29 @@ impl Param {
             name: name.into(),
             span,
             optional: false,
+            default: None,
         }
     }
 
-    /// A parameter that may be omitted at the call site (has a default).
+    /// A parameter that may be omitted at the call site but whose default
+    /// imposes no type constraint (e.g. a `=None` default).
     pub fn optional(name: impl Into<String>, span: Span) -> Self {
         Param {
             name: name.into(),
             span,
             optional: true,
+            default: None,
+        }
+    }
+
+    /// A parameter with a default value whose (widened) type constrains
+    /// the parameter. Also optional at the call site.
+    pub fn with_default(name: impl Into<String>, span: Span, default: Expr) -> Self {
+        Param {
+            name: name.into(),
+            span,
+            optional: true,
+            default: Some(Box::new(default)),
         }
     }
 }

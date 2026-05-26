@@ -527,6 +527,20 @@ impl Parser {
         self.statement()
     }
 
+    /// Build a `Param` from an optional default expression, applying the
+    /// `=None` special case: any default makes the parameter optional,
+    /// but only a *non-`None`* default constrains its type.
+    fn param_from_default(name: String, span: Span, default: Option<Expr>) -> Param {
+        match default {
+            None => Param::new(name, span),
+            Some(Expr::Lit {
+                value: Literal::Null,
+                ..
+            }) => Param::optional(name, span),
+            Some(expr) => Param::with_default(name, span, expr),
+        }
+    }
+
     fn def_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // def
@@ -545,17 +559,15 @@ impl Parser {
                     self.skip_param_annotation();
                 }
                 // A default value (`x=expr`) makes the parameter optional.
-                let optional = if self.eat(&Tok::Assign) {
-                    let _ = self.expr()?;
-                    true
+                // A non-`None` default also constrains the parameter's
+                // type; a bare `=None` is Python's idiomatic optional and
+                // carries no useful type, so it imposes no constraint.
+                let default = if self.eat(&Tok::Assign) {
+                    Some(self.expr()?)
                 } else {
-                    false
+                    None
                 };
-                params.push(if optional {
-                    Param::optional(pname, pspan)
-                } else {
-                    Param::new(pname, pspan)
-                });
+                params.push(Self::param_from_default(pname, pspan, default));
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -661,18 +673,15 @@ impl Parser {
                             if self.eat(&Tok::Colon) {
                                 self.skip_param_annotation();
                             }
-                            let optional = if self.eat(&Tok::Assign) {
-                                let _ = self.expr()?;
-                                true
+                            let default = if self.eat(&Tok::Assign) {
+                                Some(self.expr()?)
                             } else {
-                                false
+                                None
                             };
                             if idx == 0 {
                                 self_param = Some(pname);
-                            } else if optional {
-                                params.push(Param::optional(pname, pspan));
                             } else {
-                                params.push(Param::new(pname, pspan));
+                                params.push(Self::param_from_default(pname, pspan, default));
                             }
                             idx += 1;
                             if !self.eat(&Tok::Comma) {

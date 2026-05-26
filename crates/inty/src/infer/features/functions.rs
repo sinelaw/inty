@@ -133,6 +133,20 @@ impl InferState {
             ret_type.clone(),
         ));
 
+        // A parameter with a (non-`None`) default constrains its type:
+        // the parameter is unified with the default's *widened* type
+        // (so `def f(x=1)` gives `x: Number`, not the literal `1`). The
+        // default is evaluated in the defining scope. `=None` defaults
+        // carry no `default` expression by construction, so they impose
+        // no constraint — Python's idiomatic optional parameter.
+        for (param, ty) in params.iter().zip(param_types.iter()) {
+            if let Some(default) = &param.default {
+                let default_type = self.infer_expr(env, default)?;
+                let widened = default_type.widen_fresh_literals();
+                self.unify(param.span, ty, &widened)?;
+            }
+        }
+
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
             let (annotated_type, var_map, next_pvar) = parse_type_annotation_with_pvars(
