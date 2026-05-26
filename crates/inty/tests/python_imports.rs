@@ -286,6 +286,80 @@ fn pyi_named_reexport_is_followed() {
 }
 
 #[test]
+fn pyi_literal_maps_to_literal_union() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(&stubs, "lit.pyi", "def kind() -> Literal[\"a\", \"b\"]: ...\n");
+    let ty = check("from lit import kind\nkind()\n", &dir, &[stubs]).expect("literal return");
+    // Should be the literal union "a" | "b", not opaque.
+    assert!(
+        ty.contains("\"a\"") && ty.contains("\"b\""),
+        "Literal[\"a\", \"b\"] should map to a literal union, got {}",
+        ty
+    );
+}
+
+#[test]
+fn pyi_literal_param_is_enforced() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(&stubs, "lit.pyi", "def pick(x: Literal[\"a\", \"b\"]) -> int: ...\n");
+    assert!(
+        check("from lit import pick\npick(\"a\")\n", &dir, &[stubs.clone()]).is_ok(),
+        "a valid literal member should be accepted"
+    );
+    assert!(
+        check("from lit import pick\npick(\"c\")\n", &dir, &[stubs]).is_err(),
+        "a value outside the literal union must be rejected"
+    );
+}
+
+#[test]
+fn pyi_callable_maps_to_function_type() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(
+        &stubs,
+        "hof.pyi",
+        "def apply(f: Callable[[int], int], x: int) -> int: ...\n",
+    );
+    // A matching 1-arg callback type-checks; the result is the return type.
+    let ty = check(
+        "from hof import apply\ndef g(n):\n    return n + 1\nr = apply(g, 1)\nr\n",
+        &dir,
+        &[stubs.clone()],
+    )
+    .expect("matching callback should type-check");
+    assert_eq!(ty, "Number");
+
+    // A wrong-arity callback is rejected — Callable shape is enforced.
+    assert!(
+        check(
+            "from hof import apply\ndef g(a, b):\n    return a\nr = apply(g, 1)\n",
+            &dir,
+            &[stubs],
+        )
+        .is_err(),
+        "a 2-arg callback must not satisfy Callable[[int], int]"
+    );
+}
+
+#[test]
+fn pyi_callable_ellipsis_is_opaque() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    // `Callable[..., int]` (arbitrary args) can't be expressed; stays
+    // opaque so any call shape is accepted.
+    write(&stubs, "hof2.pyi", "def deco(f: Callable[..., int]) -> int: ...\n");
+    let ty = check(
+        "from hof2 import deco\ndef g(a, b, c):\n    return 1\nr = deco(g)\nr\n",
+        &dir,
+        &[stubs],
+    );
+    assert!(ty.is_ok(), "Callable[..., R] should accept any callable: {:?}", ty);
+}
+
+#[test]
 fn transitive_py_imports() {
     let dir = tmp_dir();
     write(&dir, "a.py", "def base(x):\n    return x + 1\n");
