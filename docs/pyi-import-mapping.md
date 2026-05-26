@@ -317,7 +317,105 @@ type-mapping ones: the reader needs a configured target Python version to pick
 the right branch (exactly as `ty`/pyright do). Listed here so it isn't
 mistaken for a type-system gap — it belongs in the module-resolver design.
 
-## 8. Recommendation
+## 8. Should inty add nominal types?
+
+Nominal identity (§5.1) is the root of the largest cluster of gaps, so the
+obvious question is whether to fix it at the source by adding nominal types to
+the type system. Short version: **it is the highest-leverage extension for
+Python fidelity, and — unlike subtyping or `any` — it is the *native* notion
+for a type system built like inty's.** But one distinction has to be held
+firmly, because it is where the intuition usually goes wrong.
+
+### 8.1 It is well-understood in inty's construction
+
+inty's core is the HM/unification family (HMF). In that family **nominal types
+are the default and structural records are the exotic add-on** — the reverse of
+the OO-language intuition. ML/Haskell are unification-based, have no subtyping,
+and their `data Dog = …` / `data Cat = …` are nominal: two identically-shaped
+data types do not unify. That is exactly inty's setting, so nominal types are
+not a foreign concept bolted on; they are what this kind of system was
+originally about.
+
+inty already has two working nominal mechanisms, which prove the unification
+story twice over:
+
+- **`Type::Named(TypeId, Vec<Type>)`** — a parameterized nominal reference,
+  with free-var collection and substitution already implemented. Unification is
+  "same `TypeId` *and* args unify pairwise." Today it is only auto-generated
+  for equi-recursion, but the data structure and unification shape are exactly
+  what a user-facing nominal type needs.
+- **`Type::Module`** — nominal *by name* (source path), unify iff names match,
+  with **width subtyping deliberately not implemented** (per its doc comment).
+  It is already a fully nominal, invariant, declared-not-inferred type.
+
+So **invariant nominal unification = name-equality + pairwise arg unification**,
+and that is trivial here *precisely because inty has no subtyping*. The thing
+that makes nominal types hard in Java/TS — nominal subtyping, variance,
+inheritance lattices — is the thing inty does not have. No-subtyping is a gift
+in this design, not an obstacle.
+
+### 8.2 The distinction that must not blur: identity vs. subsumption
+
+Nominal types give **identity/discrimination**. They do **not** give **is-a
+subsumption**. Python uses both:
+
+- `isinstance(x, Dog)`, distinct `Dog` vs `Cat`, `NewType`, distinct
+  `Enum`/exception classes → **identity**. Nominal types fix all of these
+  directly, closing §5.1 and tightening §4.5 (`NewType`), §4.6 (`Enum`
+  identity), and §5.9 (exception classes).
+- `Dog` *is-an* `Animal` (a subclass usable where the base is expected) →
+  **subsumption**. inty has no subtyping and (README "Future Work")
+  deliberately excludes inheritance. Nominal types do **not** buy this. So even
+  with nominal types, the is-a direction still uses **MRO flattening** (§4.2) —
+  the alternative would be nominal *subtyping*, the expensive thing inty exists
+  to avoid.
+
+Framed precisely: nominal types let inty tell same-shaped classes apart and
+narrow on them; they do not make inty an inheritance-subsumption checker.
+
+### 8.3 What is genuinely new (the design work)
+
+The data structure exists; what is missing is bounded but real, and it touches
+the inference paths:
+
+1. **A registry**: nominal `TypeId` → (underlying representation row,
+   constructor signature). `Module` already has the analog; generalize it to
+   stub/class-declared brands.
+2. **Intro/elim rules — the subtle one for inty.** Member access is done by row
+   unification (`infer_member`). For `x.name` on a nominal `Dog` to work, the
+   rule must **transparently project the nominal to its underlying row** while
+   keeping identity for unification: a *transparent-field-access,
+   opaque-identity* nominal type — "a row wearing a brand." This is the
+   principled version of the phantom-discriminant convention (§5.1), done in
+   the type system rather than as a userland hack.
+3. **Narrowing integration.** `isinstance(x, Dog)` becomes a brand check on the
+   same predicate-refinement path as `e.kind === "circle"`.
+4. **Declared, not inferred.** Nominal types should be *introduced by
+   declaration* (stub or class decl); structural rows stay the inferred
+   default — mirroring `Module` (nominal because a file declared it, never
+   guessed from shape). Inferring nominality from an unannotated class literal
+   would fight principal typing and inty's structural-by-default contract.
+5. **Type-class interaction.** Decide whether a nominal type satisfies
+   `Plus`/`Indexable` via its representation. Note this is *separate* from
+   user-declarable type-class instances (what §5.5 needs) — nominal types alone
+   do not open the closed `Plus`/`Indexable` set.
+
+### 8.4 The honest caveat
+
+It is theoretically clean and high-leverage, but it is a philosophical move:
+the README sells "structural everywhere, row polymorphism replaces subtyping,"
+and this adds a second kind of object identity plus new rules in unification,
+member access, narrowing, and the printer. The cost is bounded (largely because
+there is no subtyping), but it is not free, and it is a values decision as much
+as a technical one.
+
+**Recommended scope:** *declared, invariant, transparent-access, no-subtyping*
+nominal types — the sweet spot matching the existing `Named`/`Module`
+precedents. This closes the identity gaps without dragging in Python's
+inheritance/is-a relation, which stays out of scope (so MRO-flattening still
+does the is-a work).
+
+## 9. Recommendation
 
 1. **Build the `.pyi` reader to cover Buckets A and B**, in roughly that
    priority: primitives/unions/optionals/literals → `Protocol`s and
@@ -326,12 +424,14 @@ mistaken for a type-system gap — it belongs in the module-resolver design.
 2. **Treat every Bucket C construct and every `Any`-dominated symbol as an
    opaque export** (§6) — never an importer-facing error.
 3. **Adopt the phantom-discriminant convention (§5.1)** as the pragmatic
-   stand-in for nominal identity, and revisit a real nominal-type feature only
-   if the loss proves painful in practice.
+   stand-in for nominal identity, and prefer the principled fix — *declared,
+   invariant, transparent-access* nominal types (§8) — once the loss proves
+   painful in practice. Of the deferred extensions, nominal types are the
+   highest-leverage and the cleanest fit for inty's HM core.
 4. **Defer, as genuine type-system extensions** (not stub-reader work):
-   user-defined type classes (§5.5), intersection/overload support (§5.3),
-   and nominal value types (§5.1). Each is a deliberate addition to inty's
-   core, weighed against its "small, strict, structural" philosophy.
+   nominal value types (§8), user-defined type classes (§5.5), and
+   intersection/overload support (§5.3). Each is a deliberate addition to
+   inty's core, weighed against its "small, strict, structural" philosophy.
 
 The headline: **Protocols, TypedDicts, unions, literals, generics (Rank-1),
 and functions translate cleanly; classes and inheritance translate
