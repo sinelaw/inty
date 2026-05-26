@@ -315,6 +315,31 @@ fn return_annotated_function_typechecks() {
 }
 
 #[test]
+fn default_param_is_marked_optional() {
+    match &parse("def f(a, b=1):\n    return a")[0] {
+        Stmt::FunctionDecl { params, .. } => {
+            assert_eq!(params.len(), 2);
+            assert!(!params[0].optional, "a is required");
+            assert!(params[1].optional, "b has a default => optional");
+        }
+        other => panic!("expected function decl, got {:?}", other),
+    }
+}
+
+#[test]
+fn default_param_may_be_omitted_or_supplied() {
+    let errs = check("def f(a, b=1):\n    return a\nx = f(10)\ny = f(10, 20)\n");
+    assert!(errs.is_empty(), "omitting/supplying a default should both check, got {:?}", errs);
+}
+
+#[test]
+fn default_param_still_enforces_arity() {
+    // The required parameter is still required, and surplus args fail.
+    assert!(!check("def f(a, b=1):\n    return a\nf()\n").is_empty(), "missing required arg must fail");
+    assert!(!check("def f(a, b=1):\n    return a\nf(1, 2, 3)\n").is_empty(), "too many args must fail");
+}
+
+#[test]
 fn decorated_def_parses_ignoring_decorator() {
     // `@deco` lines are consumed; the decorated def still parses.
     match &parse("@staticmethod\ndef f(a):\n    return a")[0] {
