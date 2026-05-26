@@ -279,6 +279,23 @@ fn relative_from_import_keeps_leading_dots() {
 }
 
 #[test]
+fn decorated_def_parses_ignoring_decorator() {
+    // `@deco` lines are consumed; the decorated def still parses.
+    match &parse("@staticmethod\ndef f(a):\n    return a")[0] {
+        Stmt::FunctionDecl { name, params, .. } => {
+            assert_eq!(name, "f");
+            assert_eq!(params.len(), 1);
+        }
+        other => panic!("expected function decl, got {:?}", other),
+    }
+    // Stacked decorators with call args.
+    assert!(matches!(
+        &parse("@app.route(\"/\")\n@cached\ndef handler():\n    return 1")[0],
+        Stmt::FunctionDecl { .. }
+    ));
+}
+
+#[test]
 fn rejects_class_inheritance() {
     assert!(parse_source("class Dog(Animal):\n    pass").is_err());
 }

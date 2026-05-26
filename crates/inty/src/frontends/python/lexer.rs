@@ -73,6 +73,7 @@ pub enum Tok {
     Dot,
     Semi,
     Arrow,
+    At,
     // layout
     Newline,
     Indent,
@@ -524,6 +525,7 @@ impl Lexer {
             ':' => Tok::Colon,
             '.' => Tok::Dot,
             ';' => Tok::Semi,
+            '@' => Tok::At,
             other => return Err(self.err(&format!("unexpected character '{}'", other), start)),
         };
         self.emit(tok, start);

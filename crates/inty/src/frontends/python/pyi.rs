@@ -22,23 +22,50 @@ use crate::infer::InferState;
 use crate::span::Spanned;
 use crate::types::{FuncParam, PropName, Type, TypeScheme};
 
-/// Parse `source` as a `.pyi` stub and return its exported `(name, scheme)`
-/// pairs. Fresh type variables are drawn from `state` so they don't
-/// collide with the importing program's.
-pub fn read_stub(state: &mut InferState, source: &str) -> Result<Vec<(String, TypeScheme)>> {
+/// The result of reading a `.pyi`: directly-declared exports plus the
+/// re-export requests (`from X import …`) the caller must resolve and
+/// merge (the reader has no path/resolver context).
+pub struct StubModule {
+    pub exports: Vec<(String, TypeScheme)>,
+    pub reexports: Vec<ReExport>,
+}
+
+/// A `from SOURCE import …` line encountered in a stub. `source` keeps
+/// any leading dots (relative imports).
+pub struct ReExport {
+    pub source: String,
+    pub names: ReExportNames,
+}
+
+pub enum ReExportNames {
+    /// `from SOURCE import *`
+    Star,
+    /// `from SOURCE import a, b as c` — `(imported, local)` pairs.
+    Named(Vec<(String, String)>),
+}
+
+/// Parse `source` as a `.pyi` stub. Fresh type variables are drawn from
+/// `state` so they don't collide with the importing program's.
+pub fn read_stub(state: &mut InferState, source: &str) -> Result<StubModule> {
     let toks = tokenize(source)?;
     let mut reader = StubReader {
         toks,
         pos: 0,
         state,
+        reexports: Vec::new(),
     };
-    Ok(reader.module())
+    let exports = reader.module();
+    Ok(StubModule {
+        exports,
+        reexports: reader.reexports,
+    })
 }
 
 struct StubReader<'a> {
     toks: Vec<Spanned<Tok>>,
     pos: usize,
     state: &'a mut InferState,
+    reexports: Vec<ReExport>,
 }
 
 impl StubReader<'_> {
@@ -149,16 +176,69 @@ impl StubReader<'_> {
     /// actually tries to use it).
     fn top_decl(&mut self) -> Option<(String, Type)> {
         match self.cur().clone() {
-            Tok::Def => self.def_decl(),
+            Tok::At => {
+                let decos = self.read_decorators();
+                self.decorated_decl(&decos)
+            }
+            Tok::Def => self.def_decl(&[]),
             Tok::Class => self.class_decl(),
-            // Decorators: skip the line, then read the decorated decl.
-            Tok::AugAssign(_) => {
-                self.skip_line();
+            Tok::From => {
+                self.read_reexport();
                 None
             }
             Tok::Name(_) => self.name_decl(),
-            // `from`/`import` re-exports, `if` version guards, `@deco`
-            // lines, docstrings, etc.: skip for now.
+            // `import …`, `if` version guards, docstrings, etc.: skip.
+            _ => {
+                self.skip_line();
+                None
+            }
+        }
+    }
+
+    /// Collect a run of `@decorator` lines, returning the decorator head
+    /// names (e.g. `["overload"]`, `["property"]`). Call arguments and
+    /// dotted prefixes are ignored — only the final name matters for the
+    /// handful of decorators we model.
+    fn read_decorators(&mut self) -> Vec<String> {
+        let mut decos = Vec::new();
+        while self.eat(&Tok::At) {
+            // The decorator's head name is the last `Name` before `(` or
+            // newline (so `abc.abstractmethod` → "abstractmethod").
+            let mut last = None;
+            while !self.check(&Tok::Newline)
+                && !self.check(&Tok::LParen)
+                && !self.at_eof()
+            {
+                if let Tok::Name(n) = self.cur() {
+                    last = Some(n.clone());
+                }
+                self.advance();
+            }
+            if let Some(n) = last {
+                decos.push(n);
+            }
+            self.skip_line();
+            while self.check(&Tok::Newline) {
+                self.advance();
+            }
+        }
+        decos
+    }
+
+    /// Read the declaration following a decorator run, applying the
+    /// modelled decorators (`@overload` → opaque, others fall through).
+    fn decorated_decl(&mut self, decos: &[String]) -> Option<(String, Type)> {
+        match self.cur().clone() {
+            Tok::Def => {
+                if decos.iter().any(|d| d == "overload") {
+                    // Overloaded signature: inty has no intersection
+                    // types, so export the name opaque (see §5.3).
+                    let (name, _) = self.read_def_signature();
+                    return name.map(|n| (n, self.opaque()));
+                }
+                self.def_decl(decos)
+            }
+            Tok::Class => self.class_decl(),
             _ => {
                 self.skip_line();
                 None
@@ -189,10 +269,20 @@ impl StubReader<'_> {
     }
 
     /// `def NAME ( params ) [-> RET] : <body>`
-    fn def_decl(&mut self) -> Option<(String, Type)> {
+    fn def_decl(&mut self, _decos: &[String]) -> Option<(String, Type)> {
+        let (name, ty) = self.read_def_signature();
+        name.map(|n| (n, ty))
+    }
+
+    /// Parse a `def` header into `(name, function-type)`, consuming the
+    /// body. Shared by module-level and (decorator-stripped) class
+    /// methods.
+    fn read_def_signature(&mut self) -> (Option<String>, Type) {
         self.advance(); // def
-        let name = self.name_here()?;
-        self.advance(); // name
+        let name = self.name_here();
+        if name.is_some() {
+            self.advance(); // name
+        }
         let (params, _had_self) = self.parse_params();
         let ret = if self.eat(&Tok::Arrow) {
             self.parse_type()
@@ -201,7 +291,86 @@ impl StubReader<'_> {
         };
         self.consume_suite();
         let func = Type::wrap_callable(Type::raw_func_with_params(None, params, ret));
-        Some((name, func))
+        (name, func)
+    }
+
+    /// `from SOURCE import (* | a [as b], …)` — record a re-export for the
+    /// caller to resolve. `import …` lines are intentionally not recorded
+    /// (those bind a module for internal stub use, not a public name).
+    fn read_reexport(&mut self) {
+        self.advance(); // from
+        let mut source = String::new();
+        while self.check(&Tok::Dot) {
+            source.push('.');
+            self.advance();
+        }
+        if matches!(self.cur(), Tok::Name(_)) {
+            source.push_str(&self.dotted_name());
+        }
+        if !self.eat(&Tok::Import) {
+            self.skip_line();
+            return;
+        }
+        if self.eat(&Tok::Star) {
+            self.skip_line();
+            self.reexports.push(ReExport {
+                source,
+                names: ReExportNames::Star,
+            });
+            return;
+        }
+        let parens = self.eat(&Tok::LParen);
+        let mut names = Vec::new();
+        loop {
+            let Some(imported) = self.name_here() else { break };
+            self.advance();
+            let local = if self.eat(&Tok::As) {
+                match self.name_here() {
+                    Some(n) => {
+                        self.advance();
+                        n
+                    }
+                    None => imported.clone(),
+                }
+            } else {
+                imported.clone()
+            };
+            names.push((imported, local));
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+            if parens && self.check(&Tok::RParen) {
+                break;
+            }
+        }
+        if parens {
+            self.eat(&Tok::RParen);
+        }
+        self.skip_line();
+        self.reexports.push(ReExport {
+            source,
+            names: ReExportNames::Named(names),
+        });
+    }
+
+    /// Parse `NAME ('.' NAME)*`, joined with dots.
+    fn dotted_name(&mut self) -> String {
+        let mut parts = Vec::new();
+        if let Some(n) = self.name_here() {
+            parts.push(n);
+            self.advance();
+        }
+        while self.check(&Tok::Dot) {
+            self.advance();
+            match self.name_here() {
+                Some(n) => {
+                    parts.push(n);
+                    self.advance();
+                }
+                None => break,
+            }
+        }
+        parts.join(".")
     }
 
     /// Parse a parenthesised parameter list into `FuncParam`s, dropping a
@@ -214,8 +383,15 @@ impl StubReader<'_> {
         }
         let mut first = true;
         while !self.check(&Tok::RParen) && !self.at_eof() {
+            // `/` is the positional-only marker — not a parameter; skip
+            // it (and a following comma) and continue.
+            if self.check(&Tok::Slash) {
+                self.advance();
+                self.eat(&Tok::Comma);
+                continue;
+            }
             // `*args` / `**kwargs` / bare `*`: stop modelling further
-            // params (variadics are Bucket C).
+            // params (variadics / keyword-only are Bucket C).
             if matches!(self.cur(), Tok::Star | Tok::DStar) {
                 // Skip to the closing paren.
                 while !self.check(&Tok::RParen) && !self.at_eof() {
@@ -302,28 +478,16 @@ impl StubReader<'_> {
                     continue;
                 }
                 match self.cur().clone() {
-                    Tok::Def => {
-                        self.advance(); // def
-                        let Some(mname) = self.name_here() else {
-                            self.skip_member();
-                            continue;
-                        };
-                        self.advance(); // method name
-                        let (params, _had_self) = self.parse_params();
-                        let ret = if self.eat(&Tok::Arrow) {
-                            self.parse_type()
+                    Tok::At => {
+                        let decos = self.read_decorators();
+                        if self.check(&Tok::Def) {
+                            self.read_method(&decos, &mut fields, &mut ctor_params);
                         } else {
-                            self.opaque()
-                        };
-                        self.consume_suite();
-                        if mname == "__init__" {
-                            ctor_params = params;
-                        } else if !mname.starts_with("__") {
-                            let m = Type::wrap_callable(Type::raw_func_with_params(
-                                None, params, ret,
-                            ));
-                            fields.insert(PropName(mname), m);
+                            self.skip_member();
                         }
+                    }
+                    Tok::Def => {
+                        self.read_method(&[], &mut fields, &mut ctor_params);
                     }
                     Tok::Name(fname) => {
                         self.advance(); // field name
@@ -347,6 +511,50 @@ impl StubReader<'_> {
         let instance = Type::object(fields.into_iter().map(|(k, v)| (k.0, v)));
         let ctor = Type::wrap_callable(Type::raw_func_with_params(None, ctor_params, instance));
         Some((name, ctor))
+    }
+
+    /// Read one `def` class member into either the constructor params
+    /// (`__init__`) or an instance-row field, applying modelled
+    /// decorators: `@property`/`@cached_property` make the member a field
+    /// of its return type (§4.8); `@overload` makes it opaque (§5.3).
+    /// Dunder methods other than `__init__` are dropped.
+    fn read_method(
+        &mut self,
+        decos: &[String],
+        fields: &mut BTreeMap<PropName, Type>,
+        ctor_params: &mut Vec<FuncParam>,
+    ) {
+        self.advance(); // def
+        let Some(mname) = self.name_here() else {
+            self.skip_member();
+            return;
+        };
+        self.advance(); // method name
+        let (params, _had_self) = self.parse_params();
+        let ret = if self.eat(&Tok::Arrow) {
+            self.parse_type()
+        } else {
+            self.opaque()
+        };
+        self.consume_suite();
+
+        if mname == "__init__" {
+            *ctor_params = params;
+            return;
+        }
+        if mname.starts_with("__") {
+            return;
+        }
+        let is_property = decos.iter().any(|d| d == "property" || d == "cached_property");
+        let is_overload = decos.iter().any(|d| d == "overload");
+        let value = if is_property {
+            ret
+        } else if is_overload {
+            self.opaque()
+        } else {
+            Type::wrap_callable(Type::raw_func_with_params(None, params, ret))
+        };
+        fields.insert(PropName(mname), value);
     }
 
     /// Skip a class-body member we don't model (a decorator line, nested
