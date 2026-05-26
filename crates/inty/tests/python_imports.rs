@@ -209,6 +209,83 @@ fn pyi_class_constructor_and_method() {
 }
 
 #[test]
+fn pyi_overload_decorator_is_opaque_not_a_lex_error() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    // `@overload` must tokenize (not error) and degrade to opaque.
+    write(
+        &stubs,
+        "ov.pyi",
+        "from typing import overload\n\
+         @overload\n\
+         def f(x: int) -> int: ...\n\
+         @overload\n\
+         def f(x: str) -> str: ...\n",
+    );
+    let ty = check("from ov import f\nr = f(1) + 1\nr\n", &dir, &[stubs]);
+    assert!(ty.is_ok(), "overloaded def should be opaque, not error: {:?}", ty);
+}
+
+#[test]
+fn pyi_property_decorator_becomes_a_field() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(
+        &stubs,
+        "shape.pyi",
+        "class Circle:\n\
+         \x20   def __init__(self, r: float) -> None: ...\n\
+         \x20   @property\n\
+         \x20   def area(self) -> float: ...\n",
+    );
+    // `area` is a property → a plain field, read without calling.
+    let ty = check(
+        "from shape import Circle\nc = Circle(2.0)\na = c.area\na\n",
+        &dir,
+        &[stubs],
+    )
+    .expect("property should read as a field");
+    assert_eq!(ty, "Number");
+}
+
+#[test]
+fn pyi_positional_only_marker_is_ignored() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    // The `/` positional-only marker must not be parsed as a parameter.
+    write(&stubs, "po.pyi", "def root(x: int, /) -> int: ...\n");
+    let ty = check("from po import root\nr = root(9)\nr\n", &dir, &[stubs])
+        .expect("positional-only def should take exactly one arg");
+    assert_eq!(ty, "Number");
+}
+
+#[test]
+fn pyi_star_reexport_is_followed() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    // `agg` re-exports everything from `impl` via `import *`.
+    write(&stubs, "impl.pyi", "def helper(x: int) -> int: ...\n");
+    write(&stubs, "agg.pyi", "from impl import *\n");
+    let ty = check("from agg import helper\nr = helper(3)\nr\n", &dir, &[stubs])
+        .expect("star re-export should expose helper");
+    assert_eq!(ty, "Number");
+}
+
+#[test]
+fn pyi_named_reexport_is_followed() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(&stubs, "impl.pyi", "def helper(x: int) -> int: ...\nINTERNAL: int\n");
+    write(&stubs, "agg.pyi", "from impl import helper as helper\n");
+    // `helper` is re-exported; `INTERNAL` is not.
+    assert!(check("from agg import helper\nr = helper(3)\nr\n", &dir, &[stubs.clone()]).is_ok());
+    assert!(
+        check("from agg import INTERNAL\n", &dir, &[stubs]).is_err(),
+        "a name not named in the re-export must not be visible"
+    );
+}
+
+#[test]
 fn transitive_py_imports() {
     let dir = tmp_dir();
     write(&dir, "a.py", "def base(x):\n    return x + 1\n");

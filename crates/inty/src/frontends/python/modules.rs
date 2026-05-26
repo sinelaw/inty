@@ -45,6 +45,26 @@ pub fn resolve_python_imports(
     search_paths: &[PathBuf],
     visiting: &mut HashSet<PathBuf>,
 ) -> Result<TypeEnv, IntyError> {
+    // Memoise loaded modules by canonical path: typeshed aggregators
+    // re-export each other widely, so without a cache the same big stubs
+    // would be re-read and re-checked combinatorially.
+    let mut cache: ModuleCache = std::collections::HashMap::new();
+    resolve_inner(state, env, program, base_dir, search_paths, visiting, &mut cache)
+}
+
+/// A module's public exports, keyed by canonical path.
+type ModuleCache = std::collections::HashMap<PathBuf, Exports>;
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_inner(
+    state: &mut InferState,
+    env: TypeEnv,
+    program: &Program,
+    base_dir: &Path,
+    search_paths: &[PathBuf],
+    visiting: &mut HashSet<PathBuf>,
+    cache: &mut ModuleCache,
+) -> Result<TypeEnv, IntyError> {
     let mut env = env;
     for stmt in &program.statements {
         let Stmt::Import {
@@ -67,7 +87,7 @@ pub fn resolve_python_imports(
             // `from m import *` — merge all of m's exports.
             let path = resolve_module(source, base_dir, search_paths)
                 .ok_or_else(|| module_err(format!("cannot resolve import {:?}", source)))?;
-            let exports = load_module(state, &env, &path, search_paths, visiting)?;
+            let exports = load_module(state, &env, &path, search_paths, visiting, cache)?;
             for (name, scheme) in exports {
                 if !name.starts_with('_') {
                     env = env.extend(name, scheme);
@@ -83,7 +103,7 @@ pub fn resolve_python_imports(
                 } => {
                     let path = resolve_module(source, base_dir, search_paths)
                         .ok_or_else(|| module_err(format!("cannot resolve import {:?}", source)))?;
-                    let exports = load_module(state, &env, &path, search_paths, visiting)?;
+                    let exports = load_module(state, &env, &path, search_paths, visiting, cache)?;
                     if let Some((_, scheme)) =
                         exports.iter().find(|(n, _)| n == imported)
                     {
@@ -94,7 +114,7 @@ pub fn resolve_python_imports(
                         // `from pkg import submod` where `submod` is a
                         // module file, not a name exported by `pkg`.
                         let sub_exports =
-                            load_module(state, &env, &sub, search_paths, visiting)?;
+                            load_module(state, &env, &sub, search_paths, visiting, cache)?;
                         env = env.extend(local.clone(), namespace_scheme(&sub_exports));
                     } else {
                         return Err(module_err(format!(
@@ -108,7 +128,7 @@ pub fn resolve_python_imports(
                     // namespace as a row of its exports.
                     let path = resolve_module(source, base_dir, search_paths)
                         .ok_or_else(|| module_err(format!("cannot resolve import {:?}", source)))?;
-                    let exports = load_module(state, &env, &path, search_paths, visiting)?;
+                    let exports = load_module(state, &env, &path, search_paths, visiting, cache)?;
                     env = env.extend(local.clone(), namespace_scheme(&exports));
                 }
                 ImportSpecifier::Default { local, span } => {
@@ -146,8 +166,12 @@ fn load_module(
     path: &Path,
     search_paths: &[PathBuf],
     visiting: &mut HashSet<PathBuf>,
+    cache: &mut ModuleCache,
 ) -> Result<Exports, IntyError> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(cached) = cache.get(&canonical) {
+        return Ok(cached.clone());
+    }
     if visiting.contains(&canonical) {
         return Err(IntyError::Type(TypeError::Module {
             message: format!("circular import involving {}", canonical.display()),
@@ -163,8 +187,32 @@ fn load_module(
     })?;
 
     if path.extension().and_then(|e| e.to_str()) == Some("pyi") {
-        // Stubs are self-contained declarations; no recursion / inference.
-        return super::pyi::read_stub(state, &source);
+        // Stubs are declarations only — no inference. Read the direct
+        // declarations, then resolve `from X import …` re-exports
+        // (typeshed aggregators like `os.path`/`typing` rely on these).
+        let module = super::pyi::read_stub(state, &source)?;
+        let mut exports = module.exports;
+        let stub_base = path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        visiting.insert(canonical.clone());
+        for re in module.reexports {
+            resolve_reexport(
+                state,
+                env,
+                &re,
+                &stub_base,
+                search_paths,
+                visiting,
+                cache,
+                &mut exports,
+            );
+        }
+        visiting.remove(&canonical);
+        cache.insert(canonical, exports.clone());
+        return Ok(exports);
     }
 
     // A `.py` implementation module: parse, resolve its imports, infer,
@@ -179,17 +227,66 @@ fn load_module(
 
     let base_names: HashSet<String> = env.names().cloned().collect();
     let env_with_imports =
-        resolve_python_imports(state, env.clone(), &program, &mod_base, search_paths, visiting)?;
+        resolve_inner(state, env.clone(), &program, &mod_base, search_paths, visiting, cache)?;
     let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
 
     visiting.remove(&canonical);
 
-    let exports = module_env
+    let exports: Exports = module_env
         .iter()
         .filter(|(name, _)| !base_names.contains(*name) && !name.starts_with('_'))
         .map(|(name, scheme)| (name.clone(), scheme.clone()))
         .collect();
+    cache.insert(canonical, exports.clone());
     Ok(exports)
+}
+
+/// Resolve a stub's `from SOURCE import …` re-export and append the
+/// pulled-in names to `exports`. Failures (missing target, cycle, read
+/// error) degrade silently — a re-export we can't follow just leaves
+/// those names unavailable, per the degradation contract.
+#[allow(clippy::too_many_arguments)]
+fn resolve_reexport(
+    state: &mut InferState,
+    env: &TypeEnv,
+    re: &super::pyi::ReExport,
+    base_dir: &Path,
+    search_paths: &[PathBuf],
+    visiting: &mut HashSet<PathBuf>,
+    cache: &mut ModuleCache,
+    exports: &mut Exports,
+) {
+    use super::pyi::ReExportNames;
+
+    let Some(path) = resolve_module(&re.source, base_dir, search_paths) else {
+        return;
+    };
+    let Ok(target) = load_module(state, env, &path, search_paths, visiting, cache) else {
+        return;
+    };
+
+    match &re.names {
+        ReExportNames::Star => {
+            for (name, scheme) in target {
+                if !name.starts_with('_') {
+                    exports.push((name, scheme));
+                }
+            }
+        }
+        ReExportNames::Named(list) => {
+            for (imported, local) in list {
+                if let Some((_, scheme)) = target.iter().find(|(n, _)| n == imported) {
+                    exports.push((local.clone(), scheme.clone()));
+                } else if let Some(sub) =
+                    resolve_submodule(&re.source, imported, base_dir, search_paths)
+                {
+                    if let Ok(sub_exports) = load_module(state, env, &sub, search_paths, visiting, cache) {
+                        exports.push((local.clone(), namespace_scheme(&sub_exports)));
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Resolve an (absolute or relative) module spec to a file. Tries stub

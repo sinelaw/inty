@@ -183,6 +183,7 @@ impl Parser {
 
     fn statement(&mut self) -> Result<Vec<Stmt>> {
         match self.cur() {
+            Tok::At => self.decorated_stmt(),
             Tok::Def => Ok(vec![self.def_stmt()?]),
             Tok::Class => Ok(vec![self.class_stmt()?]),
             Tok::Import => self.import_stmt(),
@@ -500,6 +501,23 @@ impl Parser {
 
     // ---- compound statements ----
 
+    /// One or more `@decorator` lines followed by the `def`/`class` they
+    /// decorate. The decorator's *effect* is not modelled (a known
+    /// simplification); the lines are consumed so the decorated
+    /// declaration parses.
+    fn decorated_stmt(&mut self) -> Result<Vec<Stmt>> {
+        while self.check(&Tok::At) {
+            // Consume `@ <expr>` up to the end of the line.
+            while !self.check(&Tok::Newline) && !self.at_eof() {
+                self.advance();
+            }
+            self.eat(&Tok::Newline);
+            // Skip blank lines between stacked decorators.
+            while self.eat(&Tok::Newline) {}
+        }
+        self.statement()
+    }
+
     fn def_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // def
@@ -587,6 +605,15 @@ impl Parser {
                     if !self.at_eof() {
                         self.expect(&Tok::Newline, "newline")?;
                     }
+                }
+                // Decorator on a method (`@property`, …): the effect is
+                // not modelled; skip the line and let the next iteration
+                // parse the decorated `def`.
+                Tok::At => {
+                    while !self.check(&Tok::Newline) && !self.at_eof() {
+                        self.advance();
+                    }
+                    self.eat(&Tok::Newline);
                 }
                 // Tolerate a docstring (a bare string-literal line).
                 Tok::Str(_) => {
