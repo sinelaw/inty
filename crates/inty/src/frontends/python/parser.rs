@@ -185,6 +185,8 @@ impl Parser {
         match self.cur() {
             Tok::Def => Ok(vec![self.def_stmt()?]),
             Tok::Class => Ok(vec![self.class_stmt()?]),
+            Tok::Import => self.import_stmt(),
+            Tok::From => Ok(vec![self.from_import_stmt()?]),
             Tok::If => Ok(vec![self.if_stmt()?]),
             Tok::While => Ok(vec![self.while_stmt()?]),
             Tok::For => Ok(vec![self.for_stmt()?]),
@@ -716,6 +718,134 @@ impl Parser {
             type_annotation: None,
             span,
         })
+    }
+
+    /// `import a[.b.c] [as alias] (',' …)*`
+    ///
+    /// Each clause binds the module namespace under a local name. A
+    /// dotted path with no `as` binds its **first** segment (Python
+    /// binds the top package); `import a.b.c as d` binds `d` to the
+    /// `a.b.c` module. Lowers to a `Stmt::Import` with a `Namespace`
+    /// specifier per clause; the dotted module spec is the `source`.
+    fn import_stmt(&mut self) -> Result<Vec<Stmt>> {
+        self.advance(); // import
+        // Each comma-separated clause becomes its own top-level
+        // `Stmt::Import` (one `source` slot per import in the shared
+        // AST). Returned as a flat list so they stay in module scope.
+        let mut stmts = Vec::new();
+        loop {
+            let clause_span = self.cur_span();
+            let dotted = self.parse_dotted_name()?;
+            let local = if self.eat(&Tok::As) {
+                self.expect_name("import alias")?
+            } else {
+                // `import a.b.c` binds the top segment `a`.
+                dotted.split('.').next().unwrap_or(&dotted).to_string()
+            };
+            self.declare(&local);
+            stmts.push(Stmt::Import {
+                specifiers: vec![ImportSpecifier::Namespace {
+                    local,
+                    span: clause_span,
+                }],
+                source: dotted,
+                span: Span::new(clause_span.start, self.prev_span().end),
+            });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        if !self.at_eof() {
+            self.expect(&Tok::Newline, "newline")?;
+        }
+        Ok(stmts)
+    }
+
+    /// `from MODULE import (NAME [as alias] (',' …)* | '*')`
+    ///
+    /// `MODULE` may carry leading dots for relative imports
+    /// (`from . import x`, `from ..pkg.mod import y`). `import *` lowers
+    /// to a side-effect import (empty specifier list → merge all
+    /// exports). The module spec — leading dots plus dotted path — is
+    /// the `source`.
+    fn from_import_stmt(&mut self) -> Result<Stmt> {
+        let start = self.cur_span().start;
+        self.advance(); // from
+
+        // Leading dots for relative imports.
+        let mut source = String::new();
+        while self.check(&Tok::Dot) {
+            source.push('.');
+            self.advance();
+        }
+        // Optional dotted module path (absent for `from . import x`).
+        if matches!(self.cur(), Tok::Name(_)) {
+            source.push_str(&self.parse_dotted_name()?);
+        } else if source.is_empty() {
+            return Err(self.unexpected("a module name after 'from'"));
+        }
+
+        self.expect(&Tok::Import, "'import'")?;
+
+        // `from m import *` → side-effect import (merge all exports).
+        if self.eat(&Tok::Star) {
+            if !self.at_eof() {
+                self.expect(&Tok::Newline, "newline")?;
+            }
+            return Ok(Stmt::Import {
+                specifiers: Vec::new(),
+                source,
+                span: Span::new(start, self.prev_span().end),
+            });
+        }
+
+        // Optional surrounding parens (Python allows a parenthesised,
+        // possibly multi-line, import list).
+        let parens = self.eat(&Tok::LParen);
+        let mut specifiers = Vec::new();
+        loop {
+            let spec_span = self.cur_span();
+            let imported = self.expect_name("imported name")?;
+            let local = if self.eat(&Tok::As) {
+                self.expect_name("import alias")?
+            } else {
+                imported.clone()
+            };
+            self.declare(&local);
+            specifiers.push(ImportSpecifier::Named {
+                imported,
+                local,
+                span: spec_span,
+            });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+            // Allow a trailing comma before `)`.
+            if parens && self.check(&Tok::RParen) {
+                break;
+            }
+        }
+        if parens {
+            self.expect(&Tok::RParen, "')'")?;
+        }
+        if !self.at_eof() {
+            self.expect(&Tok::Newline, "newline")?;
+        }
+        Ok(Stmt::Import {
+            specifiers,
+            source,
+            span: Span::new(start, self.prev_span().end),
+        })
+    }
+
+    /// Parse a dotted name `NAME ('.' NAME)*`, returning it joined with
+    /// dots (e.g. `"a.b.c"`).
+    fn parse_dotted_name(&mut self) -> Result<String> {
+        let mut parts = vec![self.expect_name("module name")?];
+        while self.eat(&Tok::Dot) {
+            parts.push(self.expect_name("module name segment")?);
+        }
+        Ok(parts.join("."))
     }
 
     /// Pull `self.<field> = <expr>` lines out of a parsed `__init__`

@@ -194,6 +194,91 @@ fn class_lowers_to_factory_function() {
 }
 
 #[test]
+fn from_import_lowers_to_named_specifiers() {
+    use crate::ast::ImportSpecifier;
+    match &parse("from pkg.mod import a, b as c")[0] {
+        Stmt::Import { specifiers, source, .. } => {
+            assert_eq!(source, "pkg.mod");
+            assert_eq!(specifiers.len(), 2);
+            match &specifiers[0] {
+                ImportSpecifier::Named { imported, local, .. } => {
+                    assert_eq!(imported, "a");
+                    assert_eq!(local, "a");
+                }
+                other => panic!("expected named import, got {:?}", other),
+            }
+            match &specifiers[1] {
+                ImportSpecifier::Named { imported, local, .. } => {
+                    assert_eq!(imported, "b");
+                    assert_eq!(local, "c");
+                }
+                other => panic!("expected aliased named import, got {:?}", other),
+            }
+        }
+        other => panic!("expected import, got {:?}", other),
+    }
+}
+
+#[test]
+fn import_binds_namespace() {
+    use crate::ast::ImportSpecifier;
+    match &parse("import os")[0] {
+        Stmt::Import { specifiers, source, .. } => {
+            assert_eq!(source, "os");
+            assert!(matches!(
+                specifiers[0],
+                ImportSpecifier::Namespace { .. }
+            ));
+        }
+        other => panic!("expected import, got {:?}", other),
+    }
+    // Dotted import binds the top segment unless aliased.
+    match &parse("import a.b.c as abc")[0] {
+        Stmt::Import { specifiers, source, .. } => {
+            assert_eq!(source, "a.b.c");
+            match &specifiers[0] {
+                ImportSpecifier::Namespace { local, .. } => assert_eq!(local, "abc"),
+                other => panic!("expected namespace, got {:?}", other),
+            }
+        }
+        other => panic!("expected import, got {:?}", other),
+    }
+}
+
+#[test]
+fn import_comma_list_lowers_to_multiple_imports() {
+    let stmts = parse("import os, sys");
+    assert_eq!(stmts.len(), 2);
+    assert!(stmts.iter().all(|s| matches!(s, Stmt::Import { .. })));
+}
+
+#[test]
+fn from_import_star_is_side_effect_import() {
+    match &parse("from pkg import *")[0] {
+        Stmt::Import { specifiers, source, .. } => {
+            assert_eq!(source, "pkg");
+            assert!(specifiers.is_empty(), "star import has no specifiers");
+        }
+        other => panic!("expected import, got {:?}", other),
+    }
+}
+
+#[test]
+fn relative_from_import_keeps_leading_dots() {
+    match &parse("from ..pkg.mod import x")[0] {
+        Stmt::Import { source, .. } => assert_eq!(source, "..pkg.mod"),
+        other => panic!("expected import, got {:?}", other),
+    }
+    match &parse("from . import sibling")[0] {
+        Stmt::Import { source, specifiers, .. } => {
+            assert_eq!(source, ".");
+            assert_eq!(specifiers.len(), 1);
+        }
+        other => panic!("expected import, got {:?}", other),
+    }
+}
+
+#[test]
 fn rejects_class_inheritance() {
     assert!(parse_source("class Dog(Animal):\n    pass").is_err());
 }
