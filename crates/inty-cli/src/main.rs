@@ -511,6 +511,20 @@ AUTHOR:
 
 /// Lex and parse JavaScript, threading JSDoc type annotations and aliases
 /// off the scanner into the program (the other frontends don't have them).
+/// Search roots for Python's absolute imports (stubs / site-packages),
+/// read from the `INTY_PYTHONPATH` environment variable. Entries are
+/// separated by the platform path separator (`:` on Unix, `;` on
+/// Windows). Empty / unset → no extra roots (the importing file's own
+/// directory is always searched).
+fn python_search_paths() -> Vec<std::path::PathBuf> {
+    match std::env::var_os("INTY_PYTHONPATH") {
+        Some(val) => std::env::split_paths(&val)
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 fn parse_javascript(source: &str) -> Result<inty::ast::Program, IntyError> {
     let mut scanner = Scanner::new(source);
     let mut tokens = Vec::new();
@@ -559,17 +573,41 @@ fn run_inference(
         },
     };
 
-    // Resolve any `import "./foo.js"` statements relative to the file's
-    // parent directory before inferring the program itself. Only the
-    // JavaScript frontend has module imports; for stdin (no path) and the
-    // other frontends we skip resolution.
-    let env = if lang == Language::JavaScript && filename != "<stdin>" {
+    // Resolve imports relative to the file's parent directory before
+    // inferring the program itself. JavaScript uses ESM `import … from
+    // "./foo.js"`; Python resolves dotted/relative module specs against
+    // the file's directory plus the `INTY_PYTHONPATH` search roots (the
+    // typeshed / site-packages stand-in). stdin (no path) skips both.
+    let env = if filename == "<stdin>" {
+        env
+    } else if lang == Language::JavaScript {
         let base_dir = std::path::Path::new(filename)
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let mut visiting = std::collections::HashSet::new();
         match inty::modules::resolve_imports(state, env, &program, &base_dir, &mut visiting) {
+            Ok(e) => e,
+            Err(e) => {
+                errors.push(e);
+                return Err(errors);
+            }
+        }
+    } else if lang == Language::Python {
+        let base_dir = std::path::Path::new(filename)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let search_paths = python_search_paths();
+        let mut visiting = std::collections::HashSet::new();
+        match inty::frontends::python::modules::resolve_python_imports(
+            state,
+            env,
+            &program,
+            &base_dir,
+            &search_paths,
+            &mut visiting,
+        ) {
             Ok(e) => e,
             Err(e) => {
                 errors.push(e);

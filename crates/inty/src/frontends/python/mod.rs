@@ -26,7 +26,9 @@
 //! keywords `class`/`import`/`with`/`try`/`global`/`del`/`yield`/… .
 
 mod lexer;
+pub mod modules;
 mod parser;
+pub mod pyi;
 
 use crate::ast::Program;
 use crate::error::Result;
