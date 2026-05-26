@@ -685,6 +685,7 @@ impl Parser {
                             params,
                             body,
                             type_annotation,
+                            return_type_ast: _,
                             span,
                         } => Expr::Function {
                             name: Some(name),
@@ -1356,6 +1357,7 @@ impl Parser {
             params: ctor_params,
             body: Box::new(body_block),
             type_annotation: None,
+            return_type_ast: None,
             span,
         })
     }
@@ -1450,6 +1452,7 @@ impl Parser {
             params,
             body,
             type_annotation,
+            return_type_ast,
             span,
         } = decl
         {
@@ -1459,6 +1462,7 @@ impl Parser {
                 params,
                 body: new_body,
                 type_annotation,
+                return_type_ast,
                 span,
             }
         } else {
@@ -1528,6 +1532,7 @@ impl Parser {
             params,
             body,
             type_annotation,
+            return_type_ast: None,
             span: Span::new(start, self.prev_span().end),
         })
     }

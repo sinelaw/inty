@@ -302,6 +302,7 @@ fn emit_export_decl(
                 params: params.clone(),
                 body: body.clone(),
                 type_annotation: None,
+                return_type_ast: None,
                 span: *span,
             };
             for line in pretty::print_stmt(&synth).lines() {

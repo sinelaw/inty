@@ -294,6 +294,7 @@ pub fn stmt_strategy() -> impl Strategy<Value = Stmt> {
                         span: span(),
                     }),
                     type_annotation: None,
+                    return_type_ast: None,
                     span: span(),
                 }
             }),

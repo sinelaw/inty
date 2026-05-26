@@ -234,6 +234,7 @@ impl InferState {
                         params,
                         body,
                         &None,
+                        None,
                         shared_this.clone(),
                         *method_span,
                     )?;

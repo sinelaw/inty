@@ -1088,6 +1088,7 @@ mod tests {
                 span: span(),
             }),
             type_annotation: None,
+            return_type_ast: None,
             span: span(),
         };
         let output = print_stmt(&stmt);
