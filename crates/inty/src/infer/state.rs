@@ -1209,6 +1209,19 @@ impl InferState {
         self.named_types.get(&id)
     }
 
+    /// Map from `TypeId` to declared name for every *named* type
+    /// definition (brands and any other named def). Feeds
+    /// `PrettyContext::with_nominal_names` so diagnostics and the
+    /// printed program type render a brand as `UserId` / `Box<Number>`
+    /// rather than the internal `μ<id>`. Anonymous equi-recursive types
+    /// carry no name and are absent from the map.
+    pub fn nominal_names(&self) -> HashMap<TypeId, String> {
+        self.named_types
+            .iter()
+            .filter_map(|(id, def)| def.name.clone().map(|n| (*id, n)))
+            .collect()
+    }
+
     /// Whether `id` refers to a declared nominal (branded) type rather
     /// than an auto-generated equi-recursive type. Drives unification:
     /// nominal types never unroll for identity.
