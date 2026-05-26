@@ -113,8 +113,25 @@ impl InferState {
 
         // Build the function type up front so the body can refer to it
         // (recursion via `name`) and so any annotation can be unified
-        // against it before the body is checked.
-        let func_type = Type::func(this_type.clone(), param_types.clone(), ret_type.clone());
+        // against it before the body is checked. Parameters with a
+        // default value (`def f(x=1)`) become presence-polymorphic so a
+        // call may omit the trailing argument; the rest are required.
+        let func_params: Vec<crate::types::FuncParam> = params
+            .iter()
+            .zip(param_types.iter())
+            .map(|(param, ty)| {
+                if param.optional {
+                    crate::types::FuncParam::optional(self.fresh_pvar(), ty.clone())
+                } else {
+                    crate::types::FuncParam::required(ty.clone())
+                }
+            })
+            .collect();
+        let func_type = Type::wrap_callable(Type::raw_func_with_params(
+            Some(this_type.clone()),
+            func_params,
+            ret_type.clone(),
+        ));
 
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);

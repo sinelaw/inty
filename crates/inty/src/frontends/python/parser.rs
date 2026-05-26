@@ -544,10 +544,18 @@ impl Parser {
                 if self.eat(&Tok::Colon) {
                     self.skip_param_annotation();
                 }
-                if self.check(&Tok::Assign) {
-                    return Err(self.unsupported("default parameter values are not supported"));
-                }
-                params.push(Param::new(pname, pspan));
+                // A default value (`x=expr`) makes the parameter optional.
+                let optional = if self.eat(&Tok::Assign) {
+                    let _ = self.expr()?;
+                    true
+                } else {
+                    false
+                };
+                params.push(if optional {
+                    Param::optional(pname, pspan)
+                } else {
+                    Param::new(pname, pspan)
+                });
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -653,12 +661,16 @@ impl Parser {
                             if self.eat(&Tok::Colon) {
                                 self.skip_param_annotation();
                             }
-                            if self.check(&Tok::Assign) {
-                                return Err(self
-                                    .unsupported("default parameter values are not supported"));
-                            }
+                            let optional = if self.eat(&Tok::Assign) {
+                                let _ = self.expr()?;
+                                true
+                            } else {
+                                false
+                            };
                             if idx == 0 {
                                 self_param = Some(pname);
+                            } else if optional {
+                                params.push(Param::optional(pname, pspan));
                             } else {
                                 params.push(Param::new(pname, pspan));
                             }

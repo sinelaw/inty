@@ -21,6 +21,11 @@ use crate::span::Span;
 pub struct Param {
     pub name: String,
     pub span: Span,
+    /// `true` when the parameter has a default value and may be omitted
+    /// at the call site (Python `def f(x=1)`). Inference gives such
+    /// parameters a presence-polymorphic type so a shorter argument list
+    /// type-checks. Defaults to `false`.
+    pub optional: bool,
 }
 
 impl Param {
@@ -28,6 +33,16 @@ impl Param {
         Param {
             name: name.into(),
             span,
+            optional: false,
+        }
+    }
+
+    /// A parameter that may be omitted at the call site (has a default).
+    pub fn optional(name: impl Into<String>, span: Span) -> Self {
+        Param {
+            name: name.into(),
+            span,
+            optional: true,
         }
     }
 }
