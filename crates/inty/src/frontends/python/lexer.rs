@@ -24,6 +24,7 @@ pub enum Tok {
     For,
     In,
     Def,
+    Class,
     Return,
     Pass,
     Break,
@@ -118,6 +119,7 @@ impl Tok {
             "for" => Tok::For,
             "in" => Tok::In,
             "def" => Tok::Def,
+            "class" => Tok::Class,
             "return" => Tok::Return,
             "pass" => Tok::Pass,
             "break" => Tok::Break,
@@ -127,7 +129,7 @@ impl Tok {
             "None" => Tok::None,
             "lambda" => Tok::Lambda,
             "is" => Tok::Is,
-            "class" | "import" | "from" | "as" | "with" | "try" | "except" | "finally"
+            "import" | "from" | "as" | "with" | "try" | "except" | "finally"
             | "raise" | "global" | "nonlocal" | "del" | "assert" | "yield" | "async"
             | "await" => Tok::Reserved(s.to_string()),
             _ => return None,

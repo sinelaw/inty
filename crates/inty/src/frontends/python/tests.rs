@@ -167,8 +167,72 @@ fn rejects_chained_comparison() {
 }
 
 #[test]
-fn rejects_class() {
-    assert!(parse_source("class Foo:\n    pass").is_err());
+fn class_lowers_to_factory_function() {
+    // A class desugars to a factory `function` returning a structural
+    // row of fields + methods.
+    let stmts = parse("class Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n    def sum(self):\n        return self.x + self.y\n");
+    match &stmts[0] {
+        Stmt::FunctionDecl { name, params, .. } => {
+            assert_eq!(name, "Point");
+            // __init__ params (minus self) become the factory params.
+            assert_eq!(params.len(), 2);
+        }
+        other => panic!("expected class to lower to FunctionDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn rejects_class_inheritance() {
+    assert!(parse_source("class Dog(Animal):\n    pass").is_err());
+}
+
+#[test]
+fn class_instance_method_and_fields_typecheck() {
+    let errs = check(
+        "class Point:\n\
+         \x20   def __init__(self, x, y):\n\
+         \x20       self.x = x\n\
+         \x20       self.y = y\n\
+         \x20   def sum(self):\n\
+         \x20       return self.x + self.y\n\
+         p = Point(1, 2)\n\
+         s = p.sum()\n",
+    );
+    assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
+}
+
+#[test]
+fn class_unknown_field_is_rejected() {
+    let errs = check(
+        "class Box:\n\
+         \x20   def __init__(self, v):\n\
+         \x20       self.value = v\n\
+         b = Box(1)\n\
+         z = b.missing\n",
+    );
+    assert!(
+        !errs.is_empty(),
+        "reading a field the class never defines should fail"
+    );
+}
+
+#[test]
+fn class_method_this_field_type_is_enforced() {
+    // `self.name` is a String, so adding a Number to it must fail
+    // (no coercion at `+`).
+    let errs = check(
+        "class Greeter:\n\
+         \x20   def __init__(self, name):\n\
+         \x20       self.name = name\n\
+         \x20   def bad(self):\n\
+         \x20       return self.name + 1\n\
+         g = Greeter(\"hi\")\n\
+         r = g.bad()\n",
+    );
+    assert!(
+        !errs.is_empty(),
+        "String field + Number should be a type error"
+    );
 }
 
 #[test]
