@@ -263,6 +263,7 @@ pub fn stmt_strategy() -> impl Strategy<Value = Stmt> {
                         name,
                         init: Some(init),
                         type_annotation: None,
+                        type_ast: None,
                         kind,
                         span: span(),
                     }],

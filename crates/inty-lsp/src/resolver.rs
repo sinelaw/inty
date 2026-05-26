@@ -840,6 +840,7 @@ mod tests {
             name: "x".to_string(),
             init: None,
             type_annotation: None,
+            type_ast: None,
             kind: VarKind::Var,
             span: Span::new(4, 9),
         });

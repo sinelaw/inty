@@ -27,6 +27,7 @@ pub fn var_stmt(kind: VarKind, name: &str, init: Option<Expr>) -> Stmt {
             name: name.to_string(),
             init,
             type_annotation: None,
+            type_ast: None,
             kind,
             span: span(),
         }],
@@ -334,6 +335,7 @@ fn rename_stmt(stmt: &Stmt, from: &str, to: &str) -> Stmt {
                     },
                     init: d.init.as_ref().map(|e| rename_expr(e, from, to)),
                     type_annotation: d.type_annotation.clone(),
+                    type_ast: None,
                     kind: d.kind,
                     span: d.span,
                 })
@@ -574,9 +576,11 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             key,
             params,
             body,
+            return_type_ast,
             span,
         } => PropDef::Method {
             key: key.clone(),
+            return_type_ast: return_type_ast.clone(),
             params: params
                 .iter()
                 .map(|p| {

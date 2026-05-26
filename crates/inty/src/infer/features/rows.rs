@@ -224,17 +224,20 @@ impl InferState {
                     key,
                     params,
                     body,
+                    return_type_ast,
                     span: method_span,
                 } => {
                     let prop_name = self.prop_key_to_name(key);
-                    // Infer method with the shared 'this' type
+                    // Infer method with the shared 'this' type. A Python
+                    // method's `-> T` return annotation (if any) is checked
+                    // here too.
                     let method_type = self.infer_function_with_this(
                         env,
                         None,
                         params,
                         body,
                         &None,
-                        None,
+                        return_type_ast.as_ref(),
                         shared_this.clone(),
                         *method_span,
                     )?;

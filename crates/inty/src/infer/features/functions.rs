@@ -17,6 +17,7 @@ use super::super::InferResult;
 /// ExportDecl::Function }`. Hoisting and group inference need to treat
 /// both forms uniformly so peer forward references and mutual recursion
 /// across exports type-check.
+#[allow(clippy::type_complexity)]
 pub(in crate::infer) fn function_decl_parts<'a>(
     stmt: &'a Stmt,
 ) -> Option<(
