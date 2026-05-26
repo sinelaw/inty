@@ -373,7 +373,31 @@ subsumption**. Python uses both:
 Framed precisely: nominal types let inty tell same-shaped classes apart and
 narrow on them; they do not make inty an inheritance-subsumption checker.
 
-### 8.3 What is genuinely new (the design work)
+### 8.3 Implementation status
+
+The **type-system core and a declared surface are implemented** (reusing the
+`Type::Named` carrier with a `nominal` flag on `TypeDef`):
+
+- nominal unification — brand identity, args invariant, never unrolls
+  (`infer/unify.rs`); equi-recursive named types keep unrolling, regression-
+  guarded;
+- transparent field access — nominal reads unroll to the representation row
+  (`infer_member_on_type`);
+- surface `/** nominal type Name<P> = Repr */` with an injected constructor
+  `Name: <P>(Repr) => Name` as the sole introduction site
+  (`load_type_aliases` + `nominal_constructor_env`);
+- diagnostics render brands by name (`UserId` vs `OrderId`, not `μ3` vs `μ4`).
+
+This delivers nominal types for `.d.js`-style annotation/stub surfaces — the
+form a future `.pyi` reader would emit. Two pieces remain for **nominal Python
+classes specifically**: (a) the Python frontend does not parse `class` at all
+yet (it's a reserved word in the lexer); and (b) a class brand wraps an
+*inferred* instance row, whereas the implemented surface wraps a *declared*
+representation — so a "brand wraps an inferred row" path (lower `class` to a
+factory like the JS desugaring, then register its return row as the brand's
+representation) is still needed, along with `isinstance` brand-narrowing.
+
+### 8.4 What is genuinely new (the remaining design work)
 
 The data structure exists; what is missing is bounded but real, and it touches
 the inference paths:
@@ -400,7 +424,7 @@ the inference paths:
    user-declarable type-class instances (what §5.5 needs) — nominal types alone
    do not open the closed `Plus`/`Indexable` set.
 
-### 8.4 The honest caveat
+### 8.5 The honest caveat
 
 It is theoretically clean and high-leverage, but it is a philosophical move:
 the README sells "structural everywhere, row polymorphism replaces subtyping,"
