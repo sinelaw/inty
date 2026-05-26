@@ -389,13 +389,18 @@ The **type-system core and a declared surface are implemented** (reusing the
 - diagnostics render brands by name (`UserId` vs `OrderId`, not `μ3` vs `μ4`).
 
 This delivers nominal types for `.d.js`-style annotation/stub surfaces — the
-form a future `.pyi` reader would emit. Two pieces remain for **nominal Python
-classes specifically**: (a) the Python frontend does not parse `class` at all
-yet (it's a reserved word in the lexer); and (b) a class brand wraps an
-*inferred* instance row, whereas the implemented surface wraps a *declared*
-representation — so a "brand wraps an inferred row" path (lower `class` to a
-factory like the JS desugaring, then register its return row as the brand's
-representation) is still needed, along with `isinstance` brand-narrowing.
+form a future `.pyi` reader would emit.
+
+The **Python frontend now parses `class`** and lowers it to a factory function
+returning a *structural* instance row (`self` maps to inty's `this`;
+`__init__` params become the factory's constructor params and its
+`self.X = …` lines become fields; methods become row methods). Inheritance is
+rejected (instances are structural). This is the "structural classes first"
+step. One piece remains to make Python classes *nominal*: a class brand wraps
+an *inferred* instance row, whereas the implemented declared surface wraps a
+*declared* representation — so a "brand wraps an inferred row" path (brand the
+factory's inferred return row) plus `isinstance` brand-narrowing is still
+needed.
 
 ### 8.4 What is genuinely new (the remaining design work)
 

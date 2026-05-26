@@ -21,6 +21,10 @@ pub struct Parser {
     /// One set of declared names per enclosing function scope (module is
     /// the outermost). Used to decide declaration-vs-assignment.
     scopes: Vec<HashSet<String>>,
+    /// Name of the receiver parameter (`self`) while parsing a method
+    /// body. When set, references to that name lower to `Expr::This`, so
+    /// Python's explicit `self` maps onto inty's `this` row-polymorphism.
+    self_name: Option<String>,
 }
 
 impl Parser {
@@ -30,6 +34,7 @@ impl Parser {
             pos: 0,
             temp: 0,
             scopes: vec![HashSet::new()],
+            self_name: None,
         }
     }
 
@@ -173,6 +178,7 @@ impl Parser {
     fn statement(&mut self) -> Result<Vec<Stmt>> {
         match self.cur() {
             Tok::Def => Ok(vec![self.def_stmt()?]),
+            Tok::Class => Ok(vec![self.class_stmt()?]),
             Tok::If => Ok(vec![self.if_stmt()?]),
             Tok::While => Ok(vec![self.while_stmt()?]),
             Tok::For => Ok(vec![self.for_stmt()?]),
@@ -533,6 +539,227 @@ impl Parser {
             type_annotation: None,
             span: Span::new(start, self.prev_span().end),
         })
+    }
+
+    /// Parse a `class` declaration and lower it to a factory function
+    /// returning a structural row of fields + methods — the same shape
+    /// the JavaScript frontend desugars classes to. Instances are
+    /// structural (no nominal brand yet; see
+    /// `docs/pyi-import-mapping.md` §8). `self` maps to inty's `this`.
+    fn class_stmt(&mut self) -> Result<Stmt> {
+        let start = self.cur_span().start;
+        self.advance(); // class
+        let name = self.expect_name("class name")?;
+
+        // Optional base-class list. Inheritance is out of scope
+        // (instances are structural rows); accept only an empty `()`.
+        if self.eat(&Tok::LParen) {
+            if !self.check(&Tok::RParen) {
+                return Err(self.unsupported(
+                    "base classes / inheritance are not supported \
+                     (instances are structural; compose explicitly)",
+                ));
+            }
+            self.expect(&Tok::RParen, "')'")?;
+        }
+        self.expect(&Tok::Colon, "':'")?;
+        self.expect(&Tok::Newline, "newline")?;
+        self.expect(&Tok::Indent, "an indented class body")?;
+
+        let mut ctor_params: Vec<Param> = Vec::new();
+        let mut props: Vec<PropDef> = Vec::new();
+
+        while !self.check(&Tok::Dedent) && !self.at_eof() {
+            if self.eat(&Tok::Newline) {
+                continue;
+            }
+            match self.cur().clone() {
+                Tok::Pass => {
+                    self.advance();
+                    if !self.at_eof() {
+                        self.expect(&Tok::Newline, "newline")?;
+                    }
+                }
+                // Tolerate a docstring (a bare string-literal line).
+                Tok::Str(_) => {
+                    self.advance();
+                    if !self.at_eof() {
+                        self.expect(&Tok::Newline, "newline")?;
+                    }
+                }
+                Tok::Def => {
+                    let mspan = self.cur_span();
+                    self.advance(); // def
+                    let mname = self.expect_name("method name")?;
+                    self.expect(&Tok::LParen, "'('")?;
+                    // The first parameter is the receiver (`self`); the
+                    // rest are the method's own parameters.
+                    let mut self_param: Option<String> = None;
+                    let mut params: Vec<Param> = Vec::new();
+                    if !self.check(&Tok::RParen) {
+                        let mut idx = 0;
+                        loop {
+                            if matches!(self.cur(), Tok::Star | Tok::DStar) {
+                                return Err(
+                                    self.unsupported("*args / **kwargs are not supported")
+                                );
+                            }
+                            let pspan = self.cur_span();
+                            let pname = self.expect_name("parameter name")?;
+                            if self.eat(&Tok::Colon) {
+                                self.skip_param_annotation();
+                            }
+                            if self.check(&Tok::Assign) {
+                                return Err(self
+                                    .unsupported("default parameter values are not supported"));
+                            }
+                            if idx == 0 {
+                                self_param = Some(pname);
+                            } else {
+                                params.push(Param::new(pname, pspan));
+                            }
+                            idx += 1;
+                            if !self.eat(&Tok::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect(&Tok::RParen, "')'")?;
+                    if self.eat(&Tok::Arrow) {
+                        self.skip_annotation();
+                    }
+                    self.expect(&Tok::Colon, "':'")?;
+
+                    // Parse the body with `self` lowered to `this`.
+                    let saved_self = self.self_name.take();
+                    self.self_name = self_param.clone();
+                    self.scopes.push(HashSet::new());
+                    if let Some(s) = &self_param {
+                        self.declare(s);
+                    }
+                    for p in &params {
+                        self.declare(&p.name);
+                    }
+                    let body = self.suite()?;
+                    self.scopes.pop();
+                    self.self_name = saved_self;
+
+                    if mname == "__init__" {
+                        // The initialiser's params become the factory's
+                        // constructor params; its `self.X = expr` lines
+                        // become instance fields.
+                        ctor_params = params;
+                        self.extract_init_fields(&body, &mut props)?;
+                    } else {
+                        props.push(PropDef::Method {
+                            key: PropKey::Ident(mname),
+                            params,
+                            body,
+                            span: Span::new(mspan.start, self.prev_span().end),
+                        });
+                    }
+                }
+                Tok::Name(fname) => {
+                    // Class-level field: `name [: ann] = expr`.
+                    let fspan = self.cur_span();
+                    self.advance();
+                    if self.eat(&Tok::Colon) {
+                        self.skip_annotation();
+                    }
+                    self.expect(&Tok::Assign, "'='")?;
+                    let value = self.expr()?;
+                    if !self.at_eof() {
+                        self.expect(&Tok::Newline, "newline")?;
+                    }
+                    props.push(PropDef::Property {
+                        key: PropKey::Ident(fname),
+                        value,
+                        type_annotation: None,
+                        span: Span::new(fspan.start, self.prev_span().end),
+                    });
+                }
+                _ => {
+                    return Err(self.unsupported(
+                        "only method definitions and field assignments \
+                         are allowed in a class body",
+                    ));
+                }
+            }
+        }
+        self.expect(&Tok::Dedent, "dedent")?;
+
+        let span = Span::new(start, self.prev_span().end);
+        let obj = Expr::Object {
+            properties: props,
+            span,
+        };
+        let ret = Stmt::Return {
+            argument: Some(obj),
+            span,
+        };
+        let body = Box::new(Stmt::Block {
+            body: vec![ret],
+            span,
+        });
+
+        Ok(Stmt::FunctionDecl {
+            name,
+            params: ctor_params,
+            body,
+            type_annotation: None,
+            span,
+        })
+    }
+
+    /// Pull `self.<field> = <expr>` lines out of a parsed `__init__`
+    /// body (where `self` has already been lowered to `this`) and turn
+    /// each into an instance-field property of the factory's row.
+    fn extract_init_fields(&self, body: &Stmt, props: &mut Vec<PropDef>) -> Result<()> {
+        let stmts: &[Stmt] = match body {
+            Stmt::Block { body, .. } => body.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        for s in stmts {
+            match s {
+                Stmt::Empty { .. } => {}
+                Stmt::Expr {
+                    expression:
+                        Expr::Assign {
+                            op: AssignOp::Assign,
+                            left,
+                            right,
+                            ..
+                        },
+                    ..
+                } => {
+                    if let Expr::Member {
+                        object,
+                        property,
+                        span,
+                    } = left.as_ref()
+                    {
+                        if matches!(object.as_ref(), Expr::This { .. }) {
+                            props.push(PropDef::Property {
+                                key: PropKey::Ident(property.clone()),
+                                value: (**right).clone(),
+                                type_annotation: None,
+                                span: *span,
+                            });
+                            continue;
+                        }
+                    }
+                    return Err(self.unsupported(
+                        "only `self.<field> = <expr>` assignments are supported in __init__",
+                    ));
+                }
+                _ => {
+                    return Err(self.unsupported(
+                        "only `self.<field> = <expr>` assignments are supported in __init__",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Skip a parameter annotation: up to a top-level `,` or `)`.
@@ -968,7 +1195,14 @@ impl Parser {
             }
             Tok::Name(name) => {
                 self.advance();
-                Ok(Expr::Ident { name, span })
+                // Inside a method body, the receiver parameter lowers to
+                // `this` so member access (`self.x`) types via inty's
+                // `this` row-polymorphism.
+                if self.self_name.as_deref() == Some(name.as_str()) {
+                    Ok(Expr::This { span })
+                } else {
+                    Ok(Expr::Ident { name, span })
+                }
             }
             Tok::LParen => {
                 self.advance();
