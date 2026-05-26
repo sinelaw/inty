@@ -13,6 +13,7 @@ use super::lexer::{AugOp, Tok};
 use crate::ast::*;
 use crate::error::{ParseError, Result};
 use crate::span::{Span, Spanned};
+use crate::types::TypeAst;
 
 pub struct Parser {
     toks: Vec<Spanned<Tok>>,
@@ -529,16 +530,24 @@ impl Parser {
 
     /// Build a `Param` from an optional default expression, applying the
     /// `=None` special case: any default makes the parameter optional,
-    /// but only a *non-`None`* default constrains its type.
-    fn param_from_default(name: String, span: Span, default: Option<Expr>) -> Param {
-        match default {
+    /// but only a *non-`None`* default constrains its type. `type_ast`
+    /// carries the parameter's declared type, if annotated.
+    fn param_from_default(
+        name: String,
+        span: Span,
+        default: Option<Expr>,
+        type_ast: Option<TypeAst>,
+    ) -> Param {
+        let mut param = match default {
             None => Param::new(name, span),
             Some(Expr::Lit {
                 value: Literal::Null,
                 ..
             }) => Param::optional(name, span),
             Some(expr) => Param::with_default(name, span, expr),
-        }
+        };
+        param.type_ast = type_ast;
+        param
     }
 
     fn def_stmt(&mut self) -> Result<Stmt> {
@@ -554,10 +563,13 @@ impl Parser {
                 }
                 let pspan = self.cur_span();
                 let pname = self.expect_name("parameter name")?;
-                // optional `: annotation`
-                if self.eat(&Tok::Colon) {
-                    self.skip_param_annotation();
-                }
+                // Annotation `: T` — parsed into the shared TypeAst IR so
+                // inference can check the parameter's declared type.
+                let type_ast = if self.eat(&Tok::Colon) {
+                    Some(self.parse_type_ast())
+                } else {
+                    None
+                };
                 // A default value (`x=expr`) makes the parameter optional.
                 // A non-`None` default also constrains the parameter's
                 // type; a bare `=None` is Python's idiomatic optional and
@@ -567,7 +579,7 @@ impl Parser {
                 } else {
                     None
                 };
-                params.push(Self::param_from_default(pname, pspan, default));
+                params.push(Self::param_from_default(pname, pspan, default, type_ast));
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -681,7 +693,10 @@ impl Parser {
                             if idx == 0 {
                                 self_param = Some(pname);
                             } else {
-                                params.push(Self::param_from_default(pname, pspan, default));
+                                // Method parameter annotation checking is a
+                                // follow-up; only top-level `def` params are
+                                // checked for now.
+                                params.push(Self::param_from_default(pname, pspan, default, None));
                             }
                             idx += 1;
                             if !self.eat(&Tok::Comma) {
@@ -954,6 +969,14 @@ impl Parser {
             }
         }
         Ok(())
+    }
+
+    /// Parse a type annotation (a Python type expression) into the shared
+    /// [`TypeAst`] IR, advancing past it.
+    fn parse_type_ast(&mut self) -> TypeAst {
+        let (ast, new_pos) = super::type_expr::parse_type(&self.toks, self.pos);
+        self.pos = new_pos;
+        ast
     }
 
     /// Skip a parameter annotation: up to a top-level `,` or `)`.

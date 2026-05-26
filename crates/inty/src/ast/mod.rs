@@ -33,6 +33,11 @@ pub struct Param {
     /// idiomatic optional, which carries no useful type). Defaults to
     /// `None`.
     pub default: Option<Box<Expr>>,
+    /// The parameter's declared type, when annotated (`def f(x: int)`),
+    /// as the frontend-neutral [`crate::types::TypeAst`] IR. Inference
+    /// unifies the parameter with `lower_type_ast(this)`. `None` for an
+    /// unannotated parameter. Defaults to `None`.
+    pub type_ast: Option<crate::types::TypeAst>,
 }
 
 impl Param {
@@ -42,6 +47,7 @@ impl Param {
             span,
             optional: false,
             default: None,
+            type_ast: None,
         }
     }
 
@@ -53,6 +59,7 @@ impl Param {
             span,
             optional: true,
             default: None,
+            type_ast: None,
         }
     }
 
@@ -64,6 +71,7 @@ impl Param {
             span,
             optional: true,
             default: Some(Box::new(default)),
+            type_ast: None,
         }
     }
 }
