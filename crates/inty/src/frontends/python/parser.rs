@@ -586,10 +586,13 @@ impl Parser {
             }
         }
         self.expect(&Tok::RParen, "')'")?;
-        // optional return annotation
-        if self.eat(&Tok::Arrow) {
-            self.skip_annotation();
-        }
+        // Optional return annotation (`-> T`), parsed into the shared
+        // TypeAst IR so inference can check the body against it.
+        let return_type_ast = if self.eat(&Tok::Arrow) {
+            Some(self.parse_type_ast())
+        } else {
+            None
+        };
         self.expect(&Tok::Colon, "':'")?;
 
         self.scopes.push(HashSet::new());
@@ -604,6 +607,7 @@ impl Parser {
             params,
             body,
             type_annotation: None,
+            return_type_ast,
             span: Span::new(start, self.prev_span().end),
         })
     }
@@ -788,6 +792,7 @@ impl Parser {
             params: ctor_params,
             body,
             type_annotation: None,
+            return_type_ast: None,
             span,
         })
     }

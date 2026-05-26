@@ -24,6 +24,7 @@ pub(in crate::infer) fn function_decl_parts<'a>(
     &'a [Param],
     &'a Stmt,
     &'a Option<TypeAnnotation>,
+    Option<&'a crate::types::TypeAst>,
     Span,
 )> {
     match stmt {
@@ -32,12 +33,14 @@ pub(in crate::infer) fn function_decl_parts<'a>(
             params,
             body,
             type_annotation,
+            return_type_ast,
             span,
         } => Some((
             name.as_str(),
             params.as_slice(),
             body.as_ref(),
             type_annotation,
+            return_type_ast.as_ref(),
             *span,
         )),
         Stmt::Export {
@@ -55,6 +58,7 @@ pub(in crate::infer) fn function_decl_parts<'a>(
             params.as_slice(),
             body.as_ref(),
             type_annotation,
+            None,
             *span,
         )),
         _ => None,
@@ -70,16 +74,27 @@ impl InferState {
         params: &[Param],
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
+        return_type_ast: Option<&crate::types::TypeAst>,
         span: Span,
     ) -> InferResult<Type> {
         let this_type = self.fresh_type_var();
-        self.infer_function_with_this(env, name, params, body, type_annotation, this_type, span)
+        self.infer_function_with_this(
+            env,
+            name,
+            params,
+            body,
+            type_annotation,
+            return_type_ast,
+            this_type,
+            span,
+        )
     }
 
     /// Infer the type of a function expression with a pre-specified
     /// `this` type. Object-literal methods use this to ensure every
     /// method in the literal shares the same `this`; for free functions,
     /// `infer_function` calls this with a fresh `this` variable.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::infer) fn infer_function_with_this(
         &mut self,
         env: &TypeEnv,
@@ -87,6 +102,7 @@ impl InferState {
         params: &[Param],
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
+        return_type_ast: Option<&crate::types::TypeAst>,
         this_type: Type,
         span: Span,
     ) -> InferResult<Type> {
@@ -155,6 +171,15 @@ impl InferState {
             }
         }
 
+        // A return annotation (`def f() -> T`) pins the return type; the
+        // body's result must subsume into it (enforced after the body is
+        // checked, below). Unmodelled annotations lower to a fresh
+        // variable and impose no constraint.
+        if let Some(ret_ast) = return_type_ast {
+            let annotated_ret = self.lower_type_ast(ret_ast);
+            self.unify(span, &ret_type, &annotated_ret)?;
+        }
+
         if let Some(annotation) = type_annotation {
             let annotation_span = Span::new(annotation.span.start, annotation.span.end);
             let (annotated_type, var_map, next_pvar) = parse_type_annotation_with_pvars(
@@ -197,7 +222,7 @@ impl InferState {
         // matching the behaviour at `var f = "hi"`. With an annotation
         // the declared return governs and the body merely subsumes
         // into it.
-        if type_annotation.is_some() {
+        if type_annotation.is_some() || return_type_ast.is_some() {
             self.subsume(span, &body_type, &ret_type)?;
         } else {
             let widened = body_type.widen_fresh_literals();
@@ -440,14 +465,23 @@ impl InferState {
         // Both `function f` and `export function f` participate; the
         // helper function_decl_parts unifies the two shapes.
         for stmt in group {
-            if let Some((name, params, body, type_annotation, span)) = function_decl_parts(stmt) {
+            if let Some((name, params, body, type_annotation, return_type_ast, span)) =
+                function_decl_parts(stmt)
+            {
                 let func_var = hoisted
                     .lookup(name)
                     .expect("hoisted name must be in env")
                     .ty()
                     .clone();
-                let func_type =
-                    self.infer_function(&hoisted, Some(name), params, body, type_annotation, span)?;
+                let func_type = self.infer_function(
+                    &hoisted,
+                    Some(name),
+                    params,
+                    body,
+                    type_annotation,
+                    return_type_ast,
+                    span,
+                )?;
                 self.unify(span, &func_var, &func_type)?;
                 // Key the recorded type by the *name* offset so the LSP
                 // resolver (which returns the name span for go-to-def)
@@ -470,7 +504,7 @@ impl InferState {
         // receive the same polymorphism.
         let base_free = env.free_vars();
         for stmt in group {
-            if let Some((name, _, _, _, span)) = function_decl_parts(stmt) {
+            if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
                 let ty = hoisted
                     .lookup(name)
                     .expect("function must be in env after pass 1")
@@ -595,7 +629,7 @@ impl InferState {
     ) -> TypeEnv {
         let mut new_env = env.clone();
         for stmt in stmts {
-            if let Some((name, _, _, _, _)) = function_decl_parts(stmt) {
+            if let Some((name, _, _, _, _, _)) = function_decl_parts(stmt) {
                 let var = self.fresh_type_var();
                 new_env = new_env.extend(name.to_string(), TypeScheme::mono(var));
             }
@@ -604,6 +638,7 @@ impl InferState {
     }
 
     /// Handle a top-level `function` declaration statement.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::infer) fn infer_stmt_function_decl(
         &mut self,
         env: &TypeEnv,
@@ -611,6 +646,7 @@ impl InferState {
         params: &[Param],
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
+        return_type_ast: Option<&crate::types::TypeAst>,
         span: Span,
     ) -> InferResult<(Type, TypeEnv)> {
         // Reuse the type variable hoisted by the enclosing scope if
@@ -624,8 +660,15 @@ impl InferState {
         let pre_env = env.extend(name.to_string(), TypeScheme::mono(func_var.clone()));
 
         // Infer the function type
-        let func_type =
-            self.infer_function(&pre_env, Some(name), params, body, type_annotation, span)?;
+        let func_type = self.infer_function(
+            &pre_env,
+            Some(name),
+            params,
+            body,
+            type_annotation,
+            return_type_ast,
+            span,
+        )?;
 
         // Unify pre-bound type with inferred type
         self.unify(span, &func_var, &func_type)?;
@@ -688,7 +731,7 @@ pub(in crate::infer) fn compute_scc_groups(stmts: &[Stmt]) -> Vec<Vec<usize>> {
     let mut nodes: Vec<HoistableNode> = Vec::new();
     let mut name_to_node: HashMap<String, usize> = HashMap::new();
     for (i, stmt) in stmts.iter().enumerate() {
-        if let Some((name, params, body, _, _)) = function_decl_parts(stmt) {
+        if let Some((name, params, body, _, _, _)) = function_decl_parts(stmt) {
             let free = free_identifiers_in_function_body(Some(name), params, body);
             let node_idx = nodes.len();
             nodes.push(HoistableNode {

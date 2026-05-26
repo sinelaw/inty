@@ -439,6 +439,36 @@ fn unmodelled_param_annotation_imposes_no_constraint() {
 }
 
 #[test]
+fn return_annotation_is_captured() {
+    use crate::types::TypeAst;
+    match &parse("def f() -> int:\n    return 1")[0] {
+        Stmt::FunctionDecl { return_type_ast, .. } => {
+            assert!(matches!(return_type_ast, Some(TypeAst::Number)));
+        }
+        other => panic!("expected function decl, got {:?}", other),
+    }
+}
+
+#[test]
+fn return_annotation_is_checked() {
+    // The body's result must conform to the declared return type.
+    assert!(
+        !check("def g() -> str:\n    return 123\n").is_empty(),
+        "returning a Number from a `-> str` function must fail"
+    );
+    assert!(
+        check("def g() -> int:\n    return 123\n").is_empty(),
+        "a matching return should check"
+    );
+}
+
+#[test]
+fn unmodelled_return_annotation_imposes_no_constraint() {
+    let errs = check("def g() -> SomeType:\n    return 123\nx = g()\n");
+    assert!(errs.is_empty(), "unmodelled return annotation should not constrain, got {:?}", errs);
+}
+
+#[test]
 fn class_instance_method_and_fields_typecheck() {
     let errs = check(
         "class Point:\n\

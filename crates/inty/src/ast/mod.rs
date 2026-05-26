@@ -811,6 +811,11 @@ pub enum Stmt {
         params: Vec<Param>,
         body: Box<Stmt>,
         type_annotation: Option<TypeAnnotation>,
+        /// The declared return type, when annotated (`def f() -> int`),
+        /// as the frontend-neutral [`crate::types::TypeAst`] IR.
+        /// Currently only the Python frontend sets this; others leave it
+        /// `None`. Inference checks the body's result against it.
+        return_type_ast: Option<crate::types::TypeAst>,
         span: Source,
     },
 }

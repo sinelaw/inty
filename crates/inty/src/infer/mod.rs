@@ -424,7 +424,7 @@ impl InferState {
                     // noise. See `docs/scc-inference.md` § "Cross-SCC
                     // type errors".
                     for stmt in &group_stmts {
-                        if let Some((name, _, _, _, _)) =
+                        if let Some((name, _, _, _, _, _)) =
                             crate::infer::features::functions::function_decl_parts(stmt)
                         {
                             current_env = current_env
@@ -638,7 +638,15 @@ impl InferState {
                 body,
                 type_annotation,
                 span,
-            } => self.infer_function(env, name.as_deref(), params, body, type_annotation, *span),
+            } => self.infer_function(
+                env,
+                name.as_deref(),
+                params,
+                body,
+                type_annotation,
+                None,
+                *span,
+            ),
 
             Expr::Member {
                 object,
@@ -796,6 +804,7 @@ impl InferState {
                             params: params.clone(),
                             body: body.clone(),
                             type_annotation: type_annotation.clone(),
+                            return_type_ast: None,
                             span: *span,
                         },
                     ),
@@ -846,6 +855,7 @@ impl InferState {
                                     params: params.clone(),
                                     body: body.clone(),
                                     type_annotation: type_annotation.clone(),
+                                    return_type_ast: None,
                                     span: *f_span,
                                 },
                             )?;
@@ -947,8 +957,17 @@ impl InferState {
                 params,
                 body,
                 type_annotation,
+                return_type_ast,
                 span,
-            } => self.infer_stmt_function_decl(env, name, params, body, type_annotation, *span),
+            } => self.infer_stmt_function_decl(
+                env,
+                name,
+                params,
+                body,
+                type_annotation,
+                return_type_ast.as_ref(),
+                *span,
+            ),
         }
     }
 }
