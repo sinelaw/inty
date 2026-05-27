@@ -223,6 +223,14 @@ pub struct InferState {
     /// checks map a class name back to its brand. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brand_ids: HashMap<String, TypeId>,
+
+    /// The lexical environment in scope while a type annotation is being
+    /// lowered, used to resolve a class-name `TypeAst::Ref` to the class's
+    /// actual type *by scope* — a bare name binds in this env, a qualified
+    /// `mod.Class` resolves through the `mod` module namespace. Set by
+    /// [`InferState::lower_type_ast_in_env`] for the duration of one
+    /// annotation; `None` elsewhere (refs then fall back to opaque).
+    pub(in crate::infer) annotation_env: Option<crate::infer::TypeEnv>,
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -284,6 +292,7 @@ impl InferState {
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
+            annotation_env: None,
         }
     }
 

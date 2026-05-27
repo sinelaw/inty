@@ -104,12 +104,36 @@ impl Cursor<'_> {
             }
             Tok::Name(name) => {
                 self.advance();
+                // Collect a dotted path `a.b.C`. The full path is preserved
+                // so lowering can resolve it through the import environment
+                // (a qualified `mod.Class` goes through the `mod` namespace;
+                // a bare name binds in the local scope). The final segment
+                // is used only to recognise the built-in / typing
+                // constructors (`typing.List[int]` ≡ `List[int]`).
+                let mut segments = vec![name];
+                while self.check(&Tok::Dot) {
+                    self.advance();
+                    if let Tok::Name(n) = self.cur().clone() {
+                        self.advance();
+                        segments.push(n);
+                    } else {
+                        break;
+                    }
+                }
+                let qualified = segments.len() > 1;
+                let last = segments.last().unwrap().clone();
                 if self.check(&Tok::LBracket) {
-                    self.parse_generic(&name)
-                } else if self.type_vars.contains(&name) {
-                    TypeAst::Var(name)
+                    self.parse_generic(&segments.join("."), &last)
+                } else if !qualified && self.type_vars.contains(&last) {
+                    TypeAst::Var(last)
+                } else if !qualified {
+                    // Bare name: primitive, or a `Ref` to be resolved in
+                    // scope (alias / local class / imported class).
+                    map_simple_name(&last)
                 } else {
-                    map_simple_name(&name)
+                    // Qualified bare name: resolved through the module
+                    // namespace at lowering time.
+                    TypeAst::Ref(segments.join("."), Vec::new())
                 }
             }
             // A string forward-ref (`"Node"`) reached directly: opaque.
@@ -130,17 +154,21 @@ impl Cursor<'_> {
         }
     }
 
-    /// `NAME [ args ]` — a subscripted (generic) type.
-    fn parse_generic(&mut self, head: &str) -> TypeAst {
+    /// `NAME [ args ]` — a subscripted (generic) type. `head` is the full
+    /// (possibly dotted) name; `last` is its final segment, used to
+    /// recognise the built-in / typing constructors (so `typing.List[int]`
+    /// behaves like `List[int]`). An unknown constructor keeps the full
+    /// `head` in its `Ref` so lowering can resolve it through scope.
+    fn parse_generic(&mut self, head: &str, last: &str) -> TypeAst {
         // Forms needing raw access to their subscript tokens.
-        if head == "Literal" {
+        if last == "Literal" {
             return self.parse_literal_args();
         }
-        if head == "Callable" {
+        if last == "Callable" {
             return self.parse_callable_args();
         }
         let mut args = self.parse_type_args();
-        match head {
+        match last {
             "list" | "List" | "Sequence" | "Iterable" | "Iterator" | "MutableSequence"
             | "frozenset" | "set" | "Set" => {
                 TypeAst::Array(Box::new(first_or_opaque(args)))
@@ -431,6 +459,21 @@ mod tests {
         assert_eq!(ty("Final[int]"), Type::Number);
         assert_eq!(ty("ClassVar[str]"), Type::String);
         assert_eq!(ty("Annotated[bool, \"doc\"]"), Type::Boolean);
+    }
+
+    #[test]
+    fn dotted_names_parse_and_resolve() {
+        // A qualified *constructor* still maps by its final segment, so a
+        // qualified container generic behaves like its bare form.
+        assert_eq!(ty("typing.List[int]"), Type::array(Type::Number));
+        assert_eq!(ty("t.Optional[str]"), Type::union(vec![Type::String, Type::Null]));
+        // A qualified *name* (no in-scope env in this helper) parses and
+        // lowers to a fresh variable (opaque) rather than erroring; with an
+        // import environment it would resolve through the namespace (see
+        // the `python_imports` end-to-end tests).
+        assert!(matches!(ty("subprocess.CompletedProcess"), Type::Var(_)));
+        assert!(matches!(ty("builtins.int"), Type::Var(_)));
+        assert!(matches!(ty("a.b.c.Unknown"), Type::Var(_)));
     }
 
     // ---- property tests over the IR + lowering ----
