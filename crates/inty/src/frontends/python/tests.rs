@@ -632,6 +632,79 @@ fn generic_class_brands_per_instantiation() {
     );
 }
 
+/// The shared program for the `isinstance` narrowing tests: `x` is a
+/// `Dog | Cat` union (via a conditional), where `bark` is Dog-only and
+/// `meow` is Cat-only.
+const DOG_CAT_UNION: &str = "class Dog:\n\
+     \x20   def __init__(self):\n\
+     \x20       self.legs = 4\n\
+     \x20   def bark(self):\n\
+     \x20       return 1\n\
+     class Cat:\n\
+     \x20   def __init__(self):\n\
+     \x20       self.legs = 4\n\
+     \x20   def meow(self):\n\
+     \x20       return 2\n\
+     x = Dog() if True else Cat()\n";
+
+#[test]
+fn union_without_narrowing_rejects_brand_specific_method() {
+    // Control: on the bare `Dog | Cat` union, a Dog-only method is not a
+    // common member, so the access must fail. This is what narrowing
+    // rescues in the test below.
+    let errs = check_program(&format!("{DOG_CAT_UNION}r = x.bark()\n"));
+    assert!(
+        !errs.is_empty(),
+        "x.bark() on a Dog | Cat union should fail without narrowing"
+    );
+}
+
+#[test]
+fn isinstance_narrows_union_to_brand() {
+    // `isinstance(x, Dog)` narrows `x` to the Dog brand in the true
+    // branch, so the Dog-only method type-checks there.
+    let errs = check_program(&format!(
+        "{DOG_CAT_UNION}if isinstance(x, Dog):\n\
+         \x20   r = x.bark()\n"
+    ));
+    assert!(
+        errs.is_empty(),
+        "isinstance(x, Dog) should narrow x to Dog, got {:?}",
+        errs
+    );
+}
+
+#[test]
+fn isinstance_else_branch_narrows_to_other_brand() {
+    // The negated predicate narrows the `else` branch to Cat, so the
+    // Cat-only method type-checks there.
+    let errs = check_program(&format!(
+        "{DOG_CAT_UNION}if isinstance(x, Dog):\n\
+         \x20   a = x.bark()\n\
+         else:\n\
+         \x20   b = x.meow()\n"
+    ));
+    assert!(
+        errs.is_empty(),
+        "else branch should narrow x to Cat, got {:?}",
+        errs
+    );
+}
+
+#[test]
+fn isinstance_narrowing_still_rejects_wrong_brand_method() {
+    // Proof the narrowing is real: inside the `isinstance(x, Dog)` branch,
+    // x is Dog — the Cat-only method must still be rejected.
+    let errs = check_program(&format!(
+        "{DOG_CAT_UNION}if isinstance(x, Dog):\n\
+         \x20   r = x.meow()\n"
+    ));
+    assert!(
+        !errs.is_empty(),
+        "x.meow() inside the Dog branch should be rejected"
+    );
+}
+
 #[test]
 fn rejects_kwargs() {
     assert!(parse_source("f(x=1)").is_err());

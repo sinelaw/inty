@@ -41,6 +41,19 @@ pub fn initial_env() -> TypeEnv {
         )),
     );
 
+    // Python's `isinstance(value, Class)` — accepts any value and class
+    // object, returns Boolean. Its real purpose is flow-sensitive: the
+    // checker recognises `isinstance(x, C)` in a branch test and narrows
+    // `x` to `C`'s nominal brand (see `infer/narrow.rs`). Typed loosely so
+    // the call checks regardless of argument shapes.
+    env = env.extend(
+        "isinstance".to_string(),
+        TypeScheme::poly(
+            vec![TVarName::Flex(210), TVarName::Flex(211)],
+            Type::simple_func(vec![Type::flex(210), Type::flex(211)], Type::Boolean),
+        ),
+    );
+
     // `String`, `Number`, `Boolean` constructors used to live here as
     // polymorphic function bindings. Under the unified callable-row
     // design they're declared in core.d.js as callable rows so they

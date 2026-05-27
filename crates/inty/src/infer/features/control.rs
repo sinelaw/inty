@@ -6,7 +6,8 @@ use crate::types::{Type, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::narrow::{
-    apply_narrowing, narrowing_collapsed_to_never, try_extract_narrowing, Path,
+    apply_narrowing, narrowing_collapsed_to_never, path_from_expr, try_extract_narrowing,
+    Narrowing, Path,
 };
 use super::super::state::InferState;
 use super::super::InferResult;
@@ -69,6 +70,35 @@ fn warn_if_narrowing_unreachable(
 }
 
 impl InferState {
+    /// Recognise `isinstance(<path>, ClassName)` as a brand narrowing.
+    /// The class name is mapped to its nominal brand id via
+    /// `class_brand_ids` (populated when classes are branded); an unknown
+    /// class, a non-identifier class argument, or the wrong arity yields
+    /// `None`, so the test falls back to a no-op narrowing.
+    fn extract_isinstance(&self, test: &Expr) -> Option<(Path, Narrowing)> {
+        let Expr::Call {
+            callee, arguments, ..
+        } = test
+        else {
+            return None;
+        };
+        let Expr::Ident { name, .. } = callee.as_ref() else {
+            return None;
+        };
+        if name != "isinstance" || arguments.len() != 2 {
+            return None;
+        }
+        let path = path_from_expr(&arguments[0])?;
+        let Expr::Ident {
+            name: class_name, ..
+        } = &arguments[1]
+        else {
+            return None;
+        };
+        let id = *self.class_brand_ids.get(class_name)?;
+        Some((path, Narrowing::IsInstance(id)))
+    }
+
     /// Type-check the test of an `if`/conditional and produce the
     /// (consequent, alternate) environments after flow-sensitive
     /// narrowing. If the test matches one of the recognised patterns
@@ -82,7 +112,8 @@ impl InferState {
         test: &Expr,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
         let _test_type = self.infer_expr(env, test)?;
-        let envs = match try_extract_narrowing(test) {
+        let extracted = try_extract_narrowing(test).or_else(|| self.extract_isinstance(test));
+        let envs = match extracted {
             Some((path, narrowing)) => {
                 let cons_env = apply_narrowing(self, env, &path, &narrowing);
                 let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
