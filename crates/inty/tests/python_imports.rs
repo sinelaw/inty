@@ -288,6 +288,61 @@ fn pyi_generic_stub_class_ties_its_type_param() {
     );
 }
 
+/// Stub with two distinct-shape classes, where `bark` is Dog-only and
+/// `meow` is Cat-only. `x` is built as a `Dog | Cat` union.
+fn pets_stub_and_union(stubs: &Path) -> String {
+    write(
+        stubs,
+        "pets.pyi",
+        "class Dog:\n\
+         \x20   def __init__(self) -> None: ...\n\
+         \x20   def bark(self) -> int: ...\n\
+         class Cat:\n\
+         \x20   def __init__(self) -> None: ...\n\
+         \x20   def meow(self) -> int: ...\n",
+    );
+    "from pets import Dog, Cat\nx = Dog() if True else Cat()\n".to_string()
+}
+
+#[test]
+fn isinstance_narrows_imported_stub_brand() {
+    // isinstance narrowing works on imported .pyi class brands, not just
+    // source classes: `class_brand_ids` is populated for stub classes.
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    let prelude = pets_stub_and_union(&stubs);
+
+    // Control: the bare union has no Dog-only member.
+    let bad = check(&format!("{prelude}r = x.bark()\n"), &dir, &[stubs.clone()]);
+    assert!(
+        bad.is_err(),
+        "x.bark() on a Dog | Cat union should fail without narrowing"
+    );
+
+    // isinstance narrows x to Dog in the true branch.
+    let ok = check(
+        &format!("{prelude}if isinstance(x, Dog):\n    r = x.bark()\n"),
+        &dir,
+        &[stubs.clone()],
+    );
+    assert!(
+        ok.is_ok(),
+        "isinstance(x, Dog) should narrow imported x to Dog, got {:?}",
+        ok
+    );
+
+    // Proof it's a real narrowing: the Cat-only method is still rejected.
+    let still_bad = check(
+        &format!("{prelude}if isinstance(x, Dog):\n    r = x.meow()\n"),
+        &dir,
+        &[stubs],
+    );
+    assert!(
+        still_bad.is_err(),
+        "x.meow() inside the Dog branch should be rejected"
+    );
+}
+
 #[test]
 fn pyi_overload_decorator_is_opaque_not_a_lex_error() {
     let dir = tmp_dir();
