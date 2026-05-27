@@ -45,6 +45,9 @@ pub fn resolve_python_imports(
     search_paths: &[PathBuf],
     visiting: &mut HashSet<PathBuf>,
 ) -> Result<TypeEnv, IntyError> {
+    // The builtin namespace (`print`, `len`, …) is implicitly available to
+    // every Python program — load it before resolving explicit imports.
+    let env = super::prelude::load(state, env)?;
     // Memoise loaded modules by canonical path: typeshed aggregators
     // re-export each other widely, so without a cache the same big stubs
     // would be re-read and re-checked combinatorially.

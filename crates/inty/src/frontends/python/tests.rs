@@ -12,7 +12,7 @@ fn parse(src: &str) -> Vec<Stmt> {
 fn check(src: &str) -> Vec<String> {
     let program = parse_source(src).expect("parse failed");
     let mut state = InferState::new();
-    let mut env = initial_env();
+    let mut env = super::prelude::load(&mut state, initial_env()).expect("prelude");
     for stmt in &program.statements {
         match state.infer_stmt(&env, stmt) {
             Ok((_, new_env)) => env = new_env,
@@ -27,7 +27,7 @@ fn check(src: &str) -> Vec<String> {
 fn check_program(src: &str) -> Vec<String> {
     let program = parse_source(src).expect("parse failed");
     let mut state = InferState::new();
-    let env = initial_env();
+    let env = super::prelude::load(&mut state, initial_env()).expect("prelude");
     if let Err(e) = state.infer_program_with_env(&env, &program) {
         return vec![format!("{:?}", e)];
     }
@@ -1147,6 +1147,45 @@ fn raw_and_bytes_string_prefixes_lex() {
     // maps to a String literal (the bytes ≈ String decision).
     assert!(prog_ty("r\"\\d+\"").is_ok(), "raw string should lex");
     assert_eq!(prog_ty("b\"bytes\"").expect("bytes string"), "\"bytes\"");
+}
+
+#[test]
+fn builtin_free_functions_resolve() {
+    // print/len/range/abs/str are in the builtin namespace; precise
+    // signatures still flow (len → Number, usable arithmetically).
+    let errs = check(
+        "n = len(\"hello\")\n\
+         m = len([1, 2, 3])\n\
+         print(\"hi\", n, m)\n\
+         total = n + m\n\
+         s = str(42)\n",
+    );
+    assert!(errs.is_empty(), "builtins should resolve, got {:?}", errs);
+}
+
+#[test]
+fn builtin_range_iterates_as_number() {
+    let errs = check(
+        "acc = 0\n\
+         for i in range(3):\n\
+         \x20   acc = acc + i\n",
+    );
+    assert!(errs.is_empty(), "range(n) should iterate as Number, got {:?}", errs);
+}
+
+#[test]
+fn builtin_precise_signature_is_enforced() {
+    // `abs` is precisely typed `(Number) => Number`, so a String arg is
+    // rejected — the prelude doesn't degrade everything to opaque.
+    let errs = check("x = abs(\"not a number\")\n");
+    assert!(!errs.is_empty(), "abs(String) should be rejected");
+}
+
+#[test]
+fn builtin_variadic_is_opaque_not_constrained() {
+    // print/min are exposed opaquely: any call type-checks.
+    let errs = check("print()\nprint(1, \"a\", [3])\ny = min(1, 2, 3)\n");
+    assert!(errs.is_empty(), "variadic builtins should accept any call, got {:?}", errs);
 }
 
 #[test]
