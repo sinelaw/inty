@@ -152,6 +152,42 @@ pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> 
         "padEnd" => optional_last(state, vec![n.clone()], s.clone(), s.clone()),
         "concat" => Type::simple_func(vec![s.clone()], s.clone()),
         "toString" => Type::simple_func(vec![], s.clone()),
+        // Python `str` methods (shared surface; a program is
+        // single-language). Whitespace strippers take an optional set of
+        // characters to strip.
+        "strip" | "lstrip" | "rstrip" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(vec![FuncParam::optional(pvar, s.clone())], s.clone())
+        }
+        "lower" | "upper" | "title" | "capitalize" | "casefold" | "swapcase" => {
+            Type::simple_func(vec![], s.clone())
+        }
+        // `sep.join(iterable)` — the iterable's element type is
+        // unconstrained (CPython requires strings at runtime, but we keep
+        // it permissive to avoid false positives on generators/maps).
+        "join" => {
+            let item = state.fresh_type_var();
+            Type::simple_func(vec![Type::array(item)], s.clone())
+        }
+        "splitlines" => Type::simple_func(vec![], Type::array(s.clone())),
+        // `format`/`format_map` are variadic / dynamic; accept any call.
+        "format" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::optional(pvar, state.fresh_type_var())],
+                s.clone(),
+            )
+        }
+        "find" | "rfind" => optional_last(state, vec![s.clone()], n.clone(), n.clone()),
+        "count" => Type::simple_func(vec![s.clone()], n.clone()),
+        "zfill" => Type::simple_func(vec![n.clone()], s.clone()),
+        "isdigit" | "isalpha" | "isalnum" | "isspace" | "isupper" | "islower"
+        | "isnumeric" | "isidentifier" => Type::simple_func(vec![], b.clone()),
+        "encode" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(vec![FuncParam::optional(pvar, s.clone())], s.clone())
+        }
+        "removeprefix" | "removesuffix" => Type::simple_func(vec![s.clone()], s.clone()),
         _ => {
             let _ = (state, n, s, b);
             return None;

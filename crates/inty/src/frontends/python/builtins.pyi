@@ -75,3 +75,50 @@ issubclass: object
 format: object
 # `isinstance` is provided by `builtins::initial_env` with a precise
 # signature and flow-sensitive narrowing (issue #40); not redefined here.
+
+# --- module-level magic globals ---
+# Present in every module's namespace at runtime.
+__name__: str
+__file__: str
+__doc__: str
+
+# --- builtin exception classes ---
+# Exposed opaquely: they're used both as constructors (`raise Foo("…")`)
+# and as `except` targets, and inty doesn't model an exception hierarchy.
+# Opaque values accept either use without false positives.
+BaseException: object
+Exception: object
+ValueError: object
+TypeError: object
+KeyError: object
+IndexError: object
+AttributeError: object
+RuntimeError: object
+NotImplementedError: object
+StopIteration: object
+StopAsyncIteration: object
+FileNotFoundError: object
+FileExistsError: object
+IsADirectoryError: object
+NotADirectoryError: object
+PermissionError: object
+OSError: object
+IOError: object
+ImportError: object
+ModuleNotFoundError: object
+NameError: object
+ZeroDivisionError: object
+ArithmeticError: object
+OverflowError: object
+AssertionError: object
+KeyboardInterrupt: object
+SystemExit: object
+LookupError: object
+UnicodeDecodeError: object
+UnicodeEncodeError: object
+TimeoutError: object
+ConnectionError: object
+RecursionError: object
+Warning: object
+DeprecationWarning: object
+UserWarning: object
