@@ -28,6 +28,7 @@
 mod lexer;
 pub mod modules;
 mod parser;
+pub mod prelude;
 pub mod pyi;
 pub mod type_expr;
 
