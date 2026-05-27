@@ -171,6 +171,7 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                 |(name, args)| Expr::Call {
                     callee: Box::new(Expr::Ident { name, span: span() }),
                     arguments: args,
+                    keywords: vec![],
                     span: span(),
                 }
             ),

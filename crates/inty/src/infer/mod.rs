@@ -668,8 +668,9 @@ impl InferState {
             Expr::Call {
                 callee,
                 arguments,
+                keywords,
                 span,
-            } => self.infer_call(env, callee, arguments, *span),
+            } => self.infer_call(env, callee, arguments, keywords, *span),
 
             Expr::New {
                 callee,

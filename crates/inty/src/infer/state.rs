@@ -32,6 +32,7 @@ fn structural_norm(ty: &Type) -> Type {
                 .map(|p| crate::types::FuncParam {
                     presence: p.presence.clone(),
                     ty: structural_norm(&p.ty),
+                    name: p.name.clone(),
                 })
                 .collect(),
             ret: Box::new(structural_norm(ret)),

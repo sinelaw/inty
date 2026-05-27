@@ -20,10 +20,9 @@
 //! - type annotations (`x: int`, `def f(a: int) -> str:`) are parsed and
 //!   discarded — inty infers types instead.
 //!
-//! Rejected (use a simpler form): multiple return / tuples, *args/**kwargs,
-//! default & keyword arguments, generic `for k, v in`, comprehensions,
-//! slicing, f-strings, `is`/`in`, chained comparisons, and the statement
-//! keywords `class`/`import`/`with`/`try`/`global`/`del`/`yield`/… .
+//! Rejected (use a simpler form): `*args`/`**kwargs`, comprehensions,
+//! slicing, `is`/`in`, chained comparisons, and the statement keywords
+//! `with`/`try`/`global`/`del`/`yield`/… .
 
 mod lexer;
 pub mod modules;

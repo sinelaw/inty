@@ -295,6 +295,7 @@ fn wrap_in_iife(expr: Expr, s: Span) -> Expr {
     Expr::Call {
         callee: Box::new(func),
         arguments: vec![],
+        keywords: vec![],
         span: s,
     }
 }

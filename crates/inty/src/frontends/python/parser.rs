@@ -1407,10 +1407,11 @@ impl Parser {
                 }
                 Tok::LParen => {
                     self.advance();
-                    let arguments = self.call_args()?;
+                    let (arguments, keywords) = self.call_args()?;
                     e = Expr::Call {
                         callee: Box::new(e),
                         arguments,
+                        keywords,
                         span: Span::new(start, self.prev_span().end),
                     };
                 }
@@ -1420,21 +1421,35 @@ impl Parser {
         Ok(e)
     }
 
-    fn call_args(&mut self) -> Result<Vec<Expr>> {
+    /// Parse a call's argument list into `(positional, keyword)`. A
+    /// `name=value` argument is a keyword; positional arguments may not
+    /// follow a keyword (a Python `SyntaxError`).
+    fn call_args(&mut self) -> Result<(Vec<Expr>, Vec<(String, Expr)>)> {
         let mut args = Vec::new();
+        let mut kwargs: Vec<(String, Expr)> = Vec::new();
         if self.check(&Tok::RParen) {
             self.advance();
-            return Ok(args);
+            return Ok((args, kwargs));
         }
         loop {
             if matches!(self.cur(), Tok::Star | Tok::DStar) {
                 return Err(self.unsupported("argument unpacking (*/**) is not supported"));
             }
-            // reject keyword args `name=value`
-            if let Tok::Name(_) = self.cur() {
+            // Keyword argument `name=value`.
+            if let Tok::Name(name) = self.cur().clone() {
                 if matches!(self.toks.get(self.pos + 1).map(|s| &s.value), Some(Tok::Assign)) {
-                    return Err(self.unsupported("keyword arguments are not supported"));
+                    self.advance(); // name
+                    self.advance(); // '='
+                    let value = self.expr()?;
+                    kwargs.push((name, value));
+                    if !self.eat(&Tok::Comma) || self.check(&Tok::RParen) {
+                        break;
+                    }
+                    continue;
                 }
+            }
+            if !kwargs.is_empty() {
+                return Err(self.unsupported("positional argument follows keyword argument"));
             }
             args.push(self.expr()?);
             if !self.eat(&Tok::Comma) {
@@ -1445,7 +1460,7 @@ impl Parser {
             }
         }
         self.expect(&Tok::RParen, "')'")?;
-        Ok(args)
+        Ok((args, kwargs))
     }
 
     fn atom(&mut self) -> Result<Expr> {

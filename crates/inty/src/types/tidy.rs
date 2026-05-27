@@ -135,6 +135,7 @@ impl TidyEnv {
                     .map(|p| super::ty::FuncParam {
                         presence: p.presence.clone(),
                         ty: self.tidy_type(&p.ty),
+                        name: p.name.clone(),
                     })
                     .collect();
                 let ret = Box::new(self.tidy_type(ret));

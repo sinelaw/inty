@@ -774,6 +774,7 @@ impl Parser {
                     e = Expr::Call {
                         callee: Box::new(callee),
                         arguments,
+                        keywords: vec![],
                         span: Span::new(start, self.prev_span().end),
                     };
                 }
@@ -782,6 +783,7 @@ impl Parser {
                     e = Expr::Call {
                         callee: Box::new(e),
                         arguments,
+                        keywords: vec![],
                         span: Span::new(start, self.prev_span().end),
                     };
                 }

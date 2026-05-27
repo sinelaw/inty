@@ -503,10 +503,13 @@ pub enum Expr {
         span: Source,
     },
 
-    /// Function call: func(a, b)
+    /// Function call: func(a, b, k=v)
     Call {
         callee: Box<Expr>,
         arguments: Vec<Expr>,
+        /// Keyword arguments `name=value` (Python). Resolved to parameter
+        /// positions by name at call inference. Empty for JS/Lua.
+        keywords: Vec<(String, Expr)>,
         span: Source,
     },
 

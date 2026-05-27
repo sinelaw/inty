@@ -180,6 +180,7 @@ fn zonk_with_visited(
                 .map(|p| crate::types::FuncParam {
                     presence: subst.apply_presence(&p.presence),
                     ty: zonk_with_visited(table, subst, &p.ty, visited),
+                    name: p.name.clone(),
                 })
                 .collect(),
             ret: Box::new(zonk_with_visited(table, subst, ret, visited)),
@@ -374,6 +375,7 @@ fn zonk_filtered(
             params: params.iter().map(|p| crate::types::FuncParam {
                 presence: subst.apply_presence(&p.presence),
                 ty: zonk_filtered(table, subst, &p.ty, quantified),
+                name: p.name.clone(),
             }).collect(),
             ret: Box::new(zonk_filtered(table, subst, ret, quantified)),
         },

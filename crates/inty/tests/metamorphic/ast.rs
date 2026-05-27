@@ -481,10 +481,15 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
         Expr::Call {
             callee,
             arguments,
+            keywords,
             span,
         } => Expr::Call {
             callee: Box::new(rename_expr(callee, from, to)),
             arguments: arguments.iter().map(|a| rename_expr(a, from, to)).collect(),
+            keywords: keywords
+                .iter()
+                .map(|(n, e)| (n.clone(), rename_expr(e, from, to)))
+                .collect(),
             span: *span,
         },
         Expr::New {
