@@ -347,20 +347,30 @@ impl InferState {
         handler: &Option<CatchClause>,
         finalizer: &Option<Box<Stmt>>,
     ) -> InferResult<(Type, TypeEnv)> {
-        let (try_type, _) = self.infer_stmt(env, block)?;
+        // Names bound in the try-body stay in scope for the handler and for
+        // code after the `try` — `var`/Python function-scoping, where a
+        // partially-run body may have already bound them. Inferring the
+        // body's statement list directly (rather than as a fresh-scope
+        // `Block`) is what threads those bindings forward.
+        let (try_type, body_env) = match block {
+            Stmt::Block { body, .. } => self.infer_stmt_list(env, body)?,
+            other => self.infer_stmt(env, other)?,
+        };
 
         if let Some(catch) = handler {
-            // Catch parameter is typed as any (Error in practice)
+            // The caught exception object is unmodelled, so its binding is a
+            // fresh (opaque) variable. The handler runs against the
+            // try-body's environment.
             let catch_env =
-                env.extend(catch.param.clone(), TypeScheme::mono(self.fresh_type_var()));
+                body_env.extend(catch.param.clone(), TypeScheme::mono(self.fresh_type_var()));
             self.infer_stmt(&catch_env, &catch.body)?;
         }
 
         if let Some(finally) = finalizer {
-            self.infer_stmt(env, finally)?;
+            self.infer_stmt(&body_env, finally)?;
         }
 
-        Ok((try_type, env.clone()))
+        Ok((try_type, body_env))
     }
 
     /// Handle a `switch` statement.
