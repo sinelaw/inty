@@ -711,6 +711,75 @@ fn rejects_kwargs() {
 }
 
 #[test]
+fn type_alias_literal_parses_and_resolves() {
+    // The bare `NAME = Literal[…]` form parses (comma subscript) and the
+    // alias resolves in annotations, enforcing the literal union.
+    let ok = check_program(
+        "BumpType = Literal[\"patch\", \"minor\", \"major\"]\n\
+         def bump(t: BumpType) -> BumpType:\n\
+         \x20   return t\n\
+         x = bump(\"patch\")\n",
+    );
+    assert!(ok.is_empty(), "valid literal arg should check, got {:?}", ok);
+
+    let bad = check_program(
+        "BumpType = Literal[\"patch\", \"minor\", \"major\"]\n\
+         def bump(t: BumpType) -> BumpType:\n\
+         \x20   return t\n\
+         y = bump(\"nope\")\n",
+    );
+    assert!(
+        !bad.is_empty(),
+        "a literal outside the alias union must be rejected"
+    );
+}
+
+#[test]
+fn type_alias_explicit_forms() {
+    // PEP 695 `type X = …`
+    let pep695 = check_program(
+        "type Id = Optional[int]\n\
+         def f(v: Id) -> Id:\n\
+         \x20   return v\n\
+         a = f(3)\n\
+         b = f(None)\n",
+    );
+    assert!(pep695.is_empty(), "`type X =` alias should work, got {:?}", pep695);
+
+    // PEP 613 `X: TypeAlias = …`
+    let pep613 = check_program(
+        "Pair: TypeAlias = list[str]\n\
+         def g(xs: Pair) -> Pair:\n\
+         \x20   return xs\n",
+    );
+    assert!(pep613.is_empty(), "`X: TypeAlias =` alias should work, got {:?}", pep613);
+}
+
+#[test]
+fn type_alias_used_as_value_is_not_bound() {
+    // An alias is a type, not a runtime value; using it as a value is an
+    // undefined reference (it must not silently type-check).
+    let errs = check_program("Color = Literal[\"r\", \"g\"]\nx = Color\n");
+    assert!(
+        !errs.is_empty(),
+        "using a type alias as a value should be undefined"
+    );
+}
+
+#[test]
+fn unknown_type_name_is_still_opaque() {
+    // A non-alias unknown type name in an annotation imposes no
+    // constraint (lowers opaque) — no false positive.
+    let errs = check_program(
+        "def f(x: SomeUnmodelledType) -> int:\n\
+         \x20   return 1\n\
+         r = f(\"anything\")\n\
+         s = f(42)\n",
+    );
+    assert!(errs.is_empty(), "unknown annotation should be opaque, got {:?}", errs);
+}
+
+#[test]
 fn rejects_comprehension() {
     assert!(parse_source("xs = [a for a in items]").is_err());
 }

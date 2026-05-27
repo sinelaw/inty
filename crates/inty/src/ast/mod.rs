@@ -440,7 +440,13 @@ pub struct TypeAnnotation {
 pub struct TypeAlias {
     pub name: String,
     pub params: Vec<String>,
+    /// Alias body in surface annotation syntax, parsed by the inty
+    /// `type_parser` (the JavaScript path). Empty when `body_ast` is set.
     pub body: String,
+    /// Pre-parsed alias body in the shared [`crate::types::TypeAst`] IR,
+    /// used by frontends that lower annotations through `lower_type_ast`
+    /// (the Python path) rather than the string `body`.
+    pub body_ast: Option<crate::types::TypeAst>,
     pub span: Source,
     /// `true` when declared `nominal type Name = …`. A nominal alias is
     /// a *branded* type: references to it produce `Type::Named` with a

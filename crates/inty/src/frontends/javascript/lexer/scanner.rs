@@ -1425,6 +1425,7 @@ impl<'a> Scanner<'a> {
             name: name.trim().to_string(),
             params,
             body: body.trim().to_string(),
+            body_ast: None,
             span,
             nominal,
         });

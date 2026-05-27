@@ -1036,7 +1036,7 @@ fn unsupported_ts_alternative(ident: &str) -> Option<&'static str> {
 /// id is a key in `subst` with the corresponding type. Other type
 /// variables are left alone — alias parameters use the dedicated
 /// IDs the alias was registered with, so collisions are impossible.
-fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
+pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Type {
     use crate::types::{RowTail, RowType, TVarName};
     match ty {
         Type::Var(TVarName::Flex(id)) => {

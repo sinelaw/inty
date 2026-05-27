@@ -226,10 +226,14 @@ impl InferState {
                     .collect()
             };
 
-            // Parse the body with the alias env visible (so other
-            // alias references resolve), seeding type_vars with our
-            // parameter mappings.
-            let body = {
+            // Resolve the body. Frontends that lower annotations through
+            // the shared `TypeAst` IR (Python) supply `body_ast`; the
+            // JavaScript path supplies a `body` string parsed by the
+            // `type_parser`. Either way other alias references resolve,
+            // since the slots reserved in pass 1 are already in scope.
+            let body_ty = if let Some(ast) = &alias.body_ast {
+                self.lower_type_ast(ast)
+            } else {
                 let mut parser = crate::infer::type_parser::TypeParser::with_aliases(
                     &alias.body,
                     alias.span,
@@ -239,11 +243,12 @@ impl InferState {
                 for (name, id) in alias.params.iter().zip(param_ids.iter()) {
                     parser.preset_var(name.clone(), *id);
                 }
-                let body = parser.parse()?;
+                let parsed = parser.parse()?;
                 let next = parser.next_var_id();
-                (body, next)
+                self.bump_var_id_to(next);
+                parsed
             };
-            self.bump_var_id_to(body.1);
+            let body = (body_ty, 0u32);
 
             let nominal_id = self
                 .type_aliases

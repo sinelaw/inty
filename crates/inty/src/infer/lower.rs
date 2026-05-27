@@ -51,6 +51,28 @@ impl InferState {
                     v
                 }
             }
+            TypeAst::Ref(name, args) => {
+                let lowered_args: Vec<Type> = args
+                    .iter()
+                    .map(|a| self.lower_type_ast_scoped(a, scope))
+                    .collect();
+                match self.type_aliases.get(name).cloned() {
+                    // Nominal alias: keep brand identity.
+                    Some(def) if def.nominal_id.is_some() => {
+                        Type::Named(def.nominal_id.unwrap(), lowered_args)
+                    }
+                    // Structural alias: inline its body with the type
+                    // arguments substituted for the alias parameters.
+                    Some(def) => {
+                        let subst: std::collections::HashMap<u32, Type> =
+                            def.params.iter().cloned().zip(lowered_args).collect();
+                        super::type_parser::substitute_alias_body(&def.body, &subst)
+                    }
+                    // Unknown name: a fresh unconstrained variable, exactly
+                    // as an unmodelled (opaque) type — imposes no constraint.
+                    None => self.fresh_type_var(),
+                }
+            }
             TypeAst::Array(elem) => Type::array(self.lower_type_ast_scoped(elem, scope)),
             TypeAst::Map(value) => Type::map(self.lower_type_ast_scoped(value, scope)),
             TypeAst::Union(members) => {
