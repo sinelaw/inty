@@ -28,6 +28,22 @@ impl InferState {
         self.lower_type_ast_scoped(ast, &mut scope)
     }
 
+    /// Lower a [`TypeAst`] with both a type-variable `scope` and an `env`
+    /// in scope. Used by the `.pyi` reader, which needs the variable scope
+    /// for a stub's generics *and* an env so the stub's own class
+    /// references resolve to their brands.
+    pub fn lower_type_ast_scoped_in_env(
+        &mut self,
+        ast: &TypeAst,
+        scope: &mut HashMap<String, Type>,
+        env: &TypeEnv,
+    ) -> Type {
+        let saved = self.annotation_env.replace(env.clone());
+        let ty = self.lower_type_ast_scoped(ast, scope);
+        self.annotation_env = saved;
+        ty
+    }
+
     /// Lower a [`TypeAst`] with `env` in scope, so a class-name reference
     /// resolves to that class's type *by scope and qualification*: a bare
     /// name binds against `env` directly; a qualified `mod.Class` resolves

@@ -562,3 +562,30 @@ fn typing_module_is_built_in() {
     );
     assert!(bad.is_err(), "List[int] element type should be enforced");
 }
+
+#[test]
+fn stdlib_modules_are_built_in() {
+    // A curated slice of the standard library resolves from baked-in
+    // stubs with no files on the search path, and the stub classes'
+    // members are typed (a wrong member is caught).
+    let dir = tmp_dir();
+    let ok = check(
+        "import sys\nimport json\nimport subprocess\nimport re\n\
+         s = json.dumps([1, 2])\n\
+         args = sys.argv\n\
+         r = subprocess.run([\"ls\"])\n\
+         rc = r.returncode\n\
+         pat = re.compile(\"x\")\n\
+         hits = pat.findall(\"xx\")\n",
+        &dir,
+        &[],
+    );
+    assert!(ok.is_ok(), "stdlib imports should resolve: {:?}", ok);
+
+    let bad = check(
+        "import subprocess\nr = subprocess.run([\"ls\"])\nx = r.nonexistent\n",
+        &dir,
+        &[],
+    );
+    assert!(bad.is_err(), "an absent member of a stub class should be caught");
+}
