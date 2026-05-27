@@ -294,8 +294,11 @@ impl PrettyContext {
             Type::Row(row) => self.write_row(w, row),
 
             Type::Array(elem) => {
-                // Wrap complex types in parentheses for clarity
-                let needs_parens = prints_as_function(elem);
+                // Wrap complex element types in parentheses so the `[]`
+                // binds unambiguously: a union or function element reads as
+                // `(A | B)[]` / `((A) => B)[]`, not `A | B[]` (which parses
+                // as `A | (B[])`).
+                let needs_parens = prints_as_function(elem) || matches!(**elem, Type::Union(_));
                 if needs_parens {
                     write!(w, "(")?;
                 }

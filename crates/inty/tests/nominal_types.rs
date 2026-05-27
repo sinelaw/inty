@@ -110,7 +110,7 @@ fn js_structurally_identical_classes_are_distinct_brands() {
         const xs = [new A(), new B()];
         xs
     ";
-    assert_eq!(check_named(src).expect("distinct class brands"), "A | B[]");
+    assert_eq!(check_named(src).expect("distinct class brands"), "(A | B)[]");
 }
 
 #[test]
