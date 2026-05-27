@@ -1,7 +1,7 @@
 //! Conditional/sequence expressions and control-flow statements.
 
-use crate::span::Span;
 use crate::ast::{CatchClause, Expr, ForInLhs, ForInit, Stmt, SwitchCase, VarDeclarator};
+use crate::span::Span;
 use crate::types::{Type, TypeScheme};
 
 use super::super::env::TypeEnv;
@@ -145,7 +145,9 @@ impl InferState {
         // not `3 | 4`. (TS does the same: branch joins are
         // synthesis-mode widening points unless the conditional is
         // contextually typed.)
-        Ok(self.join(span, &cons_type, &alt_type).widen_fresh_literals())
+        Ok(self
+            .join(span, &cons_type, &alt_type)
+            .widen_fresh_literals())
     }
 
     /// Infer the type of a sequence expression.
