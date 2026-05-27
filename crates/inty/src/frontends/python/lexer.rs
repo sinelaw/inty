@@ -144,8 +144,9 @@ impl Tok {
             "except" => Tok::Except,
             "finally" => Tok::Finally,
             "raise" => Tok::Raise,
-            "with" | "global" | "nonlocal" | "del" | "assert" | "yield" | "async"
-            | "await" => Tok::Reserved(s.to_string()),
+            "with" | "global" | "nonlocal" | "del" | "assert" | "yield" | "async" | "await" => {
+                Tok::Reserved(s.to_string())
+            }
             _ => return None,
         })
     }
@@ -344,8 +345,8 @@ impl Lexer {
                 .map(|(_, c)| *c)
                 .filter(|c| *c != '_')
                 .collect();
-            let v = i64::from_str_radix(&text, 16)
-                .map_err(|_| self.err("malformed number", start))?;
+            let v =
+                i64::from_str_radix(&text, 16).map_err(|_| self.err("malformed number", start))?;
             self.emit(Tok::Number(v as f64), start);
             return Ok(());
         }
@@ -372,7 +373,9 @@ impl Lexer {
             .map(|(_, c)| *c)
             .filter(|c| *c != '_')
             .collect();
-        let v: f64 = text.parse().map_err(|_| self.err("malformed number", start))?;
+        let v: f64 = text
+            .parse()
+            .map_err(|_| self.err("malformed number", start))?;
         self.emit(Tok::Number(v), start);
         Ok(())
     }
@@ -381,7 +384,10 @@ impl Lexer {
         while matches!(self.peek(), Some(ch) if ch.is_alphanumeric() || ch == '_') {
             self.bump();
         }
-        let text: String = self.chars[start..self.pos].iter().map(|(_, c)| *c).collect();
+        let text: String = self.chars[start..self.pos]
+            .iter()
+            .map(|(_, c)| *c)
+            .collect();
         // string prefixes like f"..." / r"..." / b"...": only the plain
         // string forms are supported; f-strings are rejected at the prefix.
         let tok = Tok::keyword(&text).unwrap_or(Tok::Name(text));
@@ -400,7 +406,9 @@ impl Lexer {
         loop {
             match self.bump() {
                 Some('\\') => {
-                    let e = self.bump().ok_or_else(|| self.err("unterminated string", start))?;
+                    let e = self
+                        .bump()
+                        .ok_or_else(|| self.err("unterminated string", start))?;
                     s.push(match e {
                         'n' => '\n',
                         't' => '\t',

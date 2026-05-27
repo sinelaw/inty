@@ -214,10 +214,9 @@ impl Parser {
             Tok::While => Ok(vec![self.while_stmt()?]),
             Tok::For => Ok(vec![self.for_stmt()?]),
             Tok::Try => Ok(vec![self.try_stmt()?]),
-            Tok::Reserved(k) => Err(self.unsupported(&format!(
-                "'{}' is not supported in the Python subset",
-                k
-            ))),
+            Tok::Reserved(k) => {
+                Err(self.unsupported(&format!("'{}' is not supported in the Python subset", k)))
+            }
             _ => self.simple_line(),
         }
     }
@@ -257,7 +256,9 @@ impl Parser {
             Tok::Return => {
                 let start = self.cur_span().start;
                 self.advance();
-                let argument = if self.check(&Tok::Newline) || self.check(&Tok::Semi) || self.at_eof()
+                let argument = if self.check(&Tok::Newline)
+                    || self.check(&Tok::Semi)
+                    || self.at_eof()
                 {
                     None
                 } else {
@@ -266,7 +267,8 @@ impl Parser {
                     if self.check(&Tok::Comma) {
                         let mut elements = vec![e];
                         while self.eat(&Tok::Comma) {
-                            if self.check(&Tok::Newline) || self.check(&Tok::Semi) || self.at_eof() {
+                            if self.check(&Tok::Newline) || self.check(&Tok::Semi) || self.at_eof()
+                            {
                                 break; // trailing comma
                             }
                             elements.push(self.expr()?);
@@ -291,33 +293,30 @@ impl Parser {
                 // expression is still type-checked); bare `raise`
                 // re-raises and carries no operand. Either way the
                 // statement diverges, modelled by `Stmt::Throw`.
-                let argument = if self.check(&Tok::Newline)
-                    || self.check(&Tok::Semi)
-                    || self.at_eof()
-                {
-                    let span = Span::new(start, self.prev_span().end);
-                    Expr::Lit {
-                        value: Literal::Null,
-                        span,
-                    }
-                } else {
-                    let e = self.expr()?;
-                    // `raise E from cause` — evaluate and discard the cause.
-                    if self.check(&Tok::From) {
-                        self.advance();
-                        let _ = self.expr()?;
-                    }
-                    e
-                };
+                let argument =
+                    if self.check(&Tok::Newline) || self.check(&Tok::Semi) || self.at_eof() {
+                        let span = Span::new(start, self.prev_span().end);
+                        Expr::Lit {
+                            value: Literal::Null,
+                            span,
+                        }
+                    } else {
+                        let e = self.expr()?;
+                        // `raise E from cause` — evaluate and discard the cause.
+                        if self.check(&Tok::From) {
+                            self.advance();
+                            let _ = self.expr()?;
+                        }
+                        e
+                    };
                 Ok(vec![Stmt::Throw {
                     argument,
                     span: Span::new(start, self.prev_span().end),
                 }])
             }
-            Tok::Reserved(k) => Err(self.unsupported(&format!(
-                "'{}' is not supported in the Python subset",
-                k
-            ))),
+            Tok::Reserved(k) => {
+                Err(self.unsupported(&format!("'{}' is not supported in the Python subset", k)))
+            }
             _ => self.expr_or_assign(),
         }
     }
@@ -340,7 +339,9 @@ impl Parser {
             && matches!(self.peek_tok(2), Tok::Assign)
         {
             self.advance(); // `type`
-            let Tok::Name(name) = self.advance() else { unreachable!() };
+            let Tok::Name(name) = self.advance() else {
+                unreachable!()
+            };
             self.advance(); // `=`
             name
         } else if matches!(self.cur(), Tok::Name(_))
@@ -348,7 +349,9 @@ impl Parser {
             && matches!(self.peek_tok(2), Tok::Name(n) if n == "TypeAlias")
             && matches!(self.peek_tok(3), Tok::Assign)
         {
-            let Tok::Name(name) = self.advance() else { unreachable!() };
+            let Tok::Name(name) = self.advance() else {
+                unreachable!()
+            };
             self.advance(); // `:`
             self.advance(); // `TypeAlias`
             self.advance(); // `=`
@@ -358,7 +361,9 @@ impl Parser {
             && matches!(self.peek_tok(2), Tok::Name(h) if is_typing_special_form(h))
             && matches!(self.peek_tok(3), Tok::LBracket)
         {
-            let Tok::Name(name) = self.advance() else { unreachable!() };
+            let Tok::Name(name) = self.advance() else {
+                unreachable!()
+            };
             self.advance(); // `=`
             name
         } else {
@@ -433,7 +438,11 @@ impl Parser {
             }
             self.expect(&Tok::Assign, "'='")?;
             let values = self.value_list()?;
-            return self.lower_tuple_assign(targets, values, Span::new(start, self.prev_span().end));
+            return self.lower_tuple_assign(
+                targets,
+                values,
+                Span::new(start, self.prev_span().end),
+            );
         }
 
         // plain / chained assignment: `a = e` or `a = b = e`
@@ -462,7 +471,12 @@ impl Parser {
 
     /// Lower `a = b = value` (every target gets `value`). Targets that are
     /// new bare names become declarations.
-    fn lower_chained_assign(&mut self, targets: Vec<Expr>, value: Expr, span: Span) -> Result<Stmt> {
+    fn lower_chained_assign(
+        &mut self,
+        targets: Vec<Expr>,
+        value: Expr,
+        span: Span,
+    ) -> Result<Stmt> {
         if targets.len() == 1 {
             let t = &targets[0];
             if let Some(name) = self.bare_name(t) {
@@ -496,7 +510,14 @@ impl Parser {
             span,
         }];
         for t in targets {
-            body.push(self.assign_target(t, Expr::Ident { name: tmp.clone(), span }, span)?);
+            body.push(self.assign_target(
+                t,
+                Expr::Ident {
+                    name: tmp.clone(),
+                    span,
+                },
+                span,
+            )?);
         }
         Ok(Stmt::Block { body, span })
     }
@@ -585,7 +606,10 @@ impl Parser {
             return Ok(self.declare_or_assign_single(name, Some(value), None, span));
         }
         if !target.is_valid_assignment_target() {
-            return Err(ParseError::InvalidAssignmentTarget { span: target.span() }.into());
+            return Err(ParseError::InvalidAssignmentTarget {
+                span: target.span(),
+            }
+            .into());
         }
         Ok(Stmt::Expr {
             expression: Expr::Assign {
@@ -613,10 +637,7 @@ impl Parser {
                 Some(value) => Stmt::Expr {
                     expression: Expr::Assign {
                         op: AssignOp::Assign,
-                        left: Box::new(Expr::Ident {
-                            name,
-                            span,
-                        }),
+                        left: Box::new(Expr::Ident { name, span }),
                         right: Box::new(value),
                         span,
                     },
@@ -876,9 +897,7 @@ impl Parser {
                         let mut idx = 0;
                         loop {
                             if matches!(self.cur(), Tok::Star | Tok::DStar) {
-                                return Err(
-                                    self.unsupported("*args / **kwargs are not supported")
-                                );
+                                return Err(self.unsupported("*args / **kwargs are not supported"));
                             }
                             let pspan = self.cur_span();
                             let pname = self.expect_name("parameter name")?;
@@ -1006,9 +1025,9 @@ impl Parser {
     /// specifier per clause; the dotted module spec is the `source`.
     fn import_stmt(&mut self) -> Result<Vec<Stmt>> {
         self.advance(); // import
-        // Each comma-separated clause becomes its own top-level
-        // `Stmt::Import` (one `source` slot per import in the shared
-        // AST). Returned as a flat list so they stay in module scope.
+                        // Each comma-separated clause becomes its own top-level
+                        // `Stmt::Import` (one `source` slot per import in the shared
+                        // AST). Returned as a flat list so they stay in module scope.
         let mut stmts = Vec::new();
         loop {
             let clause_span = self.cur_span();
@@ -1259,7 +1278,7 @@ impl Parser {
         while self.check(&Tok::Except) {
             saw_except = true;
             self.advance(); // except
-            // Optional exception type, then optional `as NAME`.
+                            // Optional exception type, then optional `as NAME`.
             let mut bound: Option<String> = None;
             if !self.check(&Tok::Colon) {
                 let _ = self.expr()?; // the exception class(es)
@@ -1542,11 +1561,17 @@ impl Parser {
     }
 
     fn shift(&mut self) -> Result<Expr> {
-        self.left_assoc(&[(Tok::Shl, BinOp::LShift), (Tok::Shr, BinOp::RShift)], Self::arith)
+        self.left_assoc(
+            &[(Tok::Shl, BinOp::LShift), (Tok::Shr, BinOp::RShift)],
+            Self::arith,
+        )
     }
 
     fn arith(&mut self) -> Result<Expr> {
-        self.left_assoc(&[(Tok::Plus, BinOp::Add), (Tok::Minus, BinOp::Sub)], Self::term)
+        self.left_assoc(
+            &[(Tok::Plus, BinOp::Add), (Tok::Minus, BinOp::Sub)],
+            Self::term,
+        )
     }
 
     fn term(&mut self) -> Result<Expr> {
@@ -1694,7 +1719,10 @@ impl Parser {
             }
             // Keyword argument `name=value`.
             if let Tok::Name(name) = self.cur().clone() {
-                if matches!(self.toks.get(self.pos + 1).map(|s| &s.value), Some(Tok::Assign)) {
+                if matches!(
+                    self.toks.get(self.pos + 1).map(|s| &s.value),
+                    Some(Tok::Assign)
+                ) {
                     self.advance(); // name
                     self.advance(); // '='
                     let value = self.expr()?;
@@ -1831,22 +1859,21 @@ impl Parser {
         let mut props = Vec::new();
         while !self.check(&Tok::RBrace) {
             let field_span = self.cur_span();
-            let key = match self.cur().clone() {
-                Tok::Str(s) => {
-                    self.advance();
-                    PropKey::String(s)
-                }
-                Tok::Number(n) => {
-                    self.advance();
-                    PropKey::Number(n)
-                }
-                _ => {
-                    return Err(self.unsupported(
+            let key =
+                match self.cur().clone() {
+                    Tok::Str(s) => {
+                        self.advance();
+                        PropKey::String(s)
+                    }
+                    Tok::Number(n) => {
+                        self.advance();
+                        PropKey::Number(n)
+                    }
+                    _ => return Err(self.unsupported(
                         "dict keys must be string or number literals (or this is a set literal, \
                          which is unsupported)",
-                    ))
-                }
-            };
+                    )),
+                };
             self.expect(&Tok::Colon, "':' in dict")?;
             let value = self.expr()?;
             props.push(PropDef::Property {

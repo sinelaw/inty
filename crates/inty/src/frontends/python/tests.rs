@@ -46,7 +46,9 @@ fn init_of(src: &str) -> Expr {
 #[test]
 fn first_assignment_is_hoisted_var() {
     match &parse("x = 1")[0] {
-        Stmt::Var { kind, declarations, .. } => {
+        Stmt::Var {
+            kind, declarations, ..
+        } => {
             assert_eq!(*kind, VarKind::Var);
             assert_eq!(declarations[0].name, "x");
         }
@@ -71,11 +73,17 @@ fn reassignment_is_plain_assign() {
 fn none_true_false() {
     assert!(matches!(
         init_of("a = None"),
-        Expr::Lit { value: Literal::Null, .. }
+        Expr::Lit {
+            value: Literal::Null,
+            ..
+        }
     ));
     assert!(matches!(
         init_of("a = True"),
-        Expr::Lit { value: Literal::Boolean(true), .. }
+        Expr::Lit {
+            value: Literal::Boolean(true),
+            ..
+        }
     ));
 }
 
@@ -108,14 +116,20 @@ fn annotations_are_discarded() {
 #[test]
 fn elif_nests() {
     match &parse("if a:\n    x = 1\nelif b:\n    x = 2\nelse:\n    x = 3")[0] {
-        Stmt::If { alternate: Some(alt), .. } => assert!(matches!(**alt, Stmt::If { .. })),
+        Stmt::If {
+            alternate: Some(alt),
+            ..
+        } => assert!(matches!(**alt, Stmt::If { .. })),
         other => panic!("expected if/elif, got {:?}", other),
     }
 }
 
 #[test]
 fn ternary_is_conditional() {
-    assert!(matches!(init_of("y = 1 if c else 2"), Expr::Conditional { .. }));
+    assert!(matches!(
+        init_of("y = 1 if c else 2"),
+        Expr::Conditional { .. }
+    ));
 }
 
 #[test]
@@ -128,14 +142,21 @@ fn for_in_is_for_of() {
 
 #[test]
 fn lambda_is_function() {
-    assert!(matches!(init_of("f = lambda a: a + 1"), Expr::Function { .. }));
+    assert!(matches!(
+        init_of("f = lambda a: a + 1"),
+        Expr::Function { .. }
+    ));
 }
 
 #[test]
 fn power_is_right_assoc() {
     // 2 ** 3 ** 2 == 2 ** (3 ** 2)
     match init_of("y = 2 ** 3 ** 2") {
-        Expr::Binary { op: BinOp::Pow, right, .. } => {
+        Expr::Binary {
+            op: BinOp::Pow,
+            right,
+            ..
+        } => {
             assert!(matches!(*right, Expr::Binary { op: BinOp::Pow, .. }));
         }
         other => panic!("expected pow, got {:?}", other),
@@ -145,7 +166,10 @@ fn power_is_right_assoc() {
 #[test]
 fn list_and_dict() {
     assert!(matches!(init_of("a = [1, 2, 3]"), Expr::Array { .. }));
-    assert!(matches!(init_of("d = {\"a\": 1, \"b\": 2}"), Expr::Object { .. }));
+    assert!(matches!(
+        init_of("d = {\"a\": 1, \"b\": 2}"),
+        Expr::Object { .. }
+    ));
 }
 
 #[test]
@@ -178,7 +202,10 @@ fn class_name_annotation_resolves_to_brand() {
          \x20   return 1\n\
          q = use(\"nope\")\n",
     );
-    assert!(!bad.is_empty(), "String where a Point is annotated should fail");
+    assert!(
+        !bad.is_empty(),
+        "String where a Point is annotated should fail"
+    );
 
     let ok = check_program(
         "class Point:\n\
@@ -202,11 +229,18 @@ fn tuple_literal_and_return_and_index() {
          n = p[0] + 1\n\
          s = p[1] + \"!\"\n",
     );
-    assert!(ok.is_empty(), "tuple construct + index should check, got {:?}", ok);
+    assert!(
+        ok.is_empty(),
+        "tuple construct + index should check, got {:?}",
+        ok
+    );
 
     // A component used at the wrong type is rejected.
     let bad = check("t = (1, \"hi\")\nbad = t[1] + 1\n");
-    assert!(!bad.is_empty(), "String component used as Number should fail");
+    assert!(
+        !bad.is_empty(),
+        "String component used as Number should fail"
+    );
 }
 
 #[test]
@@ -222,12 +256,19 @@ fn tuple_destructuring_and_for_unpacking() {
          \x20   kk = k + 1\n\
          \x20   vv = v + \"!\"\n",
     );
-    assert!(ok.is_empty(), "destructuring + for-unpacking should check, got {:?}", ok);
+    assert!(
+        ok.is_empty(),
+        "destructuring + for-unpacking should check, got {:?}",
+        ok
+    );
 
     // Destructured names escape to the enclosing scope and keep their
     // component types: using `x` (Number) as a String is an error.
     let bad = check("x, y = (1, \"hi\")\nbad = x + \"!\"\n");
-    assert!(!bad.is_empty(), "Number component used as String should fail");
+    assert!(
+        !bad.is_empty(),
+        "Number component used as String should fail"
+    );
 }
 
 #[test]
@@ -239,7 +280,11 @@ fn tuple_annotation_lowers() {
          def g(xs: tuple[int, ...]) -> int:\n\
          \x20   return xs[0]\n",
     );
-    assert!(ok.is_empty(), "tuple annotations should check, got {:?}", ok);
+    assert!(
+        ok.is_empty(),
+        "tuple annotations should check, got {:?}",
+        ok
+    );
 }
 
 #[test]
@@ -275,18 +320,24 @@ fn class_lowers_to_factory_function() {
 fn from_import_lowers_to_named_specifiers() {
     use crate::ast::ImportSpecifier;
     match &parse("from pkg.mod import a, b as c")[0] {
-        Stmt::Import { specifiers, source, .. } => {
+        Stmt::Import {
+            specifiers, source, ..
+        } => {
             assert_eq!(source, "pkg.mod");
             assert_eq!(specifiers.len(), 2);
             match &specifiers[0] {
-                ImportSpecifier::Named { imported, local, .. } => {
+                ImportSpecifier::Named {
+                    imported, local, ..
+                } => {
                     assert_eq!(imported, "a");
                     assert_eq!(local, "a");
                 }
                 other => panic!("expected named import, got {:?}", other),
             }
             match &specifiers[1] {
-                ImportSpecifier::Named { imported, local, .. } => {
+                ImportSpecifier::Named {
+                    imported, local, ..
+                } => {
                     assert_eq!(imported, "b");
                     assert_eq!(local, "c");
                 }
@@ -301,18 +352,19 @@ fn from_import_lowers_to_named_specifiers() {
 fn import_binds_namespace() {
     use crate::ast::ImportSpecifier;
     match &parse("import os")[0] {
-        Stmt::Import { specifiers, source, .. } => {
+        Stmt::Import {
+            specifiers, source, ..
+        } => {
             assert_eq!(source, "os");
-            assert!(matches!(
-                specifiers[0],
-                ImportSpecifier::Namespace { .. }
-            ));
+            assert!(matches!(specifiers[0], ImportSpecifier::Namespace { .. }));
         }
         other => panic!("expected import, got {:?}", other),
     }
     // Dotted import binds the top segment unless aliased.
     match &parse("import a.b.c as abc")[0] {
-        Stmt::Import { specifiers, source, .. } => {
+        Stmt::Import {
+            specifiers, source, ..
+        } => {
             assert_eq!(source, "a.b.c");
             match &specifiers[0] {
                 ImportSpecifier::Namespace { local, .. } => assert_eq!(local, "abc"),
@@ -333,7 +385,9 @@ fn import_comma_list_lowers_to_multiple_imports() {
 #[test]
 fn from_import_star_is_side_effect_import() {
     match &parse("from pkg import *")[0] {
-        Stmt::Import { specifiers, source, .. } => {
+        Stmt::Import {
+            specifiers, source, ..
+        } => {
             assert_eq!(source, "pkg");
             assert!(specifiers.is_empty(), "star import has no specifiers");
         }
@@ -348,7 +402,9 @@ fn relative_from_import_keeps_leading_dots() {
         other => panic!("expected import, got {:?}", other),
     }
     match &parse("from . import sibling")[0] {
-        Stmt::Import { source, specifiers, .. } => {
+        Stmt::Import {
+            source, specifiers, ..
+        } => {
             assert_eq!(source, ".");
             assert_eq!(specifiers.len(), 1);
         }
@@ -436,23 +492,35 @@ fn non_none_default_constrains_param_type() {
 #[test]
 fn none_default_imposes_no_constraint() {
     // `=None` is Python's idiomatic optional: it accepts any value.
-    let errs = check(
-        "def conn(timeout=None):\n    return 1\nconn()\nconn(30)\nconn(\"x\")\n",
+    let errs = check("def conn(timeout=None):\n    return 1\nconn()\nconn(30)\nconn(\"x\")\n");
+    assert!(
+        errs.is_empty(),
+        "=None should accept any argument, got {:?}",
+        errs
     );
-    assert!(errs.is_empty(), "=None should accept any argument, got {:?}", errs);
 }
 
 #[test]
 fn default_param_may_be_omitted_or_supplied() {
     let errs = check("def f(a, b=1):\n    return a\nx = f(10)\ny = f(10, 20)\n");
-    assert!(errs.is_empty(), "omitting/supplying a default should both check, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "omitting/supplying a default should both check, got {:?}",
+        errs
+    );
 }
 
 #[test]
 fn default_param_still_enforces_arity() {
     // The required parameter is still required, and surplus args fail.
-    assert!(!check("def f(a, b=1):\n    return a\nf()\n").is_empty(), "missing required arg must fail");
-    assert!(!check("def f(a, b=1):\n    return a\nf(1, 2, 3)\n").is_empty(), "too many args must fail");
+    assert!(
+        !check("def f(a, b=1):\n    return a\nf()\n").is_empty(),
+        "missing required arg must fail"
+    );
+    assert!(
+        !check("def f(a, b=1):\n    return a\nf(1, 2, 3)\n").is_empty(),
+        "too many args must fail"
+    );
 }
 
 #[test]
@@ -513,14 +581,20 @@ fn unmodelled_param_annotation_imposes_no_constraint() {
     // An unknown/unmodelled annotation lowers to a fresh variable, so it
     // never produces a false positive.
     let errs = check("def f(x: SomeProtocol):\n    return 1\nf(\"anything\")\nf(5)\n");
-    assert!(errs.is_empty(), "unmodelled annotation should not constrain, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "unmodelled annotation should not constrain, got {:?}",
+        errs
+    );
 }
 
 #[test]
 fn return_annotation_is_captured() {
     use crate::types::TypeAst;
     match &parse("def f() -> int:\n    return 1")[0] {
-        Stmt::FunctionDecl { return_type_ast, .. } => {
+        Stmt::FunctionDecl {
+            return_type_ast, ..
+        } => {
             assert!(matches!(return_type_ast, Some(TypeAst::Number)));
         }
         other => panic!("expected function decl, got {:?}", other),
@@ -543,20 +617,37 @@ fn return_annotation_is_checked() {
 #[test]
 fn unmodelled_return_annotation_imposes_no_constraint() {
     let errs = check("def g() -> SomeType:\n    return 123\nx = g()\n");
-    assert!(errs.is_empty(), "unmodelled return annotation should not constrain, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "unmodelled return annotation should not constrain, got {:?}",
+        errs
+    );
 }
 
 #[test]
 fn variable_annotation_is_checked() {
-    assert!(!check("x: int = \"s\"\n").is_empty(), "int annotation vs String init must fail");
-    assert!(check("x: int = 5\n").is_empty(), "matching variable annotation should check");
-    assert!(!check("xs: list[int] = \"nope\"\n").is_empty(), "container annotation enforced");
+    assert!(
+        !check("x: int = \"s\"\n").is_empty(),
+        "int annotation vs String init must fail"
+    );
+    assert!(
+        check("x: int = 5\n").is_empty(),
+        "matching variable annotation should check"
+    );
+    assert!(
+        !check("xs: list[int] = \"nope\"\n").is_empty(),
+        "container annotation enforced"
+    );
 }
 
 #[test]
 fn unmodelled_variable_annotation_imposes_no_constraint() {
     let errs = check("x: SomeType = 5\ny: SomeType = \"s\"\n");
-    assert!(errs.is_empty(), "unmodelled variable annotation should not constrain, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "unmodelled variable annotation should not constrain, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -570,7 +661,10 @@ fn class_method_param_annotation_is_checked() {
          c = C()\n\
          c.m(\"s\")\n",
     );
-    assert!(!errs.is_empty(), "String arg against annotated `int` method param must fail");
+    assert!(
+        !errs.is_empty(),
+        "String arg against annotated `int` method param must fail"
+    );
 }
 
 #[test]
@@ -582,7 +676,10 @@ fn class_method_return_annotation_is_checked() {
          \x20   def m(self) -> str:\n\
          \x20       return 123\n",
     );
-    assert!(!errs.is_empty(), "Number body against `-> str` method must fail");
+    assert!(
+        !errs.is_empty(),
+        "Number body against `-> str` method must fail"
+    );
 }
 
 #[test]
@@ -680,7 +777,11 @@ fn same_class_reassignment_unifies() {
          v = A(1)\n\
          v = A(2)\n",
     );
-    assert!(errs.is_empty(), "same-brand reassignment should unify, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "same-brand reassignment should unify, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -695,7 +796,11 @@ fn generic_class_brands_per_instantiation() {
          b = Box(1)\n\
          n = b.value + 1\n",
     );
-    assert!(ok.is_empty(), "Box<Number>.value + 1 should be fine, got {:?}", ok);
+    assert!(
+        ok.is_empty(),
+        "Box<Number>.value + 1 should be fine, got {:?}",
+        ok
+    );
 
     let bad = check_program(
         "class Box:\n\
@@ -795,7 +900,11 @@ fn keyword_arguments_resolve_by_name() {
          c = f(x=1, y=2)\n\
          d = g(count=3, name=4)\n",
     );
-    assert!(errs.is_empty(), "keyword calls should resolve, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "keyword calls should resolve, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -806,7 +915,10 @@ fn keyword_argument_type_flows_to_parameter() {
          r = f(x=1, y=\"s\")\n\
          z = r + 1\n",
     );
-    assert!(!bad.is_empty(), "Number + String through a keyword arg should fail");
+    assert!(
+        !bad.is_empty(),
+        "Number + String through a keyword arg should fail"
+    );
 }
 
 #[test]
@@ -838,7 +950,11 @@ fn keyword_with_default_may_be_omitted_or_supplied() {
          b = f(1, y=5)\n\
          c = f(x=2, y=5)\n",
     );
-    assert!(errs.is_empty(), "default + keyword should check, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "default + keyword should check, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -851,7 +967,11 @@ fn type_alias_literal_parses_and_resolves() {
          \x20   return t\n\
          x = bump(\"patch\")\n",
     );
-    assert!(ok.is_empty(), "valid literal arg should check, got {:?}", ok);
+    assert!(
+        ok.is_empty(),
+        "valid literal arg should check, got {:?}",
+        ok
+    );
 
     let bad = check_program(
         "BumpType = Literal[\"patch\", \"minor\", \"major\"]\n\
@@ -875,7 +995,11 @@ fn type_alias_explicit_forms() {
          a = f(3)\n\
          b = f(None)\n",
     );
-    assert!(pep695.is_empty(), "`type X =` alias should work, got {:?}", pep695);
+    assert!(
+        pep695.is_empty(),
+        "`type X =` alias should work, got {:?}",
+        pep695
+    );
 
     // PEP 613 `X: TypeAlias = …`
     let pep613 = check_program(
@@ -883,7 +1007,11 @@ fn type_alias_explicit_forms() {
          def g(xs: Pair) -> Pair:\n\
          \x20   return xs\n",
     );
-    assert!(pep613.is_empty(), "`X: TypeAlias =` alias should work, got {:?}", pep613);
+    assert!(
+        pep613.is_empty(),
+        "`X: TypeAlias =` alias should work, got {:?}",
+        pep613
+    );
 }
 
 #[test]
@@ -907,7 +1035,11 @@ fn unknown_type_name_is_still_opaque() {
          r = f(\"anything\")\n\
          s = f(42)\n",
     );
-    assert!(errs.is_empty(), "unknown annotation should be opaque, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "unknown annotation should be opaque, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -963,7 +1095,9 @@ fn mixed_plus_rejected() {
 fn try_lowers_to_try_stmt() {
     let stmts = parse("try:\n    x = 1\nexcept Exception as e:\n    x = 2\nfinally:\n    x = 3\n");
     match &stmts[0] {
-        Stmt::Try { handler, finalizer, .. } => {
+        Stmt::Try {
+            handler, finalizer, ..
+        } => {
             assert!(handler.is_some());
             assert!(finalizer.is_some());
         }
