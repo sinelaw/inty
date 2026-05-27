@@ -710,6 +710,113 @@ fn rejects_kwargs() {
     assert!(parse_source("f(x=1)").is_err());
 }
 
+/// Infer a whole program and return its top-level type (the last
+/// statement's expression type), or the formatted error/errors.
+fn prog_ty(src: &str) -> Result<String, String> {
+    let program = parse_source(src).map_err(|e| format!("{:?}", e))?;
+    let mut state = InferState::new();
+    let env = initial_env();
+    let (ty, _) = state
+        .infer_program_with_env(&env, &program)
+        .map_err(|e| format!("{:?}", e))?;
+    state.resolve_constraints().map_err(|e| format!("{:?}", e))?;
+    if !state.errors.is_empty() {
+        return Err(format!("{:?}", state.errors));
+    }
+    let resolved = state.apply_subst(&ty);
+    Ok(crate::types::PrettyContext::new().format_type(&resolved))
+}
+
+#[test]
+fn fstring_plain_is_string() {
+    assert_eq!(prog_ty("f\"hello\"").expect("plain f-string"), "String");
+}
+
+#[test]
+fn fstring_with_interpolation_is_string() {
+    let errs = check("name = \"x\"\ns = f\"hi {name}, {1 + 2} times\"\n");
+    assert!(errs.is_empty(), "f-string should type-check, got {:?}", errs);
+    assert_eq!(
+        prog_ty("name = \"x\"\nf\"hi {name}\"").expect("interpolated f-string"),
+        "String"
+    );
+}
+
+#[test]
+fn fstring_type_checks_embedded_expression() {
+    // An undefined name inside `{ … }` must be reported.
+    let errs = check("s = f\"value is {missing}\"\n");
+    assert!(
+        errs.iter().any(|e| e.contains("missing") || e.contains("Undefined")),
+        "embedded expression should be type-checked, got {:?}",
+        errs
+    );
+}
+
+#[test]
+fn fstring_checks_embedded_member_access() {
+    // A bad field access inside an interpolation is rejected.
+    let errs = check_program(
+        "class C:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         c = C(1)\n\
+         s = f\"{c.nope}\"\n",
+    );
+    assert!(
+        !errs.is_empty(),
+        "accessing an absent field inside an f-string should fail"
+    );
+}
+
+#[test]
+fn fstring_ignores_conversion_and_format_spec() {
+    // `!r` conversions and `:spec` format specs are stripped; the
+    // expression part is still type-checked.
+    let errs = check("x = 42\ns = f\"{x!r} = {x:>10.2f}\"\n");
+    assert!(errs.is_empty(), "conversion/format spec should be ignored, got {:?}", errs);
+    let errs = check("s = f\"{bad!r}\"\n");
+    assert!(
+        errs.iter().any(|e| e.contains("bad") || e.contains("Undefined")),
+        "the expression before `!r` is still checked, got {:?}",
+        errs
+    );
+}
+
+#[test]
+fn fstring_escaped_braces_are_literal() {
+    // `{{` / `}}` are literal braces, not interpolations.
+    assert_eq!(
+        prog_ty("f\"{{not interpolated}}\"").expect("escaped braces"),
+        "String"
+    );
+}
+
+#[test]
+fn fstring_self_lowers_in_method() {
+    // `self` inside an f-string interpolation in a method body still
+    // lowers to `this`, so `self.x` resolves.
+    let errs = check_program(
+        "class C:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         \x20   def show(self):\n\
+         \x20       return f\"x={self.x}\"\n\
+         c = C(1)\n\
+         r = c.show()\n",
+    );
+    assert!(errs.is_empty(), "self in f-string should resolve, got {:?}", errs);
+}
+
+#[test]
+fn raw_and_bytes_string_prefixes_lex() {
+    // Bonus from the same lexer change: r"…" and b"…" no longer error.
+    // Like any string literal, they carry a literal type (`"…"`); bytes
+    // maps to a String literal (the bytes ≈ String decision).
+    assert!(prog_ty("r\"\\d+\"").is_ok(), "raw string should lex");
+    assert_eq!(prog_ty("b\"bytes\"").expect("bytes string"), "\"bytes\"");
+}
+
 #[test]
 fn rejects_comprehension() {
     assert!(parse_source("xs = [a for a in items]").is_err());

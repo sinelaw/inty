@@ -12,6 +12,14 @@ use crate::span::{Span, Spanned};
 pub enum Tok {
     Number(f64),
     Str(String),
+    /// An f-string `f"...{expr}..."`. `quasis` are the literal text
+    /// segments (always one more than `exprs`); `exprs` hold the raw
+    /// source of each `{ … }` interpolation, with any `!conversion` /
+    /// `:format_spec` already stripped, to be re-parsed into expressions.
+    FString {
+        quasis: Vec<String>,
+        exprs: Vec<String>,
+    },
     Name(String),
     // keywords we handle
     And,
@@ -102,6 +110,7 @@ impl Tok {
         match self {
             Tok::Number(n) => format!("number {}", n),
             Tok::Str(_) => "string".to_string(),
+            Tok::FString { .. } => "f-string".to_string(),
             Tok::Name(n) => format!("name '{}'", n),
             Tok::Newline => "newline".to_string(),
             Tok::Indent => "indent".to_string(),
@@ -317,11 +326,49 @@ impl Lexer {
         let c = self.peek().unwrap();
         match c {
             '0'..='9' => self.number(start)?,
+            'a'..='z' | 'A'..='Z' | '_' if self.try_prefixed_string(start)? => {}
             'a'..='z' | 'A'..='Z' | '_' => self.name(start),
-            '"' | '\'' => self.string(start)?,
+            '"' | '\'' => self.string(start, false)?,
             _ => self.operator(start)?,
         }
         Ok(())
+    }
+
+    /// If the upcoming token is a prefixed string literal (`f"…"`, `r'…'`,
+    /// `b"…"`, `rb"…"`, …), lex it and return `true`. Otherwise leave the
+    /// position untouched and return `false` so it lexes as a name.
+    ///
+    /// `f` selects an f-string (`Tok::FString`); `r` makes the body raw
+    /// (backslashes are literal); `b`/`u` are accepted and erased (bytes
+    /// map to `String`, see the bytes decision; `u` is a no-op).
+    fn try_prefixed_string(&mut self, start: usize) -> Result<bool> {
+        let c0 = self.peek();
+        let c1 = self.peek2();
+        let (plen, prefix) = match (c0, c1) {
+            (Some(a), Some(b)) if b.is_ascii_alphabetic() => {
+                (2, format!("{}{}", a.to_ascii_lowercase(), b.to_ascii_lowercase()))
+            }
+            (Some(a), _) => (1, a.to_ascii_lowercase().to_string()),
+            _ => return Ok(false),
+        };
+        let after = self.chars.get(self.pos + plen).map(|(_, c)| *c);
+        if !matches!(after, Some('"') | Some('\'')) {
+            return Ok(false);
+        }
+        if !matches!(prefix.as_str(), "f" | "r" | "b" | "u" | "rb" | "br" | "fr" | "rf") {
+            return Ok(false);
+        }
+        let is_fstring = prefix.contains('f');
+        let is_raw = prefix.contains('r');
+        for _ in 0..plen {
+            self.bump();
+        }
+        if is_fstring {
+            self.fstring(start, is_raw)?;
+        } else {
+            self.string(start, is_raw)?;
+        }
+        Ok(true)
     }
 
     fn number(&mut self, start: usize) -> Result<()> {
@@ -381,7 +428,7 @@ impl Lexer {
         self.emit(tok, start);
     }
 
-    fn string(&mut self, start: usize) -> Result<()> {
+    fn string(&mut self, start: usize, raw: bool) -> Result<()> {
         let quote = self.bump().unwrap();
         // triple-quoted?
         let triple = self.peek() == Some(quote) && self.peek2() == Some(quote);
@@ -394,16 +441,23 @@ impl Lexer {
             match self.bump() {
                 Some('\\') => {
                     let e = self.bump().ok_or_else(|| self.err("unterminated string", start))?;
-                    s.push(match e {
-                        'n' => '\n',
-                        't' => '\t',
-                        'r' => '\r',
-                        '\\' => '\\',
-                        '\'' => '\'',
-                        '"' => '"',
-                        '0' => '\0',
-                        other => other,
-                    });
+                    if raw {
+                        // Raw string: the backslash and the escaped char are
+                        // both literal, but `\"` still doesn't close.
+                        s.push('\\');
+                        s.push(e);
+                    } else {
+                        s.push(match e {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '\\' => '\\',
+                            '\'' => '\'',
+                            '"' => '"',
+                            '0' => '\0',
+                            other => other,
+                        });
+                    }
                 }
                 Some(c) if c == quote => {
                     if triple {
@@ -424,6 +478,157 @@ impl Lexer {
         }
         self.emit(Tok::Str(s), start);
         Ok(())
+    }
+
+    /// Lex an f-string body into literal segments (`quasis`) and the raw
+    /// source of each `{ … }` interpolation (`exprs`), stripping `!conv`
+    /// and `:format_spec`. `{{` / `}}` are literal braces. The quote has
+    /// not been consumed yet.
+    fn fstring(&mut self, start: usize, raw: bool) -> Result<()> {
+        let quote = self.bump().unwrap();
+        let triple = self.peek() == Some(quote) && self.peek2() == Some(quote);
+        if triple {
+            self.bump();
+            self.bump();
+        }
+        let mut quasis: Vec<String> = Vec::new();
+        let mut exprs: Vec<String> = Vec::new();
+        let mut cur = String::new();
+
+        loop {
+            match self.peek() {
+                None => return Err(self.err("unterminated f-string", start)),
+                Some('\n') if !triple => return Err(self.err("unterminated f-string", start)),
+                Some('\\') => {
+                    self.bump();
+                    let e = self.bump().ok_or_else(|| self.err("unterminated f-string", start))?;
+                    if raw {
+                        cur.push('\\');
+                        cur.push(e);
+                    } else {
+                        cur.push(match e {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '\\' => '\\',
+                            '\'' => '\'',
+                            '"' => '"',
+                            '0' => '\0',
+                            other => other,
+                        });
+                    }
+                }
+                Some('{') if self.peek2() == Some('{') => {
+                    self.bump();
+                    self.bump();
+                    cur.push('{');
+                }
+                Some('}') if self.peek2() == Some('}') => {
+                    self.bump();
+                    self.bump();
+                    cur.push('}');
+                }
+                Some('{') => {
+                    self.bump();
+                    quasis.push(std::mem::take(&mut cur));
+                    exprs.push(self.fstring_expr(start)?);
+                }
+                Some(c) if c == quote => {
+                    if triple {
+                        if self.peek2() == Some(quote)
+                            && self.chars.get(self.pos + 2).map(|(_, c)| *c) == Some(quote)
+                        {
+                            self.bump();
+                            self.bump();
+                            self.bump();
+                            break;
+                        }
+                        self.bump();
+                        cur.push(c);
+                    } else {
+                        self.bump();
+                        break;
+                    }
+                }
+                Some(c) => {
+                    self.bump();
+                    cur.push(c);
+                }
+            }
+        }
+        quasis.push(cur);
+        self.emit(Tok::FString { quasis, exprs }, start);
+        Ok(())
+    }
+
+    /// Capture one `{ … }` interpolation: read the expression source up to
+    /// the `!conversion` / `:format_spec` / closing `}` (all at brace
+    /// depth 0, outside nested strings), then consume the discarded
+    /// conversion/spec and the closing `}`. The opening `{` is consumed.
+    fn fstring_expr(&mut self, start: usize) -> Result<String> {
+        let mut src = String::new();
+        let mut depth: i32 = 0;
+        // Phase 1: the expression itself.
+        loop {
+            match self.peek() {
+                None => return Err(self.err("unterminated f-string expression", start)),
+                Some(q @ ('"' | '\'')) => {
+                    // A nested string literal — copy it verbatim so its
+                    // contents can't be mistaken for `}`/`:`/`!`.
+                    src.push(q);
+                    self.bump();
+                    loop {
+                        match self.bump() {
+                            None => return Err(self.err("unterminated string in f-string", start)),
+                            Some('\\') => {
+                                src.push('\\');
+                                if let Some(e) = self.bump() {
+                                    src.push(e);
+                                }
+                            }
+                            Some(c) => {
+                                src.push(c);
+                                if c == q {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(c @ ('(' | '[' | '{')) => {
+                    depth += 1;
+                    src.push(c);
+                    self.bump();
+                }
+                Some(c @ (')' | ']' | '}')) if depth > 0 => {
+                    depth -= 1;
+                    src.push(c);
+                    self.bump();
+                }
+                Some('}') => break, // depth 0 close
+                Some(':') if depth == 0 => break, // format spec
+                Some('!') if depth == 0 && self.peek2() != Some('=') => break, // conversion
+                Some(c) => {
+                    src.push(c);
+                    self.bump();
+                }
+            }
+        }
+        // Phase 2: skip the conversion/format-spec up to the matching `}`.
+        let mut depth: i32 = 0;
+        loop {
+            match self.bump() {
+                None => return Err(self.err("unterminated f-string expression", start)),
+                Some('{') => depth += 1,
+                Some('}') if depth > 0 => depth -= 1,
+                Some('}') => break,
+                _ => {}
+            }
+        }
+        if src.trim().is_empty() {
+            return Err(self.err("empty expression in f-string", start));
+        }
+        Ok(src)
     }
 
     fn operator(&mut self, start: usize) -> Result<()> {

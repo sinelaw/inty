@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use super::lexer::{AugOp, Tok};
+use super::lexer::{tokenize, AugOp, Tok};
 use crate::ast::*;
 use crate::error::{ParseError, Result};
 use crate::span::{Span, Spanned};
@@ -1378,6 +1378,18 @@ impl Parser {
         Ok(args)
     }
 
+    /// Parse the source of one f-string interpolation into an expression.
+    /// Runs a fresh sub-parser that inherits the receiver name, so
+    /// `f"{self.x}"` inside a method still lowers `self` to `this`. Only
+    /// the leading expression is taken; any trailing tokens (an unparsed
+    /// remnant) are ignored.
+    fn parse_embedded_expr(&self, src: &str) -> Result<Expr> {
+        let toks = tokenize(src)?;
+        let mut p = Parser::new(toks);
+        p.self_name = self.self_name.clone();
+        p.expr()
+    }
+
     fn atom(&mut self) -> Result<Expr> {
         let span = self.cur_span();
         match self.cur().clone() {
@@ -1392,6 +1404,21 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Lit {
                     value: Literal::String(s),
+                    span,
+                })
+            }
+            // An f-string desugars to a template literal: it always
+            // evaluates to `String`, and each interpolation is re-parsed
+            // and type-checked as an embedded expression.
+            Tok::FString { quasis, exprs } => {
+                self.advance();
+                let mut expressions = Vec::with_capacity(exprs.len());
+                for src in &exprs {
+                    expressions.push(self.parse_embedded_expr(src)?);
+                }
+                Ok(Expr::TemplateLiteral {
+                    quasis,
+                    expressions,
                     span,
                 })
             }
