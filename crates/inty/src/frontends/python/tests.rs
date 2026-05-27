@@ -166,6 +166,31 @@ fn inline_suite() {
     }
 }
 
+#[test]
+fn class_name_annotation_resolves_to_brand() {
+    // An annotation naming a class resolves to that class's nominal brand,
+    // not an opaque variable — so a mismatched argument is rejected.
+    let bad = check_program(
+        "class Point:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         def use(p: Point):\n\
+         \x20   return 1\n\
+         q = use(\"nope\")\n",
+    );
+    assert!(!bad.is_empty(), "String where a Point is annotated should fail");
+
+    let ok = check_program(
+        "class Point:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         def use(p: Point):\n\
+         \x20   return 1\n\
+         q = use(Point(1))\n",
+    );
+    assert!(ok.is_empty(), "passing a Point should check, got {:?}", ok);
+}
+
 // ---- rejections (limited subset) ----
 
 #[test]

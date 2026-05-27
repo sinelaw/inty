@@ -502,3 +502,33 @@ fn transitive_py_imports() {
     let ty = check("from b import twice\nr = twice(10)\nr\n", &dir, &[]).expect("transitive");
     assert_eq!(ty, "Number");
 }
+
+#[test]
+fn imported_class_resolves_as_type_annotation() {
+    // A class imported from a stub resolves as a type annotation — both
+    // the bare form (`Dog`) and the dotted/qualified form (`animals.Dog`)
+    // bring in the real class brand, not an opaque variable.
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(&stubs, "animals.pyi", "class Dog:\n    def __init__(self) -> None: ...\n");
+
+    // Correct usage type-checks.
+    let ok = check(
+        "import animals\nfrom animals import Dog\n\
+         def f(d: animals.Dog):\n    return 1\n\
+         def g(d: Dog):\n    return 1\n\
+         f(Dog())\ng(Dog())\n",
+        &dir,
+        &[stubs.clone()],
+    );
+    assert!(ok.is_ok(), "imported class annotations should check: {:?}", ok);
+
+    // A non-Dog argument is rejected — the dotted annotation resolved to
+    // the real brand, not opaque.
+    let bad = check(
+        "import animals\ndef f(d: animals.Dog):\n    return 1\nf(\"nope\")\n",
+        &dir,
+        &[stubs],
+    );
+    assert!(bad.is_err(), "String where animals.Dog is annotated should fail");
+}
