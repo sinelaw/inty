@@ -475,6 +475,164 @@ impl Parser {
         Ok(decls)
     }
 
+    /// Reinterpret an array/object *literal* on the LHS of `=` as a
+    /// destructuring [`Pattern`]. Returns `None` for shapes that can't be
+    /// a destructuring target (elision holes, computed/numeric keys,
+    /// non-identifier rest/leaf targets) — those keep the original
+    /// "invalid assignment target" error.
+    fn expr_to_pattern(expr: &Expr) -> Option<Pattern> {
+        match expr {
+            Expr::Ident { name, span } => Some(Pattern::Ident(name.clone(), *span)),
+            Expr::Array { elements, span } => {
+                let mut elems = Vec::new();
+                let mut rest = None;
+                for el in elements {
+                    match el {
+                        Some(Expr::Spread { argument, span: sp }) => {
+                            let Expr::Ident { name, .. } = argument.as_ref() else {
+                                return None;
+                            };
+                            rest = Some((name.clone(), *sp));
+                        }
+                        Some(e) => elems.push(Self::expr_to_pattern(e)?),
+                        None => return None, // elision hole `[, x]`
+                    }
+                }
+                Some(Pattern::Array(elems, rest, *span))
+            }
+            Expr::Object { properties, span } => {
+                let mut entries = Vec::new();
+                let mut rest = None;
+                for p in properties {
+                    match p {
+                        PropDef::Property {
+                            key, value, span: sp, ..
+                        } => {
+                            let name = match key {
+                                PropKey::Ident(s) | PropKey::String(s) => s.clone(),
+                                PropKey::Number(_) => return None,
+                            };
+                            entries.push((name, Self::expr_to_pattern(value)?, *sp));
+                        }
+                        PropDef::Spread { argument, span: sp } => {
+                            let Expr::Ident { name, .. } = argument else {
+                                return None;
+                            };
+                            rest = Some((name.clone(), *sp));
+                        }
+                        _ => return None,
+                    }
+                }
+                Some(Pattern::Object(entries, rest, *span))
+            }
+            _ => None,
+        }
+    }
+
+    /// Desugar a destructuring *assignment* `pattern = source` into a flat
+    /// list of statements. Leaves assign to the (already-declared) target
+    /// names; nested patterns introduce a fresh `var` temp for the
+    /// sub-source. Mirrors [`Self::desugar_pattern`], but emits
+    /// assignments instead of declarations for the bound names.
+    fn desugar_pattern_assign(&mut self, pattern: &Pattern, source: Expr, stmts: &mut Vec<Stmt>) {
+        match pattern {
+            Pattern::Ident(name, span) => {
+                stmts.push(Stmt::Expr {
+                    expression: Expr::Assign {
+                        op: AssignOp::Assign,
+                        left: Box::new(Expr::Ident {
+                            name: name.clone(),
+                            span: *span,
+                        }),
+                        right: Box::new(source),
+                        span: *span,
+                    },
+                    span: *span,
+                });
+            }
+            Pattern::Object(entries, rest, span) => {
+                let temp = self.fresh_temp_name();
+                stmts.push(Self::temp_var(&temp, source, *span));
+                for (prop_name, sub, prop_span) in entries {
+                    let access = Expr::Member {
+                        object: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *prop_span,
+                        }),
+                        property: prop_name.clone(),
+                        span: *prop_span,
+                    };
+                    self.desugar_pattern_assign(sub, access, stmts);
+                }
+                if let Some((rest_name, rest_span)) = rest {
+                    let excluded: Vec<String> = entries.iter().map(|(p, _, _)| p.clone()).collect();
+                    let init = Expr::RestRow {
+                        source: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *rest_span,
+                        }),
+                        excluded,
+                        span: *rest_span,
+                    };
+                    self.desugar_pattern_assign(
+                        &Pattern::Ident(rest_name.clone(), *rest_span),
+                        init,
+                        stmts,
+                    );
+                }
+            }
+            Pattern::Array(elems, rest, span) => {
+                let temp = self.fresh_temp_name();
+                stmts.push(Self::temp_var(&temp, source, *span));
+                for (idx, sub) in elems.iter().enumerate() {
+                    let access = Expr::ComputedMember {
+                        object: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *span,
+                        }),
+                        property: Box::new(Expr::Lit {
+                            value: Literal::Number(idx as f64),
+                            span: *span,
+                        }),
+                        span: *span,
+                    };
+                    self.desugar_pattern_assign(sub, access, stmts);
+                }
+                if let Some((rest_name, rest_span)) = rest {
+                    let init = Expr::RestArray {
+                        source: Box::new(Expr::Ident {
+                            name: temp.clone(),
+                            span: *rest_span,
+                        }),
+                        skip: elems.len(),
+                        span: *rest_span,
+                    };
+                    self.desugar_pattern_assign(
+                        &Pattern::Ident(rest_name.clone(), *rest_span),
+                        init,
+                        stmts,
+                    );
+                }
+            }
+        }
+    }
+
+    /// A `var <name> = <init>;` declarator statement for a desugaring temp.
+    fn temp_var(name: &str, init: Expr, span: Span) -> Stmt {
+        Stmt::Var {
+            kind: VarKind::Var,
+            declarations: vec![VarDeclarator {
+                name: name.to_string(),
+                init: Some(init),
+                type_annotation: None,
+                type_ast: None,
+                kind: VarKind::Var,
+                span,
+            }],
+            span,
+        }
+    }
+
     fn parse_var_declarator(&mut self, kind: VarKind) -> Result<VarDeclarator> {
         let start = self.current_span().start;
 
@@ -2262,6 +2420,28 @@ impl Parser {
         let expression = self.parse_expression()?;
         self.consume_semicolon();
 
+        // Destructuring assignment statement: `[a, b] = e` / `({a} = e)`.
+        // Desugar to a block that binds the RHS to a temp once, then
+        // assigns each existing target by index / property.
+        if let Expr::Assign {
+            op: AssignOp::Assign,
+            left,
+            right,
+            ..
+        } = &expression
+        {
+            if matches!(left.as_ref(), Expr::Array { .. } | Expr::Object { .. }) {
+                if let Some(pattern) = Self::expr_to_pattern(left) {
+                    let mut body = Vec::new();
+                    self.desugar_pattern_assign(&pattern, (**right).clone(), &mut body);
+                    return Ok(Stmt::Block {
+                        body,
+                        span: Span::new(start, self.prev_span().end),
+                    });
+                }
+            }
+        }
+
         Ok(Stmt::Expr {
             expression,
             span: Span::new(start, self.prev_span().end),
@@ -2310,7 +2490,16 @@ impl Parser {
         if let Some(op) = self.assignment_op() {
             let span = expr.span();
             if !expr.is_valid_assignment_target() {
-                return Err(ParseError::InvalidAssignmentTarget { span }.into());
+                // A plain `=` onto an array/object literal is a
+                // *destructuring assignment* (`[a, b] = e`, `({a} = e)`),
+                // desugared at statement level. Allow it through here when
+                // the literal is a valid pattern; reject everything else.
+                let is_destructuring = matches!(op, AssignOp::Assign)
+                    && matches!(expr, Expr::Array { .. } | Expr::Object { .. })
+                    && Self::expr_to_pattern(&expr).is_some();
+                if !is_destructuring {
+                    return Err(ParseError::InvalidAssignmentTarget { span }.into());
+                }
             }
 
             self.advance();
