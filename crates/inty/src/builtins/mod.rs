@@ -305,6 +305,18 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
             Type::simple_func(vec![cb, u_var.clone()], u_var)
         }
         "toString" => Type::simple_func(vec![], s.clone()),
+        // Python `list` mutators / queries. Shared with the JS surface
+        // above; a program is single-language, so the extra names are
+        // harmless to the other frontends. In-place mutators return
+        // `None` (Undefined), matching CPython.
+        "append" => Type::simple_func(vec![elem.clone()], u.clone()),
+        "extend" => Type::simple_func(vec![arr.clone()], u.clone()),
+        "insert" => Type::simple_func(vec![n.clone(), elem.clone()], u.clone()),
+        "remove" => Type::simple_func(vec![elem.clone()], u.clone()),
+        "index" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "count" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "clear" => Type::simple_func(vec![], u.clone()),
+        "copy" => Type::simple_func(vec![], arr.clone()),
         _ => {
             let _ = (n, s, b, u, arr);
             return None;
