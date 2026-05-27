@@ -12,6 +12,10 @@ fn parse(src: &str) -> Vec<Stmt> {
 fn check(src: &str) -> Vec<String> {
     let program = parse_source(src).expect("parse failed");
     let mut state = InferState::new();
+    // The per-statement path doesn't run `infer_program_with_env`, so set
+    // the language explicitly (these are Python programs) — it drives the
+    // unit type and the `str`/`list` method surface.
+    state.set_language(crate::ast::SourceLanguage::Python);
     let mut env = super::prelude::load(&mut state, initial_env()).expect("prelude");
     for stmt in &program.statements {
         match state.infer_stmt(&env, stmt) {
@@ -1400,4 +1404,47 @@ fn while_true_with_return_does_not_add_none() {
                \x20   while True:\n\
                \x20       return 1\n";
     assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+// ---- frontend-specific `str` / `list` method surface (#67) ----
+
+#[test]
+fn python_list_methods_typecheck() {
+    let src = "xs = [1, 2, 3]\n\
+               xs.append(4)\n\
+               xs.extend([5, 6])\n\
+               xs.insert(0, 9)\n\
+               c = xs.count(1)\n\
+               n = xs.index(2)\n\
+               xs.sort()\n\
+               xs.reverse()\n\
+               last = xs.pop()\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn python_str_methods_typecheck() {
+    let src = "s = \"Hello, World\"\n\
+               u = s.upper()\n\
+               t = \"  hi  \".strip()\n\
+               parts = s.split(\",\")\n\
+               joined = \"-\".join(parts)\n\
+               r = s.replace(\"l\", \"L\")\n\
+               yes = s.startswith(\"He\")\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn javascript_string_methods_rejected_in_python() {
+    // `charAt` is a JS `String.prototype` method; Python `str` has no such
+    // method, so it must not resolve under the Python method surface.
+    assert!(
+        !check("s = \"hi\".charAt(0)\n").is_empty(),
+        "JS String.charAt must not resolve on a Python str"
+    );
+    // Likewise `push` is a JS array method, not a Python list method.
+    assert!(
+        !check("xs = [1]\nxs.push(2)\n").is_empty(),
+        "JS Array.push must not resolve on a Python list"
+    );
 }

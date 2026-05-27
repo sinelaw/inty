@@ -152,42 +152,79 @@ pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> 
         "padEnd" => optional_last(state, vec![n.clone()], s.clone(), s.clone()),
         "concat" => Type::simple_func(vec![s.clone()], s.clone()),
         "toString" => Type::simple_func(vec![], s.clone()),
-        // Python `str` methods (shared surface; a program is
-        // single-language). Whitespace strippers take an optional set of
-        // characters to strip.
-        "strip" | "lstrip" | "rstrip" => {
-            let pvar = state.fresh_pvar();
-            Type::simple_func_with_params(vec![FuncParam::optional(pvar, s.clone())], s.clone())
+        _ => {
+            let _ = (state, n, s, b);
+            return None;
         }
-        "lower" | "upper" | "title" | "capitalize" | "casefold" | "swapcase" => {
-            Type::simple_func(vec![], s.clone())
+    })
+}
+
+/// Look up a Python `str` method by name. Separate from the JavaScript
+/// [`string_method_type`] surface so each language only sees its own
+/// methods (issue #67); inference picks the table by `Program::language`.
+pub fn python_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
+    use crate::types::FuncParam;
+    let n = Type::Number;
+    let s = Type::String;
+    let b = Type::Boolean;
+    // A trailing optional parameter, allocated a fresh presence variable
+    // per call so independent invocations bind separately.
+    let opt_last = |state: &mut InferState, required: Vec<Type>, optional: Type, ret: Type| {
+        let pvar = state.fresh_pvar();
+        let mut params: Vec<FuncParam> = required.into_iter().map(FuncParam::required).collect();
+        params.push(FuncParam::optional(pvar, optional));
+        Type::simple_func_with_params(params, ret)
+    };
+    Some(match method {
+        "upper" | "lower" | "title" | "capitalize" | "casefold" | "swapcase" | "strip"
+        | "lstrip" | "rstrip" => {
+            // Case transforms take no args; the whitespace strippers take
+            // an optional set of characters. Both shapes accept a single
+            // optional string argument harmlessly.
+            opt_last(state, vec![], s.clone(), s.clone())
         }
-        // `sep.join(iterable)` — the iterable's element type is
-        // unconstrained (CPython requires strings at runtime, but we keep
-        // it permissive to avoid false positives on generators/maps).
+        // `s.split(sep?, maxsplit?)` → list[str].
+        "split" | "rsplit" => {
+            let p1 = state.fresh_pvar();
+            let p2 = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![
+                    FuncParam::optional(p1, s.clone()),
+                    FuncParam::optional(p2, n.clone()),
+                ],
+                Type::array(s.clone()),
+            )
+        }
+        "splitlines" => Type::simple_func(vec![], Type::array(s.clone())),
+        // `sep.join(iterable)` — element type unconstrained (permissive to
+        // avoid false positives on generators / maps).
         "join" => {
             let item = state.fresh_type_var();
             Type::simple_func(vec![Type::array(item)], s.clone())
         }
-        "splitlines" => Type::simple_func(vec![], Type::array(s.clone())),
-        // `format`/`format_map` are variadic / dynamic; accept any call.
-        "format" => {
+        "replace" => opt_last(state, vec![s.clone(), s.clone()], n.clone(), s.clone()),
+        "startswith" | "endswith" => Type::simple_func(vec![s.clone()], b.clone()),
+        "find" | "rfind" | "index" | "rindex" => {
+            opt_last(state, vec![s.clone()], n.clone(), n.clone())
+        }
+        "count" => Type::simple_func(vec![s.clone()], n.clone()),
+        "zfill" => Type::simple_func(vec![n.clone()], s.clone()),
+        "ljust" | "rjust" | "center" => opt_last(state, vec![n.clone()], s.clone(), s.clone()),
+        "expandtabs" => opt_last(state, vec![], n.clone(), s.clone()),
+        "removeprefix" | "removesuffix" => Type::simple_func(vec![s.clone()], s.clone()),
+        "encode" => opt_last(state, vec![], s.clone(), s.clone()),
+        // `format` / `format_map` are variadic / dynamic; accept any call.
+        "format" | "format_map" => {
             let pvar = state.fresh_pvar();
             Type::simple_func_with_params(
                 vec![FuncParam::optional(pvar, state.fresh_type_var())],
                 s.clone(),
             )
         }
-        "find" | "rfind" => optional_last(state, vec![s.clone()], n.clone(), n.clone()),
-        "count" => Type::simple_func(vec![s.clone()], n.clone()),
-        "zfill" => Type::simple_func(vec![n.clone()], s.clone()),
-        "isdigit" | "isalpha" | "isalnum" | "isspace" | "isupper" | "islower"
-        | "isnumeric" | "isidentifier" => Type::simple_func(vec![], b.clone()),
-        "encode" => {
-            let pvar = state.fresh_pvar();
-            Type::simple_func_with_params(vec![FuncParam::optional(pvar, s.clone())], s.clone())
+        "isdigit" | "isalpha" | "isalnum" | "isspace" | "isupper" | "islower" | "istitle"
+        | "isnumeric" | "isdecimal" | "isidentifier" | "isprintable" => {
+            Type::simple_func(vec![], b.clone())
         }
-        "removeprefix" | "removesuffix" => Type::simple_func(vec![s.clone()], s.clone()),
         _ => {
             let _ = (state, n, s, b);
             return None;
@@ -341,20 +378,53 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
             Type::simple_func(vec![cb, u_var.clone()], u_var)
         }
         "toString" => Type::simple_func(vec![], s.clone()),
-        // Python `list` mutators / queries. Shared with the JS surface
-        // above; a program is single-language, so the extra names are
-        // harmless to the other frontends. In-place mutators return
-        // `None` (Undefined), matching CPython.
-        "append" => Type::simple_func(vec![elem.clone()], u.clone()),
-        "extend" => Type::simple_func(vec![arr.clone()], u.clone()),
-        "insert" => Type::simple_func(vec![n.clone(), elem.clone()], u.clone()),
-        "remove" => Type::simple_func(vec![elem.clone()], u.clone()),
-        "index" => Type::simple_func(vec![elem.clone()], n.clone()),
-        "count" => Type::simple_func(vec![elem.clone()], n.clone()),
-        "clear" => Type::simple_func(vec![], u.clone()),
-        "copy" => Type::simple_func(vec![], arr.clone()),
         _ => {
             let _ = (n, s, b, u, arr);
+            return None;
+        }
+    })
+}
+
+/// Look up a Python `list` method by name for a list whose element type
+/// is `elem`. Separate from the JavaScript [`array_method_type`] surface
+/// (issue #67); inference picks the table by `Program::language`. In-place
+/// mutators return `None` (modelled as the language unit `Null`).
+pub fn python_list_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
+    use crate::types::FuncParam;
+    let n = Type::Number;
+    let nil = Type::Null;
+    let arr = Type::array(elem.clone());
+    Some(match method {
+        "append" => Type::simple_func(vec![elem.clone()], nil.clone()),
+        "extend" => Type::simple_func(vec![arr.clone()], nil.clone()),
+        "insert" => Type::simple_func(vec![n.clone(), elem.clone()], nil.clone()),
+        "remove" => Type::simple_func(vec![elem.clone()], nil.clone()),
+        // `pop(index?)` returns the removed element.
+        "pop" => {
+            let pvar = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::optional(pvar, n.clone())],
+                elem.clone(),
+            )
+        }
+        // `index(x, start?, stop?)`.
+        "index" => {
+            let p1 = state.fresh_pvar();
+            let p2 = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![
+                    FuncParam::required(elem.clone()),
+                    FuncParam::optional(p1, n.clone()),
+                    FuncParam::optional(p2, n.clone()),
+                ],
+                n.clone(),
+            )
+        }
+        "count" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "sort" | "reverse" | "clear" => Type::simple_func(vec![], nil.clone()),
+        "copy" => Type::simple_func(vec![], arr.clone()),
+        _ => {
+            let _ = (state, n, nil, arr);
             return None;
         }
     })

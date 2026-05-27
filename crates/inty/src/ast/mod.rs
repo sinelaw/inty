@@ -204,11 +204,32 @@ pub struct Program {
     /// (or programs) with no nominal classes. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brands: Vec<String>,
-    /// Whether this language's "no value" / unit type is *null* (Python
-    /// `None`, Lua `nil` — `Type::Null`) rather than *undefined* (JS —
-    /// `Type::Undefined`). Inference uses it as the implicit return of a
-    /// function that falls off the end. Defaults to `false` (JS).
-    pub unit_is_null: bool,
+    /// The surface language this program was parsed from. Inference uses it
+    /// for the few frontend-specific decisions that can't be read off the
+    /// structural AST — the unit / "no value" type (JS `undefined` vs
+    /// Python `None` / Lua `nil`) and which primitive-method surface
+    /// (`str`/`list` vs `String`/`Array`) a value carries.
+    pub language: SourceLanguage,
+}
+
+/// The surface language a [`Program`] was parsed from. Kept in `ast` (not
+/// `frontends`) so the AST has no upward dependency; `frontends::Language`
+/// maps onto it. Used by inference for the handful of language-specific
+/// rules — unit type and primitive-method surface — that the structural
+/// types alone don't capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceLanguage {
+    JavaScript,
+    Python,
+    Lua,
+}
+
+impl SourceLanguage {
+    /// Whether this language's unit / "no value" type is null (Python
+    /// `None`, Lua `nil`) rather than `undefined` (JS).
+    pub fn unit_is_null(self) -> bool {
+        matches!(self, SourceLanguage::Python | SourceLanguage::Lua)
+    }
 }
 
 /// Literal values

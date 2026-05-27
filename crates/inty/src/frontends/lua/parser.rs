@@ -120,7 +120,7 @@ impl Parser {
             span: Span::new(start, end),
             type_aliases: Vec::new(),
             class_brands: Vec::new(),
-            unit_is_null: true,
+            language: crate::ast::SourceLanguage::Lua,
         })
     }
 
