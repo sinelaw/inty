@@ -233,6 +233,22 @@ pub struct InferState {
     /// [`InferState::lower_type_ast_in_env`] for the duration of one
     /// annotation; `None` elsewhere (refs then fall back to opaque).
     pub(in crate::infer) annotation_env: Option<crate::infer::TypeEnv>,
+
+    /// Stack of `return`-value accumulators, one frame per function body
+    /// currently being inferred (innermost on top). Each `return <e>`
+    /// pushes `e`'s type onto the top frame; the function's return type is
+    /// then the join of its collected returns plus `Undefined` when control
+    /// can fall off the end (a Python procedure / JS function with no
+    /// trailing `return` yields `None`/`undefined`). See
+    /// `infer_function_with_this`.
+    pub(in crate::infer) return_value_stack: Vec<Vec<Type>>,
+
+    /// The type a function returns when it falls off the end (no explicit
+    /// `return`): JS `undefined` (`Type::Undefined`) by default, or
+    /// `Type::Null` for languages whose unit value is null (Python `None`,
+    /// Lua `nil`). Set from `Program::unit_is_null` at the start of
+    /// `infer_program_with_env`.
+    pub(in crate::infer) unit_type: Type,
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -295,6 +311,8 @@ impl InferState {
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
             annotation_env: None,
+            return_value_stack: Vec::new(),
+            unit_type: Type::Undefined,
         }
     }
 

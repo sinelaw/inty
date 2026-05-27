@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::span::Span;
-use crate::ast::{ExportDecl, Expr, Param, Stmt, TypeAnnotation};
+use crate::ast::{ExportDecl, Expr, Literal, Param, Stmt, TypeAnnotation};
 use crate::ast::free_idents::free_identifiers_in_function_body;
 use crate::types::{Type, TypePred, TypeScheme};
 
@@ -68,6 +68,52 @@ pub(in crate::infer) fn function_decl_parts<'a>(
 
 impl InferState {
     /// Infer the type of a function expression.
+    /// Infer a function-like body in its own `return`-collection frame and
+    /// derive the type it returns: the join of every explicit `return`'s
+    /// value, plus `Undefined` when control can fall off the end. A body
+    /// that diverges with no `return` (e.g. `while True: …`) yields
+    /// `never`, which subsumes into any declared type. When `widen`, each
+    /// returned literal is widened to its base (the unannotated-inference
+    /// rule) *before* joining, so `return 0; return n - 1;` doesn't try to
+    /// unify `Lit(0)` with `Number`.
+    ///
+    /// Used for plain functions, object/class methods, and getters — any
+    /// body whose `return`s must not leak into an enclosing function frame.
+    pub(in crate::infer) fn infer_body_return_type(
+        &mut self,
+        body_env: &TypeEnv,
+        body: &Stmt,
+        widen: bool,
+        span: Span,
+    ) -> InferResult<Type> {
+        self.return_value_stack.push(Vec::new());
+        let body_result = self.infer_stmt(body_env, body);
+        let returns = self
+            .return_value_stack
+            .pop()
+            .expect("return frame balanced");
+        body_result?;
+
+        let mut parts = returns;
+        if !definitely_returns(body) {
+            parts.push(self.unit_type.clone());
+        }
+        if widen {
+            for p in parts.iter_mut() {
+                *p = p.widen_fresh_literals();
+            }
+        }
+        Ok(if parts.is_empty() {
+            Type::never()
+        } else {
+            let mut acc = parts[0].clone();
+            for t in &parts[1..] {
+                acc = self.join(span, &acc, t);
+            }
+            acc
+        })
+    }
+
     pub(in crate::infer) fn infer_function(
         &mut self,
         env: &TypeEnv,
@@ -217,19 +263,23 @@ impl InferState {
             body_env = body_env.extend(fn_name.to_string(), TypeScheme::mono(func_type.clone()));
         }
 
-        let (body_type, _) = self.infer_stmt(&body_env, body)?;
+        // Infer the body and derive its return type from the explicit
+        // `return`s plus a fall-through `Undefined`. The body's
+        // *completion* value is intentionally not used as the implicit
+        // return: a function that falls off the end returns
+        // `None`/`undefined`, regardless of any trailing expression
+        // statement's type.
+        let annotated = type_annotation.is_some() || return_type_ast.is_some();
+        let inferred_ret = self.infer_body_return_type(&body_env, body, !annotated, span)?;
 
-        // Without an annotation pinning the return type, the inferred
-        // return is a fresh-literal widening site: `function f() {
-        // return "hi"; }` has return type `String`, not `Lit("hi")`,
-        // matching the behaviour at `var f = "hi"`. With an annotation
-        // the declared return governs and the body merely subsumes
-        // into it.
-        if type_annotation.is_some() || return_type_ast.is_some() {
-            self.subsume(span, &body_type, &ret_type)?;
+        // Without an annotation the return is a fresh-literal widening site
+        // (`function f() { return "hi"; }` returns `String`, not
+        // `Lit("hi")`); `infer_body_return_type` widens for us. With an
+        // annotation the declared return governs and the body subsumes.
+        if annotated {
+            self.subsume(span, &inferred_ret, &ret_type)?;
         } else {
-            let widened = body_type.widen_fresh_literals();
-            self.unify(span, &ret_type, &widened)?;
+            self.unify(span, &ret_type, &inferred_ret)?;
         }
 
         Ok(self.zonk(&func_type))
@@ -1033,6 +1083,58 @@ fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
         }
     }
     result
+}
+
+/// Conservative "does control definitely leave via `return`/`throw`
+/// rather than fall off the end" analysis, used to decide whether a
+/// function's inferred return type must also include `Undefined` (the
+/// implicit `None`/`undefined` of a fall-through). Erring toward `false`
+/// is sound: it only adds `Undefined`, matching the runtime fall-through.
+fn definitely_returns(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return { .. } | Stmt::Throw { .. } => true,
+        Stmt::Block { body, .. } => body.last().is_some_and(definitely_returns),
+        Stmt::Labeled { body, .. } => definitely_returns(body),
+        // Both arms must return for the `if` to be exhaustive; a missing
+        // `else` can fall through.
+        Stmt::If {
+            consequent,
+            alternate: Some(alt),
+            ..
+        } => definitely_returns(consequent) && definitely_returns(alt),
+        // `try` completes abnormally only if every path that can reach the
+        // end returns: the body (and, if present, the handler). A
+        // `finally` that returns dominates everything.
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            if let Some(fin) = finalizer {
+                if definitely_returns(fin) {
+                    return true;
+                }
+            }
+            definitely_returns(block)
+                && handler
+                    .as_ref()
+                    .is_some_and(|h| definitely_returns(&h.body))
+        }
+        // `while True:` (with no `break`) never falls through. We don't
+        // scan for `break`; treating it as terminating is the common
+        // infinite-loop / loop-until-return idiom.
+        Stmt::While { test, .. } => {
+            matches!(
+                test,
+                Expr::Lit {
+                    value: Literal::Boolean(true),
+                    ..
+                }
+            )
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

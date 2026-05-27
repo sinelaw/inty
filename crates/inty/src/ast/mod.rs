@@ -204,6 +204,11 @@ pub struct Program {
     /// (or programs) with no nominal classes. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brands: Vec<String>,
+    /// Whether this language's "no value" / unit type is *null* (Python
+    /// `None`, Lua `nil` — `Type::Null`) rather than *undefined* (JS —
+    /// `Type::Undefined`). Inference uses it as the implicit return of a
+    /// function that falls off the end. Defaults to `false` (JS).
+    pub unit_is_null: bool,
 }
 
 /// Literal values

@@ -42,6 +42,7 @@ impl<'a> Decorator<'a> {
             span: program.span,
             type_aliases: program.type_aliases.clone(),
             class_brands: program.class_brands.clone(),
+            unit_is_null: program.unit_is_null,
         }
     }
 

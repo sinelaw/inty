@@ -25,6 +25,7 @@ fn prepend_stmt(program: &Program, extra: Stmt) -> Program {
         span: span(),
         type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
     }
 }
 
@@ -80,6 +81,7 @@ pub fn t_intersperse_empty(p: &Program) -> (Program, Comparison) {
             span: span(),
             type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
         },
         Comparison::identity(),
     )
@@ -158,6 +160,7 @@ pub fn t_swap_first_independent_pair(p: &Program) -> Option<(Program, Comparison
                     span: span(),
                     type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
                 },
                 Comparison::identity(),
             ));
@@ -271,6 +274,7 @@ pub fn t_wrap_expr_statements(p: &Program) -> (Program, Comparison) {
             span: span(),
             type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
         },
         Comparison::identity(),
     )
@@ -493,6 +497,7 @@ pub fn t_move_data_decl_after_first_user(p: &Program) -> Option<(Program, Compar
                     span: span(),
                     type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
                 },
                 Comparison::identity(),
             ));

@@ -162,6 +162,7 @@ impl Parser {
             span: Span::new(start, self.prev_span().end),
             type_aliases: std::mem::take(&mut self.type_aliases),
             class_brands: std::mem::take(&mut self.class_names),
+            unit_is_null: true,
         })
     }
 

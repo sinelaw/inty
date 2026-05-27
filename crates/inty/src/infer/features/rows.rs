@@ -244,20 +244,21 @@ impl InferState {
                     props.insert(prop_name, FieldEntry::pre(method_type));
                 }
 
-                PropDef::Getter { key, body, span: _ } => {
+                PropDef::Getter { key, body, span } => {
                     let prop_name = self.prop_key_to_name(key);
                     // Bind `this` in the getter body to the shared
                     // instance row so `this.foo` references see the
                     // surrounding object's fields (same trick as
                     // methods, but the getter's value type is just
                     // the body's return type — there's no callable
-                    // wrapper).
+                    // wrapper). Inferred through a `return`-collection
+                    // frame so the getter's `return`s don't leak into an
+                    // enclosing function's return type.
                     let getter_env = env.extend(
                         "this".to_string(),
                         TypeScheme::mono(shared_this.clone()),
                     );
-                    let (body_type, _) = self.infer_stmt(&getter_env, body)?;
-                    let ret_type = body_type.widen_fresh_literals();
+                    let ret_type = self.infer_body_return_type(&getter_env, body, true, *span)?;
                     props.insert(prop_name, FieldEntry::pre(ret_type));
                 }
 
@@ -265,13 +266,15 @@ impl InferState {
                     key,
                     param,
                     body,
-                    span: _,
+                    span,
                 } => {
                     let prop_name = self.prop_key_to_name(key);
-                    // Setter: param type is fresh, body returns undefined
+                    // Setter: param type is fresh, body returns undefined.
+                    // Inferred through a frame (return value discarded) so
+                    // any `return` doesn't leak upward.
                     let param_type = self.fresh_type_var();
                     let setter_env = env.extend(param.clone(), TypeScheme::mono(param_type));
-                    self.infer_stmt(&setter_env, body)?;
+                    let _ = self.infer_body_return_type(&setter_env, body, true, *span)?;
                     // For simplicity, we use the parameter type as the property type
                     // In a full implementation, we'd track getter/setter separately
                     props.insert(prop_name, FieldEntry::pre(self.fresh_type_var()));
