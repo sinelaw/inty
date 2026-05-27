@@ -16,8 +16,12 @@ use inty::stdlib::initial_env_with_stdlib;
 /// parse and type errors into a single `Err`.
 fn check(lang: Language, src: &str) -> Result<(), String> {
     let program = parse(lang, src).map_err(|e| format!("parse error: {:?}", e))?;
-    let (env, mut state) =
+    let (mut env, mut state) =
         initial_env_with_stdlib().map_err(|e| format!("stdlib error: {:?}", e))?;
+    if lang == Language::Python {
+        env = inty::frontends::python::prelude::load(&mut state, env)
+            .map_err(|e| format!("prelude error: {:?}", e))?;
+    }
     state
         .infer_program_with_env(&env, &program)
         .map_err(|e| format!("type error: {:?}", e))?;
