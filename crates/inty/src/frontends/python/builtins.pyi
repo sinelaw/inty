@@ -10,6 +10,9 @@
 # This file is loaded into every Python program's value namespace. It is
 # NOT typeshed; see issue #55.
 
+T = TypeVar("T")
+U = TypeVar("U")
+
 # --- precisely-modellable free functions ---
 # (`object` parameters lower to a fresh variable, so these accept any
 # argument while still constraining their result type.)
@@ -30,22 +33,34 @@ def input(prompt: str = ...) -> str: ...
 def range(start: int, stop: int = ..., step: int = ...) -> list[int]: ...
 def open(path: str) -> object: ...
 
+# --- generic sequence builtins ---
+# Modelled precisely with type variables, for the forms with a fixed
+# arity. The input is `list[T]` (inty's array); these consume the result
+# by iterating, so returning a list rather than a lazy iterator is
+# faithful. `filter`'s predicate is typed `object` (not a strict
+# `Callable`) so the `filter(None, xs)` idiom still type-checks while the
+# result keeps the element type.
+
+def sorted(xs: list[T]) -> list[T]: ...
+def reversed(xs: list[T]) -> list[T]: ...
+def any(xs: list[T]) -> bool: ...
+def all(xs: list[T]) -> bool: ...
+def sum(xs: list[float], start: float = ...) -> float: ...
+def filter(f: object, xs: list[T]) -> list[T]: ...
+
 # --- variadic / heavily-overloaded builtins ---
-# inty has no variadic arity, so these are exposed opaquely (accept any
-# call, produce a fresh result) rather than wrongly constrained.
+# inty has no variadic arity or tuple type, so these are exposed opaquely
+# (accept any call, produce a fresh result) rather than wrongly
+# constrained: `map` and `min`/`max` are variadic (`map(f, *iters)`,
+# `min(a, b, …)`); `zip`/`enumerate` yield tuples; the rest are
+# iterator-protocol / constructors.
 
 print: object
+map: object
 min: object
 max: object
-sum: object
-sorted: object
-reversed: object
 enumerate: object
 zip: object
-map: object
-filter: object
-any: object
-all: object
 iter: object
 next: object
 list: object
