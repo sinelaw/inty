@@ -83,6 +83,15 @@ fn resolve_inner(
             })
         };
 
+        // Built-in modules (`typing`, …) resolve from a baked-in stub
+        // before the filesystem is consulted. Their namespace uses the
+        // same `Type::Module` representation as any other import.
+        if let Some(stub) = builtin_python_module(source) {
+            let exports = super::pyi::read_stub(state, stub)?.exports;
+            env = bind_module_exports(env, specifiers, source, &exports, &module_err)?;
+            continue;
+        }
+
         if specifiers.is_empty() {
             // `from m import *` — merge all of m's exports.
             let path = resolve_module(source, base_dir, search_paths)
@@ -115,7 +124,10 @@ fn resolve_inner(
                         // module file, not a name exported by `pkg`.
                         let sub_exports =
                             load_module(state, &env, &sub, search_paths, visiting, cache)?;
-                        env = env.extend(local.clone(), namespace_scheme(&sub_exports));
+                        env = env.extend(
+                            local.clone(),
+                            namespace_scheme(&sub.to_string_lossy(), &sub_exports),
+                        );
                     } else {
                         return Err(module_err(format!(
                             "module {:?} has no export named {:?}",
@@ -125,11 +137,14 @@ fn resolve_inner(
                 }
                 ImportSpecifier::Namespace { local, .. } => {
                     // `import m` / `import a.b.c as m` — bind the module
-                    // namespace as a row of its exports.
+                    // namespace as a `Type::Module` of its exports.
                     let path = resolve_module(source, base_dir, search_paths)
                         .ok_or_else(|| module_err(format!("cannot resolve import {:?}", source)))?;
                     let exports = load_module(state, &env, &path, search_paths, visiting, cache)?;
-                    env = env.extend(local.clone(), namespace_scheme(&exports));
+                    env = env.extend(
+                        local.clone(),
+                        namespace_scheme(&path.to_string_lossy(), &exports),
+                    );
                 }
                 ImportSpecifier::Default { local, span } => {
                     // Python has no default imports; treat defensively.
@@ -148,14 +163,68 @@ fn resolve_inner(
 /// `{name: T, …}` so `ns.member` reads resolve. Polymorphism of exported
 /// functions is flattened to their body type (sufficient for member
 /// access in this slice).
-fn namespace_scheme(exports: &Exports) -> TypeScheme {
-    let row = Type::object(
+/// Baked-in stub source for a built-in module, if `spec` names one.
+/// These resolve without a filesystem lookup. The registry is the shared
+/// seam for language-provided modules (Python `typing` today; stdlib
+/// stubs and the other frontends' built-ins slot in the same way).
+fn builtin_python_module(spec: &str) -> Option<&'static str> {
+    match spec {
+        "typing" => Some(include_str!("typing.pyi")),
+        _ => None,
+    }
+}
+
+/// Bind a module's `exports` into `env` per the import `specifiers`,
+/// using the one `Type::Module` namespace representation. Shared by the
+/// built-in-module path (the filesystem path inlines the same logic plus
+/// submodule fallback).
+fn bind_module_exports(
+    mut env: TypeEnv,
+    specifiers: &[ImportSpecifier],
+    source: &str,
+    exports: &Exports,
+    module_err: &impl Fn(String) -> IntyError,
+) -> Result<TypeEnv, IntyError> {
+    if specifiers.is_empty() {
+        // `from m import *`
+        for (name, scheme) in exports {
+            if !name.starts_with('_') {
+                env = env.extend(name.clone(), scheme.clone());
+            }
+        }
+        return Ok(env);
+    }
+    for spec in specifiers {
+        match spec {
+            ImportSpecifier::Named { imported, local, .. } => {
+                let (_, scheme) = exports
+                    .iter()
+                    .find(|(n, _)| n == imported)
+                    .ok_or_else(|| {
+                        module_err(format!("module {:?} has no export named {:?}", source, imported))
+                    })?;
+                env = env.extend(local.clone(), scheme.clone());
+            }
+            ImportSpecifier::Namespace { local, .. } => {
+                env = env.extend(local.clone(), namespace_scheme(source, exports));
+            }
+            ImportSpecifier::Default { local, .. } => {
+                return Err(module_err(format!("unexpected default import {:?}", local)));
+            }
+        }
+    }
+    Ok(env)
+}
+
+fn namespace_scheme(source: &str, exports: &Exports) -> TypeScheme {
+    let module = crate::types::ModuleType::from_exports(
+        source,
         exports
             .iter()
             .filter(|(n, _)| !n.starts_with('_'))
-            .map(|(n, s)| (n.clone(), s.body.ty.clone())),
+            .map(|(n, s)| (n.clone(), s.clone())),
     );
-    TypeScheme::mono(row)
+    TypeScheme::mono(Type::Module(module))
 }
 
 /// Load a module file's public exports, dispatching on extension. `.py`
@@ -281,7 +350,10 @@ fn resolve_reexport(
                     resolve_submodule(&re.source, imported, base_dir, search_paths)
                 {
                     if let Ok(sub_exports) = load_module(state, env, &sub, search_paths, visiting, cache) {
-                        exports.push((local.clone(), namespace_scheme(&sub_exports)));
+                        exports.push((
+                            local.clone(),
+                            namespace_scheme(&sub.to_string_lossy(), &sub_exports),
+                        ));
                     }
                 }
             }

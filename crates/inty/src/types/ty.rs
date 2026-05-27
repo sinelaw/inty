@@ -518,6 +518,22 @@ pub struct ModuleType {
     pub exports: BTreeMap<String, TypeScheme>,
 }
 
+impl ModuleType {
+    /// Build a module namespace from `source` (its identity) and an
+    /// iterator of `(export-name, scheme)` pairs. The single shared
+    /// constructor used by every frontend's import resolution, so a module
+    /// namespace has one representation across JavaScript / Python / Lua.
+    pub fn from_exports(
+        source: impl Into<String>,
+        exports: impl IntoIterator<Item = (String, TypeScheme)>,
+    ) -> Self {
+        ModuleType {
+            source: source.into(),
+            exports: exports.into_iter().collect(),
+        }
+    }
+}
+
 impl Type {
     // === Constructors ===
 

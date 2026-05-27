@@ -532,3 +532,33 @@ fn imported_class_resolves_as_type_annotation() {
     );
     assert!(bad.is_err(), "String where animals.Dog is annotated should fail");
 }
+
+#[test]
+fn typing_module_is_built_in() {
+    // `typing` resolves with no stub files on the search path — it's a
+    // built-in module. Its constructors work as types (bare and
+    // qualified) and still enforce element types.
+    let dir = tmp_dir();
+    let ok = check(
+        "from typing import List, Optional\n\
+         def f(xs: List[int]) -> Optional[int]:\n    return None\n\
+         f([1, 2])\n",
+        &dir,
+        &[],
+    );
+    assert!(ok.is_ok(), "typing imports should resolve: {:?}", ok);
+
+    let ok2 = check(
+        "import typing\ndef g(xs: typing.List[int]):\n    return xs[0] + 1\ng([1])\n",
+        &dir,
+        &[],
+    );
+    assert!(ok2.is_ok(), "qualified typing.List should resolve: {:?}", ok2);
+
+    let bad = check(
+        "from typing import List\ndef h(xs: List[int]):\n    return xs[0]\nr = h([1]) + \"s\"\n",
+        &dir,
+        &[],
+    );
+    assert!(bad.is_err(), "List[int] element type should be enforced");
+}
