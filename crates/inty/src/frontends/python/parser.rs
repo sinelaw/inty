@@ -191,6 +191,16 @@ impl Parser {
         }))
     }
 
+    /// A suite's statements, unwrapped from the `Block` that [`Self::suite`]
+    /// produces. Used where a compound statement wants to splice a suite's
+    /// declarations into its own scope rather than nest a fresh one.
+    fn suite_body(&mut self) -> Result<Vec<Stmt>> {
+        match *self.suite()? {
+            Stmt::Block { body, .. } => Ok(body),
+            other => Ok(vec![other]),
+        }
+    }
+
     // ---- statements ----
 
     fn statement(&mut self) -> Result<Vec<Stmt>> {
@@ -203,6 +213,7 @@ impl Parser {
             Tok::If => Ok(vec![self.if_stmt()?]),
             Tok::While => Ok(vec![self.while_stmt()?]),
             Tok::For => Ok(vec![self.for_stmt()?]),
+            Tok::Try => Ok(vec![self.try_stmt()?]),
             Tok::Reserved(k) => Err(self.unsupported(&format!(
                 "'{}' is not supported in the Python subset",
                 k
@@ -269,6 +280,36 @@ impl Parser {
                     }
                 };
                 Ok(vec![Stmt::Return {
+                    argument,
+                    span: Span::new(start, self.prev_span().end),
+                }])
+            }
+            Tok::Raise => {
+                let start = self.cur_span().start;
+                self.advance();
+                // `raise EXPR` evaluates the exception (so a malformed
+                // expression is still type-checked); bare `raise`
+                // re-raises and carries no operand. Either way the
+                // statement diverges, modelled by `Stmt::Throw`.
+                let argument = if self.check(&Tok::Newline)
+                    || self.check(&Tok::Semi)
+                    || self.at_eof()
+                {
+                    let span = Span::new(start, self.prev_span().end);
+                    Expr::Lit {
+                        value: Literal::Null,
+                        span,
+                    }
+                } else {
+                    let e = self.expr()?;
+                    // `raise E from cause` — evaluate and discard the cause.
+                    if self.check(&Tok::From) {
+                        self.advance();
+                        let _ = self.expr()?;
+                    }
+                    e
+                };
+                Ok(vec![Stmt::Throw {
                     argument,
                     span: Span::new(start, self.prev_span().end),
                 }])
@@ -1190,6 +1231,104 @@ impl Parser {
             test,
             body,
             span: Span::new(start, self.prev_span().end),
+        })
+    }
+
+    /// `try: SUITE (except [E [as e]]: SUITE)* [else: SUITE] [finally: SUITE]`.
+    ///
+    /// Lowered onto the shared `Stmt::Try { block, handler, finalizer }`:
+    ///   - `block` is the try-suite with the `else`-suite appended (the
+    ///     `else` runs only when the body completes without raising, so for
+    ///     type-checking it joins the no-exception path).
+    ///   - `handler`, when there is at least one `except`, is a single
+    ///     `CatchClause` whose body runs every `except`-suite; each `as e`
+    ///     name is bound to an opaque (fresh) variable, since the exception
+    ///     object's type is unmodelled.
+    ///   - `finalizer` is the `finally`-suite.
+    fn try_stmt(&mut self) -> Result<Stmt> {
+        let start = self.cur_span().start;
+        self.advance(); // try
+        self.expect(&Tok::Colon, "':'")?;
+        // Flatten the suite into the surrounding statement list so its
+        // declarations thread through `var` (function-scope) hoisting
+        // rather than being trapped in a nested `Block`'s scope.
+        let mut block_body = self.suite_body()?;
+
+        let mut handler_body: Vec<Stmt> = Vec::new();
+        let mut saw_except = false;
+        while self.check(&Tok::Except) {
+            saw_except = true;
+            self.advance(); // except
+            // Optional exception type, then optional `as NAME`.
+            let mut bound: Option<String> = None;
+            if !self.check(&Tok::Colon) {
+                let _ = self.expr()?; // the exception class(es)
+                if self.eat(&Tok::As) {
+                    bound = Some(self.expect_name("exception variable")?);
+                }
+            }
+            self.expect(&Tok::Colon, "':'")?;
+            let body = self.suite_body()?;
+            // Bind `as NAME` opaquely for this handler's body.
+            if let Some(name) = bound {
+                let span = Span::new(start, self.prev_span().end);
+                handler_body.push(Stmt::Var {
+                    kind: VarKind::Var,
+                    declarations: vec![VarDeclarator {
+                        name,
+                        init: None,
+                        type_annotation: None,
+                        type_ast: None,
+                        kind: VarKind::Var,
+                        span,
+                    }],
+                    span,
+                });
+            }
+            handler_body.extend(body);
+        }
+
+        // Optional `else:` — append to the try-block (no-exception path).
+        if self.check(&Tok::Else) {
+            self.advance();
+            self.expect(&Tok::Colon, "':'")?;
+            block_body.extend(self.suite_body()?);
+        }
+
+        let finalizer = if self.check(&Tok::Finally) {
+            self.advance();
+            self.expect(&Tok::Colon, "':'")?;
+            Some(self.suite()?)
+        } else {
+            None
+        };
+
+        if !saw_except && finalizer.is_none() {
+            return Err(self.unexpected("'except' or 'finally' after 'try'"));
+        }
+
+        let span = Span::new(start, self.prev_span().end);
+        let handler = if saw_except {
+            Some(CatchClause {
+                param: self.fresh_temp(),
+                body: Box::new(Stmt::Block {
+                    body: handler_body,
+                    span,
+                }),
+                span,
+            })
+        } else {
+            None
+        };
+
+        Ok(Stmt::Try {
+            block: Box::new(Stmt::Block {
+                body: block_body,
+                span,
+            }),
+            handler,
+            finalizer,
+            span,
         })
     }
 

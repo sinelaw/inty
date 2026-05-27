@@ -956,3 +956,74 @@ fn ternary_typechecks() {
 fn mixed_plus_rejected() {
     assert!(!check("x = 1 + \"oops\"").is_empty());
 }
+
+// ---- try / except / finally / raise ----
+
+#[test]
+fn try_lowers_to_try_stmt() {
+    let stmts = parse("try:\n    x = 1\nexcept Exception as e:\n    x = 2\nfinally:\n    x = 3\n");
+    match &stmts[0] {
+        Stmt::Try { handler, finalizer, .. } => {
+            assert!(handler.is_some());
+            assert!(finalizer.is_some());
+        }
+        other => panic!("expected try, got {:?}", other),
+    }
+}
+
+#[test]
+fn try_except_finally_typechecks() {
+    // try-body bindings stay in scope for the handler (reassignment) and
+    // for the code after the try.
+    let src = "def f():\n\
+               \x20   try:\n\
+               \x20       x = 5\n\
+               \x20   except Exception as e:\n\
+               \x20       x = 0\n\
+               \x20   finally:\n\
+               \x20       y = 1\n\
+               \x20   return x\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn bare_raise_and_raise_expr_typecheck() {
+    // The exception type is unmodelled; `raise EXPR` just evaluates EXPR.
+    assert!(check("def f():\n    raise\n").is_empty());
+    assert!(check("def f(e):\n    raise e\n").is_empty());
+    assert!(check("def f(e, cause):\n    raise e from cause\n").is_empty());
+}
+
+#[test]
+fn raise_diverges_so_branch_type_is_unconstrained() {
+    // A function whose only non-raise path returns a number still checks:
+    // the `raise` branch contributes no conflicting return type.
+    let src = "def f(x, err):\n\
+               \x20   if x:\n\
+               \x20       return 1\n\
+               \x20   raise err\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn except_without_binding_typechecks() {
+    let src = "try:\n    x = 1\nexcept:\n    x = 2\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn multiple_except_clauses_each_bind_their_name() {
+    let src = "try:\n\
+               \x20   x = 1\n\
+               except ValueError as e:\n\
+               \x20   y = e\n\
+               except KeyError as k:\n\
+               \x20   z = k\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn try_else_branch_typechecks() {
+    let src = "try:\n    x = 1\nexcept Exception:\n    x = 2\nelse:\n    y = x\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
