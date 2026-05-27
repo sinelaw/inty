@@ -134,6 +134,11 @@ pub fn names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
                 names_in_expr(e, out);
             }
         }
+        Expr::Tuple { elements, .. } => {
+            for e in elements {
+                names_in_expr(e, out);
+            }
+        }
         Expr::Object { properties, .. } => {
             for p in properties {
                 match p {

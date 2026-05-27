@@ -49,6 +49,17 @@ fn write_expr(w: &mut impl Write, expr: &Expr, needs_parens: bool) -> fmt::Resul
             write!(w, "]")
         }
 
+        Expr::Tuple { elements, .. } => {
+            write!(w, "(")?;
+            for (i, elem) in elements.iter().enumerate() {
+                if i > 0 {
+                    write!(w, ", ")?;
+                }
+                write_expr(w, elem, false)?;
+            }
+            write!(w, ")")
+        }
+
         Expr::Object { properties, .. } => {
             write!(w, "{{")?;
             for (i, prop) in properties.iter().enumerate() {

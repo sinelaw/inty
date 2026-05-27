@@ -144,6 +144,12 @@ impl InferState {
                 }
             }
             TypeAst::Array(elem) => Type::array(self.lower_type_ast_scoped(elem, scope)),
+            TypeAst::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.lower_type_ast_scoped(e, scope))
+                    .collect(),
+            ),
             TypeAst::Map(value) => Type::map(self.lower_type_ast_scoped(value, scope)),
             TypeAst::Union(members) => {
                 let lowered: Vec<Type> = members

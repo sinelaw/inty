@@ -475,6 +475,15 @@ pub enum Type {
     /// inner `T`; an `async function` returning `T` has type `Promise<T>`.
     Promise(Box<Type>),
 
+    /// Tuple (product) type: `(T0, T1, …)`. Fixed arity, heterogeneous.
+    /// Unifies by structural congruence (same length, components unified
+    /// pairwise); distinct arities are distinct types — there is no width
+    /// subtyping. Element access is by *literal* index (resolved in
+    /// inference), not via the homogeneous `Indexable` class. Note
+    /// `tuple[T, ...]` (homogeneous, variadic) maps to `Array<T>`, not to
+    /// this constructor.
+    Tuple(Vec<Type>),
+
     /// Named recursive type reference: μα.T
     /// The TypeId refers to a type definition, and the Vec<Type> are type arguments.
     Named(TypeId, Vec<Type>),
@@ -682,6 +691,11 @@ impl Type {
         Type::Array(Box::new(elem))
     }
 
+    /// Create a tuple (product) type from its component types.
+    pub fn tuple(elems: Vec<Type>) -> Self {
+        Type::Tuple(elems)
+    }
+
     /// Create a promise type.
     pub fn promise(inner: Type) -> Self {
         Type::Promise(Box::new(inner))
@@ -766,6 +780,9 @@ impl Type {
             Type::Array(elem) => Type::Array(Box::new(elem.widen_fresh_literals())),
             Type::Map(v) => Type::Map(Box::new(v.widen_fresh_literals())),
             Type::Promise(inner) => Type::Promise(Box::new(inner.widen_fresh_literals())),
+            Type::Tuple(elems) => {
+                Type::Tuple(elems.iter().map(|e| e.widen_fresh_literals()).collect())
+            }
             Type::Union(members) => {
                 let widened: Vec<Type> =
                     members.iter().map(|m| m.widen_fresh_literals()).collect();
@@ -1061,6 +1078,11 @@ impl Type {
                     a.collect_free_pvars(pvars);
                 }
             }
+            Type::Tuple(elems) => {
+                for e in elems {
+                    e.collect_free_pvars(pvars);
+                }
+            }
             Type::Union(members) => {
                 for m in members {
                     m.collect_free_pvars(pvars);
@@ -1132,6 +1154,12 @@ impl Type {
             Type::Array(elem) => elem.collect_free_vars(vars),
             Type::Promise(inner) => inner.collect_free_vars(vars),
             Type::Map(value) => value.collect_free_vars(vars),
+
+            Type::Tuple(elems) => {
+                for e in elems {
+                    e.collect_free_vars(vars);
+                }
+            }
 
             Type::Named(_, args) => {
                 for arg in args {
@@ -1339,6 +1367,14 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Union(_) => (15, String::new()),
         Type::Module(m) => (16, m.source.clone()),
         Type::Error => (17, String::new()),
+        Type::Tuple(elems) => (
+            18,
+            elems
+                .iter()
+                .map(|e| union_member_sort_key(e).1)
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
     }
 }
 

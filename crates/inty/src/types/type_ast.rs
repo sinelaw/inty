@@ -48,6 +48,11 @@ pub enum TypeAst {
     Union(Vec<TypeAst>),
     /// A singleton-literal type (`"a"`, `42`, `true`).
     Lit(LitValue),
+    /// A fixed-arity heterogeneous tuple `(T0, T1, …)` (Python
+    /// `tuple[A, B]`). Lowers to [`crate::types::Type::Tuple`]. Note the
+    /// homogeneous variadic `tuple[T, ...]` is parsed to [`TypeAst::Array`]
+    /// instead.
+    Tuple(Vec<TypeAst>),
     /// A function type `(params) => ret`. Parameters are required
     /// (the surfaces that produce this — e.g. `Callable[[A, B], R]` —
     /// have no optionality).

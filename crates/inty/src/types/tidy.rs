@@ -155,6 +155,7 @@ impl TidyEnv {
             Type::Array(elem) => Type::Array(Box::new(self.tidy_type(elem))),
             Type::Promise(inner) => Type::Promise(Box::new(self.tidy_type(inner))),
             Type::Map(value) => Type::Map(Box::new(self.tidy_type(value))),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.tidy_type(e)).collect()),
             Type::Named(id, args) => {
                 Type::Named(*id, args.iter().map(|a| self.tidy_type(a)).collect())
             }
