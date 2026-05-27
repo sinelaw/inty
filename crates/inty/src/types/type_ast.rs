@@ -29,6 +29,11 @@ pub enum TypeAst {
     /// Lowers to a fresh type variable, so it imposes no constraint and
     /// never produces a false positive.
     Opaque,
+    /// A named type variable (`T` from `Generic[T]` / a `TypeVar`).
+    /// Unlike [`TypeAst::Opaque`], all occurrences of the same name within
+    /// one lowering scope share a single variable, so a generic container
+    /// `class Box(Generic[T])` ties its `T`-typed fields together.
+    Var(String),
     Array(Box<TypeAst>),
     /// String-keyed map (`dict[str, V]`).
     Map(Box<TypeAst>),

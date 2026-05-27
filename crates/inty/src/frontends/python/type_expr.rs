@@ -11,6 +11,8 @@
 //! checking (#35). Lowering to a real type happens in
 //! `InferState::lower_type_ast`.
 
+use std::collections::HashSet;
+
 use super::lexer::Tok;
 use crate::span::Spanned;
 use crate::types::{LitValue, TypeAst};
@@ -18,8 +20,29 @@ use crate::types::{LitValue, TypeAst};
 /// Parse a Python type expression beginning at `pos` in `toks`, returning
 /// the IR and the position just past it. `toks` must be terminated by
 /// `Tok::Eof` (the Python lexer guarantees this).
+///
+/// No names are treated as type variables; every bare name maps to a
+/// primitive or [`TypeAst::Opaque`]. Use [`parse_type_with_vars`] to have
+/// declared `TypeVar`s lower as shareable [`TypeAst::Var`] nodes.
 pub fn parse_type(toks: &[Spanned<Tok>], pos: usize) -> (TypeAst, usize) {
-    let mut c = Cursor { toks, pos };
+    let empty = HashSet::new();
+    parse_type_with_vars(toks, pos, &empty)
+}
+
+/// Like [`parse_type`], but a bare name in `type_vars` parses to
+/// [`TypeAst::Var`] (a named type variable) instead of degrading to
+/// opaque, so generic positions (`Generic[T]` fields, generic-function
+/// signatures) can tie their occurrences together when lowered.
+pub fn parse_type_with_vars(
+    toks: &[Spanned<Tok>],
+    pos: usize,
+    type_vars: &HashSet<String>,
+) -> (TypeAst, usize) {
+    let mut c = Cursor {
+        toks,
+        pos,
+        type_vars,
+    };
     let ast = c.parse_type();
     (ast, c.pos)
 }
@@ -27,6 +50,7 @@ pub fn parse_type(toks: &[Spanned<Tok>], pos: usize) -> (TypeAst, usize) {
 struct Cursor<'a> {
     toks: &'a [Spanned<Tok>],
     pos: usize,
+    type_vars: &'a HashSet<String>,
 }
 
 impl Cursor<'_> {
@@ -82,6 +106,8 @@ impl Cursor<'_> {
                 self.advance();
                 if self.check(&Tok::LBracket) {
                     self.parse_generic(&name)
+                } else if self.type_vars.contains(&name) {
+                    TypeAst::Var(name)
                 } else {
                     map_simple_name(&name)
                 }
@@ -317,6 +343,32 @@ mod tests {
         InferState::new().lower_type_ast(&ast)
     }
 
+    #[test]
+    fn known_type_var_parses_to_var_and_shares_in_scope() {
+        use super::parse_type_with_vars;
+        use std::collections::{HashMap, HashSet};
+
+        let vars: HashSet<String> = ["T".to_string()].into_iter().collect();
+        // A name not in the set stays opaque; one in the set is a `Var`.
+        let toks = tokenize("T").expect("tokenize");
+        let (ast, _) = parse_type_with_vars(&toks, 0, &vars);
+        assert_eq!(ast, super::TypeAst::Var("T".to_string()));
+
+        // Lowering two `T` references through one scope yields the *same*
+        // variable; an unrelated name lowers to a different one.
+        let mut state = InferState::new();
+        let mut scope: HashMap<String, Type> = HashMap::new();
+        let t1 = state.lower_type_ast_scoped(&super::TypeAst::Var("T".into()), &mut scope);
+        let t2 = state.lower_type_ast_scoped(&super::TypeAst::Var("T".into()), &mut scope);
+        let u = state.lower_type_ast_scoped(&super::TypeAst::Var("U".into()), &mut scope);
+        assert_eq!(t1, t2);
+        assert_ne!(t1, u);
+
+        // A fresh scope (the default `lower_type_ast`) does not share.
+        let other = state.lower_type_ast(&super::TypeAst::Var("T".into()));
+        assert_ne!(t1, other);
+    }
+
     // ---- concrete Bucket-A mappings ----
 
     #[test]
@@ -386,6 +438,7 @@ mod tests {
             Just(TypeAst::Boolean),
             Just(TypeAst::Null),
             Just(TypeAst::Opaque),
+            "[a-z]".prop_map(TypeAst::Var),
             (-1000i64..1000).prop_map(|n| TypeAst::Lit(LitValue::Number(n as f64))),
         ];
         leaf.prop_recursive(4, 32, 3, |inner| {
@@ -433,6 +486,7 @@ mod tests {
                 TypeAst::Array(_) => prop_assert!(matches!(t, Type::Array(_))),
                 TypeAst::Map(_) => prop_assert!(matches!(t, Type::Map(_))),
                 TypeAst::Func(..) => prop_assert!(matches!(t, Type::Row(_))),
+                TypeAst::Var(_) => prop_assert!(matches!(t, Type::Var(_))),
                 TypeAst::Opaque | TypeAst::Union(_) => {}
             }
         }

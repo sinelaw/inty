@@ -251,6 +251,44 @@ fn pyi_distinct_stub_classes_do_not_interchange() {
 }
 
 #[test]
+fn pyi_generic_stub_class_ties_its_type_param() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    // A generic container: the `TypeVar` T relates the constructor
+    // argument to the method return, so `Box(5).get()` is a Number.
+    write(
+        &stubs,
+        "box.pyi",
+        "from typing import TypeVar, Generic\n\
+         T = TypeVar(\"T\")\n\
+         class Box(Generic[T]):\n\
+         \x20   def __init__(self, value: T) -> None: ...\n\
+         \x20   def get(self) -> T: ...\n",
+    );
+    let ty = check(
+        "from box import Box\nb = Box(5)\nr = b.get() + 1\nr\n",
+        &dir,
+        &[stubs.clone()],
+    )
+    .expect("generic stub class should tie T across ctor and method");
+    assert_eq!(ty, "Number");
+
+    // The same class instantiated at String: get() yields a String, so
+    // using it as a Number is a type error — proof T is tracked, not
+    // collapsed to an unconstrained variable per occurrence.
+    let bad = check(
+        "from box import Box\nb = Box(\"x\")\nr = b.get() + 1\n",
+        &dir,
+        &[stubs],
+    );
+    assert!(
+        bad.is_err(),
+        "String-instantiated Box.get() must not be usable as a Number, got: {:?}",
+        bad
+    );
+}
+
+#[test]
 fn pyi_overload_decorator_is_opaque_not_a_lex_error() {
     let dir = tmp_dir();
     let stubs = tmp_dir();
