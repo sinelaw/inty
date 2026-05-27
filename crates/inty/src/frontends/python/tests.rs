@@ -1338,3 +1338,66 @@ fn try_else_branch_typechecks() {
     let src = "try:\n    x = 1\nexcept Exception:\n    x = 2\nelse:\n    y = x\n";
     assert!(check(src).is_empty(), "{:?}", check(src));
 }
+
+// ---- implicit return = None when falling off the end (#66) ----
+
+#[test]
+fn procedure_falling_off_end_returns_none() {
+    // A `-> None` procedure that ends in a bare call (not a `return`)
+    // must check: it returns `None`, not the call's value.
+    let src = "def foo() -> int:\n\
+               \x20   return 5\n\
+               def bar() -> None:\n\
+               \x20   foo()\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn unannotated_procedure_returns_none_not_trailing_value() {
+    // Without an annotation a trailing expression statement must not
+    // become the implicit return: `proc` returns None, so adding its
+    // result to a number is an error.
+    let src = "def foo() -> int:\n\
+               \x20   return 5\n\
+               def proc():\n\
+               \x20   foo()\n\
+               bad = proc() + 1\n";
+    assert!(
+        !check_program(src).is_empty(),
+        "proc() is None, not a Number"
+    );
+}
+
+#[test]
+fn annotated_return_still_enforced_on_fall_through() {
+    // A `-> int` function that falls off the end returns None, which must
+    // be rejected against the annotation.
+    let src = "def g() -> int:\n\
+               \x20   return 1\n\
+               def f() -> int:\n\
+               \x20   g()\n";
+    assert!(
+        !check_program(src).is_empty(),
+        "fall-through None vs -> int must fail"
+    );
+}
+
+#[test]
+fn returns_from_both_if_branches_join() {
+    let src = "def f(c) -> int:\n\
+               \x20   if c:\n\
+               \x20       return 1\n\
+               \x20   else:\n\
+               \x20       return 2\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn while_true_with_return_does_not_add_none() {
+    // `while True:` never falls through, so `-> int` is satisfied without
+    // an implicit `None`.
+    let src = "def f() -> int:\n\
+               \x20   while True:\n\
+               \x20       return 1\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}

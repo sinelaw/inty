@@ -114,6 +114,14 @@ impl InferState {
         // run's diagnostics.
         let _ = crate::types::subst::take_apply_subst_overflow();
 
+        // The language's unit / "no value" type — used as the implicit
+        // return of a function that falls off the end.
+        self.unit_type = if program.unit_is_null {
+            Type::Null
+        } else {
+            Type::Undefined
+        };
+
         // Load any user-defined generic type aliases before
         // checking the program. Aliases are not nominal — referring
         // to `Foo<X>` is exactly equivalent to inlining `Foo`'s body
@@ -937,6 +945,15 @@ impl InferState {
                 } else {
                     Type::Undefined
                 };
+                // Contribute to the enclosing function's return type. The
+                // function body's *completion* value is no longer used as
+                // the implicit return (a trailing bare expression statement
+                // must not leak its value), so explicit returns are
+                // collected here instead. Returns outside any function
+                // (top-level) find no frame and are ignored.
+                if let Some(frame) = self.return_value_stack.last_mut() {
+                    frame.push(ret_type.clone());
+                }
                 Ok((ret_type, env.clone()))
             }
 

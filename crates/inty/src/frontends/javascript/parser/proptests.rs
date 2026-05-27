@@ -202,6 +202,7 @@ fn program_strategy() -> impl Strategy<Value = Program> {
         span: span(),
         type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
     })
 }
 
@@ -518,6 +519,7 @@ proptest! {
             span: span(),
             type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
         };
 
         // Pretty print
@@ -547,6 +549,7 @@ proptest! {
             span: span(),
             type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        unit_is_null: false,
         };
 
         let source = print_program(&program);
