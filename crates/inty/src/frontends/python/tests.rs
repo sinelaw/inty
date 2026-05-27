@@ -731,8 +731,61 @@ fn isinstance_narrowing_still_rejects_wrong_brand_method() {
 }
 
 #[test]
-fn rejects_kwargs() {
-    assert!(parse_source("f(x=1)").is_err());
+fn keyword_arguments_resolve_by_name() {
+    // Positional, mixed, all-keyword, and reordered keyword calls all
+    // resolve against the callee's parameter names.
+    let errs = check_program(
+        "def f(x, y):\n    return x + y\n\
+         def g(name, count):\n    return count\n\
+         a = f(1, 2)\n\
+         b = f(1, y=2)\n\
+         c = f(x=1, y=2)\n\
+         d = g(count=3, name=4)\n",
+    );
+    assert!(errs.is_empty(), "keyword calls should resolve, got {:?}", errs);
+}
+
+#[test]
+fn keyword_argument_type_flows_to_parameter() {
+    // A keyword arg is checked against the named parameter's type.
+    let bad = check_program(
+        "def f(x, y):\n    return x + y\n\
+         r = f(x=1, y=\"s\")\n\
+         z = r + 1\n",
+    );
+    assert!(!bad.is_empty(), "Number + String through a keyword arg should fail");
+}
+
+#[test]
+fn keyword_argument_errors() {
+    // Unknown keyword name.
+    assert!(
+        !check_program("def f(x, y):\n    return x\nr = f(1, z=2)\n").is_empty(),
+        "unknown keyword should be rejected"
+    );
+    // Same parameter given positionally and by keyword.
+    assert!(
+        !check_program("def f(x, y):\n    return x\nr = f(1, x=2)\n").is_empty(),
+        "duplicate positional+keyword should be rejected"
+    );
+    // Missing a required parameter.
+    assert!(
+        !check_program("def f(x, y):\n    return x\nr = f(x=1)\n").is_empty(),
+        "missing required argument should be rejected"
+    );
+}
+
+#[test]
+fn keyword_with_default_may_be_omitted_or_supplied() {
+    // A defaulted (optional) parameter can be filled by keyword or left
+    // out; an omitted *required* one still errors (covered above).
+    let errs = check_program(
+        "def f(x, y=0):\n    return x + y\n\
+         a = f(1)\n\
+         b = f(1, y=5)\n\
+         c = f(x=2, y=5)\n",
+    );
+    assert!(errs.is_empty(), "default + keyword should check, got {:?}", errs);
 }
 
 #[test]

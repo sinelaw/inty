@@ -1498,6 +1498,7 @@ impl Parser {
         let iife_call = Expr::Call {
             callee: Box::new(iife),
             arguments: vec![],
+            keywords: vec![],
             span,
         };
         // Promise.resolve(<iife_call>)
@@ -1511,6 +1512,7 @@ impl Parser {
                 span,
             }),
             arguments: vec![iife_call],
+            keywords: vec![],
             span,
         };
         // { return <resolve_call>; }
@@ -2625,6 +2627,7 @@ impl Parser {
                     expr = Expr::Call {
                         callee: Box::new(expr),
                         arguments,
+                        keywords: vec![],
                         span: Span::new(start, self.prev_span().end),
                     };
                 }

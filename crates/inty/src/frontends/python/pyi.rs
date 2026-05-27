@@ -457,11 +457,16 @@ impl StubReader<'_> {
             if optional {
                 // Skip the default expression up to ',' or ')'.
                 self.skip_to_param_end();
-                let pvar = self.state.fresh_pvar();
-                params.push(FuncParam::optional(pvar, ty));
-            } else {
-                params.push(FuncParam::required(ty));
             }
+            let mut fp = if optional {
+                FuncParam::optional(self.state.fresh_pvar(), ty)
+            } else {
+                FuncParam::required(ty)
+            };
+            if let Some(n) = &pname {
+                fp = fp.with_name(n.clone());
+            }
+            params.push(fp);
             self.eat(&Tok::Comma);
         }
         self.eat(&Tok::RParen);

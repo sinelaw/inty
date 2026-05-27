@@ -589,3 +589,21 @@ fn stdlib_modules_are_built_in() {
     );
     assert!(bad.is_err(), "an absent member of a stub class should be caught");
 }
+
+#[test]
+fn keyword_arguments_through_stub_signature() {
+    // Parameter names from a `.pyi` signature drive keyword resolution
+    // at the call site.
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(&stubs, "geo.pyi", "def dist(x: int, y: int) -> int: ...\n");
+    let ok = check(
+        "from geo import dist\nr = dist(y=2, x=1)\nr\n",
+        &dir,
+        &[stubs.clone()],
+    );
+    assert_eq!(ok.expect("keyword call via stub names"), "Number");
+
+    let bad = check("from geo import dist\nr = dist(1, z=2)\n", &dir, &[stubs]);
+    assert!(bad.is_err(), "unknown keyword against a stub signature should fail");
+}

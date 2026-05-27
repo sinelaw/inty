@@ -373,6 +373,7 @@ impl Subst {
                     .map(|p| super::ty::FuncParam {
                         presence: self.resolve_presence(&p.presence),
                         ty: self.flatten_type(&p.ty, visited),
+                        name: p.name.clone(),
                     })
                     .collect(),
                 ret: Box::new(self.flatten_type(ret, visited)),
@@ -523,6 +524,7 @@ impl Substitutable for Type {
                     .map(|p| super::ty::FuncParam {
                         presence: subst.apply_presence(&p.presence),
                         ty: p.ty.apply_subst(subst),
+                        name: p.name.clone(),
                     })
                     .collect(),
                 ret: Box::new(ret.apply_subst(subst)),

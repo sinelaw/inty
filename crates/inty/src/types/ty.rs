@@ -102,11 +102,27 @@ impl Presence {
 /// call site with N args unifies position-wise: surplus formal
 /// params (formal.len() > N) must have a presence that unifies with
 /// `Abs`. See `unify_impl`'s function arm for the rule.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct FuncParam {
     pub presence: Presence,
     pub ty: Type,
+    /// The parameter's name, when known (Python `def`/lambda, `.pyi`).
+    /// Pure call-resolution metadata for keyword arguments — it is
+    /// **deliberately excluded from `PartialEq`/`Eq` and from
+    /// unification**, because a positional-or-keyword parameter's name
+    /// never affects structural compatibility (`(x: A) => B` ≡ `(A) => B`,
+    /// per PEP 484). It is the *label* half of the Garrigue 1994 model
+    /// whose *optionality* half is `presence`.
+    pub name: Option<String>,
 }
+
+impl PartialEq for FuncParam {
+    fn eq(&self, other: &Self) -> bool {
+        self.presence == other.presence && self.ty == other.ty
+    }
+}
+
+impl Eq for FuncParam {}
 
 impl FuncParam {
     /// Required parameter — the default. Equivalent to the
@@ -116,6 +132,7 @@ impl FuncParam {
         FuncParam {
             presence: Presence::Pre,
             ty,
+            name: None,
         }
     }
 
@@ -129,7 +146,15 @@ impl FuncParam {
         FuncParam {
             presence: Presence::Var(pvar),
             ty,
+            name: None,
         }
+    }
+
+    /// Attach a parameter name (call-resolution metadata for keyword
+    /// arguments). Chainable on the other constructors.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 }
 

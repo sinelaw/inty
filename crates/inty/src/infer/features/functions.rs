@@ -137,11 +137,13 @@ impl InferState {
             .iter()
             .zip(param_types.iter())
             .map(|(param, ty)| {
-                if param.optional {
+                let fp = if param.optional {
                     crate::types::FuncParam::optional(self.fresh_pvar(), ty.clone())
                 } else {
                     crate::types::FuncParam::required(ty.clone())
-                }
+                };
+                // Record the parameter name for keyword-argument resolution.
+                fp.with_name(param.name.clone())
             })
             .collect();
         let func_type = Type::wrap_callable(Type::raw_func_with_params(
@@ -239,6 +241,7 @@ impl InferState {
         env: &TypeEnv,
         callee: &Expr,
         arguments: &[Expr],
+        keywords: &[(String, Expr)],
         span: Span,
     ) -> InferResult<Type> {
         // For method calls, we need to infer the object only once to avoid creating
@@ -296,6 +299,13 @@ impl InferState {
                 let _ = self.infer_expr(env, arg);
             }
             return Ok(Type::Error);
+        }
+
+        // Keyword arguments take a dedicated path: they're resolved to
+        // parameter positions by *name* against the callee's named params,
+        // which the synthesised-row positional path below can't see.
+        if !keywords.is_empty() {
+            return self.infer_keyword_call(env, &callee_type, obj_type_for_this, arguments, keywords, span);
         }
 
         // Bidirectional checking (Peyton Jones 2007 §4): pin down the
@@ -399,6 +409,112 @@ impl InferState {
         }
 
         Ok(self.zonk(&ret_type))
+    }
+
+    /// Infer a call that has keyword arguments. Resolves each keyword to a
+    /// parameter slot *by name* against the callee's named parameters,
+    /// then checks every filled slot and ensures no required parameter is
+    /// left unfilled. An opaque/non-function callee (a bare variable) has
+    /// no names to resolve against, so its arguments are merely
+    /// type-checked and the call is accepted.
+    fn infer_keyword_call(
+        &mut self,
+        env: &TypeEnv,
+        callee_type: &Type,
+        obj_for_this: Option<Type>,
+        arguments: &[Expr],
+        keywords: &[(String, Expr)],
+        span: Span,
+    ) -> InferResult<Type> {
+        let callee_z = self.zonk(callee_type);
+        let Some((this_opt, params, ret)) = extract_callable(&callee_z) else {
+            // No resolvable signature (opaque/variadic callee): check the
+            // argument and keyword-value expressions so errors inside them
+            // surface, and accept — impose no constraint.
+            for a in arguments {
+                self.infer_expr(env, a)?;
+            }
+            for (_, v) in keywords {
+                self.infer_expr(env, v)?;
+            }
+            return Ok(self.fresh_type_var());
+        };
+
+        let n = params.len();
+        if arguments.len() > n {
+            return Err(crate::error::TypeError::ArityMismatch {
+                expected: n,
+                found: arguments.len() + keywords.len(),
+                span,
+            }
+            .into());
+        }
+
+        // Fill slots: positionals first, then keywords by name.
+        let mut slots: Vec<Option<&Expr>> = vec![None; n];
+        for (i, a) in arguments.iter().enumerate() {
+            slots[i] = Some(a);
+        }
+        for (name, value) in keywords {
+            let idx = params.iter().position(|p| p.name.as_deref() == Some(name.as_str()));
+            let Some(idx) = idx else {
+                return Err(crate::error::TypeError::InvalidSyntax {
+                    message: format!("unexpected keyword argument '{}'", name),
+                    span,
+                }
+                .into());
+            };
+            if slots[idx].is_some() {
+                return Err(crate::error::TypeError::InvalidSyntax {
+                    message: format!("got multiple values for argument '{}'", name),
+                    span,
+                }
+                .into());
+            }
+            slots[idx] = Some(value);
+        }
+
+        // Check each slot; an unfilled *required* parameter is an error.
+        for (i, slot) in slots.iter().enumerate() {
+            match slot {
+                Some(e) => {
+                    let expected = self.zonk(&params[i].ty);
+                    self.check_expr(env, e, &expected)?;
+                }
+                None => {
+                    if params[i].presence.is_pre() {
+                        let missing = params[i].name.clone().unwrap_or_else(|| i.to_string());
+                        return Err(crate::error::TypeError::InvalidSyntax {
+                            message: format!("missing required argument '{}'", missing),
+                            span,
+                        }
+                        .into());
+                    }
+                }
+            }
+        }
+
+        // Bind `this` as the positional path does: the receiver for a
+        // method call (nominal brands are transparent here), else
+        // `Undefined` for a free call.
+        if let Some(t) = this_opt {
+            let t = self.zonk(&t);
+            let obj = match obj_for_this {
+                Some(o) => {
+                    let o = self.zonk(&o);
+                    match &o {
+                        Type::Named(id, args) if self.is_nominal_type(*id) => {
+                            self.unroll_named(*id, args).unwrap_or(o)
+                        }
+                        _ => o,
+                    }
+                }
+                None => Type::Undefined,
+            };
+            self.unify(span, &t, &obj)?;
+        }
+
+        Ok(self.zonk(&ret))
     }
 
     /// Infer the type of a new expression.
@@ -784,6 +900,29 @@ pub(in crate::infer) fn compute_scc_groups(stmts: &[Stmt]) -> Vec<Vec<usize>> {
             indices
         })
         .collect()
+}
+
+/// Extract `(this, params, ret)` from a callable type — a callable row
+/// `{<CALL>: (params) => ret, …}` or a bare function. `None` when `ty`
+/// isn't a function shape (e.g. an unresolved variable), so keyword
+/// resolution can fall back to accepting the call.
+fn extract_callable(ty: &Type) -> Option<(Option<Type>, Vec<crate::types::FuncParam>, Type)> {
+    use crate::types::{PropName, CALLABLE_KEY};
+    let func = match ty {
+        Type::Row(row) => &row.props.get(&PropName(CALLABLE_KEY.to_string()))?.ty,
+        Type::Func { .. } => ty,
+        _ => return None,
+    };
+    if let Type::Func {
+        this_type,
+        params,
+        ret,
+    } = func
+    {
+        Some((this_type.as_deref().cloned(), params.clone(), (**ret).clone()))
+    } else {
+        None
+    }
 }
 
 /// Tarjan's strongly-connected components algorithm. Iterative

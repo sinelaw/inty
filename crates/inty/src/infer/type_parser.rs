@@ -1071,6 +1071,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
                 .map(|p| crate::types::FuncParam {
                     presence: p.presence.clone(),
                     ty: substitute_alias_body(&p.ty, subst),
+                    name: p.name.clone(),
                 })
                 .collect(),
             ret: Box::new(substitute_alias_body(ret, subst)),

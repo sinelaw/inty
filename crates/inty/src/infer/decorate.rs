@@ -500,12 +500,17 @@ impl<'a> Decorator<'a> {
             Expr::Call {
                 callee,
                 arguments,
+                keywords,
                 span,
             } => Expr::Call {
                 callee: Box::new(self.decorate_expr(callee, env)),
                 arguments: arguments
                     .iter()
                     .map(|a| self.decorate_expr(a, env))
+                    .collect(),
+                keywords: keywords
+                    .iter()
+                    .map(|(n, e)| (n.clone(), self.decorate_expr(e, env)))
                     .collect(),
                 span: *span,
             },
