@@ -191,12 +191,65 @@ fn class_name_annotation_resolves_to_brand() {
     assert!(ok.is_empty(), "passing a Point should check, got {:?}", ok);
 }
 
-// ---- rejections (limited subset) ----
+#[test]
+fn tuple_literal_and_return_and_index() {
+    // `(a, b)` and `return a, b` build tuples; `t[i]` reads a component
+    // with its own type (heterogeneous).
+    let ok = check(
+        "def pair():\n\
+         \x20   return 1, \"hi\"\n\
+         p = pair()\n\
+         n = p[0] + 1\n\
+         s = p[1] + \"!\"\n",
+    );
+    assert!(ok.is_empty(), "tuple construct + index should check, got {:?}", ok);
+
+    // A component used at the wrong type is rejected.
+    let bad = check("t = (1, \"hi\")\nbad = t[1] + 1\n");
+    assert!(!bad.is_empty(), "String component used as Number should fail");
+}
 
 #[test]
-fn rejects_tuple_return() {
-    assert!(parse_source("def f():\n    return 1, 2").is_err());
+fn tuple_destructuring_and_for_unpacking() {
+    let ok = check(
+        "def pair():\n\
+         \x20   return 1, \"hi\"\n\
+         x, y = pair()\n\
+         m = x + 1\n\
+         s = y + \"!\"\n\
+         pairs = [(1, \"a\"), (2, \"b\")]\n\
+         for k, v in pairs:\n\
+         \x20   kk = k + 1\n\
+         \x20   vv = v + \"!\"\n",
+    );
+    assert!(ok.is_empty(), "destructuring + for-unpacking should check, got {:?}", ok);
+
+    // Destructured names escape to the enclosing scope and keep their
+    // component types: using `x` (Number) as a String is an error.
+    let bad = check("x, y = (1, \"hi\")\nbad = x + \"!\"\n");
+    assert!(!bad.is_empty(), "Number component used as String should fail");
 }
+
+#[test]
+fn tuple_annotation_lowers() {
+    // `tuple[A, B]` is a tuple; `tuple[T, ...]` is an array.
+    let ok = check(
+        "def f(p: tuple[int, str]) -> int:\n\
+         \x20   return p[0]\n\
+         def g(xs: tuple[int, ...]) -> int:\n\
+         \x20   return xs[0]\n",
+    );
+    assert!(ok.is_empty(), "tuple annotations should check, got {:?}", ok);
+}
+
+#[test]
+fn lowers_tuple_literal_to_tuple_expr() {
+    assert!(matches!(init_of("a = (1, 2, 3)"), Expr::Tuple { .. }));
+    // A single parenthesised value is just grouping, not a 1-tuple.
+    assert!(matches!(init_of("a = (1)"), Expr::Lit { .. }));
+}
+
+// ---- rejections (limited subset) ----
 
 #[test]
 fn rejects_chained_comparison() {

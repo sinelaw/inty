@@ -213,12 +213,12 @@ impl Parser {
 
     /// `simple_stmt (';' simple_stmt)* NEWLINE`
     fn simple_line(&mut self) -> Result<Vec<Stmt>> {
-        let mut stmts = vec![self.simple_stmt()?];
+        let mut stmts = self.simple_stmt()?;
         while self.eat(&Tok::Semi) {
             if self.check(&Tok::Newline) || self.at_eof() {
                 break;
             }
-            stmts.push(self.simple_stmt()?);
+            stmts.extend(self.simple_stmt()?);
         }
         if !self.at_eof() {
             self.expect(&Tok::Newline, "newline")?;
@@ -226,22 +226,22 @@ impl Parser {
         Ok(stmts)
     }
 
-    fn simple_stmt(&mut self) -> Result<Stmt> {
+    fn simple_stmt(&mut self) -> Result<Vec<Stmt>> {
         match self.cur() {
             Tok::Pass => {
                 let span = self.cur_span();
                 self.advance();
-                Ok(Stmt::Empty { span })
+                Ok(vec![Stmt::Empty { span }])
             }
             Tok::Break => {
                 let span = self.cur_span();
                 self.advance();
-                Ok(Stmt::Break { label: None, span })
+                Ok(vec![Stmt::Break { label: None, span }])
             }
             Tok::Continue => {
                 let span = self.cur_span();
                 self.advance();
-                Ok(Stmt::Continue { label: None, span })
+                Ok(vec![Stmt::Continue { label: None, span }])
             }
             Tok::Return => {
                 let start = self.cur_span().start;
@@ -251,17 +251,27 @@ impl Parser {
                     None
                 } else {
                     let e = self.expr()?;
+                    // `return a, b` returns a tuple.
                     if self.check(&Tok::Comma) {
-                        return Err(self.unsupported(
-                            "returning multiple values (a tuple) is not supported",
-                        ));
+                        let mut elements = vec![e];
+                        while self.eat(&Tok::Comma) {
+                            if self.check(&Tok::Newline) || self.check(&Tok::Semi) || self.at_eof() {
+                                break; // trailing comma
+                            }
+                            elements.push(self.expr()?);
+                        }
+                        Some(Expr::Tuple {
+                            elements,
+                            span: Span::new(start, self.prev_span().end),
+                        })
+                    } else {
+                        Some(e)
                     }
-                    Some(e)
                 };
-                Ok(Stmt::Return {
+                Ok(vec![Stmt::Return {
                     argument,
                     span: Span::new(start, self.prev_span().end),
-                })
+                }])
             }
             Tok::Reserved(k) => Err(self.unsupported(&format!(
                 "'{}' is not supported in the Python subset",
@@ -327,9 +337,9 @@ impl Parser {
         Some(Stmt::Empty { span })
     }
 
-    fn expr_or_assign(&mut self) -> Result<Stmt> {
+    fn expr_or_assign(&mut self) -> Result<Vec<Stmt>> {
         if let Some(stmt) = self.try_type_alias() {
-            return Ok(stmt);
+            return Ok(vec![stmt]);
         }
         let start = self.cur_span().start;
         let first = self.expr()?;
@@ -344,12 +354,12 @@ impl Parser {
             } else {
                 None
             };
-            return Ok(self.declare_or_assign_single(
+            return Ok(vec![self.declare_or_assign_single(
                 name,
                 init,
                 type_ast,
                 Span::new(start, self.prev_span().end),
-            ));
+            )]);
         }
 
         // augmented: `target op= value`
@@ -360,7 +370,7 @@ impl Parser {
                 return Err(ParseError::InvalidAssignmentTarget { span: first.span() }.into());
             }
             let span = Span::new(start, self.prev_span().end);
-            return Ok(Stmt::Expr {
+            return Ok(vec![Stmt::Expr {
                 expression: Expr::Assign {
                     op: aug_to_assign(op),
                     left: Box::new(first),
@@ -368,7 +378,7 @@ impl Parser {
                     span,
                 },
                 span,
-            });
+            }]);
         }
 
         // tuple unpacking: `a, b = ...`
@@ -394,16 +404,19 @@ impl Parser {
                 targets.push(value);
                 value = self.expr()?;
             }
+            // A trailing comma on the final value makes it a tuple:
+            // `x = a, b`.
+            value = self.finish_tuple_if_comma(value, start)?;
             let span = Span::new(start, self.prev_span().end);
-            return self.lower_chained_assign(targets, value, span);
+            return Ok(vec![self.lower_chained_assign(targets, value, span)?]);
         }
 
         // bare expression statement
         let span = first.span();
-        Ok(Stmt::Expr {
+        Ok(vec![Stmt::Expr {
             expression: first,
             span,
-        })
+        }])
     }
 
     /// Lower `a = b = value` (every target gets `value`). Targets that are
@@ -447,13 +460,51 @@ impl Parser {
         Ok(Stmt::Block { body, span })
     }
 
-    /// Lower `a, b = e1, e2` (matched arity), evaluating all values first.
+    /// Lower a tuple assignment into a flat list of statements (no scoping
+    /// block, so `var` declarations escape to the enclosing scope like
+    /// Python). Handles `a, b = t` (destructure one tuple by indexing) and
+    /// `a, b = e1, e2` (matched arity, parallel via temporaries).
     fn lower_tuple_assign(
         &mut self,
         targets: Vec<Expr>,
-        values: Vec<Expr>,
+        mut values: Vec<Expr>,
         span: Span,
-    ) -> Result<Stmt> {
+    ) -> Result<Vec<Stmt>> {
+        // `a, b = t` — destructure a single tuple/sequence value by
+        // indexing it: `tmp = t; a = tmp[0]; b = tmp[1]`. Reuses tuple
+        // element-access inference, so `a`/`b` get the component types.
+        if targets.len() > 1 && values.len() == 1 {
+            let mut body = Vec::new();
+            let tmp = self.fresh_temp();
+            body.push(Stmt::Var {
+                kind: VarKind::Var,
+                declarations: vec![VarDeclarator {
+                    name: tmp.clone(),
+                    init: Some(values.pop().unwrap()),
+                    type_annotation: None,
+                    type_ast: None,
+                    kind: VarKind::Var,
+                    span,
+                }],
+                span,
+            });
+            for (i, target) in targets.into_iter().enumerate() {
+                let idx = Expr::ComputedMember {
+                    object: Box::new(Expr::Ident {
+                        name: tmp.clone(),
+                        span,
+                    }),
+                    property: Box::new(Expr::Lit {
+                        value: Literal::Number(i as f64),
+                        span,
+                    }),
+                    span,
+                };
+                body.push(self.assign_target(target, idx, span)?);
+            }
+            return Ok(body);
+        }
+
         if targets.len() != values.len() {
             return Err(ParseError::Unsupported {
                 feature: "tuple assignment requires equal numbers of targets and values \
@@ -484,7 +535,7 @@ impl Parser {
         for (target, t) in targets.into_iter().zip(temps) {
             body.push(self.assign_target(target, Expr::Ident { name: t, span }, span)?);
         }
-        Ok(Stmt::Block { body, span })
+        Ok(body)
     }
 
     /// Assign `value` to a target, declaring it first if it's a new name.
@@ -567,6 +618,26 @@ impl Parser {
             out.push(self.expr()?);
         }
         Ok(out)
+    }
+
+    /// If a `,` follows `first`, collect `first, …` (to end of statement)
+    /// into a tuple literal; otherwise return `first` unchanged. Used for
+    /// unparenthesised tuple values like `x = a, b`.
+    fn finish_tuple_if_comma(&mut self, first: Expr, start: usize) -> Result<Expr> {
+        if !self.check(&Tok::Comma) {
+            return Ok(first);
+        }
+        let mut elements = vec![first];
+        while self.eat(&Tok::Comma) {
+            if self.check(&Tok::Newline) || self.check(&Tok::Semi) || self.at_eof() {
+                break; // trailing comma
+            }
+            elements.push(self.expr()?);
+        }
+        Ok(Expr::Tuple {
+            elements,
+            span: Span::new(start, self.prev_span().end),
+        })
     }
 
     /// Skip a type annotation: tokens up to a top-level `=`, `:`, NEWLINE,
@@ -1125,23 +1196,70 @@ impl Parser {
     fn for_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // for
-        let name = self.expect_name("loop variable")?;
-        if self.check(&Tok::Comma) {
-            return Err(self.unsupported(
-                "tuple targets in 'for' (e.g. 'for k, v in ...') are not supported",
-            ));
+        let mut targets = vec![self.expect_name("loop variable")?];
+        while self.eat(&Tok::Comma) {
+            targets.push(self.expect_name("loop variable")?);
         }
         self.expect(&Tok::In, "'in'")?;
         let right = self.expr()?;
         self.expect(&Tok::Colon, "':'")?;
-        self.declare(&name);
+
+        // Simple `for x in xs` — bind `x` directly to the element type.
+        if targets.len() == 1 {
+            let name = targets.pop().unwrap();
+            self.declare(&name);
+            let span_so_far = Span::new(start, self.prev_span().end);
+            let body = self.suite()?;
+            return Ok(Stmt::ForOf {
+                left: ForInLhs::VarDecl(name, None, span_so_far),
+                right,
+                body,
+                span: Span::new(start, self.prev_span().end),
+            });
+        }
+
+        // `for k, v in items` — iterate a fresh element variable and
+        // destructure it by indexing at the top of the body, so `k`/`v`
+        // get the tuple component types.
+        let tmp = self.fresh_temp();
+        for t in &targets {
+            self.declare(t);
+        }
+        self.declare(&tmp);
         let span_so_far = Span::new(start, self.prev_span().end);
-        let body = self.suite()?;
+        let inner = self.suite()?;
+        let mut body = Vec::with_capacity(targets.len() + 1);
+        for (i, t) in targets.iter().enumerate() {
+            body.push(Stmt::Var {
+                kind: VarKind::Var,
+                declarations: vec![VarDeclarator {
+                    name: t.clone(),
+                    init: Some(Expr::ComputedMember {
+                        object: Box::new(Expr::Ident {
+                            name: tmp.clone(),
+                            span: span_so_far,
+                        }),
+                        property: Box::new(Expr::Lit {
+                            value: Literal::Number(i as f64),
+                            span: span_so_far,
+                        }),
+                        span: span_so_far,
+                    }),
+                    type_annotation: None,
+                    type_ast: None,
+                    kind: VarKind::Var,
+                    span: span_so_far,
+                }],
+                span: span_so_far,
+            });
+        }
+        body.push(*inner);
+        let span = Span::new(start, self.prev_span().end);
         Ok(Stmt::ForOf {
-            left: ForInLhs::VarDecl(name, None, span_so_far),
+            left: ForInLhs::VarDecl(tmp, None, span_so_far),
             right,
-            body,
-            span: Span::new(start, self.prev_span().end),
+            body: Box::new(Stmt::Block { body, span }),
+            span,
         })
     }
 
@@ -1514,15 +1632,32 @@ impl Parser {
             }
             Tok::LParen => {
                 self.advance();
-                if self.check(&Tok::RParen) {
-                    return Err(self.unsupported("the empty tuple '()' is not supported"));
+                // Empty tuple `()`.
+                if self.eat(&Tok::RParen) {
+                    return Ok(Expr::Tuple {
+                        elements: Vec::new(),
+                        span: Span::new(span.start, self.prev_span().end),
+                    });
                 }
-                let inner = self.expr()?;
+                let first = self.expr()?;
+                // A comma makes it a tuple (`(a, b)`, `(a,)`); otherwise the
+                // parentheses are just grouping.
                 if self.check(&Tok::Comma) {
-                    return Err(self.unsupported("tuples are not supported"));
+                    let mut elements = vec![first];
+                    while self.eat(&Tok::Comma) {
+                        if self.check(&Tok::RParen) {
+                            break; // trailing comma, e.g. `(a,)`
+                        }
+                        elements.push(self.expr()?);
+                    }
+                    self.expect(&Tok::RParen, "')'")?;
+                    return Ok(Expr::Tuple {
+                        elements,
+                        span: Span::new(span.start, self.prev_span().end),
+                    });
                 }
                 self.expect(&Tok::RParen, "')'")?;
-                Ok(inner)
+                Ok(first)
             }
             Tok::LBracket => self.list(),
             Tok::LBrace => self.dict(),

@@ -172,6 +172,17 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             Ok(Value::Array(loc))
         }
 
+        Expr::Tuple { elements, .. } => {
+            // A tuple is array-like at runtime; evaluate components and
+            // store them in an array cell (indexing reads them back).
+            let mut vs = Vec::with_capacity(elements.len());
+            for e in elements {
+                vs.push(eval_expr(state, env, e)?);
+            }
+            let loc = state.heap.alloc(Cell::Array(vs));
+            Ok(Value::Array(loc))
+        }
+
         Expr::Object { properties, .. } => {
             let mut props: BTreeMap<PropName, Value> = BTreeMap::new();
             for prop in properties {

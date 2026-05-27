@@ -167,20 +167,14 @@ impl Cursor<'_> {
         if last == "Callable" {
             return self.parse_callable_args();
         }
+        if head == "tuple" || head == "Tuple" {
+            return self.parse_tuple_args();
+        }
         let mut args = self.parse_type_args();
         match last {
             "list" | "List" | "Sequence" | "Iterable" | "Iterator" | "MutableSequence"
             | "frozenset" | "set" | "Set" => {
                 TypeAst::Array(Box::new(first_or_opaque(args)))
-            }
-            "tuple" | "Tuple" => {
-                // Homogeneous `tuple[T, ...]` → T[]; heterogeneous → the
-                // union of the element types (lossy).
-                match args.len() {
-                    0 => TypeAst::Array(Box::new(TypeAst::Opaque)),
-                    1 => TypeAst::Array(Box::new(args.pop().unwrap())),
-                    _ => TypeAst::Array(Box::new(TypeAst::Union(args))),
-                }
             }
             "dict" | "Dict" | "Mapping" | "MutableMapping" => {
                 // Map is string-keyed; the value is the 2nd arg.
@@ -277,6 +271,51 @@ impl Cursor<'_> {
         match params {
             Some(ps) => TypeAst::Func(ps, Box::new(ret)),
             None => TypeAst::Opaque,
+        }
+    }
+
+    /// Parse a `tuple[...]` subscript. `tuple[T, ...]` (the homogeneous
+    /// variadic form, where `...` is the Ellipsis) maps to `T[]`; a
+    /// fixed-arity `tuple[A, B, …]` maps to [`TypeAst::Tuple`]. An empty or
+    /// malformed subscript degrades to an opaque array.
+    fn parse_tuple_args(&mut self) -> TypeAst {
+        if !self.eat(&Tok::LBracket) {
+            return TypeAst::Opaque;
+        }
+        if self.eat(&Tok::RBracket) {
+            return TypeAst::Array(Box::new(TypeAst::Opaque));
+        }
+        let first = self.parse_type();
+        // `tuple[T, ...]` — variadic homogeneous → `T[]`.
+        if self.check(&Tok::Comma) {
+            let save = self.pos;
+            self.advance(); // ','
+            if self.eat_ellipsis() {
+                self.eat(&Tok::RBracket);
+                return TypeAst::Array(Box::new(first));
+            }
+            self.pos = save; // not an ellipsis — a heterogeneous element
+        }
+        let mut elems = vec![first];
+        while self.eat(&Tok::Comma) {
+            if self.check(&Tok::RBracket) {
+                break;
+            }
+            elems.push(self.parse_type());
+        }
+        self.eat(&Tok::RBracket);
+        TypeAst::Tuple(elems)
+    }
+
+    /// Consume a `...` (three `Dot` tokens) if present, restoring position
+    /// otherwise. Returns whether an ellipsis was consumed.
+    fn eat_ellipsis(&mut self) -> bool {
+        let save = self.pos;
+        if self.eat(&Tok::Dot) && self.eat(&Tok::Dot) && self.eat(&Tok::Dot) {
+            true
+        } else {
+            self.pos = save;
+            false
         }
     }
 
@@ -494,6 +533,7 @@ mod tests {
             prop_oneof![
                 inner.clone().prop_map(|t| TypeAst::Array(Box::new(t))),
                 inner.clone().prop_map(|t| TypeAst::Map(Box::new(t))),
+                prop::collection::vec(inner.clone(), 0..3).prop_map(TypeAst::Tuple),
                 prop::collection::vec(inner.clone(), 1..3).prop_map(TypeAst::Union),
                 (prop::collection::vec(inner.clone(), 0..3), inner)
                     .prop_map(|(ps, r)| TypeAst::Func(ps, Box::new(r))),
@@ -533,6 +573,7 @@ mod tests {
                 TypeAst::Null => prop_assert_eq!(t, Type::Null),
                 TypeAst::Lit(v) => prop_assert_eq!(t, Type::Literal(v.clone())),
                 TypeAst::Array(_) => prop_assert!(matches!(t, Type::Array(_))),
+                TypeAst::Tuple(_) => prop_assert!(matches!(t, Type::Tuple(_))),
                 TypeAst::Map(_) => prop_assert!(matches!(t, Type::Map(_))),
                 TypeAst::Func(..) => prop_assert!(matches!(t, Type::Row(_))),
                 TypeAst::Var(_) => prop_assert!(matches!(t, Type::Var(_))),

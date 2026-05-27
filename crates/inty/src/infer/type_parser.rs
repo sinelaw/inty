@@ -1058,6 +1058,9 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         Type::Array(elem) => Type::array(substitute_alias_body(elem, subst)),
         Type::Map(value) => Type::Map(Box::new(substitute_alias_body(value, subst))),
         Type::Promise(inner) => Type::promise(substitute_alias_body(inner, subst)),
+        Type::Tuple(elems) => {
+            Type::Tuple(elems.iter().map(|e| substitute_alias_body(e, subst)).collect())
+        }
         Type::Func {
             this_type,
             params,

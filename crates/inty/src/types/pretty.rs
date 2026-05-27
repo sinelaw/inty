@@ -171,6 +171,16 @@ impl PrettyContext {
                 }
                 write!(w, "[]")
             }
+            Type::Tuple(elems) => {
+                write!(w, "[")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    self.write_type_ts(w, e, false)?;
+                }
+                write!(w, "]")
+            }
             Type::Map(value) => {
                 write!(w, "Record<string, ")?;
                 self.write_type_ts(w, value, false)?;
@@ -307,6 +317,17 @@ impl PrettyContext {
                     write!(w, ")")?;
                 }
                 write!(w, "[]")
+            }
+
+            Type::Tuple(elems) => {
+                write!(w, "(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, ", ")?;
+                    }
+                    self.write_type(w, e, false)?;
+                }
+                write!(w, ")")
             }
 
             Type::Promise(inner) => {
@@ -583,6 +604,11 @@ fn collect_hidden_this_vars(ty: &Type, hidden: &mut HashSet<TVarName>) {
         Type::Array(elem) => collect_hidden_this_vars(elem, hidden),
         Type::Promise(inner) => collect_hidden_this_vars(inner, hidden),
         Type::Map(value) => collect_hidden_this_vars(value, hidden),
+        Type::Tuple(elems) => {
+            for e in elems {
+                collect_hidden_this_vars(e, hidden);
+            }
+        }
         Type::Row(row) => {
             for entry in row.props.values() {
                 collect_hidden_this_vars(&entry.ty, hidden);

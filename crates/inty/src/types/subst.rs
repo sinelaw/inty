@@ -381,6 +381,9 @@ impl Subst {
             Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, visited))),
             Type::Promise(inner) => Type::Promise(Box::new(self.flatten_type(inner, visited))),
             Type::Map(value) => Type::Map(Box::new(self.flatten_type(value, visited))),
+            Type::Tuple(elems) => {
+                Type::Tuple(elems.iter().map(|e| self.flatten_type(e, visited)).collect())
+            }
             Type::Union(members) => {
                 Type::union(members.iter().map(|m| self.flatten_type(m, visited)))
             }
@@ -541,6 +544,11 @@ impl Substitutable for Type {
 
             // Map types
             Type::Map(value) => Type::Map(Box::new(value.apply_subst(subst))),
+
+            // Tuple types — substitute each component.
+            Type::Tuple(elems) => {
+                Type::Tuple(elems.iter().map(|e| e.apply_subst(subst)).collect())
+            }
 
             // Named recursive types
             Type::Named(id, args) => {

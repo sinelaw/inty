@@ -577,6 +577,11 @@ impl State {
                     self.visit_expr(elt);
                 }
             }
+            Expr::Tuple { elements, .. } => {
+                for elt in elements {
+                    self.visit_expr(elt);
+                }
+            }
             Expr::Object { properties, .. } => {
                 for p in properties {
                     self.visit_prop(p);

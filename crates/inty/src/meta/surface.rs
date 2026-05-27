@@ -25,6 +25,7 @@ pub fn is_surface_expr(expr: &Expr) -> bool {
             Some(e) => is_surface_expr(e),
             None => true,
         }),
+        Expr::Tuple { elements, .. } => elements.iter().all(is_surface_expr),
         Expr::Object { properties, .. } => properties.iter().all(|p| match p {
             crate::ast::PropDef::Property { value, .. } => is_surface_expr(value),
             crate::ast::PropDef::Method { body, .. } => is_surface_stmt(body),

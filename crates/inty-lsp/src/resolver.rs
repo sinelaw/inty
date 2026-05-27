@@ -519,6 +519,11 @@ impl Resolution {
                     self.visit_expr(e, scope);
                 }
             }
+            Expr::Tuple { elements, .. } => {
+                for e in elements {
+                    self.visit_expr(e, scope);
+                }
+            }
             Expr::Object { properties, .. } => {
                 for p in properties {
                     match p {

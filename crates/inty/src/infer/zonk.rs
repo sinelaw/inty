@@ -191,6 +191,12 @@ fn zonk_with_visited(
             Type::Promise(Box::new(zonk_with_visited(table, subst, inner, visited)))
         }
         Type::Map(value) => Type::Map(Box::new(zonk_with_visited(table, subst, value, visited))),
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| zonk_with_visited(table, subst, e, visited))
+                .collect(),
+        ),
         Type::Named(id, args) => Type::Named(
             *id,
             args.iter()
@@ -383,6 +389,12 @@ fn zonk_filtered(
         Type::Array(elem) => Type::Array(Box::new(zonk_filtered(table, subst, elem, quantified))),
         Type::Promise(inner) => Type::Promise(Box::new(zonk_filtered(table, subst, inner, quantified))),
         Type::Map(value) => Type::Map(Box::new(zonk_filtered(table, subst, value, quantified))),
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| zonk_filtered(table, subst, e, quantified))
+                .collect(),
+        ),
         Type::Named(id, args) => Type::Named(
             *id,
             args.iter().map(|a| zonk_filtered(table, subst, a, quantified)).collect(),

@@ -635,6 +635,8 @@ impl InferState {
 
             Expr::Array { elements, span } => self.infer_array(env, elements, *span),
 
+            Expr::Tuple { elements, span } => self.infer_tuple(env, elements, *span),
+
             Expr::Object { properties, span } => self.infer_object(env, properties, *span),
 
             Expr::Function {

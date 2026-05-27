@@ -70,6 +70,7 @@ fn structural_norm(ty: &Type) -> Type {
         Type::Array(elem) => Type::Array(Box::new(structural_norm(elem))),
         Type::Promise(inner) => Type::Promise(Box::new(structural_norm(inner))),
         Type::Map(value) => Type::Map(Box::new(structural_norm(value))),
+        Type::Tuple(elems) => Type::Tuple(elems.iter().map(structural_norm).collect()),
         Type::Named(id, args) => Type::Named(*id, args.iter().map(structural_norm).collect()),
         Type::Union(members) => Type::Union(members.iter().map(structural_norm).collect()),
         other => other.clone(),
@@ -371,6 +372,7 @@ impl InferState {
             Type::Array(elem) => self.find_origin_in_type(elem),
             Type::Promise(inner) => self.find_origin_in_type(inner),
             Type::Map(value) => self.find_origin_in_type(value),
+            Type::Tuple(elems) => elems.iter().find_map(|e| self.find_origin_in_type(e)),
             Type::Named(_, args) => args.iter().find_map(|a| self.find_origin_in_type(a)),
             Type::Union(members) => members.iter().find_map(|m| self.find_origin_in_type(m)),
             _ => None,
@@ -1446,6 +1448,7 @@ impl InferState {
             Type::Array(elem) => self.occurs_in_impl(var, elem),
             Type::Promise(inner) => self.occurs_in_impl(var, inner),
             Type::Map(value) => self.occurs_in_impl(var, value),
+            Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in_impl(var, e)),
 
             Type::Named(_, args) => args.iter().any(|a| self.occurs_in_impl(var, a)),
 
@@ -1509,6 +1512,9 @@ impl InferState {
             Type::Array(elem) => self.is_inside_row_type_impl(var, elem, in_row),
             Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row),
             Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
+            Type::Tuple(elems) => elems
+                .iter()
+                .any(|e| self.is_inside_row_type_impl(var, e, in_row)),
 
             _ => false,
         }

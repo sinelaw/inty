@@ -216,6 +216,17 @@ impl InferState {
             // Maps
             (Type::Map(v1), Type::Map(v2)) => self.unify(span, v1, v2),
 
+            // Tuples — structural congruence: same arity, components
+            // unified pairwise. A different arity is a distinct type and
+            // falls through to the mismatch error below (no width
+            // subtyping).
+            (Type::Tuple(a), Type::Tuple(b)) if a.len() == b.len() => {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    self.unify(span, x, y)?;
+                }
+                Ok(())
+            }
+
             // Same named type (recursive or nominal): unify arguments
             // invariantly. For nominal types this is the *only* way they
             // unify — identical brand id, matching args.
@@ -642,6 +653,33 @@ mod tests {
 
         assert!(state.unify(span, &Type::Number, &Type::Number).is_ok());
         assert!(state.unify(span, &Type::String, &Type::String).is_ok());
+    }
+
+    #[test]
+    fn test_unify_tuples_congruence() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+
+        // Same arity, components unify pairwise.
+        let a = Type::Tuple(vec![Type::Number, Type::String]);
+        let b = Type::Tuple(vec![Type::Number, Type::String]);
+        assert!(state.unify(span, &a, &b).is_ok());
+
+        // Component mismatch fails.
+        let c = Type::Tuple(vec![Type::Number, Type::Boolean]);
+        assert!(state.unify(span, &a, &c).is_err());
+
+        // Different arity is a distinct type (no width subtyping).
+        let d = Type::Tuple(vec![Type::Number, Type::String, Type::Boolean]);
+        assert!(state.unify(span, &a, &d).is_err());
+
+        // A tuple does not unify with an array.
+        let arr = Type::array(Type::Number);
+        assert!(state.unify(span, &a, &arr).is_err());
+
+        // A fresh variable binds to a tuple.
+        let v = state.fresh_type_var();
+        assert!(state.unify(span, &v, &a).is_ok());
     }
 
     #[test]
