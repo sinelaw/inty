@@ -62,6 +62,72 @@ fn brand_does_not_collapse_into_representation() {
     );
 }
 
+/// Like [`check`], but renders nominal brands by their declared name
+/// (rather than the `μ<id>` fallback), for asserting on branded output.
+fn check_named(src: &str) -> Result<String, String> {
+    let program = parse(src).map_err(|e| format!("parse error: {:?}", e))?;
+    let (env, mut state) =
+        initial_env_with_stdlib().map_err(|e| format!("stdlib error: {:?}", e))?;
+    let (ty, _) = state
+        .infer_program_with_env(&env, &program)
+        .map_err(|e| format!("type error: {:?}", e))?;
+    state
+        .resolve_constraints()
+        .map_err(|e| format!("constraint error: {:?}", e))?;
+    let resolved = state.apply_subst(&ty);
+    let mut ctx = inty::types::PrettyContext::with_nominal_names(state.nominal_names());
+    Ok(ctx.format_type(&resolved))
+}
+
+#[test]
+fn js_class_instance_method_sees_through_brand() {
+    // Branding a JS class must stay transparent for field/method access:
+    // reading a field and calling a method through the brand still works.
+    let src = "
+        class Box {
+            constructor(v) { this.v = v; }
+            id() { return this.v; }
+        }
+        const b = new Box(7);
+        const r = b.id();
+        r
+    ";
+    assert!(
+        check(src).is_ok(),
+        "field/method access through a class brand must work: {:?}",
+        check(src)
+    );
+}
+
+#[test]
+fn js_structurally_identical_classes_are_distinct_brands() {
+    // JS classes are nominal by default: `A` and `B` have identical shape
+    // but are distinct types, so a list holding both is the union `A | B`,
+    // not the single structural row it would collapse to structurally.
+    let src = "
+        class A {}
+        class B {}
+        const xs = [new A(), new B()];
+        xs
+    ";
+    assert_eq!(check_named(src).expect("distinct class brands"), "A | B[]");
+}
+
+#[test]
+fn js_distinct_classes_do_not_interchange() {
+    // Reassigning a binding across two same-shape class brands must fail.
+    let src = "
+        class A { constructor(x) { this.x = x; } }
+        class B { constructor(x) { this.x = x; } }
+        var v = new A(1);
+        v = new B(1);
+    ";
+    assert!(
+        check(src).is_err(),
+        "instances of distinct class brands must not unify"
+    );
+}
+
 #[test]
 fn same_brand_is_interchangeable() {
     let src = "

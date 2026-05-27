@@ -51,6 +51,12 @@ pub struct Parser {
     /// `this.#x` from inside a callback that's still inside the class
     /// body is legal.
     class_depth: usize,
+    /// Names of `class` declarations lowered to factory functions, in
+    /// declaration order. Surfaced on `Program::class_brands` so inference
+    /// brands each class's instance row nominally — two structurally
+    /// identical classes are then distinct types (JS classes are nominal
+    /// by default, matching `new`/`instanceof` semantics).
+    class_brands: Vec<String>,
     /// Original source text. Used to slice byte ranges out of the source
     /// when we need to reconstruct content the lexer didn't capture as a
     /// JSDoc annotation — currently only TS-style `field: T` annotations
@@ -79,6 +85,7 @@ impl Parser {
             async_depth: 0,
             next_fn_is_async: false,
             class_depth: 0,
+            class_brands: Vec::new(),
             source,
         }
     }
@@ -136,7 +143,7 @@ impl Parser {
             statements,
             span: Span::new(start, end),
             type_aliases: Vec::new(),
-            class_brands: Vec::new(),
+            class_brands: std::mem::take(&mut self.class_brands),
         })
     }
 
@@ -857,6 +864,8 @@ impl Parser {
             Some(n) => n,
             None => self.expect_ident()?,
         };
+        // Record the class for nominal branding (see `class_brands`).
+        self.class_brands.push(name.clone());
 
         // Reject `extends Parent` for now; it'd need a real prototype chain
         // to match runtime semantics and inty has no inheritance.
