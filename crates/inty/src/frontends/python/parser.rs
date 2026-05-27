@@ -30,6 +30,9 @@ pub struct Parser {
     /// to, in declaration order. Surfaced on `Program::class_brands` so
     /// inference brands each one's inferred instance row nominally.
     class_names: Vec<String>,
+    /// Type aliases collected from `type X = …` / `X: TypeAlias = …` /
+    /// `X = Literal[…]`, surfaced on `Program::type_aliases`.
+    type_aliases: Vec<TypeAlias>,
 }
 
 impl Parser {
@@ -41,7 +44,15 @@ impl Parser {
             scopes: vec![HashSet::new()],
             self_name: None,
             class_names: Vec::new(),
+            type_aliases: Vec::new(),
         }
+    }
+
+    /// Look at the token `n` positions ahead (saturating at the trailing
+    /// `Eof`), without consuming.
+    fn peek_tok(&self, n: usize) -> &Tok {
+        let i = (self.pos + n).min(self.toks.len().saturating_sub(1));
+        &self.toks[i].value
     }
 
     // ---- token helpers ----
@@ -149,7 +160,7 @@ impl Parser {
         Ok(Program {
             statements,
             span: Span::new(start, self.prev_span().end),
-            type_aliases: Vec::new(),
+            type_aliases: std::mem::take(&mut self.type_aliases),
             class_brands: std::mem::take(&mut self.class_names),
         })
     }
@@ -260,7 +271,66 @@ impl Parser {
         }
     }
 
+    /// Recognise a type-alias statement and, if matched, parse its body as
+    /// a *type expression* (so comma-bearing forms like `Literal["a","b"]`
+    /// parse) and register it on `type_aliases`. Recognised, unambiguously,
+    /// as:
+    ///   - `type NAME = <type>`            (PEP 695)
+    ///   - `NAME: TypeAlias = <type>`      (PEP 613)
+    ///   - `NAME = Head[…]` where `Head` is a typing special form
+    ///     (`Literal`, `Optional`, `Union`, …) — always a type, never a
+    ///     value, so no ambiguity with ordinary assignment.
+    /// A type alias introduces a *type name*, not a runtime value, so it
+    /// lowers to an empty statement.
+    fn try_type_alias(&mut self) -> Option<Stmt> {
+        let start = self.cur_span().start;
+        let name = if matches!(self.cur(), Tok::Name(n) if n == "type")
+            && matches!(self.peek_tok(1), Tok::Name(_))
+            && matches!(self.peek_tok(2), Tok::Assign)
+        {
+            self.advance(); // `type`
+            let Tok::Name(name) = self.advance() else { unreachable!() };
+            self.advance(); // `=`
+            name
+        } else if matches!(self.cur(), Tok::Name(_))
+            && matches!(self.peek_tok(1), Tok::Colon)
+            && matches!(self.peek_tok(2), Tok::Name(n) if n == "TypeAlias")
+            && matches!(self.peek_tok(3), Tok::Assign)
+        {
+            let Tok::Name(name) = self.advance() else { unreachable!() };
+            self.advance(); // `:`
+            self.advance(); // `TypeAlias`
+            self.advance(); // `=`
+            name
+        } else if matches!(self.cur(), Tok::Name(_))
+            && matches!(self.peek_tok(1), Tok::Assign)
+            && matches!(self.peek_tok(2), Tok::Name(h) if is_typing_special_form(h))
+            && matches!(self.peek_tok(3), Tok::LBracket)
+        {
+            let Tok::Name(name) = self.advance() else { unreachable!() };
+            self.advance(); // `=`
+            name
+        } else {
+            return None;
+        };
+
+        let body_ast = self.parse_type_ast();
+        let span = Span::new(start, self.prev_span().end);
+        self.type_aliases.push(TypeAlias {
+            name,
+            params: Vec::new(),
+            body: String::new(),
+            body_ast: Some(body_ast),
+            span,
+            nominal: false,
+        });
+        Some(Stmt::Empty { span })
+    }
+
     fn expr_or_assign(&mut self) -> Result<Stmt> {
+        if let Some(stmt) = self.try_type_alias() {
+            return Ok(stmt);
+        }
         let start = self.cur_span().start;
         let first = self.expr()?;
 
@@ -1506,6 +1576,26 @@ impl Parser {
             span: Span::new(start, self.prev_span().end),
         })
     }
+}
+
+/// Typing special forms that are *only* type-level — assigning one is
+/// always a type alias, never a value computation. Used to recognise the
+/// bare `NAME = Head[…]` alias form without ambiguity. Excludes the
+/// lowercase builtin generics (`list`/`dict`/…), which can be runtime
+/// values; those need the explicit `type X =` / `: TypeAlias` form.
+fn is_typing_special_form(name: &str) -> bool {
+    matches!(
+        name,
+        "Literal"
+            | "Optional"
+            | "Union"
+            | "Callable"
+            | "Tuple"
+            | "Type"
+            | "Annotated"
+            | "Final"
+            | "ClassVar"
+    )
 }
 
 fn aug_to_assign(op: AugOp) -> AssignOp {

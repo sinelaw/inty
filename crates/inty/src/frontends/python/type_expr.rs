@@ -169,8 +169,9 @@ impl Cursor<'_> {
                 // Erase the wrapper, keep the first argument.
                 first_or_opaque(args)
             }
-            // Unknown generic (a user class with params, Protocol, etc.).
-            _ => TypeAst::Opaque,
+            // Unknown subscripted name: a reference to a (possibly
+            // aliased) generic type — `Pair[int, str]`, a user class, etc.
+            _ => TypeAst::Ref(head.to_string(), args),
         }
     }
 
@@ -319,8 +320,12 @@ fn map_simple_name(name: &str) -> TypeAst {
         "bool" => TypeAst::Boolean,
         "bytes" | "bytearray" => TypeAst::String, // lossy: bytes ≈ String
         "None" | "NoneType" => TypeAst::Null,
-        // `object`, `Any`, and unknown names → opaque.
-        _ => TypeAst::Opaque,
+        // `object` / `Any` are genuinely unconstrained → opaque.
+        "object" | "Any" | "any" => TypeAst::Opaque,
+        // Any other bare name is a reference to a (possibly aliased) type;
+        // lowering resolves it against the alias table, or treats it as
+        // opaque if unknown.
+        other => TypeAst::Ref(other.to_string(), Vec::new()),
     }
 }
 
@@ -439,6 +444,7 @@ mod tests {
             Just(TypeAst::Null),
             Just(TypeAst::Opaque),
             "[a-z]".prop_map(TypeAst::Var),
+            "[A-Z][a-z]*".prop_map(|n| TypeAst::Ref(n, Vec::new())),
             (-1000i64..1000).prop_map(|n| TypeAst::Lit(LitValue::Number(n as f64))),
         ];
         leaf.prop_recursive(4, 32, 3, |inner| {
@@ -487,6 +493,9 @@ mod tests {
                 TypeAst::Map(_) => prop_assert!(matches!(t, Type::Map(_))),
                 TypeAst::Func(..) => prop_assert!(matches!(t, Type::Row(_))),
                 TypeAst::Var(_) => prop_assert!(matches!(t, Type::Var(_))),
+                // An unknown reference lowers to a fresh variable (no alias
+                // table in this test), just like opaque.
+                TypeAst::Ref(_, _) => prop_assert!(matches!(t, Type::Var(_))),
                 TypeAst::Opaque | TypeAst::Union(_) => {}
             }
         }

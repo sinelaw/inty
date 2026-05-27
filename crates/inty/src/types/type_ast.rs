@@ -34,6 +34,12 @@ pub enum TypeAst {
     /// one lowering scope share a single variable, so a generic container
     /// `class Box(Generic[T])` ties its `T`-typed fields together.
     Var(String),
+    /// A reference to a named type — a user type alias, possibly with type
+    /// arguments (`BumpType`, `Pair[int, str]`). Lowering resolves it
+    /// against the inference state's alias table (inlining a structural
+    /// alias, or producing the brand of a nominal one); an unknown name
+    /// lowers to a fresh variable, so it imposes no constraint.
+    Ref(String, Vec<TypeAst>),
     Array(Box<TypeAst>),
     /// String-keyed map (`dict[str, V]`).
     Map(Box<TypeAst>),
