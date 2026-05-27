@@ -632,12 +632,26 @@ impl InferState {
         // Built-in prototype methods on primitive carriers. Each match
         // arm returns a fresh function type; polymorphic methods bind
         // their type variables when the surrounding call unifies.
+        use crate::ast::SourceLanguage;
+        let language = self.language;
         match obj_type {
             Type::Array(elem_ty) => {
                 if property == "length" {
                     return Ok(Type::Number);
                 }
-                if let Some(ty) = crate::builtins::array_method_type(self, elem_ty, property) {
+                // The primitive-method surface is language-specific: Python
+                // `list` vs JavaScript `Array` (issue #67). Lua has no
+                // method-call surface on sequences (yet).
+                let method = match language {
+                    SourceLanguage::Python => {
+                        crate::builtins::python_list_method_type(self, elem_ty, property)
+                    }
+                    SourceLanguage::JavaScript => {
+                        crate::builtins::array_method_type(self, elem_ty, property)
+                    }
+                    SourceLanguage::Lua => None,
+                };
+                if let Some(ty) = method {
                     return Ok(ty);
                 }
             }
@@ -645,7 +659,16 @@ impl InferState {
                 if property == "length" {
                     return Ok(Type::Number);
                 }
-                if let Some(ty) = crate::builtins::string_method_type(self, property) {
+                let method = match language {
+                    SourceLanguage::Python => {
+                        crate::builtins::python_string_method_type(self, property)
+                    }
+                    SourceLanguage::JavaScript => {
+                        crate::builtins::string_method_type(self, property)
+                    }
+                    SourceLanguage::Lua => None,
+                };
+                if let Some(ty) = method {
                     return Ok(ty);
                 }
             }

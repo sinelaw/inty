@@ -202,7 +202,7 @@ fn program_strategy() -> impl Strategy<Value = Program> {
         span: span(),
         type_aliases: Vec::new(),
         class_brands: Vec::new(),
-        unit_is_null: false,
+        language: crate::ast::SourceLanguage::JavaScript,
     })
 }
 
@@ -519,7 +519,7 @@ proptest! {
             span: span(),
             type_aliases: Vec::new(),
         class_brands: Vec::new(),
-        unit_is_null: false,
+        language: crate::ast::SourceLanguage::JavaScript,
         };
 
         // Pretty print
@@ -549,7 +549,7 @@ proptest! {
             span: span(),
             type_aliases: Vec::new(),
         class_brands: Vec::new(),
-        unit_is_null: false,
+        language: crate::ast::SourceLanguage::JavaScript,
         };
 
         let source = print_program(&program);

@@ -114,9 +114,12 @@ impl InferState {
         // run's diagnostics.
         let _ = crate::types::subst::take_apply_subst_overflow();
 
+        // Record the source language for the few frontend-specific
+        // inference rules (unit type, primitive-method surface).
+        self.language = program.language;
         // The language's unit / "no value" type — used as the implicit
         // return of a function that falls off the end.
-        self.unit_type = if program.unit_is_null {
+        self.unit_type = if program.language.unit_is_null() {
             Type::Null
         } else {
             Type::Undefined

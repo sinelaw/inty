@@ -246,9 +246,15 @@ pub struct InferState {
     /// The type a function returns when it falls off the end (no explicit
     /// `return`): JS `undefined` (`Type::Undefined`) by default, or
     /// `Type::Null` for languages whose unit value is null (Python `None`,
-    /// Lua `nil`). Set from `Program::unit_is_null` at the start of
+    /// Lua `nil`). Derived from `Program::language` at the start of
     /// `infer_program_with_env`.
     pub(in crate::infer) unit_type: Type,
+
+    /// The source language of the program being inferred. Drives the few
+    /// frontend-specific rules — currently the unit type and which
+    /// primitive-method surface (`str`/`list` vs `String`/`Array`) a value
+    /// carries. Defaults to JavaScript.
+    pub(in crate::infer) language: crate::ast::SourceLanguage,
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -313,7 +319,20 @@ impl InferState {
             annotation_env: None,
             return_value_stack: Vec::new(),
             unit_type: Type::Undefined,
+            language: crate::ast::SourceLanguage::JavaScript,
         }
+    }
+
+    /// Set the source language and derive the unit / "no value" type.
+    /// `infer_program_with_env` does this from `Program::language`; callers
+    /// that infer statements directly (without a `Program`) use this.
+    pub fn set_language(&mut self, language: crate::ast::SourceLanguage) {
+        self.language = language;
+        self.unit_type = if language.unit_is_null() {
+            Type::Null
+        } else {
+            Type::Undefined
+        };
     }
 
     /// Record an inference error and continue. Used by `infer_stmt_list`
