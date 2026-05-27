@@ -812,6 +812,37 @@ fn builtin_precise_signature_is_enforced() {
 }
 
 #[test]
+fn builtin_sorted_preserves_element_type() {
+    // sorted is generic `<T>(list[T]) -> list[T]`: a Number list stays a
+    // Number list, a String list stays String.
+    let ok = check("xs = [3, 1, 2]\ny = sorted(xs)\nz = y[0] + 1\n");
+    assert!(ok.is_empty(), "sorted(Number[]) element should be Number, got {:?}", ok);
+
+    let bad = check("xs = [\"b\", \"a\"]\ny = sorted(xs)\nz = y[0] + 1\n");
+    assert!(!bad.is_empty(), "sorted(String[])[0] + 1 should be a type error");
+}
+
+#[test]
+fn builtin_filter_accepts_none_and_keeps_element() {
+    // The `filter(None, xs)` idiom type-checks (predicate is `object`),
+    // and the result keeps the element type.
+    let errs = check("xs = [1, 2, 3]\nys = filter(None, xs)\nz = ys[0] + 1\n");
+    assert!(errs.is_empty(), "filter(None, Number[]) should keep Number, got {:?}", errs);
+}
+
+#[test]
+fn builtin_sum_and_predicates() {
+    let errs = check(
+        "xs = [1.0, 2.0]\n\
+         t = sum(xs)\n\
+         u = sum(xs, 10)\n\
+         ok = all(xs)\n\
+         any_ = any(xs)\n",
+    );
+    assert!(errs.is_empty(), "sum/all/any should check, got {:?}", errs);
+}
+
+#[test]
 fn builtin_variadic_is_opaque_not_constrained() {
     // print/min are exposed opaquely: any call type-checks.
     let errs = check("print()\nprint(1, \"a\", [3])\ny = min(1, 2, 3)\n");
