@@ -247,7 +247,7 @@ fn pyi_distinct_stub_classes_do_not_interchange() {
         &[stubs],
     )
     .expect("two same-shape stub classes coexist in a list as a union");
-    assert_eq!(ty, "A | B[]");
+    assert_eq!(ty, "(A | B)[]");
 }
 
 #[test]
