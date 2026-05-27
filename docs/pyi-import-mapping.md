@@ -106,6 +106,16 @@ of methods + fields, and models constructors-with-statics as **callable rows**
   `@classmethod`/`@staticmethod`) = a **callable row**: a keyless call
   signature `(args) => InstanceRow` plus the class/static methods as named
   fields.
+- **Generic class** (`class Box(Generic[T])`): a module-level
+  `T = TypeVar("T")` registers `T` as a type variable, and every `T` in the
+  class body lowers to one shared variable (the `type_expr` IR carries
+  `TypeAst::Var`, resolved through a per-declaration scope). The shared
+  variable is free in the instance row, so it becomes a **brand parameter** —
+  `Box(5).get()` ties to the constructor argument and yields `Number`. *Decision:*
+  all `TypeVar`s used inside a class are scoped to the class (its brand
+  params); per-method generics aren't separately quantified. Generic `def`s at
+  module level share their `TypeVar`s across the one signature, so `scheme_of`
+  generalises them per call.
 
 ```python
 # stub

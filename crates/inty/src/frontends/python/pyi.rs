@@ -14,7 +14,7 @@
 //! returns `{fields + methods}`); nominal branding of imported classes is
 //! deferred.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::lexer::{tokenize, Tok};
 use crate::error::Result;
@@ -53,6 +53,8 @@ pub fn read_stub(state: &mut InferState, source: &str) -> Result<StubModule> {
         pos: 0,
         state,
         reexports: Vec::new(),
+        type_vars: HashSet::new(),
+        scope: HashMap::new(),
     };
     let exports = reader.module();
     Ok(StubModule {
@@ -66,6 +68,15 @@ struct StubReader<'a> {
     pos: usize,
     state: &'a mut InferState,
     reexports: Vec<ReExport>,
+    /// Names declared as type variables (`T = TypeVar("T")`), so a bare
+    /// `T` in a later type expression lowers to a shareable variable
+    /// rather than opaque.
+    type_vars: HashSet<String>,
+    /// Type-variable scope for the declaration currently being read. Reset
+    /// per top-level declaration (see `module`), so a class body shares
+    /// its type vars (they become the class's brand parameters) and each
+    /// generic `def` shares across its own signature.
+    scope: HashMap<String, Type>,
 }
 
 impl StubReader<'_> {
@@ -163,6 +174,10 @@ impl StubReader<'_> {
                 self.advance();
                 continue;
             }
+            // Each top-level declaration gets a fresh type-var scope: a
+            // class body shares one scope across all its fields/methods,
+            // and a generic `def` shares across its own signature.
+            self.scope.clear();
             if let Some((name, ty)) = self.top_decl() {
                 out.push((name, Self::scheme_of(&ty)));
             }
@@ -258,8 +273,21 @@ impl StubReader<'_> {
             return Some((name, ty));
         }
         if self.eat(&Tok::Assign) {
-            // `Name = value` — could be a TypeAlias or a constant; we
-            // don't distinguish yet, so export it opaque.
+            // `T = TypeVar("T")` (also `ParamSpec`/`TypeVarTuple`, possibly
+            // dotted like `typing.TypeVar`) declares a *type variable*, not
+            // a value: register the name so later type expressions tie its
+            // occurrences together, and don't export it as a binding.
+            if matches!(self.cur(), Tok::Name(_)) {
+                let head = self.dotted_name();
+                let last = head.rsplit('.').next().unwrap_or(&head);
+                if matches!(last, "TypeVar" | "ParamSpec" | "TypeVarTuple") {
+                    self.type_vars.insert(name);
+                    self.skip_line();
+                    return None;
+                }
+            }
+            // Otherwise `Name = value` is a TypeAlias or constant; we don't
+            // distinguish yet, so export it opaque.
             let ty = self.opaque();
             self.skip_line();
             return Some((name, ty));
@@ -513,12 +541,14 @@ impl StubReader<'_> {
         // Brand the instance row nominally so an imported stub class has a
         // distinct identity — two stub classes of identical shape no longer
         // interchange, mirroring source-class branding (PR #33,
-        // `brand_class_factory`). Free flex vars of the instance row (e.g.
-        // an opaque field, or a `Generic[T]` param lowered as opaque)
-        // become the brand's parameters, so `scheme_of` generalises the
-        // ctor and each call mints a fresh instantiation. Field/method
-        // access sees *through* the brand to this representation; only
-        // identity is opaque. See `docs/pyi-import-mapping.md` §8.
+        // `brand_class_factory`). Free flex vars of the instance row become
+        // the brand's parameters, so `scheme_of` generalises the ctor and
+        // each call mints a fresh instantiation. For a generic class these
+        // are the declared `TypeVar`s, shared across the body via
+        // `self.scope`, so `class Box(Generic[T])` brands as `Box<T>` with
+        // its `T`-typed members tied together. Field/method access sees
+        // *through* the brand to this representation; only identity is
+        // opaque. See `docs/pyi-import-mapping.md` §4.1/§5.1/§8.
         let mut brand_vars: Vec<TVarName> = instance
             .free_vars()
             .into_iter()
@@ -617,11 +647,15 @@ impl StubReader<'_> {
     // ---- type expressions ----
 
     /// Parse a Python type expression into the shared [`TypeAst`] IR
-    /// (via [`super::type_expr`]) and lower it to a `Type`. The IR is
-    /// allocator-free; opaque/unknown nodes mint fresh variables here.
+    /// (via [`super::type_expr`]) and lower it to a `Type`. Declared type
+    /// variables (`self.type_vars`) parse to [`TypeAst::Var`] and are
+    /// resolved through `self.scope`, so occurrences of the same name
+    /// within one declaration share a variable; opaque/unknown nodes mint
+    /// fresh variables here.
     fn parse_type(&mut self) -> Type {
-        let (ast, new_pos) = super::type_expr::parse_type(&self.toks, self.pos);
+        let (ast, new_pos) =
+            super::type_expr::parse_type_with_vars(&self.toks, self.pos, &self.type_vars);
         self.pos = new_pos;
-        self.state.lower_type_ast(&ast)
+        self.state.lower_type_ast_scoped(&ast, &mut self.scope)
     }
 }
