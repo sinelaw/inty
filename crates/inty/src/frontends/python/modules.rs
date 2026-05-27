@@ -86,7 +86,7 @@ fn resolve_inner(
         // Built-in modules (`typing`, …) resolve from a baked-in stub
         // before the filesystem is consulted. Their namespace uses the
         // same `Type::Module` representation as any other import.
-        if let Some(stub) = builtin_python_module(source) {
+        if let Some(stub) = super::stubs::builtin_module(source) {
             let exports = super::pyi::read_stub(state, stub)?.exports;
             env = bind_module_exports(env, specifiers, source, &exports, &module_err)?;
             continue;
@@ -163,17 +163,6 @@ fn resolve_inner(
 /// `{name: T, …}` so `ns.member` reads resolve. Polymorphism of exported
 /// functions is flattened to their body type (sufficient for member
 /// access in this slice).
-/// Baked-in stub source for a built-in module, if `spec` names one.
-/// These resolve without a filesystem lookup. The registry is the shared
-/// seam for language-provided modules (Python `typing` today; stdlib
-/// stubs and the other frontends' built-ins slot in the same way).
-fn builtin_python_module(spec: &str) -> Option<&'static str> {
-    match spec {
-        "typing" => Some(include_str!("typing.pyi")),
-        _ => None,
-    }
-}
-
 /// Bind a module's `exports` into `env` per the import `specifiers`,
 /// using the one `Type::Module` namespace representation. Shared by the
 /// built-in-module path (the filesystem path inlines the same logic plus

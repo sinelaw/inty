@@ -55,6 +55,7 @@ pub fn read_stub(state: &mut InferState, source: &str) -> Result<StubModule> {
         reexports: Vec::new(),
         type_vars: HashSet::new(),
         scope: HashMap::new(),
+        env: crate::infer::TypeEnv::empty(),
     };
     let exports = reader.module();
     Ok(StubModule {
@@ -77,6 +78,10 @@ struct StubReader<'a> {
     /// its type vars (they become the class's brand parameters) and each
     /// generic `def` shares across its own signature.
     scope: HashMap<String, Type>,
+    /// Accumulated bindings for declarations read so far, so a class
+    /// referenced by a later declaration's annotation (`def run() ->
+    /// CompletedProcess`) resolves to the class's brand within the stub.
+    env: crate::infer::TypeEnv,
 }
 
 impl StubReader<'_> {
@@ -179,7 +184,12 @@ impl StubReader<'_> {
             // and a generic `def` shares across its own signature.
             self.scope.clear();
             if let Some((name, ty)) = self.top_decl() {
-                out.push((name, Self::scheme_of(&ty)));
+                let scheme = Self::scheme_of(&ty);
+                // Make this declaration visible to later declarations'
+                // annotations (e.g. a class referenced by a `def`'s return
+                // type further down the stub).
+                self.env = self.env.extend(name.clone(), scheme.clone());
+                out.push((name, scheme));
             }
         }
         out
@@ -656,6 +666,9 @@ impl StubReader<'_> {
         let (ast, new_pos) =
             super::type_expr::parse_type_with_vars(&self.toks, self.pos, &self.type_vars);
         self.pos = new_pos;
-        self.state.lower_type_ast_scoped(&ast, &mut self.scope)
+        // Lower with the stub's accumulated env in scope so a reference to
+        // a class declared earlier in the stub resolves to its brand.
+        self.state
+            .lower_type_ast_scoped_in_env(&ast, &mut self.scope, &self.env)
     }
 }
