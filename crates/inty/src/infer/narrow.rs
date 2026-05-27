@@ -20,7 +20,7 @@
 //! it with the unification substitution would over-narrow at sibling
 //! branches.
 
-use crate::types::{LitValue, PropName, RowTail, RowType, Type, TypeScheme};
+use crate::types::{LitValue, PropName, RowTail, RowType, Type, TypeId, TypeScheme};
 
 use super::env::TypeEnv;
 use crate::ast::{BinOp, Expr, Literal, UnaryOp};
@@ -57,6 +57,12 @@ pub enum Narrowing {
     Equals(LitValue),
     /// `<path> !== <literal>`.
     NotEquals(LitValue),
+    /// `isinstance(<path>, C)` — the value is an instance of the class
+    /// whose nominal brand is `TypeId`. Filters a union of `Named` brands
+    /// to the matching member.
+    IsInstance(TypeId),
+    /// Negation of [`Narrowing::IsInstance`] (the `else` branch).
+    IsNotInstance(TypeId),
 }
 
 impl Narrowing {
@@ -68,6 +74,8 @@ impl Narrowing {
             Narrowing::IsNotTypeof(s) => Narrowing::IsTypeof(s.clone()),
             Narrowing::Equals(l) => Narrowing::NotEquals(l.clone()),
             Narrowing::NotEquals(l) => Narrowing::Equals(l.clone()),
+            Narrowing::IsInstance(id) => Narrowing::IsNotInstance(*id),
+            Narrowing::IsNotInstance(id) => Narrowing::IsInstance(*id),
         }
     }
 }
@@ -206,7 +214,26 @@ fn member_compatible(ty: &Type, narrowing: &Narrowing) -> bool {
         Narrowing::IsNotTypeof(name) => !typeof_definitely_matches(ty, name),
         Narrowing::Equals(lit) => value_compatible_with_literal(ty, lit),
         Narrowing::NotEquals(lit) => !value_definitely_equals_literal(ty, lit),
+        Narrowing::IsInstance(id) => brand_could_match(ty, *id),
+        Narrowing::IsNotInstance(id) => !brand_definitely_matches(ty, *id),
     }
+}
+
+/// True if a value of type `ty` *could* be an instance of nominal brand
+/// `id` — its `Named` brand matches, or its shape is still unknown.
+fn brand_could_match(ty: &Type, id: TypeId) -> bool {
+    match ty {
+        Type::Named(mid, _) => *mid == id,
+        // A variable or union member of unknown shape can't be ruled out.
+        Type::Var(_) | Type::Union(_) => true,
+        _ => false,
+    }
+}
+
+/// True if a value of type `ty` *must* be an instance of nominal brand
+/// `id` (used to drop members in the negated `else` branch).
+fn brand_definitely_matches(ty: &Type, id: TypeId) -> bool {
+    matches!(ty, Type::Named(mid, _) if *mid == id)
 }
 
 /// True if a value of type `ty` *could* have `typeof` equal to `name`.
@@ -643,6 +670,47 @@ mod tests {
         let narrowed = apply_narrowing(&state, &env, &path, &narrowing);
         let new_ty = narrowed.lookup("shape").unwrap().ty();
         assert_eq!(*new_ty, square);
+    }
+
+    #[test]
+    fn test_narrow_isinstance_filters_brand_union() {
+        // x : Named(1) | Named(2). isinstance(x, brand 1) keeps Named(1);
+        // the negation keeps Named(2).
+        let dog = Type::Named(1, vec![]);
+        let cat = Type::Named(2, vec![]);
+        let env = env_with("x", Type::union(vec![dog.clone(), cat.clone()]));
+        let state = crate::infer::InferState::new();
+
+        let yes = apply_narrowing(
+            &state,
+            &env,
+            &Path::Ident("x".to_string()),
+            &Narrowing::IsInstance(1),
+        );
+        assert_eq!(*yes.lookup("x").unwrap().ty(), dog);
+
+        let no = apply_narrowing(
+            &state,
+            &env,
+            &Path::Ident("x".to_string()),
+            &Narrowing::IsNotInstance(1),
+        );
+        assert_eq!(*no.lookup("x").unwrap().ty(), cat);
+    }
+
+    #[test]
+    fn test_narrow_isinstance_unmatched_brand_is_never() {
+        // A value known to be one brand, tested against a different one,
+        // collapses to never (a statically dead branch).
+        let env = env_with("x", Type::Named(2, vec![]));
+        let state = crate::infer::InferState::new();
+        let narrowed = apply_narrowing(
+            &state,
+            &env,
+            &Path::Ident("x".to_string()),
+            &Narrowing::IsInstance(1),
+        );
+        assert!(narrowed.lookup("x").unwrap().ty().is_never());
     }
 
     #[test]
