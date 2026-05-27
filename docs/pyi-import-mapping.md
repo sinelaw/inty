@@ -97,8 +97,11 @@ of methods + fields, and models constructors-with-statics as **callable rows**
 (README §"Callable Rows"; `core.d.js` `String`). The same encoding carries a
 `.pyi` class:
 
-- **Instance type** = closed row of the instance attributes + methods
-  (`@property` → plain field, exactly as JS getters lower).
+- **Instance type** = a **nominal brand** (`Type::Named`) over a closed row
+  of the instance attributes + methods (`@property` → plain field, exactly as
+  JS getters lower). The constructor returns `Named(id, …)`; field/method
+  access sees *through* the brand to the row, but identity is distinct, so two
+  stub classes of identical shape no longer interchange (see §5.1).
 - **Class object** (`type[Foo]`, the thing you call and that holds
   `@classmethod`/`@staticmethod`) = a **callable row**: a keyless call
   signature `(args) => InstanceRow` plus the class/static methods as named
@@ -122,9 +125,9 @@ class Counter:
 
 - **`Self` / `def copy(self) -> Self`** rides inty's equi-recursive `this`
   rows (the method-chaining mechanism) — `return self` already types in inty.
-- **Lost:** nominal identity (see §5.1), `__slots__` exactness nuances, and
-  the distinction between the class object and `type[Foo]` in generic
-  position.
+- **Lost:** `__slots__` exactness nuances, and the distinction between the
+  class object and `type[Foo]` in generic position. Nominal identity is now
+  **preserved** — each stub class brands its instance row (see §5.1).
 
 ### 4.2 Inheritance → flatten the MRO
 
@@ -183,23 +186,22 @@ These depend on features inty intentionally lacks. For each: why it can't be
 translated, and the **best available mitigation** short of a type-system
 change.
 
-### 5.1 Nominal identity / `isinstance` distinctions — *the big one*
+### 5.1 Nominal identity / `isinstance` distinctions — *resolved*
 
 Two Python classes with identical structure (`class Dog: name: str` vs
-`class Cat: name: str`) are **distinct types**; inty unifies them structurally,
-so it cannot tell them apart, and `isinstance`-based narrowing against a class
-has no target. `NewType`, `Enum`, distinct exception classes, and "two empty
-marker classes" all collapse.
+`class Cat: name: str`) are **distinct types**. This was once inty's biggest
+mapping gap — structural unification collapsed `NewType`, `Enum`, distinct
+exception classes, and "two empty marker classes" into one.
 
-- **Mitigation:** synthesize a **phantom discriminant field** per class
-  (`{__class__: "Dog", name: String}`) so that classes participate in inty's
-  *discriminated-union narrowing* (README §"Sum Types"). This recovers the
-  common case — distinguishing members of a union by tag — but is a
-  convention, not true nominality, and balloons every row with a tag field.
-- **Otherwise:** a genuine fix is a nominal-type feature (inty has the
-  machinery shape for it — `Type::Module` is already nominal-by-name, and
-  `Type::Named` exists for recursion — but exposing user-declarable nominal
-  types is a type-system decision, not a stub-reader trick).
+inty now has user-declarable **nominal types** (`Type::Named`, PR #33), and
+both source classes (`brand_class_factory`) and **imported stub classes**
+(`pyi.rs::class_decl`) brand their instance row: the constructor returns
+`Named(id, repr)`, so identically-shaped classes no longer unify. Reads see
+through the brand to the representation row; only identity is opaque.
+
+- **Still open:** `isinstance`-based *narrowing* against a brand (#40), and
+  `NewType`/`Enum`, which map to their base type / a literal union rather than
+  fresh brands.
 
 ### 5.2 `Any` — pervasive, and fundamentally unrepresentable
 

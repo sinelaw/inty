@@ -20,7 +20,7 @@ use super::lexer::{tokenize, Tok};
 use crate::error::Result;
 use crate::infer::InferState;
 use crate::span::Spanned;
-use crate::types::{FuncParam, PropName, Type, TypeScheme};
+use crate::types::{FuncParam, PropName, TVarName, Type, TypeDef, TypeScheme};
 
 /// The result of reading a `.pyi`: directly-declared exports plus the
 /// re-export requests (`from X import …`) the caller must resolve and
@@ -509,7 +509,35 @@ impl StubReader<'_> {
         }
 
         let instance = Type::object(fields.into_iter().map(|(k, v)| (k.0, v)));
-        let ctor = Type::wrap_callable(Type::raw_func_with_params(None, ctor_params, instance));
+
+        // Brand the instance row nominally so an imported stub class has a
+        // distinct identity — two stub classes of identical shape no longer
+        // interchange, mirroring source-class branding (PR #33,
+        // `brand_class_factory`). Free flex vars of the instance row (e.g.
+        // an opaque field, or a `Generic[T]` param lowered as opaque)
+        // become the brand's parameters, so `scheme_of` generalises the
+        // ctor and each call mints a fresh instantiation. Field/method
+        // access sees *through* the brand to this representation; only
+        // identity is opaque. See `docs/pyi-import-mapping.md` §8.
+        let mut brand_vars: Vec<TVarName> = instance
+            .free_vars()
+            .into_iter()
+            .filter(|v| v.is_flex())
+            .collect();
+        brand_vars.sort_by_key(|v| v.id());
+
+        let id = self.state.fresh_type_id();
+        self.state.register_named_type(TypeDef::nominal(
+            id,
+            name.clone(),
+            brand_vars.clone(),
+            instance,
+        ));
+        self.state.class_brand_ids.insert(name.clone(), id);
+
+        let args: Vec<Type> = brand_vars.iter().map(|v| Type::var(v.clone())).collect();
+        let branded = Type::Named(id, args);
+        let ctor = Type::wrap_callable(Type::raw_func_with_params(None, ctor_params, branded));
         Some((name, ctor))
     }
 

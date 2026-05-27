@@ -209,6 +209,48 @@ fn pyi_class_constructor_and_method() {
 }
 
 #[test]
+fn pyi_stub_class_is_nominally_branded() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    write(
+        &stubs,
+        "geo.pyi",
+        "class Point:\n    def __init__(self, x: int, y: int) -> None: ...\n    def dist(self) -> float: ...\n",
+    );
+    // A constructed instance carries the nominal brand: it prints as the
+    // class name, not as its structural representation row.
+    let ty = check(
+        "from geo import Point\np = Point(1, 2)\np\n",
+        &dir,
+        &[stubs],
+    )
+    .expect("stub class construction");
+    assert_eq!(ty, "Point");
+}
+
+#[test]
+fn pyi_distinct_stub_classes_do_not_interchange() {
+    let dir = tmp_dir();
+    let stubs = tmp_dir();
+    // Two stub classes of identical (empty) shape. Before nominal
+    // branding both mapped to the same structural row `{}` and collapsed
+    // into one element type; now each has a distinct identity, so a list
+    // holding both infers the *union* `A | B` rather than a single type.
+    write(
+        &stubs,
+        "twins.pyi",
+        "class A:\n    def __init__(self) -> None: ...\nclass B:\n    def __init__(self) -> None: ...\n",
+    );
+    let ty = check(
+        "from twins import A, B\nxs = [A(), B()]\nxs\n",
+        &dir,
+        &[stubs],
+    )
+    .expect("two same-shape stub classes coexist in a list as a union");
+    assert_eq!(ty, "A | B[]");
+}
+
+#[test]
 fn pyi_overload_decorator_is_opaque_not_a_lex_error() {
     let dir = tmp_dir();
     let stubs = tmp_dir();
