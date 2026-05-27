@@ -88,7 +88,7 @@
 //!   ExportTable)>` keyed on the canonical path would eliminate it; the
 //!   `visiting` set already gives us the right key shape.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::error::IntyError;
@@ -139,7 +139,7 @@ fn build_namespace_type(
     err_span: crate::span::Span,
     err_source: &str,
 ) -> Result<Type, IntyError> {
-    let mut export_schemes: BTreeMap<String, TypeScheme> = BTreeMap::new();
+    let mut export_schemes: Vec<(String, TypeScheme)> = Vec::new();
     for entry in exports {
         let scheme = export_scheme(entry, module_env).ok_or_else(|| {
             IntyError::Type(crate::error::TypeError::Module {
@@ -150,12 +150,10 @@ fn build_namespace_type(
                 span: err_span,
             })
         })?;
-        export_schemes.insert(entry.exported.clone(), scheme);
+        export_schemes.push((entry.exported.clone(), scheme));
     }
-    Ok(Type::Module(ModuleType {
-        source: source_id,
-        exports: export_schemes,
-    }))
+    // One shared namespace representation across frontends.
+    Ok(Type::Module(ModuleType::from_exports(source_id, export_schemes)))
 }
 
 /// Compute the effective export table of an inferred module. For local
