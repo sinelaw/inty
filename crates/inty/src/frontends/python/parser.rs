@@ -1555,38 +1555,58 @@ impl Parser {
     /// Comparisons are non-associative in this subset: a chain like
     /// `a < b < c` (which Python treats specially) is rejected rather than
     /// silently parsed left-associatively.
+    ///
+    /// `is` / `is not` are lowered to strict (in)equality — sufficient for
+    /// the common `x is None` idiom under the strict type system. `in` /
+    /// `not in` are lowered to the membership `BinOp::In` (with an outer
+    /// `not` for the negated form); both yield `bool`.
     fn comparison(&mut self) -> Result<Expr> {
         let start = self.cur_span().start;
         let left = self.bitor()?;
-        let op = match self.cur() {
-            Tok::Eq => Some(BinOp::EqEqEq),
-            Tok::Ne => Some(BinOp::NotEqEq),
-            Tok::Lt => Some(BinOp::Lt),
-            Tok::Gt => Some(BinOp::Gt),
-            Tok::Le => Some(BinOp::LtEq),
-            Tok::Ge => Some(BinOp::GtEq),
-            Tok::Is | Tok::In => {
-                return Err(self.unsupported("'is' / 'in' comparisons are not supported"))
-            }
-            _ => None,
+        // Two-token operators (`is not`, `not in`) need lookahead.
+        let (op, negate, advance_tokens) = match (self.cur(), self.peek_tok(1)) {
+            (Tok::Is, Tok::Not) => (Some(BinOp::EqEqEq), true, 2),
+            (Tok::Is, _) => (Some(BinOp::EqEqEq), false, 1),
+            (Tok::Not, Tok::In) => (Some(BinOp::In), true, 2),
+            (Tok::In, _) => (Some(BinOp::In), false, 1),
+            (Tok::Eq, _) => (Some(BinOp::EqEqEq), false, 1),
+            (Tok::Ne, _) => (Some(BinOp::NotEqEq), false, 1),
+            (Tok::Lt, _) => (Some(BinOp::Lt), false, 1),
+            (Tok::Gt, _) => (Some(BinOp::Gt), false, 1),
+            (Tok::Le, _) => (Some(BinOp::LtEq), false, 1),
+            (Tok::Ge, _) => (Some(BinOp::GtEq), false, 1),
+            _ => (None, false, 0),
         };
         let Some(op) = op else { return Ok(left) };
-        self.advance();
+        for _ in 0..advance_tokens {
+            self.advance();
+        }
         let right = self.bitor()?;
         // reject chained comparisons
         if matches!(
             self.cur(),
             Tok::Eq | Tok::Ne | Tok::Lt | Tok::Gt | Tok::Le | Tok::Ge | Tok::Is | Tok::In
-        ) {
+        ) || matches!((self.cur(), self.peek_tok(1)), (Tok::Not, Tok::In))
+        {
             return Err(self.unsupported(
                 "chained comparisons (e.g. 'a < b < c') are not supported; use 'and'",
             ));
         }
-        Ok(Expr::Binary {
+        let span = Span::new(start, self.prev_span().end);
+        let cmp = Expr::Binary {
             op,
             left: Box::new(left),
             right: Box::new(right),
-            span: Span::new(start, self.prev_span().end),
+            span,
+        };
+        Ok(if negate {
+            Expr::Unary {
+                op: UnaryOp::Not,
+                argument: Box::new(cmp),
+                span,
+            }
+        } else {
+            cmp
         })
     }
 

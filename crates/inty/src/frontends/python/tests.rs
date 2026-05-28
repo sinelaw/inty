@@ -192,6 +192,71 @@ fn with_multiple_items() {
 }
 
 #[test]
+fn in_operator_is_membership_binop() {
+    use crate::ast::BinOp;
+    match init_of("ok = x in xs") {
+        Expr::Binary { op: BinOp::In, .. } => {}
+        other => panic!("expected `in` binary, got {:?}", other),
+    }
+}
+
+#[test]
+fn not_in_is_negated_membership() {
+    use crate::ast::{BinOp, UnaryOp};
+    match init_of("ok = x not in xs") {
+        Expr::Unary {
+            op: UnaryOp::Not,
+            argument,
+            ..
+        } => {
+            assert!(matches!(
+                *argument,
+                Expr::Binary { op: BinOp::In, .. }
+            ));
+        }
+        other => panic!("expected `not in` as unary-not over `in`, got {:?}", other),
+    }
+}
+
+#[test]
+fn is_lowers_to_strict_equality() {
+    use crate::ast::BinOp;
+    match init_of("ok = x is None") {
+        Expr::Binary {
+            op: BinOp::EqEqEq, ..
+        } => {}
+        other => panic!("expected `is` as strict equality, got {:?}", other),
+    }
+}
+
+#[test]
+fn is_not_lowers_to_negated_strict_equality() {
+    use crate::ast::{BinOp, UnaryOp};
+    match init_of("ok = x is not None") {
+        Expr::Unary {
+            op: UnaryOp::Not,
+            argument,
+            ..
+        } => assert!(matches!(
+            *argument,
+            Expr::Binary {
+                op: BinOp::EqEqEq,
+                ..
+            }
+        )),
+        other => panic!("expected `is not` as `not (a === b)`, got {:?}", other),
+    }
+}
+
+#[test]
+fn not_in_inside_if_typechecks() {
+    // End-to-end: a realistic guard like `if "foo" not in s:` should
+    // parse and type-check cleanly.
+    let errs = check("s = \"hello\"\nif \"x\" not in s:\n    y = 1\n");
+    assert!(errs.is_empty(), "unexpected errors: {:?}", errs);
+}
+
+#[test]
 fn lambda_is_function() {
     assert!(matches!(
         init_of("f = lambda a: a + 1"),
