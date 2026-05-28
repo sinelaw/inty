@@ -682,6 +682,39 @@ fn stdlib_modules_are_built_in() {
 }
 
 #[test]
+fn module_level_stub_class_instance_accessed_from_function() {
+    // Issue #71: a module-level binding of a stub class instance,
+    // accessed via method or field from inside a function body, hits
+    // the hoisted-unify path with an open-tailed row constraint meeting
+    // the brand. Before the nominal-vs-open-row unroll rule in
+    // `unify`, this rejected with a "row vs Path" mismatch. The
+    // canonical pathlib pattern from real scripts is the regression
+    // case.
+    let dir = tmp_dir();
+    let src = "from pathlib import Path
+
+ROOT = Path('Cargo.toml')
+
+def f() -> str:
+    return ROOT.read_text()
+";
+    check(src, &dir, &[]).expect("module-level Path read from a function must type-check");
+
+    // Also exercise the keyword-argument path through a Pattern method
+    // (`re.compile(...).subn(repl, s, count=1)`), which originally
+    // surfaced the same bug a second time in `bump-version.py`.
+    let src2 = "import re
+
+PAT = re.compile(r'x', re.DOTALL)
+
+def f(s: str) -> str:
+    new_s, _count = PAT.subn('y', s, count=1)
+    return new_s
+";
+    check(src2, &dir, &[]).expect("module-level Pattern + subn keyword call must type-check");
+}
+
+#[test]
 fn keyword_arguments_through_stub_signature() {
     // Parameter names from a `.pyi` signature drive keyword resolution
     // at the call site.

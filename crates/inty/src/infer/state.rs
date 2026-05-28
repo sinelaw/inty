@@ -255,6 +255,34 @@ pub struct InferState {
     /// primitive-method surface (`str`/`list` vs `String`/`Array`) a value
     /// carries. Defaults to JavaScript.
     pub(in crate::infer) language: crate::ast::SourceLanguage,
+
+    /// Coinductive unification assumptions for recursive `Named` types.
+    /// When `unify` is about to unfold a `Named(id, ...)` against another
+    /// type during structural recursion, the (id, kind) pair is pushed
+    /// here. If the same pair recurs deeper in the same `unify` call —
+    /// e.g. two distinct equirecursive types of the same shape, or a
+    /// nominal type whose instance row transitively mentions itself —
+    /// the recursive arm succeeds by coinduction (Brandt-Henglein 1998;
+    /// Pierce, TAPL ch. 21). Without this, equirecursive types of
+    /// distinct ids unroll forever. The stack is logically scoped to a
+    /// single `unify` invocation but lives on the state so it threads
+    /// through `&mut self` without rewriting the call signature.
+    pub(in crate::infer) unfold_assumptions: Vec<UnfoldAssumption>,
+}
+
+/// One in-progress unfold the unifier is mid-recursion on. Two
+/// equirecursive types with distinct ids alternate-unrolling forever
+/// without this; with it, re-entering an assumption signals the cycle
+/// has closed and the unification is sound by coinduction.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(in crate::infer) enum UnfoldAssumption {
+    /// `Named(id_a) ↔ Named(id_b)` unfold in progress.
+    NamedPair(TypeId, TypeId),
+    /// `Named(id) ↔ Row(...)` unfold in progress. The row side has no
+    /// stable identity, so a same-id re-entry is what the cycle check
+    /// looks for — sufficient because every cycle goes through *some*
+    /// brand, and the row direction can't loop without the brand looping.
+    NamedRow(TypeId),
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -320,6 +348,7 @@ impl InferState {
             return_value_stack: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
+            unfold_assumptions: Vec::new(),
         }
     }
 
