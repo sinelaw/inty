@@ -22,8 +22,8 @@
 
 use std::path::{Path, PathBuf};
 
-use inty::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Stmt, VarKind};
 use inty::ast::pretty;
+use inty::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Stmt, VarKind};
 use sourcemap::SourceMapBuilder;
 
 use crate::graph::{Module, ModuleGraph};

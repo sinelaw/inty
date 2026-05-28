@@ -9,8 +9,8 @@
 
 use crate::builtins::initial_env;
 use crate::error::IntyError;
-use crate::infer::{InferState, TypeEnv};
 use crate::frontends::javascript::parse;
+use crate::infer::{InferState, TypeEnv};
 
 /// Core built-ins: console, Math, parseInt, parseFloat, isNaN, isFinite.
 pub const CORE: &str = include_str!("../stdlib/core.d.js");

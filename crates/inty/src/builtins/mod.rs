@@ -83,16 +83,14 @@ pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> 
     // presence-polymorphic. Each call allocates a fresh `PVarName` so
     // distinct invocations of the same method (e.g. `s1.slice(1)` and
     // `s2.slice(0, 4)`) bind independently.
-    let optional_last = |state: &mut InferState,
-                         required: Vec<Type>,
-                         optional: Type,
-                         ret: Type|
-     -> Type {
-        let pvar = state.fresh_pvar();
-        let mut params: Vec<FuncParam> = required.into_iter().map(FuncParam::required).collect();
-        params.push(FuncParam::optional(pvar, optional));
-        Type::simple_func_with_params(params, ret)
-    };
+    let optional_last =
+        |state: &mut InferState, required: Vec<Type>, optional: Type, ret: Type| -> Type {
+            let pvar = state.fresh_pvar();
+            let mut params: Vec<FuncParam> =
+                required.into_iter().map(FuncParam::required).collect();
+            params.push(FuncParam::optional(pvar, optional));
+            Type::simple_func_with_params(params, ret)
+        };
     Some(match method {
         // `indexOf(searchValue, fromIndex?)` per ECMAScript §22.1.3.8.
         // htmx hits this through chained calls without ever passing
@@ -283,21 +281,30 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
         "indexOf" => {
             let pvar = state.fresh_pvar();
             Type::simple_func_with_params(
-                vec![FuncParam::required(elem.clone()), FuncParam::optional(pvar, n.clone())],
+                vec![
+                    FuncParam::required(elem.clone()),
+                    FuncParam::optional(pvar, n.clone()),
+                ],
                 n.clone(),
             )
         }
         "lastIndexOf" => {
             let pvar = state.fresh_pvar();
             Type::simple_func_with_params(
-                vec![FuncParam::required(elem.clone()), FuncParam::optional(pvar, n.clone())],
+                vec![
+                    FuncParam::required(elem.clone()),
+                    FuncParam::optional(pvar, n.clone()),
+                ],
                 n.clone(),
             )
         }
         "includes" => {
             let pvar = state.fresh_pvar();
             Type::simple_func_with_params(
-                vec![FuncParam::required(elem.clone()), FuncParam::optional(pvar, n.clone())],
+                vec![
+                    FuncParam::required(elem.clone()),
+                    FuncParam::optional(pvar, n.clone()),
+                ],
                 b.clone(),
             )
         }
@@ -309,7 +316,10 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
             let p1 = state.fresh_pvar();
             let p2 = state.fresh_pvar();
             Type::simple_func_with_params(
-                vec![FuncParam::optional(p1, n.clone()), FuncParam::optional(p2, n.clone())],
+                vec![
+                    FuncParam::optional(p1, n.clone()),
+                    FuncParam::optional(p2, n.clone()),
+                ],
                 arr.clone(),
             )
         }
@@ -318,10 +328,7 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
         // ','. Most array→string conversions in real code omit it.
         "join" => {
             let pvar = state.fresh_pvar();
-            Type::simple_func_with_params(
-                vec![FuncParam::optional(pvar, s.clone())],
-                s.clone(),
-            )
+            Type::simple_func_with_params(vec![FuncParam::optional(pvar, s.clone())], s.clone())
         }
         "reverse" => Type::simple_func(vec![], arr.clone()),
         "sort" => Type::simple_func(vec![], arr.clone()),
@@ -402,10 +409,7 @@ pub fn python_list_method_type(state: &mut InferState, elem: &Type, method: &str
         // `pop(index?)` returns the removed element.
         "pop" => {
             let pvar = state.fresh_pvar();
-            Type::simple_func_with_params(
-                vec![FuncParam::optional(pvar, n.clone())],
-                elem.clone(),
-            )
+            Type::simple_func_with_params(vec![FuncParam::optional(pvar, n.clone())], elem.clone())
         }
         // `index(x, start?, stop?)`.
         "index" => {
@@ -482,7 +486,11 @@ impl InferState {
         // type that flowed in already failed inference; making its
         // dependent uses fail their type-class checks too would
         // produce one noise diagnostic per use site.
-        if pred.types.iter().any(|t| matches!(self.apply_subst(t), Type::Error)) {
+        if pred
+            .types
+            .iter()
+            .any(|t| matches!(self.apply_subst(t), Type::Error))
+        {
             return Ok(());
         }
         match pred.class {

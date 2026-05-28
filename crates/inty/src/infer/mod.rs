@@ -31,8 +31,8 @@ pub use type_parser::{
 };
 pub use unify::UnifyResult;
 
-use crate::error::{IntyError, TypeError};
 use crate::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
+use crate::error::{IntyError, TypeError};
 use crate::types::{Type, TypeScheme};
 
 /// Result type for inference operations.
@@ -167,10 +167,7 @@ impl InferState {
     /// own parameter names bound to fresh skolemised type-var IDs.
     /// Subsequent `Foo<args>` references substitute argument types
     /// for those parameter IDs.
-    pub fn load_type_aliases(
-        &mut self,
-        aliases: &[crate::ast::TypeAlias],
-    ) -> InferResult<()> {
+    pub fn load_type_aliases(&mut self, aliases: &[crate::ast::TypeAlias]) -> InferResult<()> {
         use crate::infer::state::AliasDef;
         use crate::types::{TVarName, TypeDef};
 
@@ -396,8 +393,7 @@ impl InferState {
                     collect_hoists(&mut hoisted_data, self, declarations);
                 }
                 Stmt::Export {
-                    declaration:
-                        crate::ast::ExportDecl::Var { declarations, .. },
+                    declaration: crate::ast::ExportDecl::Var { declarations, .. },
                     ..
                 } => {
                     collect_hoists(&mut hoisted_data, self, declarations);
@@ -424,8 +420,7 @@ impl InferState {
         for scc_indices in &scc_groups {
             // Gather the SCC's statements in source order. Cloning
             // is cheap relative to the inference work that follows.
-            let group_stmts: Vec<Stmt> =
-                scc_indices.iter().map(|&i| stmts[i].clone()).collect();
+            let group_stmts: Vec<Stmt> = scc_indices.iter().map(|&i| stmts[i].clone()).collect();
             match self.infer_function_group(&current_env, &group_stmts) {
                 Ok(new_env) => current_env = new_env,
                 Err(err) => {
@@ -443,8 +438,8 @@ impl InferState {
                         if let Some((name, _, _, _, _, _)) =
                             crate::infer::features::functions::function_decl_parts(stmt)
                         {
-                            current_env = current_env
-                                .extend(name.to_string(), TypeScheme::mono(Type::Error));
+                            current_env =
+                                current_env.extend(name.to_string(), TypeScheme::mono(Type::Error));
                         }
                     }
                     self.push_error(err);
@@ -498,8 +493,7 @@ impl InferState {
                     // Pass 2 that referenced the name before its
                     // declaration; unifying propagates the real type
                     // to those references via the substitution.
-                    let unify_hoisted = |state: &mut Self,
-                                         declarations: &[VarDeclarator]| {
+                    let unify_hoisted = |state: &mut Self, declarations: &[VarDeclarator]| {
                         for decl in declarations {
                             if let Some(hoisted) = hoisted_data.get(&decl.name) {
                                 if let Some(scheme) = current_env.lookup(&decl.name) {
@@ -516,8 +510,7 @@ impl InferState {
                             unify_hoisted(self, declarations);
                         }
                         Stmt::Export {
-                            declaration:
-                                crate::ast::ExportDecl::Var { declarations, .. },
+                            declaration: crate::ast::ExportDecl::Var { declarations, .. },
                             ..
                         } => {
                             unify_hoisted(self, declarations);
@@ -567,12 +560,7 @@ impl InferState {
     /// Falls back to synthesis + subsume whenever the expected type
     /// is a fresh variable, a primitive, or anything else where
     /// pushing-down has no purchase.
-    pub fn check_expr(
-        &mut self,
-        env: &TypeEnv,
-        expr: &Expr,
-        expected: &Type,
-    ) -> InferResult<Type> {
+    pub fn check_expr(&mut self, env: &TypeEnv, expr: &Expr, expected: &Type) -> InferResult<Type> {
         let expected = self.zonk(expected);
         // Object-literal special case: dispatch to the contextual
         // checking path that propagates per-field expected types.

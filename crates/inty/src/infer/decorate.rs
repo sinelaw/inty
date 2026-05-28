@@ -3,8 +3,8 @@
 //! After type inference, this module walks the AST and adds type annotations
 //! showing the inferred types for variables and functions.
 
-use crate::span::Span;
 use crate::ast::*;
+use crate::span::Span;
 use crate::types::{PrettyContext, Type, TypeScheme};
 
 use super::env::TypeEnv;

@@ -247,7 +247,12 @@ impl Parser {
         } else {
             None
         };
-        self.make_var_decls(VarKind::Let, names, inits, Span::new(start, self.prev_span().end))
+        self.make_var_decls(
+            VarKind::Let,
+            names,
+            inits,
+            Span::new(start, self.prev_span().end),
+        )
     }
 
     fn make_var_decls(
@@ -303,7 +308,7 @@ impl Parser {
     fn function_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // function
-        // funcname: Name {'.' Name} [':' Name]
+                        // funcname: Name {'.' Name} [':' Name]
         let first = self.expect_name("function name")?;
         let name_span = self.prev_span();
         let mut target = Expr::Ident {
@@ -484,7 +489,13 @@ impl Parser {
         let span = Span::new(start, self.prev_span().end);
 
         // Desugar `for i = a, b[, s] do body end` to a C-style for.
-        let descending = matches!(&step, Some(Expr::Unary { op: UnaryOp::Neg, .. }));
+        let descending = matches!(
+            &step,
+            Some(Expr::Unary {
+                op: UnaryOp::Neg,
+                ..
+            })
+        );
         let cmp = if descending { BinOp::GtEq } else { BinOp::LtEq };
         let var = Expr::Ident {
             name: name.clone(),
@@ -971,6 +982,9 @@ impl Parser {
     }
 
     fn peek_is_assign(&self) -> bool {
-        matches!(self.toks.get(self.pos + 1).map(|s| &s.value), Some(Tok::Assign))
+        matches!(
+            self.toks.get(self.pos + 1).map(|s| &s.value),
+            Some(Tok::Assign)
+        )
     }
 }

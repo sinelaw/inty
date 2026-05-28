@@ -353,9 +353,10 @@ impl Lexer {
         let c0 = self.peek();
         let c1 = self.peek2();
         let (plen, prefix) = match (c0, c1) {
-            (Some(a), Some(b)) if b.is_ascii_alphabetic() => {
-                (2, format!("{}{}", a.to_ascii_lowercase(), b.to_ascii_lowercase()))
-            }
+            (Some(a), Some(b)) if b.is_ascii_alphabetic() => (
+                2,
+                format!("{}{}", a.to_ascii_lowercase(), b.to_ascii_lowercase()),
+            ),
             (Some(a), _) => (1, a.to_ascii_lowercase().to_string()),
             _ => return Ok(false),
         };
@@ -363,7 +364,10 @@ impl Lexer {
         if !matches!(after, Some('"') | Some('\'')) {
             return Ok(false);
         }
-        if !matches!(prefix.as_str(), "f" | "r" | "b" | "u" | "rb" | "br" | "fr" | "rf") {
+        if !matches!(
+            prefix.as_str(),
+            "f" | "r" | "b" | "u" | "rb" | "br" | "fr" | "rf"
+        ) {
             return Ok(false);
         }
         let is_fstring = prefix.contains('f');
@@ -516,7 +520,9 @@ impl Lexer {
                 Some('\n') if !triple => return Err(self.err("unterminated f-string", start)),
                 Some('\\') => {
                     self.bump();
-                    let e = self.bump().ok_or_else(|| self.err("unterminated f-string", start))?;
+                    let e = self
+                        .bump()
+                        .ok_or_else(|| self.err("unterminated f-string", start))?;
                     if raw {
                         cur.push('\\');
                         cur.push(e);
@@ -620,7 +626,7 @@ impl Lexer {
                     src.push(c);
                     self.bump();
                 }
-                Some('}') => break, // depth 0 close
+                Some('}') => break,               // depth 0 close
                 Some(':') if depth == 0 => break, // format spec
                 Some('!') if depth == 0 && self.peek2() != Some('=') => break, // conversion
                 Some(c) => {

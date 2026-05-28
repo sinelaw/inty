@@ -1058,9 +1058,12 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         Type::Array(elem) => Type::array(substitute_alias_body(elem, subst)),
         Type::Map(value) => Type::Map(Box::new(substitute_alias_body(value, subst))),
         Type::Promise(inner) => Type::promise(substitute_alias_body(inner, subst)),
-        Type::Tuple(elems) => {
-            Type::Tuple(elems.iter().map(|e| substitute_alias_body(e, subst)).collect())
-        }
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_alias_body(e, subst))
+                .collect(),
+        ),
         Type::Func {
             this_type,
             params,
@@ -1217,7 +1220,10 @@ mod tests {
                 assert_eq!(optional_idx, 0);
                 assert_eq!(required_idx, 1);
             }
-            other => panic!("expected OptionalParameterFollowedByRequired, got: {:?}", other),
+            other => panic!(
+                "expected OptionalParameterFollowedByRequired, got: {:?}",
+                other
+            ),
         }
     }
 
@@ -1234,7 +1240,10 @@ mod tests {
                 assert_eq!(optional_idx, 1);
                 assert_eq!(required_idx, 2);
             }
-            other => panic!("expected OptionalParameterFollowedByRequired, got: {:?}", other),
+            other => panic!(
+                "expected OptionalParameterFollowedByRequired, got: {:?}",
+                other
+            ),
         }
     }
 
@@ -1421,13 +1430,9 @@ mod tests {
                     _ => false,
                 };
                 this_eq
-                    && p1
-                        .iter()
-                        .zip(p2.iter())
-                        .all(|(a, b)| {
-                            a.presence == b.presence
-                                && types_structurally_equal(&a.ty, &b.ty, var_map)
-                        })
+                    && p1.iter().zip(p2.iter()).all(|(a, b)| {
+                        a.presence == b.presence && types_structurally_equal(&a.ty, &b.ty, var_map)
+                    })
                     && types_structurally_equal(r1, r2, var_map)
             }
 
@@ -1597,13 +1602,9 @@ mod proptests {
                     _ => false,
                 };
                 this_eq
-                    && p1
-                        .iter()
-                        .zip(p2.iter())
-                        .all(|(a, b)| {
-                            a.presence == b.presence
-                                && types_structurally_equal(&a.ty, &b.ty, var_map)
-                        })
+                    && p1.iter().zip(p2.iter()).all(|(a, b)| {
+                        a.presence == b.presence && types_structurally_equal(&a.ty, &b.ty, var_map)
+                    })
                     && types_structurally_equal(r1, r2, var_map)
             }
 

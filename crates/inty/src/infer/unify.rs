@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 
 use crate::error::{IntyError, TypeError};
 use crate::span::Span;
-use crate::types::{FieldEntry, PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef};
+use crate::types::{
+    FieldEntry, PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef,
+};
 
 use super::state::InferState;
 
@@ -178,18 +180,10 @@ impl InferState {
                             // Surplus formal on the left side: its
                             // presence must reduce to Abs for the
                             // shorter side to be callable here.
-                            self.unify_presence(
-                                span,
-                                &p1.presence,
-                                &crate::types::Presence::Abs,
-                            )?;
+                            self.unify_presence(span, &p1.presence, &crate::types::Presence::Abs)?;
                         }
                         (None, Some(p2)) => {
-                            self.unify_presence(
-                                span,
-                                &p2.presence,
-                                &crate::types::Presence::Abs,
-                            )?;
+                            self.unify_presence(span, &p2.presence, &crate::types::Presence::Abs)?;
                         }
                         (None, None) => unreachable!(),
                     }
@@ -336,7 +330,11 @@ impl InferState {
             RowTail::Open(TVarName::Flex(id)) => {
                 // Open row - bind the tail to a closed empty row
                 // (arrays don't have additional arbitrary properties)
-                self.extend_subst(span, TVarName::Flex(*id), Type::Row(RowType::empty_closed()))
+                self.extend_subst(
+                    span,
+                    TVarName::Flex(*id),
+                    Type::Row(RowType::empty_closed()),
+                )
             }
             RowTail::Open(TVarName::Skolem(_)) => {
                 // Skolem tail can't be bound
@@ -444,7 +442,11 @@ impl InferState {
                     .collect();
 
                 if extra_props.is_empty() {
-                    self.extend_subst(span, TVarName::Flex(*id), Type::Row(RowType::empty_closed()))
+                    self.extend_subst(
+                        span,
+                        TVarName::Flex(*id),
+                        Type::Row(RowType::empty_closed()),
+                    )
                 } else {
                     self.extend_subst(
                         span,
@@ -464,7 +466,11 @@ impl InferState {
                     .collect();
 
                 if extra_props.is_empty() {
-                    self.extend_subst(span, TVarName::Flex(*id), Type::Row(RowType::empty_closed()))
+                    self.extend_subst(
+                        span,
+                        TVarName::Flex(*id),
+                        Type::Row(RowType::empty_closed()),
+                    )
                 } else {
                     self.extend_subst(
                         span,
@@ -803,11 +809,8 @@ mod tests {
 
         // call site: (Number, Number) => ret (2 args supplied)
         let ret = state.fresh_type_var();
-        let call_shape = state.callable_row_open(
-            None,
-            vec![Type::Number, Type::Number],
-            ret.clone(),
-        );
+        let call_shape =
+            state.callable_row_open(None, vec![Type::Number, Type::Number], ret.clone());
 
         assert!(
             state.unify(span, &callee, &call_shape).is_ok(),
@@ -962,25 +965,20 @@ mod tests {
         props: &[(&str, crate::types::Type)],
         tail_id: crate::types::TVarId,
     ) -> crate::types::RowType {
-        let entries: std::collections::BTreeMap<
-            crate::types::PropName,
-            crate::types::FieldEntry,
-        > = props
-            .iter()
-            .map(|(k, t)| {
-                (
-                    crate::types::PropName((*k).to_string()),
-                    crate::types::FieldEntry {
-                        presence: crate::types::Presence::Pre,
-                        ty: t.clone(),
-                    },
-                )
-            })
-            .collect();
-        crate::types::RowType::open_entries(
-            entries,
-            crate::types::TVarName::Flex(tail_id),
-        )
+        let entries: std::collections::BTreeMap<crate::types::PropName, crate::types::FieldEntry> =
+            props
+                .iter()
+                .map(|(k, t)| {
+                    (
+                        crate::types::PropName((*k).to_string()),
+                        crate::types::FieldEntry {
+                            presence: crate::types::Presence::Pre,
+                            ty: t.clone(),
+                        },
+                    )
+                })
+                .collect();
+        crate::types::RowType::open_entries(entries, crate::types::TVarName::Flex(tail_id))
     }
 
     #[test]

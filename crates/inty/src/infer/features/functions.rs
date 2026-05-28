@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::span::Span;
-use crate::ast::{ExportDecl, Expr, Literal, Param, Stmt, TypeAnnotation};
 use crate::ast::free_idents::free_identifiers_in_function_body;
+use crate::ast::{ExportDecl, Expr, Literal, Param, Stmt, TypeAnnotation};
+use crate::span::Span;
 use crate::types::{Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
@@ -355,7 +355,14 @@ impl InferState {
         // parameter positions by *name* against the callee's named params,
         // which the synthesised-row positional path below can't see.
         if !keywords.is_empty() {
-            return self.infer_keyword_call(env, &callee_type, obj_type_for_this, arguments, keywords, span);
+            return self.infer_keyword_call(
+                env,
+                &callee_type,
+                obj_type_for_this,
+                arguments,
+                keywords,
+                span,
+            );
         }
 
         // Bidirectional checking (Peyton Jones 2007 §4): pin down the
@@ -383,8 +390,11 @@ impl InferState {
         // callee can carry additional fields (e.g. `String`, a
         // constructor with statics). Row polymorphism's fresh tail
         // absorbs whatever extras the callee happens to have.
-        let expected_func =
-            self.callable_row_open(Some(this_type.clone()), param_vars.clone(), ret_type.clone());
+        let expected_func = self.callable_row_open(
+            Some(this_type.clone()),
+            param_vars.clone(),
+            ret_type.clone(),
+        );
 
         // Unify callee with expected function type. After this, each
         // `param_vars[i]` is bound to the callee's i-th parameter
@@ -506,7 +516,9 @@ impl InferState {
             slots[i] = Some(a);
         }
         for (name, value) in keywords {
-            let idx = params.iter().position(|p| p.name.as_deref() == Some(name.as_str()));
+            let idx = params
+                .iter()
+                .position(|p| p.name.as_deref() == Some(name.as_str()));
             let Some(idx) = idx else {
                 return Err(crate::error::TypeError::InvalidSyntax {
                     message: format!("unexpected keyword argument '{}'", name),
@@ -725,7 +737,9 @@ impl InferState {
         use crate::types::{FieldEntry, PropName, RowType, TVarName, TypeDef, CALLABLE_KEY};
 
         // Navigate to the callable row's `<CALL>` field.
-        let Type::Row(row) = ty else { return ty.clone() };
+        let Type::Row(row) = ty else {
+            return ty.clone();
+        };
         let call_key = PropName(CALLABLE_KEY.to_string());
         let Some(call_entry) = row.props.get(&call_key) else {
             return ty.clone();
@@ -944,8 +958,10 @@ pub(in crate::infer) fn compute_scc_groups(stmts: &[Stmt]) -> Vec<Vec<usize>> {
     // callers see them).
     sccs.into_iter()
         .map(|scc| {
-            let mut indices: Vec<usize> =
-                scc.into_iter().map(|node_id| nodes[node_id].stmt_index).collect();
+            let mut indices: Vec<usize> = scc
+                .into_iter()
+                .map(|node_id| nodes[node_id].stmt_index)
+                .collect();
             indices.sort_unstable();
             indices
         })
@@ -969,7 +985,11 @@ fn extract_callable(ty: &Type) -> Option<(Option<Type>, Vec<crate::types::FuncPa
         ret,
     } = func
     {
-        Some((this_type.as_deref().cloned(), params.clone(), (**ret).clone()))
+        Some((
+            this_type.as_deref().cloned(),
+            params.clone(),
+            (**ret).clone(),
+        ))
     } else {
         None
     }
@@ -1007,40 +1027,39 @@ fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     // `v`. If one needs to be explored, push the Resume frame for
     // `v` and an Enter frame for the successor and return without
     // closing. Otherwise close v (popping any SCC it roots).
-    let descend_or_close =
-        |mut i: usize,
-         v: usize,
-         index: &mut Vec<Option<usize>>,
-         lowlink: &mut Vec<usize>,
-         on_stack: &mut Vec<bool>,
-         stack: &mut Vec<usize>,
-         result: &mut Vec<Vec<usize>>,
-         work: &mut Vec<Step>| {
-            while i < adj[v].len() {
-                let w = adj[v][i];
-                if index[w].is_none() {
-                    work.push(Step::Resume { v, i, child: w });
-                    work.push(Step::Enter(w));
-                    return;
-                }
-                if on_stack[w] {
-                    lowlink[v] = lowlink[v].min(index[w].unwrap());
-                }
-                i += 1;
+    let descend_or_close = |mut i: usize,
+                            v: usize,
+                            index: &mut Vec<Option<usize>>,
+                            lowlink: &mut Vec<usize>,
+                            on_stack: &mut Vec<bool>,
+                            stack: &mut Vec<usize>,
+                            result: &mut Vec<Vec<usize>>,
+                            work: &mut Vec<Step>| {
+        while i < adj[v].len() {
+            let w = adj[v][i];
+            if index[w].is_none() {
+                work.push(Step::Resume { v, i, child: w });
+                work.push(Step::Enter(w));
+                return;
             }
-            // No more successors — close v.
-            if Some(lowlink[v]) == index[v] {
-                let mut scc: Vec<usize> = Vec::new();
-                while let Some(w) = stack.pop() {
-                    on_stack[w] = false;
-                    scc.push(w);
-                    if w == v {
-                        break;
-                    }
-                }
-                result.push(scc);
+            if on_stack[w] {
+                lowlink[v] = lowlink[v].min(index[w].unwrap());
             }
-        };
+            i += 1;
+        }
+        // No more successors — close v.
+        if Some(lowlink[v]) == index[v] {
+            let mut scc: Vec<usize> = Vec::new();
+            while let Some(w) = stack.pop() {
+                on_stack[w] = false;
+                scc.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            result.push(scc);
+        }
+    };
 
     for root in 0..n {
         if index[root].is_some() {

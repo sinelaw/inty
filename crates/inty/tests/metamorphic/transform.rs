@@ -3,8 +3,8 @@
 //! how the transformation renamed / introduced / removed bindings, so
 //! the oracle can assert the appropriate equivalence.
 
-use inty::span::Span;
 use inty::ast::*;
+use inty::span::Span;
 
 use super::ast::{
     bound_names_in_stmt, empty_stmt, fresh_name, names_in, num_lit, referenced_names_in_stmt,
@@ -80,8 +80,8 @@ pub fn t_intersperse_empty(p: &Program) -> (Program, Comparison) {
             statements: out,
             span: span(),
             type_aliases: Vec::new(),
-        class_brands: Vec::new(),
-        language: inty::ast::SourceLanguage::JavaScript,
+            class_brands: Vec::new(),
+            language: inty::ast::SourceLanguage::JavaScript,
         },
         Comparison::identity(),
     )
@@ -159,8 +159,8 @@ pub fn t_swap_first_independent_pair(p: &Program) -> Option<(Program, Comparison
                     statements,
                     span: span(),
                     type_aliases: Vec::new(),
-        class_brands: Vec::new(),
-        language: inty::ast::SourceLanguage::JavaScript,
+                    class_brands: Vec::new(),
+                    language: inty::ast::SourceLanguage::JavaScript,
                 },
                 Comparison::identity(),
             ));
@@ -273,8 +273,8 @@ pub fn t_wrap_expr_statements(p: &Program) -> (Program, Comparison) {
             statements,
             span: span(),
             type_aliases: Vec::new(),
-        class_brands: Vec::new(),
-        language: inty::ast::SourceLanguage::JavaScript,
+            class_brands: Vec::new(),
+            language: inty::ast::SourceLanguage::JavaScript,
         },
         Comparison::identity(),
     )
@@ -336,11 +336,7 @@ fn wrap_in_iife(expr: Expr, s: Span) -> Expr {
 ///
 /// `op` is one of `"??="`, `"||="`, `"&&="`; the corresponding
 /// short-circuit binary op (`??`, `||`, `&&`) is selected automatically.
-pub fn build_logical_assign_pair(
-    op: &str,
-    init: &str,
-    rhs: &str,
-) -> (String, String, Comparison) {
+pub fn build_logical_assign_pair(op: &str, init: &str, rhs: &str) -> (String, String, Comparison) {
     let bin = match op {
         "??=" => "??",
         "||=" => "||",
@@ -496,8 +492,8 @@ pub fn t_move_data_decl_after_first_user(p: &Program) -> Option<(Program, Compar
                     statements,
                     span: span(),
                     type_aliases: Vec::new(),
-        class_brands: Vec::new(),
-        language: inty::ast::SourceLanguage::JavaScript,
+                    class_brands: Vec::new(),
+                    language: inty::ast::SourceLanguage::JavaScript,
                 },
                 Comparison::identity(),
             ));

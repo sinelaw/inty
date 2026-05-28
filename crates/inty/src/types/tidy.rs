@@ -124,9 +124,7 @@ impl TidyEnv {
                     None | Some(Type::Undefined) | Some(Type::Var(_))
                 );
                 let tidied_this_visible = if !this_hidden {
-                    this_type
-                        .as_ref()
-                        .map(|t| Box::new(self.tidy_type(t)))
+                    this_type.as_ref().map(|t| Box::new(self.tidy_type(t)))
                 } else {
                     None
                 };
@@ -225,18 +223,10 @@ impl TidyEnv {
         // assigned. A quantified var that didn't appear in the
         // body (e.g. a hidden `this`) gets a fresh ID at the tail,
         // which `write_scheme` filters away anyway.
-        let mut vars: Vec<TVarName> = scheme
-            .vars
-            .iter()
-            .map(|v| self.rename_tvar(v))
-            .collect();
+        let mut vars: Vec<TVarName> = scheme.vars.iter().map(|v| self.rename_tvar(v)).collect();
         vars.sort_by_key(|v| v.id());
 
-        let mut pvars: Vec<PVarName> = scheme
-            .pvars
-            .iter()
-            .map(|p| self.rename_pvar(p))
-            .collect();
+        let mut pvars: Vec<PVarName> = scheme.pvars.iter().map(|p| self.rename_pvar(p)).collect();
         pvars.sort_by_key(|p| p.id());
 
         TypeScheme {
@@ -301,11 +291,7 @@ mod tests {
         let scheme = TypeScheme {
             // Vars happen to be listed `[5, 1, 9]` from generalize's
             // sort, but in the body they appear in the order 9, 5, 1.
-            vars: vec![
-                TVarName::Flex(5),
-                TVarName::Flex(1),
-                TVarName::Flex(9),
-            ],
+            vars: vec![TVarName::Flex(5), TVarName::Flex(1), TVarName::Flex(9)],
             pvars: vec![],
             body: QualType::with_preds(
                 vec![TypePred {
@@ -327,11 +313,7 @@ mod tests {
         // 1 → 2; return uses 9 → 0 again.
         assert_eq!(
             tidied.vars,
-            vec![
-                TVarName::Flex(0),
-                TVarName::Flex(1),
-                TVarName::Flex(2),
-            ],
+            vec![TVarName::Flex(0), TVarName::Flex(1), TVarName::Flex(2),],
         );
         match &tidied.body.ty {
             Type::Func { params, ret, .. } => {
@@ -341,9 +323,6 @@ mod tests {
             }
             _ => panic!("expected Func"),
         }
-        assert_eq!(
-            tidied.body.preds[0].types[0],
-            Type::Var(TVarName::Flex(0))
-        );
+        assert_eq!(tidied.body.preds[0].types[0], Type::Var(TVarName::Flex(0)));
     }
 }

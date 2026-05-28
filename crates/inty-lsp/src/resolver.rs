@@ -25,11 +25,11 @@
 
 use std::collections::HashMap;
 
-use inty::span::Span;
 use inty::ast::{
     ExportDecl, Expr, ForInLhs, ForInit, ImportSpecifier, Param, Program, PropDef, Stmt,
     VarDeclarator, VarKind,
 };
+use inty::span::Span;
 
 /// What kind of thing a binding-site span refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

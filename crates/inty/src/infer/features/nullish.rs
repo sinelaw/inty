@@ -18,9 +18,9 @@
 //! single AST node so once any optional segment fires, the rest of
 //! the chain inherits the `Undefined` carry.
 
+use crate::ast::{ChainSegment, Expr};
 use crate::infer::{InferResult, InferState, TypeEnv};
 use crate::span::Span;
-use crate::ast::{ChainSegment, Expr};
 use crate::types::Type;
 
 impl InferState {

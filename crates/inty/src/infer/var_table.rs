@@ -599,7 +599,7 @@ mod tests {
         t.union(a, b);
         let mark = t.snapshot();
         t.union(b, c); // now there's an even longer chain to compress
-        // Force a find that triggers compression inside the snapshot.
+                       // Force a find that triggers compression inside the snapshot.
         let _ = t.find(a);
         // Restore should revert both the union and the compression.
         t.restore(mark);

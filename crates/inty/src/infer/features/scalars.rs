@@ -1,7 +1,7 @@
 //! Scalar literals and template literals.
 
-use crate::span::Span;
 use crate::ast::{Expr, Literal};
+use crate::span::Span;
 use crate::types::Type;
 
 use super::super::env::TypeEnv;

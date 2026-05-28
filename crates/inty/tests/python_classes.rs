@@ -87,20 +87,19 @@ const VALUES: [&str; 3] = ["1", "\"s\"", "True"];
 /// Generate a non-empty set of `(field, value-literal)` pairs with
 /// distinct field names drawn from a small pool.
 fn fields_strategy() -> impl Strategy<Value = Vec<(String, String)>> {
-    proptest::sample::subsequence(FIELD_POOL.to_vec(), 1..=FIELD_POOL.len()).prop_flat_map(
-        |names| {
+    proptest::sample::subsequence(FIELD_POOL.to_vec(), 1..=FIELD_POOL.len())
+        .prop_flat_map(|names| {
             let n = names.len();
             let vals = prop::collection::vec(proptest::sample::select(VALUES.to_vec()), n);
             (Just(names), vals)
-        },
-    )
-    .prop_map(|(names, vals)| {
-        names
-            .into_iter()
-            .map(String::from)
-            .zip(vals.into_iter().map(String::from))
-            .collect()
-    })
+        })
+        .prop_map(|(names, vals)| {
+            names
+                .into_iter()
+                .map(String::from)
+                .zip(vals.into_iter().map(String::from))
+                .collect()
+        })
 }
 
 /// Render a class whose `__init__` takes one parameter per field and
@@ -114,7 +113,11 @@ fn fields_strategy() -> impl Strategy<Value = Vec<(String, String)>> {
 /// ```
 fn render_class(name: &str, fields: &[(String, String)]) -> String {
     let params: Vec<&str> = fields.iter().map(|(f, _)| f.as_str()).collect();
-    let mut s = format!("class {}:\n    def __init__(self, {}):\n", name, params.join(", "));
+    let mut s = format!(
+        "class {}:\n    def __init__(self, {}):\n",
+        name,
+        params.join(", ")
+    );
     for (f, _) in fields {
         s.push_str(&format!("        self.{} = {}\n", f, f));
     }
@@ -244,12 +247,7 @@ proptest! {
 /// fail; per-instantiation branding keeps them independent.
 #[test]
 fn generic_class_brands_per_instantiation() {
-    for (v1, v2) in [
-        ("1", "\"s\""),
-        ("\"s\"", "1"),
-        ("True", "1"),
-        ("1", "True"),
-    ] {
+    for (v1, v2) in [("1", "\"s\""), ("\"s\"", "1"), ("True", "1"), ("1", "True")] {
         let src = format!(
             "class Box:\n    def __init__(self, v):\n        self.value = v\n\
              a = Box({v1})\nb = Box({v2})\nx = a.value\ny = b.value\n"
@@ -257,7 +255,9 @@ fn generic_class_brands_per_instantiation() {
         assert!(
             checks(&src),
             "Box<{}> and Box<{}> should construct independently:\n{}",
-            v1, v2, src
+            v1,
+            v2,
+            src
         );
     }
 }
@@ -273,5 +273,9 @@ fn field_type_is_visible_through_brand() {
 
     let bad = "class Box:\n    def __init__(self, v):\n        self.value = v\n\
                b = Box(\"s\")\nn = b.value + 1\n";
-    assert!(!checks(bad), "String field + 1 must fail through the brand:\n{}", bad);
+    assert!(
+        !checks(bad),
+        "String field + 1 must fail through the brand:\n{}",
+        bad
+    );
 }

@@ -27,7 +27,9 @@ mod transform;
 
 use proptest::prelude::*;
 
-use inty::ast::Program; use inty::ast::pretty::print_program; use inty::frontends::javascript::parse;
+use inty::ast::pretty::print_program;
+use inty::ast::Program;
+use inty::frontends::javascript::parse;
 
 #[cfg(test)]
 use oracle::CheckResult;

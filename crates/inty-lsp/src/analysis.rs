@@ -3,12 +3,12 @@
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
-use inty::error::IntyError;
-use inty::infer::{InferState, InferWarning, TypeEnv};
 use inty::ast::{Expr, ImportSpecifier, Program, Stmt};
+use inty::error::IntyError;
 use inty::frontends::javascript::lexer::{Scanner, Token};
 use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
+use inty::infer::{InferState, InferWarning, TypeEnv};
 use inty::span::Span;
 use inty::stdlib::initial_env_with_stdlib;
 use inty::types::{PrettyContext, RowType, Type};
@@ -438,11 +438,7 @@ pub struct InlayHintData {
 /// letters in the where-clause line up with the body's letters in
 /// the same hint and with every other hint built from the same
 /// env. Empty string when there's no scheme or no predicates.
-fn where_clause_for(
-    state: &InferState,
-    def_span: Span,
-    tidy: &mut inty::types::TidyEnv,
-) -> String {
+fn where_clause_for(state: &InferState, def_span: Span, tidy: &mut inty::types::TidyEnv) -> String {
     let Some(scheme) = state.get_decl_scheme(def_span) else {
         return String::new();
     };

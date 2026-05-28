@@ -2292,8 +2292,7 @@ fn quantifier_bound_identifier_resolves() {
         const id; \
         const n = id(42); \
         const s = id(\"hi\");";
-    let (_, env, state) =
-        infer_program_with_state(src).expect("explicit quantifier should bind T");
+    let (_, env, state) = infer_program_with_state(src).expect("explicit quantifier should bind T");
     assert_eq!(
         state.apply_subst(&env.lookup("n").unwrap().body.ty),
         Type::Number
@@ -2906,11 +2905,19 @@ fn error_unifies_trivially_with_concrete() {
     let mut state = InferState::new();
     let span = crate::span::Span::new(0, 0);
     // Error on the left, concrete on the right.
-    state.unify(span, &Type::Error, &Type::Number).expect("Error ~ Number must succeed");
-    state.unify(span, &Type::Error, &Type::String).expect("Error ~ String must succeed");
+    state
+        .unify(span, &Type::Error, &Type::Number)
+        .expect("Error ~ Number must succeed");
+    state
+        .unify(span, &Type::Error, &Type::String)
+        .expect("Error ~ String must succeed");
     // Error on the right, concrete on the left.
-    state.unify(span, &Type::Boolean, &Type::Error).expect("Boolean ~ Error must succeed");
-    state.unify(span, &Type::Undefined, &Type::Error).expect("Undefined ~ Error must succeed");
+    state
+        .unify(span, &Type::Boolean, &Type::Error)
+        .expect("Boolean ~ Error must succeed");
+    state
+        .unify(span, &Type::Undefined, &Type::Error)
+        .expect("Undefined ~ Error must succeed");
 }
 
 #[test]
@@ -2918,9 +2925,13 @@ fn error_unifies_with_compound_types() {
     let mut state = InferState::new();
     let span = crate::span::Span::new(0, 0);
     let func = Type::simple_func(vec![Type::Number], Type::String);
-    state.unify(span, &Type::Error, &func).expect("Error ~ Func must succeed");
+    state
+        .unify(span, &Type::Error, &func)
+        .expect("Error ~ Func must succeed");
     let arr = Type::Array(Box::new(Type::Number));
-    state.unify(span, &arr, &Type::Error).expect("Array ~ Error must succeed");
+    state
+        .unify(span, &arr, &Type::Error)
+        .expect("Array ~ Error must succeed");
 }
 
 #[test]
@@ -2932,7 +2943,9 @@ fn error_unifies_with_flex_var_without_binding_it() {
     let mut state = InferState::new();
     let span = crate::span::Span::new(0, 0);
     let v = state.fresh_type_var();
-    state.unify(span, &Type::Error, &v).expect("Error ~ Var must succeed");
+    state
+        .unify(span, &Type::Error, &v)
+        .expect("Error ~ Var must succeed");
     // The var should still be a free type variable, not bound to Error.
     let resolved = state.apply_subst(&v);
     assert!(
@@ -3029,7 +3042,9 @@ fn error_call_propagates_through_call() {
         Stmt::Expr { expression, .. } => expression.clone(),
         _ => panic!(),
     };
-    let result = state.infer_expr(&env, &expr).expect("Error(...) must succeed");
+    let result = state
+        .infer_expr(&env, &expr)
+        .expect("Error(...) must succeed");
     let resolved = state.apply_subst(&result);
     assert_eq!(resolved, Type::Error);
 }
@@ -3041,7 +3056,10 @@ fn error_member_chain_propagates() {
     use crate::ast::Stmt;
     let mut state = InferState::new();
     let env = initial_env();
-    let env = env.extend("broken".to_string(), crate::types::TypeScheme::mono(Type::Error));
+    let env = env.extend(
+        "broken".to_string(),
+        crate::types::TypeScheme::mono(Type::Error),
+    );
     let src = "broken.a.b.c";
     let mut scanner = Scanner::new(src);
     let mut tokens = Vec::new();
@@ -3060,7 +3078,9 @@ fn error_member_chain_propagates() {
         Stmt::Expr { expression, .. } => expression.clone(),
         _ => panic!(),
     };
-    let result = state.infer_expr(&env, &expr).expect("chained access on Error must succeed");
+    let result = state
+        .infer_expr(&env, &expr)
+        .expect("chained access on Error must succeed");
     assert_eq!(state.apply_subst(&result), Type::Error);
 }
 
@@ -3071,7 +3091,10 @@ fn error_does_not_cascade_to_unrelated_bindings() {
     // to type-check normally.
     let mut state = InferState::new();
     let env = initial_env();
-    let env = env.extend("broken".to_string(), crate::types::TypeScheme::mono(Type::Error));
+    let env = env.extend(
+        "broken".to_string(),
+        crate::types::TypeScheme::mono(Type::Error),
+    );
 
     // Build a program that uses `broken` *and* an unrelated valid
     // binding. The unrelated path must still infer correctly.
@@ -3094,7 +3117,9 @@ fn error_does_not_cascade_to_unrelated_bindings() {
     let (_, env_after) = state
         .infer_program_with_env(&env, &program)
         .expect("program with Error binding must still type-check");
-    state.resolve_constraints().expect("constraints must resolve");
+    state
+        .resolve_constraints()
+        .expect("constraints must resolve");
     // `a` involves Error.field + 1 → Error + Number → resolves OK (Plus Error trivially).
     let a_ty = state.apply_subst(&env_after.lookup("a").unwrap().body.ty);
     // The result is whatever the `+` operator produced; since one
@@ -3142,9 +3167,8 @@ fn multi_error_two_independent_undefined_vars() {
     // in `state.errors` and the second binding should be recoverable
     // (bound to `Type::Error`) so any later code referring to it
     // doesn't add a third unrelated error.
-    let program = parse_for_multi_error_test(
-        "var a = doesNotExistOne; var b = doesNotExistTwo; var c = b;",
-    );
+    let program =
+        parse_for_multi_error_test("var a = doesNotExistOne; var b = doesNotExistTwo; var c = b;");
     let mut state = InferState::new();
     let env = initial_env();
     let _ = state.infer_program_with_env(&env, &program);
@@ -3160,9 +3184,18 @@ fn multi_error_two_independent_undefined_vars() {
     // a cascading "undefined variable" error.
     let undef_count = errs
         .iter()
-        .filter(|e| matches!(e, crate::error::IntyError::Type(TypeError::UndefinedVariable { .. })))
+        .filter(|e| {
+            matches!(
+                e,
+                crate::error::IntyError::Type(TypeError::UndefinedVariable { .. })
+            )
+        })
         .count();
-    assert!(undef_count >= 2, "expected at least two UndefinedVariable errors, got: {:?}", errs);
+    assert!(
+        undef_count >= 2,
+        "expected at least two UndefinedVariable errors, got: {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -3221,7 +3254,11 @@ fn multi_error_failing_var_binds_name_to_error() {
     let undef_for_x = errs
         .iter()
         .any(|e| matches!(e, crate::error::IntyError::Type(TypeError::UndefinedVariable { name, .. }) if name == "x"));
-    assert!(!undef_for_x, "reading recovered `x` should not error: {:?}", errs);
+    assert!(
+        !undef_for_x,
+        "reading recovered `x` should not error: {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -3441,12 +3478,7 @@ fn annotated_string_param_accepts_mixed_arity_slice() {
     let errs: Vec<_> = state
         .errors
         .iter()
-        .filter(|e| {
-            !matches!(
-                e,
-                crate::error::IntyError::Type(TypeError::Module { .. })
-            )
-        })
+        .filter(|e| !matches!(e, crate::error::IntyError::Type(TypeError::Module { .. })))
         .collect();
     assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
 }
@@ -3510,12 +3542,10 @@ fn unannotated_param_mixed_arity_slice_still_errors() {
     // is that *some* type error fires.
     let typed_err = match infer_program_with_state(src) {
         Err(_) => true,
-        Ok((_, _, state)) => state.errors.iter().any(|e| {
-            !matches!(
-                e,
-                crate::error::IntyError::Type(TypeError::Module { .. })
-            )
-        }),
+        Ok((_, _, state)) => state
+            .errors
+            .iter()
+            .any(|e| !matches!(e, crate::error::IntyError::Type(TypeError::Module { .. }))),
     };
     assert!(
         typed_err,

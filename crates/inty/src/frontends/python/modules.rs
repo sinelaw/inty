@@ -52,7 +52,15 @@ pub fn resolve_python_imports(
     // re-export each other widely, so without a cache the same big stubs
     // would be re-read and re-checked combinatorially.
     let mut cache: ModuleCache = std::collections::HashMap::new();
-    resolve_inner(state, env, program, base_dir, search_paths, visiting, &mut cache)
+    resolve_inner(
+        state,
+        env,
+        program,
+        base_dir,
+        search_paths,
+        visiting,
+        &mut cache,
+    )
 }
 
 /// A module's public exports, keyed by canonical path.
@@ -116,9 +124,7 @@ fn resolve_inner(
                     let path = resolve_module(source, base_dir, search_paths)
                         .ok_or_else(|| module_err(format!("cannot resolve import {:?}", source)))?;
                     let exports = load_module(state, &env, &path, search_paths, visiting, cache)?;
-                    if let Some((_, scheme)) =
-                        exports.iter().find(|(n, _)| n == imported)
-                    {
+                    if let Some((_, scheme)) = exports.iter().find(|(n, _)| n == imported) {
                         env = env.extend(local.clone(), scheme.clone());
                     } else if let Some(sub) =
                         resolve_submodule(source, imported, base_dir, search_paths)
@@ -188,13 +194,15 @@ fn bind_module_exports(
     }
     for spec in specifiers {
         match spec {
-            ImportSpecifier::Named { imported, local, .. } => {
-                let (_, scheme) = exports
-                    .iter()
-                    .find(|(n, _)| n == imported)
-                    .ok_or_else(|| {
-                        module_err(format!("module {:?} has no export named {:?}", source, imported))
-                    })?;
+            ImportSpecifier::Named {
+                imported, local, ..
+            } => {
+                let (_, scheme) = exports.iter().find(|(n, _)| n == imported).ok_or_else(|| {
+                    module_err(format!(
+                        "module {:?} has no export named {:?}",
+                        source, imported
+                    ))
+                })?;
                 env = env.extend(local.clone(), scheme.clone());
             }
             ImportSpecifier::Namespace { local, .. } => {
@@ -287,8 +295,15 @@ fn load_module(
         .unwrap_or_else(|| PathBuf::from("."));
 
     let base_names: HashSet<String> = env.names().cloned().collect();
-    let env_with_imports =
-        resolve_inner(state, env.clone(), &program, &mod_base, search_paths, visiting, cache)?;
+    let env_with_imports = resolve_inner(
+        state,
+        env.clone(),
+        &program,
+        &mod_base,
+        search_paths,
+        visiting,
+        cache,
+    )?;
     let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
 
     visiting.remove(&canonical);
@@ -341,7 +356,9 @@ fn resolve_reexport(
                 } else if let Some(sub) =
                     resolve_submodule(&re.source, imported, base_dir, search_paths)
                 {
-                    if let Ok(sub_exports) = load_module(state, env, &sub, search_paths, visiting, cache) {
+                    if let Ok(sub_exports) =
+                        load_module(state, env, &sub, search_paths, visiting, cache)
+                    {
                         exports.push((
                             local.clone(),
                             namespace_scheme(&sub.to_string_lossy(), &sub_exports),
@@ -368,7 +385,10 @@ fn resolve_module(spec: &str, base_dir: &Path, search_paths: &[PathBuf]) -> Opti
         return file_candidates(&anchor, &parts);
     }
     // Absolute: search the configured roots first, then the file's dir.
-    for root in search_paths.iter().chain(std::iter::once(&base_dir.to_path_buf())) {
+    for root in search_paths
+        .iter()
+        .chain(std::iter::once(&base_dir.to_path_buf()))
+    {
         if let Some(hit) = file_candidates(root, &parts) {
             return Some(hit);
         }

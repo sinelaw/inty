@@ -1055,7 +1055,9 @@ fn prog_ty(src: &str) -> Result<String, String> {
     let (ty, _) = state
         .infer_program_with_env(&env, &program)
         .map_err(|e| format!("{:?}", e))?;
-    state.resolve_constraints().map_err(|e| format!("{:?}", e))?;
+    state
+        .resolve_constraints()
+        .map_err(|e| format!("{:?}", e))?;
     if !state.errors.is_empty() {
         return Err(format!("{:?}", state.errors));
     }
@@ -1071,7 +1073,11 @@ fn fstring_plain_is_string() {
 #[test]
 fn fstring_with_interpolation_is_string() {
     let errs = check("name = \"x\"\ns = f\"hi {name}, {1 + 2} times\"\n");
-    assert!(errs.is_empty(), "f-string should type-check, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "f-string should type-check, got {:?}",
+        errs
+    );
     assert_eq!(
         prog_ty("name = \"x\"\nf\"hi {name}\"").expect("interpolated f-string"),
         "String"
@@ -1083,7 +1089,8 @@ fn fstring_type_checks_embedded_expression() {
     // An undefined name inside `{ … }` must be reported.
     let errs = check("s = f\"value is {missing}\"\n");
     assert!(
-        errs.iter().any(|e| e.contains("missing") || e.contains("Undefined")),
+        errs.iter()
+            .any(|e| e.contains("missing") || e.contains("Undefined")),
         "embedded expression should be type-checked, got {:?}",
         errs
     );
@@ -1110,10 +1117,15 @@ fn fstring_ignores_conversion_and_format_spec() {
     // `!r` conversions and `:spec` format specs are stripped; the
     // expression part is still type-checked.
     let errs = check("x = 42\ns = f\"{x!r} = {x:>10.2f}\"\n");
-    assert!(errs.is_empty(), "conversion/format spec should be ignored, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "conversion/format spec should be ignored, got {:?}",
+        errs
+    );
     let errs = check("s = f\"{bad!r}\"\n");
     assert!(
-        errs.iter().any(|e| e.contains("bad") || e.contains("Undefined")),
+        errs.iter()
+            .any(|e| e.contains("bad") || e.contains("Undefined")),
         "the expression before `!r` is still checked, got {:?}",
         errs
     );
@@ -1141,7 +1153,11 @@ fn fstring_self_lowers_in_method() {
          c = C(1)\n\
          r = c.show()\n",
     );
-    assert!(errs.is_empty(), "self in f-string should resolve, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "self in f-string should resolve, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -1174,7 +1190,11 @@ fn builtin_range_iterates_as_number() {
          for i in range(3):\n\
          \x20   acc = acc + i\n",
     );
-    assert!(errs.is_empty(), "range(n) should iterate as Number, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "range(n) should iterate as Number, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -1190,10 +1210,17 @@ fn builtin_sorted_preserves_element_type() {
     // sorted is generic `<T>(list[T]) -> list[T]`: a Number list stays a
     // Number list, a String list stays String.
     let ok = check("xs = [3, 1, 2]\ny = sorted(xs)\nz = y[0] + 1\n");
-    assert!(ok.is_empty(), "sorted(Number[]) element should be Number, got {:?}", ok);
+    assert!(
+        ok.is_empty(),
+        "sorted(Number[]) element should be Number, got {:?}",
+        ok
+    );
 
     let bad = check("xs = [\"b\", \"a\"]\ny = sorted(xs)\nz = y[0] + 1\n");
-    assert!(!bad.is_empty(), "sorted(String[])[0] + 1 should be a type error");
+    assert!(
+        !bad.is_empty(),
+        "sorted(String[])[0] + 1 should be a type error"
+    );
 }
 
 #[test]
@@ -1201,7 +1228,11 @@ fn builtin_filter_accepts_none_and_keeps_element() {
     // The `filter(None, xs)` idiom type-checks (predicate is `object`),
     // and the result keeps the element type.
     let errs = check("xs = [1, 2, 3]\nys = filter(None, xs)\nz = ys[0] + 1\n");
-    assert!(errs.is_empty(), "filter(None, Number[]) should keep Number, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "filter(None, Number[]) should keep Number, got {:?}",
+        errs
+    );
 }
 
 #[test]
@@ -1220,7 +1251,11 @@ fn builtin_sum_and_predicates() {
 fn builtin_variadic_is_opaque_not_constrained() {
     // print/min are exposed opaquely: any call type-checks.
     let errs = check("print()\nprint(1, \"a\", [3])\ny = min(1, 2, 3)\n");
-    assert!(errs.is_empty(), "variadic builtins should accept any call, got {:?}", errs);
+    assert!(
+        errs.is_empty(),
+        "variadic builtins should accept any call, got {:?}",
+        errs
+    );
 }
 
 #[test]

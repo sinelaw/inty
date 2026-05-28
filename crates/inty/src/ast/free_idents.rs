@@ -228,9 +228,10 @@ impl State {
                     self.bind_lex(name);
                 }
                 Stmt::Export {
-                    declaration: ExportDecl::Var {
-                        kind, declarations, ..
-                    },
+                    declaration:
+                        ExportDecl::Var {
+                            kind, declarations, ..
+                        },
                     ..
                 } => {
                     self.bind_var_declarations(*kind, declarations);
@@ -498,7 +499,10 @@ impl State {
             }
             Stmt::Labeled { body, .. } => self.visit_stmt(body),
             Stmt::FunctionDecl {
-                name: _, params, body, ..
+                name: _,
+                params,
+                body,
+                ..
             } => {
                 // The function's name is already bound in the
                 // enclosing scope by collect_block_bindings.
@@ -522,9 +526,7 @@ impl State {
                     }
                 }
             }
-            ExportDecl::Function {
-                params, body, ..
-            } => {
+            ExportDecl::Function { params, body, .. } => {
                 self.enter_function();
                 for p in params {
                     self.bind_lex(&p.name);
@@ -751,19 +753,13 @@ mod tests {
 
     #[test]
     fn function_param_shadows_outer() {
-        assert_eq!(
-            free_in("function f(x) { return x; }"),
-            Vec::<String>::new()
-        );
+        assert_eq!(free_in("function f(x) { return x; }"), Vec::<String>::new());
     }
 
     #[test]
     fn nested_function_referencing_outer_helper_is_free() {
         // `g` is not declared anywhere — free.
-        assert_eq!(
-            free_in("function f() { return g(); }"),
-            vec!["g"]
-        );
+        assert_eq!(free_in("function f() { return g(); }"), vec!["g"]);
     }
 
     #[test]
@@ -871,10 +867,9 @@ mod tests {
             Stmt::FunctionDecl { params, body, .. } => (params.as_slice(), body.as_ref()),
             _ => panic!(),
         };
-        let mut free: Vec<String> =
-            free_identifiers_in_function_body(Some("f"), params, body)
-                .into_iter()
-                .collect();
+        let mut free: Vec<String> = free_identifiers_in_function_body(Some("f"), params, body)
+            .into_iter()
+            .collect();
         free.sort();
         // `a` is a param, `f` is the function's own name, `b` and `c`
         // are unresolved → free.

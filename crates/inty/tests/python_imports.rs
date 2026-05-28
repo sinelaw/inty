@@ -15,11 +15,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 /// A throwaway directory under the OS temp dir, unique per call.
 fn tmp_dir() -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "inty_pyimports_{}_{}",
-        std::process::id(),
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("inty_pyimports_{}_{}", std::process::id(), n));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
@@ -39,8 +35,15 @@ fn check(main_src: &str, base_dir: &Path, search_paths: &[PathBuf]) -> Result<St
     let (env, mut state) =
         initial_env_with_stdlib().map_err(|e| format!("stdlib error: {:?}", e))?;
     let mut visiting = HashSet::new();
-    let env = resolve_python_imports(&mut state, env, &program, base_dir, search_paths, &mut visiting)
-        .map_err(|e| format!("resolve error: {:?}", e))?;
+    let env = resolve_python_imports(
+        &mut state,
+        env,
+        &program,
+        base_dir,
+        search_paths,
+        &mut visiting,
+    )
+    .map_err(|e| format!("resolve error: {:?}", e))?;
     let (ty, _) = state
         .infer_program_with_env(&env, &program)
         .map_err(|e| format!("type error: {:?}", e))?;
@@ -116,9 +119,17 @@ fn pyi_stub_optional_param_and_list_return() {
         "def items(n: int, start: int = ...) -> list[int]: ...\n",
     );
     // Optional trailing param may be omitted.
-    let ok1 = check("from coll import items\nr = items(3)\nr\n", &dir, &[stubs.clone()]);
+    let ok1 = check(
+        "from coll import items\nr = items(3)\nr\n",
+        &dir,
+        &[stubs.clone()],
+    );
     assert_eq!(ok1.expect("omitting optional arg is fine"), "Number[]");
-    let ok2 = check("from coll import items\nr = items(3, 1)\nr\n", &dir, &[stubs]);
+    let ok2 = check(
+        "from coll import items\nr = items(3, 1)\nr\n",
+        &dir,
+        &[stubs],
+    );
     assert_eq!(ok2.expect("supplying optional arg is fine"), "Number[]");
 }
 
@@ -135,7 +146,11 @@ fn pyi_module_level_var() {
 fn import_namespace_member_access() {
     let dir = tmp_dir();
     let stubs = tmp_dir();
-    write(&stubs, "mathx.pyi", "def add(a: int, b: int) -> int: ...\nPI: float\n");
+    write(
+        &stubs,
+        "mathx.pyi",
+        "def add(a: int, b: int) -> int: ...\nPI: float\n",
+    );
     // `import mathx` binds a namespace; `mathx.add(...)` reads through it.
     let ty = check("import mathx\nr = mathx.add(1, 2)\nr\n", &dir, &[stubs]).expect("namespace");
     assert_eq!(ty, "Number");
@@ -158,15 +173,27 @@ fn opaque_export_for_unmodelled_type() {
     // `Any`-typed parameter and return → opaque: the call still checks,
     // and the result unifies with anything.
     write(&stubs, "dyn.pyi", "def passthru(x: Any) -> Any: ...\n");
-    let ty = check("from dyn import passthru\nr = passthru(1) + 1\nr\n", &dir, &[stubs]);
-    assert!(ty.is_ok(), "opaque export should not break the importer: {:?}", ty);
+    let ty = check(
+        "from dyn import passthru\nr = passthru(1) + 1\nr\n",
+        &dir,
+        &[stubs],
+    );
+    assert!(
+        ty.is_ok(),
+        "opaque export should not break the importer: {:?}",
+        ty
+    );
 }
 
 #[test]
 fn pyi_optional_maps_to_union_with_null() {
     let dir = tmp_dir();
     let stubs = tmp_dir();
-    write(&stubs, "opt.pyi", "def find(k: str) -> Optional[int]: ...\n");
+    write(
+        &stubs,
+        "opt.pyi",
+        "def find(k: str) -> Optional[int]: ...\n",
+    );
     let ty = check("from opt import find\nr = find(\"k\")\nr\n", &dir, &[stubs]).expect("optional");
     // int | None  ->  Number | Null  (order may vary; check membership).
     assert!(
@@ -182,7 +209,11 @@ fn pyi_dict_maps_to_string_keyed_map() {
     let stubs = tmp_dir();
     write(&stubs, "m.pyi", "def lookup() -> dict[str, int]: ...\n");
     let ty = check("from m import lookup\nr = lookup()\nr\n", &dir, &[stubs]).expect("dict");
-    assert!(ty.contains("Map") || ty.contains("Number"), "dict[str,int] -> Map<Number>, got {}", ty);
+    assert!(
+        ty.contains("Map") || ty.contains("Number"),
+        "dict[str,int] -> Map<Number>, got {}",
+        ty
+    );
 }
 
 #[test]
@@ -204,7 +235,11 @@ fn pyi_class_constructor_and_method() {
     assert_eq!(ty, "Number");
 
     // Wrong constructor argument type is rejected.
-    let bad = check("from geo import Point\np = Point(\"a\", 2)\n", &dir, &[stubs]);
+    let bad = check(
+        "from geo import Point\np = Point(\"a\", 2)\n",
+        &dir,
+        &[stubs],
+    );
     assert!(bad.is_err(), "stub constructor arg types must be enforced");
 }
 
@@ -358,7 +393,11 @@ fn pyi_overload_decorator_is_opaque_not_a_lex_error() {
          def f(x: str) -> str: ...\n",
     );
     let ty = check("from ov import f\nr = f(1) + 1\nr\n", &dir, &[stubs]);
-    assert!(ty.is_ok(), "overloaded def should be opaque, not error: {:?}", ty);
+    assert!(
+        ty.is_ok(),
+        "overloaded def should be opaque, not error: {:?}",
+        ty
+    );
 }
 
 #[test]
@@ -410,10 +449,19 @@ fn pyi_star_reexport_is_followed() {
 fn pyi_named_reexport_is_followed() {
     let dir = tmp_dir();
     let stubs = tmp_dir();
-    write(&stubs, "impl.pyi", "def helper(x: int) -> int: ...\nINTERNAL: int\n");
+    write(
+        &stubs,
+        "impl.pyi",
+        "def helper(x: int) -> int: ...\nINTERNAL: int\n",
+    );
     write(&stubs, "agg.pyi", "from impl import helper as helper\n");
     // `helper` is re-exported; `INTERNAL` is not.
-    assert!(check("from agg import helper\nr = helper(3)\nr\n", &dir, &[stubs.clone()]).is_ok());
+    assert!(check(
+        "from agg import helper\nr = helper(3)\nr\n",
+        &dir,
+        &[stubs.clone()]
+    )
+    .is_ok());
     assert!(
         check("from agg import INTERNAL\n", &dir, &[stubs]).is_err(),
         "a name not named in the re-export must not be visible"
@@ -424,7 +472,11 @@ fn pyi_named_reexport_is_followed() {
 fn pyi_literal_maps_to_literal_union() {
     let dir = tmp_dir();
     let stubs = tmp_dir();
-    write(&stubs, "lit.pyi", "def kind() -> Literal[\"a\", \"b\"]: ...\n");
+    write(
+        &stubs,
+        "lit.pyi",
+        "def kind() -> Literal[\"a\", \"b\"]: ...\n",
+    );
     let ty = check("from lit import kind\nkind()\n", &dir, &[stubs]).expect("literal return");
     // Should be the literal union "a" | "b", not opaque.
     assert!(
@@ -438,9 +490,18 @@ fn pyi_literal_maps_to_literal_union() {
 fn pyi_literal_param_is_enforced() {
     let dir = tmp_dir();
     let stubs = tmp_dir();
-    write(&stubs, "lit.pyi", "def pick(x: Literal[\"a\", \"b\"]) -> int: ...\n");
+    write(
+        &stubs,
+        "lit.pyi",
+        "def pick(x: Literal[\"a\", \"b\"]) -> int: ...\n",
+    );
     assert!(
-        check("from lit import pick\npick(\"a\")\n", &dir, &[stubs.clone()]).is_ok(),
+        check(
+            "from lit import pick\npick(\"a\")\n",
+            &dir,
+            &[stubs.clone()]
+        )
+        .is_ok(),
         "a valid literal member should be accepted"
     );
     assert!(
@@ -485,20 +546,32 @@ fn pyi_callable_ellipsis_is_opaque() {
     let stubs = tmp_dir();
     // `Callable[..., int]` (arbitrary args) can't be expressed; stays
     // opaque so any call shape is accepted.
-    write(&stubs, "hof2.pyi", "def deco(f: Callable[..., int]) -> int: ...\n");
+    write(
+        &stubs,
+        "hof2.pyi",
+        "def deco(f: Callable[..., int]) -> int: ...\n",
+    );
     let ty = check(
         "from hof2 import deco\ndef g(a, b, c):\n    return 1\nr = deco(g)\nr\n",
         &dir,
         &[stubs],
     );
-    assert!(ty.is_ok(), "Callable[..., R] should accept any callable: {:?}", ty);
+    assert!(
+        ty.is_ok(),
+        "Callable[..., R] should accept any callable: {:?}",
+        ty
+    );
 }
 
 #[test]
 fn transitive_py_imports() {
     let dir = tmp_dir();
     write(&dir, "a.py", "def base(x):\n    return x + 1\n");
-    write(&dir, "b.py", "from a import base\ndef twice(x):\n    return base(base(x))\n");
+    write(
+        &dir,
+        "b.py",
+        "from a import base\ndef twice(x):\n    return base(base(x))\n",
+    );
     let ty = check("from b import twice\nr = twice(10)\nr\n", &dir, &[]).expect("transitive");
     assert_eq!(ty, "Number");
 }
@@ -510,7 +583,11 @@ fn imported_class_resolves_as_type_annotation() {
     // bring in the real class brand, not an opaque variable.
     let dir = tmp_dir();
     let stubs = tmp_dir();
-    write(&stubs, "animals.pyi", "class Dog:\n    def __init__(self) -> None: ...\n");
+    write(
+        &stubs,
+        "animals.pyi",
+        "class Dog:\n    def __init__(self) -> None: ...\n",
+    );
 
     // Correct usage type-checks.
     let ok = check(
@@ -521,7 +598,11 @@ fn imported_class_resolves_as_type_annotation() {
         &dir,
         &[stubs.clone()],
     );
-    assert!(ok.is_ok(), "imported class annotations should check: {:?}", ok);
+    assert!(
+        ok.is_ok(),
+        "imported class annotations should check: {:?}",
+        ok
+    );
 
     // A non-Dog argument is rejected — the dotted annotation resolved to
     // the real brand, not opaque.
@@ -530,7 +611,10 @@ fn imported_class_resolves_as_type_annotation() {
         &dir,
         &[stubs],
     );
-    assert!(bad.is_err(), "String where animals.Dog is annotated should fail");
+    assert!(
+        bad.is_err(),
+        "String where animals.Dog is annotated should fail"
+    );
 }
 
 #[test]
@@ -553,7 +637,11 @@ fn typing_module_is_built_in() {
         &dir,
         &[],
     );
-    assert!(ok2.is_ok(), "qualified typing.List should resolve: {:?}", ok2);
+    assert!(
+        ok2.is_ok(),
+        "qualified typing.List should resolve: {:?}",
+        ok2
+    );
 
     let bad = check(
         "from typing import List\ndef h(xs: List[int]):\n    return xs[0]\nr = h([1]) + \"s\"\n",
@@ -587,7 +675,10 @@ fn stdlib_modules_are_built_in() {
         &dir,
         &[],
     );
-    assert!(bad.is_err(), "an absent member of a stub class should be caught");
+    assert!(
+        bad.is_err(),
+        "an absent member of a stub class should be caught"
+    );
 }
 
 #[test]
@@ -605,5 +696,8 @@ fn keyword_arguments_through_stub_signature() {
     assert_eq!(ok.expect("keyword call via stub names"), "Number");
 
     let bad = check("from geo import dist\nr = dist(1, z=2)\n", &dir, &[stubs]);
-    assert!(bad.is_err(), "unknown keyword against a stub signature should fail");
+    assert!(
+        bad.is_err(),
+        "unknown keyword against a stub signature should fail"
+    );
 }

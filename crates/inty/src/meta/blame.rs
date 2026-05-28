@@ -13,8 +13,8 @@
 
 use crate::dynamics::{run_to_end_with_fuel, Stuck};
 use crate::frontends::javascript::lexer::{Scanner, Token};
-use crate::operators::{BaseType, OpInfo, OpKind, TypeShape, TypingArm};
 use crate::frontends::javascript::parser::Parser;
+use crate::operators::{BaseType, OpInfo, OpKind, TypeShape, TypingArm};
 use crate::types::ClassName;
 
 /// `(operator name, configuration snapshot, input shape)` describing a

@@ -247,7 +247,10 @@ impl Lexer {
                 self.bump();
             }
         }
-        let text: String = self.chars[start..self.pos].iter().map(|(_, c)| *c).collect();
+        let text: String = self.chars[start..self.pos]
+            .iter()
+            .map(|(_, c)| *c)
+            .collect();
         let v: f64 = text.parse().map_err(|_| self.num_err(start))?;
         Ok(Tok::Number(v))
     }
@@ -265,7 +268,10 @@ impl Lexer {
         while matches!(self.peek(), Some(c) if c.is_alphanumeric() || c == '_') {
             self.bump();
         }
-        let text: String = self.chars[start..self.pos].iter().map(|(_, c)| *c).collect();
+        let text: String = self.chars[start..self.pos]
+            .iter()
+            .map(|(_, c)| *c)
+            .collect();
         Tok::keyword(&text).unwrap_or(Tok::Name(text))
     }
 

@@ -50,9 +50,9 @@ fn structural_norm(ty: &Type) -> Type {
                             // doesn't fire on differently-named
                             // presence vars.
                             presence: match &e.presence {
-                                crate::types::Presence::Var(_) => crate::types::Presence::Var(
-                                    crate::types::PVarName::Flex(0),
-                                ),
+                                crate::types::Presence::Var(_) => {
+                                    crate::types::Presence::Var(crate::types::PVarName::Flex(0))
+                                }
                                 other => other.clone(),
                             },
                             ty: structural_norm(&e.ty),
@@ -459,10 +459,7 @@ impl InferState {
     /// `var_table.fresh()`; the two counters are invariant-equal.
     pub fn fresh_flex(&mut self) -> TVarName {
         let id = self.var_table.fresh();
-        debug_assert_eq!(
-            id, self.name_source,
-            "var_table id must match name_source"
-        );
+        debug_assert_eq!(id, self.name_source, "var_table id must match name_source");
         self.name_source = id + 1;
         TVarName::Flex(id)
     }
@@ -476,10 +473,7 @@ impl InferState {
     /// inference run and is never read.
     pub fn fresh_skolem(&mut self) -> TVarName {
         let id = self.var_table.fresh();
-        debug_assert_eq!(
-            id, self.name_source,
-            "var_table id must match name_source"
-        );
+        debug_assert_eq!(id, self.name_source, "var_table id must match name_source");
         self.name_source = id + 1;
         TVarName::Skolem(id)
     }
@@ -671,11 +665,7 @@ impl InferState {
             .iter()
             .map(|p| TypePred {
                 class: p.class,
-                types: p
-                    .types
-                    .iter()
-                    .map(|t| self.main_subst.flatten(t))
-                    .collect(),
+                types: p.types.iter().map(|t| self.main_subst.flatten(t)).collect(),
             })
             .collect();
         TypeScheme {
@@ -840,10 +830,7 @@ impl InferState {
                 let mut all_ok = true;
                 for (k, sub_field) in &r1.props {
                     let sup_field = r2.props.get(k).expect("keys checked equal");
-                    if self
-                        .subsume(span, &sub_field.ty, &sup_field.ty)
-                        .is_err()
-                    {
+                    if self.subsume(span, &sub_field.ty, &sup_field.ty).is_err() {
                         all_ok = false;
                         break;
                     }
@@ -1353,10 +1340,7 @@ impl InferState {
         }
         for pvar in &scheme.pvars {
             let skolem = self.fresh_pvar_skolem();
-            subst.insert_presence(
-                pvar.clone(),
-                crate::types::Presence::Var(skolem),
-            );
+            subst.insert_presence(pvar.clone(), crate::types::Presence::Var(skolem));
         }
 
         (skolems, subst.apply(&scheme.body.ty))
@@ -1399,10 +1383,8 @@ impl InferState {
         // makes them escape today), so we generalize every free flex
         // pvar we see. If presence-bound env entries ever exist, this
         // would need an env_free_pvars analogue.
-        let mut gen_pvars: Vec<crate::types::PVarName> = pvars
-            .into_iter()
-            .filter(|p| p.is_flex())
-            .collect();
+        let mut gen_pvars: Vec<crate::types::PVarName> =
+            pvars.into_iter().filter(|p| p.is_flex()).collect();
         gen_pvars.sort_by_key(|p| p.id());
 
         if gen_vars.is_empty() && gen_pvars.is_empty() {

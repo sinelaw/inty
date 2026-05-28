@@ -1,8 +1,8 @@
 //! Character-level scanner for tokenizing JavaScript source.
 
 use super::token::{Span, Spanned, Token};
-use crate::error::{LexError, Result};
 use crate::ast::{AnnotationKind, TypeAlias, TypeAnnotation};
+use crate::error::{LexError, Result};
 
 /// The lexer/scanner for mquickjs source code.
 pub struct Scanner<'a> {
@@ -161,7 +161,7 @@ impl<'a> Scanner<'a> {
                     }
                     Some((_, '?')) => {
                         self.advance(); // ?
-                        // ES2021 logical-assignment `??=`.
+                                        // ES2021 logical-assignment `??=`.
                         if matches!(self.peek(), Some((_, '='))) {
                             self.advance(); // =
                             Token::QuestionQuestionEq
@@ -1741,10 +1741,7 @@ mod tests {
     #[test]
     fn jsdoc_at_type_with_following_tags() {
         let body = " @type Number\n * @default 0\n ";
-        assert_eq!(
-            extract_jsdoc_type_tag(body),
-            Some("Number".to_string())
-        );
+        assert_eq!(extract_jsdoc_type_tag(body), Some("Number".to_string()));
     }
 
     #[test]

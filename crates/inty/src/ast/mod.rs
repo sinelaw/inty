@@ -503,10 +503,7 @@ pub enum Expr {
     /// Tuple literal: `(a, b, c)` — a fixed-arity heterogeneous product.
     /// Infers to [`crate::types::Type::Tuple`]. Distinct from `Array`,
     /// which is homogeneous.
-    Tuple {
-        elements: Vec<Expr>,
-        span: Source,
-    },
+    Tuple { elements: Vec<Expr>, span: Source },
 
     /// Object literal: {a: 1, b: 2}
     Object {

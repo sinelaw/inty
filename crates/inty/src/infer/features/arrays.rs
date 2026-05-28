@@ -1,8 +1,8 @@
 //! Array literals and indexing.
 
-use crate::span::Span;
 use crate::ast::{Expr, Literal, UnaryOp};
 use crate::error::{IntyError, TypeError};
+use crate::span::Span;
 use crate::types::{LitValue, RowTail, TVarName, Type, TypePred};
 
 use super::super::env::TypeEnv;
@@ -249,8 +249,15 @@ impl InferState {
 /// Returns `None` for any non-constant index.
 fn const_int_of(e: &Expr) -> Option<i64> {
     match e {
-        Expr::Lit { value: Literal::Number(n), .. } if n.fract() == 0.0 => Some(*n as i64),
-        Expr::Unary { op: UnaryOp::Neg, argument, .. } => const_int_of(argument).map(|v| -v),
+        Expr::Lit {
+            value: Literal::Number(n),
+            ..
+        } if n.fract() == 0.0 => Some(*n as i64),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            argument,
+            ..
+        } => const_int_of(argument).map(|v| -v),
         _ => None,
     }
 }

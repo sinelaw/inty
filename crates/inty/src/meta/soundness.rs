@@ -19,9 +19,9 @@
 
 use crate::builtins::initial_env;
 use crate::dynamics::{run_to_end_with_fuel, Stuck, Value};
-use crate::infer::InferState;
 use crate::frontends::javascript::lexer::{Scanner, Token};
 use crate::frontends::javascript::parser::Parser;
+use crate::infer::InferState;
 use crate::types::Type;
 
 /// Target type for a generated expression.

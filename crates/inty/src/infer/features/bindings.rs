@@ -2,9 +2,9 @@
 
 use std::collections::HashSet;
 
+use crate::ast::{AssignOp, Expr, PropDef, VarDeclarator, VarKind};
 use crate::error::TypeError;
 use crate::span::Span;
-use crate::ast::{AssignOp, Expr, PropDef, VarDeclarator, VarKind};
 use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};
@@ -312,14 +312,12 @@ impl InferState {
                 // `=`, the runtime test only decides whether the
                 // assignment actually fires.
                 let lhs_resolved = self.zonk(&left_type);
-                let rhs_for_assign = if matches!(
-                    lhs_resolved,
-                    Type::Var(crate::types::TVarName::Flex(_))
-                ) {
-                    right_type.widen_fresh_literals()
-                } else {
-                    right_type.clone()
-                };
+                let rhs_for_assign =
+                    if matches!(lhs_resolved, Type::Var(crate::types::TVarName::Flex(_))) {
+                        right_type.widen_fresh_literals()
+                    } else {
+                        right_type.clone()
+                    };
                 self.subsume(span, &rhs_for_assign, &left_type)?;
             }
 

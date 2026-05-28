@@ -44,7 +44,10 @@ fn nil_is_null_literal() {
     match &parse("local y = nil")[0] {
         Stmt::Var { declarations, .. } => assert!(matches!(
             declarations[0].init,
-            Some(Expr::Lit { value: Literal::Null, .. })
+            Some(Expr::Lit {
+                value: Literal::Null,
+                ..
+            })
         )),
         _ => unreachable!(),
     }
@@ -77,14 +80,26 @@ fn not_equal_is_strict() {
         Stmt::Var { declarations, .. } => declarations[0].init.clone().unwrap(),
         _ => unreachable!(),
     };
-    assert!(matches!(e, Expr::Binary { op: BinOp::NotEqEq, .. }));
+    assert!(matches!(
+        e,
+        Expr::Binary {
+            op: BinOp::NotEqEq,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn repeat_is_dowhile_with_negation() {
     match &parse("repeat x = x + 1 until x > 10")[0] {
         Stmt::DoWhile { test, .. } => {
-            assert!(matches!(test, Expr::Unary { op: UnaryOp::Not, .. }));
+            assert!(matches!(
+                test,
+                Expr::Unary {
+                    op: UnaryOp::Not,
+                    ..
+                }
+            ));
         }
         other => panic!("expected do-while, got {:?}", other),
     }
@@ -106,7 +121,10 @@ fn numeric_for_desugars() {
 #[test]
 fn elseif_nests() {
     match &parse("if a then x = 1 elseif b then x = 2 else x = 3 end")[0] {
-        Stmt::If { alternate: Some(alt), .. } => {
+        Stmt::If {
+            alternate: Some(alt),
+            ..
+        } => {
             assert!(matches!(**alt, Stmt::If { .. }));
         }
         other => panic!("expected if with nested elseif, got {:?}", other),
@@ -139,7 +157,9 @@ fn method_call_keeps_receiver() {
         _ => unreachable!(),
     };
     match e {
-        Expr::Call { callee, arguments, .. } => {
+        Expr::Call {
+            callee, arguments, ..
+        } => {
             assert!(matches!(*callee, Expr::Member { .. }));
             assert_eq!(arguments.len(), 1);
         }

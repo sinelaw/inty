@@ -173,9 +173,7 @@ impl Cursor<'_> {
         let mut args = self.parse_type_args();
         match last {
             "list" | "List" | "Sequence" | "Iterable" | "Iterator" | "MutableSequence"
-            | "frozenset" | "set" | "Set" => {
-                TypeAst::Array(Box::new(first_or_opaque(args)))
-            }
+            | "frozenset" | "set" | "Set" => TypeAst::Array(Box::new(first_or_opaque(args))),
             "dict" | "Dict" | "Mapping" | "MutableMapping" => {
                 // Map is string-keyed; the value is the 2nd arg.
                 let value = if args.len() >= 2 {
@@ -505,7 +503,10 @@ mod tests {
         // A qualified *constructor* still maps by its final segment, so a
         // qualified container generic behaves like its bare form.
         assert_eq!(ty("typing.List[int]"), Type::array(Type::Number));
-        assert_eq!(ty("t.Optional[str]"), Type::union(vec![Type::String, Type::Null]));
+        assert_eq!(
+            ty("t.Optional[str]"),
+            Type::union(vec![Type::String, Type::Null])
+        );
         // A qualified *name* (no in-scope env in this helper) parses and
         // lowers to a fresh variable (opaque) rather than erroring; with an
         // import environment it would resolve through the namespace (see

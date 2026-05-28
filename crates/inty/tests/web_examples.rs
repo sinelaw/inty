@@ -117,7 +117,11 @@ fn enable_markers(src: &str) -> Option<String> {
         out.push_str(raw_line);
     }
 
-    if found_any { Some(out) } else { None }
+    if found_any {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 fn workspace_root() -> PathBuf {
@@ -135,8 +139,8 @@ fn read_manifest() -> (PathBuf, Manifest) {
     let manifest_path = dir.join("manifest.json");
     let raw = fs::read_to_string(&manifest_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", manifest_path.display()));
-    let manifest: Manifest = serde_json::from_str(&raw)
-        .unwrap_or_else(|e| panic!("parse manifest: {e}"));
+    let manifest: Manifest =
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse manifest: {e}"));
     (dir, manifest)
 }
 
@@ -157,9 +161,7 @@ fn every_example_matches_manifest_expectation() {
             let qualified = format!("{}/{}", section.id, item.id);
             match (&item.expect, &result) {
                 (Expect::Ok, Err(e)) => {
-                    failures.push(format!(
-                        "{qualified}: expected to type-check, got: {e}"
-                    ));
+                    failures.push(format!("{qualified}: expected to type-check, got: {e}"));
                 }
                 (Expect::Error, Ok(())) => {
                     failures.push(format!(

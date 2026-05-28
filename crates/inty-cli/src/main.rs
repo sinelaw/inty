@@ -5,13 +5,13 @@ use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
 
+use inty::ast::pretty::print_program;
 use inty::diagnostics::{print_error, print_error_plain, print_warning, print_warning_plain};
 use inty::error::IntyError;
-use inty::infer::{decorate_with_types, InferState, InferWarning, TypeEnv};
-use inty::ast::pretty::print_program;
 use inty::frontends::javascript::lexer::{Scanner, Token};
 use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
+use inty::infer::{decorate_with_types, InferState, InferWarning, TypeEnv};
 use inty::stdlib::{initial_env_with_stdlib, load_lib};
 use inty::types::PrettyContext;
 
@@ -297,9 +297,9 @@ fn run_declarations(args: &[String]) -> ExitCode {
         let check =
             inty::modules::check_module(&mut state, env, std::path::Path::new(&path_for_thread));
         match check {
-            Ok((module_env, exports)) => state
-                .resolve_constraints()
-                .map(|()| (module_env, exports)),
+            Ok((module_env, exports)) => {
+                state.resolve_constraints().map(|()| (module_env, exports))
+            }
             Err(e) => Err(e),
         }
     });

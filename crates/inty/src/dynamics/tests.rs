@@ -6,8 +6,8 @@
 use super::*;
 
 use crate::frontends::javascript::lexer::{Scanner, Token};
-use crate::operators::{OpKind, OPERATORS};
 use crate::frontends::javascript::parser::Parser;
+use crate::operators::{OpKind, OPERATORS};
 
 fn parse_program(source: &str) -> crate::ast::Program {
     let mut scanner = Scanner::new(source);

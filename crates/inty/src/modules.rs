@@ -91,10 +91,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::error::IntyError;
-use crate::infer::{InferState, TypeEnv};
 use crate::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt};
+use crate::error::IntyError;
 use crate::frontends::javascript::parse;
+use crate::infer::{InferState, TypeEnv};
 use crate::types::{ModuleType, Type, TypeScheme};
 
 /// One entry of a module's export table.
@@ -153,7 +153,10 @@ fn build_namespace_type(
         export_schemes.push((entry.exported.clone(), scheme));
     }
     // One shared namespace representation across frontends.
-    Ok(Type::Module(ModuleType::from_exports(source_id, export_schemes)))
+    Ok(Type::Module(ModuleType::from_exports(
+        source_id,
+        export_schemes,
+    )))
 }
 
 /// Compute the effective export table of an inferred module. For local

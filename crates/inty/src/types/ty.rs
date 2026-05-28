@@ -352,28 +352,40 @@ impl RowType {
     /// Convenience for the common case (object literals, most stubs).
     pub fn closed(props: BTreeMap<PropName, Type>) -> Self {
         RowType {
-            props: props.into_iter().map(|(k, v)| (k, FieldEntry::pre(v))).collect(),
+            props: props
+                .into_iter()
+                .map(|(k, v)| (k, FieldEntry::pre(v)))
+                .collect(),
             tail: RowTail::Closed,
         }
     }
 
     /// Create a closed row from a fully-specified entry map.
     pub fn closed_entries(props: BTreeMap<PropName, FieldEntry>) -> Self {
-        RowType { props, tail: RowTail::Closed }
+        RowType {
+            props,
+            tail: RowTail::Closed,
+        }
     }
 
     /// Create an open row where every listed property is definitely
     /// present. Tail variable carries the unmentioned fields.
     pub fn open(props: BTreeMap<PropName, Type>, var: TVarName) -> Self {
         RowType {
-            props: props.into_iter().map(|(k, v)| (k, FieldEntry::pre(v))).collect(),
+            props: props
+                .into_iter()
+                .map(|(k, v)| (k, FieldEntry::pre(v)))
+                .collect(),
             tail: RowTail::Open(var),
         }
     }
 
     /// Create an open row from a fully-specified entry map.
     pub fn open_entries(props: BTreeMap<PropName, FieldEntry>, var: TVarName) -> Self {
-        RowType { props, tail: RowTail::Open(var) }
+        RowType {
+            props,
+            tail: RowTail::Open(var),
+        }
     }
 
     /// Create an empty open row.
@@ -784,8 +796,7 @@ impl Type {
                 Type::Tuple(elems.iter().map(|e| e.widen_fresh_literals()).collect())
             }
             Type::Union(members) => {
-                let widened: Vec<Type> =
-                    members.iter().map(|m| m.widen_fresh_literals()).collect();
+                let widened: Vec<Type> = members.iter().map(|m| m.widen_fresh_literals()).collect();
                 Type::union(widened)
             }
             Type::Func {
@@ -1263,11 +1274,7 @@ impl TypeScheme {
     }
 
     /// Create a type scheme with both type and presence quantifiers.
-    pub fn poly_with_presence(
-        vars: Vec<TVarName>,
-        pvars: Vec<PVarName>,
-        ty: Type,
-    ) -> Self {
+    pub fn poly_with_presence(vars: Vec<TVarName>, pvars: Vec<PVarName>, ty: Type) -> Self {
         TypeScheme {
             vars,
             pvars,

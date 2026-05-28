@@ -4,9 +4,9 @@
 #[cfg(test)]
 mod tests {
     use crate::builtins::initial_env;
-    use crate::infer::{InferConfig, InferState};
     use crate::frontends::javascript::lexer::{Scanner, Token};
     use crate::frontends::javascript::parser::Parser;
+    use crate::infer::{InferConfig, InferState};
 
     fn infer_with_config(source: &str, config: InferConfig) -> InferState {
         let mut scanner = Scanner::new(source);

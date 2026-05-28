@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::span::Span;
 use crate::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
+use crate::span::Span;
 use crate::types::{FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypeScheme};
 
 use super::super::env::TypeEnv;
@@ -254,10 +254,8 @@ impl InferState {
                     // wrapper). Inferred through a `return`-collection
                     // frame so the getter's `return`s don't leak into an
                     // enclosing function's return type.
-                    let getter_env = env.extend(
-                        "this".to_string(),
-                        TypeScheme::mono(shared_this.clone()),
-                    );
+                    let getter_env =
+                        env.extend("this".to_string(), TypeScheme::mono(shared_this.clone()));
                     let ret_type = self.infer_body_return_type(&getter_env, body, true, *span)?;
                     props.insert(prop_name, FieldEntry::pre(ret_type));
                 }
@@ -367,7 +365,11 @@ impl InferState {
                 let m_resolved = self.zonk(m);
                 if let Type::Row(row) = &m_resolved {
                     if row.is_closed()
-                        && row.props.keys().cloned().collect::<std::collections::BTreeSet<_>>()
+                        && row
+                            .props
+                            .keys()
+                            .cloned()
+                            .collect::<std::collections::BTreeSet<_>>()
                             == lit_keys
                     {
                         count += 1;

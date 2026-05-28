@@ -161,7 +161,11 @@ impl StubReader<'_> {
     /// the inference state's pending constraints.
     fn scheme_of(ty: &Type) -> TypeScheme {
         let vars: Vec<_> = ty.free_vars().into_iter().filter(|v| v.is_flex()).collect();
-        let pvars: Vec<_> = ty.free_pvars().into_iter().filter(|p| p.is_flex()).collect();
+        let pvars: Vec<_> = ty
+            .free_pvars()
+            .into_iter()
+            .filter(|p| p.is_flex())
+            .collect();
         if vars.is_empty() && pvars.is_empty() {
             TypeScheme::mono(ty.clone())
         } else {
@@ -230,10 +234,7 @@ impl StubReader<'_> {
             // The decorator's head name is the last `Name` before `(` or
             // newline (so `abc.abstractmethod` → "abstractmethod").
             let mut last = None;
-            while !self.check(&Tok::Newline)
-                && !self.check(&Tok::LParen)
-                && !self.at_eof()
-            {
+            while !self.check(&Tok::Newline) && !self.check(&Tok::LParen) && !self.at_eof() {
                 if let Tok::Name(n) = self.cur() {
                     last = Some(n.clone());
                 }
@@ -360,7 +361,9 @@ impl StubReader<'_> {
         let parens = self.eat(&Tok::LParen);
         let mut names = Vec::new();
         loop {
-            let Some(imported) = self.name_here() else { break };
+            let Some(imported) = self.name_here() else {
+                break;
+            };
             self.advance();
             let local = if self.eat(&Tok::As) {
                 match self.name_here() {
@@ -497,7 +500,7 @@ impl StubReader<'_> {
         self.advance(); // class
         let name = self.name_here()?;
         self.advance(); // name
-        // Optional base list — skip (MRO flattening is Bucket B, later).
+                        // Optional base list — skip (MRO flattening is Bucket B, later).
         if self.eat(&Tok::LParen) {
             let mut depth = 1;
             while depth > 0 && !self.at_eof() {
@@ -618,7 +621,9 @@ impl StubReader<'_> {
         if mname.starts_with("__") {
             return;
         }
-        let is_property = decos.iter().any(|d| d == "property" || d == "cached_property");
+        let is_property = decos
+            .iter()
+            .any(|d| d == "property" || d == "cached_property");
         let is_overload = decos.iter().any(|d| d == "overload");
         let value = if is_property {
             ret

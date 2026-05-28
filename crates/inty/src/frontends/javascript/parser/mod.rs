@@ -507,7 +507,10 @@ impl Parser {
                 for p in properties {
                     match p {
                         PropDef::Property {
-                            key, value, span: sp, ..
+                            key,
+                            value,
+                            span: sp,
+                            ..
                         } => {
                             let name = match key {
                                 PropKey::Ident(s) | PropKey::String(s) => s.clone(),

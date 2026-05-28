@@ -4,8 +4,8 @@
 
 use std::collections::HashSet;
 
-use inty::span::Span;
 use inty::ast::*;
+use inty::span::Span;
 
 // -------------------------------------------------------------------------
 // Small constructors — cut down on boilerplate when building expected ASTs

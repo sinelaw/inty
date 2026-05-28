@@ -7,8 +7,8 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use super::ty::{
-    FieldEntry, PVarName, Presence, PropName, QualType, RowTail, RowType, TVarName, Type,
-    TypePred, TypeScheme,
+    FieldEntry, PVarName, Presence, PropName, QualType, RowTail, RowType, TVarName, Type, TypePred,
+    TypeScheme,
 };
 
 /// Default cap on the recursion depth of `Type::apply_subst`. Past
@@ -381,9 +381,12 @@ impl Subst {
             Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, visited))),
             Type::Promise(inner) => Type::Promise(Box::new(self.flatten_type(inner, visited))),
             Type::Map(value) => Type::Map(Box::new(self.flatten_type(value, visited))),
-            Type::Tuple(elems) => {
-                Type::Tuple(elems.iter().map(|e| self.flatten_type(e, visited)).collect())
-            }
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.flatten_type(e, visited))
+                    .collect(),
+            ),
             Type::Union(members) => {
                 Type::union(members.iter().map(|m| self.flatten_type(m, visited)))
             }
@@ -546,9 +549,7 @@ impl Substitutable for Type {
             Type::Map(value) => Type::Map(Box::new(value.apply_subst(subst))),
 
             // Tuple types — substitute each component.
-            Type::Tuple(elems) => {
-                Type::Tuple(elems.iter().map(|e| e.apply_subst(subst)).collect())
-            }
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| e.apply_subst(subst)).collect()),
 
             // Named recursive types
             Type::Named(id, args) => {
@@ -839,7 +840,10 @@ mod tests {
         let ty = deep_array(10);
         let result = Subst::empty().apply(&ty);
         assert_eq!(result, ty);
-        assert!(!take_apply_subst_overflow(), "should not overflow well below the cap");
+        assert!(
+            !take_apply_subst_overflow(),
+            "should not overflow well below the cap"
+        );
     }
 
     #[test]
@@ -878,7 +882,10 @@ mod tests {
 
         let shallow = Subst::empty().apply(&deep_array(10));
         assert_eq!(shallow, deep_array(10));
-        assert!(!take_apply_subst_overflow(), "shallow walk after overflow must not retrigger");
+        assert!(
+            !take_apply_subst_overflow(),
+            "shallow walk after overflow must not retrigger"
+        );
     }
 
     // --- Subst::resolve (Tarjan path compression) -----------------

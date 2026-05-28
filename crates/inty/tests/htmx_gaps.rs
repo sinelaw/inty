@@ -88,14 +88,12 @@ fn reserved_word_as_member_async_read() {
 
 #[test]
 fn for_const_in() {
-    parses("for (const k in {}) {}")
-        .expect("should accept `const` as binder in for-in");
+    parses("for (const k in {}) {}").expect("should accept `const` as binder in for-in");
 }
 
 #[test]
 fn for_const_of() {
-    parses("for (const k of []) {}")
-        .expect("should accept `const` as binder in for-of");
+    parses("for (const k of []) {}").expect("should accept `const` as binder in for-of");
 }
 
 // ---------------------------------------------------------------------------
@@ -326,8 +324,7 @@ fn await_inside_non_async_arrow_still_rejected() {
 
 #[test]
 fn async_arrow_no_params() {
-    parses("var f = async () => 1;")
-        .expect("async arrow with zero parameters should parse");
+    parses("var f = async () => 1;").expect("async arrow with zero parameters should parse");
 }
 
 // ---------------------------------------------------------------------------
@@ -427,5 +424,10 @@ fn delete_in_middle_of_file_does_not_stop_inference() {
     let _ = state.infer_program_with_env(&env, &program);
     // The delete emits a diagnostic; that's expected.
     let errs = state.take_errors();
-    assert_eq!(errs.len(), 1, "expected exactly one diagnostic (for delete), got: {:?}", errs);
+    assert_eq!(
+        errs.len(),
+        1,
+        "expected exactly one diagnostic (for delete), got: {:?}",
+        errs
+    );
 }

@@ -349,9 +349,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             // side effects.
             if matches!(
                 op,
-                AssignOp::NullishAssign
-                    | AssignOp::LogicalAndAssign
-                    | AssignOp::LogicalOrAssign
+                AssignOp::NullishAssign | AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign
             ) {
                 let cur = eval_expr(state, env, left)?;
                 let should_assign = match op {
@@ -635,9 +633,7 @@ fn apply(
 fn compound_to_binop(op: AssignOp) -> BinOp {
     match op {
         AssignOp::Assign => unreachable!("Assign handled separately"),
-        AssignOp::NullishAssign
-        | AssignOp::LogicalAndAssign
-        | AssignOp::LogicalOrAssign => {
+        AssignOp::NullishAssign | AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign => {
             unreachable!("short-circuit assignment handled separately")
         }
         AssignOp::AddAssign => BinOp::Add,

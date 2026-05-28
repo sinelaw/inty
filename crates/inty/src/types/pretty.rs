@@ -7,8 +7,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Write};
 
 use super::ty::{
-    ClassName, LitValue, Presence, PropName, RowTail, RowType, TVarName, Type, TypePred,
-    TypeScheme,
+    ClassName, LitValue, Presence, PropName, RowTail, RowType, TVarName, Type, TypePred, TypeScheme,
 };
 use super::{private_key_display, CALLABLE_KEY};
 
@@ -469,10 +468,7 @@ impl PrettyContext {
                 write!(w, ", ")?;
             }
             first = false;
-            let optional_marker = matches!(
-                entry.presence,
-                crate::types::ty::Presence::Var(_)
-            );
+            let optional_marker = matches!(entry.presence, crate::types::ty::Presence::Var(_));
             // Private-field sentinels render as `#name`, restoring the
             // user-written form. The raw stored key contains control
             // characters that would otherwise look broken in errors.
@@ -773,11 +769,8 @@ mod tests {
             vec![Type::Var(a.clone()), Type::Var(a.clone())],
             Type::Var(a.clone()),
         );
-        let scheme = TypeScheme::qualified(
-            vec![a.clone()],
-            vec![TypePred::plus(Type::Var(a))],
-            body,
-        );
+        let scheme =
+            TypeScheme::qualified(vec![a.clone()], vec![TypePred::plus(Type::Var(a))], body);
         let s = scheme.to_string();
         assert!(s.contains("<a>"), "missing <a> in {}", s);
         assert!(s.contains("where Plus"), "missing predicate in {}", s);
