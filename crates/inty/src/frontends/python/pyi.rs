@@ -20,7 +20,7 @@ use super::lexer::{tokenize, Tok};
 use crate::error::Result;
 use crate::infer::InferState;
 use crate::span::Spanned;
-use crate::types::{FuncParam, PropName, TVarName, Type, TypeDef, TypeScheme};
+use crate::types::{FuncParam, PropName, RowType, TVarName, Type, TypeDef, TypeScheme, CALLABLE_KEY};
 
 /// The result of reading a `.pyi`: directly-declared exports plus the
 /// re-export requests (`from X import …`) the caller must resolve and
@@ -515,6 +515,7 @@ impl StubReader<'_> {
         self.eat(&Tok::Newline);
 
         let mut fields: BTreeMap<PropName, Type> = BTreeMap::new();
+        let mut static_fields: BTreeMap<PropName, Type> = BTreeMap::new();
         let mut ctor_params: Vec<FuncParam> = Vec::new();
 
         if self.eat(&Tok::Indent) {
@@ -527,13 +528,23 @@ impl StubReader<'_> {
                     Tok::At => {
                         let decos = self.read_decorators();
                         if self.check(&Tok::Def) {
-                            self.read_method(&decos, &mut fields, &mut ctor_params);
+                            self.read_method(
+                                &decos,
+                                &mut fields,
+                                &mut static_fields,
+                                &mut ctor_params,
+                            );
                         } else {
                             self.skip_member();
                         }
                     }
                     Tok::Def => {
-                        self.read_method(&[], &mut fields, &mut ctor_params);
+                        self.read_method(
+                            &[],
+                            &mut fields,
+                            &mut static_fields,
+                            &mut ctor_params,
+                        );
                     }
                     Tok::Name(fname) => {
                         self.advance(); // field name
@@ -585,19 +596,32 @@ impl StubReader<'_> {
 
         let args: Vec<Type> = brand_vars.iter().map(|v| Type::var(v.clone())).collect();
         let branded = Type::Named(id, args);
-        let ctor = Type::wrap_callable(Type::raw_func_with_params(None, ctor_params, branded));
+        let func = Type::raw_func_with_params(None, ctor_params, branded);
+        let ctor = if static_fields.is_empty() {
+            Type::wrap_callable(func)
+        } else {
+            // Class with `@classmethod` / `@staticmethod` members: the
+            // constructor is a callable row that ALSO carries those as
+            // accessible properties (`Cls.method` reads them).
+            let mut props = static_fields;
+            props.insert(PropName(CALLABLE_KEY.to_string()), func);
+            Type::Row(RowType::closed(props))
+        };
         Some((name, ctor))
     }
 
     /// Read one `def` class member into either the constructor params
     /// (`__init__`) or an instance-row field, applying modelled
     /// decorators: `@property`/`@cached_property` make the member a field
-    /// of its return type (§4.8); `@overload` makes it opaque (§5.3).
+    /// of its return type (§4.8); `@overload` makes it opaque (§5.3);
+    /// `@classmethod`/`@staticmethod` route the member into the
+    /// constructor's static slot so `Cls.m(...)` resolves (§4.7).
     /// Dunder methods other than `__init__` are dropped.
     fn read_method(
         &mut self,
         decos: &[String],
         fields: &mut BTreeMap<PropName, Type>,
+        static_fields: &mut BTreeMap<PropName, Type>,
         ctor_params: &mut Vec<FuncParam>,
     ) {
         self.advance(); // def
@@ -625,6 +649,9 @@ impl StubReader<'_> {
             .iter()
             .any(|d| d == "property" || d == "cached_property");
         let is_overload = decos.iter().any(|d| d == "overload");
+        let is_static = decos
+            .iter()
+            .any(|d| d == "classmethod" || d == "staticmethod");
         let value = if is_property {
             ret
         } else if is_overload {
@@ -632,7 +659,11 @@ impl StubReader<'_> {
         } else {
             Type::wrap_callable(Type::raw_func_with_params(None, params, ret))
         };
-        fields.insert(PropName(mname), value);
+        if is_static {
+            static_fields.insert(PropName(mname), value);
+        } else {
+            fields.insert(PropName(mname), value);
+        }
     }
 
     /// Skip a class-body member we don't model (a decorator line, nested

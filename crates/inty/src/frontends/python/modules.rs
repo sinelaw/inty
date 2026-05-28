@@ -150,10 +150,27 @@ fn resolve_inner(
                     let path = resolve_module(source, base_dir, search_paths)
                         .ok_or_else(|| module_err(format!("cannot resolve import {:?}", source)))?;
                     let exports = load_module(state, &env, &path, search_paths, visiting, cache)?;
-                    env = env.extend(
-                        local.clone(),
-                        namespace_scheme(&path.to_string_lossy(), &exports),
-                    );
+                    let segments: Vec<&str> = source.split('.').collect();
+                    let scheme = if segments.len() > 1 && local == segments[0] {
+                        // `import a.b.c` (no `as`) binds the *top* package
+                        // `a`, with the dotted chain `a.b.c` reading
+                        // through nested namespaces — matching Python's
+                        // `setattr(a, 'b', <b>)` import semantics.
+                        nested_dotted_namespace(
+                            state,
+                            &env,
+                            &segments,
+                            &path.to_string_lossy(),
+                            exports,
+                            base_dir,
+                            search_paths,
+                            visiting,
+                            cache,
+                        )
+                    } else {
+                        namespace_scheme(&path.to_string_lossy(), &exports)
+                    };
+                    env = env.extend(local.clone(), scheme);
                 }
                 ImportSpecifier::Default { local, span } => {
                     // Python has no default imports; treat defensively.
@@ -214,6 +231,45 @@ fn bind_module_exports(
         }
     }
     Ok(env)
+}
+
+/// Build the binding for `import a.b.c` (no `as`): the leaf module's
+/// exports live at `a.b.c`, and each intermediate package is a namespace
+/// merging its own `__init__` exports (if any) with a single attribute
+/// for the next segment. Failures to resolve intermediate packages
+/// degrade silently — that prefix is then a synthetic wrapper containing
+/// only the chain to the leaf.
+#[allow(clippy::too_many_arguments)]
+fn nested_dotted_namespace(
+    state: &mut InferState,
+    env: &TypeEnv,
+    segments: &[&str],
+    leaf_source: &str,
+    leaf_exports: Exports,
+    base_dir: &Path,
+    search_paths: &[PathBuf],
+    visiting: &mut HashSet<PathBuf>,
+    cache: &mut ModuleCache,
+) -> TypeScheme {
+    let mut scheme = namespace_scheme(leaf_source, &leaf_exports);
+    for i in (1..segments.len()).rev() {
+        let attr = segments[i].to_string();
+        let prefix = segments[..i].join(".");
+        let mut merged: Exports = vec![(attr.clone(), scheme.clone())];
+        if let Some(pkg_path) = resolve_module(&prefix, base_dir, search_paths) {
+            if let Ok(pkg_exports) =
+                load_module(state, env, &pkg_path, search_paths, visiting, cache)
+            {
+                for (n, s) in pkg_exports {
+                    if n != attr && !n.starts_with('_') {
+                        merged.push((n, s));
+                    }
+                }
+            }
+        }
+        scheme = namespace_scheme(&prefix, &merged);
+    }
+    scheme
 }
 
 fn namespace_scheme(source: &str, exports: &Exports) -> TypeScheme {
