@@ -20,7 +20,9 @@ use super::lexer::{tokenize, Tok};
 use crate::error::Result;
 use crate::infer::InferState;
 use crate::span::Spanned;
-use crate::types::{FuncParam, PropName, RowType, TVarName, Type, TypeDef, TypeScheme, CALLABLE_KEY};
+use crate::types::{
+    FuncParam, PropName, RowType, TVarName, Type, TypeDef, TypeScheme, CALLABLE_KEY,
+};
 
 /// The result of reading a `.pyi`: directly-declared exports plus the
 /// re-export requests (`from X import …`) the caller must resolve and
@@ -539,12 +541,7 @@ impl StubReader<'_> {
                         }
                     }
                     Tok::Def => {
-                        self.read_method(
-                            &[],
-                            &mut fields,
-                            &mut static_fields,
-                            &mut ctor_params,
-                        );
+                        self.read_method(&[], &mut fields, &mut static_fields, &mut ctor_params);
                     }
                     Tok::Name(fname) => {
                         self.advance(); // field name

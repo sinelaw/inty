@@ -181,8 +181,12 @@ fn with_multiple_items() {
     let stmts = parse("with a() as x, b() as y:\n    pass");
     match (&stmts[0], &stmts[1]) {
         (
-            Stmt::Var { declarations: d0, .. },
-            Stmt::Var { declarations: d1, .. },
+            Stmt::Var {
+                declarations: d0, ..
+            },
+            Stmt::Var {
+                declarations: d1, ..
+            },
         ) => {
             assert_eq!(d0[0].name, "x");
             assert_eq!(d1[0].name, "y");
@@ -209,10 +213,7 @@ fn not_in_is_negated_membership() {
             argument,
             ..
         } => {
-            assert!(matches!(
-                *argument,
-                Expr::Binary { op: BinOp::In, .. }
-            ));
+            assert!(matches!(*argument, Expr::Binary { op: BinOp::In, .. }));
         }
         other => panic!("expected `not in` as unary-not over `in`, got {:?}", other),
     }
