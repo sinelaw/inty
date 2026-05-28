@@ -202,3 +202,110 @@ fn generic_nominal_carries_its_type_argument() {
     ";
     check(src).expect("Box's type argument should flow through to b.value");
 }
+
+// === Closed-row values do not collapse into a brand (#71) ===
+//
+// The new unify rule unfolds a nominal type against an *open-tailed*
+// row constraint (synthesized by inference at member-access sites) so
+// that module-level branded singletons can be read from inside function
+// bodies. A *closed* row is a concrete user-introduced value, never an
+// inferred constraint, and must still be rejected — otherwise nominal
+// safety degrades into structural duck-typing.
+
+#[test]
+fn closed_object_literal_does_not_satisfy_brand_annotation() {
+    // A bare object literal of the brand's representation shape is
+    // *not* a brand value: only the brand's constructor produces one.
+    let src = "
+        /** nominal type Point = {x: Number, y: Number} */
+        var p /*: Point */ = {x: 1, y: 2};
+    ";
+    assert!(
+        check(src).is_err(),
+        "an anonymous object literal must not satisfy a brand annotation"
+    );
+}
+
+#[test]
+fn closed_class_instance_literal_does_not_satisfy_class_brand() {
+    // Same invariant for JS `class` brands: an object literal that
+    // happens to match the instance shape is not an instance.
+    let src = "
+        class Box { constructor(v) { this.value = v; } }
+        function takeBox(b) { return b.value + 1; }
+        var b = new Box(1);
+        takeBox(b);            // fine
+        var v /*: Box */ = {value: 2};   // not fine
+    ";
+    assert!(
+        check(src).is_err(),
+        "an object literal must not satisfy a class brand annotation"
+    );
+}
+
+// === Cycle-guard sanity: coinduction is bounded by structural mismatch ===
+//
+// The `UnfoldAssumption` stack only short-circuits when the *same*
+// pair is re-entered. Two equirecursive types of genuinely different
+// shape (different non-recursive field types) still fail. This guards
+// against the cycle guard accepting too much.
+
+use inty::infer::InferState;
+use inty::span::Span;
+use inty::types::{Type, TypeDef};
+
+#[test]
+fn cycle_guard_does_not_accept_distinct_recursive_shapes() {
+    let mut state = InferState::new();
+    let span = Span::new(0, 0);
+    // Two equirecursive types with the same self-reference *shape* but
+    // a disagreeing non-recursive field: A has `tag: Number`, B has
+    // `tag: String`. Unrolling either side should still reach the
+    // disagreeing field through a sub-unify and fail there.
+    let id_a = state.fresh_type_id();
+    let id_b = state.fresh_type_id();
+    let body_a = Type::object([
+        ("tag", Type::Number),
+        ("self_ref", Type::Named(id_a, vec![])),
+    ]);
+    let body_b = Type::object([
+        ("tag", Type::String),
+        ("self_ref", Type::Named(id_b, vec![])),
+    ]);
+    state.register_named_type(TypeDef::recursive(id_a, vec![], body_a));
+    state.register_named_type(TypeDef::recursive(id_b, vec![], body_b));
+    let a = Type::Named(id_a, vec![]);
+    let b = Type::Named(id_b, vec![]);
+    assert!(
+        state.unify(span, &a, &b).is_err(),
+        "equirec types disagreeing on a non-recursive field must still fail"
+    );
+}
+
+#[test]
+fn cycle_guard_accepts_equal_recursive_shapes() {
+    // Positive companion: two equirec types of the *same* shape (with
+    // the loop closed through a self-reference) must unify under the
+    // coinductive assumption. Otherwise the alternating unroll never
+    // terminates.
+    let mut state = InferState::new();
+    let span = Span::new(0, 0);
+    let id_a = state.fresh_type_id();
+    let id_b = state.fresh_type_id();
+    let body_a = Type::object([
+        ("tag", Type::Number),
+        ("self_ref", Type::Named(id_a, vec![])),
+    ]);
+    let body_b = Type::object([
+        ("tag", Type::Number),
+        ("self_ref", Type::Named(id_b, vec![])),
+    ]);
+    state.register_named_type(TypeDef::recursive(id_a, vec![], body_a));
+    state.register_named_type(TypeDef::recursive(id_b, vec![], body_b));
+    let a = Type::Named(id_a, vec![]);
+    let b = Type::Named(id_b, vec![]);
+    assert!(
+        state.unify(span, &a, &b).is_ok(),
+        "equirec types of the same shape must unify coinductively"
+    );
+}

@@ -715,6 +715,69 @@ def f(s: str) -> str:
 }
 
 #[test]
+fn module_level_stub_class_unknown_member_is_rejected() {
+    // Negative companion: unfolding the brand against the open-row
+    // constraint exposes the stub's instance row to structural
+    // matching. A property the stub doesn't declare still fails.
+    let dir = tmp_dir();
+    let src = "from pathlib import Path
+
+ROOT = Path('Cargo.toml')
+
+def f():
+    return ROOT.nonexistent()
+";
+    assert!(
+        check(src, &dir, &[]).is_err(),
+        "calling an undeclared Path method from a function must still fail"
+    );
+}
+
+#[test]
+fn module_level_stub_class_field_type_is_honoured() {
+    // Negative companion: the field types from the stub flow through
+    // unfolding. `Path.read_text()` returns `str`, not `int`, so
+    // arithmetic on it must fail even when the access goes through the
+    // hoisted-unify path.
+    let dir = tmp_dir();
+    let src = "from pathlib import Path
+
+ROOT = Path('Cargo.toml')
+
+def f():
+    return ROOT.read_text() + 1
+";
+    assert!(
+        check(src, &dir, &[]).is_err(),
+        "str + int must still fail when the str comes from a module-level brand"
+    );
+}
+
+#[test]
+fn module_level_distinct_stub_brands_do_not_interchange() {
+    // Negative companion: two different stub brands instantiated at
+    // module level still don't interchange even through the
+    // hoisted-unify path. The unfold rule is bounded to
+    // nominal-vs-open-row; nominal-vs-different-nominal remains rejected.
+    let dir = tmp_dir();
+    let src = "from pathlib import Path
+import re
+
+ROOT = Path('Cargo.toml')
+PAT = re.compile(r'x')
+
+def f():
+    x = ROOT
+    x = PAT
+    return x
+";
+    assert!(
+        check(src, &dir, &[]).is_err(),
+        "reassigning across Path and Pattern must still fail at module scope"
+    );
+}
+
+#[test]
 fn keyword_arguments_through_stub_signature() {
     // Parameter names from a `.pyi` signature drive keyword resolution
     // at the call site.

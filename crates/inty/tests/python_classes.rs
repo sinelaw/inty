@@ -310,6 +310,84 @@ def f():
     );
 }
 
+/// Negative companion to [`module_level_class_instance_accessed_from_function`]:
+/// the open-row unfolding rule must not *over*-accept. Demanding a
+/// property the brand's instance row doesn't have still fails after
+/// unrolling — the row-vs-row comparison of the open constraint with the
+/// closed instance row catches the missing field.
+#[test]
+fn module_level_class_instance_unknown_member_is_rejected() {
+    let src = "
+class P:
+    def m(self):
+        return 'x'
+
+ROOT = P()
+
+def f():
+    return ROOT.bogus()
+";
+    assert!(
+        !checks(src),
+        "calling a method the class doesn't declare must still fail through the brand:\n{}",
+        src
+    );
+}
+
+/// Negative companion: the unfolded row's field types are honoured. A
+/// String field combined with `+ 1` is a type error even when the access
+/// flows through the module-level/hoisted-unify path — the brand doesn't
+/// hide the field's representation type.
+#[test]
+fn module_level_class_field_type_visible_through_brand() {
+    let bad = "
+class P:
+    def __init__(self, v):
+        self.value = v
+
+ROOT = P('hello')
+
+def f():
+    return ROOT.value + 1
+";
+    assert!(
+        !checks(bad),
+        "String field + 1 must still fail through a module-level brand:\n{}",
+        bad
+    );
+}
+
+/// Negative companion: two *distinct* brands instantiated at module
+/// level still can't interchange even when each side is reached through
+/// the hoisted-unify path. The new unify rule is bounded to
+/// nominal-vs-open-row; nominal-vs-nominal with different ids is
+/// untouched.
+#[test]
+fn module_level_distinct_brands_do_not_interchange() {
+    let src = "
+class A:
+    def m(self):
+        return 'a'
+
+class B:
+    def m(self):
+        return 'b'
+
+ROOT_A = A()
+ROOT_B = B()
+
+def f():
+    x = ROOT_A
+    x = ROOT_B
+    return x
+";
+    assert!(
+        !checks(src),
+        "reassigning across distinct brands must still fail at module scope:\n{}",
+        src
+    );
+}
+
 /// Field access reads *through* the brand to the representation's field
 /// type, so a String field combined with `+ 1` is a type error while a
 /// Number field is fine — the brand doesn't hide the field's real type.
