@@ -13,8 +13,12 @@ export class Analysis {
   /**
    * Lex, parse, and infer `source`. Always returns an `Analysis`; on
    * failure `errors()` is non-empty and queries return null/empty.
+   *
+   * `language` is `"javascript"` (the default), `"python"`, or
+   * `"lua"`. Unknown values fall back to JavaScript so older callers
+   * keep working.
    */
-  constructor(source: string);
+  constructor(source: string, language?: string | null);
   /**
    * Hover at a UTF-8 byte offset. Returns
    * `{name, start, end, type_str}` or `null` if no binding sits
@@ -42,7 +46,7 @@ export interface InitOutput {
   readonly analysis_errors: (a: number) => [number, number];
   readonly analysis_hover: (a: number, b: number) => any;
   readonly analysis_inlay_hints: (a: number, b: number, c: number) => [number, number];
-  readonly analysis_new: (a: number, b: number) => number;
+  readonly analysis_new: (a: number, b: number, c: number, d: number) => number;
   readonly analysis_ok: (a: number) => number;
   readonly init: () => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;

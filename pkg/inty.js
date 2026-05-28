@@ -112,6 +112,10 @@ function handleError(f, args) {
     }
 }
 
+function isLikeNone(x) {
+    return x === undefined || x === null;
+}
+
 function passStringToWasm0(arg, malloc, realloc) {
     if (realloc === undefined) {
         const buf = cachedTextEncoder.encode(arg);
@@ -222,12 +226,19 @@ export class Analysis {
     /**
      * Lex, parse, and infer `source`. Always returns an `Analysis`; on
      * failure `errors()` is non-empty and queries return null/empty.
+     *
+     * `language` is `"javascript"` (the default), `"python"`, or
+     * `"lua"`. Unknown values fall back to JavaScript so older callers
+     * keep working.
      * @param {string} source
+     * @param {string | null} [language]
      */
-    constructor(source) {
+    constructor(source, language) {
         const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.analysis_new(ptr0, len0);
+        var ptr1 = isLikeNone(language) ? 0 : passStringToWasm0(language, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.analysis_new(ptr0, len0, ptr1, len1);
         this.__wbg_ptr = ret >>> 0;
         AnalysisFinalization.register(this, this.__wbg_ptr, this);
         return this;

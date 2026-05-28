@@ -4,10 +4,12 @@
 export const EXAMPLES = [
     {
         id: "features",
+        language: "javascript",
         label: "Type System",
         items: [
             {
                 id: "basics",
+                language: "javascript",
                 label: "basics.js",
                 blurb: "Inference for plain JavaScript",
                 expect: "ok",
@@ -27,6 +29,7 @@ var hi = greet("world");
             },
             {
                 id: "generics",
+                language: "javascript",
                 label: "generics.js",
                 blurb: "Parametric polymorphism",
                 expect: "ok",
@@ -44,6 +47,7 @@ var arr = id([1, 2, 3]);
             },
             {
                 id: "structural",
+                language: "javascript",
                 label: "structural.js",
                 blurb: "Row polymorphism \u2014 typed by shape",
                 expect: "ok",
@@ -62,6 +66,7 @@ var ship  = getName({ name: "USS Enterprise", warpFactor: 9 });
             },
             {
                 id: "overloading",
+                language: "javascript",
                 label: "overloading.js",
                 blurb: "Operator type classes",
                 expect: "ok",
@@ -79,6 +84,7 @@ var concat = add("foo", "bar");
             },
             {
                 id: "unions",
+                language: "javascript",
                 label: "unions.js",
                 blurb: "Control-flow joins",
                 expect: "ok",
@@ -101,6 +107,7 @@ var x  = pt.x;                      // both branches expose \`x: Number\`
             },
             {
                 id: "method-chaining",
+                language: "javascript",
                 label: "method-chaining.js",
                 blurb: "Equi-recursive builder types",
                 expect: "ok",
@@ -123,6 +130,7 @@ var response = request
             },
             {
                 id: "tagged-unions",
+                language: "javascript",
                 label: "tagged-unions.js",
                 blurb: "Discriminated unions + narrowing",
                 expect: "ok",
@@ -145,6 +153,7 @@ var b = area({ kind: "square", s:  5 });
             },
             {
                 id: "nullable",
+                language: "javascript",
                 label: "nullable.js",
                 blurb: "Optional values, ??, narrowing",
                 expect: "ok",
@@ -163,6 +172,7 @@ var safe = (typeof v === "undefined") ? 0 : v;       // Number
             },
             {
                 id: "optional-fields",
+                language: "javascript",
                 label: "optional-fields.js",
                 blurb: "Row-field presence polymorphism",
                 expect: "ok",
@@ -197,6 +207,7 @@ var c = request({url: "/api", method: "POST", body: "hello"});   // ok — both 
             },
             {
                 id: "classes",
+                language: "javascript",
                 label: "classes.js",
                 blurb: "Class bodies + private fields",
                 expect: "ok",
@@ -223,6 +234,7 @@ var v = c.current;         // Number
             },
             {
                 id: "callable-rows",
+                language: "javascript",
                 label: "callable-rows.js",
                 blurb: "Functions are rows with statics",
                 expect: "ok",
@@ -242,6 +254,7 @@ var stringified = arr.map(String); // String[]
             },
             {
                 id: "higher-order",
+                language: "javascript",
                 label: "higher-order.js",
                 blurb: "First-class functions",
                 expect: "ok",
@@ -265,6 +278,7 @@ var loud = g("yo");                 // "yoyo!"
             },
             {
                 id: "jsdoc-at-type",
+                language: "javascript",
                 label: "jsdoc-at-type.js",
                 blurb: "JSDoc @type on object fields",
                 expect: "ok",
@@ -317,10 +331,12 @@ var on  = api.enabled && true;
     },
     {
         id: "ts-misses",
+        language: "javascript",
         label: "TS wouldn't catch this",
         items: [
             {
                 id: "string-plus-number",
+                language: "javascript",
                 label: "string-plus-number.js",
                 blurb: "`+` silently coerces in TS",
                 expect: "error",
@@ -342,6 +358,7 @@ var msg   = "Got " + count + " items";
             },
             {
                 id: "or-fallback",
+                language: "javascript",
                 label: "or-fallback.js",
                 blurb: "Truthy fallback hides type changes",
                 expect: "ok",
@@ -367,6 +384,7 @@ function label(n) {
             },
             {
                 id: "mixed-array",
+                language: "javascript",
                 label: "mixed-array.js",
                 blurb: "Mixed arrays look uniform in TS",
                 expect: "error",
@@ -389,6 +407,7 @@ var first = describe(items[0]);
             },
             {
                 id: "missing-prop",
+                language: "javascript",
                 label: "missing-prop.js",
                 blurb: "Reading a property that isn't there",
                 expect: "error",
@@ -410,6 +429,7 @@ var name = fullName({ name: "Alice", id: 42 });
             },
             {
                 id: "this-leak",
+                language: "javascript",
                 label: "this-leak.js",
                 blurb: "Methods called without their receiver",
                 expect: "ok",
@@ -435,6 +455,7 @@ var ok = counter.inc();
             },
             {
                 id: "truthy-narrow",
+                language: "javascript",
                 label: "truthy-narrow.js",
                 blurb: "0 and \"\" are falsy \u2014 silently",
                 expect: "ok",
@@ -461,6 +482,604 @@ function priceLabel(price) {
             },
         ],
     },
+    {
+        id: "py-features",
+        language: "python",
+        label: "Type System",
+        items: [
+            {
+                id: "py-basics",
+                language: "python",
+                label: "basics.py",
+                blurb: "Inference for plain Python",
+                expect: "ok",
+                code: `# Functions, assignment, arithmetic, string concatenation and a
+# for-each loop over a list. Types are inferred throughout.
+
+def add(a, b):
+    return a + b
+
+def double(n):
+    return n * 2
+
+total = 0
+for i in [1, 2, 3, 4, 5]:
+    total = total + add(i, double(i))
+
+label = "total = " + "done"
+`,
+            },
+            {
+                id: "py-annotations",
+                language: "python",
+                label: "annotations.py",
+                blurb: "Type hints enforced as constraints",
+                expect: "ok",
+                code: `# Type annotations are enforced as constraints, not discarded. A
+# program whose values match its annotations type-checks. Annotations
+# inty doesn't model (e.g. \`SomeProtocol\`) impose no constraint, so they
+# never cause a false positive.
+
+def add_one(x: int) -> int:
+    return x + 1
+
+def greet(name: str) -> str:
+    return "hi " + name
+
+def total(xs: list[int]) -> int:
+    s = 0
+    for v in xs:
+        s = s + v
+    return s
+
+count: int = 5
+label: str = "app"
+r = add_one(10)
+m = total([1, 2, 3])
+
+class Counter:
+    def __init__(self):
+        self.v = 0
+    def scaled(self, k: int) -> int:
+        return self.v * k
+
+c = Counter()
+out = c.scaled(3)
+
+# Unmodelled annotation: lowers to a fresh variable, constrains nothing.
+def use(p: SomeProtocol):
+    return 1
+
+ignored = use("anything")
+also = use(42)
+`,
+            },
+            {
+                id: "py-control",
+                language: "python",
+                label: "control.py",
+                blurb: "if/elif/else and while loops",
+                expect: "ok",
+                code: `# Control flow: if/elif/else, a while loop, and a conditional
+# expression. All branches of \`classify\` return strings.
+
+def classify(n):
+    if n < 0:
+        return "negative"
+    elif n == 0:
+        return "zero"
+    else:
+        return "positive"
+
+label = classify(5)
+
+i = 0
+while i < 5:
+    i = i + 1
+
+sign = "pos" if i > 0 else "nonpos"
+`,
+            },
+            {
+                id: "py-records",
+                language: "python",
+                label: "records.py",
+                blurb: "Dicts with literal keys are records",
+                expect: "ok",
+                code: `# Dicts with string-literal keys are records: \`d["field"]\` lowers to a
+# field read, so structural typing applies just like in JavaScript.
+
+def make_point(x, y):
+    return {"x": x, "y": y}
+
+def length_squared(p):
+    return p["x"] * p["x"] + p["y"] * p["y"]
+
+origin = make_point(0, 0)
+p = make_point(3, 4)
+d = length_squared(p)
+
+config = {"name": "app", "version": 1, "enabled": True}
+title = config["name"]
+`,
+            },
+            {
+                id: "py-generics",
+                language: "python",
+                label: "generics.py",
+                blurb: "Parametric polymorphism",
+                expect: "ok",
+                code: `# A function that doesn't constrain its inputs becomes polymorphic.
+# Inty infers \`id<a>(a) => a\` — one definition, every call site
+# instantiates at its own type.
+
+def id(x):
+    return x
+
+def pair(a, b):
+    return [a, b]
+
+n = id(42)               # Number
+s = id("hello")          # String
+
+nums  = pair(1, 2)       # list[Number]
+words = pair("hi", "yo") # list[String]
+`,
+            },
+            {
+                id: "py-classes",
+                language: "python",
+                label: "classes.py",
+                blurb: "Methods, fields, nominal brands",
+                expect: "ok",
+                code: `# A class lowers to a factory function returning a row of methods +
+# fields. \`__init__\` pins the field types; methods read them through
+# \`self\`. Different classes are distinct nominal brands even when
+# their shape is identical.
+
+class Counter:
+    def __init__(self, start):
+        self.value = start
+    def inc(self):
+        self.value = self.value + 1
+        return self.value
+    def get(self):
+        return self.value
+
+c = Counter(0)
+a = c.inc()
+b = c.inc()
+v = c.get()
+
+# Try this — fields keep the type fixed by __init__:
+# c.value = "oops"   # error!
+`,
+            },
+            {
+                id: "py-tagged-unions",
+                language: "python",
+                label: "tagged-unions.py",
+                blurb: "isinstance narrows a brand union",
+                expect: "ok",
+                code: `# A union of two brands. The brand-specific methods are only safe
+# to call inside the matching \`isinstance\` branch — outside it,
+# inty rejects the access.
+
+class Dog:
+    def __init__(self):
+        self.legs = 4
+    def bark(self):
+        return "woof"
+
+class Cat:
+    def __init__(self):
+        self.legs = 4
+    def meow(self):
+        return "miaow"
+
+animal = Dog() if True else Cat()
+
+# Each branch narrows \`animal\` to a single brand, so the brand-
+# specific method type-checks here.
+if isinstance(animal, Dog):
+    dog_sound = animal.bark()
+else:
+    cat_sound = animal.meow()
+
+# Try this — uncomment to see narrowing in action:
+# leak = animal.bark()   # error!
+`,
+            },
+            {
+                id: "py-higher-order",
+                language: "python",
+                label: "higher-order.py",
+                blurb: "First-class functions, compose",
+                expect: "ok",
+                code: `# Functions are first-class. \`compose\` is fully polymorphic — inty
+# infers \`compose<a, b, c>((b) => c, (a) => b) => ((a) => c)\`.
+
+def compose(f, g):
+    def composed(x):
+        return f(g(x))
+    return composed
+
+def double(n):
+    return n * 2
+
+def inc(n):
+    return n + 1
+
+f = compose(double, inc)
+m = f(3)              # (3 + 1) * 2 == 8
+
+# Same compose, different types — strings flow through fine.
+def loud(s):
+    return s + "!"
+def repeat(s):
+    return s + s
+
+g = compose(loud, repeat)
+hi = g("yo")          # "yoyo!"
+`,
+            },
+            {
+                id: "py-type-aliases",
+                language: "python",
+                label: "type-aliases.py",
+                blurb: "Literal aliases pin a string set",
+                expect: "ok",
+                code: `# \`Literal[...]\` constrains a value to a fixed set of strings. The
+# alias makes the set reusable; passing a value outside the set is a
+# type error — caught here, not as a \`ValueError\` at runtime.
+
+BumpType = Literal["patch", "minor", "major"]
+
+def next_version(kind: BumpType) -> BumpType:
+    return kind
+
+a = next_version("patch")
+b = next_version("minor")
+c = next_version("major")
+
+# Try this — uncomment to see the alias enforce its set:
+# d = next_version("majr")   # error!
+`,
+            },
+            {
+                id: "py-tuples",
+                language: "python",
+                label: "tuples.py",
+                blurb: "Tuples + positional destructuring",
+                expect: "ok",
+                code: `# Tuples are typed positionally. Returning one and destructuring it
+# at the call site preserves each element's type — \`q\` is a Number,
+# \`r\` is a Number, and the program type-checks across the seam.
+
+def divmod_pair(a, b):
+    return (a // b, a % b)
+
+q, r = divmod_pair(17, 5)
+total = q + r
+
+# A heterogeneous tuple keeps each slot's type distinct.
+def labelled(n, name):
+    return (n, name + "!")
+
+count, tag = labelled(3, "items")
+ok = count + 1
+caption = tag + " ok"
+`,
+            },
+            {
+                id: "py-list-methods",
+                language: "python",
+                label: "list-methods.py",
+                blurb: "append/extend/pop/sort/index",
+                expect: "ok",
+                code: `# Inty exposes the Python \`list\` method surface — not the JavaScript
+# one. The methods you'd reach for at the REPL all type-check.
+
+xs = [3, 1, 4, 1, 5]
+xs.append(9)
+xs.extend([2, 6])
+xs.insert(0, 0)
+
+n = xs.count(1)       # how many 1s
+i = xs.index(4)       # first position of 4
+
+xs.sort()
+xs.reverse()
+last = xs.pop()       # Number
+
+ys = ["banana", "apple", "cherry"]
+ys.sort()
+top = ys[0]           # String
+`,
+            },
+            {
+                id: "py-str-methods",
+                language: "python",
+                label: "str-methods.py",
+                blurb: "upper/split/join/replace/startswith",
+                expect: "ok",
+                code: `# Python \`str\` methods are typed individually. Each call's result
+# flows through the rest of the program with its real type.
+
+s = "Hello, World"
+
+upper = s.upper()                  # String
+parts = s.split(", ")              # list[String]
+joined = " / ".join(parts)         # String
+clean = "  hi  ".strip()           # String
+swapped = s.replace("World", "Inty")
+yes = s.startswith("Hello")        # Bool
+n = len(s)                         # Number
+`,
+            },
+            {
+                id: "py-f-strings",
+                language: "python",
+                label: "f-strings.py",
+                blurb: "f-strings type-check embedded code",
+                expect: "ok",
+                code: `# F-strings are typed end-to-end. Each interpolation is checked,
+# so misspelt names or type errors inside \`{ … }\` surface here, not
+# at runtime.
+
+def greeting(name, count):
+    return f"hi {name}, this is message #{count + 1}"
+
+msg = greeting("ada", 0)
+
+# Method calls and arithmetic both work inside the braces.
+items = ["apple", "fig"]
+header = f"{len(items)} items, starting with {items[0].upper()}"
+`,
+            },
+            {
+                id: "py-builtins",
+                language: "python",
+                label: "builtins.py",
+                blurb: "range, sorted, sum, abs, str, len",
+                expect: "ok",
+                code: `# Inty's Python prelude types core builtins precisely. \`abs\` is
+# \`(Number) -> Number\`, \`range\` produces something you can iterate
+# over as Number, \`sorted\` is generic over the element type.
+
+x = abs(-7)                 # Number
+total = sum([1, 2, 3])      # Number
+
+words = sorted(["pear", "apple", "fig"])
+first = words[0]            # String
+
+count = 0
+for i in range(10):
+    count = count + i
+
+label = str(count)          # Number -> String
+yes = all([True, True])     # Bool
+`,
+            },
+        ],
+    },
+    {
+        id: "py-misses",
+        language: "python",
+        label: "Mistakes mypy lets slip",
+        items: [
+            {
+                id: "py-mixed-plus",
+                language: "python",
+                label: "mixed-plus.py",
+                blurb: "`+` requires matching operand types",
+                expect: "error",
+                code: `# inty rejects mixing operand types: \`+\` requires both operands to
+# share one type. This is a type error, by design.
+
+x = 1 + "oops"
+`,
+            },
+            {
+                id: "py-unknown-field",
+                language: "python",
+                label: "unknown-field.py",
+                blurb: "Reading a key the dict doesn't have",
+                expect: "error",
+                code: `# The dict literal gives \`p\` a closed shape \`{"x", "y"}\`. Reading a key
+# it doesn't have is a type error.
+
+p = {"x": 1, "y": 2}
+bad = p["z"]
+`,
+            },
+            {
+                id: "py-bad-annotation",
+                language: "python",
+                label: "bad-annotation.py",
+                blurb: "Value contradicts its annotation",
+                expect: "error",
+                code: `# A value that contradicts its annotation is a type error. Here the
+# variable is annotated \`int\` but initialised with a String, so inty
+# rejects the program.
+
+n: int = "not a number"
+`,
+            },
+            {
+                id: "py-field-mismatch",
+                language: "python",
+                label: "field-mismatch.py",
+                blurb: "self.field type fixed by __init__",
+                expect: "error",
+                code: `# \`__init__\` ties each field to its initial type. Inside any method
+# that reads \`self.name\`, the field is a \`String\` — adding a Number
+# to it is a type error, by design.
+
+class Greeter:
+    def __init__(self, name):
+        self.name = name
+    def shout(self, times):
+        return self.name + times   # String + Number — rejected
+
+g = Greeter("ada")
+out = g.shout(3)
+`,
+            },
+            {
+                id: "py-keyword-typo",
+                language: "python",
+                label: "keyword-typo.py",
+                blurb: "Misspelt keyword argument name",
+                expect: "error",
+                code: `# Keyword arguments resolve by name against the callee's parameter
+# list. A misspelt keyword has no matching parameter — caught here,
+# not as a TypeError at runtime.
+
+def make_user(name, age):
+    return {"name": name, "age": age}
+
+# \`nme\` is a typo for \`name\`. Python runs it as a TypeError; inty
+# rejects it statically.
+u = make_user(nme="ada", age=36)
+`,
+            },
+            {
+                id: "py-missing-arg",
+                language: "python",
+                label: "missing-arg.py",
+                blurb: "A required argument left unfilled",
+                expect: "error",
+                code: `# A required parameter must be supplied — either positionally or by
+# name. Forgetting one is a static error.
+
+def transfer(src, dst, amount):
+    return {"from": src, "to": dst, "amount": amount}
+
+# Forgot \`dst\`. Python: TypeError at the call site. Inty: caught.
+r = transfer(src="checking", amount=50)
+`,
+            },
+            {
+                id: "py-distinct-brands",
+                language: "python",
+                label: "distinct-brands.py",
+                blurb: "Twin classes are still distinct types",
+                expect: "error",
+                code: `# Two classes with the *same shape* are still different types —
+# nominal typing. Trying to use one where the other is expected is
+# rejected even when the fields and methods match exactly.
+
+class Meters:
+    def __init__(self, n):
+        self.value = n
+
+class Seconds:
+    def __init__(self, n):
+        self.value = n
+
+distance = Meters(100)
+distance = Seconds(60)   # different brand — rejected
+`,
+            },
+            {
+                id: "py-union-no-narrow",
+                language: "python",
+                label: "union-no-narrow.py",
+                blurb: "Brand-specific method without isinstance",
+                expect: "error",
+                code: `# A union value has only the methods common to *all* its branches.
+# A brand-specific method requires an \`isinstance\` check first —
+# without one, inty rejects the access.
+
+class Dog:
+    def __init__(self):
+        self.legs = 4
+    def bark(self):
+        return "woof"
+
+class Cat:
+    def __init__(self):
+        self.legs = 4
+    def meow(self):
+        return "miaow"
+
+animal = Dog() if True else Cat()
+
+# No narrowing yet — \`bark\` exists on Dog only.
+sound = animal.bark()
+`,
+            },
+            {
+                id: "py-literal-out-of-set",
+                language: "python",
+                label: "literal-out-of-set.py",
+                blurb: "Literal alias rejects unknown strings",
+                expect: "error",
+                code: `# \`Literal["...", "..."]\` declares the exact strings allowed.
+# Passing one outside the set is a static error — no typo can slip
+# through to a \`raise ValueError\` at runtime.
+
+LogLevel = Literal["debug", "info", "warn", "error"]
+
+def log(level: LogLevel, msg: str) -> None:
+    pass
+
+log("info", "starting up")
+log("warm", "uh oh")   # typo for "warn"
+`,
+            },
+            {
+                id: "py-js-method-on-py",
+                language: "python",
+                label: "js-method-on-py.py",
+                blurb: "JS methods don't exist on Python types",
+                expect: "error",
+                code: `# Methods are language-specific. JavaScript array methods don't
+# exist on a Python \`list\`, and JavaScript string methods don't
+# exist on a Python \`str\`. Inty enforces the Python surface.
+
+xs = [1, 2, 3]
+xs.push(4)              # JS Array.push — not a Python list method
+
+s = "hello"
+c = s.charAt(0)         # JS String.charAt — not a Python str method
+`,
+            },
+            {
+                id: "py-return-type",
+                language: "python",
+                label: "return-type-mismatch.py",
+                blurb: "`-> int` annotation is enforced",
+                expect: "error",
+                code: `# A \`-> int\` annotation is enforced. Returning a String from a
+# function the type system promised would yield an \`int\` is rejected.
+
+def total_price(quantity: int, price: int) -> int:
+    # Easy to swap by accident when refactoring.
+    return f"total: {quantity * price}"
+
+t = total_price(3, 10)
+`,
+            },
+            {
+                id: "py-none-return",
+                language: "python",
+                label: "none-return.py",
+                blurb: "Missing `return` makes the result None",
+                expect: "error",
+                code: `# A function that doesn't \`return\` anything returns \`None\`, not the
+# value of its last expression statement. Using that None as if it
+# were a Number is a bug Python only spots when the addition runs.
+
+def log(msg):
+    f"[log] {msg}"     # no \`return\` — the value is thrown away
+
+x = log("starting") + 1
+`,
+            },
+        ],
+    },
 ];
 
 export function findExample(id) {
@@ -472,4 +1091,5 @@ export function findExample(id) {
     return null;
 }
 
+export const DEFAULT_EXAMPLE_IDS = {"javascript": "basics", "python": "py-basics"};
 export const DEFAULT_EXAMPLE_ID = "basics";
