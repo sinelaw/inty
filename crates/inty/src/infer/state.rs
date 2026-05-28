@@ -255,6 +255,12 @@ pub struct InferState {
     /// primitive-method surface (`str`/`list` vs `String`/`Array`) a value
     /// carries. Defaults to JavaScript.
     pub(in crate::infer) language: crate::ast::SourceLanguage,
+
+    /// Per-language typeclass instance registry. Consulted by the
+    /// constraint solver when resolving class predicates; populated by
+    /// language-specific seeding (`seed_class_env`) plus dynamic
+    /// registration from stub loaders for built-in stdlib classes.
+    pub(in crate::infer) class_env: super::class_env::ClassEnv,
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -320,6 +326,7 @@ impl InferState {
             return_value_stack: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
+            class_env: super::class_env::ClassEnv::new(),
         }
     }
 
@@ -333,6 +340,31 @@ impl InferState {
         } else {
             Type::Undefined
         };
+    }
+
+    /// Register a typeclass instance for `lang` under `class`. Looked up
+    /// by the constraint solver via [`Self::class_instances`]; used by
+    /// the static seeding in [`Self::seed_class_env`] and by stub
+    /// loaders that install language-specific instances once a class's
+    /// brand id is known.
+    pub fn register_class_instance(
+        &mut self,
+        lang: crate::ast::SourceLanguage,
+        class: crate::types::ClassName,
+        instance: super::class_env::Instance,
+    ) {
+        self.class_env.register(lang, class, instance);
+    }
+
+    /// Look up all instances registered for `(lang, class)`. Empty slice
+    /// when nothing matches — the solver decides what to do with that
+    /// (default arm, error, etc.) per class.
+    pub fn class_instances(
+        &self,
+        lang: crate::ast::SourceLanguage,
+        class: crate::types::ClassName,
+    ) -> &[super::class_env::Instance] {
+        self.class_env.lookup(lang, class)
     }
 
     /// Record an inference error and continue. Used by `infer_stmt_list`
