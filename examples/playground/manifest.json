@@ -42,10 +42,20 @@
       "language": "python",
       "label": "Type System",
       "items": [
-        { "id": "py-basics",      "file": "basics.py",      "label": "basics.py",      "blurb": "Inference for plain Python",          "expect": "ok" },
-        { "id": "py-annotations", "file": "annotations.py", "label": "annotations.py", "blurb": "Type hints enforced as constraints",  "expect": "ok" },
-        { "id": "py-control",     "file": "control.py",     "label": "control.py",     "blurb": "if/elif/else and while loops",        "expect": "ok" },
-        { "id": "py-records",     "file": "records.py",     "label": "records.py",     "blurb": "Dicts with literal keys are records", "expect": "ok" }
+        { "id": "py-basics",       "file": "basics.py",       "label": "basics.py",       "blurb": "Inference for plain Python",          "expect": "ok" },
+        { "id": "py-annotations",  "file": "annotations.py",  "label": "annotations.py",  "blurb": "Type hints enforced as constraints",  "expect": "ok" },
+        { "id": "py-control",      "file": "control.py",      "label": "control.py",      "blurb": "if/elif/else and while loops",        "expect": "ok" },
+        { "id": "py-records",      "file": "records.py",      "label": "records.py",      "blurb": "Dicts with literal keys are records", "expect": "ok" },
+        { "id": "py-generics",     "file": "generics.py",     "label": "generics.py",     "blurb": "Parametric polymorphism",             "expect": "ok" },
+        { "id": "py-classes",      "file": "classes.py",      "label": "classes.py",      "blurb": "Methods, fields, nominal brands",     "expect": "ok" },
+        { "id": "py-tagged-unions","file": "tagged-unions.py","label": "tagged-unions.py","blurb": "isinstance narrows a brand union",    "expect": "ok" },
+        { "id": "py-higher-order", "file": "higher-order.py", "label": "higher-order.py", "blurb": "First-class functions, compose",      "expect": "ok" },
+        { "id": "py-type-aliases", "file": "type-aliases.py", "label": "type-aliases.py", "blurb": "Literal aliases pin a string set",    "expect": "ok" },
+        { "id": "py-tuples",       "file": "tuples.py",       "label": "tuples.py",       "blurb": "Tuples + positional destructuring",   "expect": "ok" },
+        { "id": "py-list-methods", "file": "list-methods.py", "label": "list-methods.py", "blurb": "append/extend/pop/sort/index",        "expect": "ok" },
+        { "id": "py-str-methods",  "file": "str-methods.py",  "label": "str-methods.py",  "blurb": "upper/split/join/replace/startswith", "expect": "ok" },
+        { "id": "py-f-strings",    "file": "f-strings.py",    "label": "f-strings.py",    "blurb": "f-strings type-check embedded code",  "expect": "ok" },
+        { "id": "py-builtins",     "file": "builtins.py",     "label": "builtins.py",     "blurb": "range, sorted, sum, abs, str, len",   "expect": "ok" }
       ]
     },
     {
@@ -53,9 +63,18 @@
       "language": "python",
       "label": "Mistakes mypy lets slip",
       "items": [
-        { "id": "py-mixed-plus",     "file": "mixed-plus.py",     "label": "mixed-plus.py",     "blurb": "`+` requires matching operand types", "expect": "error" },
-        { "id": "py-unknown-field",  "file": "unknown-field.py",  "label": "unknown-field.py",  "blurb": "Reading a key the dict doesn't have", "expect": "error" },
-        { "id": "py-bad-annotation", "file": "bad-annotation.py", "label": "bad-annotation.py", "blurb": "Value contradicts its annotation",    "expect": "error" }
+        { "id": "py-mixed-plus",          "file": "mixed-plus.py",          "label": "mixed-plus.py",          "blurb": "`+` requires matching operand types",      "expect": "error" },
+        { "id": "py-unknown-field",       "file": "unknown-field.py",       "label": "unknown-field.py",       "blurb": "Reading a key the dict doesn't have",      "expect": "error" },
+        { "id": "py-bad-annotation",      "file": "bad-annotation.py",      "label": "bad-annotation.py",      "blurb": "Value contradicts its annotation",         "expect": "error" },
+        { "id": "py-field-mismatch",      "file": "field-mismatch.py",      "label": "field-mismatch.py",      "blurb": "self.field type fixed by __init__",        "expect": "error" },
+        { "id": "py-keyword-typo",        "file": "keyword-typo.py",        "label": "keyword-typo.py",        "blurb": "Misspelt keyword argument name",           "expect": "error" },
+        { "id": "py-missing-arg",         "file": "missing-arg.py",         "label": "missing-arg.py",         "blurb": "A required argument left unfilled",        "expect": "error" },
+        { "id": "py-distinct-brands",     "file": "distinct-brands.py",     "label": "distinct-brands.py",     "blurb": "Twin classes are still distinct types",    "expect": "error" },
+        { "id": "py-union-no-narrow",     "file": "union-no-narrow.py",     "label": "union-no-narrow.py",     "blurb": "Brand-specific method without isinstance", "expect": "error" },
+        { "id": "py-literal-out-of-set",  "file": "literal-out-of-set.py",  "label": "literal-out-of-set.py",  "blurb": "Literal alias rejects unknown strings",    "expect": "error" },
+        { "id": "py-js-method-on-py",     "file": "js-method-on-py.py",     "label": "js-method-on-py.py",     "blurb": "JS methods don't exist on Python types",   "expect": "error" },
+        { "id": "py-return-type",         "file": "return-type-mismatch.py","label": "return-type-mismatch.py","blurb": "`-> int` annotation is enforced",          "expect": "error" },
+        { "id": "py-none-return",         "file": "none-return.py",         "label": "none-return.py",         "blurb": "Missing `return` makes the result None",   "expect": "error" }
       ]
     }
   ]

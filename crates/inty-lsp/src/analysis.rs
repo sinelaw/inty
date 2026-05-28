@@ -89,8 +89,27 @@ impl Analysis {
 
         // Build the initial env with the embedded stdlib. If the stdlib
         // itself fails to load (shouldn't happen — it's tested), we
-        // surface the error and bail out of inference.
-        let (env, mut state) = match initial_env_with_stdlib() {
+        // surface the error and bail out of inference. For non-JS
+        // frontends we layer their own prelude on top of an empty env
+        // instead — the JS stdlib bindings would just be noise.
+        let env_state = match lang {
+            Language::JavaScript => initial_env_with_stdlib(),
+            Language::Python => {
+                let mut state = inty::infer::InferState::new();
+                state.set_language(inty::ast::SourceLanguage::Python);
+                inty::frontends::python::prelude::load(
+                    &mut state,
+                    inty::builtins::initial_env(),
+                )
+                .map(|env| (env, state))
+            }
+            Language::Lua => Ok((inty::builtins::initial_env(), {
+                let mut state = inty::infer::InferState::new();
+                state.set_language(inty::ast::SourceLanguage::Lua);
+                state
+            })),
+        };
+        let (env, mut state) = match env_state {
             Ok(r) => r,
             Err(e) => {
                 errors.push(e);
