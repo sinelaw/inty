@@ -335,6 +335,14 @@ pub enum TypeError {
         property: String,
         span: Span,
     },
+
+    /// A type annotation refers to a name that isn't a known primitive,
+    /// type alias, declared type variable, or class in scope — typically
+    /// a typo (`-> blabla`) or an unmodelled imported type. Lowering
+    /// returns a fresh variable to keep inference going, but the error
+    /// is surfaced so the user sees the dangling reference.
+    #[error("Unknown type '{name}' in annotation")]
+    UnknownTypeRef { name: String, span: Span },
 }
 
 impl TypeError {
@@ -355,6 +363,7 @@ impl TypeError {
             TypeError::AmbiguousType { span } => *span,
             TypeError::AssignmentToConstant { span, .. } => *span,
             TypeError::AssignmentToPolymorphicProperty { span, .. } => *span,
+            TypeError::UnknownTypeRef { span, .. } => *span,
             TypeError::Module { span, .. } => *span,
             TypeError::InvalidSyntax { span, .. } => *span,
             TypeError::TypeMismatch { span, .. } => *span,

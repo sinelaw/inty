@@ -694,13 +694,21 @@ fn param_annotation_is_checked() {
 }
 
 #[test]
-fn unmodelled_param_annotation_imposes_no_constraint() {
-    // An unknown/unmodelled annotation lowers to a fresh variable, so it
-    // never produces a false positive.
+fn unknown_param_annotation_is_flagged_but_call_sites_unconstrained() {
+    // A user-authored annotation referring to an undeclared name is now
+    // a `UnknownTypeRef` error (strict policy — catches typos like
+    // `-> blabla`). The parameter still lowers to a fresh variable so
+    // call sites aren't poisoned: only the annotation error surfaces.
     let errs = check("def f(x: SomeProtocol):\n    return 1\nf(\"anything\")\nf(5)\n");
+    assert_eq!(
+        errs.len(),
+        1,
+        "expected exactly one UnknownTypeRef error, got {:?}",
+        errs
+    );
     assert!(
-        errs.is_empty(),
-        "unmodelled annotation should not constrain, got {:?}",
+        errs[0].contains("UnknownTypeRef") && errs[0].contains("SomeProtocol"),
+        "expected UnknownTypeRef('SomeProtocol'), got {:?}",
         errs
     );
 }
@@ -732,11 +740,21 @@ fn return_annotation_is_checked() {
 }
 
 #[test]
-fn unmodelled_return_annotation_imposes_no_constraint() {
+fn unknown_return_annotation_is_flagged() {
+    // Strict policy: an unknown name in a return annotation is an
+    // `UnknownTypeRef` error. The return type still lowers to a fresh
+    // variable so the body and downstream uses (`x = g()`) check
+    // without secondary errors.
     let errs = check("def g() -> SomeType:\n    return 123\nx = g()\n");
+    assert_eq!(
+        errs.len(),
+        1,
+        "expected exactly one UnknownTypeRef error, got {:?}",
+        errs
+    );
     assert!(
-        errs.is_empty(),
-        "unmodelled return annotation should not constrain, got {:?}",
+        errs[0].contains("UnknownTypeRef") && errs[0].contains("SomeType"),
+        "expected UnknownTypeRef('SomeType'), got {:?}",
         errs
     );
 }
@@ -758,11 +776,22 @@ fn variable_annotation_is_checked() {
 }
 
 #[test]
-fn unmodelled_variable_annotation_imposes_no_constraint() {
+fn unknown_variable_annotation_is_flagged_per_occurrence() {
+    // Strict policy: each occurrence of an unknown name in a variable
+    // annotation is an `UnknownTypeRef` error (two declarations → two
+    // errors). The init expressions still type-check — the annotation
+    // lowers to a fresh variable, so neither `5` nor `"s"` is rejected.
     let errs = check("x: SomeType = 5\ny: SomeType = \"s\"\n");
+    assert_eq!(
+        errs.len(),
+        2,
+        "expected one UnknownTypeRef error per annotation, got {:?}",
+        errs
+    );
     assert!(
-        errs.is_empty(),
-        "unmodelled variable annotation should not constrain, got {:?}",
+        errs.iter()
+            .all(|e| e.contains("UnknownTypeRef") && e.contains("SomeType")),
+        "expected all errors to be UnknownTypeRef('SomeType'), got {:?}",
         errs
     );
 }
@@ -1143,18 +1172,26 @@ fn type_alias_used_as_value_is_not_bound() {
 }
 
 #[test]
-fn unknown_type_name_is_still_opaque() {
-    // A non-alias unknown type name in an annotation imposes no
-    // constraint (lowers opaque) — no false positive.
+fn unknown_type_name_is_flagged_but_lowers_opaque() {
+    // Strict policy: the unknown name surfaces as an `UnknownTypeRef`
+    // error, but inference continues because the annotation still
+    // lowers to a fresh variable — both call sites (`"anything"` and
+    // `42`) check, so the only error is the annotation itself.
     let errs = check_program(
         "def f(x: SomeUnmodelledType) -> int:\n\
          \x20   return 1\n\
          r = f(\"anything\")\n\
          s = f(42)\n",
     );
+    assert_eq!(
+        errs.len(),
+        1,
+        "expected exactly one UnknownTypeRef error, got {:?}",
+        errs
+    );
     assert!(
-        errs.is_empty(),
-        "unknown annotation should be opaque, got {:?}",
+        errs[0].contains("UnknownTypeRef") && errs[0].contains("SomeUnmodelledType"),
+        "expected UnknownTypeRef('SomeUnmodelledType'), got {:?}",
         errs
     );
 }

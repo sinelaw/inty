@@ -372,6 +372,15 @@ pub fn write_error<W: Write>(
                 *span,
                 None,
             ),
+            TypeError::UnknownTypeRef { name, span } => (
+                format!("Unknown type '{}' in annotation", name),
+                *span,
+                Some(format!(
+                    "'{}' isn't a primitive, an alias, a declared type variable, \
+                     or a class in scope — did you mean to import it?",
+                    name
+                )),
+            ),
         },
     };
 

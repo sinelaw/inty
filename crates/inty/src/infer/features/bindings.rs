@@ -379,7 +379,10 @@ impl InferState {
             // shared TypeAst IR; the JS/`.d.js` string form is parsed by
             // `type_parser`. A declarator carries at most one.
             let annotated_type: Option<(Type, Span)> = if let Some(type_ast) = &decl.type_ast {
-                Some((self.lower_type_ast_in_env(type_ast, env), decl.span))
+                Some((
+                    self.lower_type_ast_in_env_with_span(type_ast, env, decl.span),
+                    decl.span,
+                ))
             } else if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
                 let (ann_ty, var_map, next_pvar) = parse_type_annotation_with_pvars(

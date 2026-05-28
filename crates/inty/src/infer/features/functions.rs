@@ -210,7 +210,7 @@ impl InferState {
             // unmodelled annotations lower to a fresh variable and so
             // impose no constraint (never a false positive).
             if let Some(type_ast) = &param.type_ast {
-                let annotated = self.lower_type_ast_in_env(type_ast, env);
+                let annotated = self.lower_type_ast_in_env_with_span(type_ast, env, param.span);
                 self.unify(param.span, ty, &annotated)?;
             }
             if let Some(default) = &param.default {
@@ -225,7 +225,7 @@ impl InferState {
         // checked, below). Unmodelled annotations lower to a fresh
         // variable and impose no constraint.
         if let Some(ret_ast) = return_type_ast {
-            let annotated_ret = self.lower_type_ast_in_env(ret_ast, env);
+            let annotated_ret = self.lower_type_ast_in_env_with_span(ret_ast, env, span);
             self.unify(span, &ret_type, &annotated_ret)?;
         }
 
