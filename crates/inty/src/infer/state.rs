@@ -928,7 +928,18 @@ impl InferState {
             // the original sub/sup pair so the user sees the union.
         }
 
-        Err(self.unification_error(span, &sub, &sup))
+        // Direction matters for the error labels. `subsume(sub, sup)`
+        // is "the value of type `sub` flows into a slot of type `sup`"
+        // — so the natural reading is `expected = sup` (what the slot
+        // wants) and `found = sub` (what was supplied). `unify` itself
+        // is symmetric, but its rendered error uses its arg order as
+        // `(expected, found)`; passing `(sup, sub)` here matches the
+        // call-site semantics. The internal `unify` attempt above used
+        // `(sub, sup)` for the constraint direction (literal-vs-base
+        // is one-directional in `unify`), but its error was discarded
+        // on rollback, so the only user-visible label comes from this
+        // line.
+        Err(self.unification_error(span, &sup, &sub))
     }
 
     /// "Either-direction" subsumption used by symmetric operators
