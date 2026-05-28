@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = ROOT / "examples" / "playground"
-OUT_FILE = ROOT / "web" / "examples.js"
+SRC_DIR = ROOT.joinpath("examples", "playground")
+OUT_FILE = ROOT.joinpath("web", "examples.js")
 
 
 def js_string(s: str) -> str:
@@ -30,7 +30,7 @@ def js_string(s: str) -> str:
 
 
 def main() -> int:
-    manifest_path = SRC_DIR / "manifest.json"
+    manifest_path = SRC_DIR.joinpath("manifest.json")
     manifest = json.loads(manifest_path.read_text())
 
     out = []
@@ -45,7 +45,7 @@ def main() -> int:
         out.append(f"        label: {json.dumps(section['label'])},")
         out.append("        items: [")
         for item in section["items"]:
-            file_path = SRC_DIR / section["id"] / f"{item['id']}.js"
+            file_path = SRC_DIR.joinpath(section["id"], f"{item['id']}.js")
             if not file_path.is_file():
                 print(f"error: missing example file {file_path}", file=sys.stderr)
                 return 1
