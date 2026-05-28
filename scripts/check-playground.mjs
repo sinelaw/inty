@@ -34,33 +34,45 @@ function encodeHash(code) {
   return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function enableMarkers(src) {
+const COMMENT_PREFIX = { javascript: '//', python: '#', lua: '--' };
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function enableMarkers(src, lang) {
   // Mirrors crates/inty/tests/web_examples.rs::enable_markers — used
   // here to build the "triggered" variant of an example for the URL
   // hash. Returns null if the file has no markers.
+  //
+  // The marker comment prefix is per-language (`//` for JS, `#` for
+  // Python). Otherwise the convention is identical.
+  const prefix = COMMENT_PREFIX[lang || 'javascript'] || '//';
+  const endMarker = `${prefix} error!`;
   const lines = src.split('\n');
   const out = [];
   let inBlock = false;
   let found = false;
   for (const raw of lines) {
     const trimmed = raw.trim();
-    if (trimmed.startsWith('//') && trimmed.includes('error-begin')) {
+    if (trimmed.startsWith(prefix) && trimmed.includes('error-begin')) {
       inBlock = true; found = true; continue;
     }
-    if (trimmed.startsWith('//') && trimmed.includes('error-end')) {
+    if (trimmed.startsWith(prefix) && trimmed.includes('error-end')) {
       inBlock = false; continue;
     }
-    if (inBlock) { out.push(uncomment(raw)); continue; }
-    if (trimmed.startsWith('//') && trimmed.replace(/\s+$/, '').endsWith('// error!')) {
-      found = true; out.push(uncomment(raw)); continue;
+    if (inBlock) { out.push(uncomment(prefix, raw)); continue; }
+    if (trimmed.startsWith(prefix) && trimmed.replace(/\s+$/, '').endsWith(endMarker)) {
+      found = true; out.push(uncomment(prefix, raw)); continue;
     }
     out.push(raw);
   }
   return found ? out.join('\n') : null;
 }
 
-function uncomment(line) {
-  const m = line.match(/^(\s*)\/\/ ?(.*)$/);
+function uncomment(prefix, line) {
+  const re = new RegExp(`^(\\s*)${escapeRegExp(prefix)} ?(.*)$`);
+  const m = line.match(re);
   return m ? m[1] + m[2] : line;
 }
 
@@ -215,22 +227,39 @@ async function main() {
   // (features/overloading) which passes as-written and errors with the
   // marker enabled. This proves end-to-end that the hash → editor →
   // analysis path agrees with the Rust test.
-  const featuresSection = MANIFEST.sections.find((s) => s.id === 'features');
-  const overloadingItem = featuresSection?.items.find((i) => i.id === 'overloading');
-  const src = await readExampleSource(featuresSection, overloadingItem);
-  const enabled = enableMarkers(src);
-  if (!enabled) {
-    failures.push('marker probe: features/overloading has no markers — convention drift?');
-  } else {
+  // Probe one marker-bearing example per frontend to verify the
+  // hash → editor → analysis path end-to-end. Picks the overloading
+  // example for JS and tagged-unions for Python — both pass as
+  // written and error with the marker enabled.
+  const PROBES = [
+    { sectionId: 'features',    itemId: 'overloading' },
+    { sectionId: 'py-features', itemId: 'py-tagged-unions' },
+  ];
+  for (const probe of PROBES) {
+    const section = MANIFEST.sections.find((s) => s.id === probe.sectionId);
+    const item = section?.items.find((i) => i.id === probe.itemId);
+    if (!section || !item) {
+      failures.push(`marker probe: missing ${probe.sectionId}/${probe.itemId} in manifest`);
+      continue;
+    }
+    const src = await readExampleSource(section, item);
+    const enabled = enableMarkers(src, section.language || 'javascript');
+    if (!enabled) {
+      failures.push(`marker probe: ${probe.sectionId}/${probe.itemId} has no markers — convention drift?`);
+      continue;
+    }
+    // The `?ex=<id>` query carries the language so the editor opens
+    // in the right mode before the hash code lands.
     const hash = encodeHash(enabled);
-    await page.goto(`${BASE_URL}#${hash}`, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
+    const url = `${BASE_URL}?ex=${encodeURIComponent(item.id)}#${hash}`;
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
     await statusReady(page);
     await waitForCheck(page);
     const visible = await errorPanelVisible(page);
     if (!visible) {
-      failures.push('marker probe (features/overloading enabled): expected errors, panel hidden');
+      failures.push(`marker probe (${probe.sectionId}/${probe.itemId} enabled): expected errors, panel hidden`);
     } else {
-      console.log(`[ok] marker probe (features/overloading): errors visible (${await errorSummary(page)})`);
+      console.log(`[ok] marker probe (${probe.sectionId}/${probe.itemId}): errors visible (${await errorSummary(page)})`);
     }
   }
 
