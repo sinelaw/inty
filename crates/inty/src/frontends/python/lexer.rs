@@ -49,6 +49,7 @@ pub enum Tok {
     Except,
     Finally,
     Raise,
+    With,
     /// A reserved word we recognise but deliberately don't support; the
     /// parser turns it into a clear `Unsupported` diagnostic.
     Reserved(String),
@@ -153,7 +154,8 @@ impl Tok {
             "except" => Tok::Except,
             "finally" => Tok::Finally,
             "raise" => Tok::Raise,
-            "with" | "global" | "nonlocal" | "del" | "assert" | "yield" | "async" | "await" => {
+            "with" => Tok::With,
+            "global" | "nonlocal" | "del" | "assert" | "yield" | "async" | "await" => {
                 Tok::Reserved(s.to_string())
             }
             _ => return None,
