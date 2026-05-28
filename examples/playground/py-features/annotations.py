@@ -1,7 +1,5 @@
 # Type annotations are enforced as constraints, not discarded. A
-# program whose values match its annotations type-checks. Annotations
-# inty doesn't model (e.g. `SomeProtocol`) impose no constraint, so they
-# never cause a false positive.
+# program whose values match its annotations type-checks.
 
 def add_one(x: int) -> int:
     return x + 1
@@ -28,10 +26,3 @@ class Counter:
 
 c = Counter()
 out = c.scaled(3)
-
-# Unmodelled annotation: lowers to a fresh variable, constrains nothing.
-def use(p: SomeProtocol):
-    return 1
-
-ignored = use("anything")
-also = use(42)
