@@ -250,10 +250,7 @@ impl InferState {
                 if n1 && n2 {
                     return Err(self.unification_error(span, t1, t2));
                 }
-                let assumption = UnfoldAssumption::NamedPair(
-                    (*id1).min(*id2),
-                    (*id1).max(*id2),
-                );
+                let assumption = UnfoldAssumption::NamedPair((*id1).min(*id2), (*id1).max(*id2));
                 if self.unfold_assumptions.contains(&assumption) {
                     return Ok(());
                 }
