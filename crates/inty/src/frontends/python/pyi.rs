@@ -22,11 +22,6 @@ use crate::infer::InferState;
 use crate::span::Spanned;
 use crate::types::{FuncParam, PropName, TVarName, Type, TypeDef, TypeScheme};
 
-/// Dunder methods inty retains from a class body (rather than dropping
-/// like other `__x__` names) because an operator dispatches to them.
-/// Currently just `__truediv__`, the `/` join used by `pathlib.Path`.
-const OPERATOR_DUNDERS: &[&str] = &["__truediv__"];
-
 /// The result of reading a `.pyi`: directly-declared exports plus the
 /// re-export requests (`from X import …`) the caller must resolve and
 /// merge (the reader has no path/resolver context).
@@ -521,8 +516,8 @@ impl StubReader<'_> {
 
         // Pre-register the brand *before* reading the body so a
         // self-reference in a field or method type (`parent: Path`,
-        // `def resolve(self) -> Path`, `def __truediv__(...) -> Path`)
-        // resolves to this class — a recursive nominal — rather than
+        // `def resolve(self) -> Path`) resolves to this class — a
+        // recursive nominal — rather than
         // minting a fresh opaque var that would otherwise leak in as a
         // phantom brand parameter. A placeholder constructor whose return
         // is `Named(id, [])` is enough for `resolve_ref_in_env` to map
@@ -649,10 +644,12 @@ impl StubReader<'_> {
             *ctor_params = params;
             return;
         }
-        // Drop dunders, except the operand-protocol methods inty
-        // dispatches on (e.g. `__truediv__` for the `/` join operator),
-        // which are kept as ordinary instance-row methods.
-        if mname.starts_with("__") && !OPERATOR_DUNDERS.contains(&mname.as_str()) {
+        // Drop other dunders. Operand-protocol dunders (e.g.
+        // `__truediv__`) are not surfaced as instance-row fields —
+        // their behaviour is declared once as a per-language typeclass
+        // instance (see `frontends::python::instances`), not as a
+        // queryable method.
+        if mname.starts_with("__") {
             return;
         }
         let is_property = decos

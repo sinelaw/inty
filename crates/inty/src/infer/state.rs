@@ -326,7 +326,7 @@ impl InferState {
             return_value_stack: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
-            class_env: super::class_env::ClassEnv::new(),
+            class_env: seed_class_env(),
         }
     }
 
@@ -340,6 +340,12 @@ impl InferState {
         } else {
             Type::Undefined
         };
+    }
+
+    /// The active source language. Used by language-specific rules
+    /// (typeclass instance lookup, primitive-method surface, …).
+    pub fn source_language(&self) -> crate::ast::SourceLanguage {
+        self.language
     }
 
     /// Register a typeclass instance for `lang` under `class`. Looked up
@@ -1570,6 +1576,35 @@ impl InferState {
             _ => false,
         }
     }
+}
+
+/// Build the initial typeclass instance registry shared by every
+/// frontend. Numeric `Div = (Number, Number, Number)` is universal —
+/// JavaScript, Python, and Lua all divide numbers the same way.
+/// Language-specific instances (e.g. Python's `pathlib.Path` join) are
+/// installed dynamically by the stub loaders.
+fn seed_class_env() -> super::class_env::ClassEnv {
+    use super::class_env::{BaseType, ClassEnv, Instance, InstanceBody, InstanceHead};
+    use crate::ast::SourceLanguage;
+
+    let numeric_div = Instance {
+        head: InstanceHead::BaseType(BaseType::Number),
+        body: InstanceBody::Direct {
+            left: Type::Number,
+            right: Type::Number,
+            result: Type::Number,
+        },
+    };
+
+    let mut env = ClassEnv::new();
+    for lang in [
+        SourceLanguage::JavaScript,
+        SourceLanguage::Python,
+        SourceLanguage::Lua,
+    ] {
+        env.register(lang, ClassName::Div, numeric_div.clone());
+    }
+    env
 }
 
 #[cfg(test)]

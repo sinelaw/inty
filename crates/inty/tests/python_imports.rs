@@ -766,3 +766,40 @@ fn re_sub_accepts_count_keyword() {
     );
     assert!(ok.is_ok(), "re.Pattern.sub should accept count= kwarg: {:?}", ok);
 }
+
+#[test]
+fn pathlib_div_defers_when_left_is_forward_reference() {
+    // A module-level `Path("a")` binding stored on a forward-reference
+    // type variable that's read inside a nested function body: at the
+    // `/` site the left operand zonks to a flex var. With eager
+    // dispatch this would either pin the var to Number (wrong) or
+    // error. With the Div class, the operator posts a deferred
+    // constraint; the solver runs after inference (when the global is
+    // bound to Path) and dispatches through the Path instance.
+    let dir = tmp_dir();
+    let main = concat!(
+        "from pathlib import Path\n",
+        "def child(name: str) -> str:\n",
+        "    return str(ROOT / name)\n",
+        "ROOT = Path(\"a\")\n",
+        "r = child(\"x\")\n",
+    );
+    let ok = check(main, &dir, &[]);
+    assert!(
+        ok.is_ok(),
+        "Path / str via a forward-referenced module global should resolve: {:?}",
+        ok
+    );
+}
+
+#[test]
+fn div_on_string_is_rejected() {
+    // No `Div` instance covers `String` in any frontend, so `"a" / "b"`
+    // resolves through the deferred path (left isn't a known instance
+    // head at the operator site) and the solver errors with a `Div`
+    // constraint-not-satisfied diagnostic. Python is fine for this
+    // case because the rejection is frontend-uniform.
+    let dir = tmp_dir();
+    let bad = check("x = \"a\" / \"b\"\n", &dir, &[]);
+    assert!(bad.is_err(), "String / String must not type-check: {:?}", bad);
+}

@@ -137,6 +137,26 @@ const ANY_UNDEF: &[TypingArm] = &[TypingArm {
     notes: "",
 }];
 
+// `/` dispatches via the `Div` typeclass. The numeric instance —
+// shared by every frontend — is enumerated as a concrete arm; the
+// language-specific class-instance instances (e.g. Python's
+// `pathlib.Path` join) are not enumerable here because their operand
+// types are dynamic. The class-mediated arm covers them.
+const DIV_ARMS: &[TypingArm] = &[
+    TypingArm {
+        inputs: &[Concrete(Number), Concrete(Number)],
+        output: Concrete(Number),
+        class: None,
+        notes: "",
+    },
+    TypingArm {
+        inputs: &[AnyOfClass(ClassName::Div), AnyOfClass(ClassName::Div)],
+        output: AnyOfClass(ClassName::Div),
+        class: Some(ClassName::Div),
+        notes: "deferred to constraint solver; operand/result types follow the registered Div instance",
+    },
+];
+
 const PLUS_ARMS: &[TypingArm] = &[
     TypingArm {
         inputs: &[Concrete(Number), Concrete(Number)],
@@ -278,7 +298,7 @@ pub static OPERATORS: &[OpInfo] = &[
         name: "/",
         kind: OpKind::BinOp,
         dispatch: Dispatch::OpSymbol,
-        arms: NUM_NUM_NUM,
+        arms: DIV_ARMS,
     },
     OpInfo {
         name: "%",

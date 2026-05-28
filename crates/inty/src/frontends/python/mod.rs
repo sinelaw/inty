@@ -24,6 +24,7 @@
 //! slicing, `is`/`in`, chained comparisons, and the statement keywords
 //! `with`/`try`/`global`/`del`/`yield`/… .
 
+mod instances;
 mod lexer;
 pub mod modules;
 mod parser;

@@ -498,6 +498,9 @@ impl InferState {
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
+            ClassName::Div => {
+                self.resolve_div(&pred.types[0], &pred.types[1], &pred.types[2], span)
+            }
         }
     }
 
@@ -611,6 +614,69 @@ impl InferState {
             }
             .into()),
         }
+    }
+
+    /// Resolve a deferred `Div` predicate. Only reached when the
+    /// operator site posted the constraint because the left operand
+    /// was still a flex var (see `try_resolve_div` for the eager path).
+    /// At this point inference has finished, so the substituted left
+    /// is the final truth:
+    ///   - Concrete shape matching a registered instance head →
+    ///     dispatch through the shared body application.
+    ///   - Still flex → fall back to the language's numeric instance
+    ///     (pinning the left to Number), matching the previous eager
+    ///     `subsume(left, Number)` behaviour for untyped operands.
+    ///   - Concrete but unmatched → error.
+    fn resolve_div(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        result: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        use crate::infer::{BaseType, InstanceBody, InstanceHead};
+
+        let left_now = self.apply_subst(left);
+        let lang = self.source_language();
+        let instances = self.class_instances(lang, ClassName::Div).to_vec();
+
+        let pick = if left_now.is_flex_var() {
+            // Default a still-flex left to the numeric instance.
+            instances
+                .iter()
+                .find(|i| matches!(i.head, InstanceHead::BaseType(BaseType::Number)))
+                .cloned()
+        } else {
+            instances
+                .iter()
+                .find(|i| i.head.matches(&left_now))
+                .cloned()
+        };
+
+        if let Some(instance) = pick {
+            // Direct's `left` slot pins the original `left` even when
+            // it was still flex (the numeric-default path); Method
+            // doesn't touch it. `apply_div_body` handles both.
+            let inst_result = self.apply_div_body(
+                if matches!(instance.body, InstanceBody::Direct { .. }) {
+                    left
+                } else {
+                    &left_now
+                },
+                right,
+                instance.body,
+                span,
+            )?;
+            self.unify(span, result, &inst_result)?;
+            return Ok(());
+        }
+
+        Err(TypeError::ConstraintNotSatisfied {
+            class: "Div".to_string(),
+            ty: left_now.to_string(),
+            span,
+        }
+        .into())
     }
 }
 
