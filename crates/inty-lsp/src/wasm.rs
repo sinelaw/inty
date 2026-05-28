@@ -7,6 +7,7 @@
 use wasm_bindgen::prelude::*;
 
 use inty::error::IntyError;
+use inty::frontends::Language;
 
 use crate::analysis::{Analysis as RawAnalysis, HoverResult, InlayHintData};
 
@@ -23,14 +24,27 @@ pub struct Analysis {
     source: String,
 }
 
+fn parse_language(name: Option<String>) -> Language {
+    match name.as_deref() {
+        Some("python") | Some("py") => Language::Python,
+        Some("lua") => Language::Lua,
+        _ => Language::JavaScript,
+    }
+}
+
 #[wasm_bindgen]
 impl Analysis {
     /// Lex, parse, and infer `source`. Always returns an `Analysis`; on
     /// failure `errors()` is non-empty and queries return null/empty.
+    ///
+    /// `language` is `"javascript"` (the default), `"python"`, or
+    /// `"lua"`. Unknown values fall back to JavaScript so older callers
+    /// keep working.
     #[wasm_bindgen(constructor)]
-    pub fn new(source: &str) -> Analysis {
+    pub fn new(source: &str, language: Option<String>) -> Analysis {
+        let lang = parse_language(language);
         Analysis {
-            inner: RawAnalysis::check(source),
+            inner: RawAnalysis::check_lang(source, lang),
             source: source.to_string(),
         }
     }

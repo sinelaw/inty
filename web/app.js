@@ -5,7 +5,7 @@
 // render inlay hints and hover tooltips from its responses.
 
 import init, { Analysis } from './pkg/inty.js';
-import { EXAMPLES, findExample, DEFAULT_EXAMPLE_ID } from './examples.js';
+import { EXAMPLES, findExample, DEFAULT_EXAMPLE_IDS } from './examples.js';
 
 let wasmReady = false;
 let inputEditor = null;
@@ -26,9 +26,23 @@ let activeExampleId = null;
 // Suppress URL rewriting during programmatic setValue.
 let suppressDirty = false;
 
+// Which surface language the Rust analysis is currently running for.
+// Drives both the WASM Analysis constructor and the CodeMirror mode.
+let currentLanguage = localStorage.getItem('inty.lang') || 'javascript';
+
 const SIDEBAR_KEY = 'inty.sidebar';
+const LANG_KEY = 'inty.lang';
 const ONBOARDED_KEY = 'inty.onboarded';
 const MOBILE_BREAKPOINT = 768;
+
+const LANG_LABEL = {
+    javascript: 'JavaScript Type Checker',
+    python: 'Python Type Checker',
+};
+const LANG_CM_MODE = {
+    javascript: 'javascript',
+    python: { name: 'python', version: 3, singleLineStringErrors: false },
+};
 
 // ---- URL hash sync ----------------------------------------------------
 
@@ -139,10 +153,13 @@ const sidebarScrim = document.getElementById('sidebar-scrim');
 const treeEl = document.getElementById('tree');
 const exampleStatusDot = document.getElementById('example-status');
 const exampleBlurbEl = document.getElementById('example-blurb');
+const titleSubEl = document.getElementById('title-sub');
+const langButtons = Array.from(document.querySelectorAll('.lang-btn'));
 
 // ---- Init ------------------------------------------------------------
 
 async function initialize() {
+    setupLangToggle();
     renderTree();
     setupSidebar();
 
@@ -155,7 +172,7 @@ async function initialize() {
         inputEditor = CodeMirror.fromTextArea(
             document.getElementById('input-editor'),
             {
-                mode: 'javascript',
+                mode: LANG_CM_MODE[currentLanguage] || 'javascript',
                 theme: 'dracula',
                 lineNumbers: true,
                 matchBrackets: true,
@@ -167,20 +184,35 @@ async function initialize() {
         );
 
         // Resolve initial content. Precedence: shared snippet (#hash)
-        // > example query (?ex=) > default example.
+        // > example query (?ex=) > default example for the saved
+        // language preference.
         const urlCode = getCodeFromUrl();
         if (urlCode) {
             loadCustomCode(urlCode);
         } else {
             const id = getExampleIdFromUrl();
             const found = id ? findExample(id) : null;
-            const target = found || findExample(DEFAULT_EXAMPLE_ID);
-            if (target) {
-                loadExample(target.item.id, { updateUrl: !!id });
+            if (found) {
+                // The URL example wins and drags the language with it
+                // so the chosen example always renders in its own mode.
+                if (found.section.language && found.section.language !== currentLanguage) {
+                    currentLanguage = found.section.language;
+                    persistLanguage();
+                }
+                loadExample(found.item.id, { updateUrl: true });
             } else {
-                loadCustomCode('');
+                const defaultId = DEFAULT_EXAMPLE_IDS[currentLanguage];
+                const target = defaultId ? findExample(defaultId) : null;
+                if (target) {
+                    loadExample(target.item.id, { updateUrl: false });
+                } else {
+                    loadCustomCode('');
+                }
             }
         }
+
+        reflectLangButtons();
+        applyCmModeForLanguage();
 
         inputEditor.on('change', onEditorChange);
 
@@ -212,6 +244,16 @@ function loadExample(id, { updateUrl = true } = {}) {
     const found = findExample(id);
     if (!found) return;
     activeExampleId = id;
+    // Examples come tagged with a language; clicking one in another
+    // language flips the playground over so the analyzer and editor
+    // mode match the source.
+    const lang = found.section.language || found.item.language || 'javascript';
+    if (lang !== currentLanguage) {
+        currentLanguage = lang;
+        persistLanguage();
+        reflectLangButtons();
+        applyCmModeForLanguage();
+    }
     setEditorContent(found.item.code);
     if (updateUrl) setUrlExample(id);
     updateActiveTreeItem();
@@ -261,7 +303,7 @@ function runCheck() {
         return;
     }
 
-    analysis = new Analysis(source);
+    analysis = new Analysis(source, currentLanguage);
     const errors = analysis.errors();
 
     if (errors.length === 0) {
@@ -487,6 +529,80 @@ window.addEventListener('popstate', () => {
     }
 });
 
+// ---- Language toggle ------------------------------------------------
+//
+// The toggle decides which Inty frontend analyses the editor buffer
+// and which CodeMirror mode highlights it. Switching language also
+// filters the examples sidebar — picking a Python example while JS is
+// active flips the toggle on the user's behalf (see loadExample).
+
+function setupLangToggle() {
+    // Reflect the initial subtitle even before WASM finishes loading.
+    if (titleSubEl) {
+        titleSubEl.textContent = LANG_LABEL[currentLanguage] || 'Type Checker';
+    }
+    if (!langButtons.length) return;
+    langButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const lang = btn.dataset.lang;
+            if (!lang || lang === currentLanguage) return;
+            switchLanguage(lang);
+        });
+    });
+}
+
+function persistLanguage() {
+    try { localStorage.setItem(LANG_KEY, currentLanguage); } catch (_) {}
+    if (titleSubEl) {
+        titleSubEl.textContent = LANG_LABEL[currentLanguage] || 'Type Checker';
+    }
+}
+
+function reflectLangButtons() {
+    langButtons.forEach((btn) => {
+        const on = btn.dataset.lang === currentLanguage;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', String(on));
+    });
+    if (titleSubEl) {
+        titleSubEl.textContent = LANG_LABEL[currentLanguage] || 'Type Checker';
+    }
+    // The visible sections in the sidebar depend on language, so
+    // ask the tree to re-evaluate visibility.
+    applyLanguageFilterToTree();
+}
+
+function applyCmModeForLanguage() {
+    if (!inputEditor) return;
+    const mode = LANG_CM_MODE[currentLanguage] || 'javascript';
+    inputEditor.setOption('mode', mode);
+}
+
+function switchLanguage(lang) {
+    if (lang === currentLanguage) return;
+    currentLanguage = lang;
+    persistLanguage();
+    reflectLangButtons();
+    applyCmModeForLanguage();
+    // Drop any in-URL example id when it points at the other
+    // language — otherwise the next reload would yank the user back.
+    const defaultId = DEFAULT_EXAMPLE_IDS[currentLanguage];
+    if (defaultId) {
+        loadExample(defaultId, { updateUrl: true });
+    } else {
+        loadCustomCode('');
+        runCheck();
+    }
+}
+
+function applyLanguageFilterToTree() {
+    if (!treeEl) return;
+    treeEl.querySelectorAll('.tree-section').forEach((el) => {
+        const lang = el.dataset.sectionLang || 'javascript';
+        el.hidden = lang !== currentLanguage;
+    });
+}
+
 // ---- Sidebar / examples ---------------------------------------------
 
 function renderTree() {
@@ -498,12 +614,16 @@ function renderTree() {
         const sectionEl = document.createElement('div');
         sectionEl.className = 'tree-section';
         sectionEl.dataset.sectionId = section.id;
+        sectionEl.dataset.sectionLang = section.language || 'javascript';
+        // Hide sections that don't match the current language until the
+        // user toggles to them.
+        sectionEl.hidden = (section.language || 'javascript') !== currentLanguage;
         // Open by default; remember closed state across reloads.
         if (openSections[section.id] !== false) {
             sectionEl.classList.add('open');
         }
 
-        const folderGlyph = section.id === 'ts-misses' ? '⚠' : '▦';
+        const folderGlyph = (section.id === 'ts-misses' || section.id === 'py-misses') ? '⚠' : '▦';
         const header = document.createElement('button');
         header.className = 'tree-section-header';
         header.type = 'button';

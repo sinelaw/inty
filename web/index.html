@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inty - JavaScript Type Checker</title>
+    <title>Inty - Type Checker for JavaScript and Python</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
-    <link rel="stylesheet" href="styles.css?v=18">
+    <link rel="stylesheet" href="styles.css?v=19">
 </head>
 <body>
     <div class="backdrop">
@@ -25,7 +25,7 @@
             <div class="title">
                 <span class="title-name">Inty</span>
                 <span class="title-sep">·</span>
-                <span class="title-sub">JavaScript Type Checker</span>
+                <span class="title-sub" id="title-sub">JavaScript Type Checker</span>
             </div>
             <div class="title-actions">
                 <span class="credits">
@@ -33,6 +33,10 @@
                     <span class="credit-sep">·</span>
                     <a href="https://github.com/sinelaw/inty" target="_blank" rel="noopener noreferrer" class="credit-link">github.com/sinelaw/inty</a>
                 </span>
+                <div class="lang-toggle" role="group" aria-label="Source language">
+                    <button id="lang-js" class="lang-btn active" type="button" data-lang="javascript" aria-pressed="true" title="Check JavaScript">JS</button>
+                    <button id="lang-py" class="lang-btn" type="button" data-lang="python" aria-pressed="false" title="Check Python">Py</button>
+                </div>
                 <button id="sidebar-toggle" class="chip sidebar-toggle" title="Show or hide the examples panel" aria-pressed="true">
                     <span class="sidebar-toggle-icon" aria-hidden="true">
                         <span></span><span></span><span></span>
@@ -92,9 +96,10 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
-    <script type="module" src="app.js?v=10"></script>
+    <script type="module" src="app.js?v=11"></script>
     <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0858f4857c744e418bce27f9577ea9d2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
