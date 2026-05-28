@@ -234,6 +234,15 @@ pub struct InferState {
     /// annotation; `None` elsewhere (refs then fall back to opaque).
     pub(in crate::infer) annotation_env: Option<crate::infer::TypeEnv>,
 
+    /// Span of the annotation currently being lowered, used to attach a
+    /// `TypeError::UnknownTypeRef` to the right source range when a
+    /// `TypeAst::Ref` doesn't resolve. Set by the span-aware lowering
+    /// entry points (e.g. `lower_type_ast_in_env_with_span`); `None`
+    /// elsewhere, in which case an unresolved ref is silently degraded
+    /// to opaque (the stub-reading contract: typeshed and other stubs
+    /// have unmodelled types we don't want to nag about).
+    pub(in crate::infer) current_annotation_span: Option<crate::span::Span>,
+
     /// Stack of `return`-value accumulators, one frame per function body
     /// currently being inferred (innermost on top). Each `return <e>`
     /// pushes `e`'s type onto the top frame; the function's return type is
@@ -345,6 +354,7 @@ impl InferState {
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
             annotation_env: None,
+            current_annotation_span: None,
             return_value_stack: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,

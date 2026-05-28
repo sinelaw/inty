@@ -9,6 +9,8 @@
 
 use std::collections::HashMap;
 
+use crate::error::{IntyError, TypeError};
+use crate::span::Span;
 use crate::types::{FuncParam, Type, TypeAst, CALLABLE_KEY};
 
 use super::state::InferState;
@@ -56,6 +58,27 @@ impl InferState {
         let mut scope = HashMap::new();
         let ty = self.lower_type_ast_scoped(ast, &mut scope);
         self.annotation_env = saved;
+        ty
+    }
+
+    /// Like [`InferState::lower_type_ast_in_env`], but additionally
+    /// records `span` as the source location of the annotation being
+    /// lowered. Unresolved `TypeAst::Ref` nodes then surface as
+    /// [`TypeError::UnknownTypeRef`] anchored at that span, instead of
+    /// silently degrading to a fresh variable. Used for user-authored
+    /// `.py` annotations (parameters, return types, variable annotations)
+    /// where a typo like `-> blabla` should be flagged; `.pyi` stubs
+    /// keep using the span-less entry points so typeshed gaps stay
+    /// quiet.
+    pub fn lower_type_ast_in_env_with_span(
+        &mut self,
+        ast: &TypeAst,
+        env: &TypeEnv,
+        span: Span,
+    ) -> Type {
+        let saved_span = self.current_annotation_span.replace(span);
+        let ty = self.lower_type_ast_in_env(ast, env);
+        self.current_annotation_span = saved_span;
         ty
     }
 
@@ -135,12 +158,27 @@ impl InferState {
                     // import, a qualified `mod.Class` goes through the
                     // module namespace. This brings in the class's real
                     // type only when the name is actually in scope.
-                    None => self
-                        .resolve_ref_in_env(name, &lowered_args)
-                        // Genuinely unknown / out-of-scope name: a fresh
-                        // unconstrained variable (opaque) — imposes no
-                        // constraint and never a false positive.
-                        .unwrap_or_else(|| self.fresh_type_var()),
+                    None => match self.resolve_ref_in_env(name, &lowered_args) {
+                        Some(ty) => ty,
+                        // Genuinely unknown / out-of-scope name. If we're
+                        // lowering a user-authored annotation (the entry
+                        // point set `current_annotation_span`) this is a
+                        // typo — surface it as a `UnknownTypeRef` so the
+                        // user catches `-> blabla` and friends. Without a
+                        // span we're inside a stub (typeshed / `.pyi`):
+                        // keep the existing graceful-degradation contract
+                        // and return a fresh variable so the import still
+                        // type-checks against the half-modelled stub.
+                        None => {
+                            if let Some(span) = self.current_annotation_span {
+                                self.push_error(IntyError::Type(TypeError::UnknownTypeRef {
+                                    name: name.clone(),
+                                    span,
+                                }));
+                            }
+                            self.fresh_type_var()
+                        }
+                    },
                 }
             }
             TypeAst::Array(elem) => Type::array(self.lower_type_ast_scoped(elem, scope)),
