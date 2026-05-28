@@ -28,3 +28,10 @@ lsp-server = { version = "0.7", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
+
+# wasm-pack normally fetches `wasm-opt` from a GitHub release tarball
+# to shrink the output. Our sandbox blocks that download, and the
+# unoptimised module is still well under a megabyte for this use, so
+# disable the step.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
