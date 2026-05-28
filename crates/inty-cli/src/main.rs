@@ -1,9 +1,11 @@
 //! Inty CLI: Type inference for mquickjs JavaScript subset.
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
+use std::time::Instant;
 
 use inty::ast::pretty::print_program;
 use inty::diagnostics::{print_error, print_error_plain, print_warning, print_warning_plain};
@@ -13,7 +15,16 @@ use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
 use inty::infer::{decorate_with_types, InferState, InferWarning, TypeEnv};
 use inty::stdlib::{initial_env_with_stdlib, load_lib};
-use inty::types::PrettyContext;
+/// Counters reported after a successful run — surfaced in the summary
+/// line so the user gets a confirming signal that scales with the work
+/// actually done (cf. ty / pyright). The `symbols` count is *user-level*:
+/// top-level bindings introduced by the program, excluding prelude /
+/// imported names and private (`_`-prefixed) bindings, so it tracks what
+/// the user wrote rather than the total checked surface.
+struct Summary {
+    symbols: usize,
+    duration: std::time::Duration,
+}
 
 struct Args {
     input: Option<String>,
@@ -188,7 +199,10 @@ fn main() -> ExitCode {
     }
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(summary) => {
+            print_summary(&filename, &summary, state.warnings.len());
+            ExitCode::SUCCESS
+        }
         Err(errors) => {
             for error in errors {
                 report(&filename, &source, &error);
@@ -196,6 +210,40 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Render the post-check summary line. ty/pyright-style: a short
+/// affirmative followed by the counts that actually moved (symbols
+/// always; warnings only if non-zero) and wall-clock time. Times under
+/// 100 ms render as `Xms` so sub-second runs don't all collapse to
+/// `0.00s`; everything else as seconds with two decimals.
+fn print_summary(filename: &str, summary: &Summary, warnings: usize) {
+    let symbols = format!(
+        "{} {}",
+        summary.symbols,
+        if summary.symbols == 1 {
+            "symbol"
+        } else {
+            "symbols"
+        },
+    );
+    let counts = if warnings == 0 {
+        symbols
+    } else {
+        format!(
+            "{}, {} {}",
+            symbols,
+            warnings,
+            if warnings == 1 { "warning" } else { "warnings" },
+        )
+    };
+    let ms = summary.duration.as_millis();
+    let when = if ms < 100 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.2}s", summary.duration.as_secs_f64())
+    };
+    println!("All checks passed: {filename} ({counts}) in {when}");
 }
 
 fn load_extra_libs(
@@ -550,7 +598,8 @@ fn run_inference(
     source: &str,
     filename: &str,
     lang: Language,
-) -> Result<(), Vec<IntyError>> {
+) -> Result<Summary, Vec<IntyError>> {
+    let started = Instant::now();
     let mut errors = Vec::new();
 
     // Parsing — dispatch on the frontend. JavaScript keeps its bespoke
@@ -618,6 +667,13 @@ fn run_inference(
         env
     };
 
+    // Snapshot the names already in scope before checking the program
+    // body so the per-run summary can report only the *user's* top-level
+    // bindings (excluding prelude / imported names). Mirrors the
+    // base-name diff used by `python::modules::load_module` to derive a
+    // module's exports.
+    let base_names: HashSet<String> = env.names().cloned().collect();
+
     // Type inference. The Type::Error recovery path lets inference
     // continue past a failing statement, so `state.errors` may
     // contain multiple diagnostics even though the public API only
@@ -626,7 +682,7 @@ fn run_inference(
     let infer_result = state.infer_program_with_env(&env, &program);
     let collected = state.take_errors();
     match infer_result {
-        Ok((result_type, final_env)) => {
+        Ok((_result_type, final_env)) => {
             // Resolve type class constraints
             if let Err(e) = state.resolve_constraints() {
                 errors.extend(collected);
@@ -639,23 +695,22 @@ fn run_inference(
                 return Err(errors);
             }
 
-            // Print the program type, rendering nominal brands by their
-            // declared name (`Box<Number>`) rather than the internal
-            // `μ<id>` form.
-            let mut ctx = PrettyContext::with_nominal_names(state.nominal_names());
-            let final_type = state.apply_subst(&result_type);
-            println!("// Program type: {}", ctx.format_type(&final_type));
-            println!();
-
-            // The decorator re-emits the source as JavaScript, so it only
-            // makes sense for the JavaScript frontend. For other languages
-            // the program type above is the result.
+            // The decorator re-emits the source as JavaScript, so it
+            // only makes sense for the JavaScript frontend. For other
+            // languages the summary line is the only success output.
             if lang == Language::JavaScript {
                 let decorated = decorate_with_types(&program, &final_env, state);
                 print!("{}", print_program(&decorated));
             }
 
-            Ok(())
+            let symbols = final_env
+                .iter()
+                .filter(|(n, _)| !base_names.contains(*n) && !n.starts_with('_'))
+                .count();
+            Ok(Summary {
+                symbols,
+                duration: started.elapsed(),
+            })
         }
         Err(_first) => {
             // `_first` is also at the head of `collected`, so use the
