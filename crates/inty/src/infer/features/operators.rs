@@ -130,8 +130,24 @@ impl InferState {
         }
 
         match op {
+            // `/` dispatches through the `Div` typeclass. Same shape
+            // as `+` (Plus): widen, mint a result var, post the
+            // class predicate, subsume both operands into it. The
+            // solver checks the resulting type is Number at the end
+            // of inference; an unresolved type variable stays
+            // polymorphic.
+            BinOp::Div => {
+                let left_widened = left_type.widen_fresh_literals();
+                let right_widened = right_type.widen_fresh_literals();
+                let result = self.fresh_type_var();
+                self.add_constraint(TypePred::div(result.clone()), span);
+                self.subsume(span, &left_widened, &result)?;
+                self.subsume(span, &right_widened, &result)?;
+                Ok(self.zonk(&result))
+            }
+
             // Arithmetic (require numbers)
-            BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
+            BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::Pow => {
                 self.subsume(span, &left_type, &Type::Number)?;
                 self.subsume(span, &right_type, &Type::Number)?;
                 Ok(Type::Number)

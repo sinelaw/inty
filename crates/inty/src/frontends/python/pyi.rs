@@ -514,6 +514,33 @@ impl StubReader<'_> {
         self.eat(&Tok::Colon);
         self.eat(&Tok::Newline);
 
+        // Pre-register the brand *before* reading the body so a
+        // self-reference in a field or method type (`parent: Path`,
+        // `def resolve(self) -> Path`) resolves to this class — a
+        // recursive nominal — rather than
+        // minting a fresh opaque var that would otherwise leak in as a
+        // phantom brand parameter. A placeholder constructor whose return
+        // is `Named(id, [])` is enough for `resolve_ref_in_env` to map
+        // the name back to the brand during body parsing; both the brand
+        // def and the export are overwritten with their final forms once
+        // the body (and its real ctor params / generic args) is known.
+        let id = self.state.fresh_type_id();
+        self.state.class_brand_ids.insert(name.clone(), id);
+        self.state.register_named_type(TypeDef::nominal(
+            id,
+            name.clone(),
+            Vec::new(),
+            Type::object(Vec::<(String, Type)>::new()),
+        ));
+        let placeholder_ctor = Type::wrap_callable(Type::raw_func_with_params(
+            None,
+            Vec::new(),
+            Type::Named(id, Vec::new()),
+        ));
+        self.env = self
+            .env
+            .extend(name.clone(), Self::scheme_of(&placeholder_ctor));
+
         let mut fields: BTreeMap<PropName, Type> = BTreeMap::new();
         let mut ctor_params: Vec<FuncParam> = Vec::new();
 
@@ -574,14 +601,14 @@ impl StubReader<'_> {
             .collect();
         brand_vars.sort_by_key(|v| v.id());
 
-        let id = self.state.fresh_type_id();
+        // Finalise the brand: overwrite the placeholder registered before
+        // the body with the real representation and parameters.
         self.state.register_named_type(TypeDef::nominal(
             id,
             name.clone(),
             brand_vars.clone(),
             instance,
         ));
-        self.state.class_brand_ids.insert(name.clone(), id);
 
         let args: Vec<Type> = brand_vars.iter().map(|v| Type::var(v.clone())).collect();
         let branded = Type::Named(id, args);
@@ -618,6 +645,8 @@ impl StubReader<'_> {
             *ctor_params = params;
             return;
         }
+        // Drop other dunders — they aren't surfaced as instance-row
+        // fields.
         if mname.starts_with("__") {
             return;
         }

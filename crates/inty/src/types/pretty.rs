@@ -563,6 +563,10 @@ impl PrettyContext {
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
             }
+            ClassName::Div => {
+                write!(w, "Div ")?;
+                self.write_type(w, &pred.types[0], true)?;
+            }
         }
         Ok(())
     }
@@ -673,6 +677,7 @@ impl Display for ClassName {
         match self {
             ClassName::Plus => write!(f, "Plus"),
             ClassName::Indexable => write!(f, "Indexable"),
+            ClassName::Div => write!(f, "Div"),
         }
     }
 }

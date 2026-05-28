@@ -498,6 +498,7 @@ impl InferState {
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
+            ClassName::Div => self.resolve_div(&pred.types[0], span),
         }
     }
 
@@ -607,6 +608,35 @@ impl InferState {
             _ => Err(TypeError::ConstraintNotSatisfied {
                 class: "Indexable".to_string(),
                 ty: container.to_string(),
+                span,
+            }
+            .into()),
+        }
+    }
+
+    /// Resolve Div constraint: type must be Number. Same shape as
+    /// `resolve_plus`: a still-flex var stays polymorphic; a concrete
+    /// non-Number errors; `Type::Error` satisfies trivially.
+    fn resolve_div(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
+        let ty = self.apply_subst(ty);
+
+        match &ty {
+            Type::Number => Ok(()),
+
+            Type::Error => Ok(()),
+
+            Type::Var(TVarName::Flex(_)) => Ok(()),
+
+            Type::Var(TVarName::Skolem(_)) => Err(TypeError::ConstraintNotSatisfied {
+                class: "Div".to_string(),
+                ty: ty.to_string(),
+                span,
+            }
+            .into()),
+
+            _ => Err(TypeError::ConstraintNotSatisfied {
+                class: "Div".to_string(),
+                ty: ty.to_string(),
                 span,
             }
             .into()),

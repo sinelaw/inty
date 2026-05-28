@@ -206,6 +206,10 @@ pub enum ClassName {
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
+    /// Div class: types that support the `/` operator. Numeric only —
+    /// same shape as `Plus`: a single-position predicate over the
+    /// shared operand/result type, satisfied by `Number`.
+    Div,
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
@@ -227,6 +231,13 @@ impl TypePred {
         TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
+        }
+    }
+
+    pub fn div(ty: Type) -> Self {
+        TypePred {
+            class: ClassName::Div,
+            types: vec![ty],
         }
     }
 

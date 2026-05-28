@@ -72,6 +72,12 @@ pub static INDEXABLE_INSTANCES: &[InstanceDecl] = &[
     },
 ];
 
+/// Instances of `Div` — types that support `/`. Numeric only.
+pub static DIV_INSTANCES: &[InstanceDecl] = &[InstanceDecl {
+    class: ClassName::Div,
+    inputs: &[TypeShape::Concrete(BaseType::Number)],
+}];
+
 /// Look up every instance for `class`. Returns an empty slice if the
 /// class is unknown — callers (notably the blame prober) treat that as
 /// "no probes available".
@@ -79,6 +85,7 @@ pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
     match class {
         ClassName::Plus => PLUS_INSTANCES,
         ClassName::Indexable => INDEXABLE_INSTANCES,
+        ClassName::Div => DIV_INSTANCES,
     }
 }
 

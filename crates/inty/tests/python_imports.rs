@@ -701,3 +701,37 @@ fn keyword_arguments_through_stub_signature() {
         "unknown keyword against a stub signature should fail"
     );
 }
+
+#[test]
+fn re_sub_accepts_count_keyword() {
+    // `Pattern.sub` / `Pattern.subn` take an optional `count=` kwarg;
+    // omitting it from the stub used to surface as a "Presence
+    // mismatch: expected present, found absent" at the call site.
+    let dir = tmp_dir();
+    let ok = check(
+        "import re\n\
+         pat = re.compile(\"x\")\n\
+         out = pat.sub(\"y\", \"xxx\", count=1)\n",
+        &dir,
+        &[],
+    );
+    assert!(
+        ok.is_ok(),
+        "re.Pattern.sub should accept count= kwarg: {:?}",
+        ok
+    );
+}
+
+#[test]
+fn div_on_string_is_rejected() {
+    // `Div` has no instance for `String`. The constraint solver errors
+    // with `Div`-not-satisfied at the end of inference. Same shape as
+    // Plus on a non-Plus operand — single-pass class resolution.
+    let dir = tmp_dir();
+    let bad = check("x = \"a\" / \"b\"\n", &dir, &[]);
+    assert!(
+        bad.is_err(),
+        "String / String must not type-check: {:?}",
+        bad
+    );
+}

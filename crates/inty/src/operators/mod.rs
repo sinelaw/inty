@@ -137,6 +137,24 @@ const ANY_UNDEF: &[TypingArm] = &[TypingArm {
     notes: "",
 }];
 
+// `/` dispatches via the `Div` typeclass. Single-arg predicate over
+// the shared operand/result type — same shape as Plus, but the
+// instance set is just Number.
+const DIV_ARMS: &[TypingArm] = &[
+    TypingArm {
+        inputs: &[Concrete(Number), Concrete(Number)],
+        output: Concrete(Number),
+        class: None,
+        notes: "",
+    },
+    TypingArm {
+        inputs: &[AnyOfClass(ClassName::Div), SameAsArg(0)],
+        output: SameAsArg(0),
+        class: Some(ClassName::Div),
+        notes: "",
+    },
+];
+
 const PLUS_ARMS: &[TypingArm] = &[
     TypingArm {
         inputs: &[Concrete(Number), Concrete(Number)],
@@ -278,7 +296,7 @@ pub static OPERATORS: &[OpInfo] = &[
         name: "/",
         kind: OpKind::BinOp,
         dispatch: Dispatch::OpSymbol,
-        arms: NUM_NUM_NUM,
+        arms: DIV_ARMS,
     },
     OpInfo {
         name: "%",
