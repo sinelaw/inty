@@ -262,6 +262,54 @@ fn generic_class_brands_per_instantiation() {
     }
 }
 
+/// Module-level binding of a class instance, accessed from inside a
+/// function body. The hoisted-unify path in `infer_stmt_list` meets the
+/// brand with the open-tailed row constraints accumulated against the
+/// pre-hoisted placeholder by the function body — without the
+/// nominal-vs-open-row unrolling rule in `unify`, this rejects with a
+/// "row vs P" type mismatch (issue #71).
+#[test]
+fn module_level_class_instance_accessed_from_function() {
+    let src = "
+class P:
+    def m(self):
+        return 'x'
+
+ROOT = P()
+
+def f():
+    return ROOT.m()
+";
+    assert!(
+        checks(src),
+        "module-level instance accessed inside a function must type-check:\n{}",
+        src
+    );
+}
+
+/// Variant of the above where the class has fields (set via `self.x =`
+/// in `__init__`) and the function reads one. Exercises the same
+/// hoisted-vs-brand path but with a field rather than a method, so the
+/// open-row constraint demands a non-callable field shape.
+#[test]
+fn module_level_class_field_read_from_function() {
+    let src = "
+class P:
+    def __init__(self, v):
+        self.value = v
+
+ROOT = P(1)
+
+def f():
+    return ROOT.value + 1
+";
+    assert!(
+        checks(src),
+        "module-level instance field read inside a function must type-check:\n{}",
+        src
+    );
+}
+
 /// Field access reads *through* the brand to the representation's field
 /// type, so a String field combined with `+ 1` is a type error while a
 /// Number field is fine — the brand doesn't hide the field's real type.

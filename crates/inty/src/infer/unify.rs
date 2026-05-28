@@ -13,7 +13,7 @@ use crate::types::{
     FieldEntry, PropName, RowTail, RowType, Subst, TVarId, TVarName, Type, TypeDef,
 };
 
-use super::state::InferState;
+use super::state::{InferState, UnfoldAssumption};
 
 /// Result type for unification.
 pub type UnifyResult<T> = Result<T, IntyError>;
@@ -234,19 +234,104 @@ impl InferState {
                 Ok(())
             }
 
-            // Named vs anything else (including a *different* named type).
+            // Two named types with *different* ids. The two-Nominal case
+            // is rejected up front (different brand identities never
+            // interchange). For any case that involves an equirecursive
+            // type — including (Nominal, Equirec), (Equirec, Nominal),
+            // (Equirec, Equirec) — unrolling the equirecursive side and
+            // recursing is sound. The coinductive assumption guards the
+            // (Equirec, Equirec) sub-case against the alternating-unroll
+            // infinite loop: two distinct recursive types of the same
+            // shape would otherwise unroll forever (Brandt-Henglein
+            // 1998; Pierce TAPL ch. 21).
+            (Type::Named(id1, args1), Type::Named(id2, args2)) => {
+                let n1 = self.is_nominal_type(*id1);
+                let n2 = self.is_nominal_type(*id2);
+                if n1 && n2 {
+                    return Err(self.unification_error(span, t1, t2));
+                }
+                let assumption = UnfoldAssumption::NamedPair(
+                    (*id1).min(*id2),
+                    (*id1).max(*id2),
+                );
+                if self.unfold_assumptions.contains(&assumption) {
+                    return Ok(());
+                }
+                self.unfold_assumptions.push(assumption);
+                // Prefer unrolling the equirecursive side (definitionally
+                // transparent); if both are equirecursive either works.
+                let result = if !n1 {
+                    match self.unroll_named(*id1, args1) {
+                        Some(u) => self.unify(span, &u, t2),
+                        None => Err(self.unification_error(span, t1, t2)),
+                    }
+                } else {
+                    match self.unroll_named(*id2, args2) {
+                        Some(u) => self.unify(span, t1, &u),
+                        None => Err(self.unification_error(span, t1, t2)),
+                    }
+                };
+                self.unfold_assumptions.pop();
+                result
+            }
+
+            // Named vs anything else (a non-Named structural shape).
             (Type::Named(id, args), other) | (other, Type::Named(id, args)) => {
                 if self.is_nominal_type(*id) {
                     // Nominal types have brand identity: they unify only
                     // with the same id (handled above), never by
-                    // unrolling to their representation. So `UserId` and
-                    // `Number` — or two distinct nominals with identical
-                    // representation — stay distinct. (Transparent field
-                    // access still unrolls; see `infer_member_on_type`.)
+                    // collapsing into a structurally-equivalent value
+                    // — so `UserId` ≠ `Number`, and two distinct brands
+                    // with identical shape stay distinct.
+                    //
+                    // One *bounded* exception: an **open-tailed row**
+                    // constraint. Open rows with a flex tail are
+                    // synthesized by inference (member-access
+                    // fall-through in `rows.rs` posts
+                    // `{prop: T | tail}` to demand a field on an
+                    // un-resolved object), never authored by the user.
+                    // When such a constraint flows back into a
+                    // nominal-typed binding (the canonical case is a
+                    // module-level `ROOT = Path(...)` whose use sites
+                    // accumulated row constraints against the hoisted
+                    // placeholder before the actual nominal type was
+                    // bound; see `infer_stmt_list`'s hoisted-unify),
+                    // unrolling and unifying lets the constraint resolve
+                    // structurally against the instance row — exactly
+                    // the transparency `infer_member_on_type` already
+                    // gives at an immediate access site.
+                    //
+                    // A *closed* row is a concrete user-introduced value
+                    // (object literal, fully-specified annotation), so
+                    // it still fails — preserving nominal safety against
+                    // structural duck-typing.
+                    if let Type::Row(row) = other {
+                        if matches!(row.tail, RowTail::Open(_)) {
+                            let assumption = UnfoldAssumption::NamedRow(*id);
+                            if self.unfold_assumptions.contains(&assumption) {
+                                return Ok(());
+                            }
+                            if let Some(unrolled) = self.unroll_named(*id, args) {
+                                self.unfold_assumptions.push(assumption);
+                                let r = self.unify(span, &unrolled, other);
+                                self.unfold_assumptions.pop();
+                                return r;
+                            }
+                        }
+                    }
                     Err(self.unification_error(span, t1, t2))
                 } else if let Some(unrolled) = self.unroll_named(*id, args) {
                     // Equi-recursive type: unroll and unify structurally.
-                    self.unify(span, &unrolled, other)
+                    // Cycle-guarded so a recursive equi-type doesn't
+                    // unroll forever against a row that mentions it.
+                    let assumption = UnfoldAssumption::NamedRow(*id);
+                    if self.unfold_assumptions.contains(&assumption) {
+                        return Ok(());
+                    }
+                    self.unfold_assumptions.push(assumption);
+                    let r = self.unify(span, &unrolled, other);
+                    self.unfold_assumptions.pop();
+                    r
                 } else {
                     Err(self.unification_error(span, t1, t2))
                 }
@@ -1159,5 +1244,69 @@ mod tests {
         state.register_named_type(TypeDef::recursive(id, vec![], Type::Number));
         let named = Type::Named(id, vec![]);
         assert!(state.unify(span, &named, &Type::Number).is_ok());
+    }
+
+    // === Nominal × open-row constraint (#71) ===
+    //
+    // The hoisted-unify path in `infer_stmt_list` meets a brand with the
+    // open-tailed row constraints accumulated by use sites before the
+    // declaration was inferred. Without unrolling that direction, the
+    // canonical `ROOT = Path("..."); def f(): return ROOT.read_text()`
+    // pattern fails to type-check. Closed rows (user-introduced values)
+    // are still rejected, preserving nominal safety.
+
+    #[test]
+    fn nominal_unrolls_for_open_row_constraint() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        // nominal Point = {x: Number, y: Number}
+        let repr = Type::object([("x", Type::Number), ("y", Type::Number)]);
+        let point = declare_nominal(&mut state, "Point", repr);
+        // Open-tailed row demanding `x: Number` — the shape `rows.rs`
+        // synthesizes when an unresolved object is member-accessed.
+        let tail = state.fresh_flex();
+        let constraint = Type::object_open([("x", Type::Number)], tail);
+        assert!(state.unify(span, &point, &constraint).is_ok());
+    }
+
+    #[test]
+    fn nominal_rejects_closed_row_value() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        // nominal Point = {x: Number, y: Number}
+        let repr = Type::object([("x", Type::Number), ("y", Type::Number)]);
+        let point = declare_nominal(&mut state, "Point", repr);
+        // A user-introduced value of structurally-equivalent shape is a
+        // *closed* row — it must not collapse into the brand.
+        let value = Type::object([("x", Type::Number), ("y", Type::Number)]);
+        assert!(state.unify(span, &point, &value).is_err());
+        assert!(state.unify(span, &value, &point).is_err());
+    }
+
+    #[test]
+    fn nominal_open_row_constraint_with_wrong_field_type_fails() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let repr = Type::object([("x", Type::Number), ("y", Type::Number)]);
+        let point = declare_nominal(&mut state, "Point", repr);
+        // Field name matches but type disagrees — unrolling exposes the
+        // mismatch through the structural unification.
+        let tail = state.fresh_flex();
+        let constraint = Type::object_open([("x", Type::String)], tail);
+        assert!(state.unify(span, &point, &constraint).is_err());
+    }
+
+    #[test]
+    fn nominal_open_row_missing_field_fails() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let repr = Type::object([("x", Type::Number)]);
+        let point = declare_nominal(&mut state, "Point", repr);
+        // Demanding a property the instance row doesn't have still fails:
+        // unrolling produces a closed `{x: Number}` which can't satisfy
+        // `{missing: T | _}`.
+        let tail = state.fresh_flex();
+        let constraint = Type::object_open([("missing", Type::Number)], tail);
+        assert!(state.unify(span, &point, &constraint).is_err());
     }
 }
