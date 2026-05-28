@@ -208,6 +208,38 @@ html, body {
     border-color: rgba(166, 227, 161, 0.35);
 }
 
+/* Segmented language toggle (JS | Py) in the title bar. The two
+   buttons share a border so they read as one control. */
+.lang-toggle {
+    display: inline-flex;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    background: rgba(108, 112, 134, 0.10);
+}
+.lang-btn {
+    font-family: inherit;
+    font-size: var(--fs-sm);
+    padding: 5px 10px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 0;
+    border-right: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    min-width: 36px;
+    letter-spacing: 0.3px;
+}
+.lang-btn:last-child { border-right: 0; }
+.lang-btn:hover { color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); }
+.lang-btn.active {
+    color: var(--accent);
+    background: rgba(137, 180, 250, 0.18);
+}
+.lang-btn.active:hover {
+    background: rgba(137, 180, 250, 0.24);
+}
+
 .status {
     font-size: var(--fs-sm);
     padding: 5px 11px;

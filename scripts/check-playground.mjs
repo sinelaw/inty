@@ -64,8 +64,17 @@ function uncomment(line) {
   return m ? m[1] + m[2] : line;
 }
 
-async function readExampleSource(sectionId, itemId) {
-  const path = resolve(PLAYGROUND_DIR, sectionId, `${itemId}.js`);
+const LANG_EXT = { javascript: 'js', python: 'py', lua: 'lua' };
+
+function fileNameFor(item, sectionLang) {
+  if (item.file) return item.file;
+  const ext = LANG_EXT[sectionLang || 'javascript'] || 'js';
+  return `${item.id}.${ext}`;
+}
+
+async function readExampleSource(section, item) {
+  const fname = fileNameFor(item, section.language);
+  const path = resolve(PLAYGROUND_DIR, section.id, fname);
   return readFileSync(path, 'utf8');
 }
 
@@ -158,6 +167,20 @@ async function main() {
   await waitForCheck(page);
 
   for (const section of MANIFEST.sections) {
+    // Switch the language toggle so this section's tree items are
+    // visible. The toggle's click handler also loads the default
+    // example for that language, but we override it immediately
+    // below by clicking a specific tree item.
+    const lang = section.language || 'javascript';
+    const langSelector = lang === 'python' ? '#lang-py' : '#lang-js';
+    const wasActive = await page.evaluate(
+      (sel) => document.querySelector(sel)?.classList.contains('active') ?? false,
+      langSelector,
+    );
+    if (!wasActive) {
+      await page.locator(langSelector).click();
+      await waitForCheck(page);
+    }
     for (const item of section.items) {
       const selector = `button.tree-item[data-example-id="${item.id}"]`;
       await page.locator(selector).click();
@@ -192,7 +215,9 @@ async function main() {
   // (features/overloading) which passes as-written and errors with the
   // marker enabled. This proves end-to-end that the hash → editor →
   // analysis path agrees with the Rust test.
-  const src = await readExampleSource('features', 'overloading');
+  const featuresSection = MANIFEST.sections.find((s) => s.id === 'features');
+  const overloadingItem = featuresSection?.items.find((i) => i.id === 'overloading');
+  const src = await readExampleSource(featuresSection, overloadingItem);
   const enabled = enableMarkers(src);
   if (!enabled) {
     failures.push('marker probe: features/overloading has no markers — convention drift?');

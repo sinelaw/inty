@@ -22,7 +22,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use inty::frontends::javascript::parse;
+use inty::frontends::{parse, Language};
 use inty::stdlib::initial_env_with_stdlib;
 
 #[derive(Debug, Deserialize)]
@@ -33,13 +33,37 @@ struct Manifest {
 #[derive(Debug, Deserialize)]
 struct Section {
     id: String,
+    #[serde(default = "default_language")]
+    language: String,
     items: Vec<Item>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Item {
     id: String,
+    #[serde(default)]
+    file: Option<String>,
     expect: Expect,
+}
+
+fn default_language() -> String {
+    "javascript".to_string()
+}
+
+fn lang_from_str(s: &str) -> Language {
+    match s {
+        "python" => Language::Python,
+        "lua" => Language::Lua,
+        _ => Language::JavaScript,
+    }
+}
+
+fn lang_extension(lang: Language) -> &'static str {
+    match lang {
+        Language::JavaScript => "js",
+        Language::Python => "py",
+        Language::Lua => "lua",
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -51,8 +75,8 @@ enum Expect {
 
 /// Run the same pipeline the CLI uses, collapsing parse and type
 /// errors into a single `Err` (we only care whether it accepts).
-fn check(src: &str) -> Result<(), String> {
-    let program = parse(src).map_err(|e| format!("parse error: {:?}", e))?;
+fn check(lang: Language, src: &str) -> Result<(), String> {
+    let program = parse(lang, src).map_err(|e| format!("parse error: {:?}", e))?;
     let (env, mut state) =
         initial_env_with_stdlib().map_err(|e| format!("stdlib error: {:?}", e))?;
     let (_ty, _) = state
@@ -144,9 +168,15 @@ fn read_manifest() -> (PathBuf, Manifest) {
     (dir, manifest)
 }
 
-fn read_example(dir: &Path, section: &str, item: &str) -> String {
-    let path = dir.join(section).join(format!("{item}.js"));
+fn read_example(dir: &Path, section: &str, file_name: &str) -> String {
+    let path = dir.join(section).join(file_name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn file_name_for(item: &Item, lang: Language) -> String {
+    item.file
+        .clone()
+        .unwrap_or_else(|| format!("{}.{}", item.id, lang_extension(lang)))
 }
 
 #[test]
@@ -155,9 +185,11 @@ fn every_example_matches_manifest_expectation() {
     let mut failures: Vec<String> = Vec::new();
 
     for section in &manifest.sections {
+        let lang = lang_from_str(&section.language);
         for item in &section.items {
-            let src = read_example(&dir, &section.id, &item.id);
-            let result = check(&src);
+            let file_name = file_name_for(item, lang);
+            let src = read_example(&dir, &section.id, &file_name);
+            let result = check(lang, &src);
             let qualified = format!("{}/{}", section.id, item.id);
             match (&item.expect, &result) {
                 (Expect::Ok, Err(e)) => {
@@ -188,14 +220,22 @@ fn marker_lines_actually_trigger_errors() {
     let mut covered = 0usize;
 
     for section in &manifest.sections {
+        let lang = lang_from_str(&section.language);
+        // Marker-driven `// error!` triggers are a JavaScript-only
+        // convention right now (the comment syntax differs across
+        // frontends). Skip non-JS sections.
+        if lang != Language::JavaScript {
+            continue;
+        }
         for item in &section.items {
-            let src = read_example(&dir, &section.id, &item.id);
+            let file_name = file_name_for(item, lang);
+            let src = read_example(&dir, &section.id, &file_name);
             let Some(enabled) = enable_markers(&src) else {
                 continue;
             };
             covered += 1;
             let qualified = format!("{}/{}", section.id, item.id);
-            if check(&enabled).is_ok() {
+            if check(lang, &enabled).is_ok() {
                 failures.push(format!(
                     "{qualified}: enabling the `// error!` marker(s) did not produce an error"
                 ));

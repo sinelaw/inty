@@ -1,8 +1,12 @@
 {
-  "default": "basics",
+  "defaults": {
+    "javascript": "basics",
+    "python": "py-basics"
+  },
   "sections": [
     {
       "id": "features",
+      "language": "javascript",
       "label": "Type System",
       "items": [
         { "id": "basics",          "label": "basics.js",          "blurb": "Inference for plain JavaScript",  "expect": "ok" },
@@ -22,6 +26,7 @@
     },
     {
       "id": "ts-misses",
+      "language": "javascript",
       "label": "TS wouldn't catch this",
       "items": [
         { "id": "string-plus-number", "label": "string-plus-number.js", "blurb": "`+` silently coerces in TS",         "expect": "error" },
@@ -30,6 +35,27 @@
         { "id": "missing-prop",       "label": "missing-prop.js",       "blurb": "Reading a property that isn't there", "expect": "error" },
         { "id": "this-leak",          "label": "this-leak.js",          "blurb": "Methods called without their receiver", "expect": "ok"  },
         { "id": "truthy-narrow",      "label": "truthy-narrow.js",      "blurb": "0 and \"\" are falsy — silently",   "expect": "ok"    }
+      ]
+    },
+    {
+      "id": "py-features",
+      "language": "python",
+      "label": "Type System",
+      "items": [
+        { "id": "py-basics",      "file": "basics.py",      "label": "basics.py",      "blurb": "Inference for plain Python",          "expect": "ok" },
+        { "id": "py-annotations", "file": "annotations.py", "label": "annotations.py", "blurb": "Type hints enforced as constraints",  "expect": "ok" },
+        { "id": "py-control",     "file": "control.py",     "label": "control.py",     "blurb": "if/elif/else and while loops",        "expect": "ok" },
+        { "id": "py-records",     "file": "records.py",     "label": "records.py",     "blurb": "Dicts with literal keys are records", "expect": "ok" }
+      ]
+    },
+    {
+      "id": "py-misses",
+      "language": "python",
+      "label": "Mistakes mypy lets slip",
+      "items": [
+        { "id": "py-mixed-plus",     "file": "mixed-plus.py",     "label": "mixed-plus.py",     "blurb": "`+` requires matching operand types", "expect": "error" },
+        { "id": "py-unknown-field",  "file": "unknown-field.py",  "label": "unknown-field.py",  "blurb": "Reading a key the dict doesn't have", "expect": "error" },
+        { "id": "py-bad-annotation", "file": "bad-annotation.py", "label": "bad-annotation.py", "blurb": "Value contradicts its annotation",    "expect": "error" }
       ]
     }
   ]
