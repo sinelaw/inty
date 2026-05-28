@@ -130,6 +130,28 @@ impl InferState {
         }
 
         match op {
+            // `/` in Python is overloaded by the operand protocol:
+            // `a / b` lowers to `a.__truediv__(b)`. We honour it only
+            // for class instances (a nominal type) that actually carry
+            // the dunder — e.g. `pathlib.Path`, where `/` joins paths.
+            // Numbers, type variables, and plain objects fall through to
+            // numeric division below. Other frontends never take this
+            // path (JS/Lua `/` is always numeric).
+            BinOp::Div if self.language == crate::ast::SourceLanguage::Python => {
+                // Dispatch to `__truediv__` only for a concrete instance
+                // shape — a class instance row (imported pyi classes are
+                // structural rows) or a nominal brand. Numbers, bare type
+                // variables, and other shapes fall through to numeric
+                // division so `x / 2` stays arithmetic.
+                let lz = self.zonk(&left_type);
+                if matches!(&lz, Type::Row(_) | Type::Named(..)) {
+                    return self.infer_operator_method(span, &lz, &right_type, "__truediv__");
+                }
+                self.subsume(span, &left_type, &Type::Number)?;
+                self.subsume(span, &right_type, &Type::Number)?;
+                Ok(Type::Number)
+            }
+
             // Arithmetic (require numbers)
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
                 self.subsume(span, &left_type, &Type::Number)?;
@@ -274,5 +296,46 @@ impl InferState {
                 Ok(Type::Boolean)
             }
         }
+    }
+
+    /// Type a binary operator that lowers to a one-argument method call
+    /// on its left operand (an operand-protocol dunder such as
+    /// `__truediv__`). Mirrors the method-call rule in `infer_call`:
+    /// look the method up on the receiver, unify it with a one-arg
+    /// callable, bind `this` to the receiver's representation, and check
+    /// the right operand against the parameter. A receiver that lacks
+    /// the dunder produces the same "property absent" error a direct
+    /// `recv.__truediv__` access would.
+    fn infer_operator_method(
+        &mut self,
+        span: Span,
+        receiver: &Type,
+        arg: &Type,
+        method: &str,
+    ) -> InferResult<Type> {
+        let method_type = self.infer_member_on_type(receiver, method, span)?;
+        let this_type = self.fresh_type_var();
+        let param = self.fresh_type_var();
+        let ret = self.fresh_type_var();
+        let expected =
+            self.callable_row_open(Some(this_type.clone()), vec![param.clone()], ret.clone());
+        self.unify(span, &method_type, &expected)?;
+
+        // Bind `this` to the receiver's instance row. A nominal brand is
+        // transparent for receiver binding (same as field access), so
+        // unroll it to its representation before unifying.
+        let receiver_for_this = match receiver {
+            Type::Named(id, args) if self.is_nominal_type(*id) => self
+                .unroll_named(*id, args)
+                .unwrap_or_else(|| receiver.clone()),
+            _ => receiver.clone(),
+        };
+        let this_applied = self.zonk(&this_type);
+        self.unify(span, &this_applied, &receiver_for_this)?;
+
+        let param_resolved = self.zonk(&param);
+        let arg_resolved = self.zonk(arg);
+        self.subsume(span, &arg_resolved, &param_resolved)?;
+        Ok(self.zonk(&ret))
     }
 }

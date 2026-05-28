@@ -22,6 +22,11 @@ use crate::infer::InferState;
 use crate::span::Spanned;
 use crate::types::{FuncParam, PropName, TVarName, Type, TypeDef, TypeScheme};
 
+/// Dunder methods inty retains from a class body (rather than dropping
+/// like other `__x__` names) because an operator dispatches to them.
+/// Currently just `__truediv__`, the `/` join used by `pathlib.Path`.
+const OPERATOR_DUNDERS: &[&str] = &["__truediv__"];
+
 /// The result of reading a `.pyi`: directly-declared exports plus the
 /// re-export requests (`from X import …`) the caller must resolve and
 /// merge (the reader has no path/resolver context).
@@ -514,6 +519,32 @@ impl StubReader<'_> {
         self.eat(&Tok::Colon);
         self.eat(&Tok::Newline);
 
+        // Pre-register the brand *before* reading the body so a
+        // self-reference in a field or method type (`parent: Path`,
+        // `def resolve(self) -> Path`, `def __truediv__(...) -> Path`)
+        // resolves to this class — a recursive nominal — rather than
+        // minting a fresh opaque var that would otherwise leak in as a
+        // phantom brand parameter. A placeholder constructor whose return
+        // is `Named(id, [])` is enough for `resolve_ref_in_env` to map
+        // the name back to the brand during body parsing; both the brand
+        // def and the export are overwritten with their final forms once
+        // the body (and its real ctor params / generic args) is known.
+        let id = self.state.fresh_type_id();
+        self.state.class_brand_ids.insert(name.clone(), id);
+        self.state
+            .register_named_type(TypeDef::nominal(
+                id,
+                name.clone(),
+                Vec::new(),
+                Type::object(Vec::<(String, Type)>::new()),
+            ));
+        let placeholder_ctor = Type::wrap_callable(Type::raw_func_with_params(
+            None,
+            Vec::new(),
+            Type::Named(id, Vec::new()),
+        ));
+        self.env = self.env.extend(name.clone(), Self::scheme_of(&placeholder_ctor));
+
         let mut fields: BTreeMap<PropName, Type> = BTreeMap::new();
         let mut ctor_params: Vec<FuncParam> = Vec::new();
 
@@ -574,14 +605,14 @@ impl StubReader<'_> {
             .collect();
         brand_vars.sort_by_key(|v| v.id());
 
-        let id = self.state.fresh_type_id();
+        // Finalise the brand: overwrite the placeholder registered before
+        // the body with the real representation and parameters.
         self.state.register_named_type(TypeDef::nominal(
             id,
             name.clone(),
             brand_vars.clone(),
             instance,
         ));
-        self.state.class_brand_ids.insert(name.clone(), id);
 
         let args: Vec<Type> = brand_vars.iter().map(|v| Type::var(v.clone())).collect();
         let branded = Type::Named(id, args);
@@ -618,7 +649,10 @@ impl StubReader<'_> {
             *ctor_params = params;
             return;
         }
-        if mname.starts_with("__") {
+        // Drop dunders, except the operand-protocol methods inty
+        // dispatches on (e.g. `__truediv__` for the `/` join operator),
+        // which are kept as ordinary instance-row methods.
+        if mname.starts_with("__") && !OPERATOR_DUNDERS.contains(&mname.as_str()) {
             return;
         }
         let is_property = decos

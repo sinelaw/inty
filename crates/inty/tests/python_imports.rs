@@ -701,3 +701,68 @@ fn keyword_arguments_through_stub_signature() {
         "unknown keyword against a stub signature should fail"
     );
 }
+
+#[test]
+fn pathlib_truediv_joins_to_path() {
+    // `p / "x"` lowers to `p.__truediv__("x")` for a class instance that
+    // carries the dunder. `Path / str` yields a `Path`, so the result
+    // accepts another `/` (chaining) and supports `.read_text()`.
+    let dir = tmp_dir();
+    let ok = check(
+        "from pathlib import Path\n\
+         p = Path(\"a\")\n\
+         q = p / \"b\" / \"c\"\n\
+         s = q.read_text()\n",
+        &dir,
+        &[],
+    );
+    assert!(ok.is_ok(), "Path / str / str then .read_text() should type-check: {:?}", ok);
+}
+
+#[test]
+fn pathlib_truediv_rejects_non_string_rhs() {
+    // `__truediv__` is declared `(self, other: str) -> Path`; a numeric
+    // RHS must not be accepted.
+    let dir = tmp_dir();
+    let bad = check(
+        "from pathlib import Path\np = Path(\"a\") / 1\n",
+        &dir,
+        &[],
+    );
+    assert!(bad.is_err(), "Path / Number must be rejected by __truediv__'s str parameter");
+}
+
+#[test]
+fn pathlib_self_referential_fields_resolve_to_path() {
+    // `parent: Path` and `resolve() -> Path` in the stub are self-
+    // references. Without recursive-nominal resolution they used to mint
+    // phantom brand parameters, so chaining `.resolve().parent / "x"`
+    // would degrade to opaque vars and the final `/` would fall back to
+    // numeric. Pre-registration ties the references to the class itself.
+    let dir = tmp_dir();
+    let ok = check(
+        "from pathlib import Path\n\
+         root = Path(\"x\").resolve().parent\n\
+         child = root / \"sub\"\n\
+         s = child.read_text()\n",
+        &dir,
+        &[],
+    );
+    assert!(ok.is_ok(), "self-referential Path methods should chain: {:?}", ok);
+}
+
+#[test]
+fn re_sub_accepts_count_keyword() {
+    // `Pattern.sub` / `Pattern.subn` take an optional `count=` kwarg;
+    // omitting it from the stub used to surface as a "Presence
+    // mismatch: expected present, found absent" at the call site.
+    let dir = tmp_dir();
+    let ok = check(
+        "import re\n\
+         pat = re.compile(\"x\")\n\
+         out = pat.sub(\"y\", \"xxx\", count=1)\n",
+        &dir,
+        &[],
+    );
+    assert!(ok.is_ok(), "re.Pattern.sub should accept count= kwarg: {:?}", ok);
+}
