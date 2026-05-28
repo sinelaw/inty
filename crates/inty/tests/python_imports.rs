@@ -715,7 +715,11 @@ fn re_sub_accepts_count_keyword() {
         &dir,
         &[],
     );
-    assert!(ok.is_ok(), "re.Pattern.sub should accept count= kwarg: {:?}", ok);
+    assert!(
+        ok.is_ok(),
+        "re.Pattern.sub should accept count= kwarg: {:?}",
+        ok
+    );
 }
 
 #[test]
@@ -725,5 +729,9 @@ fn div_on_string_is_rejected() {
     // Plus on a non-Plus operand — single-pass class resolution.
     let dir = tmp_dir();
     let bad = check("x = \"a\" / \"b\"\n", &dir, &[]);
-    assert!(bad.is_err(), "String / String must not type-check: {:?}", bad);
+    assert!(
+        bad.is_err(),
+        "String / String must not type-check: {:?}",
+        bad
+    );
 }

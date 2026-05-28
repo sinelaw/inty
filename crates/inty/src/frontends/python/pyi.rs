@@ -526,19 +526,20 @@ impl StubReader<'_> {
         // the body (and its real ctor params / generic args) is known.
         let id = self.state.fresh_type_id();
         self.state.class_brand_ids.insert(name.clone(), id);
-        self.state
-            .register_named_type(TypeDef::nominal(
-                id,
-                name.clone(),
-                Vec::new(),
-                Type::object(Vec::<(String, Type)>::new()),
-            ));
+        self.state.register_named_type(TypeDef::nominal(
+            id,
+            name.clone(),
+            Vec::new(),
+            Type::object(Vec::<(String, Type)>::new()),
+        ));
         let placeholder_ctor = Type::wrap_callable(Type::raw_func_with_params(
             None,
             Vec::new(),
             Type::Named(id, Vec::new()),
         ));
-        self.env = self.env.extend(name.clone(), Self::scheme_of(&placeholder_ctor));
+        self.env = self
+            .env
+            .extend(name.clone(), Self::scheme_of(&placeholder_ctor));
 
         let mut fields: BTreeMap<PropName, Type> = BTreeMap::new();
         let mut ctor_params: Vec<FuncParam> = Vec::new();

@@ -335,7 +335,6 @@ impl InferState {
         };
     }
 
-
     /// Record an inference error and continue. Used by `infer_stmt_list`
     /// when `Type::Error` recovery lets us keep type-checking past a
     /// failing statement. The first call's error is what the public
