@@ -215,6 +215,7 @@ impl Parser {
             Tok::While => Ok(vec![self.while_stmt()?]),
             Tok::For => Ok(vec![self.for_stmt()?]),
             Tok::Try => Ok(vec![self.try_stmt()?]),
+            Tok::With => self.with_stmt(),
             Tok::Reserved(k) => {
                 Err(self.unsupported(&format!("'{}' is not supported in the Python subset", k)))
             }
@@ -1350,6 +1351,46 @@ impl Parser {
             finalizer,
             span,
         })
+    }
+
+    /// `with EXPR ['as' NAME] (',' EXPR ['as' NAME])* ':' SUITE`.
+    ///
+    /// Lowered to a flat statement sequence: for each manager, either bind
+    /// `NAME = EXPR` (when `as NAME` is present) or evaluate `EXPR` as an
+    /// expression statement; then splice in the suite body. The
+    /// `__enter__` / `__exit__` protocol isn't modelled — the manager
+    /// expression itself stands in for the value bound by `as`, and any
+    /// resource teardown is treated as a runtime concern outside the type
+    /// system. The body's declarations are flattened into the surrounding
+    /// scope (Python's `with` doesn't introduce a new scope).
+    fn with_stmt(&mut self) -> Result<Vec<Stmt>> {
+        self.advance(); // with
+        let mut out: Vec<Stmt> = Vec::new();
+        loop {
+            let item_start = self.cur_span().start;
+            let value = self.expr()?;
+            let bound: Option<String> = if self.eat(&Tok::As) {
+                Some(self.expect_name("context manager binding")?)
+            } else {
+                None
+            };
+            let span = Span::new(item_start, self.prev_span().end);
+            match bound {
+                Some(name) => {
+                    out.push(self.declare_or_assign_single(name, Some(value), None, span))
+                }
+                None => out.push(Stmt::Expr {
+                    expression: value,
+                    span,
+                }),
+            }
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::Colon, "':'")?;
+        out.extend(self.suite_body()?);
+        Ok(out)
     }
 
     fn for_stmt(&mut self) -> Result<Stmt> {

@@ -145,6 +145,53 @@ fn for_in_is_for_of() {
 }
 
 #[test]
+fn with_as_binds_target_in_outer_scope() {
+    // `with EXPR as t: BODY` lowers to `t = EXPR` plus the body, flattened
+    // into the surrounding scope — so a later reference to `t` resolves.
+    let stmts = parse("with foo() as t:\n    pass\nx = t");
+    match &stmts[0] {
+        Stmt::Var { declarations, .. } => {
+            assert_eq!(declarations[0].name, "t");
+            assert!(matches!(declarations[0].init, Some(Expr::Call { .. })));
+        }
+        other => panic!("expected var, got {:?}", other),
+    }
+    // pass + assignment of x from t — both visible.
+    assert!(matches!(stmts.last().unwrap(), Stmt::Var { .. }));
+}
+
+#[test]
+fn with_without_as_evaluates_expr() {
+    // `with EXPR: BODY` keeps the manager evaluation as an expression
+    // statement, then the body — no binding introduced.
+    let stmts = parse("with foo():\n    y = 1");
+    assert!(matches!(
+        stmts[0],
+        Stmt::Expr {
+            expression: Expr::Call { .. },
+            ..
+        }
+    ));
+    assert!(matches!(stmts[1], Stmt::Var { .. }));
+}
+
+#[test]
+fn with_multiple_items() {
+    // `with A as a, B as b: BODY` binds both targets in order.
+    let stmts = parse("with a() as x, b() as y:\n    pass");
+    match (&stmts[0], &stmts[1]) {
+        (
+            Stmt::Var { declarations: d0, .. },
+            Stmt::Var { declarations: d1, .. },
+        ) => {
+            assert_eq!(d0[0].name, "x");
+            assert_eq!(d1[0].name, "y");
+        }
+        other => panic!("expected two vars, got {:?}", other),
+    }
+}
+
+#[test]
 fn lambda_is_function() {
     assert!(matches!(
         init_of("f = lambda a: a + 1"),
