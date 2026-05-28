@@ -217,7 +217,7 @@ pub struct Program {
 /// maps onto it. Used by inference for the handful of language-specific
 /// rules — unit type and primitive-method surface — that the structural
 /// types alone don't capture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceLanguage {
     JavaScript,
     Python,

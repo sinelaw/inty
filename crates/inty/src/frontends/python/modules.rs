@@ -99,7 +99,6 @@ fn resolve_inner(
         // same `Type::Module` representation as any other import.
         if let Some(stub) = super::stubs::builtin_module(source) {
             let exports = super::pyi::read_stub(state, stub)?.exports;
-            super::instances::install_for_module(state, source);
             env = bind_module_exports(env, specifiers, source, &exports, &module_err)?;
             continue;
         }

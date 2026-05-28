@@ -130,26 +130,19 @@ impl InferState {
         }
 
         match op {
-            // `/` dispatches through the `Div` typeclass: numeric in
-            // every frontend, plus class-instance instances installed
-            // per language by the stub loaders (e.g. Python's
-            // `pathlib.Path` join). Resolve eagerly when the left
-            // operand is already a known instance head — that way the
-            // expression's result has its concrete type at the use site
-            // and chained operations (`p / "a" / "b"`, `q.method()`)
-            // see through it. Defer to the constraint solver only when
-            // the left is still a flex var (e.g. a forward-referenced
-            // module global): the deferred resolution fires once all
-            // unifications have settled.
+            // `/` dispatches through the `Div` typeclass. Same shape
+            // as `+` (Plus): widen, mint a result var, post the
+            // class predicate, subsume both operands into it. The
+            // solver checks the resulting type is Number at the end
+            // of inference; an unresolved type variable stays
+            // polymorphic.
             BinOp::Div => {
-                if let Some(ty) = self.try_resolve_div(&left_type, &right_type, span)? {
-                    return Ok(self.zonk(&ty));
-                }
+                let left_widened = left_type.widen_fresh_literals();
+                let right_widened = right_type.widen_fresh_literals();
                 let result = self.fresh_type_var();
-                self.add_constraint(
-                    TypePred::div(left_type.clone(), right_type.clone(), result.clone()),
-                    span,
-                );
+                self.add_constraint(TypePred::div(result.clone()), span);
+                self.subsume(span, &left_widened, &result)?;
+                self.subsume(span, &right_widened, &result)?;
                 Ok(self.zonk(&result))
             }
 
@@ -295,79 +288,6 @@ impl InferState {
             BinOp::Instanceof => {
                 // expr instanceof Constructor
                 Ok(Type::Boolean)
-            }
-        }
-    }
-
-    /// Attempt to resolve a `Div` predicate eagerly at the operator
-    /// site. Returns:
-    ///   - `Ok(Some(result_type))` when the left operand's substituted
-    ///     form matches a registered instance head — the instance body
-    ///     is applied immediately (`subsume` / `unify` on the operand
-    ///     and result positions), and the caller can use the returned
-    ///     type as the expression's value.
-    ///   - `Ok(None)` when the left is still a flex var — no instance
-    ///     can be selected yet; the caller posts a deferred constraint.
-    ///   - `Err(_)` when the left is concrete but no instance covers it
-    ///     — same error the deferred solver would produce.
-    pub(in crate::infer) fn try_resolve_div(
-        &mut self,
-        left: &Type,
-        right: &Type,
-        span: Span,
-    ) -> InferResult<Option<Type>> {
-        let left_now = self.apply_subst(left);
-        if left_now.is_flex_var() {
-            return Ok(None);
-        }
-        if matches!(&left_now, Type::Error) {
-            return Ok(Some(Type::Error));
-        }
-        let lang = self.source_language();
-        let instance = self
-            .class_instances(lang, crate::types::ClassName::Div)
-            .iter()
-            .find(|i| i.head.matches(&left_now))
-            .cloned();
-        match instance {
-            Some(inst) => {
-                let result = self.apply_div_body(&left_now, right, inst.body, span)?;
-                Ok(Some(result))
-            }
-            None => Err(crate::error::TypeError::ConstraintNotSatisfied {
-                class: "Div".to_string(),
-                ty: left_now.to_string(),
-                span,
-            }
-            .into()),
-        }
-    }
-
-    /// Apply a `Div` instance body to the operand positions. The left
-    /// operand has already been checked against the instance head;
-    /// here we unify it with the body's `left` (for `Direct`), check
-    /// the right operand, and produce the instance's result type.
-    pub fn apply_div_body(
-        &mut self,
-        left: &Type,
-        right: &Type,
-        body: crate::infer::InstanceBody,
-        span: Span,
-    ) -> InferResult<Type> {
-        use crate::infer::InstanceBody;
-        match body {
-            InstanceBody::Direct {
-                left: l,
-                right: r,
-                result: res,
-            } => {
-                self.unify(span, left, &l)?;
-                self.unify(span, right, &r)?;
-                Ok(res)
-            }
-            InstanceBody::Method { param, ret } => {
-                self.subsume(span, right, &param)?;
-                Ok(ret)
             }
         }
     }

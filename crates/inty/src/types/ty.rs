@@ -206,10 +206,9 @@ pub enum ClassName {
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
-    /// Div class: types that support the `/` operator. Numeric in
-    /// every frontend; Python additionally has class-instance instances
-    /// (e.g. `pathlib.Path`'s path-join). `Div(left, right, result)` —
-    /// dispatch on left.
+    /// Div class: types that support the `/` operator. Numeric only —
+    /// same shape as `Plus`: a single-position predicate over the
+    /// shared operand/result type, satisfied by `Number`.
     Div,
 }
 
@@ -235,10 +234,10 @@ impl TypePred {
         }
     }
 
-    pub fn div(left: Type, right: Type, result: Type) -> Self {
+    pub fn div(ty: Type) -> Self {
         TypePred {
             class: ClassName::Div,
-            types: vec![left, right, result],
+            types: vec![ty],
         }
     }
 

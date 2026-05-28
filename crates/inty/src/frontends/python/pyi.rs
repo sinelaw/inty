@@ -644,11 +644,8 @@ impl StubReader<'_> {
             *ctor_params = params;
             return;
         }
-        // Drop other dunders. Operand-protocol dunders (e.g.
-        // `__truediv__`) are not surfaced as instance-row fields —
-        // their behaviour is declared once as a per-language typeclass
-        // instance (see `frontends::python::instances`), not as a
-        // queryable method.
+        // Drop other dunders — they aren't surfaced as instance-row
+        // fields.
         if mname.starts_with("__") {
             return;
         }

@@ -1,7 +1,6 @@
 # Built-in `pathlib` module stub for inty. The `/` join operator is
-# typed via a Python `Div` typeclass instance for `Path` registered by
-# `frontends::python::instances` — not via a `__truediv__` field on the
-# class. The stub therefore omits the dunder.
+# numeric-only (`Div` typeclass), so `Path / str` does not type-check
+# today; users go through `.joinpath(...)` instead.
 class Path:
     def __init__(self, p: str = ...) -> None: ...
     def exists(self) -> bool: ...

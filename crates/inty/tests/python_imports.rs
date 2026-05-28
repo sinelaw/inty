@@ -703,55 +703,6 @@ fn keyword_arguments_through_stub_signature() {
 }
 
 #[test]
-fn pathlib_truediv_joins_to_path() {
-    // `p / "x"` lowers to `p.__truediv__("x")` for a class instance that
-    // carries the dunder. `Path / str` yields a `Path`, so the result
-    // accepts another `/` (chaining) and supports `.read_text()`.
-    let dir = tmp_dir();
-    let ok = check(
-        "from pathlib import Path\n\
-         p = Path(\"a\")\n\
-         q = p / \"b\" / \"c\"\n\
-         s = q.read_text()\n",
-        &dir,
-        &[],
-    );
-    assert!(ok.is_ok(), "Path / str / str then .read_text() should type-check: {:?}", ok);
-}
-
-#[test]
-fn pathlib_truediv_rejects_non_string_rhs() {
-    // `__truediv__` is declared `(self, other: str) -> Path`; a numeric
-    // RHS must not be accepted.
-    let dir = tmp_dir();
-    let bad = check(
-        "from pathlib import Path\np = Path(\"a\") / 1\n",
-        &dir,
-        &[],
-    );
-    assert!(bad.is_err(), "Path / Number must be rejected by __truediv__'s str parameter");
-}
-
-#[test]
-fn pathlib_self_referential_fields_resolve_to_path() {
-    // `parent: Path` and `resolve() -> Path` in the stub are self-
-    // references. Without recursive-nominal resolution they used to mint
-    // phantom brand parameters, so chaining `.resolve().parent / "x"`
-    // would degrade to opaque vars and the final `/` would fall back to
-    // numeric. Pre-registration ties the references to the class itself.
-    let dir = tmp_dir();
-    let ok = check(
-        "from pathlib import Path\n\
-         root = Path(\"x\").resolve().parent\n\
-         child = root / \"sub\"\n\
-         s = child.read_text()\n",
-        &dir,
-        &[],
-    );
-    assert!(ok.is_ok(), "self-referential Path methods should chain: {:?}", ok);
-}
-
-#[test]
 fn re_sub_accepts_count_keyword() {
     // `Pattern.sub` / `Pattern.subn` take an optional `count=` kwarg;
     // omitting it from the stub used to surface as a "Presence
@@ -768,37 +719,10 @@ fn re_sub_accepts_count_keyword() {
 }
 
 #[test]
-fn pathlib_div_defers_when_left_is_forward_reference() {
-    // A module-level `Path("a")` binding stored on a forward-reference
-    // type variable that's read inside a nested function body: at the
-    // `/` site the left operand zonks to a flex var. With eager
-    // dispatch this would either pin the var to Number (wrong) or
-    // error. With the Div class, the operator posts a deferred
-    // constraint; the solver runs after inference (when the global is
-    // bound to Path) and dispatches through the Path instance.
-    let dir = tmp_dir();
-    let main = concat!(
-        "from pathlib import Path\n",
-        "def child(name: str) -> str:\n",
-        "    return str(ROOT / name)\n",
-        "ROOT = Path(\"a\")\n",
-        "r = child(\"x\")\n",
-    );
-    let ok = check(main, &dir, &[]);
-    assert!(
-        ok.is_ok(),
-        "Path / str via a forward-referenced module global should resolve: {:?}",
-        ok
-    );
-}
-
-#[test]
 fn div_on_string_is_rejected() {
-    // No `Div` instance covers `String` in any frontend, so `"a" / "b"`
-    // resolves through the deferred path (left isn't a known instance
-    // head at the operator site) and the solver errors with a `Div`
-    // constraint-not-satisfied diagnostic. Python is fine for this
-    // case because the rejection is frontend-uniform.
+    // `Div` has no instance for `String`. The constraint solver errors
+    // with `Div`-not-satisfied at the end of inference. Same shape as
+    // Plus on a non-Plus operand — single-pass class resolution.
     let dir = tmp_dir();
     let bad = check("x = \"a\" / \"b\"\n", &dir, &[]);
     assert!(bad.is_err(), "String / String must not type-check: {:?}", bad);

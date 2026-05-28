@@ -8,7 +8,6 @@
 //! - `type_parser`: Parser for TypeScript-style type annotations
 //! - `decorate`: AST decoration with inferred types
 
-mod class_env;
 mod decorate;
 mod env;
 mod features;
@@ -23,7 +22,6 @@ mod zonk;
 #[cfg(test)]
 mod tests;
 
-pub use class_env::{BaseType, ClassEnv, Instance, InstanceBody, InstanceHead};
 pub use decorate::decorate_with_types;
 pub use env::TypeEnv;
 pub use narrow::{apply_narrowing, Narrowing, Path};

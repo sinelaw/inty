@@ -255,12 +255,6 @@ pub struct InferState {
     /// primitive-method surface (`str`/`list` vs `String`/`Array`) a value
     /// carries. Defaults to JavaScript.
     pub(in crate::infer) language: crate::ast::SourceLanguage,
-
-    /// Per-language typeclass instance registry. Consulted by the
-    /// constraint solver when resolving class predicates; populated by
-    /// language-specific seeding (`seed_class_env`) plus dynamic
-    /// registration from stub loaders for built-in stdlib classes.
-    pub(in crate::infer) class_env: super::class_env::ClassEnv,
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -326,7 +320,6 @@ impl InferState {
             return_value_stack: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
-            class_env: seed_class_env(),
         }
     }
 
@@ -342,36 +335,6 @@ impl InferState {
         };
     }
 
-    /// The active source language. Used by language-specific rules
-    /// (typeclass instance lookup, primitive-method surface, …).
-    pub fn source_language(&self) -> crate::ast::SourceLanguage {
-        self.language
-    }
-
-    /// Register a typeclass instance for `lang` under `class`. Looked up
-    /// by the constraint solver via [`Self::class_instances`]; used by
-    /// the static seeding in [`Self::seed_class_env`] and by stub
-    /// loaders that install language-specific instances once a class's
-    /// brand id is known.
-    pub fn register_class_instance(
-        &mut self,
-        lang: crate::ast::SourceLanguage,
-        class: crate::types::ClassName,
-        instance: super::class_env::Instance,
-    ) {
-        self.class_env.register(lang, class, instance);
-    }
-
-    /// Look up all instances registered for `(lang, class)`. Empty slice
-    /// when nothing matches — the solver decides what to do with that
-    /// (default arm, error, etc.) per class.
-    pub fn class_instances(
-        &self,
-        lang: crate::ast::SourceLanguage,
-        class: crate::types::ClassName,
-    ) -> &[super::class_env::Instance] {
-        self.class_env.lookup(lang, class)
-    }
 
     /// Record an inference error and continue. Used by `infer_stmt_list`
     /// when `Type::Error` recovery lets us keep type-checking past a
@@ -1576,35 +1539,6 @@ impl InferState {
             _ => false,
         }
     }
-}
-
-/// Build the initial typeclass instance registry shared by every
-/// frontend. Numeric `Div = (Number, Number, Number)` is universal —
-/// JavaScript, Python, and Lua all divide numbers the same way.
-/// Language-specific instances (e.g. Python's `pathlib.Path` join) are
-/// installed dynamically by the stub loaders.
-fn seed_class_env() -> super::class_env::ClassEnv {
-    use super::class_env::{BaseType, ClassEnv, Instance, InstanceBody, InstanceHead};
-    use crate::ast::SourceLanguage;
-
-    let numeric_div = Instance {
-        head: InstanceHead::BaseType(BaseType::Number),
-        body: InstanceBody::Direct {
-            left: Type::Number,
-            right: Type::Number,
-            result: Type::Number,
-        },
-    };
-
-    let mut env = ClassEnv::new();
-    for lang in [
-        SourceLanguage::JavaScript,
-        SourceLanguage::Python,
-        SourceLanguage::Lua,
-    ] {
-        env.register(lang, ClassName::Div, numeric_div.clone());
-    }
-    env
 }
 
 #[cfg(test)]

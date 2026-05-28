@@ -72,18 +72,10 @@ pub static INDEXABLE_INSTANCES: &[InstanceDecl] = &[
     },
 ];
 
-/// Instances of `Div` — types that support `/`. The numeric instance
-/// is universal across frontends; class-instance Divs (e.g. Python's
-/// `pathlib.Path` join) are not enumerable here because their operand
-/// types are dynamic — they live in the per-language class env
-/// (`InferState::class_env`).
+/// Instances of `Div` — types that support `/`. Numeric only.
 pub static DIV_INSTANCES: &[InstanceDecl] = &[InstanceDecl {
     class: ClassName::Div,
-    inputs: &[
-        TypeShape::Concrete(BaseType::Number),
-        TypeShape::Concrete(BaseType::Number),
-        TypeShape::Concrete(BaseType::Number),
-    ],
+    inputs: &[TypeShape::Concrete(BaseType::Number)],
 }];
 
 /// Look up every instance for `class`. Returns an empty slice if the

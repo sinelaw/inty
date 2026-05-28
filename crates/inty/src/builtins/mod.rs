@@ -498,9 +498,7 @@ impl InferState {
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
-            ClassName::Div => {
-                self.resolve_div(&pred.types[0], &pred.types[1], &pred.types[2], span)
-            }
+            ClassName::Div => self.resolve_div(&pred.types[0], span),
         }
     }
 
@@ -616,67 +614,33 @@ impl InferState {
         }
     }
 
-    /// Resolve a deferred `Div` predicate. Only reached when the
-    /// operator site posted the constraint because the left operand
-    /// was still a flex var (see `try_resolve_div` for the eager path).
-    /// At this point inference has finished, so the substituted left
-    /// is the final truth:
-    ///   - Concrete shape matching a registered instance head →
-    ///     dispatch through the shared body application.
-    ///   - Still flex → fall back to the language's numeric instance
-    ///     (pinning the left to Number), matching the previous eager
-    ///     `subsume(left, Number)` behaviour for untyped operands.
-    ///   - Concrete but unmatched → error.
-    fn resolve_div(
-        &mut self,
-        left: &Type,
-        right: &Type,
-        result: &Type,
-        span: Span,
-    ) -> Result<(), IntyError> {
-        use crate::infer::{BaseType, InstanceBody, InstanceHead};
+    /// Resolve Div constraint: type must be Number. Same shape as
+    /// `resolve_plus`: a still-flex var stays polymorphic; a concrete
+    /// non-Number errors; `Type::Error` satisfies trivially.
+    fn resolve_div(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
+        let ty = self.apply_subst(ty);
 
-        let left_now = self.apply_subst(left);
-        let lang = self.source_language();
-        let instances = self.class_instances(lang, ClassName::Div).to_vec();
+        match &ty {
+            Type::Number => Ok(()),
 
-        let pick = if left_now.is_flex_var() {
-            // Default a still-flex left to the numeric instance.
-            instances
-                .iter()
-                .find(|i| matches!(i.head, InstanceHead::BaseType(BaseType::Number)))
-                .cloned()
-        } else {
-            instances
-                .iter()
-                .find(|i| i.head.matches(&left_now))
-                .cloned()
-        };
+            Type::Error => Ok(()),
 
-        if let Some(instance) = pick {
-            // Direct's `left` slot pins the original `left` even when
-            // it was still flex (the numeric-default path); Method
-            // doesn't touch it. `apply_div_body` handles both.
-            let inst_result = self.apply_div_body(
-                if matches!(instance.body, InstanceBody::Direct { .. }) {
-                    left
-                } else {
-                    &left_now
-                },
-                right,
-                instance.body,
+            Type::Var(TVarName::Flex(_)) => Ok(()),
+
+            Type::Var(TVarName::Skolem(_)) => Err(TypeError::ConstraintNotSatisfied {
+                class: "Div".to_string(),
+                ty: ty.to_string(),
                 span,
-            )?;
-            self.unify(span, result, &inst_result)?;
-            return Ok(());
-        }
+            }
+            .into()),
 
-        Err(TypeError::ConstraintNotSatisfied {
-            class: "Div".to_string(),
-            ty: left_now.to_string(),
-            span,
+            _ => Err(TypeError::ConstraintNotSatisfied {
+                class: "Div".to_string(),
+                ty: ty.to_string(),
+                span,
+            }
+            .into()),
         }
-        .into())
     }
 }
 
