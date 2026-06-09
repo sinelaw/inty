@@ -167,6 +167,9 @@ impl Cursor<'_> {
         if last == "Callable" {
             return self.parse_callable_args();
         }
+        if last == "Annotated" {
+            return self.parse_annotated_args();
+        }
         if head == "tuple" || head == "Tuple" {
             return self.parse_tuple_args();
         }
@@ -185,7 +188,7 @@ impl Cursor<'_> {
             }
             "Optional" => TypeAst::Union(vec![first_or_opaque(args), TypeAst::Null]),
             "Union" => TypeAst::Union(args),
-            "Final" | "ClassVar" | "Annotated" | "InitVar" | "TypeGuard" => {
+            "Final" | "ClassVar" | "InitVar" | "TypeGuard" => {
                 // Erase the wrapper, keep the first argument.
                 first_or_opaque(args)
             }
@@ -240,6 +243,26 @@ impl Cursor<'_> {
             1 => members.pop().unwrap(),
             _ => TypeAst::Union(members),
         }
+    }
+
+    /// `Annotated[T, *metadata]` → `T`. Per PEP 593 only the first argument
+    /// is a type; the remaining metadata arguments are arbitrary Python
+    /// expressions (`Depends(get_bar)`, `Field(default=…)`, `ctype("char")`,
+    /// …) that the type system erases. They are *skipped* by balanced-bracket
+    /// scanning rather than parsed as types, so a call/attribute/literal in a
+    /// metadata position no longer leaves the cursor stranded mid-expression.
+    fn parse_annotated_args(&mut self) -> TypeAst {
+        if !self.eat(&Tok::LBracket) {
+            return TypeAst::Opaque;
+        }
+        let ty = self.parse_type();
+        // Discard each remaining (metadata) argument up to its top-level
+        // `,` / `]`, then consume the closing bracket.
+        while self.eat(&Tok::Comma) {
+            self.skip_to_arg_end();
+        }
+        self.eat(&Tok::RBracket);
+        ty
     }
 
     /// `Callable[[A, B], R]` → `(A, B) => R`. `Callable[..., R]` (arbitrary
@@ -496,6 +519,46 @@ mod tests {
         assert_eq!(ty("Final[int]"), Type::Number);
         assert_eq!(ty("ClassVar[str]"), Type::String);
         assert_eq!(ty("Annotated[bool, \"doc\"]"), Type::Boolean);
+    }
+
+    /// PEP 593: only `Annotated`'s first argument is a type; the metadata
+    /// arguments are arbitrary expressions (calls, attribute access, dict
+    /// literals, …). They must be fully consumed so the cursor lands past
+    /// the closing `]` — otherwise the enclosing statement parse derails.
+    #[test]
+    fn annotated_metadata_is_erased_and_fully_consumed() {
+        for (src, want) in [
+            ("Annotated[int, Depends(get_bar)]", Type::Number),
+            ("Annotated[str, Field(default=\"x\", gt=0)]", Type::String),
+            ("Annotated[bool, ValueRange(3, 10), ctype(\"char\")]", Type::Boolean),
+            ("Annotated[int, {\"k\": [1, 2]}]", Type::Number),
+            ("Annotated[str, mod.Marker.FLAG]", Type::String),
+        ] {
+            let toks = tokenize(src).expect("tokenize");
+            let (ast, pos) = parse_type(&toks, 0);
+            assert_eq!(
+                InferState::new().lower_type_ast(&ast),
+                want,
+                "type mismatch for {src}"
+            );
+            // The next token after the type expression must be the lexer's
+            // trailing Newline/Eof — i.e. the whole subscript was consumed.
+            assert!(
+                matches!(toks[pos].value, super::Tok::Newline | super::Tok::Eof),
+                "cursor stranded at {:?} for {src}",
+                toks[pos].value
+            );
+        }
+    }
+
+    /// End-to-end: a type-alias assignment whose body carries a call in the
+    /// `Annotated` metadata parses the whole module without error.
+    #[test]
+    fn annotated_alias_with_call_metadata_parses_module() {
+        let src = "Foo = Annotated[Bar, Depends(get_bar)]\nx: int = 1\n";
+        let program = super::super::parse_source(src).expect("module should parse");
+        assert_eq!(program.type_aliases.len(), 1);
+        assert_eq!(program.type_aliases[0].name, "Foo");
     }
 
     #[test]
