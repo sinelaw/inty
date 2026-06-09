@@ -15,13 +15,28 @@ use crate::error::{ParseError, Result};
 use crate::span::{Span, Spanned};
 use crate::types::TypeAst;
 
+/// Name bookkeeping for one function scope (the module is the outermost
+/// such scope). Python binds a name to the *innermost* scope that assigns
+/// it, so we track each scope's own bindings separately rather than
+/// flattening across the stack.
+#[derive(Default)]
+struct Scope {
+    /// Names bound locally in this scope (assignments, `for`/`with`
+    /// targets, parameters). Drives declaration-vs-assignment.
+    locals: HashSet<String>,
+    /// Names this scope declared `global`: assignments to them rebind the
+    /// module-level variable instead of creating a local.
+    globals: HashSet<String>,
+}
+
 pub struct Parser {
     toks: Vec<Spanned<Tok>>,
     pos: usize,
     temp: usize,
-    /// One set of declared names per enclosing function scope (module is
-    /// the outermost). Used to decide declaration-vs-assignment.
-    scopes: Vec<HashSet<String>>,
+    /// One [`Scope`] per enclosing function scope (module is the
+    /// outermost). Used to decide declaration-vs-assignment and to resolve
+    /// `global`.
+    scopes: Vec<Scope>,
     /// Name of the receiver parameter (`self`) while parsing a method
     /// body. When set, references to that name lower to `Expr::This`, so
     /// Python's explicit `self` maps onto inty's `this` row-polymorphism.
@@ -47,7 +62,7 @@ impl Parser {
             toks,
             pos: 0,
             temp: 0,
-            scopes: vec![HashSet::new()],
+            scopes: vec![Scope::default()],
             self_name: None,
             class_names: Vec::new(),
             type_aliases: Vec::new(),
@@ -145,12 +160,42 @@ impl Parser {
 
     // ---- scope helpers ----
 
-    fn declared(&self, name: &str) -> bool {
-        self.scopes.iter().any(|s| s.contains(name))
+    /// Whether `name` is already bound in the *current* (innermost) scope.
+    /// Python scoping is not flattened across the stack: a name bound in an
+    /// enclosing scope is still a fresh local here once we assign to it, so
+    /// we only consult the top scope.
+    fn local_declared(&self, name: &str) -> bool {
+        self.scopes.last().unwrap().locals.contains(name)
+    }
+
+    /// Whether the current scope declared `name` with a `global` statement.
+    fn is_global(&self, name: &str) -> bool {
+        self.scopes.last().unwrap().globals.contains(name)
+    }
+
+    /// Whether we are parsing inside a function/method body (i.e. not at
+    /// module scope), where the local-by-default binding rule applies.
+    fn in_function(&self) -> bool {
+        self.scopes.len() > 1
     }
 
     fn declare(&mut self, name: &str) {
-        self.scopes.last_mut().unwrap().insert(name.to_string());
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .locals
+            .insert(name.to_string());
+    }
+
+    /// Record `name` as `global` in the current scope, and globally so
+    /// [`Self::parse_program`] can backfill a module binding if needed.
+    fn declare_global(&mut self, name: &str) {
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .globals
+            .insert(name.to_string());
+        self.globals.insert(name.to_string());
     }
 
     // ---- program / suites ----
@@ -173,7 +218,7 @@ impl Parser {
         let mut backfill: Vec<Stmt> = self
             .globals
             .iter()
-            .filter(|name| !self.scopes[0].contains(*name))
+            .filter(|name| !self.scopes[0].locals.contains(*name))
             .map(|name| Stmt::Var {
                 kind: VarKind::Var,
                 declarations: vec![VarDeclarator {
@@ -366,21 +411,20 @@ impl Parser {
     /// `global NAME (',' NAME)*`.
     ///
     /// `global` declares that the named bindings live at module scope, so
-    /// assignments to them inside the current function must lower to plain
+    /// assignments to them inside the current function lower to plain
     /// assignments against the module binding rather than fresh
-    /// function-scoped `var`s. We mark each name declared in the current
-    /// scope (so [`Self::declare_or_assign_single`] takes the assignment
-    /// branch) and record it on `globals`; [`Self::parse_program`] then
-    /// backfills a module-level `var` for any global that never receives
-    /// one otherwise. The statement itself carries no runtime effect, so it
+    /// function-scoped `var`s. We record each name as `global` in the
+    /// current scope (so [`Self::declare_or_assign_single`] targets the
+    /// module binding) and globally so [`Self::parse_program`] can backfill
+    /// a module-level `var` for any global that never receives one
+    /// otherwise. The statement itself carries no runtime effect, so it
     /// lowers to an empty statement.
     fn global_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // global
         loop {
             let name = self.expect_name("name after 'global'")?;
-            self.declare(&name);
-            self.globals.insert(name);
+            self.declare_global(&name);
             if !self.eat(&Tok::Comma) {
                 break;
             }
@@ -483,6 +527,20 @@ impl Parser {
             let value = self.expr()?;
             if !first.is_valid_assignment_target() {
                 return Err(ParseError::InvalidAssignmentTarget { span: first.span() }.into());
+            }
+            // An augmented assignment reads its target before writing it, so
+            // a bare name must already be bound. Inside a function an unbound
+            // bare name would otherwise become a fresh local — Python's
+            // read-before-assignment trap. Require an explicit `global` to
+            // rebind a module-level variable.
+            if let Some(name) = self.bare_name(&first) {
+                if self.in_function() && !self.local_declared(&name) && !self.is_global(&name) {
+                    return Err(ParseError::LocalReferencedBeforeAssignment {
+                        name,
+                        span: first.span(),
+                    }
+                    .into());
+                }
             }
             let span = Span::new(start, self.prev_span().end);
             return Ok(vec![Stmt::Expr {
@@ -691,8 +749,15 @@ impl Parser {
         })
     }
 
-    /// First assignment to a bare name becomes a hoisted `var` declaration;
-    /// subsequent ones become assignments.
+    /// Lower an assignment to a bare name, applying Python's binding rule.
+    ///
+    /// - A name declared `global` (or already bound) in the current scope
+    ///   becomes a plain assignment — for a global that targets the
+    ///   module-level variable, for a local it reassigns it.
+    /// - Otherwise this is the name's first binding in this scope, so it
+    ///   becomes a fresh function-scoped `var`. In a function that shadows
+    ///   any same-named module/enclosing binding, matching Python: a name
+    ///   assigned in a function is local unless declared `global`.
     fn declare_or_assign_single(
         &mut self,
         name: String,
@@ -700,8 +765,9 @@ impl Parser {
         type_ast: Option<TypeAst>,
         span: Span,
     ) -> Stmt {
-        if self.declared(&name) {
-            // already declared; if there's no value it's a no-op annotation.
+        if self.is_global(&name) || self.local_declared(&name) {
+            // already bound (global rebind or local reassignment); a bare
+            // annotation with no value is a no-op.
             match init {
                 Some(value) => Stmt::Expr {
                     expression: Expr::Assign {
@@ -881,7 +947,7 @@ impl Parser {
         };
         self.expect(&Tok::Colon, "':'")?;
 
-        self.scopes.push(HashSet::new());
+        self.scopes.push(Scope::default());
         for p in &params {
             self.declare(&p.name);
         }
@@ -1004,7 +1070,7 @@ impl Parser {
                     // Parse the body with `self` lowered to `this`.
                     let saved_self = self.self_name.take();
                     self.self_name = self_param.clone();
-                    self.scopes.push(HashSet::new());
+                    self.scopes.push(Scope::default());
                     if let Some(s) = &self_param {
                         self.declare(s);
                     }

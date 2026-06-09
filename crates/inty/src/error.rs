@@ -213,6 +213,9 @@ pub enum ParseError {
 
     #[error("unsupported construct: {feature}")]
     Unsupported { feature: String, span: Span },
+
+    #[error("local variable '{name}' referenced before assignment (declare it 'global' to rebind a module-level variable)")]
+    LocalReferencedBeforeAssignment { name: String, span: Span },
 }
 
 impl ParseError {
@@ -227,6 +230,7 @@ impl ParseError {
             ParseError::ContinueOutsideLoop { span } => *span,
             ParseError::ReturnOutsideFunction { span } => *span,
             ParseError::Unsupported { span, .. } => *span,
+            ParseError::LocalReferencedBeforeAssignment { span, .. } => *span,
         }
     }
 }

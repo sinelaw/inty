@@ -16,6 +16,12 @@
 //! - Python has no `var`/`local`, so the first assignment to a bare name
 //!   becomes a hoisted `var` (inty scopes `var` to the function, matching
 //!   Python's function scoping); later assignments become plain assignments.
+//! - Scoping follows Python's local-by-default rule: a name assigned inside
+//!   a function is a fresh local that shadows any same-named module/enclosing
+//!   binding. To rebind a module-level variable, declare it `global` (then
+//!   assignments lower against the module binding). An augmented assignment
+//!   (`x += 1`) to a name that isn't yet bound in the function — and isn't
+//!   declared `global` — is rejected as a referenced-before-assignment.
 //! - `/` and `//` both map to `/`; `**` → `**` (Pow).
 //! - type annotations (`x: int`, `def f(a: int) -> str:`) are parsed and
 //!   discarded — inty infers types instead.
