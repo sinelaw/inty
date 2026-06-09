@@ -128,10 +128,39 @@ impl InferState {
                     key,
                     value,
                     type_annotation,
-                    ..
+                    type_ast,
+                    span: prop_span,
                 } => {
                     let prop_name = self.prop_key_to_name(key);
                     let value_type = self.infer_expr(env, value)?;
+                    // IR-channel annotation (Python `field: T`): lower the
+                    // shared `TypeAst` to a `Type` through the canonical
+                    // bridge — the same path params and method returns use
+                    // — then unify the initialiser against it. An
+                    // annotation-only field is seeded with a placeholder
+                    // initialiser (`undefined`); in that case the
+                    // declaration alone types the field and the
+                    // placeholder is not checked, mirroring the JSDoc
+                    // `@type` + placeholder convention below.
+                    if let Some(ast) = type_ast {
+                        let ann_span = Span::new(prop_span.start, prop_span.end);
+                        let annotated = self.lower_type_ast_in_env_with_span(ast, env, ann_span);
+                        let is_placeholder = matches!(
+                            value,
+                            Expr::Lit {
+                                value: Literal::Null | Literal::Undefined,
+                                ..
+                            }
+                        );
+                        if !is_placeholder {
+                            // Annotation first so the message reads
+                            // "expected <annotated>, found <value>".
+                            self.subsume(ann_span, &value_type, &annotated)?;
+                        }
+                        let prop_type = self.zonk(&annotated);
+                        props.insert(prop_name, FieldEntry::pre(prop_type));
+                        continue;
+                    }
                     // If the property carries an inline annotation, parse
                     // it and unify with the value's inferred type so the
                     // annotation is enforced the same way a variable
@@ -406,8 +435,17 @@ impl InferState {
                     key,
                     value,
                     type_annotation,
+                    type_ast,
                     ..
                 } => {
+                    // An IR-channel field annotation (Python `field: T`)
+                    // isn't modelled on this bidirectional path; defer to
+                    // synthesis (`infer_object`), which lowers and unifies
+                    // it. In practice such fields only arise inside class
+                    // factories, which synthesise their row anyway.
+                    if type_ast.is_some() {
+                        return Ok(None);
+                    }
                     let prop_name = self.prop_key_to_name(key);
                     let Some(expected_prop_ty) =
                         expected_row.props.get(&prop_name).map(|e| e.ty.clone())

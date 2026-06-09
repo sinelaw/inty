@@ -837,30 +837,6 @@ impl Parser {
         })
     }
 
-    /// Skip a type annotation: tokens up to a top-level `=`, `:`, NEWLINE,
-    /// or `;` (annotations are not mapped onto inty types in this subset).
-    ///
-    /// Stopping at a top-level `:` matters for a **return** annotation:
-    /// `def f() -> T:` must leave the `def` header's terminating colon for
-    /// the caller's `expect(':')`. A `:` never occurs at the top level
-    /// inside the other annotation positions (a variable's or field's own
-    /// `:` is already consumed before this runs, and a type's internal
-    /// colons — slices, dict displays — sit inside brackets at depth > 0).
-    fn skip_annotation(&mut self) {
-        let mut depth = 0i32;
-        loop {
-            match self.cur() {
-                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
-                Tok::RParen | Tok::RBracket | Tok::RBrace => depth -= 1,
-                Tok::Assign | Tok::Colon | Tok::Newline | Tok::Semi | Tok::Eof if depth <= 0 => {
-                    break
-                }
-                _ => {}
-            }
-            self.advance();
-        }
-    }
-
     // ---- compound statements ----
 
     /// One or more `@decorator` lines followed by the `def`/`class` they
@@ -1098,14 +1074,41 @@ impl Parser {
                     }
                 }
                 Tok::Name(fname) => {
-                    // Class-level field: `name [: ann] = expr`.
+                    // Class-level field. Two shapes are accepted:
+                    //   `name: T`            (annotation-only declaration)
+                    //   `name [: T] = expr`  (initialised field)
+                    // The annotation is lowered to the shared `TypeAst`
+                    // IR and carried on the property so inference can pin
+                    // the field's type, mirroring the param / return
+                    // annotations elsewhere in this frontend.
                     let fspan = self.cur_span();
                     self.advance();
-                    if self.eat(&Tok::Colon) {
-                        self.skip_annotation();
-                    }
-                    self.expect(&Tok::Assign, "'='")?;
-                    let value = self.expr()?;
+                    let type_ast = if self.eat(&Tok::Colon) {
+                        Some(self.parse_type_ast())
+                    } else {
+                        None
+                    };
+                    let value = if self.eat(&Tok::Assign) {
+                        self.expr()?
+                    } else if type_ast.is_some() {
+                        // Annotation-only field (`bar: str`): synthesise a
+                        // placeholder initialiser. The declared type is
+                        // authoritative; inference declares the field at
+                        // the annotation and skips checking the
+                        // placeholder against it (the htmx `@type` +
+                        // placeholder pattern, on the Python IR channel).
+                        Expr::Lit {
+                            value: Literal::Undefined,
+                            span: fspan,
+                        }
+                    } else {
+                        // `name` with neither annotation nor initialiser
+                        // isn't a declaration we can type.
+                        return Err(self.unsupported(
+                            "a class field needs a type annotation (`name: T`) \
+                             or an initialiser (`name = expr`)",
+                        ));
+                    };
                     if !self.at_eof() {
                         self.expect(&Tok::Newline, "newline")?;
                     }
@@ -1113,6 +1116,7 @@ impl Parser {
                         key: PropKey::Ident(fname),
                         value,
                         type_annotation: None,
+                        type_ast,
                         span: Span::new(fspan.start, self.prev_span().end),
                     });
                 }
@@ -1125,6 +1129,8 @@ impl Parser {
             }
         }
         self.expect(&Tok::Dedent, "dedent")?;
+
+        Self::merge_class_field_annotations(&mut props);
 
         let span = Span::new(start, self.prev_span().end);
         let obj = Expr::Object {
@@ -1279,6 +1285,88 @@ impl Parser {
         Ok(parts.join("."))
     }
 
+    /// Fold an annotation-only field declaration (`x: T`, lowered to a
+    /// placeholder `Property` carrying `type_ast`) into a same-named
+    /// field that has a real initialiser — typically the `self.x = …`
+    /// assignment extracted from `__init__`. The declared type is moved
+    /// onto the initialised field so inference unifies the initialiser
+    /// against the annotation, and the now-redundant placeholder is
+    /// dropped. Without this, the two same-keyed properties would both
+    /// flow into the factory's row and the later one would silently win,
+    /// discarding the declared type.
+    fn merge_class_field_annotations(props: &mut Vec<PropDef>) {
+        // A placeholder declaration is the synthetic `name: T` form: an
+        // `undefined` value with a declared `type_ast`. An initialised
+        // field is any other `Property` with a real value.
+        fn ident(p: &PropDef) -> Option<&str> {
+            match p {
+                PropDef::Property {
+                    key: PropKey::Ident(n),
+                    ..
+                } => Some(n),
+                _ => None,
+            }
+        }
+        fn is_placeholder_decl(p: &PropDef) -> bool {
+            matches!(
+                p,
+                PropDef::Property {
+                    value: Expr::Lit {
+                        value: Literal::Undefined,
+                        ..
+                    },
+                    type_ast: Some(_),
+                    ..
+                }
+            )
+        }
+
+        // Names that have an initialised (non-placeholder) field.
+        let initialised: std::collections::HashSet<String> = props
+            .iter()
+            .filter(|p| !is_placeholder_decl(p))
+            .filter_map(|p| ident(p).map(str::to_owned))
+            .collect();
+
+        // Declared types for placeholder-only declarations, keyed by name.
+        let declared: std::collections::HashMap<String, crate::types::TypeAst> = props
+            .iter()
+            .filter(|p| is_placeholder_decl(p) && ident(p).is_some_and(|n| initialised.contains(n)))
+            .filter_map(|p| match p {
+                PropDef::Property {
+                    key: PropKey::Ident(n),
+                    type_ast: Some(t),
+                    ..
+                } => Some((n.clone(), t.clone())),
+                _ => None,
+            })
+            .collect();
+
+        if declared.is_empty() {
+            return;
+        }
+
+        // Attach the declared type to the initialised field (unless it
+        // already carries its own annotation, e.g. `x: T = v`), then drop
+        // the placeholder declarations that were merged.
+        for p in props.iter_mut() {
+            if is_placeholder_decl(p) {
+                continue;
+            }
+            if let PropDef::Property {
+                key: PropKey::Ident(n),
+                type_ast: slot @ None,
+                ..
+            } = p
+            {
+                if let Some(t) = declared.get(n) {
+                    *slot = Some(t.clone());
+                }
+            }
+        }
+        props.retain(|p| !(is_placeholder_decl(p) && ident(p).is_some_and(|n| declared.contains_key(n))));
+    }
+
     /// Pull `self.<field> = <expr>` lines out of a parsed `__init__`
     /// body (where `self` has already been lowered to `this`) and turn
     /// each into an instance-field property of the factory's row.
@@ -1311,6 +1399,7 @@ impl Parser {
                                 key: PropKey::Ident(property.clone()),
                                 value: (**right).clone(),
                                 type_annotation: None,
+                                type_ast: None,
                                 span: *span,
                             });
                             continue;
@@ -2102,6 +2191,7 @@ impl Parser {
                 key,
                 value,
                 type_annotation: None,
+                type_ast: None,
                 span: field_span,
             });
             if !self.eat(&Tok::Comma) {

@@ -408,6 +408,17 @@ returning the instance row (`self` maps to inty's `this`; `__init__` params
 become the factory's constructor params and its `self.X = …` lines become
 fields; methods become row methods). Inheritance is rejected.
 
+Class bodies also accept **annotated field declarations**. A bare `name: T`
+declares the field's type with no initialiser; `name: T = expr` additionally
+checks the initialiser against `T`. The annotation is carried on
+`PropDef::Property` in the shared `TypeAst` IR channel (alongside the
+JavaScript frontend's string-based `type_annotation`) and lowered through the
+same `lower_type_ast_in_env_with_span` bridge that param and method-return
+annotations use. A field that is *both* declared (`name: T`) and assigned in
+`__init__` is merged in the parser — the declared type is folded onto the
+initialised field so the assignment is unified against `T` — independent of
+the order the two appear in the body.
+
 Python classes are now **nominal**. The "brand wraps an *inferred* row" path
 is implemented: the frontend lists each class factory on
 `Program::class_brands`, and at the generalisation boundary

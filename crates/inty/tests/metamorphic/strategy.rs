@@ -118,6 +118,7 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                             key,
                             value,
                             type_annotation: None,
+                            type_ast: None,
                             span: span(),
                         })
                     })

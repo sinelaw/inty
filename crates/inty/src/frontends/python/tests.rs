@@ -1786,6 +1786,89 @@ fn module_level_augmented_assignment_still_allowed() {
 }
 
 #[test]
+fn class_field_declaration_only_typechecks() {
+    // A bare `name: T` declares the field's type with no initialiser;
+    // reading it at the declared type is fine.
+    let errs = check(
+        "class Foo:\n\
+         \x20   bar: str\n\
+         def use(f: Foo) -> str:\n\
+         \x20   return f.bar\n",
+    );
+    assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
+}
+
+#[test]
+fn class_field_declared_type_is_enforced_at_use() {
+    // `bar` is declared `str`, so returning it where an `int` is
+    // expected must fail.
+    let errs = check(
+        "class Foo:\n\
+         \x20   bar: str\n\
+         def use(f: Foo) -> int:\n\
+         \x20   return f.bar\n",
+    );
+    assert!(
+        !errs.is_empty(),
+        "a declared-`str` field used as `int` must fail"
+    );
+}
+
+#[test]
+fn class_field_initialiser_checked_against_annotation() {
+    // `bar: str = 123` — the initialiser must match the annotation.
+    let errs = check("class Foo:\n    bar: str = 123\n");
+    assert!(
+        !errs.is_empty(),
+        "Number initialiser against `: str` field must fail"
+    );
+    // A matching initialiser type-checks.
+    assert!(check("class Foo:\n    bar: str = \"hi\"\n").is_empty());
+}
+
+#[test]
+fn class_field_declaration_constrains_init_assignment() {
+    // A declared field type constrains the matching `__init__`
+    // assignment — and the body order of the two does not matter.
+    let bad_before = check(
+        "class Foo:\n\
+         \x20   bar: int\n\
+         \x20   def __init__(self):\n\
+         \x20       self.bar = \"x\"\n",
+    );
+    assert!(
+        !bad_before.is_empty(),
+        "str assignment to declared-`int` field must fail"
+    );
+
+    let bad_after = check(
+        "class Foo:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.bar = \"x\"\n\
+         \x20   bar: int\n",
+    );
+    assert!(
+        !bad_after.is_empty(),
+        "declaration after __init__ must still constrain the assignment"
+    );
+
+    let good = check(
+        "class Foo:\n\
+         \x20   bar: int\n\
+         \x20   def __init__(self):\n\
+         \x20       self.bar = 5\n",
+    );
+    assert!(good.is_empty(), "expected no errors, got {:?}", good);
+}
+
+#[test]
+fn class_field_without_annotation_or_value_is_rejected() {
+    // A bare `name` with neither a type annotation nor an initialiser is
+    // not a declaration the frontend can type.
+    assert!(parse_source("class Foo:\n    bar\n").is_err());
+}
+
+#[test]
 fn javascript_string_methods_rejected_in_python() {
     // `charAt` is a JS `String.prototype` method; Python `str` has no such
     // method, so it must not resolve under the Python method surface.

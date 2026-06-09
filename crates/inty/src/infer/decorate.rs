@@ -623,11 +623,13 @@ impl<'a> Decorator<'a> {
                 key,
                 value,
                 type_annotation,
+                type_ast,
                 span,
             } => PropDef::Property {
                 key: key.clone(),
                 value: self.decorate_expr(value, env),
                 type_annotation: type_annotation.clone(),
+                type_ast: type_ast.clone(),
                 span: *span,
             },
             PropDef::Getter { key, body, span } => PropDef::Getter {
