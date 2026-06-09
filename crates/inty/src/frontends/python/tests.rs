@@ -1530,15 +1530,24 @@ fn except_unparenthesized_tuple_typechecks() {
 }
 
 #[test]
-fn except_unparenthesized_tuple_with_binding_typechecks() {
-    // The optional `as NAME` binds after the comma-separated class list.
-    let src = "try:\n    x = 1\nexcept ValueError, KeyError as e:\n    y = e\n";
+fn except_parenthesized_tuple_with_binding_typechecks() {
+    // PEP 758 keeps parentheses mandatory when binding multiple types: the
+    // tuple is a single expression that `as NAME` can attach to.
+    let src = "try:\n    x = 1\nexcept (ValueError, KeyError) as e:\n    y = e\n";
     assert!(check(src).is_empty(), "{:?}", check(src));
 }
 
 #[test]
+fn except_unparenthesized_tuple_with_binding_rejected() {
+    // `except A, B as e:` is a syntax error in Python 3.14 — `as` binding
+    // requires the parenthesised form `except (A, B) as e:`.
+    let src = "try:\n    x = 1\nexcept ValueError, KeyError as e:\n    y = e\n";
+    assert!(parse_source(src).is_err());
+}
+
+#[test]
 fn except_unparenthesized_tuple_lowers_to_handler() {
-    let stmts = parse("try:\n    x = 1\nexcept ValueError, KeyError as e:\n    x = 2\n");
+    let stmts = parse("try:\n    x = 1\nexcept ValueError, KeyError:\n    x = 2\n");
     match &stmts[0] {
         Stmt::Try { handler, .. } => assert!(handler.is_some()),
         other => panic!("expected try, got {:?}", other),
