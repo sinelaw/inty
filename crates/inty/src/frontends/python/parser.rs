@@ -1485,6 +1485,11 @@ impl Parser {
     /// expression, so binding multiple types still needs parentheses:
     /// `except (A, B) as e:` (an unparenthesised list with `as` is rejected).
     ///
+    /// `except*` (PEP 654, exception groups) is accepted with the same type
+    /// grammar, but a `try` may not mix `except` and `except*`, and `except*`
+    /// must name a type (no bare `except*:`). Since the exception object is
+    /// unmodelled, both forms lower identically — the `*` is parse-only.
+    ///
     /// Lowered onto the shared `Stmt::Try { block, handler, finalizer }`:
     ///   - `block` is the try-suite with the `else`-suite appended (the
     ///     `else` runs only when the body completes without raising, so for
@@ -1505,10 +1510,26 @@ impl Parser {
 
         let mut handler_body: Vec<Stmt> = Vec::new();
         let mut saw_except = false;
+        // `except*` (PEP 654) handles members of an `ExceptionGroup`. A single
+        // `try` must use one form throughout — `except` and `except*` cannot be
+        // mixed — so remember which form the first clause picked.
+        let mut star_form: Option<bool> = None;
         while self.check(&Tok::Except) {
             saw_except = true;
             self.advance(); // except
-                            // Optional exception type, then optional `as NAME`.
+            let is_star = self.eat(&Tok::Star); // `except*`
+            match star_form {
+                None => star_form = Some(is_star),
+                Some(prev) if prev != is_star => {
+                    return Err(self.unexpected(if is_star {
+                        "'except' (cannot mix `except` and `except*` in one `try`)"
+                    } else {
+                        "'except*' (cannot mix `except` and `except*` in one `try`)"
+                    }));
+                }
+                Some(_) => {}
+            }
+            // Optional exception type, then optional `as NAME`.
             let mut bound: Option<String> = None;
             if !self.check(&Tok::Colon) {
                 let _ = self.expr()?; // the exception class
@@ -1538,6 +1559,10 @@ impl Parser {
                     self.advance(); // as
                     bound = Some(self.expect_name("exception variable")?);
                 }
+            } else if is_star {
+                // A bare `except*:` is a syntax error — a group handler must
+                // name the exception type(s) it splits out.
+                return Err(self.unexpected("an exception type (`except*` cannot be bare)"));
             }
             self.expect(&Tok::Colon, "':'")?;
             let body = self.suite_body()?;
