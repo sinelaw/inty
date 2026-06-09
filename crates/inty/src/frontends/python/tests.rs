@@ -1554,6 +1554,61 @@ fn except_unparenthesized_tuple_lowers_to_handler() {
     }
 }
 
+// ---- except* (PEP 654, exception groups) ----
+
+#[test]
+fn except_star_typechecks() {
+    let src = "try:\n    x = 1\nexcept* ValueError:\n    x = 2\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn except_star_binding_and_tuple_typecheck() {
+    // `except*` shares the type grammar: single class with `as`, an
+    // unparenthesised list, and a parenthesised tuple with `as`.
+    let single = "try:\n    x = 1\nexcept* KeyError as e:\n    y = e\n";
+    let list = "try:\n    x = 1\nexcept* ValueError, KeyError:\n    x = 2\n";
+    let paren = "try:\n    x = 1\nexcept* (ValueError, KeyError) as e:\n    y = e\n";
+    assert!(check(single).is_empty(), "{:?}", check(single));
+    assert!(check(list).is_empty(), "{:?}", check(list));
+    assert!(check(paren).is_empty(), "{:?}", check(paren));
+}
+
+#[test]
+fn except_star_multiple_clauses_typecheck() {
+    let src = "try:\n\
+               \x20   x = 1\n\
+               except* ValueError as e:\n\
+               \x20   y = e\n\
+               except* KeyError as k:\n\
+               \x20   z = k\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn except_star_bare_rejected() {
+    // A group handler must name a type — bare `except*:` is a syntax error.
+    assert!(parse_source("try:\n    x = 1\nexcept*:\n    x = 2\n").is_err());
+}
+
+#[test]
+fn except_star_unparenthesized_tuple_with_binding_rejected() {
+    // PEP 758 applies to `except*` too: binding a list needs parentheses.
+    let src = "try:\n    x = 1\nexcept* ValueError, KeyError as e:\n    y = e\n";
+    assert!(parse_source(src).is_err());
+}
+
+#[test]
+fn mixing_except_and_except_star_rejected() {
+    // A single `try` cannot mix the two handler forms (either direction).
+    let star_then_plain =
+        "try:\n    x = 1\nexcept* ValueError:\n    x = 2\nexcept KeyError:\n    x = 3\n";
+    let plain_then_star =
+        "try:\n    x = 1\nexcept ValueError:\n    x = 2\nexcept* KeyError:\n    x = 3\n";
+    assert!(parse_source(star_then_plain).is_err());
+    assert!(parse_source(plain_then_star).is_err());
+}
+
 #[test]
 fn try_else_branch_typechecks() {
     let src = "try:\n    x = 1\nexcept Exception:\n    x = 2\nelse:\n    y = x\n";
