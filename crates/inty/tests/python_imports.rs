@@ -59,6 +59,22 @@ fn check(main_src: &str, base_dir: &Path, search_paths: &[PathBuf]) -> Result<St
 }
 
 #[test]
+fn parse_error_in_imported_module_surfaces_at_importer() {
+    // A *parse* error in the imported module takes a different path than a
+    // type error: `load_module` parses the module with `?`, so the failure
+    // propagates out of import resolution (not via `state.errors`). Running
+    // inty on the importer must still report it. Here `helpers.py` has an
+    // unsupported class base, which the Python frontend rejects at parse.
+    let dir = tmp_dir();
+    write(&dir, "helpers.py", "class Dog(Animal):\n    pass\n");
+    let main = "from helpers import Dog\n";
+    assert!(
+        check(main, &dir, &[]).is_err(),
+        "a parse error inside an imported module must surface when checking the importer"
+    );
+}
+
+#[test]
 fn type_error_in_imported_module_surfaces_at_importer() {
     // Running inty on the *importer* must report a type error that lives
     // in the imported `.py` module: the module is fully inferred during
