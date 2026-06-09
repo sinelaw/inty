@@ -1477,7 +1477,11 @@ impl Parser {
         })
     }
 
-    /// `try: SUITE (except [E [as e]]: SUITE)* [else: SUITE] [finally: SUITE]`.
+    /// `try: SUITE (except [E (',' E)* [as e]]: SUITE)* [else: SUITE] [finally: SUITE]`.
+    ///
+    /// The exception class position accepts a comma-separated list
+    /// (`except A, B:`, Python 3.14+) as well as the older single class or
+    /// parenthesised tuple.
     ///
     /// Lowered onto the shared `Stmt::Try { block, handler, finalizer }`:
     ///   - `block` is the try-suite with the `else`-suite appended (the
@@ -1505,7 +1509,18 @@ impl Parser {
                             // Optional exception type, then optional `as NAME`.
             let mut bound: Option<String> = None;
             if !self.check(&Tok::Colon) {
-                let _ = self.expr()?; // the exception class(es)
+                let _ = self.expr()?; // the exception class
+                // An unparenthesised tuple of exception types — `except A, B:`
+                // — catches any of them (Python 3.14+). Equivalent to the
+                // older `except (A, B):`. Each class is parsed (and discarded)
+                // so the names are still type-checked.
+                while self.eat(&Tok::Comma) {
+                    // Tolerate a trailing comma before `as`/`:`.
+                    if self.check(&Tok::As) || self.check(&Tok::Colon) {
+                        break;
+                    }
+                    let _ = self.expr()?;
+                }
                 if self.eat(&Tok::As) {
                     bound = Some(self.expect_name("exception variable")?);
                 }

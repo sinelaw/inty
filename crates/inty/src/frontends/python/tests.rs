@@ -1523,6 +1523,29 @@ fn multiple_except_clauses_each_bind_their_name() {
 }
 
 #[test]
+fn except_unparenthesized_tuple_typechecks() {
+    // Python 3.14+: `except A, B:` catches either type without parentheses.
+    let src = "try:\n    x = 1\nexcept ValueError, KeyError:\n    x = 2\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn except_unparenthesized_tuple_with_binding_typechecks() {
+    // The optional `as NAME` binds after the comma-separated class list.
+    let src = "try:\n    x = 1\nexcept ValueError, KeyError as e:\n    y = e\n";
+    assert!(check(src).is_empty(), "{:?}", check(src));
+}
+
+#[test]
+fn except_unparenthesized_tuple_lowers_to_handler() {
+    let stmts = parse("try:\n    x = 1\nexcept ValueError, KeyError as e:\n    x = 2\n");
+    match &stmts[0] {
+        Stmt::Try { handler, .. } => assert!(handler.is_some()),
+        other => panic!("expected try, got {:?}", other),
+    }
+}
+
+#[test]
 fn try_else_branch_typechecks() {
     let src = "try:\n    x = 1\nexcept Exception:\n    x = 2\nelse:\n    y = x\n";
     assert!(check(src).is_empty(), "{:?}", check(src));
