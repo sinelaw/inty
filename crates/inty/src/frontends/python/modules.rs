@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ast::{ImportSpecifier, Program, Stmt};
-use crate::error::{IntyError, TypeError};
+use crate::error::{IntyError, SourceFile, TypeError};
 use crate::infer::{InferState, TypeEnv};
 use crate::types::{Type, TypeScheme};
 
@@ -341,8 +341,24 @@ fn load_module(
     }
 
     // A `.py` implementation module: parse, resolve its imports, infer,
-    // then surface its public top-level bindings as exports.
-    let program = super::parse_source(&source)?;
+    // then surface its public top-level bindings as exports. Errors carry
+    // this module's source so they render against the right file: a parse
+    // failure is located by setting `current_source` before propagating;
+    // inference errors are bracketed by `current_source` so each collected
+    // diagnostic is tagged. Both `Span`s are byte offsets into `source`.
+    let module_src = SourceFile {
+        path: path.display().to_string(),
+        text: source.clone(),
+    };
+    let program = match super::parse_source(&source) {
+        Ok(program) => program,
+        Err(e) => {
+            // Leave `current_source` set (don't restore) so the error
+            // propagating out of resolution is located against this module.
+            state.set_current_source(Some(module_src));
+            return Err(e);
+        }
+    };
     visiting.insert(canonical.clone());
 
     let mod_base = path
@@ -360,7 +376,18 @@ fn load_module(
         visiting,
         cache,
     )?;
-    let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
+    let prev_source = state.set_current_source(Some(module_src));
+    let module_env = match state.infer_program_with_env(&env_with_imports, &program) {
+        Ok((_ty, module_env)) => {
+            state.set_current_source(prev_source);
+            module_env
+        }
+        Err(e) => {
+            // A hard inference error: keep `current_source` on this module
+            // so the propagated error is located here too.
+            return Err(e);
+        }
+    };
 
     visiting.remove(&canonical);
 

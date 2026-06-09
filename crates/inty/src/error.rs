@@ -129,6 +129,26 @@ impl TypeOrigin {
     }
 }
 
+/// A source file an error's span indexes into: a display path plus the
+/// full text. Spans are bare byte ranges with no file identity, so a
+/// diagnostic raised while checking an imported module needs to carry the
+/// module's source to render against the right file instead of the entry
+/// source.
+#[derive(Debug, Clone)]
+pub struct SourceFile {
+    pub path: String,
+    pub text: String,
+}
+
+/// An error paired with the source file its span refers to. `source` is
+/// `None` for the entry/primary file (the common single-file case); it is
+/// `Some` when the error originates in an imported module.
+#[derive(Debug, Clone)]
+pub struct LocatedError {
+    pub error: IntyError,
+    pub source: Option<SourceFile>,
+}
+
 /// Result type for inty operations.
 pub type Result<T> = std::result::Result<T, IntyError>;
 
