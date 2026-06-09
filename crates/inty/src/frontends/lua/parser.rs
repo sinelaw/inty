@@ -937,6 +937,7 @@ impl Parser {
                     key,
                     value,
                     type_annotation: None,
+                    type_ast: None,
                     span: field_span,
                 });
             } else if matches!(self.cur(), Tok::Name(_)) && self.peek_is_assign() {
@@ -948,6 +949,7 @@ impl Parser {
                     key: PropKey::Ident(key),
                     value,
                     type_annotation: None,
+                    type_ast: None,
                     span: field_span,
                 });
             } else {

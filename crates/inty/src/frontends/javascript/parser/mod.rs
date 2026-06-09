@@ -1329,6 +1329,7 @@ impl Parser {
                             key: PropKey::Ident(key_name),
                             value: init,
                             type_annotation: annotation,
+                            type_ast: None,
                             span: member_span,
                         });
                     }
@@ -1358,6 +1359,7 @@ impl Parser {
                                 span: member_span,
                             },
                             type_annotation: None,
+                            type_ast: None,
                             span: member_span,
                         });
                     }
@@ -1454,6 +1456,7 @@ impl Parser {
                                     key: PropKey::Ident(field),
                                     value,
                                     type_annotation,
+                                    type_ast: None,
                                     span,
                                 });
                             } else {
@@ -3273,6 +3276,7 @@ impl Parser {
                         span: key_span,
                     },
                     type_annotation: pending_jsdoc,
+                    type_ast: None,
                     span: Span::new(start, self.prev_span().end),
                 });
             }
@@ -3299,6 +3303,7 @@ impl Parser {
             key,
             value,
             type_annotation,
+            type_ast: None,
             span: Span::new(start, self.prev_span().end),
         })
     }

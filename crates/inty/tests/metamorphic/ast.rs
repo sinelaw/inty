@@ -576,11 +576,13 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             key,
             value,
             type_annotation,
+            type_ast,
             span,
         } => PropDef::Property {
             key: key.clone(),
             value: rename_expr(value, from, to),
             type_annotation: type_annotation.clone(),
+            type_ast: type_ast.clone(),
             span: *span,
         },
         PropDef::Method {

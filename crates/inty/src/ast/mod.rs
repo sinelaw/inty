@@ -367,10 +367,20 @@ pub enum PropDef {
     Property {
         key: PropKey,
         value: Expr,
-        /// Inline annotation sitting between `key` and the colon.
-        /// When present, inference unifies the value's type with the
-        /// annotated type and records the property at that type.
+        /// Inline annotation sitting between `key` and the colon, in the
+        /// string-based annotation channel (the JavaScript frontend's
+        /// `/*: T */` / `@type` forms). When present, inference unifies
+        /// the value's type with the annotated type and records the
+        /// property at that type.
         type_annotation: Option<TypeAnnotation>,
+        /// Declared field type in the shared [`crate::types::TypeAst`] IR
+        /// channel (Python `field: T`). Only the Python frontend sets
+        /// this; it mirrors how `Method.return_type_ast` and
+        /// `Param.type_ast` carry Python annotations. When present,
+        /// inference lowers it via `lower_type_ast_in_env_with_span` and
+        /// unifies the field at that type — and, for an annotation-only
+        /// field, the placeholder initialiser is not checked against it.
+        type_ast: Option<crate::types::TypeAst>,
         span: Source,
     },
     /// Getter: get key() { ... }
