@@ -15,6 +15,13 @@ use crate::error::{ParseError, Result};
 use crate::span::{Span, Spanned};
 use crate::types::TypeAst;
 
+/// Name of the synthetic factory-scope local a subclass binds to its
+/// freshly-constructed base instance. `super().__init__(args)` lowers to
+/// `var __super__ = Base(args);` and the subclass's return object spreads
+/// `...__super__`, so inherited fields/methods flow in via the existing
+/// right-biased row merge. `super().m(...)` lowers to `__super__.m(...)`.
+const SUPER_LOCAL: &str = "__super__";
+
 pub struct Parser {
     toks: Vec<Spanned<Tok>>,
     pos: usize,
@@ -30,6 +37,11 @@ pub struct Parser {
     /// to, in declaration order. Surfaced on `Program::class_brands` so
     /// inference brands each one's inferred instance row nominally.
     class_names: Vec<String>,
+    /// `(subclass, [base class names])` for each `class C(Base):` with a
+    /// base list, in declaration order. Surfaced on `Program::class_bases`
+    /// so inference can record the nominal ancestor relation that
+    /// `isinstance` / `except` narrowing consult.
+    class_bases: Vec<(String, Vec<String>)>,
     /// Type aliases collected from `type X = …` / `X: TypeAlias = …` /
     /// `X = Literal[…]`, surfaced on `Program::type_aliases`.
     type_aliases: Vec<TypeAlias>,
@@ -43,6 +55,7 @@ impl Parser {
             temp: 0,
             scopes: vec![HashSet::new()],
             self_name: None,
+            class_bases: Vec::new(),
             class_names: Vec::new(),
             type_aliases: Vec::new(),
         }
@@ -162,6 +175,7 @@ impl Parser {
             span: Span::new(start, self.prev_span().end),
             type_aliases: std::mem::take(&mut self.type_aliases),
             class_brands: std::mem::take(&mut self.class_names),
+            class_bases: std::mem::take(&mut self.class_bases),
             language: crate::ast::SourceLanguage::Python,
         })
     }
@@ -833,24 +847,48 @@ impl Parser {
 
     /// Parse a `class` declaration and lower it to a factory function
     /// returning a structural row of fields + methods — the same shape
-    /// the JavaScript frontend desugars classes to. Instances are
-    /// structural (no nominal brand yet; see
-    /// `docs/pyi-import-mapping.md` §8). `self` maps to inty's `this`.
+    /// the JavaScript frontend desugars classes to. Inference brands the
+    /// returned row nominally (see `docs/pyi-import-mapping.md` §8). `self`
+    /// maps to inty's `this`.
+    ///
+    /// Single inheritance (`class Sub(Base):`) lowers by binding
+    /// `var __super__ = Base(super_init_args);` at the top of the factory
+    /// and spreading `...__super__` as the first property of the returned
+    /// object, so the base's fields/methods merge in (own members override
+    /// via the right-biased row merge). `super().__init__(args)` supplies
+    /// the base-construction arguments; `super().m(args)` lowers to
+    /// `__super__.m(args)`.
+    ///
+    /// Known gap: calling an *inherited, non-overridden* method directly on
+    /// a subclass instance (`Dog(...).base_method()`) is not yet accepted —
+    /// the inherited method's equirecursive `this`-row conflicts with the
+    /// wider subclass instance under the current row unifier. Reading
+    /// inherited *fields*, overriding a method, calling `super().m()`, and
+    /// passing a subclass where a base shape is expected all work.
     fn class_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // class
         let name = self.expect_name("class name")?;
 
-        // Optional base-class list. Inheritance is out of scope
-        // (instances are structural rows); accept only an empty `()`.
+        // Optional base-class list. Single inheritance is supported: the
+        // base's fields/methods are inherited by spreading a constructed
+        // base instance into the subclass's return object (see below).
+        // Multiple inheritance (mixins) would need MRO resolution and is
+        // rejected.
+        let mut bases: Vec<String> = Vec::new();
         if self.eat(&Tok::LParen) {
-            if !self.check(&Tok::RParen) {
-                return Err(self.unsupported(
-                    "base classes / inheritance are not supported \
-                     (instances are structural; compose explicitly)",
-                ));
+            while !self.check(&Tok::RParen) {
+                bases.push(self.expect_name("base class name")?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
             }
             self.expect(&Tok::RParen, "')'")?;
+        }
+        if bases.len() > 1 {
+            return Err(
+                self.unsupported("multiple inheritance is not supported; use a single base class")
+            );
         }
         self.expect(&Tok::Colon, "':'")?;
         self.expect(&Tok::Newline, "newline")?;
@@ -858,6 +896,10 @@ impl Parser {
 
         let mut ctor_params: Vec<Param> = Vec::new();
         let mut props: Vec<PropDef> = Vec::new();
+        // Arguments passed to `super().__init__(...)` inside `__init__`,
+        // used to construct the base instance. `None` if the subclass has
+        // no explicit super-init call.
+        let mut super_init_args: Option<Vec<Expr>> = None;
 
         while !self.check(&Tok::Dedent) && !self.at_eof() {
             if self.eat(&Tok::Newline) {
@@ -953,7 +995,7 @@ impl Parser {
                         // constructor params; its `self.X = expr` lines
                         // become instance fields.
                         ctor_params = params;
-                        self.extract_init_fields(&body, &mut props)?;
+                        self.extract_init_fields(&body, &mut props, &mut super_init_args)?;
                     } else {
                         props.push(PropDef::Method {
                             key: PropKey::Ident(mname),
@@ -994,20 +1036,63 @@ impl Parser {
         self.expect(&Tok::Dedent, "dedent")?;
 
         let span = Span::new(start, self.prev_span().end);
+
+        // Build the factory body. With a base class, prepend
+        // `var __super__ = Base(super_init_args);` and spread `...__super__`
+        // as the first property so inherited fields/methods merge in (own
+        // members override via the right-biased row merge).
+        let mut body_stmts: Vec<Stmt> = Vec::new();
+        if let Some(base) = bases.first() {
+            let args = super_init_args.unwrap_or_default();
+            body_stmts.push(Stmt::Var {
+                kind: VarKind::Var,
+                declarations: vec![VarDeclarator {
+                    name: SUPER_LOCAL.to_string(),
+                    init: Some(Expr::Call {
+                        callee: Box::new(Expr::Ident {
+                            name: base.clone(),
+                            span,
+                        }),
+                        arguments: args,
+                        keywords: Vec::new(),
+                        span,
+                    }),
+                    type_annotation: None,
+                    type_ast: None,
+                    kind: VarKind::Var,
+                    span,
+                }],
+                span,
+            });
+            props.insert(
+                0,
+                PropDef::Spread {
+                    argument: Expr::Ident {
+                        name: SUPER_LOCAL.to_string(),
+                        span,
+                    },
+                    span,
+                },
+            );
+        }
+
         let obj = Expr::Object {
             properties: props,
             span,
         };
-        let ret = Stmt::Return {
+        body_stmts.push(Stmt::Return {
             argument: Some(obj),
             span,
-        };
+        });
         let body = Box::new(Stmt::Block {
-            body: vec![ret],
+            body: body_stmts,
             span,
         });
 
         self.class_names.push(name.clone());
+        if !bases.is_empty() {
+            self.class_bases.push((name.clone(), bases.clone()));
+        }
         Ok(Stmt::FunctionDecl {
             name,
             params: ctor_params,
@@ -1149,12 +1234,39 @@ impl Parser {
     /// Pull `self.<field> = <expr>` lines out of a parsed `__init__`
     /// body (where `self` has already been lowered to `this`) and turn
     /// each into an instance-field property of the factory's row.
-    fn extract_init_fields(&self, body: &Stmt, props: &mut Vec<PropDef>) -> Result<()> {
+    fn extract_init_fields(
+        &self,
+        body: &Stmt,
+        props: &mut Vec<PropDef>,
+        super_init_args: &mut Option<Vec<Expr>>,
+    ) -> Result<()> {
         let stmts: &[Stmt] = match body {
             Stmt::Block { body, .. } => body.as_slice(),
             other => std::slice::from_ref(other),
         };
         for s in stmts {
+            // `super().__init__(args)` has already lowered to
+            // `__super__.__init__(args)`; capture its arguments to drive the
+            // base construction and drop the call (it isn't a field).
+            if let Stmt::Expr {
+                expression: Expr::Call {
+                    callee, arguments, ..
+                },
+                ..
+            } = s
+            {
+                if let Expr::Member {
+                    object, property, ..
+                } = callee.as_ref()
+                {
+                    if property == "__init__"
+                        && matches!(object.as_ref(), Expr::Ident { name, .. } if name == SUPER_LOCAL)
+                    {
+                        *super_init_args = Some(arguments.clone());
+                        continue;
+                    }
+                }
+            }
             match s {
                 Stmt::Empty { .. } => {}
                 Stmt::Expr {
@@ -1877,6 +1989,21 @@ impl Parser {
             }
             Tok::Name(name) => {
                 self.advance();
+                // `super()` (the Python 3 zero-arg form) lowers to a
+                // reference to the synthetic `__super__` local that a
+                // subclass factory binds to its freshly-constructed base
+                // instance. `super().m(...)` then parses as
+                // `__super__.m(...)`, and `super().__init__(...)` is
+                // recognised in `extract_init_fields` to drive the base
+                // construction. See `class_stmt`.
+                if name == "super" && self.check(&Tok::LParen) {
+                    self.advance(); // (
+                    self.expect(&Tok::RParen, "')' (only zero-arg super() is supported)")?;
+                    return Ok(Expr::Ident {
+                        name: SUPER_LOCAL.to_string(),
+                        span: Span::new(span.start, self.prev_span().end),
+                    });
+                }
                 // Inside a method body, the receiver parameter lowers to
                 // `this` so member access (`self.x`) types via inty's
                 // `this` row-polymorphism.

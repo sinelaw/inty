@@ -657,9 +657,93 @@ fn decorated_def_parses_ignoring_decorator() {
     ));
 }
 
+// ---- single inheritance ----
+
+const ANIMAL_DOG: &str = "\
+class Animal:\n\
+\x20   def __init__(self, name):\n\
+\x20       self.name = name\n\
+class Dog(Animal):\n\
+\x20   def __init__(self, name, breed):\n\
+\x20       super().__init__(name)\n\
+\x20       self.breed = breed\n";
+
 #[test]
-fn rejects_class_inheritance() {
-    assert!(parse_source("class Dog(Animal):\n    pass").is_err());
+fn single_inheritance_parses() {
+    // `class C(Base):` now lowers (it used to be rejected). The subclass
+    // becomes a factory that constructs and spreads a base instance.
+    assert!(parse_source(&format!("{ANIMAL_DOG}d = Dog(\"x\", \"y\")\n")).is_ok());
+}
+
+#[test]
+fn subclass_inherits_base_fields() {
+    // `name` comes from the base via `super().__init__`, `breed` is own.
+    let errs = check_program(&format!(
+        "{ANIMAL_DOG}d = Dog(\"x\", \"y\")\nn = d.name\nb = d.breed\n"
+    ));
+    assert!(
+        errs.is_empty(),
+        "inherited + own field access should check: {errs:?}"
+    );
+}
+
+#[test]
+fn subclass_absent_field_is_rejected() {
+    // Soundness: inheritance does not open the instance row — a field that
+    // is neither inherited nor own is still an error.
+    let errs = check_program(&format!("{ANIMAL_DOG}d = Dog(\"x\", \"y\")\nc = d.color\n"));
+    assert!(!errs.is_empty(), "absent field must be rejected");
+}
+
+#[test]
+fn subclass_field_type_propagates_through_inheritance() {
+    // The inherited field keeps its type: adding a Number to the String
+    // `name` must fail.
+    let errs = check_program(&format!(
+        "{ANIMAL_DOG}def bad(x):\n    return x.name + 1\nz = bad(Dog(\"x\", \"y\"))\n"
+    ));
+    assert!(
+        !errs.is_empty(),
+        "type error through an inherited field must surface"
+    );
+}
+
+#[test]
+fn subclass_accepted_where_base_shape_expected() {
+    // Structural subsumption: a function reading `.name` accepts a Dog,
+    // because the subclass row carries the inherited field (row poly).
+    let errs = check_program(&format!(
+        "{ANIMAL_DOG}def greet(x):\n    return x.name\ng = greet(Dog(\"x\", \"y\"))\n"
+    ));
+    assert!(
+        errs.is_empty(),
+        "subclass should pass where base shape is expected: {errs:?}"
+    );
+}
+
+#[test]
+fn own_method_reads_inherited_field() {
+    let errs = check_program(
+        "class A:\n\
+         \x20   def __init__(self, x):\n\
+         \x20       self.x = x\n\
+         class B(A):\n\
+         \x20   def __init__(self, x, y):\n\
+         \x20       super().__init__(x)\n\
+         \x20       self.y = y\n\
+         \x20   def total(self):\n\
+         \x20       return self.x + self.y\n\
+         t = B(1, 2).total()\n",
+    );
+    assert!(
+        errs.is_empty(),
+        "own method reading inherited field should check: {errs:?}"
+    );
+}
+
+#[test]
+fn multiple_inheritance_is_rejected() {
+    assert!(parse_source("class C(A, B):\n    pass").is_err());
 }
 
 #[test]

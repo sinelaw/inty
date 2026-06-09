@@ -204,6 +204,14 @@ pub struct Program {
     /// (or programs) with no nominal classes. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brands: Vec<String>,
+    /// `(subclass, [base class names])` for each class declared with a base
+    /// list, in declaration order. Recorded so a later pass can resolve the
+    /// base names to their nominal brand ids and build the ancestor relation
+    /// for `isinstance` / `except` narrowing (so a base brand matches a
+    /// subclass instance). Field inheritance itself does not depend on this —
+    /// it falls out of the spread-based lowering. Empty for frontends with
+    /// no class inheritance.
+    pub class_bases: Vec<(String, Vec<String>)>,
     /// The surface language this program was parsed from. Inference uses it
     /// for the few frontend-specific decisions that can't be read off the
     /// structural AST — the unit / "no value" type (JS `undefined` vs

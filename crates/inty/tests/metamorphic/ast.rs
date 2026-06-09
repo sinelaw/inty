@@ -315,6 +315,7 @@ pub fn rename_all(program: &Program, from: &str, to: &str) -> Program {
         span: program.span,
         type_aliases: program.type_aliases.clone(),
         class_brands: program.class_brands.clone(),
+        class_bases: program.class_bases.clone(),
         language: program.language,
     }
 }

@@ -144,6 +144,7 @@ impl Parser {
             span: Span::new(start, end),
             type_aliases: Vec::new(),
             class_brands: std::mem::take(&mut self.class_brands),
+            class_bases: Vec::new(),
             language: crate::ast::SourceLanguage::JavaScript,
         })
     }

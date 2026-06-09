@@ -327,6 +327,7 @@ pub fn program_strategy() -> impl Strategy<Value = Program> {
         span: span(),
         type_aliases: Vec::new(),
         class_brands: Vec::new(),
+        class_bases: Vec::new(),
         language: inty::ast::SourceLanguage::JavaScript,
     })
 }

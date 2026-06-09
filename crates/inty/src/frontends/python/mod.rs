@@ -11,6 +11,16 @@
 //! `lambda`, ternary `a if c else b`, calls, lists, dicts (literal keys),
 //! and the usual operators.
 //!
+//! Classes support single inheritance: `class Sub(Base):` lowers to a
+//! factory that constructs and spreads a base instance, so base fields and
+//! methods are inherited via the structural row merge. `super().__init__(…)`
+//! drives the base construction and `super().m(…)` calls a base method.
+//! Inheritance is structural — a subclass instance carries its base's
+//! fields, so a base-shaped parameter accepts a subclass by row
+//! polymorphism. (Known gap: calling an *inherited, non-overridden* method
+//! directly on a subclass instance is not yet accepted — see the parser's
+//! `class_stmt`.) Multiple inheritance is rejected.
+//!
 //! Lowerings worth noting:
 //! - `None` → the null literal; `True`/`False` → booleans.
 //! - Python has no `var`/`local`, so the first assignment to a bare name

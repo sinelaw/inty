@@ -535,6 +535,19 @@ impl InferState {
         let resolved = self.zonk(ty);
         match resolved {
             Type::Row(row) => Ok(row),
+            // A branded class instance (`Named`) spreads as its underlying
+            // representation row — the same transparency member access has.
+            // This is what lets a subclass factory spread a constructed base
+            // instance (`...__super__`) to inherit its fields/methods.
+            Type::Named(id, ref args) => match self.unroll_named(id, args) {
+                Some(unrolled) => self.coerce_to_row(&unrolled, span),
+                None => Err(crate::error::TypeError::TypeMismatch {
+                    expected: format!("{}", Type::Row(RowType::empty_closed())),
+                    found: format!("{}", resolved),
+                    span,
+                }
+                .into()),
+            },
             Type::Var(_) => {
                 // Open row of unknown shape; pin the type variable
                 // to a fresh open row so it can be merged in.
