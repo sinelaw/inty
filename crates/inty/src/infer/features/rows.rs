@@ -158,6 +158,16 @@ impl InferState {
                             self.subsume(ann_span, &value_type, &annotated)?;
                         }
                         let prop_type = self.zonk(&annotated);
+                        // A field declared more than once in the same class
+                        // body (e.g. `bar: int` and `bar: str`) must agree:
+                        // unify the declarations rather than letting the
+                        // last one silently win. Only same-key Python field
+                        // declarations carry a `type_ast`, so this can't
+                        // disturb JS object-literal duplicate semantics.
+                        if let Some(existing) = props.get(&prop_name) {
+                            let existing_ty = existing.ty.clone();
+                            self.unify(ann_span, &existing_ty, &prop_type)?;
+                        }
                         props.insert(prop_name, FieldEntry::pre(prop_type));
                         continue;
                     }

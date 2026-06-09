@@ -1862,6 +1862,39 @@ fn class_field_declaration_constrains_init_assignment() {
 }
 
 #[test]
+fn class_field_conflicting_declarations_are_rejected() {
+    // Two declarations of the same field with different types must
+    // disagree at the declaration, not silently let the last one win.
+    let dup_annotation_only = check(
+        "class Foo:\n\
+         \x20   bar: int\n\
+         \x20   bar: str\n",
+    );
+    assert!(
+        !dup_annotation_only.is_empty(),
+        "conflicting `bar: int` / `bar: str` declarations must fail"
+    );
+
+    let dup_initialised = check(
+        "class Foo:\n\
+         \x20   bar: int = 1\n\
+         \x20   bar: str = \"x\"\n",
+    );
+    assert!(
+        !dup_initialised.is_empty(),
+        "conflicting annotated initialisers for `bar` must fail"
+    );
+
+    // A harmless redeclaration at the *same* type is fine.
+    let agree = check(
+        "class Foo:\n\
+         \x20   bar: int\n\
+         \x20   bar: int\n",
+    );
+    assert!(agree.is_empty(), "expected no errors, got {:?}", agree);
+}
+
+#[test]
 fn class_field_without_annotation_or_value_is_rejected() {
     // A bare `name` with neither a type annotation nor an initialiser is
     // not a declaration the frontend can type.
