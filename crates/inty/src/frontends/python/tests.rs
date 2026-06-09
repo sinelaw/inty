@@ -1715,6 +1715,76 @@ fn nonlocal_still_rejected() {
     assert!(parse_source("def f():\n    nonlocal x\n    x = 1\n").is_err());
 }
 
+// ---- assignment scoping rules ----
+
+#[test]
+fn function_assignment_is_local_not_module_mutation() {
+    // Without `global`, assigning to a module-level name inside a function
+    // creates a fresh function-local `var` that shadows the module
+    // binding (Python's local-by-default rule) — it does not lower to an
+    // assignment against the module variable.
+    let stmts = parse("counter = 0\ndef f():\n    counter = 1\n");
+    let body = match &stmts[1] {
+        Stmt::FunctionDecl { body, .. } => body,
+        other => panic!("expected function decl, got {:?}", other),
+    };
+    match &**body {
+        Stmt::Block { body, .. } => {
+            assert!(
+                matches!(
+                    &body[0],
+                    Stmt::Var { declarations, .. } if declarations[0].name == "counter"
+                ),
+                "expected a local `var counter`, got {:?}",
+                body[0]
+            );
+        }
+        other => panic!("expected block body, got {:?}", other),
+    }
+}
+
+#[test]
+fn local_shadow_allows_distinct_type_from_module() {
+    // The module global is a number; a same-named function local may be a
+    // string because it's a separate binding.
+    let src = "total = 0\ndef f():\n    total = \"hi\"\n    return total\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn augmented_assignment_without_global_is_rejected() {
+    // `counter += 1` reads `counter` before binding it; inside a function
+    // that's a read-before-assignment unless `counter` is declared global.
+    assert!(parse_source("counter = 0\ndef f():\n    counter += 1\n").is_err());
+}
+
+#[test]
+fn augmented_assignment_with_global_is_accepted() {
+    let src = "counter = 0\ndef f():\n    global counter\n    counter += 1\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn augmented_assignment_on_local_is_fine() {
+    // A name first bound locally can be augmented-assigned afterwards.
+    let src = "def f():\n    x = 0\n    x += 1\n    return x\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn augmented_assignment_on_parameter_is_fine() {
+    let src = "def f(n):\n    n += 1\n    return n\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn module_level_augmented_assignment_still_allowed() {
+    // The local-by-default rule only applies inside functions; at module
+    // scope an augmented assignment to a module binding is fine.
+    let src = "counter = 0\ncounter += 1\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
 #[test]
 fn javascript_string_methods_rejected_in_python() {
     // `charAt` is a JS `String.prototype` method; Python `str` has no such

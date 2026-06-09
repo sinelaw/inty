@@ -245,6 +245,11 @@ pub fn write_error<W: Write>(
             ParseError::Unsupported { feature, span } => {
                 (format!("Unsupported construct: {}", feature), *span, None)
             }
+            ParseError::LocalReferencedBeforeAssignment { name, span } => (
+                format!("Local variable '{}' referenced before assignment", name),
+                *span,
+                Some("Declare it 'global' to rebind a module-level variable".to_string()),
+            ),
         },
 
         IntyError::Type(e) => match e {
