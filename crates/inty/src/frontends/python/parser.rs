@@ -1477,11 +1477,13 @@ impl Parser {
         })
     }
 
-    /// `try: SUITE (except [E (',' E)* [as e]]: SUITE)* [else: SUITE] [finally: SUITE]`.
+    /// `try: SUITE (except [E (',' E)* | E 'as' e]: SUITE)* [else: SUITE] [finally: SUITE]`.
     ///
-    /// The exception class position accepts a comma-separated list
-    /// (`except A, B:`, Python 3.14+) as well as the older single class or
-    /// parenthesised tuple.
+    /// Per PEP 758 (Python 3.14+) the exception position accepts an
+    /// unparenthesised list of types — `except A, B:` — equivalent to the
+    /// older `except (A, B):`. The `as NAME` binding only applies to a single
+    /// expression, so binding multiple types still needs parentheses:
+    /// `except (A, B) as e:` (an unparenthesised list with `as` is rejected).
     ///
     /// Lowered onto the shared `Stmt::Try { block, handler, finalizer }`:
     ///   - `block` is the try-suite with the `else`-suite appended (the
@@ -1510,18 +1512,30 @@ impl Parser {
             let mut bound: Option<String> = None;
             if !self.check(&Tok::Colon) {
                 let _ = self.expr()?; // the exception class
-                // An unparenthesised tuple of exception types — `except A, B:`
-                // — catches any of them (Python 3.14+). Equivalent to the
-                // older `except (A, B):`. Each class is parsed (and discarded)
-                // so the names are still type-checked.
+                // An unparenthesised list of exception types — `except A, B:` —
+                // catches any of them (Python 3.14+, PEP 758). Equivalent to
+                // the older `except (A, B):`. Each class is parsed (and
+                // discarded) so the names are still type-checked.
+                let mut multiple = false;
                 while self.eat(&Tok::Comma) {
                     // Tolerate a trailing comma before `as`/`:`.
                     if self.check(&Tok::As) || self.check(&Tok::Colon) {
                         break;
                     }
+                    multiple = true;
                     let _ = self.expr()?;
                 }
-                if self.eat(&Tok::As) {
+                if self.check(&Tok::As) {
+                    // PEP 758 only drops the parentheses for the no-binding
+                    // form: `except A, B as e:` is a syntax error and must be
+                    // written `except (A, B) as e:`.
+                    if multiple {
+                        return Err(self.unexpected(
+                            "':' (parenthesise the exception types to bind \
+                             with `as`, e.g. `except (A, B) as e:`)",
+                        ));
+                    }
+                    self.advance(); // as
                     bound = Some(self.expect_name("exception variable")?);
                 }
             }
