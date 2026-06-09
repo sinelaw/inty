@@ -1,0 +1,39 @@
+[project]
+name = "authkit"
+version = "0.1.0"
+description = "A small JWT auth/session toolkit — a non-trivial uv project for exercising type checkers (ty, inty)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic[email]>=2.6",
+    "pyjwt>=2.8",
+    "python-dateutil>=2.9",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+authkit = "authkit.cli:main"
+
+[dependency-groups]
+dev = [
+    "ty>=0.0.1a1",
+    "ruff>=0.6",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/authkit"]
+
+[tool.ty.environment]
+root = ["./src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
