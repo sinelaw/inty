@@ -59,6 +59,26 @@ fn check(main_src: &str, base_dir: &Path, search_paths: &[PathBuf]) -> Result<St
 }
 
 #[test]
+fn type_error_in_imported_module_surfaces_at_importer() {
+    // Running inty on the *importer* must report a type error that lives
+    // in the imported `.py` module: the module is fully inferred during
+    // import resolution, so its errors accumulate even though the broken
+    // code is in another file. Here `main` only imports the healthy
+    // `double`, but `helpers.py` also contains a module-level `1 + "x"`.
+    let dir = tmp_dir();
+    write(
+        &dir,
+        "helpers.py",
+        "def double(x):\n    return x + x\noops = 1 + \"x\"\n",
+    );
+    let main = "from helpers import double\nr = double(21)\nr\n";
+    assert!(
+        check(main, &dir, &[]).is_err(),
+        "a type error inside an imported module must surface when checking the importer"
+    );
+}
+
+#[test]
 fn imports_a_function_from_a_local_py_module() {
     let dir = tmp_dir();
     write(&dir, "helpers.py", "def double(x):\n    return x + x\n");
