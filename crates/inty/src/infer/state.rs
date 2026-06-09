@@ -76,7 +76,7 @@ fn structural_norm(ty: &Type) -> Type {
         other => other.clone(),
     }
 }
-use crate::error::{IntyError, TypeOrigin};
+use crate::error::{IntyError, LocatedError, SourceFile, TypeOrigin};
 use crate::span::Span;
 use crate::types::{
     ClassName, LitValue, QualType, RowTail, Subst, Substitutable, TVarId, TVarName, TidyEnv, Type,
@@ -200,6 +200,18 @@ pub struct InferState {
     /// consumers wanting the full set (e.g. the CLI) drain this vec
     /// after the call completes.
     pub errors: Vec<IntyError>,
+
+    /// Parallel to `errors`: the source file each error's span indexes
+    /// into, or `None` for the entry source. Kept in lockstep with
+    /// `errors` through `push_error` / `take_errors`, so a diagnostic
+    /// raised while checking an imported module renders against that
+    /// module rather than the entry file.
+    error_sources: Vec<Option<SourceFile>>,
+
+    /// The source file errors are currently attributed to. Set by the
+    /// module loader while inferring an imported module and restored
+    /// afterwards; `None` means the entry source.
+    current_source: Option<SourceFile>,
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
@@ -349,6 +361,8 @@ impl InferState {
             type_origins: HashMap::new(),
             warnings: Vec::new(),
             errors: Vec::new(),
+            error_sources: Vec::new(),
+            current_source: None,
             config,
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
@@ -381,13 +395,44 @@ impl InferState {
     /// visible to callers that drain `errors` after the run.
     pub fn push_error(&mut self, err: IntyError) {
         self.errors.push(err);
+        self.error_sources.push(self.current_source.clone());
     }
 
     /// Drain accumulated errors, leaving the state empty. The CLI calls
     /// this after `infer_program_with_env` to report every error,
     /// not just the first.
     pub fn take_errors(&mut self) -> Vec<IntyError> {
+        self.error_sources.clear();
         std::mem::take(&mut self.errors)
+    }
+
+    /// Like `take_errors`, but pairs each error with the source file its
+    /// span indexes into (`None` = the entry source). Lets the CLI render
+    /// an imported module's diagnostics against that module's file rather
+    /// than the entry source.
+    pub fn take_located_errors(&mut self) -> Vec<LocatedError> {
+        let sources = std::mem::take(&mut self.error_sources);
+        let errors = std::mem::take(&mut self.errors);
+        errors
+            .into_iter()
+            .zip(sources.into_iter().chain(std::iter::repeat(None)))
+            .map(|(error, source)| LocatedError { error, source })
+            .collect()
+    }
+
+    /// Set the source file new errors are attributed to, returning the
+    /// previous value so the caller can restore it. The module loader
+    /// brackets an imported module's inference with this so the module's
+    /// diagnostics carry its own source.
+    pub fn set_current_source(&mut self, source: Option<SourceFile>) -> Option<SourceFile> {
+        std::mem::replace(&mut self.current_source, source)
+    }
+
+    /// The source file currently attributed to new errors (`None` = entry
+    /// source). Used to locate an error propagated out of import
+    /// resolution (e.g. a parse failure in an imported module).
+    pub fn current_source(&self) -> Option<SourceFile> {
+        self.current_source.clone()
     }
 
     /// Push a non-fatal warning. Called from inference paths that detect

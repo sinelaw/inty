@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use inty::ast::pretty::print_program;
 use inty::diagnostics::{print_error, print_error_plain, print_warning, print_warning_plain};
-use inty::error::IntyError;
+use inty::error::{IntyError, LocatedError};
 use inty::frontends::javascript::lexer::{Scanner, Token};
 use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
@@ -204,8 +204,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(errors) => {
-            for error in errors {
-                report(&filename, &source, &error);
+            for located in errors {
+                // An imported module's error carries that module's source;
+                // entry-file errors (`None`) render against the entry.
+                match &located.source {
+                    Some(src) => report(&src.path, &src.text, &located.error),
+                    None => report(&filename, &source, &located.error),
+                }
             }
             ExitCode::from(1)
         }
@@ -598,9 +603,16 @@ fn run_inference(
     source: &str,
     filename: &str,
     lang: Language,
-) -> Result<Summary, Vec<IntyError>> {
+) -> Result<Summary, Vec<LocatedError>> {
     let started = Instant::now();
-    let mut errors = Vec::new();
+    let mut errors: Vec<LocatedError> = Vec::new();
+
+    // A parse/resolve error in the entry file renders against the entry
+    // source (`source: None`).
+    let entry_error = |e: IntyError| LocatedError {
+        error: e,
+        source: None,
+    };
 
     // Parsing — dispatch on the frontend. JavaScript keeps its bespoke
     // path (JSDoc type annotations and aliases come off the lexer); the
@@ -609,14 +621,14 @@ fn run_inference(
         Language::JavaScript => match parse_javascript(source) {
             Ok(p) => p,
             Err(e) => {
-                errors.push(e);
+                errors.push(entry_error(e));
                 return Err(errors);
             }
         },
         other => match inty::frontends::parse(other, source) {
             Ok(p) => p,
             Err(e) => {
-                errors.push(e);
+                errors.push(entry_error(e));
                 return Err(errors);
             }
         },
@@ -638,7 +650,14 @@ fn run_inference(
         match inty::modules::resolve_imports(state, env, &program, &base_dir, &mut visiting) {
             Ok(e) => e,
             Err(e) => {
-                errors.push(e);
+                // A hard error aborting resolution is both returned here and
+                // (for inference failures) already in `state.errors`; report
+                // only the propagated one, located against the module whose
+                // resolution failed (`current_source`), to avoid duplicates.
+                errors.push(LocatedError {
+                    error: e,
+                    source: state.current_source(),
+                });
                 return Err(errors);
             }
         }
@@ -659,7 +678,13 @@ fn run_inference(
         ) {
             Ok(e) => e,
             Err(e) => {
-                errors.push(e);
+                // See the JavaScript arm: report only the propagated error,
+                // located against the failing module, to avoid duplicating an
+                // inference error that is also sitting in `state.errors`.
+                errors.push(LocatedError {
+                    error: e,
+                    source: state.current_source(),
+                });
                 return Err(errors);
             }
         }
@@ -680,13 +705,13 @@ fn run_inference(
     // returns the first via `Result::Err`. Report every accumulated
     // error to the user.
     let infer_result = state.infer_program_with_env(&env, &program);
-    let collected = state.take_errors();
+    let collected = state.take_located_errors();
     match infer_result {
         Ok((_result_type, final_env)) => {
             // Resolve type class constraints
             if let Err(e) = state.resolve_constraints() {
                 errors.extend(collected);
-                errors.push(e);
+                errors.push(entry_error(e));
                 return Err(errors);
             }
 
