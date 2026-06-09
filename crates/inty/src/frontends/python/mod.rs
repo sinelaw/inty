@@ -8,8 +8,8 @@
 //! Supported: `def` (positional params), assignment (plain, chained,
 //! augmented, matched-arity tuple), `if/elif/else`, `while`, `for ... in`
 //! (single target), `pass`/`break`/`continue`, single-value `return`,
-//! `lambda`, ternary `a if c else b`, calls, lists, dicts (literal keys),
-//! and the usual operators.
+//! `global`, `lambda`, ternary `a if c else b`, calls, lists, dicts
+//! (literal keys), and the usual operators.
 //!
 //! Lowerings worth noting:
 //! - `None` → the null literal; `True`/`False` → booleans.
@@ -22,7 +22,7 @@
 //!
 //! Rejected (use a simpler form): `*args`/`**kwargs`, comprehensions,
 //! slicing, `is`/`in`, chained comparisons, and the statement keywords
-//! `with`/`try`/`global`/`del`/`yield`/… .
+//! `nonlocal`/`del`/`yield`/… .
 
 mod lexer;
 pub mod modules;

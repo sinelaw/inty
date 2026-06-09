@@ -1619,6 +1619,102 @@ fn python_str_methods_typecheck() {
     assert!(check(src).is_empty(), "{:?}", check(src));
 }
 
+// ---- global ----
+
+#[test]
+fn global_statement_lowers_to_empty() {
+    // `global x` carries no runtime effect; it lowers to an empty
+    // statement (the function body is `global x` then `x = 1`).
+    let stmts = parse("x = 0\ndef f():\n    global x\n    x = 1\n");
+    let body = match &stmts[1] {
+        Stmt::FunctionDecl { body, .. } => body,
+        other => panic!("expected function decl, got {:?}", other),
+    };
+    match &**body {
+        Stmt::Block { body, .. } => {
+            assert!(matches!(body[0], Stmt::Empty { .. }), "{:?}", body[0]);
+            // The assignment to the already-declared global is a plain
+            // assignment, not a fresh function-scoped `var`.
+            assert!(
+                matches!(
+                    body[1],
+                    Stmt::Expr {
+                        expression: Expr::Assign { .. },
+                        ..
+                    }
+                ),
+                "{:?}",
+                body[1]
+            );
+        }
+        other => panic!("expected block body, got {:?}", other),
+    }
+}
+
+#[test]
+fn global_mutates_module_binding() {
+    // A module-level global mutated through `global` inside a function
+    // type-checks: the assignment targets the module binding.
+    let src = "counter = 0\n\
+               def inc():\n    global counter\n    counter = counter + 1\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn global_augmented_assignment_typechecks() {
+    let src = "total = 0\n\
+               def add(n):\n    global total\n    total += n\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn global_assigned_only_in_function_gets_backfilled_var() {
+    // `config` is never bound at module level; the parser backfills a
+    // module-scope `var` so the in-function assignment resolves.
+    let stmts = parse("def init():\n    global config\n    config = 5\ninit()\n");
+    match &stmts[0] {
+        Stmt::Var {
+            kind, declarations, ..
+        } => {
+            assert_eq!(*kind, VarKind::Var);
+            assert_eq!(declarations[0].name, "config");
+            assert!(declarations[0].init.is_none());
+        }
+        other => panic!("expected backfilled var, got {:?}", other),
+    }
+    let src = "def init():\n    global config\n    config = 5\ninit()\nr = config + 1\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn global_declared_before_module_assignment() {
+    // The function (hoisted) declares `total` global before the module
+    // assignment appears in source order; the module assignment still
+    // produces the binding and the types agree.
+    let src = "def reset():\n    global total\n    total = 0\ntotal = 100\nreset()\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn global_preserves_type_consistency() {
+    // The global stays single-typed: assigning a string to a numeric
+    // global is rejected.
+    let src = "n = 0\ndef bad():\n    global n\n    n = \"oops\"\n";
+    assert!(!check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn global_multiple_names() {
+    let src = "a = 0\nb = 0\n\
+               def f():\n    global a, b\n    a = 1\n    b = 2\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn nonlocal_still_rejected() {
+    assert!(parse_source("def f():\n    nonlocal x\n    x = 1\n").is_err());
+}
+
 #[test]
 fn javascript_string_methods_rejected_in_python() {
     // `charAt` is a JS `String.prototype` method; Python `str` has no such
