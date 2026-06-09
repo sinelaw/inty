@@ -72,12 +72,39 @@ reader already does), never infer the body — and fall back to an opaque
 binding when a symbol can't be modelled. That is exactly the contract the
 design doc already specifies; it just isn't wired for `.py` inputs.
 
+> **Update — partially implemented (ty's flow, layer 0).** The import
+> resolver now routes any `.py` under a PEP 561 `py.typed` package through
+> the same declaration reader used for `.pyi` (`read_as_declarations` in
+> `frontends/python/modules.rs`), and `from __future__ import …` is a
+> recognized no-op. After this, `from pydantic import BaseModel` and
+> `import jwt` **resolve** instead of dying on pydantic's `del`, and the
+> import *surface* is real — `jwt.no_such_function` and `from pydantic
+> import NoSuchName` are correctly flagged as missing exports. This is ty's
+> **graceful-degradation floor**, and it is necessary, but it is **not
+> sufficient** to get ty-level information. Three layers remain:
+>
+> 1. **Signature precision.** `jwt.encode(...) + 1` still does *not* error,
+>    because `encode` (a module-level-assigned bound method) degrades to
+>    *opaque* rather than `-> str`. The heuristic reader was tuned for
+>    `.pyi` (bodies are `...`); on real `.py` it loses many signatures. ty
+>    keeps them because it parses the whole file and consumes every
+>    annotation. A faithful version needs declaration-lowering over inty's
+>    *real* Python AST, not the line-skipping stub reader.
+> 2. **Inheritance.** pydantic is still unusable: `class User(BaseModel)`
+>    hits inty's `base classes / inheritance are not supported` rejection
+>    (Part B) — a frontend gap independent of imports. Resolving the
+>    `BaseModel` *name* doesn't help if you can't subclass it.
+> 3. **PEP 681 `@dataclass_transform`.** Even with 1 and 2, `a.balance:
+>    int` requires synthesizing `Model.__init__(...)` from the annotated
+>    fields. ty special-cases the `dataclass_transform` marker that
+>    pydantic's metaclass carries; inty has no analog. This is the specific
+>    mechanism behind ty's precise `Account(owner: str, balance: int)`.
+
 ### A3. `from __future__ import annotations` is unresolvable
 
 Every file in this project (and most modern Python) starts with it.
-`inty` reports `cannot resolve import "__future__"`. `__future__` needs to
-be a recognized no-op pseudo-module (as it is to every other checker).
-Today this is masked by earlier parse errors; fix those and it surfaces.
+`inty` reported `cannot resolve import "__future__"`. **Fixed:**
+`__future__` is now a recognized no-op pseudo-module (see A2's update).
 
 ### A4. The first parse-level error aborts the whole file
 

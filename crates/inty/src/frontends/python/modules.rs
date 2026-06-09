@@ -94,6 +94,14 @@ fn resolve_inner(
             })
         };
 
+        // `from __future__ import …` is a no-op pseudo-module for typing:
+        // its names (`annotations`, …) are compiler directives, not values.
+        // Skip it so modern files — whose first line is almost always
+        // `from __future__ import annotations` — resolve. Matches ty/pyright.
+        if source == "__future__" {
+            continue;
+        }
+
         // Built-in modules (`typing`, …) resolve from a baked-in stub
         // before the filesystem is consulted. Their namespace uses the
         // same `Type::Module` representation as any other import.
@@ -311,9 +319,12 @@ fn load_module(
         })
     })?;
 
-    if path.extension().and_then(|e| e.to_str()) == Some("pyi") {
-        // Stubs are declarations only — no inference. Read the direct
-        // declarations, then resolve `from X import …` re-exports
+    if read_as_declarations(path) {
+        // Declaration-only sources: `.pyi` stubs *and* the inline-typed
+        // `.py` of a PEP 561 (`py.typed`) third-party package. As ty does,
+        // we read only the signatures/annotations and never type-infer the
+        // library body — unmodelable symbols degrade to opaque. Read the
+        // direct declarations, then resolve `from X import …` re-exports
         // (typeshed aggregators like `os.path`/`typing` rely on these).
         let module = super::pyi::read_stub(state, &source)?;
         let mut exports = module.exports;
@@ -451,6 +462,28 @@ fn resolve_reexport(
             }
         }
     }
+}
+
+/// Whether `path` should be read as *declarations only* (signatures and
+/// annotations, no body inference), the way ty/pyright treat third-party
+/// code. True for `.pyi` stubs, and for any `.py` under a PEP 561 package
+/// — one whose package root carries a `py.typed` marker. First-party
+/// project code (no `py.typed`) is still fully inferred.
+fn read_as_declarations(path: &Path) -> bool {
+    if path.extension().and_then(|e| e.to_str()) == Some("pyi") {
+        return true;
+    }
+    // Walk up from the file looking for a `py.typed` sibling of some
+    // ancestor package (PEP 561 places it at the package root). Bounded by
+    // the filesystem root; a project tree without the marker returns false.
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d.join("py.typed").is_file() {
+            return true;
+        }
+        dir = d.parent();
+    }
+    false
 }
 
 /// Resolve an (absolute or relative) module spec to a file. Tries stub
