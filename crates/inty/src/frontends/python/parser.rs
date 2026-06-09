@@ -33,6 +33,12 @@ pub struct Parser {
     /// Type aliases collected from `type X = …` / `X: TypeAlias = …` /
     /// `X = Literal[…]`, surfaced on `Program::type_aliases`.
     type_aliases: Vec<TypeAlias>,
+    /// Names mentioned in a `global` statement anywhere in the program.
+    /// At the end of parsing, any of these that never received a
+    /// module-level binding get a synthetic module-scope `var` so the
+    /// in-function assignments that target them resolve to a real
+    /// (module-scoped) declaration. See [`Self::global_stmt`].
+    globals: HashSet<String>,
 }
 
 impl Parser {
@@ -45,6 +51,7 @@ impl Parser {
             self_name: None,
             class_names: Vec::new(),
             type_aliases: Vec::new(),
+            globals: HashSet::new(),
         }
     }
 
@@ -157,6 +164,38 @@ impl Parser {
             }
             statements.extend(self.statement()?);
         }
+        // Backfill a module-scope `var` for every `global` name that never
+        // received a module-level binding (e.g. one only ever assigned from
+        // inside a function). Without it, those in-function assignments
+        // would reference an undeclared name. Module `var`s are hoisted by
+        // the checker, so the leading position is fine.
+        let span = Span::new(start, self.prev_span().end);
+        let mut backfill: Vec<Stmt> = self
+            .globals
+            .iter()
+            .filter(|name| !self.scopes[0].contains(*name))
+            .map(|name| Stmt::Var {
+                kind: VarKind::Var,
+                declarations: vec![VarDeclarator {
+                    name: name.clone(),
+                    init: None,
+                    type_annotation: None,
+                    type_ast: None,
+                    kind: VarKind::Var,
+                    span,
+                }],
+                span,
+            })
+            .collect();
+        // Deterministic order (HashSet iteration is not stable).
+        backfill.sort_by(|a, b| match (a, b) {
+            (Stmt::Var { declarations: da, .. }, Stmt::Var { declarations: db, .. }) => {
+                da[0].name.cmp(&db[0].name)
+            }
+            _ => std::cmp::Ordering::Equal,
+        });
+        backfill.extend(statements);
+        let statements = backfill;
         Ok(Program {
             statements,
             span: Span::new(start, self.prev_span().end),
@@ -316,11 +355,39 @@ impl Parser {
                     span: Span::new(start, self.prev_span().end),
                 }])
             }
+            Tok::Global => Ok(vec![self.global_stmt()?]),
             Tok::Reserved(k) => {
                 Err(self.unsupported(&format!("'{}' is not supported in the Python subset", k)))
             }
             _ => self.expr_or_assign(),
         }
+    }
+
+    /// `global NAME (',' NAME)*`.
+    ///
+    /// `global` declares that the named bindings live at module scope, so
+    /// assignments to them inside the current function must lower to plain
+    /// assignments against the module binding rather than fresh
+    /// function-scoped `var`s. We mark each name declared in the current
+    /// scope (so [`Self::declare_or_assign_single`] takes the assignment
+    /// branch) and record it on `globals`; [`Self::parse_program`] then
+    /// backfills a module-level `var` for any global that never receives
+    /// one otherwise. The statement itself carries no runtime effect, so it
+    /// lowers to an empty statement.
+    fn global_stmt(&mut self) -> Result<Stmt> {
+        let start = self.cur_span().start;
+        self.advance(); // global
+        loop {
+            let name = self.expect_name("name after 'global'")?;
+            self.declare(&name);
+            self.globals.insert(name);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        Ok(Stmt::Empty {
+            span: Span::new(start, self.prev_span().end),
+        })
     }
 
     /// Recognise a type-alias statement and, if matched, parse its body as
