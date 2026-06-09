@@ -1949,39 +1949,44 @@ fn class_field_declaration_constrains_init_assignment() {
 }
 
 #[test]
-fn method_tuple_unpacking_assignment_checks() {
-    // A non-`__init__` method may assign through tuple unpacking. Here
-    // `swap` rebinds the two fields in parallel via `self.a, self.b =
-    // self.b, self.a`; with both fields the same type the unpacking
-    // assignment type-checks and the fields keep that type afterwards.
+fn method_destructures_function_call_result() {
+    // Inside a non-`__init__` method, a single call returning a tuple is
+    // destructured directly into the targets: `self.n, self.s = pair()`.
+    // The components keep their per-position types (Number / String), so
+    // reading the fields afterwards at those types checks.
     let ok = check_program(
-        "class Pair:\n\
-         \x20   def __init__(self, a, b):\n\
-         \x20       self.a = a\n\
-         \x20       self.b = b\n\
-         \x20   def swap(self):\n\
-         \x20       self.a, self.b = self.b, self.a\n\
-         p = Pair(1, 2)\n\
-         p.swap()\n\
-         n = p.a + 1\n",
+        "def pair():\n\
+         \x20   return 1, \"hi\"\n\
+         class Row:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.n = 0\n\
+         \x20       self.s = \"\"\n\
+         \x20   def load(self):\n\
+         \x20       self.n, self.s = pair()\n\
+         r = Row()\n\
+         r.load()\n\
+         a = r.n + 1\n\
+         b = r.s + \"!\"\n",
     );
     assert!(ok.is_empty(), "expected no errors, got {:?}", ok);
 
-    // Local tuple unpacking inside a method binds component types: `lo`
-    // is a Number (from `self.x`) and using it as a String must fail.
+    // The component types from the call are enforced: `self.n` is a
+    // Number, so using it as a String inside the method must fail.
     let bad = check_program(
-        "class Point:\n\
-         \x20   def __init__(self, x, y):\n\
-         \x20       self.x = x\n\
-         \x20       self.y = y\n\
-         \x20   def bad(self):\n\
-         \x20       lo, hi = self.x, self.y\n\
-         \x20       return lo + \"!\"\n\
-         p = Point(1, 2)\n",
+        "def pair():\n\
+         \x20   return 1, \"hi\"\n\
+         class Row:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.n = 0\n\
+         \x20       self.s = \"\"\n\
+         \x20   def load(self):\n\
+         \x20       self.n, self.s = pair()\n\
+         \x20       return self.n + \"!\"\n\
+         r = Row()\n",
     );
     assert!(
         !bad.is_empty(),
-        "Number component used as String in unpacking must fail"
+        "Number field bound from the call used as String must fail"
     );
 }
 
