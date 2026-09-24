@@ -17,8 +17,23 @@ function sieve(n) {
   return count;
 }
 
-let total = 0;
-for (let round = 0; round < 20; round++) {
-  total += sieve(2000000);
+function main() {
+  const lines = [];
+  let total = 0;
+  for (let round = 0; round < 10; round++) {
+    total += sieve(2000000);
+  }
+  lines.push(total);
+  return lines.join("\n");
 }
-console.log(total);
+
+// ---- benchmark protocol (see bench.mjs) ------------------------------
+// Run the workload 4 times in one process. The first run includes JIT
+// warm-up; bench.mjs reports the other three as steady-state samples.
+let report = "";
+for (let iteration = 0; iteration < 4; iteration++) {
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);

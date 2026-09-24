@@ -32,4 +32,17 @@ function simulate(n, steps) {
   return sum;
 }
 
-console.log(simulate(1000, 20000));
+function main() {
+  return String(simulate(1000, 20000));
+}
+
+// ---- benchmark protocol (see bench.mjs) ------------------------------
+// Run the workload 4 times in one process. The first run includes JIT
+// warm-up; bench.mjs reports the other three as steady-state samples.
+let report = "";
+for (let iteration = 0; iteration < 4; iteration++) {
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);

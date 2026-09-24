@@ -20,6 +20,10 @@ const console;
 /** const Math: {PI: Number, E: Number, LN2: Number, LN10: Number, LOG2E: Number, LOG10E: Number, SQRT2: Number, abs: (Number) => Number, floor: (Number) => Number, ceil: (Number) => Number, round: (Number) => Number, trunc: (Number) => Number, sign: (Number) => Number, sqrt: (Number) => Number, cbrt: (Number) => Number, pow: (Number, Number) => Number, min: (Number, Number) => Number, max: (Number, Number) => Number, hypot: (Number, Number) => Number, log: (Number) => Number, log2: (Number) => Number, log10: (Number) => Number, exp: (Number) => Number, expm1: (Number) => Number, log1p: (Number) => Number, sin: (Number) => Number, cos: (Number) => Number, tan: (Number) => Number, asin: (Number) => Number, acos: (Number) => Number, atan: (Number) => Number, atan2: (Number, Number) => Number, sinh: (Number) => Number, cosh: (Number) => Number, tanh: (Number) => Number, random: () => Number, imul: (Number, Number) => Number, fround: (Number) => Number, clz32: (Number) => Number} */
 const Math;
 
+// High-resolution monotonic clock (milliseconds), as in browsers and Node.
+/** const performance: {now: () => Number} */
+const performance;
+
 // `<T>` quantifies the scheme for the whole row, so each `JSON.parse(s)`
 // and `JSON.stringify(x)` lookup re-instantiates `T` fresh. Round-tripping
 // `JSON.stringify(JSON.parse(s))` in one expression still unifies the two
