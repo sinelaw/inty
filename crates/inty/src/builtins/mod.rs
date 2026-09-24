@@ -471,13 +471,98 @@ impl InferState {
     /// Resolve pending type class constraints.
     /// This should be called after inference to check that all constraints are satisfiable.
     pub fn resolve_constraints(&mut self) -> Result<(), IntyError> {
-        let constraints = std::mem::take(&mut self.pending_constraints);
-
-        for constraint in constraints {
-            self.resolve_constraint(&constraint.pred, constraint.span)?;
+        // Resolving one constraint can make another's container concrete
+        // (an `Indexable` whose container is still a variable is deferred),
+        // so iterate until nothing changes. Previously a single pass
+        // dropped every constraint deferred this way, leaving its element
+        // type unconstrained.
+        let mut constraints = std::mem::take(&mut self.pending_constraints);
+        loop {
+            let before = constraints.len();
+            let mut deferred = Vec::new();
+            for constraint in constraints {
+                if self.is_deferred_indexable(&constraint.pred) {
+                    deferred.push(constraint);
+                } else {
+                    self.resolve_constraint(&constraint.pred, constraint.span)?;
+                }
+            }
+            if deferred.is_empty() || deferred.len() == before {
+                // Whatever is left has a container nothing ever pinned down:
+                // no use of it depends on the element type.
+                return Ok(());
+            }
+            constraints = deferred;
         }
+    }
 
-        Ok(())
+    /// An `Indexable` whose container is still an unbound variable.
+    fn is_deferred_indexable(&self, pred: &TypePred) -> bool {
+        pred.class == ClassName::Indexable
+            && matches!(
+                pred.types.first().map(|c| self.apply_subst(c)),
+                Some(Type::Var(TVarName::Flex(_)))
+            )
+    }
+
+    /// `record[key]`. A literal key selects that field (which must exist).
+    /// A computed key can read any field, so on a closed record the
+    /// element is the union of the field types (like array indexing, a
+    /// missing key's `undefined` isn't modelled). On a record whose other
+    /// fields are unknown there is no sound element type; that's an error
+    /// rather than the unconstrained variable inty used to leave.
+    fn resolve_record_index(
+        &mut self,
+        container: &Type,
+        literal_key: Option<String>,
+        element: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        use crate::types::{is_callable_key, FieldEntry, PropName, RowTail, RowType};
+        if let Some(key) = literal_key {
+            let rest = self.fresh_flex();
+            let mut props = std::collections::BTreeMap::new();
+            props.insert(PropName(key), FieldEntry::pre(element.clone()));
+            let wanted = Type::Row(RowType {
+                props,
+                tail: RowTail::Open(rest),
+            });
+            return self.unify(span, container, &wanted);
+        }
+        let row = match self.flatten_type(container) {
+            Type::Row(row) => row,
+            other => {
+                return Err(TypeError::ConstraintNotSatisfied {
+                    class: "Indexable".to_string(),
+                    ty: other.to_string(),
+                    span,
+                }
+                .into())
+            }
+        };
+        if !matches!(row.tail, RowTail::Closed) {
+            return Err(TypeError::ConstraintNotSatisfied {
+                class: "Indexable (a computed key needs every field of the record to be known)"
+                    .to_string(),
+                ty: Type::Row(row).to_string(),
+                span,
+            }
+            .into());
+        }
+        let fields: Vec<Type> = row
+            .props
+            .iter()
+            .filter(|(k, f)| {
+                !is_callable_key(k) && !k.0.starts_with('\u{2}') && !f.presence.is_abs()
+            })
+            .map(|(_, f)| f.ty.clone())
+            .collect();
+        let union = if fields.is_empty() {
+            Type::Undefined
+        } else {
+            Type::union(fields)
+        };
+        self.unify(span, element, &union)
     }
 
     /// Resolve a single type class constraint.
@@ -548,6 +633,11 @@ impl InferState {
         // A literal index (`xs[0]`) carries its singleton type; the
         // container's key type is the base type, as in the eager rule in
         // `infer_computed_member` (which subsumes rather than unifies).
+        // The literal itself still selects a record field (`o["x"]`).
+        let literal_key = match self.apply_subst(index) {
+            Type::Literal(crate::types::LitValue::String(k)) => Some(k),
+            _ => None,
+        };
         let index = self.apply_subst(index).widen_fresh_literals();
         let element = self.apply_subst(element);
 
@@ -593,13 +683,9 @@ impl InferState {
                     }
                 }
 
-                // Fall back to object indexing with string key
+                // Object indexing with a string key.
                 self.unify(span, &index, &Type::String)?;
-
-                // The element type is the union of all property types
-                // For simplicity, we use a fresh variable
-                // In a full implementation, we'd need union types
-                Ok(())
+                self.resolve_record_index(&container, literal_key, &element, span)
             }
 
             Type::Var(TVarName::Flex(_)) => {

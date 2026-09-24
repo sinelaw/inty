@@ -140,6 +140,23 @@ impl InferState {
             .extend(program.class_brands.iter().cloned());
         let result = self.infer_stmt_list(&env, &program.statements);
 
+        // Use before initialisation is invisible to inference, which lets
+        // every binding of a scope be referenced from anywhere in it (so
+        // hoisted functions can use later declarations). Check execution
+        // order separately. JavaScript only: Python and Lua scope names
+        // differently.
+        if program.language == crate::ast::SourceLanguage::JavaScript {
+            for v in crate::ast::tdz::check_program(&program.statements) {
+                self.push_error(
+                    TypeError::Module {
+                        message: v.message(),
+                        span: v.span,
+                    }
+                    .into(),
+                );
+            }
+        }
+
         // If `Type::apply_subst` hit its recursion-depth cap during
         // this run (see `docs/scaling.md`), surface a clean
         // diagnostic. The walk has already substituted the offending

@@ -835,8 +835,18 @@ impl InferState {
         // each against the *outer* env's free variables so all peers
         // receive the same polymorphism.
         let base_free = env.free();
+        // Every member is generalised against the same pending constraints:
+        // `generalize` moves the predicates that mention a member's
+        // quantified variables into its scheme, and mutually recursive
+        // members share variables, so the first member would otherwise take
+        // a predicate the others need too (leaving `b` in `a ↔ b` with no
+        // `Indexable` predicate at all). A predicate stays pending only if no
+        // member took it.
+        let pending = self.pending_constraints.clone();
+        let mut left_by_all = vec![true; pending.len()];
         for stmt in group {
             if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
+                self.pending_constraints = pending.clone();
                 let ty = hoisted
                     .lookup(name)
                     .expect("function must be in env after pass 1")
@@ -853,6 +863,16 @@ impl InferState {
                     ty
                 };
                 let scheme = self.generalize(&base_free, &ty);
+                // `generalize` keeps the predicates it doesn't take, in
+                // order: mark the ones it took.
+                let mut kept = self.pending_constraints.iter().peekable();
+                for (i, c) in pending.iter().enumerate() {
+                    if kept.peek() == Some(&c) {
+                        kept.next();
+                    } else {
+                        left_by_all[i] = false;
+                    }
+                }
                 self.record_decl_scheme(hoisted_name_span(stmt, name, span), scheme.clone());
                 hoisted = hoisted.extend_with_mutability(
                     name.to_string(),
@@ -861,6 +881,11 @@ impl InferState {
                 );
             }
         }
+        self.pending_constraints = pending
+            .into_iter()
+            .zip(left_by_all)
+            .filter_map(|(c, left)| left.then_some(c))
+            .collect();
 
         Ok(hoisted)
     }

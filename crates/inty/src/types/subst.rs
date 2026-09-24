@@ -328,38 +328,53 @@ impl Subst {
     ///
     /// Cycles can exist on row tails because `unify_rows` extends
     /// the substitution directly without going through
-    /// `var_bind`'s recursive-type wrapping. The local visited set
-    /// caps each chain at one full traversal.
+    /// `var_bind`'s recursive-type wrapping; they are cut where they
+    /// close (see `flatten_var`). Every other occurrence of a bound
+    /// variable is expanded in full — an earlier version expanded each
+    /// variable once per call and left later occurrences as bare
+    /// (bound) variables, so a type mentioning the same row twice lost
+    /// fields and could get a bound variable quantified.
     pub fn flatten(&self, ty: &Type) -> Type {
-        let mut visited: HashSet<TVarName> = HashSet::new();
-        self.flatten_type(ty, &mut visited)
+        let mut state = FlattenState::default();
+        self.flatten_type(ty, &mut state)
     }
 
-    fn flatten_type(&self, ty: &Type, visited: &mut HashSet<TVarName>) -> Type {
+    /// Resolve a variable to its fully flattened binding (or itself when
+    /// unbound). Every occurrence of a bound variable is expanded — a type
+    /// like `{p: o, q: o}` mentions `o`'s row twice — but each expansion
+    /// is computed once and memoised, so the walk stays linear in the size
+    /// of the substitution. Cycles (equi-recursive bindings) are cut at the
+    /// variable being expanded; an expansion that had to cut one is not
+    /// memoised, since it is only valid inside that cycle.
+    fn flatten_var(&self, name: &TVarName, state: &mut FlattenState) -> Type {
+        let Some(bound) = self.get(name) else {
+            return Type::Var(name.clone());
+        };
+        if let Some(done) = state.memo.get(name) {
+            return done.clone();
+        }
+        if !state.in_progress.insert(name.clone()) {
+            state.cuts += 1;
+            return Type::Var(name.clone());
+        }
+        let cuts_before = state.cuts;
+        let bound = bound.clone();
+        let flat = self.flatten_type(&bound, state);
+        state.in_progress.remove(name);
+        if state.cuts == cuts_before {
+            state.memo.insert(name.clone(), flat.clone());
+        }
+        flat
+    }
+
+    fn flatten_type(&self, ty: &Type, state: &mut FlattenState) -> Type {
         match ty {
-            // Resolve variables here, not just at the top level —
-            // `Subst::compose` only fully applies the substitution
-            // to its own keys; deeply nested `Var(...)` inside
-            // rows-bound-to-rows can still point at unsubstituted
+            // Resolve variables at any depth, not just the top level —
+            // `Subst::compose` only fully applies the substitution to its
+            // own keys, so rows bound to rows can still mention bound
             // variables.
-            //
-            // `visited` is insert-only across the whole flatten()
-            // call: each variable is expanded at most once. The
-            // structure produced is a DAG-collapse of the
-            // substitution graph, which is what we want for the
-            // boundary callers (printer, generalize). It also caps
-            // the work: with `n` vars in the substitution,
-            // flatten is O(n) instead of O(2^n) in the worst case
-            // through wide-fan-out rows.
-            Type::Var(name) => match self.get(name) {
-                None => ty.clone(),
-                Some(_) if !visited.insert(name.clone()) => ty.clone(),
-                Some(bound) => {
-                    let cloned = bound.clone();
-                    self.flatten_type(&cloned, visited)
-                }
-            },
-            Type::Row(row) => Type::Row(self.flatten_row(row, visited)),
+            Type::Var(name) => self.flatten_var(name, state),
+            Type::Row(row) => Type::Row(self.flatten_row(row, state)),
             Type::Func {
                 this_type,
                 params,
@@ -367,39 +382,36 @@ impl Subst {
             } => Type::Func {
                 this_type: this_type
                     .as_ref()
-                    .map(|t| Box::new(self.flatten_type(t, visited))),
+                    .map(|t| Box::new(self.flatten_type(t, state))),
                 params: params
                     .iter()
                     .map(|p| super::ty::FuncParam {
                         presence: self.resolve_presence(&p.presence),
-                        ty: self.flatten_type(&p.ty, visited),
+                        ty: self.flatten_type(&p.ty, state),
                         name: p.name.clone(),
                     })
                     .collect(),
-                ret: Box::new(self.flatten_type(ret, visited)),
+                ret: Box::new(self.flatten_type(ret, state)),
             },
-            Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, visited))),
-            Type::Promise(inner) => Type::Promise(Box::new(self.flatten_type(inner, visited))),
-            Type::Map(value) => Type::Map(Box::new(self.flatten_type(value, visited))),
-            Type::Tuple(elems) => Type::Tuple(
-                elems
-                    .iter()
-                    .map(|e| self.flatten_type(e, visited))
-                    .collect(),
-            ),
+            Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, state))),
+            Type::Promise(inner) => Type::Promise(Box::new(self.flatten_type(inner, state))),
+            Type::Map(value) => Type::Map(Box::new(self.flatten_type(value, state))),
+            Type::Tuple(elems) => {
+                Type::Tuple(elems.iter().map(|e| self.flatten_type(e, state)).collect())
+            }
             Type::Union(members) => {
-                Type::union(members.iter().map(|m| self.flatten_type(m, visited)))
+                Type::union(members.iter().map(|m| self.flatten_type(m, state)))
             }
             Type::Named(id, args) => Type::Named(
                 *id,
-                args.iter().map(|a| self.flatten_type(a, visited)).collect(),
+                args.iter().map(|a| self.flatten_type(a, state)).collect(),
             ),
             // Module/Literal/primitives: nothing to flatten.
             _ => ty.clone(),
         }
     }
 
-    fn flatten_row(&self, row: &RowType, visited: &mut HashSet<TVarName>) -> RowType {
+    fn flatten_row(&self, row: &RowType, state: &mut FlattenState) -> RowType {
         let mut props: std::collections::BTreeMap<PropName, FieldEntry> = row
             .props
             .iter()
@@ -408,57 +420,46 @@ impl Subst {
                     k.clone(),
                     FieldEntry {
                         presence: self.resolve_presence(&e.presence),
-                        ty: self.flatten_type(&e.ty, visited),
+                        ty: self.flatten_type(&e.ty, state),
                     },
                 )
             })
             .collect();
 
-        let mut current_tail = row.tail.clone();
-        let tail = loop {
-            match current_tail {
-                RowTail::Closed => break RowTail::Closed,
-                RowTail::Recursive(id, args) => {
-                    break RowTail::Recursive(
-                        id,
-                        args.iter().map(|a| self.flatten_type(a, visited)).collect(),
-                    );
-                }
-                RowTail::Open(var) => {
-                    if !visited.insert(var.clone()) {
-                        break RowTail::Open(var);
+        let tail = match &row.tail {
+            RowTail::Closed => RowTail::Closed,
+            RowTail::Recursive(id, args) => RowTail::Recursive(
+                *id,
+                args.iter().map(|a| self.flatten_type(a, state)).collect(),
+            ),
+            // The tail variable's own flattening already merged the rest
+            // of its tail chain, so one step suffices. Fields of the row
+            // itself take precedence over the tail's.
+            RowTail::Open(var) => match self.flatten_var(var, state) {
+                Type::Row(rest) => {
+                    for (k, e) in rest.props {
+                        props.entry(k).or_insert(e);
                     }
-                    match self.get(&var) {
-                        None => break RowTail::Open(var),
-                        Some(Type::Var(next_var)) => {
-                            current_tail = RowTail::Open(next_var.clone());
-                        }
-                        Some(Type::Row(other_row)) => {
-                            // Bindings in the substitution are kept
-                            // idempotent by `Subst::compose` (every
-                            // extend pushes the new singleton
-                            // through every existing value), so
-                            // `other_row`'s props don't need
-                            // re-substitution beyond what the
-                            // recursive `flatten_type` does for any
-                            // `Var` we encounter.
-                            for (k, e) in &other_row.props {
-                                let v_flat = self.flatten_type(&e.ty, visited);
-                                props.entry(k.clone()).or_insert(FieldEntry {
-                                    presence: self.resolve_presence(&e.presence),
-                                    ty: v_flat,
-                                });
-                            }
-                            current_tail = other_row.tail.clone();
-                        }
-                        Some(_) => break RowTail::Open(var),
-                    }
+                    rest.tail
                 }
-            }
+                Type::Var(v) => RowTail::Open(v),
+                _ => RowTail::Open(var.clone()),
+            },
         };
 
         RowType { props, tail }
     }
+}
+
+/// Working state of one [`Subst::flatten`] call.
+#[derive(Default)]
+struct FlattenState {
+    /// Variables whose expansion is on the current path (cycle detection).
+    in_progress: HashSet<TVarName>,
+    /// Finished expansions, reused for every later occurrence.
+    memo: HashMap<TVarName, Type>,
+    /// Number of cycle cuts so far; see [`Subst::flatten_var`].
+    cuts: usize,
 }
 
 impl IntoIterator for Subst {
