@@ -22,6 +22,27 @@ pub const DOM: &str = include_str!("../stdlib/dom.d.js");
 ///
 /// Each entry is `(source, name-for-errors)`. Order matters: later libs
 /// can reference names from earlier ones.
+/// Declarations for Node's built-in modules, resolved by specifier
+/// (`import { readFileSync } from "node:fs"`). They are not loaded into the
+/// initial environment, so a browser program can't use `process` by
+/// accident; a program opts in by importing the module.
+pub const NODE_FS: &str = include_str!("../stdlib/node/fs.d.js");
+pub const NODE_PROCESS: &str = include_str!("../stdlib/node/process.d.js");
+
+/// The canonical name and declaration source of a built-in module
+/// specifier, if it names one. Both `"node:fs"` and `"fs"` resolve.
+pub fn builtin_module(specifier: &str) -> Option<(&'static str, &'static str)> {
+    match specifier.strip_prefix("node:").unwrap_or(specifier) {
+        "fs" => Some(("node:fs", NODE_FS)),
+        "process" => Some(("node:process", NODE_PROCESS)),
+        _ => None,
+    }
+}
+
+/// Prefix of the virtual path a built-in module resolves to, e.g.
+/// `<builtin>/node:fs`.
+pub const BUILTIN_MODULE_PREFIX: &str = "<builtin>/";
+
 pub const DEFAULT_LIBS: &[(&str, &str)] =
     &[(CORE, "<stdlib/core.d.js>"), (DOM, "<stdlib/dom.d.js>")];
 
