@@ -60,7 +60,48 @@ Top-level and nested functions, closures, arrow functions, `let` /
 `const` / `var`, and all loops except `for-in`. Also: labels, `switch`
 with fall-through, numbers with exact JS formatting and `%` / bitwise
 semantics, strings (ASCII), arrays (with the common methods), object
-literals whose shape inty inferred, `Math.*` and `console.log`.
+literals whose shape inty inferred, `Math.*`, `performance.now()` and
+`console.log`.
+
+### Polymorphism: monomorphisation
+
+inty infers polymorphic types, and the backend keeps them. A function
+is emitted as **one Go function per concrete instantiation reachable
+from `main`**, the way Rust and C++ compile generics:
+
+```js
+function first(xs) { return xs[0]; }
+function getX(p) { return p.x; }          // any object with a numeric x
+console.log(first([3, 1, 2]) + getX({ x: 1, y: 2 }));
+console.log(first(["a", "b"]));
+```
+
+```go
+func first(xs *[]float64) float64 { ... }
+func first__2(xs *[]string) string { ... }
+func getX(p *Obj1) float64 { ... }        // Obj1 is {x, y}
+```
+
+This covers the following. `tests/programs/polymorphism.js` exercises
+all of it against Node:
+- **Kinds of polymorphism:** parametric (`identity`, `first`),
+  type-class (`twice(x) = x + x` on numbers and strings) and row
+  (`getX` on differently shaped objects).
+- **Higher-order and recursive functions:** user-defined higher-order
+  functions, and recursion within a specialisation.
+- **Other bindings:** polymorphic `const f = (…) => …` arrows, and
+  polymorphic closures nested in other functions.
+- **Nesting:** specialisations inside specialisations.
+
+Functions nothing reaches are not emitted, and instantiations that map
+to the same Go types share one copy.
+
+How it works:
+1. inty records, for every use of a polymorphic binding, which types
+   replaced its quantified variables (`InferState::instantiations`).
+2. The emitter requests a specialisation per distinct concrete choice.
+3. It re-emits the function body with every recorded type substituted
+   accordingly.
 
 ## Deliberate gaps
 
@@ -68,14 +109,19 @@ Anything outside the supported subset is reported as an "unsupported
 construct" diagnostic at the source span. It is never silently
 mistranslated.
 
-- **Monomorphic programs only.** inty normally generalises
-  `function id(x)` to `<a>(a) => a`. For the Go backend, let-polymorphism
-  is switched off, so every binding gets exactly one type. Using one
-  function at two types is a type error. Monomorphisation would lift
-  this.
+- **Polymorphic values other than functions** (e.g. an object literal
+  of polymorphic functions) used at a specific type are rejected, as are
+  polymorphic `let` / `var` function values. Declare them with
+  `function` or `const`.
 - **Not supported:** `this`, classes, `new`, `try` / `throw`, getters and
   setters, spread, destructuring rest, `??`, `?.`, generic
   non-boolean `&&` / `||`, ES modules, and recursive object types.
+- **inty hoisting gap.** inty infers hoisted `function` declarations
+  before top-level `const`s declared later in the file, and a function
+  that uses such a `const` can get imprecise or unresolved types.
+  inty's own output shows it: `const pair: (a, a) => …`. The backend
+  reports these as unsupported rather than guessing. Declaring the
+  `const` before the function, or annotating it, avoids the problem.
 - **Strings are treated as byte strings.** `.length` and indexing are
   exact only for ASCII (JS uses UTF-16 code units).
 - **Out-of-bounds array reads panic**, where JS would return `undefined`.

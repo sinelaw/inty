@@ -11,17 +11,17 @@
 //! # Pipeline
 //!
 //! 1. Parse with the regular JavaScript frontend.
-//! 2. Type-check with inty, in *monomorphic* mode
-//!    ([`inty::infer::InferConfig::monomorphic`]): let-polymorphism is
-//!    off for user code, so every type variable in the program is pinned
-//!    by its uses and every expression ends up with one concrete type.
-//!    The stdlib keeps its polymorphic schemes. Programs that genuinely
-//!    need polymorphism (the same function used at two types) are
-//!    rejected with an ordinary inty type error — monomorphisation is
-//!    future work.
-//! 3. Record the synthesised type of every expression
-//!    ([`inty::infer::InferState::expr_types`]) and walk the AST once,
-//!    emitting Go from those types (see `emit.rs`).
+//! 2. Type-check with inty as usual, with full let-polymorphism,
+//!    recording the synthesised type of every expression
+//!    ([`inty::infer::InferState::expr_types`]) and how every use of a
+//!    polymorphic binding was instantiated
+//!    ([`inty::infer::InferState::instantiations`]).
+//! 3. Walk the AST and emit Go from those types (see `emit.rs`),
+//!    *monomorphising* as it goes. Each function is emitted once per
+//!    distinct concrete instantiation reachable from `main`, so
+//!    `function first(xs)` used on a `number[]` and on a `string[]`
+//!    becomes two Go functions. Functions nothing reaches are not
+//!    emitted.
 //!
 //! # Semantics
 //!
@@ -51,7 +51,7 @@ pub struct GoOutput {
     pub code: String,
 }
 
-/// Parse, type-check (monomorphically) and translate `source` to Go.
+/// Parse, type-check and translate `source` to Go.
 ///
 /// On failure, returns every diagnostic collected: type errors from
 /// inference, or a single "unsupported construct" error from the Go
@@ -60,11 +60,10 @@ pub fn compile(source: &str) -> std::result::Result<GoOutput, Vec<IntyError>> {
     let program = inty::frontends::javascript::parse_source(source).map_err(|e| vec![e])?;
 
     let (env, mut state) = inty::stdlib::initial_env_with_stdlib().map_err(|e| vec![e])?;
-    // Flip the knobs only *after* the stdlib is loaded so its bindings
-    // stay polymorphic (each `console.log` use instantiates afresh).
-    state.config.monomorphic = true;
+    // Record only for the user program, not for the stdlib loaded above.
     state.config.exhaustiveness_warnings = false;
     state.expr_types = Some(HashMap::new());
+    state.instantiations = Some(HashMap::new());
 
     // Deeply nested programs need the same stack headroom the CLI gives
     // the checker (see `inty::worker`); the emitter recurses as deeply.

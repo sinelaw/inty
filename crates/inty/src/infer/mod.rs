@@ -610,7 +610,12 @@ impl InferState {
 
             Expr::Ident { name, span } => {
                 if let Some(scheme) = env.lookup(name) {
-                    let ty = self.instantiate(scheme);
+                    let (ty, instantiation) = self.instantiate_recording(scheme);
+                    if !instantiation.is_empty() {
+                        if let Some(record) = self.instantiations.as_mut() {
+                            record.insert((span.start, span.end), instantiation);
+                        }
+                    }
                     // Record origin for type variables from variable references
                     if let Type::Var(var) = &ty {
                         self.record_origin(

@@ -545,7 +545,10 @@ impl InferState {
         span: Span,
     ) -> Result<(), IntyError> {
         let container = self.apply_subst(container);
-        let index = self.apply_subst(index);
+        // A literal index (`xs[0]`) carries its singleton type; the
+        // container's key type is the base type, as in the eager rule in
+        // `infer_computed_member` (which subsumes rather than unifies).
+        let index = self.apply_subst(index).widen_fresh_literals();
         let element = self.apply_subst(element);
 
         match &container {

@@ -96,14 +96,41 @@ fn objects_become_structs() {
 }
 
 #[test]
-fn polymorphic_use_is_a_type_error() {
-    // Let-polymorphism is off for the Go backend: one type per binding.
-    let err = compile_err("function id(x) { return x; }\nid(1);\nid(\"a\");");
+fn polymorphic_functions_are_monomorphised() {
+    // One Go function per concrete instantiation; the first keeps the
+    // JS name.
+    let code = inty_go::compile(
+        "function id(x) { return x; }\nconsole.log(id(1));\nconsole.log(id(\"a\"));",
+    )
+    .unwrap()
+    .code;
+    assert!(code.contains("func id(x float64) float64 {"), "{}", code);
+    assert!(code.contains("func id__2(x string) string {"), "{}", code);
     assert!(
-        err.to_lowercase().contains("mismatch") || err.contains("unify"),
+        code.contains("intyLog(intyInspectNum(id(1.0)))"),
         "{}",
-        err
+        code
     );
+    assert!(code.contains("intyLog(id__2(\"a\"))"), "{}", code);
+}
+
+#[test]
+fn same_go_types_share_a_specialisation() {
+    // Two uses that differ only in literal types reuse one copy.
+    let code =
+        inty_go::compile("function id(x) { return x; }\nconsole.log(id(1));\nconsole.log(id(2));")
+            .unwrap()
+            .code;
+    assert!(code.contains("func id(x float64) float64 {"), "{}", code);
+    assert!(!code.contains("id__2"), "{}", code);
+}
+
+#[test]
+fn unreachable_functions_are_not_emitted() {
+    let code = inty_go::compile("function unused(x) { return x; }\nconsole.log(1);")
+        .unwrap()
+        .code;
+    assert!(!code.contains("unused"), "{}", code);
 }
 
 #[test]

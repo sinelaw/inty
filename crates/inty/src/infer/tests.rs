@@ -3573,3 +3573,20 @@ fn test_for_init_literal_is_widened() {
     let ty = state.apply_subst(state.get_decl_type(decl_span).unwrap());
     assert_eq!(ty, Type::Number);
 }
+
+/// Indexing an as-yet-unknown container with a literal (`xs[0]`) defers
+/// an `Indexable` constraint whose index is the singleton type `0`. The
+/// resolver must widen it like the eager rule does, or `first` could not
+/// be applied to an array at all.
+#[test]
+fn test_deferred_literal_index_is_widened() {
+    let src = "function first(xs) { return xs[0]; }\n\
+               const a = first([3, 1, 2]);\n\
+               const b = first([\"x\", \"y\"]);";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let mut state = InferState::new();
+    state
+        .infer_program(&initial_env(), &program)
+        .and_then(|_| state.resolve_constraints())
+        .expect("first(xs) = xs[0] should apply to number[] and string[]");
+}

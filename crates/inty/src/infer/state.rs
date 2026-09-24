@@ -126,14 +126,6 @@ pub struct InferConfig {
     /// in the presence of indexed assignment — the option exists so
     /// the meta-tests can exercise the looser regime.
     pub generalize_mutable_var_containers: bool,
-
-    /// Disable let-polymorphism: `generalize` returns a monomorphic
-    /// scheme, so every user binding has exactly one type and every
-    /// type variable is eventually pinned by its uses. Bindings that
-    /// were already generalised before the flag was set (the stdlib)
-    /// stay polymorphic. Default: `false`. Code generators (the Go
-    /// backend) set this so each expression has one concrete type.
-    pub monomorphic: bool,
 }
 
 impl Default for InferConfig {
@@ -141,7 +133,6 @@ impl Default for InferConfig {
         InferConfig {
             exhaustiveness_warnings: true,
             generalize_mutable_var_containers: false,
-            monomorphic: false,
         }
     }
 }
@@ -200,6 +191,15 @@ pub struct InferState {
     /// [`Self::flatten_type`] after inference completes. Used by code
     /// generators that need a type for every node, not just bindings.
     pub expr_types: Option<HashMap<(usize, usize), Type>>,
+
+    /// How each reference to a polymorphic binding was instantiated,
+    /// keyed by the identifier's `(span.start, span.end)`: the scheme's
+    /// quantified variables paired with the fresh types that replaced
+    /// them at that use. `None` (the default) records nothing. Together
+    /// with [`Self::expr_types`] this lets a code generator monomorphise
+    /// — emit one copy of a polymorphic function per concrete
+    /// instantiation — without re-running inference.
+    pub instantiations: Option<HashMap<(usize, usize), Vec<(TVarName, Type)>>>,
 
     /// Type origins for error reporting.
     pub type_origins: HashMap<TVarName, TypeOrigin>,
@@ -376,6 +376,7 @@ impl InferState {
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
+            instantiations: None,
             type_origins: HashMap::new(),
             warnings: Vec::new(),
             errors: Vec::new(),
@@ -1407,13 +1408,21 @@ impl InferState {
     /// variables, so a scheme like `<θ>{x:Number, y:θ(String)} -> R`
     /// can be called once supplying `y` and once omitting it.
     pub fn instantiate(&mut self, scheme: &TypeScheme) -> Type {
+        self.instantiate_recording(scheme).0
+    }
+
+    /// [`Self::instantiate`], also returning which fresh type replaced
+    /// each quantified variable (empty for a monomorphic scheme).
+    pub fn instantiate_recording(&mut self, scheme: &TypeScheme) -> (Type, Vec<(TVarName, Type)>) {
         if scheme.is_mono() {
-            return scheme.body.ty.clone();
+            return (scheme.body.ty.clone(), Vec::new());
         }
 
         let mut subst = Subst::empty();
+        let mut instantiation = Vec::with_capacity(scheme.vars.len());
         for var in &scheme.vars {
             let fresh = self.fresh_type_var();
+            instantiation.push((var.clone(), fresh.clone()));
             subst.insert(var.clone(), fresh);
         }
         for pvar in &scheme.pvars {
@@ -1431,7 +1440,7 @@ impl InferState {
             });
         }
 
-        subst.apply(&scheme.body.ty)
+        (subst.apply(&scheme.body.ty), instantiation)
     }
 
     /// Skolemize a type scheme (for subsumption checking).
@@ -1477,9 +1486,6 @@ impl InferState {
         // incompatible argument shapes through. See
         // `Subst::flatten` for the full story.
         let ty = self.main_subst.flatten(ty);
-        if self.config.monomorphic {
-            return TypeScheme::mono(ty);
-        }
         let ty_vars = ty.free_vars();
         let pvars = ty.free_pvars();
 
