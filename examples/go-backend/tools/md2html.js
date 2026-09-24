@@ -89,7 +89,7 @@ function escapeHtml(s) {
     }
   }
   if (start === 0) return s;
-  return out + s.slice(start, s.length);
+  return out + s.slice(start);
 }
 
 // ---- inline ----------------------------------------------------------------
@@ -331,11 +331,11 @@ function tableCells(t) {
     const c = s.charCodeAt(i);
     if (c === 92) i++;
     else if (c === 124) {
-      cells.push(s.slice(start, i).trim());
+      cells.push(s.slice(start, i).trim().replaceAll("\\|", "|"));
       start = i + 1;
     }
   }
-  cells.push(s.slice(start, s.length).trim());
+  cells.push(s.slice(start).trim().replaceAll("\\|", "|"));
   return cells;
 }
 
@@ -379,8 +379,12 @@ function interrupts(t) {
   return m.ok && t.length > m.width - 1 && (!m.ordered || m.start === 1);
 }
 
+// Marks a tight list item's paragraph text in `renderBlocks`' output, for
+// the list item around it (and removed there).
+const TIGHT = "\u0001";
+
 // Render `lines` as HTML blocks onto `out`. In a tight list item,
-// paragraphs are emitted without `<p>` tags.
+// paragraphs are emitted without `<p>` tags (marked with TIGHT).
 function renderBlocks(lines, tight, out) {
   const n = lines.length;
   let i = 0;
@@ -497,6 +501,8 @@ function renderBlocks(lines, tight, out) {
             continue;
           }
           const ut = dedent(u, ui);
+          // The list's next item, or a list at the same level ending it.
+          if (listMarker(ut).ok) break;
           if (!sawBlank && !interrupts(ut) && !isBlank(item[item.length - 1])) {
             item.push(ut); // lazy continuation of the item's paragraph
             i++;
@@ -518,17 +524,17 @@ function renderBlocks(lines, tight, out) {
       for (const item of items) {
         const inner = [];
         renderBlocks(item, !loose, inner);
-        let body = inner.join("");
-        if (!loose && body.endsWith("\n") && !body.endsWith(">\n")) body = body.slice(0, body.length - 1);
-        if (!loose && body.indexOf("\n") >= 0 && !body.startsWith("<")) {
-          // Tight item text followed by a nested block: break the line
-          // after the text, as CommonMark renderers do.
-          out.push("<li>" + body + "</li>\n");
-        } else if (body.startsWith("<") || body === "") {
-          out.push("<li>" + (body === "" ? "" : "\n" + body) + "</li>\n");
-        } else {
-          out.push("<li>" + body + "</li>\n");
+        if (inner.length === 0) {
+          out.push("<li></li>\n");
+          continue;
         }
+        // A tight item's text sits directly in the <li>; a block starts
+        // on a new line.
+        const firstText = inner[0].startsWith(TIGHT);
+        const lastText = inner[inner.length - 1].startsWith(TIGHT);
+        let body = inner.map((c) => (c.startsWith(TIGHT) ? c.slice(1) : c)).join("");
+        if (lastText) body = body.slice(0, body.length - 1);
+        out.push("<li>" + (firstText ? "" : "\n") + body + "</li>\n");
       }
       out.push("</" + tag + ">\n");
       continue;
@@ -582,7 +588,7 @@ function renderBlocks(lines, tight, out) {
       const h = "h" + String(setext);
       out.push("<" + h + ">" + text + "</" + h + ">\n");
     } else if (tight) {
-      out.push(text + "\n");
+      out.push(TIGHT + text + "\n");
     } else {
       out.push("<p>" + text + "</p>\n");
     }
