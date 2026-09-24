@@ -32,37 +32,74 @@ representations instead:
 
 ## Benchmarks
 
-Run `node bench.mjs` in this directory. It builds inty, translates and
-builds each `*.js` file here, checks that the output is identical to
-Node's, and reports the median wall-clock time of 5 runs.
+`node bench.mjs` (in this directory) does the following:
+1. Builds inty.
+2. Translates each `*.js` file here and builds it with `go build`.
+3. Requires the Go binary's stdout to be identical to Node's.
+4. Measures both sides.
 
-| benchmark       | node    | inty → go | speedup | what it stresses                           |
-| --------------- | ------: | --------: | ------: | ------------------------------------------ |
-| `sieve`         | 1674 ms |    375 ms | 4.47x   | large `boolean[]`: 1 byte per element in Go |
-| `array-hof`     | 1714 ms |    607 ms | 2.83x   | `map` / `filter` / `reduce` with closures  |
-| `fib`           |  374 ms |    206 ms | 1.82x   | call overhead (naive recursion)            |
-| `collatz`       | 3104 ms |   2157 ms | 1.44x   | `%` and `/` on integer-valued doubles      |
-| `spectral-norm` |  657 ms |    586 ms | 1.12x   | numeric loops over `number[]`              |
-| `nbody`         |  407 ms |    400 ms | 1.02x   | float arithmetic on object fields          |
-| `mandelbrot`    |  877 ms |    891 ms | 0.98x   | pure float arithmetic in registers         |
-| `particles`     |  353 ms |    368 ms | 0.96x   | many short-lived small objects (GC)        |
+Pass `--processes N`, `--warmup W` and `--json out.json` for raw samples,
+or benchmark names to run a subset. It needs `node`, `go` (>= 1.22) and
+`python3`, which it uses for `getrusage`.
 
-These numbers are from Node v22.22.2 and Go 1.24.7 on a 4-core linux/amd64
-container. Node's startup alone (`node -e ""`) takes about 28 ms, and that
-time is included in the Node column.
+### Methodology
 
-What the numbers show:
+- **Steady state, not startup.** Every program ends with a small
+  benchmark protocol: it runs its `main()` workload 4 times in one process
+  and prints each iteration's `performance.now()` duration to stderr.
+  Iteration 0 is *cold*; for Node it includes JIT warm-up. Iterations 1–3
+  are *warm*. The headline speedup uses warm iterations only, so neither
+  Node's ~27 ms startup nor V8's warm-up counts against it.
+- **Many interleaved processes.** Each side gets 10 fresh processes by
+  default, after 1 discarded warm-up process, so 30 warm samples per side.
+  Node and Go processes alternate in a random order every round, so drift
+  (CPU frequency, noisy neighbours, page cache) affects both equally.
+- **Uncertainty.** Medians with interquartile ranges, and a 95% confidence
+  interval on the speedup from a *cluster* bootstrap. Whole processes are
+  resampled, because iterations within a process are correlated.
+- **Resources.** For each process: cold first-iteration time, end-to-end
+  wall time, CPU time (user + sys, including GC and JIT threads) and peak
+  RSS.
+- Each workload is long-running by itself (hundreds of milliseconds to
+  about a second per iteration, with millions of hot-loop iterations), so
+  timer resolution is irrelevant.
 
-- **Big wins** come where V8 pays for being dynamic. It stores booleans
-  in large arrays as tagged values, calls go through generic machinery,
-  and callbacks passed to array built-ins go through calls it can't
-  specialise as well.
-- **Parity** comes on tight float loops such as `mandelbrot` and `nbody`.
-  Once V8's optimising compiler has warmed up on monomorphic code, it
-  produces machine code about as good as Go's. Static types don't buy
-  much more there.
-- **Allocation-heavy code** (`particles`) is also about even. V8's
-  generational GC is very good at short-lived objects.
+### Programs
+
+| benchmark | what it is |
+| --- | --- |
+| `raytracer` | Whitted ray tracer (spheres, shadows, reflections), 1280x960, with vector math on `{x, y, z}` objects |
+| `orders` | ETL batch job over 1M synthetic orders: validate, enrich, aggregate by region and category, top customers |
+| `bytecode-vm` | stack-based bytecode interpreter with switch dispatch, running a compiled prime counter |
+| `log-analytics` | generate 35 MB of access logs, then parse them byte by byte and aggregate status codes, latency percentiles and path hits |
+| `fuzzy-search` | spell-check suggestions: Levenshtein distance from 60 queries against a 20k-word dictionary |
+| `dijkstra` | shortest paths on a 490k-node road grid in CSR form, with a hand-written binary heap |
+| `game-of-life` | Conway's Life on a 1024x1024 torus |
+| `sieve`, `fib`, `collatz`, `array-hof`, `nbody`, `spectral-norm`, `mandelbrot`, `particles` | classic kernels, each isolating one effect |
+
+### Results
+
+*Preliminary* (calibration runs: warm iterations from a single process
+per side; the full statistical run replaces this table). Node v22.22.2
+vs Go 1.24.7, 4-core linux/amd64 container.
+
+| benchmark | node warm | go warm | speedup | peak RSS node / go |
+| --- | ---: | ---: | ---: | ---: |
+| sieve | 743 ms | 176 ms | ~4.2x | 187 / 11 MB |
+| array-hof | 840 ms | 285 ms | ~2.9x | — |
+| bytecode-vm | 940 ms | 453 ms | ~2.1x | 50 / 10 MB |
+| raytracer | 384 ms | 194 ms | ~2.0x | 53 / 10 MB |
+| orders | 423 ms | 224 ms | ~1.9x | 471 / 236 MB |
+| fib | 311 ms | 172 ms | ~1.8x | 50 / 10 MB |
+| fuzzy-search | 639 ms | 411 ms | ~1.6x | 55 / 10 MB |
+| log-analytics | 705 ms | 510 ms | ~1.4x | 270 / 163 MB |
+| collatz | 1396 ms | 1002 ms | ~1.4x | — |
+| game-of-life | 938 ms | 925 ms | ~1.0x | 104 / 10 MB |
+| mandelbrot | 844 ms | 890 ms | ~0.95x | — |
+| nbody | 370 ms | 422 ms | ~0.9x | — |
+| spectral-norm | 533 ms | 603 ms | ~0.9x | — |
+| dijkstra | 282 ms | 382 ms | ~0.75x | 168 / 83 MB |
+| particles | 236 ms | 368 ms | ~0.65x | — |
 
 ## What's supported
 
