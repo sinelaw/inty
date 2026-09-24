@@ -145,6 +145,21 @@ impl TypeEnv {
         vars
     }
 
+    /// Everything generalisation must know about the environment: its
+    /// free type and presence variables and the named types it mentions
+    /// (whose bodies can hide further variables). See
+    /// `InferState::generalize`.
+    pub fn free(&self) -> EnvFree {
+        let mut free = EnvFree::default();
+        for binding in self.bindings.values() {
+            let scheme = &binding.scheme;
+            free.vars.extend(scheme.free_vars());
+            free.pvars.extend(scheme.free_pvars());
+            free.named.extend(scheme.body.ty.named_ids());
+        }
+        free
+    }
+
     /// Get all bound names.
     pub fn names(&self) -> impl Iterator<Item = &String> {
         self.bindings.keys()
@@ -259,4 +274,13 @@ mod tests {
         let y_binding = env.lookup_binding("y").unwrap();
         assert_eq!(y_binding.mutability, Mutability::Immutable);
     }
+}
+
+/// Free variables of an environment, as needed by generalisation (see
+/// [`TypeEnv::free`]).
+#[derive(Debug, Clone, Default)]
+pub struct EnvFree {
+    pub vars: HashSet<TVarName>,
+    pub pvars: HashSet<crate::types::PVarName>,
+    pub named: HashSet<crate::types::TypeId>,
 }

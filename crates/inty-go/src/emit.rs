@@ -38,7 +38,6 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         .take()
         .expect("inty-go: expression-type recording must be enabled before inference");
     let instantiations = state.instantiations.take().unwrap_or_default();
-    let late = late_bindings(state, &instantiations);
     let mut e = Emitter {
         state,
         types,
@@ -53,7 +52,6 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         mappings: vec![Rc::new(Mapping::new())],
         blocks: 0,
         block_stack: Vec::new(),
-        late,
     };
 
     // Bind every top-level name first: function bodies may refer to
@@ -146,37 +144,6 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
     Ok(out)
 }
 
-/// Repairs for variables generalised too early.
-///
-/// inty can generalise a function over a type variable that its body
-/// only pins down later. A hoisted function reading a top-level constant
-/// declared further down is the typical case: `function pick(i) { return
-/// NAMES[i]; }` gets `∀a. (Number) => a` before `NAMES` is known to be a
-/// `String[]`. Each use then instantiates `a` with a fresh variable that
-/// nothing constrains, although the definition resolves `a` to `String`.
-/// For every such quantified variable, the fresh variable at each use
-/// must equal the variable's final binding, under that use's
-/// instantiation; this returns those equations.
-fn late_bindings(
-    state: &mut InferState,
-    instantiations: &HashMap<(usize, usize), Vec<(TVarName, Type)>>,
-) -> Mapping {
-    let mut late = Mapping::new();
-    for inst in instantiations.values() {
-        let inst_map: Mapping = inst.iter().cloned().collect();
-        for (v, fresh) in inst {
-            let bound = resolve(state, &Type::Var(v.clone()));
-            if bound == Type::Var(v.clone()) {
-                continue; // still quantified: an ordinary instantiation
-            }
-            if let Type::Var(f) = resolve(state, fresh) {
-                late.insert(f, apply_mapping(&bound, &inst_map));
-            }
-        }
-    }
-    late
-}
-
 /// A `const f = <function>` declarator: bound like a function
 /// declaration, so it can be specialised. (`let`/`var` function values
 /// may be reassigned, so they stay ordinary variables.)
@@ -263,8 +230,6 @@ struct Emitter<'a> {
     blocks: usize,
     /// Ids of the blocks being emitted, innermost last.
     block_stack: Vec<usize>,
-    /// See [`late_bindings`].
-    late: Mapping,
 }
 
 /// A number the emitter can fold at translation time. Folding happens
@@ -555,16 +520,7 @@ impl<'a> Emitter<'a> {
     /// `ty` under inty's final substitution and then the current
     /// specialisation's mapping.
     fn in_context(&mut self, ty: &Type) -> Type {
-        let mut r = resolve(self.state, ty);
-        // Late bindings can refer to further fresh variables; a few rounds
-        // reach the fixpoint for any realistic chain.
-        for _ in 0..8 {
-            let next = apply_mapping(&r, &self.late);
-            if next == r {
-                break;
-            }
-            r = resolve(self.state, &next);
-        }
+        let r = resolve(self.state, ty);
         apply_mapping(&r, &self.mapping())
     }
 
