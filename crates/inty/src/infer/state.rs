@@ -306,6 +306,8 @@ pub struct InferState {
     /// single `unify` invocation but lives on the state so it threads
     /// through `&mut self` without rewriting the call signature.
     pub(in crate::infer) unfold_assumptions: Vec<UnfoldAssumption>,
+    /// Current nesting of [`Self::unify`] (see `MAX_UNIFY_DEPTH`).
+    pub(in crate::infer) unify_depth: usize,
 }
 
 /// One in-progress unfold the unifier is mid-recursion on. Two
@@ -321,6 +323,12 @@ pub(in crate::infer) enum UnfoldAssumption {
     /// looks for — sufficient because every cycle goes through *some*
     /// brand, and the row direction can't loop without the brand looping.
     NamedRow(TypeId),
+    /// Two open rows' tail variables (smaller id first) are being
+    /// unified. A cycle in the substitution — `ρ₁ ↦ {… | ρ₂}` and
+    /// `ρ₂ ↦ {… | ρ₁}`, which `zonk` shows as free tails — otherwise
+    /// makes every attempt re-bind an already-bound tail and unify the
+    /// same pair again, without end.
+    RowTails(TVarId, TVarId),
 }
 
 /// State captured by [`InferState::snapshot_inference`] and consumed
@@ -392,6 +400,7 @@ impl InferState {
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
             unfold_assumptions: Vec::new(),
+            unify_depth: 0,
         }
     }
 

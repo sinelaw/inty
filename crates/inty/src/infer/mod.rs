@@ -38,6 +38,12 @@ use crate::types::{Type, TypeScheme};
 /// Result type for inference operations.
 pub type InferResult<T> = Result<T, IntyError>;
 
+/// How deeply [`InferState::unify`] may nest before it reports
+/// `TypeError::UnifyDepth`. Well-typed programs stay far below it (the
+/// deepest unification in the test suite and examples is a few dozen
+/// levels); only a diverging unification of recursive types reaches it.
+pub const MAX_UNIFY_DEPTH: usize = 2_000;
+
 /// True when a statement is either a plain `function f() {}` declaration or
 /// an `export function f() {}` — both participate in the same hoisting
 /// group so peer forward references and mutual recursion work uniformly.
