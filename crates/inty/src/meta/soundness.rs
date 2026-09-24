@@ -264,3 +264,247 @@ mod tests {
         }
     }
 }
+
+// ---- Declarations, hoisting and generalisation ----------------------------
+//
+// The generators above build programs that are well-typed by construction,
+// which can't catch the checker *accepting* an ill-typed program. The
+// generator below builds programs that may or may not type-check: a few
+// top-level helper functions in random order, each written either as
+// `function h(x)` or as `const h = (x) => …`, calling each other forwards
+// and backwards (so generalisation, hoisting and let-polymorphism are
+// exercised) and used at several argument types. Two properties:
+//
+// * **Accepted ⇒ not stuck.** Whenever inty accepts a program, the
+//   operational semantics must not get stuck on it (fuel exhaustion from
+//   unbounded recursion is fine). This is the property the
+//   generalisation bugs fixed alongside this test violated — e.g.
+//   `function f(x) { return g(x); } const g = (y) => y * 2; f("hi") * 2`.
+// * **Declaration form is irrelevant to typing.** Writing a helper as
+//   `function h` or `const h = (x) =>` must not change whether the
+//   program type-checks, nor any helper's inferred scheme.
+
+/// Body of a generated helper `h_i(x)`.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub enum HelperBody {
+    Id,
+    Num,
+    Str,
+    Pair,
+    Call(usize),
+    CallLit(usize, &'static str),
+    First(usize),
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub struct DeclProgram {
+    /// `(body, written as const)` per helper `h0, h1, …`.
+    pub helpers: Vec<(HelperBody, bool)>,
+    /// Declaration order: a permutation of helper indices.
+    pub order: Vec<usize>,
+    /// Final uses: `(helper, argument literal, consumer)`.
+    pub uses: Vec<(usize, &'static str, &'static str)>,
+}
+
+#[cfg(test)]
+impl DeclProgram {
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        for &i in &self.order {
+            let (body, as_const) = &self.helpers[i];
+            let expr = match body {
+                HelperBody::Id => "x".to_string(),
+                HelperBody::Num => "x * 2".to_string(),
+                HelperBody::Str => "x + \"!\"".to_string(),
+                HelperBody::Pair => "({ first: x, second: x })".to_string(),
+                HelperBody::Call(j) => format!("h{}(x)", j),
+                HelperBody::CallLit(j, lit) => format!("h{}({})", j, lit),
+                HelperBody::First(j) => format!("h{}(x).first", j),
+            };
+            if *as_const {
+                out.push_str(&format!("const h{} = (x) => {};\n", i, expr));
+            } else {
+                out.push_str(&format!("function h{}(x) {{ return {}; }}\n", i, expr));
+            }
+        }
+        for (k, (h, arg, consumer)) in self.uses.iter().enumerate() {
+            out.push_str(&format!("const r{} = h{}({});\n", k, h, arg));
+            out.push_str(&consumer.replace("R", &format!("r{}", k)));
+            out.push_str(";\n");
+        }
+        out
+    }
+
+    /// The same program with every helper written in the given form.
+    pub fn with_forms(&self, as_const: impl Fn(usize) -> bool) -> DeclProgram {
+        let mut p = self.clone();
+        for (i, h) in p.helpers.iter_mut().enumerate() {
+            h.1 = as_const(i);
+        }
+        p
+    }
+}
+
+#[cfg(test)]
+pub fn arb_decl_program() -> BoxedStrategy<DeclProgram> {
+    const LITS: [&str; 3] = ["1", "\"s\"", "true"];
+    const CONSUMERS: [&str; 4] = ["R * 2", "R + \"!\"", "R.first", "R"];
+    (2usize..=4)
+        .prop_flat_map(|n| {
+            // `h_i` only calls `h_j` for `j > i`: the call graph is acyclic,
+            // so evaluation terminates (the reduction relation recurses per
+            // call). Declaration order is shuffled independently, so calls
+            // still go forwards and backwards in the source.
+            let body = |i: usize| {
+                let mut arms: Vec<BoxedStrategy<HelperBody>> = vec![
+                    Just(HelperBody::Id).boxed(),
+                    Just(HelperBody::Num).boxed(),
+                    Just(HelperBody::Str).boxed(),
+                    Just(HelperBody::Pair).boxed(),
+                ];
+                if i + 1 < n {
+                    arms.push(((i + 1)..n).prop_map(HelperBody::Call).boxed());
+                    arms.push(
+                        ((i + 1)..n, 0..LITS.len())
+                            .prop_map(|(j, l)| HelperBody::CallLit(j, LITS[l]))
+                            .boxed(),
+                    );
+                    arms.push(((i + 1)..n).prop_map(HelperBody::First).boxed());
+                }
+                (proptest::strategy::Union::new(arms), any::<bool>())
+            };
+            let helpers: Vec<_> = (0..n).map(body).collect();
+            let order = Just((0..n).collect::<Vec<usize>>()).prop_shuffle();
+            let uses = proptest::collection::vec(
+                (0..n, 0..LITS.len(), 0..CONSUMERS.len())
+                    .prop_map(|(h, l, c)| (h, LITS[l], CONSUMERS[c])),
+                1..=3,
+            );
+            (helpers, order, uses)
+        })
+        .prop_map(|(helpers, order, uses)| DeclProgram {
+            helpers,
+            order,
+            uses,
+        })
+        .boxed()
+}
+
+/// Type-check `source` like the CLI does (inference, then constraint
+/// resolution, with every accumulated error counted). `Ok` holds the
+/// display form of each helper's scheme.
+pub fn infer_helpers(source: &str, helpers: usize) -> Result<Vec<String>, String> {
+    let program = crate::frontends::javascript::parse_source(source).map_err(|e| e.to_string())?;
+    let mut state = InferState::new();
+    let (_, env) = state
+        .infer_program_with_env(&initial_env(), &program)
+        .map_err(|e| e.to_string())?;
+    if let Some(e) = state.errors.first() {
+        return Err(e.to_string());
+    }
+    state.resolve_constraints().map_err(|e| e.to_string())?;
+    Ok((0..helpers)
+        .map(|i| match env.lookup(&format!("h{}", i)) {
+            Some(scheme) => format!("{}", state.display_scheme(scheme)),
+            None => "<unbound>".to_string(),
+        })
+        .collect())
+}
+
+/// Accepted ⇒ not stuck, for one program. Runs on a worker thread with
+/// the inference stack size: generated helpers can recurse without bound,
+/// and the reduction relation recurses per call until fuel runs out.
+pub fn check_accepted_not_stuck(source: &str, helpers: usize) -> Result<(), String> {
+    let source = source.to_string();
+    crate::worker::run_with_inference_stack("inty-soundness-probe", move || {
+        if infer_helpers(&source, helpers).is_err() {
+            return Ok(()); // rejected: nothing to check
+        }
+        let program =
+            crate::frontends::javascript::parse_source(&source).map_err(|e| e.to_string())?;
+        match run_to_end_with_fuel(&program, 5_000) {
+            Ok(_) | Err(Stuck::FuelExhausted) | Err(Stuck::NotImplemented(_)) => Ok(()),
+            Err(stuck) => Err(format!("accepted by inty but STUCK: {}", stuck)),
+        }
+    })
+}
+
+#[cfg(test)]
+mod decl_tests {
+    use super::*;
+
+    /// The programs from the generalisation fix: accepted before and
+    /// stuck at runtime; rejected now.
+    #[test]
+    fn known_unsound_programs_are_rejected() {
+        for src in [
+            "function f(x) { return g(x); }\nconst g = (y) => y * 2;\nconst r = f(\"hi\");\nr;",
+            "function both(x) { return pair(x, x); }\n\
+             const pair = (a, b) => ({ first: a, second: b });\n\
+             const b = both(1).first;\nb * 2;",
+        ] {
+            check_accepted_not_stuck(src, 0).unwrap_or_else(|e| panic!("{}\n{}", src, e));
+        }
+    }
+
+    /// The generator must not be vacuous: a healthy share of its programs
+    /// type-check, and a healthy share don't.
+    #[test]
+    fn decl_generator_produces_accepted_and_rejected_programs() {
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::{Config, TestRng, TestRunner};
+        let mut runner = TestRunner::new_with_rng(
+            Config::default(),
+            TestRng::deterministic_rng(proptest::test_runner::RngAlgorithm::ChaCha),
+        );
+        let strategy = arb_decl_program();
+        let (mut accepted, total) = (0, 300);
+        for _ in 0..total {
+            let p = strategy.new_tree(&mut runner).unwrap().current();
+            if infer_helpers(&p.render(), p.helpers.len()).is_ok() {
+                accepted += 1;
+            }
+        }
+        assert!(
+            accepted >= total / 10 && accepted <= total * 9 / 10,
+            "{} of {} generated programs type-check",
+            accepted,
+            total
+        );
+    }
+
+    // 256 cases by default; set PROPTEST_CASES for a longer soak.
+    proptest! {
+        #![proptest_config(ProptestConfig::default())]
+
+        #[test]
+        fn accepted_programs_never_get_stuck(p in arb_decl_program()) {
+            let src = p.render();
+            check_accepted_not_stuck(&src, p.helpers.len())
+                .map_err(|e| TestCaseError::fail(format!("source:\n{}\n{}", src, e)))?;
+        }
+
+        #[test]
+        fn declaration_form_does_not_change_typing(p in arb_decl_program()) {
+            let n = p.helpers.len();
+            let as_functions = p.with_forms(|_| false).render();
+            let as_consts = p.with_forms(|_| true).render();
+            let mixed = p.render();
+            let reference = infer_helpers(&as_functions, n).map_err(|_| ());
+            for (label, src) in [("const", &as_consts), ("mixed", &mixed)] {
+                let other = infer_helpers(src, n).map_err(|_| ());
+                prop_assert_eq!(
+                    &reference,
+                    &other,
+                    "{} form typed differently from `function` form\n--- function form:\n{}--- {} form:\n{}",
+                    label,
+                    as_functions,
+                    label,
+                    src
+                );
+            }
+        }
+    }
+}

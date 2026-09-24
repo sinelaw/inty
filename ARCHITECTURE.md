@@ -86,6 +86,13 @@ test meta::soundness::tests::generated_string_programs_sound ... ok
 test meta::soundness::tests::generated_boolean_programs_sound ... ok
 ```
 
+**Accepted ⇒ not stuck (`src/meta/soundness.rs`, `decl_tests`)** covers what a generator of well-typed programs cannot: the checker *accepting* an ill-typed program. It generates programs that may or may not type-check. Each has a few top-level helper functions in random declaration order, each written either as `function h(x)` or as `const h = (x) => …`. The helpers call each other forwards and backwards and are used at several argument types, which exercises hoisting, generalisation and let-polymorphism. Two properties are checked:
+
+- Whenever inty accepts a program, `dynamics` must not get stuck on it.
+- The two declaration forms type identically: acceptance and every helper's scheme are the same whichever form each helper uses.
+
+Both properties fail immediately on the pre-`ftv(S Γ)` generaliser, and proptest shrinks the failure to `function h0(x) { return h1(x); } const h1 = (x) => x; h0("s") * 2`. Set `PROPTEST_CASES` for a longer soak. In debug builds, `InferState::generalize` also checks that no quantified variable is bound or reachable from the environment (`debug_check_generalisation`).
+
 The generator is deliberately conservative — it emits only the constructions where typing and operational semantics are known to agree. Adding cases here is how soundness coverage grows as new typing features land. A failing case shrinks via proptest to a minimal counterexample.
 
 ### Adding a typing feature
