@@ -2343,6 +2343,7 @@ impl<'a> Emitter<'a> {
             ("indexOf", [x]) => format!("intyStrIndexOf({}, {})", s, x),
             ("includes", [x]) => format!("strings.Contains({}, {})", s, x),
             ("startsWith", [x]) => format!("strings.HasPrefix({}, {})", s, x),
+            ("startsWith", [x, pos]) => format!("intyStartsWithAt({}, {}, {})", s, x, pos),
             ("endsWith", [x]) => format!("strings.HasSuffix({}, {})", s, x),
             ("toUpperCase", []) => format!("strings.ToUpper({})", s),
             ("toLowerCase", []) => format!("strings.ToLower({})", s),
