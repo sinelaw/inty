@@ -3,6 +3,7 @@ name = "inty-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Command-line interface for inty (type checker + LSP server)"
 
 [[bin]]
@@ -10,7 +11,7 @@ name = "inty"
 path = "src/main.rs"
 
 [dependencies]
-inty = { path = "../inty" }
-inty-lsp = { path = "../inty-lsp" }
-inty-bundle = { path = "../inty-bundle" }
-inty-go = { path = "../inty-go" }
+inty = { workspace = true }
+inty-lsp = { workspace = true }
+inty-bundle = { workspace = true }
+inty-go = { workspace = true }
