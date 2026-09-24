@@ -3896,3 +3896,77 @@ fn instantiated_predicate_errors_point_at_the_use() {
     };
     assert_eq!(&src[span.start..span.end], "twice");
 }
+// ---- Review findings on HasProp ---------------------------------------------
+
+#[test]
+fn has_prop_on_a_union_needs_every_arm() {
+    // Reading `.x` of a union of objects whose `x` differ can't give a
+    // `String` for all of them (it used to join the fields to
+    // `Number | String` and let unify's union-membership rule accept it).
+    let bad = "function up(o) { const y = o.x; const t = \"\" + y; const w = t === y; return y.toUpperCase(); }\n\
+               const u = true ? {a: 1, x: 5} : {b: 1, x: \"hi\"};\n\
+               up(u);";
+    assert!(check_program(bad, &[]).is_err());
+    // Arms that agree are fine, including a string and an array.
+    let ok = "function nm(o) { return o.name; }\n\
+              const s = nm(true ? {name: \"a\", k: 1} : {name: \"b\", z: 2});\n\
+              function ln(x) { return x.length; }\n\
+              const n = ln(true ? \"abc\" : [1, 2]);";
+    assert_eq!(check_program(ok, &["s", "n"]).unwrap(), ["String", "Number"]);
+}
+
+#[test]
+fn predicate_variables_in_shared_recursive_types_stay_monomorphic() {
+    // `a = o.x` also lives in `mk`'s recursive type; quantifying it with
+    // the `HasProp` separated each call's `x` from that shared body.
+    let src = "function f(o) { const a = o.x; function mk() { return { v: a, me: mk }; } o.z = mk(); return 0; }\n\
+               function mk2() { return { v: \"s\", me: mk2 }; }\n\
+               const obj = { x: 1, z: mk2() };\n\
+               f(obj);\n\
+               obj.z.v.toUpperCase();";
+    assert!(check_program(src, &[]).is_err());
+}
+
+#[test]
+fn spread_of_a_parameter_after_reading_it() {
+    // The reducer shape. `coerce_to_row` used to hand out an unallocated
+    // variable id that the next fresh variable reused.
+    let src = "function inc(state, v) { return {...state, count: state.count + v}; }\n\
+               const s = inc({count: 1, name: \"a\"}, 2);\n\
+               const c = s.count * 2;";
+    assert!(check_program(src, &[]).is_ok());
+}
+
+#[test]
+fn factories_reading_this_fields_stay_generic() {
+    let src = "function W(s) { return { src: s, get: function() { return this.src; } }; }\n\
+               const a = W(\"a\").get();\n\
+               const b = W(5).get();";
+    assert_eq!(check_program(src, &["a", "b"]).unwrap(), ["String", "Number"]);
+}
+
+#[test]
+fn has_prop_on_a_primitive_reports_the_missing_property() {
+    let err = check_program("function up(s) { return s.toUpperCase(); }\nup(5);", &[]).unwrap_err();
+    assert!(err.contains("toUpperCase") && err.contains("Number"), "{}", err);
+}
+
+#[test]
+fn a_join_with_a_type_not_known_yet_is_equality() {
+    // As in HM: joining (or passing into a slot) a value whose type isn't
+    // known yet unifies it with the other side; implicit unions only form
+    // between types already known to differ. So whether `o` is read
+    // before or after the join, `o` is a string here, which has no `x` —
+    // the verdict doesn't depend on statement order.
+    for src in [
+        "function h(o, b) { const n = o.x; const v = b ? o : \"str\"; return n; }",
+        "function h(o, b) { const v = b ? o : \"str\"; const n = o.x; return n; }",
+        "function h(o) { const n = o.x; const a = [o, \"s\"]; return n; }",
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(err.contains("Property 'x' not found"), "{}\n{}", src, err);
+    }
+    // Known, different types still join to a union.
+    let t = check_program("function k(b) { return b ? {x: 1} : \"str\"; }", &["k"]).unwrap();
+    assert_eq!(t[0], "<a>(a) => String | {x: Number}");
+}

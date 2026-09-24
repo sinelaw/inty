@@ -671,8 +671,13 @@ fn apply_builtin(
             });
             Ok(Value::Number(found.map_or(-1.0, |i| i as f64)))
         }
-        // A method detached from its receiver (`const f = s.slice; f()`).
-        _ => Err(Stuck::NotImplemented("built-in method on another receiver")),
+        // A method detached from its receiver (`const f = s.slice; f()`):
+        // a TypeError in JavaScript, so a real stuck state.
+        (_, m) => Err(Stuck::TypeMismatch {
+            op: m,
+            expected: "its string or array receiver",
+            got: "another receiver",
+        }),
     }
 }
 

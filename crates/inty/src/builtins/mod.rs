@@ -502,17 +502,11 @@ impl InferState {
                 let mut defaulted = false;
                 let mut rest = Vec::new();
                 for c in deferred {
-                    match c.pred.as_has_prop() {
-                        Some((recv, name, result)) => {
-                            let row =
-                                Type::object_open([(name, result.clone())], self.fresh_flex());
-                            self.unify(c.span, recv, &row)?;
-                            if let Some(this) = c.pred.method_this() {
-                                self.unify(c.span, this, recv)?;
-                            }
-                            defaulted = true;
-                        }
-                        None => rest.push(c),
+                    if c.pred.class == ClassName::HasProp {
+                        self.default_has_prop(&c)?;
+                        defaulted = true;
+                    } else {
+                        rest.push(c);
                     }
                 }
                 if !defaulted {
@@ -532,11 +526,9 @@ impl InferState {
     /// before generalising, so a function's scheme only keeps the
     /// property reads that really depend on its quantified variables,
     /// and after calls, so a result type is known as early as possible.
-    /// Only constraints at index `from` or later are considered.
-    pub(crate) fn simplify_has_props(&mut self, from: usize) -> Result<(), IntyError> {
+    pub(crate) fn simplify_has_props(&mut self) -> Result<(), IntyError> {
         loop {
-            let from = from.min(self.pending_constraints.len());
-            let ready: Vec<usize> = (from..self.pending_constraints.len())
+            let ready: Vec<usize> = (0..self.pending_constraints.len())
                 .filter(|&i| {
                     let pred = &self.pending_constraints[i].pred;
                     pred.class == ClassName::HasProp && !self.is_deferred(pred)
@@ -553,6 +545,23 @@ impl InferState {
                 self.resolve_constraint(&c.pred, c.span)?;
             }
         }
+    }
+
+    /// Read `HasProp(receiver, name, result)` as a field of an object:
+    /// bind the receiver to `{name: result | ρ}`. A valid choice for a
+    /// receiver nothing else constrains (it only narrows the types the
+    /// constraint admits), and what inty inferred before `HasProp`.
+    fn default_has_prop(&mut self, c: &crate::infer::PendingConstraint) -> Result<(), IntyError> {
+        let (recv, name, result) = c
+            .pred
+            .as_has_prop()
+            .expect("default_has_prop: a HasProp constraint");
+        let row = Type::object_open([(name, result.clone())], self.fresh_flex());
+        self.unify(c.span, recv, &row)?;
+        if let Some(this) = c.pred.method_this() {
+            self.unify(c.span, this, recv)?;
+        }
+        Ok(())
     }
 
     /// A constraint that must wait for its first type (an `Indexable`'s
@@ -581,7 +590,51 @@ impl InferState {
         if matches!(receiver, Type::Var(TVarName::Flex(_))) {
             return Ok(());
         }
-        let found = self.infer_member_on_type(&receiver, name, span)?;
+        if let Type::Union(members) = &receiver {
+            // Every arm must give `result`. (A direct read from a union
+            // joins the arms' fields into a union, but `result` may
+            // already be pinned to one of them, and unify's `Union ~ T`
+            // rule would accept that.) An arm whose type isn't known yet
+            // gets its own constraint.
+            for m in members {
+                match self.zonk(m) {
+                    m @ Type::Var(TVarName::Flex(_)) => {
+                        self.add_constraint(TypePred::has_prop(m, name, result.clone()), span)
+                    }
+                    m => self.resolve_has_prop(&m, name, result, None, span)?,
+                }
+            }
+            if let Some(this) = this {
+                self.unify(span, this, &receiver)?;
+            }
+            return Ok(());
+        }
+        let found = match self.infer_member_on_type(&receiver, name, span) {
+            Ok(t) => t,
+            // A primitive without the property: say so, rather than
+            // report the object shape it failed to unify with.
+            Err(_)
+                if matches!(
+                    receiver,
+                    Type::Number
+                        | Type::Boolean
+                        | Type::Null
+                        | Type::Undefined
+                        | Type::String
+                        | Type::Literal(_)
+                        | Type::Array(_)
+                        | Type::Regex
+                ) =>
+            {
+                return Err(TypeError::PropertyNotFound {
+                    prop: name.to_string(),
+                    obj_type: receiver.to_string(),
+                    span,
+                }
+                .into());
+            }
+            Err(e) => return Err(e),
+        };
         self.unify(span, result, &found)?;
         if let Some(this) = this {
             let receiver = self.method_receiver(&receiver);
@@ -668,14 +721,14 @@ impl InferState {
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
-            ClassName::HasProp => match pred.as_has_prop() {
-                Some((recv, name, result)) => {
-                    let (recv, result) = (recv.clone(), result.clone());
-                    let this = pred.method_this().cloned();
-                    self.resolve_has_prop(&recv, name, &result, this.as_ref(), span)
-                }
-                None => Ok(()),
-            },
+            ClassName::HasProp => {
+                let (recv, name, result) = pred
+                    .as_has_prop()
+                    .expect("HasProp predicates are built by TypePred::has_prop");
+                let (recv, result) = (recv.clone(), result.clone());
+                let this = pred.method_this().cloned();
+                self.resolve_has_prop(&recv, name, &result, this.as_ref(), span)
+            }
         }
     }
 

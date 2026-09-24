@@ -115,7 +115,13 @@ impl InferState {
         // Create a shared 'this' type for all methods in this object
         // This ensures that when one method's 'this' is unified with the object type,
         // all methods are connected, avoiding infinite types during method chaining.
-        let shared_this = self.fresh_type_var();
+        // It is known to be an object (it becomes this one), so it starts
+        // as an open row: `this.field` reads in the methods extend it
+        // directly, as they always did, rather than waiting as `HasProp`s
+        // on a bare variable — which the finished literal could only bind
+        // through a non-parametric recursive type, freezing a factory's
+        // type variables.
+        let shared_this = Type::Row(RowType::empty_open(self.fresh_flex()));
 
         let mut props: BTreeMap<PropName, FieldEntry> = BTreeMap::new();
         let mut row_tail: RowTail = RowTail::Closed;
@@ -605,9 +611,11 @@ impl InferState {
 
     /// Generate a fresh row-tail variable name. Mirrors the bare
     /// type-var helper but flagged as a row variable through its
-    /// usage in `RowTail::Open`.
+    /// usage in `RowTail::Open`. (It must allocate the id: returning
+    /// `next_var_id()` without doing so handed the same variable to the
+    /// next `fresh_flex`, tying unrelated types together.)
     fn fresh_tvar_name(&mut self) -> TVarName {
-        TVarName::Flex(self.next_var_id())
+        self.fresh_flex()
     }
 
     /// Convert a property key to a property name.
@@ -812,6 +820,21 @@ impl InferState {
                 span,
             );
             return Ok(result_type);
+        }
+
+        // A primitive without the property (its built-ins were looked up
+        // above): say so, rather than report the object shape it can't
+        // unify with.
+        if matches!(
+            receiver,
+            Type::Number | Type::Boolean | Type::Null | Type::Undefined | Type::String | Type::Regex
+        ) {
+            return Err(crate::error::TypeError::PropertyNotFound {
+                prop: property.to_string(),
+                obj_type: receiver.to_string(),
+                span,
+            }
+            .into());
         }
 
         // Otherwise (open rows that don't yet name the property, and

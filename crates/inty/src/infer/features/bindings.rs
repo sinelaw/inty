@@ -450,7 +450,7 @@ impl InferState {
             //    polymorphism. Polymorphic record/array storage must be
             //    opted in via an explicit type annotation (case 1).
             if is_declaration || decl.init.as_ref().is_some_and(is_syntactic_value) {
-                self.simplify_has_props(0)?;
+                self.simplify_has_props()?;
             }
             let scheme = if is_declaration {
                 let env_free = new_env.free();
