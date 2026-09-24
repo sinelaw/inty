@@ -188,8 +188,11 @@ impl InferState {
     ) -> InferResult<TypeEnv> {
         let mut new_env = env.clone();
         for decl in decls {
+            // Widen like an ordinary `let`: the header variable is
+            // mutable, so `let i = 0` must be `Number`, not the
+            // singleton `0` (which `i++` or `a(i)` would then contradict).
             let var_type = if let Some(init_expr) = &decl.init {
-                self.infer_expr(&new_env, init_expr)?
+                self.infer_expr(&new_env, init_expr)?.widen_fresh_literals()
             } else {
                 self.fresh_type_var()
             };

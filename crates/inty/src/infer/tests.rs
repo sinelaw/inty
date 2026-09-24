@@ -3553,3 +3553,23 @@ fn unannotated_param_mixed_arity_slice_still_errors() {
          see PR #29 / docs for HMX-style follow-up"
     );
 }
+
+/// A `for (let i = 0; …)` header variable is mutable, so it widens like
+/// an ordinary `let`: its type is `Number`, not the singleton `0` (which
+/// a later `f(i)` / `g(1)` pair sharing one parameter would contradict).
+#[test]
+fn test_for_init_literal_is_widened() {
+    let program =
+        crate::frontends::javascript::parse_source("for (let i = 0; i < 3; i++) {}").unwrap();
+    let decl_span = match &program.statements[0] {
+        crate::ast::Stmt::For {
+            init: Some(crate::ast::ForInit::VarDecl(decls)),
+            ..
+        } => decls[0].span,
+        other => panic!("expected a for loop, got {:?}", other),
+    };
+    let mut state = InferState::new();
+    state.infer_program(&initial_env(), &program).unwrap();
+    let ty = state.apply_subst(state.get_decl_type(decl_span).unwrap());
+    assert_eq!(ty, Type::Number);
+}

@@ -103,6 +103,9 @@ fn main() -> ExitCode {
     if raw.get(1).map(String::as_str) == Some("bundle") {
         return run_bundle(&raw[2..]);
     }
+    if raw.get(1).map(String::as_str) == Some("go") {
+        return run_go(&raw[2..]);
+    }
 
     let args = match parse_args(raw) {
         Ok(a) => a,
@@ -482,6 +485,87 @@ fn run_bundle(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_go(args: &[String]) -> ExitCode {
+    let mut input: Option<String> = None;
+    let mut out_path: Option<String> = None;
+    let mut no_color = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                println!("inty go <file.js> [-o out.go]");
+                println!();
+                println!("Proof of concept: type-check a single-file JavaScript");
+                println!("program and translate it to a standalone Go `main`");
+                println!("package. Every binding must have one concrete type");
+                println!("(let-polymorphism is disabled for the translation).");
+                println!("Without -o, the Go source is printed to stdout.");
+                return ExitCode::SUCCESS;
+            }
+            "--no-color" | "--no-colour" => no_color = true,
+            "-o" | "--output" => match iter.next() {
+                Some(p) => out_path = Some(p.clone()),
+                None => {
+                    eprintln!("error: -o requires a path argument");
+                    return ExitCode::from(2);
+                }
+            },
+            _ if arg.starts_with("--output=") => {
+                out_path = Some(arg["--output=".len()..].to_string());
+            }
+            _ if arg.starts_with('-') => {
+                eprintln!("error: unknown option to 'go': {}", arg);
+                return ExitCode::from(2);
+            }
+            _ => {
+                if input.is_some() {
+                    eprintln!("error: unexpected extra argument: {}", arg);
+                    return ExitCode::from(2);
+                }
+                input = Some(arg.clone());
+            }
+        }
+    }
+
+    let Some(path) = input else {
+        eprintln!("Usage: inty go <file.js> [-o out.go]");
+        return ExitCode::from(2);
+    };
+    let source = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading file '{}': {}", path, e);
+            return ExitCode::from(1);
+        }
+    };
+
+    match inty_go::compile(&source) {
+        Ok(out) => match out_path {
+            Some(p) => match fs::write(&p, &out.code) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error writing {}: {}", p, e);
+                    ExitCode::from(1)
+                }
+            },
+            None => {
+                print!("{}", out.code);
+                ExitCode::SUCCESS
+            }
+        },
+        Err(errors) => {
+            for e in &errors {
+                if no_color {
+                    print_error_plain(&path, &source, e);
+                } else {
+                    print_error(&path, &source, e);
+                }
+            }
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn run_lsp(args: &[String]) -> ExitCode {
     for arg in args {
         match arg.as_str() {
@@ -533,6 +617,8 @@ SUBCOMMANDS:
                          for every exported binding of a module
     bundle               Bundle a module's import graph into a single
                          self-contained JS blob plus a v3 source map
+    go                   (Proof of concept) translate a single-file
+                         program to a standalone Go program
 
 DESCRIPTION:
     Inty performs static type inference on mquickjs JavaScript code.

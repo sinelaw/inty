@@ -596,6 +596,15 @@ impl InferState {
 
     /// Infer the type of an expression.
     pub fn infer_expr(&mut self, env: &TypeEnv, expr: &Expr) -> InferResult<Type> {
+        let ty = self.infer_expr_inner(env, expr)?;
+        if let Some(types) = self.expr_types.as_mut() {
+            let span = expr.span();
+            types.insert((span.start, span.end), ty.clone());
+        }
+        Ok(ty)
+    }
+
+    fn infer_expr_inner(&mut self, env: &TypeEnv, expr: &Expr) -> InferResult<Type> {
         match expr {
             Expr::Lit { value, span } => self.infer_literal(value, *span),
 

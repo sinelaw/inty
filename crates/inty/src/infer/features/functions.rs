@@ -282,6 +282,13 @@ impl InferState {
             self.unify(span, &ret_type, &inferred_ret)?;
         }
 
+        // Function declarations aren't expressions, so `infer_expr`
+        // never records them; key the type by the function's own span
+        // so code generators can read a declaration's signature too.
+        if let Some(types) = self.expr_types.as_mut() {
+            types.insert((span.start, span.end), func_type.clone());
+        }
+
         Ok(self.zonk(&func_type))
     }
 
