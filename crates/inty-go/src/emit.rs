@@ -44,11 +44,30 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         indent: 0,
         ret_stack: Vec::new(),
         tmp: 0,
+        scopes: vec![HashMap::new()],
     };
 
     let mut globals = String::new();
     let mut funcs = String::new();
     let mut main_body = String::new();
+
+    // Bind every top-level name first: function bodies may refer to
+    // functions and variables declared further down (hoisting).
+    for stmt in &program.statements {
+        match stmt {
+            Stmt::FunctionDecl { name, span, .. } => {
+                let t = e.fn_type(*span)?;
+                e.bind(name, t);
+            }
+            Stmt::Var { declarations, .. } => {
+                for d in declarations {
+                    let t = e.decl_type(d)?;
+                    e.bind(&d.name, t);
+                }
+            }
+            _ => {}
+        }
+    }
 
     // Pass 1: top-level functions become Go functions; top-level
     // variables become package-level vars so functions can see them.
@@ -63,7 +82,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
             } => {
                 e.buf.clear();
                 e.indent = 0;
-                let (sig_params, ret) = e.signature(params, *span)?;
+                let (sig_params, ptys, ret) = e.signature(params, *span)?;
                 e.line(&format!(
                     "func {}({}){} {{",
                     mangle(name),
@@ -71,7 +90,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
                     e.tm.render_result(&ret)
                 ));
                 e.indent += 1;
-                e.function_body(body, &ret)?;
+                e.function_body(params, &ptys, body, &ret)?;
                 e.indent -= 1;
                 e.line("}");
                 funcs.push_str(&e.buf);
@@ -114,7 +133,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
     out.push_str("// Requires Go >= 1.22 (per-iteration loop variables, like JS `let`).\n\n");
     out.push_str("package main\n\n");
     out.push_str(
-        "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n)\n\n",
+        "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n)\n\n",
     );
     out.push_str(&e.tm.render_structs());
     if !globals.is_empty() {
@@ -140,6 +159,12 @@ struct Emitter<'a> {
     ret_stack: Vec<GoType>,
     /// Counter for fresh temporaries.
     tmp: usize,
+    /// Declared Go type of every JS binding in scope, innermost last.
+    /// An identifier's type comes from here rather than from the type
+    /// recorded at the use site: a use inside a hoisted function can be
+    /// recorded as a structural *view* of the binding (e.g. an array seen
+    /// as `{length: Number | ρ}`), which isn't the variable's Go type.
+    scopes: Vec<HashMap<String, GoType>>,
 }
 
 /// A number the emitter can fold at translation time. Folding happens
@@ -331,6 +356,7 @@ const GO_RESERVED: &[&str] = &[
     "os",
     "strconv",
     "strings",
+    "time",
     "main",
     "init",
 ];
@@ -429,7 +455,25 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    fn bind(&mut self, name: &str, t: GoType) {
+        self.scopes.last_mut().expect("scope").insert(name.to_string(), t);
+    }
+
+    fn lookup(&self, name: &str) -> Option<&GoType> {
+        self.scopes.iter().rev().find_map(|s| s.get(name))
+    }
+
+    fn fn_type(&mut self, span: Span) -> Result<GoType> {
+        let t = self.raw_type(span)?;
+        self.tm.map(self.state, &t, span)
+    }
+
     fn type_of(&mut self, e: &Expr) -> Result<GoType> {
+        if let Expr::Ident { name, .. } = e {
+            if let Some(t) = self.lookup(name) {
+                return Ok(t.clone());
+            }
+        }
         let span = e.span();
         let t = self.raw_type(span)?;
         self.tm.map(self.state, &t, span)
@@ -447,7 +491,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// Go parameter list and result type for a function at `span`.
-    fn signature(&mut self, params: &[Param], span: Span) -> Result<(String, GoType)> {
+    fn signature(&mut self, params: &[Param], span: Span) -> Result<(String, Vec<GoType>, GoType)> {
         let t = self.raw_type(span)?;
         let (ps, ret) = match self.tm.map(self.state, &t, span)? {
             GoType::Func(ps, ret) => (ps, *ret),
@@ -466,10 +510,14 @@ impl<'a> Emitter<'a> {
             .zip(&ps)
             .map(|(p, t)| format!("{} {}", mangle(&p.name), self.tm.render(t)))
             .collect();
-        Ok((rendered.join(", "), ret))
+        Ok((rendered.join(", "), ps, ret))
     }
 
-    fn function_body(&mut self, body: &Stmt, ret: &GoType) -> Result<()> {
+    fn function_body(&mut self, params: &[Param], ptys: &[GoType], body: &Stmt, ret: &GoType) -> Result<()> {
+        self.scopes.push(HashMap::new());
+        for (p, t) in params.iter().zip(ptys) {
+            self.bind(&p.name, t.clone());
+        }
         self.ret_stack.push(ret.clone());
         let stmts: &[Stmt] = match body {
             Stmt::Block { body, .. } => body,
@@ -483,12 +531,13 @@ impl<'a> Emitter<'a> {
             self.line("panic(\"unreachable\")");
         }
         self.ret_stack.pop();
+        self.scopes.pop();
         Ok(())
     }
 
     fn func_literal(&mut self, params: &[Param], body: &Stmt, span: Span) -> Result<String> {
-        let (sig, ret) = self.signature(params, span)?;
-        let text = self.nested(|e| e.function_body(body, &ret))?;
+        let (sig, ptys, ret) = self.signature(params, span)?;
+        let text = self.nested(|e| e.function_body(params, &ptys, body, &ret))?;
         Ok(format!(
             "func({}){} {{\n{}{}}}",
             sig,
@@ -503,12 +552,19 @@ impl<'a> Emitter<'a> {
     /// Emit a statement list that forms one Go block. Nested function
     /// declarations are declared up front (JS hoists them).
     fn block_stmts(&mut self, stmts: &[Stmt]) -> Result<()> {
+        self.scopes.push(HashMap::new());
+        let r = self.block_stmts_in_scope(stmts);
+        self.scopes.pop();
+        r
+    }
+
+    fn block_stmts_in_scope(&mut self, stmts: &[Stmt]) -> Result<()> {
         for s in stmts {
             if let Stmt::FunctionDecl { name, span, .. } = s {
-                let t = self.raw_type(*span)?;
-                let g = self.tm.map(self.state, &t, *span)?;
+                let g = self.fn_type(*span)?;
                 let rendered = self.tm.render(&g);
                 self.line(&format!("var {} {}", mangle(name), rendered));
+                self.bind(name, g);
             }
         }
         for (i, s) in stmts.iter().enumerate() {
@@ -538,6 +594,7 @@ impl<'a> Emitter<'a> {
                         // first so the literal can capture the variable.
                         Some(init @ Expr::Function { .. }) => {
                             self.line(&format!("var {} {}", name, rendered));
+                            self.bind(&d.name, ty.clone());
                             let v = self.expr(init)?;
                             self.line(&format!("{} = {}", name, v));
                         }
@@ -547,6 +604,7 @@ impl<'a> Emitter<'a> {
                         }
                         None => self.line(&format!("var {} {}", name, rendered)),
                     }
+                    self.bind(&d.name, ty.clone());
                     // Go rejects unused locals; JS doesn't care.
                     let used_later = declarations[i + 1..]
                         .iter()
@@ -662,6 +720,7 @@ impl<'a> Emitter<'a> {
                     GoType::Array(e) => *e,
                     _ => return Err(unsupported("for-of over a non-array", right.span())),
                 };
+                self.scopes.push(HashMap::new());
                 let arr = self.fresh("Arr");
                 let idx = self.fresh("I");
                 let a = self.expr(right)?;
@@ -676,6 +735,7 @@ impl<'a> Emitter<'a> {
                         let t = self.tm.render(&elem);
                         self.line(&format!("var {n} {t} = (*{arr})[{idx}]"));
                         self.line(&format!("_ = {n}"));
+                        self.bind(name, elem.clone());
                     }
                     ForInLhs::Expr(target) => {
                         let place = self.place(target)?;
@@ -687,6 +747,7 @@ impl<'a> Emitter<'a> {
                 self.line("}");
                 self.indent -= 1;
                 self.line("}");
+                self.scopes.pop();
             }
             Stmt::Break { label, .. } => match label {
                 Some(l) => self.line(&format!("break {}", mangle(l))),
@@ -739,7 +800,20 @@ impl<'a> Emitter<'a> {
         test: Option<&Expr>,
         update: Option<&Expr>,
         body: &Stmt,
-        span: Span,
+        _span: Span,
+    ) -> Result<()> {
+        self.scopes.push(HashMap::new());
+        let r = self.for_stmt_in_scope(init, test, update, body);
+        self.scopes.pop();
+        r
+    }
+
+    fn for_stmt_in_scope(
+        &mut self,
+        init: Option<&ForInit>,
+        test: Option<&Expr>,
+        update: Option<&Expr>,
+        body: &Stmt,
     ) -> Result<()> {
         let mut pre = Vec::new();
         let init_s = match init {
@@ -756,7 +830,7 @@ impl<'a> Emitter<'a> {
                         Some(init) => self.expr_as(init, &ty)?,
                         None => return Err(unsupported("uninitialised for-loop variable", d.span)),
                     };
-                    let v = match ty {
+                    let v = match &ty {
                         GoType::Float | GoType::Str | GoType::Bool => v,
                         _ if v == "nil" => {
                             return Err(unsupported("null-initialised for-loop variable", d.span))
@@ -766,6 +840,7 @@ impl<'a> Emitter<'a> {
                     names.push(mangle(&d.name));
                     vals.push(v);
                     pre.push(d.name.clone());
+                    self.bind(&d.name, ty);
                 }
                 format!("{} := {}", names.join(", "), vals.join(", "))
             }
@@ -805,7 +880,7 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    fn switch_stmt(&mut self, disc: &Expr, cases: &[SwitchCase], span: Span) -> Result<()> {
+    fn switch_stmt(&mut self, disc: &Expr, cases: &[SwitchCase], _span: Span) -> Result<()> {
         let dt = self.type_of(disc)?;
         let d = self.expr(disc)?;
         self.line(&format!("switch {} {{", d));
@@ -1620,8 +1695,10 @@ impl<'a> Emitter<'a> {
                     "sqrt" => "math.Sqrt",
                     "cbrt" => "math.Cbrt",
                     "pow" => "intyPow",
-                    "min" => "math.Min",
-                    "max" => "math.Max",
+                    // Go 1.21 builtins: NaN-propagating, -0 < +0 — exactly
+                    // JS semantics, and compiled inline (math.Min is a call).
+                    "min" => "min",
+                    "max" => "max",
                     "hypot" => "math.Hypot",
                     "log" => "math.Log",
                     "log2" => "math.Log2",
@@ -1647,6 +1724,7 @@ impl<'a> Emitter<'a> {
                 };
                 format!("{}({})", go, vals.join(", "))
             }
+            ("performance", "now") if args.is_empty() => "intyNow()".into(),
             ("String", "fromCharCode") if args.len() == 1 => {
                 arg(self, &mut vals)?;
                 format!("intyFromCharCode({})", vals[0])

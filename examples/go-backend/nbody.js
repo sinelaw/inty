@@ -90,10 +90,25 @@ function energy(bodies) {
   return e;
 }
 
-const bodies = makeBodies();
-offsetMomentum(bodies);
-console.log(energy(bodies));
-for (let step = 0; step < 5000000; step++) {
-  advance(bodies, 0.01);
+function main() {
+  const lines = [];
+  const bodies = makeBodies();
+  offsetMomentum(bodies);
+  lines.push(energy(bodies));
+  for (let step = 0; step < 5000000; step++) {
+    advance(bodies, 0.01);
+  }
+  lines.push(energy(bodies));
+  return lines.join("\n");
 }
-console.log(energy(bodies));
+
+// ---- benchmark protocol (see bench.mjs) ------------------------------
+// Run the workload 4 times in one process. The first run includes JIT
+// warm-up; bench.mjs reports the other three as steady-state samples.
+let report = "";
+for (let iteration = 0; iteration < 4; iteration++) {
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);

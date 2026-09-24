@@ -57,4 +57,17 @@ function spectralNorm(n) {
   return Math.sqrt(vBv / vv);
 }
 
-console.log(spectralNorm(3000));
+function main() {
+  return String(spectralNorm(3000));
+}
+
+// ---- benchmark protocol (see bench.mjs) ------------------------------
+// Run the workload 4 times in one process. The first run includes JIT
+// warm-up; bench.mjs reports the other three as steady-state samples.
+let report = "";
+for (let iteration = 0; iteration < 4; iteration++) {
+  const t0 = performance.now();
+  report = main();
+  console.error(`inty-bench iteration ${iteration} ms ${performance.now() - t0}`);
+}
+console.log(report);

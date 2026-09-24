@@ -349,3 +349,8 @@ func intyClz32(f float64) float64 { return float64(bits.LeadingZeros32(intyToUin
 func intyIsInteger(f float64) bool { return !math.IsInf(f, 0) && f == math.Trunc(f) }
 
 var _ = rand.Float64
+
+var intyStart = time.Now()
+
+// intyNow is performance.now(): milliseconds since program start.
+func intyNow() float64 { return float64(time.Since(intyStart).Nanoseconds()) / 1e6 }
