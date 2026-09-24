@@ -363,6 +363,11 @@ func intyStrIndexOfFrom(s, sub string, from float64) float64 {
 	return -1
 }
 
+// intyStartsWithAt is startsWith(x, pos).
+func intyStartsWithAt(s, x string, pos float64) bool {
+	return strings.HasPrefix(s[intyClampIndex(max(pos, 0), len(s)):], x)
+}
+
 func intyCharAt(s string, i float64) string {
 	if i != i {
 		i = 0
