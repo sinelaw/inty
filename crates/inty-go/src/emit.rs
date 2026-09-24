@@ -650,7 +650,16 @@ impl<'a> Emitter<'a> {
             .get(&(span.start, span.end))
             .cloned()
             .unwrap_or_default();
-        let qvars = self.funcs[fid].qvars.clone();
+        // The scheme can also quantify variables its type doesn't mention
+        // (determined by a predicate: the element of an `Indexable`
+        // parameter, the result of a `HasProp`); the instantiation fixes
+        // those too.
+        let mut qvars = self.funcs[fid].qvars.clone();
+        for (q, _) in &inst {
+            if !qvars.contains(q) {
+                qvars.push(q.clone());
+            }
+        }
         let mut concrete = Vec::with_capacity(qvars.len());
         for v in &qvars {
             let t = match inst.iter().find(|(q, _)| q == v) {

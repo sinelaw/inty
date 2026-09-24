@@ -539,6 +539,8 @@ fn read_member(heap: &Heap, obj: &Value, property: &str) -> Result<Value, Stuck>
                     _ => return Err(Stuck::NotImplemented("array loc not Array cell")),
                 };
                 Ok(Value::Number(len as f64))
+            } else if let Some(m) = builtin_method("array", property) {
+                Ok(Value::Builtin(m))
             } else {
                 Err(Stuck::PropertyNotFound {
                     kind: "array",
@@ -549,6 +551,8 @@ fn read_member(heap: &Heap, obj: &Value, property: &str) -> Result<Value, Stuck>
         Value::String(s) => {
             if property == "length" {
                 Ok(Value::Number(s.chars().count() as f64))
+            } else if let Some(m) = builtin_method("string", property) {
+                Ok(Value::Builtin(m))
             } else {
                 Err(Stuck::PropertyNotFound {
                     kind: "string",
@@ -557,6 +561,118 @@ fn read_member(heap: &Heap, obj: &Value, property: &str) -> Result<Value, Stuck>
             }
         }
         _ => Err(Stuck::NotIndexable(obj.type_string())),
+    }
+}
+
+/// The built-in methods the semantics models, by receiver kind.
+const BUILTIN_METHODS: &[(&str, &str)] = &[
+    ("string", "slice"),
+    ("string", "toUpperCase"),
+    ("string", "charCodeAt"),
+    ("string", "indexOf"),
+    ("array", "slice"),
+    ("array", "indexOf"),
+];
+
+fn builtin_method(kind: &str, property: &str) -> Option<&'static str> {
+    BUILTIN_METHODS
+        .iter()
+        .find(|(k, m)| *k == kind && *m == property)
+        .map(|(_, m)| *m)
+}
+
+/// `start`/`end` of `slice`: a negative index counts from the end.
+fn slice_bounds(args: &[Value], len: usize) -> Result<(usize, usize), Stuck> {
+    let at = |i: usize, default: f64| -> Result<usize, Stuck> {
+        let n = match args.get(i) {
+            None | Some(Value::Undefined) => default,
+            Some(Value::Number(n)) => n.trunc(),
+            Some(_) => return Err(Stuck::NotImplemented("slice with a non-number index")),
+        };
+        let n = if n < 0.0 {
+            (len as f64 + n).max(0.0)
+        } else {
+            n.min(len as f64)
+        };
+        Ok(n as usize)
+    };
+    let (a, b) = (at(0, 0.0)?, at(1, len as f64)?);
+    Ok((a, b.max(a)))
+}
+
+fn apply_builtin(
+    state: &mut State,
+    method: &'static str,
+    this: Option<Value>,
+    args: Vec<Value>,
+) -> Result<Value, Stuck> {
+    let arity = |lo: usize, hi: usize| -> Result<(), Stuck> {
+        if args.len() < lo || args.len() > hi {
+            return Err(Stuck::ArityMismatch {
+                expected: hi,
+                got: args.len(),
+            });
+        }
+        Ok(())
+    };
+    match (this, method) {
+        (Some(Value::String(s)), "slice") => {
+            arity(0, 2)?;
+            let chars: Vec<char> = s.chars().collect();
+            let (a, b) = slice_bounds(&args, chars.len())?;
+            Ok(Value::String(chars[a..b].iter().collect()))
+        }
+        (Some(Value::String(s)), "toUpperCase") => {
+            arity(0, 0)?;
+            Ok(Value::String(s.to_uppercase()))
+        }
+        (Some(Value::String(s)), "charCodeAt") => {
+            arity(1, 1)?;
+            let Value::Number(i) = args[0] else {
+                return Err(Stuck::NotImplemented("charCodeAt with a non-number index"));
+            };
+            Ok(Value::Number(
+                s.encode_utf16()
+                    .nth(i as usize)
+                    .map_or(f64::NAN, |c| c as f64),
+            ))
+        }
+        (Some(Value::String(s)), "indexOf") => {
+            arity(1, 1)?;
+            let Value::String(needle) = &args[0] else {
+                return Err(Stuck::NotImplemented("indexOf with a non-string argument"));
+            };
+            Ok(Value::Number(
+                s.find(needle.as_str())
+                    .map_or(-1.0, |b| s[..b].chars().count() as f64),
+            ))
+        }
+        (Some(Value::Array(loc)), "slice") => {
+            arity(0, 2)?;
+            let items = match state.heap.get(loc) {
+                Some(Cell::Array(v)) => v.clone(),
+                _ => return Err(Stuck::NotImplemented("array loc not Array cell")),
+            };
+            let (a, b) = slice_bounds(&args, items.len())?;
+            let loc = state.heap.alloc(Cell::Array(items[a..b].to_vec()));
+            Ok(Value::Array(loc))
+        }
+        (Some(Value::Array(loc)), "indexOf") => {
+            arity(1, 1)?;
+            let items = match state.heap.get(loc) {
+                Some(Cell::Array(v)) => v.clone(),
+                _ => return Err(Stuck::NotImplemented("array loc not Array cell")),
+            };
+            let found = items.iter().position(|v| match (v, &args[0]) {
+                (Value::Number(a), Value::Number(b)) => a == b,
+                (Value::String(a), Value::String(b)) => a == b,
+                (Value::Boolean(a), Value::Boolean(b)) => a == b,
+                _ => false,
+            });
+            Ok(Value::Number(found.map_or(-1.0, |i| i as f64)))
+        }
+        // A method detached from its receiver (`const f = s.slice; f()`).
+        _ => Err(Stuck::NotImplemented("built-in method on another receiver")),
     }
 }
 
@@ -602,6 +718,7 @@ fn apply(
 ) -> Result<Value, Stuck> {
     let closure = match callee {
         Value::Closure(c) => c,
+        Value::Builtin(m) => return apply_builtin(state, m, this, args),
         other => return Err(Stuck::NotCallable(other.type_string())),
     };
     if args.len() != closure.params.len() {

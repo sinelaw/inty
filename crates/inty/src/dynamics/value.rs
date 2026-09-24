@@ -32,6 +32,10 @@ pub enum Value {
     /// `Promise<v>`. Modelled as a transparent wrapper for now —
     /// `await p` reduces to `p`'s inner value. See phase-3 notes.
     Promise(Box<Value>),
+    /// A built-in method of strings or arrays (`"abc".slice`), applied
+    /// to the receiver it's called on. Only a few are modelled; see
+    /// `step::BUILTIN_METHODS`.
+    Builtin(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -51,7 +55,7 @@ impl Value {
             Value::Boolean(_) => "boolean",
             Value::Undefined => "undefined",
             Value::Null => "object",
-            Value::Closure(_) => "function",
+            Value::Closure(_) | Value::Builtin(_) => "function",
             Value::Array(_) | Value::Object(_) => "object",
             Value::Promise(_) => "object",
         }
@@ -64,7 +68,11 @@ impl Value {
             Value::String(s) => !s.is_empty(),
             Value::Boolean(b) => *b,
             Value::Null | Value::Undefined => false,
-            Value::Closure(_) | Value::Array(_) | Value::Object(_) | Value::Promise(_) => true,
+            Value::Closure(_)
+            | Value::Builtin(_)
+            | Value::Array(_)
+            | Value::Object(_)
+            | Value::Promise(_) => true,
         }
     }
 }
@@ -84,6 +92,7 @@ impl fmt::Display for Value {
             Value::Array(l) => write!(f, "<array @{}>", l.0),
             Value::Object(l) => write!(f, "<object @{}>", l.0),
             Value::Promise(v) => write!(f, "<promise {}>", v),
+            Value::Builtin(m) => write!(f, "<builtin {}>", m),
         }
     }
 }

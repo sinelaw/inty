@@ -661,7 +661,7 @@ impl InferState {
 
             Expr::Ident { name, span } => {
                 if let Some(scheme) = env.lookup(name) {
-                    let (ty, instantiation) = self.instantiate_recording(scheme);
+                    let (ty, instantiation) = self.instantiate_recording_at(scheme, *span);
                     if !instantiation.is_empty() {
                         if let Some(record) = self.instantiations.as_mut() {
                             record.insert((span.start, span.end), instantiation);

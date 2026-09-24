@@ -149,23 +149,27 @@ For DOM APIs that return `null` (not `undefined`), users write
 the long form `Element | Null` — `T?` adds `Undefined` only,
 matching TypeScript's `?:` convention.
 
-### 7. `String` and `String[]` collide under structural indexing
+### 7. `String` and `String[]` collide under structural indexing *(resolved)*
 
-A function that only uses `s.length` and `s[i]` satisfies both `String`
-and `String[]` identically, so inty picks one by unification order
-and may default wrongly. The workaround is to throw a `"" + s` into the
-body to trigger the `Plus` type-class and pin it to `String`. Now that
-`String.prototype` methods dispatch directly (gap 5), most real code
-touches at least one string-specific method and the ambiguity never
-fires — but a pure `length`/`[i]` function still has the problem.
+A function that only uses `s.length` and `s[i]` used to be forced to
+one of `String` and `String[]` by unification order, and the other
+caller was rejected. Property reads on a parameter are now constraints
+(`a has {length: Number}`, see `docs/type-system.md`) resolved per call,
+so the same function takes both:
 
-### 8. Generic row-polymorphic helpers "forget" fields
+```js
+function count(s) { var n = 0; for (var i = 0; i < s.length; i++) { if (s[i] === "a") n++; } return n; }
+count("banana");       // OK
+count(["a", "b"]);     // OK
+```
 
-A polymorphic helper `function removeById(arr, id)` is inferred at
-`<a, b>({id: b | a}[], b) => {id: b | a}[]`, but when called with a
-concrete todo array the returned element's `text` field comes back as
-a free type variable rather than `String`. The workaround is to inline
-the helper (lose the generic). Needs attention in the inference engine.
+### 8. Generic row-polymorphic helpers "forget" fields *(resolved)*
+
+`function removeById(arr, id) { return arr.filter(…) }` couldn't be
+called with a concrete todo array at all: `arr` was inferred as an
+object with a `filter` field, which an array doesn't unify with. It's
+now `a has {filter: …}`, resolved against `Array.prototype.filter` at
+the call, and `removeById(todos, 1)[0].text` is a `String`.
 
 ### 9. Control-flow-dependent return typing is strict
 

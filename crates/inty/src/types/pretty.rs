@@ -536,11 +536,34 @@ impl PrettyContext {
 
         if !scheme.body.preds.is_empty() {
             write!(w, " where ")?;
-            for (i, pred) in scheme.body.preds.iter().enumerate() {
-                if i > 0 {
+            // `HasProp` predicates on the same receiver print together,
+            // in first-appearance order: `a has {x: b, y: c}`.
+            let mut groups: Vec<(&Type, Vec<(&str, &Type)>)> = Vec::new();
+            let mut first = true;
+            for pred in &scheme.body.preds {
+                if let Some((recv, name, result)) = pred.as_has_prop() {
+                    match groups.iter_mut().find(|(r, _)| *r == recv) {
+                        Some((_, fields)) => {
+                            if !fields.contains(&(name, result)) {
+                                fields.push((name, result));
+                            }
+                        }
+                        None => groups.push((recv, vec![(name, result)])),
+                    }
+                    continue;
+                }
+                if !first {
                     write!(w, ", ")?;
                 }
+                first = false;
                 self.write_pred(w, pred)?;
+            }
+            for (recv, fields) in groups {
+                if !first {
+                    write!(w, ", ")?;
+                }
+                first = false;
+                self.write_has_props(w, recv, &fields)?;
             }
             write!(w, " => ")?;
         }
@@ -563,8 +586,38 @@ impl PrettyContext {
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
             }
+            ClassName::HasProp => match pred.as_has_prop() {
+                Some((recv, name, result)) => self.write_has_props(w, recv, &[(name, result)])?,
+                None => {
+                    write!(w, "HasProp")?;
+                    for t in &pred.types {
+                        write!(w, " ")?;
+                        self.write_type(w, t, true)?;
+                    }
+                }
+            },
         }
         Ok(())
+    }
+
+    /// `recv has {name: T, …}`: the properties a scheme reads from a
+    /// value of a quantified type.
+    fn write_has_props<W: Write>(
+        &mut self,
+        w: &mut W,
+        recv: &Type,
+        fields: &[(&str, &Type)],
+    ) -> fmt::Result {
+        self.write_type(w, recv, true)?;
+        write!(w, " has {{")?;
+        for (i, (name, ty)) in fields.iter().enumerate() {
+            if i > 0 {
+                write!(w, ", ")?;
+            }
+            write!(w, "{}: ", name)?;
+            self.write_type(w, ty, false)?;
+        }
+        write!(w, "}}")
     }
 }
 
@@ -630,6 +683,13 @@ fn displayed_vars_of_scheme(scheme: &TypeScheme) -> HashSet<TVarName> {
             collect_hidden_this_vars(t, &mut hidden);
         }
     }
+    // A `HasProp` receiver is printed (`a has {…}`) even where it's
+    // also a method's hidden `this`.
+    for p in &scheme.body.preds {
+        if let Some((Type::Var(v), _, _)) = p.as_has_prop() {
+            hidden.remove(v);
+        }
+    }
     for v in &hidden {
         used.remove(v);
     }
@@ -673,6 +733,7 @@ impl Display for ClassName {
         match self {
             ClassName::Plus => write!(f, "Plus"),
             ClassName::Indexable => write!(f, "Indexable"),
+            ClassName::HasProp => write!(f, "HasProp"),
         }
     }
 }
