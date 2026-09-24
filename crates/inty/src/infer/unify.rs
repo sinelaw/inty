@@ -33,9 +33,19 @@ impl InferState {
     /// (`infernu/Decycle.hs` discipline) so any structural cycle in
     /// the mirror degrades to a free variable rather than a SIGSEGV.
     pub fn unify(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
+        // A cycle in the substitution that `zonk` cuts (it shows a bound
+        // row tail as free) can make unification re-bind the same tails
+        // with fresh variables forever. Give up with a type error at a
+        // depth no real type reaches, instead of overflowing the stack.
+        if self.unify_depth >= super::MAX_UNIFY_DEPTH {
+            return Err(TypeError::UnifyDepth { span }.into());
+        }
         let t1 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t1);
         let t2 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t2);
-        self.unify_impl(span, &t1, &t2)
+        self.unify_depth += 1;
+        let result = self.unify_impl(span, &t1, &t2);
+        self.unify_depth -= 1;
+        result
     }
 
     fn unify_impl(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
@@ -594,65 +604,17 @@ impl InferState {
                 if root1 == root2 {
                     return Ok(());
                 }
-
-                // Calculate extra properties for each side
-                let extra1: BTreeMap<PropName, FieldEntry> = r2
-                    .props
-                    .iter()
-                    .filter(|(k, _)| !r1.props.contains_key(*k))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-
-                let extra2: BTreeMap<PropName, FieldEntry> = r1
-                    .props
-                    .iter()
-                    .filter(|(k, _)| !r2.props.contains_key(*k))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-
-                // Fast path: when both rows have the same prop set
-                // (extras both empty), the standard Rémy fresh-tail
-                // dance reduces to bookkeeping — we'd allocate a
-                // fresh `γ` and bind `root1 → Row{∅, γ}`,
-                // `root2 → Row{∅, γ}` purely to record that root1
-                // and root2 now share an unknown extension. Just
-                // union them instead: `root1 → Var(root2)` makes
-                // them members of the same equivalence class with
-                // one fewer variable. This is the union-find merge
-                // operation (Tarjan 1975) and converts the htmx
-                // divergence cycle — which spent its time
-                // re-allocating γ's for repeatedly-unified copies
-                // of the same htmx row — into a constant-time
-                // operation.
-                if extra1.is_empty() && extra2.is_empty() {
-                    self.extend_subst(
-                        span,
-                        TVarName::Flex(root1),
-                        Type::Var(TVarName::Flex(root2)),
-                    )?;
+                // Coinductive: re-entering the unification of the same
+                // two tails assumes it succeeds (the rows are regular
+                // trees; see `UnfoldAssumption::RowTails`).
+                let assumption = UnfoldAssumption::RowTails(root1.min(root2), root1.max(root2));
+                if self.unfold_assumptions.contains(&assumption) {
                     return Ok(());
                 }
-
-                // Both open with at least one side extending the
-                // other: standard Rémy fresh-tail dance.
-                let fresh = self.fresh_flex();
-
-                // Bind both row variables. Use the path-compressed
-                // roots rather than the original ids so the binding
-                // lands on the canonical representative of each
-                // equivalence class.
-                self.extend_subst(
-                    span,
-                    TVarName::Flex(root1),
-                    Type::Row(RowType::open_entries(extra1, fresh.clone())),
-                )?;
-                self.extend_subst(
-                    span,
-                    TVarName::Flex(root2),
-                    Type::Row(RowType::open_entries(extra2, fresh)),
-                )?;
-
-                Ok(())
+                self.unfold_assumptions.push(assumption);
+                let result = self.unify_open_tails(span, r1, r2, root1, root2);
+                self.unfold_assumptions.pop();
+                result
             }
 
             (RowTail::Recursive(id1, args1), RowTail::Recursive(id2, args2)) if id1 == id2 => {
@@ -665,6 +627,76 @@ impl InferState {
 
             _ => Err(self.unification_error(span, &Type::Row(r1.clone()), &Type::Row(r2.clone()))),
         }
+    }
+
+    /// The open-tail / open-tail case of [`Self::unify_rows`], once the
+    /// tails' roots `root1` and `root2` are known to differ.
+    fn unify_open_tails(
+        &mut self,
+        span: Span,
+        r1: &RowType,
+        r2: &RowType,
+        root1: TVarId,
+        root2: TVarId,
+    ) -> UnifyResult<()> {
+        // Calculate extra properties for each side
+        let extra1: BTreeMap<PropName, FieldEntry> = r2
+            .props
+            .iter()
+            .filter(|(k, _)| !r1.props.contains_key(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let extra2: BTreeMap<PropName, FieldEntry> = r1
+            .props
+            .iter()
+            .filter(|(k, _)| !r2.props.contains_key(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        // Fast path: when both rows have the same prop set
+        // (extras both empty), the standard Rémy fresh-tail
+        // dance reduces to bookkeeping — we'd allocate a
+        // fresh `γ` and bind `root1 → Row{∅, γ}`,
+        // `root2 → Row{∅, γ}` purely to record that root1
+        // and root2 now share an unknown extension. Just
+        // union them instead: `root1 → Var(root2)` makes
+        // them members of the same equivalence class with
+        // one fewer variable. This is the union-find merge
+        // operation (Tarjan 1975) and converts the htmx
+        // divergence cycle — which spent its time
+        // re-allocating γ's for repeatedly-unified copies
+        // of the same htmx row — into a constant-time
+        // operation.
+        if extra1.is_empty() && extra2.is_empty() {
+            self.extend_subst(
+                span,
+                TVarName::Flex(root1),
+                Type::Var(TVarName::Flex(root2)),
+            )?;
+            return Ok(());
+        }
+
+        // Both open with at least one side extending the
+        // other: standard Rémy fresh-tail dance.
+        let fresh = self.fresh_flex();
+
+        // Bind both row variables. Use the path-compressed
+        // roots rather than the original ids so the binding
+        // lands on the canonical representative of each
+        // equivalence class.
+        self.extend_subst(
+            span,
+            TVarName::Flex(root1),
+            Type::Row(RowType::open_entries(extra1, fresh.clone())),
+        )?;
+        self.extend_subst(
+            span,
+            TVarName::Flex(root2),
+            Type::Row(RowType::open_entries(extra2, fresh)),
+        )?;
+
+        Ok(())
     }
 
     /// Create a recursive type when occurs check detects a row cycle.

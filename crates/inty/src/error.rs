@@ -271,6 +271,12 @@ pub enum TypeError {
     #[error("Infinite type: {var} occurs in {ty}")]
     OccursCheck { var: String, ty: String, span: Span },
 
+    /// Unification nested deeper than [`crate::infer::MAX_UNIFY_DEPTH`]:
+    /// recursive types it couldn't settle. Reported instead of
+    /// overflowing the stack.
+    #[error("Type too complex: unifying these recursive types did not terminate")]
+    UnifyDepth { span: Span },
+
     #[error("Undefined variable '{name}'")]
     UndefinedVariable { name: String, span: Span },
 
@@ -374,6 +380,7 @@ impl TypeError {
         match self {
             TypeError::UnificationError { span, .. } => *span,
             TypeError::OccursCheck { span, .. } => *span,
+            TypeError::UnifyDepth { span } => *span,
             TypeError::UndefinedVariable { span, .. } => *span,
             TypeError::PropertyNotFound { span, .. } => *span,
             TypeError::PresenceMismatch { span, .. } => *span,
