@@ -19,6 +19,11 @@ generally harmful.
 
 inty is available as a CLI, an LSP server, and a WASM library.
 
+There is also an experimental Go backend. `inty go file.js` translates a
+fully type-checked program into Go, to show what the static types are
+worth at runtime. See [examples/go-backend](examples/go-backend/README.md)
+and the [benchmarks against Node and Bun](examples/go-backend/BENCHMARKS.md).
+
 Try it online at: https://sinelaw.github.io/inty/
 
 inty is based on [infernu](https://github.com/sinelaw/infernu).
