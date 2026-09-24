@@ -419,12 +419,19 @@ fn load_module(
     path: &Path,
     visiting: &mut HashSet<PathBuf>,
 ) -> Result<(TypeEnv, ExportTable), IntyError> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
-        IntyError::Type(crate::error::TypeError::Module {
-            message: format!("failed to read {}: {}", path.display(), e),
-            span: crate::span::Span::new(0, 0),
-        })
-    })?;
+    let builtin = path
+        .to_str()
+        .and_then(|p| p.strip_prefix(crate::stdlib::BUILTIN_MODULE_PREFIX))
+        .and_then(crate::stdlib::builtin_module);
+    let source = match builtin {
+        Some((_, declarations)) => declarations.to_string(),
+        None => std::fs::read_to_string(path).map_err(|e| {
+            IntyError::Type(crate::error::TypeError::Module {
+                message: format!("failed to read {}: {}", path.display(), e),
+                span: crate::span::Span::new(0, 0),
+            })
+        })?,
+    };
 
     let program = parse(&source)?;
 
@@ -533,6 +540,14 @@ fn try_extensions(candidate: &Path) -> Option<PathBuf> {
 }
 
 fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
+    // Node built-ins (`node:fs`, `fs`, …) resolve to embedded declarations.
+    if let Some((name, _)) = crate::stdlib::builtin_module(source) {
+        return Ok(PathBuf::from(format!(
+            "{}{}",
+            crate::stdlib::BUILTIN_MODULE_PREFIX,
+            name
+        )));
+    }
     // Direct relative / absolute resolution. Tried first so existing
     // `./foo.js` style imports keep working with no config in sight.
     let raw = Path::new(source);

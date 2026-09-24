@@ -86,6 +86,11 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
                     e.bind(&d.name, t);
                 }
             }
+            Stmt::Import {
+                specifiers,
+                source,
+                span,
+            } => e.bind_import(specifiers, source, *span)?,
             _ => {}
         }
     }
@@ -95,7 +100,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
     e.ret_stack.push(GoType::Unit);
     for stmt in &program.statements {
         match stmt {
-            Stmt::FunctionDecl { .. } => {}
+            Stmt::FunctionDecl { .. } | Stmt::Import { .. } => {}
             Stmt::Var {
                 kind, declarations, ..
             } => {
@@ -129,7 +134,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
     out.push_str("// Requires Go >= 1.22 (per-iteration loop variables, like JS `let`).\n\n");
     out.push_str("package main\n\n");
     out.push_str(
-        "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n)\n\n",
+        "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n\t\"unicode\"\n)\n\n",
     );
     out.push_str(&e.tm.render_structs());
     if !globals.is_empty() {
@@ -171,6 +176,55 @@ enum Bound {
     /// A function binding, specialised per instantiation: index into
     /// `Emitter::funcs`.
     Func(usize),
+    /// Something imported from a Node built-in module.
+    Node(NodeItem),
+}
+
+/// The parts of Node's built-in modules the backend implements (see
+/// `crates/inty/stdlib/node/*.d.js` for their types). Each lowers to a
+/// runtime helper; none is a first-class Go value except `argv`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum NodeItem {
+    /// `import * as fs from "node:fs"`
+    FsModule,
+    /// `import process from "node:process"` (or `* as process`)
+    ProcessModule,
+    ReadFileSync,
+    WriteFileSync,
+    AppendFileSync,
+    ExistsSync,
+    Argv,
+    Exit,
+    Stdout,
+    Stderr,
+}
+
+impl NodeItem {
+    /// `name` imported from the built-in module `module` (`"node:fs"`,
+    /// `"node:process"`; the `node:` prefix is optional).
+    fn import(module: &str, name: &str) -> Option<NodeItem> {
+        let module = module.strip_prefix("node:").unwrap_or(module);
+        Some(match (module, name) {
+            ("fs", "readFileSync") => NodeItem::ReadFileSync,
+            ("fs", "writeFileSync") => NodeItem::WriteFileSync,
+            ("fs", "appendFileSync") => NodeItem::AppendFileSync,
+            ("fs", "existsSync") => NodeItem::ExistsSync,
+            ("process", "argv") => NodeItem::Argv,
+            ("process", "exit") => NodeItem::Exit,
+            ("process", "stdout") => NodeItem::Stdout,
+            ("process", "stderr") => NodeItem::Stderr,
+            _ => return None,
+        })
+    }
+
+    /// `self.property`, for a module object.
+    fn member(self, property: &str) -> Option<NodeItem> {
+        match self {
+            NodeItem::FsModule => NodeItem::import("fs", property),
+            NodeItem::ProcessModule => NodeItem::import("process", property),
+            _ => None,
+        }
+    }
 }
 
 /// A function the emitter may specialise.
@@ -550,6 +604,68 @@ impl<'a> Emitter<'a> {
         self.scopes.iter().rev().find_map(|s| s.get(name)).cloned()
     }
 
+    /// Bind the names a top-level `import` introduces. Only Node's
+    /// built-in modules are supported: programs are single files.
+    fn bind_import(
+        &mut self,
+        specifiers: &[ImportSpecifier],
+        source: &str,
+        span: Span,
+    ) -> Result<()> {
+        let module = source.strip_prefix("node:").unwrap_or(source);
+        if !matches!(module, "fs" | "process") {
+            return Err(unsupported(
+                format!("import from \"{}\" (only node:fs and node:process)", source),
+                span,
+            ));
+        }
+        for sp in specifiers {
+            let (local, item) = match sp {
+                ImportSpecifier::Named {
+                    imported, local, ..
+                } => (local, NodeItem::import(module, imported)),
+                ImportSpecifier::Default { local, .. } if module == "process" => {
+                    (local, Some(NodeItem::ProcessModule))
+                }
+                ImportSpecifier::Namespace { local, .. } => (
+                    local,
+                    Some(if module == "fs" {
+                        NodeItem::FsModule
+                    } else {
+                        NodeItem::ProcessModule
+                    }),
+                ),
+                ImportSpecifier::Default { local, .. } => (local, None),
+            };
+            let Some(item) = item else {
+                return Err(unsupported(
+                    format!("`{}` from \"{}\"", local, source),
+                    span,
+                ));
+            };
+            self.scopes
+                .last_mut()
+                .expect("scope")
+                .insert(local.clone(), Bound::Node(item));
+        }
+        Ok(())
+    }
+
+    /// The Node built-in `e` denotes, if any: an imported name, or a
+    /// member of an imported module (`process.stdout`).
+    fn node_item(&self, e: &Expr) -> Option<NodeItem> {
+        match e {
+            Expr::Ident { name, .. } => match self.lookup(name) {
+                Some(Bound::Node(item)) => Some(item),
+                _ => None,
+            },
+            Expr::Member {
+                object, property, ..
+            } => self.node_item(object)?.member(property),
+            _ => None,
+        }
+    }
+
     fn fn_type(&mut self, span: Span) -> Result<GoType> {
         let t = self.raw_type(span)?;
         self.tm.map(self.state, &t, span)
@@ -559,6 +675,14 @@ impl<'a> Emitter<'a> {
     fn ident(&mut self, name: &str, span: Span) -> Result<Option<(String, GoType)>> {
         match self.lookup(name) {
             Some(Bound::Func(fid)) => self.func_ref(fid, span).map(Some),
+            Some(Bound::Node(NodeItem::Argv)) => Ok(Some((
+                "intyArgv".into(),
+                GoType::Array(Box::new(GoType::Str)),
+            ))),
+            Some(Bound::Node(item)) => Err(unsupported(
+                format!("Node built-in `{}` used as a value ({:?})", name, item),
+                span,
+            )),
             Some(Bound::Var(t)) => {
                 // A generalised non-function value (e.g. an object of
                 // polymorphic functions) would need one copy per use type.
@@ -1738,6 +1862,15 @@ impl<'a> Emitter<'a> {
     }
 
     fn member(&mut self, object: &Expr, property: &str, span: Span) -> Result<String> {
+        if let Some(module) = self.node_item(object) {
+            return match module.member(property) {
+                Some(NodeItem::Argv) => Ok("intyArgv".into()),
+                _ => Err(unsupported(
+                    format!("Node built-in `.{}` used as a value", property),
+                    span,
+                )),
+            };
+        }
         match self.type_of(object)? {
             GoType::Array(_) if property == "length" => {
                 let a = self.expr(object)?;
@@ -1916,6 +2049,9 @@ impl<'a> Emitter<'a> {
                 span,
             ));
         }
+        if let Some(s) = self.node_call(callee, args, span, stmt)? {
+            return Ok(s);
+        }
         if let Expr::Member {
             object, property, ..
         } = callee
@@ -1971,6 +2107,52 @@ impl<'a> Emitter<'a> {
             format!("({})", f)
         };
         Ok(format!("{}({})", f, vs.join(", ")))
+    }
+
+    /// A call of a Node built-in: `readFileSync(path, "utf8")`,
+    /// `process.stdout.write(s)`, `process.exit(code)`, ….
+    fn node_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+        stmt: bool,
+    ) -> Result<Option<String>> {
+        let (item, write) = match callee {
+            Expr::Member {
+                object, property, ..
+            } if property == "write" => match self.node_item(object) {
+                Some(s @ (NodeItem::Stdout | NodeItem::Stderr)) => (s, true),
+                _ => match self.node_item(callee) {
+                    Some(item) => (item, false),
+                    None => return Ok(None),
+                },
+            },
+            _ => match self.node_item(callee) {
+                Some(item) => (item, false),
+                None => return Ok(None),
+            },
+        };
+        let mut vs = Vec::new();
+        for a in args {
+            vs.push(self.expr(a)?);
+        }
+        let helper = match (item, write, vs.len()) {
+            (NodeItem::Stdout, true, 1) => "intyStdoutWrite",
+            (NodeItem::Stderr, true, 1) => "intyStderrWrite",
+            (NodeItem::ReadFileSync, _, 2) => "intyReadFileSync",
+            (NodeItem::WriteFileSync, _, 2) => "intyWriteFileSync",
+            (NodeItem::AppendFileSync, _, 2) => "intyAppendFileSync",
+            (NodeItem::ExistsSync, _, 1) => "intyExistsSync",
+            (NodeItem::Exit, _, 1) => {
+                if !stmt {
+                    return Err(unsupported("using the result of process.exit", span));
+                }
+                "intyExit"
+            }
+            _ => return Err(unsupported("this use of a Node built-in", span)),
+        };
+        Ok(Some(format!("{}({})", helper, vs.join(", "))))
     }
 
     /// `Math.*`, `console.*`, `String.fromCharCode`, `Number.isInteger`.
@@ -2170,6 +2352,20 @@ impl<'a> Emitter<'a> {
             ("slice", [a, b]) => format!("intyStrSlice({}, {}, {})", s, a, b),
             ("substring", [a]) => format!("intyStrSubstring({}, {}, math.Inf(1))", s, a),
             ("substring", [a, b]) => format!("intyStrSubstring({}, {}, {})", s, a, b),
+            ("indexOf", [x, from]) => format!("intyStrIndexOfFrom({}, {}, {})", s, x, from),
+            ("lastIndexOf", [x]) => format!("float64(strings.LastIndex({}, {}))", s, x),
+            ("charAt", [i]) => format!("intyCharAt({}, {})", s, i),
+            ("trimStart", []) => format!("strings.TrimLeftFunc({}, unicode.IsSpace)", s),
+            ("trimEnd", []) => format!("strings.TrimRightFunc({}, unicode.IsSpace)", s),
+            ("split", [sep]) => format!("intySplit({}, {}, math.Inf(1))", s, sep),
+            ("split", [sep, limit]) => format!("intySplit({}, {}, {})", s, sep, limit),
+            ("replace", [pat, rep]) => format!("intyReplace({}, {}, {}, 1)", s, pat, rep),
+            ("replaceAll", [pat, rep]) => format!("intyReplace({}, {}, {}, -1)", s, pat, rep),
+            ("padStart", [n]) => format!("intyPad({}, {}, \" \", true)", s, n),
+            ("padStart", [n, pad]) => format!("intyPad({}, {}, {}, true)", s, n, pad),
+            ("padEnd", [n]) => format!("intyPad({}, {}, \" \", false)", s, n),
+            ("padEnd", [n, pad]) => format!("intyPad({}, {}, {}, false)", s, n, pad),
+            ("concat", [x]) => format!("({} + {})", s, x),
             _ => return Err(unsupported(format!("String method `.{}`", method), span)),
         })
     }
