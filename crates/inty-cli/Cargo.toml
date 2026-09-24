@@ -13,3 +13,4 @@ path = "src/main.rs"
 inty = { path = "../inty" }
 inty-lsp = { path = "../inty-lsp" }
 inty-bundle = { path = "../inty-bundle" }
+inty-go = { path = "../inty-go" }

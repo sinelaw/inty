@@ -126,6 +126,14 @@ pub struct InferConfig {
     /// in the presence of indexed assignment — the option exists so
     /// the meta-tests can exercise the looser regime.
     pub generalize_mutable_var_containers: bool,
+
+    /// Disable let-polymorphism: `generalize` returns a monomorphic
+    /// scheme, so every user binding has exactly one type and every
+    /// type variable is eventually pinned by its uses. Bindings that
+    /// were already generalised before the flag was set (the stdlib)
+    /// stay polymorphic. Default: `false`. Code generators (the Go
+    /// backend) set this so each expression has one concrete type.
+    pub monomorphic: bool,
 }
 
 impl Default for InferConfig {
@@ -133,6 +141,7 @@ impl Default for InferConfig {
         InferConfig {
             exhaustiveness_warnings: true,
             generalize_mutable_var_containers: false,
+            monomorphic: false,
         }
     }
 }
@@ -183,6 +192,14 @@ pub struct InferState {
     /// predicates (`where Plus a`) even after the enclosing scope's
     /// env has been discarded.
     pub decl_schemes: HashMap<usize, TypeScheme>,
+
+    /// Synthesised type of every expression, keyed by the expression's
+    /// `(span.start, span.end)`. `None` (the default) records nothing;
+    /// set it to `Some(HashMap::new())` before inference to opt in.
+    /// Types are stored unsubstituted — read them through
+    /// [`Self::flatten_type`] after inference completes. Used by code
+    /// generators that need a type for every node, not just bindings.
+    pub expr_types: Option<HashMap<(usize, usize), Type>>,
 
     /// Type origins for error reporting.
     pub type_origins: HashMap<TVarName, TypeOrigin>,
@@ -358,6 +375,7 @@ impl InferState {
             pending_constraints: Vec::new(),
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
+            expr_types: None,
             type_origins: HashMap::new(),
             warnings: Vec::new(),
             errors: Vec::new(),
@@ -1459,6 +1477,9 @@ impl InferState {
         // incompatible argument shapes through. See
         // `Subst::flatten` for the full story.
         let ty = self.main_subst.flatten(ty);
+        if self.config.monomorphic {
+            return TypeScheme::mono(ty);
+        }
         let ty_vars = ty.free_vars();
         let pvars = ty.free_pvars();
 

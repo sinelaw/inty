@@ -339,7 +339,15 @@ version = "0.1.1"
 dependencies = [
  "inty",
  "inty-bundle",
+ "inty-go",
  "inty-lsp",
+]
+
+[[package]]
+name = "inty-go"
+version = "0.1.1"
+dependencies = [
+ "inty",
 ]
 
 [[package]]
