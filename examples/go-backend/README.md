@@ -35,25 +35,28 @@ representations instead:
 `node bench.mjs` (in this directory) does the following:
 1. Builds inty.
 2. Translates each `*.js` file here and builds it with `go build`.
-3. Requires the Go binary's stdout to be identical to Node's.
-4. Measures both sides.
+3. Requires the Go binary's stdout to be identical to what Node (V8)
+   prints, and to what Bun (JavaScriptCore) prints when Bun is installed.
+4. Measures every side.
 
 Pass `--processes N`, `--warmup W` and `--json out.json` for raw samples,
-or benchmark names to run a subset. It needs `node`, `go` (>= 1.22) and
-`python3`, which it uses for `getrusage`.
+or benchmark names to run a subset. Pass `--no-bun` to skip Bun. It
+needs `node`, `go` (>= 1.22) and `python3`, which it uses for
+`getrusage`. `bun` is optional.
 
 ### Methodology
 
 - **Steady state, not startup.** Every program ends with a small
   benchmark protocol: it runs its `main()` workload 4 times in one process
   and prints each iteration's `performance.now()` duration to stderr.
-  Iteration 0 is *cold*; for Node it includes JIT warm-up. Iterations 1–3
+  Iteration 0 is *cold*; for the JS engines it includes JIT warm-up. Iterations 1–3
   are *warm*. The headline speedup uses warm iterations only, so neither
-  Node's ~27 ms startup nor V8's warm-up counts against it.
+  runtime startup (Node ~30 ms, Bun ~4 ms) nor JIT warm-up counts
+  against the JS engines.
 - **Many interleaved processes.** Each side gets 10 fresh processes by
   default, after 1 discarded warm-up process, so 30 warm samples per side.
-  Node and Go processes alternate in a random order every round, so drift
-  (CPU frequency, noisy neighbours, page cache) affects both equally.
+  Node, Bun and Go processes run in a random order every round, so drift
+  (CPU frequency, noisy neighbours, page cache) affects every side equally.
 - **Uncertainty.** Medians with interquartile ranges, and a 95% confidence
   interval on the speedup from a *cluster* bootstrap. Whole processes are
   resampled, because iterations within a process are correlated.
