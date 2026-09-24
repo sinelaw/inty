@@ -357,10 +357,17 @@ impl<'a> Walker<'a> {
                 }
                 self.initialise(chain, &d.name);
             } else if !d.name.starts_with("$destr$") {
-                // `let x;` / `var x;`: `undefined` from here on. Only `let`
-                // leaves the dead zone; a `var` stays unassigned.
+                // `let x;` holds `undefined` from here on, so it leaves the
+                // dead zone. A `const x;` with no initialiser is not real
+                // JavaScript: in declaration files (`.d.js`) it declares an
+                // external binding, which is always initialised. A `var x;`
+                // stays unassigned until something assigns it.
                 if let Some(frame) = self.lookup(chain, &d.name) {
-                    if self.frames[frame].bindings[&d.name].state == State::Uninit(VarKind::Let) {
+                    let state = self.frames[frame].bindings[&d.name].state;
+                    if matches!(
+                        state,
+                        State::Uninit(VarKind::Let) | State::Uninit(VarKind::Const)
+                    ) {
                         self.initialise(chain, &d.name);
                     }
                 }

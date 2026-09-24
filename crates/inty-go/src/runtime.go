@@ -354,3 +354,177 @@ var intyStart = time.Now()
 
 // intyNow is performance.now(): milliseconds since program start.
 func intyNow() float64 { return float64(time.Since(intyStart).Nanoseconds()) / 1e6 }
+
+func intyStrIndexOfFrom(s, sub string, from float64) float64 {
+	i := intyClampIndex(max(from, 0), len(s))
+	if j := strings.Index(s[i:], sub); j >= 0 {
+		return float64(i + j)
+	}
+	return -1
+}
+
+func intyCharAt(s string, i float64) string {
+	if i != i {
+		i = 0
+	}
+	i = math.Trunc(i)
+	if i < 0 || i >= float64(len(s)) {
+		return ""
+	}
+	return s[int(i) : int(i)+1]
+}
+
+// intySplit is String.prototype.split with a string separator. An empty
+// separator splits into single bytes (code units, for ASCII).
+func intySplit(s, sep string, limit float64) *[]string {
+	var parts []string
+	if sep == "" {
+		parts = make([]string, len(s))
+		for i := range s {
+			parts[i] = s[i : i+1]
+		}
+	} else {
+		parts = strings.Split(s, sep)
+	}
+	if !math.IsInf(limit, 1) {
+		n := int(uint32(intyToInt32(limit)))
+		if n < len(parts) {
+			parts = parts[:n]
+		}
+	}
+	return &parts
+}
+
+// intyReplace is String.prototype.replace / replaceAll with a string
+// pattern (n = 1 or -1), including the `$$`, `$&`, "$`" and `$'`
+// replacement patterns.
+func intyReplace(s, pat, rep string, n int) string {
+	if !strings.Contains(rep, "$") {
+		if pat == "" && n < 0 {
+			return strings.Replace(s, pat, rep, len(s)+1)
+		}
+		return strings.Replace(s, pat, rep, n)
+	}
+	var b strings.Builder
+	last := 0
+	for n != 0 {
+		i := strings.Index(s[last:], pat)
+		if i < 0 {
+			break
+		}
+		at := last + i
+		b.WriteString(s[last:at])
+		for k := 0; k < len(rep); k++ {
+			if rep[k] != '$' || k+1 == len(rep) {
+				b.WriteByte(rep[k])
+				continue
+			}
+			switch rep[k+1] {
+			case '$':
+				b.WriteByte('$')
+			case '&':
+				b.WriteString(pat)
+			case '`':
+				b.WriteString(s[:at])
+			case '\'':
+				b.WriteString(s[at+len(pat):])
+			default:
+				b.WriteByte('$')
+				continue
+			}
+			k++
+		}
+		last = at + len(pat)
+		if pat == "" {
+			if at < len(s) {
+				b.WriteByte(s[at])
+			}
+			last = at + 1
+			if last > len(s) {
+				return b.String()
+			}
+		}
+		n--
+	}
+	b.WriteString(s[min(last, len(s)):])
+	return b.String()
+}
+
+func intyPad(s string, n float64, pad string, start bool) string {
+	want := int(max(math.Trunc(n), 0)) - len(s)
+	if want <= 0 || pad == "" {
+		return s
+	}
+	fill := strings.Repeat(pad, want/len(pad)+1)[:want]
+	if start {
+		return fill + s
+	}
+	return s + fill
+}
+
+// ---- Node built-ins (node:fs, node:process) ---------------------------------
+
+// process.argv: Node puts the executable and the script path first, so
+// `process.argv.slice(2)` is the user's arguments on both sides.
+var intyArgv = func() *[]string {
+	a := append([]string{os.Args[0], os.Args[0]}, os.Args[1:]...)
+	return &a
+}()
+
+// intyFail reports an I/O error the way an uncaught Node exception
+// would end the process: a message on stderr and exit status 1.
+func intyFail(err error) {
+	intyOut.Flush()
+	os.Stderr.WriteString("Error: " + err.Error() + "\n")
+	os.Exit(1)
+}
+
+func intyReadFileSync(path, enc string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		intyFail(err)
+	}
+	return string(b)
+}
+
+func intyWriteFileSync(path, data string) {
+	if err := os.WriteFile(path, []byte(data), 0o666); err != nil {
+		intyFail(err)
+	}
+}
+
+func intyAppendFileSync(path, data string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+	if err == nil {
+		_, err = f.WriteString(data)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		intyFail(err)
+	}
+}
+
+func intyExistsSync(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func intyExit(code float64) {
+	intyOut.Flush()
+	os.Exit(int(intyToInt32(code)))
+}
+
+func intyStdoutWrite(s string) bool {
+	intyOut.WriteString(s)
+	return true
+}
+
+func intyStderrWrite(s string) bool {
+	intyOut.Flush()
+	os.Stderr.WriteString(s)
+	return true
+}
+
+var _ = unicode.IsSpace

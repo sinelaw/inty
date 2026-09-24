@@ -60,14 +60,30 @@ pub fn compile(source: &str) -> std::result::Result<GoOutput, Vec<IntyError>> {
     let program = inty::frontends::javascript::parse_source(source).map_err(|e| vec![e])?;
 
     let (env, mut state) = inty::stdlib::initial_env_with_stdlib().map_err(|e| vec![e])?;
-    // Record only for the user program, not for the stdlib loaded above.
     state.config.exhaustiveness_warnings = false;
-    state.expr_types = Some(HashMap::new());
-    state.instantiations = Some(HashMap::new());
 
     // Deeply nested programs need the same stack headroom the CLI gives
     // the checker (see `inty::worker`); the emitter recurses as deeply.
     let code = inty::worker::run_with_inference_stack("inty-go", move || {
+        // Imports: only Node's built-in modules (`node:fs`,
+        // `node:process`), whose declarations are embedded in inty; the
+        // emitter lowers their uses to Go. Anything else is reported by
+        // the emitter as unsupported.
+        let mut visiting = std::collections::HashSet::new();
+        let env = match inty::modules::resolve_imports(
+            &mut state,
+            env,
+            &program,
+            std::path::Path::new("."),
+            &mut visiting,
+        ) {
+            Ok(env) => env,
+            Err(e) => return Err(vec![e]),
+        };
+        // Record only for the user program, not the stdlib and built-ins
+        // loaded above.
+        state.expr_types = Some(HashMap::new());
+        state.instantiations = Some(HashMap::new());
         let result = state.infer_program_with_env(&env, &program);
         let mut errors: Vec<IntyError> = state.take_errors();
         if let Err(e) = result {
