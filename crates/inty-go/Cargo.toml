@@ -3,7 +3,8 @@ name = "inty-go"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Proof-of-concept Go backend: translates inty-checked JavaScript to Go"
 
 [dependencies]
-inty = { path = "../inty" }
+inty = { workspace = true }

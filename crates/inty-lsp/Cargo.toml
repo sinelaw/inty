@@ -3,6 +3,7 @@ name = "inty-lsp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Language Server Protocol server backed by inty"
 
 [lib]
@@ -16,7 +17,7 @@ stdio = ["dep:lsp-server"]
 wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:console_error_panic_hook"]
 
 [dependencies]
-inty = { path = "../inty" }
+inty = { workspace = true }
 lsp-types = "0.97"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
