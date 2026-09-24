@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use inty::infer::InferState;
 use inty::span::Span;
 use inty::types::{
-    is_callable_key, FieldEntry, FuncParam, Presence, RowTail, RowType, Type, TypeId,
+    is_callable_key, FieldEntry, FuncParam, Presence, RowTail, RowType, TVarName, Type, TypeId,
 };
 
 use crate::{unsupported, Result};
@@ -410,6 +410,147 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
                 .map(|t| resolve_depth(state, t, d))
                 .collect::<Vec<_>>(),
         ),
+        other => other.clone(),
+    }
+}
+
+/// A monomorphisation substitution: quantified type variable → the
+/// concrete type it stands for in one specialisation.
+pub type Mapping = HashMap<TVarName, Type>;
+
+/// Stand-in for a type variable nothing constrained. Specialisation keys
+/// and mappings use it so that two otherwise-identical instantiations
+/// that differ only in *which* fresh unbound variable they carry share
+/// one specialisation. It maps to Go `any`.
+pub fn unconstrained() -> Type {
+    Type::Var(TVarName::Flex(u32::MAX))
+}
+
+/// Substitute `m` into an already-resolved type, merging row tails whose
+/// variable maps to a row (as `resolve` does for the final substitution).
+pub fn apply_mapping(ty: &Type, m: &Mapping) -> Type {
+    if m.is_empty() {
+        return ty.clone();
+    }
+    match ty {
+        Type::Var(v) => m.get(v).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Row(row) => {
+            let mut props: BTreeMap<_, _> = row
+                .props
+                .iter()
+                .map(|(k, f)| {
+                    (
+                        k.clone(),
+                        FieldEntry {
+                            presence: f.presence.clone(),
+                            ty: apply_mapping(&f.ty, m),
+                        },
+                    )
+                })
+                .collect();
+            let mut tail = match &row.tail {
+                RowTail::Recursive(id, args) => {
+                    RowTail::Recursive(*id, args.iter().map(|a| apply_mapping(a, m)).collect())
+                }
+                t => t.clone(),
+            };
+            for _ in 0..256 {
+                let RowTail::Open(v) = &tail else { break };
+                match m.get(v) {
+                    Some(Type::Row(more)) => {
+                        for (k, f) in &more.props {
+                            props.entry(k.clone()).or_insert_with(|| f.clone());
+                        }
+                        tail = more.tail.clone();
+                    }
+                    Some(Type::Var(w)) if w != v => tail = RowTail::Open(w.clone()),
+                    _ => break,
+                }
+            }
+            Type::Row(RowType { props, tail })
+        }
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: this_type.as_ref().map(|t| Box::new(apply_mapping(t, m))),
+            params: params
+                .iter()
+                .map(|p| FuncParam {
+                    presence: p.presence.clone(),
+                    ty: apply_mapping(&p.ty, m),
+                    name: p.name.clone(),
+                })
+                .collect(),
+            ret: Box::new(apply_mapping(ret, m)),
+        },
+        Type::Array(e) => Type::Array(Box::new(apply_mapping(e, m))),
+        Type::Map(e) => Type::Map(Box::new(apply_mapping(e, m))),
+        Type::Promise(e) => Type::Promise(Box::new(apply_mapping(e, m))),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| apply_mapping(t, m)).collect()),
+        Type::Named(id, args) => {
+            Type::Named(*id, args.iter().map(|t| apply_mapping(t, m)).collect())
+        }
+        Type::Union(ts) => Type::union(ts.iter().map(|t| apply_mapping(t, m)).collect::<Vec<_>>()),
+        other => other.clone(),
+    }
+}
+
+/// Normal form for an instantiation type: literal types widen to their
+/// base type and unbound variables become [`unconstrained`], so that
+/// equal Go types give equal specialisation keys.
+pub fn canonical(ty: &Type) -> Type {
+    let unconstrained_names: Mapping = ty
+        .free_vars()
+        .into_iter()
+        .map(|v| (v, unconstrained()))
+        .collect();
+    widen(&apply_mapping(ty, &unconstrained_names))
+}
+
+fn widen(ty: &Type) -> Type {
+    match ty {
+        Type::Literal(inty::types::LitValue::Number(_)) => Type::Number,
+        Type::Literal(inty::types::LitValue::String(_)) => Type::String,
+        Type::Literal(inty::types::LitValue::Bool(_)) => Type::Boolean,
+        Type::Row(row) => Type::Row(RowType {
+            props: row
+                .props
+                .iter()
+                .map(|(k, f)| {
+                    (
+                        k.clone(),
+                        FieldEntry {
+                            presence: f.presence.clone(),
+                            ty: widen(&f.ty),
+                        },
+                    )
+                })
+                .collect(),
+            tail: row.tail.clone(),
+        }),
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: this_type.as_ref().map(|t| Box::new(widen(t))),
+            params: params
+                .iter()
+                .map(|p| FuncParam {
+                    presence: p.presence.clone(),
+                    ty: widen(&p.ty),
+                    name: p.name.clone(),
+                })
+                .collect(),
+            ret: Box::new(widen(ret)),
+        },
+        Type::Array(e) => Type::Array(Box::new(widen(e))),
+        Type::Map(e) => Type::Map(Box::new(widen(e))),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(widen).collect()),
+        Type::Named(id, args) => Type::Named(*id, args.iter().map(widen).collect()),
+        Type::Union(ts) => Type::union(ts.iter().map(widen).collect::<Vec<_>>()),
         other => other.clone(),
     }
 }

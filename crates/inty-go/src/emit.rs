@@ -17,14 +17,15 @@
 //! ```
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use inty::ast::free_idents::free_identifiers_in_stmt;
 use inty::ast::*;
 use inty::infer::InferState;
 use inty::span::Span;
-use inty::types::Type;
+use inty::types::{TVarName, Type};
 
-use crate::types::{GoType, TypeMapper};
+use crate::types::{apply_mapping, canonical, resolve, GoType, Mapping, TypeMapper};
 use crate::{unsupported, Result};
 
 const RUNTIME: &str = include_str!("runtime.go");
@@ -36,41 +37,31 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         .expr_types
         .take()
         .expect("inty-go: expression-type recording must be enabled before inference");
+    let instantiations = state.instantiations.take().unwrap_or_default();
+    let late = late_bindings(state, &instantiations);
     let mut e = Emitter {
         state,
         types,
+        instantiations,
         tm: TypeMapper::default(),
         buf: String::new(),
         indent: 0,
         ret_stack: Vec::new(),
         tmp: 0,
         scopes: vec![HashMap::new()],
+        funcs: Vec::new(),
+        mappings: vec![Rc::new(Mapping::new())],
+        blocks: 0,
+        block_stack: Vec::new(),
+        late,
     };
 
-    let mut globals = String::new();
-    let mut funcs = String::new();
-    let mut main_body = String::new();
-
     // Bind every top-level name first: function bodies may refer to
-    // functions and variables declared further down (hoisting).
-    for stmt in &program.statements {
-        match stmt {
-            Stmt::FunctionDecl { name, span, .. } => {
-                let t = e.fn_type(*span)?;
-                e.bind(name, t);
-            }
-            Stmt::Var { declarations, .. } => {
-                for d in declarations {
-                    let t = e.decl_type(d)?;
-                    e.bind(&d.name, t);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Pass 1: top-level functions become Go functions; top-level
-    // variables become package-level vars so functions can see them.
+    // functions and variables declared further down (hoisting). Top-level
+    // functions (declarations and `const f = …` function values) become
+    // Go functions, emitted on demand once per instantiation; other
+    // top-level bindings become package-level vars.
+    let mut globals = String::new();
     for stmt in &program.statements {
         match stmt {
             Stmt::FunctionDecl {
@@ -80,41 +71,40 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
                 span,
                 ..
             } => {
-                e.buf.clear();
-                e.indent = 0;
-                let (sig_params, ptys, ret) = e.signature(params, *span)?;
-                e.line(&format!(
-                    "func {}({}){} {{",
-                    mangle(name),
-                    sig_params,
-                    e.tm.render_result(&ret)
-                ));
-                e.indent += 1;
-                e.function_body(params, &ptys, body, &ret)?;
-                e.indent -= 1;
-                e.line("}");
-                funcs.push_str(&e.buf);
-                funcs.push('\n');
+                let fid = e.register_func(name, params, body, *span, None)?;
+                e.bind_func(name, fid);
             }
-            Stmt::Var { declarations, .. } => {
+            Stmt::Var {
+                kind, declarations, ..
+            } => {
                 for d in declarations {
-                    let ty = e.decl_type(d)?;
-                    globals.push_str(&format!("var {} {}\n", mangle(&d.name), e.tm.render(&ty)));
+                    if let Some((params, body, span)) = const_function(*kind, d) {
+                        let fid = e.register_func(&d.name, params, body, span, None)?;
+                        e.bind_func(&d.name, fid);
+                        continue;
+                    }
+                    let t = e.decl_type(d)?;
+                    globals.push_str(&format!("var {} {}\n", mangle(&d.name), e.tm.render(&t)));
+                    e.bind(&d.name, t);
                 }
             }
             _ => {}
         }
     }
 
-    // Pass 2: everything else runs in `main`, in source order.
-    e.buf.clear();
+    // Everything else runs in `main`, in source order.
     e.indent = 1;
     e.ret_stack.push(GoType::Unit);
     for stmt in &program.statements {
         match stmt {
             Stmt::FunctionDecl { .. } => {}
-            Stmt::Var { declarations, .. } => {
+            Stmt::Var {
+                kind, declarations, ..
+            } => {
                 for d in declarations {
+                    if const_function(*kind, d).is_some() {
+                        continue;
+                    }
                     if let Some(init) = &d.init {
                         let ty = e.decl_type(d)?;
                         let v = e.expr_as(init, &ty)?;
@@ -126,7 +116,15 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         }
     }
     e.ret_stack.pop();
-    main_body.push_str(&e.buf);
+    let main_body = std::mem::take(&mut e.buf);
+
+    // Emit every specialisation of a top-level function that something
+    // reached; emitting one can request more.
+    let mut funcs = String::new();
+    while let Some((fid, sid)) = e.next_pending(None) {
+        funcs.push_str(&e.emit_top_level_spec(fid, sid)?);
+        funcs.push('\n');
+    }
 
     let mut out = String::new();
     out.push_str("// Code generated by `inty go` from type-checked JavaScript. DO NOT EDIT.\n");
@@ -148,9 +146,101 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
     Ok(out)
 }
 
+/// Repairs for variables generalised too early.
+///
+/// inty can generalise a function over a type variable that its body
+/// only pins down later. A hoisted function reading a top-level constant
+/// declared further down is the typical case: `function pick(i) { return
+/// NAMES[i]; }` gets `∀a. (Number) => a` before `NAMES` is known to be a
+/// `String[]`. Each use then instantiates `a` with a fresh variable that
+/// nothing constrains, although the definition resolves `a` to `String`.
+/// For every such quantified variable, the fresh variable at each use
+/// must equal the variable's final binding, under that use's
+/// instantiation; this returns those equations.
+fn late_bindings(
+    state: &mut InferState,
+    instantiations: &HashMap<(usize, usize), Vec<(TVarName, Type)>>,
+) -> Mapping {
+    let mut late = Mapping::new();
+    for inst in instantiations.values() {
+        let inst_map: Mapping = inst.iter().cloned().collect();
+        for (v, fresh) in inst {
+            let bound = resolve(state, &Type::Var(v.clone()));
+            if bound == Type::Var(v.clone()) {
+                continue; // still quantified: an ordinary instantiation
+            }
+            if let Type::Var(f) = resolve(state, fresh) {
+                late.insert(f, apply_mapping(&bound, &inst_map));
+            }
+        }
+    }
+    late
+}
+
+/// A `const f = <function>` declarator: bound like a function
+/// declaration, so it can be specialised. (`let`/`var` function values
+/// may be reassigned, so they stay ordinary variables.)
+fn const_function(kind: VarKind, d: &VarDeclarator) -> Option<(&[Param], &Stmt, Span)> {
+    match (kind, &d.init) {
+        (
+            VarKind::Const,
+            Some(Expr::Function {
+                name: None,
+                params,
+                body,
+                span,
+                ..
+            }),
+        ) => Some((params, body, *span)),
+        _ => None,
+    }
+}
+
+/// What a JS name is bound to, as far as code generation is concerned.
+#[derive(Clone)]
+enum Bound {
+    /// An ordinary variable (or parameter) of this Go type.
+    Var(GoType),
+    /// A function binding, specialised per instantiation: index into
+    /// `Emitter::funcs`.
+    Func(usize),
+}
+
+/// A function the emitter may specialise.
+struct FuncInfo {
+    name: String,
+    params: Vec<Param>,
+    body: Rc<Stmt>,
+    /// Span of the function itself, where inty recorded its type.
+    span: Span,
+    /// Its quantified type variables — those a specialisation fixes.
+    qvars: Vec<TVarName>,
+    /// The mapping in force where it was declared (an enclosing
+    /// function's specialisation); specialisations extend it.
+    outer: Rc<Mapping>,
+    /// `None` for a top-level Go function; `Some(block)` for a closure
+    /// declared in that block.
+    block: Option<usize>,
+    specs: Vec<Spec>,
+}
+
+/// One monomorphic copy of a function.
+struct Spec {
+    key: String,
+    name: String,
+    mapping: Rc<Mapping>,
+    go_type: GoType,
+    emitted: bool,
+    /// For closures: the `name = func(...) {...}` text, once emitted.
+    text: Option<String>,
+}
+
 struct Emitter<'a> {
     state: &'a mut InferState,
     types: HashMap<(usize, usize), Type>,
+    /// Per-identifier instantiation of polymorphic bindings (see
+    /// `InferState::instantiations`).
+    instantiations: HashMap<(usize, usize), Vec<(TVarName, inty::types::Type)>>,
     tm: TypeMapper,
     /// Statement output for the function currently being emitted.
     buf: String,
@@ -164,7 +254,17 @@ struct Emitter<'a> {
     /// recorded at the use site: a use inside a hoisted function can be
     /// recorded as a structural *view* of the binding (e.g. an array seen
     /// as `{length: Number | ρ}`), which isn't the variable's Go type.
-    scopes: Vec<HashMap<String, GoType>>,
+    scopes: Vec<HashMap<String, Bound>>,
+    /// Every function binding seen so far, with its specialisations.
+    funcs: Vec<FuncInfo>,
+    /// The specialisation mapping in force, innermost last.
+    mappings: Vec<Rc<Mapping>>,
+    /// Counter for block ids (closure specialisation markers).
+    blocks: usize,
+    /// Ids of the blocks being emitted, innermost last.
+    block_stack: Vec<usize>,
+    /// See [`late_bindings`].
+    late: Mapping,
 }
 
 /// A number the emitter can fold at translation time. Folding happens
@@ -447,20 +547,51 @@ impl<'a> Emitter<'a> {
 
     // ---- types -----------------------------------------------------------
 
-    /// The fully-resolved type inty recorded for the node at `span`.
+    /// The mapping of the specialisation being emitted.
+    fn mapping(&self) -> Rc<Mapping> {
+        self.mappings.last().cloned().expect("mapping")
+    }
+
+    /// `ty` under inty's final substitution and then the current
+    /// specialisation's mapping.
+    fn in_context(&mut self, ty: &Type) -> Type {
+        let mut r = resolve(self.state, ty);
+        // Late bindings can refer to further fresh variables; a few rounds
+        // reach the fixpoint for any realistic chain.
+        for _ in 0..8 {
+            let next = apply_mapping(&r, &self.late);
+            if next == r {
+                break;
+            }
+            r = resolve(self.state, &next);
+        }
+        apply_mapping(&r, &self.mapping())
+    }
+
+    /// The type inty recorded for the node at `span`, in context.
     fn raw_type(&mut self, span: Span) -> Result<Type> {
-        match self.types.get(&(span.start, span.end)) {
-            Some(t) => Ok(crate::types::resolve(self.state, t)),
+        match self.types.get(&(span.start, span.end)).cloned() {
+            Some(t) => Ok(self.in_context(&t)),
             None => Err(unsupported("expression with no recorded type", span)),
         }
     }
 
     fn bind(&mut self, name: &str, t: GoType) {
-        self.scopes.last_mut().expect("scope").insert(name.to_string(), t);
+        self.scopes
+            .last_mut()
+            .expect("scope")
+            .insert(name.to_string(), Bound::Var(t));
     }
 
-    fn lookup(&self, name: &str) -> Option<&GoType> {
-        self.scopes.iter().rev().find_map(|s| s.get(name))
+    fn bind_func(&mut self, name: &str, fid: usize) {
+        self.scopes
+            .last_mut()
+            .expect("scope")
+            .insert(name.to_string(), Bound::Func(fid));
+    }
+
+    fn lookup(&self, name: &str) -> Option<Bound> {
+        self.scopes.iter().rev().find_map(|s| s.get(name)).cloned()
     }
 
     fn fn_type(&mut self, span: Span) -> Result<GoType> {
@@ -468,10 +599,38 @@ impl<'a> Emitter<'a> {
         self.tm.map(self.state, &t, span)
     }
 
+    /// The Go type of an identifier, and its Go name.
+    fn ident(&mut self, name: &str, span: Span) -> Result<Option<(String, GoType)>> {
+        match self.lookup(name) {
+            Some(Bound::Func(fid)) => self.func_ref(fid, span).map(Some),
+            Some(Bound::Var(t)) => {
+                // A generalised non-function value (e.g. an object of
+                // polymorphic functions) would need one copy per use type.
+                if let Some(inst) = self.instantiations.get(&(span.start, span.end)).cloned() {
+                    for (_, t) in &inst {
+                        let c = canonical(&self.in_context(t));
+                        if c != crate::types::unconstrained() {
+                            return Err(unsupported(
+                                format!(
+                                    "polymorphic value `{}` used at a specific type (only \
+                                     functions are specialised; declare it with `function` or `const`)",
+                                    name
+                                ),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                Ok(Some((mangle(name), t)))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn type_of(&mut self, e: &Expr) -> Result<GoType> {
-        if let Expr::Ident { name, .. } = e {
-            if let Some(t) = self.lookup(name) {
-                return Ok(t.clone());
+        if let Expr::Ident { name, span } = e {
+            if let Some((_, t)) = self.ident(name, *span)? {
+                return Ok(t);
             }
         }
         let span = e.span();
@@ -481,13 +640,167 @@ impl<'a> Emitter<'a> {
 
     fn decl_type(&mut self, d: &VarDeclarator) -> Result<GoType> {
         if let Some(t) = self.state.get_decl_type(d.span).cloned() {
-            let t = crate::types::resolve(self.state, &t);
+            let t = self.in_context(&t);
             return self.tm.map(self.state, &t, d.span);
         }
         match &d.init {
             Some(init) => self.type_of(init),
             None => Err(unsupported("declaration without an inferred type", d.span)),
         }
+    }
+
+    // ---- monomorphisation -------------------------------------------------
+
+    /// Record a function binding. Its quantified variables are the type
+    /// variables still free in its (in-context) type.
+    fn register_func(
+        &mut self,
+        name: &str,
+        params: &[Param],
+        body: &Stmt,
+        span: Span,
+        block: Option<usize>,
+    ) -> Result<usize> {
+        let ty = self.raw_type(span)?;
+        let mut qvars: Vec<TVarName> = ty
+            .free_vars()
+            .into_iter()
+            .filter(|v| Type::Var(v.clone()) != crate::types::unconstrained())
+            .collect();
+        qvars.sort_by_key(|v| v.id());
+        self.funcs.push(FuncInfo {
+            name: name.to_string(),
+            params: params.to_vec(),
+            body: Rc::new(body.clone()),
+            span,
+            qvars,
+            outer: self.mapping(),
+            block,
+            specs: Vec::new(),
+        });
+        Ok(self.funcs.len() - 1)
+    }
+
+    /// The specialisation of function `fid` that the identifier at `span`
+    /// refers to, requesting it if new: its Go name and type.
+    ///
+    /// Each quantified variable is fixed by the instantiation inty
+    /// recorded at this use. A use with no recorded instantiation is a
+    /// monomorphic reference from inside the function's own definition
+    /// (recursion), so it inherits the current specialisation's choice.
+    fn func_ref(&mut self, fid: usize, span: Span) -> Result<(String, GoType)> {
+        let inst = self
+            .instantiations
+            .get(&(span.start, span.end))
+            .cloned()
+            .unwrap_or_default();
+        let qvars = self.funcs[fid].qvars.clone();
+        let mut concrete = Vec::with_capacity(qvars.len());
+        for v in &qvars {
+            let t = match inst.iter().find(|(q, _)| q == v) {
+                Some((_, t)) => t.clone(),
+                None => Type::Var(v.clone()),
+            };
+            concrete.push(canonical(&self.in_context(&t)));
+        }
+        let key = format!("{}", Type::Tuple(concrete.clone()));
+        if let Some(spec) = self.funcs[fid].specs.iter().find(|s| s.key == key) {
+            return Ok((spec.name.clone(), spec.go_type.clone()));
+        }
+        let mut mapping = (*self.funcs[fid].outer).clone();
+        for (v, t) in qvars.iter().zip(concrete) {
+            mapping.insert(v.clone(), t);
+        }
+        let mapping = Rc::new(mapping);
+        self.mappings.push(mapping.clone());
+        let go_type = self.fn_type(self.funcs[fid].span);
+        self.mappings.pop();
+        let go_type = go_type?;
+        let info = &mut self.funcs[fid];
+        let base = mangle(&info.name);
+        let name = match info.specs.len() {
+            0 => base,
+            n => format!("{}__{}", base, n + 1),
+        };
+        info.specs.push(Spec {
+            key,
+            name: name.clone(),
+            mapping,
+            go_type: go_type.clone(),
+            emitted: false,
+            text: None,
+        });
+        Ok((name, go_type))
+    }
+
+    /// A requested but not yet emitted specialisation of a function
+    /// owned by `block` (`None`: top level).
+    fn next_pending(&self, block: Option<usize>) -> Option<(usize, usize)> {
+        self.funcs.iter().enumerate().find_map(|(fid, f)| {
+            if f.block != block {
+                return None;
+            }
+            f.specs
+                .iter()
+                .position(|s| !s.emitted)
+                .map(|sid| (fid, sid))
+        })
+    }
+
+    /// `func name(params) result { body }` for a top-level function.
+    fn emit_top_level_spec(&mut self, fid: usize, sid: usize) -> Result<String> {
+        self.funcs[fid].specs[sid].emitted = true;
+        let (params, body, span) = {
+            let f = &self.funcs[fid];
+            (f.params.clone(), f.body.clone(), f.span)
+        };
+        let (name, mapping) = {
+            let s = &self.funcs[fid].specs[sid];
+            (s.name.clone(), s.mapping.clone())
+        };
+        // A top-level function sees only the global scope.
+        let inner_scopes = self.scopes.split_off(1);
+        let saved_buf = std::mem::take(&mut self.buf);
+        let saved_indent = std::mem::replace(&mut self.indent, 0);
+        self.mappings.push(mapping);
+        let r = (|| -> Result<()> {
+            let (sig, ptys, ret) = self.signature(&params, span)?;
+            self.line(&format!(
+                "func {}({}){} {{",
+                name,
+                sig,
+                self.tm.render_result(&ret)
+            ));
+            self.indent += 1;
+            self.function_body(&params, &ptys, &body, &ret)?;
+            self.indent -= 1;
+            self.line("}");
+            Ok(())
+        })();
+        self.mappings.pop();
+        self.indent = saved_indent;
+        let text = std::mem::replace(&mut self.buf, saved_buf);
+        self.scopes.extend(inner_scopes);
+        r.map(|()| text)
+    }
+
+    /// `name = func(params) result {...}` for a closure specialisation,
+    /// emitted in the scope of its declaring block.
+    fn emit_closure_spec(&mut self, fid: usize, sid: usize) -> Result<()> {
+        self.funcs[fid].specs[sid].emitted = true;
+        let (params, body, span) = {
+            let f = &self.funcs[fid];
+            (f.params.clone(), f.body.clone(), f.span)
+        };
+        let (name, mapping) = {
+            let s = &self.funcs[fid].specs[sid];
+            (s.name.clone(), s.mapping.clone())
+        };
+        self.mappings.push(mapping);
+        let lit = self.func_literal(&params, &body, span);
+        self.mappings.pop();
+        self.funcs[fid].specs[sid].text = Some(format!("{} = {}", name, lit?));
+        Ok(())
     }
 
     /// Go parameter list and result type for a function at `span`.
@@ -513,7 +826,13 @@ impl<'a> Emitter<'a> {
         Ok((rendered.join(", "), ps, ret))
     }
 
-    fn function_body(&mut self, params: &[Param], ptys: &[GoType], body: &Stmt, ret: &GoType) -> Result<()> {
+    fn function_body(
+        &mut self,
+        params: &[Param],
+        ptys: &[GoType],
+        body: &Stmt,
+        ret: &GoType,
+    ) -> Result<()> {
         self.scopes.push(HashMap::new());
         for (p, t) in params.iter().zip(ptys) {
             self.bind(&p.name, t.clone());
@@ -558,18 +877,62 @@ impl<'a> Emitter<'a> {
         r
     }
 
+    /// A block's statements. Functions declared in it become closures,
+    /// one per specialisation the code reaches. Which specialisations
+    /// exist is only known once the whole block has been emitted, so the
+    /// block leaves markers — one for the `var` declarations at its top
+    /// (JS hoists function declarations) and one per function where it is
+    /// declared — and fills them in at the end.
     fn block_stmts_in_scope(&mut self, stmts: &[Stmt]) -> Result<()> {
+        self.blocks += 1;
+        let block = self.blocks;
+        self.block_stack.push(block);
+        let r = self.block_body_with_markers(stmts, block);
+        self.block_stack.pop();
+        r
+    }
+
+    fn block_body_with_markers(&mut self, stmts: &[Stmt], block: usize) -> Result<()> {
         for s in stmts {
-            if let Stmt::FunctionDecl { name, span, .. } = s {
-                let g = self.fn_type(*span)?;
-                let rendered = self.tm.render(&g);
-                self.line(&format!("var {} {}", mangle(name), rendered));
-                self.bind(name, g);
+            if let Stmt::FunctionDecl {
+                name,
+                params,
+                body,
+                span,
+                ..
+            } = s
+            {
+                let fid = self.register_func(name, params, body, *span, Some(block))?;
+                self.bind_func(name, fid);
             }
         }
+        let decl_marker = format!("\u{1}D{}\u{1}", block);
+        self.line(&decl_marker);
         for (i, s) in stmts.iter().enumerate() {
             self.stmt(s, &stmts[i + 1..])?;
         }
+        while let Some((fid, sid)) = self.next_pending(Some(block)) {
+            self.emit_closure_spec(fid, sid)?;
+        }
+        let pad = self.pad();
+        let mut decls = String::new();
+        for fid in 0..self.funcs.len() {
+            if self.funcs[fid].block != Some(block) {
+                continue;
+            }
+            let mut assigns = String::new();
+            for spec in &self.funcs[fid].specs {
+                let t = self.tm.render(&spec.go_type);
+                decls.push_str(&format!("{}var {} {}\n", pad, spec.name, t));
+                if let Some(text) = &spec.text {
+                    assigns.push_str(&format!("{}{}\n", pad, text));
+                }
+            }
+            let marker = format!("{}\u{1}A{}\u{1}\n", pad, fid);
+            self.buf = self.buf.replacen(&marker, &assigns, 1);
+        }
+        let marker = format!("{}{}\n", pad, decl_marker);
+        self.buf = self.buf.replacen(&marker, &decls, 1);
         Ok(())
     }
 
@@ -584,8 +947,17 @@ impl<'a> Emitter<'a> {
                 self.line("}");
             }
             Stmt::Expr { expression, .. } => self.expr_stmt(expression)?,
-            Stmt::Var { declarations, .. } => {
+            Stmt::Var {
+                kind, declarations, ..
+            } => {
                 for (i, d) in declarations.iter().enumerate() {
+                    if let Some((params, body, span)) = const_function(*kind, d) {
+                        let block = self.block_stack.last().copied();
+                        let fid = self.register_func(&d.name, params, body, span, block)?;
+                        self.bind_func(&d.name, fid);
+                        self.line(&format!("\u{1}A{}\u{1}", fid));
+                        continue;
+                    }
                     let ty = self.decl_type(d)?;
                     let name = mangle(&d.name);
                     let rendered = self.tm.render(&ty);
@@ -620,16 +992,13 @@ impl<'a> Emitter<'a> {
                     }
                 }
             }
-            Stmt::FunctionDecl {
-                name,
-                params,
-                body,
-                span,
-                ..
-            } => {
-                // Declared by `block_stmts`; assign here.
-                let f = self.func_literal(params, body, *span)?;
-                self.line(&format!("{} = {}", mangle(name), f));
+            Stmt::FunctionDecl { name, span, .. } => {
+                // Registered by `block_stmts_in_scope`; its specialisations
+                // are assigned here once the block is complete.
+                match self.lookup(name) {
+                    Some(Bound::Func(fid)) => self.line(&format!("\u{1}A{}\u{1}", fid)),
+                    _ => return Err(unsupported("function declaration in this position", *span)),
+                }
             }
             Stmt::Return { argument, span } => {
                 let ret = self.ret_stack.last().cloned().unwrap_or(GoType::Unit);
@@ -1196,15 +1565,17 @@ impl<'a> Emitter<'a> {
                 Literal::Null | Literal::Undefined => Ok("nil".into()),
                 Literal::Regex { .. } => Err(unsupported("regular expression", *span)),
             },
-            Expr::Ident { name, span } => match name.as_str() {
-                "NaN" => Ok("math.NaN()".into()),
-                "Infinity" => Ok("math.Inf(1)".into()),
-                "undefined" => Ok("nil".into()),
-                _ => {
-                    let _ = span;
-                    Ok(mangle(name))
+            Expr::Ident { name, span } => {
+                if let Some((go, _)) = self.ident(name, *span)? {
+                    return Ok(go);
                 }
-            },
+                match name.as_str() {
+                    "NaN" => Ok("math.NaN()".into()),
+                    "Infinity" => Ok("math.Inf(1)".into()),
+                    "undefined" => Ok("nil".into()),
+                    _ => Ok(mangle(name)),
+                }
+            }
             Expr::This { span } => Err(unsupported("`this`", *span)),
             Expr::Array { elements, span } => {
                 let elem = match self.type_of(e)? {
