@@ -23,7 +23,7 @@ mod zonk;
 mod tests;
 
 pub use decorate::decorate_with_types;
-pub use env::TypeEnv;
+pub use env::{EnvFree, TypeEnv};
 pub use narrow::{apply_narrowing, Narrowing, Path};
 pub use state::{InferConfig, InferState, InferWarning, PendingConstraint, TypeClass};
 pub use type_parser::{
@@ -41,6 +41,8 @@ pub type InferResult<T> = Result<T, IntyError>;
 /// True when a statement is either a plain `function f() {}` declaration or
 /// an `export function f() {}` — both participate in the same hoisting
 /// group so peer forward references and mutual recursion work uniformly.
+/// (Function-valued `const`s can join the hoisting groups too; see
+/// `features::functions::hoistable_const_functions`.)
 pub(crate) fn is_function_like_decl(stmt: &Stmt) -> bool {
     matches!(
         stmt,
@@ -387,7 +389,13 @@ impl InferState {
                     .or_insert_with(|| state.fresh_type_var());
             }
         };
-        for stmt in stmts {
+        // Function-valued `const`s inferred with the hoisted functions
+        // (Pass 2) get their real scheme there, so they need no placeholder.
+        let hoisted_consts = crate::infer::features::functions::hoistable_const_functions(stmts);
+        for (i, stmt) in stmts.iter().enumerate() {
+            if hoisted_consts.contains(&i) {
+                continue;
+            }
             match stmt {
                 Stmt::Var { declarations, .. } => {
                     collect_hoists(&mut hoisted_data, self, declarations);
@@ -405,7 +413,8 @@ impl InferState {
         // Pass 1: compute the SCC partition of all hoistable function
         // decls in this scope. Each inner Vec holds statement indices
         // in source order; the outer Vec is in topological order.
-        let scc_groups = crate::infer::features::functions::compute_scc_groups(stmts);
+        let scc_groups =
+            crate::infer::features::functions::compute_scc_groups(stmts, &hoisted_consts);
 
         // Pass 2: type-check each SCC in topological order.
         // `infer_function_group` does the textbook let-rec inference
@@ -456,7 +465,23 @@ impl InferState {
         // uses propagate `Error` silently through unification, member
         // access, and call inference.
         let mut result = Type::Undefined;
-        for stmt in stmts {
+        for (i, stmt) in stmts.iter().enumerate() {
+            if hoisted_consts.contains(&i) {
+                let (decl, ..) = crate::infer::features::functions::const_function_decl(stmt)
+                    .expect("hoisted const is a const function");
+                // Typed in Pass 2; only the duplicate-`const` check is left.
+                if !const_names.insert(decl.name.clone()) {
+                    let err = TypeError::Module {
+                        message: format!(
+                            "duplicate declaration of 'const {}' in the same scope",
+                            decl.name
+                        ),
+                        span: decl.span,
+                    };
+                    self.push_error(err.into());
+                }
+                continue;
+            }
             if is_function_like_decl(stmt) {
                 continue;
             }
@@ -496,8 +521,11 @@ impl InferState {
                     let unify_hoisted = |state: &mut Self, declarations: &[VarDeclarator]| {
                         for decl in declarations {
                             if let Some(hoisted) = hoisted_data.get(&decl.name) {
-                                if let Some(scheme) = current_env.lookup(&decl.name) {
-                                    let actual = scheme.body.ty.clone();
+                                if let Some(scheme) = current_env.lookup(&decl.name).cloned() {
+                                    // An *instance*: unifying with the scheme
+                                    // body would bind its quantified
+                                    // variables to the placeholder's uses.
+                                    let actual = state.instantiate(&scheme);
                                     if let Err(e) = state.unify(decl.span, hoisted, &actual) {
                                         state.push_error(e);
                                     }
@@ -957,9 +985,15 @@ impl InferState {
                 // collected here instead. Returns outside any function
                 // (top-level) find no frame and are ignored.
                 if let Some(frame) = self.return_value_stack.last_mut() {
-                    frame.push(ret_type.clone());
+                    frame.push(ret_type);
                 }
-                Ok((ret_type, env.clone()))
+                // A `return` never completes normally, so as a statement it
+                // has the bottom type. Its *value* already went to the
+                // function's return frame above; also yielding it here made
+                // `if (c) return 0; else return f(n - 1);` join the literal
+                // `0` with `f`'s return variable and pin that to the
+                // singleton `0` (the collected returns are widened).
+                Ok((Type::never(), env.clone()))
             }
 
             Stmt::Throw { argument, .. } => {

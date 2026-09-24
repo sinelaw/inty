@@ -450,7 +450,7 @@ impl InferState {
             //    polymorphism. Polymorphic record/array storage must be
             //    opted in via an explicit type annotation (case 1).
             let scheme = if is_declaration {
-                let env_free = new_env.free_vars();
+                let env_free = new_env.free();
                 self.generalize(&env_free, &var_type)
             } else {
                 match &decl.init {
@@ -459,7 +459,7 @@ impl InferState {
                             && (self.config.generalize_mutable_var_containers
                                 || !is_mutable_container_literal(init)) =>
                     {
-                        let env_free = new_env.free_vars();
+                        let env_free = new_env.free();
                         self.generalize(&env_free, &var_type)
                     }
                     _ => TypeScheme::mono(var_type),

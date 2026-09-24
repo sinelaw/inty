@@ -116,12 +116,6 @@ mistranslated.
 - **Not supported:** `this`, classes, `new`, `try` / `throw`, getters and
   setters, spread, destructuring rest, `??`, `?.`, generic
   non-boolean `&&` / `||`, ES modules, and recursive object types.
-- **inty hoisting gap.** inty infers hoisted `function` declarations
-  before top-level `const`s declared later in the file, and a function
-  that uses such a `const` can get imprecise or unresolved types.
-  inty's own output shows it: `const pair: (a, a) => …`. The backend
-  reports these as unsupported rather than guessing. Declaring the
-  `const` before the function, or annotating it, avoids the problem.
 - **Strings are treated as byte strings.** `.length` and indexing are
   exact only for ASCII (JS uses UTF-16 code units).
 - **Out-of-bounds array reads panic**, where JS would return `undefined`.

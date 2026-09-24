@@ -88,7 +88,9 @@ console.log(describe(5, "five"));
 
 // Specialisations of a polymorphic function inside another polymorphic
 // function follow the outer specialisation.
-const both = (x) => pair(x, identity(x));
+function both(x) {
+  return pair(x, identity(x));
+}
 const b1 = both(1.5);
 const b2 = both("s");
 console.log(`${b1.first + b1.second} ${b2.first + b2.second}`);

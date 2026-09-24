@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::ast::free_idents::free_identifiers_in_function_body;
-use crate::ast::{ExportDecl, Expr, Literal, Param, Stmt, TypeAnnotation};
+use crate::ast::{ExportDecl, Expr, Literal, Param, Stmt, TypeAnnotation, VarDeclarator, VarKind};
 use crate::span::Span;
 use crate::types::{Type, TypePred, TypeScheme};
 
@@ -13,10 +13,12 @@ use super::super::type_parser::parse_type_annotation_with_pvars;
 use super::super::InferResult;
 
 /// Borrow-able view of a function declaration that abstracts over
-/// `Stmt::FunctionDecl` and `Stmt::Export { declaration:
-/// ExportDecl::Function }`. Hoisting and group inference need to treat
-/// both forms uniformly so peer forward references and mutual recursion
-/// across exports type-check.
+/// `Stmt::FunctionDecl`, `Stmt::Export { declaration:
+/// ExportDecl::Function }` and a function-valued `const` (see
+/// [`const_function_decl`]). Hoisting and group inference need to treat
+/// these forms uniformly so peer forward references and mutual recursion
+/// type-check, and so a function-valued `const` has its principal
+/// (generalised) type before the hoisted functions that use it.
 #[allow(clippy::type_complexity)]
 pub(in crate::infer) fn function_decl_parts<'a>(
     stmt: &'a Stmt,
@@ -62,8 +64,156 @@ pub(in crate::infer) fn function_decl_parts<'a>(
             None,
             *span,
         )),
+        _ => const_function_decl(stmt).map(|(decl, params, body, type_annotation, span)| {
+            (
+                decl.name.as_str(),
+                params,
+                body,
+                type_annotation,
+                None,
+                span,
+            )
+        }),
+    }
+}
+
+/// `const f = <anonymous function>` — a single-declarator, unannotated
+/// `const` whose initialiser is a function (or arrow) expression.
+///
+/// For *typing* this behaves exactly like `function f`: the binding
+/// can't be reassigned and the initialiser has no effects, so inferring
+/// it in dependency order rather than source order changes nothing but
+/// which types are known when. It matters because `infer_stmt_list`
+/// infers every hoisted `function` before any source-order statement: a
+/// hoisted function that calls `f` would otherwise see only `f`'s
+/// monomorphic placeholder, pinning `f` to that one use. (Runtime TDZ is
+/// unaffected — inty doesn't model it for placeholders either.)
+#[allow(clippy::type_complexity)]
+pub(in crate::infer) fn const_function_decl(
+    stmt: &Stmt,
+) -> Option<(
+    &VarDeclarator,
+    &[Param],
+    &Stmt,
+    &Option<TypeAnnotation>,
+    Span,
+)> {
+    let Stmt::Var {
+        kind: VarKind::Const,
+        declarations,
+        ..
+    } = stmt
+    else {
+        return None;
+    };
+    let [decl] = declarations.as_slice() else {
+        return None;
+    };
+    if decl.type_annotation.is_some() || decl.type_ast.is_some() {
+        return None;
+    }
+    match &decl.init {
+        Some(Expr::Function {
+            name: None,
+            params,
+            body,
+            type_annotation,
+            span,
+        }) => Some((
+            decl,
+            params.as_slice(),
+            body.as_ref(),
+            type_annotation,
+            *span,
+        )),
         _ => None,
     }
+}
+
+/// `function f` can be reassigned; a function-valued `const` cannot.
+fn hoisted_mutability(stmt: &Stmt) -> super::super::env::Mutability {
+    if const_function_decl(stmt).is_some() {
+        super::super::env::Mutability::Immutable
+    } else {
+        super::super::env::Mutability::Mutable
+    }
+}
+
+/// Which function-valued `const`s in a statement list are inferred with
+/// the hoisted functions (statement indices).
+///
+/// Only those whose bodies don't depend — directly or through other such
+/// `const`s — on a binding of this scope that is still a monomorphic
+/// placeholder during hoisted inference (any other `var` / `let` /
+/// `const`). A `const` that does, e.g. `const g = () => alias(1)` after
+/// `const alias = id`, is left in source order so it sees that binding's
+/// real (possibly polymorphic) type, exactly as before.
+pub(in crate::infer) fn hoistable_const_functions(
+    stmts: &[Stmt],
+) -> std::collections::HashSet<usize> {
+    use std::collections::HashSet;
+    let mut candidates: HashSet<usize> = stmts
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| const_function_decl(s).is_some())
+        .map(|(i, _)| i)
+        .collect();
+    let mut placeholders: HashSet<String> = HashSet::new();
+    for (i, stmt) in stmts.iter().enumerate() {
+        if candidates.contains(&i) {
+            continue;
+        }
+        let decls = match stmt {
+            Stmt::Var { declarations, .. } => declarations,
+            Stmt::Export {
+                declaration: ExportDecl::Var { declarations, .. },
+                ..
+            } => declarations,
+            _ => continue,
+        };
+        placeholders.extend(decls.iter().map(|d| d.name.clone()));
+    }
+    let free: std::collections::HashMap<usize, HashSet<String>> = candidates
+        .iter()
+        .map(|&i| {
+            let (decl, params, body, _, _) = const_function_decl(&stmts[i]).expect("candidate");
+            (
+                i,
+                free_identifiers_in_function_body(Some(&decl.name), params, body),
+            )
+        })
+        .collect();
+    loop {
+        let blocked: Vec<usize> = candidates
+            .iter()
+            .copied()
+            .filter(|i| free[i].iter().any(|n| placeholders.contains(n)))
+            .collect();
+        if blocked.is_empty() {
+            return candidates;
+        }
+        for i in blocked {
+            candidates.remove(&i);
+            let (decl, ..) = const_function_decl(&stmts[i]).expect("candidate");
+            placeholders.insert(decl.name.clone());
+        }
+    }
+}
+
+/// Where a hoistable declaration's name is recorded for the LSP /
+/// decorator (`record_decl_type`): the identifier after the `function`
+/// keyword, or the declarator of a function-valued `const`.
+fn hoisted_name_span(stmt: &Stmt, name: &str, span: Span) -> Span {
+    if let Some((decl, ..)) = const_function_decl(stmt) {
+        return decl.span;
+    }
+    let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
+        "export function ".len()
+    } else {
+        "function ".len()
+    };
+    let name_offset = span.start + keyword_len;
+    Span::new(name_offset, name_offset + name.len())
 }
 
 impl InferState {
@@ -251,16 +401,18 @@ impl InferState {
 
         let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
 
+        // The function's own name first, so a parameter of the same name
+        // shadows it (`function f(f) { return f; }` returns the argument).
+        if let Some(fn_name) = name {
+            body_env = body_env.extend(fn_name.to_string(), TypeScheme::mono(func_type.clone()));
+        }
+
         for (param, ty) in params.iter().zip(param_types.iter()) {
             body_env = body_env.extend(param.name.clone(), TypeScheme::mono(ty.clone()));
             // Record per-param type for the LSP / hover. Keyed by the
             // param's name span so we can look it up at any reference
             // to the parameter.
             self.record_decl_type(param.span, ty.clone());
-        }
-
-        if let Some(fn_name) = name {
-            body_env = body_env.extend(fn_name.to_string(), TypeScheme::mono(func_type.clone()));
         }
 
         // Infer the body and derive its return type from the explicit
@@ -674,13 +826,7 @@ impl InferState {
                 // can look the type up directly. The exported form is
                 // prefixed with `export `, so the keyword offset
                 // accounts for that.
-                let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
-                    "export function ".len()
-                } else {
-                    "function ".len()
-                };
-                let name_offset = span.start + keyword_len;
-                self.record_decl_type(Span::new(name_offset, name_offset + name.len()), func_type);
+                self.record_decl_type(hoisted_name_span(stmt, name, span), func_type);
             }
         }
 
@@ -688,7 +834,7 @@ impl InferState {
         // monomorphic type sitting under its hoisted variable. Generalise
         // each against the *outer* env's free variables so all peers
         // receive the same polymorphism.
-        let base_free = env.free_vars();
+        let base_free = env.free();
         for stmt in group {
             if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
                 let ty = hoisted
@@ -701,22 +847,18 @@ impl InferState {
                 // return row branded nominally, so two structurally
                 // identical classes stay distinct types.
                 let ty = if self.class_brand_names.contains(name) {
-                    self.brand_class_factory(name, &ty, &base_free)
+                    let (fixed, _) = self.env_fixed_vars(&base_free, &ty);
+                    self.brand_class_factory(name, &ty, &fixed)
                 } else {
                     ty
                 };
                 let scheme = self.generalize(&base_free, &ty);
-                let keyword_len = if matches!(stmt, Stmt::Export { .. }) {
-                    "export function ".len()
-                } else {
-                    "function ".len()
-                };
-                let name_offset = span.start + keyword_len;
-                self.record_decl_scheme(
-                    Span::new(name_offset, name_offset + name.len()),
-                    scheme.clone(),
+                self.record_decl_scheme(hoisted_name_span(stmt, name, span), scheme.clone());
+                hoisted = hoisted.extend_with_mutability(
+                    name.to_string(),
+                    scheme,
+                    hoisted_mutability(stmt),
                 );
-                hoisted = hoisted.extend(name.to_string(), scheme);
             }
         }
 
@@ -819,7 +961,11 @@ impl InferState {
         for stmt in stmts {
             if let Some((name, _, _, _, _, _)) = function_decl_parts(stmt) {
                 let var = self.fresh_type_var();
-                new_env = new_env.extend(name.to_string(), TypeScheme::mono(var));
+                new_env = new_env.extend_with_mutability(
+                    name.to_string(),
+                    TypeScheme::mono(var),
+                    hoisted_mutability(stmt),
+                );
             }
         }
         new_env
@@ -867,8 +1013,11 @@ impl InferState {
         let name_span = Span::new(name_offset, name_offset + name.len());
         self.record_decl_type(name_span, func_type.clone());
 
-        // Generalize the function type
-        let env_free = env.free_vars();
+        // Generalize the function type. The enclosing scope may have
+        // pre-bound `name` to the placeholder `func_var` (now unified with
+        // the function's own type), which must not count as the
+        // environment fixing the function's variables.
+        let env_free = env.remove(name).free();
         let scheme = self.generalize(&env_free, &func_type);
         self.record_decl_scheme(name_span, scheme.clone());
 
@@ -913,12 +1062,19 @@ struct HoistableNode {
 /// Statements that aren't hoistable function declarations do not
 /// appear in the output. The caller is responsible for interleaving
 /// non-function statements with the SCC results.
-pub(in crate::infer) fn compute_scc_groups(stmts: &[Stmt]) -> Vec<Vec<usize>> {
-    // Pass 1: collect the hoistable function decls and their free
-    // identifiers.
+pub(in crate::infer) fn compute_scc_groups(
+    stmts: &[Stmt],
+    const_functions: &std::collections::HashSet<usize>,
+) -> Vec<Vec<usize>> {
+    // Pass 1: collect the hoistable function decls (and the function-
+    // valued `const`s chosen by `hoistable_const_functions`) and their
+    // free identifiers.
     let mut nodes: Vec<HoistableNode> = Vec::new();
     let mut name_to_node: HashMap<String, usize> = HashMap::new();
     for (i, stmt) in stmts.iter().enumerate() {
+        if const_function_decl(stmt).is_some() && !const_functions.contains(&i) {
+            continue;
+        }
         if let Some((name, params, body, _, _, _)) = function_decl_parts(stmt) {
             let free = free_identifiers_in_function_body(Some(name), params, body);
             let node_idx = nodes.len();

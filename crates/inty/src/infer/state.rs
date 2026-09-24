@@ -1472,11 +1472,7 @@ impl InferState {
     /// Also collects relevant predicates from pending_constraints.
     /// Generalizes over presence variables too (Remy '94), with the
     /// same env-difference rule.
-    pub fn generalize(
-        &mut self,
-        env_free_vars: &std::collections::HashSet<TVarName>,
-        ty: &Type,
-    ) -> TypeScheme {
+    pub fn generalize(&mut self, env_free: &crate::infer::EnvFree, ty: &Type) -> TypeScheme {
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
         // for performance reasons; without flattening here, a
@@ -1495,18 +1491,20 @@ impl InferState {
         // HashSet is seeded independently — which would otherwise make
         // the printed scheme `<a, b>...` non-deterministically map
         // letters to type-var slots across runs.
+        let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
         let mut gen_vars: Vec<TVarName> = ty_vars
             .into_iter()
-            .filter(|v| !env_free_vars.contains(v) && v.is_flex())
+            .filter(|v| !fixed_vars.contains(v) && v.is_flex())
             .collect();
         gen_vars.sort_by_key(|v| v.id());
 
-        // Presence variables: we don't track env-bound pvars (no flow
-        // makes them escape today), so we generalize every free flex
-        // pvar we see. If presence-bound env entries ever exist, this
-        // would need an env_free_pvars analogue.
-        let mut gen_pvars: Vec<crate::types::PVarName> =
-            pvars.into_iter().filter(|p| p.is_flex()).collect();
+        // Presence variables follow the same rule as type variables: a
+        // pvar reachable from the environment (e.g. an optional field of
+        // a row a parameter's type is bound to) must stay monomorphic.
+        let mut gen_pvars: Vec<crate::types::PVarName> = pvars
+            .into_iter()
+            .filter(|p| p.is_flex() && !fixed_pvars.contains(p))
+            .collect();
         gen_pvars.sort_by_key(|p| p.id());
 
         if gen_vars.is_empty() && gen_pvars.is_empty() {
@@ -1532,6 +1530,135 @@ impl InferState {
 
             TypeScheme::qualified_with_presence(gen_vars, gen_pvars, scheme_preds, ty)
         }
+    }
+
+    /// The type and presence variables generalisation must leave alone.
+    ///
+    /// This is the textbook `ftv(S Γ)` — the environment's free variables
+    /// *after* applying the current substitution — plus two extensions:
+    ///
+    /// * **Named-type bodies.** Free-variable functions stop at
+    ///   `Named(id, …)`, but a recursive or nominal type's body can mention
+    ///   variables other than its parameters, and instantiating a scheme
+    ///   can't copy those (the body is shared). Every such variable reachable
+    ///   from the environment *or from `ty`* is kept monomorphic.
+    /// * **Functional dependencies of pending constraints.** A variable
+    ///   determined by fixed variables is fixed too. For
+    ///   `Indexable(container, index, element)` the container determines the
+    ///   other two — `NAMES[i]` with `NAMES` still an environment
+    ///   placeholder fixes the element — but a fixed *index* alone fixes
+    ///   nothing (`o[KEY]` stays polymorphic in `o`). `Plus` has a single
+    ///   argument, so it never propagates. A predicate that mixes fixed and
+    ///   generalised variables goes into the scheme as usual (HM(X)).
+    ///
+    /// Callers pass `env.free()` of the unsubstituted environment. A
+    /// variable in it may since have been bound to a type mentioning other
+    /// variables — e.g. the placeholder `infer_stmt_list` pre-binds for a
+    /// top-level `const` that a hoisted function uses before the `const`
+    /// is inferred. Quantifying those would let the function's scheme
+    /// disagree with the `const`'s eventual type (and, once the `const` is
+    /// inferred, corrupt it).
+    pub(in crate::infer) fn env_fixed_vars(
+        &mut self,
+        env_free: &crate::infer::EnvFree,
+        ty: &Type,
+    ) -> (
+        std::collections::HashSet<TVarName>,
+        std::collections::HashSet<crate::types::PVarName>,
+    ) {
+        use std::collections::HashSet;
+        let mut vars: HashSet<TVarName> = HashSet::new();
+        let mut pvars: HashSet<crate::types::PVarName> = env_free.pvars.clone();
+        let mut named: Vec<TypeId> = env_free.named.iter().copied().collect();
+        for v in &env_free.vars {
+            vars.insert(v.clone());
+            let var = Type::Var(v.clone());
+            for resolved in [self.zonk(&var), self.main_subst.flatten(&var)] {
+                vars.extend(resolved.free_vars());
+                pvars.extend(resolved.free_pvars());
+                named.extend(resolved.named_ids());
+            }
+        }
+        // Presence variables bound in the substitution resolve too.
+        let bound_pvars: Vec<crate::types::PVarName> = pvars.iter().cloned().collect();
+        for p in bound_pvars {
+            if let Some(crate::types::Presence::Var(q)) = self.main_subst.get_presence(&p).cloned()
+            {
+                pvars.insert(q);
+            }
+        }
+        // Variables inside named-type bodies reachable from the environment
+        // or from `ty` itself.
+        named.extend(ty.named_ids());
+        let mut seen: HashSet<TypeId> = HashSet::new();
+        while let Some(id) = named.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(def) = self.named_types.get(&id) else {
+                continue;
+            };
+            let params: HashSet<TVarName> = def.params.iter().cloned().collect();
+            let body = self.main_subst.flatten(&def.body.clone());
+            let body = self.zonk(&body);
+            vars.extend(body.free_vars().into_iter().filter(|v| !params.contains(v)));
+            pvars.extend(body.free_pvars());
+            named.extend(body.named_ids());
+        }
+        // Close over the pending constraints' functional dependencies.
+        let preds: Vec<TypePred> = self
+            .pending_constraints
+            .iter()
+            .map(|c| TypePred {
+                class: c.pred.class,
+                types: c
+                    .pred
+                    .types
+                    .iter()
+                    .map(|t| self.main_subst.flatten(t))
+                    .collect(),
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for pred in &preds {
+                let determined: Vec<&Type> = match (pred.class, pred.types.as_slice()) {
+                    // container → index, element
+                    (ClassName::Indexable, [container, index, element]) => {
+                        if container.free_vars().is_subset(&vars) {
+                            vec![index, element]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    (ClassName::Plus, _) => vec![],
+                    // Unknown shape: conservatively, any fixed variable
+                    // fixes the whole predicate.
+                    (_, types) => {
+                        if types
+                            .iter()
+                            .any(|t| t.free_vars().iter().any(|v| vars.contains(v)))
+                        {
+                            types.iter().collect()
+                        } else {
+                            vec![]
+                        }
+                    }
+                };
+                for t in determined {
+                    for v in t.free_vars() {
+                        changed |= vars.insert(v);
+                    }
+                    for p in t.free_pvars() {
+                        changed |= pvars.insert(p);
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        (vars, pvars)
     }
 
     /// Apply substitution to a predicate.

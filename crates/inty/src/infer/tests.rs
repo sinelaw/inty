@@ -3590,3 +3590,154 @@ fn test_deferred_literal_index_is_widened() {
         .and_then(|_| state.resolve_constraints())
         .expect("first(xs) = xs[0] should apply to number[] and string[]");
 }
+
+// ---- Generalisation soundness ---------------------------------------------
+//
+// Regression tests for generalising against `ftv(S Γ)` (the environment's
+// free variables *after* substitution) closed over the pending constraints'
+// functional dependencies, and for inferring function-valued `const`s with
+// the hoisted functions. Each program was mis-typed before the change; the
+// comment says how.
+
+/// Infer a whole program; the display form of each requested binding's
+/// scheme, or the first error.
+fn check_program(src: &str, names: &[&str]) -> Result<Vec<String>, String> {
+    let program = crate::frontends::javascript::parse_source(src).map_err(|e| e.to_string())?;
+    let mut state = InferState::new();
+    let (_, env) = state
+        .infer_program_with_env(&initial_env(), &program)
+        .map_err(|e| e.to_string())?;
+    if let Some(e) = state.errors.first() {
+        return Err(e.to_string());
+    }
+    state.resolve_constraints().map_err(|e| e.to_string())?;
+    Ok(names
+        .iter()
+        .map(|n| {
+            let scheme = env.lookup(n).unwrap_or_else(|| panic!("{} not bound", n));
+            format!("{}", state.display_scheme(scheme))
+        })
+        .collect())
+}
+
+#[test]
+fn gen_rejects_wrong_argument_through_later_const() {
+    // Was accepted: `f` was generalised to `∀a. (a) => …` although its
+    // body passes `x` to the (then placeholder) `g : (Number) => Number`.
+    let src = "function f(x) { return g(x); }\n\
+               const g = (y) => y * 2;\n\
+               const r = f(\"hi\");";
+    assert!(check_program(src, &[]).is_err());
+}
+
+#[test]
+fn gen_later_const_keeps_its_principal_type() {
+    // `pair` was corrupted to `(a, a) => {first: b, second: a}` by the
+    // hoisted `both`; now it is inferred first and both stay polymorphic.
+    let src = "function both(x) { return pair(x, x); }\n\
+               const pair = (a, b) => ({ first: a, second: b });\n\
+               const b1 = both(1.5);\n\
+               const b2 = both(\"s\");\n\
+               const p = pair(\"s\", 2);";
+    let t = check_program(src, &["pair", "both", "p"]).unwrap();
+    assert_eq!(t[0], "<a, b>(a, b) => {first: a, second: b}");
+    assert_eq!(t[1], "<a>(a) => {first: a, second: a}");
+    assert_eq!(t[2], "{first: String, second: Number}");
+}
+
+#[test]
+fn gen_element_of_later_const_is_not_quantified() {
+    // `pick` was `∀r. (Number) => r`: the element variable of
+    // `Indexable(NAMES, Number, r)` was quantified while `NAMES` was still
+    // a placeholder, so `pick(0) * 2` type-checked.
+    let src = "function pick(i) { return NAMES[i]; }\n\
+               const NAMES = [\"a\", \"b\"];\n\
+               const s = pick(0);\n\
+               const t = s * 2;";
+    assert!(check_program(src, &[]).is_err());
+    let ok = "function pick(i) { return NAMES[i]; }\nconst NAMES = [\"a\", \"b\"];";
+    assert_eq!(
+        check_program(ok, &["pick"]).unwrap()[0],
+        "(Number) => String"
+    );
+}
+
+#[test]
+fn gen_fixed_index_does_not_fix_the_container() {
+    // Functional dependency container → element: a fixed *index* (a
+    // top-level const, still a placeholder) must not make `get`
+    // monomorphic.
+    let src = "const KEY = 0;\n\
+               function get(o) { return o[KEY]; }\n\
+               const a = get([1]);\n\
+               const b = get([\"s\"]);";
+    let t = check_program(src, &["get"]).unwrap();
+    assert!(t[0].starts_with("<a, b>"), "{}", t[0]);
+}
+
+#[test]
+fn gen_captured_variable_is_not_quantified() {
+    // `outer` was `<a, b> where Plus a => (b) => (a) => a`: `inner` was
+    // generalised over the type of the captured `x`.
+    let src = "function outer(x) { function inner(y) { return x + y; } return inner; }\n\
+               var addThree = outer(3);";
+    let t = check_program(src, &["outer", "addThree"]).unwrap();
+    assert_eq!(t[0], "<a> where Plus a => (a) => (a) => a");
+    assert_eq!(t[1], "(Number) => Number");
+}
+
+#[test]
+fn gen_presence_variable_in_environment_is_not_quantified() {
+    // The optional field's presence variable is reachable from `o`; `m`
+    // used to generalise it, accepting a read of a field that is absent.
+    let src = "function outer(o) {\n\
+                 /** const g: (p: {name?: String}) => Number */\n\
+                 const g = (p) => 1;\n\
+                 g(o);\n\
+                 let m = () => o;\n\
+                 const n = m().name.length;\n\
+                 return n;\n\
+               }\n\
+               outer({});";
+    assert!(check_program(src, &[]).is_err());
+}
+
+#[test]
+fn gen_hoisted_const_function_stays_immutable() {
+    let src = "const f = () => 1;\nf = () => 2;";
+    let err = check_program(src, &[]).unwrap_err();
+    assert!(err.contains("constant"), "{}", err);
+}
+
+#[test]
+fn gen_parameter_shadows_function_name() {
+    let t = check_program("const f = (f) => f + 1;\nconst r = f(2);", &["f"]).unwrap();
+    assert_eq!(t[0], "(Number) => Number");
+    let t = check_program("function g(g) { return g + 1; }\nconst r = g(2);", &["g"]).unwrap();
+    assert_eq!(t[0], "(Number) => Number");
+}
+
+#[test]
+fn gen_const_function_using_polymorphic_alias_stays_in_source_order() {
+    // `g` depends on the non-function const `alias`, so it is not hoisted
+    // and sees `alias`'s polymorphic scheme.
+    let src = "const id = (x) => x;\n\
+               const alias = id;\n\
+               const g = () => [alias(1), alias(\"s\")];";
+    let t = check_program(src, &["alias"]).unwrap();
+    assert_eq!(t[0], "<a>(a) => a");
+}
+
+#[test]
+fn gen_return_in_both_branches_of_if() {
+    // The `if` statement's completion type joined `Lit(0)` with `f`'s
+    // return variable, pinning it to the singleton `0`.
+    let src = "function f(n) { if (n == 0) return 0; else return f(n - 1); }";
+    assert_eq!(check_program(src, &["f"]).unwrap()[0], "(Number) => Number");
+    let nested = "function f(n) { function g(m) { return f(m - 1); } \
+                  if (n == 0) return 0; else return g(n); }";
+    assert_eq!(
+        check_program(nested, &["f"]).unwrap()[0],
+        "(Number) => Number"
+    );
+}

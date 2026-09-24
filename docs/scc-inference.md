@@ -258,8 +258,23 @@ only assigned when the assignment expression executes. Calling
 in every engine. Treating it as hoistable would type-check programs
 that the spec says crash. Stay out of the hoistable set.
 
-The same applies to `let f = function…` and `const f = function…`:
-both are TDZ before the line. Not hoistable.
+The same applies to `let f = function…` at runtime, and to
+`const f = function…`: both are TDZ before the line.
+
+**Typing order vs. runtime hoisting.** A function-valued `const` is
+nevertheless *typed* together with the hoisted functions (see
+`hoistable_const_functions` in `src/infer/features/functions.rs`),
+because the binding can't be reassigned and a function expression has
+no effects. Inferring it in dependency order rather than source order
+changes only which types are known when. Without this, a hoisted
+function that calls a later `const pair = (a, b) => …` would see only
+`pair`'s monomorphic placeholder and pin it to that one use. A
+`const` function joins the hoisted inference only if nothing it
+references (transitively) is another `var` / `let` / `const` of the
+scope, since those are still placeholders during Pass 2; otherwise it
+stays in source order. It is bound immutably either way. This doesn't
+make calling it before its line legal at runtime; inty doesn't
+diagnose TDZ (see § 5).
 
 ### 3. Class declarations
 
@@ -287,13 +302,23 @@ hoist to the block, never to the enclosing function.
 ### 5. TDZ diagnostics
 
 For `let` / `const` / `class`, ES specifies a `ReferenceError`
-on any access before the declaration line is reached. inty's
-current "Undefined variable" error catches the static cases
-because these forms aren't in the hoistable set — they're
-processed in source order, and a reference before the decl
-hits an env that doesn't contain the name yet. The SCC change
-preserves this exactly: only `function` decls hoist, everything
-else still flows source-order.
+on any access before the declaration line is reached. inty does
+**not** diagnose this. Every `var` / `let` / `const` name of a scope
+is pre-bound to a placeholder type variable so hoisted function
+bodies can refer to it (the IIFE-library pattern, where functions
+read state declared later but only run after it is initialised). A
+top-level `f(); const x = …; function f() { return x; }` therefore
+type-checks, and throws at runtime. Diagnosing it would need a
+call-graph-aware "may run before initialisation" analysis.
+
+**Placeholders and generalisation.** A placeholder is monomorphic
+while the hoisted functions are inferred, and it can be bound (through
+a function body) to a type mentioning other variables. Generalisation
+therefore uses the environment's free variables *after* substitution
+(`ftv(S Γ)`), closed over the pending constraints' functional
+dependencies (`InferState::env_fixed_vars`). Otherwise a hoisted
+function could be generalised over a variable that the placeholder,
+and later the declared `const`, depend on.
 
 ### 6. Interaction with the value restriction
 

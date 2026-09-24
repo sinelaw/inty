@@ -1041,6 +1041,59 @@ impl Type {
         pvars
     }
 
+    /// Ids of the recursive / nominal named types this type mentions
+    /// (`Named(id, …)` and recursive row tails), not looking inside their
+    /// bodies. Free-variable functions don't look inside named-type bodies
+    /// either, so generalisation uses this to find the variables hidden
+    /// there.
+    pub fn named_ids(&self) -> HashSet<TypeId> {
+        let mut ids = HashSet::new();
+        self.collect_named_ids(&mut ids);
+        ids
+    }
+
+    fn collect_named_ids(&self, ids: &mut HashSet<TypeId>) {
+        match self {
+            Type::Named(id, args) => {
+                ids.insert(*id);
+                for a in args {
+                    a.collect_named_ids(ids);
+                }
+            }
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                if let Some(t) = this_type {
+                    t.collect_named_ids(ids);
+                }
+                for p in params {
+                    p.ty.collect_named_ids(ids);
+                }
+                ret.collect_named_ids(ids);
+            }
+            Type::Row(row) => {
+                for entry in row.props.values() {
+                    entry.ty.collect_named_ids(ids);
+                }
+                if let RowTail::Recursive(id, args) = &row.tail {
+                    ids.insert(*id);
+                    for a in args {
+                        a.collect_named_ids(ids);
+                    }
+                }
+            }
+            Type::Array(e) | Type::Promise(e) | Type::Map(e) => e.collect_named_ids(ids),
+            Type::Tuple(ts) | Type::Union(ts) => {
+                for t in ts {
+                    t.collect_named_ids(ids);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn collect_free_pvars(&self, pvars: &mut HashSet<PVarName>) {
         match self {
             Type::Number
