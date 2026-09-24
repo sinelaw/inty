@@ -25,7 +25,7 @@
 
 use crate::infer::TypeEnv;
 use crate::modules::{ExportBinding, ExportEntry, ExportTable};
-use crate::types::{PrettyContext, QualType, TypeScheme};
+use crate::types::{PrettyContext, QualType, TVarName, Type, TypeScheme};
 
 /// A fully type-checked module, ready for declaration emission.
 ///
@@ -99,7 +99,77 @@ fn resolve_scheme(entry: &ExportEntry, env: &TypeEnv) -> Option<TypeScheme> {
     }
 }
 
+/// `scheme` with each `HasProp`-constrained quantified variable replaced
+/// by an open object type with those fields — `a has {x: b} => (a) => b`
+/// becomes `({x: b | c}) => b`. Declarations can't carry predicates (see
+/// `emit_one`), and a property constraint is a requirement a consumer
+/// must be held to; an object with the fields is the (sound, narrower)
+/// type inty inferred for such a parameter before `HasProp`. A string or
+/// array argument that the constraint would have admitted is rejected by
+/// the declaration.
+fn with_has_props_as_rows(scheme: &TypeScheme) -> TypeScheme {
+    use crate::types::{FieldEntry, PropName, RowType, Subst};
+    use std::collections::BTreeMap;
+    let mut fields: Vec<(TVarName, BTreeMap<PropName, FieldEntry>)> = Vec::new();
+    for pred in &scheme.body.preds {
+        let Some((Type::Var(v), name, result)) = pred.as_has_prop() else {
+            continue;
+        };
+        if !scheme.vars.contains(v) {
+            continue;
+        }
+        let entry = match fields.iter_mut().find(|(w, _)| w == v) {
+            Some((_, f)) => f,
+            None => {
+                fields.push((v.clone(), BTreeMap::new()));
+                &mut fields.last_mut().expect("just pushed").1
+            }
+        };
+        // Two reads of one property (`s.slice(i)`, `s.slice(i, j)`) can
+        // only be one field: keep the first.
+        entry
+            .entry(PropName(name.to_string()))
+            .or_insert_with(|| FieldEntry::pre(result.clone()));
+    }
+    if fields.is_empty() {
+        return scheme.clone();
+    }
+    let mut next = scheme
+        .vars
+        .iter()
+        .map(|v| v.id())
+        .chain(scheme.body.ty.free_vars().iter().map(|v| v.id()))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let mut vars = scheme.vars.clone();
+    let mut subst = Subst::empty();
+    for (v, props) in fields {
+        let tail = TVarName::Flex(next);
+        next += 1;
+        vars.push(tail.clone());
+        subst.insert(v, Type::Row(RowType::open_entries(props, tail)));
+    }
+    // A field's type can mention another receiver (`a has {p: b}`,
+    // `b has {q: c}`): substitute until none is left, a few levels deep
+    // (a receiver in its own fields is recursive and stays a variable).
+    let mut ty = scheme.body.ty.clone();
+    for _ in 0..8 {
+        let next_ty = subst.apply(&ty);
+        if next_ty == ty {
+            break;
+        }
+        ty = next_ty;
+    }
+    TypeScheme {
+        vars,
+        pvars: scheme.pvars.clone(),
+        body: QualType::simple(ty),
+    }
+}
+
 fn emit_one(out: &mut String, name: &str, scheme: &TypeScheme) {
+    let scheme = &with_has_props_as_rows(scheme);
     let mut ctx = PrettyContext::new();
     // Print the quantifier prefix (so re-parsing finds bound names
     // for every type variable in the body) but drop type-class
@@ -126,6 +196,7 @@ fn emit_one(out: &mut String, name: &str, scheme: &TypeScheme) {
 }
 
 fn emit_one_ts(out: &mut String, name: &str, scheme: &TypeScheme) {
+    let scheme = &with_has_props_as_rows(scheme);
     let mut ctx = PrettyContext::new();
     let body = ctx.format_type_ts(&scheme.body.ty);
     out.push_str("declare const ");
@@ -143,6 +214,28 @@ mod tests {
 
     fn make_env_with(name: &str, ty: Type) -> TypeEnv {
         TypeEnv::empty().extend(name.to_string(), TypeScheme::mono(ty))
+    }
+
+    #[test]
+    fn has_prop_requirements_become_object_fields() {
+        // `function len(s) { return s.length; }`:
+        // `<a, b> where a has {length: b} => (a) => b`. Declarations can't
+        // carry the constraint, so it's printed as the object it requires
+        // (dropping it would let a consumer pass anything).
+        use crate::types::{TVarName, TypePred};
+        let (a, b) = (TVarName::Flex(0), TVarName::Flex(1));
+        let scheme = TypeScheme::qualified(
+            vec![a.clone(), b.clone()],
+            vec![TypePred::has_prop(Type::Var(a.clone()), "length", Type::Var(b.clone()))],
+            Type::simple_func(vec![Type::Var(a)], Type::Var(b)),
+        );
+        let env = TypeEnv::empty().extend("len".to_string(), scheme);
+        let exports = vec![ExportEntry {
+            exported: "len".to_string(),
+            binding: ExportBinding::Local("len".to_string()),
+        }];
+        let out = emit_declarations(&CheckedModule::new(env, exports));
+        assert_eq!(out, "/** const len: <b, c>({length: b | c}) => b */\nconst len;\n");
     }
 
     #[test]

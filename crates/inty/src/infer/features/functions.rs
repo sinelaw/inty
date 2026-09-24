@@ -641,7 +641,7 @@ impl InferState {
         // reads — the callee's instantiated predicates, or a method's
         // `this` — so resolve those now: the result type is then known
         // to what follows.
-        self.simplify_has_props(0)?;
+        self.simplify_has_props()?;
         Ok(self.zonk(&ret_type))
     }
 
@@ -872,7 +872,7 @@ impl InferState {
         // a predicate the others need too (leaving `b` in `a ↔ b` with no
         // `Indexable` predicate at all). A predicate stays pending only if no
         // member took it.
-        self.simplify_has_props(0)?;
+        self.simplify_has_props()?;
         let pending = self.pending_constraints.clone();
         let mut left_by_all = vec![true; pending.len()];
         for stmt in group {
@@ -1074,7 +1074,7 @@ impl InferState {
         // the function's own type), which must not count as the
         // environment fixing the function's variables.
         let env_free = env.remove(name).free();
-        self.simplify_has_props(0)?;
+        self.simplify_has_props()?;
         let scheme = self.generalize(&env_free, &func_type);
         self.record_decl_scheme(name_span, scheme.clone());
 

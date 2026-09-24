@@ -171,6 +171,16 @@ var pt: {x: Number, y: Number} | {x: Number, z: Number}
 var x: Number    // both branches expose `x: Number`
 ```
 
+A union forms only between types that are **already known to differ**. A value whose type isn't known yet — typically a parameter, even one whose properties are read (`HasProp`) — is *unified* with the other side of a join, as in plain Hindley–Milner, and never guessed to be one arm of a union:
+
+```javascript
+function h(o, b) { const v = b ? o : "str"; return o.x; }
+// error: Property 'x' not found in type String — `o` is joined with a
+// String, so it is one; annotate `o` if it's meant to be `String | {x: …}`.
+```
+
+Deciding from what's already known keeps the verdict independent of where the property read sits: reading `o.x` before the join gives the same error. (Implicit unions between types that are both known are an extension to HM, and whether a type is known yet at a join can still depend on statement order — `g(o)` with `g: (Number) => …` before `b ? o : "s"` makes the join a `Number | String`, after it an error. Only annotation-introduced unions are fully order-independent.)
+
 ### Sum Types: Discriminated Unions & Narrowing (Predicate Refinement)
 
 `typeof e === "..."`, `e === literal`, and `e.kind === "..."` *refine* a union-typed binding within a branch. Use this to write sum types in the canonical tagged-union style — a single value that is exactly one of several known shapes, distinguished by a literal discriminator:

@@ -1652,9 +1652,17 @@ impl InferState {
                 pvars.insert(q);
             }
         }
-        // Variables inside named-type bodies reachable from the environment
-        // or from `ty` itself.
+        // Variables inside named-type bodies reachable from the environment,
+        // from `ty` itself, or from a pending constraint (which
+        // `generalize` may take into the scheme and quantify the
+        // variables of: one that also sits in a shared body would then
+        // come apart from it in each instance).
         named.extend(ty.named_ids());
+        for c in &self.pending_constraints {
+            for t in &c.pred.types {
+                named.extend(self.main_subst.flatten(t).named_ids());
+            }
+        }
         let mut seen: HashSet<TypeId> = HashSet::new();
         while let Some(id) = named.pop() {
             if !seen.insert(id) {
