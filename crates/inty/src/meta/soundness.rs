@@ -295,6 +295,14 @@ pub enum HelperBody {
     Call(usize),
     CallLit(usize, &'static str),
     First(usize),
+    /// A property read or method call on the parameter itself, whose
+    /// type isn't known inside the helper (`HasProp`).
+    Prop(&'static str),
+    /// `h_j` applied to the result of a method call on the parameter.
+    CallProp(usize, &'static str),
+    /// Recursion through a method result, like a string-processing
+    /// function: `x.length > 1 ? h_i(x.slice(1)) : x`.
+    Shrink,
 }
 
 #[cfg(test)]
@@ -322,6 +330,9 @@ impl DeclProgram {
                 HelperBody::Call(j) => format!("h{}(x)", j),
                 HelperBody::CallLit(j, lit) => format!("h{}({})", j, lit),
                 HelperBody::First(j) => format!("h{}(x).first", j),
+                HelperBody::Prop(p) => format!("x{}", p),
+                HelperBody::CallProp(j, p) => format!("h{}(x{})", j, p),
+                HelperBody::Shrink => format!("x.length > 1 ? h{}(x.slice(1)) : x", i),
             };
             if *as_const {
                 out.push_str(&format!("const h{} = (x) => {};\n", i, expr));
@@ -349,8 +360,34 @@ impl DeclProgram {
 
 #[cfg(test)]
 pub fn arb_decl_program() -> BoxedStrategy<DeclProgram> {
-    const LITS: [&str; 3] = ["1", "\"s\"", "true"];
-    const CONSUMERS: [&str; 4] = ["R * 2", "R + \"!\"", "R.first", "R"];
+    const LITS: [&str; 6] = [
+        "1",
+        "\"s\"",
+        "true",
+        "\"abc\"",
+        "[1, 2]",
+        "({ first: \"s\", length: 2 })",
+    ];
+    const CONSUMERS: [&str; 7] = [
+        "R * 2",
+        "R + \"!\"",
+        "R.first",
+        "R",
+        "R.length * 2",
+        "R.slice(1)",
+        "R.toUpperCase()",
+    ];
+    // Property reads and method calls a helper makes on its parameter:
+    // some every string has, some arrays have too, some only objects.
+    const PROPS: [&str; 7] = [
+        ".length",
+        ".slice(1)",
+        ".slice(0, 1)",
+        ".toUpperCase()",
+        ".charCodeAt(0)",
+        ".indexOf(\"s\")",
+        ".first",
+    ];
     (2usize..=4)
         .prop_flat_map(|n| {
             // `h_i` only calls `h_j` for `j > i`: the call graph is acyclic,
@@ -363,6 +400,10 @@ pub fn arb_decl_program() -> BoxedStrategy<DeclProgram> {
                     Just(HelperBody::Num).boxed(),
                     Just(HelperBody::Str).boxed(),
                     Just(HelperBody::Pair).boxed(),
+                    (0..PROPS.len())
+                        .prop_map(|p| HelperBody::Prop(PROPS[p]))
+                        .boxed(),
+                    Just(HelperBody::Shrink).boxed(),
                 ];
                 if i + 1 < n {
                     arms.push(((i + 1)..n).prop_map(HelperBody::Call).boxed());
@@ -372,6 +413,11 @@ pub fn arb_decl_program() -> BoxedStrategy<DeclProgram> {
                             .boxed(),
                     );
                     arms.push(((i + 1)..n).prop_map(HelperBody::First).boxed());
+                    arms.push(
+                        ((i + 1)..n, 0..PROPS.len())
+                            .prop_map(|(j, p)| HelperBody::CallProp(j, PROPS[p]))
+                            .boxed(),
+                    );
                 }
                 (proptest::strategy::Union::new(arms), any::<bool>())
             };
@@ -380,7 +426,7 @@ pub fn arb_decl_program() -> BoxedStrategy<DeclProgram> {
             let uses = proptest::collection::vec(
                 (0..n, 0..LITS.len(), 0..CONSUMERS.len())
                     .prop_map(|(h, l, c)| (h, LITS[l], CONSUMERS[c])),
-                1..=3,
+                1..=2,
             );
             (helpers, order, uses)
         })
@@ -460,11 +506,19 @@ mod decl_tests {
             TestRng::deterministic_rng(proptest::test_runner::RngAlgorithm::ChaCha),
         );
         let strategy = arb_decl_program();
-        let (mut accepted, total) = (0, 300);
+        let (mut accepted, mut with_props, total) = (0, 0, 600);
         for _ in 0..total {
             let p = strategy.new_tree(&mut runner).unwrap().current();
             if infer_helpers(&p.render(), p.helpers.len()).is_ok() {
                 accepted += 1;
+                if p.helpers.iter().any(|(b, _)| {
+                    matches!(
+                        b,
+                        HelperBody::Prop(_) | HelperBody::CallProp(..) | HelperBody::Shrink
+                    )
+                }) {
+                    with_props += 1;
+                }
             }
         }
         assert!(
@@ -472,6 +526,14 @@ mod decl_tests {
             "{} of {} generated programs type-check",
             accepted,
             total
+        );
+        // Accepted programs whose helpers read properties of a parameter
+        // of unknown type — the `HasProp` path — are well represented.
+        assert!(
+            with_props >= accepted / 4,
+            "only {} of {} accepted programs read properties of a parameter",
+            with_props,
+            accepted
         );
     }
 

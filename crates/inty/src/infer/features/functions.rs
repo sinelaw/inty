@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::ast::free_idents::free_identifiers_in_function_body;
 use crate::ast::{ExportDecl, Expr, Literal, Param, Stmt, TypeAnnotation, VarDeclarator, VarKind};
 use crate::span::Span;
-use crate::types::{Type, TypePred, TypeScheme};
+use crate::types::{TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
@@ -455,6 +455,7 @@ impl InferState {
     ) -> InferResult<Type> {
         // For method calls, we need to infer the object only once to avoid creating
         // different fresh type variables. We'll manually extract the method type.
+        let mut deferred_this: Option<Type> = None;
         let (callee_type, obj_type_for_this) = match callee {
             Expr::Member {
                 object,
@@ -465,11 +466,28 @@ impl InferState {
                 let obj_type = self.infer_expr(env, object)?;
                 let obj_type_applied = self.zonk(&obj_type);
 
-                // Get method type from the object without re-inferring
-                let method_type =
-                    self.infer_member_on_type(&obj_type_applied, property, *member_span)?;
-
-                (method_type, Some(obj_type_applied))
+                if matches!(obj_type_applied, Type::Var(TVarName::Flex(_))) {
+                    // A receiver whose type isn't known yet: the method and
+                    // the call's `this` both wait for it (`HasProp`).
+                    let method_type = self.fresh_type_var();
+                    let this = self.fresh_type_var();
+                    self.add_constraint(
+                        TypePred::has_method(
+                            obj_type_applied.clone(),
+                            property,
+                            method_type.clone(),
+                            this.clone(),
+                        ),
+                        *member_span,
+                    );
+                    deferred_this = Some(this);
+                    (method_type, Some(obj_type_applied))
+                } else {
+                    // Get method type from the object without re-inferring
+                    let method_type =
+                        self.infer_member_on_type(&obj_type_applied, property, *member_span)?;
+                    (method_type, Some(obj_type_applied))
+                }
             }
             Expr::ComputedMember {
                 object,
@@ -607,19 +625,11 @@ impl InferState {
         // `this`-agnostic functions are unaffected) and produces a
         // type error when it's a concrete row, catching detached
         // method calls like `var f = obj.m; f();` at type-check time.
-        if let Some(obj_type) = obj_type_for_this {
-            let obj_type_applied = self.zonk(&obj_type);
-            // A nominal brand is transparent for method-receiver binding,
-            // just as it is for field access: unroll it to its
-            // representation row so the method body's `this`-row unifies
-            // against the instance shape. The receiver's own type stays
-            // nominal everywhere else.
-            let obj_for_this = match &obj_type_applied {
-                Type::Named(id, args) if self.is_nominal_type(*id) => self
-                    .unroll_named(*id, args)
-                    .unwrap_or_else(|| obj_type_applied.clone()),
-                _ => obj_type_applied.clone(),
-            };
+        if let Some(this) = deferred_this {
+            // Bound to the receiver when its `HasProp` resolves.
+            self.unify(span, &this_type, &this)?;
+        } else if let Some(obj_type) = obj_type_for_this {
+            let obj_for_this = self.method_receiver(&obj_type);
             let this_type_applied = self.zonk(&this_type);
             self.unify(span, &this_type_applied, &obj_for_this)?;
         } else {
@@ -627,7 +637,27 @@ impl InferState {
             self.unify(span, &this_type_applied, &Type::Undefined)?;
         }
 
+        // The call may have pinned down receivers of pending property
+        // reads — the callee's instantiated predicates, or a method's
+        // `this` — so resolve those now: the result type is then known
+        // to what follows.
+        self.simplify_has_props(0)?;
         Ok(self.zonk(&ret_type))
+    }
+
+    /// What a method called on `receiver` sees as `this`. A nominal brand
+    /// is transparent for method-receiver binding, just as it is for
+    /// field access: it unrolls to its representation row so the method
+    /// body's `this`-row unifies against the instance shape. The
+    /// receiver's own type stays nominal everywhere else.
+    pub(crate) fn method_receiver(&mut self, receiver: &Type) -> Type {
+        let receiver = self.zonk(receiver);
+        match &receiver {
+            Type::Named(id, args) if self.is_nominal_type(*id) => self
+                .unroll_named(*id, args)
+                .unwrap_or_else(|| receiver.clone()),
+            _ => receiver,
+        }
     }
 
     /// Infer a call that has keyword arguments. Resolves each keyword to a
@@ -842,6 +872,7 @@ impl InferState {
         // a predicate the others need too (leaving `b` in `a ↔ b` with no
         // `Indexable` predicate at all). A predicate stays pending only if no
         // member took it.
+        self.simplify_has_props(0)?;
         let pending = self.pending_constraints.clone();
         let mut left_by_all = vec![true; pending.len()];
         for stmt in group {
@@ -1043,6 +1074,7 @@ impl InferState {
         // the function's own type), which must not count as the
         // environment fixing the function's variables.
         let env_free = env.remove(name).free();
+        self.simplify_has_props(0)?;
         let scheme = self.generalize(&env_free, &func_type);
         self.record_decl_scheme(name_span, scheme.clone());
 

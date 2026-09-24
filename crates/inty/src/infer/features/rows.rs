@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
 use crate::span::Span;
-use crate::types::{FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypeScheme};
+use crate::types::{
+    FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme,
+};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
@@ -635,7 +637,7 @@ impl InferState {
     /// optional-chain handling for each segment, by call-expression
     /// handling to extract the method type without re-inferring the
     /// receiver, and recursively for union elimination.
-    pub(in crate::infer) fn infer_member_on_type(
+    pub(crate) fn infer_member_on_type(
         &mut self,
         obj_type: &Type,
         property: &str,
@@ -785,9 +787,6 @@ impl InferState {
             _ => {}
         }
 
-        // Fall through (type variables, open rows that don't yet name
-        // the property, etc.): pose the property access as a row
-        // constraint and let unification resolve it.
         let result_type = self.fresh_type_var();
 
         if let Type::Var(var) = &result_type {
@@ -800,6 +799,24 @@ impl InferState {
             );
         }
 
+        // A receiver whose type isn't known yet: don't decide here that
+        // it's an object. Record `HasProp(receiver, property, result)`
+        // and resolve it once the receiver's type is known (see
+        // `resolve_has_prop`) — so a parameter used as `s.slice(i)` can
+        // still be a string, and every access gets its own copy of a
+        // built-in method's type.
+        let receiver = self.zonk(obj_type);
+        if matches!(receiver, Type::Var(TVarName::Flex(_))) {
+            self.add_constraint(
+                TypePred::has_prop(receiver, property, result_type.clone()),
+                span,
+            );
+            return Ok(result_type);
+        }
+
+        // Otherwise (open rows that don't yet name the property, and
+        // shapes unification can unroll): pose the property access as a
+        // row constraint and let unification resolve it.
         let row_var = self.fresh_flex();
         let expected_row = Type::object_open([(property, result_type.clone())], row_var);
 

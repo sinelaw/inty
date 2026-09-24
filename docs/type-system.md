@@ -54,16 +54,25 @@ var n2 = getName(dog);
 ```
 
 ```
-function getName<a, b>({name: a | b}) => a
+function getName<a, b> where a has {name: b} => (a) => b
 var n1: String
 var n2: String
 ```
 
-The row variable `b` ranges over the rest of the object's fields; the function commits only to the existence of `name`.
+`a has {name: b}` is a *property constraint* (`HasProp` internally): `getName` works on any `a` from which reading `.name` gives a `b`. That's any object with a `name` field, whatever else it carries — and, for a property built-in types have, a string or an array too:
+
+```javascript
+function lastChar(s) { return s.slice(s.length - 1); }
+lastChar("abc");     // String: a string has `slice` and `length`
+lastChar([1, 2, 3]); // Number[]: so does an array
+lastChar(42);        // error: a number has neither
+```
+
+inference doesn't decide what `obj` is when it meets `obj.name` on a value whose type isn't known yet. It records the constraint and resolves it once the type is known: a string's or array's built-in property (each read gets its own copy of a built-in method's type, so `s.slice(i)` and `s.slice(i, j)` can both be called on the same parameter), or an object's field. A constraint still open when the function is generalised becomes part of its type, like `Plus` below; the receiver determines the result, so a constraint on a variable the environment fixes fixes its result too (see `env_fixed_vars`). A receiver nothing ever pins down is read as an object with that field, which is what inty inferred for every property access before `HasProp`.
 
 ### Operator Overloading (Type Classes)
 
-`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row. Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one.
+`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row. Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
 
 ### Method Chaining & Builders (Equi-recursive Types)
 

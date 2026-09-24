@@ -206,6 +206,16 @@ pub enum ClassName {
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
+    /// Property access on a value whose type isn't known yet:
+    /// `HasProp(receiver, "name", result)` says reading `.name` from a
+    /// `receiver` gives a `result`. The name is carried as a string
+    /// literal type. Resolved once the receiver's type is known — a
+    /// string or array (its built-in property), an object (its field) —
+    /// and otherwise generalised with the function that made it, so
+    /// `function f(s) { return s.length; }` accepts strings, arrays and
+    /// `{length: …}` objects alike. The receiver determines the result
+    /// (a functional dependency, like `Indexable`'s container).
+    HasProp,
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
@@ -227,6 +237,45 @@ impl TypePred {
         TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
+        }
+    }
+
+    pub fn has_prop(receiver: Type, name: &str, result: Type) -> Self {
+        TypePred {
+            class: ClassName::HasProp,
+            types: vec![
+                receiver,
+                Type::Literal(LitValue::String(name.to_string())),
+                result,
+            ],
+        }
+    }
+
+    /// `HasProp` for a method call `receiver.name(…)`: also carries the
+    /// call's `this`, which is bound to the receiver (unrolled, if it's
+    /// a nominal type, as a call on a known receiver does) when the
+    /// constraint is resolved.
+    pub fn has_method(receiver: Type, name: &str, result: Type, this: Type) -> Self {
+        let mut pred = Self::has_prop(receiver, name, result);
+        pred.types.push(this);
+        pred
+    }
+
+    /// `(receiver, name, result)` of a `HasProp` predicate.
+    pub fn as_has_prop(&self) -> Option<(&Type, &str, &Type)> {
+        match (self.class, self.types.as_slice()) {
+            (ClassName::HasProp, [recv, Type::Literal(LitValue::String(name)), result, ..]) => {
+                Some((recv, name.as_str(), result))
+            }
+            _ => None,
+        }
+    }
+
+    /// The call's `this` of a [`Self::has_method`] predicate.
+    pub fn method_this(&self) -> Option<&Type> {
+        match (self.class, self.types.as_slice()) {
+            (ClassName::HasProp, [_, _, _, this]) => Some(this),
+            _ => None,
         }
     }
 

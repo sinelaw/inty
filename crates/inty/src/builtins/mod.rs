@@ -481,28 +481,113 @@ impl InferState {
             let before = constraints.len();
             let mut deferred = Vec::new();
             for constraint in constraints {
-                if self.is_deferred_indexable(&constraint.pred) {
+                if self.is_deferred(&constraint.pred) {
                     deferred.push(constraint);
                 } else {
                     self.resolve_constraint(&constraint.pred, constraint.span)?;
                 }
+                // Resolving can pose new constraints (a property read
+                // from a union's variable member).
+                deferred.append(&mut self.pending_constraints);
             }
-            if deferred.is_empty() || deferred.len() == before {
-                // Whatever is left has a container nothing ever pinned down:
-                // no use of it depends on the element type.
+            if deferred.is_empty() {
                 return Ok(());
+            }
+            if deferred.len() == before {
+                // Nothing pinned down the receivers of the property reads
+                // left: read them as fields of an object, as a direct
+                // access to an object would. That's a valid choice for a
+                // type nothing else constrains, and it can let the
+                // `Indexable`s on the same receivers resolve.
+                let mut defaulted = false;
+                let mut rest = Vec::new();
+                for c in deferred {
+                    match c.pred.as_has_prop() {
+                        Some((recv, name, result)) => {
+                            let row =
+                                Type::object_open([(name, result.clone())], self.fresh_flex());
+                            self.unify(c.span, recv, &row)?;
+                            if let Some(this) = c.pred.method_this() {
+                                self.unify(c.span, this, recv)?;
+                            }
+                            defaulted = true;
+                        }
+                        None => rest.push(c),
+                    }
+                }
+                if !defaulted {
+                    // Whatever is left has a container nothing ever pinned
+                    // down: no use of it depends on the element type.
+                    return Ok(());
+                }
+                constraints = rest;
+                continue;
             }
             constraints = deferred;
         }
     }
 
-    /// An `Indexable` whose container is still an unbound variable.
-    fn is_deferred_indexable(&self, pred: &TypePred) -> bool {
-        pred.class == ClassName::Indexable
+    /// Resolve every pending `HasProp` whose receiver's type is now known
+    /// (repeatedly: resolving one can pin down another's receiver). Run
+    /// before generalising, so a function's scheme only keeps the
+    /// property reads that really depend on its quantified variables,
+    /// and after calls, so a result type is known as early as possible.
+    /// Only constraints at index `from` or later are considered.
+    pub(crate) fn simplify_has_props(&mut self, from: usize) -> Result<(), IntyError> {
+        loop {
+            let from = from.min(self.pending_constraints.len());
+            let ready: Vec<usize> = (from..self.pending_constraints.len())
+                .filter(|&i| {
+                    let pred = &self.pending_constraints[i].pred;
+                    pred.class == ClassName::HasProp && !self.is_deferred(pred)
+                })
+                .collect();
+            if ready.is_empty() {
+                return Ok(());
+            }
+            let mut taken = Vec::with_capacity(ready.len());
+            for &i in ready.iter().rev() {
+                taken.push(self.pending_constraints.remove(i));
+            }
+            for c in taken.into_iter().rev() {
+                self.resolve_constraint(&c.pred, c.span)?;
+            }
+        }
+    }
+
+    /// A constraint that must wait for its first type (an `Indexable`'s
+    /// container, a `HasProp`'s receiver) to be known.
+    fn is_deferred(&self, pred: &TypePred) -> bool {
+        matches!(pred.class, ClassName::Indexable | ClassName::HasProp)
             && matches!(
                 pred.types.first().map(|c| self.apply_subst(c)),
                 Some(Type::Var(TVarName::Flex(_)))
             )
+    }
+
+    /// Resolve `HasProp(receiver, name, result)` for a known receiver:
+    /// exactly what reading `.name` from a value of that type directly
+    /// would have given — a string's or array's built-in property (a
+    /// fresh copy of a method's type per read), an object's field.
+    fn resolve_has_prop(
+        &mut self,
+        receiver: &Type,
+        name: &str,
+        result: &Type,
+        this: Option<&Type>,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        let receiver = self.zonk(receiver);
+        if matches!(receiver, Type::Var(TVarName::Flex(_))) {
+            return Ok(());
+        }
+        let found = self.infer_member_on_type(&receiver, name, span)?;
+        self.unify(span, result, &found)?;
+        if let Some(this) = this {
+            let receiver = self.method_receiver(&receiver);
+            self.unify(span, this, &receiver)?;
+        }
+        Ok(())
     }
 
     /// `record[key]`. A literal key selects that field (which must exist).
@@ -583,6 +668,14 @@ impl InferState {
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
+            ClassName::HasProp => match pred.as_has_prop() {
+                Some((recv, name, result)) => {
+                    let (recv, result) = (recv.clone(), result.clone());
+                    let this = pred.method_this().cloned();
+                    self.resolve_has_prop(&recv, name, &result, this.as_ref(), span)
+                }
+                None => Ok(()),
+            },
         }
     }
 

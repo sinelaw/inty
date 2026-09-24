@@ -1148,12 +1148,10 @@ fn test_map_function_indexable_unification() {
 
 #[test]
 fn test_map_function_complete_type_signature() {
-    // Test that the map function has a clean type signature where:
-    // 1. arr is typed as an array (not just a row with length)
-    // 2. fn's input type equals arr's element type
-    // 3. fn's output type equals result's element type
-    // 4. All quantified type variables are actually used in the type
-    let source = r#"
+    // `map` reads `arr.length` and `arr[i]`, so it works on anything with
+    // both: arrays and strings alike. Its result's element type is what
+    // `fn` returns, and `fn` takes `arr`'s elements.
+    let map = r#"
         function map(arr, fn) {
             var result = [];
             for (var i = 0; i < arr.length; i++) {
@@ -1162,66 +1160,31 @@ fn test_map_function_complete_type_signature() {
             return result;
         }
     "#;
-    let (_, env, state) = infer_program_with_state(source).expect("Should type-check successfully");
-
-    let scheme = env.lookup("map").expect("Should have map function");
-
-    // All quantified variables should appear in the type body
-    let body_vars = scheme.body.ty.free_vars();
-    for var in &scheme.vars {
-        assert!(
-            body_vars.contains(var),
-            "Quantified variable {:?} should appear in type body",
-            var
-        );
+    let t = check_program(
+        &format!(
+            "{map}\nconst a = map([1, 2], (x) => x * 2);\n\
+             const b = map(\"ab\", (c) => c + \"!\");"
+        ),
+        &["a", "b"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Number[]", "String[]"]);
+    // The element flows from `arr` into `fn`: a string's elements are
+    // strings, so `c * 2` is wrong.
+    assert!(check_program(&format!("{map}\nmap(\"ab\", (c) => c.toFixed(1));"), &[]).is_err());
+    // Every quantified variable is used by the type or its predicates.
+    let (_, env, _) = infer_program_with_state(map).unwrap();
+    let scheme = env.lookup("map").unwrap();
+    let mut used = scheme.body.ty.free_vars();
+    for p in &scheme.body.preds {
+        used.extend(p.free_vars());
     }
-
-    let ty = state.apply_subst(&scheme.body.ty);
-
-    let (_, params, ret) = ty.as_callable().expect("map should be a function type");
-    let arr_param = state.apply_subst(&params[0].ty);
-    let fn_param = state.apply_subst(&params[1].ty);
-    let ret_type = state.apply_subst(ret);
-
-    // arr should be an array type
-    assert!(
-        matches!(arr_param, Type::Array(_)),
-        "arr parameter should be Array type, got: {}",
-        arr_param
-    );
-
-    // fn should be a function type
-    assert!(
-        fn_param.is_func(),
-        "fn parameter should be a function type, got: {}",
-        fn_param
-    );
-
-    // ret should be an array type
-    assert!(
-        matches!(ret_type, Type::Array(_)),
-        "return type should be Array type, got: {}",
-        ret_type
-    );
-
-    if let (Type::Array(arr_elem), Some((_, fn_params, fn_ret)), Type::Array(result_elem)) =
-        (&arr_param, fn_param.as_callable(), &ret_type)
-    {
-        let arr_elem_type = state.apply_subst(arr_elem.as_ref());
-        let fn_input_type = state.apply_subst(&fn_params[0].ty);
-        let fn_ret_type = state.apply_subst(fn_ret);
-        let result_elem_type = state.apply_subst(result_elem.as_ref());
-
-        // arr element type should equal fn's input type
-        assert_eq!(
-            arr_elem_type, fn_input_type,
-            "arr element type should equal fn input type"
-        );
-
-        // fn return type should equal result element type
-        assert_eq!(
-            fn_ret_type, result_elem_type,
-            "fn return type should equal result element type"
+    for v in &scheme.vars {
+        assert!(
+            used.contains(v),
+            "quantified {:?} is unused in {:?}",
+            v,
+            scheme
         );
     }
 }
@@ -2731,27 +2694,16 @@ fn export_default_class_extends_rejects_with_inheritance_error() {
 /// printed/generalised function type only mentions `foo`.
 #[test]
 fn row_subst_merges_bindings_through_open_tail() {
-    use crate::types::{PropName, Type};
-    let src = "function f(o) { var a = o.foo; var b = o.bar; }";
-    let (_, env, state) = infer_program_with_state(src).unwrap();
-    let scheme = env.lookup("f").unwrap();
-    let ty = state.apply_subst(scheme.ty());
-    let (_, params, _) = ty.as_callable().expect("f should be callable");
-    let param = state.apply_subst(&params[0].ty);
-    let row = match &param {
-        Type::Row(r) => r,
-        other => panic!("parameter should be a row, got {}", other),
-    };
-    assert!(
-        row.props.contains_key(&PropName("foo".to_string())),
-        "parameter row should mention `foo`, got {}",
-        param
-    );
-    assert!(
-        row.props.contains_key(&PropName("bar".to_string())),
-        "parameter row should mention `bar` (the second access dropped its constraint), got {}",
-        param
-    );
+    let t = check_program("function f(o) { var a = o.foo; var b = o.bar; }", &["f"]).unwrap();
+    assert!(t[0].contains("a has {foo: b, bar: c}"), "{}", t[0]);
+    // And once `o` is an object, both reads are its fields.
+    let t = check_program(
+        "function f(o) { var a = o.foo; var b = o.bar; return o; }\n\
+         const r = f({foo: 1, bar: \"s\"});",
+        &["r"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "{bar: String, foo: Number}");
 }
 
 /// Soundness companion to `row_subst_merges_bindings_through_open_tail`:
@@ -3519,39 +3471,29 @@ fn annotated_array_param_accepts_optional_index_of() {
     );
 }
 
-/// The inferred-row regression case: without annotation, the *first*
-/// call commits `str`'s row to a 1-arg slice, and the second call
-/// fails. This test pins inty's *current* behaviour on
-/// unannotated inferred rows — see the PR description and
-/// `docs/destructive-unification-plan.md`'s open follow-ups for the
-/// HMX-style constraint-based inference that would fix this. The
-/// test exists so a future improvement that closes this gap shows
-/// up as a clean test change.
+/// An unannotated parameter used as `str.slice(-2)` and `str.slice(0, -2)`:
+/// each read of `.slice` is its own `HasProp` constraint, resolved against
+/// a fresh copy of `String.prototype.slice` once `str` is known, so the
+/// optional second argument can be omitted in one call and given in the
+/// other. (A single inferred row field shared one presence variable
+/// between the two calls and rejected this.)
 #[test]
-fn unannotated_param_mixed_arity_slice_still_errors() {
+fn unannotated_param_mixed_arity_slice() {
     let src = "\
         function getSuffix(str) { \
             if (str.slice(-2) == \"ms\") { return str.slice(0, -2); } \
             return str; \
-        }";
-    // The inference may surface the error either as a `Result::Err`
-    // returned from `infer_program_with_state` (when the first
-    // failing statement aborts the run) or as an accumulated entry
-    // in `state.errors` (when `Type::Error` recovery let inference
-    // continue). Either is a valid current behaviour; the assertion
-    // is that *some* type error fires.
-    let typed_err = match infer_program_with_state(src) {
-        Err(_) => true,
-        Ok((_, _, state)) => state
-            .errors
-            .iter()
-            .any(|e| !matches!(e, crate::error::IntyError::Type(TypeError::Module { .. }))),
-    };
-    assert!(
-        typed_err,
-        "unannotated inferred-row case should still error today — \
-         see PR #29 / docs for HMX-style follow-up"
-    );
+        }\n\
+        const s = getSuffix(\"10ms\");";
+    assert_eq!(check_program(src, &["s"]).unwrap(), ["String"]);
+    // A number has no `slice`.
+    let bad = "\
+        function getSuffix(str) { \
+            if (str.slice(-2) == \"ms\") { return str.slice(0, -2); } \
+            return str; \
+        }\n\
+        getSuffix(10);";
+    assert!(check_program(bad, &[]).is_err());
 }
 
 /// A `for (let i = 0; …)` header variable is mutable, so it widens like
@@ -3757,7 +3699,8 @@ fn flatten_expands_every_occurrence_of_a_bound_row() {
         &["f"],
     )
     .unwrap();
-    assert!(t[0].contains("q: {x: a, y: b | c}"), "{}", t[0]);
+    assert!(t[0].contains("a has {x: b, y: c}"), "{}", t[0]);
+    assert!(t[0].contains("{p: a, q: a}"), "{}", t[0]);
 }
 
 #[test]
@@ -3826,4 +3769,103 @@ fn use_before_initialisation_is_reported() {
     ] {
         check_program(src, &[]).unwrap_or_else(|e| panic!("{}: {}", src, e));
     }
+}
+
+// ---- HasProp: property reads on values of not-yet-known type -----------------
+
+#[test]
+fn has_prop_string_parameter_used_through_methods() {
+    // `s` is only known through its methods; a string satisfies them.
+    let src = "function f(s) { return s.charCodeAt(0) + s.slice(1).length; }\n\
+               const n = f(\"abc\");";
+    assert_eq!(check_program(src, &["n"]).unwrap(), ["Number"]);
+    // So does an array, for the methods arrays have.
+    let arr = "function first(xs) { return xs.slice(0, 1); }\n\
+               const a = first([1, 2]);\n\
+               const b = first(\"xy\");";
+    assert_eq!(
+        check_program(arr, &["a", "b"]).unwrap(),
+        ["Number[]", "String"]
+    );
+    // A number has neither.
+    assert!(check_program("function f(s) { return s.slice(1); }\nf(5);", &[]).is_err());
+    // An array has no `charCodeAt`.
+    assert!(check_program("function f(s) { return s.charCodeAt(0); }\nf([1]);", &[]).is_err());
+}
+
+#[test]
+fn has_prop_recursion_through_a_method_result() {
+    // md2html's `inline(s)` calls itself on `s.slice(…)`: the parameter's
+    // type is "whatever `slice` returns", which used to be an
+    // equi-recursive row that no string could match (and, in larger
+    // programs, overflowed the stack).
+    let src = "function inline(s) {\n\
+                 if (s.length > 0 && s.charCodeAt(0) === 42) {\n\
+                   return \"<em>\" + inline(s.slice(1, s.length - 1)) + \"</em>\";\n\
+                 }\n\
+                 return s;\n\
+               }\n\
+               const h = inline(\"*a*\");";
+    assert_eq!(check_program(src, &["h"]).unwrap(), ["String"]);
+}
+
+#[test]
+fn has_prop_result_follows_the_receiver() {
+    // The receiver determines the result: an object whose `length` is a
+    // string gives a string, which can't be multiplied.
+    let src = "function len(x) { return x.length; }\n\
+               const a = len(\"abc\") * 2;\n\
+               const b = len({length: 3}) * 2;";
+    assert!(check_program(src, &[]).is_ok());
+    let bad = "function len(x) { return x.length; }\n\
+               const c = len({length: \"3\"}) * 2;";
+    assert!(check_program(bad, &[]).is_err());
+}
+
+#[test]
+fn has_prop_unused_result_is_quantified() {
+    // `o.x`'s result isn't part of `f`'s type; each call still gets its
+    // own (it's quantified with the predicate), so the two calls don't
+    // have to agree on `x`.
+    let src = "function f(o) { o.x; return 1; }\n\
+               f({x: 1});\n\
+               f({x: \"s\"});";
+    assert!(check_program(src, &[]).is_ok());
+}
+
+#[test]
+fn has_prop_array_methods_on_a_parameter() {
+    let src = "function add(xs, v) { xs.push(v); return xs.length; }\n\
+               const n = add([1], 2);";
+    assert_eq!(check_program(src, &["n"]).unwrap(), ["Number"]);
+    // The pushed value must be an element.
+    assert!(check_program(
+        "function add(xs, v) { xs.push(v); return xs; }\nadd([1], \"s\");",
+        &[]
+    )
+    .is_err());
+}
+
+#[test]
+fn has_prop_scheme_display() {
+    let t = check_program("function getX(p) { return p.x; }", &["getX"]).unwrap();
+    assert_eq!(t[0], "<a, b> where a has {x: b} => (a) => b");
+}
+
+#[test]
+fn instantiated_predicate_errors_point_at_the_use() {
+    // A predicate of a polymorphic function is checked where the function
+    // is used, and reported there (it used to be reported at 0:0).
+    let src = "function twice(x) { return x + x; }\ntwice(true);";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let mut state = InferState::new();
+    state
+        .infer_program_with_env(&initial_env(), &program)
+        .unwrap();
+    let err = state.resolve_constraints().unwrap_err();
+    let span = match err {
+        crate::error::IntyError::Type(ref e) => e.span(),
+        ref other => panic!("expected a type error, got {:?}", other),
+    };
+    assert_eq!(&src[span.start..span.end], "twice");
 }
