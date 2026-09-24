@@ -49,11 +49,20 @@ def calculate_new_version(current: str, bump_type: BumpType) -> str:
     return f"{major}.{minor}.{patch}"
 
 
+# Match the exact-version pins of the workspace's own crates under
+# [workspace.dependencies], e.g. `inty = { path = "crates/inty", version = "=0.1.1" }`.
+INTERNAL_DEP_VERSION_RE = re.compile(r'(\{ path = "crates/[^"]+", version = "=)([^"]+)(")')
+
+
 def update_workspace_version(new: str) -> None:
     content = ROOT_CARGO.read_text()
     new_content, count = WORKSPACE_VERSION_RE.subn(rf'\g<1>{new}\g<3>', content, count=1)
     if count != 1:
         raise RuntimeError("Failed to update [workspace.package] version")
+    # The internal crates depend on each other at exactly this version.
+    new_content, pins = INTERNAL_DEP_VERSION_RE.subn(rf'\g<1>{new}\g<3>', new_content)
+    if pins == 0:
+        raise RuntimeError("Failed to update the [workspace.dependencies] version pins")
     ROOT_CARGO.write_text(new_content)
 
 
@@ -116,7 +125,7 @@ def main() -> None:
     print("")
     print("This will:")
     if not skip_bump:
-        print("  - Update [workspace.package] version in Cargo.toml")
+        print("  - Update [workspace.package] version and internal dependency pins in Cargo.toml")
         print("  - Run `cargo build` to refresh Cargo.lock")
         print("  - Commit the changes")
     print(f"  - Create tag {tag}")

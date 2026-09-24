@@ -1,8 +1,13 @@
-# Publish inty, inty-lsp, and inty-cli to crates.io.
+# Publish the workspace's crates to crates.io.
 #
-# Path-only dependencies between the crates are rewritten to include the
-# matching version so `cargo publish` accepts them. Crates are published
-# in dependency order: inty -> inty-lsp -> inty-cli.
+# The crates depend on each other through [workspace.dependencies] in the
+# root Cargo.toml. Each entry there has a path (used for builds) and an
+# exact version (used by `cargo publish`, since crates.io rejects
+# path-only dependencies). This workflow sets the release version in both
+# places, then publishes in dependency order:
+#   inty -> inty-lsp, inty-bundle, inty-go -> inty-cli
+# A crate version that is already on crates.io is skipped, so a
+# partially failed run can simply be re-run.
 
 name: Publish to crates.io
 
@@ -30,24 +35,39 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set workspace version to ${{ inputs.version }}
+      - name: Set version to ${{ inputs.version }}
         run: |
-          # All three crates inherit version from [workspace.package] in the root Cargo.toml.
+          # [workspace.package] version, inherited by every crate.
           sed -i -E "0,/^version = \".*\"/s//version = \"${VERSION}\"/" Cargo.toml
+          # The exact-version pins on the internal crates.
+          sed -i -E "s|(\{ path = \"crates/[^\"]+\", version = \")=[^\"]*\"|\1=${VERSION}\"|" Cargo.toml
+          grep -n "version = " Cargo.toml
+          pins=$(grep -c "path = \"crates/.*version = \"=${VERSION}\"" Cargo.toml)
+          if [ "$pins" -ne 4 ]; then
+            echo "expected 4 internal dependency pins at ${VERSION}, found ${pins}" >&2
+            exit 1
+          fi
 
-      - name: Add version to internal path dependencies
+      - name: Check every crate packages
+        # Separate target dir; see the same step in rust.yml.
+        run: cargo package --workspace --allow-dirty --target-dir target/package-check
+
+      - name: Publish
         run: |
-          # Path-only deps need a version key for crates.io.
-          sed -i -E "s|inty = \\{ path = \"\\.\\./inty\" \\}|inty = { path = \"../inty\", version = \"=${VERSION}\" }|g" \
-            crates/inty-lsp/Cargo.toml crates/inty-cli/Cargo.toml
-          sed -i -E "s|inty-lsp = \\{ path = \"\\.\\./inty-lsp\" \\}|inty-lsp = { path = \"../inty-lsp\", version = \"=${VERSION}\" }|g" \
-            crates/inty-cli/Cargo.toml
-
-      - name: Publish inty
-        run: cargo publish --allow-dirty -p inty
-
-      - name: Publish inty-lsp
-        run: cargo publish --allow-dirty -p inty-lsp
-
-      - name: Publish inty-cli
-        run: cargo publish --allow-dirty -p inty-cli
+          publish() {
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              -A "inty-release (https://github.com/sinelaw/inty)" \
+              "https://crates.io/api/v1/crates/$1/${VERSION}")
+            if [ "$status" = "200" ]; then
+              echo "$1 ${VERSION} is already on crates.io; skipping"
+            else
+              cargo publish --allow-dirty -p "$1"
+            fi
+          }
+          # Dependency order. `cargo publish` waits until each crate is
+          # available in the index before returning.
+          publish inty
+          publish inty-lsp
+          publish inty-bundle
+          publish inty-go
+          publish inty-cli

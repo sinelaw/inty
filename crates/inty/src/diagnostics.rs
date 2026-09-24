@@ -261,6 +261,15 @@ pub fn write_error<W: Write>(
                 *span,
                 Some("This would create an infinite type".to_string()),
             ),
+            TypeError::UnifyDepth { span } => (
+                "Type too complex: unifying these recursive types did not terminate".to_string(),
+                *span,
+                Some(
+                    "inty gave up rather than overflow its stack; this is a checker \
+                     limitation, not necessarily an error in the program"
+                        .to_string(),
+                ),
+            ),
             TypeError::UndefinedVariable { name, span } => {
                 (format!("Undefined variable: '{}'", name), *span, None)
             }

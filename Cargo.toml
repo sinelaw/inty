@@ -12,7 +12,19 @@ members = [
 version = "0.1.1"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/sinelaw/inty"
 
 [profile.release]
 opt-level = "s"
 lto = true
+
+# The workspace's own crates, for use as `inty = { workspace = true }`.
+# Each carries an exact version as well as a path: builds use the path,
+# and `cargo publish` replaces it with the version (crates.io rejects
+# path-only dependencies). scripts/bump-version.py and the publish
+# workflow keep these versions equal to [workspace.package].version.
+[workspace.dependencies]
+inty = { path = "crates/inty", version = "=0.1.1" }
+inty-lsp = { path = "crates/inty-lsp", version = "=0.1.1" }
+inty-bundle = { path = "crates/inty-bundle", version = "=0.1.1" }
+inty-go = { path = "crates/inty-go", version = "=0.1.1" }

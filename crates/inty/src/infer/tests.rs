@@ -3869,3 +3869,30 @@ fn instantiated_predicate_errors_point_at_the_use() {
     };
     assert_eq!(&src[span.start..span.end], "twice");
 }
+
+/// A cycle between two row tails (`ρ₁ ↦ {| ρ₂}`, `ρ₂ ↦ {| ρ₁}`) that
+/// `zonk` cuts made `unify_rows` re-bind the same pair forever and
+/// overflow the stack (found in a Markdown converter). The unification
+/// of a pair of tails already in progress is now assumed to succeed.
+#[test]
+fn cyclic_row_tails_terminate() {
+    let src = "function isBlank(l) { return l.length === 0; }\n\
+               function indentOf(l) { return 0; }\n\
+               function dedent(line, cols) { return line.slice(cols); }\n\
+               function isRule(t) { return t.length >= 3; }\n\
+               function fenceLength(t) { return t.charCodeAt(0) === 96 && t.indexOf(\"`\", 1) >= 0 ? 3 : 0; }\n\
+               function interrupts(t) { return isRule(t) || fenceLength(t) > 0 || t.startsWith(\">\"); }\n\
+               function render(lines) {\n\
+                 let i = 0;\n\
+                 while (i < lines.length) {\n\
+                   const t = dedent(lines[i], indentOf(lines[i]));\n\
+                   if (fenceLength(t) > 0) {\n\
+                     const u = dedent(lines[i], 0);\n\
+                     if (!interrupts(dedent(u, indentOf(u))) && !isBlank(u)) i++;\n\
+                   }\n\
+                   i++;\n\
+                 }\n\
+                 return i;\n\
+               }";
+    assert!(check_program(src, &[]).is_ok());
+}
