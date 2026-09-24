@@ -272,9 +272,8 @@ function that calls a later `const pair = (a, b) => …` would see only
 `const` function joins the hoisted inference only if nothing it
 references (transitively) is another `var` / `let` / `const` of the
 scope, since those are still placeholders during Pass 2; otherwise it
-stays in source order. It is bound immutably either way. This doesn't
-make calling it before its line legal at runtime; inty doesn't
-diagnose TDZ (see § 5).
+stays in source order. It is bound immutably either way. Calling it before its line is still a TDZ error, and
+`crate::ast::tdz` reports it (see § 5).
 
 ### 3. Class declarations
 
@@ -302,14 +301,24 @@ hoist to the block, never to the enclosing function.
 ### 5. TDZ diagnostics
 
 For `let` / `const` / `class`, ES specifies a `ReferenceError`
-on any access before the declaration line is reached. inty does
-**not** diagnose this. Every `var` / `let` / `const` name of a scope
-is pre-bound to a placeholder type variable so hoisted function
-bodies can refer to it (the IIFE-library pattern, where functions
-read state declared later but only run after it is initialised). A
-top-level `f(); const x = …; function f() { return x; }` therefore
-type-checks, and throws at runtime. Diagnosing it would need a
-call-graph-aware "may run before initialisation" analysis.
+on any access before the declaration line is reached. Every
+`var` / `let` / `const` name of a scope is pre-bound to a placeholder
+type variable, so hoisted function bodies can refer to it (the
+IIFE-library pattern, where functions read state declared later but
+only run after it is initialised). Inference therefore can't see use
+before initialisation.
+
+A separate pass checks it: `crate::ast::tdz`, run from
+`infer_program_with_env` for JavaScript. It abstractly interprets
+execution order. Statements are walked in the order they run, and
+calling a known function (a declaration, a function-valued binding, or
+an IIFE) runs its body at the call, in its defining scope. So
+`f(); const x = 1; function f() { return x; }` is reported, and so is a
+`var` read before its assignment (still `undefined`, not a value of its
+type). A function that is only referenced is assumed to run later; its
+body is checked once everything has been initialised. This avoids false
+positives for handlers and exported APIs, at the cost of missing a
+callback invoked synchronously before the binding it reads.
 
 **Placeholders and generalisation.** A placeholder is monomorphic
 while the hoisted functions are inferred, and it can be bound (through

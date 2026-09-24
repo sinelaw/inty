@@ -3741,3 +3741,89 @@ fn gen_return_in_both_branches_of_if() {
         "(Number) => Number"
     );
 }
+
+// ---- Older holes found by the generalisation review ------------------------
+
+#[test]
+fn flatten_expands_every_occurrence_of_a_bound_row() {
+    // `flatten` expanded each bound variable once per call, so the second
+    // copy of `o` lost its fields and `r.p.y` could be used as a Number.
+    let src = "function f(o) { const a = o.x; const b = o.y; return {p: o, q: o}; }\n\
+               const r = f({x: 1, y: \"s\"});\n\
+               const bad = r.p.y * 2;";
+    assert!(check_program(src, &[]).is_err());
+    let t = check_program(
+        "function f(o) { const a = o.x; const b = o.y; return {p: o, q: o}; }",
+        &["f"],
+    )
+    .unwrap();
+    assert!(t[0].contains("q: {x: a, y: b | c}"), "{}", t[0]);
+}
+
+#[test]
+fn mutually_recursive_functions_share_predicates() {
+    // Only the first member of the SCC used to get the `Indexable`
+    // predicate, so `b(["s"], 0, 1)` was unconstrained.
+    let src = "function a(o, k, n) { return n > 0 ? b(o, k, n - 1) : o[k]; }\n\
+               function b(o, k, n) { return a(o, k, n); }\n\
+               const bad = b([\"s\"], 0, 1) * 2;";
+    assert!(check_program(src, &[]).is_err());
+    let t = check_program(
+        "function a(o, k, n) { return n > 0 ? b(o, k, n - 1) : o[k]; }\n\
+         function b(o, k, n) { return a(o, k, n); }",
+        &["a", "b"],
+    )
+    .unwrap();
+    assert!(t[1].contains("Indexable"), "{}", t[1]);
+}
+
+#[test]
+fn record_indexing_constrains_the_element() {
+    // The element type of `record[key]` was left unconstrained.
+    assert!(check_program(
+        "function get(o, k) { return o[k]; }\nconst bad = get({x: \"s\"}, \"x\") * 2;",
+        &[]
+    )
+    .is_err());
+    assert!(check_program(
+        "const o = {x: \"s\"};\nfunction get(k) { return o[k]; }\nconst bad = get(\"x\") * 2;",
+        &[]
+    )
+    .is_err());
+    // A literal key selects the field; a computed key reads any field.
+    let src = "const o = {x: \"s\", y: 1};\nconst a = o[\"x\"];\nconst b = o[\"y\"];";
+    assert_eq!(
+        check_program(src, &["a", "b"]).unwrap(),
+        ["String", "Number"]
+    );
+    let src =
+        "const o = {x: \"s\", y: \"t\"};\nfunction get(k) { return o[k]; }\nconst v = get(\"x\");";
+    assert_eq!(check_program(src, &["v"]).unwrap(), ["String"]);
+}
+
+#[test]
+fn self_application_through_recursive_callable_row_is_rejected() {
+    let src = "function outer(o) { return o(o) * 2; }\nouter((x) => x);";
+    assert!(check_program(src, &[]).is_err());
+}
+
+#[test]
+fn use_before_initialisation_is_reported() {
+    for src in [
+        "const r = f(1);\nconst f = (x) => x + 1;",
+        "const a = b;\nconst b = a;",
+        "f();\nconst x = 1;\nfunction f() { return x; }",
+        "const y = v * 2;\nvar v = 3;",
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(err.contains("before"), "{}: {}", src, err);
+    }
+    // Hoisted function declarations may be called early; functions that
+    // run later may read later bindings.
+    for src in [
+        "const r = f(1);\nfunction f(x) { return x + 1; }",
+        "function helper() { return lib.foo; }\nconst lib = { foo: 1 };\nconst r = helper();",
+    ] {
+        check_program(src, &[]).unwrap_or_else(|e| panic!("{}: {}", src, e));
+    }
+}

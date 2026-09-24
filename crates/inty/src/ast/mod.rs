@@ -8,6 +8,7 @@
 
 pub mod free_idents;
 pub mod pretty;
+pub mod tdz;
 
 use crate::span::Span;
 

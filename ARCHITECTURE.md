@@ -14,6 +14,7 @@ inty is built as a small set of cooperating modules. Each one does one job; toge
 - **`src/classes/`** — declarative type-class instance tables (`Plus`, `Indexable`). Adding an instance is a one-line change here; the constraint solver in `src/builtins/` consults it.
 - **`src/meta/`** — meta-tests that cross-check the type system against itself. See [Testing](#testing).
 - **`src/infer::InferConfig`** — runtime knobs for type-system policy (currently exhaustiveness warnings, value-restriction strictness). Defaults match historical behaviour; flipping a knob changes one rule.
+- **`src/ast/tdz.rs`** — use-before-initialisation (temporal dead zone) analysis: an abstract interpretation of execution order, run after inference for JavaScript. Inference can't see TDZ violations, because every binding of a scope is visible throughout it so that hoisted functions can refer to later declarations.
 - **`src/decorate.rs`** — re-emits the source with inferred types as comments, for IDE display and `--annotate` output.
 
 The production pipeline is `parse → infer → (optionally) decorate`. The dynamics, catalog, and meta-tests don't run in production; they exist so that adding a typing rule means you also describe its operator (catalog) and runtime behaviour (dynamics), and the test suite mechanically verifies the three agree.

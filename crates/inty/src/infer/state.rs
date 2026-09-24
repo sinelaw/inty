@@ -91,7 +91,7 @@ pub struct TypeClass {
 }
 
 /// A pending constraint that needs to be resolved.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PendingConstraint {
     pub pred: TypePred,
     pub span: Span,
