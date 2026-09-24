@@ -215,3 +215,113 @@ fn go_binaries_match_node_output() {
     let _ = fs::remove_dir_all(&work);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Build translated Go `code` in `dir`; the binary's path, or the build
+/// errors.
+fn go_build(dir: &Path, code: &str) -> Result<PathBuf, String> {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("main.go"), code).unwrap();
+    fs::write(dir.join("go.mod"), "module prog\n\ngo 1.22\n").unwrap();
+    let build = Command::new("go")
+        .args(["build", "-o", "prog", "."])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    if build.status.success() {
+        Ok(dir.join("prog"))
+    } else {
+        Err(String::from_utf8_lossy(&build.stderr).into_owned())
+    }
+}
+
+/// Run `bin` with `args` and `stdin`: (exit code, stdout, stderr).
+fn run_with(bin: &Path, args: &[&str], stdin: &[u8]) -> (i32, String, String) {
+    use std::io::Write;
+    let mut child = Command::new(bin)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn go_available() -> bool {
+    match go_version() {
+        Some((1, minor)) if minor >= 22 => true,
+        other => {
+            eprintln!("skipping end-to-end Go test: need go >= 1.22, found {:?}", other);
+            false
+        }
+    }
+}
+
+/// Node built-ins (`node:fs`, `node:process`): arguments, reading and
+/// writing files, stdout/stderr and the exit status all behave as under
+/// Node (the expected output in `tests/io/` was recorded from Node).
+#[test]
+fn node_io_matches_node() {
+    if !go_available() {
+        return;
+    }
+    let io = manifest_dir().join("tests/io");
+    let work = std::env::temp_dir().join(format!("inty-go-io-{}", std::process::id()));
+    let bin = go_build(&work.join("io"), &translate(&io.join("io.js"))).unwrap();
+    let outdir = work.join("out");
+    fs::create_dir_all(&outdir).unwrap();
+    let input = io.join("input.txt");
+    let (code, stdout, stderr) = run_with(
+        &bin,
+        &[input.to_str().unwrap(), outdir.to_str().unwrap()],
+        b"",
+    );
+    assert_eq!(stdout, fs::read_to_string(io.join("io.out")).unwrap());
+    assert_eq!(stderr, fs::read_to_string(io.join("io.err")).unwrap());
+    assert_eq!(code, 3, "process.exit(3)");
+    assert_eq!(fs::read_to_string(outdir.join("out.txt")).unwrap(), "first\nsecond\n");
+    // Wrong usage: message on stderr, exit status 2.
+    let (code, stdout, stderr) = run_with(&bin, &[], b"");
+    assert_eq!((code, stdout.as_str()), (2, ""));
+    assert!(stderr.starts_with("usage: io"), "{}", stderr);
+    let _ = fs::remove_dir_all(&work);
+}
+
+/// The md2html tool (`examples/go-backend/tools/md2html.js`) produces the
+/// same HTML as under Node, from a file, from stdin, and to a file.
+#[test]
+fn md2html_matches_node() {
+    if !go_available() {
+        return;
+    }
+    let io = manifest_dir().join("tests/io");
+    let tool = manifest_dir().join("../../examples/go-backend/tools/md2html.js");
+    let work = std::env::temp_dir().join(format!("inty-go-md2html-{}", std::process::id()));
+    let bin = go_build(&work.join("md2html"), &translate(&tool)).unwrap();
+    let sample = io.join("sample.md");
+    let md = fs::read(&sample).unwrap();
+    let html = fs::read_to_string(io.join("sample.html")).unwrap();
+    assert_eq!(run_with(&bin, &[sample.to_str().unwrap()], b"").1, html);
+    assert_eq!(run_with(&bin, &["-"], &md).1, html);
+    let out = work.join("standalone.html");
+    let (code, stdout, _) = run_with(
+        &bin,
+        &["--standalone", "-o", out.to_str().unwrap(), sample.to_str().unwrap()],
+        b"",
+    );
+    assert_eq!((code, stdout.as_str()), (0, ""));
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        fs::read_to_string(io.join("sample.standalone.html")).unwrap()
+    );
+    let (code, _, stderr) = run_with(&bin, &["--bogus"], b"");
+    assert_eq!(code, 2);
+    assert!(stderr.contains("unknown option --bogus"), "{}", stderr);
+    let _ = fs::remove_dir_all(&work);
+}

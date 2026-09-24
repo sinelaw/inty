@@ -1,0 +1,11 @@
+3 lines
+name .|    inty|
+lang..|      js|
+fast .|      go|
+a / b /  / c
+a / b
+x+y-z x[-]y[-]z
+3 3 a
+[pad  ][  pad]
+true abcd
+true false
