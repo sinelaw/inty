@@ -79,6 +79,8 @@ pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
     match class {
         ClassName::Plus => PLUS_INSTANCES,
         ClassName::Indexable => INDEXABLE_INSTANCES,
+        // Structural: any type with the property is an instance.
+        ClassName::HasProp => &[],
     }
 }
 

@@ -1423,6 +1423,16 @@ impl InferState {
     /// [`Self::instantiate`], also returning which fresh type replaced
     /// each quantified variable (empty for a monomorphic scheme).
     pub fn instantiate_recording(&mut self, scheme: &TypeScheme) -> (Type, Vec<(TVarName, Type)>) {
+        self.instantiate_recording_at(scheme, Span::new(0, 0))
+    }
+
+    /// [`Self::instantiate_recording`] for a use at `span`, where the
+    /// scheme's predicates are then checked (and reported).
+    pub fn instantiate_recording_at(
+        &mut self,
+        scheme: &TypeScheme,
+        span: Span,
+    ) -> (Type, Vec<(TVarName, Type)>) {
         if scheme.is_mono() {
             return (scheme.body.ty.clone(), Vec::new());
         }
@@ -1442,10 +1452,9 @@ impl InferState {
         // Also instantiate predicates as pending constraints
         for pred in &scheme.body.preds {
             let instantiated_pred = subst.apply(pred);
-            // Note: We'd need a span here, for now we use a dummy
             self.pending_constraints.push(PendingConstraint {
                 pred: instantiated_pred,
-                span: Span::new(0, 0),
+                span,
             });
         }
 
@@ -1523,29 +1532,66 @@ impl InferState {
             .collect();
         gen_pvars.sort_by_key(|p| p.id());
 
-        #[cfg(debug_assertions)]
-        self.debug_check_generalisation(env_free, &gen_vars);
-
         if gen_vars.is_empty() && gen_pvars.is_empty() {
+            #[cfg(debug_assertions)]
+            self.debug_check_generalisation(env_free, &gen_vars);
             TypeScheme::mono(ty)
         } else {
-            // Collect predicates that involve the generalized variables
-            let gen_var_set: std::collections::HashSet<_> = gen_vars.iter().cloned().collect();
+            // Collect the predicates that involve the generalized
+            // variables. Their other variables are quantified too unless
+            // the environment fixes them: a predicate's variable that the
+            // type doesn't mention (the result of an unused `s.length`, or
+            // of an `xs[i]`) must not be shared by every instantiation.
+            // Quantifying one can pull in further predicates, so iterate.
+            let mut gen_var_set: std::collections::HashSet<_> = gen_vars.iter().cloned().collect();
+            let mut gen_pvar_set: std::collections::HashSet<_> =
+                gen_pvars.iter().cloned().collect();
             let mut scheme_preds = Vec::new();
-            let mut remaining_constraints = Vec::new();
-
-            for constraint in std::mem::take(&mut self.pending_constraints) {
-                let pred = self.apply_subst_pred(&constraint.pred);
-                let pred_vars = pred.free_vars();
-
-                // If the predicate involves any generalized variable, include it in the scheme
-                if pred_vars.iter().any(|v| gen_var_set.contains(v)) {
-                    scheme_preds.push(pred);
-                } else {
-                    remaining_constraints.push(constraint);
+            let mut remaining: Vec<PendingConstraint> =
+                std::mem::take(&mut self.pending_constraints);
+            loop {
+                let mut rest = Vec::new();
+                let mut took = false;
+                for constraint in remaining {
+                    let pred = self.apply_subst_pred(&constraint.pred);
+                    if pred.free_vars().iter().any(|v| gen_var_set.contains(v)) {
+                        for t in &pred.types {
+                            let t = self.main_subst.flatten(t);
+                            for v in t.free_vars() {
+                                if v.is_flex()
+                                    && !fixed_vars.contains(&v)
+                                    && self.zonk(&Type::Var(v.clone())) == Type::Var(v.clone())
+                                    && gen_var_set.insert(v.clone())
+                                {
+                                    gen_vars.push(v);
+                                }
+                            }
+                            for p in t.free_pvars() {
+                                if p.is_flex()
+                                    && !fixed_pvars.contains(&p)
+                                    && gen_pvar_set.insert(p.clone())
+                                {
+                                    gen_pvars.push(p);
+                                }
+                            }
+                        }
+                        scheme_preds.push(pred);
+                        took = true;
+                    } else {
+                        rest.push(constraint);
+                    }
+                }
+                remaining = rest;
+                if !took {
+                    break;
                 }
             }
-            self.pending_constraints = remaining_constraints;
+            self.pending_constraints = remaining;
+            gen_vars.sort_by_key(|v| v.id());
+            gen_pvars.sort_by_key(|p| p.id());
+
+            #[cfg(debug_assertions)]
+            self.debug_check_generalisation(env_free, &gen_vars);
 
             TypeScheme::qualified_with_presence(gen_vars, gen_pvars, scheme_preds, ty)
         }
@@ -1646,6 +1692,14 @@ impl InferState {
                     (ClassName::Indexable, [container, index, element]) => {
                         if container.free_vars().is_subset(&vars) {
                             vec![index, element]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    // receiver → result (and a method call's `this`)
+                    (ClassName::HasProp, [receiver, _, determined @ ..]) => {
+                        if receiver.free_vars().is_subset(&vars) {
+                            determined.iter().collect()
                         } else {
                             vec![]
                         }
