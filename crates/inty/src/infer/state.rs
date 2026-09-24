@@ -1492,9 +1492,16 @@ impl InferState {
         // the printed scheme `<a, b>...` non-deterministically map
         // letters to type-var slots across runs.
         let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
+        // A variable that is bound in the substitution is not free, whatever
+        // a (shallow) traversal of `ty` reports; `flatten` expands each
+        // variable once, so a bound variable can survive in its output.
         let mut gen_vars: Vec<TVarName> = ty_vars
             .into_iter()
-            .filter(|v| !fixed_vars.contains(v) && v.is_flex())
+            .filter(|v| v.is_flex() && !fixed_vars.contains(v))
+            .filter(|v| {
+                let var = Type::Var(v.clone());
+                self.zonk(&var) == var
+            })
             .collect();
         gen_vars.sort_by_key(|v| v.id());
 
@@ -1506,6 +1513,9 @@ impl InferState {
             .filter(|p| p.is_flex() && !fixed_pvars.contains(p))
             .collect();
         gen_pvars.sort_by_key(|p| p.id());
+
+        #[cfg(debug_assertions)]
+        self.debug_check_generalisation(env_free, &gen_vars);
 
         if gen_vars.is_empty() && gen_pvars.is_empty() {
             TypeScheme::mono(ty)
@@ -1659,6 +1669,36 @@ impl InferState {
             }
         }
         (vars, pvars)
+    }
+
+    /// Debug-build invariant for [`Self::generalize`], derived independently
+    /// of [`Self::env_fixed_vars`]: no quantified variable is bound, and none
+    /// is reachable from the environment through the substitution (read via
+    /// `main_subst`, the other mirror of the substitution).
+    #[cfg(debug_assertions)]
+    fn debug_check_generalisation(
+        &mut self,
+        env_free: &crate::infer::EnvFree,
+        gen_vars: &[TVarName],
+    ) {
+        let reachable: std::collections::HashSet<TVarName> = env_free
+            .vars
+            .iter()
+            .flat_map(|v| self.main_subst.apply(&Type::Var(v.clone())).free_vars())
+            .collect();
+        for v in gen_vars {
+            let var = Type::Var(v.clone());
+            debug_assert!(
+                self.main_subst.apply(&var) == var,
+                "generalize quantified {:?}, which is bound",
+                v
+            );
+            debug_assert!(
+                !env_free.vars.contains(v) && !reachable.contains(v),
+                "generalize quantified {:?}, which the environment reaches",
+                v
+            );
+        }
     }
 
     /// Apply substitution to a predicate.
