@@ -94,19 +94,49 @@ function escapeHtml(s) {
 
 // ---- inline ----------------------------------------------------------------
 
-// The index of the delimiter run `d` that closes emphasis opened just
-// before `start`: not preceded by whitespace, and (for `_`) not followed
-// by a letter or digit. -1 if there is none.
+// The length of the run of backticks at `i`.
+function backtickRun(s, i) {
+  let run = 0;
+  while (i + run < s.length && s.charCodeAt(i + run) === 96) run++;
+  return run;
+}
+
+// The start of the backtick run that closes the code span opened by the
+// `run` backticks at `i` (a run of exactly the same length), or -1.
+function codeSpanClose(s, i, run) {
+  const fence = s.slice(i, i + run);
+  let close = s.indexOf(fence, i + run);
+  while (close >= 0 && backtickRun(s, close) !== run) {
+    close = s.indexOf(fence, close + backtickRun(s, close));
+  }
+  return close;
+}
+
+// The index of the delimiter run `d` that closes emphasis whose content
+// starts at `start` (and isn't empty): not preceded by whitespace, and
+// (for `_`) not followed by a letter or digit. Code spans and escaped
+// characters don't count. -1 if there is none.
 function closingDelim(s, d, start) {
-  let j = s.indexOf(d, start);
-  while (j >= 0) {
-    const before = s.charCodeAt(j - 1);
-    const end = j + d.length;
-    const afterOk = end >= s.length || d.charCodeAt(0) === 42 || !isAlnum(s.charCodeAt(end));
-    // A single `*` must not be half of a `**`.
-    const single = d.length === 1 && end < s.length && s.charCodeAt(end) === d.charCodeAt(0);
-    if (!isBlankChar(before) && before !== 10 && afterOk && !single) return j;
-    j = s.indexOf(d, single ? j + 2 : j + 1);
+  let j = start;
+  while (j < s.length) {
+    const c = s.charCodeAt(j);
+    if (c === 92) {
+      j += 2;
+    } else if (c === 96) {
+      const run = backtickRun(s, j);
+      const close = codeSpanClose(s, j, run);
+      j = close >= 0 ? close + run : j + run;
+    } else if (s.startsWith(d, j)) {
+      const before = s.charCodeAt(j - 1);
+      const end = j + d.length;
+      const afterOk = end >= s.length || d.charCodeAt(0) !== 95 || !isAlnum(s.charCodeAt(end));
+      // A single `*` must not be half of a `**`.
+      const single = d.length === 1 && end < s.length && s.charCodeAt(end) === d.charCodeAt(0);
+      if (j > start && !isBlankChar(before) && before !== 10 && afterOk && !single) return j;
+      j += single ? 2 : 1;
+    } else {
+      j++;
+    }
   }
   return -1;
 }
@@ -157,15 +187,8 @@ function inline(s) {
       i++;
     } else if (c === 96) {
       // Code span: a run of backticks closed by a run of the same length.
-      let run = 1;
-      while (i + run < n && s.charCodeAt(i + run) === 96) run++;
-      const fence = s.slice(i, i + run);
-      let close = s.indexOf(fence, i + run);
-      while (close >= 0 && close + run < n && s.charCodeAt(close + run) === 96) {
-        let k = close;
-        while (k < n && s.charCodeAt(k) === 96) k++;
-        close = s.indexOf(fence, k);
-      }
+      const run = backtickRun(s, i);
+      const close = codeSpanClose(s, i, run);
       if (close >= 0) {
         out.push(escapeHtml(s.slice(text, i)));
         let code = s.slice(i + run, close).replaceAll("\n", " ");
@@ -190,7 +213,7 @@ function inline(s) {
         !isBlankChar(s.charCodeAt(after)) &&
         s.charCodeAt(after) !== 10 &&
         (c === 42 || i === 0 || !isAlnum(s.charCodeAt(i - 1)));
-      const close = opens ? closingDelim(s, d, after + 1) : -1;
+      const close = opens ? closingDelim(s, d, after) : -1;
       if (close >= 0) {
         out.push(escapeHtml(s.slice(text, i)));
         const tag = strong ? "strong" : "em";
@@ -199,6 +222,18 @@ function inline(s) {
         text = i;
       } else {
         i += run;
+      }
+    } else if (c === 126 && i + 1 < n && s.charCodeAt(i + 1) === 126) {
+      // Strikethrough `~~x~~` (GitHub).
+      const opens = i + 2 < n && !isBlankChar(s.charCodeAt(i + 2));
+      const close = opens ? closingDelim(s, "~~", i + 2) : -1;
+      if (close >= 0) {
+        out.push(escapeHtml(s.slice(text, i)));
+        out.push("<s>" + inline(s.slice(i + 2, close)) + "</s>");
+        i = close + 2;
+        text = i;
+      } else {
+        i += 2;
       }
     } else if (c === 91 || (c === 33 && i + 1 < n && s.charCodeAt(i + 1) === 91)) {
       // Link `[text](url)` or image `![alt](src)`.
@@ -366,7 +401,7 @@ function tableRow(cells, aligns, tag, out) {
   out.push("<tr>\n");
   for (let i = 0; i < aligns.length; i++) {
     const text = i < cells.length ? inline(cells[i]) : "";
-    const style = aligns[i] === "" ? "" : " style=\"text-align: " + aligns[i] + "\"";
+    const style = aligns[i] === "" ? "" : " style=\"text-align:" + aligns[i] + "\"";
     out.push("<" + tag + style + ">" + text + "</" + tag + ">\n");
   }
   out.push("</tr>\n");
@@ -595,12 +630,26 @@ function renderBlocks(lines, tight, out) {
   }
 }
 
-// The document title for --standalone: the first heading's text.
-function titleOf(lines) {
-  for (const line of lines) {
-    const t = dedent(line, indentOf(line));
-    const level = headingLevel(t);
-    if (level > 0 && indentOf(line) < 4) return headingText(t, level);
+// The document title for --standalone: the text of the first heading in
+// the rendered `html` (already escaped), without its inline tags.
+function titleOf(html) {
+  let open = html.indexOf("<h");
+  while (open >= 0 && open + 3 < html.length) {
+    // `<h1>` … `<h6>`, not `<hr />`.
+    const level = html.charCodeAt(open + 2);
+    if (level >= 49 && level <= 54 && html.charCodeAt(open + 3) === 62) {
+      const inner = html.slice(open + 4, html.indexOf("</h", open));
+      const text = [];
+      let inTag = false;
+      for (let i = 0; i < inner.length; i++) {
+        const c = inner.charCodeAt(i);
+        if (c === 60) inTag = true;
+        else if (c === 62) inTag = false;
+        else if (!inTag) text.push(inner.slice(i, i + 1));
+      }
+      return text.join("");
+    }
+    open = html.indexOf("<h", open + 2);
   }
   return "Document";
 }
@@ -651,7 +700,7 @@ while (a < args.length) {
 const src = readFileSync(input === "-" ? "/dev/stdin" : input, "utf8");
 let html = markdownToHtml(src);
 if (standalone) {
-  const title = escapeHtml(titleOf(src.split("\n")));
+  const title = titleOf(html);
   html =
     "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>" +
     title +

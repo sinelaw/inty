@@ -1113,4 +1113,68 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.path);
         }
     }
+
+    /// Type-check `src` as a program's main module, like the CLI does
+    /// (imports, inference with recovered errors counted, constraints).
+    fn check_main(src: &str) -> Result<(), String> {
+        let dir = tempdir();
+        write_file(dir.path(), "main.js", src);
+        let program = parse(src).map_err(|e| e.to_string())?;
+        let mut state = InferState::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            dir.path(),
+            &mut HashSet::new(),
+        )
+        .map_err(|e| e.to_string())?;
+        state
+            .infer_program_with_env(&env, &program)
+            .map_err(|e| e.to_string())?;
+        if let Some(e) = state.errors.first() {
+            return Err(e.to_string());
+        }
+        state.resolve_constraints().map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn node_builtin_modules_type_check() {
+        let ok = [
+            // Named imports, with and without the `node:` prefix.
+            "import { readFileSync, writeFileSync } from \"node:fs\";\n\
+             const s = readFileSync(\"in.txt\", \"utf8\");\n\
+             writeFileSync(\"out.txt\", s.toUpperCase());",
+            "import { existsSync, appendFileSync } from \"fs\";\n\
+             if (existsSync(\"log\")) appendFileSync(\"log\", \"x\");",
+            // `process` as a default import, and its parts as named ones.
+            "import process from \"node:process\";\n\
+             const n = process.argv.slice(2).length * 2;\n\
+             process.stdout.write(\"x\");\n\
+             process.exit(n);",
+            "import { argv, stderr } from \"node:process\";\n\
+             stderr.write(argv[0]);",
+            "import * as fs from \"node:fs\";\nconst t = fs.readFileSync(\"a\", \"utf-8\").length;",
+        ];
+        for src in ok {
+            check_main(src).unwrap_or_else(|e| panic!("{}\n{}", src, e));
+        }
+        let bad = [
+            // `readFileSync` returns a string only with an encoding.
+            "import { readFileSync } from \"node:fs\";\nreadFileSync(\"a\");",
+            "import { readFileSync } from \"node:fs\";\nreadFileSync(\"a\", \"latin1\");",
+            "import { readFileSync } from \"node:fs\";\nreadFileSync(\"a\", \"utf8\") * 2;",
+            // Not exported.
+            "import { nope } from \"node:fs\";",
+            // Wrong argument types.
+            "import { writeFileSync } from \"node:fs\";\nwriteFileSync(\"a\", 1);",
+            "import process from \"node:process\";\nprocess.exit(\"1\");",
+            "import process from \"node:process\";\nprocess.stdout.write(1);",
+            // Not a module inty ships.
+            "import { spawn } from \"node:child_process\";",
+        ];
+        for src in bad {
+            assert!(check_main(src).is_err(), "should be rejected:\n{}", src);
+        }
+    }
 }
