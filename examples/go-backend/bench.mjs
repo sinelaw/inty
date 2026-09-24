@@ -1,14 +1,17 @@
 #!/usr/bin/env node
-// Benchmark harness for the inty Go backend proof of concept.
+// Benchmark harness for the inty Go backend proof of concept: the
+// translated Go binary vs the original JavaScript under Node (V8) and,
+// when installed, Bun (JavaScriptCore).
 //
 // For every benchmark program in this directory:
 //   1. `inty go prog.js -o <tmp>/prog/main.go`  (type-check + translate)
 //   2. `go build`                               (native binary)
-//   3. run the binary and `node prog.js` once and require identical stdout
+//   3. run the binary, `node prog.js` and `bun prog.js` once and require
+//      identical stdout
 //   4. launch `--processes` fresh processes per side (after `--warmup`
 //      discarded ones), INTERLEAVED in a random order within every round
 //      so slow drift (CPU frequency, noisy neighbours, page cache) hits
-//      both sides equally instead of biasing whichever ran second
+//      every side equally instead of biasing whichever ran last
 //
 // Inside each process the program runs its workload 4 times (see the
 // "benchmark protocol" footer of each .js file) and prints the time of
@@ -27,7 +30,8 @@
 // within one process are correlated).
 //
 // Usage:
-//   node bench.mjs [--processes N] [--warmup W] [--inty path] [--json out.json] [name ...]
+//   node bench.mjs [--processes N] [--warmup W] [--inty path] [--json out.json]
+//                  [--no-bun] [name ...]
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
@@ -43,12 +47,14 @@ let processes = 10;
 let warmup = 1;
 let inty = null;
 let jsonOut = null;
+let noBun = false;
 const only = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--processes") processes = Number(args[++i]);
   else if (args[i] === "--warmup") warmup = Number(args[++i]);
   else if (args[i] === "--inty") inty = resolve(args[++i]);
   else if (args[i] === "--json") jsonOut = resolve(args[++i]);
+  else if (args[i] === "--no-bun") noBun = true;
   else only.push(args[i].replace(/\.js$/, ""));
 }
 
@@ -133,6 +139,22 @@ const goVersion = must("go", ["version"]).stdout.trim();
 const work = mkdtempSync(join(tmpdir(), "inty-go-bench-"));
 const order = rng(2024);
 
+// JavaScript runtimes to compare against: Node (V8) always, Bun
+// (JavaScriptCore) when it's on PATH and not disabled with --no-bun.
+const runtimes = [{ id: "node", cmd: "node", version: `node ${process.version} (V8)` }];
+const bun = noBun ? { status: 1 } : run("bun", ["--version"]);
+if (bun.status === 0) runtimes.push({ id: "bun", cmd: "bun", version: `bun ${bun.stdout.trim()} (JavaScriptCore)` });
+const sideIds = [...runtimes.map((r) => r.id), "go"];
+
+function shuffled(xs) {
+  const a = [...xs];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(order() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 const programs = readdirSync(here)
   .filter((f) => f.endsWith(".js"))
   .map((f) => basename(f, ".js"))
@@ -151,17 +173,21 @@ for (const name of programs) {
   must("go", ["build", "-o", "prog", "."], { cwd: dir });
   const bin = join(dir, "prog");
 
-  const nodeOut = must("node", [src]).stdout;
-  const goOut = must(bin, []).stdout;
-  const same = nodeOut === goOut;
-  if (!same) console.error(`[${name}] OUTPUT MISMATCH\n--- node\n${nodeOut}--- go\n${goOut}`);
+  const sides = { go: [bin, []] };
+  for (const rt of runtimes) sides[rt.id] = [rt.cmd, [src]];
 
-  const sides = { node: ["node", [src]], go: [bin, []] };
-  const data = { node: [], go: [] };
-  console.error(`[${name}] ${warmup} warm-up + ${processes} interleaved processes per side...`);
+  // Every JS runtime and the Go binary must print the same thing.
+  const outs = Object.fromEntries(sideIds.map((id) => [id, must(...sides[id]).stdout]));
+  const same = sideIds.every((id) => outs[id] === outs.node);
+  if (!same) {
+    for (const id of sideIds) console.error(`[${name}] --- ${id}\n${outs[id]}`);
+    console.error(`[${name}] OUTPUT MISMATCH`);
+  }
+
+  const data = Object.fromEntries(sideIds.map((id) => [id, []]));
+  console.error(`[${name}] ${warmup} warm-up + ${processes} interleaved processes per side (${sideIds.join(", ")})...`);
   for (let round = 0; round < warmup + processes; round++) {
-    const turn = order() < 0.5 ? ["node", "go"] : ["go", "node"];
-    for (const side of turn) {
+    for (const side of shuffled(sideIds)) {
       const s = sample(...sides[side]);
       if (round >= warmup) data[side].push(s);
     }
@@ -169,49 +195,59 @@ for (const name of programs) {
   results.push({ name, same, data });
 }
 
-const startup = [];
-for (let i = 0; i < processes; i++) {
-  const t0 = process.hrtime.bigint();
-  must("node", ["-e", ""]);
-  startup.push(Number(process.hrtime.bigint() - t0) / 1e6);
+const startup = {};
+for (const rt of runtimes) {
+  startup[rt.id] = [];
+  for (let i = 0; i < processes; i++) {
+    const t0 = process.hrtime.bigint();
+    must(rt.cmd, ["-e", ""]);
+    startup[rt.id].push(Number(process.hrtime.bigint() - t0) / 1e6);
+  }
 }
 
 const ms = (x) => (x >= 100 ? x.toFixed(0) : x.toFixed(1));
 const spread = (xs) => `${ms(median(xs))} (${ms(quantile(xs, 0.25))}–${ms(quantile(xs, 0.75))})`;
 const ratio = (a, b) => `${(median(a) / median(b)).toFixed(2)}x`;
+const js = runtimes.map((r) => r.id);
 
-console.log(`\nnode ${process.version} (V8) vs ${goVersion}`);
+console.log(`\n${runtimes.map((r) => r.version).join(" and ")} vs ${goVersion}`);
 console.log(
   `${processes} processes per side (after ${warmup} discarded), interleaved in random order; ` +
-    `${processes * 3} warm iterations per side. node startup alone (node -e ""): ${ms(median(startup))} ms\n`,
+    `${processes * 3} warm iterations per side. Startup alone (-e ""): ` +
+    runtimes.map((r) => `${r.id} ${ms(median(startup[r.id]))} ms`).join(", ") +
+    "\n",
 );
-console.log("Steady state (warm iterations, after in-process warm-up), median ms (IQR):\n");
-console.log("| benchmark | node warm | inty → go warm | **speedup** [95% CI] | output |");
-console.log("| --- | ---: | ---: | ---: | :---: |");
+console.log("Steady state (warm iterations, after in-process warm-up), median ms (IQR). Speedup = JS time / Go time:\n");
+console.log(
+  `| benchmark | ${js.map((id) => `${id} warm`).join(" | ")} | inty → go warm | ${js.map((id) => `**vs ${id}** [95% CI]`).join(" | ")} | output |`,
+);
+console.log(`| --- | ${sideIds.map(() => "---:").join(" | ")} | ${js.map(() => "---:").join(" | ")} | :---: |`);
 for (const r of results) {
-  const n = r.data.node.map((s) => s.warm);
-  const g = r.data.go.map((s) => s.warm);
-  const [lo, hi] = bootstrapRatioCI(n, g);
+  const warm = (id) => r.data[id].map((s) => s.warm);
+  const g = warm("go");
+  const cells = js.map((id) => {
+    const [lo, hi] = bootstrapRatioCI(warm(id), g);
+    return `**${ratio(warm(id).flat(), g.flat())}** [${lo.toFixed(2)}–${hi.toFixed(2)}]`;
+  });
   console.log(
-    `| ${r.name} | ${spread(n.flat())} | ${spread(g.flat())} | **${ratio(n.flat(), g.flat())}** [${lo.toFixed(2)}–${hi.toFixed(2)}] | ${r.same ? "identical" : "**DIFFERS**"} |`,
+    `| ${r.name} | ${sideIds.map((id) => spread(warm(id).flat())).join(" | ")} | ${cells.join(" | ")} | ${r.same ? "identical" : "**DIFFERS**"} |`,
   );
 }
-console.log("\nWhole process (4 iterations + startup), median per process:\n");
-console.log("| benchmark | cold 1st iteration node / go | wall node / go | CPU (user+sys) node / go | peak RSS node / go |");
+console.log(`\nWhole process (4 iterations + startup), median per process, ${sideIds.join(" / ")}:\n`);
+console.log("| benchmark | cold 1st iteration | wall | CPU (user+sys) | peak RSS |");
 console.log("| --- | ---: | ---: | ---: | ---: |");
 for (const r of results) {
-  const pick = (side, k) => r.data[side].map((s) => s[k]);
-  const pair = (k, unit, f = ms) =>
-    `${f(median(pick("node", k)))} / ${f(median(pick("go", k)))} ${unit} (${ratio(pick("node", k), pick("go", k))})`;
+  const cell = (k, unit, f = ms) =>
+    `${sideIds.map((id) => f(median(r.data[id].map((s) => s[k])))).join(" / ")} ${unit}`;
   console.log(
-    `| ${r.name} | ${pair("cold", "ms")} | ${pair("wall", "ms")} | ${pair("cpu", "ms")} | ${pair("rssMb", "MB", (x) => x.toFixed(0))} |`,
+    `| ${r.name} | ${cell("cold", "ms")} | ${cell("wall", "ms")} | ${cell("cpu", "ms")} | ${cell("rssMb", "MB", (x) => x.toFixed(0))} |`,
   );
 }
 
 if (jsonOut) {
   writeFileSync(
     jsonOut,
-    JSON.stringify({ node: process.version, go: goVersion, processes, warmup, startup, results }, null, 1),
+    JSON.stringify({ runtimes, go: goVersion, processes, warmup, startup, results }, null, 1),
   );
   console.error(`raw samples written to ${jsonOut}`);
 }
