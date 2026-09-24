@@ -296,6 +296,10 @@ func intyFindIndex[T any](a *[]T, f func(T) bool) float64 {
 }
 
 func intyJoin[T any](a *[]T, sep string, str func(T) string) string {
+	// Strings: strings.Join sizes the result once instead of growing it.
+	if ss, ok := any(*a).([]string); ok {
+		return strings.Join(ss, sep)
+	}
 	var b strings.Builder
 	for i, x := range *a {
 		if i > 0 {

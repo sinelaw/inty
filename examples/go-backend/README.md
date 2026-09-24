@@ -63,6 +63,53 @@ semantics, strings (ASCII), arrays (with the common methods), object
 literals whose shape inty inferred, `Math.*`, `performance.now()` and
 `console.log`.
 
+### I/O: Node's built-in modules
+
+Programs read and write files, take arguments and set an exit status
+through the same Node APIs they'd use anyway, imported from
+`node:fs` and `node:process` (declared in
+`crates/inty/stdlib/node/*.d.js`, so inty type-checks them too):
+
+```js
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import process from "node:process";          // or { argv, exit, stdout, stderr }
+
+const [input, output] = process.argv.slice(2);
+const text = readFileSync(input, "utf8");      // stdin: readFileSync("/dev/stdin", "utf8")
+writeFileSync(output, text.toUpperCase());
+process.stderr.write("done\n");
+process.exit(0);
+```
+
+`readFileSync` must be given the `"utf8"` encoding (it returns a string
+only then). `process.argv` keeps Node's two leading entries, so
+`argv.slice(2)` is the arguments on both sides. An I/O error ends the
+program with a message and exit status 1, like an uncaught exception
+in Node.
+
+### A real tool: `md2html`
+
+[`tools/md2html.js`](tools/md2html.js) is a ~700-line Markdown → HTML
+converter (CommonMark core plus GitHub tables and strikethrough)
+written as ordinary JavaScript: recursive string processing,
+`slice`/`indexOf`/`charCodeAt`, arrays of lines, small records. It runs
+under Node or Bun, and `inty go` turns it into a Go program with
+byte-identical output (checked in `crates/inty-go/tests/go_backend.rs`).
+On the repository's own Markdown files it matches
+[markdown-it](https://github.com/markdown-it/markdown-it) exactly, except
+for one file where markdown-it itself differs from the CommonMark
+reference implementation.
+
+```sh
+inty go examples/go-backend/tools/md2html.js -o /tmp/md2html/main.go
+cd /tmp/md2html && printf 'module md2html\n\ngo 1.22\n' > go.mod && go build -o md2html .
+./md2html README.md -o README.html     # or: ./md2html - < in.md, --standalone
+```
+
+`node tools/bench.mjs` times the whole CLI process on a small document
+(startup dominates) and a ~20 MB one (throughput dominates); see
+[BENCHMARKS.md](BENCHMARKS.md#a-real-tool-md2html).
+
 ### Polymorphism: monomorphisation
 
 inty infers polymorphic types, and the backend keeps them. A function
@@ -115,7 +162,8 @@ mistranslated.
   `function` or `const`.
 - **Not supported:** `this`, classes, `new`, `try` / `throw`, getters and
   setters, spread, destructuring rest, `??`, `?.`, generic
-  non-boolean `&&` / `||`, ES modules, and recursive object types.
+  non-boolean `&&` / `||`, imports other than the Node built-ins above
+  (programs are single files), and recursive object types.
 - **Strings are treated as byte strings.** `.length` and indexing are
   exact only for ASCII (JS uses UTF-16 code units).
 - **Out-of-bounds array reads panic**, where JS would return `undefined`.
