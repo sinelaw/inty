@@ -681,7 +681,7 @@ impl InferState {
                 let prop_ty = self.infer_member_on_type(&m_resolved, property, span)?;
                 result = Some(match result {
                     None => prop_ty,
-                    Some(acc) => self.join(span, &acc, &prop_ty),
+                    Some(acc) => self.union_of(span, &acc, &prop_ty),
                 });
             }
             // The empty union (`never`) can be accessed at any property

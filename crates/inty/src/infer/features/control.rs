@@ -106,7 +106,7 @@ impl InferState {
     /// branch's env with the predicate and its negation; otherwise both
     /// branches see the original env. Also fires the unreachable-branch
     /// warning when narrowing collapses one side to `never`.
-    fn infer_branching_test(
+    pub(in crate::infer) fn infer_branching_test(
         &mut self,
         env: &TypeEnv,
         test: &Expr,
@@ -145,9 +145,7 @@ impl InferState {
         // not `3 | 4`. (TS does the same: branch joins are
         // synthesis-mode widening points unless the conditional is
         // contextually typed.)
-        Ok(self
-            .join(span, &cons_type, &alt_type)
-            .widen_fresh_literals())
+        Ok(self.join(span, &cons_type, &alt_type)?.widen_fresh_literals())
     }
 
     /// Infer the type of a sequence expression.
@@ -216,11 +214,19 @@ impl InferState {
 
         let (cons_type, _) = self.infer_stmt(&cons_env, consequent)?;
 
+        // A statement's value isn't joined: only whether it completes
+        // matters (`never` when neither branch does).
+        let _ = span;
+        let is_never = |t: &Type| matches!(t, Type::Union(m) if m.is_empty());
         let result = if let Some(alt) = alternate {
             let (alt_type, _) = self.infer_stmt(&alt_env, alt)?;
-            self.join(span, &cons_type, &alt_type)
+            if is_never(&self.zonk(&cons_type)) && is_never(&self.zonk(&alt_type)) {
+                Type::never()
+            } else {
+                Type::Undefined
+            }
         } else {
-            self.zonk(&cons_type)
+            Type::Undefined
         };
 
         Ok((result, env.clone()))

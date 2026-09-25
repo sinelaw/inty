@@ -1239,16 +1239,32 @@ impl<'a> Scanner<'a> {
         let mut paren_depth: i32 = 0;
         let mut brace_depth: i32 = 0;
         let mut angle_depth: i32 = 0;
+        // Inside a scheme's `where C, … =>` clause, whose commas separate
+        // constraints, not declarators.
+        let mut in_where = false;
 
         while let Some((_, ch)) = self.peek() {
             // Check for end of comment
             if ch == '*' && self.peek_next() == Some('/') {
                 break;
             }
+            let top = paren_depth == 0 && brace_depth == 0 && angle_depth == 0;
+            if top && !in_where && ch.is_whitespace() && content.ends_with("where") {
+                let before = content[..content.len() - 5].chars().last();
+                if before.is_some_and(|c| c.is_whitespace() || c == '>') {
+                    in_where = true;
+                }
+            }
+            if top && in_where && ch == '>' && content.ends_with('=') {
+                in_where = false;
+                content.push(ch);
+                self.advance();
+                continue;
+            }
             // Comma at top level ends this type annotation. Commas inside
             // parens `(A, B) => C`, braces `{a: T, b: U}` and angle
             // brackets `<T, U>` are part of the current type.
-            if ch == ',' && paren_depth == 0 && brace_depth == 0 && angle_depth == 0 {
+            if ch == ',' && top && !in_where {
                 break;
             }
             if ch == '(' {

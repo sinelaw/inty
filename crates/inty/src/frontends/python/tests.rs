@@ -974,7 +974,7 @@ const DOG_CAT_UNION: &str = "class Dog:\n\
      \x20       self.legs = 4\n\
      \x20   def meow(self):\n\
      \x20       return 2\n\
-     x = Dog() if True else Cat()\n";
+     x: Dog | Cat = Dog() if True else Cat()\n";
 
 #[test]
 fn union_without_narrowing_rejects_brand_specific_method() {

@@ -373,6 +373,16 @@ pub enum TypeError {
     /// is surfaced so the user sees the dangling reference.
     #[error("Unknown type '{name}' in annotation")]
     UnknownTypeRef { name: String, span: Span },
+
+    /// Two branches (of a conditional, the `return`s of a function, the
+    /// elements of an array literal, `??`) have different types. inty
+    /// doesn't guess that they form a union; an annotation says so.
+    #[error("Branches have different types: {left} and {right}")]
+    BranchMismatch {
+        left: String,
+        right: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -398,6 +408,7 @@ impl TypeError {
             TypeError::Module { span, .. } => *span,
             TypeError::InvalidSyntax { span, .. } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
+            TypeError::BranchMismatch { span, .. } => *span,
         }
     }
 }

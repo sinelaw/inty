@@ -41,7 +41,7 @@ impl InferState {
             // Right side is reachable; union it in. If the non-nullish
             // part is `never` (LHS was purely nullish), `join` collapses
             // to RHS's type.
-            Ok(self.join(span, &non_nullish, &right_ty))
+            self.join(span, &non_nullish, &right_ty)
         } else {
             // Right side is unreachable. We type-checked it for
             // well-formedness; the result is just the LHS type.
@@ -155,7 +155,7 @@ impl InferState {
 /// Strip `Null` and `Undefined` from a type. Returns `(non_nullish,
 /// had_any_nullish_member)`. If the type is itself `Null` or
 /// `Undefined`, the non-nullish part is the empty union (`never`).
-fn strip_nullish(ty: &Type) -> (Type, bool) {
+pub(in crate::infer) fn strip_nullish(ty: &Type) -> (Type, bool) {
     match ty {
         Type::Null | Type::Undefined => (Type::never(), true),
         Type::Union(members) => {

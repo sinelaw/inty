@@ -62,7 +62,7 @@ impl InferState {
                 }
                 other => self.infer_expr(env, other)?,
             };
-            acc = self.join(span, &acc, &elem_ty);
+            acc = self.join(span, &acc, &elem_ty)?;
         }
 
         Ok(Type::array(self.zonk(&acc)))
@@ -109,7 +109,7 @@ impl InferState {
                 let idx_ty = self.index_into_type(&m_resolved, &index_type, span)?;
                 result = Some(match result {
                     None => idx_ty,
-                    Some(acc) => self.join(span, &acc, &idx_ty),
+                    Some(acc) => self.union_of(span, &acc, &idx_ty),
                 });
             }
             return Ok(result.unwrap_or_else(Type::never));

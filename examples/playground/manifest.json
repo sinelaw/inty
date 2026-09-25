@@ -13,7 +13,7 @@
         { "id": "generics",        "label": "generics.js",        "blurb": "Parametric polymorphism",         "expect": "ok" },
         { "id": "structural",      "label": "structural.js",      "blurb": "Row polymorphism — typed by shape", "expect": "ok" },
         { "id": "overloading",     "label": "overloading.js",     "blurb": "Operator type classes",           "expect": "ok" },
-        { "id": "unions",          "label": "unions.js",          "blurb": "Control-flow joins",              "expect": "ok" },
+        { "id": "unions",          "label": "unions.js",          "blurb": "Declared unions",                  "expect": "ok" },
         { "id": "method-chaining", "label": "method-chaining.js", "blurb": "Equi-recursive builder types",    "expect": "ok" },
         { "id": "tagged-unions",   "label": "tagged-unions.js",   "blurb": "Discriminated unions + narrowing", "expect": "ok" },
         { "id": "nullable",        "label": "nullable.js",        "blurb": "Optional values, ??, narrowing",  "expect": "ok" },

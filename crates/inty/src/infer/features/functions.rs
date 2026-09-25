@@ -236,8 +236,24 @@ impl InferState {
         widen: bool,
         span: Span,
     ) -> InferResult<Type> {
+        self.infer_body_return_type_expecting(body_env, body, widen, None, span)
+    }
+
+    /// [`Self::infer_body_return_type`] where the return type is known
+    /// (annotated): each `return` is checked against `expected` rather
+    /// than the returns joined.
+    pub(in crate::infer) fn infer_body_return_type_expecting(
+        &mut self,
+        body_env: &TypeEnv,
+        body: &Stmt,
+        widen: bool,
+        expected: Option<Type>,
+        span: Span,
+    ) -> InferResult<Type> {
         self.return_value_stack.push(Vec::new());
+        self.return_expected_stack.push(expected);
         let body_result = self.infer_stmt(body_env, body);
+        self.return_expected_stack.pop();
         let returns = self
             .return_value_stack
             .pop()
@@ -258,7 +274,7 @@ impl InferState {
         } else {
             let mut acc = parts[0].clone();
             for t in &parts[1..] {
-                acc = self.join(span, &acc, t);
+                acc = self.join(span, &acc, t)?;
             }
             acc
         })
@@ -422,7 +438,14 @@ impl InferState {
         // `None`/`undefined`, regardless of any trailing expression
         // statement's type.
         let annotated = type_annotation.is_some() || return_type_ast.is_some();
-        let inferred_ret = self.infer_body_return_type(&body_env, body, !annotated, span)?;
+        // An annotated return type is pushed into the `return`s.
+        let expected_ret = match self.zonk(&ret_type) {
+            Type::Var(crate::types::TVarName::Flex(_)) => None,
+            t if annotated => Some(t),
+            _ => None,
+        };
+        let inferred_ret =
+            self.infer_body_return_type_expecting(&body_env, body, !annotated, expected_ret, span)?;
 
         // Without an annotation the return is a fresh-literal widening site
         // (`function f() { return "hi"; }` returns `String`, not
@@ -653,6 +676,8 @@ impl InferState {
     pub(crate) fn method_receiver(&mut self, receiver: &Type) -> Type {
         let receiver = self.zonk(receiver);
         match &receiver {
+            // `"abc".trim()`: a literal's methods are its base type's.
+            Type::Literal(lit) => lit.base_type(),
             Type::Named(id, args) if self.is_nominal_type(*id) => self
                 .unroll_named(*id, args)
                 .unwrap_or_else(|| receiver.clone()),
@@ -974,6 +999,19 @@ impl InferState {
             (**ret).clone(),
         ));
         self.class_brand_ids.insert(name.to_string(), id);
+        // A JavaScript class's name is a type in annotations
+        // (`/** const xs: (A | B)[] */`), unless an alias already claims
+        // it: references resolve to the brand. (Python resolves class
+        // names in annotations itself.)
+        if self.language == crate::ast::SourceLanguage::JavaScript {
+            self.type_aliases
+                .entry(name.to_string())
+                .or_insert_with(|| crate::infer::state::AliasDef {
+                    params: brand_vars.iter().map(|v| v.id()).collect(),
+                    body: (**ret).clone(),
+                    nominal_id: Some(id),
+                });
+        }
 
         let args: Vec<Type> = brand_vars.iter().map(|v| Type::var(v.clone())).collect();
         let branded_func = Type::Func {
@@ -1192,7 +1230,7 @@ pub(in crate::infer) fn compute_scc_groups(
 /// `{<CALL>: (params) => ret, …}` or a bare function. `None` when `ty`
 /// isn't a function shape (e.g. an unresolved variable), so keyword
 /// resolution can fall back to accepting the call.
-fn extract_callable(ty: &Type) -> Option<(Option<Type>, Vec<crate::types::FuncParam>, Type)> {
+pub(crate) fn extract_callable(ty: &Type) -> Option<(Option<Type>, Vec<crate::types::FuncParam>, Type)> {
     use crate::types::{PropName, CALLABLE_KEY};
     let func = match ty {
         Type::Row(row) => &row.props.get(&PropName(CALLABLE_KEY.to_string()))?.ty,

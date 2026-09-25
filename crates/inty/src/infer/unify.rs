@@ -93,43 +93,12 @@ impl InferState {
                 }
             }
 
-            // Union ~ T: succeed if T is a member of the union (after
-            // subst). This is the bridge that lets `var x: T | undefined
-            // = expr` accept an `expr` that infers as `T` or `undefined`.
-            //
-            // Only the *sound* `Lit ≤ Base` direction is honoured here:
-            // a literal value `other` can sit where a `Base` member is
-            // expected. The reverse — a `Base` value where a literal
-            // member is expected — is unsound (not every `String` is
-            // `"circle"`) and is intentionally rejected. Callers that
-            // legitimately need that direction (e.g. discriminated
-            // unions matched by row arms) go through `subsume`'s
-            // S-UnionR rule, which structurally distributes the
-            // value over the arms.
-            (Type::Union(members), other) | (other, Type::Union(members)) => {
-                let mut matched = false;
-                for m in members {
-                    let m = self.zonk(m);
-                    if &m == other {
-                        matched = true;
-                        break;
-                    }
-                    // Literal-into-base subsumption: a literal value
-                    // can be supplied where the union has a base
-                    // member.
-                    if let Type::Literal(lit) = other {
-                        if m == lit.base_type() {
-                            matched = true;
-                            break;
-                        }
-                    }
-                }
-                if matched {
-                    Ok(())
-                } else {
-                    Err(self.unification_error(span, t1, t2))
-                }
-            }
+            // Union ~ T (T not a union) doesn't unify: unification is
+            // equality, and a union is not any one of its arms. Putting a
+            // value of an arm where the union is expected is subsumption
+            // (`subsume`'s S-UnionR); accepting it here also accepted the
+            // reverse — a `String | Number` where a `String` is needed.
+            (Type::Union(_), _) | (_, Type::Union(_)) => Err(self.unification_error(span, t1, t2)),
 
             // Skolems must match exactly
             (Type::Var(TVarName::Skolem(n1)), Type::Var(TVarName::Skolem(n2))) if n1 == n2 => {

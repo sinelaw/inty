@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::error::TypeError;
 use crate::span::Span;
-use crate::types::{LitValue, Type};
+use crate::types::{LitValue, Type, TypePred};
 
 use super::state::AliasDef;
 
@@ -63,6 +63,8 @@ pub struct TypeParser<'a> {
     /// resolver context is available (alias-body parsing, free-form
     /// type-string parsing in unit tests).
     typeof_table: Option<&'a TypeOfTable>,
+    /// Type-class constraints from a `<a> where C, … => T` prefix.
+    preds: Vec<TypePred>,
 }
 
 impl<'a> TypeParser<'a> {
@@ -78,6 +80,7 @@ impl<'a> TypeParser<'a> {
             allow_quantifiers: true, // Quantifiers allowed at top level
             aliases: None,
             typeof_table: None,
+            preds: Vec::new(),
         }
     }
 
@@ -99,6 +102,7 @@ impl<'a> TypeParser<'a> {
             allow_quantifiers: true,
             aliases: Some(aliases),
             typeof_table: None,
+            preds: Vec::new(),
         }
     }
 
@@ -236,12 +240,110 @@ impl<'a> TypeParser<'a> {
         }
         self.expect_char('>')?;
 
+        // An optional `where C, … =>` clause: the constraints the printer
+        // writes for a qualified scheme (`<a> where Plus a => (a, a) => a`,
+        // `<a, b> where a has {x: b} => (a) => b`).
+        self.skip_whitespace();
+        if self.input[self.pos..].starts_with("where")
+            && !self.input[self.pos + 5..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            self.pos += 5;
+            loop {
+                self.skip_whitespace();
+                self.parse_constraint()?;
+                self.skip_whitespace();
+                if self.peek_char() == Some(',') {
+                    self.pos += 1;
+                    continue;
+                }
+                break;
+            }
+            self.skip_whitespace();
+            if !self.input[self.pos..].starts_with("=>") {
+                return Err(self.error("expected `=>` after the `where` constraints".to_string()));
+            }
+            self.pos += 2;
+        }
+
         // Parse the body — either a function type or a row type. Use
         // `parse_simple_type` so any leaf-shape (and `[]` array
         // suffixes) is acceptable; quantifier-then-arbitrary-shape is
         // the principled extension and only the parser changes.
         self.skip_whitespace();
         self.parse_simple_type()
+    }
+
+    /// One constraint of a `where` clause: `Plus t`, `Indexable t t t`, or
+    /// `t has {name: T, …}` (one `HasProp` per field).
+    fn parse_constraint(&mut self) -> ParseResult<()> {
+        let rest = &self.input[self.pos..];
+        let keyword = |kw: &str| {
+            rest.starts_with(kw)
+                && rest[kw.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_whitespace())
+        };
+        if keyword("Plus") {
+            self.pos += 4;
+            self.skip_whitespace();
+            let t = self.parse_simple_type()?;
+            self.preds.push(TypePred::plus(t));
+            return Ok(());
+        }
+        if keyword("Indexable") {
+            self.pos += "Indexable".len();
+            let mut ts = Vec::new();
+            for _ in 0..3 {
+                self.skip_whitespace();
+                ts.push(self.parse_simple_type()?);
+            }
+            let element = ts.pop().expect("three");
+            let index = ts.pop().expect("three");
+            let container = ts.pop().expect("three");
+            self.preds.push(TypePred::indexable(container, index, element));
+            return Ok(());
+        }
+        let receiver = self.parse_simple_type()?;
+        self.skip_whitespace();
+        if !(self.input[self.pos..].starts_with("has")
+            && self.input[self.pos + 3..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_whitespace() || c == '{'))
+        {
+            return Err(self.error(
+                "expected a constraint: `Plus t`, `Indexable t i e` or `t has {field: T}`"
+                    .to_string(),
+            ));
+        }
+        self.pos += 3;
+        self.skip_whitespace();
+        self.expect_char('{')?;
+        loop {
+            self.skip_whitespace();
+            if self.peek_char() == Some('}') {
+                break;
+            }
+            let name = self.parse_ident()?;
+            self.skip_whitespace();
+            self.expect_char(':')?;
+            self.skip_whitespace();
+            let prev = self.allow_quantifiers;
+            self.allow_quantifiers = false;
+            let ty = self.parse_type();
+            self.allow_quantifiers = prev;
+            self.preds.push(TypePred::has_prop(receiver.clone(), &name, ty?));
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') {
+                self.pos += 1;
+            }
+        }
+        self.expect_char('}')?;
+        Ok(())
     }
 
     /// Parse a function type or a grouped type in parentheses.
@@ -973,6 +1075,26 @@ pub fn parse_type_annotation_with_aliases(
     let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
     let ty = parser.parse()?;
     Ok((ty, parser.type_vars.clone()))
+}
+
+/// As [`parse_type_annotation_with_pvars`], also returning the constraints
+/// of a `<…> where C, … =>` prefix (for a declaration's scheme).
+pub fn parse_type_annotation_with_preds(
+    content: &str,
+    span: Span,
+    start_var_id: u32,
+    start_pvar_id: u32,
+    aliases: &HashMap<String, AliasDef>,
+) -> ParseResult<(Type, HashMap<String, u32>, u32, Vec<TypePred>)> {
+    let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
+    parser.seed_pvar_id(start_pvar_id);
+    let ty = parser.parse()?;
+    Ok((
+        ty,
+        parser.type_vars.clone(),
+        parser.next_pvar_id_value(),
+        std::mem::take(&mut parser.preds),
+    ))
 }
 
 /// As [`parse_type_annotation_with_aliases`] but also accepts a

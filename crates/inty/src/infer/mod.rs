@@ -11,6 +11,7 @@
 mod decorate;
 mod env;
 mod features;
+pub(crate) use features::functions::extract_callable;
 mod lower;
 mod narrow;
 mod state;
@@ -620,6 +621,71 @@ impl InferState {
                 return Ok(ty);
             }
         }
+        // Branches checked against a known expected type separately, not
+        // joined first: the annotation is what makes `b ? 1 : "a"` a
+        // `Number | String` (see `InferState::join`).
+        let known = !matches!(expected, Type::Var(crate::types::TVarName::Flex(_)));
+        if let (
+            true,
+            Expr::Conditional {
+                test,
+                consequent,
+                alternate,
+                span,
+            },
+        ) = (known, expr)
+        {
+            let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
+            self.check_expr(&cons_env, consequent, &expected)?;
+            self.check_expr(&alt_env, alternate, &expected)?;
+            let ty = self.zonk(&expected);
+            if let Some(types) = self.expr_types.as_mut() {
+                types.insert((span.start, span.end), ty.clone());
+            }
+            return Ok(ty);
+        }
+        if let (
+            true,
+            Expr::NullishCoalesce { left, right, span },
+        ) = (known, expr)
+        {
+            // `a ?? b`: the non-nullish part of `a`, and `b`, each fit.
+            let left_ty = self.infer_expr(env, left)?;
+            let (non_nullish, had_nullish) =
+                features::nullish::strip_nullish(&self.zonk(&left_ty));
+            self.subsume(left.span(), &non_nullish, &expected)?;
+            if had_nullish {
+                self.check_expr(env, right, &expected)?;
+            } else {
+                self.infer_expr(env, right)?;
+            }
+            let ty = self.zonk(&expected);
+            if let Some(types) = self.expr_types.as_mut() {
+                types.insert((span.start, span.end), ty.clone());
+            }
+            return Ok(ty);
+        }
+        if let (Expr::Array { elements, span }, Type::Array(elem)) = (expr, &expected) {
+            if elements.iter().all(|e| e.is_some()) {
+                for e in elements.iter().flatten() {
+                    match e {
+                        // `...xs`: an array whose elements fit.
+                        Expr::Spread { argument, span } => {
+                            let arg_ty = self.infer_expr(env, argument)?;
+                            self.subsume(*span, &arg_ty, &expected)?;
+                        }
+                        e => {
+                            self.check_expr(env, e, elem)?;
+                        }
+                    }
+                }
+                let ty = self.zonk(&expected);
+                if let Some(types) = self.expr_types.as_mut() {
+                    types.insert((span.start, span.end), ty.clone());
+                }
+                return Ok(ty);
+            }
+        }
         // Default: synthesise, then subsume into expected.
         // When the expected type is still a fresh flex variable
         // (e.g. an un-instantiated polymorphic parameter), the
@@ -996,10 +1062,14 @@ impl InferState {
             Stmt::Break { .. } | Stmt::Continue { .. } => Ok((Type::Undefined, env.clone())),
 
             Stmt::Return { argument, span: _ } => {
-                let ret_type = if let Some(expr) = argument {
-                    self.infer_expr(env, expr)?
-                } else {
-                    Type::Undefined
+                let expected = self.return_expected_stack.last().cloned().flatten();
+                let ret_type = match (argument, expected) {
+                    (Some(expr), Some(expected)) => {
+                        self.check_expr(env, expr, &expected)?;
+                        expected
+                    }
+                    (Some(expr), None) => self.infer_expr(env, expr)?,
+                    (None, _) => Type::Undefined,
                 };
                 // Contribute to the enclosing function's return type. The
                 // function body's *completion* value is no longer used as

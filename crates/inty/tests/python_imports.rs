@@ -306,14 +306,17 @@ fn pyi_distinct_stub_classes_do_not_interchange() {
     // Two stub classes of identical (empty) shape. Before nominal
     // branding both mapped to the same structural row `{}` and collapsed
     // into one element type; now each has a distinct identity, so a list
-    // holding both infers the *union* `A | B` rather than a single type.
+    // holding both is rejected unless annotated as the union `A | B`.
     write(
         &stubs,
         "twins.pyi",
         "class A:\n    def __init__(self) -> None: ...\nclass B:\n    def __init__(self) -> None: ...\n",
     );
+    let err = check("from twins import A, B\nxs = [A(), B()]\nxs\n", &dir, &[stubs.clone()])
+        .expect_err("distinct brands don't collapse into one element type");
+    assert!(err.contains("BranchMismatch"), "{}", err);
     let ty = check(
-        "from twins import A, B\nxs = [A(), B()]\nxs\n",
+        "from twins import A, B\nxs: list[A | B] = [A(), B()]\nxs\n",
         &dir,
         &[stubs],
     )
@@ -372,7 +375,7 @@ fn pets_stub_and_union(stubs: &Path) -> String {
          \x20   def __init__(self) -> None: ...\n\
          \x20   def meow(self) -> int: ...\n",
     );
-    "from pets import Dog, Cat\nx = Dog() if True else Cat()\n".to_string()
+    "from pets import Dog, Cat\nx: Dog | Cat = Dog() if True else Cat()\n".to_string()
 }
 
 #[test]

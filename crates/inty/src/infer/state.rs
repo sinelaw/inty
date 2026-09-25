@@ -280,6 +280,9 @@ pub struct InferState {
     /// trailing `return` yields `None`/`undefined`). See
     /// `infer_function_with_this`.
     pub(in crate::infer) return_value_stack: Vec<Vec<Type>>,
+    /// Per return frame, the annotated return type `return`s are
+    /// checked against (instead of being joined), if there is one.
+    pub(in crate::infer) return_expected_stack: Vec<Option<Type>>,
 
     /// The type a function returns when it falls off the end (no explicit
     /// `return`): JS `undefined` (`Type::Undefined`) by default, or
@@ -397,6 +400,7 @@ impl InferState {
             annotation_env: None,
             current_annotation_span: None,
             return_value_stack: Vec::new(),
+            return_expected_stack: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
             unfold_assumptions: Vec::new(),
@@ -819,7 +823,94 @@ impl InferState {
         env.tidy_scheme(&self.flatten_scheme(scheme))
     }
 
-    /// Join two types into their least upper bound.
+    /// Join the types of two branches: of a conditional, the `return`s of
+    /// a function, the elements of an array literal, the sides of `??`.
+    ///
+    /// As in Hindley–Milner, the branches must have one type — inty
+    /// doesn't guess that they form a union (a guess that could depend on
+    /// what is known yet about each side). The exceptions, which don't
+    /// guess either:
+    ///
+    /// * literals of one base type widen to it (`1` and `2` join to
+    ///   `Number`);
+    /// * a branch that is `null` or `undefined` makes the join nullable
+    ///   (`x ? v : null` is `T | Null`), for any `T`;
+    /// * a value of an (annotated) union joined with one of its arms is
+    ///   that union;
+    /// * a branch that doesn't complete (`never`) contributes nothing.
+    ///
+    /// Otherwise it's a `BranchMismatch` error. Where an annotation gives
+    /// the expected type, branches are checked against it instead of
+    /// joined (`check_expr`, annotated returns), so a union is made by
+    /// saying so.
+    pub fn join(&mut self, span: Span, t1: &Type, t2: &Type) -> InferResult<Type> {
+        let t1 = self.zonk(t1);
+        let t2 = self.zonk(t2);
+        if t1 == t2 {
+            return Ok(t1);
+        }
+        let is_never = |t: &Type| matches!(t, Type::Union(m) if m.is_empty());
+        if is_never(&t1) {
+            return Ok(t2);
+        }
+        if is_never(&t2) {
+            return Ok(t1);
+        }
+        let nullish = |t: &Type| match t {
+            Type::Null | Type::Undefined => true,
+            Type::Union(m) => m.iter().any(|m| matches!(m, Type::Null | Type::Undefined)),
+            _ => false,
+        };
+        if nullish(&t1) || nullish(&t2) {
+            // Directly, not by first trying to unify: that would bind a
+            // not-yet-known side to `Null`.
+            let mut all = Vec::new();
+            for t in [t1, t2] {
+                match t {
+                    Type::Union(m) => all.extend(m),
+                    other => all.push(other.widen_fresh_literals()),
+                }
+            }
+            return Ok(Self::normalise_union_members(all));
+        }
+        // Equal after widening literals (also inside tuples, rows, …) —
+        // one attempt: a join's result is widened anyway.
+        {
+            let (a, b) = (t1.widen_fresh_literals(), t2.widen_fresh_literals());
+            let snap = self.snapshot_inference();
+            if self.unify(span, &a, &b).is_ok() {
+                return Ok(self.zonk(&a));
+            }
+            self.restore_snapshot(snap);
+        }
+        // A union value joined with one of its arms.
+        if matches!(t1, Type::Union(_)) || matches!(t2, Type::Union(_)) {
+            for (small, big) in [(&t2, &t1), (&t1, &t2)] {
+                if !matches!(big, Type::Union(_)) {
+                    continue;
+                }
+                let snap = self.snapshot_inference();
+                if self.subsume(span, small, big).is_ok() {
+                    return Ok(self.zonk(big));
+                }
+                self.restore_snapshot(snap);
+            }
+        }
+        // Classes by name, not their brand ids.
+        let mut ctx = crate::types::PrettyContext::with_nominal_names(self.nominal_names());
+        Err(crate::error::TypeError::BranchMismatch {
+            left: ctx.format_type(&t1),
+            right: ctx.format_type(&t2),
+            span,
+        }
+        .into())
+    }
+
+    /// The union of two types (normalised), or their unification when
+    /// they unify. For *eliminations* of a union that already exists —
+    /// reading a property or an index from each arm — where the results
+    /// are legitimately "one of these"; not for branches (see
+    /// [`Self::join`]).
     ///
     /// Unlike [`Self::unify`], this never fails: if the two types disagree
     /// in a way unification can't reconcile, it returns the (normalised)
@@ -831,8 +922,8 @@ impl InferState {
     /// Side-effects: if unification succeeds, the substitution is updated
     /// as if the user had called `unify` directly. If it fails, the
     /// substitution is rolled back and a union is returned. This means
-    /// `join` is safe to call speculatively at branch boundaries.
-    pub fn join(&mut self, span: Span, t1: &Type, t2: &Type) -> Type {
+    /// it is safe to call speculatively.
+    pub fn union_of(&mut self, span: Span, t1: &Type, t2: &Type) -> Type {
         let t1 = self.zonk(t1);
         let t2 = self.zonk(t2);
 
@@ -1959,7 +2050,7 @@ mod tests {
     fn test_join_equal_types() {
         let mut state = InferState::new();
         let span = Span::new(0, 0);
-        let r = state.join(span, &Type::Number, &Type::Number);
+        let r = state.join(span, &Type::Number, &Type::Number).unwrap();
         assert_eq!(r, Type::Number);
     }
 
@@ -1969,15 +2060,36 @@ mod tests {
         let span = Span::new(0, 0);
         let v = Type::flex(0);
         // a flex var joined with Number unifies to Number
-        let r = state.join(span, &v, &Type::Number);
+        let r = state.join(span, &v, &Type::Number).unwrap();
         assert_eq!(r, Type::Number);
     }
 
     #[test]
-    fn test_join_disjoint_primitives_yields_union() {
+    fn test_join_disjoint_primitives_is_an_error() {
+        // Branches don't form an implicit union.
         let mut state = InferState::new();
         let span = Span::new(0, 0);
-        let r = state.join(span, &Type::Number, &Type::String);
+        let err = state.join(span, &Type::Number, &Type::String).unwrap_err();
+        assert!(err.to_string().contains("Branches have different types"), "{}", err);
+    }
+
+    #[test]
+    fn test_join_with_null_is_nullable() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        match state.join(span, &Type::Number, &Type::Null).unwrap() {
+            Type::Union(members) => {
+                assert!(members.contains(&Type::Number) && members.contains(&Type::Null))
+            }
+            other => panic!("expected Number | Null, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_union_of_disjoint_primitives_yields_union() {
+        let mut state = InferState::new();
+        let span = Span::new(0, 0);
+        let r = state.union_of(span, &Type::Number, &Type::String);
         match r {
             Type::Union(members) => {
                 assert_eq!(members.len(), 2);
@@ -1992,16 +2104,22 @@ mod tests {
     fn test_join_literal_with_base_collapses() {
         let mut state = InferState::new();
         let span = Span::new(0, 0);
-        let r = state.join(span, &Type::lit_string("a"), &Type::String);
+        let r = state
+            .join(span, &Type::lit_string("a"), &Type::String)
+            .unwrap();
         assert_eq!(r, Type::String);
     }
 
     #[test]
-    fn test_join_literals_keep_distinct() {
+    fn test_join_literals_widen_to_their_base() {
         let mut state = InferState::new();
         let span = Span::new(0, 0);
-        let r = state.join(span, &Type::lit_string("a"), &Type::lit_string("b"));
-        match r {
+        let r = state
+            .join(span, &Type::lit_string("a"), &Type::lit_string("b"))
+            .unwrap();
+        assert_eq!(r, Type::String);
+        // `union_of` keeps them distinct (a union of literal arms).
+        match state.union_of(span, &Type::lit_string("a"), &Type::lit_string("b")) {
             Type::Union(m) => assert_eq!(m.len(), 2),
             other => panic!("expected union, got {:?}", other),
         }
