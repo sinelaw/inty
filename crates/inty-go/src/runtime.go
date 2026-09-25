@@ -381,25 +381,23 @@ func intySet[T any](a *[]T, j int, v T) {
 
 const intyMaxSafe = 1 << 53
 
-func intyIntRange(f float64) {
-	if f != f || f > intyMaxSafe || f < -intyMaxSafe {
-		panic("inty: integer result " + strconv.FormatFloat(f, 'g', -1, 64) +
-			" is not a safe integer (|n| <= 2^53); JavaScript would compute a different value")
-	}
-}
-
 // intyToInt is a double known to be an integer (or a trap) as an Int.
+// (NaN fails the comparison too.)
 func intyToInt(f float64) int {
-	intyIntRange(f)
+	if !(f < intyMaxSafe && f > -intyMaxSafe) {
+		panic("inty: a number converted to an integer is not a safe integer (|n| < 2^53)")
+	}
 	return int(f)
 }
 
-// intyIMul is `a * b` on Ints.
+// intyIMul is `a * b` on Ints. Small enough to inline: the product as a
+// double decides (a product it can't represent exactly is at least 2^53
+// in magnitude, so it's caught).
 func intyIMul(a, b int) int {
-	if a > -1<<26 && a < 1<<26 && b > -1<<26 && b < 1<<26 {
-		return a * b
+	if f := float64(a) * float64(b); f >= intyMaxSafe || f <= -intyMaxSafe {
+		panic("inty: an integer product is not a safe integer (|n| < 2^53); " +
+			"JavaScript would compute a different value")
 	}
-	intyIntRange(float64(a) * float64(b))
 	return a * b
 }
 
