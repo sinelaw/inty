@@ -377,6 +377,15 @@ pub fn write_error<W: Write>(
             ),
             TypeError::Module { message, span } => (message.clone(), *span, None),
             TypeError::InvalidSyntax { message, span } => (message.clone(), *span, None),
+            TypeError::BranchMismatch { left, right, span } => (
+                format!("Branches have different types: '{}' and '{}'", left, right),
+                *span,
+                Some(format!(
+                    "inty doesn't infer a union from branches; annotate the result \
+                     (e.g. `/** const v: {} | {} */`) if one is meant",
+                    left, right
+                )),
+            ),
             TypeError::TypeMismatch {
                 expected,
                 found,

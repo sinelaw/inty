@@ -102,11 +102,21 @@ fn js_class_instance_method_sees_through_brand() {
 #[test]
 fn js_structurally_identical_classes_are_distinct_brands() {
     // JS classes are nominal by default: `A` and `B` have identical shape
-    // but are distinct types, so a list holding both is the union `A | B`,
-    // not the single structural row it would collapse to structurally.
+    // but are distinct types, so a list holding both is the union `A | B`
+    // (declared: branches don't form one implicitly), not the single
+    // structural row it would collapse to structurally.
+    let bad = "
+        class A {}
+        class B {}
+        const xs = [new A(), new B()];
+        xs
+    ";
+    let err = check_named(bad).expect_err("distinct brands don't join");
+    assert!(err.contains("BranchMismatch"), "{}", err);
     let src = "
         class A {}
         class B {}
+        /** const xs: (A | B)[] */
         const xs = [new A(), new B()];
         xs
     ";

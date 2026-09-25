@@ -14,7 +14,7 @@ class Cat:
     def meow(self):
         return "miaow"
 
-animal = Dog() if True else Cat()
+animal: Dog | Cat = Dog() if True else Cat()
 
 # Each branch narrows `animal` to a single brand, so the brand-
 # specific method type-checks here.

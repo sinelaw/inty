@@ -75,6 +75,40 @@ pub fn initial_env() -> TypeEnv {
 /// Used from `infer_member_from_type` when a property is accessed on a
 /// value of type `String`.
 pub fn string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
+    js_string_method_type(state, method).map(|t| with_receiver(t, Type::String))
+}
+
+/// A built-in method's type with its receiver as `this`. A method read
+/// off a value and then called on its own (`const g = s.slice; g()`)
+/// is then a free call with `this` undefined — the TypeError it is in
+/// JavaScript — like a detached user-defined method.
+fn with_receiver(ty: Type, receiver: Type) -> Type {
+    use crate::types::{PropName, CALLABLE_KEY};
+    match ty {
+        Type::Func {
+            this_type: None,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: Some(Box::new(receiver)),
+            params,
+            ret,
+        },
+        // A callable row: its call signature.
+        Type::Row(mut row) => {
+            let key = PropName(CALLABLE_KEY.to_string());
+            if let Some(entry) = row.props.remove(&key) {
+                let mut entry = entry;
+                entry.ty = with_receiver(entry.ty, receiver);
+                row.props.insert(key, entry);
+            }
+            Type::Row(row)
+        }
+        other => other,
+    }
+}
+
+fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     use crate::types::FuncParam;
     let n = Type::Number;
     let s = Type::String;
@@ -266,6 +300,10 @@ pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
 /// from the caller's `InferState`; unification during the surrounding
 /// call expression binds them.
 pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
+    js_array_method_type(state, elem, method).map(|t| with_receiver(t, Type::array(elem.clone())))
+}
+
+fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
     use crate::types::FuncParam;
     let n = Type::Number;
     let s = Type::String;
@@ -499,14 +537,32 @@ impl InferState {
                 // access to an object would. That's a valid choice for a
                 // type nothing else constrains, and it can let the
                 // `Indexable`s on the same receivers resolve.
+                // Only the first read of each (receiver, name) becomes the
+                // field: the receiver has no value, so further reads of
+                // the name (`s.slice(i)`, `s.slice(i, j)`) are vacuous and
+                // needn't agree.
+                // (Keys are taken before any defaulting binds a receiver.)
+                let keys: Vec<Option<(Type, String)>> = deferred
+                    .iter()
+                    .map(|c| {
+                        c.pred
+                            .as_has_prop()
+                            .map(|(recv, name, _)| (self.zonk(recv), name.to_string()))
+                    })
+                    .collect();
                 let mut defaulted = false;
                 let mut rest = Vec::new();
-                for c in deferred {
-                    if c.pred.class == ClassName::HasProp {
-                        self.default_has_prop(&c)?;
-                        defaulted = true;
-                    } else {
-                        rest.push(c);
+                let mut seen: Vec<(Type, String)> = Vec::new();
+                for (c, key) in deferred.into_iter().zip(keys) {
+                    match key {
+                        Some(key) => {
+                            if !seen.contains(&key) {
+                                seen.push(key);
+                                self.default_has_prop(&c)?;
+                            }
+                            defaulted = true;
+                        }
+                        None => rest.push(c),
                     }
                 }
                 if !defaulted {
@@ -635,12 +691,56 @@ impl InferState {
             }
             Err(e) => return Err(e),
         };
-        self.unify(span, result, &found)?;
-        if let Some(this) = this {
-            let receiver = self.method_receiver(&receiver);
-            self.unify(span, this, &receiver)?;
+        match this {
+            // A method call: check it as a direct call on this receiver
+            // would be checked — each argument subsumed into its
+            // parameter (`"\n"` into `String | Regex`), the result
+            // unified — rather than equating the call's argument types
+            // with the parameters.
+            Some(this) => {
+                self.apply_deferred_call(span, result, &found)?;
+                let receiver = self.method_receiver(&receiver);
+                self.unify(span, this, &receiver)?;
+            }
+            None => self.unify(span, result, &found)?,
         }
         Ok(())
+    }
+
+    /// Relate the call-site shape `site` (a callable whose parameters are
+    /// the call's argument types) with the method `callee` it turned out
+    /// to call, the way `infer_call` relates a known callee with its
+    /// arguments.
+    fn apply_deferred_call(&mut self, span: Span, site: &Type, callee: &Type) -> Result<(), IntyError> {
+        use crate::infer::extract_callable;
+        use crate::types::Presence;
+        let (site_z, callee_z) = (self.zonk(site), self.zonk(callee));
+        let (Some((_, args, site_ret)), Some((_, params, ret))) =
+            (extract_callable(&site_z), extract_callable(&callee_z))
+        else {
+            // Not a function after all (or not yet known): relate the
+            // types as they are, which reports the mismatch.
+            return self.unify(span, site, callee);
+        };
+        for i in 0..args.len().max(params.len()) {
+            match (args.get(i), params.get(i)) {
+                (Some(a), Some(p)) => {
+                    self.unify_presence(span, &a.presence, &p.presence)?;
+                    // Subsumption matters where the parameter is a union;
+                    // elsewhere it is unification, done directly (no
+                    // snapshot).
+                    if matches!(self.zonk(&p.ty), Type::Union(_)) {
+                        self.subsume(span, &a.ty, &p.ty)?;
+                    } else {
+                        self.unify(span, &a.ty, &p.ty)?;
+                    }
+                }
+                (Some(a), None) => self.unify_presence(span, &a.presence, &Presence::Abs)?,
+                (None, Some(p)) => self.unify_presence(span, &p.presence, &Presence::Abs)?,
+                (None, None) => unreachable!(),
+            }
+        }
+        self.unify(span, &site_ret, &ret)
     }
 
     /// `record[key]`. A literal key selects that field (which must exist).

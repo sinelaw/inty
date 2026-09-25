@@ -9,7 +9,7 @@ use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
 
 use super::super::env::{Mutability, TypeEnv};
 use super::super::state::InferState;
-use super::super::type_parser::parse_type_annotation_with_pvars;
+use super::super::type_parser::parse_type_annotation_with_preds;
 use super::super::InferResult;
 
 /// If `lhs` is an assignment target whose binding resolves to a polymorphic
@@ -385,7 +385,7 @@ impl InferState {
                 ))
             } else if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
-                let (ann_ty, var_map, next_pvar) = parse_type_annotation_with_pvars(
+                let (ann_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
                     &annotation.content,
                     annotation_span,
                     self.next_var_id(),
@@ -395,6 +395,11 @@ impl InferState {
                 self.bump_pvar_id_to(next_pvar);
                 if let Some(&max) = var_map.values().max() {
                     self.bump_var_id_to(max + 1);
+                }
+                // `<a> where Plus a => …`: the declared scheme's constraints,
+                // taken into it when the binding is generalised.
+                for pred in preds {
+                    self.add_constraint(pred, annotation_span);
                 }
                 Some((ann_ty, annotation_span))
             } else {

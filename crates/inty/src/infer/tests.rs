@@ -1554,8 +1554,14 @@ fn test_phase6_discriminated_union_exhaustive() {
 
 #[test]
 fn test_if_branches_form_union() {
-    // Two branches with disjoint row shapes form a union.
-    let src = "function pick(b) { if (b) { return {x: 1, y: 2}; } else { return {x: 3, z: 4}; } }";
+    // Two branches with disjoint row shapes form a union when the return
+    // type says so; unannotated, they must agree.
+    assert!(infer_program_with_state(
+        "function pick(b) { if (b) { return {x: 1, y: 2}; } else { return {x: 3, z: 4}; } }"
+    )
+    .is_err());
+    let src = "/** function pick(Boolean) => {x: Number, y: Number} | {x: Number, z: Number} */\n\
+               function pick(b) { if (b) { return {x: 1, y: 2}; } else { return {x: 3, z: 4}; } }";
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("pick").unwrap();
     let ty = state.apply_subst(scheme.ty());
@@ -1576,7 +1582,9 @@ fn test_if_branches_form_union() {
 fn test_member_on_union_with_shared_field() {
     // Both branches expose `x: Number`, so reading `.x` on the union
     // returns Number even though the rows differ otherwise.
-    let src = "function getX(b) { var pt = b ? {x: 1, y: 2} : {x: 3, z: 4}; return pt.x; }";
+    let src = "function getX(b) {\n\
+               /** var pt: {x: Number, y: Number} | {x: Number, z: Number} */\n\
+               var pt = b ? {x: 1, y: 2} : {x: 3, z: 4}; return pt.x; }";
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("getX").unwrap();
     let ty = state.apply_subst(scheme.ty());
@@ -1592,7 +1600,9 @@ fn test_member_on_union_with_shared_field() {
 fn test_member_on_union_disagreeing_field_joins() {
     // .x has type Number in one member and String in another →
     // the property access yields a union.
-    let src = "function getX(b) { var pt = b ? {x: 1, y: 2} : {x: \"a\", z: 4}; return pt.x; }";
+    let src = "function getX(b) {\n\
+               /** var pt: {x: Number, y: Number} | {x: String, z: Number} */\n\
+               var pt = b ? {x: 1, y: 2} : {x: \"a\", z: 4}; return pt.x; }";
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("getX").unwrap();
     let ty = state.apply_subst(scheme.ty());
@@ -1906,11 +1916,13 @@ fn array_spread_propagates_element_type() {
 
 #[test]
 fn array_spread_mixed_types_unions() {
-    // Mixed element types union, matching the existing `[1, "two"]`
-    // behaviour. `[...xs, "three"]` with `xs : Number[]` produces
-    // `(Number | String)[]`.
+    // Mixed element types form a union when the annotation says so:
+    // `[...xs, "three"]` with `xs : Number[]` checks against
+    // `(Number | String)[]`. (Unannotated, the elements must agree.)
+    assert!(infer_program_with_state("var xs = [1, 2]; var ys = [...xs, \"three\"];").is_err());
     let src = "\
         var xs = [1, 2]; \
+        /** var ys: (Number | String)[] */ \
         var ys = [...xs, \"three\"];";
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("ys").unwrap();
@@ -3665,7 +3677,7 @@ fn gen_const_function_using_polymorphic_alias_stays_in_source_order() {
     // and sees `alias`'s polymorphic scheme.
     let src = "const id = (x) => x;\n\
                const alias = id;\n\
-               const g = () => [alias(1), alias(\"s\")];";
+               const g = () => { alias(1); return alias(\"s\"); };";
     let t = check_program(src, &["alias"]).unwrap();
     assert_eq!(t[0], "<a>(a) => a");
 }
@@ -3904,14 +3916,19 @@ fn has_prop_on_a_union_needs_every_arm() {
     // `String` for all of them (it used to join the fields to
     // `Number | String` and let unify's union-membership rule accept it).
     let bad = "function up(o) { const y = o.x; const t = \"\" + y; const w = t === y; return y.toUpperCase(); }\n\
+               /** const u: {a: Number, x: Number} | {b: Number, x: String} */\n\
                const u = true ? {a: 1, x: 5} : {b: 1, x: \"hi\"};\n\
                up(u);";
     assert!(check_program(bad, &[]).is_err());
     // Arms that agree are fine, including a string and an array.
     let ok = "function nm(o) { return o.name; }\n\
-              const s = nm(true ? {name: \"a\", k: 1} : {name: \"b\", z: 2});\n\
+              /** const a: {name: String, k: Number} | {name: String, z: Number} */\n\
+              const a = true ? {name: \"a\", k: 1} : {name: \"b\", z: 2};\n\
+              const s = nm(a);\n\
               function ln(x) { return x.length; }\n\
-              const n = ln(true ? \"abc\" : [1, 2]);";
+              /** const b: String | Number[] */\n\
+              const b = true ? \"abc\" : [1, 2];\n\
+              const n = ln(b);";
     assert_eq!(check_program(ok, &["s", "n"]).unwrap(), ["String", "Number"]);
 }
 
@@ -3966,7 +3983,156 @@ fn a_join_with_a_type_not_known_yet_is_equality() {
         let err = check_program(src, &[]).unwrap_err();
         assert!(err.contains("Property 'x' not found"), "{}\n{}", src, err);
     }
-    // Known, different types still join to a union.
-    let t = check_program("function k(b) { return b ? {x: 1} : \"str\"; }", &["k"]).unwrap();
-    assert_eq!(t[0], "<a>(a) => String | {x: Number}");
+    // Known, different types don't join either: a union is annotated.
+    let err = check_program("function k(b) { return b ? {x: 1} : \"str\"; }", &[]).unwrap_err();
+    assert!(err.contains("Branches have different types"), "{}", err);
+    let t = check_program(
+        "/** function k(Boolean) => {x: Number} | String */\n\
+         function k(b) { return b ? {x: 1} : \"str\"; }",
+        &["k"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "(Boolean) => String | {x: Number}");
+}
+
+#[test]
+fn declared_constraints_hold_consumers_to_them() {
+    // What `inty declarations` prints for `add(a, b) { return a + b }` and
+    // for property reads; a consumer of the `.d.js` is checked against the
+    // constraints (they used to be dropped: `add(true, false)` passed).
+    let decls = "/** const add: <a> where Plus a => (a, a) => a */\nconst add;\n\
+                 /** const len: <a, b> where a has {length: b} => (a) => b */\nconst len;\n\
+                 /** const mixed: <c, r> where Plus r, c has {slice: (Number, Number) => r, slice: (Number) => r} => (c) => r */\nconst mixed;\n";
+    for ok in [
+        "const a = add(1, 2) * 2;",
+        "const b = len(\"abc\") * 2;",
+        "const c = len([1, 2]) * 2;",
+        "const d = mixed(\"abc\").toUpperCase();",
+    ] {
+        check_program(&format!("{decls}{ok}"), &[]).unwrap_or_else(|e| panic!("{}: {}", ok, e));
+    }
+    for bad in [
+        "add(true, false);",
+        "len(5);",
+        "mixed(3);",
+        "const s = len({length: \"x\"}) * 2;",
+    ] {
+        assert!(check_program(&format!("{decls}{bad}"), &[]).is_err(), "{}", bad);
+    }
+}
+
+#[test]
+fn where_clauses_parse_in_annotations() {
+    let t = check_program(
+        "/** const f: <a, b> where Indexable a Number b => (a) => b */\nconst f;",
+        &["f"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "<a, b> where Indexable a Number b => (a) => b");
+}
+
+// ---- Sound joins and unification --------------------------------------------
+
+#[test]
+fn a_union_is_not_one_of_its_arms() {
+    // Unification is equality: a `String | Number` value doesn't pass for a
+    // `String` (it used to, through a union-membership rule in `unify`).
+    for bad in [
+        "function g(o) { const y = o.x; const s = \"\" + y; const w = s === y; return y.toUpperCase(); }\n\
+         /** const o: {x: String | Number} */\n\
+         const o = {x: true ? \"hi\" : 5};\n\
+         g(o);",
+        "/** const xs: (Number | String)[] */\n\
+         const xs = [5, \"a\"];\n\
+         function up(a, i) { const v = a[i]; const s = \"\" + v; const w = s === v; return v.toUpperCase(); }\n\
+         up(xs, 0);",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // An arm's value fits where the union is expected (subsumption).
+    let ok = "/** function f(String | Number) => Number */\nfunction f(v) { return 1; }\nconst a = f(\"s\") + f(2);";
+    assert!(check_program(ok, &[]).is_ok());
+}
+
+#[test]
+fn a_deferred_method_call_checks_arguments_like_a_direct_one() {
+    // `s.replaceAll("\n", " ")` on a parameter of unknown type: the
+    // literal argument fits `String | Regex`, as it does on a string.
+    let src = "function norm(s) { return s.replaceAll(\"\\n\", \" \"); }\nconst r = norm(\"a\\nb\");";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["String"]);
+}
+
+#[test]
+fn detached_built_in_methods_are_rejected() {
+    for bad in [
+        "const g = \"a\".toUpperCase;\nconst r = g();",
+        "function f(s) { const g = s.toUpperCase; return g(); }\nf(\"a\");",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // Called on a (literal) receiver, fine.
+    assert!(check_program("const t = \"  a \".trim();\nconst n = [3, 1].slice(0, 1).length;", &[]).is_ok());
+}
+
+#[test]
+fn branches_checked_against_an_annotation_form_a_union() {
+    for (src, name, ty) in [
+        (
+            "/** const v: Number | String */\nconst v = true ? 1 : \"a\";",
+            "v",
+            "Number | String",
+        ),
+        (
+            "/** const xs: (Number | String)[] */\nconst xs = [1, \"a\"];",
+            "xs",
+            "(Number | String)[]",
+        ),
+        (
+            "/** function f(Boolean) => Number | String */\nfunction f(b) { if (b) { return 1; } return \"a\"; }\nconst r = f(true);",
+            "r",
+            "Number | String",
+        ),
+        (
+            "/** function g(String | Null) => String | Number */\nfunction g(s) { return s ?? 42; }\nconst q = g(\"a\");",
+            "q",
+            "Number | String",
+        ),
+    ] {
+        assert_eq!(check_program(src, &[name]).unwrap(), [ty], "{}", src);
+    }
+    // Without the annotation, the branches must agree.
+    for bad in [
+        "const v = true ? 1 : \"a\";",
+        "const xs = [1, \"a\"];",
+        "function f(b) { if (b) { return 1; } return \"a\"; }",
+    ] {
+        let err = check_program(bad, &[]).unwrap_err();
+        assert!(err.contains("Branches have different types"), "{}: {}", bad, err);
+    }
+}
+
+#[test]
+fn a_null_branch_makes_the_join_nullable() {
+    // Even when the other side isn't known yet: it isn't bound to `Null`.
+    let src = "function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n\
+               const hit = find([1, 2], 2);";
+    assert_eq!(check_program(src, &["hit"]).unwrap(), ["Number | Null"]);
+}
+
+#[test]
+fn statements_are_not_joined_by_value() {
+    // `n += 4` (a Number) and `break` in the branches of an `if`
+    // statement: statements have no value to agree on.
+    let src = "function w(line) { let n = 0; for (let i = 0; i < line.length; i++) { \
+               const c = line.charCodeAt(i); if (c === 32) n += 1; else if (c === 9) n += 4; else break; } \
+               return n; }\nconst k = w(\"  x\");";
+    assert_eq!(check_program(src, &["k"]).unwrap(), ["Number"]);
+}
+
+#[test]
+fn javascript_class_names_are_types_in_annotations() {
+    let src = "class A {}\nclass B {}\n/** const xs: (A | B)[] */\nconst xs = [new A(), new B()];";
+    assert!(check_program(src, &[]).is_ok());
+    let err = check_program("class A {}\nclass B {}\nconst xs = [new A(), new B()];", &[]).unwrap_err();
+    assert!(err.contains("Branches have different types"), "{}", err);
 }

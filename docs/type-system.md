@@ -74,6 +74,8 @@ inference doesn't decide what `obj` is when it meets `obj.name` on a value whose
 
 `+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row. Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
 
+A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a> where Plus a => (a, a) => a */`, and the annotation parser reads the `where` clause back (`Plus t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them.
+
 ### Method Chaining & Builders (Equi-recursive Types)
 
 Methods that `return this` produce equi-recursive types: the method's `this` parameter is unified with the object containing the method, so the chain types itself.
@@ -133,53 +135,52 @@ function safe(arr) {
 
 For DOM-style APIs that return `null` (not `undefined`), write the long form `Element | Null` explicitly — `?` adds `Undefined` only, matching TypeScript's `?:` convention.
 
-### Control-Flow Joins (Union Types)
+### Unions: declared, not guessed
 
-Branches of an `if`, ternary, or array literal that disagree in type are *joined* into a closed union. Reading a member or indexing into a union pushes the operation through every member.
+Branches that must produce one value — the two sides of a conditional, the `return`s of a function, the elements of an array literal, the sides of `??` — must have **one type**, as in Hindley–Milner. inty doesn't guess that disagreeing branches form a union: whether such a guess succeeds could depend on what happens to be known about each side at that point, which makes the verdict depend on statement order.
 
 ```javascript
 function f(b) { return b ? 42 : "err"; }
+// error: Branches have different types: '42' and '"err"'
 ```
 
-```
-function f<a>(a) => Number | String
-```
-
-Same mechanism handles multiple return types and mixed arrays:
+A union is made by saying so. Where an annotation gives the expected type, each branch is *checked* against it instead of being joined:
 
 ```javascript
-function f(b) { if (b) { return 1; } else { return null; } }
-var a = [1, "two", 3];
-var v = [1, "two"][0];
-```
+/** function f(Boolean) => Number | String */
+function f(b) { return b ? 42 : "err"; }
 
-```
-function f<a>(a) => Number | Null
-var a: Number | String[]    // i.e. (Number | String)[]
-var v: Number | String
-```
+/** const mixed: (Number | String)[] */
+var mixed = [1, "two", 3];
 
-For object branches with disjoint shapes, the union member access joins the available fields:
-
-```javascript
+/** var pt: {x: Number, y: Number} | {x: Number, z: Number} */
 var pt = b ? {x: 1, y: 2} : {x: 3, z: 4};
-var x = pt.x;
+var x = pt.x;    // Number — both arms expose `x: Number`
 ```
 
-```
-var pt: {x: Number, y: Number} | {x: Number, z: Number}
-var x: Number    // both branches expose `x: Number`
-```
+The join rules, none of which guesses:
 
-A union forms only between types that are **already known to differ**. A value whose type isn't known yet — typically a parameter, even one whose properties are read (`HasProp`) — is *unified* with the other side of a join, as in plain Hindley–Milner, and never guessed to be one arm of a union:
+- literals of one base type widen to it (`b ? 1 : 2` is `Number`; also inside tuples and objects);
+- a branch that is `null` or `undefined` makes the result nullable, whatever the other side is — even a type not known yet, which is *not* bound to `Null`:
+
+  ```javascript
+  function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }
+  var hit = find([1, 2], 2);    // Number | Null
+  ```
+- a value of a (declared) union joined with one of its arms is that union;
+- a branch that doesn't complete (`return`, `throw`) contributes nothing, and statements (`if (c) n += 1; else break;`) aren't joined by value at all.
+
+A value whose type isn't known yet is unified with the other side, including a parameter whose properties are read (`HasProp`):
 
 ```javascript
 function h(o, b) { const v = b ? o : "str"; return o.x; }
 // error: Property 'x' not found in type String — `o` is joined with a
-// String, so it is one; annotate `o` if it's meant to be `String | {x: …}`.
+// String, so it is one; annotate `v` (or `o`) if a union is meant.
 ```
 
-Deciding from what's already known keeps the verdict independent of where the property read sits: reading `o.x` before the join gives the same error. (Implicit unions between types that are both known are an extension to HM, and whether a type is known yet at a join can still depend on statement order — `g(o)` with `g: (Number) => …` before `b ? o : "s"` makes the join a `Number | String`, after it an error. Only annotation-introduced unions are fully order-independent.)
+Reading a member of, or indexing into, a union pushes the operation through every arm; there the results do form a union (`{x: Number} | {x: String}` read at `.x` is `Number | String`) — derived from one that was declared. Unification itself is equality: a union is not any one of its arms. A value of an arm is accepted where the union is expected by *subsumption*, but a `String | Number` is never accepted where a `String` is needed.
+
+In JavaScript annotations a class's name is its type (`/** const xs: (A | B)[] */`); Python annotations already name classes (`x: Dog | Cat = …`).
 
 ### Sum Types: Discriminated Unions & Narrowing (Predicate Refinement)
 

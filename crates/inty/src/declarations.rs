@@ -168,23 +168,89 @@ fn with_has_props_as_rows(scheme: &TypeScheme) -> TypeScheme {
     }
 }
 
-fn emit_one(out: &mut String, name: &str, scheme: &TypeScheme) {
-    let scheme = &with_has_props_as_rows(scheme);
-    let mut ctx = PrettyContext::new();
-    // Print the quantifier prefix (so re-parsing finds bound names
-    // for every type variable in the body) but drop type-class
-    // predicates: the annotation grammar doesn't accept `where`
-    // clauses yet, so a faithful printer would emit something the
-    // loader can't read back. The reloaded scheme loses the class
-    // constraint — same as the prior behaviour, where the scheme
-    // wasn't printed at all and every `a` reparsed as a fresh
-    // unconstrained variable.
-    let printable = TypeScheme {
-        vars: scheme.vars.clone(),
+/// `ty` with every callable row whose only extra is an open tail printed
+/// as a plain function: `{(Number) => a | ρ}` → `(Number) => a`. The
+/// annotation grammar has no row-tail syntax (it would read `a | ρ` as a
+/// union return), and such a tail — the call site's "anything else the
+/// function value carries" — says nothing a consumer must satisfy.
+fn close_call_tails(ty: &Type) -> Type {
+    use crate::types::{FuncParam, RowTail, RowType, CALLABLE_KEY};
+    let f = close_call_tails;
+    match ty {
+        Type::Row(row) => {
+            let props = row
+                .props
+                .iter()
+                .map(|(k, e)| {
+                    let mut e = e.clone();
+                    e.ty = f(&e.ty);
+                    (k.clone(), e)
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let only_call = props.len() == 1 && props.keys().all(|k| k.0 == CALLABLE_KEY);
+            let tail = match (&row.tail, only_call) {
+                (RowTail::Open(_), true) => RowTail::Closed,
+                (t, _) => t.clone(),
+            };
+            Type::Row(RowType { props, tail })
+        }
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => Type::Func {
+            this_type: this_type.as_ref().map(|t| Box::new(f(t))),
+            params: params
+                .iter()
+                .map(|p| FuncParam {
+                    ty: f(&p.ty),
+                    ..p.clone()
+                })
+                .collect(),
+            ret: Box::new(f(ret)),
+        },
+        Type::Array(e) => Type::Array(Box::new(f(e))),
+        Type::Promise(e) => Type::Promise(Box::new(f(e))),
+        Type::Map(e) => Type::Map(Box::new(f(e))),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(f).collect()),
+        Type::Union(ts) => Type::union(ts.iter().map(f).collect::<Vec<_>>()),
+        other => other.clone(),
+    }
+}
+
+/// [`close_call_tails`] over a whole scheme, dropping quantified
+/// variables nothing mentions any more.
+fn declarable(scheme: &TypeScheme) -> TypeScheme {
+    use crate::types::TypePred;
+    let ty = close_call_tails(&scheme.body.ty);
+    let preds: Vec<TypePred> = scheme
+        .body
+        .preds
+        .iter()
+        .map(|p| TypePred {
+            class: p.class,
+            types: p.types.iter().map(close_call_tails).collect(),
+        })
+        .collect();
+    let mut used = ty.free_vars();
+    for p in &preds {
+        used.extend(p.free_vars());
+    }
+    TypeScheme {
+        vars: scheme.vars.iter().filter(|v| used.contains(v)).cloned().collect(),
         pvars: scheme.pvars.clone(),
-        body: QualType::simple(scheme.body.ty.clone()),
-    };
-    let body = ctx.format_scheme(&printable);
+        body: QualType::with_preds(preds, ty),
+    }
+}
+
+fn emit_one(out: &mut String, name: &str, scheme: &TypeScheme) {
+    let scheme = &declarable(scheme);
+    let mut ctx = PrettyContext::new();
+    // The whole scheme, `where` constraints included
+    // (`<a> where Plus a => (a, a) => a`): the annotation parser reads
+    // them back, so a consumer is held to them. (Dropping them let a
+    // consumer call `add(true, false)`.)
+    let body = ctx.format_scheme(scheme);
     out.push_str("/** const ");
     out.push_str(name);
     out.push_str(": ");
@@ -217,11 +283,29 @@ mod tests {
     }
 
     #[test]
-    fn has_prop_requirements_become_object_fields() {
+    fn plus_constraints_are_printed() {
+        use crate::types::{TVarName, TypePred};
+        let a = TVarName::Flex(0);
+        let scheme = TypeScheme::qualified(
+            vec![a.clone()],
+            vec![TypePred::plus(Type::Var(a.clone()))],
+            Type::simple_func(vec![Type::Var(a.clone()), Type::Var(a.clone())], Type::Var(a)),
+        );
+        let env = TypeEnv::empty().extend("add".to_string(), scheme);
+        let exports = vec![ExportEntry {
+            exported: "add".to_string(),
+            binding: ExportBinding::Local("add".to_string()),
+        }];
+        let out = emit_declarations(&CheckedModule::new(env, exports));
+        assert_eq!(out, "/** const add: <a> where Plus a => (a, a) => a */\nconst add;\n");
+    }
+
+    #[test]
+    fn declarations_keep_their_constraints() {
         // `function len(s) { return s.length; }`:
-        // `<a, b> where a has {length: b} => (a) => b`. Declarations can't
-        // carry the constraint, so it's printed as the object it requires
-        // (dropping it would let a consumer pass anything).
+        // `<a, b> where a has {length: b} => (a) => b`, printed as such —
+        // the annotation parser reads `where` clauses back, so a consumer
+        // is held to them (dropping them let a consumer pass anything).
         use crate::types::{TVarName, TypePred};
         let (a, b) = (TVarName::Flex(0), TVarName::Flex(1));
         let scheme = TypeScheme::qualified(
@@ -235,7 +319,10 @@ mod tests {
             binding: ExportBinding::Local("len".to_string()),
         }];
         let out = emit_declarations(&CheckedModule::new(env, exports));
-        assert_eq!(out, "/** const len: <b, c>({length: b | c}) => b */\nconst len;\n");
+        assert_eq!(
+            out,
+            "/** const len: <a, b> where a has {length: b} => (a) => b */\nconst len;\n"
+        );
     }
 
     #[test]

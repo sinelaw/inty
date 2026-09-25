@@ -122,6 +122,7 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::Module { .. } => "Module",
             TypeError::InvalidSyntax { .. } => "InvalidSyntax",
             TypeError::TypeMismatch { .. } => "TypeMismatch",
+            TypeError::BranchMismatch { .. } => "BranchMismatch",
             TypeError::UnknownTypeRef { .. } => "UnknownTypeRef",
         },
     }
