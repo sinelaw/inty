@@ -40,7 +40,7 @@ for (let v = 0; v < V; v++) {
 offsets.push(targets.length);
 
 // Binary min-heap of (priority, vertex) pairs in two parallel arrays.
-/** function heapPush(Number[], Number[], Number, Number) => Undefined */
+/** function heapPush(Number[], Int[], Number, Int) => Undefined */
 function heapPush(heapKey, heapVal, k, v) {
   heapKey.push(k);
   heapVal.push(v);
@@ -62,7 +62,7 @@ function heapPush(heapKey, heapVal, k, v) {
 
 // Removes the minimum; its vertex is returned, its key left in popKey.
 let popKey = 0;
-/** function heapPop(Number[], Number[]) => Number */
+/** function heapPop(Number[], Int[]) => Int */
 function heapPop(heapKey, heapVal) {
   const top = heapVal[0];
   popKey = heapKey[0];

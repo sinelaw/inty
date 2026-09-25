@@ -266,7 +266,7 @@ impl InferState {
         }
         if widen {
             for p in parts.iter_mut() {
-                *p = p.widen_fresh_literals();
+                *p = self.widen(span, p);
             }
         }
         Ok(if parts.is_empty() {
@@ -381,7 +381,7 @@ impl InferState {
             }
             if let Some(default) = &param.default {
                 let default_type = self.infer_expr(env, default)?;
-                let widened = default_type.widen_fresh_literals();
+                let widened = self.widen(default.span(), &default_type);
                 self.unify(param.span, ty, &widened)?;
             }
         }
@@ -1230,7 +1230,9 @@ pub(in crate::infer) fn compute_scc_groups(
 /// `{<CALL>: (params) => ret, …}` or a bare function. `None` when `ty`
 /// isn't a function shape (e.g. an unresolved variable), so keyword
 /// resolution can fall back to accepting the call.
-pub(crate) fn extract_callable(ty: &Type) -> Option<(Option<Type>, Vec<crate::types::FuncParam>, Type)> {
+pub(crate) fn extract_callable(
+    ty: &Type,
+) -> Option<(Option<Type>, Vec<crate::types::FuncParam>, Type)> {
     use crate::types::{PropName, CALLABLE_KEY};
     let func = match ty {
         Type::Row(row) => &row.props.get(&PropName(CALLABLE_KEY.to_string()))?.ty,

@@ -107,6 +107,7 @@ impl InferState {
 
             // Primitives
             (Type::Number, Type::Number) => Ok(()),
+            (Type::Int, Type::Int) => Ok(()),
             (Type::String, Type::String) => Ok(()),
             (Type::Boolean, Type::Boolean) => Ok(()),
             (Type::Undefined, Type::Undefined) => Ok(()),

@@ -10,6 +10,7 @@ pub(super) mod bindings;
 pub(super) mod control;
 pub(super) mod functions;
 pub(super) mod nullish;
+pub(crate) mod numeric;
 pub(super) mod operators;
 pub(super) mod rows;
 pub(super) mod scalars;

@@ -2,7 +2,7 @@
 //!
 //! | inty                         | Go                                  |
 //! | ---------------------------- | ----------------------------------- |
-//! | `Number`, number literals    | `float64`                           |
+//! | `Number`, `Int`, number literals | `float64`                       |
 //! | `String`, string literals    | `string`                            |
 //! | `Boolean`, boolean literals  | `bool`                              |
 //! | `T[]`                        | `*[]T` (JS arrays are references)   |
@@ -89,7 +89,9 @@ impl TypeMapper {
         }
         let d = depth + 1;
         Ok(match ty {
-            Type::Number => GoType::Float,
+            // `Int` is still a `float64` here: its values are the same
+            // doubles (an `int64` lowering needs checked arithmetic).
+            Type::Number | Type::Int => GoType::Float,
             Type::String => GoType::Str,
             Type::Boolean => GoType::Bool,
             Type::Undefined => GoType::Unit,
@@ -511,7 +513,7 @@ pub fn canonical(ty: &Type) -> Type {
 
 fn widen(ty: &Type) -> Type {
     match ty {
-        Type::Literal(inty::types::LitValue::Number(_)) => Type::Number,
+        Type::Literal(inty::types::LitValue::Number(_)) | Type::Int => Type::Number,
         Type::Literal(inty::types::LitValue::String(_)) => Type::String,
         Type::Literal(inty::types::LitValue::Bool(_)) => Type::Boolean,
         Type::Row(row) => Type::Row(RowType {

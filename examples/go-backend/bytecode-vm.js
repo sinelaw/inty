@@ -16,13 +16,13 @@ const HALT = 11;
 const LE = 12;
 
 // A one-pass assembler with back-patching for forward jumps.
-/** function emit(Number[], Number, Number) => Number */
+/** function emit(Int[], Int, Int) => Int */
 function emit(code, op, arg) {
   code.push(op);
   code.push(arg);
   return code.length - 2;
 }
-/** function patch(Number[], Number, Number) => Undefined */
+/** function patch(Int[], Int, Int) => Undefined */
 function patch(code, at, target) {
   code[at + 1] = target;
 }
@@ -81,7 +81,7 @@ emit(code, JMP, outerTop);
 patch(code, exitJump, code.length);
 emit(code, HALT, 0);
 
-/** function run(Number[], Number[], Number[]) => Number */
+/** function run(Int[], Number[], Number[]) => Number */
 function run(program, stack, vars) {
   let pc = 0;
   let sp = 0;

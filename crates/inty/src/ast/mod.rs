@@ -252,6 +252,8 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    /// Python's `//`: floored division.
+    FloorDiv,
     Mod,
     Pow, // **
 
@@ -295,7 +297,7 @@ impl BinOp {
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq | BinOp::In | BinOp::Instanceof => 10,
             BinOp::LShift | BinOp::RShift | BinOp::URShift => 11,
             BinOp::Add | BinOp::Sub => 12,
-            BinOp::Mul | BinOp::Div | BinOp::Mod => 13,
+            BinOp::Mul | BinOp::Div | BinOp::FloorDiv | BinOp::Mod => 13,
             BinOp::Pow => 14, // ** is highest precedence among binary ops
         }
     }

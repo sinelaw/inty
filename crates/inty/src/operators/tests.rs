@@ -11,6 +11,7 @@ const ALL_BINOPS: &[BinOp] = &[
     BinOp::Sub,
     BinOp::Mul,
     BinOp::Div,
+    BinOp::FloorDiv,
     BinOp::Mod,
     BinOp::Pow,
     BinOp::Lt,
@@ -57,6 +58,7 @@ fn binops_exhaustive(op: BinOp) {
         | BinOp::Sub
         | BinOp::Mul
         | BinOp::Div
+        | BinOp::FloorDiv
         | BinOp::Mod
         | BinOp::Pow
         | BinOp::Lt

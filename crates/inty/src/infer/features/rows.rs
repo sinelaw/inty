@@ -216,7 +216,7 @@ impl InferState {
                                         format_parse_error(&e)
                                     ),
                                 );
-                                let inferred = value_type.widen_fresh_literals();
+                                let inferred = self.widen(value.span(), &value_type);
                                 props.insert(prop_name, FieldEntry::pre(inferred));
                                 continue;
                             }
@@ -262,7 +262,7 @@ impl InferState {
                         // tagged-union argument like `{kind: "circle"}`
                         // keeps its singleton field — that's what makes
                         // discriminated unions work at call sites.
-                        value_type.widen_fresh_literals()
+                        self.widen(value.span(), &value_type)
                     };
                     props.insert(prop_name, FieldEntry::pre(prop_type));
                 }
@@ -697,7 +697,7 @@ impl InferState {
         match obj_type {
             Type::Array(elem_ty) => {
                 if property == "length" {
-                    return Ok(Type::Number);
+                    return Ok(Type::Int);
                 }
                 // The primitive-method surface is language-specific: Python
                 // `list` vs JavaScript `Array` (issue #67). Lua has no
@@ -717,7 +717,7 @@ impl InferState {
             }
             Type::String => {
                 if property == "length" {
-                    return Ok(Type::Number);
+                    return Ok(Type::Int);
                 }
                 let method = match language {
                     SourceLanguage::Python => {
@@ -827,7 +827,13 @@ impl InferState {
         // unify with.
         if matches!(
             receiver,
-            Type::Number | Type::Boolean | Type::Null | Type::Undefined | Type::String | Type::Regex
+            Type::Number
+                | Type::Int
+                | Type::Boolean
+                | Type::Null
+                | Type::Undefined
+                | Type::String
+                | Type::Regex
         ) {
             return Err(crate::error::TypeError::PropertyNotFound {
                 prop: property.to_string(),

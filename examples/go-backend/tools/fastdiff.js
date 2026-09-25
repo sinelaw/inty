@@ -611,13 +611,13 @@ function diff_halfMatch_(text1, text2) {
 
 // `stack[i]` for any integer i, as a JS array read: negative indices are
 // ordinary properties, kept in `neg` (i = -1 is neg[0]).
-/** function stackGet(Number[], Number[], Number) => Number */
+/** function stackGet(Int[], Int[], Int) => Int */
 function stackGet(stack, neg, i) {
   return i >= 0 ? stack[i] : neg[-i - 1];
 }
 
 // `stack[i] = v` for any integer i (see stackGet).
-/** function stackSet(Number[], Number[], Number, Number) => Undefined */
+/** function stackSet(Int[], Int[], Int, Int) => Undefined */
 function stackSet(stack, neg, i, v) {
   if (i >= 0) stack[i] = v;
   else neg[-i - 1] = v;
@@ -1137,7 +1137,7 @@ function diff_cleanupMerge(diffs, fix_unicode) {
 }
 
 // `str.charCodeAt(i)`, or NaN when i is out of range (as in JS).
-/** function charCodeOrNaN(String, Number) => Number */
+/** function charCodeOrNaN(String, Int) => Number */
 function charCodeOrNaN(str, i) {
   if (i < 0 || i >= str.length) {
     return NaN;

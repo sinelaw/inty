@@ -123,6 +123,7 @@ impl InferState {
     ) -> Type {
         match ast {
             TypeAst::Number => Type::Number,
+            TypeAst::Int => Type::Int,
             TypeAst::String => Type::String,
             TypeAst::Boolean => Type::Boolean,
             TypeAst::Null => Type::Null,

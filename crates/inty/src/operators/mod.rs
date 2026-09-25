@@ -286,6 +286,13 @@ pub static OPERATORS: &[OpInfo] = &[
         dispatch: Dispatch::OpSymbol,
         arms: NUM_NUM_NUM,
     },
+    // Python's floored division.
+    OpInfo {
+        name: "//",
+        kind: OpKind::BinOp,
+        dispatch: Dispatch::OpSymbol,
+        arms: NUM_NUM_NUM,
+    },
     OpInfo {
         name: "**",
         kind: OpKind::BinOp,
@@ -517,6 +524,7 @@ pub fn binop_name(op: BinOp) -> &'static str {
         BinOp::Mul => "*",
         BinOp::Div => "/",
         BinOp::Mod => "%",
+        BinOp::FloorDiv => "//",
         BinOp::Pow => "**",
         BinOp::Lt => "<",
         BinOp::Gt => ">",

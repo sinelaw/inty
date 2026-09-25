@@ -667,7 +667,7 @@ fn param_annotation_is_captured() {
     use crate::types::TypeAst;
     match &parse("def f(a: int, b):\n    return a")[0] {
         Stmt::FunctionDecl { params, .. } => {
-            assert!(matches!(params[0].type_ast, Some(TypeAst::Number)));
+            assert!(matches!(params[0].type_ast, Some(TypeAst::Int)));
             assert!(params[1].type_ast.is_none());
         }
         other => panic!("expected function decl, got {:?}", other),
@@ -720,7 +720,7 @@ fn return_annotation_is_captured() {
         Stmt::FunctionDecl {
             return_type_ast, ..
         } => {
-            assert!(matches!(return_type_ast, Some(TypeAst::Number)));
+            assert!(matches!(return_type_ast, Some(TypeAst::Int)));
         }
         other => panic!("expected function decl, got {:?}", other),
     }

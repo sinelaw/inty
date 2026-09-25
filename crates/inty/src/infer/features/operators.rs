@@ -21,9 +21,11 @@ impl InferState {
         let arg_type = self.infer_expr(env, argument)?;
 
         match op {
+            // `-i` is an `Int` for an `Int` `i`.
             UnaryOp::Neg | UnaryOp::Pos => {
-                self.subsume(span, &arg_type, &Type::Number)?;
-                Ok(Type::Number)
+                let arg = self.widen(span, &arg_type);
+                self.require_num(span, &arg)?;
+                Ok(self.zonk(&arg))
             }
 
             UnaryOp::Not => {
@@ -31,9 +33,10 @@ impl InferState {
                 Ok(Type::Boolean)
             }
 
+            // Bitwise operators work on 32-bit integers.
             UnaryOp::BitNot => {
-                self.subsume(span, &arg_type, &Type::Number)?;
-                Ok(Type::Number)
+                self.require_num(span, &arg_type)?;
+                Ok(Type::Int)
             }
 
             UnaryOp::Typeof => {
@@ -73,9 +76,11 @@ impl InferState {
                 Ok(Type::Error)
             }
 
+            // `i++` keeps `i`'s type: `Int ± 1` is an `Int`, and so is
+            // `Number ± 1` a `Number`.
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
-                self.subsume(span, &arg_type, &Type::Number)?;
-                Ok(Type::Number)
+                self.require_num(span, &arg_type)?;
+                Ok(self.zonk(&arg_type))
             }
 
             UnaryOp::Await => {
@@ -131,9 +136,16 @@ impl InferState {
 
         match op {
             // Arithmetic (require numbers)
-            BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow => {
-                self.subsume(span, &left_type, &Type::Number)?;
-                self.subsume(span, &right_type, &Type::Number)?;
+            // `Int` in, `Int` out (`Arith`); `/` and `**` (`2 ** -1`)
+            // make fractions.
+            BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::FloorDiv => {
+                let left = self.widen(span, &left_type);
+                let right = self.widen(span, &right_type);
+                self.arith(span, &left, &right)
+            }
+            BinOp::Div | BinOp::Pow => {
+                self.require_num(span, &left_type)?;
+                self.require_num(span, &right_type)?;
                 Ok(Type::Number)
             }
 
@@ -144,13 +156,9 @@ impl InferState {
                 // subsume and then failing the second. The result of
                 // `+` is the operand's *base* type — the singleton
                 // is meaningless once arithmetic happens.
-                let left_widened = left_type.widen_fresh_literals();
-                let right_widened = right_type.widen_fresh_literals();
-                let result = self.fresh_type_var();
-                self.add_constraint(TypePred::plus(result.clone()), span);
-                self.subsume(span, &left_widened, &result)?;
-                self.subsume(span, &right_widened, &result)?;
-                Ok(self.zonk(&result))
+                let left_widened = self.widen(span, &left_type);
+                let right_widened = self.widen(span, &right_type);
+                self.infer_add(span, &left_widened, &right_widened)
             }
 
             // Comparison (return boolean). The two operands need to
@@ -159,10 +167,18 @@ impl InferState {
             // to unify `Lit(1) ~ Lit(2)`, then check that one
             // subsumes into the other (either direction is fine —
             // `String < "a"` is meaningful in both orders).
+            //
+            // Numbers compare whatever their kind: `i < n / 2` doesn't
+            // make `i` a `Number`.
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                let left_widened = left_type.widen_fresh_literals();
-                let right_widened = right_type.widen_fresh_literals();
-                self.subsume_either(span, &left_widened, &right_widened)?;
+                let left_widened = self.widen(span, &left_type);
+                let right_widened = self.widen(span, &right_type);
+                if self.is_numeric(&left_widened) || self.is_numeric(&right_widened) {
+                    self.require_num(span, &left_widened)?;
+                    self.require_num(span, &right_widened)?;
+                } else {
+                    self.subsume_either(span, &left_widened, &right_widened)?;
+                }
                 Ok(Type::Boolean)
             }
 
@@ -258,9 +274,9 @@ impl InferState {
             | BinOp::LShift
             | BinOp::RShift
             | BinOp::URShift => {
-                self.subsume(span, &left_type, &Type::Number)?;
-                self.subsume(span, &right_type, &Type::Number)?;
-                Ok(Type::Number)
+                self.require_num(span, &left_type)?;
+                self.require_num(span, &right_type)?;
+                Ok(Type::Int)
             }
 
             // Membership
@@ -274,5 +290,25 @@ impl InferState {
                 Ok(Type::Boolean)
             }
         }
+    }
+
+    /// `left + right` (operands widened): `Arith` when either is a
+    /// number (so `1 + "a"` is rejected, as before), otherwise `Plus` over
+    /// one type — a string concatenation, or not known yet.
+    pub(in crate::infer) fn infer_add(
+        &mut self,
+        span: Span,
+        left: &Type,
+        right: &Type,
+    ) -> InferResult<Type> {
+        let (l, r) = (self.zonk(left), self.zonk(right));
+        if self.is_numeric(&l) || self.is_numeric(&r) {
+            return self.arith(span, &l, &r);
+        }
+        let result = self.fresh_type_var();
+        self.add_constraint(TypePred::plus(result.clone()), span);
+        self.subsume(span, &l, &result)?;
+        self.subsume(span, &r, &result)?;
+        Ok(self.zonk(&result))
     }
 }

@@ -283,6 +283,18 @@ pub struct InferState {
     /// Per return frame, the annotated return type `return`s are
     /// checked against (instead of being joined), if there is one.
     pub(in crate::infer) return_expected_stack: Vec<Option<Type>>,
+    /// How many array elements / object fields `subsume` is inside:
+    /// `Int ≤ Number` only holds outside them (see S-IntNum).
+    pub(in crate::infer) subsume_in_place: u32,
+    /// Variables a numeric constraint (`Num`, `NumLit`, `Arith`) is on:
+    /// their *kind* is "number", so unification refuses to bind one to
+    /// anything but `Int`, `Number` or another variable (which inherits
+    /// the kind). Otherwise a speculative unification (`subsume`'s first
+    /// attempt, a join) could bind an integral literal's variable to a
+    /// union and only fail when the constraint is next looked at.
+    pub(in crate::infer) numeric_vars: std::collections::HashSet<TVarName>,
+    /// Numeric variables [`Self::generalize_mutable`] keeps monomorphic.
+    pinned_numeric: Vec<TVarName>,
 
     /// The type a function returns when it falls off the end (no explicit
     /// `return`): JS `undefined` (`Type::Undefined`) by default, or
@@ -341,6 +353,7 @@ pub(in crate::infer) enum UnfoldAssumption {
 pub(crate) struct InferSnapshot {
     pub(crate) subst: Subst,
     pub(crate) constraints: Vec<PendingConstraint>,
+    pub(crate) numeric_vars: std::collections::HashSet<TVarName>,
     pub(crate) trail: TrailMark,
 }
 
@@ -401,6 +414,9 @@ impl InferState {
             current_annotation_span: None,
             return_value_stack: Vec::new(),
             return_expected_stack: Vec::new(),
+            subsume_in_place: 0,
+            numeric_vars: Default::default(),
+            pinned_numeric: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
             unfold_assumptions: Vec::new(),
@@ -730,6 +746,7 @@ impl InferState {
         InferSnapshot {
             subst: self.main_subst.clone(),
             constraints: self.pending_constraints.clone(),
+            numeric_vars: self.numeric_vars.clone(),
             trail: self.var_table.snapshot(),
         }
     }
@@ -738,6 +755,7 @@ impl InferState {
     pub(crate) fn restore_snapshot(&mut self, snap: InferSnapshot) {
         self.main_subst = snap.subst;
         self.pending_constraints = snap.constraints;
+        self.numeric_vars = snap.numeric_vars;
         self.var_table.restore(snap.trail);
         // Post-restore probe (debug only): the var_table and
         // main_subst should still agree on every key that survives
@@ -868,7 +886,14 @@ impl InferState {
             for t in [t1, t2] {
                 match t {
                     Type::Union(m) => all.extend(m),
-                    other => all.push(other.widen_fresh_literals()),
+                    // A literal next to `null` widens to its base (`Int`
+                    // for an integral one): no variable inside a union.
+                    other => all.push(other.widen_fresh_literals_with(&mut |lit| match lit {
+                        crate::types::LitValue::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+                            Type::Int
+                        }
+                        lit => lit.base_type(),
+                    })),
                 }
             }
             return Ok(Self::normalise_union_members(all));
@@ -876,12 +901,16 @@ impl InferState {
         // Equal after widening literals (also inside tuples, rows, …) —
         // one attempt: a join's result is widened anyway.
         {
-            let (a, b) = (t1.widen_fresh_literals(), t2.widen_fresh_literals());
+            let (a, b) = (self.widen(span, &t1), self.widen(span, &t2));
             let snap = self.snapshot_inference();
             if self.unify(span, &a, &b).is_ok() {
                 return Ok(self.zonk(&a));
             }
             self.restore_snapshot(snap);
+            // `Int` and `Number`: a `Number`.
+            if let Some(lub) = self.numeric_lub(&a, &b) {
+                return Ok(lub);
+            }
         }
         // A union value joined with one of its arms.
         if matches!(t1, Type::Union(_)) || matches!(t2, Type::Union(_)) {
@@ -1007,6 +1036,39 @@ impl InferState {
             if lit.base_type() == sup {
                 return Ok(());
             }
+            // An integral number literal is an `Int` too.
+            if let (crate::types::LitValue::Number(n), Type::Int) = (lit, &sup) {
+                if n.is_finite() && n.fract() == 0.0 {
+                    return Ok(());
+                }
+            }
+        }
+
+        // S-VarNum / S-IntVar: against a variable, the two numeric bounds
+        // are constraints, not bindings. `v ≤ Number` holds exactly when
+        // `v` is `Int` or `Number` — `Num v`; `Int ≤ v` exactly when `v`
+        // is one of them too, `Int` by default — `NumLit v`. Binding `v`
+        // instead would guess (`isPunct(r)` fixing a result `r` that turns
+        // out an `Int`).
+        if self.subsume_in_place == 0 {
+            match (&sub, &sup) {
+                (Type::Var(TVarName::Flex(_)), Type::Number) => {
+                    self.add_constraint(TypePred::num(sub.clone()), span);
+                    return Ok(());
+                }
+                (Type::Int, Type::Var(TVarName::Flex(_))) => {
+                    self.add_constraint(TypePred::num_lit(sup.clone()), span);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
+        // S-IntNum: every `Int` is a `Number` — for a value, not inside
+        // an array or object (`subsume_in_place`): an `Int[]` read as a
+        // `Number[]` could be pushed a fraction.
+        if sub == Type::Int && sup == Type::Number && self.subsume_in_place == 0 {
+            return Ok(());
         }
 
         // Rule 1: try unify with rollback so a failed attempt has
@@ -1031,6 +1093,7 @@ impl InferState {
             {
                 let snap = self.snapshot_inference();
                 let mut all_ok = true;
+                self.subsume_in_place += 1;
                 for (k, sub_field) in &r1.props {
                     let sup_field = r2.props.get(k).expect("keys checked equal");
                     if self.subsume(span, &sub_field.ty, &sup_field.ty).is_err() {
@@ -1038,6 +1101,7 @@ impl InferState {
                         break;
                     }
                 }
+                self.subsume_in_place -= 1;
                 if all_ok {
                     return Ok(());
                 }
@@ -1048,7 +1112,10 @@ impl InferState {
         // S-Array: covariant element subsumption.
         if let (Type::Array(e1), Type::Array(e2)) = (&sub, &sup) {
             let snap = self.snapshot_inference();
-            if self.subsume(span, e1, e2).is_ok() {
+            self.subsume_in_place += 1;
+            let ok = self.subsume(span, e1, e2).is_ok();
+            self.subsume_in_place -= 1;
+            if ok {
                 return Ok(());
             }
             self.restore_snapshot(snap);
@@ -1067,8 +1134,14 @@ impl InferState {
 
         // Rule 2b (S-UnionR): pick a union arm.
         if let Type::Union(members) = &sup {
+            // A number variable (an integral literal's type, an operand)
+            // can only be one of the number arms.
+            let numeric_var = matches!(sub, Type::Var(_)) && self.is_numeric(&sub);
             let mut matching: Vec<usize> = Vec::new();
             for (i, m) in members.iter().enumerate() {
+                if numeric_var && !matches!(m, Type::Int | Type::Number) {
+                    continue;
+                }
                 let snap = self.snapshot_inference();
                 let m_resolved = self.zonk(m);
                 let ok = self.subsume(span, &sub, &m_resolved).is_ok();
@@ -1182,6 +1255,28 @@ impl InferState {
         if let Some(existing) = self.main_subst.resolve(&var) {
             // Already bound — unify so we don't lose either side.
             return self.unify(span, &existing, &ty);
+        }
+        // A number-kinded variable only takes a number type; a variable
+        // it's bound to (either way round) is number-kinded too.
+        if !self.numeric_vars.is_empty() {
+            match &ty {
+                Type::Var(w @ TVarName::Flex(_)) => {
+                    if self.numeric_vars.contains(&var) {
+                        self.numeric_vars.insert(w.clone());
+                    } else if self.numeric_vars.contains(w) {
+                        self.numeric_vars.insert(var.clone());
+                    }
+                }
+                Type::Int
+                | Type::Number
+                | Type::Literal(crate::types::LitValue::Number(_))
+                | Type::Error
+                | Type::Var(_) => {}
+                other if self.numeric_vars.contains(&var) => {
+                    return Err(self.unification_error(span, &Type::Number, other));
+                }
+                _ => {}
+            }
         }
         // Direct insert — no `Subst::compose` walk over the existing
         // substitution. The textbook Damas-Milner formulation
@@ -1494,6 +1589,13 @@ impl InferState {
 
     /// Add a pending constraint.
     pub fn add_constraint(&mut self, pred: TypePred, span: Span) {
+        if crate::infer::features::numeric::is_numeric_class(pred.class) {
+            for t in &pred.types {
+                if let Type::Var(v @ TVarName::Flex(_)) = self.zonk(t) {
+                    self.numeric_vars.insert(v);
+                }
+            }
+        }
         self.pending_constraints
             .push(PendingConstraint { pred, span });
     }
@@ -1581,6 +1683,28 @@ impl InferState {
     /// Also collects relevant predicates from pending_constraints.
     /// Generalizes over presence variables too (Remy '94), with the
     /// same env-difference rule.
+    /// [`Self::generalize`] for a mutable (`let`/`var`) binding: its
+    /// numeric variables stay monomorphic — a later assignment decides
+    /// them (`let n = 10; n /= 7` makes `n` a `Number`), and quantifying
+    /// one would let each use pick its own.
+    pub fn generalize_mutable(
+        &mut self,
+        env_free: &crate::infer::EnvFree,
+        ty: &Type,
+    ) -> TypeScheme {
+        let numeric: Vec<TVarName> = self
+            .main_subst
+            .flatten(ty)
+            .free_vars()
+            .into_iter()
+            .filter(|v| self.numeric_vars.contains(v))
+            .collect();
+        let saved = std::mem::replace(&mut self.pinned_numeric, numeric);
+        let scheme = self.generalize(env_free, ty);
+        self.pinned_numeric = saved;
+        scheme
+    }
+
     pub fn generalize(&mut self, env_free: &crate::infer::EnvFree, ty: &Type) -> TypeScheme {
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
@@ -1590,6 +1714,20 @@ impl InferState {
         // scheme that's missing those fields, letting calls with
         // incompatible argument shapes through. See
         // `Subst::flatten` for the full story.
+        // Default the numeric variables local to this binding first (see
+        // `features::numeric`): the scheme is then over what's left.
+        if self
+            .pending_constraints
+            .iter()
+            .any(|c| crate::infer::features::numeric::is_numeric_class(c.pred.class))
+        {
+            let ty = self.main_subst.flatten(ty);
+            let (mut fixed_vars, _) = self.env_fixed_vars(env_free, &ty);
+            fixed_vars.extend(self.pinned_numeric.iter().cloned());
+            if let Err(e) = self.default_numeric(&fixed_vars, Some(&ty), false) {
+                self.push_error(e);
+            }
+        }
         let ty = self.main_subst.flatten(ty);
         let ty_vars = ty.free_vars();
         let pvars = ty.free_pvars();
@@ -1600,7 +1738,10 @@ impl InferState {
         // HashSet is seeded independently — which would otherwise make
         // the printed scheme `<a, b>...` non-deterministically map
         // letters to type-var slots across runs.
-        let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
+        let (mut fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
+        for v in self.pinned_numeric.clone() {
+            fixed_vars.extend(self.zonk(&Type::Var(v)).free_vars());
+        }
         // A variable that is bound in the substitution is not free, whatever
         // a (shallow) traversal of `ty` reports; `flatten` expands each
         // variable once, so a bound variable can survive in its output.
@@ -1684,6 +1825,7 @@ impl InferState {
             #[cfg(debug_assertions)]
             self.debug_check_generalisation(env_free, &gen_vars);
 
+            let scheme_preds = crate::infer::features::numeric::tidy_scheme_preds(scheme_preds);
             TypeScheme::qualified_with_presence(gen_vars, gen_pvars, scheme_preds, ty)
         }
     }
@@ -1871,7 +2013,7 @@ impl InferState {
     /// mirror keeps both views equivalent; correctness is identical.
     /// Migrating this off `main_subst` is a follow-up that requires
     /// restructuring the solver loop.
-    fn apply_subst_pred(&self, pred: &TypePred) -> TypePred {
+    pub(crate) fn apply_subst_pred(&self, pred: &TypePred) -> TypePred {
         TypePred {
             class: pred.class.clone(),
             types: pred.types.iter().map(|t| self.apply_subst(t)).collect(),
@@ -1887,6 +2029,7 @@ impl InferState {
     fn occurs_in_impl(&self, var: TVarId, ty: &Type) -> bool {
         match ty {
             Type::Number
+            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -2070,7 +2213,11 @@ mod tests {
         let mut state = InferState::new();
         let span = Span::new(0, 0);
         let err = state.join(span, &Type::Number, &Type::String).unwrap_err();
-        assert!(err.to_string().contains("Branches have different types"), "{}", err);
+        assert!(
+            err.to_string().contains("Branches have different types"),
+            "{}",
+            err
+        );
     }
 
     #[test]

@@ -234,9 +234,14 @@ impl Parser {
             .collect();
         // Deterministic order (HashSet iteration is not stable).
         backfill.sort_by(|a, b| match (a, b) {
-            (Stmt::Var { declarations: da, .. }, Stmt::Var { declarations: db, .. }) => {
-                da[0].name.cmp(&db[0].name)
-            }
+            (
+                Stmt::Var {
+                    declarations: da, ..
+                },
+                Stmt::Var {
+                    declarations: db, ..
+                },
+            ) => da[0].name.cmp(&db[0].name),
             _ => std::cmp::Ordering::Equal,
         });
         backfill.extend(statements);
@@ -1364,7 +1369,9 @@ impl Parser {
                 }
             }
         }
-        props.retain(|p| !(is_placeholder_decl(p) && ident(p).is_some_and(|n| declared.contains_key(n))));
+        props.retain(|p| {
+            !(is_placeholder_decl(p) && ident(p).is_some_and(|n| declared.contains_key(n)))
+        });
     }
 
     /// Pull `self.<field> = <expr>` lines out of a parsed `__init__`
@@ -1533,10 +1540,10 @@ impl Parser {
             let mut bound: Option<String> = None;
             if !self.check(&Tok::Colon) {
                 let _ = self.expr()?; // the exception class
-                // An unparenthesised list of exception types — `except A, B:` —
-                // catches any of them (Python 3.14+, PEP 758). Equivalent to
-                // the older `except (A, B):`. Each class is parsed (and
-                // discarded) so the names are still type-checked.
+                                      // An unparenthesised list of exception types — `except A, B:` —
+                                      // catches any of them (Python 3.14+, PEP 758). Equivalent to
+                                      // the older `except (A, B):`. Each class is parsed (and
+                                      // discarded) so the names are still type-checked.
                 let mut multiple = false;
                 while self.eat(&Tok::Comma) {
                     // Tolerate a trailing comma before `as`/`:`.
@@ -1917,7 +1924,7 @@ impl Parser {
             &[
                 (Tok::Star, BinOp::Mul),
                 (Tok::Slash, BinOp::Div),
-                (Tok::DSlash, BinOp::Div),
+                (Tok::DSlash, BinOp::FloorDiv),
                 (Tok::Percent, BinOp::Mod),
             ],
             Self::factor,

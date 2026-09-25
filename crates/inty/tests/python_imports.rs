@@ -100,7 +100,7 @@ fn imports_a_function_from_a_local_py_module() {
     write(&dir, "helpers.py", "def double(x):\n    return x + x\n");
     let main = "from helpers import double\nr = double(21)\nr\n";
     let ty = check(main, &dir, &[]).expect("should type-check");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn pyi_stub_function_signature_is_used() {
     write(&stubs, "mathx.pyi", "def add(a: int, b: int) -> int: ...\n");
     let main = "from mathx import add\nr = add(1, 2)\nr\n";
     let ty = check(main, &dir, &[stubs]).expect("should type-check via stub");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 }
 
 #[test]
@@ -160,13 +160,13 @@ fn pyi_stub_optional_param_and_list_return() {
         &dir,
         &[stubs.clone()],
     );
-    assert_eq!(ok1.expect("omitting optional arg is fine"), "Number[]");
+    assert_eq!(ok1.expect("omitting optional arg is fine"), "Int[]");
     let ok2 = check(
         "from coll import items\nr = items(3, 1)\nr\n",
         &dir,
         &[stubs],
     );
-    assert_eq!(ok2.expect("supplying optional arg is fine"), "Number[]");
+    assert_eq!(ok2.expect("supplying optional arg is fine"), "Int[]");
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn import_namespace_member_access() {
     );
     // `import mathx` binds a namespace; `mathx.add(...)` reads through it.
     let ty = check("import mathx\nr = mathx.add(1, 2)\nr\n", &dir, &[stubs]).expect("namespace");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn relative_import_from_sibling() {
     // `from . import util` then use util.ident, OR import the name.
     let main = "from util import ident\nr = ident(5)\nr\n";
     let ty = check(main, &dir, &[]).expect("sibling import");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 }
 
 #[test]
@@ -233,8 +233,8 @@ fn pyi_optional_maps_to_union_with_null() {
     let ty = check("from opt import find\nr = find(\"k\")\nr\n", &dir, &[stubs]).expect("optional");
     // int | None  ->  Number | Null  (order may vary; check membership).
     assert!(
-        ty.contains("Number") && (ty.contains("Null") || ty.contains("null")),
-        "Optional[int] should map to Number | Null, got {}",
+        ty.contains("Int") && (ty.contains("Null") || ty.contains("null")),
+        "Optional[int] should map to Int | Null, got {}",
         ty
     );
 }
@@ -312,8 +312,12 @@ fn pyi_distinct_stub_classes_do_not_interchange() {
         "twins.pyi",
         "class A:\n    def __init__(self) -> None: ...\nclass B:\n    def __init__(self) -> None: ...\n",
     );
-    let err = check("from twins import A, B\nxs = [A(), B()]\nxs\n", &dir, &[stubs.clone()])
-        .expect_err("distinct brands don't collapse into one element type");
+    let err = check(
+        "from twins import A, B\nxs = [A(), B()]\nxs\n",
+        &dir,
+        &[stubs.clone()],
+    )
+    .expect_err("distinct brands don't collapse into one element type");
     assert!(err.contains("BranchMismatch"), "{}", err);
     let ty = check(
         "from twins import A, B\nxs: list[A | B] = [A(), B()]\nxs\n",
@@ -345,7 +349,7 @@ fn pyi_generic_stub_class_ties_its_type_param() {
         &[stubs.clone()],
     )
     .expect("generic stub class should tie T across ctor and method");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 
     // The same class instantiated at String: get() yields a String, so
     // using it as a Number is a type error — proof T is tracked, not
@@ -469,7 +473,7 @@ fn pyi_positional_only_marker_is_ignored() {
     write(&stubs, "po.pyi", "def root(x: int, /) -> int: ...\n");
     let ty = check("from po import root\nr = root(9)\nr\n", &dir, &[stubs])
         .expect("positional-only def should take exactly one arg");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 }
 
 #[test]
@@ -481,7 +485,7 @@ fn pyi_star_reexport_is_followed() {
     write(&stubs, "agg.pyi", "from impl import *\n");
     let ty = check("from agg import helper\nr = helper(3)\nr\n", &dir, &[stubs])
         .expect("star re-export should expose helper");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 }
 
 #[test]
@@ -565,7 +569,7 @@ fn pyi_callable_maps_to_function_type() {
         &[stubs.clone()],
     )
     .expect("matching callback should type-check");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 
     // A wrong-arity callback is rejected — Callable shape is enforced.
     assert!(
@@ -612,7 +616,7 @@ fn transitive_py_imports() {
         "from a import base\ndef twice(x):\n    return base(base(x))\n",
     );
     let ty = check("from b import twice\nr = twice(10)\nr\n", &dir, &[]).expect("transitive");
-    assert_eq!(ty, "Number");
+    assert_eq!(ty, "Int");
 }
 
 #[test]
@@ -828,7 +832,7 @@ fn keyword_arguments_through_stub_signature() {
         &dir,
         &[stubs.clone()],
     );
-    assert_eq!(ok.expect("keyword call via stub names"), "Number");
+    assert_eq!(ok.expect("keyword call via stub names"), "Int");
 
     let bad = check("from geo import dist\nr = dist(1, z=2)\n", &dir, &[stubs]);
     assert!(

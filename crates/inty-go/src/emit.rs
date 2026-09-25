@@ -785,6 +785,19 @@ impl<'a> Emitter<'a> {
                 qvars.push(q.clone());
             }
         }
+        // Those an earlier use fixed, too: a recursive use records no
+        // instantiation for them, and inherits the current choice (below).
+        let outer = self.funcs[fid].outer.clone();
+        let mut earlier: Vec<TVarName> = Vec::new();
+        for spec in &self.funcs[fid].specs {
+            for v in spec.mapping.keys() {
+                if !outer.contains_key(v) && !qvars.contains(v) && !earlier.contains(v) {
+                    earlier.push(v.clone());
+                }
+            }
+        }
+        earlier.sort_by_key(|v| v.id());
+        qvars.extend(earlier);
         let mut concrete = Vec::with_capacity(qvars.len());
         for v in &qvars {
             let t = match inst.iter().find(|(q, _)| q == v) {

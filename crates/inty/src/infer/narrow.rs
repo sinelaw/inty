@@ -196,7 +196,11 @@ fn refine_type(ty: &Type, narrowing: &Narrowing) -> Type {
             // (e.g. a String narrowed by `=== "a"` becomes `Literal("a")`).
             match narrowing {
                 Narrowing::Equals(lit)
-                    if matches!(ty, Type::String | Type::Number | Type::Boolean) =>
+                    if matches!(ty, Type::String | Type::Number | Type::Boolean)
+                        || matches!(
+                            (ty, lit),
+                            (Type::Int, LitValue::Number(n)) if n.fract() == 0.0
+                        ) =>
                 {
                     Type::Literal(lit.clone())
                 }
@@ -239,7 +243,7 @@ fn brand_definitely_matches(ty: &Type, id: TypeId) -> bool {
 /// True if a value of type `ty` *could* have `typeof` equal to `name`.
 fn typeof_matches(ty: &Type, name: &str) -> bool {
     match (ty, name) {
-        (Type::Number, "number") => true,
+        (Type::Number | Type::Int, "number") => true,
         (Type::String, "string") => true,
         (Type::Boolean, "boolean") => true,
         (Type::Undefined, "undefined") => true,
@@ -265,7 +269,7 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
 /// True if a value of type `ty` *must* have `typeof` equal to `name`.
 fn typeof_definitely_matches(ty: &Type, name: &str) -> bool {
     match (ty, name) {
-        (Type::Number, "number") => true,
+        (Type::Number | Type::Int, "number") => true,
         (Type::String, "string") => true,
         (Type::Boolean, "boolean") => true,
         (Type::Undefined, "undefined") => true,
@@ -283,6 +287,7 @@ fn value_compatible_with_literal(ty: &Type, lit: &LitValue) -> bool {
         Type::Literal(other) => other == lit,
         Type::String => matches!(lit, LitValue::String(_)),
         Type::Number => matches!(lit, LitValue::Number(_)),
+        Type::Int => matches!(lit, LitValue::Number(n) if n.fract() == 0.0),
         Type::Boolean => matches!(lit, LitValue::Bool(_)),
         // Unknown/abstract types are compatible — we can't rule them out.
         Type::Var(_) | Type::Named(_, _) | Type::Union(_) => true,

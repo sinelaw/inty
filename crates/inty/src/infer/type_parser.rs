@@ -276,8 +276,8 @@ impl<'a> TypeParser<'a> {
         self.parse_simple_type()
     }
 
-    /// One constraint of a `where` clause: `Plus t`, `Indexable t t t`, or
-    /// `t has {name: T, …}` (one `HasProp` per field).
+    /// One constraint of a `where` clause: `Plus t`, `Num t`, `Arith t t t`,
+    /// `Indexable t t t`, or `t has {name: T, …}` (one `HasProp` per field).
     fn parse_constraint(&mut self) -> ParseResult<()> {
         let rest = &self.input[self.pos..];
         let keyword = |kw: &str| {
@@ -294,6 +294,26 @@ impl<'a> TypeParser<'a> {
             self.preds.push(TypePred::plus(t));
             return Ok(());
         }
+        if keyword("Num") {
+            self.pos += 3;
+            self.skip_whitespace();
+            let t = self.parse_simple_type()?;
+            self.preds.push(TypePred::num(t));
+            return Ok(());
+        }
+        if keyword("Arith") {
+            self.pos += "Arith".len();
+            let mut ts = Vec::new();
+            for _ in 0..3 {
+                self.skip_whitespace();
+                ts.push(self.parse_simple_type()?);
+            }
+            let c = ts.pop().expect("three");
+            let b = ts.pop().expect("three");
+            let a = ts.pop().expect("three");
+            self.preds.push(TypePred::arith(a, b, c));
+            return Ok(());
+        }
         if keyword("Indexable") {
             self.pos += "Indexable".len();
             let mut ts = Vec::new();
@@ -304,7 +324,8 @@ impl<'a> TypeParser<'a> {
             let element = ts.pop().expect("three");
             let index = ts.pop().expect("three");
             let container = ts.pop().expect("three");
-            self.preds.push(TypePred::indexable(container, index, element));
+            self.preds
+                .push(TypePred::indexable(container, index, element));
             return Ok(());
         }
         let receiver = self.parse_simple_type()?;
@@ -316,7 +337,8 @@ impl<'a> TypeParser<'a> {
                 .is_some_and(|c| c.is_whitespace() || c == '{'))
         {
             return Err(self.error(
-                "expected a constraint: `Plus t`, `Indexable t i e` or `t has {field: T}`"
+                "expected a constraint: `Plus t`, `Num t`, `Arith a b c`, `Indexable t i e` \
+                 or `t has {field: T}`"
                     .to_string(),
             ));
         }
@@ -336,7 +358,8 @@ impl<'a> TypeParser<'a> {
             self.allow_quantifiers = false;
             let ty = self.parse_type();
             self.allow_quantifiers = prev;
-            self.preds.push(TypePred::has_prop(receiver.clone(), &name, ty?));
+            self.preds
+                .push(TypePred::has_prop(receiver.clone(), &name, ty?));
             self.skip_whitespace();
             if self.peek_char() == Some(',') {
                 self.pos += 1;
@@ -857,6 +880,7 @@ impl<'a> TypeParser<'a> {
 
         match ident {
             "Number" | "number" => Ok(Type::Number),
+            "Int" => Ok(Type::Int),
             "String" | "string" => Ok(Type::String),
             "Boolean" | "boolean" => Ok(Type::Boolean),
             "Undefined" | "undefined" | "void" => Ok(Type::Undefined),
@@ -1170,6 +1194,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         }
         Type::Var(_) => ty.clone(),
         Type::Number
+        | Type::Int
         | Type::String
         | Type::Boolean
         | Type::Undefined
