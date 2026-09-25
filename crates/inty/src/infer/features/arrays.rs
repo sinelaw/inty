@@ -119,12 +119,12 @@ impl InferState {
         match &obj_type_resolved {
             Type::Array(elem_type) => {
                 // Array indexing: immediately unify index with Number and return element type
-                self.subsume(span, &index_type, &Type::Number)?;
+                self.subsume(span, &index_type, &Type::Int)?;
                 Ok(elem_type.as_ref().clone())
             }
             Type::String => {
                 // String indexing: returns String
-                self.subsume(span, &index_type, &Type::Number)?;
+                self.subsume(span, &index_type, &Type::Int)?;
                 Ok(Type::String)
             }
             Type::Map(value_type) => {
@@ -137,7 +137,7 @@ impl InferState {
                 // so there's no single element type). A literal index
                 // selects that component; a dynamic index yields the union
                 // of all components (sound but lossy).
-                self.subsume(span, &index_type, &Type::Number)?;
+                self.subsume(span, &index_type, &Type::Int)?;
                 let elems = elems.clone();
                 match const_tuple_index(property, elems.len()) {
                     Some(Ok(i)) => Ok(elems[i].clone()),
@@ -170,7 +170,7 @@ impl InferState {
                         self.rebind_var(var_name.clone(), Type::array(elem_type.clone()));
                     }
 
-                    self.subsume(span, &index_type, &Type::Number)?;
+                    self.subsume(span, &index_type, &Type::Int)?;
                     Ok(elem_type)
                 } else {
                     // Regular object: use string indexing
@@ -208,11 +208,11 @@ impl InferState {
     ) -> InferResult<Type> {
         match obj_type {
             Type::Array(elem_type) => {
-                self.subsume(span, index_type, &Type::Number)?;
+                self.subsume(span, index_type, &Type::Int)?;
                 Ok(elem_type.as_ref().clone())
             }
             Type::String => {
-                self.subsume(span, index_type, &Type::Number)?;
+                self.subsume(span, index_type, &Type::Int)?;
                 Ok(Type::String)
             }
             Type::Map(value_type) => {
@@ -223,7 +223,7 @@ impl InferState {
                 // No source-level index expression here (union elimination),
                 // so resolve a constant only from a literal index type;
                 // otherwise the union of components.
-                self.subsume(span, index_type, &Type::Number)?;
+                self.subsume(span, index_type, &Type::Int)?;
                 if let Type::Literal(LitValue::Number(n)) = self.zonk(index_type) {
                     if n.fract() == 0.0 && n >= 0.0 && (n as usize) < elems.len() {
                         return Ok(elems[n as usize].clone());

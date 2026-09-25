@@ -37,6 +37,13 @@ pub static PLUS_INSTANCES: &[InstanceDecl] = &[
     },
 ];
 
+/// Instances of `Num` — `Int` and `Number`. (`Int` has no catalog
+/// base type of its own; the prober probes `Number`.)
+pub static NUM_INSTANCES: &[InstanceDecl] = &[InstanceDecl {
+    class: ClassName::Num,
+    inputs: &[TypeShape::Concrete(BaseType::Number)],
+}];
+
 /// Instances of `Indexable` — types `T` such that `T[I] = E` for some
 /// pair of `I, E`. Recorded as `(container, index, element)` shape
 /// triples.
@@ -78,6 +85,10 @@ pub static INDEXABLE_INSTANCES: &[InstanceDecl] = &[
 pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
     match class {
         ClassName::Plus => PLUS_INSTANCES,
+        ClassName::Num | ClassName::NumLit => NUM_INSTANCES,
+        // `Arith a b c` relates three `Num`s; the blame prober only
+        // expands unary classes.
+        ClassName::Arith => &[],
         ClassName::Indexable => INDEXABLE_INSTANCES,
         // Structural: any type with the property is an instance.
         ClassName::HasProp => &[],

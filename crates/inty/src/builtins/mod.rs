@@ -129,8 +129,8 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
         // `indexOf(searchValue, fromIndex?)` per ECMAScript §22.1.3.8.
         // htmx hits this through chained calls without ever passing
         // the second arg, but `String.prototype.indexOf` accepts it.
-        "indexOf" => optional_last(state, vec![s.clone()], n.clone(), n.clone()),
-        "lastIndexOf" => optional_last(state, vec![s.clone()], n.clone(), n.clone()),
+        "indexOf" => optional_last(state, vec![s.clone()], n.clone(), Type::Int),
+        "lastIndexOf" => optional_last(state, vec![s.clone()], n.clone(), Type::Int),
         // `substring(start, end?)`. htmx uses both 1-arg and 2-arg
         // forms in different files.
         "substring" => optional_last(state, vec![n.clone()], n.clone(), s.clone()),
@@ -171,7 +171,7 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
         "toUpperCase" => Type::simple_func(vec![], s.clone()),
         "toLowerCase" => Type::simple_func(vec![], s.clone()),
         "charAt" => Type::simple_func(vec![n.clone()], s.clone()),
-        "charCodeAt" => Type::simple_func(vec![n.clone()], n.clone()),
+        "charCodeAt" => Type::simple_func(vec![n.clone()], Type::Int),
         // `startsWith(searchString, position?)` per §22.1.3.21;
         // `endsWith(searchString, length?)` per §22.1.3.6.
         "startsWith" => optional_last(state, vec![s.clone()], n.clone(), b.clone()),
@@ -315,10 +315,10 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
     let u = Type::Undefined;
     let arr = Type::array(elem.clone());
     Some(match method {
-        "push" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "push" => Type::simple_func(vec![elem.clone()], Type::Int),
         "pop" => Type::simple_func(vec![], elem.clone()),
         "shift" => Type::simple_func(vec![], elem.clone()),
-        "unshift" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "unshift" => Type::simple_func(vec![elem.clone()], Type::Int),
         // `Array.prototype.splice(start, deleteCount?, ...items)`, returning
         // the removed elements. There are no variadic function types, so
         // the items are modelled as SPLICE_MAX_ITEMS optional parameters
@@ -339,7 +339,7 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
                     FuncParam::required(elem.clone()),
                     FuncParam::optional(pvar, n.clone()),
                 ],
-                n.clone(),
+                Type::Int,
             )
         }
         "lastIndexOf" => {
@@ -349,7 +349,7 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
                     FuncParam::required(elem.clone()),
                     FuncParam::optional(pvar, n.clone()),
                 ],
-                n.clone(),
+                Type::Int,
             )
         }
         "includes" => {
@@ -401,7 +401,7 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
         ),
         "findIndex" => Type::simple_func(
             vec![state.callable_row_open(None, vec![elem.clone()], b.clone())],
-            n.clone(),
+            Type::Int,
         ),
         "forEach" => Type::simple_func(
             vec![state.callable_row_open(None, vec![elem.clone()], u.clone())],
@@ -475,10 +475,10 @@ pub fn python_list_method_type(state: &mut InferState, elem: &Type, method: &str
                     FuncParam::optional(p1, n.clone()),
                     FuncParam::optional(p2, n.clone()),
                 ],
-                n.clone(),
+                Type::Int,
             )
         }
-        "count" => Type::simple_func(vec![elem.clone()], n.clone()),
+        "count" => Type::simple_func(vec![elem.clone()], Type::Int),
         "sort" | "reverse" | "clear" => Type::simple_func(vec![], nil.clone()),
         "copy" => Type::simple_func(vec![], arr.clone()),
         _ => {
@@ -530,6 +530,9 @@ impl InferState {
         // so iterate until nothing changes. Previously a single pass
         // dropped every constraint deferred this way, leaving its element
         // type unconstrained.
+        // Numeric variables first: an `Int` index or a `Number` receiver
+        // can decide what's left.
+        self.default_numeric(&Default::default(), None, false)?;
         let mut constraints = std::mem::take(&mut self.pending_constraints);
         loop {
             let before = constraints.len();
@@ -548,6 +551,13 @@ impl InferState {
                 return Ok(());
             }
             if deferred.len() == before {
+                self.pending_constraints = deferred;
+                let numeric = self.default_numeric(&Default::default(), None, false)?;
+                deferred = std::mem::take(&mut self.pending_constraints);
+                if numeric {
+                    constraints = deferred;
+                    continue;
+                }
                 // Nothing pinned down the receivers of the property reads
                 // left: read them as fields of an object, as a direct
                 // access to an object would. That's a valid choice for a
@@ -583,7 +593,14 @@ impl InferState {
                 }
                 if !defaulted {
                     // Whatever is left has a container nothing ever pinned
-                    // down: no use of it depends on the element type.
+                    // down: no use of it depends on the element type. Its
+                    // numeric variables still get their default.
+                    self.pending_constraints = rest;
+                    if self.default_numeric(&Default::default(), None, true)? {
+                        constraints = std::mem::take(&mut self.pending_constraints);
+                        continue;
+                    }
+                    self.pending_constraints.clear();
                     return Ok(());
                 }
                 constraints = rest;
@@ -599,11 +616,15 @@ impl InferState {
     /// property reads that really depend on its quantified variables,
     /// and after calls, so a result type is known as early as possible.
     pub(crate) fn simplify_has_props(&mut self) -> Result<(), IntyError> {
+        self.simplify_numeric()?;
         loop {
             let ready: Vec<usize> = (0..self.pending_constraints.len())
                 .filter(|&i| {
                     let pred = &self.pending_constraints[i].pred;
-                    pred.class == ClassName::HasProp && !self.is_deferred(pred)
+                    // (An `Indexable` on a known container too: its element
+                    // must be known before numeric defaulting picks one.)
+                    matches!(pred.class, ClassName::HasProp | ClassName::Indexable)
+                        && !self.is_deferred(pred)
                 })
                 .collect();
             if ready.is_empty() {
@@ -727,7 +748,12 @@ impl InferState {
     /// the call's argument types) with the method `callee` it turned out
     /// to call, the way `infer_call` relates a known callee with its
     /// arguments.
-    fn apply_deferred_call(&mut self, span: Span, site: &Type, callee: &Type) -> Result<(), IntyError> {
+    fn apply_deferred_call(
+        &mut self,
+        span: Span,
+        site: &Type,
+        callee: &Type,
+    ) -> Result<(), IntyError> {
         use crate::infer::extract_callable;
         use crate::types::Presence;
         let (site_z, callee_z) = (self.zonk(site), self.zonk(callee));
@@ -742,10 +768,10 @@ impl InferState {
             match (args.get(i), params.get(i)) {
                 (Some(a), Some(p)) => {
                     self.unify_presence(span, &a.presence, &p.presence)?;
-                    // Subsumption matters where the parameter is a union;
-                    // elsewhere it is unification, done directly (no
-                    // snapshot).
-                    if matches!(self.zonk(&p.ty), Type::Union(_)) {
+                    // Subsumption matters where the parameter is a union or
+                    // a `Number` (an `Int` argument fits); elsewhere it is
+                    // unification, done directly (no snapshot).
+                    if matches!(self.zonk(&p.ty), Type::Union(_) | Type::Number) {
                         self.subsume(span, &a.ty, &p.ty)?;
                     } else {
                         self.unify(span, &a.ty, &p.ty)?;
@@ -834,6 +860,15 @@ impl InferState {
         }
         match pred.class {
             ClassName::Plus => self.resolve_plus(&pred.types[0], span),
+            ClassName::Num | ClassName::NumLit => self.resolve_num(&pred.types[0], span),
+            ClassName::Arith => {
+                let (a, b, c) = (
+                    pred.types[0].clone(),
+                    pred.types[1].clone(),
+                    pred.types[2].clone(),
+                );
+                self.resolve_arith(&a, &b, &c, span)
+            }
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
@@ -853,7 +888,7 @@ impl InferState {
         let ty = self.apply_subst(ty);
 
         match &ty {
-            Type::Number | Type::String => Ok(()),
+            Type::Number | Type::Int | Type::String => Ok(()),
 
             // Error satisfies trivially; the original failure was
             // already reported.
@@ -900,20 +935,29 @@ impl InferState {
             Type::Literal(crate::types::LitValue::String(k)) => Some(k),
             _ => None,
         };
-        let index = self.apply_subst(index).widen_fresh_literals();
+        let raw_index = self.apply_subst(index);
+        let index = raw_index.widen_fresh_literals();
         let element = self.apply_subst(element);
+        // An array or string index is an `Int`: `xs[0]`, `xs[i]`, not
+        // `xs[n / 2]`.
+        let int_index = |state: &mut Self| -> Result<(), IntyError> {
+            match &raw_index {
+                lit @ Type::Literal(_) => state.subsume(span, lit, &Type::Int),
+                other => state.unify(span, other, &Type::Int),
+            }
+        };
 
         match &container {
             // Array indexing: [T][Number] = T
             Type::Array(elem_ty) => {
-                self.unify(span, &index, &Type::Number)?;
+                int_index(self)?;
                 self.unify(span, &element, elem_ty)?;
                 Ok(())
             }
 
             // String indexing: String[Number] = String
             Type::String => {
-                self.unify(span, &index, &Type::Number)?;
+                int_index(self)?;
                 self.unify(span, &element, &Type::String)?;
                 Ok(())
             }
@@ -939,7 +983,7 @@ impl InferState {
                     // Try to unify the row with the array's structural representation
                     // This will succeed if the row is compatible with arrays
                     if self.unify(span, &container, &array_type).is_ok() {
-                        self.unify(span, &index, &Type::Number)?;
+                        int_index(self)?;
                         self.unify(span, &element, &elem_var)?;
                         return Ok(());
                     }
@@ -1009,9 +1053,14 @@ mod tests {
         let arr = Type::array(Type::Number);
         let elem = Type::flex(0);
         assert!(state
-            .resolve_indexable(&arr, &Type::Number, &elem, Span::new(0, 0))
+            .resolve_indexable(&arr, &Type::Int, &elem, Span::new(0, 0))
             .is_ok());
         assert_eq!(state.apply_subst(&elem), Type::Number);
+        // An index with a fractional part is rejected.
+        let elem = Type::flex(1);
+        assert!(state
+            .resolve_indexable(&arr, &Type::Number, &elem, Span::new(0, 0))
+            .is_err());
     }
 
     #[test]
@@ -1028,8 +1077,8 @@ mod tests {
             .resolve_indexable(&row, &index, &elem, Span::new(0, 0))
             .is_ok());
 
-        // The index should be Number (array-style) not String (object-style)
-        assert_eq!(state.apply_subst(&index), Type::Number);
+        // The index should be Int (array-style) not String (object-style)
+        assert_eq!(state.apply_subst(&index), Type::Int);
     }
 
     #[test]

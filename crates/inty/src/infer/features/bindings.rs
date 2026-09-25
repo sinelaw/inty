@@ -314,7 +314,7 @@ impl InferState {
                 let lhs_resolved = self.zonk(&left_type);
                 let rhs_for_assign =
                     if matches!(lhs_resolved, Type::Var(crate::types::TVarName::Flex(_))) {
-                        right_type.widen_fresh_literals()
+                        self.widen(span, &right_type)
                     } else {
                         right_type.clone()
                     };
@@ -324,21 +324,25 @@ impl InferState {
             AssignOp::AddAssign => {
                 // Like +: widen operands so `n += 1` doesn't get
                 // pinned to a singleton type.
-                let left_widened = left_type.widen_fresh_literals();
-                let right_widened = right_type.widen_fresh_literals();
-                let result = self.fresh_type_var();
-                self.add_constraint(TypePred::plus(result.clone()), span);
-                self.subsume(span, &left_widened, &result)?;
-                self.subsume(span, &right_widened, &result)?;
+                // `x += y` stores `x + y` back in `x`.
+                let left_widened = self.widen(span, &left_type);
+                let right_widened = self.widen(span, &right_type);
+                let result = self.infer_add(span, &left_widened, &right_widened)?;
+                self.subsume(span, &result, &left_type)?;
             }
 
-            AssignOp::SubAssign
-            | AssignOp::MulAssign
-            | AssignOp::DivAssign
-            | AssignOp::ModAssign
-            | AssignOp::PowAssign => {
-                self.subsume(span, &left_type, &Type::Number)?;
-                self.subsume(span, &right_type, &Type::Number)?;
+            // `x ∘= y` stores `x ∘ y` back in `x`: `n /= 2` needs a
+            // `Number` `n`.
+            AssignOp::SubAssign | AssignOp::MulAssign | AssignOp::ModAssign => {
+                let left_widened = self.widen(span, &left_type);
+                let right_widened = self.widen(span, &right_type);
+                let result = self.arith(span, &left_widened, &right_widened)?;
+                self.subsume(span, &result, &left_type)?;
+            }
+            AssignOp::DivAssign | AssignOp::PowAssign => {
+                self.require_num(span, &left_type)?;
+                self.require_num(span, &right_type)?;
+                self.subsume(span, &Type::Number, &left_type)?;
             }
 
             AssignOp::LShiftAssign
@@ -347,8 +351,9 @@ impl InferState {
             | AssignOp::BitAndAssign
             | AssignOp::BitOrAssign
             | AssignOp::BitXorAssign => {
-                self.subsume(span, &left_type, &Type::Number)?;
-                self.subsume(span, &right_type, &Type::Number)?;
+                self.require_num(span, &left_type)?;
+                self.require_num(span, &right_type)?;
+                self.subsume(span, &Type::Int, &left_type)?;
             }
         }
 
@@ -434,7 +439,7 @@ impl InferState {
                 }
                 self.zonk(&ann_ty)
             } else {
-                var_type.widen_fresh_literals()
+                self.widen(decl.span, &var_type)
             };
 
             // Record the type for this declaration
@@ -468,7 +473,11 @@ impl InferState {
                                 || !is_mutable_container_literal(init)) =>
                     {
                         let env_free = new_env.free();
-                        self.generalize(&env_free, &var_type)
+                        if kind == VarKind::Const {
+                            self.generalize(&env_free, &var_type)
+                        } else {
+                            self.generalize_mutable(&env_free, &var_type)
+                        }
                     }
                     _ => TypeScheme::mono(var_type),
                 }

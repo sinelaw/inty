@@ -181,6 +181,7 @@ fn every_catalog_op_has_a_dynamics_rule() {
         ("*", Some("2 * 3")),
         ("/", Some("6 / 2")),
         ("%", Some("5 % 2")),
+        ("//", None), // Python only; the fixtures are JavaScript
         ("**", Some("2 ** 3")),
         ("<", Some("1 < 2")),
         (">", Some("2 > 1")),

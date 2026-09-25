@@ -96,7 +96,7 @@ fn jsdoc_at_type_typeof_helper() {
         api.run(10)
     "#;
     let ty = check(src).expect("typeof-helper pattern should type-check");
-    assert!(ty.contains("Number"), "got: {}", ty);
+    assert!(ty.contains("Int"), "got: {}", ty);
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn jsdoc_at_type_typeof_unknown_name_degrades() {
     "#;
     // Should not error overall — annotation is silently ignored.
     let ty = check(src).expect("unknown typeof should degrade, not error");
-    assert!(ty.contains("Number"), "got: {}", ty);
+    assert!(ty.contains("Int"), "got: {}", ty);
 }
 
 #[test]

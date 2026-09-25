@@ -927,6 +927,7 @@ fn apply_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, Stuck> {
         Mul => num_op(l, r, "*", |a, b| a * b),
         Div => num_op(l, r, "/", |a, b| a / b),
         Mod => num_op(l, r, "%", |a, b| a % b),
+        FloorDiv => num_op(l, r, "//", |a, b| (a / b).floor()),
         Pow => num_op(l, r, "**", |a, b| a.powf(b)),
         BitAnd => bit_op(l, r, "&", |a, b| a & b),
         BitOr => bit_op(l, r, "|", |a, b| a | b),

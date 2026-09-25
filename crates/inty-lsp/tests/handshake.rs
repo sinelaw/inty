@@ -192,8 +192,8 @@ fn hover_returns_inferred_type() {
     };
     assert!(value.contains("x"), "hover mentions x: {}", value);
     assert!(
-        value.to_lowercase().contains("number"),
-        "hover mentions Number: {}",
+        value.to_lowercase().contains("int"),
+        "hover mentions Int: {}",
         value
     );
 
@@ -599,9 +599,9 @@ fn inlay_hints_show_inferred_types() {
             }
         })
         .collect();
-    let any_number = labels.iter().any(|l| l.to_lowercase().contains("number"));
+    let any_number = labels.iter().any(|l| l.to_lowercase().contains("int"));
     let any_string = labels.iter().any(|l| l.to_lowercase().contains("string"));
-    assert!(any_number, "expected a Number hint among {:?}", labels);
+    assert!(any_number, "expected an Int hint among {:?}", labels);
     assert!(any_string, "expected a String hint among {:?}", labels);
 
     shutdown(client, handle);

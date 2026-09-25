@@ -201,8 +201,19 @@ impl FieldEntry {
 /// Type class names for constraint-based polymorphism.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ClassName {
-    /// Plus class: types that support the + operator (Number, String).
+    /// Plus class: types that support the + operator (Number, Int, String).
     Plus,
+    /// `Num a`: `a` is `Int` or `Number`.
+    Num,
+    /// `Num a` for the type of an integral literal (`0`, `42`): the same
+    /// constraint, printed as `Num`; it only differs in defaulting — to
+    /// `Int`, where a plain `Num` defaults to `Number`.
+    NumLit,
+    /// `Arith a b c`: `c` is the type of `a ∘ b` for an arithmetic
+    /// operator — `Int` when both are `Int`, `Number` when either is.
+    /// All three are `Num`. `a` and `b` determine `c`; `c = Int` also
+    /// determines `a = b = Int`.
+    Arith,
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
@@ -230,6 +241,27 @@ impl TypePred {
         TypePred {
             class: ClassName::Plus,
             types: vec![ty],
+        }
+    }
+
+    pub fn num(ty: Type) -> Self {
+        TypePred {
+            class: ClassName::Num,
+            types: vec![ty],
+        }
+    }
+
+    pub fn num_lit(ty: Type) -> Self {
+        TypePred {
+            class: ClassName::NumLit,
+            types: vec![ty],
+        }
+    }
+
+    pub fn arith(left: Type, right: Type, result: Type) -> Self {
+        TypePred {
+            class: ClassName::Arith,
+            types: vec![left, right, result],
         }
     }
 
@@ -488,6 +520,13 @@ pub enum Type {
     // === Primitive types ===
     /// JavaScript number type (all numbers are f64).
     Number,
+    /// A number with no fractional part: the refinement of `Number` that
+    /// array and string indices, `.length`, `indexOf` and the bitwise
+    /// operators range over. Every `Int` is a `Number` (`Int ≤ Number` in
+    /// `subsume`, at the top level only); they don't unify. A non-finite
+    /// result of an operation typed `Int` (`0 % 0`, `Math.floor(NaN)`)
+    /// is, like an out-of-bounds read, not ruled out.
+    Int,
     /// JavaScript string type.
     String,
     /// JavaScript boolean type.
@@ -817,8 +856,14 @@ impl Type {
     /// * Type variables, named types, and modules are left alone.
     ///   Widening through a substitution is the substitution's job.
     pub fn widen_fresh_literals(&self) -> Self {
+        self.widen_fresh_literals_with(&mut |lit| lit.base_type())
+    }
+
+    /// [`Self::widen_fresh_literals`] with the literal's widening given
+    /// by `f` (inference widens an integral literal to a fresh variable).
+    pub fn widen_fresh_literals_with(&self, f: &mut dyn FnMut(&LitValue) -> Type) -> Self {
         match self {
-            Type::Literal(lit) => lit.base_type(),
+            Type::Literal(lit) => f(lit),
             Type::Row(row) => {
                 let props = row
                     .props
@@ -828,7 +873,7 @@ impl Type {
                             k.clone(),
                             FieldEntry {
                                 presence: e.presence.clone(),
-                                ty: e.ty.widen_fresh_literals(),
+                                ty: e.ty.widen_fresh_literals_with(f),
                             },
                         )
                     })
@@ -838,14 +883,20 @@ impl Type {
                     tail: row.tail.clone(),
                 })
             }
-            Type::Array(elem) => Type::Array(Box::new(elem.widen_fresh_literals())),
-            Type::Map(v) => Type::Map(Box::new(v.widen_fresh_literals())),
-            Type::Promise(inner) => Type::Promise(Box::new(inner.widen_fresh_literals())),
-            Type::Tuple(elems) => {
-                Type::Tuple(elems.iter().map(|e| e.widen_fresh_literals()).collect())
-            }
+            Type::Array(elem) => Type::Array(Box::new(elem.widen_fresh_literals_with(f))),
+            Type::Map(v) => Type::Map(Box::new(v.widen_fresh_literals_with(f))),
+            Type::Promise(inner) => Type::Promise(Box::new(inner.widen_fresh_literals_with(f))),
+            Type::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| e.widen_fresh_literals_with(f))
+                    .collect(),
+            ),
             Type::Union(members) => {
-                let widened: Vec<Type> = members.iter().map(|m| m.widen_fresh_literals()).collect();
+                let widened: Vec<Type> = members
+                    .iter()
+                    .map(|m| m.widen_fresh_literals_with(f))
+                    .collect();
                 Type::union(widened)
             }
             Type::Func {
@@ -855,12 +906,13 @@ impl Type {
             } => Type::Func {
                 this_type: this_type.clone(),
                 params: params.clone(),
-                ret: Box::new(ret.widen_fresh_literals()),
+                ret: Box::new(ret.widen_fresh_literals_with(f)),
             },
             // Primitives, vars, named refs, modules, error: nothing
             // to widen. `Error` is opaque — widening through it
             // would generate noise from a binding that already failed.
             Type::Number
+            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -1146,6 +1198,7 @@ impl Type {
     fn collect_free_pvars(&self, pvars: &mut HashSet<PVarName>) {
         match self {
             Type::Number
+            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -1222,6 +1275,7 @@ impl Type {
     fn collect_free_vars(&self, vars: &mut HashSet<TVarName>) {
         match self {
             Type::Number
+            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -1449,6 +1503,7 @@ impl TypeScheme {
 fn union_member_sort_key(t: &Type) -> (u8, String) {
     match t {
         Type::Number => (0, String::new()),
+        Type::Int => (0, "int".to_string()),
         Type::String => (1, String::new()),
         Type::Boolean => (2, String::new()),
         Type::Undefined => (3, String::new()),

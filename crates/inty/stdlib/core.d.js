@@ -17,7 +17,7 @@
 /** const console: <T>{log: (T) => Undefined, error: (T) => Undefined, warn: (T) => Undefined} */
 const console;
 
-/** const Math: {PI: Number, E: Number, LN2: Number, LN10: Number, LOG2E: Number, LOG10E: Number, SQRT2: Number, abs: (Number) => Number, floor: (Number) => Number, ceil: (Number) => Number, round: (Number) => Number, trunc: (Number) => Number, sign: (Number) => Number, sqrt: (Number) => Number, cbrt: (Number) => Number, pow: (Number, Number) => Number, min: (Number, Number) => Number, max: (Number, Number) => Number, hypot: (Number, Number) => Number, log: (Number) => Number, log2: (Number) => Number, log10: (Number) => Number, exp: (Number) => Number, expm1: (Number) => Number, log1p: (Number) => Number, sin: (Number) => Number, cos: (Number) => Number, tan: (Number) => Number, asin: (Number) => Number, acos: (Number) => Number, atan: (Number) => Number, atan2: (Number, Number) => Number, sinh: (Number) => Number, cosh: (Number) => Number, tanh: (Number) => Number, random: () => Number, imul: (Number, Number) => Number, fround: (Number) => Number, clz32: (Number) => Number} */
+/** const Math: {PI: Number, E: Number, LN2: Number, LN10: Number, LOG2E: Number, LOG10E: Number, SQRT2: Number, abs: <a> where Num a => (a) => a, floor: (Number) => Int, ceil: (Number) => Int, round: (Number) => Int, trunc: (Number) => Int, sign: (Number) => Number, sqrt: (Number) => Number, cbrt: (Number) => Number, pow: (Number, Number) => Number, min: <a, b, c> where Arith a b c => (a, b) => c, max: <d, e, f> where Arith d e f => (d, e) => f, hypot: (Number, Number) => Number, log: (Number) => Number, log2: (Number) => Number, log10: (Number) => Number, exp: (Number) => Number, expm1: (Number) => Number, log1p: (Number) => Number, sin: (Number) => Number, cos: (Number) => Number, tan: (Number) => Number, asin: (Number) => Number, acos: (Number) => Number, atan: (Number) => Number, atan2: (Number, Number) => Number, sinh: (Number) => Number, cosh: (Number) => Number, tanh: (Number) => Number, random: () => Number, imul: (Number, Number) => Int, fround: (Number) => Number, clz32: (Number) => Int} */
 const Math;
 
 // High-resolution monotonic clock (milliseconds), as in browsers and Node.
@@ -66,8 +66,8 @@ const String;
         isInteger: (Number) => Boolean,
         isFinite: (Number) => Boolean,
         isNaN: (Number) => Boolean,
-        MAX_SAFE_INTEGER: Number,
-        MIN_SAFE_INTEGER: Number,
+        MAX_SAFE_INTEGER: Int,
+        MIN_SAFE_INTEGER: Int,
         EPSILON: Number,
         MAX_VALUE: Number,
         MIN_VALUE: Number
@@ -188,7 +188,7 @@ const RegExp;
         delete: (K) => Boolean,
         clear: () => Undefined,
         forEach: ((V, K) => Undefined) => Undefined,
-        size: Number
+        size: Int
     } */
 const Map;
 
@@ -198,7 +198,7 @@ const Map;
         delete: (T) => Boolean,
         clear: () => Undefined,
         forEach: ((T) => Undefined) => Undefined,
-        size: Number
+        size: Int
     } */
 const Set;
 

@@ -113,6 +113,24 @@ impl TypeEnv {
         TypeEnv { bindings }
     }
 
+    /// The environment with `f` applied to every binding's scheme.
+    pub fn map_schemes(&self, mut f: impl FnMut(&TypeScheme) -> TypeScheme) -> Self {
+        let bindings = self
+            .bindings
+            .iter()
+            .map(|(k, b)| {
+                (
+                    k.clone(),
+                    Binding {
+                        scheme: f(&b.scheme),
+                        mutability: b.mutability,
+                    },
+                )
+            })
+            .collect();
+        TypeEnv { bindings }
+    }
+
     /// Extend the environment with multiple mutable bindings.
     pub fn extend_many(&self, bindings: impl IntoIterator<Item = (String, TypeScheme)>) -> Self {
         let mut new_bindings = self.bindings.clone();

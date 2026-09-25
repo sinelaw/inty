@@ -11,7 +11,7 @@ function rand() {
 const PATHS = ["/", "/login", "/api/items", "/api/cart", "/static/app.js", "/static/app.css", "/search", "/checkout"];
 const STATUS = [200, 200, 200, 200, 200, 304, 301, 404, 500, 200];
 
-/** function parseIntAt(String, Number) => Number */
+/** function parseIntAt(String, Int) => Int */
 function parseIntAt(s, i) {
   let n = 0;
   let c = s.charCodeAt(i);
@@ -23,7 +23,7 @@ function parseIntAt(s, i) {
   return n;
 }
 
-/** function skipPast(String, Number, Number) => Number */
+/** function skipPast(String, Int, Int) => Int */
 function skipPast(s, i, ch) {
   while (s.charCodeAt(i) !== ch) {
     i++;
@@ -31,7 +31,7 @@ function skipPast(s, i, ch) {
   return i + 1;
 }
 
-/** function percentile(Number[], Number, Number) => Number */
+/** function percentile(Number[], Number, Number) => Int */
 function percentile(buckets, total, q) {
   let seen = 0;
   for (let i = 0; i < buckets.length; i++) {

@@ -145,7 +145,8 @@ impl InferState {
         // not `3 | 4`. (TS does the same: branch joins are
         // synthesis-mode widening points unless the conditional is
         // contextually typed.)
-        Ok(self.join(span, &cons_type, &alt_type)?.widen_fresh_literals())
+        let joined = self.join(span, &cons_type, &alt_type)?;
+        Ok(self.widen(span, &joined))
     }
 
     /// Infer the type of a sequence expression.
@@ -190,7 +191,8 @@ impl InferState {
             // mutable, so `let i = 0` must be `Number`, not the
             // singleton `0` (which `i++` or `a(i)` would then contradict).
             let var_type = if let Some(init_expr) = &decl.init {
-                self.infer_expr(&new_env, init_expr)?.widen_fresh_literals()
+                let init_type = self.infer_expr(&new_env, init_expr)?;
+                self.widen(init_expr.span(), &init_type)
             } else {
                 self.fresh_type_var()
             };
@@ -408,8 +410,15 @@ impl InferState {
                 let test_type = self.infer_expr(env, test)?;
                 // Symmetric "comparable" check, like `===`: the case
                 // test value is matched against the discriminator at
-                // runtime, so either may subsume the other.
-                self.subsume_either(span, &disc_type, &test_type)?;
+                // runtime, so either may subsume the other. Numbers
+                // compare whatever their kind (an `Int` case on a `Number`
+                // discriminant), as with `<`.
+                if self.is_numeric(&disc_type) || self.is_numeric(&test_type) {
+                    self.require_num(span, &disc_type)?;
+                    self.require_num(span, &test_type)?;
+                } else {
+                    self.subsume_either(span, &disc_type, &test_type)?;
+                }
 
                 // If the case test is a literal and we know the
                 // discriminator's path, the case body gets an env

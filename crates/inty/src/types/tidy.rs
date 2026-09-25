@@ -94,6 +94,7 @@ impl TidyEnv {
     pub fn tidy_type(&mut self, ty: &Type) -> Type {
         match ty {
             Type::Number
+            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined

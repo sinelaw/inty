@@ -51,7 +51,7 @@ impl SynthType {
         // "synth equals expected" check after `infer_literal` started
         // returning singletons.
         match (self, t) {
-            (SynthType::Number, Type::Number)
+            (SynthType::Number, Type::Number | Type::Int)
             | (SynthType::String, Type::String)
             | (SynthType::Boolean, Type::Boolean) => true,
             (SynthType::Number, Type::Literal(crate::types::LitValue::Number(_)))
@@ -90,6 +90,8 @@ pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
             .prop_map(|(a, b)| format!("({} - {})", a, b)),
         (arb_number(depth - 1), arb_number(depth - 1))
             .prop_map(|(a, b)| format!("({} * {})", a, b)),
+        // a fraction: the `Int`/`Number` split
+        arb_number(depth - 1).prop_map(|a| format!("({} / 2)", a)),
         // unary
         arb_number(depth - 1).prop_map(|a| format!("-({})", a)),
         // conditional with boolean test
@@ -207,6 +209,10 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
             "value-type mismatch: expected {:?}, got {}",
             expected, value
         ));
+    }
+    // An `Int` has no fractional part.
+    if ty == Type::Int && !matches!(value, Value::Number(n) if n.fract() == 0.0) {
+        return Err(format!("value-type mismatch: expected Int, got {}", value));
     }
     Ok(())
 }

@@ -146,6 +146,12 @@ impl InferState {
         self.class_brand_names
             .extend(program.class_brands.iter().cloned());
         let result = self.infer_stmt_list(&env, &program.statements);
+        // The program's own numeric variables (`let i = 0` at the top
+        // level) get their defaults here, as a function's do when it's
+        // generalised.
+        if let Err(e) = self.default_numeric(&Default::default(), None, false) {
+            self.push_error(e);
+        }
 
         // Use before initialisation is invisible to inference, which lets
         // every binding of a scope be referenced from anywhere in it (so
@@ -542,30 +548,47 @@ impl InferState {
                     // Pass 2 that referenced the name before its
                     // declaration; unifying propagates the real type
                     // to those references via the substitution.
-                    let unify_hoisted = |state: &mut Self, declarations: &[VarDeclarator]| {
-                        for decl in declarations {
-                            if let Some(hoisted) = hoisted_data.get(&decl.name) {
-                                if let Some(scheme) = current_env.lookup(&decl.name).cloned() {
-                                    // An *instance*: unifying with the scheme
-                                    // body would bind its quantified
-                                    // variables to the placeholder's uses.
-                                    let actual = state.instantiate(&scheme);
-                                    if let Err(e) = state.unify(decl.span, hoisted, &actual) {
-                                        state.push_error(e);
+                    // A `const` is only read through the placeholder, so
+                    // its value flows into those uses (`Int ≤ Number`); a
+                    // `let` / `var` can also be written through one, so the
+                    // types must agree.
+                    let unify_hoisted =
+                        |state: &mut Self,
+                         kind: crate::ast::VarKind,
+                         declarations: &[VarDeclarator]| {
+                            for decl in declarations {
+                                if let Some(hoisted) = hoisted_data.get(&decl.name) {
+                                    if let Some(scheme) = current_env.lookup(&decl.name).cloned() {
+                                        // An *instance*: unifying with the scheme
+                                        // body would bind its quantified
+                                        // variables to the placeholder's uses.
+                                        let actual = state.instantiate(&scheme);
+                                        let related = if kind == crate::ast::VarKind::Const {
+                                            state.subsume(decl.span, &actual, hoisted)
+                                        } else {
+                                            state.unify(decl.span, hoisted, &actual)
+                                        };
+                                        if let Err(e) = related {
+                                            state.push_error(e);
+                                        }
                                     }
                                 }
                             }
-                        }
-                    };
+                        };
                     match stmt {
-                        Stmt::Var { declarations, .. } => {
-                            unify_hoisted(self, declarations);
+                        Stmt::Var {
+                            kind, declarations, ..
+                        } => {
+                            unify_hoisted(self, *kind, declarations);
                         }
                         Stmt::Export {
-                            declaration: crate::ast::ExportDecl::Var { declarations, .. },
+                            declaration:
+                                crate::ast::ExportDecl::Var {
+                                    kind, declarations, ..
+                                },
                             ..
                         } => {
-                            unify_hoisted(self, declarations);
+                            unify_hoisted(self, *kind, declarations);
                         }
                         _ => {}
                     }
@@ -644,15 +667,10 @@ impl InferState {
             }
             return Ok(ty);
         }
-        if let (
-            true,
-            Expr::NullishCoalesce { left, right, span },
-        ) = (known, expr)
-        {
+        if let (true, Expr::NullishCoalesce { left, right, span }) = (known, expr) {
             // `a ?? b`: the non-nullish part of `a`, and `b`, each fit.
             let left_ty = self.infer_expr(env, left)?;
-            let (non_nullish, had_nullish) =
-                features::nullish::strip_nullish(&self.zonk(&left_ty));
+            let (non_nullish, had_nullish) = features::nullish::strip_nullish(&self.zonk(&left_ty));
             self.subsume(left.span(), &non_nullish, &expected)?;
             if had_nullish {
                 self.check_expr(env, right, &expected)?;
@@ -703,7 +721,7 @@ impl InferState {
             self.zonk(&expected),
             Type::Var(crate::types::TVarName::Flex(_))
         ) {
-            synth.widen_fresh_literals()
+            self.widen(expr.span(), &synth)
         } else {
             synth.clone()
         };

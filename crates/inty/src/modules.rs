@@ -448,6 +448,17 @@ fn load_module(
     let env_with_imports =
         resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting)?;
     let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
+    // Through the substitution: a binding's type can be a variable the end
+    // of inference decided (`export let n = 0` defaults to `Int`), and
+    // what reads the environment next (declarations, importers) has no
+    // substitution to apply.
+    let module_env = module_env.map_schemes(|s| {
+        if s.body.ty.free_vars().is_empty() {
+            s.clone()
+        } else {
+            state.flatten_scheme(s)
+        }
+    });
 
     let exports = compute_export_table(state, &starting_env, &program, &base_dir, visiting)?;
 

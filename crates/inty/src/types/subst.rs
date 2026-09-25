@@ -503,6 +503,7 @@ impl Substitutable for Type {
         match self {
             // Primitives are unchanged
             Type::Number => Type::Number,
+            Type::Int => Type::Int,
             Type::String => Type::String,
             Type::Boolean => Type::Boolean,
             Type::Undefined => Type::Undefined,
