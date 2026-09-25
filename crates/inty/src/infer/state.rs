@@ -889,7 +889,7 @@ impl InferState {
                     // A literal next to `null` widens to its base (`Int`
                     // for an integral one): no variable inside a union.
                     other => all.push(other.widen_fresh_literals_with(&mut |lit| match lit {
-                        crate::types::LitValue::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+                        crate::types::LitValue::Number(n) if crate::types::is_safe_int(*n) => {
                             Type::Int
                         }
                         lit => lit.base_type(),
@@ -1038,7 +1038,7 @@ impl InferState {
             }
             // An integral number literal is an `Int` too.
             if let (crate::types::LitValue::Number(n), Type::Int) = (lit, &sup) {
-                if n.is_finite() && n.fract() == 0.0 {
+                if crate::types::is_safe_int(*n) {
                     return Ok(());
                 }
             }

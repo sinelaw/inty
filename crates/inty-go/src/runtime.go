@@ -135,7 +135,7 @@ func intySign(f float64) float64 {
 	return f // ±0 and NaN
 }
 
-func intyStrIndexOf(s, sub string) float64 { return float64(strings.Index(s, sub)) }
+func intyStrIndexOf(s, sub string) int { return strings.Index(s, sub) }
 
 func intyClampIndex(i float64, n int) int {
 	if i != i {
@@ -182,9 +182,9 @@ func intyFromCharCode(c float64) string { return string(rune(intyToUint32(c) & 0
 
 // ---- Arrays: JS arrays are reference types, so they map to *[]T. -----
 
-func intyPush[T any](a *[]T, v T) float64 {
+func intyPush[T any](a *[]T, v T) int {
 	intyAppend(a, v)
-	return float64(len(*a))
+	return len(*a)
 }
 
 // intyAppend is `a.push(v)` as a statement. A full array grows to twice
@@ -210,9 +210,9 @@ func intyPop[T any](a *[]T) T {
 }
 
 // intyUnshift is Array.prototype.unshift with one element.
-func intyUnshift[T any](a *[]T, v T) float64 {
+func intyUnshift[T any](a *[]T, v T) int {
 	*a = slices.Insert(*a, 0, v)
-	return float64(len(*a))
+	return len(*a)
 }
 
 // intySplice is Array.prototype.splice(start, deleteCount, ...items): it
@@ -241,10 +241,10 @@ func intySpliceRange(n int, start, del float64) (int, int) {
 	return i, i + d
 }
 
-func intyIndexOf[T comparable](a *[]T, v T) float64 {
+func intyIndexOf[T comparable](a *[]T, v T) int {
 	for i, x := range *a {
 		if x == v {
-			return float64(i)
+			return i
 		}
 	}
 	return -1
@@ -333,10 +333,10 @@ func intyEvery[T any](a *[]T, f func(T) bool) bool {
 	return true
 }
 
-func intyFindIndex[T any](a *[]T, f func(T) bool) float64 {
+func intyFindIndex[T any](a *[]T, f func(T) bool) int {
 	for i, x := range *a {
 		if f(x) {
-			return float64(i)
+			return i
 		}
 	}
 	return -1
@@ -359,9 +359,8 @@ func intyJoin[T any](a *[]T, sep string, str func(T) string) string {
 
 // intySet is `a[i] = v`: JS grows the array when writing past the end
 // (holes are filled with the zero value; JS would leave them empty).
-func intySet[T any](a *[]T, i float64, v T) {
+func intySet[T any](a *[]T, j int, v T) {
 	s := *a
-	j := int(i)
 	if j < len(s) {
 		s[j] = v
 		return
@@ -374,6 +373,75 @@ func intySet[T any](a *[]T, i float64, v T) {
 }
 
 // ---- Numbers ------------------------------------------------------------
+
+// An inty `Int` is a Go int. JS computes on doubles, which hold every
+// integer up to 2^53 exactly; past that the two would silently disagree,
+// so the operations that can get there (multiplication, and a double
+// becoming an Int: Math.floor and friends) stop the program instead.
+
+const intyMaxSafe = 1 << 53
+
+func intyIntRange(f float64) {
+	if f != f || f > intyMaxSafe || f < -intyMaxSafe {
+		panic("inty: integer result " + strconv.FormatFloat(f, 'g', -1, 64) +
+			" is not a safe integer (|n| <= 2^53); JavaScript would compute a different value")
+	}
+}
+
+// intyToInt is a double known to be an integer (or a trap) as an Int.
+func intyToInt(f float64) int {
+	intyIntRange(f)
+	return int(f)
+}
+
+// intyIMul is `a * b` on Ints.
+func intyIMul(a, b int) int {
+	if a > -1<<26 && a < 1<<26 && b > -1<<26 && b < 1<<26 {
+		return a * b
+	}
+	intyIntRange(float64(a) * float64(b))
+	return a * b
+}
+
+func intyFloorInt(f float64) int { return intyToInt(math.Floor(f)) }
+func intyCeilInt(f float64) int  { return intyToInt(math.Ceil(f)) }
+func intyTruncInt(f float64) int { return intyToInt(math.Trunc(f)) }
+func intyRoundInt(f float64) int { return intyToInt(intyRound(f)) }
+
+func intyAbsInt(i int) int {
+	if i < 0 {
+		return -i
+	}
+	return i
+}
+
+// intyStrSliceI is intyStrSlice with Int bounds.
+func intyStrSliceI(s string, a, b int) string {
+	n := len(s)
+	if a < 0 {
+		a = max(a+n, 0)
+	} else if a > n {
+		a = n
+	}
+	if b < 0 {
+		b = max(b+n, 0)
+	} else if b > n {
+		b = n
+	}
+	if a >= b {
+		return ""
+	}
+	return s[a:b]
+}
+
+// intyStrSubstringI is intyStrSubstring with Int bounds.
+func intyStrSubstringI(s string, a, b int) string {
+	a, b = min(max(a, 0), len(s)), min(max(b, 0), len(s))
+	if a > b {
+		a, b = b, a
+	}
+	return s[a:b]
+}
 
 func intyTruthy(f float64) bool { return f != 0 && f == f }
 
@@ -391,11 +459,11 @@ func intyPow(x, y float64) float64 {
 	return math.Pow(x, y)
 }
 
-func intyImul(a, b float64) float64 { return float64(intyToInt32(a) * intyToInt32(b)) }
+func intyImul(a, b float64) int { return int(intyToInt32(a) * intyToInt32(b)) }
 
 func intyFround(f float64) float64 { return float64(float32(f)) }
 
-func intyClz32(f float64) float64 { return float64(bits.LeadingZeros32(intyToUint32(f))) }
+func intyClz32(f float64) int { return bits.LeadingZeros32(intyToUint32(f)) }
 
 func intyIsInteger(f float64) bool { return !math.IsInf(f, 0) && f == math.Trunc(f) }
 
@@ -406,10 +474,10 @@ var intyStart = time.Now()
 // intyNow is performance.now(): milliseconds since program start.
 func intyNow() float64 { return float64(time.Since(intyStart).Nanoseconds()) / 1e6 }
 
-func intyStrIndexOfFrom(s, sub string, from float64) float64 {
+func intyStrIndexOfFrom(s, sub string, from float64) int {
 	i := intyClampIndex(max(from, 0), len(s))
 	if j := strings.Index(s[i:], sub); j >= 0 {
-		return float64(i + j)
+		return i + j
 	}
 	return -1
 }

@@ -84,15 +84,11 @@ fn objects_become_structs() {
     .unwrap()
     .code;
     assert!(
-        code.contains("type Obj1 struct {\n\tx float64\n\ty float64\n}"),
+        code.contains("type Obj1 struct {\n\tx int\n\ty int\n}"),
         "{}",
         code
     );
-    assert!(
-        code.contains("func p(x float64, y float64) *Obj1 {"),
-        "{}",
-        code
-    );
+    assert!(code.contains("func p(x int, y int) *Obj1 {"), "{}", code);
 }
 
 #[test]
@@ -104,13 +100,9 @@ fn polymorphic_functions_are_monomorphised() {
     )
     .unwrap()
     .code;
-    assert!(code.contains("func id(x float64) float64 {"), "{}", code);
+    assert!(code.contains("func id(x int) int {"), "{}", code);
     assert!(code.contains("func id__2(x string) string {"), "{}", code);
-    assert!(
-        code.contains("intyLog(intyInspectNum(id(1.0)))"),
-        "{}",
-        code
-    );
+    assert!(code.contains("intyLog(strconv.Itoa(id(1)))"), "{}", code);
     assert!(code.contains("intyLog(id__2(\"a\"))"), "{}", code);
 }
 
@@ -121,8 +113,28 @@ fn same_go_types_share_a_specialisation() {
         inty_go::compile("function id(x) { return x; }\nconsole.log(id(1));\nconsole.log(id(2));")
             .unwrap()
             .code;
-    assert!(code.contains("func id(x float64) float64 {"), "{}", code);
+    assert!(code.contains("func id(x int) int {"), "{}", code);
     assert!(!code.contains("id__2"), "{}", code);
+}
+
+#[test]
+fn ints_and_numbers_get_their_own_specialisations() {
+    // `Int` is a Go int, `Number` a float64: an identity used at both is
+    // two functions, and an `Int` flowing into a `Number` is converted.
+    let code = inty_go::compile(
+        "function id(x) { return x; }\n\
+         const xs = [1, 2, 3];\n\
+         console.log(id(xs.length));\n\
+         console.log(id(0.5));\n\
+         const half = xs.length / 2;\n\
+         console.log(half + xs[0]);",
+    )
+    .unwrap()
+    .code;
+    assert!(code.contains("func id(x int) int {"), "{}", code);
+    assert!(code.contains("func id__2(x float64) float64 {"), "{}", code);
+    assert!(code.contains("float64(len(*xs)) / 2.0"), "{}", code);
+    assert!(code.contains("(half + float64((*xs)[0]))"), "{}", code);
 }
 
 #[test]
@@ -257,7 +269,10 @@ fn go_available() -> bool {
     match go_version() {
         Some((1, minor)) if minor >= 22 => true,
         other => {
-            eprintln!("skipping end-to-end Go test: need go >= 1.22, found {:?}", other);
+            eprintln!(
+                "skipping end-to-end Go test: need go >= 1.22, found {:?}",
+                other
+            );
             false
         }
     }
@@ -285,7 +300,10 @@ fn node_io_matches_node() {
     assert_eq!(stdout, fs::read_to_string(io.join("io.out")).unwrap());
     assert_eq!(stderr, fs::read_to_string(io.join("io.err")).unwrap());
     assert_eq!(code, 3, "process.exit(3)");
-    assert_eq!(fs::read_to_string(outdir.join("out.txt")).unwrap(), "first\nsecond\n");
+    assert_eq!(
+        fs::read_to_string(outdir.join("out.txt")).unwrap(),
+        "first\nsecond\n"
+    );
     // Wrong usage: message on stderr, exit status 2.
     let (code, stdout, stderr) = run_with(&bin, &[], b"");
     assert_eq!((code, stdout.as_str()), (2, ""));
@@ -312,7 +330,12 @@ fn md2html_matches_node() {
     let out = work.join("standalone.html");
     let (code, stdout, _) = run_with(
         &bin,
-        &["--standalone", "-o", out.to_str().unwrap(), sample.to_str().unwrap()],
+        &[
+            "--standalone",
+            "-o",
+            out.to_str().unwrap(),
+            sample.to_str().unwrap(),
+        ],
         b"",
     );
     assert_eq!((code, stdout.as_str()), (0, ""));

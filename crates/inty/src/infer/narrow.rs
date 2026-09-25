@@ -199,7 +199,7 @@ fn refine_type(ty: &Type, narrowing: &Narrowing) -> Type {
                     if matches!(ty, Type::String | Type::Number | Type::Boolean)
                         || matches!(
                             (ty, lit),
-                            (Type::Int, LitValue::Number(n)) if n.fract() == 0.0
+                            (Type::Int, LitValue::Number(n)) if crate::types::is_safe_int(*n)
                         ) =>
                 {
                     Type::Literal(lit.clone())
@@ -287,7 +287,7 @@ fn value_compatible_with_literal(ty: &Type, lit: &LitValue) -> bool {
         Type::Literal(other) => other == lit,
         Type::String => matches!(lit, LitValue::String(_)),
         Type::Number => matches!(lit, LitValue::Number(_)),
-        Type::Int => matches!(lit, LitValue::Number(n) if n.fract() == 0.0),
+        Type::Int => matches!(lit, LitValue::Number(n) if crate::types::is_safe_int(*n)),
         Type::Boolean => matches!(lit, LitValue::Bool(_)),
         // Unknown/abstract types are compatible — we can't rule them out.
         Type::Var(_) | Type::Named(_, _) | Type::Union(_) => true,

@@ -3,7 +3,7 @@
 use crate::ast::{BinOp, Expr, UnaryOp};
 use crate::error::{IntyError, TypeError};
 use crate::span::Span;
-use crate::types::{Type, TypePred};
+use crate::types::{LitValue, Type, TypePred};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
@@ -21,6 +21,13 @@ impl InferState {
         let arg_type = self.infer_expr(env, argument)?;
 
         match op {
+            // `-3` is the literal `-3` (and `-0` isn't an `Int`: it isn't 0).
+            UnaryOp::Neg if matches!(arg_type, Type::Literal(LitValue::Number(_))) => {
+                let Type::Literal(LitValue::Number(n)) = arg_type else {
+                    unreachable!()
+                };
+                Ok(Type::Literal(LitValue::Number(-n)))
+            }
             // `-i` is an `Int` for an `Int` `i`.
             UnaryOp::Neg | UnaryOp::Pos => {
                 let arg = self.widen(span, &arg_type);
