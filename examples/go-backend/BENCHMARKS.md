@@ -158,3 +158,41 @@ the types already carry the information:
   generic helpers that take a func value, so the callback isn't
   inlined. Emitting the loop at the call site when the callback is a
   literal would remove the indirect call.
+
+## A real tool: md2html
+
+[`tools/md2html.js`](tools/md2html.js) is a ~700-line Markdown → HTML
+converter (CommonMark core plus GitHub tables and strikethrough) written
+as ordinary JavaScript and reading and writing files through
+`node:fs` / `node:process`. Unlike the programs above it isn't a loop
+kernel with an in-process benchmark protocol: it's measured the way a
+CLI is used, as **whole processes** — startup, reading the input,
+converting, writing the HTML.
+
+`node tools/bench.mjs` translates and builds it, checks that Node, Bun
+and the Go binary produce byte-identical HTML, then runs each side 21
+times per input (after one discarded warm-up round), interleaved in
+random order. Wall time, CPU time (user + sys) and peak RSS come from
+`getrusage`; medians are reported.
+
+Inputs: the repository README (5.2 KB), and every Markdown file in the
+repository concatenated and repeated to 20.4 MB.
+
+| input | node | bun | inty → go | go vs node / bun | CPU node / bun / go | peak RSS node / bun / go |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small (5.2 KB) | 72.2 ms | 37.2 ms | 3.0 ms | **23.8x / 12.3x** | 75 / 43 / 4 ms | 58 / 44 / 10 MB |
+| large (20.4 MB) | 1303 ms | 1129 ms | 821 ms | **1.59x / 1.37x** | 1734 / 2115 / 1126 ms | 332 / 459 / 149 MB |
+
+Node v22.22.2, Bun 1.3.11, Go 1.24.7, linux/amd64.
+
+- **Small inputs are startup.** A native binary starts in ~3 ms; the JS
+  engines spend 35–70 ms before running a line. For a tool invoked once
+  per file — a build step, a pre-commit hook — this is the number that
+  matters.
+- **Large inputs are throughput.** Here the gap is 1.4–1.6x in wall time,
+  with 35–50% less CPU (the engines' JIT and GC threads work in parallel
+  with the program) and less than half the memory.
+- The Go side's one runtime-level optimisation that mattered was sizing a
+  string array's `join` once (`strings.Join`); the program builds its
+  output by pushing strings onto an array and joining them, as idiomatic
+  JavaScript does.
