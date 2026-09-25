@@ -16,6 +16,9 @@ see the [README](README.md) for what the backend supports.
   beats it by 1.2–1.8x.
 - **Ties and losses:** pure float loops are a tie. Short-lived allocation
   (vs V8) and integer index arithmetic done in doubles are losses.
+- **Integers:** since inty types integers as `Int` and the backend emits
+  them as Go `int`, every program is 0–42% faster than the float64 code
+  the tables below measured. See [Integers](#integers-int-as-a-go-int).
 
 ## Reproducing
 
@@ -71,7 +74,8 @@ table and makes the run exit non-zero.
 ## Results
 
 These are from Node v22.22.2 (V8), Bun 1.3.11 (JavaScriptCore) and Go
-1.24.7 on a 4-core linux/amd64 cloud container. Each runtime got 10
+1.24.7 on a 4-core linux/amd64 cloud container. They predate the `Int`
+lowering: [Integers](#integers-int-as-a-go-int) has its before/after. Each runtime got 10
 processes after 1 discarded, so 30 warm iterations. Every program's
 output was byte-identical across all three. On their own, the runtimes
 take 28 ms (Node) and 3.8 ms (Bun) to start.
@@ -268,3 +272,69 @@ Go 1.24.7, linux/amd64.
 - **Where the types could still help:** the bisection indices are
   integral, so a range analysis could make the V arrays `[]int32`,
   halving the memory traffic that decides the large case.
+
+## Integers: `Int` as a Go `int`
+
+inty types a number with no fractional part as `Int`, a refinement of
+`Number`: indices, `.length`, `indexOf`, loop counters, bitwise results
+and `Math.floor`. The backend emits `Int` as a Go `int` and `Number` as a
+`float64`. The conversion happens where an `Int` flows into a `Number`.
+Indexing no longer goes through `int(float64)`, and integer `+ - %`
+are single instructions.
+
+Multiplication and `Math.floor`/`ceil`/`round`/`trunc` are checked:
+past ±2^53, where doubles stop being exact, the program stops rather
+than print something Node wouldn't. Each check is one double compare,
+small enough for Go to inline. The first version, whose slow path built
+an error message, wasn't inlined, which made `game-of-life`'s
+`y * W + x` a call and the program 76% *slower*.
+
+**Before/after, Go only.** The pre-`Int` binary (all numbers `float64`)
+against the current one, run interleaved in the same session: 7
+processes each, median of warm iterations. Node and Bun don't enter into
+it, so drift of the machine between sessions doesn't either.
+
+| benchmark | float64 | `Int` → `int` | change |
+| --- | ---: | ---: | ---: |
+| array-hof | 430 ms | 335 ms | −22% |
+| bytecode-vm | 694 ms | 483 ms | −31% |
+| collatz | 1415 ms | 1427 ms | +1% (noise) |
+| dijkstra | 574 ms | 526 ms | −8% |
+| fib | 303 ms | 255 ms | −16% |
+| fuzzy-search | 647 ms | 509 ms | −21% |
+| game-of-life | 1177 ms | 683 ms | **−42%** |
+| log-analytics | 342 ms | 261 ms | −24% |
+| mandelbrot | 1472 ms | 1490 ms | +1% (noise) |
+| nbody | 661 ms | 508 ms | −23% |
+| orders | 264 ms | 220 ms | −17% |
+| particles | 632 ms | 600 ms | −5% |
+| raytracer | 304 ms | 305 ms | 0% |
+| sieve | 252 ms | 215 ms | −15% |
+| spectral-norm | 1117 ms | 924 ms | −17% |
+
+The programs that don't move are the float ones: mandelbrot and
+raytracer compute in doubles throughout, and collatz's values need no
+indexing. game-of-life gains most because its whole inner loop is
+neighbour-index arithmetic. It goes from a tie with Node to 1.8x faster.
+
+**md2html and fast-diff** (whole processes, as in their sections):
+
+| program, input | float64 | `Int` → `int` | Go vs Node, before → after |
+| --- | ---: | ---: | ---: |
+| md2html, large (20 MB) | 1073 ms | 990 ms (CPU −16%) | 1.60x → 1.80x |
+| fast-diff, large (4 MB) | 2022 ms | 1890 ms | 0.84x → 0.93x |
+| fast-diff, large `--cleanup` | 1952 ms | 1769 ms | 0.88x → 0.98x |
+| fast-diff, dense (200 KB) | 480 ms | 444 ms | 1.30x → 1.38x |
+
+The fast-diff "after" column predates the inlining fix; a later, noisier
+run with it had Go ahead of Node on the large input (1.15x). Peak memory
+doesn't change: an `int` is 8 bytes, like a `float64`. The
+large fast-diff input is still decided by allocating the V arrays, which
+V8 stores as 4-byte integers. `[]int32` storage would need a range
+analysis proving the values fit.
+
+**Where Go and Node can still differ:** Int arithmetic that produces
+`-0` in JS (`-0 * 1`) is `0` in Go, which only shows when it's printed
+or divided by. An `Int` remainder by zero traps (JS gives `NaN`, which
+isn't an `Int`).
+
