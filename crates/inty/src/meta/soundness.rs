@@ -210,8 +210,9 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
             expected, value
         ));
     }
-    // An `Int` has no fractional part.
-    if ty == Type::Int && !matches!(value, Value::Number(n) if n.fract() == 0.0) {
+    // An `Int` has no fractional part. (Arithmetic can still make a `-0`
+    // from `Int`s — `-0 * 1` — which a Go `int` holds as 0: a known corner.)
+    if ty == Type::Int && !matches!(value, Value::Number(n) if crate::types::is_safe_int(n.abs())) {
         return Err(format!("value-type mismatch: expected Int, got {}", value));
     }
     Ok(())

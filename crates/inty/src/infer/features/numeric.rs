@@ -44,7 +44,7 @@ pub(crate) enum NumKind {
 }
 
 fn is_integral(n: f64) -> bool {
-    n.is_finite() && n.fract() == 0.0
+    crate::types::is_safe_int(n)
 }
 
 impl InferState {

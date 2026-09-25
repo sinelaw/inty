@@ -337,6 +337,16 @@ pub enum LitValue {
     Bool(bool),
 }
 
+/// Whether a number is an `Int` value: a *safe* integer — no fractional
+/// part, `|n| ≤ 2^53` (every integer in that range is a distinct double),
+/// and not `-0` (which prints, and divides, differently from `0`).
+pub fn is_safe_int(n: f64) -> bool {
+    n.is_finite()
+        && n.fract() == 0.0
+        && n.abs() <= 9007199254740992.0
+        && !(n == 0.0 && n.is_sign_negative())
+}
+
 impl LitValue {
     /// The base primitive type that this literal subsumes into.
     pub fn base_type(&self) -> Type {

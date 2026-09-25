@@ -9,3 +9,4 @@ cc 3b091101917f8bc9589a69636f3a14529a421a95f1ae8acf519f3cb0dd8991eb # shrinks to
 cc f46e3367527b4a732bfb8e082efd9c864bd9156450d42e7a469eacc0056f24f5 # shrinks to src = "((0 < (0 - 0)) ? \"\" : \"\")"
 cc 9d7419ae7258a2d654a43367f03537906d4b46608f4e8edc300d662a55a11baa # shrinks to src = "(0 === ((4 + 1) - 1))"
 cc 73bb0d748d046bec9e72500e5a75572bbfffb7c3de29d8a4f40d2f56154fde5a # shrinks to src = "(function(x) { return x; })(((0 - 0) + (5 - 55)))"
+cc 4febba643eb2d314f79a5e6bf3a9010c69dfe924ace881a15007f030d9ea9efd # shrinks to src = "(-((true ? 0 : 0)) * -(-(0)))"

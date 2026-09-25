@@ -316,6 +316,12 @@ fn const_num(e: &Expr) -> Option<f64> {
                 BinOp::Div => a / b,
                 BinOp::Mod => a % b,
                 BinOp::Pow => a.powf(b),
+                BinOp::BitAnd => (js_i32(a) & js_i32(b)) as f64,
+                BinOp::BitOr => (js_i32(a) | js_i32(b)) as f64,
+                BinOp::BitXor => (js_i32(a) ^ js_i32(b)) as f64,
+                BinOp::LShift => js_i32(a).wrapping_shl(js_i32(b) as u32 & 31) as f64,
+                BinOp::RShift => js_i32(a).wrapping_shr(js_i32(b) as u32 & 31) as f64,
+                BinOp::URShift => (js_i32(a) as u32).wrapping_shr(js_i32(b) as u32 & 31) as f64,
                 _ => return None,
             })
         }
@@ -335,6 +341,14 @@ fn const_num(e: &Expr) -> Option<f64> {
         },
         _ => None,
     }
+}
+
+/// ECMAScript ToInt32.
+fn js_i32(f: f64) -> i32 {
+    if !f.is_finite() {
+        return 0;
+    }
+    (f.trunc().rem_euclid(4294967296.0) as u64) as u32 as i32
 }
 
 fn math_constant(name: &str) -> Option<f64> {
@@ -374,6 +388,76 @@ fn num_lit(n: f64) -> String {
             s
         }
     }
+}
+
+/// Go spelling of an integral value as an `int` constant.
+fn int_lit(n: f64) -> String {
+    let i = n as i64;
+    if i < 0 {
+        format!("({})", i)
+    } else {
+        i.to_string()
+    }
+}
+
+fn is_num(t: &GoType) -> bool {
+    matches!(t, GoType::Int | GoType::Float)
+}
+
+/// `v`, of Go type `from`, as a value of type `to`: an `Int` flowing into
+/// a `Number` slot (the checker's `Int ≤ Number`) becomes a float64. The
+/// other direction is a double the checker proved integral (a trap past
+/// ±2^53).
+fn coerce(v: String, from: &GoType, to: &GoType) -> String {
+    match (from, to) {
+        (GoType::Int, GoType::Float) => {
+            // An int constant: its float spelling.
+            let digits = v.trim_start_matches('(').trim_end_matches(')');
+            let digits = digits.strip_prefix('-').unwrap_or(digits);
+            if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                format!("{}.0", v.trim_end_matches(')')) + if v.ends_with(')') { ")" } else { "" }
+            } else {
+                format!("float64({})", v)
+            }
+        }
+        (GoType::Float, GoType::Int) => format!("intyToInt({})", v),
+        _ => v,
+    }
+}
+
+/// ECMAScript ToInt32 / ToUint32 of a number of Go type `t`: a
+/// conversion for an `Int` (Go's wraps modulo 2^32, as JS does).
+/// (A constant is converted here: Go rejects `uint32(-1)` and would
+/// fold `int32(1) << 31` as an overflowing constant.)
+fn to_i32(v: String, t: &GoType) -> String {
+    if let Some(n) = const_int(&v) {
+        return format!("int32({})", js_i32(n as f64));
+    }
+    match t {
+        GoType::Int => format!("int32({})", v),
+        _ => format!("intyToInt32({})", v),
+    }
+}
+
+fn to_u32(v: String, t: &GoType) -> String {
+    if let Some(n) = const_int(&v) {
+        return format!("uint32({})", js_i32(n as f64) as u32);
+    }
+    match t {
+        GoType::Int => format!("uint32({})", v),
+        _ => format!("intyToUint32({})", v),
+    }
+}
+
+/// The value of an integer (or integral float) literal as spelled by
+/// `int_lit` / `num_lit`.
+fn const_int(v: &str) -> Option<i64> {
+    let inner = v
+        .strip_prefix('(')
+        .and_then(|x| x.strip_suffix(')'))
+        .unwrap_or(v);
+    let f: f64 = inner.parse().ok()?;
+    (f.is_finite() && f.fract() == 0.0 && f.abs() < 1e15).then_some(f as i64)
 }
 
 fn go_string_lit(s: &str) -> String {
@@ -1303,7 +1387,7 @@ impl<'a> Emitter<'a> {
                         None => return Err(unsupported("uninitialised for-loop variable", d.span)),
                     };
                     let v = match &ty {
-                        GoType::Float | GoType::Str | GoType::Bool => v,
+                        GoType::Float | GoType::Int | GoType::Str | GoType::Bool => v,
                         _ if v == "nil" => {
                             return Err(unsupported("null-initialised for-loop variable", d.span))
                         }
@@ -1353,8 +1437,23 @@ impl<'a> Emitter<'a> {
     }
 
     fn switch_stmt(&mut self, disc: &Expr, cases: &[SwitchCase], _span: Span) -> Result<()> {
-        let dt = self.type_of(disc)?;
+        let mut dt = self.type_of(disc)?;
         let d = self.expr(disc)?;
+        // An `Int` discriminant with a fractional case compares as doubles.
+        let d = if dt == GoType::Int {
+            let mut fractional = false;
+            for c in cases.iter().filter_map(|c| c.test.as_ref()) {
+                fractional |= self.type_of(c)? == GoType::Float;
+            }
+            if fractional {
+                dt = GoType::Float;
+                coerce(d, &GoType::Int, &GoType::Float)
+            } else {
+                d
+            }
+        } else {
+            d
+        };
         self.line(&format!("switch {} {{", d));
         let mut pending: Vec<String> = Vec::new();
         for (i, case) in cases.iter().enumerate() {
@@ -1499,21 +1598,46 @@ impl<'a> Emitter<'a> {
             {
                 if let GoType::Array(elem) = self.type_of(object)? {
                     let a = self.expr(object)?;
-                    let i = self.expr(property)?;
+                    let i = self.index(property)?;
                     let v = self.expr_as(right, &elem)?;
                     return Ok(format!("intySet({a}, {i}, {v})"));
                 }
             }
         }
         let p = self.place(left)?;
-        let r = self.expr_as(right, &lt)?;
+        // A bitwise operand keeps its own type (`n |= x` on a Number `n`).
+        let bitwise = matches!(
+            op,
+            AssignOp::BitAndAssign
+                | AssignOp::BitOrAssign
+                | AssignOp::BitXorAssign
+                | AssignOp::LShiftAssign
+                | AssignOp::RShiftAssign
+                | AssignOp::URShiftAssign
+        );
+        let (r, r_t) = if bitwise {
+            let t = self.type_of(right)?;
+            (self.expr(right)?, t)
+        } else {
+            (self.expr_as(right, &lt)?, lt.clone())
+        };
         let direct = |o: &str| Ok(format!("{} {} {}", p, o, r));
         match op {
             AssignOp::Assign => direct("="),
             AssignOp::AddAssign if lt == GoType::Str => direct("+="),
             AssignOp::AddAssign => direct("+="),
             AssignOp::SubAssign => direct("-="),
+            AssignOp::MulAssign if lt == GoType::Int => {
+                if !is_pure_place(left) {
+                    return Err(unsupported(
+                        "compound assignment to a place with side effects",
+                        left.span(),
+                    ));
+                }
+                Ok(format!("{p} = intyIMul({p}, {r})"))
+            }
             AssignOp::MulAssign => direct("*="),
+            AssignOp::ModAssign if lt == GoType::Int => direct("%="),
             AssignOp::DivAssign if const_num(right) == Some(0.0) => {
                 Ok(format!("{} /= intyZero", p))
             }
@@ -1525,27 +1649,18 @@ impl<'a> Emitter<'a> {
                         left.span(),
                     ));
                 }
+                let (pi, pu) = (to_i32(p.clone(), &lt), to_u32(p.clone(), &lt));
+                let (ri, ru) = (to_i32(r.clone(), &r_t), to_u32(r.clone(), &r_t));
+                let bits = |s: String| coerce(s, &GoType::Int, &lt);
                 let v = match op {
                     AssignOp::ModAssign => format!("intyMod({p}, {r})"),
                     AssignOp::PowAssign => format!("intyPow({p}, {r})"),
-                    AssignOp::BitAndAssign => {
-                        format!("float64(intyToInt32({p}) & intyToInt32({r}))")
-                    }
-                    AssignOp::BitOrAssign => {
-                        format!("float64(intyToInt32({p}) | intyToInt32({r}))")
-                    }
-                    AssignOp::BitXorAssign => {
-                        format!("float64(intyToInt32({p}) ^ intyToInt32({r}))")
-                    }
-                    AssignOp::LShiftAssign => {
-                        format!("float64(intyToInt32({p}) << (intyToUint32({r}) & 31))")
-                    }
-                    AssignOp::RShiftAssign => {
-                        format!("float64(intyToInt32({p}) >> (intyToUint32({r}) & 31))")
-                    }
-                    AssignOp::URShiftAssign => {
-                        format!("float64(intyToUint32({p}) >> (intyToUint32({r}) & 31))")
-                    }
+                    AssignOp::BitAndAssign => bits(format!("int({pi} & {ri})")),
+                    AssignOp::BitOrAssign => bits(format!("int({pi} | {ri})")),
+                    AssignOp::BitXorAssign => bits(format!("int({pi} ^ {ri})")),
+                    AssignOp::LShiftAssign => bits(format!("int({pi} << ({ru} & 31))")),
+                    AssignOp::RShiftAssign => bits(format!("int({pi} >> ({ru} & 31))")),
+                    AssignOp::URShiftAssign => bits(format!("int({pu} >> ({ru} & 31))")),
                     _ => return Err(unsupported("logical assignment operator", left.span())),
                 };
                 Ok(format!("{} = {}", p, v))
@@ -1584,6 +1699,7 @@ impl<'a> Emitter<'a> {
         Ok(match t {
             GoType::Bool => v,
             GoType::Float => format!("intyTruthy({})", v),
+            GoType::Int => format!("({} != 0)", v),
             GoType::Str => format!("({} != \"\")", v),
             GoType::Array(_) | GoType::Struct(_) | GoType::Func(..) => format!("({} != nil)", v),
             _ => return Err(unsupported("condition of this type", span)),
@@ -1597,8 +1713,12 @@ impl<'a> Emitter<'a> {
                 return Ok(format!("{}", n as i64));
             }
         }
+        let t = self.type_of(e)?;
         let v = self.expr(e)?;
-        Ok(format!("int({})", v))
+        Ok(match t {
+            GoType::Int => v,
+            _ => format!("int({})", v),
+        })
     }
 
     /// `e`, where the context expects a value of type `want`. Only
@@ -1629,14 +1749,37 @@ impl<'a> Emitter<'a> {
                     ))
                 }
             }
+            _ if is_num(want) => self.num_as(e, want),
             _ => self.expr(e),
         }
+    }
+
+    /// A number-valued `e` as a Go value of type `want` (`Int` or
+    /// `Number`): a constant is spelled in that type, anything else
+    /// converted.
+    fn num_as(&mut self, e: &Expr, want: &GoType) -> Result<String> {
+        if let Some(n) = const_num(e) {
+            if *want == GoType::Float || !crate::types::is_int(n) {
+                return Ok(num_lit(n));
+            }
+            return Ok(int_lit(n));
+        }
+        let t = self.type_of(e)?;
+        let v = self.expr(e)?;
+        Ok(coerce(v, &t, want))
+    }
+
+    /// The Go type inty recorded for the expression at `span`.
+    fn go_type_at(&mut self, span: Span) -> Result<GoType> {
+        let t = self.raw_type(span)?;
+        self.tm.map(self.state, &t, span)
     }
 
     fn to_str(&mut self, v: String, t: &GoType, span: Span) -> Result<String> {
         Ok(match t {
             GoType::Str => v,
             GoType::Float => format!("intyNumStr({})", v),
+            GoType::Int => format!("strconv.Itoa({})", v),
             GoType::Bool => format!("intyBoolStr({})", v),
             GoType::Array(elem) => {
                 let f = self.str_func(elem, span)?;
@@ -1651,6 +1794,7 @@ impl<'a> Emitter<'a> {
         Ok(match t {
             GoType::Str => "func(s string) string { return s }".into(),
             GoType::Float => "intyNumStr".into(),
+            GoType::Int => "strconv.Itoa".into(),
             GoType::Bool => "intyBoolStr".into(),
             _ => return Err(unsupported("join over elements of this type", span)),
         })
@@ -1658,6 +1802,9 @@ impl<'a> Emitter<'a> {
 
     fn expr(&mut self, e: &Expr) -> Result<String> {
         if let Some(n) = const_num(e) {
+            if crate::types::is_int(n) && self.type_of(e).ok() == Some(GoType::Int) {
+                return Ok(int_lit(n));
+            }
             return Ok(num_lit(n));
         }
         match e {
@@ -1888,11 +2035,13 @@ impl<'a> Emitter<'a> {
         match self.type_of(object)? {
             GoType::Array(_) if property == "length" => {
                 let a = self.expr(object)?;
-                Ok(format!("float64(len(*{}))", a))
+                let want = self.go_type_at(span)?;
+                Ok(coerce(format!("len(*{})", a), &GoType::Int, &want))
             }
             GoType::Str if property == "length" => {
                 let s = self.expr(object)?;
-                Ok(format!("float64(len({}))", s))
+                let want = self.go_type_at(span)?;
+                Ok(coerce(format!("len({})", s), &GoType::Int, &want))
             }
             GoType::Struct(idx) => {
                 let go = self
@@ -1913,16 +2062,31 @@ impl<'a> Emitter<'a> {
     fn unary(&mut self, op: UnaryOp, arg: &Expr, span: Span, whole: &Expr) -> Result<String> {
         let t = self.type_of(arg)?;
         match op {
-            UnaryOp::Neg if t == GoType::Float => Ok(format!("(-{})", self.expr(arg)?)),
-            UnaryOp::Pos if t == GoType::Float => self.expr(arg),
+            UnaryOp::Neg | UnaryOp::Pos if is_num(&t) => {
+                let want = self.go_type_at(span)?;
+                let v = self.num_as(arg, &want)?;
+                Ok(if op == UnaryOp::Neg {
+                    format!("(-{})", v)
+                } else {
+                    v
+                })
+            }
             UnaryOp::Not => {
                 let v = self.expr(arg)?;
                 let c = self.truthy(v, &t, span)?;
                 Ok(format!("(!{})", c))
             }
-            UnaryOp::BitNot => Ok(format!("float64(^intyToInt32({}))", self.expr(arg)?)),
+            UnaryOp::BitNot => {
+                let v = self.expr(arg)?;
+                let want = self.go_type_at(span)?;
+                Ok(coerce(
+                    format!("int(^{})", to_i32(v, &t)),
+                    &GoType::Int,
+                    &want,
+                ))
+            }
             UnaryOp::Typeof if matches!(arg, Expr::Ident { .. }) => Ok(go_string_lit(match t {
-                GoType::Float => "number",
+                GoType::Float | GoType::Int => "number",
                 GoType::Str => "string",
                 GoType::Bool => "boolean",
                 GoType::Func(..) => "function",
@@ -1940,10 +2104,11 @@ impl<'a> Emitter<'a> {
                     "--"
                 };
                 let _ = whole;
+                let rt = self.tm.render(&t);
                 if matches!(op, UnaryOp::PostInc | UnaryOp::PostDec) {
-                    Ok(format!("func() float64 {{ t := {p}; {p}{o}; return t }}()"))
+                    Ok(format!("func() {rt} {{ t := {p}; {p}{o}; return t }}()"))
                 } else {
-                    Ok(format!("func() float64 {{ {p}{o}; return {p} }}()"))
+                    Ok(format!("func() {rt} {{ {p}{o}; return {p} }}()"))
                 }
             }
             _ => Err(unsupported(format!("unary `{:?}` on this type", op), span)),
@@ -1978,20 +2143,47 @@ impl<'a> Emitter<'a> {
         }
         let a = self.expr(left)?;
         let b = self.expr(right)?;
-        let num = lt == GoType::Float && rt == GoType::Float;
+        let num = is_num(&lt) && is_num(&rt);
+        // Arithmetic happens in the result's type (an `Int` operand of a
+        // `Number` operation becomes a float64); a comparison in `Int` only
+        // when both sides are.
+        let whole = if num {
+            self.go_type_at(span)?
+        } else {
+            GoType::Unit
+        };
+        let both_int = lt == GoType::Int && rt == GoType::Int;
+        let cmp_t = if both_int { GoType::Int } else { GoType::Float };
+        let (fa, fb) = (
+            coerce(a.clone(), &lt, &GoType::Float),
+            coerce(b.clone(), &rt, &GoType::Float),
+        );
+        let (wa, wb) = (
+            coerce(a.clone(), &lt, &whole),
+            coerce(b.clone(), &rt, &whole),
+        );
+        let (ca, cb) = (
+            coerce(a.clone(), &lt, &cmp_t),
+            coerce(b.clone(), &rt, &cmp_t),
+        );
+        let int_result = |s: String, whole: &GoType| coerce(s, &GoType::Int, whole);
         Ok(match op {
-            BinOp::Add if num => format!("({} + {})", a, b),
             BinOp::Add if lt == GoType::Str || rt == GoType::Str => {
                 let a = self.to_str(a, &lt, span)?;
                 let b = self.to_str(b, &rt, span)?;
                 format!("({} + {})", a, b)
             }
-            BinOp::Sub if num => format!("({} - {})", a, b),
-            BinOp::Mul if num => format!("({} * {})", a, b),
-            BinOp::Div if num && const_num(right) == Some(0.0) => format!("({} / intyZero)", a),
-            BinOp::Div if num => format!("({} / {})", a, b),
-            BinOp::Mod if num => format!("intyMod({}, {})", a, b),
-            BinOp::Pow if num => format!("intyPow({}, {})", a, b),
+            BinOp::Add if num => format!("({} + {})", wa, wb),
+            BinOp::Sub if num => format!("({} - {})", wa, wb),
+            BinOp::Mul if num && whole == GoType::Int => format!("intyIMul({}, {})", wa, wb),
+            BinOp::Mul if num => format!("({} * {})", wa, wb),
+            BinOp::Div if num && const_num(right) == Some(0.0) => format!("({} / intyZero)", fa),
+            BinOp::Div if num => format!("({} / {})", fa, fb),
+            // Go's `%` truncates like JS's; an Int remainder by zero traps
+            // (JS gives NaN, which isn't an Int).
+            BinOp::Mod if num && whole == GoType::Int => format!("({} % {})", wa, wb),
+            BinOp::Mod if num => format!("intyMod({}, {})", wa, wb),
+            BinOp::Pow if num => format!("intyPow({}, {})", fa, fb),
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
                 if num || (lt == GoType::Str && rt == GoType::Str) =>
             {
@@ -2001,9 +2193,13 @@ impl<'a> Emitter<'a> {
                     BinOp::LtEq => "<=",
                     _ => ">=",
                 };
-                format!("({} {} {})", a, o, b)
+                if num {
+                    format!("({} {} {})", ca, o, cb)
+                } else {
+                    format!("({} {} {})", a, o, b)
+                }
             }
-            BinOp::EqEq | BinOp::EqEqEq | BinOp::NotEq | BinOp::NotEqEq if lt == rt => {
+            BinOp::EqEq | BinOp::EqEqEq | BinOp::NotEq | BinOp::NotEqEq if num || lt == rt => {
                 let o = if matches!(op, BinOp::EqEq | BinOp::EqEqEq) {
                     "=="
                 } else {
@@ -2013,6 +2209,7 @@ impl<'a> Emitter<'a> {
                     GoType::Func(..) => {
                         return Err(unsupported("comparing functions", span));
                     }
+                    _ if num => format!("({} {} {})", ca, o, cb),
                     _ => format!("({} {} {})", a, o, b),
                 }
             }
@@ -2020,23 +2217,30 @@ impl<'a> Emitter<'a> {
                 let o = if op == BinOp::And { "&&" } else { "||" };
                 format!("({} {} {})", a, o, b)
             }
+            // The bitwise operators work on 32-bit integers and give one.
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor if num => {
                 let o = match op {
                     BinOp::BitAnd => "&",
                     BinOp::BitOr => "|",
                     _ => "^",
                 };
-                format!("float64(intyToInt32({}) {} intyToInt32({}))", a, o, b)
+                int_result(
+                    format!("int({} {} {})", to_i32(a, &lt), o, to_i32(b, &rt)),
+                    &whole,
+                )
             }
-            BinOp::LShift if num => {
-                format!("float64(intyToInt32({}) << (intyToUint32({}) & 31))", a, b)
-            }
-            BinOp::RShift if num => {
-                format!("float64(intyToInt32({}) >> (intyToUint32({}) & 31))", a, b)
-            }
-            BinOp::URShift if num => {
-                format!("float64(intyToUint32({}) >> (intyToUint32({}) & 31))", a, b)
-            }
+            BinOp::LShift if num => int_result(
+                format!("int({} << ({} & 31))", to_i32(a, &lt), to_u32(b, &rt)),
+                &whole,
+            ),
+            BinOp::RShift if num => int_result(
+                format!("int({} >> ({} & 31))", to_i32(a, &lt), to_u32(b, &rt)),
+                &whole,
+            ),
+            BinOp::URShift if num => int_result(
+                format!("int({} >> ({} & 31))", to_u32(a, &lt), to_u32(b, &rt)),
+                &whole,
+            ),
             _ => {
                 return Err(unsupported(
                     format!(
@@ -2097,7 +2301,7 @@ impl<'a> Emitter<'a> {
                     return self.to_str(v, &t, span);
                 }
                 "isNaN" if args.len() == 1 => {
-                    let v = self.expr(&args[0])?;
+                    let v = self.num_as(&args[0], &GoType::Float)?;
                     return Ok(format!("math.IsNaN({})", v));
                 }
                 _ => {}
@@ -2149,7 +2353,12 @@ impl<'a> Emitter<'a> {
         };
         let mut vs = Vec::new();
         for a in args {
-            vs.push(self.expr(a)?);
+            let t = self.type_of(a)?;
+            vs.push(if is_num(&t) {
+                self.num_as(a, &GoType::Float)?
+            } else {
+                self.expr(a)?
+            });
         }
         let helper = match (item, write, vs.len()) {
             (NodeItem::Stdout, true, 1) => "intyStdoutWrite",
@@ -2179,9 +2388,10 @@ impl<'a> Emitter<'a> {
         stmt: bool,
     ) -> Result<Option<String>> {
         let mut vals = Vec::new();
+        // (The built-ins take doubles.)
         let arg = |e: &mut Self, vals: &mut Vec<String>| -> Result<()> {
             for a in args {
-                vals.push(e.expr(a)?);
+                vals.push(e.num_as(a, &GoType::Float)?);
             }
             Ok(())
         };
@@ -2203,7 +2413,8 @@ impl<'a> Emitter<'a> {
                 }
                 let v = self.expr(a)?;
                 // console.log formats numbers with util.inspect, which
-                // (unlike String(x)) keeps the sign of -0.
+                // (unlike String(x)) keeps the sign of -0. (An `Int` has
+                // no -0.)
                 let s = if t == GoType::Float {
                     format!("intyInspectNum({})", v)
                 } else {
@@ -2214,6 +2425,34 @@ impl<'a> Emitter<'a> {
                 } else {
                     format!("intyLogErr({})", s)
                 }
+            }
+            // Polymorphic in `Num`: computed in the result's type.
+            ("Math", f @ ("abs" | "min" | "max")) => {
+                let want = self.go_type_at(span)?;
+                let want = if is_num(&want) { want } else { GoType::Float };
+                for a in args {
+                    vals.push(self.num_as(a, &want)?);
+                }
+                match (f, &want) {
+                    ("abs", GoType::Int) => format!("intyAbsInt({})", vals.join(", ")),
+                    ("abs", _) => format!("math.Abs({})", vals.join(", ")),
+                    // Go 1.21 builtins: NaN-propagating, -0 < +0 — exactly
+                    // JS semantics, and compiled inline (math.Min is a call).
+                    _ => format!("{}({})", f, vals.join(", ")),
+                }
+            }
+            // To an `Int`, checked.
+            ("Math", f @ ("floor" | "ceil" | "round" | "trunc"))
+                if self.go_type_at(span)? == GoType::Int =>
+            {
+                arg(self, &mut vals)?;
+                let go = match f {
+                    "floor" => "intyFloorInt",
+                    "ceil" => "intyCeilInt",
+                    "round" => "intyRoundInt",
+                    _ => "intyTruncInt",
+                };
+                format!("{}({})", go, vals.join(", "))
             }
             ("Math", f) => {
                 arg(self, &mut vals)?;
@@ -2227,10 +2466,6 @@ impl<'a> Emitter<'a> {
                     "sqrt" => "math.Sqrt",
                     "cbrt" => "math.Cbrt",
                     "pow" => "intyPow",
-                    // Go 1.21 builtins: NaN-propagating, -0 < +0 — exactly
-                    // JS semantics, and compiled inline (math.Min is a call).
-                    "min" => "min",
-                    "max" => "max",
                     "hypot" => "math.Hypot",
                     "log" => "math.Log",
                     "log2" => "math.Log2",
@@ -2284,9 +2519,9 @@ impl<'a> Emitter<'a> {
         if method == "splice" && n >= 1 {
             // splice(start, deleteCount?, ...items). In statement position
             // the removed elements aren't collected.
-            let start = self.expr(&args[0])?;
+            let start = self.num_as(&args[0], &GoType::Float)?;
             let del = match args.get(1) {
-                Some(d) => self.expr(d)?,
+                Some(d) => self.num_as(d, &GoType::Float)?,
                 None => "math.Inf(1)".into(),
             };
             let mut call = format!(
@@ -2322,7 +2557,7 @@ impl<'a> Emitter<'a> {
             ("slice", _) if n <= 2 => {
                 let mut ix = Vec::new();
                 for x in args {
-                    ix.push(self.expr(x)?);
+                    ix.push(self.num_as(x, &GoType::Float)?);
                 }
                 let start = ix.first().cloned().unwrap_or_else(|| "0.0".into());
                 let end = ix.get(1).cloned().unwrap_or_else(|| "math.Inf(1)".into());
@@ -2350,7 +2585,9 @@ impl<'a> Emitter<'a> {
             }
             ("reduce", 2) => {
                 let f = self.expr(&args[0])?;
-                let acc_t = self.type_of(&args[1])?;
+                // The accumulator has the result's type (`0` for a sum of
+                // doubles is a double).
+                let acc_t = self.go_type_at(span)?;
                 let acc = self.expr_as(&args[1], &acc_t)?;
                 format!("intyReduce({}, {}, {})", a, f, acc)
             }
@@ -2372,13 +2609,43 @@ impl<'a> Emitter<'a> {
         span: Span,
     ) -> Result<String> {
         let s = self.expr(object)?;
-        let mut vs = Vec::new();
+        // Numeric arguments as doubles (the helpers' JS semantics), except
+        // where every bound is an `Int`: then the `Int` fast paths.
+        let mut types = Vec::new();
         for x in args {
-            vs.push(self.expr(x)?);
+            types.push(self.type_of(x)?);
         }
+        let all_int = !args.is_empty() && types.iter().all(|t| *t == GoType::Int);
+        let mut vs = Vec::new();
+        for (x, t) in args.iter().zip(&types) {
+            vs.push(if is_num(t) {
+                self.num_as(x, &GoType::Float)?
+            } else {
+                self.expr(x)?
+            });
+        }
+        let want = self.go_type_at(span)?;
+        if all_int && matches!(method, "slice" | "substring" | "charCodeAt") {
+            let mut is = Vec::new();
+            for x in args {
+                is.push(self.expr(x)?);
+            }
+            let f = if method == "slice" {
+                "intyStrSliceI"
+            } else {
+                "intyStrSubstringI"
+            };
+            return Ok(match (method, is.as_slice()) {
+                ("charCodeAt", [i]) => coerce(format!("int({}[{}])", s, i), &GoType::Int, &want),
+                (_, [a]) => format!("{}({}, {}, len({}))", f, s, a, s),
+                (_, [a, b]) => format!("{}({}, {}, {})", f, s, a, b),
+                _ => return Err(unsupported(format!("String method `.{}`", method), span)),
+            });
+        }
+        let int_res = |v: String| coerce(v, &GoType::Int, &want);
         Ok(match (method, vs.as_slice()) {
-            ("charCodeAt", [i]) => format!("float64({}[int({})])", s, i),
-            ("indexOf", [x]) => format!("intyStrIndexOf({}, {})", s, x),
+            ("charCodeAt", [i]) => int_res(format!("int({}[int({})])", s, i)),
+            ("indexOf", [x]) => int_res(format!("intyStrIndexOf({}, {})", s, x)),
             ("includes", [x]) => format!("strings.Contains({}, {})", s, x),
             ("startsWith", [x]) => format!("strings.HasPrefix({}, {})", s, x),
             ("startsWith", [x, pos]) => format!("intyStartsWithAt({}, {}, {})", s, x, pos),
@@ -2391,8 +2658,10 @@ impl<'a> Emitter<'a> {
             ("slice", [a, b]) => format!("intyStrSlice({}, {}, {})", s, a, b),
             ("substring", [a]) => format!("intyStrSubstring({}, {}, math.Inf(1))", s, a),
             ("substring", [a, b]) => format!("intyStrSubstring({}, {}, {})", s, a, b),
-            ("indexOf", [x, from]) => format!("intyStrIndexOfFrom({}, {}, {})", s, x, from),
-            ("lastIndexOf", [x]) => format!("float64(strings.LastIndex({}, {}))", s, x),
+            ("indexOf", [x, from]) => {
+                int_res(format!("intyStrIndexOfFrom({}, {}, {})", s, x, from))
+            }
+            ("lastIndexOf", [x]) => int_res(format!("strings.LastIndex({}, {})", s, x)),
             ("charAt", [i]) => format!("intyCharAt({}, {})", s, i),
             ("trimStart", []) => format!("strings.TrimLeftFunc({}, unicode.IsSpace)", s),
             ("trimEnd", []) => format!("strings.TrimRightFunc({}, unicode.IsSpace)", s),

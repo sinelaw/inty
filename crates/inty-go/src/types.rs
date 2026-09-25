@@ -2,7 +2,8 @@
 //!
 //! | inty                         | Go                                  |
 //! | ---------------------------- | ----------------------------------- |
-//! | `Number`, `Int`, number literals | `float64`                       |
+//! | `Number`, fractional literals | `float64`                          |
+//! | `Int`, integral literals     | `int` (checked against ±2^53)       |
 //! | `String`, string literals    | `string`                            |
 //! | `Boolean`, boolean literals  | `bool`                              |
 //! | `T[]`                        | `*[]T` (JS arrays are references)   |
@@ -30,6 +31,8 @@ use crate::{unsupported, Result};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GoType {
     Float,
+    /// An inty `Int`: Go `int` (64 bits).
+    Int,
     Str,
     Bool,
     /// JS `undefined` as a value type — only legal as a function
@@ -89,13 +92,13 @@ impl TypeMapper {
         }
         let d = depth + 1;
         Ok(match ty {
-            // `Int` is still a `float64` here: its values are the same
-            // doubles (an `int64` lowering needs checked arithmetic).
-            Type::Number | Type::Int => GoType::Float,
+            Type::Number => GoType::Float,
+            Type::Int => GoType::Int,
             Type::String => GoType::Str,
             Type::Boolean => GoType::Bool,
             Type::Undefined => GoType::Unit,
             Type::Literal(lit) => match lit {
+                inty::types::LitValue::Number(n) if is_int(*n) => GoType::Int,
                 inty::types::LitValue::Number(_) => GoType::Float,
                 inty::types::LitValue::String(_) => GoType::Str,
                 inty::types::LitValue::Bool(_) => GoType::Bool,
@@ -265,6 +268,7 @@ impl TypeMapper {
     pub fn render(&self, ty: &GoType) -> String {
         match ty {
             GoType::Float => "float64".into(),
+            GoType::Int => "int".into(),
             GoType::Str => "string".into(),
             GoType::Bool => "bool".into(),
             GoType::Unit => "struct{}".into(),
@@ -513,7 +517,8 @@ pub fn canonical(ty: &Type) -> Type {
 
 fn widen(ty: &Type) -> Type {
     match ty {
-        Type::Literal(inty::types::LitValue::Number(_)) | Type::Int => Type::Number,
+        Type::Literal(inty::types::LitValue::Number(n)) if is_int(*n) => Type::Int,
+        Type::Literal(inty::types::LitValue::Number(_)) => Type::Number,
         Type::Literal(inty::types::LitValue::String(_)) => Type::String,
         Type::Literal(inty::types::LitValue::Bool(_)) => Type::Boolean,
         Type::Row(row) => Type::Row(RowType {
@@ -555,6 +560,11 @@ fn widen(ty: &Type) -> Type {
         Type::Union(ts) => Type::union(ts.iter().map(widen).collect::<Vec<_>>()),
         other => other.clone(),
     }
+}
+
+/// Whether a number literal is an `Int`.
+pub fn is_int(n: f64) -> bool {
+    inty::types::is_safe_int(n)
 }
 
 /// Go field name for a JS property. Keywords get a trailing underscore;
