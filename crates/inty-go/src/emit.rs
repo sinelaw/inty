@@ -134,7 +134,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
     out.push_str("// Requires Go >= 1.22 (per-iteration loop variables, like JS `let`).\n\n");
     out.push_str("package main\n\n");
     out.push_str(
-        "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n\t\"unicode\"\n)\n\n",
+        "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"slices\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n\t\"unicode\"\n)\n\n",
     );
     out.push_str(&e.tm.render_structs());
     if !globals.is_empty() {
@@ -473,6 +473,7 @@ const GO_RESERVED: &[&str] = &[
     "bits",
     "rand",
     "os",
+    "slices",
     "strconv",
     "strings",
     "time",
@@ -1462,7 +1463,7 @@ impl<'a> Emitter<'a> {
                         if let GoType::Array(elem) = self.type_of(object)? {
                             let a = self.expr(object)?;
                             let v = self.expr_as(&arguments[0], &elem)?;
-                            return Ok(format!("*{a} = append(*{a}, {v})"));
+                            return Ok(format!("intyAppend({a}, {v})"));
                         }
                     }
                 }
@@ -2063,7 +2064,7 @@ impl<'a> Emitter<'a> {
             }
             match self.type_of(object)? {
                 GoType::Array(elem) => {
-                    return self.array_method(object, &elem, property, args, span)
+                    return self.array_method(object, &elem, property, args, span, stmt)
                 }
                 GoType::Str => return self.string_method(object, property, args, span),
                 GoType::Struct(_) => {} // a function-valued field: ordinary call below
@@ -2262,17 +2263,41 @@ impl<'a> Emitter<'a> {
         method: &str,
         args: &[Expr],
         span: Span,
+        stmt: bool,
     ) -> Result<String> {
         let a = self.expr(object)?;
         let et = self.tm.render(elem);
+        let n = args.len();
+        if method == "splice" && n >= 1 {
+            // splice(start, deleteCount?, ...items). In statement position
+            // the removed elements aren't collected.
+            let start = self.expr(&args[0])?;
+            let del = match args.get(1) {
+                Some(d) => self.expr(d)?,
+                None => "math.Inf(1)".into(),
+            };
+            let mut call = format!(
+                "{}({}, {}, {}",
+                if stmt { "intySpliceStmt" } else { "intySplice" },
+                a,
+                start,
+                del
+            );
+            for x in args.iter().skip(2) {
+                call.push_str(", ");
+                call.push_str(&self.expr_as(x, elem)?);
+            }
+            call.push(')');
+            return Ok(call);
+        }
         let mut vs = Vec::new();
         for x in args {
             vs.push(self.expr_as(x, elem)?);
         }
-        let n = args.len();
         Ok(match (method, n) {
             ("push", 1) => format!("intyPush({}, {})", a, vs[0]),
             ("pop", 0) => format!("intyPop({})", a),
+            ("unshift", 1) => format!("intyUnshift({}, {})", a, vs[0]),
             ("indexOf", 1) => format!("intyIndexOf({}, {})", a, vs[0]),
             ("includes", 1) => format!("intyIncludes({}, {})", a, vs[0]),
             ("fill", 1) => format!("intyFill({}, {})", a, vs[0]),

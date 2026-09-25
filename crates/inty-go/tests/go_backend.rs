@@ -325,3 +325,91 @@ fn md2html_matches_node() {
     assert!(stderr.contains("unknown option --bogus"), "{}", stderr);
     let _ = fs::remove_dir_all(&work);
 }
+
+/// Small inputs that reach the rarer paths of fast-diff's cleanup passes:
+/// (1) eliminating the first equality (upstream's equality stack goes
+/// negative) and a forward overlap, (2) a reverse overlap, (3) an edit
+/// slid over the following equality. Semantic cleanup depends on what
+/// precedes an edit, so each is diffed on its own. Their expected output,
+/// with and without `--cleanup`, is in `tests/io/fastdiff.edge.out`.
+const FASTDIFF_EDGE_CASES: &[(&str, &str)] = &[
+    (
+        "the badefdefba baa badefcat camecat defxxxcamea\n\nabbacat ",
+        "bcamecame\n\ncat   the \n\n",
+    ),
+    ("abaxxx\n\n", " defbaabxxx"),
+    ("abc xxxcame ", "the abb.\nab"),
+];
+
+/// The fastdiff tool (`examples/go-backend/tools/fastdiff.js`, a port of
+/// npm fast-diff) prints the same diff as under Node, with and without
+/// `--cleanup`. The expected output in `tests/io/fastdiff*.out` was
+/// recorded from Node and agrees with the upstream package.
+#[test]
+fn fastdiff_matches_node() {
+    if !go_available() {
+        return;
+    }
+    let io = manifest_dir().join("tests/io");
+    let tool = manifest_dir().join("../../examples/go-backend/tools/fastdiff.js");
+    let work = std::env::temp_dir().join(format!("inty-go-fastdiff-{}", std::process::id()));
+    let bin = go_build(&work.join("fastdiff"), &translate(&tool)).unwrap();
+    let old = io.join("fastdiff.old.txt");
+    let new = io.join("fastdiff.new.txt");
+    let (old, new) = (old.to_str().unwrap(), new.to_str().unwrap());
+    let (code, stdout, _) = run_with(&bin, &[old, new], b"");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, fs::read_to_string(io.join("fastdiff.out")).unwrap());
+    let (code, stdout, _) = run_with(&bin, &[old, "--cleanup", new], b"");
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout,
+        fs::read_to_string(io.join("fastdiff.cleanup.out")).unwrap()
+    );
+
+    let mut edge = String::new();
+    for (i, (a, b)) in FASTDIFF_EDGE_CASES.iter().enumerate() {
+        let (fa, fb) = (work.join("a.txt"), work.join("b.txt"));
+        fs::write(&fa, a).unwrap();
+        fs::write(&fb, b).unwrap();
+        for cleanup in [false, true] {
+            let mut args = vec![fa.to_str().unwrap(), fb.to_str().unwrap()];
+            if cleanup {
+                args.push("--cleanup");
+            }
+            let (code, stdout, stderr) = run_with(&bin, &args, b"");
+            assert_eq!(code, 0, "edge case {}: {}", i + 1, stderr);
+            edge.push_str(&format!(
+                "# edge case {}{}\n{}",
+                i + 1,
+                if cleanup { " --cleanup" } else { "" },
+                stdout
+            ));
+        }
+    }
+    assert_eq!(
+        edge,
+        fs::read_to_string(io.join("fastdiff.edge.out")).unwrap()
+    );
+
+    // Wrong usage: message on stderr, exit status 2.
+    let (code, stdout, stderr) = run_with(&bin, &[old], b"");
+    assert_eq!((code, stdout.as_str()), (2, ""));
+    assert!(stderr.contains("usage: fastdiff"), "{}", stderr);
+    let (code, _, stderr) = run_with(&bin, &[old, new, "--bogus"], b"");
+    assert_eq!(code, 2);
+    assert!(stderr.contains("unknown option --bogus"), "{}", stderr);
+    let _ = fs::remove_dir_all(&work);
+}
+
+/// `splice` takes at most `SPLICE_MAX_ITEMS` inserted items (there are no
+/// variadic function types): a call with more is a type error, never a
+/// mistranslation.
+#[test]
+fn splice_with_too_many_items_is_rejected() {
+    let err =
+        compile_err("const a = [1, 2];\na.splice(0, 0, 1, 2, 3, 4, 5);\nconsole.log(a.length);");
+    assert!(!err.is_empty());
+    let four = "const a = [1, 2];\na.splice(0, 0, 1, 2, 3, 4);\nconsole.log(a.length);";
+    assert!(inty_go::compile(four).is_ok());
+}

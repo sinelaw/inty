@@ -196,3 +196,75 @@ Node v22.22.2, Bun 1.3.11, Go 1.24.7, linux/amd64.
   string array's `join` once (`strings.Join`); the program builds its
   output by pushing strings onto an array and joining them, as idiomatic
   JavaScript does.
+
+## A real library: fast-diff
+
+[`tools/fastdiff.js`](tools/fastdiff.js) is a port of
+[fast-diff](https://github.com/jhchen/fast-diff) 1.3.0, the npm package
+(about 35M weekly downloads) that Quill uses for its text diffs. It is
+the diff core of Neil Fraser's diff-match-patch: common prefix and suffix
+stripping, the half-match speedup, Myers' O(ND) bisection, and the
+merge and semantic-cleanup passes. It's wrapped in a CLI:
+`fastdiff old.txt new.txt [--cleanup]`. The port keeps upstream's
+functions and control flow. Its header comment lists every change the
+subset forces, such as `{op, text}` records for `[op, text]` tuples and
+character tests for regexes.
+
+**Correctness.** Differential fuzzing (6,606 diffs, with and without
+cleanup) compares it with the npm package: random strings over small
+alphabets, and random insertions, deletions and moved blocks in the
+repository's files. The op sequences are identical, and the Go binary
+prints byte-identical output on all of them. Inputs are ASCII:
+inty-go strings are byte strings, while JS strings are UTF-16.
+`crates/inty-go/tests/go_backend.rs` pins the output on a realistic edit
+and on three small inputs that reach the rarer cleanup paths.
+
+`node tools/bench-fastdiff.mjs` translates and builds the tool, checks
+that Node, Bun and the Go binary print byte-identical diffs, and then
+measures as for md2html: whole processes, 21 interleaved runs per cell
+after one discarded warm-up round, medians of wall time, CPU time
+(user + sys) and peak RSS. All inputs are generated deterministically
+(seeded PRNG) from the repository's own files:
+
+- **small:** the README (5.2 KB) vs a copy with 6 edits;
+- **large:** the first 2 MB of the Rust sources vs a copy with 40
+  scattered insertions, deletions, replacements and moved blocks, diffed
+  with and without `--cleanup`;
+- **dense:** 100 KB of the same with 2,000 small edits (one every ~50
+  characters). Here the half-match speedup rarely applies, so the Myers
+  bisection does the work.
+
+| input | node | bun | inty → go | go vs node / bun | CPU node / bun / go | peak RSS node / bun / go |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small (2 × 5 KB) | 111 ms | 71.8 ms | 14.9 ms | **7.4x / 4.8x** | 147 / 86 / 16 ms | 59 / 46 / 10 MB |
+| large (2 × 2 MB) | 1753 ms | 2343 ms | 1921 ms | 0.91x / 1.22x | 1876 / 2418 / 2922 ms | 477 / 308 / 197 MB |
+| large, `--cleanup` | 1728 ms | 2341 ms | 1916 ms | 0.90x / 1.22x | 1875 / 2415 / 2858 ms | 480 / 310 / 197 MB |
+| dense (2 × 100 KB) | 626 ms | 1205 ms | 479 ms | **1.31x / 2.51x** | 762 / 1256 / 544 ms | 93 / 89 / 13 MB |
+
+Node v22.22.2, Bun 1.3.11 (default options, i.e. without `--smol`),
+Go 1.24.7, linux/amd64.
+
+- **Small inputs:** the native binary wins by 5–7x. The gap is smaller
+  than for md2html because even a 5 KB diff runs a few bisections.
+- **Large input: Node wins by about 10%, and uses more than twice the
+  memory.** Each bisection builds two arrays the size of both texts,
+  about 4M elements at the top level and 21M pushes per array over the
+  whole run. They are built with `push(-1)`, as upstream does with
+  `new Array(n)` plus a fill loop. That makes this input a test of
+  allocating and page-faulting large arrays. V8 stores them as 4-byte
+  small integers; Go stores 8-byte `float64`s and returns freed pages to
+  the OS, then faults them in again. Go's CPU time exceeds its wall time
+  because of its concurrent GC. `GOGC=200` brings Go to about 1.45 s,
+  but the benchmark uses defaults.
+- **Dense input:** Myers bisection is character comparisons and index
+  arithmetic on the V arrays, and Go wins: 1.3x vs Node and 2.5x vs
+  Bun, at a seventh of the memory.
+- **The runtime change this benchmark prompted:** `arr.push` now grows
+  a full array to twice its length. Go's `append` grows large slices by
+  only 1.25x, which copied the V arrays about five times over. That
+  change took the large input from about 2.5 s (a single run) to 1.92 s. It is neutral or
+  better on the other programs; `sieve` is ~20% faster as a whole
+  process.
+- **Where the types could still help:** the bisection indices are
+  integral, so a range analysis could make the V arrays `[]int32`,
+  halving the memory traffic that decides the large case.
