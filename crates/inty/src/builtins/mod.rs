@@ -293,6 +293,10 @@ pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     })
 }
 
+/// How many inserted items `Array.prototype.splice` accepts (see
+/// [`array_method_type`]).
+pub const SPLICE_MAX_ITEMS: usize = 4;
+
 /// Look up a built-in Array prototype method by name for an array whose
 /// element type is `elem`.
 ///
@@ -315,6 +319,18 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
         "pop" => Type::simple_func(vec![], elem.clone()),
         "shift" => Type::simple_func(vec![], elem.clone()),
         "unshift" => Type::simple_func(vec![elem.clone()], n.clone()),
+        // `Array.prototype.splice(start, deleteCount?, ...items)`, returning
+        // the removed elements. There are no variadic function types, so
+        // the items are modelled as SPLICE_MAX_ITEMS optional parameters
+        // (a call inserting more is rejected, never mistyped).
+        "splice" => {
+            let mut params = vec![FuncParam::required(n.clone())];
+            params.push(FuncParam::optional(state.fresh_pvar(), n.clone()));
+            for _ in 0..SPLICE_MAX_ITEMS {
+                params.push(FuncParam::optional(state.fresh_pvar(), elem.clone()));
+            }
+            Type::simple_func_with_params(params, arr.clone())
+        }
         // `Array.prototype.indexOf(searchElement, fromIndex?)`.
         "indexOf" => {
             let pvar = state.fresh_pvar();

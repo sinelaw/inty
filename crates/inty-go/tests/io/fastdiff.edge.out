@@ -1,0 +1,52 @@
+# edge case 1
+ops 11, edits 6, equal 15, deleted 42, inserted 8
+-"the "
+="b"
+-"adefdefba baa badefcat "
+="cameca"
+-"t defxxxca"
+="me"
+-"a"
+="\n\n"
+-"abba"
+="cat "
++"  the \n\n"
+# edge case 1 --cleanup
+ops 8, edits 5, equal 10, deleted 47, inserted 13
+-"the badefdefba baa badefcat camecat defxxx"
++"bcame"
+="came"
+-"a"
+="\n\n"
+-"abba"
+="cat "
++"  the \n\n"
+# edge case 2
+ops 7, edits 4, equal 5, deleted 3, inserted 6
++" defb"
+="a"
+-"b"
+="a"
++"b"
+="xxx"
+-"\n\n"
+# edge case 2 --cleanup
+ops 5, edits 3, equal 5, deleted 3, inserted 6
++" defba"
+="ab"
+-"a"
+="xxx"
+-"\n\n"
+# edge case 3
+ops 7, edits 5, equal 3, deleted 9, inserted 8
++"the "
+="ab"
+-"c xxxc"
++"b.\n"
+="a"
+-"me "
++"b"
+# edge case 3 --cleanup
+ops 2, edits 2, equal 0, deleted 12, inserted 11
+-"abc xxxcame "
++"the abb.\nab"

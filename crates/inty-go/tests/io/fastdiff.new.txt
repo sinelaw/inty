@@ -1,0 +1,29 @@
+fast-diff: a small text diff for code editors
+
+The dog came back the next day. It was a rainy morning, and the
+garden was full of bees. Everybody expected it; nobody said so!
+
+Configuration
+-------------
+
+	indent = "spaces"
+	width  = 100
+	path   = "C:\tmp\out"
+	eol    = "\r\n"
+
+Steps:
+1. Read both files.
+2. Strip the common prefix and suffix.
+4. Otherwise walk the Myers edit graph from both ends.
+3. Split the problem in two if a long common substring exists.
+5. Merge adjacent edits and shift them to word boundaries.
+6. Print the result.
+
+function commonPrefix(x, y) {
+  let i = 0;
+  while (i < x.length && i < y.length && x[i] === y[i]) i += 1;
+  return i;
+}
+
+Notes: xxxdef and abcxxx overlap; so do defxxx and xxxabc.
+The end.

@@ -183,15 +183,62 @@ func intyFromCharCode(c float64) string { return string(rune(intyToUint32(c) & 0
 // ---- Arrays: JS arrays are reference types, so they map to *[]T. -----
 
 func intyPush[T any](a *[]T, v T) float64 {
-	*a = append(*a, v)
+	intyAppend(a, v)
 	return float64(len(*a))
 }
+
+// intyAppend is `a.push(v)` as a statement. A full array grows to twice
+// its length: Go's append grows large slices by only 1.25x, so an array
+// built by pushing millions of elements (a JS idiom) would be copied
+// about five times over; doubling copies it about once, like V8's 1.5x.
+func intyAppend[T any](a *[]T, v T) {
+	s := *a
+	if len(s) == cap(s) {
+		s = intyGrow(s)
+	}
+	*a = append(s, v)
+}
+
+//go:noinline
+func intyGrow[T any](s []T) []T { return slices.Grow(s, len(s)+1) }
 
 func intyPop[T any](a *[]T) T {
 	s := *a
 	v := s[len(s)-1]
 	*a = s[:len(s)-1]
 	return v
+}
+
+// intyUnshift is Array.prototype.unshift with one element.
+func intyUnshift[T any](a *[]T, v T) float64 {
+	*a = slices.Insert(*a, 0, v)
+	return float64(len(*a))
+}
+
+// intySplice is Array.prototype.splice(start, deleteCount, ...items): it
+// replaces the deleted range with items in place and returns the removed
+// elements. An omitted deleteCount is +Inf (remove to the end).
+func intySplice[T any](a *[]T, start, del float64, items ...T) *[]T {
+	i, j := intySpliceRange(len(*a), start, del)
+	removed := append([]T{}, (*a)[i:j]...)
+	*a = slices.Replace(*a, i, j, items...)
+	return &removed
+}
+
+// intySpliceStmt is intySplice in statement position: the removed
+// elements are not collected.
+func intySpliceStmt[T any](a *[]T, start, del float64, items ...T) {
+	i, j := intySpliceRange(len(*a), start, del)
+	*a = slices.Replace(*a, i, j, items...)
+}
+
+func intySpliceRange(n int, start, del float64) (int, int) {
+	i := intyClampIndex(math.Trunc(start), n)
+	d := 0
+	if del == del && del > 0 {
+		d = int(min(math.Trunc(del), float64(n-i)))
+	}
+	return i, i + d
 }
 
 func intyIndexOf[T comparable](a *[]T, v T) float64 {

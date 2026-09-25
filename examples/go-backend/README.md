@@ -110,6 +110,32 @@ cd /tmp/md2html && printf 'module md2html\n\ngo 1.22\n' > go.mod && go build -o 
 (startup dominates) and a ~20 MB one (throughput dominates); see
 [BENCHMARKS.md](BENCHMARKS.md#a-real-tool-md2html).
 
+### A real library: `fast-diff`
+
+[`tools/fastdiff.js`](tools/fastdiff.js) is a port of
+[fast-diff](https://github.com/jhchen/fast-diff) 1.3.0 (npm `fast-diff`,
+the diff-match-patch diff core that the Quill editor uses; Apache-2.0),
+wrapped in a small CLI: `fastdiff old.txt new.txt [--cleanup]` prints one
+line per diff operation. The algorithm is upstream's, function for
+function. The header comment lists the few changes the subset forces:
+- `{op, text}` records instead of `[op, text]` tuples;
+- character tests instead of regular expressions;
+- no cursor fast path.
+
+On ASCII input it produces the same diffs as the npm package (checked
+by differential fuzzing), and Node, Bun and the Go binary print
+byte-identical output (checked in `crates/inty-go/tests/go_backend.rs`).
+
+```sh
+inty go examples/go-backend/tools/fastdiff.js -o /tmp/fastdiff/main.go
+cd /tmp/fastdiff && printf 'module fastdiff\n\ngo 1.22\n' > go.mod && go build -o fastdiff .
+./fastdiff old.txt new.txt --cleanup
+```
+
+`node tools/bench-fastdiff.mjs` times it on a small edit, a 2 MB file
+with scattered edits and moved blocks, and a densely edited 100 KB file;
+see [BENCHMARKS.md](BENCHMARKS.md#a-real-library-fast-diff).
+
 ### Polymorphism: monomorphisation
 
 inty infers polymorphic types, and the backend keeps them. A function
@@ -166,9 +192,13 @@ mistranslated.
   (programs are single files), and recursive object types.
 - **Strings are treated as byte strings.** `.length` and indexing are
   exact only for ASCII (JS uses UTF-16 code units).
+- **`splice` inserts at most four items** per call. There are no variadic
+  function types, so inty models the items as four optional parameters.
 - **Out-of-bounds array reads panic**, where JS would return `undefined`.
   inty types `xs[i]` as the element type, so this is the same
   assumption the checker already makes. Writes past the end grow the
-  array, as in JS.
+  array, as in JS. Writes at a negative index panic; in JS they create
+  an ordinary property. fast-diff relies on that, and its port keeps
+  those entries in a second array.
 - `console.log` takes one argument. It can't print whole arrays or
   objects, because Node's inspect formatting isn't reproduced.
