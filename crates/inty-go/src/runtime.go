@@ -296,6 +296,11 @@ func intyFilter[T any](a *[]T, f func(T) bool) *[]T {
 	out := []T{}
 	for _, x := range *a {
 		if f(x) {
+			// Doubling, as in intyAppend: append's 1.25x growth for large
+			// slices copied the result several times over.
+			if len(out) == cap(out) {
+				out = intyGrow(out)
+			}
 			out = append(out, x)
 		}
 	}
