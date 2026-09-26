@@ -38,3 +38,9 @@ for (let i = 0; i < big.length; i++) sum += big[i];
 console.log(String(big.length) + " " + String(sum));
 const n = [];
 console.log(n.push(5) + n.push(6));
+
+// `new Array(n).fill(v)`: one allocation of the final size.
+const filled = new Array(4).fill(-1);
+filled[2] = 7;
+console.log(filled.join(","));
+console.log(Array(3).fill("ab").join("|"));

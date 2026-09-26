@@ -4152,3 +4152,15 @@ fn javascript_class_names_are_types_in_annotations() {
     .unwrap_err();
     assert!(err.contains("Branches have different types"), "{}", err);
 }
+
+#[test]
+fn new_array_fill_is_an_array_of_the_value() {
+    let t = check_program(
+        "const v = new Array(3).fill(-1);\nconst w = Array(2).fill(\"a\");",
+        &["v", "w"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Int[]", "String[]"]);
+    // The length is an `Int` (JS throws a RangeError otherwise).
+    assert!(check_program("const v = new Array(1.5).fill(0);", &[]).is_err());
+}

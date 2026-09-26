@@ -1958,10 +1958,15 @@ impl<'a> Emitter<'a> {
                 arguments,
                 span,
                 ..
-            } => match self.fused(e)? {
-                Some(v) => Ok(v),
-                None => self.call(callee, arguments, *span, false),
-            },
+            } => {
+                if let Some(v) = self.array_fill(callee, arguments, *span)? {
+                    return Ok(v);
+                }
+                match self.fused(e)? {
+                    Some(v) => Ok(v),
+                    None => self.call(callee, arguments, *span, false),
+                }
+            }
             Expr::Unary { op, argument, span } => self.unary(*op, argument, *span, e),
             Expr::Binary {
                 op,
@@ -2698,6 +2703,45 @@ impl<'a> Emitter<'a> {
             ("concat", [x]) => format!("({} + {})", s, x),
             _ => return Err(unsupported(format!("String method `.{}`", method), span)),
         })
+    }
+
+    /// `new Array(n).fill(v)` / `Array(n).fill(v)`: one allocation of the
+    /// final size (building it by `push` copies it as it grows).
+    fn array_fill(&mut self, callee: &Expr, args: &[Expr], span: Span) -> Result<Option<String>> {
+        let (
+            Expr::Member {
+                object, property, ..
+            },
+            [value],
+        ) = (callee, args)
+        else {
+            return Ok(None);
+        };
+        if property != "fill" {
+            return Ok(None);
+        }
+        let len = match &**object {
+            Expr::New {
+                callee, arguments, ..
+            }
+            | Expr::Call {
+                callee, arguments, ..
+            } => match (&**callee, arguments.as_slice()) {
+                (Expr::Ident { name, .. }, [n])
+                    if name == "Array" && self.lookup(name).is_none() =>
+                {
+                    n
+                }
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let GoType::Array(elem) = self.go_type_at(span)? else {
+            return Ok(None);
+        };
+        let n = self.num_as(len, &GoType::Int)?;
+        let v = self.expr_as(value, &elem)?;
+        Ok(Some(format!("intyFilled({}, {})", n, v)))
     }
 
     // ---- array pipelines ----------------------------------------------------

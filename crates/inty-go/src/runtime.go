@@ -202,6 +202,16 @@ func intyAppend[T any](a *[]T, v T) {
 //go:noinline
 func intyGrow[T any](s []T) []T { return slices.Grow(s, len(s)+1) }
 
+// intyFilled is `new Array(n).fill(v)`. (A negative n traps, where JS
+// throws a RangeError.)
+func intyFilled[T any](n int, v T) *[]T {
+	s := make([]T, n)
+	for i := range s {
+		s[i] = v
+	}
+	return &s
+}
+
 func intyPop[T any](a *[]T) T {
 	s := *a
 	v := s[len(s)-1]
