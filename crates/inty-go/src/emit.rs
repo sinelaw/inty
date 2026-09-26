@@ -52,6 +52,8 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         mappings: vec![Rc::new(Mapping::new())],
         blocks: 0,
         block_stack: Vec::new(),
+        deferred: HashMap::new(),
+        pure_funcs: HashMap::new(),
     };
 
     // Bind every top-level name first: function bodies may refer to
@@ -284,6 +286,11 @@ struct Emitter<'a> {
     blocks: usize,
     /// Ids of the blocks being emitted, innermost last.
     block_stack: Vec<usize>,
+    /// `const` array pipelines not emitted where declared: their one use,
+    /// in the next statement, fuses them into its own loop.
+    deferred: HashMap<String, Expr>,
+    /// Purity of user functions (see `pure_func`), memoised by name.
+    pure_funcs: HashMap<String, bool>,
 }
 
 /// A number the emitter can fold at translation time. Folding happens
@@ -1095,8 +1102,17 @@ impl<'a> Emitter<'a> {
         }
         let decl_marker = format!("\u{1}D{}\u{1}", block);
         self.line(&decl_marker);
+        let mut deferred_here = Vec::new();
         for (i, s) in stmts.iter().enumerate() {
+            if let Some((name, init)) = self.fusible_intermediate(s, &stmts[i + 1..]) {
+                self.deferred.insert(name.clone(), init);
+                deferred_here.push(name);
+                continue;
+            }
             self.stmt(s, &stmts[i + 1..])?;
+        }
+        for name in deferred_here {
+            self.deferred.remove(&name);
         }
         while let Some((fid, sid)) = self.next_pending(Some(block)) {
             self.emit_closure_spec(fid, sid)?;
@@ -1566,6 +1582,9 @@ impl<'a> Emitter<'a> {
                 span,
                 ..
             } => {
+                if let Some(v) = self.fused(e)? {
+                    return Ok(v);
+                }
                 // `arr.push(x)` as a statement: append in place.
                 if let Expr::Member {
                     object, property, ..
@@ -1939,7 +1958,15 @@ impl<'a> Emitter<'a> {
                 arguments,
                 span,
                 ..
-            } => self.call(callee, arguments, *span, false),
+            } => {
+                if let Some(v) = self.array_fill(callee, arguments, *span)? {
+                    return Ok(v);
+                }
+                match self.fused(e)? {
+                    Some(v) => Ok(v),
+                    None => self.call(callee, arguments, *span, false),
+                }
+            }
             Expr::Unary { op, argument, span } => self.unary(*op, argument, *span, e),
             Expr::Binary {
                 op,
@@ -2677,4 +2704,597 @@ impl<'a> Emitter<'a> {
             _ => return Err(unsupported(format!("String method `.{}`", method), span)),
         })
     }
+
+    /// `new Array(n).fill(v)` / `Array(n).fill(v)`: one allocation of the
+    /// final size (building it by `push` copies it as it grows).
+    fn array_fill(&mut self, callee: &Expr, args: &[Expr], span: Span) -> Result<Option<String>> {
+        let (
+            Expr::Member {
+                object, property, ..
+            },
+            [value],
+        ) = (callee, args)
+        else {
+            return Ok(None);
+        };
+        if property != "fill" {
+            return Ok(None);
+        }
+        let len = match &**object {
+            Expr::New {
+                callee, arguments, ..
+            }
+            | Expr::Call {
+                callee, arguments, ..
+            } => match (&**callee, arguments.as_slice()) {
+                (Expr::Ident { name, .. }, [n])
+                    if name == "Array" && self.lookup(name).is_none() =>
+                {
+                    n
+                }
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let GoType::Array(elem) = self.go_type_at(span)? else {
+            return Ok(None);
+        };
+        let n = self.num_as(len, &GoType::Int)?;
+        let v = self.expr_as(value, &elem)?;
+        Ok(Some(format!("intyFilled({}, {})", n, v)))
+    }
+
+    // ---- array pipelines ----------------------------------------------------
+    //
+    // `xs.map(f).filter(g).reduce(h, 0)` would build two throwaway arrays;
+    // allocating, zeroing and collecting them is most of such a program's
+    // time. When every callback is pure, the chain is one loop over `xs`
+    // instead (fusion, as in Rust's iterators or Haskell's stream fusion):
+    // the only difference is that the callbacks' calls interleave, which a
+    // pure callback can't observe. A `const` holding an intermediate array
+    // fuses too, when its one use is the next statement's pipeline.
+
+    /// `e` as a fused loop, if it's a pipeline of at least two steps.
+    fn fused(&mut self, e: &Expr) -> Result<Option<String>> {
+        let Some(p) = self.pipeline(e) else {
+            return Ok(None);
+        };
+        self.emit_pipeline(&p, e.span()).map(Some)
+    }
+
+    /// Recognise `e` as a pipeline whose callbacks are all pure: its steps
+    /// (expanding a deferred `const` source) and what consumes them.
+    fn pipeline(&mut self, e: &Expr) -> Option<Pipeline> {
+        let p = self.pipeline_parts(e)?;
+        let steps = p.stages.len() + usize::from(!matches!(p.sink, Sink::Collect(_)));
+        (steps >= 2).then_some(p)
+    }
+
+    /// [`Self::pipeline`] without the two-step minimum (a deferred `const`
+    /// is one step of a longer chain).
+    fn pipeline_parts(&mut self, e: &Expr) -> Option<Pipeline> {
+        let (sink, mut object) = match e {
+            Expr::Call {
+                callee, arguments, ..
+            } => match &**callee {
+                Expr::Member {
+                    object, property, ..
+                } => {
+                    let sink = match (property.as_str(), arguments.as_slice()) {
+                        ("reduce", [f, init]) => Sink::Reduce(f.clone(), init.clone()),
+                        ("forEach", [f]) => Sink::ForEach(f.clone()),
+                        ("some", [f]) => Sink::Some(f.clone()),
+                        ("every", [f]) => Sink::Every(f.clone()),
+                        ("findIndex", [f]) => Sink::FindIndex(f.clone()),
+                        ("map", [f]) => Sink::Collect(Some(Stage::Map(f.clone()))),
+                        ("filter", [f]) => Sink::Collect(Some(Stage::Filter(f.clone()))),
+                        _ => return None,
+                    };
+                    (sink, (**object).clone())
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let mut stages: Vec<Stage> = Vec::new();
+        if let Sink::Collect(Some(st)) = &sink {
+            stages.push(st.clone());
+        }
+        loop {
+            match &object {
+                Expr::Call {
+                    callee, arguments, ..
+                } => match (&**callee, arguments.as_slice()) {
+                    (
+                        Expr::Member {
+                            object: inner,
+                            property,
+                            ..
+                        },
+                        [f],
+                    ) if property == "map" || property == "filter" => {
+                        let st = if property == "map" {
+                            Stage::Map(f.clone())
+                        } else {
+                            Stage::Filter(f.clone())
+                        };
+                        stages.insert(0, st);
+                        object = (**inner).clone();
+                    }
+                    _ => break,
+                },
+                Expr::Ident { name, .. } if self.deferred.contains_key(name) => {
+                    let init = self.deferred.get(name).cloned().expect("checked");
+                    let inner = self.pipeline_parts(&init)?;
+                    let Sink::Collect(_) = inner.sink else {
+                        return None;
+                    };
+                    let mut all = inner.stages;
+                    all.append(&mut stages);
+                    stages = all;
+                    object = inner.source;
+                    break;
+                }
+                _ => break,
+            }
+        }
+        // Only arrays: the source must be one.
+        if !matches!(self.type_of(&object), Ok(GoType::Array(_))) {
+            return None;
+        }
+        let callbacks: Vec<Expr> = stages
+            .iter()
+            .map(|s| match s {
+                Stage::Map(f) | Stage::Filter(f) => f.clone(),
+            })
+            .chain(sink.callback().cloned())
+            .collect();
+        for f in &callbacks {
+            if !self.pure_callback(f) {
+                return None;
+            }
+        }
+        Some(Pipeline {
+            source: object,
+            stages,
+            sink,
+        })
+    }
+
+    /// The Go code of a fused pipeline: one loop in a function literal
+    /// called in place (Go inlines both it and the callbacks bound in it).
+    fn emit_pipeline(&mut self, p: &Pipeline, span: Span) -> Result<String> {
+        let pad = self.pad();
+        let mut body = String::new();
+        // (The callbacks are bound one level in.)
+        self.indent += 1;
+        let mut fs = Vec::new();
+        let mut sink_f = None;
+        let r = (|| -> Result<()> {
+            for st in &p.stages {
+                let f = match st {
+                    Stage::Map(f) | Stage::Filter(f) => f,
+                };
+                fs.push(self.expr(f)?);
+            }
+            if let Some(f) = p.sink.callback() {
+                sink_f = Some(self.expr(f)?);
+            }
+            Ok(())
+        })();
+        self.indent -= 1;
+        r?;
+        let src = self.expr(&p.source)?;
+        let result = self.go_type_at(span)?;
+        let n = self.fresh("P");
+        for (i, f) in fs.iter().enumerate() {
+            body.push_str(&format!("{pad}\t{n}f{i} := {f}\n"));
+        }
+        if let Some(f) = &sink_f {
+            body.push_str(&format!("{pad}\t{n}s := {f}\n"));
+        }
+        body.push_str(&format!("{pad}\t{n}src := {src}\n"));
+        let filters = p.stages.iter().any(|s| matches!(s, Stage::Filter(_)));
+        // Before the loop.
+        match &p.sink {
+            Sink::Reduce(_, init) => {
+                let acc = self.expr_as(init, &result)?;
+                body.push_str(&format!("{pad}\t{n}acc := {acc}\n"));
+            }
+            Sink::FindIndex(_) => body.push_str(&format!("{pad}\t{n}k := 0\n")),
+            Sink::Collect(_) => {
+                let GoType::Array(elem) = &result else {
+                    return Err(unsupported("array pipeline of a non-array type", span));
+                };
+                let t = self.tm.render(elem);
+                if filters {
+                    body.push_str(&format!("{pad}\t{n}out := []{t}{{}}\n"));
+                } else {
+                    body.push_str(&format!("{pad}\t{n}out := make([]{t}, 0, len(*{n}src))\n"));
+                }
+            }
+            _ => {}
+        }
+        body.push_str(&format!("{pad}\tfor _, {n}x := range *{n}src {{\n"));
+        let mut x = format!("{n}x");
+        for (i, st) in p.stages.iter().enumerate() {
+            match st {
+                Stage::Map(_) => {
+                    let y = format!("{n}x{i}");
+                    body.push_str(&format!("{pad}\t\t{y} := {n}f{i}({x})\n"));
+                    x = y;
+                }
+                Stage::Filter(_) => {
+                    body.push_str(&format!(
+                        "{pad}\t\tif !{n}f{i}({x}) {{\n{pad}\t\t\tcontinue\n{pad}\t\t}}\n"
+                    ));
+                }
+            }
+        }
+        let (each, after, ret) = match &p.sink {
+            Sink::Reduce(..) => (
+                format!("{n}acc = {n}s({n}acc, {x})"),
+                format!("return {n}acc"),
+                true,
+            ),
+            Sink::ForEach(_) => (format!("{n}s({x})"), String::new(), false),
+            Sink::Some(_) => (
+                format!("if {n}s({x}) {{ return true }}"),
+                "return false".into(),
+                true,
+            ),
+            Sink::Every(_) => (
+                format!("if !{n}s({x}) {{ return false }}"),
+                "return true".into(),
+                true,
+            ),
+            Sink::FindIndex(_) => (
+                format!(
+                    "if {n}s({x}) {{ return {} }}\n{pad}\t\t{n}k++",
+                    coerce(format!("{n}k"), &GoType::Int, &result)
+                ),
+                format!("return {}", coerce("(-1)".into(), &GoType::Int, &result)),
+                true,
+            ),
+            Sink::Collect(_) => {
+                let grow = if filters {
+                    format!(
+                        "if len({n}out) == cap({n}out) {{ {n}out = intyGrow({n}out) }}\n{pad}\t\t"
+                    )
+                } else {
+                    String::new()
+                };
+                (
+                    format!("{grow}{n}out = append({n}out, {x})"),
+                    format!("return &{n}out"),
+                    true,
+                )
+            }
+        };
+        body.push_str(&format!("{pad}\t\t{each}\n{pad}\t}}\n"));
+        if !after.is_empty() {
+            body.push_str(&format!("{pad}\t{after}\n"));
+        }
+        let sig = if ret {
+            format!("func() {} ", self.tm.render(&result))
+        } else {
+            "func() ".to_string()
+        };
+        Ok(format!("{sig}{{\n{body}{pad}}}()"))
+    }
+
+    /// `stmt` as `const name = <map/filter chain>` whose only use is as
+    /// the source of a pipeline that `rest[0]` evaluates first thing (the
+    /// whole value of a declaration, a `return`, an assignment or an
+    /// expression statement): then it needn't exist as an array.
+    fn fusible_intermediate(&mut self, stmt: &Stmt, rest: &[Stmt]) -> Option<(String, Expr)> {
+        let Stmt::Var {
+            kind: VarKind::Const,
+            declarations,
+            ..
+        } = stmt
+        else {
+            return None;
+        };
+        let [d] = declarations.as_slice() else {
+            return None;
+        };
+        let init = d.init.as_ref()?;
+        // The declaration itself must be a map/filter chain of pure steps.
+        let Expr::Call { callee, .. } = init else {
+            return None;
+        };
+        match &**callee {
+            Expr::Member { property, .. } if property == "map" || property == "filter" => {}
+            _ => return None,
+        }
+        let (next, later) = rest.split_first()?;
+        let uses = inty::ast::free_idents::free_identifier_counts_in_stmt(next);
+        if uses.get(&d.name).copied() != Some(1)
+            || later
+                .iter()
+                .any(|s| free_identifiers_in_stmt(s).contains(&d.name))
+        {
+            return None;
+        }
+        let consumer = match next {
+            Stmt::Var { declarations, .. } => match declarations.as_slice() {
+                [c] => c.init.as_ref()?,
+                _ => return None,
+            },
+            Stmt::Return {
+                argument: Some(a), ..
+            } => a,
+            Stmt::Expr { expression, .. } => match expression {
+                Expr::Assign { left, right, .. } if is_pure_place(left) => right,
+                other => other,
+            },
+            _ => return None,
+        };
+        // Check with the declaration deferred, as the consumer will see it.
+        self.deferred.insert(d.name.clone(), init.clone());
+        let ok = self.pipeline_source_is(consumer, &d.name) && self.pipeline(consumer).is_some();
+        self.deferred.remove(&d.name);
+        // The deferred chain itself must be pure too.
+        let own = matches!(self.pipeline_steps_pure(init), Some(true));
+        (ok && own).then(|| (d.name.clone(), init.clone()))
+    }
+
+    /// Whether the innermost source of the chain `e` is the name `name`.
+    fn pipeline_source_is(&self, e: &Expr, name: &str) -> bool {
+        let mut cur = e;
+        loop {
+            match cur {
+                Expr::Call { callee, .. } => match &**callee {
+                    Expr::Member { object, .. } => cur = object,
+                    _ => return false,
+                },
+                Expr::Ident { name: n, .. } => return n == name,
+                _ => return false,
+            }
+        }
+    }
+
+    /// For a map/filter chain: whether all its callbacks are pure.
+    fn pipeline_steps_pure(&mut self, e: &Expr) -> Option<bool> {
+        let mut cur = e;
+        loop {
+            match cur {
+                Expr::Call {
+                    callee, arguments, ..
+                } => match (&**callee, arguments.as_slice()) {
+                    (
+                        Expr::Member {
+                            object, property, ..
+                        },
+                        [f],
+                    ) if property == "map" || property == "filter" => {
+                        if !self.pure_callback(f) {
+                            return Some(false);
+                        }
+                        cur = object;
+                    }
+                    _ => return Some(true),
+                },
+                _ => return Some(true),
+            }
+        }
+    }
+
+    /// A function literal whose calls have no effect anything can see.
+    fn pure_callback(&mut self, f: &Expr) -> bool {
+        match f {
+            Expr::Function {
+                name: None,
+                params,
+                body,
+                ..
+            } => {
+                let mut locals: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+                self.pure_stmt(body, &mut locals)
+            }
+            // `xs.map(square)`: a pure function by name.
+            Expr::Ident { name, .. } => self.pure_func(name),
+            _ => false,
+        }
+    }
+
+    /// A top-level (or block-level) function whose calls are pure. A
+    /// recursive reference is assumed pure while it's being checked.
+    fn pure_func(&mut self, name: &str) -> bool {
+        if let Some(&p) = self.pure_funcs.get(name) {
+            return p;
+        }
+        let Some(Bound::Func(fid)) = self.lookup(name) else {
+            return false;
+        };
+        self.pure_funcs.insert(name.to_string(), true);
+        let params = self.funcs[fid].params.clone();
+        let body = self.funcs[fid].body.clone();
+        let mut locals: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        let pure = self.pure_stmt(&body, &mut locals);
+        self.pure_funcs.insert(name.to_string(), pure);
+        pure
+    }
+
+    fn pure_stmt(&mut self, s: &Stmt, locals: &mut Vec<String>) -> bool {
+        match s {
+            Stmt::Empty { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => true,
+            Stmt::Block { body, .. } => {
+                let n = locals.len();
+                let ok = body.iter().all(|s| self.pure_stmt(s, locals));
+                locals.truncate(n);
+                ok
+            }
+            Stmt::Expr { expression, .. } => self.pure_expr(expression, locals),
+            Stmt::Var { declarations, .. } => declarations.iter().all(|d| {
+                let ok = d.init.as_ref().is_none_or(|e| self.pure_expr(e, locals));
+                locals.push(d.name.clone());
+                ok
+            }),
+            Stmt::Return { argument, .. } => {
+                argument.as_ref().is_none_or(|e| self.pure_expr(e, locals))
+            }
+            Stmt::If {
+                test,
+                consequent,
+                alternate,
+                ..
+            } => {
+                self.pure_expr(test, locals)
+                    && self.pure_stmt(consequent, locals)
+                    && alternate
+                        .as_deref()
+                        .is_none_or(|a| self.pure_stmt(a, locals))
+            }
+            Stmt::While { test, body, .. } | Stmt::DoWhile { body, test, .. } => {
+                self.pure_expr(test, locals) && self.pure_stmt(body, locals)
+            }
+            Stmt::For {
+                init,
+                test,
+                update,
+                body,
+                ..
+            } => {
+                let n = locals.len();
+                let ok = match init {
+                    None => true,
+                    Some(ForInit::Expr(e)) => self.pure_expr(e, locals),
+                    Some(ForInit::VarDecl(ds)) => ds.iter().all(|d| {
+                        let ok = d.init.as_ref().is_none_or(|e| self.pure_expr(e, locals));
+                        locals.push(d.name.clone());
+                        ok
+                    }),
+                } && test.as_ref().is_none_or(|t| self.pure_expr(t, locals))
+                    && update.as_ref().is_none_or(|u| self.pure_expr(u, locals))
+                    && self.pure_stmt(body, locals);
+                locals.truncate(n);
+                ok
+            }
+            _ => false,
+        }
+    }
+
+    fn pure_expr(&mut self, e: &Expr, locals: &mut Vec<String>) -> bool {
+        let is_local = |e: &Expr, locals: &[String]| matches!(e, Expr::Ident { name, .. } if locals.contains(name));
+        match e {
+            Expr::Lit { .. } | Expr::Ident { .. } => true,
+            Expr::Unary { op, argument, .. } => match op {
+                UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
+                    is_local(argument, locals)
+                }
+                UnaryOp::Delete => false,
+                _ => self.pure_expr(argument, locals),
+            },
+            Expr::Binary { left, right, .. } => {
+                self.pure_expr(left, locals) && self.pure_expr(right, locals)
+            }
+            Expr::Assign { left, right, .. } => {
+                is_local(left, locals) && self.pure_expr(right, locals)
+            }
+            Expr::Conditional {
+                test,
+                consequent,
+                alternate,
+                ..
+            } => {
+                self.pure_expr(test, locals)
+                    && self.pure_expr(consequent, locals)
+                    && self.pure_expr(alternate, locals)
+            }
+            Expr::Member { object, .. } => self.pure_expr(object, locals),
+            Expr::ComputedMember {
+                object, property, ..
+            } => self.pure_expr(object, locals) && self.pure_expr(property, locals),
+            Expr::Array { elements, .. } => elements
+                .iter()
+                .all(|el| el.as_ref().is_some_and(|x| self.pure_expr(x, locals))),
+            Expr::Object { properties, .. } => properties.iter().all(|p| match p {
+                PropDef::Property { value, .. } => self.pure_expr(value, locals),
+                _ => false,
+            }),
+            Expr::TemplateLiteral { expressions, .. } => {
+                expressions.iter().all(|x| self.pure_expr(x, locals))
+            }
+            Expr::Call {
+                callee, arguments, ..
+            } => {
+                if !arguments.iter().all(|a| self.pure_expr(a, locals)) {
+                    return false;
+                }
+                match &**callee {
+                    Expr::Ident { name, .. } => {
+                        matches!(name.as_str(), "String" | "isNaN") || self.pure_func(name)
+                    }
+                    Expr::Member {
+                        object, property, ..
+                    } => {
+                        if let Expr::Ident { name, .. } = &**object {
+                            match (name.as_str(), property.as_str()) {
+                                ("Math", "random") => return false,
+                                ("Math", _) => return true,
+                                ("Number", "isInteger") | ("String", "fromCharCode") => {
+                                    return true
+                                }
+                                _ => {}
+                            }
+                        }
+                        if !self.pure_expr(object, locals) {
+                            return false;
+                        }
+                        match self.type_of(object) {
+                            Ok(GoType::Str) => true,
+                            Ok(GoType::Array(_)) => matches!(
+                                property.as_str(),
+                                "indexOf" | "includes" | "slice" | "join" | "concat"
+                            ),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+/// One step of an array pipeline, by its callback.
+#[derive(Clone)]
+enum Stage {
+    Map(Expr),
+    Filter(Expr),
+}
+
+/// What consumes a pipeline's elements.
+#[derive(Clone)]
+enum Sink {
+    Reduce(Expr, Expr),
+    ForEach(Expr),
+    Some(Expr),
+    Every(Expr),
+    FindIndex(Expr),
+    /// The elements as an array (the chain's last step is its first entry
+    /// until `pipeline` moves it into the stages).
+    Collect(Option<Stage>),
+}
+
+impl Sink {
+    fn callback(&self) -> Option<&Expr> {
+        match self {
+            Sink::Reduce(f, _)
+            | Sink::ForEach(f)
+            | Sink::Some(f)
+            | Sink::Every(f)
+            | Sink::FindIndex(f) => Some(f),
+            Sink::Collect(_) => None,
+        }
+    }
+}
+
+struct Pipeline {
+    source: Expr,
+    stages: Vec<Stage>,
+    sink: Sink,
 }

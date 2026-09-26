@@ -467,6 +467,54 @@ impl InferState {
         Ok(self.zonk(&func_type))
     }
 
+    /// `new Array(n).fill(v)` (or `Array(n).fill(v)`): an array of `n`
+    /// copies of `v`. Typed as a whole: `new Array(n)` alone holds holes
+    /// that read as `undefined`, which an array of `v`'s type can't, but
+    /// `fill` replaces every one before anything can read it.
+    fn infer_array_fill(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        span: Span,
+    ) -> InferResult<Option<Type>> {
+        let (
+            Expr::Member {
+                object, property, ..
+            },
+            [value],
+        ) = (callee, arguments)
+        else {
+            return Ok(None);
+        };
+        if property != "fill" {
+            return Ok(None);
+        }
+        let len = match &**object {
+            Expr::New {
+                callee, arguments, ..
+            }
+            | Expr::Call {
+                callee, arguments, ..
+            } => match (&**callee, arguments.as_slice()) {
+                (Expr::Ident { name, .. }, [n])
+                    if name == "Array" && env.lookup("Array").is_some() =>
+                {
+                    n
+                }
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let len_type = self.infer_expr(env, len)?;
+        let len_type = self.widen(len.span(), &len_type);
+        self.subsume(len.span(), &len_type, &Type::Int)?;
+        let value_type = self.infer_expr(env, value)?;
+        let elem = self.widen(value.span(), &value_type);
+        let _ = span;
+        Ok(Some(Type::array(elem)))
+    }
+
     /// Infer the type of a function call.
     pub(in crate::infer) fn infer_call(
         &mut self,
@@ -476,6 +524,9 @@ impl InferState {
         keywords: &[(String, Expr)],
         span: Span,
     ) -> InferResult<Type> {
+        if let Some(t) = self.infer_array_fill(env, callee, arguments, span)? {
+            return Ok(t);
+        }
         // For method calls, we need to infer the object only once to avoid creating
         // different fresh type variables. We'll manually extract the method type.
         let mut deferred_this: Option<Type> = None;

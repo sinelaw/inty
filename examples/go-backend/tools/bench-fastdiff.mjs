@@ -45,6 +45,10 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === "--inty") inty = resolve(argv[++i]);
   else if (argv[i] === "--no-bun") noBun = true;
   else if (argv[i] === "--only") only = argv[++i].split(",");
+  else {
+    console.error(`bench-fastdiff.mjs: unknown argument ${argv[i]}`);
+    process.exit(2);
+  }
 }
 
 function must(cmd, args, opts = {}) {
@@ -141,7 +145,14 @@ let inputs = [
   pair("large-cleanup", large, largeEdited, ["--cleanup"]),
   pair("dense", dense, edit(dense, 2000, 4, false)),
 ];
-if (only) inputs = inputs.filter((x) => only.includes(x.id));
+if (only) {
+  const unknown = only.filter((id) => !inputs.some((x) => x.id === id));
+  if (unknown.length > 0) {
+    console.error(`bench-fastdiff.mjs: no input named ${unknown.join(", ")}`);
+    process.exit(2);
+  }
+  inputs = inputs.filter((x) => only.includes(x.id));
+}
 
 // ---- sides ---------------------------------------------------------------
 

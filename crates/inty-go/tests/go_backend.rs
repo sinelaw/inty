@@ -436,3 +436,55 @@ fn splice_with_too_many_items_is_rejected() {
     let four = "const a = [1, 2];\na.splice(0, 0, 1, 2, 3, 4);\nconsole.log(a.length);";
     assert!(inty_go::compile(four).is_ok());
 }
+
+/// The code of `main` (and the functions before it) of a translation.
+fn user_code(code: &str) -> &str {
+    code.split("// ---- ").next().unwrap_or(code)
+}
+
+#[test]
+fn pure_array_pipelines_become_one_loop() {
+    // `map`, `filter` and `reduce`, with the intermediates in single-use
+    // consts, fuse into one loop: no helper call, no intermediate array.
+    let code = inty_go::compile(
+        "function f(xs, k) {\n\
+           const ys = xs.map((x) => x * x + k);\n\
+           const odd = ys.filter((x) => x % 2 === 1);\n\
+           return odd.reduce((acc, x) => acc + x / 1000, 0);\n\
+         }\n\
+         console.log(f([1, 2, 3], 1));",
+    )
+    .unwrap()
+    .code;
+    let user = user_code(&code);
+    for helper in ["intyMap(", "intyFilter(", "intyReduce("] {
+        assert!(!user.contains(helper), "{} left in:\n{}", helper, user);
+    }
+    assert!(user.contains(":= range *"), "{}", user);
+}
+
+#[test]
+fn pipelines_with_effects_are_not_fused() {
+    // Fusing would interleave the two callbacks' effects on `trace`.
+    let code = inty_go::compile(
+        "let trace = \"\";\n\
+         function g(xs) {\n\
+           return xs.map((x) => { trace += \"m\"; return x; }).filter((x) => x > 1).length;\n\
+         }\n\
+         console.log(g([1, 2]));",
+    )
+    .unwrap()
+    .code;
+    assert!(user_code(&code).contains("intyMap("), "{}", code);
+    // An intermediate used twice stays an array too.
+    let code = inty_go::compile(
+        "function h(xs) {\n\
+           const ys = xs.map((x) => x + 1);\n\
+           return ys.filter((x) => x > 1).length + ys.length;\n\
+         }\n\
+         console.log(h([1, 2]));",
+    )
+    .unwrap()
+    .code;
+    assert!(user_code(&code).contains("intyMap("), "{}", code);
+}

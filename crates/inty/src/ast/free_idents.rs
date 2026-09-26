@@ -46,7 +46,7 @@
 //! nested function boundaries); other forms are collected only from
 //! the immediate block.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::{
     CatchClause, ChainSegment, ExportDecl, Expr, ForInLhs, ForInit, ImportSpecifier, Param,
@@ -91,6 +91,15 @@ pub fn free_identifiers_in_stmt(stmt: &Stmt) -> HashSet<String> {
     state.free
 }
 
+/// How many times each free identifier of a statement is referenced.
+pub fn free_identifier_counts_in_stmt(stmt: &Stmt) -> HashMap<String, usize> {
+    let mut state = State::new();
+    state.enter_block();
+    state.collect_block_bindings(std::slice::from_ref(stmt));
+    state.visit_stmt(stmt);
+    state.counts
+}
+
 /// Free identifiers of a single expression. No bindings are
 /// introduced at the outer level; every `Ident` reference inside is
 /// counted as free unless shadowed by an inner scope (e.g. a function
@@ -119,6 +128,8 @@ struct Scope {
 struct State {
     scopes: Vec<Scope>,
     free: HashSet<String>,
+    /// How many references each free name has.
+    counts: HashMap<String, usize>,
 }
 
 impl State {
@@ -126,6 +137,7 @@ impl State {
         State {
             scopes: Vec::new(),
             free: HashSet::new(),
+            counts: HashMap::new(),
         }
     }
 
@@ -182,6 +194,7 @@ impl State {
     fn record_ref(&mut self, name: &str) {
         if !self.is_bound(name) {
             self.free.insert(name.to_string());
+            *self.counts.entry(name.to_string()).or_insert(0) += 1;
         }
     }
 
