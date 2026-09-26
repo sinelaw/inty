@@ -50,7 +50,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     CatchClause, ChainSegment, ExportDecl, Expr, ForInLhs, ForInit, ImportSpecifier, Param,
-    PropDef, Stmt, SwitchCase, VarDeclarator, VarKind,
+    PropDef, Stmt, SwitchCase, UnaryOp, VarDeclarator, VarKind,
 };
 
 /// Free identifiers of a function body, given the function's name (if
@@ -100,6 +100,49 @@ pub fn free_identifier_counts_in_stmt(stmt: &Stmt) -> HashMap<String, usize> {
     state.counts
 }
 
+/// Names a statement assigns to: `x = …`, `x += …`, `x++`, a
+/// `for (x of …)` target and the names in a destructuring assignment,
+/// nested functions included.
+pub fn assigned_names_in_stmt(stmt: &Stmt) -> HashSet<String> {
+    let mut state = State::new();
+    state.enter_block();
+    state.collect_block_bindings(std::slice::from_ref(stmt));
+    state.visit_stmt(stmt);
+    state.assigned
+}
+
+/// [`assigned_names_in_stmt`] for an expression.
+pub fn assigned_names_in_expr(expr: &Expr) -> HashSet<String> {
+    let mut state = State::new();
+    state.visit_expr(expr);
+    state.assigned
+}
+
+/// The names an assignment target writes: a plain name, or those in a
+/// destructuring pattern.
+pub fn assign_target_names(target: &Expr) -> HashSet<String> {
+    let mut state = State::new();
+    state.record_assign_targets(target);
+    state.assigned
+}
+
+/// Every name a program assigns to, and the names assigned from inside
+/// a function that doesn't declare them itself: a closure writing a
+/// variable it captured. A variable in the second set can change during
+/// any call, so no test of it stays true for long.
+pub fn assignments_in_program(stmts: &[Stmt]) -> (HashSet<String>, HashSet<String>) {
+    let mut state = State::new();
+    state.enter_block();
+    state.collect_block_bindings(stmts);
+    for s in stmts {
+        state.collect_nested_vars(s);
+    }
+    for s in stmts {
+        state.visit_stmt(s);
+    }
+    (state.assigned, state.captured_assigned)
+}
+
 /// Free identifiers of a single expression. No bindings are
 /// introduced at the outer level; every `Ident` reference inside is
 /// counted as free unless shadowed by an inner scope (e.g. a function
@@ -130,6 +173,10 @@ struct State {
     free: HashSet<String>,
     /// How many references each free name has.
     counts: HashMap<String, usize>,
+    /// Every name assigned to.
+    assigned: HashSet<String>,
+    /// Names assigned from a function nested below their declaration.
+    captured_assigned: HashSet<String>,
 }
 
 impl State {
@@ -138,6 +185,8 @@ impl State {
             scopes: Vec::new(),
             free: HashSet::new(),
             counts: HashMap::new(),
+            assigned: HashSet::new(),
+            captured_assigned: HashSet::new(),
         }
     }
 
@@ -195,6 +244,56 @@ impl State {
         if !self.is_bound(name) {
             self.free.insert(name.to_string());
             *self.counts.entry(name.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Record an assignment to `name`, noting whether it writes a
+    /// variable declared outside the innermost function (or not declared
+    /// at all, which is treated the same way).
+    fn record_assign(&mut self, name: &str) {
+        self.assigned.insert(name.to_string());
+        let Some(function) = self
+            .scopes
+            .iter()
+            .rposition(|s| s.kind == ScopeKind::Function)
+        else {
+            return;
+        };
+        let declared_inside = self.scopes[function..]
+            .iter()
+            .any(|s| s.names.contains(name));
+        if !declared_inside {
+            self.captured_assigned.insert(name.to_string());
+        }
+    }
+
+    /// Record the names an assignment target writes: a plain name, or
+    /// the names inside a destructuring pattern.
+    fn record_assign_targets(&mut self, target: &Expr) {
+        match target {
+            Expr::Ident { name, .. } => self.record_assign(name),
+            Expr::Array { elements, .. } => {
+                for e in elements.iter().flatten() {
+                    self.record_assign_targets(e);
+                }
+            }
+            Expr::Tuple { elements, .. } => {
+                for e in elements {
+                    self.record_assign_targets(e);
+                }
+            }
+            Expr::Object { properties, .. } => {
+                for p in properties {
+                    match p {
+                        PropDef::Property { value, .. } => self.record_assign_targets(value),
+                        PropDef::Spread { argument, .. } => self.record_assign_targets(argument),
+                        _ => {}
+                    }
+                }
+            }
+            Expr::Spread { argument, .. } => self.record_assign_targets(argument),
+            Expr::Assign { left, .. } => self.record_assign_targets(left),
+            _ => {}
         }
     }
 
@@ -466,7 +565,10 @@ impl State {
                 self.enter_block();
                 match left {
                     ForInLhs::VarDecl(name, _, _) => self.bind_lex(name),
-                    ForInLhs::Expr(e) => self.visit_expr(e),
+                    ForInLhs::Expr(e) => {
+                        self.record_assign_targets(e);
+                        self.visit_expr(e);
+                    }
                 }
                 self.visit_stmt(body);
                 self.leave_scope();
@@ -634,12 +736,21 @@ impl State {
                     self.visit_expr(a);
                 }
             }
-            Expr::Unary { argument, .. } => self.visit_expr(argument),
+            Expr::Unary { op, argument, .. } => {
+                if matches!(
+                    op,
+                    UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
+                ) {
+                    self.record_assign_targets(argument);
+                }
+                self.visit_expr(argument);
+            }
             Expr::Binary { left, right, .. } => {
                 self.visit_expr(left);
                 self.visit_expr(right);
             }
             Expr::Assign { left, right, .. } => {
+                self.record_assign_targets(left);
                 self.visit_expr(left);
                 self.visit_expr(right);
             }

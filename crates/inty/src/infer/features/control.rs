@@ -6,11 +6,14 @@ use crate::types::{Type, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::narrow::{
-    apply_narrowing, narrowing_collapsed_to_never, path_from_expr, try_extract_narrowing,
-    Narrowing, Path,
+    apply_narrowing, narrowing_collapsed_to_never, path_from_expr, test_facts, Facts, Narrowing,
+    Path,
 };
 use super::super::state::InferState;
 use super::super::InferResult;
+use crate::ast::free_idents::{
+    assign_target_names, assigned_names_in_expr, assigned_names_in_stmt,
+};
 
 /// If `ty` is a closed union whose every member is a literal type
 /// (or just a single literal type), return the set of literal values.
@@ -42,30 +45,55 @@ fn format_literal(l: &crate::types::LitValue) -> String {
     }
 }
 
-/// Emit warnings for an `if`-test or conditional whose narrowing makes
-/// one branch dead. The check fires after `apply_narrowing` has
-/// produced the consequent and alternate environments — if the bound
-/// path's type was non-never before but is `never` in either branch,
-/// the predicate is statically constant and the branch is unreachable.
-fn warn_if_narrowing_unreachable(
+/// Apply each of `facts` to `env` in turn. With `dead_warning`, a fact
+/// that leaves its variable no possible type makes the branch dead, and
+/// the test at `test_span` is reported as constant.
+fn apply_facts(
     state: &mut InferState,
-    base_env: &TypeEnv,
-    cons_env: &TypeEnv,
-    alt_env: &TypeEnv,
-    path: &Path,
-    test_span: Span,
-) {
-    if narrowing_collapsed_to_never(state, base_env, cons_env, path) {
-        state.warn(
-            test_span,
-            "this comparison is always false: the type of the operand cannot satisfy it",
-        );
+    env: &TypeEnv,
+    facts: &[(Path, Narrowing)],
+    dead_warning: Option<(&str, Span)>,
+) -> TypeEnv {
+    let mut out = env.clone();
+    for (path, narrowing) in facts {
+        let next = apply_narrowing(state, &out, path, narrowing);
+        if let Some((message, span)) = dead_warning {
+            if narrowing.warns_when_dead() && narrowing_collapsed_to_never(state, &out, &next, path)
+            {
+                state.warn(span, message);
+            }
+        }
+        out = next;
     }
-    if narrowing_collapsed_to_never(state, base_env, alt_env, path) {
-        state.warn(
-            test_span,
-            "this comparison is always true: the type of the operand cannot violate it",
-        );
+    out
+}
+
+/// Whether control never leaves `stmt` normally: it always returns,
+/// throws, breaks or continues. Code after such a statement in the same
+/// list runs only if control didn't get this far. Erring toward `false`
+/// only gives up narrowing.
+pub(in crate::infer) fn always_exits(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return { .. } | Stmt::Throw { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {
+            true
+        }
+        Stmt::Block { body, .. } => body.iter().any(always_exits),
+        Stmt::If {
+            consequent,
+            alternate: Some(alt),
+            ..
+        } => always_exits(consequent) && always_exits(alt),
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            finalizer.as_deref().is_some_and(always_exits)
+                || (always_exits(block) && handler.as_ref().is_none_or(|h| always_exits(&h.body)))
+        }
+        // A labeled statement can be left by a `break` to its own label.
+        _ => false,
     }
 }
 
@@ -112,17 +140,83 @@ impl InferState {
         test: &Expr,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
         let _test_type = self.infer_expr(env, test)?;
-        let extracted = try_extract_narrowing(test).or_else(|| self.extract_isinstance(test));
-        let envs = match extracted {
-            Some((path, narrowing)) => {
-                let cons_env = apply_narrowing(self, env, &path, &narrowing);
-                let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
-                warn_if_narrowing_unreachable(self, env, &cons_env, &alt_env, &path, test.span());
-                (cons_env, alt_env)
-            }
-            None => (env.clone(), env.clone()),
+        let (base, facts) = self.test_facts_in(env, test, None);
+        let span = test.span();
+        let cons_env = apply_facts(
+            self,
+            &base,
+            &facts.when_true,
+            Some((
+                "this comparison is always false: the type of the operand cannot satisfy it",
+                span,
+            )),
+        );
+        let alt_env = apply_facts(
+            self,
+            &base,
+            &facts.when_false,
+            Some((
+                "this comparison is always true: the type of the operand cannot violate it",
+                span,
+            )),
+        );
+        Ok((cons_env, alt_env))
+    }
+
+    /// The facts `test` establishes, and the environment they refine:
+    /// `env` less any narrowing of a variable the test assigns. Facts
+    /// about variables assigned in `test` or in `guarded` (the code the
+    /// test guards, when that is part of the same expression) are
+    /// dropped: the value there may not be the one tested.
+    fn test_facts_in(
+        &self,
+        env: &TypeEnv,
+        test: &Expr,
+        guarded: Option<&Expr>,
+    ) -> (TypeEnv, Facts) {
+        let mut facts = test_facts(test, &|e| self.extract_isinstance(e));
+        if facts.when_true.is_empty() && facts.when_false.is_empty() && !env.has_narrowings() {
+            return (env.clone(), facts);
+        }
+        let mut assigned = assigned_names_in_expr(test);
+        if let Some(g) = guarded {
+            assigned.extend(assigned_names_in_expr(g));
+        }
+        facts.forget(&assigned);
+        (env.unnarrow(&assigned), facts)
+    }
+
+    /// The environment `guarded` is checked in when it runs only if
+    /// `test` came out `outcome`: the right operand of `&&` (`true`) or
+    /// `||` (`false`).
+    pub(in crate::infer) fn env_given(
+        &mut self,
+        env: &TypeEnv,
+        test: &Expr,
+        outcome: bool,
+        guarded: &Expr,
+    ) -> TypeEnv {
+        let (base, facts) = self.test_facts_in(env, test, Some(guarded));
+        let facts = if outcome {
+            &facts.when_true
+        } else {
+            &facts.when_false
         };
-        Ok(envs)
+        apply_facts(self, &base, facts, None)
+    }
+
+    /// A loop's environment: every iteration after the first starts
+    /// wherever the previous one left off, so a narrowing of a variable
+    /// the loop assigns may not hold on entry.
+    fn loop_entry_env(&self, env: &TypeEnv, exprs: &[Option<&Expr>], body: &Stmt) -> TypeEnv {
+        if !env.has_narrowings() {
+            return env.clone();
+        }
+        let mut assigned = assigned_names_in_stmt(body);
+        for e in exprs.iter().flatten() {
+            assigned.extend(assigned_names_in_expr(e));
+        }
+        env.unnarrow(&assigned)
     }
 
     /// Infer the type of a conditional expression.
@@ -231,7 +325,39 @@ impl InferState {
             Type::Undefined
         };
 
-        Ok((result, env.clone()))
+        // When one branch always exits, what follows runs only after the
+        // other, so that branch's facts still hold there (less those of
+        // variables the test or that branch assigns):
+        //
+        //     if (node === null) return 0;
+        //     return node.value;            // node is not null here
+        let cons_exits = always_exits(consequent);
+        let alt_exits = alternate.as_deref().is_some_and(always_exits);
+        let after = match (cons_exits, alt_exits) {
+            (true, false) => {
+                let mut assigned = assigned_names_in_expr(test);
+                if let Some(alt) = alternate {
+                    assigned.extend(assigned_names_in_stmt(alt));
+                }
+                alt_env.unnarrow(&assigned)
+            }
+            (false, true) => {
+                let mut assigned = assigned_names_in_expr(test);
+                assigned.extend(assigned_names_in_stmt(consequent));
+                cons_env.unnarrow(&assigned)
+            }
+            _ if env.has_narrowings() => {
+                let mut assigned = assigned_names_in_expr(test);
+                assigned.extend(assigned_names_in_stmt(consequent));
+                if let Some(alt) = alternate {
+                    assigned.extend(assigned_names_in_stmt(alt));
+                }
+                env.unnarrow(&assigned)
+            }
+            _ => env.clone(),
+        };
+
+        Ok((result, after))
     }
 
     /// Handle a `while` statement.
@@ -241,8 +367,12 @@ impl InferState {
         test: &Expr,
         body: &Stmt,
     ) -> InferResult<(Type, TypeEnv)> {
-        let _test_type = self.infer_expr(env, test)?;
-        self.infer_stmt(env, body)?;
+        // The body runs while the test holds:
+        //
+        //     while (node !== null) { sum += node.value; node = node.next; }
+        let loop_env = self.loop_entry_env(env, &[Some(test)], body);
+        let (body_env, _) = self.infer_branching_test(&loop_env, test)?;
+        self.infer_stmt(&body_env, body)?;
         Ok((Type::Undefined, env.clone()))
     }
 
@@ -253,8 +383,9 @@ impl InferState {
         body: &Stmt,
         test: &Expr,
     ) -> InferResult<(Type, TypeEnv)> {
-        self.infer_stmt(env, body)?;
-        let _test_type = self.infer_expr(env, test)?;
+        let loop_env = self.loop_entry_env(env, &[Some(test)], body);
+        self.infer_stmt(&loop_env, body)?;
+        let _test_type = self.infer_expr(&loop_env, test)?;
         Ok((Type::Undefined, env.clone()))
     }
 
@@ -278,16 +409,19 @@ impl InferState {
         } else {
             env.clone()
         };
+        let loop_env = self.loop_entry_env(&loop_env, &[test.as_ref(), update.as_ref()], body);
 
-        if let Some(test) = test {
-            self.infer_expr(&loop_env, test)?;
-        }
+        // The body runs while the test holds.
+        let body_env = match test {
+            Some(test) => self.infer_branching_test(&loop_env, test)?.0,
+            None => loop_env.clone(),
+        };
 
         if let Some(update) = update {
             self.infer_expr(&loop_env, update)?;
         }
 
-        self.infer_stmt(&loop_env, body)?;
+        self.infer_stmt(&body_env, body)?;
         Ok((Type::Undefined, env.clone()))
     }
 
@@ -312,9 +446,10 @@ impl InferState {
             ForInLhs::Expr(expr) => {
                 let lhs_type = self.infer_expr(env, expr)?;
                 self.subsume(span, &lhs_type, &Type::String)?;
-                env.clone()
+                env.unnarrow(&assign_target_names(expr))
             }
         };
+        let loop_env = self.loop_entry_env(&loop_env, &[], body);
 
         self.infer_stmt(&loop_env, body)?;
         Ok((Type::Undefined, env.clone()))
@@ -344,9 +479,10 @@ impl InferState {
             ForInLhs::Expr(expr) => {
                 let lhs_type = self.infer_expr(env, expr)?;
                 self.subsume(span, &lhs_type, &elem_type)?;
-                env.clone()
+                env.unnarrow(&assign_target_names(expr))
             }
         };
+        let loop_env = self.loop_entry_env(&loop_env, &[], body);
 
         self.infer_stmt(&loop_env, body)?;
         Ok((Type::Undefined, env.clone()))
@@ -370,20 +506,32 @@ impl InferState {
             other => self.infer_stmt(env, other)?,
         };
 
+        // The handler and the `finally` block can start anywhere in the
+        // body, where none of the body's narrowings need hold yet and any
+        // of its assignments may have run. Dropping every narrowing there
+        // is simple and safe.
+        let unsure_env = body_env.without_narrowings();
+
         if let Some(catch) = handler {
             // The caught exception object is unmodelled, so its binding is a
             // fresh (opaque) variable. The handler runs against the
             // try-body's environment.
             let catch_env =
-                body_env.extend(catch.param.clone(), TypeScheme::mono(self.fresh_type_var()));
+                unsure_env.extend(catch.param.clone(), TypeScheme::mono(self.fresh_type_var()));
             self.infer_stmt(&catch_env, &catch.body)?;
         }
 
         if let Some(finally) = finalizer {
-            self.infer_stmt(&body_env, finally)?;
+            self.infer_stmt(&unsure_env, finally)?;
         }
 
-        Ok((try_type, body_env))
+        // After a handler, what follows may have come through it.
+        let after = if handler.is_some() || finalizer.is_some() {
+            unsure_env
+        } else {
+            body_env
+        };
+        Ok((try_type, after))
     }
 
     /// Handle a `switch` statement.
@@ -405,8 +553,33 @@ impl InferState {
         let mut covered_literals: Vec<crate::types::LitValue> = Vec::new();
         let mut has_default = false;
 
-        for case in cases {
-            let case_env = if let Some(test) = &case.test {
+        for (i, case) in cases.iter().enumerate() {
+            // A case reached by falling through from the one before has
+            // none of its own facts, and is past that case's assignments.
+            let falls_into = i > 0 && !cases[i - 1].consequent.iter().any(always_exits);
+            let case_env = if falls_into {
+                let mut assigned = std::collections::HashSet::new();
+                for c in &cases[..i] {
+                    for s in &c.consequent {
+                        assigned.extend(assigned_names_in_stmt(s));
+                    }
+                }
+                if let Some(test) = &case.test {
+                    let test_type = self.infer_expr(env, test)?;
+                    if self.is_numeric(&disc_type) || self.is_numeric(&test_type) {
+                        self.require_num(span, &disc_type)?;
+                        self.require_num(span, &test_type)?;
+                    } else {
+                        self.subsume_either(span, &disc_type, &test_type)?;
+                    }
+                    if let Some(lit) = super::super::narrow::literal_value_of(test) {
+                        covered_literals.push(lit);
+                    }
+                } else {
+                    has_default = true;
+                }
+                env.unnarrow(&assigned)
+            } else if let Some(test) = &case.test {
                 let test_type = self.infer_expr(env, test)?;
                 // Symmetric "comparable" check, like `===`: the case
                 // test value is matched against the discriminator at
@@ -441,8 +614,9 @@ impl InferState {
                 env.clone()
             };
 
+            let mut stmt_env = case_env;
             for stmt in &case.consequent {
-                self.infer_stmt(&case_env, stmt)?;
+                stmt_env = self.infer_stmt(&stmt_env, stmt)?.1;
             }
         }
 

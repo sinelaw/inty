@@ -112,7 +112,15 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let left_type = self.infer_expr(env, left)?;
-        let right_type = self.infer_expr(env, right)?;
+        // The right operand of `&&` runs only when the left is truthy,
+        // that of `||` only when it is falsy: `node !== null && node.ok`.
+        let right_type = match op {
+            BinOp::And | BinOp::Or => {
+                let right_env = self.env_given(env, left, matches!(op, BinOp::And), right);
+                self.infer_expr(&right_env, right)?
+            }
+            _ => self.infer_expr(env, right)?,
+        };
 
         // Record origins for the operands
         let op_str = format!("{:?}", op);

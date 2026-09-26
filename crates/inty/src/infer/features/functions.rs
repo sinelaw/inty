@@ -250,6 +250,13 @@ impl InferState {
         expected: Option<Type>,
         span: Span,
     ) -> InferResult<Type> {
+        // A function can run long after it is made, when a variable it
+        // captured may hold something else. Narrowings of variables that
+        // are assigned somewhere don't carry into its body.
+        let body_env = &body_env.unnarrow_where(|name, b| {
+            b.mutability == crate::infer::env::Mutability::Mutable
+                && self.assigned_anywhere.contains(name)
+        });
         self.return_value_stack.push(Vec::new());
         self.return_expected_stack.push(expected);
         let body_result = self.infer_stmt(body_env, body);

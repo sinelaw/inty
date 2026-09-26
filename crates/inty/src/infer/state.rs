@@ -6,7 +6,7 @@
 //! - Named recursive type definitions
 //! - Pending type class constraints
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::var_table::{TrailMark, VarTable};
 use super::InferResult;
@@ -254,6 +254,13 @@ pub struct InferState {
     /// checks map a class name back to its brand. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brand_ids: HashMap<String, TypeId>,
+    /// Names the program assigns to anywhere, and names a closure
+    /// assigns (see `ast::free_idents::assignments_in_program`). They
+    /// bound flow-sensitive narrowing: a closure-assigned variable is
+    /// never narrowed, and a function body doesn't inherit narrowings
+    /// of variables assigned anywhere.
+    pub assigned_anywhere: HashSet<String>,
+    pub closure_assigned: HashSet<String>,
 
     /// The lexical environment in scope while a type annotation is being
     /// lowered, used to resolve a class-name `TypeAst::Ref` to the class's
@@ -410,6 +417,8 @@ impl InferState {
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
+            assigned_anywhere: HashSet::new(),
+            closure_assigned: HashSet::new(),
             annotation_env: None,
             current_annotation_span: None,
             return_value_stack: Vec::new(),

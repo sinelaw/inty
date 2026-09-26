@@ -23,6 +23,7 @@
 use crate::types::{LitValue, PropName, RowTail, RowType, Type, TypeId, TypeScheme};
 
 use super::env::TypeEnv;
+use crate::ast::SourceLanguage as Language;
 use crate::ast::{BinOp, Expr, Literal, UnaryOp};
 
 /// A `Path` names something that can be narrowed: a local identifier, or
@@ -63,6 +64,22 @@ pub enum Narrowing {
     IsInstance(TypeId),
     /// Negation of [`Narrowing::IsInstance`] (the `else` branch).
     IsNotInstance(TypeId),
+    /// `<path> === null`.
+    IsNull,
+    /// `<path> !== null`.
+    NotNull,
+    /// `<path> === undefined`.
+    IsUndefined,
+    /// `<path> !== undefined`.
+    NotUndefined,
+    /// `<path> == null` (or `== undefined`): null or undefined.
+    IsNullish,
+    /// `<path> != null` (or `!= undefined`).
+    NotNullish,
+    /// `<path>` tested for truth, as in `if (x)`.
+    Truthy,
+    /// `!<path>`.
+    Falsy,
 }
 
 impl Narrowing {
@@ -76,7 +93,117 @@ impl Narrowing {
             Narrowing::NotEquals(l) => Narrowing::Equals(l.clone()),
             Narrowing::IsInstance(id) => Narrowing::IsNotInstance(*id),
             Narrowing::IsNotInstance(id) => Narrowing::IsInstance(*id),
+            Narrowing::IsNull => Narrowing::NotNull,
+            Narrowing::NotNull => Narrowing::IsNull,
+            Narrowing::IsUndefined => Narrowing::NotUndefined,
+            Narrowing::NotUndefined => Narrowing::IsUndefined,
+            Narrowing::IsNullish => Narrowing::NotNullish,
+            Narrowing::NotNullish => Narrowing::IsNullish,
+            Narrowing::Truthy => Narrowing::Falsy,
+            Narrowing::Falsy => Narrowing::Truthy,
         }
+    }
+
+    /// Whether a branch this narrowing makes dead is worth a warning.
+    /// Defensive null checks and truth tests of values that can't be
+    /// falsy are ordinary JavaScript, so those stay quiet.
+    pub fn warns_when_dead(&self) -> bool {
+        matches!(
+            self,
+            Narrowing::IsTypeof(_)
+                | Narrowing::IsNotTypeof(_)
+                | Narrowing::Equals(_)
+                | Narrowing::NotEquals(_)
+                | Narrowing::IsInstance(_)
+                | Narrowing::IsNotInstance(_)
+        )
+    }
+}
+
+/// What a test tells us: the narrowings that hold when it is true, and
+/// those that hold when it is false.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Facts {
+    pub when_true: Vec<(Path, Narrowing)>,
+    pub when_false: Vec<(Path, Narrowing)>,
+}
+
+impl Facts {
+    fn one(path: Path, narrowing: Narrowing) -> Facts {
+        Facts {
+            when_false: vec![(path.clone(), narrowing.negate())],
+            when_true: vec![(path, narrowing)],
+        }
+    }
+
+    fn swap(self) -> Facts {
+        Facts {
+            when_true: self.when_false,
+            when_false: self.when_true,
+        }
+    }
+
+    /// Drop every fact about a variable in `names` (ones the test itself
+    /// assigns, whose value at the branch may not be the one tested).
+    pub fn forget(&mut self, names: &std::collections::HashSet<String>) {
+        self.when_true
+            .retain(|(p, _)| !names.contains(p.root_ident()));
+        self.when_false
+            .retain(|(p, _)| !names.contains(p.root_ident()));
+    }
+}
+
+/// The facts a test establishes. `extra` recognises tests that need the
+/// checker's state (`isinstance`).
+///
+/// - a comparison [`try_extract_narrowing`] understands;
+/// - `<path>` alone: truthy when true, falsy when false;
+/// - `!e`: the facts of `e`, swapped;
+/// - `a && b`: when true, both sides' true facts (`b` only runs once
+///   `a` held); when false, nothing we can pin to one side;
+/// - `a || b`: when false, both sides' false facts; when true, nothing.
+pub fn test_facts(test: &Expr, extra: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>) -> Facts {
+    if let Some((path, narrowing)) = try_extract_narrowing(test).or_else(|| extra(test)) {
+        return Facts::one(path, narrowing);
+    }
+    match test {
+        Expr::Unary {
+            op: UnaryOp::Not,
+            argument,
+            ..
+        } => test_facts(argument, extra).swap(),
+        Expr::Binary {
+            op: BinOp::And,
+            left,
+            right,
+            ..
+        } => {
+            let mut l = test_facts(left, extra);
+            let r = test_facts(right, extra);
+            l.when_true.extend(r.when_true);
+            Facts {
+                when_true: l.when_true,
+                when_false: Vec::new(),
+            }
+        }
+        Expr::Binary {
+            op: BinOp::Or,
+            left,
+            right,
+            ..
+        } => {
+            let mut l = test_facts(left, extra);
+            let r = test_facts(right, extra);
+            l.when_false.extend(r.when_false);
+            Facts {
+                when_true: Vec::new(),
+                when_false: l.when_false,
+            }
+        }
+        _ => match path_from_expr(test) {
+            Some(path) => Facts::one(path, Narrowing::Truthy),
+            None => Facts::default(),
+        },
     }
 }
 
@@ -111,11 +238,41 @@ pub fn apply_narrowing(
         return env.clone();
     }
 
-    let original_ty = state.apply_subst(scheme.ty());
-    let new_ty = refine_at_path(&original_ty, &path_steps(path), narrowing);
+    // A variable that a closure assigns can change during any call, so a
+    // test of it may be stale by the time the branch reads it.
+    let mutable = env
+        .lookup_binding(&root)
+        .is_some_and(|b| b.mutability == super::env::Mutability::Mutable);
+    if mutable && state.closure_assigned.contains(&root) {
+        return env.clone();
+    }
 
-    let new_scheme = TypeScheme::mono(new_ty);
-    env.extend(root, new_scheme)
+    let original_ty = state.apply_subst(scheme.ty());
+    let exposed = expose_named(state, &original_ty);
+    let new_ty = refine_at_path(&exposed, &path_steps(path), narrowing, state.language);
+    if new_ty == exposed {
+        // Nothing ruled out: leave the binding (and a named type) alone.
+        return env.clone();
+    }
+
+    env.narrow(&root, TypeScheme::mono(new_ty))
+}
+
+/// A named (recursive) type unrolled one step when it is a union, so
+/// narrowing can pick its members; a union's named members likewise.
+fn expose_named(state: &super::state::InferState, ty: &Type) -> Type {
+    let unroll = |t: &Type| match t {
+        Type::Named(id, args) if !state.is_nominal_type(*id) => match state.unroll_named(*id, args)
+        {
+            Some(u @ Type::Union(_)) => u,
+            _ => t.clone(),
+        },
+        _ => t.clone(),
+    };
+    match ty {
+        Type::Union(members) => Type::union(members.iter().map(unroll).collect::<Vec<_>>()),
+        _ => unroll(ty),
+    }
 }
 
 /// Decompose a path into a list of property steps below the root. The
@@ -141,9 +298,9 @@ fn path_steps(path: &Path) -> Vec<PropName> {
 /// root satisfies `narrowing`. Empty `steps` means refine the root value
 /// directly; non-empty steps means filter union members at the root by
 /// what the predicate says about the (possibly nested) sub-property.
-fn refine_at_path(ty: &Type, steps: &[PropName], narrowing: &Narrowing) -> Type {
+fn refine_at_path(ty: &Type, steps: &[PropName], narrowing: &Narrowing, lang: Language) -> Type {
     if steps.is_empty() {
-        return refine_type(ty, narrowing);
+        return refine_type(ty, narrowing, lang);
     }
 
     // We have nested member accesses. The interesting cases are:
@@ -156,7 +313,7 @@ fn refine_at_path(ty: &Type, steps: &[PropName], narrowing: &Narrowing) -> Type 
         Type::Union(members) => {
             let kept: Vec<Type> = members
                 .iter()
-                .filter(|m| member_property_compatible(m, steps, narrowing))
+                .filter(|m| member_property_compatible(m, steps, narrowing, lang))
                 .cloned()
                 .collect();
             // If we eliminated nothing, the result is the same union; if
@@ -165,7 +322,7 @@ fn refine_at_path(ty: &Type, steps: &[PropName], narrowing: &Narrowing) -> Type 
             Type::union(kept)
         }
         Type::Row(_) => {
-            if member_property_compatible(ty, steps, narrowing) {
+            if member_property_compatible(ty, steps, narrowing, lang) {
                 ty.clone()
             } else {
                 Type::never()
@@ -178,18 +335,18 @@ fn refine_at_path(ty: &Type, steps: &[PropName], narrowing: &Narrowing) -> Type 
 }
 
 /// Refine a type with a top-level (non-property) narrowing.
-fn refine_type(ty: &Type, narrowing: &Narrowing) -> Type {
+fn refine_type(ty: &Type, narrowing: &Narrowing, lang: Language) -> Type {
     match ty {
         Type::Union(members) => {
             let kept: Vec<Type> = members
                 .iter()
-                .filter(|m| member_compatible(m, narrowing))
-                .map(|m| refine_type(m, narrowing))
+                .filter(|m| member_compatible(m, narrowing, lang))
+                .map(|m| refine_type(m, narrowing, lang))
                 .collect();
             Type::union(kept)
         }
         _ => {
-            if !member_compatible(ty, narrowing) {
+            if !member_compatible(ty, narrowing, lang) {
                 return Type::never();
             }
             // For positive narrowings, sharpen the type when possible
@@ -212,7 +369,7 @@ fn refine_type(ty: &Type, narrowing: &Narrowing) -> Type {
 
 /// True if `ty` is consistent with `narrowing` — i.e. it's possible for
 /// a value of type `ty` to satisfy the predicate.
-fn member_compatible(ty: &Type, narrowing: &Narrowing) -> bool {
+fn member_compatible(ty: &Type, narrowing: &Narrowing, lang: Language) -> bool {
     match narrowing {
         Narrowing::IsTypeof(name) => typeof_matches(ty, name),
         Narrowing::IsNotTypeof(name) => !typeof_definitely_matches(ty, name),
@@ -220,6 +377,73 @@ fn member_compatible(ty: &Type, narrowing: &Narrowing) -> bool {
         Narrowing::NotEquals(lit) => !value_definitely_equals_literal(ty, lit),
         Narrowing::IsInstance(id) => brand_could_match(ty, *id),
         Narrowing::IsNotInstance(id) => !brand_definitely_matches(ty, *id),
+        Narrowing::IsNull => could_be(ty, &Type::Null),
+        Narrowing::NotNull => *ty != Type::Null,
+        Narrowing::IsUndefined => could_be(ty, &Type::Undefined),
+        Narrowing::NotUndefined => *ty != Type::Undefined,
+        Narrowing::IsNullish => could_be(ty, &Type::Null) || could_be(ty, &Type::Undefined),
+        Narrowing::NotNullish => !matches!(ty, Type::Null | Type::Undefined),
+        Narrowing::Truthy => could_be_truthy(ty, lang),
+        Narrowing::Falsy => could_be_falsy(ty, lang),
+    }
+}
+
+/// True if a value of type `ty` could be the unit value `unit` (`Null`
+/// or `Undefined`): it is that type, or a type we don't know yet.
+fn could_be(ty: &Type, unit: &Type) -> bool {
+    ty == unit
+        || matches!(
+            ty,
+            Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Error
+        )
+}
+
+/// True unless every value of `ty` is falsy. `null`/`nil`, `undefined`
+/// and `false` are falsy everywhere; `0` and `""` only outside Lua.
+fn could_be_truthy(ty: &Type, lang: Language) -> bool {
+    match ty {
+        Type::Null | Type::Undefined => false,
+        Type::Literal(LitValue::Bool(b)) => *b,
+        Type::Literal(LitValue::Number(n)) if lang != Language::Lua => *n != 0.0 && !n.is_nan(),
+        Type::Literal(LitValue::String(s)) if lang != Language::Lua => !s.is_empty(),
+        _ => true,
+    }
+}
+
+/// True unless every value of `ty` is truthy. In JavaScript objects,
+/// arrays and functions always are; in Lua everything but `nil` and
+/// `false` is; in Python only functions are sure to be (an empty list
+/// or an object with `__bool__` can be falsy).
+fn could_be_falsy(ty: &Type, lang: Language) -> bool {
+    if let Type::Literal(_) = ty {
+        return !could_be_truthy(ty, lang);
+    }
+    let callable = ty.is_func();
+    match lang {
+        Language::JavaScript => {
+            !(callable
+                || matches!(
+                    ty,
+                    Type::Row(_)
+                        | Type::Array(_)
+                        | Type::Map(_)
+                        | Type::Promise(_)
+                        | Type::Tuple(_)
+                        | Type::Module(_)
+                        | Type::Regex
+                ))
+        }
+        Language::Lua => matches!(
+            ty,
+            Type::Null
+                | Type::Undefined
+                | Type::Boolean
+                | Type::Var(_)
+                | Type::Named(_, _)
+                | Type::Union(_)
+                | Type::Error
+        ),
+        Language::Python => !callable,
     }
 }
 
@@ -303,16 +527,21 @@ fn value_definitely_equals_literal(ty: &Type, lit: &LitValue) -> bool {
 
 /// True if the property at `steps` inside `member_ty` is compatible with
 /// `narrowing`. Used to keep/drop union members during refinement.
-fn member_property_compatible(member_ty: &Type, steps: &[PropName], narrowing: &Narrowing) -> bool {
+fn member_property_compatible(
+    member_ty: &Type,
+    steps: &[PropName],
+    narrowing: &Narrowing,
+    lang: Language,
+) -> bool {
     if steps.is_empty() {
-        return member_compatible(member_ty, narrowing);
+        return member_compatible(member_ty, narrowing, lang);
     }
 
     match member_ty {
         Type::Row(row) => {
             let head = &steps[0];
             if let Some(entry) = row.props.get(head) {
-                member_property_compatible(&entry.ty, &steps[1..], narrowing)
+                member_property_compatible(&entry.ty, &steps[1..], narrowing, lang)
             } else {
                 // Property is absent from this row's known fields.
                 // - If the row is open, we don't know — be conservative
@@ -370,6 +599,20 @@ pub fn try_extract_narrowing(test: &Expr) -> Option<(Path, Narrowing)> {
             Narrowing::IsTypeof(name)
         };
         return Some((path, narrowing));
+    }
+
+    // `<path> === null`, `<path> !== undefined`, … Loose equality is
+    // exact here too: `x == null` holds for `null` and `undefined` and
+    // nothing else.
+    for (a, b) in [(left, right), (right, left)] {
+        if let (Some(path), Some(unit)) = (path_from_expr(a), unit_literal(b)) {
+            let narrowing = match (strict, unit) {
+                (true, Type::Null) => Narrowing::IsNull,
+                (true, _) => Narrowing::IsUndefined,
+                (false, _) => Narrowing::IsNullish,
+            };
+            return Some((path, if neg { narrowing.negate() } else { narrowing }));
+        }
     }
 
     // For `<path> === <literal>`, only strict equality is recognised.
@@ -456,6 +699,22 @@ fn string_literal(e: &Expr) -> Option<String> {
             value: Literal::String(s),
             ..
         } => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// `null` or `undefined` as an operand: the type it is.
+fn unit_literal(e: &Expr) -> Option<Type> {
+    match e {
+        Expr::Lit {
+            value: Literal::Null,
+            ..
+        } => Some(Type::Null),
+        Expr::Lit {
+            value: Literal::Undefined,
+            ..
+        } => Some(Type::Undefined),
+        Expr::Ident { name, .. } if name == "undefined" => Some(Type::Undefined),
         _ => None,
     }
 }
