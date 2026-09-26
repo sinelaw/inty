@@ -729,8 +729,10 @@ pub struct VarDeclarator {
 /// Left-hand side of for-in/of
 #[derive(Debug, Clone)]
 pub enum ForInLhs {
-    /// var x
-    VarDecl(String, Option<TypeAnnotation>, Span),
+    /// `var x` / `let x` / `const x`. The kind says whether the loop
+    /// writes one function-scoped `var` on every iteration or binds a
+    /// fresh `let`/`const` per iteration.
+    VarDecl(String, Option<TypeAnnotation>, Span, VarKind),
     /// x (existing variable)
     Expr(Expr),
 }

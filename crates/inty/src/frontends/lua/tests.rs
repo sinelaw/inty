@@ -1,7 +1,7 @@
 //! Tests for the Lua frontend: AST lowerings and end-to-end inference.
 
 use super::parse_source;
-use crate::ast::{BinOp, Expr, Literal, Stmt, UnaryOp};
+use crate::ast::{BinOp, Expr, Literal, Stmt};
 use crate::builtins::initial_env;
 use crate::infer::InferState;
 
@@ -19,6 +19,17 @@ fn check(src: &str) -> Vec<String> {
             Ok((_, new_env)) => env = new_env,
             Err(e) => return vec![format!("{:?}", e)],
         }
+    }
+    state.errors.iter().map(|e| format!("{:?}", e)).collect()
+}
+
+/// Like `check`, through the whole-program path (with binding
+/// resolution, which narrowing needs).
+fn check_program(src: &str) -> Vec<String> {
+    let program = parse_source(src).expect("parse failed");
+    let mut state = InferState::new();
+    if let Err(e) = state.infer_program_with_env(&initial_env(), &program) {
+        return vec![format!("{:?}", e)];
     }
     state.errors.iter().map(|e| format!("{:?}", e)).collect()
 }
@@ -90,18 +101,25 @@ fn not_equal_is_strict() {
 }
 
 #[test]
-fn repeat_is_dowhile_with_negation() {
-    match &parse("repeat x = x + 1 until x > 10")[0] {
-        Stmt::DoWhile { test, .. } => {
-            assert!(matches!(
-                test,
-                Expr::Unary {
-                    op: UnaryOp::Not,
+fn repeat_checks_its_condition_inside_the_body() {
+    // `repeat B until c` is `while true do B; if c then break end end`:
+    // `c` sees B's locals, as in Lua.
+    match &parse("repeat local y = 1 until y > 10")[0] {
+        Stmt::While {
+            test:
+                Expr::Lit {
+                    value: Literal::Boolean(true),
                     ..
-                }
-            ));
-        }
-        other => panic!("expected do-while, got {:?}", other),
+                },
+            body,
+            ..
+        } => match body.as_ref() {
+            Stmt::Block { body, .. } => {
+                assert!(matches!(body.last(), Some(Stmt::If { .. })));
+            }
+            other => panic!("expected a block, got {:?}", other),
+        },
+        other => panic!("expected while true, got {:?}", other),
     }
 }
 
@@ -249,4 +267,21 @@ fn numeric_for_typechecks() {
 fn mixed_plus_operands_rejected() {
     // `1 + "x"` must not type-check: inty's `+` requires matching operands.
     assert!(!check("local x = 1 + \"oops\"").is_empty());
+}
+
+#[test]
+fn narrowing_holds_only_for_its_own_binding() {
+    let pick = "local function pick(b)\n  if b then return \"s\" end\n  return nil\nend\n";
+    let rejected = [
+        // `until` sees the body's `x`, not the outer one.
+        format!("{pick}local x = pick(false)\nrepeat\n  local x = \"s\"\nuntil x ~= nil\nlocal n = #x\n"),
+        // `function f` assigns the visible local `f`.
+        format!("{pick}local f = pick(true)\nif f ~= nil then\n  do\n    function f() return 1 end\n  end\n  local n = #f\nend\n"),
+        "local f = \"s\"\ndo\n  function f() return 1 end\nend\nlocal n = #f\n".to_string(),
+    ];
+    for src in &rejected {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+    // `local x = x` reads the outer `x`.
+    assert!(check_program("local x = 1\ndo\n  local x = x + 1\nend\n").is_empty());
 }

@@ -22,6 +22,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::ast::resolve::BindingId;
 use crate::types::{Subst, Substitutable, TVarName, TypeScheme};
 
 /// Whether a binding is mutable or immutable.
@@ -67,82 +68,127 @@ impl Binding {
     }
 }
 
-/// Type environment mapping names to type schemes.
+/// What a binding is keyed by: the declaration binding resolution found
+/// (`ast::resolve`), or, for a global (the standard library, an import,
+/// `this`), its name.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Key {
+    Local(BindingId),
+    Name(String),
+}
+
+/// Type environment: the bindings in scope and their type schemes.
+///
+/// Bindings are keyed by [`Key`]: inference reads and declares a
+/// program's identifiers by the declaration they resolve to, so two
+/// variables of the same name are never confused. The environment also
+/// keeps, for each name, the key it was last bound under, for callers
+/// outside inference (a module's exports, the CLI, tests) and for type
+/// annotations, which refer to names.
 #[derive(Clone, Debug, Default)]
 pub struct TypeEnv {
-    bindings: HashMap<String, Binding>,
+    bindings: HashMap<Key, Binding>,
+    names: HashMap<String, Key>,
 }
 
 impl TypeEnv {
     /// Create an empty environment.
     pub fn empty() -> Self {
-        TypeEnv {
-            bindings: HashMap::new(),
-        }
+        TypeEnv::default()
     }
 
-    /// Look up a name in the environment and return just the type scheme.
-    /// For backwards compatibility with existing code.
+    /// The scheme `name` is bound to, by the name view.
     pub fn lookup(&self, name: &str) -> Option<&TypeScheme> {
-        self.bindings.get(name).map(|b| &b.scheme)
+        self.lookup_binding(name).map(|b| &b.scheme)
     }
 
-    /// Look up a name in the environment and return the full binding.
+    /// The binding `name` refers to, by the name view.
     pub fn lookup_binding(&self, name: &str) -> Option<&Binding> {
-        self.bindings.get(name)
+        self.bindings.get(self.names.get(name)?)
     }
 
-    /// Extend the environment with a new mutable binding.
+    /// The binding under `key`.
+    pub fn lookup_key(&self, key: &Key) -> Option<&Binding> {
+        self.bindings.get(key)
+    }
+
+    /// The key `name` was last bound under.
+    pub fn key_of_name(&self, name: &str) -> Option<&Key> {
+        self.names.get(name)
+    }
+
+    /// Bind `key` (named `name`) to `binding`.
+    pub fn extend_key(&self, key: Key, name: &str, binding: Binding) -> Self {
+        let mut out = self.clone();
+        out.names.insert(name.to_string(), key.clone());
+        out.bindings.insert(key, binding);
+        out
+    }
+
+    /// Extend the environment with a new mutable global binding.
     /// Returns a new environment (immutable extension).
     pub fn extend(&self, name: String, scheme: TypeScheme) -> Self {
-        let mut bindings = self.bindings.clone();
-        bindings.insert(name, Binding::mutable(scheme));
-        TypeEnv { bindings }
+        self.extend_key(Key::Name(name.clone()), &name, Binding::mutable(scheme))
     }
 
-    /// Extend the environment with a new immutable binding.
-    /// Returns a new environment (immutable extension).
+    /// Extend the environment with a new immutable global binding.
     pub fn extend_immutable(&self, name: String, scheme: TypeScheme) -> Self {
-        let mut bindings = self.bindings.clone();
-        bindings.insert(name, Binding::immutable(scheme));
-        TypeEnv { bindings }
+        self.extend_key(Key::Name(name.clone()), &name, Binding::immutable(scheme))
     }
 
-    /// A copy with `name`'s type narrowed to `scheme`. The binding keeps
+    /// Extend the environment with a global binding specifying mutability.
+    pub fn extend_with_mutability(
+        &self,
+        name: String,
+        scheme: TypeScheme,
+        mutability: Mutability,
+    ) -> Self {
+        self.extend_key(
+            Key::Name(name.clone()),
+            &name,
+            Binding {
+                scheme,
+                mutability,
+                declared: None,
+            },
+        )
+    }
+
+    /// A copy with `key`'s type narrowed to `scheme`. The binding keeps
     /// its mutability and remembers its own scheme.
-    pub fn narrow(&self, name: &str, scheme: TypeScheme) -> Self {
-        let Some(b) = self.bindings.get(name) else {
+    pub fn narrow(&self, key: &Key, scheme: TypeScheme) -> Self {
+        let Some(b) = self.bindings.get(key) else {
             return self.clone();
         };
         let declared = b.declared.clone().unwrap_or_else(|| b.scheme.clone());
-        let mut bindings = self.bindings.clone();
-        bindings.insert(
-            name.to_string(),
+        let mut out = self.clone();
+        out.bindings.insert(
+            key.clone(),
             Binding {
                 scheme,
                 mutability: b.mutability,
                 declared: Some(declared),
             },
         );
-        TypeEnv { bindings }
+        out
     }
 
     /// `name`'s own scheme, narrowed or not.
     pub fn lookup_declared(&self, name: &str) -> Option<&TypeScheme> {
-        let b = self.bindings.get(name)?;
+        let b = self.lookup_binding(name)?;
         Some(b.declared.as_ref().unwrap_or(&b.scheme))
     }
 
     /// A copy whose narrowings are those of `base`: each narrowed binding
-    /// takes `base`'s binding of the name, or its own scheme when `base`
-    /// has none. Other bindings (declared since `base`) are kept.
+    /// takes `base`'s binding under the same key, or its own scheme when
+    /// `base` has none. Other bindings (declared since `base`) are kept.
     pub fn with_narrowings_of(&self, base: &TypeEnv) -> Self {
-        let mut bindings = self.bindings.clone();
-        for (name, b) in &self.bindings {
+        let mut out = self.clone();
+        for (key, b) in &self.bindings {
             let Some(declared) = &b.declared else {
                 continue;
             };
-            let restored = match base.bindings.get(name) {
+            let restored = match base.bindings.get(key) {
                 Some(bb) => bb.clone(),
                 None => Binding {
                     scheme: declared.clone(),
@@ -150,81 +196,91 @@ impl TypeEnv {
                     declared: None,
                 },
             };
-            bindings.insert(name.clone(), restored);
+            out.bindings.insert(key.clone(), restored);
         }
-        TypeEnv { bindings }
+        out
+    }
+
+    /// A copy whose name view is `outer`'s: bindings this scope
+    /// declared stay reachable by key only, as they are when it ends.
+    pub fn with_names_of(&self, outer: &TypeEnv) -> Self {
+        let mut out = self.clone();
+        out.names = outer.names.clone();
+        out
     }
 
     /// A copy with every binding's own scheme.
     pub fn without_narrowings(&self) -> Self {
-        let mut bindings = self.bindings.clone();
-        for b in bindings.values_mut() {
+        let mut out = self.clone();
+        for b in out.bindings.values_mut() {
             if let Some(declared) = b.declared.take() {
                 b.scheme = declared;
             }
         }
-        TypeEnv { bindings }
+        out
     }
 
-    /// Extend the environment with a binding specifying mutability.
-    pub fn extend_with_mutability(
-        &self,
-        name: String,
-        scheme: TypeScheme,
-        mutability: Mutability,
-    ) -> Self {
-        let mut bindings = self.bindings.clone();
-        bindings.insert(
-            name,
-            Binding {
-                scheme,
-                mutability,
-                declared: None,
-            },
-        );
-        TypeEnv { bindings }
+    /// What a program leaves for the next one (its importers, or the user
+    /// program after the standard library): each name's binding as a
+    /// global keyed by name. Other programs' declaration ids mean nothing
+    /// here, so no `Local` key survives.
+    pub fn globalized(&self) -> Self {
+        let mut out = TypeEnv::default();
+        for (key, b) in &self.bindings {
+            if let Key::Name(n) = key {
+                out.bindings.insert(key.clone(), b.clone());
+                out.names.insert(n.clone(), key.clone());
+            }
+        }
+        for (name, key) in &self.names {
+            if let (Key::Local(_), Some(b)) = (key, self.bindings.get(key)) {
+                let global = Key::Name(name.clone());
+                out.bindings.insert(global.clone(), b.clone());
+                out.names.insert(name.clone(), global);
+            }
+        }
+        out
     }
 
     /// The environment with `f` applied to every binding's scheme.
     pub fn map_schemes(&self, mut f: impl FnMut(&TypeScheme) -> TypeScheme) -> Self {
-        let bindings = self
-            .bindings
-            .iter()
-            .map(|(k, b)| {
-                (
-                    k.clone(),
-                    Binding {
-                        scheme: f(&b.scheme),
-                        mutability: b.mutability,
-                        declared: b.declared.as_ref().map(&mut f),
-                    },
-                )
-            })
-            .collect();
-        TypeEnv { bindings }
+        let mut out = self.clone();
+        for b in out.bindings.values_mut() {
+            b.scheme = f(&b.scheme);
+            b.declared = b.declared.as_ref().map(&mut f);
+        }
+        out
     }
 
-    /// Extend the environment with multiple mutable bindings.
+    /// Extend the environment with multiple mutable global bindings.
     pub fn extend_many(&self, bindings: impl IntoIterator<Item = (String, TypeScheme)>) -> Self {
-        let mut new_bindings = self.bindings.clone();
+        let mut out = self.clone();
         for (name, scheme) in bindings {
-            new_bindings.insert(name, Binding::mutable(scheme));
+            out = out.extend(name, scheme);
         }
-        TypeEnv {
-            bindings: new_bindings,
-        }
+        out
     }
 
-    /// Remove a binding from the environment.
+    /// Remove the binding `name` refers to.
     pub fn remove(&self, name: &str) -> Self {
-        let mut bindings = self.bindings.clone();
-        bindings.remove(name);
-        TypeEnv { bindings }
+        let mut out = self.clone();
+        if let Some(key) = out.names.remove(name) {
+            out.bindings.remove(&key);
+        }
+        out
+    }
+
+    /// Remove the binding under `key`.
+    pub fn remove_key(&self, key: &Key) -> Self {
+        let mut out = self.clone();
+        out.bindings.remove(key);
+        out.names.retain(|_, k| k != key);
+        out
     }
 
     /// Check if a name is bound in the environment.
     pub fn contains(&self, name: &str) -> bool {
-        self.bindings.contains_key(name)
+        self.lookup_binding(name).is_some()
     }
 
     /// Get all free type variables in the environment.
@@ -257,7 +313,7 @@ impl TypeEnv {
 
     /// Get all bound names.
     pub fn names(&self) -> impl Iterator<Item = &String> {
-        self.bindings.keys()
+        self.names.keys()
     }
 
     /// Get the number of bindings.
@@ -270,34 +326,27 @@ impl TypeEnv {
         self.bindings.is_empty()
     }
 
-    /// Iterate over all bindings (returns type schemes for compatibility).
+    /// Iterate over the name view (name, scheme).
     pub fn iter(&self) -> impl Iterator<Item = (&String, &TypeScheme)> {
-        self.bindings.iter().map(|(k, b)| (k, &b.scheme))
+        self.iter_bindings().map(|(n, b)| (n, &b.scheme))
     }
 
-    /// Iterate over all bindings with full binding info.
+    /// Iterate over the name view with full binding info.
     pub fn iter_bindings(&self) -> impl Iterator<Item = (&String, &Binding)> {
-        self.bindings.iter()
+        self.names
+            .iter()
+            .filter_map(|(n, k)| self.bindings.get(k).map(|b| (n, b)))
     }
 }
 
 impl Substitutable for TypeEnv {
     fn apply_subst(&self, subst: &Subst) -> Self {
-        let bindings = self
-            .bindings
-            .iter()
-            .map(|(k, b)| {
-                (
-                    k.clone(),
-                    Binding {
-                        scheme: b.scheme.apply_subst(subst),
-                        mutability: b.mutability,
-                        declared: b.declared.as_ref().map(|d| d.apply_subst(subst)),
-                    },
-                )
-            })
-            .collect();
-        TypeEnv { bindings }
+        let mut out = self.clone();
+        for b in out.bindings.values_mut() {
+            b.scheme = b.scheme.apply_subst(subst);
+            b.declared = b.declared.as_ref().map(|d| d.apply_subst(subst));
+        }
+        out
     }
 
     fn free_vars(&self) -> HashSet<TVarName> {

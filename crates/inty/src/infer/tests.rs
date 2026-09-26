@@ -174,7 +174,8 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
 
     let mut state = InferState::new();
     state.load_type_aliases(&program.type_aliases)?;
-    state.resolution = crate::ast::resolve::Resolution::of_program(&program.statements);
+    state.resolution =
+        crate::ast::resolve::Resolution::of_program(&program.statements, program.language);
     let env = initial_env();
 
     // Infer statements and track final environment
@@ -4327,4 +4328,79 @@ fn narrowing_is_coherent() {
         let rb = check_program(&format!("{p}{b}"), &[]).is_ok();
         assert!(ra && rb, "{a} => {ra}, {b} => {rb}");
     }
+}
+
+/// The review of the stable-bindings narrowing: each program crashed
+/// under Node yet type-checked, because a fact landed on a different
+/// variable of the same name or a write went unseen. The environment is
+/// now keyed by declaration, and binding resolution sees these writes.
+#[test]
+fn narrowing_holds_only_for_its_own_binding() {
+    let x = "const x = Math.random() > 2 ? \"abc\" : null;\n";
+    let rejected = [
+        // `break L` completes the labeled statement.
+        format!("{x}L: if (x === null) break L;\nconsole.log(x.length);"),
+        format!("{x}L: try {{ if (x === null) throw 0; }} finally {{ break L; }}\nconsole.log(x.length);"),
+        // A `var` in a `try` is not the outer binding of the same name.
+        "const x = { a: { b: 1 } };\n\
+         function f(c) { try { var x = c ? \"s\" : null; if (x === null) return 0; } catch (e) {} return x.a.b; }"
+            .to_string(),
+        // `function x` and `var x` are one binding, written by the `var`.
+        "var x = Math.random() < 2 ? \"s\" : null;\n\
+         const g = x !== null ? () => x.length : () => 0;\n\
+         var x = Math.random() > 2 ? \"s\" : null;\nfunction x() {}"
+            .to_string(),
+        // `for (var x of …)`: one variable, written by every iteration.
+        format!("{x}const fs = [];\nfor (var y of [\"b\", x]) {{ if (y !== null) fs.push(() => y.length); }}"),
+        "function f() { var x = \"str\"; for (var x of [null]) {} return x.length; }".to_string(),
+        // A `var` directly under an `if` is the function's.
+        "const x = \"str\";\nfunction g(n) { if (n > 0) var x = null; return x.length; }".to_string(),
+        // A direct `eval` can write anything in scope.
+        format!("function f() {{ let y = Math.random() > 2 ? \"s\" : null; \
+                 if (y !== null) {{ eval(\"y = null\"); return y.length; }} return 0; }}"),
+        // A destructuring default is checked (and can write).
+        "let x = \"s\";\nconst o = { a: undefined };\nconst { a = (x = null) } = o;".to_string(),
+        // `typeof` of a regex is "object".
+        "const r = /a/;\nif (typeof r === \"object\") { const z = r.foo; }".to_string(),
+    ];
+    for src in &rejected {
+        assert!(check_program(src, &[]).is_err(), "accepted:\n{src}");
+    }
+}
+
+#[test]
+fn renaming_a_binding_changes_nothing() {
+    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n\
+             function a() { const q = p(1); if (q === null) return 0; return q.x; }\n";
+    // Another function's binding named `q` (written, captured and written
+    // by a closure, shadowing) is not `a`'s `q`: renaming it changes
+    // nothing.
+    for other in [
+        "function b() { let NAME = 0; const f = () => { NAME = 1; }; f(); return NAME; }",
+        "function b() { [1, 2].forEach(k => { let NAME = k; NAME = NAME + 1; }); return 0; }",
+        "function b() { var NAME = 1; NAME = 2; return NAME; }",
+    ] {
+        for name in ["q", "r"] {
+            let src = format!("{p}{}", other.replace("NAME", name));
+            assert!(
+                check_program(&src, &[]).is_ok(),
+                "rejected:\n{src}: {:?}",
+                check_program(&src, &[])
+            );
+        }
+    }
+}
+
+#[test]
+fn destructuring_defaults_are_checked() {
+    let (_, env, state) = infer_program_via_program_with_stdlib(
+        "const { a = 1 } = { a: 2 };\nconst [b, c = \"z\"] = [\"x\", \"y\"];",
+    )
+    .unwrap();
+    assert!(state.errors.is_empty(), "{:?}", state.errors);
+    let ty = |n: &str| state.apply_subst(&env.lookup(n).unwrap().body.ty);
+    assert_eq!(ty("a"), Type::Int);
+    assert_eq!(ty("c"), Type::String);
+    // A default must be of the property's type.
+    assert!(infer_program_via_program_with_stdlib("const { a = \"s\" } = { a: 2 };").is_err());
 }

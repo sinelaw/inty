@@ -152,6 +152,66 @@ down into branches, never updated by assignments.
   affected program either does reassign the variable or can use a
   `const`.
 
+## Follow-up: bindings keyed by declaration
+
+A second review found that facts could still land on the wrong
+variable. The resolver decided stability per declaration, but the
+checker applied a narrowing to whatever its environment bound under
+that *name*. Where the two disagreed about scoping, a fact moved to
+another variable:
+- a `var` in a `try`;
+- `for (var x of …)`;
+- Lua's `repeat … until`;
+- a `function` and a `var` of the same name.
+
+The fix is the one production checkers use (GHC's renamer, OCaml's
+stamped identifiers, Rust's resolved bindings, TypeScript's symbols):
+resolve names once, before inference, and key the type environment by
+declaration.
+
+- **One scoping authority.** `ast/resolve.rs` gives each declaration a
+  `BindingId` and resolves each use and assignment target to it, with
+  each language's rules:
+  - JS `var` and function hoisting;
+  - a Lua `local` in scope only after its declaration;
+  - a Lua `function f` assigning a visible `f`;
+  - a Python `for` target being one variable.
+
+  Names it resolves to no declaration are globals: the standard
+  library, and imports, which the exporting module can reassign.
+- **The environment is keyed by `Key::Local(BindingId)` or
+  `Key::Name(name)`** (`infer/env.rs`). Inference declares and reads a
+  program's identifiers only by key. A narrowing refines the binding
+  under its key, so it can't reach another variable of the same name,
+  and alpha-renaming a program changes nothing.
+- **The checker's own scope handling no longer decides identity:**
+  - A binding its environment doesn't show (a `var` in an `if`) is read
+    from a per-declaration table, and its type variables are held fixed
+    in generalisation.
+  - A read before the declaration gets a fresh type that the
+    declaration unifies with, which generalises hoisting.
+  - A second declaration of the same binding must agree with the first
+    (one binding, one type).
+  - A name view kept alongside serves exports, the CLI and type
+    annotations.
+- **A program's result is by name.** Declaration ids are per program,
+  so a program's final environment turns its top-level bindings into
+  name-keyed globals for its importers.
+
+The same review's other findings are fixed too:
+- **Labeled statements:** after a labeled statement whose body can
+  `break` to it, the body's early-exit facts don't hold.
+- **Impossible branches:** a narrowing that leaves no possible type (a
+  dead branch) keeps the declared type and only warns. An inexact
+  predicate table then costs precision, never soundness.
+- **The tables:** `typeof` of a regex or tuple is `"object"`, an `Int`
+  may equal a non-finite literal, and Python's `True == 1` is allowed
+  for.
+- **Destructuring defaults:** they are no longer dropped by the parser.
+  `{a = d}` is `a = v === undefined ? d : v`, checked and compiled like
+  any expression.
+- **`eval`:** a direct `eval` counts as writing every binding in scope.
+
 ## Kept separate: field writes (#9)
 
 A discriminant fact (`shape.kind === "c"`) stays true only if no write,

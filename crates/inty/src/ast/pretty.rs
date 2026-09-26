@@ -809,7 +809,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             left, right, body, ..
         } => {
             match left {
-                ForInLhs::VarDecl(name, annotation, _) => {
+                ForInLhs::VarDecl(name, annotation, _, _) => {
                     if let Some(ann) = annotation {
                         writeln!(w, "/** var {}: {} */", name, ann.content)?;
                         write!(w, "{}", ind)?;
@@ -831,7 +831,7 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             left, right, body, ..
         } => {
             match left {
-                ForInLhs::VarDecl(name, annotation, _) => {
+                ForInLhs::VarDecl(name, annotation, _, _) => {
                     if let Some(ann) = annotation {
                         writeln!(w, "/** var {}: {} */", name, ann.content)?;
                         write!(w, "{}", ind)?;

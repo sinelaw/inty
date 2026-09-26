@@ -21,6 +21,32 @@ enum Pattern {
     /// `[sub_pattern, sub_pattern, ..., ...rest]`. The middle tuple
     /// holds the optional rest binding's name and span.
     Array(Vec<Pattern>, Option<(String, Span)>, Span),
+    /// `<pattern> = default`: the default replaces an `undefined` value.
+    /// The span covers the whole `<pattern> = default` text.
+    Default(Box<Pattern>, Box<Expr>, Span),
+}
+
+/// `source === undefined ? default : source`: what a destructuring
+/// default means. `source` is always a read of a synthesised temp (a
+/// property or an index), so reading it twice is safe. The new nodes get
+/// source ranges of their own (types are recorded by range): the whole
+/// `x = d` for the conditional, `x = ` for the test.
+fn with_default(source: Expr, default: &Expr, span: Span) -> Expr {
+    let test_span = Span::new(span.start, default.span().start);
+    Expr::Conditional {
+        test: Box::new(Expr::Binary {
+            op: BinOp::EqEqEq,
+            left: Box::new(source.clone()),
+            right: Box::new(Expr::Lit {
+                value: Literal::Undefined,
+                span: test_span,
+            }),
+            span: test_span,
+        }),
+        consequent: Box::new(default.clone()),
+        alternate: Box::new(source),
+        span,
+    }
 }
 
 /// The parser for mquickjs source code.
@@ -276,17 +302,16 @@ impl Parser {
     }
 
     /// Parse a pattern entry that may carry a default: `<pattern> [= expr]`.
-    /// inty has no notion of optional values at the type level — every
-    /// destructured property must exist on the source row — so the
-    /// default expression has no run-time or type effect under inty's
-    /// rules. We still parse it (so source files using defaults type-
-    /// check), then discard. The default expression is **not** type-
-    /// checked. (Function-parameter defaults, by contrast, do type-check
-    /// the default, because the parameter's type is otherwise free.)
+    /// The default is kept, and desugared to `v === undefined ? d : v`
+    /// (see [`with_default`]), so it is type-checked and compiled like
+    /// any other expression.
     fn parse_pattern_with_default(&mut self) -> Result<Pattern> {
+        let start = self.current_span().start;
         let inner = self.parse_pattern()?;
         if self.consume_if(&Token::Eq) {
-            let _default = self.parse_assignment_expression()?;
+            let default = self.parse_assignment_expression()?;
+            let span = Span::new(start, default.span().end);
+            return Ok(Pattern::Default(Box::new(inner), Box::new(default), span));
         }
         Ok(inner)
     }
@@ -315,12 +340,13 @@ impl Parser {
                 // to the binding `a`.
                 let ident_pat = Pattern::Ident(source.clone(), entry_span);
                 if self.consume_if(&Token::Eq) {
-                    // Default value on a destructuring shorthand
-                    // (`{a = 1}`). inty has no nullable model, so the
-                    // default has no type effect — parse and discard.
-                    let _default = self.parse_assignment_expression()?;
+                    // Default value on a destructuring shorthand (`{a = 1}`).
+                    let default = self.parse_assignment_expression()?;
+                    let span = Span::new(entry_span.start, default.span().end);
+                    Pattern::Default(Box::new(ident_pat), Box::new(default), span)
+                } else {
+                    ident_pat
                 }
-                ident_pat
             };
             entries.push((source, sub, entry_span));
             if !self.consume_if(&Token::Comma) {
@@ -367,6 +393,9 @@ impl Parser {
         decls: &mut Vec<VarDeclarator>,
     ) {
         match pattern {
+            Pattern::Default(inner, default, span) => {
+                self.desugar_pattern(inner, with_default(source, default, *span), kind, decls)
+            }
             Pattern::Ident(name, span) => {
                 decls.push(VarDeclarator {
                     name: name.clone(),
@@ -484,6 +513,17 @@ impl Parser {
     fn expr_to_pattern(expr: &Expr) -> Option<Pattern> {
         match expr {
             Expr::Ident { name, span } => Some(Pattern::Ident(name.clone(), *span)),
+            // `[a = 1] = xs`: a target with a default.
+            Expr::Assign {
+                op: AssignOp::Assign,
+                left,
+                right,
+                span,
+            } => Some(Pattern::Default(
+                Box::new(Self::expr_to_pattern(left)?),
+                right.clone(),
+                *span,
+            )),
             Expr::Array { elements, span } => {
                 let mut elems = Vec::new();
                 let mut rest = None;
@@ -540,6 +580,9 @@ impl Parser {
     /// assignments instead of declarations for the bound names.
     fn desugar_pattern_assign(&mut self, pattern: &Pattern, source: Expr, stmts: &mut Vec<Stmt>) {
         match pattern {
+            Pattern::Default(inner, default, span) => {
+                self.desugar_pattern_assign(inner, with_default(source, default, *span), stmts)
+            }
             Pattern::Ident(name, span) => {
                 stmts.push(Stmt::Expr {
                     expression: Expr::Assign {
@@ -2044,14 +2087,14 @@ impl Parser {
                     let for_span = Span::new(start, self.prev_span().end);
                     return if is_of {
                         Ok(Stmt::ForOf {
-                            left: ForInLhs::VarDecl(temp, None, pattern_span),
+                            left: ForInLhs::VarDecl(temp, None, pattern_span, kind),
                             right,
                             body: Box::new(new_body),
                             span: for_span,
                         })
                     } else {
                         Ok(Stmt::ForIn {
-                            left: ForInLhs::VarDecl(temp, None, pattern_span),
+                            left: ForInLhs::VarDecl(temp, None, pattern_span, kind),
                             right,
                             body: Box::new(new_body),
                             span: for_span,
@@ -2093,14 +2136,14 @@ impl Parser {
 
                 return if is_of {
                     Ok(Stmt::ForOf {
-                        left: ForInLhs::VarDecl(name, type_annotation, var_span),
+                        left: ForInLhs::VarDecl(name, type_annotation, var_span, kind),
                         right,
                         body,
                         span: Span::new(start, self.prev_span().end),
                     })
                 } else {
                     Ok(Stmt::ForIn {
-                        left: ForInLhs::VarDecl(name, type_annotation, var_span),
+                        left: ForInLhs::VarDecl(name, type_annotation, var_span, kind),
                         right,
                         body,
                         span: Span::new(start, self.prev_span().end),

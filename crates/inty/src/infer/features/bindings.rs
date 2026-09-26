@@ -26,10 +26,12 @@ use super::super::InferResult;
 /// Returns `None` for monomorphic targets (existing unification path is
 /// sufficient) and for LHS shapes we don't model (computed members, deeply
 /// nested members, etc.) — those fall back to the existing path.
-fn lhs_polytype(env: &TypeEnv, lhs: &Expr) -> Option<TypeScheme> {
+fn lhs_polytype(state: &InferState, env: &TypeEnv, lhs: &Expr) -> Option<TypeScheme> {
+    let scheme_of =
+        |name: &str, span: Span| env.lookup_key(&state.key_of(span, name)).map(|b| &b.scheme);
     match lhs {
-        Expr::Ident { name, .. } => {
-            let scheme = env.lookup(name)?;
+        Expr::Ident { name, span } => {
+            let scheme = scheme_of(name, *span)?;
             if scheme.vars.is_empty() {
                 None
             } else {
@@ -43,9 +45,9 @@ fn lhs_polytype(env: &TypeEnv, lhs: &Expr) -> Option<TypeScheme> {
             // levels deep can't slip past the subsumption check.
             let mut path: Vec<&str> = Vec::new();
             let mut cur = lhs;
-            let root_name = loop {
+            let (root_name, root_span) = loop {
                 match cur {
-                    Expr::Ident { name, .. } => break name,
+                    Expr::Ident { name, span } => break (name, *span),
                     Expr::Member {
                         object, property, ..
                     } => {
@@ -57,7 +59,7 @@ fn lhs_polytype(env: &TypeEnv, lhs: &Expr) -> Option<TypeScheme> {
             };
             path.reverse();
 
-            let obj_scheme = env.lookup(root_name)?;
+            let obj_scheme = scheme_of(root_name, root_span)?;
             if obj_scheme.vars.is_empty() {
                 return None;
             }
@@ -185,8 +187,8 @@ impl InferState {
     ) -> InferResult<()> {
         match left {
             // Direct assignment to a variable
-            Expr::Ident { name, .. } => {
-                if let Some(binding) = env.lookup_binding(name) {
+            Expr::Ident { name, span: at } => {
+                if let Some(binding) = env.lookup_key(&self.key_of(*at, name)) {
                     if binding.mutability == Mutability::Immutable {
                         return Err(TypeError::AssignmentToConstant {
                             name: name.clone(),
@@ -262,7 +264,7 @@ impl InferState {
                 | AssignOp::LogicalAndAssign
                 | AssignOp::LogicalOrAssign
         ) {
-            if let Some(expected) = lhs_polytype(env, left) {
+            if let Some(expected) = lhs_polytype(self, env, left) {
                 let env_free_before = env.free_vars();
                 let (skolems, expected_ty) = self.skolemize(&expected);
                 self.unify(span, &expected_ty, &right_type)?;
@@ -496,7 +498,7 @@ impl InferState {
             // Also persist the generalised scheme so LSP/inlay hints
             // can recover predicates after the scope is gone.
             self.record_decl_scheme(decl.span, scheme.clone());
-            new_env = new_env.extend_with_mutability(decl.name.clone(), scheme, mutability);
+            new_env = self.bind(&new_env, decl.span, &decl.name, scheme, mutability)?;
         }
 
         Ok((Type::Undefined, new_env))

@@ -7,7 +7,7 @@ use crate::ast::{ExportDecl, Expr, Literal, Param, Stmt, TypeAnnotation, VarDecl
 use crate::span::Span;
 use crate::types::{TVarName, Type, TypePred, TypeScheme};
 
-use super::super::env::TypeEnv;
+use super::super::env::{Mutability, TypeEnv};
 use super::super::state::InferState;
 use super::super::type_parser::parse_type_annotation_with_pvars;
 use super::super::InferResult;
@@ -127,6 +127,19 @@ pub(in crate::infer) fn const_function_decl(
             *span,
         )),
         _ => None,
+    }
+}
+
+/// Where a hoisted function's name is declared, for its binding key: the
+/// statement for `function f`, the declarator for `const f = …`.
+pub(in crate::infer) fn hoisted_key_span(stmt: &Stmt) -> Option<Span> {
+    match stmt {
+        Stmt::FunctionDecl { span, .. }
+        | Stmt::Export {
+            declaration: ExportDecl::Function { span, .. },
+            ..
+        } => Some(*span),
+        _ => const_function_decl(stmt).map(|(decl, ..)| decl.span),
     }
 }
 
@@ -420,11 +433,23 @@ impl InferState {
         // The function's own name first, so a parameter of the same name
         // shadows it (`function f(f) { return f; }` returns the argument).
         if let Some(fn_name) = name {
-            body_env = body_env.extend(fn_name.to_string(), TypeScheme::mono(func_type.clone()));
+            body_env = self.bind(
+                &body_env,
+                span,
+                fn_name,
+                TypeScheme::mono(func_type.clone()),
+                Mutability::Mutable,
+            )?;
         }
 
         for (param, ty) in params.iter().zip(param_types.iter()) {
-            body_env = body_env.extend(param.name.clone(), TypeScheme::mono(ty.clone()));
+            body_env = self.bind(
+                &body_env,
+                param.span,
+                &param.name,
+                TypeScheme::mono(ty.clone()),
+                Mutability::Mutable,
+            )?;
             // Record per-param type for the LSP / hover. Keyed by the
             // param's name span so we can look it up at any reference
             // to the parameter.
@@ -851,7 +876,7 @@ impl InferState {
         env: &TypeEnv,
         group: &[Stmt],
     ) -> InferResult<TypeEnv> {
-        let mut hoisted = self.hoist_function_names(env, group);
+        let mut hoisted = self.hoist_function_names(env, group)?;
 
         // Pass 1: infer every body with the full hoisted env in scope, then
         // unify each function's type with its hoisted variable. Bindings
@@ -863,9 +888,11 @@ impl InferState {
             if let Some((name, params, body, type_annotation, return_type_ast, span)) =
                 function_decl_parts(stmt)
             {
+                let key = self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
                 let func_var = hoisted
-                    .lookup(name)
+                    .lookup_key(&key)
                     .expect("hoisted name must be in env")
+                    .scheme
                     .ty()
                     .clone();
                 let func_type = self.infer_function(
@@ -905,9 +932,11 @@ impl InferState {
         for stmt in group {
             if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
                 self.pending_constraints = pending.clone();
+                let key = self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
                 let ty = hoisted
-                    .lookup(name)
+                    .lookup_key(&key)
                     .expect("function must be in env after pass 1")
+                    .scheme
                     .ty()
                     .clone();
                 let ty = self.zonk(&ty);
@@ -932,11 +961,15 @@ impl InferState {
                     }
                 }
                 self.record_decl_scheme(hoisted_name_span(stmt, name, span), scheme.clone());
-                hoisted = hoisted.extend_with_mutability(
-                    name.to_string(),
+                let key_span = hoisted_key_span(stmt).expect("a hoisted function");
+                hoisted = self.rebind(
+                    &hoisted,
+                    key,
+                    key_span,
+                    name,
                     scheme,
                     hoisted_mutability(stmt),
-                );
+                )?;
             }
         }
         self.pending_constraints = pending
@@ -1052,19 +1085,24 @@ impl InferState {
         &mut self,
         env: &TypeEnv,
         stmts: &[Stmt],
-    ) -> TypeEnv {
+    ) -> InferResult<TypeEnv> {
         let mut new_env = env.clone();
         for stmt in stmts {
             if let Some((name, _, _, _, _, _)) = function_decl_parts(stmt) {
                 let var = self.fresh_type_var();
-                new_env = new_env.extend_with_mutability(
-                    name.to_string(),
+                let key_span = hoisted_key_span(stmt).expect("a hoisted function");
+                let key = self.key_of(key_span, name);
+                new_env = self.rebind(
+                    &new_env,
+                    key,
+                    key_span,
+                    name,
                     TypeScheme::mono(var),
                     hoisted_mutability(stmt),
-                );
+                )?;
             }
         }
-        new_env
+        Ok(new_env)
     }
 
     /// Handle a top-level `function` declaration statement.
@@ -1083,11 +1121,19 @@ impl InferState {
         // this function was pre-bound there, otherwise start fresh.
         // Re-using the hoisted var is what lets mutually recursive
         // functions see each other's inferred types.
-        let func_var = match env.lookup(name) {
-            Some(scheme) if scheme.is_mono() => scheme.ty().clone(),
+        let key = self.key_of(span, name);
+        let func_var = match env.lookup_key(&key) {
+            Some(b) if b.scheme.is_mono() => b.scheme.ty().clone(),
             _ => self.fresh_type_var(),
         };
-        let pre_env = env.extend(name.to_string(), TypeScheme::mono(func_var.clone()));
+        let pre_env = self.rebind(
+            env,
+            key.clone(),
+            span,
+            name,
+            TypeScheme::mono(func_var.clone()),
+            Mutability::Mutable,
+        )?;
 
         // Infer the function type
         let func_type = self.infer_function(
@@ -1113,12 +1159,15 @@ impl InferState {
         // pre-bound `name` to the placeholder `func_var` (now unified with
         // the function's own type), which must not count as the
         // environment fixing the function's variables.
-        let env_free = env.remove(name).free();
+        let env_free = env.remove_key(&key).free();
         self.simplify_has_props()?;
         let scheme = self.generalize(&env_free, &func_type);
         self.record_decl_scheme(name_span, scheme.clone());
 
-        Ok((Type::Undefined, env.extend(name.to_string(), scheme)))
+        Ok((
+            Type::Undefined,
+            self.bind(env, span, name, scheme, Mutability::Mutable)?,
+        ))
     }
 }
 

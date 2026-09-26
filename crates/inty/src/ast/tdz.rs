@@ -460,7 +460,7 @@ impl<'a> Walker<'a> {
                 let mut inner = chain.to_vec();
                 inner.push(f);
                 match left {
-                    ForInLhs::VarDecl(name, _, _) => self.bind(f, name, State::Always, None),
+                    ForInLhs::VarDecl(name, _, _, _) => self.bind(f, name, State::Always, None),
                     ForInLhs::Expr(e) => self.walk_target(e, &inner, false),
                 }
                 self.walk_stmt(body, &inner);

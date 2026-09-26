@@ -318,7 +318,13 @@ impl InferState {
                     // Inferred through a frame (return value discarded) so
                     // any `return` doesn't leak upward.
                     let param_type = self.fresh_type_var();
-                    let setter_env = env.extend(param.clone(), TypeScheme::mono(param_type));
+                    let setter_env = self.bind(
+                        env,
+                        *span,
+                        param,
+                        TypeScheme::mono(param_type),
+                        super::super::env::Mutability::Mutable,
+                    )?;
                     let _ = self.infer_body_return_type(&setter_env, body, true, *span)?;
                     // For simplicity, we use the parameter type as the property type
                     // In a full implementation, we'd track getter/setter separately

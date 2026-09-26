@@ -1694,7 +1694,7 @@ impl Parser {
             let span_so_far = Span::new(start, self.prev_span().end);
             let body = self.suite()?;
             return Ok(Stmt::ForOf {
-                left: ForInLhs::VarDecl(name, None, span_so_far),
+                left: ForInLhs::VarDecl(name, None, span_so_far, VarKind::Var),
                 right,
                 body,
                 span: Span::new(start, self.prev_span().end),
@@ -1739,7 +1739,7 @@ impl Parser {
         body.push(*inner);
         let span = Span::new(start, self.prev_span().end);
         Ok(Stmt::ForOf {
-            left: ForInLhs::VarDecl(tmp, None, span_so_far),
+            left: ForInLhs::VarDecl(tmp, None, span_so_far, VarKind::Var),
             right,
             body: Box::new(Stmt::Block { body, span }),
             span,

@@ -71,8 +71,9 @@ pub(crate) fn is_function_like_decl(stmt: &Stmt) -> bool {
 /// references don't trigger cascading "undefined variable" or
 /// unification errors — they're absorbed by the sentinel and the
 /// original error stays the only diagnostic for this site.
-fn bind_failed_stmt_names_to_error(env: &TypeEnv, stmt: &Stmt) -> TypeEnv {
+fn bind_failed_stmt_names_to_error(state: &InferState, env: &TypeEnv, stmt: &Stmt) -> TypeEnv {
     let mut out = env.clone();
+    let error_binding = || env::Binding::mutable(TypeScheme::mono(Type::Error));
     let declarators = match stmt {
         Stmt::Var { declarations, .. } => Some(declarations.as_slice()),
         Stmt::Export {
@@ -86,20 +87,24 @@ fn bind_failed_stmt_names_to_error(env: &TypeEnv, stmt: &Stmt) -> TypeEnv {
             if decl.name.starts_with("$destr$") {
                 continue;
             }
-            out = out.extend(decl.name.clone(), TypeScheme::mono(Type::Error));
+            out = out.extend_key(
+                state.key_of(decl.span, &decl.name),
+                &decl.name,
+                error_binding(),
+            );
         }
         return out;
     }
     let fn_name = match stmt {
-        Stmt::FunctionDecl { name, .. } => Some(name),
+        Stmt::FunctionDecl { name, span, .. } => Some((name, span)),
         Stmt::Export {
-            declaration: ExportDecl::Function { name, .. },
+            declaration: ExportDecl::Function { name, span, .. },
             ..
-        } => Some(name),
+        } => Some((name, span)),
         _ => None,
     };
-    if let Some(name) = fn_name {
-        out = out.extend(name.clone(), TypeScheme::mono(Type::Error));
+    if let Some((name, span)) = fn_name {
+        out = out.extend_key(state.key_of(*span, name), name, error_binding());
     }
     out
 }
@@ -149,15 +154,43 @@ impl InferState {
         // the enclosing one's resolution is put back afterwards.)
         let outer_resolution = std::mem::replace(
             &mut self.resolution,
-            crate::ast::resolve::Resolution::of_program(&program.statements),
+            crate::ast::resolve::Resolution::of_program(&program.statements, program.language),
+        );
+        // Declaration ids are the program's own: another program's (a
+        // module inferred mid-way) must neither see nor clobber them.
+        let outer_locals = (
+            std::mem::take(&mut self.local_types),
+            std::mem::take(&mut self.forward_locals),
+            std::mem::take(&mut self.escaped_locals),
+            std::mem::take(&mut self.local_decl_spans),
         );
         // What the program leaves behind — a module's exports, the
         // top-level symbols — has each binding's own type, not one
         // narrowed by top-level control flow.
         let result = self
             .infer_stmt_list(&env, &program.statements)
-            .map(|(ty, env)| (ty, env.without_narrowings()));
+            .map(|(ty, env)| (ty, env.without_narrowings().globalized()));
+        // Every binding read before its declaration must have met it
+        // since: one that didn't means a declaration was bound under a
+        // key its uses don't resolve to, and its reads were unconstrained.
+        for (_, (_, name, span)) in std::mem::take(&mut self.forward_locals) {
+            self.push_error(
+                TypeError::Module {
+                    message: format!(
+                        "internal error: `{name}` is used, but its declaration was never checked"
+                    ),
+                    span,
+                }
+                .into(),
+            );
+        }
         self.resolution = outer_resolution;
+        (
+            self.local_types,
+            self.forward_locals,
+            self.escaped_locals,
+            self.local_decl_spans,
+        ) = outer_locals;
         // The program's own numeric variables (`let i = 0` at the top
         // level) get their defaults here, as a function's do when it's
         // generalised.
@@ -417,20 +450,23 @@ impl InferState {
         // This is what TypeScript / Flow do for typing purposes —
         // TDZ violations remain runtime-only and are not enforced
         // here.
-        let mut hoisted_data: std::collections::HashMap<String, Type> =
+        let mut hoisted_data: std::collections::HashMap<env::Key, (String, Type)> =
             std::collections::HashMap::new();
-        let collect_hoists = |hoisted_data: &mut std::collections::HashMap<String, Type>,
-                              state: &mut Self,
-                              declarations: &[VarDeclarator]| {
-            for decl in declarations {
-                if decl.name.starts_with("$destr$") {
-                    continue;
+        let collect_hoists =
+            |hoisted_data: &mut std::collections::HashMap<env::Key, (String, Type)>,
+             state: &mut Self,
+             declarations: &[VarDeclarator]| {
+                for decl in declarations {
+                    if decl.name.starts_with("$destr$") {
+                        continue;
+                    }
+                    let key = state.key_of(decl.span, &decl.name);
+                    if !hoisted_data.contains_key(&key) {
+                        let var = state.fresh_type_var();
+                        hoisted_data.insert(key, (decl.name.clone(), var));
+                    }
                 }
-                hoisted_data
-                    .entry(decl.name.clone())
-                    .or_insert_with(|| state.fresh_type_var());
-            }
-        };
+            };
         // Function-valued `const`s inferred with the hoisted functions
         // (Pass 2) get their real scheme there, so they need no placeholder.
         let hoisted_consts = crate::infer::features::functions::hoistable_const_functions(stmts);
@@ -464,8 +500,12 @@ impl InferState {
         // generalise at the boundary) — we just hand it one SCC at a
         // time.
         let mut current_env = env.clone();
-        for (name, ty) in &hoisted_data {
-            current_env = current_env.extend(name.clone(), TypeScheme::mono(ty.clone()));
+        for (key, (name, ty)) in &hoisted_data {
+            current_env = current_env.extend_key(
+                key.clone(),
+                name,
+                env::Binding::mutable(TypeScheme::mono(ty.clone())),
+            );
         }
         let errors_at_entry = self.errors.len();
         for scc_indices in &scc_groups {
@@ -486,11 +526,14 @@ impl InferState {
                     // noise. See `docs/scc-inference.md` § "Cross-SCC
                     // type errors".
                     for stmt in &group_stmts {
-                        if let Some((name, _, _, _, _, _)) =
+                        if let Some((name, _, _, _, _, span)) =
                             crate::infer::features::functions::function_decl_parts(stmt)
                         {
-                            current_env =
-                                current_env.extend(name.to_string(), TypeScheme::mono(Type::Error));
+                            current_env = current_env.extend_key(
+                                self.key_of(span, name),
+                                name,
+                                env::Binding::mutable(TypeScheme::mono(Type::Error)),
+                            );
                         }
                     }
                     self.push_error(err);
@@ -569,8 +612,11 @@ impl InferState {
                          kind: crate::ast::VarKind,
                          declarations: &[VarDeclarator]| {
                             for decl in declarations {
-                                if let Some(hoisted) = hoisted_data.get(&decl.name) {
-                                    if let Some(scheme) = current_env.lookup(&decl.name).cloned() {
+                                let key = state.key_of(decl.span, &decl.name);
+                                if let Some((_, hoisted)) = hoisted_data.get(&key) {
+                                    if let Some(scheme) =
+                                        current_env.lookup_key(&key).map(|b| b.scheme.clone())
+                                    {
                                         // An *instance*: unifying with the scheme
                                         // body would bind its quantified
                                         // variables to the placeholder's uses.
@@ -612,7 +658,7 @@ impl InferState {
                     // "undefined variable" noise. Statements that
                     // don't bind names (Expr, If, While, ...) just
                     // get skipped — the env is unchanged.
-                    current_env = bind_failed_stmt_names_to_error(&current_env, stmt);
+                    current_env = bind_failed_stmt_names_to_error(self, &current_env, stmt);
                     self.push_error(err);
                 }
             }
@@ -756,7 +802,8 @@ impl InferState {
             Expr::Lit { value, span } => self.infer_literal(value, *span),
 
             Expr::Ident { name, span } => {
-                if let Some(scheme) = env.lookup(name) {
+                if let Some(binding) = self.read_binding(env, *span, name) {
+                    let scheme = &binding.scheme;
                     let (ty, instantiation) = self.instantiate_recording_at(scheme, *span);
                     if !instantiation.is_empty() {
                         if let Some(record) = self.instantiations.as_mut() {
@@ -1138,7 +1185,17 @@ impl InferState {
                 span,
             } => self.infer_stmt_switch(env, discriminant, cases, *span),
 
-            Stmt::Labeled { body, .. } => self.infer_stmt(env, body),
+            // `break L` completes the labeled statement normally, from
+            // wherever in its body it is: what follows can't rely on the
+            // body's own completion (its early-exit narrowings).
+            Stmt::Labeled { label, body, .. } => {
+                let (ty, after) = self.infer_stmt(env, body)?;
+                if features::control::breaks_to(body, label) {
+                    Ok((ty, env.clone()))
+                } else {
+                    Ok((ty, after))
+                }
+            }
 
             Stmt::FunctionDecl {
                 name,
