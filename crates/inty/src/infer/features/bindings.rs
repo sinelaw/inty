@@ -288,24 +288,7 @@ impl InferState {
             }
         }
 
-        // A narrowed variable reads as narrowed (`n += 1` after a null
-        // check), but what is stored must fit the variable's own type:
-        // `node = node.next` may store `null` again.
-        let (left_type, store_type) = match left {
-            Expr::Ident { name, .. } if env.is_narrowed(name) => {
-                let own = self.infer_expr(&env.unnarrow([name]), left)?;
-                let read = if matches!(op, AssignOp::Assign) {
-                    own.clone()
-                } else {
-                    self.infer_expr(env, left)?
-                };
-                (read, own)
-            }
-            _ => {
-                let t = self.infer_expr(env, left)?;
-                (t.clone(), t)
-            }
-        };
+        let left_type = self.infer_expr(env, left)?;
 
         match op {
             AssignOp::Assign
@@ -328,14 +311,14 @@ impl InferState {
                 // this rule: at the type level they look identical to
                 // `=`, the runtime test only decides whether the
                 // assignment actually fires.
-                let lhs_resolved = self.zonk(&store_type);
+                let lhs_resolved = self.zonk(&left_type);
                 let rhs_for_assign =
                     if matches!(lhs_resolved, Type::Var(crate::types::TVarName::Flex(_))) {
                         self.widen(span, &right_type)
                     } else {
                         right_type.clone()
                     };
-                self.subsume(span, &rhs_for_assign, &store_type)?;
+                self.subsume(span, &rhs_for_assign, &left_type)?;
             }
 
             AssignOp::AddAssign => {
@@ -345,7 +328,7 @@ impl InferState {
                 let left_widened = self.widen(span, &left_type);
                 let right_widened = self.widen(span, &right_type);
                 let result = self.infer_add(span, &left_widened, &right_widened)?;
-                self.subsume(span, &result, &store_type)?;
+                self.subsume(span, &result, &left_type)?;
             }
 
             // `x ∘= y` stores `x ∘ y` back in `x`: `n /= 2` needs a
@@ -354,12 +337,12 @@ impl InferState {
                 let left_widened = self.widen(span, &left_type);
                 let right_widened = self.widen(span, &right_type);
                 let result = self.arith(span, &left_widened, &right_widened)?;
-                self.subsume(span, &result, &store_type)?;
+                self.subsume(span, &result, &left_type)?;
             }
             AssignOp::DivAssign | AssignOp::PowAssign => {
                 self.require_num(span, &left_type)?;
                 self.require_num(span, &right_type)?;
-                self.subsume(span, &Type::Number, &store_type)?;
+                self.subsume(span, &Type::Number, &left_type)?;
             }
 
             AssignOp::LShiftAssign
@@ -370,11 +353,11 @@ impl InferState {
             | AssignOp::BitXorAssign => {
                 self.require_num(span, &left_type)?;
                 self.require_num(span, &right_type)?;
-                self.subsume(span, &Type::Int, &store_type)?;
+                self.subsume(span, &Type::Int, &left_type)?;
             }
         }
 
-        Ok(self.zonk(&store_type))
+        Ok(self.zonk(&left_type))
     }
 
     /// Handle a `var` / `let` / `const` declaration statement.

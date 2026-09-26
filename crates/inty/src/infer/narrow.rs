@@ -15,11 +15,18 @@
 //! }
 //! ```
 //!
+//! Only *stable* bindings are narrowed: ones never written after their
+//! initialiser (`ast::resolve`). A fact about a stable binding's value
+//! holds for the rest of its scope, on every path and inside every
+//! closure, because the value cannot change; nothing ever has to end a
+//! narrowing.
+//!
 //! Narrowing is not a substitution. It only lives in the environment passed
 //! down into a branch — a fact that holds *here*, not everywhere. Sharing
 //! it with the unification substitution would over-narrow at sibling
 //! branches.
 
+use crate::span::Span;
 use crate::types::{LitValue, PropName, RowTail, RowType, Type, TypeId, TypeScheme};
 
 use super::env::TypeEnv;
@@ -30,8 +37,9 @@ use crate::ast::{BinOp, Expr, Literal, UnaryOp};
 /// a (possibly nested) property access off one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Path {
-    /// A bare identifier in the environment.
-    Ident(String),
+    /// A bare identifier in the environment, and where it occurs (which
+    /// is how its binding is found).
+    Ident(String, Span),
     /// A property access: `<parent>.<prop>`.
     Member(Box<Path>, PropName),
 }
@@ -41,41 +49,46 @@ impl Path {
     /// identifier; it's the one whose binding gets refined.
     pub fn root_ident(&self) -> &str {
         match self {
-            Path::Ident(n) => n.as_str(),
+            Path::Ident(n, _) => n.as_str(),
             Path::Member(p, _) => p.root_ident(),
         }
     }
 }
 
 /// A predicate to apply to the value at a `Path`.
+///
+/// Comparisons are read by the *type* of the other operand, never its
+/// name: `x === undefined` narrows because `undefined` has the singleton
+/// type `Undefined`, and a local `const undefined = 0` doesn't.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Narrowing {
     /// `typeof <path> === "string-literal"`.
     IsTypeof(String),
     /// `typeof <path> !== "string-literal"`.
     IsNotTypeof(String),
-    /// `<path> === <literal>`.
-    Equals(LitValue),
-    /// `<path> !== <literal>`.
-    NotEquals(LitValue),
+    /// `<path> === e` where `e` has a singleton type (`Null`,
+    /// `Undefined` or a literal): the value is that one value.
+    Is(Type),
+    /// `<path> !== e`, `e` of a singleton type.
+    IsNot(Type),
+    /// `<path> == e` in JavaScript with `e : Null` or `e : Undefined`:
+    /// `null` or `undefined` (loose equality is exact here).
+    Nullish,
+    /// `<path> != e`, likewise.
+    NotNullish,
+    /// Python `<path> == e`, `e` of a singleton type. `==` calls
+    /// `__eq__`, which an object may define to say anything, so an
+    /// object member always stays; a primitive stays if it can be `e`.
+    PyEq(Type),
+    /// Python `<path> != e`: only the singleton itself is ruled out
+    /// (built-in values compare as expected with `!=`).
+    PyNotEq(Type),
     /// `isinstance(<path>, C)` — the value is an instance of the class
     /// whose nominal brand is `TypeId`. Filters a union of `Named` brands
     /// to the matching member.
     IsInstance(TypeId),
     /// Negation of [`Narrowing::IsInstance`] (the `else` branch).
     IsNotInstance(TypeId),
-    /// `<path> === null`.
-    IsNull,
-    /// `<path> !== null`.
-    NotNull,
-    /// `<path> === undefined`.
-    IsUndefined,
-    /// `<path> !== undefined`.
-    NotUndefined,
-    /// `<path> == null` (or `== undefined`): null or undefined.
-    IsNullish,
-    /// `<path> != null` (or `!= undefined`).
-    NotNullish,
     /// `<path>` tested for truth, as in `if (x)`.
     Truthy,
     /// `!<path>`.
@@ -89,16 +102,14 @@ impl Narrowing {
         match self {
             Narrowing::IsTypeof(s) => Narrowing::IsNotTypeof(s.clone()),
             Narrowing::IsNotTypeof(s) => Narrowing::IsTypeof(s.clone()),
-            Narrowing::Equals(l) => Narrowing::NotEquals(l.clone()),
-            Narrowing::NotEquals(l) => Narrowing::Equals(l.clone()),
+            Narrowing::Is(t) => Narrowing::IsNot(t.clone()),
+            Narrowing::IsNot(t) => Narrowing::Is(t.clone()),
+            Narrowing::Nullish => Narrowing::NotNullish,
+            Narrowing::NotNullish => Narrowing::Nullish,
+            Narrowing::PyEq(t) => Narrowing::PyNotEq(t.clone()),
+            Narrowing::PyNotEq(t) => Narrowing::PyEq(t.clone()),
             Narrowing::IsInstance(id) => Narrowing::IsNotInstance(*id),
             Narrowing::IsNotInstance(id) => Narrowing::IsInstance(*id),
-            Narrowing::IsNull => Narrowing::NotNull,
-            Narrowing::NotNull => Narrowing::IsNull,
-            Narrowing::IsUndefined => Narrowing::NotUndefined,
-            Narrowing::NotUndefined => Narrowing::IsUndefined,
-            Narrowing::IsNullish => Narrowing::NotNullish,
-            Narrowing::NotNullish => Narrowing::IsNullish,
             Narrowing::Truthy => Narrowing::Falsy,
             Narrowing::Falsy => Narrowing::Truthy,
         }
@@ -106,17 +117,28 @@ impl Narrowing {
 
     /// Whether a branch this narrowing makes dead is worth a warning.
     /// Defensive null checks and truth tests of values that can't be
-    /// falsy are ordinary JavaScript, so those stay quiet.
+    /// falsy are ordinary code, so those stay quiet.
     pub fn warns_when_dead(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Narrowing::IsTypeof(_)
-                | Narrowing::IsNotTypeof(_)
-                | Narrowing::Equals(_)
-                | Narrowing::NotEquals(_)
-                | Narrowing::IsInstance(_)
-                | Narrowing::IsNotInstance(_)
-        )
+            | Narrowing::IsNotTypeof(_)
+            | Narrowing::IsInstance(_)
+            | Narrowing::IsNotInstance(_) => true,
+            Narrowing::Is(t) | Narrowing::IsNot(t) => matches!(t, Type::Literal(_)),
+            _ => false,
+        }
+    }
+}
+
+/// Whether `ty` has exactly one value, so that `===` against a value of
+/// it says which value, and `!==` rules it out. (`NaN` is its own
+/// exception: it equals nothing.)
+pub fn is_singleton(ty: &Type) -> bool {
+    match ty {
+        Type::Null | Type::Undefined => true,
+        Type::Literal(LitValue::Number(n)) => !n.is_nan(),
+        Type::Literal(_) => true,
+        _ => false,
     }
 }
 
@@ -142,28 +164,19 @@ impl Facts {
             when_false: self.when_true,
         }
     }
-
-    /// Drop every fact about a variable in `names` (ones the test itself
-    /// assigns, whose value at the branch may not be the one tested).
-    pub fn forget(&mut self, names: &std::collections::HashSet<String>) {
-        self.when_true
-            .retain(|(p, _)| !names.contains(p.root_ident()));
-        self.when_false
-            .retain(|(p, _)| !names.contains(p.root_ident()));
-    }
 }
 
-/// The facts a test establishes. `extra` recognises tests that need the
-/// checker's state (`isinstance`).
+/// The facts a test establishes. `atom` recognises the comparisons, which
+/// need the checker (the other operand's type, `isinstance`'s class).
 ///
-/// - a comparison [`try_extract_narrowing`] understands;
+/// - a comparison `atom` understands;
 /// - `<path>` alone: truthy when true, falsy when false;
 /// - `!e`: the facts of `e`, swapped;
 /// - `a && b`: when true, both sides' true facts (`b` only runs once
 ///   `a` held); when false, nothing we can pin to one side;
 /// - `a || b`: when false, both sides' false facts; when true, nothing.
-pub fn test_facts(test: &Expr, extra: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>) -> Facts {
-    if let Some((path, narrowing)) = try_extract_narrowing(test).or_else(|| extra(test)) {
+pub fn test_facts(test: &Expr, atom: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>) -> Facts {
+    if let Some((path, narrowing)) = atom(test) {
         return Facts::one(path, narrowing);
     }
     match test {
@@ -171,15 +184,15 @@ pub fn test_facts(test: &Expr, extra: &dyn Fn(&Expr) -> Option<(Path, Narrowing)
             op: UnaryOp::Not,
             argument,
             ..
-        } => test_facts(argument, extra).swap(),
+        } => test_facts(argument, atom).swap(),
         Expr::Binary {
             op: BinOp::And,
             left,
             right,
             ..
         } => {
-            let mut l = test_facts(left, extra);
-            let r = test_facts(right, extra);
+            let mut l = test_facts(left, atom);
+            let r = test_facts(right, atom);
             l.when_true.extend(r.when_true);
             Facts {
                 when_true: l.when_true,
@@ -192,8 +205,8 @@ pub fn test_facts(test: &Expr, extra: &dyn Fn(&Expr) -> Option<(Path, Narrowing)
             right,
             ..
         } => {
-            let mut l = test_facts(left, extra);
-            let r = test_facts(right, extra);
+            let mut l = test_facts(left, atom);
+            let r = test_facts(right, atom);
             l.when_false.extend(r.when_false);
             Facts {
                 when_true: Vec::new(),
@@ -211,15 +224,38 @@ pub fn test_facts(test: &Expr, extra: &dyn Fn(&Expr) -> Option<(Path, Narrowing)
 /// copy. The binding for the root identifier is replaced with one whose
 /// type reflects the predicate; other bindings are untouched.
 ///
+/// Only a stable binding (see the module docs) is narrowed; for any other
+/// the input env is returned unchanged, as it is when the root isn't
+/// bound at all (the checker reports that use elsewhere).
+///
 /// The binding's type is normalised through the current substitution
 /// before refinement — without this, a parameter bound to a fresh
 /// variable that *happens* to be substituted to a union would never
 /// narrow, because the env still holds the bare variable.
-///
-/// If the path's root isn't bound, the input env is returned unchanged —
-/// a missing binding is a non-narrowable expression and the type checker
-/// will report the underlying use later.
 pub fn apply_narrowing(
+    state: &super::state::InferState,
+    env: &TypeEnv,
+    path: &Path,
+    narrowing: &Narrowing,
+) -> TypeEnv {
+    let Path::Ident(name, span) = root_of(path) else {
+        unreachable!("a path is rooted at an identifier")
+    };
+    if !state.resolution.stable_at(*span, name) {
+        return env.clone();
+    }
+    narrow_binding(state, env, path, narrowing)
+}
+
+fn root_of(path: &Path) -> &Path {
+    match path {
+        Path::Member(p, _) => root_of(p),
+        ident => ident,
+    }
+}
+
+/// [`apply_narrowing`] without the stability check.
+fn narrow_binding(
     state: &super::state::InferState,
     env: &TypeEnv,
     path: &Path,
@@ -235,15 +271,6 @@ pub fn apply_narrowing(
     // refinements we model don't apply to type schemes — and trying to
     // refine inside a quantifier would be unsound.
     if !scheme.is_mono() {
-        return env.clone();
-    }
-
-    // A variable that a closure assigns can change during any call, so a
-    // test of it may be stale by the time the branch reads it.
-    let mutable = env
-        .lookup_binding(&root)
-        .is_some_and(|b| b.mutability == super::env::Mutability::Mutable);
-    if mutable && state.closure_assigned.contains(&root) {
         return env.clone();
     }
 
@@ -282,7 +309,7 @@ fn path_steps(path: &Path) -> Vec<PropName> {
     let mut cur = path;
     loop {
         match cur {
-            Path::Ident(_) => {
+            Path::Ident(..) => {
                 steps.reverse();
                 return steps;
             }
@@ -352,7 +379,7 @@ fn refine_type(ty: &Type, narrowing: &Narrowing, lang: Language) -> Type {
             // For positive narrowings, sharpen the type when possible
             // (e.g. a String narrowed by `=== "a"` becomes `Literal("a")`).
             match narrowing {
-                Narrowing::Equals(lit)
+                Narrowing::Is(Type::Literal(lit))
                     if matches!(ty, Type::String | Type::Number | Type::Boolean)
                         || matches!(
                             (ty, lit),
@@ -373,29 +400,48 @@ fn member_compatible(ty: &Type, narrowing: &Narrowing, lang: Language) -> bool {
     match narrowing {
         Narrowing::IsTypeof(name) => typeof_matches(ty, name),
         Narrowing::IsNotTypeof(name) => !typeof_definitely_matches(ty, name),
-        Narrowing::Equals(lit) => value_compatible_with_literal(ty, lit),
-        Narrowing::NotEquals(lit) => !value_definitely_equals_literal(ty, lit),
+        Narrowing::Is(single) => could_be_value(ty, single),
+        Narrowing::IsNot(single) => ty != single,
+        Narrowing::Nullish => could_be(ty, &Type::Null) || could_be(ty, &Type::Undefined),
+        Narrowing::NotNullish => !matches!(ty, Type::Null | Type::Undefined),
+        Narrowing::PyEq(single) => could_be_value(ty, single) || !is_primitive(ty),
+        Narrowing::PyNotEq(single) => ty != single,
         Narrowing::IsInstance(id) => brand_could_match(ty, *id),
         Narrowing::IsNotInstance(id) => !brand_definitely_matches(ty, *id),
-        Narrowing::IsNull => could_be(ty, &Type::Null),
-        Narrowing::NotNull => *ty != Type::Null,
-        Narrowing::IsUndefined => could_be(ty, &Type::Undefined),
-        Narrowing::NotUndefined => *ty != Type::Undefined,
-        Narrowing::IsNullish => could_be(ty, &Type::Null) || could_be(ty, &Type::Undefined),
-        Narrowing::NotNullish => !matches!(ty, Type::Null | Type::Undefined),
         Narrowing::Truthy => could_be_truthy(ty, lang),
         Narrowing::Falsy => could_be_falsy(ty, lang),
     }
 }
 
+/// True if a value of type `ty` could be the one value of the singleton
+/// type `single`.
+fn could_be_value(ty: &Type, single: &Type) -> bool {
+    match single {
+        Type::Literal(lit) => value_compatible_with_literal(ty, lit),
+        unit => could_be(ty, unit),
+    }
+}
+
+/// A value Python compares with built-in `==` (no user `__eq__`).
+fn is_primitive(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Number
+            | Type::Int
+            | Type::String
+            | Type::Boolean
+            | Type::Null
+            | Type::Undefined
+            | Type::Literal(_)
+    )
+}
+
 /// True if a value of type `ty` could be the unit value `unit` (`Null`
-/// or `Undefined`): it is that type, or a type we don't know yet.
+/// or `Undefined`): it is that type, or a type we don't know yet. (A
+/// named type is a class instance or a recursive type that doesn't
+/// unfold to a union — `expose_named` unfolds those — so it is neither.)
 fn could_be(ty: &Type, unit: &Type) -> bool {
-    ty == unit
-        || matches!(
-            ty,
-            Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Error
-        )
+    ty == unit || matches!(ty, Type::Var(_) | Type::Union(_) | Type::Error)
 }
 
 /// True unless every value of `ty` is falsy. `null`/`nil`, `undefined`
@@ -520,11 +566,6 @@ fn value_compatible_with_literal(ty: &Type, lit: &LitValue) -> bool {
     }
 }
 
-/// True if a value of type `ty` *must* equal the literal value `lit`.
-fn value_definitely_equals_literal(ty: &Type, lit: &LitValue) -> bool {
-    matches!(ty, Type::Literal(other) if other == lit)
-}
-
 /// True if the property at `steps` inside `member_ty` is compatible with
 /// `narrowing`. Used to keep/drop union members during refinement.
 fn member_property_compatible(
@@ -556,88 +597,29 @@ fn member_property_compatible(
     }
 }
 
-/// Try to extract a `(Path, Narrowing)` from a test expression.
-/// Returns `None` if the expression isn't a recognised narrowing pattern.
-///
-/// Recognised patterns:
-///   - `typeof <path> === "lit"`     → `IsTypeof("lit")` on `<path>`
-///   - `typeof <path> !== "lit"`     → `IsNotTypeof("lit")` on `<path>`
-///   - `typeof <path> ==  "lit"`     → `IsTypeof("lit")` on `<path>`
-///   - `typeof <path> !=  "lit"`     → `IsNotTypeof("lit")` on `<path>`
-///   - `<path> === <literal>`        → `Equals(literal)` on `<path>`
-///   - `<path> !== <literal>`        → `NotEquals(literal)` on `<path>`
-///
-/// Both operand orders are accepted for the comparison operators.
-///
-/// Loose equality (`==`/`!=`) is supported only for the typeof form: a
-/// `typeof <expr>` always evaluates to a string, and the other operand
-/// is a string literal, so JS's coercion rules cannot make `==` and
-/// `===` differ. For `<value> == <literal>` in general, semantics
-/// diverge from `===` (e.g. `0 == ""`), so loose equality is rejected.
-pub fn try_extract_narrowing(test: &Expr) -> Option<(Path, Narrowing)> {
+/// `typeof <path> === "lit"` (either order, `==` too: `typeof` yields a
+/// string, so loose and strict equality agree), with its negations.
+pub fn typeof_fact(test: &Expr) -> Option<(Path, Narrowing)> {
     let Expr::Binary {
         op, left, right, ..
     } = test
     else {
         return None;
     };
-
-    let (strict, neg) = match op {
-        BinOp::EqEqEq => (true, false),
-        BinOp::NotEqEq => (true, true),
-        BinOp::EqEq => (false, false),
-        BinOp::NotEq => (false, true),
+    let neg = match op {
+        BinOp::EqEqEq | BinOp::EqEq => false,
+        BinOp::NotEqEq | BinOp::NotEq => true,
         _ => return None,
     };
-
-    // `typeof <path> {==,===} "lit"` — sound for both strict and loose
-    // equality (see doc comment).
-    if let Some((path, name)) = try_typeof_string_pair(left, right) {
-        let narrowing = if neg {
+    let (path, name) = try_typeof_string_pair(left, right)?;
+    Some((
+        path,
+        if neg {
             Narrowing::IsNotTypeof(name)
         } else {
             Narrowing::IsTypeof(name)
-        };
-        return Some((path, narrowing));
-    }
-
-    // `<path> === null`, `<path> !== undefined`, … Loose equality is
-    // exact here too: `x == null` holds for `null` and `undefined` and
-    // nothing else.
-    for (a, b) in [(left, right), (right, left)] {
-        if let (Some(path), Some(unit)) = (path_from_expr(a), unit_literal(b)) {
-            let narrowing = match (strict, unit) {
-                (true, Type::Null) => Narrowing::IsNull,
-                (true, _) => Narrowing::IsUndefined,
-                (false, _) => Narrowing::IsNullish,
-            };
-            return Some((path, if neg { narrowing.negate() } else { narrowing }));
-        }
-    }
-
-    // For `<path> === <literal>`, only strict equality is recognised.
-    if !strict {
-        return None;
-    }
-
-    if let (Some(path), Some(lit)) = (path_from_expr(left), literal_value(right)) {
-        let narrowing = if neg {
-            Narrowing::NotEquals(lit)
-        } else {
-            Narrowing::Equals(lit)
-        };
-        return Some((path, narrowing));
-    }
-    if let (Some(path), Some(lit)) = (path_from_expr(right), literal_value(left)) {
-        let narrowing = if neg {
-            Narrowing::NotEquals(lit)
-        } else {
-            Narrowing::Equals(lit)
-        };
-        return Some((path, narrowing));
-    }
-
-    None
+        },
+    ))
 }
 
 /// True when applying a narrowing at `path` collapsed the binding's
@@ -703,22 +685,6 @@ fn string_literal(e: &Expr) -> Option<String> {
     }
 }
 
-/// `null` or `undefined` as an operand: the type it is.
-fn unit_literal(e: &Expr) -> Option<Type> {
-    match e {
-        Expr::Lit {
-            value: Literal::Null,
-            ..
-        } => Some(Type::Null),
-        Expr::Lit {
-            value: Literal::Undefined,
-            ..
-        } => Some(Type::Undefined),
-        Expr::Ident { name, .. } if name == "undefined" => Some(Type::Undefined),
-        _ => None,
-    }
-}
-
 /// Public wrapper for switch's case-literal extraction.
 pub fn literal_value_of(e: &Expr) -> Option<LitValue> {
     literal_value(e)
@@ -747,7 +713,7 @@ fn literal_value(e: &Expr) -> Option<LitValue> {
 /// (calls, arithmetic) isn't supported.
 pub fn path_from_expr(e: &Expr) -> Option<Path> {
     match e {
-        Expr::Ident { name, .. } => Some(Path::Ident(name.clone())),
+        Expr::Ident { name, span } => Some(Path::Ident(name.clone(), *span)),
         Expr::Member {
             object, property, ..
         } => {
@@ -812,10 +778,10 @@ mod tests {
         let ty = Type::union(vec![Type::String, Type::Undefined]);
         let env = env_with("x", ty);
         let state = crate::infer::InferState::new();
-        let narrowed = apply_narrowing(
+        let narrowed = narrow_binding(
             &state,
             &env,
-            &Path::Ident("x".to_string()),
+            &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsNotTypeof("undefined".to_string()),
         );
         let new_ty = narrowed.lookup("x").unwrap().ty();
@@ -827,10 +793,10 @@ mod tests {
         let ty = Type::union(vec![Type::String, Type::Undefined]);
         let env = env_with("x", ty);
         let state = crate::infer::InferState::new();
-        let narrowed = apply_narrowing(
+        let narrowed = narrow_binding(
             &state,
             &env,
-            &Path::Ident("x".to_string()),
+            &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsTypeof("undefined".to_string()),
         );
         let new_ty = narrowed.lookup("x").unwrap().ty();
@@ -841,49 +807,34 @@ mod tests {
     fn test_narrow_equals_literal_sharpens_string() {
         let env = env_with("s", Type::String);
         let state = crate::infer::InferState::new();
-        let narrowed = apply_narrowing(
+        let narrowed = narrow_binding(
             &state,
             &env,
-            &Path::Ident("s".to_string()),
-            &Narrowing::Equals(LitValue::String("hi".into())),
+            &Path::Ident("s".to_string(), Span::new(0, 0)),
+            &Narrowing::Is(Type::lit_string("hi")),
         );
         let new_ty = narrowed.lookup("s").unwrap().ty();
         assert_eq!(*new_ty, Type::lit_string("hi"));
     }
 
     #[test]
-    fn test_extract_narrowing_for_member_eq_literal() {
-        // shape.kind === "circle" — does the predicate detector find it?
-        let span = crate::span::Span::new(0, 0);
-        let test = Expr::Binary {
-            op: BinOp::EqEqEq,
-            left: Box::new(Expr::Member {
-                object: Box::new(Expr::Ident {
-                    name: "shape".into(),
-                    span,
-                }),
-                property: "kind".into(),
+    fn test_path_for_member_chain() {
+        // shape.kind — the path the discriminant narrowing refines.
+        let span = crate::span::Span::new(0, 5);
+        let e = Expr::Member {
+            object: Box::new(Expr::Ident {
+                name: "shape".into(),
                 span,
             }),
-            right: Box::new(Expr::Lit {
-                value: Literal::String("circle".into()),
-                span,
-            }),
+            property: "kind".into(),
             span,
         };
-        let extracted = try_extract_narrowing(&test);
-        assert!(extracted.is_some(), "should extract a narrowing");
-        let (path, narrowing) = extracted.unwrap();
         assert_eq!(
-            path,
-            Path::Member(
-                Box::new(Path::Ident("shape".into())),
+            path_from_expr(&e),
+            Some(Path::Member(
+                Box::new(Path::Ident("shape".into(), span)),
                 PropName("kind".into())
-            )
-        );
-        assert_eq!(
-            narrowing,
-            Narrowing::Equals(LitValue::String("circle".into()))
+            ))
         );
     }
 
@@ -902,12 +853,12 @@ mod tests {
         let env = env_with("shape", union);
 
         let path = Path::Member(
-            Box::new(Path::Ident("shape".to_string())),
+            Box::new(Path::Ident("shape".to_string(), Span::new(0, 0))),
             PropName("kind".into()),
         );
-        let narrowing = Narrowing::Equals(LitValue::String("circle".into()));
+        let narrowing = Narrowing::Is(Type::lit_string("circle"));
         let state = crate::infer::InferState::new();
-        let narrowed = apply_narrowing(&state, &env, &path, &narrowing);
+        let narrowed = narrow_binding(&state, &env, &path, &narrowing);
         let new_ty = narrowed.lookup("shape").unwrap().ty();
         assert_eq!(*new_ty, circle);
     }
@@ -926,12 +877,12 @@ mod tests {
         let env = env_with("shape", union);
 
         let path = Path::Member(
-            Box::new(Path::Ident("shape".to_string())),
+            Box::new(Path::Ident("shape".to_string(), Span::new(0, 0))),
             PropName("kind".into()),
         );
-        let narrowing = Narrowing::NotEquals(LitValue::String("circle".into()));
+        let narrowing = Narrowing::IsNot(Type::lit_string("circle"));
         let state = crate::infer::InferState::new();
-        let narrowed = apply_narrowing(&state, &env, &path, &narrowing);
+        let narrowed = narrow_binding(&state, &env, &path, &narrowing);
         let new_ty = narrowed.lookup("shape").unwrap().ty();
         assert_eq!(*new_ty, square);
     }
@@ -945,18 +896,18 @@ mod tests {
         let env = env_with("x", Type::union(vec![dog.clone(), cat.clone()]));
         let state = crate::infer::InferState::new();
 
-        let yes = apply_narrowing(
+        let yes = narrow_binding(
             &state,
             &env,
-            &Path::Ident("x".to_string()),
+            &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsInstance(1),
         );
         assert_eq!(*yes.lookup("x").unwrap().ty(), dog);
 
-        let no = apply_narrowing(
+        let no = narrow_binding(
             &state,
             &env,
-            &Path::Ident("x".to_string()),
+            &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsNotInstance(1),
         );
         assert_eq!(*no.lookup("x").unwrap().ty(), cat);
@@ -968,10 +919,10 @@ mod tests {
         // collapses to never (a statically dead branch).
         let env = env_with("x", Type::Named(2, vec![]));
         let state = crate::infer::InferState::new();
-        let narrowed = apply_narrowing(
+        let narrowed = narrow_binding(
             &state,
             &env,
-            &Path::Ident("x".to_string()),
+            &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsInstance(1),
         );
         assert!(narrowed.lookup("x").unwrap().ty().is_never());
@@ -982,11 +933,11 @@ mod tests {
         // Narrow String to "a", then to NotEquals "a" — should be never.
         let env = env_with("s", Type::lit_string("a"));
         let state = crate::infer::InferState::new();
-        let narrowed = apply_narrowing(
+        let narrowed = narrow_binding(
             &state,
             &env,
-            &Path::Ident("s".to_string()),
-            &Narrowing::NotEquals(LitValue::String("a".into())),
+            &Path::Ident("s".to_string(), Span::new(0, 0)),
+            &Narrowing::IsNot(Type::lit_string("a")),
         );
         let new_ty = narrowed.lookup("s").unwrap().ty();
         assert!(new_ty.is_never(), "expected never, got {}", new_ty);

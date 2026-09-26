@@ -1,6 +1,8 @@
 # Narrowing, the safe version: refine only what cannot change
 
-Status: design. This is an alternative to [flow-narrowing.md](flow-narrowing.md)
+Status: implemented (`ast/resolve.rs`, `infer/narrow.rs`,
+`infer/features/control.rs`). Field writes (#9, below) are still open.
+This is an alternative to [flow-narrowing.md](flow-narrowing.md)
 that gives up some precision for a much smaller change, whose soundness
 argument fits in one sentence:
 

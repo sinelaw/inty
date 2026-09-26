@@ -41,8 +41,9 @@ pub struct Binding {
     /// Whether this binding can be reassigned.
     pub mutability: Mutability,
     /// The binding's own scheme when `scheme` is a narrowing of it (see
-    /// `narrow.rs`): what an assignment must fit, and what the binding
-    /// goes back to once the narrowing stops holding.
+    /// `narrow.rs`). Only bindings that are never written are narrowed,
+    /// so nothing is ever stored against a narrowed scheme; this is kept
+    /// for what outlives the narrowing's scope, like a module's exports.
     pub declared: Option<TypeScheme>,
 }
 
@@ -70,9 +71,6 @@ impl Binding {
 #[derive(Clone, Debug, Default)]
 pub struct TypeEnv {
     bindings: HashMap<String, Binding>,
-    /// How many bindings are narrowed, so code with nothing narrowed can
-    /// skip looking for assignments that would end a narrowing.
-    narrowed: usize,
 }
 
 impl TypeEnv {
@@ -80,7 +78,6 @@ impl TypeEnv {
     pub fn empty() -> Self {
         TypeEnv {
             bindings: HashMap::new(),
-            narrowed: 0,
         }
     }
 
@@ -98,37 +95,17 @@ impl TypeEnv {
     /// Extend the environment with a new mutable binding.
     /// Returns a new environment (immutable extension).
     pub fn extend(&self, name: String, scheme: TypeScheme) -> Self {
-        self.with_binding(name, Binding::mutable(scheme))
+        let mut bindings = self.bindings.clone();
+        bindings.insert(name, Binding::mutable(scheme));
+        TypeEnv { bindings }
     }
 
-    /// A copy with `name` bound to `binding`, replacing any binding it had.
-    fn with_binding(&self, name: String, binding: Binding) -> Self {
-        let mut out = self.clone();
-        out.insert(name, binding);
-        out
-    }
-
-    fn insert(&mut self, name: String, binding: Binding) {
-        if binding.declared.is_some() {
-            self.narrowed += 1;
-        }
-        if let Some(old) = self.bindings.insert(name, binding) {
-            if old.declared.is_some() {
-                self.narrowed -= 1;
-            }
-        }
-    }
-
-    /// Whether any binding is narrowed.
-    pub fn has_narrowings(&self) -> bool {
-        self.narrowed > 0
-    }
-
-    /// Whether `name`'s binding is narrowed.
-    pub fn is_narrowed(&self, name: &str) -> bool {
-        self.bindings
-            .get(name)
-            .is_some_and(|b| b.declared.is_some())
+    /// Extend the environment with a new immutable binding.
+    /// Returns a new environment (immutable extension).
+    pub fn extend_immutable(&self, name: String, scheme: TypeScheme) -> Self {
+        let mut bindings = self.bindings.clone();
+        bindings.insert(name, Binding::immutable(scheme));
+        TypeEnv { bindings }
     }
 
     /// A copy with `name`'s type narrowed to `scheme`. The binding keeps
@@ -138,64 +115,55 @@ impl TypeEnv {
             return self.clone();
         };
         let declared = b.declared.clone().unwrap_or_else(|| b.scheme.clone());
-        self.with_binding(
+        let mut bindings = self.bindings.clone();
+        bindings.insert(
             name.to_string(),
             Binding {
                 scheme,
                 mutability: b.mutability,
                 declared: Some(declared),
             },
-        )
+        );
+        TypeEnv { bindings }
     }
 
-    /// A copy where the bindings of `names` that are narrowed have their
-    /// own types back.
-    pub fn unnarrow<'a>(&self, names: impl IntoIterator<Item = &'a String>) -> Self {
-        if !self.has_narrowings() {
-            return self.clone();
+    /// `name`'s own scheme, narrowed or not.
+    pub fn lookup_declared(&self, name: &str) -> Option<&TypeScheme> {
+        let b = self.bindings.get(name)?;
+        Some(b.declared.as_ref().unwrap_or(&b.scheme))
+    }
+
+    /// A copy whose narrowings are those of `base`: each narrowed binding
+    /// takes `base`'s binding of the name, or its own scheme when `base`
+    /// has none. Other bindings (declared since `base`) are kept.
+    pub fn with_narrowings_of(&self, base: &TypeEnv) -> Self {
+        let mut bindings = self.bindings.clone();
+        for (name, b) in &self.bindings {
+            let Some(declared) = &b.declared else {
+                continue;
+            };
+            let restored = match base.bindings.get(name) {
+                Some(bb) => bb.clone(),
+                None => Binding {
+                    scheme: declared.clone(),
+                    mutability: b.mutability,
+                    declared: None,
+                },
+            };
+            bindings.insert(name.clone(), restored);
         }
-        let mut out = self.clone();
-        for name in names {
-            if let Some(b) = out.bindings.get(name) {
-                if let Some(declared) = b.declared.clone() {
-                    let mutability = b.mutability;
-                    out.insert(
-                        name.clone(),
-                        Binding {
-                            scheme: declared,
-                            mutability,
-                            declared: None,
-                        },
-                    );
-                }
+        TypeEnv { bindings }
+    }
+
+    /// A copy with every binding's own scheme.
+    pub fn without_narrowings(&self) -> Self {
+        let mut bindings = self.bindings.clone();
+        for b in bindings.values_mut() {
+            if let Some(declared) = b.declared.take() {
+                b.scheme = declared;
             }
         }
-        out
-    }
-
-    /// [`Self::unnarrow`] for the narrowed bindings `pred` picks.
-    pub fn unnarrow_where(&self, mut pred: impl FnMut(&str, &Binding) -> bool) -> Self {
-        if !self.has_narrowings() {
-            return self.clone();
-        }
-        let names: Vec<String> = self
-            .bindings
-            .iter()
-            .filter(|(k, b)| b.declared.is_some() && pred(k, b))
-            .map(|(k, _)| k.clone())
-            .collect();
-        self.unnarrow(&names)
-    }
-
-    /// A copy with every narrowing dropped.
-    pub fn without_narrowings(&self) -> Self {
-        self.unnarrow_where(|_, _| true)
-    }
-
-    /// Extend the environment with a new immutable binding.
-    /// Returns a new environment (immutable extension).
-    pub fn extend_immutable(&self, name: String, scheme: TypeScheme) -> Self {
-        self.with_binding(name, Binding::immutable(scheme))
+        TypeEnv { bindings }
     }
 
     /// Extend the environment with a binding specifying mutability.
@@ -205,14 +173,16 @@ impl TypeEnv {
         scheme: TypeScheme,
         mutability: Mutability,
     ) -> Self {
-        self.with_binding(
+        let mut bindings = self.bindings.clone();
+        bindings.insert(
             name,
             Binding {
                 scheme,
                 mutability,
                 declared: None,
             },
-        )
+        );
+        TypeEnv { bindings }
     }
 
     /// The environment with `f` applied to every binding's scheme.
@@ -231,30 +201,25 @@ impl TypeEnv {
                 )
             })
             .collect();
-        TypeEnv {
-            bindings,
-            narrowed: self.narrowed,
-        }
+        TypeEnv { bindings }
     }
 
     /// Extend the environment with multiple mutable bindings.
     pub fn extend_many(&self, bindings: impl IntoIterator<Item = (String, TypeScheme)>) -> Self {
-        let mut out = self.clone();
+        let mut new_bindings = self.bindings.clone();
         for (name, scheme) in bindings {
-            out.insert(name, Binding::mutable(scheme));
+            new_bindings.insert(name, Binding::mutable(scheme));
         }
-        out
+        TypeEnv {
+            bindings: new_bindings,
+        }
     }
 
     /// Remove a binding from the environment.
     pub fn remove(&self, name: &str) -> Self {
-        let mut out = self.clone();
-        if let Some(old) = out.bindings.remove(name) {
-            if old.declared.is_some() {
-                out.narrowed -= 1;
-            }
-        }
-        out
+        let mut bindings = self.bindings.clone();
+        bindings.remove(name);
+        TypeEnv { bindings }
     }
 
     /// Check if a name is bound in the environment.
@@ -332,10 +297,7 @@ impl Substitutable for TypeEnv {
                 )
             })
             .collect();
-        TypeEnv {
-            bindings,
-            narrowed: self.narrowed,
-        }
+        TypeEnv { bindings }
     }
 
     fn free_vars(&self) -> HashSet<TVarName> {

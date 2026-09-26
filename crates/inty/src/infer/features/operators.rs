@@ -116,7 +116,7 @@ impl InferState {
         // that of `||` only when it is falsy: `node !== null && node.ok`.
         let right_type = match op {
             BinOp::And | BinOp::Or => {
-                let right_env = self.env_given(env, left, matches!(op, BinOp::And), right);
+                let right_env = self.env_given(env, left, matches!(op, BinOp::And));
                 self.infer_expr(&right_env, right)?
             }
             _ => self.infer_expr(env, right)?,

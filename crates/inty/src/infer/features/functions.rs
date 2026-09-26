@@ -250,13 +250,6 @@ impl InferState {
         expected: Option<Type>,
         span: Span,
     ) -> InferResult<Type> {
-        // A function can run long after it is made, when a variable it
-        // captured may hold something else. Narrowings of variables that
-        // are assigned somewhere don't carry into its body.
-        let body_env = &body_env.unnarrow_where(|name, b| {
-            b.mutability == crate::infer::env::Mutability::Mutable
-                && self.assigned_anywhere.contains(name)
-        });
         self.return_value_stack.push(Vec::new());
         self.return_expected_stack.push(expected);
         let body_result = self.infer_stmt(body_env, body);
@@ -474,54 +467,6 @@ impl InferState {
         Ok(self.zonk(&func_type))
     }
 
-    /// `new Array(n).fill(v)` (or `Array(n).fill(v)`): an array of `n`
-    /// copies of `v`. Typed as a whole: `new Array(n)` alone holds holes
-    /// that read as `undefined`, which an array of `v`'s type can't, but
-    /// `fill` replaces every one before anything can read it.
-    fn infer_array_fill(
-        &mut self,
-        env: &TypeEnv,
-        callee: &Expr,
-        arguments: &[Expr],
-        span: Span,
-    ) -> InferResult<Option<Type>> {
-        let (
-            Expr::Member {
-                object, property, ..
-            },
-            [value],
-        ) = (callee, arguments)
-        else {
-            return Ok(None);
-        };
-        if property != "fill" {
-            return Ok(None);
-        }
-        let len = match &**object {
-            Expr::New {
-                callee, arguments, ..
-            }
-            | Expr::Call {
-                callee, arguments, ..
-            } => match (&**callee, arguments.as_slice()) {
-                (Expr::Ident { name, .. }, [n])
-                    if name == "Array" && env.lookup("Array").is_some() =>
-                {
-                    n
-                }
-                _ => return Ok(None),
-            },
-            _ => return Ok(None),
-        };
-        let len_type = self.infer_expr(env, len)?;
-        let len_type = self.widen(len.span(), &len_type);
-        self.subsume(len.span(), &len_type, &Type::Int)?;
-        let value_type = self.infer_expr(env, value)?;
-        let elem = self.widen(value.span(), &value_type);
-        let _ = span;
-        Ok(Some(Type::array(elem)))
-    }
-
     /// Infer the type of a function call.
     pub(in crate::infer) fn infer_call(
         &mut self,
@@ -531,9 +476,6 @@ impl InferState {
         keywords: &[(String, Expr)],
         span: Span,
     ) -> InferResult<Type> {
-        if let Some(t) = self.infer_array_fill(env, callee, arguments, span)? {
-            return Ok(t);
-        }
         // For method calls, we need to infer the object only once to avoid creating
         // different fresh type variables. We'll manually extract the method type.
         let mut deferred_this: Option<Type> = None;
@@ -861,29 +803,6 @@ impl InferState {
     ) -> InferResult<Type> {
         let callee_type = self.infer_expr(env, callee)?;
 
-        // Infer argument types. `...expr` (Expr::Spread) in argument
-        // position unwraps the inner array to its element type and is
-        // treated as a single argument — inty has no variadic call
-        // shape, so a spread can't expand into N arguments. Callers
-        // that rely on variadic semantics will see an arity error
-        // here; callers that want a single-arg function fed from an
-        // array's element will type-check correctly.
-        let arg_types: Vec<Type> = arguments
-            .iter()
-            .map(|arg| match arg {
-                Expr::Spread {
-                    argument,
-                    span: spread_span,
-                } => {
-                    let inner = self.infer_expr(env, argument)?;
-                    let elem = self.fresh_type_var();
-                    self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
-                    Ok(self.zonk(&elem))
-                }
-                _ => self.infer_expr(env, arg),
-            })
-            .collect::<InferResult<_>>()?;
-
         // The constructor returns some object type
         let result_type = self.fresh_type_var();
         let this_type = result_type.clone();
@@ -891,9 +810,34 @@ impl InferState {
         // Expected constructor shape — an *open* callable row so the
         // constructor value can carry additional static fields beyond
         // the call signature (matches the unified callable-row design).
-        let expected_func = self.callable_row_open(Some(this_type), arg_types, result_type.clone());
-
+        // Its parameters are learnt from the callee first; each argument
+        // is then checked against its parameter, exactly as for a call
+        // (`new Array(3)` and `Array(3)` agree).
+        let params: Vec<Type> = arguments.iter().map(|_| self.fresh_type_var()).collect();
+        let expected_func =
+            self.callable_row_open(Some(this_type), params.clone(), result_type.clone());
         self.unify(span, &callee_type, &expected_func)?;
+
+        // `...expr` (Expr::Spread) in argument position unwraps the inner
+        // array to its element type and is treated as a single argument —
+        // inty has no variadic call shape, so a spread can't expand into N
+        // arguments. Callers that rely on variadic semantics will see an
+        // arity error here; callers that want a single-arg function fed
+        // from an array's element will type-check correctly.
+        for (arg, param) in arguments.iter().zip(&params) {
+            match arg {
+                Expr::Spread {
+                    argument,
+                    span: spread_span,
+                } => {
+                    let inner = self.infer_expr(env, argument)?;
+                    self.unify(*spread_span, &inner, &Type::Array(Box::new(param.clone())))?;
+                }
+                _ => {
+                    self.check_expr(env, arg, param)?;
+                }
+            }
+        }
 
         Ok(self.zonk(&result_type))
     }

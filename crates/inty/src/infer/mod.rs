@@ -32,7 +32,7 @@ pub use type_parser::{
 };
 pub use unify::UnifyResult;
 
-use crate::ast::{AssignOp, ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
+use crate::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
 use crate::error::{IntyError, TypeError};
 use crate::types::{Type, TypeScheme};
 
@@ -145,11 +145,19 @@ impl InferState {
         // Record which factory functions to brand nominally (classes).
         self.class_brand_names
             .extend(program.class_brands.iter().cloned());
-        let (assigned, closure_assigned) =
-            crate::ast::free_idents::assignments_in_program(&program.statements);
-        self.assigned_anywhere.extend(assigned);
-        self.closure_assigned.extend(closure_assigned);
-        let result = self.infer_stmt_list(&env, &program.statements);
+        // (A module imported mid-inference resolves its own program, so
+        // the enclosing one's resolution is put back afterwards.)
+        let outer_resolution = std::mem::replace(
+            &mut self.resolution,
+            crate::ast::resolve::Resolution::of_program(&program.statements),
+        );
+        // What the program leaves behind — a module's exports, the
+        // top-level symbols — has each binding's own type, not one
+        // narrowed by top-level control flow.
+        let result = self
+            .infer_stmt_list(&env, &program.statements)
+            .map(|(ty, env)| (ty, env.without_narrowings()));
+        self.resolution = outer_resolution;
         // The program's own numeric variables (`let i = 0` at the top
         // level) get their defaults here, as a function's do when it's
         // generalised.
@@ -904,62 +912,6 @@ impl InferState {
     /// Infer the type of a statement.
     /// Returns the type that the statement "produces" and the updated environment.
     pub fn infer_stmt(&mut self, env: &TypeEnv, stmt: &Stmt) -> InferResult<(Type, TypeEnv)> {
-        if !env.has_narrowings() {
-            return self.infer_stmt_unnarrowing(env, stmt);
-        }
-        // A narrowing ends where its variable is assigned. An `if` works
-        // out which of its assignments reach the code after it; for the
-        // rest, the statement's assignments end their narrowings after it
-        // and, in a plain statement, before it: `f(x = null, x.y)` must
-        // not read `x` as narrowed. A lone `x = e;` still reads `x`
-        // narrowed in `e`, which runs before the store.
-        if matches!(stmt, Stmt::If { .. }) {
-            return self.infer_stmt_unnarrowing(env, stmt);
-        }
-        let assigned = crate::ast::free_idents::assigned_names_in_stmt(stmt);
-        if !assigned.iter().any(|n| env.is_narrowed(n)) {
-            return self.infer_stmt_unnarrowing(env, stmt);
-        }
-        let simple_store = match stmt {
-            Stmt::Expr {
-                expression:
-                    Expr::Assign {
-                        op: AssignOp::Assign,
-                        left,
-                        right,
-                        ..
-                    },
-                ..
-            } => match left.as_ref() {
-                Expr::Ident { name, .. } => {
-                    !crate::ast::free_idents::assigned_names_in_expr(right).contains(name)
-                }
-                _ => false,
-            },
-            _ => false,
-        };
-        let plain = matches!(
-            stmt,
-            Stmt::Expr { .. }
-                | Stmt::Var { .. }
-                | Stmt::Return { .. }
-                | Stmt::Throw { .. }
-                | Stmt::Export { .. }
-        );
-        let before = if plain && !simple_store {
-            env.unnarrow(&assigned)
-        } else {
-            env.clone()
-        };
-        let (ty, after) = self.infer_stmt_unnarrowing(&before, stmt)?;
-        Ok((ty, after.unnarrow(&assigned)))
-    }
-
-    fn infer_stmt_unnarrowing(
-        &mut self,
-        env: &TypeEnv,
-        stmt: &Stmt,
-    ) -> InferResult<(Type, TypeEnv)> {
         match stmt {
             Stmt::Block { body, .. } => {
                 // Function declarations inside a block are hoisted within

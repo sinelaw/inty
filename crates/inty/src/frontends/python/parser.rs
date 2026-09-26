@@ -1840,7 +1840,10 @@ impl Parser {
     /// silently parsed left-associatively.
     ///
     /// `is` / `is not` are lowered to strict (in)equality — sufficient for
-    /// the common `x is None` idiom under the strict type system. `in` /
+    /// the common `x is None` idiom under the strict type system. `==` /
+    /// `!=` are lowered to loose (in)equality: they call `__eq__`, which
+    /// an object may define as it likes, so narrowing reads them less
+    /// strictly than `is` (see `narrow::Narrowing::PyEq`). `in` /
     /// `not in` are lowered to the membership `BinOp::In` (with an outer
     /// `not` for the negated form); both yield `bool`.
     fn comparison(&mut self) -> Result<Expr> {
@@ -1852,8 +1855,8 @@ impl Parser {
             (Tok::Is, _) => (Some(BinOp::EqEqEq), false, 1),
             (Tok::Not, Tok::In) => (Some(BinOp::In), true, 2),
             (Tok::In, _) => (Some(BinOp::In), false, 1),
-            (Tok::Eq, _) => (Some(BinOp::EqEqEq), false, 1),
-            (Tok::Ne, _) => (Some(BinOp::NotEqEq), false, 1),
+            (Tok::Eq, _) => (Some(BinOp::EqEq), false, 1),
+            (Tok::Ne, _) => (Some(BinOp::NotEq), false, 1),
             (Tok::Lt, _) => (Some(BinOp::Lt), false, 1),
             (Tok::Gt, _) => (Some(BinOp::Gt), false, 1),
             (Tok::Le, _) => (Some(BinOp::LtEq), false, 1),
