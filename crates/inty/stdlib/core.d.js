@@ -40,7 +40,17 @@ const JSON;
 /** const Object: <a, b>{keys: (a) => String[], values: (a) => b[], entries: (a) => b[][], assign: (a, b) => a, fromEntries: (a[][]) => b} */
 const Object;
 
-/** const Array: <a, b>{isArray: (a) => Boolean, from: (a) => b[], of: (a) => a[]} */
+// `new Array(n)` / `Array(n)` make an array of `n` holes. A hole reads
+// as `undefined`, which no element type admits, so the result is not an
+// array: it has a `length` and `fill(v)`, which replaces every hole and
+// gives the `v[]`. (`fill(v, start)` would leave holes, so it has no
+// type; nor has `Array(x)` with a non-integer, which makes `[x]`.)
+/** const Array: <a, b, c>{
+        (Int) => {length: Int, fill: (c) => c[]},
+        isArray: (a) => Boolean,
+        from: (a) => b[],
+        of: (a) => a[]
+    } */
 const Array;
 
 // Primitive constructors as callable rows. The keyless `(a) => T`

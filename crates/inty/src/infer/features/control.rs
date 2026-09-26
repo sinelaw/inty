@@ -1,13 +1,16 @@
 //! Conditional/sequence expressions and control-flow statements.
 
-use crate::ast::{CatchClause, Expr, ForInLhs, ForInit, Stmt, SwitchCase, VarDeclarator};
+use crate::ast::{
+    BinOp, CatchClause, Expr, ForInLhs, ForInit, Literal, SourceLanguage, Stmt, SwitchCase,
+    VarDeclarator,
+};
 use crate::span::Span;
-use crate::types::{Type, TypeScheme};
+use crate::types::{LitValue, Type, TypeScheme};
 
 use super::super::env::TypeEnv;
 use super::super::narrow::{
-    apply_narrowing, narrowing_collapsed_to_never, path_from_expr, try_extract_narrowing,
-    Narrowing, Path,
+    apply_narrowing, is_singleton, narrowing_collapsed_to_never, path_from_expr, test_facts,
+    typeof_fact, Narrowing, Path,
 };
 use super::super::state::InferState;
 use super::super::InferResult;
@@ -42,30 +45,93 @@ fn format_literal(l: &crate::types::LitValue) -> String {
     }
 }
 
-/// Emit warnings for an `if`-test or conditional whose narrowing makes
-/// one branch dead. The check fires after `apply_narrowing` has
-/// produced the consequent and alternate environments — if the bound
-/// path's type was non-never before but is `never` in either branch,
-/// the predicate is statically constant and the branch is unreachable.
-fn warn_if_narrowing_unreachable(
+/// Apply each of `facts` to `env` in turn. With `dead_warning`, a fact
+/// that leaves its variable no possible type makes the branch dead, and
+/// the test at `test_span` is reported as constant.
+fn apply_facts(
     state: &mut InferState,
-    base_env: &TypeEnv,
-    cons_env: &TypeEnv,
-    alt_env: &TypeEnv,
-    path: &Path,
-    test_span: Span,
-) {
-    if narrowing_collapsed_to_never(state, base_env, cons_env, path) {
-        state.warn(
-            test_span,
-            "this comparison is always false: the type of the operand cannot satisfy it",
-        );
+    env: &TypeEnv,
+    facts: &[(Path, Narrowing)],
+    dead_warning: Option<(&str, Span)>,
+) -> TypeEnv {
+    let mut out = env.clone();
+    for (path, narrowing) in facts {
+        let next = apply_narrowing(state, &out, path, narrowing);
+        if let Some((message, span)) = dead_warning {
+            if narrowing.warns_when_dead() && narrowing_collapsed_to_never(state, &out, &next, path)
+            {
+                state.warn(span, message);
+            }
+        }
+        out = next;
     }
-    if narrowing_collapsed_to_never(state, base_env, alt_env, path) {
-        state.warn(
-            test_span,
-            "this comparison is always true: the type of the operand cannot violate it",
-        );
+    out
+}
+
+/// Whether `body` (a loop's) contains a `break` that can leave the loop:
+/// an unlabeled one outside any nested loop or `switch`, or any labeled
+/// one (conservatively). Nested functions are not searched.
+fn breaks_out(body: &Stmt) -> bool {
+    fn walk(s: &Stmt, nested: bool) -> bool {
+        match s {
+            Stmt::Break { label, .. } => label.is_some() || !nested,
+            Stmt::Block { body, .. } => body.iter().any(|s| walk(s, nested)),
+            Stmt::If {
+                consequent,
+                alternate,
+                ..
+            } => walk(consequent, nested) || alternate.as_deref().is_some_and(|a| walk(a, nested)),
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::ForIn { body, .. }
+            | Stmt::ForOf { body, .. } => walk(body, true),
+            Stmt::Switch { cases, .. } => cases
+                .iter()
+                .any(|c| c.consequent.iter().any(|s| walk(s, true))),
+            Stmt::Try {
+                block,
+                handler,
+                finalizer,
+                ..
+            } => {
+                walk(block, nested)
+                    || handler.as_ref().is_some_and(|h| walk(&h.body, nested))
+                    || finalizer.as_deref().is_some_and(|f| walk(f, nested))
+            }
+            Stmt::Labeled { body, .. } => walk(body, nested),
+            _ => false,
+        }
+    }
+    walk(body, false)
+}
+
+/// Whether control never leaves `stmt` normally: it always returns,
+/// throws, breaks or continues. Code after such a statement in the same
+/// list runs only if control didn't get this far. Erring toward `false`
+/// only gives up narrowing.
+pub(in crate::infer) fn always_exits(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return { .. } | Stmt::Throw { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {
+            true
+        }
+        Stmt::Block { body, .. } => body.iter().any(always_exits),
+        Stmt::If {
+            consequent,
+            alternate: Some(alt),
+            ..
+        } => always_exits(consequent) && always_exits(alt),
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            finalizer.as_deref().is_some_and(always_exits)
+                || (always_exits(block) && handler.as_ref().is_none_or(|h| always_exits(&h.body)))
+        }
+        // A labeled statement can be left by a `break` to its own label.
+        _ => false,
     }
 }
 
@@ -99,30 +165,118 @@ impl InferState {
         Some((path, Narrowing::IsInstance(id)))
     }
 
+    /// The narrowing one comparison establishes, if any: `typeof`,
+    /// `isinstance`, or `<path> OP e` read by the type of `e` (see
+    /// [`Narrowing`]). Both operand orders are recognised.
+    fn fact_of(&self, env: &TypeEnv, test: &Expr) -> Option<(Path, Narrowing)> {
+        if let Some(fact) = typeof_fact(test).or_else(|| self.extract_isinstance(test)) {
+            return Some(fact);
+        }
+        let Expr::Binary {
+            op, left, right, ..
+        } = test
+        else {
+            return None;
+        };
+        let (strict, neg) = match op {
+            BinOp::EqEqEq => (true, false),
+            BinOp::NotEqEq => (true, true),
+            BinOp::EqEq => (false, false),
+            BinOp::NotEq => (false, true),
+            _ => return None,
+        };
+        for (a, b) in [(left, right), (right, left)] {
+            let Some(path) = path_from_expr(a) else {
+                continue;
+            };
+            let Some(single) = self.singleton_operand(env, b) else {
+                continue;
+            };
+            let narrowing = match (strict, self.language) {
+                (true, _) => Narrowing::Is(single),
+                (false, SourceLanguage::Python) => Narrowing::PyEq(single),
+                (false, _) if matches!(single, Type::Null | Type::Undefined) => Narrowing::Nullish,
+                (false, _) => continue,
+            };
+            return Some((path, if neg { narrowing.negate() } else { narrowing }));
+        }
+        None
+    }
+
+    /// The type of a comparison operand when it has exactly one value: a
+    /// literal, or a variable of a singleton type (`undefined`).
+    fn singleton_operand(&self, env: &TypeEnv, e: &Expr) -> Option<Type> {
+        let ty = match e {
+            Expr::Lit { value, .. } => match value {
+                Literal::Null => Type::Null,
+                Literal::Undefined => Type::Undefined,
+                Literal::String(s) => Type::Literal(LitValue::String(s.clone())),
+                Literal::Number(n) => Type::Literal(LitValue::Number(*n)),
+                Literal::Boolean(b) => Type::Literal(LitValue::Bool(*b)),
+                Literal::Regex { .. } => return None,
+            },
+            Expr::Ident { name, .. } => {
+                let scheme = env.lookup(name)?;
+                if !scheme.is_mono() {
+                    return None;
+                }
+                self.apply_subst(scheme.ty())
+            }
+            _ => return None,
+        };
+        is_singleton(&ty).then_some(ty)
+    }
+
     /// Type-check the test of an `if`/conditional and produce the
     /// (consequent, alternate) environments after flow-sensitive
-    /// narrowing. If the test matches one of the recognised patterns
-    /// (`typeof x === ...`, `x === lit`, `x !== lit`, …), refine each
-    /// branch's env with the predicate and its negation; otherwise both
-    /// branches see the original env. Also fires the unreachable-branch
-    /// warning when narrowing collapses one side to `never`.
+    /// narrowing: the facts the test establishes when true, and when
+    /// false (see `narrow::test_facts`). Also fires the
+    /// unreachable-branch warning when a fact collapses its variable's
+    /// type to `never`.
     pub(in crate::infer) fn infer_branching_test(
         &mut self,
         env: &TypeEnv,
         test: &Expr,
     ) -> InferResult<(TypeEnv, TypeEnv)> {
         let _test_type = self.infer_expr(env, test)?;
-        let extracted = try_extract_narrowing(test).or_else(|| self.extract_isinstance(test));
-        let envs = match extracted {
-            Some((path, narrowing)) => {
-                let cons_env = apply_narrowing(self, env, &path, &narrowing);
-                let alt_env = apply_narrowing(self, env, &path, &narrowing.negate());
-                warn_if_narrowing_unreachable(self, env, &cons_env, &alt_env, &path, test.span());
-                (cons_env, alt_env)
-            }
-            None => (env.clone(), env.clone()),
+        let facts = test_facts(test, &|e| self.fact_of(env, e));
+        let span = test.span();
+        let cons_env = apply_facts(
+            self,
+            env,
+            &facts.when_true,
+            Some((
+                "this comparison is always false: the type of the operand cannot satisfy it",
+                span,
+            )),
+        );
+        let alt_env = apply_facts(
+            self,
+            env,
+            &facts.when_false,
+            Some((
+                "this comparison is always true: the type of the operand cannot violate it",
+                span,
+            )),
+        );
+        Ok((cons_env, alt_env))
+    }
+
+    /// The environment for code that runs only if `test` came out
+    /// `outcome`: the right operand of `&&` (`true`) or `||` (`false`).
+    pub(in crate::infer) fn env_given(
+        &mut self,
+        env: &TypeEnv,
+        test: &Expr,
+        outcome: bool,
+    ) -> TypeEnv {
+        let facts = test_facts(test, &|e| self.fact_of(env, e));
+        let facts = if outcome {
+            &facts.when_true
+        } else {
+            &facts.when_false
         };
-        Ok(envs)
+        apply_facts(self, env, facts, None)
     }
 
     /// Infer the type of a conditional expression.
@@ -231,7 +385,21 @@ impl InferState {
             Type::Undefined
         };
 
-        Ok((result, env.clone()))
+        // When one branch always exits, what follows runs only after the
+        // other, so that branch's facts still hold there (less those of
+        // variables the test or that branch assigns):
+        //
+        //     if (node === null) return 0;
+        //     return node.value;            // node is not null here
+        let cons_exits = always_exits(consequent);
+        let alt_exits = alternate.as_deref().is_some_and(always_exits);
+        let after = match (cons_exits, alt_exits) {
+            (true, false) => alt_env,
+            (false, true) => cons_env,
+            _ => env.clone(),
+        };
+
+        Ok((result, after))
     }
 
     /// Handle a `while` statement.
@@ -241,9 +409,17 @@ impl InferState {
         test: &Expr,
         body: &Stmt,
     ) -> InferResult<(Type, TypeEnv)> {
-        let _test_type = self.infer_expr(env, test)?;
-        self.infer_stmt(env, body)?;
-        Ok((Type::Undefined, env.clone()))
+        // The body runs while the test holds, and without a `break` the
+        // loop is left only when it doesn't. (Narrowed bindings are never
+        // written, so a test that held stays true for the iteration.)
+        let (body_env, exit_env) = self.infer_branching_test(env, test)?;
+        self.infer_stmt(&body_env, body)?;
+        let after = if breaks_out(body) {
+            env.clone()
+        } else {
+            exit_env
+        };
+        Ok((Type::Undefined, after))
     }
 
     /// Handle a `do { } while` statement.
@@ -254,8 +430,13 @@ impl InferState {
         test: &Expr,
     ) -> InferResult<(Type, TypeEnv)> {
         self.infer_stmt(env, body)?;
-        let _test_type = self.infer_expr(env, test)?;
-        Ok((Type::Undefined, env.clone()))
+        let (_, exit_env) = self.infer_branching_test(env, test)?;
+        let after = if breaks_out(body) {
+            env.clone()
+        } else {
+            exit_env
+        };
+        Ok((Type::Undefined, after))
     }
 
     /// Handle a C-style `for` statement.
@@ -278,17 +459,28 @@ impl InferState {
         } else {
             env.clone()
         };
-
-        if let Some(test) = test {
-            self.infer_expr(&loop_env, test)?;
-        }
+        // The body, and the update after it, run while the test holds,
+        // as in the loop's `while` form.
+        let (body_env, exit_env) = match test {
+            Some(test) => self.infer_branching_test(&loop_env, test)?,
+            None => (loop_env.clone(), loop_env.clone()),
+        };
 
         if let Some(update) = update {
-            self.infer_expr(&loop_env, update)?;
+            self.infer_expr(&body_env, update)?;
         }
 
-        self.infer_stmt(&loop_env, body)?;
-        Ok((Type::Undefined, env.clone()))
+        self.infer_stmt(&body_env, body)?;
+        // After the loop, the test's false facts hold, unless the loop
+        // can `break` or declared its own bindings (a fact about a
+        // loop-scoped name mustn't land on an outer one).
+        let declares = matches!(init, Some(ForInit::VarDecl(_)));
+        let after = if test.is_some() && !declares && !breaks_out(body) {
+            exit_env
+        } else {
+            env.clone()
+        };
+        Ok((Type::Undefined, after))
     }
 
     /// Handle a `for-in` statement.
@@ -370,20 +562,34 @@ impl InferState {
             other => self.infer_stmt(env, other)?,
         };
 
+        // The handler and the `finally` block can start anywhere in the
+        // body, before any of its tests ran: they get the narrowings in
+        // force before the `try`, which still hold (narrowed bindings are
+        // never written).
+        let unsure_env = body_env.with_narrowings_of(env);
+
         if let Some(catch) = handler {
             // The caught exception object is unmodelled, so its binding is a
             // fresh (opaque) variable. The handler runs against the
             // try-body's environment.
             let catch_env =
-                body_env.extend(catch.param.clone(), TypeScheme::mono(self.fresh_type_var()));
+                unsure_env.extend(catch.param.clone(), TypeScheme::mono(self.fresh_type_var()));
             self.infer_stmt(&catch_env, &catch.body)?;
         }
 
         if let Some(finally) = finalizer {
-            self.infer_stmt(&body_env, finally)?;
+            self.infer_stmt(&unsure_env, finally)?;
         }
 
-        Ok((try_type, body_env))
+        // After a handler, what follows may have come through it. (A
+        // `finally` alone runs after the body completed, so the body's
+        // narrowings still hold.)
+        let after = if handler.is_some() {
+            unsure_env
+        } else {
+            body_env
+        };
+        Ok((try_type, after))
     }
 
     /// Handle a `switch` statement.
@@ -405,8 +611,9 @@ impl InferState {
         let mut covered_literals: Vec<crate::types::LitValue> = Vec::new();
         let mut has_default = false;
 
-        for case in cases {
-            let case_env = if let Some(test) = &case.test {
+        for (i, case) in cases.iter().enumerate() {
+            let mut narrowing = None;
+            if let Some(test) = &case.test {
                 let test_type = self.infer_expr(env, test)?;
                 // Symmetric "comparable" check, like `===`: the case
                 // test value is matched against the discriminator at
@@ -419,30 +626,26 @@ impl InferState {
                 } else {
                     self.subsume_either(span, &disc_type, &test_type)?;
                 }
-
-                // If the case test is a literal and we know the
-                // discriminator's path, the case body gets an env
-                // narrowed by `disc === literal`.
-                let lit = super::super::narrow::literal_value_of(test);
-                if let Some(lit) = lit.clone() {
+                if let Some(lit) = super::super::narrow::literal_value_of(test) {
                     covered_literals.push(lit);
                 }
-                match (disc_path.as_ref(), lit) {
-                    (Some(path), Some(lit)) => apply_narrowing(
-                        self,
-                        env,
-                        path,
-                        &super::super::narrow::Narrowing::Equals(lit),
-                    ),
-                    _ => env.clone(),
-                }
+                // `case e:` matches by `===`: a case of a singleton type
+                // narrows the discriminant's path.
+                narrowing = self.singleton_operand(env, test).map(Narrowing::Is);
             } else {
                 has_default = true;
-                env.clone()
+            }
+            // A case reached by falling through from the one before gets
+            // none of its own facts.
+            let falls_into = i > 0 && !cases[i - 1].consequent.iter().any(always_exits);
+            let case_env = match (falls_into, disc_path.as_ref(), narrowing) {
+                (false, Some(path), Some(n)) => apply_narrowing(self, env, path, &n),
+                _ => env.clone(),
             };
 
+            let mut stmt_env = case_env;
             for stmt in &case.consequent {
-                self.infer_stmt(&case_env, stmt)?;
+                stmt_env = self.infer_stmt(&stmt_env, stmt)?.1;
             }
         }
 

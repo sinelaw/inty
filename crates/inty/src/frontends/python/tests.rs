@@ -2044,3 +2044,42 @@ fn javascript_string_methods_rejected_in_python() {
         "JS Array.push must not resolve on a Python list"
     );
 }
+
+#[test]
+fn is_none_narrows() {
+    let src = "def f(x: int | None) -> int:\n\
+               \x20   if x is None:\n\
+               \x20       return 0\n\
+               \x20   return x + 1\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+}
+
+#[test]
+fn eq_none_narrows_only_as_far_as_eq_can_be_trusted() {
+    // `!=` against None rules out None (built-in values compare as
+    // expected)...
+    let src = "def f(x: int | None) -> int:\n\
+               \x20   if x != None:\n\
+               \x20       return x + 1\n\
+               \x20   return 0\n";
+    assert!(check_program(src).is_empty(), "{:?}", check_program(src));
+    // ...but `==` calls `__eq__`, which an object may define to say
+    // anything, so `a == None` doesn't prove an object is None, where
+    // `a is None` does.
+    let src = |op: &str| {
+        format!(
+            "class A:\n\
+             \x20   def __init__(self):\n\
+             \x20       self.v = 1\n\
+             def g(a: A | None) -> None:\n\
+             \x20   if a {op} None:\n\
+             \x20       n: None = a\n"
+        )
+    };
+    assert!(
+        check_program(&src("is")).is_empty(),
+        "{:?}",
+        check_program(&src("is"))
+    );
+    assert!(!check_program(&src("==")).is_empty(), "a may be an A");
+}

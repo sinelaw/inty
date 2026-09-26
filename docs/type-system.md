@@ -199,6 +199,18 @@ This type-checks: inside the `if` branch, `shape` is narrowed to `{kind: "circle
 
 `switch` on a literal-union discriminant gets the same narrowing per case, plus exhaustiveness analysis: a switch with no `default` whose cases don't cover every literal of the discriminant produces a warning.
 
+The other predicates that narrow:
+- `x === null` and `x !== undefined`, read by the *type* of the other operand, so a local `const undefined = 0` doesn't count;
+- `x == null` / `x != null`;
+- truthiness (`if (x)`, `!x`), with each language's rules;
+- `&&`, `||` and `?:`, including their right operands (`q !== null && q.x > 0`).
+
+A test also narrows:
+- the code after an `if` whose other branch always returns, throws, breaks or continues (`if (q === null) return 0; return q.x;`);
+- the body of a `while` or `for` loop, and the code after a loop that has no `break`.
+
+**Only bindings that never change are narrowed.** Narrowing applies to `const`s, parameters that the function never reassigns, and `let`s that are never reassigned. For any binding that is written after its initialiser, a test says nothing. This is Typed Racket's rule: a fact about a value holds as long as the value is the same, so a narrowing never has to end — not after an assignment, not in a loop, and not inside a closure that runs later. [docs/flow-narrowing-safe.md](flow-narrowing-safe.md) has the full argument. To narrow a variable you update, copy it into a `const` first.
+
 The `Array.prototype.find` builtin returns `T | undefined`, so the caller has to narrow before using the result:
 
 ```javascript

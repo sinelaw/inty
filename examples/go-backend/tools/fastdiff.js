@@ -65,8 +65,9 @@
 //    `/[^a-zA-Z0-9]/`, `/\s/` (ASCII whitespace: space, \t \n \v \f \r),
 //    `/[\r\n]/`, `/\n\r?\n$/` and `/^\r?\n\r?\n/`. In JS `\s` also matches
 //    non-ASCII spaces (U+00A0, U+2028, ...); see the ASCII note below.
-// 8. `new Array(v_length)` filled with -1 (`new` is not supported) becomes
-//    an empty array filled by `push(-1)`.
+// 8. `new Array(v_length)` filled with -1 by a loop becomes
+//    `new Array(v_length).fill(-1)` (inty types `new Array(n)` only
+//    together with its `fill`: alone, its holes read as undefined).
 // 9. `a.concat(b, c)` becomes `a.concat(b).concat(c)` (concat takes one
 //    array).
 // 10. `var` becomes `let` / `const`. Upstream re-declares `var x1`,
@@ -238,14 +239,10 @@ function diff_bisect_(text1, text2) {
   const max_d = Math.ceil((text1_length + text2_length) / 2);
   const v_offset = max_d;
   const v_length = 2 * max_d;
-  const v1 = [];
-  const v2 = [];
   // Setting all elements to -1 is faster in Chrome & Firefox than mixing
   // integers and undefined.
-  for (let x = 0; x < v_length; x++) {
-    v1.push(-1);
-    v2.push(-1);
-  }
+  const v1 = new Array(v_length).fill(-1);
+  const v2 = new Array(v_length).fill(-1);
   v1[v_offset + 1] = 0;
   v2[v_offset + 1] = 0;
   const delta = text1_length - text2_length;

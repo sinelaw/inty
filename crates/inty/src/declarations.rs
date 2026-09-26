@@ -237,7 +237,12 @@ fn declarable(scheme: &TypeScheme) -> TypeScheme {
         used.extend(p.free_vars());
     }
     TypeScheme {
-        vars: scheme.vars.iter().filter(|v| used.contains(v)).cloned().collect(),
+        vars: scheme
+            .vars
+            .iter()
+            .filter(|v| used.contains(v))
+            .cloned()
+            .collect(),
         pvars: scheme.pvars.clone(),
         body: QualType::with_preds(preds, ty),
     }
@@ -289,7 +294,10 @@ mod tests {
         let scheme = TypeScheme::qualified(
             vec![a.clone()],
             vec![TypePred::plus(Type::Var(a.clone()))],
-            Type::simple_func(vec![Type::Var(a.clone()), Type::Var(a.clone())], Type::Var(a)),
+            Type::simple_func(
+                vec![Type::Var(a.clone()), Type::Var(a.clone())],
+                Type::Var(a),
+            ),
         );
         let env = TypeEnv::empty().extend("add".to_string(), scheme);
         let exports = vec![ExportEntry {
@@ -297,7 +305,10 @@ mod tests {
             binding: ExportBinding::Local("add".to_string()),
         }];
         let out = emit_declarations(&CheckedModule::new(env, exports));
-        assert_eq!(out, "/** const add: <a> where Plus a => (a, a) => a */\nconst add;\n");
+        assert_eq!(
+            out,
+            "/** const add: <a> where Plus a => (a, a) => a */\nconst add;\n"
+        );
     }
 
     #[test]
@@ -310,7 +321,11 @@ mod tests {
         let (a, b) = (TVarName::Flex(0), TVarName::Flex(1));
         let scheme = TypeScheme::qualified(
             vec![a.clone(), b.clone()],
-            vec![TypePred::has_prop(Type::Var(a.clone()), "length", Type::Var(b.clone()))],
+            vec![TypePred::has_prop(
+                Type::Var(a.clone()),
+                "length",
+                Type::Var(b.clone()),
+            )],
             Type::simple_func(vec![Type::Var(a)], Type::Var(b)),
         );
         let env = TypeEnv::empty().extend("len".to_string(), scheme);

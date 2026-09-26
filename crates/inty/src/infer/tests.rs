@@ -174,6 +174,7 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
 
     let mut state = InferState::new();
     state.load_type_aliases(&program.type_aliases)?;
+    state.resolution = crate::ast::resolve::Resolution::of_program(&program.statements);
     let env = initial_env();
 
     // Infer statements and track final environment
@@ -4151,4 +4152,179 @@ fn javascript_class_names_are_types_in_annotations() {
     )
     .unwrap_err();
     assert!(err.contains("Branches have different types"), "{}", err);
+}
+
+#[test]
+fn new_array_fill_is_an_array_of_the_value() {
+    // `new Array(n)` is declared in core.d.js: holes with only `length`
+    // and `fill`, so it types the same however it's written.
+    let ty = |src: &str, name: &str| -> Result<String, String> {
+        let (_, env, state) =
+            infer_program_via_program_with_stdlib(src).map_err(|e| e.to_string())?;
+        if let Some(e) = state.errors.first() {
+            return Err(e.to_string());
+        }
+        let scheme = env.lookup(name).expect("bound");
+        Ok(format!("{}", state.display_scheme(scheme)))
+    };
+    assert_eq!(
+        ty("const v = new Array(3).fill(-1);", "v").unwrap(),
+        "Int[]"
+    );
+    assert_eq!(
+        ty("const w = Array(2).fill(\"a\");", "w").unwrap(),
+        "String[]"
+    );
+    assert_eq!(
+        ty("const t = new Array(3); const v = t.fill(0);", "v").unwrap(),
+        "Int[]"
+    );
+    // The length is an `Int` (JS throws a RangeError otherwise), and a
+    // hole can't be read.
+    assert!(ty("const v = new Array(1.5).fill(0);", "v").is_err());
+    assert!(ty("const t = new Array(3); const x = t[0];", "x").is_err());
+    // A local `Array` is just that.
+    assert_eq!(
+        ty(
+            "function f() { const Array = (n) => ({ fill: (v) => n }); return Array(3).fill(1); }\n\
+             const r = f();",
+            "r"
+        )
+        .unwrap(),
+        "Int"
+    );
+}
+
+#[test]
+fn null_tests_narrow() {
+    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let accepted = [
+        "const q = p(1); if (q !== null) { const a = q.x; }",
+        "const q = p(1); if (q != null) { const a = q.x; }",
+        "const q = p(1); if (q) { const a = q.x; }",
+        "const q = p(1); if (q === null) { } else { const a = q.x; }",
+        "const q = p(1); const a = q === null ? 0 : q.x;",
+        "const q = p(1); const a = q !== null && q.x > 0;",
+        "const q = p(1); const a = q === null || q.x > 0;",
+        "const a = p(1); const b = p(2); if (a !== null && b !== null) { const c = a.x + b.x; }",
+        "function f() { const q = p(1); if (q === null) return 0; return q.x; }",
+        "function f() { const q = p(1); if (!q) throw 'none'; return q.x; }",
+        "function f() { const a = p(1); const b = p(2); if (a === null || b === null) return 0; return a.x + b.x; }",
+        "let t = 0; for (let i = 0; i < 3; i++) { const q = p(i); if (q === null) continue; t += q.x; }",
+        // The stored value is checked against the variable's own type.
+        "let q = p(1); if (q !== null) { q = p(0); }",
+        "const q = p(1); if (q !== null) { const g = () => q.x; }",
+    ];
+    for body in accepted {
+        let src = format!("{p}{body}");
+        assert!(check_program(&src, &[]).is_ok(), "rejected: {body}");
+    }
+}
+
+#[test]
+fn null_narrowing_ends_where_the_value_may_change() {
+    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let rejected = [
+        "const q = p(1); const a = q.x;",
+        "const q = p(1); if (q === null) { const a = q.x; }",
+        "const a = p(1); const b = p(2); if (a !== null || b !== null) { const c = a.x; }",
+        // Reassigned inside the branch.
+        "let q = p(1); if (q !== null) { q = p(0); const a = q.x; }",
+        // Reassigned by a later loop iteration.
+        "let q = p(1); if (q !== null) { while (q.x > 0) { q = p(q.x - 1); } }",
+        // Assigned by a closure the branch calls.
+        "let q = p(1); const reset = () => { q = null; }; if (q !== null) { reset(); const a = q.x; }",
+        // Read by a closure after the variable changes.
+        "let q = p(1); let g = () => 0; if (q !== null) { g = () => q.x; } q = null;",
+        // The handler can run before the test.
+        "function f() { let q = p(1); try { if (q === null) return 0; q = p(0); return 1; } catch (e) { return q.x; } }",
+    ];
+    for body in rejected {
+        let src = format!("{p}{body}");
+        assert!(check_program(&src, &[]).is_err(), "accepted: {body}");
+    }
+}
+
+#[test]
+fn narrowing_a_const_keeps_it_const() {
+    let src = "function p(x) { return x > 0 ? { x: x } : null; }\n\
+               const q = p(1); if (q !== null) { q = p(2); }";
+    assert!(check_program(src, &[]).is_err());
+}
+
+/// The review of the first narrowing (docs/flow-narrowing-safe.md): each
+/// of these crashed under Node yet type-checked, or type-checked or not
+/// depending on something that shouldn't matter.
+#[test]
+fn narrowing_refines_only_bindings_that_never_change() {
+    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let rejected = [
+        // An assignment inside the guarded expression.
+        "let q = p(1); const a = q !== null ? (q = p(0), q.x) : 0;",
+        "let q = p(1); function f(a, b) { return a; } if (q !== null) { if (f(q = p(0), q.x)) {} }",
+        // A `var` redeclared: its initialiser is a write.
+        "function f() { var q = p(1); if (q === null) return 0; { var q = null; } return q.x; }",
+        // A local `undefined` is an `Int`, not the unit value.
+        "function f() { const undefined = 0; const v = [1].find(x => x > 1); \
+         if (v === undefined) return 0; return v + 1; }",
+        // A closure writes it.
+        "let q = p(1); const reset = () => { q = null; }; if (q !== null) { reset(); const a = q.x; }",
+        // The handler can run before the test in the block did.
+        "function f() { const q = p(1); try { if (q === null) return 0; } catch (e) { return q.x; } return 1; }",
+    ];
+    for body in rejected {
+        let src = format!("{p}{body}");
+        assert!(check_program(&src, &[]).is_err(), "accepted: {body}");
+    }
+    let accepted = [
+        // Facts before a `try` hold in its handler.
+        "function f() { const q = p(1); if (q === null) return 0; \
+         try { g(); } catch (e) { return q.x; } return q.x; } function g() {}",
+        // An unrelated binding of the same name elsewhere doesn't matter.
+        "function a() { const q = p(1); if (q === null) return 0; \
+         [1, 2].forEach(k => { let q = k; q = q + 1; }); return q.x; }",
+        "function a() { const q = p(1); if (q === null) return 0; return q.x; }\n\
+         function b() { let q = 0; const f = () => { q = 1; }; f(); return q; }",
+        // A closure reads a narrowed `const`.
+        "const q = p(1); if (q !== null) { const g = () => q.x; }",
+        // The loop test narrows the body, the update, and what follows.
+        "/** function h(q: {x: Number} | Null) => Number */\n\
+         function h(q) { let s = 0; for (let i = 0; q !== null && i < q.x; i = i + q.x) { s += q.x; } return s; }",
+        "/** function h(q: {x: Number} | Null) => Number */\n\
+         function h(q) { let n = 0; while (q !== null && n < q.x) { n += 1; } return n; }",
+    ];
+    for body in accepted {
+        let src = format!("{p}{body}");
+        assert!(
+            check_program(&src, &[]).is_ok(),
+            "rejected: {body}: {:?}",
+            check_program(&src, &[])
+        );
+    }
+}
+
+#[test]
+fn narrowing_is_coherent() {
+    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let pairs = [
+        // Operand order.
+        ("const q = p(1); const a = q === null ? 0 : q.x;", "const q = p(1); const a = null === q ? 0 : q.x;"),
+        // `?:` and `if`.
+        ("const q = p(1); const a = q === null ? 0 : q.x;", "const q = p(1); let a = 0; if (q === null) { a = 0; } else { a = q.x; }"),
+        // De Morgan.
+        ("const q = p(1); const r = p(2); if (!(q === null || r === null)) { const a = q.x + r.x; }",
+         "const q = p(1); const r = p(2); if (!(q === null) && !(r === null)) { const a = q.x + r.x; }"),
+        // `for` and its `while` form.
+        ("/** function h(q: {x: Number} | Null) => Number */\n\
+          function h(q) { let s = 0; for (; q !== null && s < 3; s = s + q.x) {} return s; }",
+         "/** function h(q: {x: Number} | Null) => Number */\n\
+          function h(q) { let s = 0; while (q !== null && s < 3) { s = s + q.x; } return s; }"),
+        // A `const` and a `let` that is never written.
+        ("const q = p(1); if (q !== null) { const a = q.x; }", "let q = p(1); if (q !== null) { const a = q.x; }"),
+    ];
+    for (a, b) in pairs {
+        let ra = check_program(&format!("{p}{a}"), &[]).is_ok();
+        let rb = check_program(&format!("{p}{b}"), &[]).is_ok();
+        assert!(ra && rb, "{a} => {ra}, {b} => {rb}");
+    }
 }

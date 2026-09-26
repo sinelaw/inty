@@ -254,6 +254,10 @@ pub struct InferState {
     /// checks map a class name back to its brand. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brand_ids: HashMap<String, TypeId>,
+    /// Which declaration each identifier refers to, and which bindings
+    /// are never written after their initialiser: the only ones
+    /// narrowing refines (see `ast::resolve`).
+    pub resolution: crate::ast::resolve::Resolution,
 
     /// The lexical environment in scope while a type annotation is being
     /// lowered, used to resolve a class-name `TypeAst::Ref` to the class's
@@ -410,6 +414,7 @@ impl InferState {
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
+            resolution: Default::default(),
             annotation_env: None,
             current_annotation_span: None,
             return_value_stack: Vec::new(),

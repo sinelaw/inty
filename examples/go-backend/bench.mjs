@@ -55,7 +55,10 @@ for (let i = 0; i < args.length; i++) {
   else if (args[i] === "--inty") inty = resolve(args[++i]);
   else if (args[i] === "--json") jsonOut = resolve(args[++i]);
   else if (args[i] === "--no-bun") noBun = true;
-  else only.push(args[i].replace(/\.js$/, ""));
+  else if (args[i].startsWith("-")) {
+    console.error(`bench.mjs: unknown option ${args[i]}`);
+    process.exit(2);
+  } else only.push(args[i].replace(/\.js$/, ""));
 }
 
 function run(cmd, argv, opts = {}) {
@@ -155,11 +158,15 @@ function shuffled(xs) {
   return a;
 }
 
-const programs = readdirSync(here)
+const available = readdirSync(here)
   .filter((f) => f.endsWith(".js"))
-  .map((f) => basename(f, ".js"))
-  .filter((n) => only.length === 0 || only.includes(n))
-  .sort();
+  .map((f) => basename(f, ".js"));
+const unknown = only.filter((n) => !available.includes(n));
+if (unknown.length > 0) {
+  console.error(`bench.mjs: no benchmark named ${unknown.join(", ")} (have: ${available.sort().join(", ")})`);
+  process.exit(2);
+}
+const programs = available.filter((n) => only.length === 0 || only.includes(n)).sort();
 
 const results = [];
 for (const name of programs) {

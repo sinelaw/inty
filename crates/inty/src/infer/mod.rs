@@ -145,7 +145,19 @@ impl InferState {
         // Record which factory functions to brand nominally (classes).
         self.class_brand_names
             .extend(program.class_brands.iter().cloned());
-        let result = self.infer_stmt_list(&env, &program.statements);
+        // (A module imported mid-inference resolves its own program, so
+        // the enclosing one's resolution is put back afterwards.)
+        let outer_resolution = std::mem::replace(
+            &mut self.resolution,
+            crate::ast::resolve::Resolution::of_program(&program.statements),
+        );
+        // What the program leaves behind — a module's exports, the
+        // top-level symbols — has each binding's own type, not one
+        // narrowed by top-level control flow.
+        let result = self
+            .infer_stmt_list(&env, &program.statements)
+            .map(|(ty, env)| (ty, env.without_narrowings()));
+        self.resolution = outer_resolution;
         // The program's own numeric variables (`let i = 0` at the top
         // level) get their defaults here, as a function's do when it's
         // generalised.

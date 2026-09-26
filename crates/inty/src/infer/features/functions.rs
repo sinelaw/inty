@@ -803,29 +803,6 @@ impl InferState {
     ) -> InferResult<Type> {
         let callee_type = self.infer_expr(env, callee)?;
 
-        // Infer argument types. `...expr` (Expr::Spread) in argument
-        // position unwraps the inner array to its element type and is
-        // treated as a single argument — inty has no variadic call
-        // shape, so a spread can't expand into N arguments. Callers
-        // that rely on variadic semantics will see an arity error
-        // here; callers that want a single-arg function fed from an
-        // array's element will type-check correctly.
-        let arg_types: Vec<Type> = arguments
-            .iter()
-            .map(|arg| match arg {
-                Expr::Spread {
-                    argument,
-                    span: spread_span,
-                } => {
-                    let inner = self.infer_expr(env, argument)?;
-                    let elem = self.fresh_type_var();
-                    self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
-                    Ok(self.zonk(&elem))
-                }
-                _ => self.infer_expr(env, arg),
-            })
-            .collect::<InferResult<_>>()?;
-
         // The constructor returns some object type
         let result_type = self.fresh_type_var();
         let this_type = result_type.clone();
@@ -833,9 +810,34 @@ impl InferState {
         // Expected constructor shape — an *open* callable row so the
         // constructor value can carry additional static fields beyond
         // the call signature (matches the unified callable-row design).
-        let expected_func = self.callable_row_open(Some(this_type), arg_types, result_type.clone());
-
+        // Its parameters are learnt from the callee first; each argument
+        // is then checked against its parameter, exactly as for a call
+        // (`new Array(3)` and `Array(3)` agree).
+        let params: Vec<Type> = arguments.iter().map(|_| self.fresh_type_var()).collect();
+        let expected_func =
+            self.callable_row_open(Some(this_type), params.clone(), result_type.clone());
         self.unify(span, &callee_type, &expected_func)?;
+
+        // `...expr` (Expr::Spread) in argument position unwraps the inner
+        // array to its element type and is treated as a single argument —
+        // inty has no variadic call shape, so a spread can't expand into N
+        // arguments. Callers that rely on variadic semantics will see an
+        // arity error here; callers that want a single-arg function fed
+        // from an array's element will type-check correctly.
+        for (arg, param) in arguments.iter().zip(&params) {
+            match arg {
+                Expr::Spread {
+                    argument,
+                    span: spread_span,
+                } => {
+                    let inner = self.infer_expr(env, argument)?;
+                    self.unify(*spread_span, &inner, &Type::Array(Box::new(param.clone())))?;
+                }
+                _ => {
+                    self.check_expr(env, arg, param)?;
+                }
+            }
+        }
 
         Ok(self.zonk(&result_type))
     }
