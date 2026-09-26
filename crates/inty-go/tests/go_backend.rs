@@ -88,7 +88,50 @@ fn objects_become_structs() {
         "{}",
         code
     );
-    assert!(code.contains("func p(x int, y int) *Obj1 {"), "{}", code);
+    // Nothing writes its fields or compares it by identity: a value.
+    assert!(code.contains("func p(x int, y int) Obj1 {"), "{}", code);
+}
+
+#[test]
+fn objects_whose_identity_is_observable_stay_pointers() {
+    // Each of these operations at the object's type needs identity.
+    for (what, src) in [
+        (
+            "a field write",
+            "function p(x) { return { x: x }; }
+const q = p(1);
+q.x = 2;
+console.log(q.x);",
+        ),
+        (
+            "an identity comparison",
+            "function p(x) { return { x: x }; }
+const q = p(1);
+const r = p(1);
+console.log(q === r);",
+        ),
+        (
+            "a nullable type",
+            "function p(x) { return x > 0 ? { x: x } : null; }
+const q = p(1);
+console.log(q === null);",
+        ),
+        (
+            "indexOf",
+            "function p(x) { return { x: x }; }
+const q = p(1);
+const xs = [q, p(2)];
+console.log(xs.indexOf(q));",
+        ),
+    ] {
+        let code = inty_go::compile(src).unwrap().code;
+        assert!(
+            code.contains("*Obj1"),
+            "{}: expected a pointer in\n{}",
+            what,
+            code
+        );
+    }
 }
 
 #[test]

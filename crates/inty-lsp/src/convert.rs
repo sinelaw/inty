@@ -96,9 +96,7 @@ fn error_code(err: &IntyError) -> &'static str {
             ParseError::ContinueOutsideLoop { .. } => "ContinueOutsideLoop",
             ParseError::ReturnOutsideFunction { .. } => "ReturnOutsideFunction",
             ParseError::Unsupported { .. } => "Unsupported",
-            ParseError::LocalReferencedBeforeAssignment { .. } => {
-                "LocalReferencedBeforeAssignment"
-            }
+            ParseError::LocalReferencedBeforeAssignment { .. } => "LocalReferencedBeforeAssignment",
         },
         IntyError::Type(e) => match e {
             TypeError::UnificationError { .. } => "UnificationError",

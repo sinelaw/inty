@@ -97,11 +97,8 @@ impl Analysis {
             Language::Python => {
                 let mut state = inty::infer::InferState::new();
                 state.set_language(inty::ast::SourceLanguage::Python);
-                inty::frontends::python::prelude::load(
-                    &mut state,
-                    inty::builtins::initial_env(),
-                )
-                .map(|env| (env, state))
+                inty::frontends::python::prelude::load(&mut state, inty::builtins::initial_env())
+                    .map(|env| (env, state))
             }
             Language::Lua => Ok((inty::builtins::initial_env(), {
                 let mut state = inty::infer::InferState::new();

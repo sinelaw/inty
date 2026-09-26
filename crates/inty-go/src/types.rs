@@ -16,7 +16,7 @@
 //! Equi-recursive (`Named`) types get a struct keyed by their id so the
 //! Go type can refer to itself through a pointer.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use inty::infer::InferState;
 use inty::span::Span;
@@ -69,6 +69,13 @@ pub struct TypeMapper {
     pub structs: Vec<GoStruct>,
     by_shape: HashMap<Vec<(String, GoType)>, usize>,
     by_named: HashMap<TypeId, usize>,
+    /// Structs stored as Go values rather than pointers: those no
+    /// operation of the program at their type can tell apart from a
+    /// copy (see `emit::emit_program`).
+    pub by_value: HashSet<usize>,
+    /// Structs some typed operation needs a pointer for: a field write,
+    /// an identity comparison, a nullable type, a recursive type.
+    pub needs_pointer: HashSet<usize>,
 }
 
 impl TypeMapper {
@@ -153,6 +160,13 @@ impl TypeMapper {
                         mapped.push(g);
                     }
                 }
+                if has_null {
+                    for g in &mapped {
+                        if let GoType::Struct(i) = g {
+                            self.needs_pointer.insert(*i);
+                        }
+                    }
+                }
                 match mapped.as_slice() {
                     [single] if !has_null || single.is_nullable() => single.clone(),
                     _ => return Err(unsupported(format!("union type `{}`", pretty(ty)), span)),
@@ -234,6 +248,8 @@ impl TypeMapper {
                 fields: Vec::new(),
             });
             self.by_named.insert(id, idx);
+            // A recursive type refers to itself: through a pointer.
+            self.needs_pointer.insert(idx);
             idx
         });
         let mut fields = Vec::new();
@@ -274,6 +290,7 @@ impl TypeMapper {
             GoType::Unit => "struct{}".into(),
             GoType::Any => "any".into(),
             GoType::Array(e) => format!("*[]{}", self.render(e)),
+            GoType::Struct(i) if self.by_value.contains(i) => self.structs[*i].name.clone(),
             GoType::Struct(i) => format!("*{}", self.structs[*i].name),
             GoType::Func(ps, r) => {
                 format!("func({}){}", self.render_list(ps), self.render_result(r))
@@ -313,6 +330,14 @@ impl TypeMapper {
             out.push_str("}\n\n");
         }
         out
+    }
+
+    /// Record that an operation at type `t` needs objects of it to have
+    /// identity (a pointer), if it's a struct.
+    pub fn need_pointer(&mut self, t: &GoType) {
+        if let GoType::Struct(i) = t {
+            self.needs_pointer.insert(*i);
+        }
     }
 
     pub fn field(&self, idx: usize, js_name: &str) -> Option<&(String, String, GoType)> {

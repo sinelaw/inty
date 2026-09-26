@@ -84,11 +84,9 @@ fn check(lang: Language, src: &str) -> Result<(), String> {
         Language::Python => {
             let mut state = inty::infer::InferState::new();
             state.set_language(inty::ast::SourceLanguage::Python);
-            let env = inty::frontends::python::prelude::load(
-                &mut state,
-                inty::builtins::initial_env(),
-            )
-            .map_err(|e| format!("python prelude error: {:?}", e))?;
+            let env =
+                inty::frontends::python::prelude::load(&mut state, inty::builtins::initial_env())
+                    .map_err(|e| format!("python prelude error: {:?}", e))?;
             (env, state)
         }
         Language::Lua => {
@@ -302,8 +300,14 @@ fn marker_lines_actually_trigger_errors() {
             }
         }
     }
-    assert!(js_marker > 0, "expected at least one JavaScript example with markers");
-    assert!(py_marker > 0, "expected at least one Python example with markers");
+    assert!(
+        js_marker > 0,
+        "expected at least one JavaScript example with markers"
+    );
+    assert!(
+        py_marker > 0,
+        "expected at least one Python example with markers"
+    );
     assert!(
         failures.is_empty(),
         "{} example(s) failed marker check:\n  - {}",

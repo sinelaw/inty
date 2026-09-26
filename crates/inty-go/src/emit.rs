@@ -32,17 +32,60 @@ const RUNTIME: &str = include_str!("runtime.go");
 
 /// Emit a whole program. `state` must be the state that checked
 /// `program`, with `expr_types` recording enabled.
+///
+/// Objects are pointers (`*ObjN`) in general: JavaScript objects have
+/// identity. An object type whose identity no operation of the program
+/// can observe is stored by value instead (`ObjN`), with no heap
+/// allocation per object. That is decided from the typed program in two
+/// passes. The first emits it with every struct a pointer and records,
+/// from each specialisation, the struct types some operation needs a
+/// pointer for:
+/// - a field write;
+/// - an identity comparison (`===`, `switch`, `indexOf`);
+/// - a nullable type;
+/// - a recursive type.
+///
+/// Every view of an object has the same struct type (the Go code passes
+/// it around as that type), so this is per type, and sound. The second
+/// pass emits the program with the other structs as values.
 pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String> {
     let types = state
         .expr_types
         .take()
         .expect("inty-go: expression-type recording must be enabled before inference");
     let instantiations = state.instantiations.take().unwrap_or_default();
+    let (code, tm) = emit_pass(
+        program,
+        state,
+        types.clone(),
+        instantiations.clone(),
+        Default::default(),
+    )?;
+    let by_value: std::collections::HashSet<usize> = (0..tm.structs.len())
+        .filter(|i| !tm.needs_pointer.contains(i))
+        .collect();
+    if by_value.is_empty() {
+        return Ok(code);
+    }
+    let (code, tm2) = emit_pass(program, state, types, instantiations, by_value)?;
+    debug_assert_eq!(tm.structs.len(), tm2.structs.len());
+    Ok(code)
+}
+
+fn emit_pass(
+    program: &Program,
+    state: &mut InferState,
+    types: HashMap<(usize, usize), Type>,
+    instantiations: HashMap<(usize, usize), Vec<(TVarName, Type)>>,
+    by_value: std::collections::HashSet<usize>,
+) -> Result<(String, TypeMapper)> {
+    let mut tm = TypeMapper::default();
+    tm.by_value = by_value;
     let mut e = Emitter {
         state,
         types,
         instantiations,
-        tm: TypeMapper::default(),
+        tm,
         buf: String::new(),
         indent: 0,
         ret_stack: Vec::new(),
@@ -148,7 +191,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
     out.push_str(&main_body);
     out.push_str("}\n\n");
     out.push_str(RUNTIME);
-    Ok(out)
+    Ok((out, e.tm))
 }
 
 /// A `const f = <function>` declarator: bound like a function
@@ -1454,6 +1497,7 @@ impl<'a> Emitter<'a> {
 
     fn switch_stmt(&mut self, disc: &Expr, cases: &[SwitchCase], _span: Span) -> Result<()> {
         let mut dt = self.type_of(disc)?;
+        self.tm.need_pointer(&dt);
         let d = self.expr(disc)?;
         // An `Int` discriminant with a fractional case compares as doubles.
         let d = if dt == GoType::Int {
@@ -1689,6 +1733,12 @@ impl<'a> Emitter<'a> {
 
     /// An assignable Go expression for `e`.
     fn place(&mut self, e: &Expr) -> Result<String> {
+        // Writing a field is only the same on a copy if nothing else
+        // holds the object: its type keeps its identity.
+        if let Expr::Member { object, .. } = e {
+            let t = self.type_of(object)?;
+            self.tm.need_pointer(&t);
+        }
         match e {
             Expr::Ident { .. } | Expr::Member { .. } => self.expr(e),
             Expr::ComputedMember {
@@ -1714,7 +1764,9 @@ impl<'a> Emitter<'a> {
         self.truthy(v, &t, e.span())
     }
 
-    fn truthy(&self, v: String, t: &GoType, span: Span) -> Result<String> {
+    fn truthy(&mut self, v: String, t: &GoType, span: Span) -> Result<String> {
+        // Testing an object's truthiness tests it against null.
+        self.tm.need_pointer(t);
         Ok(match t {
             GoType::Bool => v,
             GoType::Float => format!("intyTruthy({})", v),
@@ -1917,7 +1969,12 @@ impl<'a> Emitter<'a> {
                     }
                 }
                 let name = self.tm.structs[idx].name.clone();
-                Ok(format!("&{}{{{}}}", name, fields.join(", ")))
+                let amp = if self.tm.by_value.contains(&idx) {
+                    ""
+                } else {
+                    "&"
+                };
+                Ok(format!("{}{}{{{}}}", amp, name, fields.join(", ")))
             }
             Expr::Function {
                 name,
@@ -2159,6 +2216,9 @@ impl<'a> Emitter<'a> {
             op,
             BinOp::EqEq | BinOp::EqEqEq | BinOp::NotEq | BinOp::NotEqEq
         ) {
+            // Objects compare by identity (and against null).
+            self.tm.need_pointer(&lt);
+            self.tm.need_pointer(&rt);
             let neg = matches!(op, BinOp::NotEq | BinOp::NotEqEq);
             let cmp = if neg { "!=" } else { "==" };
             if is_nullish(right) && lt.is_nullable() {
@@ -2540,6 +2600,10 @@ impl<'a> Emitter<'a> {
         span: Span,
         stmt: bool,
     ) -> Result<String> {
+        if matches!(method, "indexOf" | "lastIndexOf" | "includes") {
+            // By identity, for objects.
+            self.tm.need_pointer(elem);
+        }
         let a = self.expr(object)?;
         let et = self.tm.render(elem);
         let n = args.len();
