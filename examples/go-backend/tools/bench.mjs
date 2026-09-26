@@ -31,6 +31,10 @@ for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--runs") runs = Number(argv[++i]);
   else if (argv[i] === "--inty") inty = resolve(argv[++i]);
   else if (argv[i] === "--no-bun") noBun = true;
+  else {
+    console.error(`bench.mjs: unknown argument ${argv[i]}`);
+    process.exit(2);
+  }
 }
 
 function must(cmd, args, opts = {}) {
