@@ -4164,3 +4164,60 @@ fn new_array_fill_is_an_array_of_the_value() {
     // The length is an `Int` (JS throws a RangeError otherwise).
     assert!(check_program("const v = new Array(1.5).fill(0);", &[]).is_err());
 }
+
+#[test]
+fn null_tests_narrow() {
+    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let accepted = [
+        "const q = p(1); if (q !== null) { const a = q.x; }",
+        "const q = p(1); if (q != null) { const a = q.x; }",
+        "const q = p(1); if (q) { const a = q.x; }",
+        "const q = p(1); if (q === null) { } else { const a = q.x; }",
+        "const q = p(1); const a = q === null ? 0 : q.x;",
+        "const q = p(1); const a = q !== null && q.x > 0;",
+        "const q = p(1); const a = q === null || q.x > 0;",
+        "const a = p(1); const b = p(2); if (a !== null && b !== null) { const c = a.x + b.x; }",
+        "function f() { const q = p(1); if (q === null) return 0; return q.x; }",
+        "function f() { const q = p(1); if (!q) throw 'none'; return q.x; }",
+        "function f() { const a = p(1); const b = p(2); if (a === null || b === null) return 0; return a.x + b.x; }",
+        "let t = 0; for (let i = 0; i < 3; i++) { const q = p(i); if (q === null) continue; t += q.x; }",
+        // The stored value is checked against the variable's own type.
+        "let q = p(1); if (q !== null) { q = p(0); }",
+        "const q = p(1); if (q !== null) { const g = () => q.x; }",
+    ];
+    for body in accepted {
+        let src = format!("{p}{body}");
+        assert!(check_program(&src, &[]).is_ok(), "rejected: {body}");
+    }
+}
+
+#[test]
+fn null_narrowing_ends_where_the_value_may_change() {
+    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let rejected = [
+        "const q = p(1); const a = q.x;",
+        "const q = p(1); if (q === null) { const a = q.x; }",
+        "const a = p(1); const b = p(2); if (a !== null || b !== null) { const c = a.x; }",
+        // Reassigned inside the branch.
+        "let q = p(1); if (q !== null) { q = p(0); const a = q.x; }",
+        // Reassigned by a later loop iteration.
+        "let q = p(1); if (q !== null) { while (q.x > 0) { q = p(q.x - 1); } }",
+        // Assigned by a closure the branch calls.
+        "let q = p(1); const reset = () => { q = null; }; if (q !== null) { reset(); const a = q.x; }",
+        // Read by a closure after the variable changes.
+        "let q = p(1); let g = () => 0; if (q !== null) { g = () => q.x; } q = null;",
+        // The handler can run before the test.
+        "function f() { let q = p(1); try { if (q === null) return 0; q = p(0); return 1; } catch (e) { return q.x; } }",
+    ];
+    for body in rejected {
+        let src = format!("{p}{body}");
+        assert!(check_program(&src, &[]).is_err(), "accepted: {body}");
+    }
+}
+
+#[test]
+fn narrowing_a_const_keeps_it_const() {
+    let src = "function p(x) { return x > 0 ? { x: x } : null; }\n\
+               const q = p(1); if (q !== null) { q = p(2); }";
+    assert!(check_program(src, &[]).is_err());
+}
