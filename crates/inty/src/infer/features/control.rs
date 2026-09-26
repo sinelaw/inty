@@ -7,10 +7,10 @@ use crate::ast::{
 use crate::span::Span;
 use crate::types::{LitValue, Type, TypeScheme};
 
-use super::super::env::TypeEnv;
+use super::super::env::{Mutability, TypeEnv};
 use super::super::narrow::{
-    apply_narrowing, is_singleton, narrowing_collapsed_to_never, path_from_expr, test_facts,
-    typeof_fact, Narrowing, Path,
+    apply_narrowing, is_singleton, narrowing_is_dead, path_from_expr, test_facts, typeof_fact,
+    Narrowing, Path,
 };
 use super::super::state::InferState;
 use super::super::InferResult;
@@ -56,14 +56,12 @@ fn apply_facts(
 ) -> TypeEnv {
     let mut out = env.clone();
     for (path, narrowing) in facts {
-        let next = apply_narrowing(state, &out, path, narrowing);
         if let Some((message, span)) = dead_warning {
-            if narrowing.warns_when_dead() && narrowing_collapsed_to_never(state, &out, &next, path)
-            {
+            if narrowing.warns_when_dead() && narrowing_is_dead(state, &out, path, narrowing) {
                 state.warn(span, message);
             }
         }
-        out = next;
+        out = apply_narrowing(state, &out, path, narrowing);
     }
     out
 }
@@ -104,6 +102,42 @@ fn breaks_out(body: &Stmt) -> bool {
         }
     }
     walk(body, false)
+}
+
+/// Whether `body` contains a `break label` (outside nested functions).
+pub(in crate::infer) fn breaks_to(body: &Stmt, label: &str) -> bool {
+    match body {
+        Stmt::Break { label: Some(l), .. } => l == label,
+        Stmt::Block { body, .. } => body.iter().any(|s| breaks_to(s, label)),
+        Stmt::If {
+            consequent,
+            alternate,
+            ..
+        } => {
+            breaks_to(consequent, label)
+                || alternate.as_deref().is_some_and(|a| breaks_to(a, label))
+        }
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForIn { body, .. }
+        | Stmt::ForOf { body, .. }
+        | Stmt::Labeled { body, .. } => breaks_to(body, label),
+        Stmt::Switch { cases, .. } => cases
+            .iter()
+            .any(|c| c.consequent.iter().any(|s| breaks_to(s, label))),
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            breaks_to(block, label)
+                || handler.as_ref().is_some_and(|h| breaks_to(&h.body, label))
+                || finalizer.as_deref().is_some_and(|f| breaks_to(f, label))
+        }
+        _ => false,
+    }
 }
 
 /// Whether control never leaves `stmt` normally: it always returns,
@@ -215,8 +249,8 @@ impl InferState {
                 Literal::Boolean(b) => Type::Literal(LitValue::Bool(*b)),
                 Literal::Regex { .. } => return None,
             },
-            Expr::Ident { name, .. } => {
-                let scheme = env.lookup(name)?;
+            Expr::Ident { name, span } => {
+                let scheme = &env.lookup_key(&self.key_of(*span, name))?.scheme;
                 if !scheme.is_mono() {
                     return None;
                 }
@@ -352,7 +386,13 @@ impl InferState {
             };
             // Record the type for this declaration
             self.record_decl_type(decl.span, var_type.clone());
-            new_env = new_env.extend(decl.name.clone(), TypeScheme::mono(var_type));
+            new_env = self.bind(
+                &new_env,
+                decl.span,
+                &decl.name,
+                TypeScheme::mono(var_type),
+                Mutability::Mutable,
+            )?;
         }
         Ok(new_env)
     }
@@ -472,11 +512,10 @@ impl InferState {
 
         self.infer_stmt(&body_env, body)?;
         // After the loop, the test's false facts hold, unless the loop
-        // can `break` or declared its own bindings (a fact about a
-        // loop-scoped name mustn't land on an outer one).
-        let declares = matches!(init, Some(ForInit::VarDecl(_)));
-        let after = if test.is_some() && !declares && !breaks_out(body) {
-            exit_env
+        // can `break`. (A fact about the loop's own `let` stays with that
+        // binding: the environment is keyed by declaration.)
+        let after = if test.is_some() && !breaks_out(body) {
+            exit_env.with_names_of(env)
         } else {
             env.clone()
         };
@@ -495,11 +534,17 @@ impl InferState {
         let _right_type = self.infer_expr(env, right)?;
 
         let loop_env = match left {
-            ForInLhs::VarDecl(name, _, decl_span) => {
+            ForInLhs::VarDecl(name, _, decl_span, _) => {
                 // for-in iterates over string keys
                 let var_type = Type::String;
                 self.record_decl_type(*decl_span, var_type.clone());
-                env.extend(name.clone(), TypeScheme::mono(var_type))
+                self.bind(
+                    env,
+                    *decl_span,
+                    name,
+                    TypeScheme::mono(var_type),
+                    Mutability::Mutable,
+                )?
             }
             ForInLhs::Expr(expr) => {
                 let lhs_type = self.infer_expr(env, expr)?;
@@ -528,10 +573,16 @@ impl InferState {
         self.unify(span, &right_type, &Type::array(elem_type.clone()))?;
 
         let loop_env = match left {
-            ForInLhs::VarDecl(name, _, decl_span) => {
+            ForInLhs::VarDecl(name, _, decl_span, _) => {
                 let var_type = self.zonk(&elem_type);
                 self.record_decl_type(*decl_span, var_type.clone());
-                env.extend(name.clone(), TypeScheme::mono(var_type))
+                self.bind(
+                    env,
+                    *decl_span,
+                    name,
+                    TypeScheme::mono(var_type),
+                    Mutability::Mutable,
+                )?
             }
             ForInLhs::Expr(expr) => {
                 let lhs_type = self.infer_expr(env, expr)?;
@@ -572,8 +623,14 @@ impl InferState {
             // The caught exception object is unmodelled, so its binding is a
             // fresh (opaque) variable. The handler runs against the
             // try-body's environment.
-            let catch_env =
-                unsure_env.extend(catch.param.clone(), TypeScheme::mono(self.fresh_type_var()));
+            let param_type = self.fresh_type_var();
+            let catch_env = self.bind(
+                &unsure_env,
+                catch.span,
+                &catch.param,
+                TypeScheme::mono(param_type),
+                Mutability::Mutable,
+            )?;
             self.infer_stmt(&catch_env, &catch.body)?;
         }
 

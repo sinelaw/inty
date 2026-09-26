@@ -465,7 +465,7 @@ impl State {
                 self.visit_expr(right);
                 self.enter_block();
                 match left {
-                    ForInLhs::VarDecl(name, _, _) => self.bind_lex(name),
+                    ForInLhs::VarDecl(name, _, _, _) => self.bind_lex(name),
                     ForInLhs::Expr(e) => self.visit_expr(e),
                 }
                 self.visit_stmt(body);

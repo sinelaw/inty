@@ -45,6 +45,8 @@ const Object;
 // array: it has a `length` and `fill(v)`, which replaces every hole and
 // gives the `v[]`. (`fill(v, start)` would leave holes, so it has no
 // type; nor has `Array(x)` with a non-integer, which makes `[x]`.)
+// A stored `const h = new Array(n)` has one element type, like any
+// other binding of a call's result (the value restriction).
 /** const Array: <a, b, c>{
         (Int) => {length: Int, fill: (c) => c[]},
         isArray: (a) => Boolean,

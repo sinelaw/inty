@@ -414,7 +414,7 @@ impl Resolution {
             } => {
                 let for_scope = self.new_scope(Some(scope), *span);
                 match left {
-                    ForInLhs::VarDecl(name, _, lhs_span) => {
+                    ForInLhs::VarDecl(name, _, lhs_span, _) => {
                         // `for (var x in …)` hoists; `for (let x in …)`
                         // wouldn't, but the parser flattens both to
                         // VarDecl. Treat as `var` for compatibility.
@@ -756,7 +756,7 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
             hoist_stmt(body, r, scope);
         }
         Stmt::ForIn { left, body, .. } | Stmt::ForOf { left, body, .. } => {
-            if let ForInLhs::VarDecl(name, _, span) = left {
+            if let ForInLhs::VarDecl(name, _, span, _) = left {
                 r.declare(scope, name, *span, DefKind::Var);
             }
             hoist_stmt(body, r, scope);

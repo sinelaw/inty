@@ -1437,7 +1437,7 @@ fn bind_for_lhs(
     value: Value,
 ) -> Result<RuntimeEnv, Stuck> {
     match lhs {
-        ForInLhs::VarDecl(name, _, _) => {
+        ForInLhs::VarDecl(name, _, _, _) => {
             let loc = state.alloc_var(value);
             Ok(env.extend(name.clone(), loc))
         }

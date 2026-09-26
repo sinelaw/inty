@@ -1,6 +1,13 @@
 //! Binding resolution: which declaration each identifier refers to, and
 //! which bindings are *stable* — never written after their initialiser.
 //!
+//! This is the one authority on scoping. Inference keys its environment
+//! by the [`BindingId`]s found here (`infer::env::Key`), never by name, so
+//! two variables that share a name can't be confused, and whether a
+//! program type-checks doesn't depend on what its variables are called.
+//! Names this pass resolves to no declaration are globals (the standard
+//! library, imports), which inference keys by name.
+//!
 //! Narrowing (`infer/narrow.rs`) refines only stable bindings. A fact
 //! established about a stable binding's value holds for the rest of its
 //! scope, on every path and in every closure, because the value cannot
@@ -11,16 +18,25 @@
 //! - `x` as a destructuring target or a `for (x of …)` / `for (x in …)`
 //!   target;
 //! - a `var x = e` other than a single declaration that runs once, before
-//!   every other occurrence of `x`: a second `var x = e`, one inside a
-//!   loop, or one that an occurrence of `x` precedes (in the text, or in
-//!   a hoisted function declaration, which can run first). `let` and
-//!   `const` need none of this: reading them before their initialiser
-//!   throws.
+//!   every other occurrence of `x`: a second `var x = e` (or a `var` and a
+//!   `function x`), one inside a loop, or one that an occurrence of `x`
+//!   precedes (in the text, or in a hoisted function declaration, which
+//!   can run first). `let` and `const` need none of this: reading them
+//!   before their initialiser throws;
+//! - `for (var x of …)`, and Python's `for x in …`: one function-scoped
+//!   variable, written on every iteration;
+//! - a Lua `function f() … end` statement where `f` is a visible local;
+//! - a direct `eval(…)`, which may write anything in scope.
 //!
-//! Scoping follows ECMAScript as `free_idents` does (`var` hoists to the
-//! function, `let`/`const`/`function` are block scoped); the Python and
-//! Lua frontends lower their scopes onto the same declarations. A name
-//! that resolves to no declaration is a global and never stable.
+//! Scoping follows ECMAScript: `var` and a function body's top-level
+//! `function` declarations hoist to the function, `let`, `const` and
+//! block-level `function`s are block scoped. The Python and Lua frontends
+//! lower their scopes onto the same declarations, with two Lua rules of
+//! its own: a `local` is in scope only after its declaration (`local x =
+//! x` reads the outer `x`), and a `function f` statement assigns a visible
+//! `f` rather than declaring one. A name that resolves to no declaration
+//! — including an import, which the exporting module can reassign — is a
+//! global and never stable.
 //!
 //! Occurrences are keyed by their span and name, and a key two bindings
 //! share (synthesised code) resolves to neither.
@@ -28,8 +44,8 @@
 use std::collections::HashMap;
 
 use super::{
-    CatchClause, ChainSegment, ExportDecl, Expr, ForInLhs, ForInit, ImportSpecifier, Param,
-    PropDef, Stmt, UnaryOp, VarDeclarator, VarKind,
+    CatchClause, ChainSegment, ExportDecl, Expr, ForInLhs, ForInit, Param, PropDef, SourceLanguage,
+    Stmt, UnaryOp, VarDeclarator, VarKind,
 };
 use crate::span::Span;
 
@@ -50,6 +66,8 @@ struct Binding {
     kind: Kind,
     assigned: bool,
     declarators: u32,
+    /// `function` declarations of this `var`-scoped name.
+    fn_decls: u32,
     /// A `var` declarator with an initialiser has run through the walk.
     declared: bool,
     has_init: bool,
@@ -68,7 +86,7 @@ impl Binding {
             Kind::Let | Kind::Param => !self.assigned,
             Kind::Var => {
                 !self.assigned
-                    && self.declarators <= 1
+                    && self.declarators + self.fn_decls <= 1
                     && (!self.has_init || (!self.init_in_loop && !self.read_before_init))
             }
         }
@@ -79,14 +97,19 @@ impl Binding {
 #[derive(Clone, Debug, Default)]
 pub struct Resolution {
     stable: Vec<bool>,
+    global: Vec<bool>,
     names: Vec<String>,
     occurrences: HashMap<(usize, usize), Vec<BindingId>>,
 }
 
 impl Resolution {
-    /// Resolve a program's statements.
-    pub fn of_program(stmts: &[Stmt]) -> Resolution {
-        let mut w = Walker::default();
+    /// Resolve a program's statements. `hidden_writes` names variables
+    /// the parser saw assigned in code it didn't keep (`"*"`: anything).
+    pub fn of_program(stmts: &[Stmt], language: SourceLanguage) -> Resolution {
+        let mut w = Walker {
+            lua: language == SourceLanguage::Lua,
+            ..Walker::default()
+        };
         w.enter(ScopeKind::Function);
         w.collect_block(stmts);
         for s in stmts {
@@ -96,12 +119,21 @@ impl Resolution {
             w.stmt(s);
         }
         let stable = w.bindings.iter().map(Binding::stable).collect();
+        let global = w.bindings.iter().map(|b| b.kind == Kind::Global).collect();
         let names = w.bindings.into_iter().map(|b| b.name).collect();
         Resolution {
             stable,
+            global,
             names,
             occurrences: w.occurrences,
         }
+    }
+
+    /// The program-declared binding the identifier `name` at `span` (a use
+    /// or a declaration) refers to; `None` for a global.
+    pub fn local_at(&self, span: Span, name: &str) -> Option<BindingId> {
+        self.binding_at(span, name)
+            .filter(|&id| !self.global[id as usize])
     }
 
     /// The binding the identifier `name` at `span` refers to.
@@ -140,6 +172,8 @@ struct Walker {
     scopes: Vec<Scope>,
     globals: HashMap<String, BindingId>,
     occurrences: HashMap<(usize, usize), Vec<BindingId>>,
+    /// Lua's scoping rules (see the module docs).
+    lua: bool,
     /// Loop nesting inside the current function, one entry per function.
     loops: Vec<u32>,
     /// Per enclosing function: whether it is a function declaration,
@@ -182,6 +216,7 @@ impl Walker {
             kind,
             assigned: false,
             declarators: 0,
+            fn_decls: 0,
             declared: false,
             has_init: false,
             init_in_loop: false,
@@ -202,17 +237,53 @@ impl Walker {
 
     /// Declare a `var` in the innermost function scope; a second `var`
     /// of the same name there is the same binding.
-    fn bind_var(&mut self, name: &str) {
+    fn bind_var(&mut self, name: &str) -> BindingId {
         let idx = self
             .scopes
             .iter()
             .rposition(|s| s.kind == ScopeKind::Function)
             .unwrap_or(0);
-        if self.scopes[idx].names.contains_key(name) {
-            return;
+        if let Some(&id) = self.scopes[idx].names.get(name) {
+            return id;
         }
         let id = self.new_binding(name, Kind::Var);
         self.scopes[idx].names.insert(name.to_string(), id);
+        id
+    }
+
+    /// Record that the identifier `name` at `span` is binding `id`.
+    fn register(&mut self, span: Span, id: BindingId) {
+        let ids = self.occurrences.entry((span.start, span.end)).or_default();
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+
+    /// Declare a `function` statement's name: in a function body's top
+    /// level it shares the `var` scope (and counts as one of its
+    /// declarations); in a nested block it is block scoped.
+    fn bind_function(&mut self, name: &str, span: Span) {
+        let at_function_top = self
+            .scopes
+            .last()
+            .is_some_and(|s| s.kind == ScopeKind::Function);
+        let id = if at_function_top {
+            let id = self.bind_var(name);
+            self.bindings[id as usize].fn_decls += 1;
+            id
+        } else {
+            self.bind_lex(name, Kind::Let)
+        };
+        self.register(span, id);
+    }
+
+    fn global_id(&mut self, name: &str) -> BindingId {
+        if let Some(&id) = self.globals.get(name) {
+            return id;
+        }
+        let id = self.new_binding(name, Kind::Global);
+        self.globals.insert(name.to_string(), id);
+        id
     }
 
     fn lookup(&mut self, name: &str) -> BindingId {
@@ -242,10 +313,7 @@ impl Walker {
         if b.kind == Kind::Var && early {
             self.bindings[id as usize].read_before_init = true;
         }
-        let ids = self.occurrences.entry((span.start, span.end)).or_default();
-        if !ids.contains(&id) {
-            ids.push(id);
-        }
+        self.register(span, id);
         id
     }
 
@@ -295,13 +363,26 @@ impl Walker {
     fn collect_block(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
             match stmt {
-                Stmt::FunctionDecl { name, .. }
+                // A Lua `function f` runs where it stands (see `stmt`).
+                Stmt::FunctionDecl { .. } if self.lua => {}
+                Stmt::FunctionDecl { name, span, .. }
                 | Stmt::Export {
-                    declaration: ExportDecl::Function { name, .. },
+                    declaration: ExportDecl::Function { name, span, .. },
                     ..
-                } => {
-                    self.bind_lex(name, Kind::Let);
-                }
+                } => self.bind_function(name, *span),
+                Stmt::Export {
+                    declaration:
+                        ExportDecl::Default {
+                            value:
+                                Expr::Function {
+                                    name: Some(name),
+                                    span,
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                } => self.bind_function(name, *span),
                 Stmt::Var {
                     kind, declarations, ..
                 }
@@ -312,16 +393,8 @@ impl Walker {
                         },
                     ..
                 } => self.collect_decls(*kind, declarations),
-                Stmt::Import { specifiers, .. } => {
-                    for spec in specifiers {
-                        let local = match spec {
-                            ImportSpecifier::Named { local, .. }
-                            | ImportSpecifier::Default { local, .. }
-                            | ImportSpecifier::Namespace { local, .. } => local,
-                        };
-                        self.bind_lex(local, Kind::Const);
-                    }
-                }
+                // Imports stay globals: the exporting module can
+                // reassign them.
                 _ => {}
             }
         }
@@ -330,7 +403,11 @@ impl Walker {
     fn collect_decls(&mut self, kind: VarKind, decls: &[VarDeclarator]) {
         for d in decls {
             match kind {
-                VarKind::Var => self.bind_var(&d.name),
+                // A Lua local is declared where it stands.
+                VarKind::Let | VarKind::Const if self.lua => {}
+                VarKind::Var => {
+                    self.bind_var(&d.name);
+                }
                 VarKind::Let => {
                     self.bind_lex(&d.name, Kind::Let);
                 }
@@ -381,7 +458,12 @@ impl Walker {
                 }
                 self.collect_nested_vars(body);
             }
-            Stmt::ForIn { body, .. } | Stmt::ForOf { body, .. } => self.collect_nested_vars(body),
+            Stmt::ForIn { left, body, .. } | Stmt::ForOf { left, body, .. } => {
+                if let ForInLhs::VarDecl(name, _, _, VarKind::Var) = left {
+                    self.bind_var(name);
+                }
+                self.collect_nested_vars(body)
+            }
             Stmt::Try {
                 block,
                 handler,
@@ -402,26 +484,38 @@ impl Walker {
                 }
             }
             Stmt::Labeled { body, .. } => self.collect_nested_vars(body),
+            // A `var` directly under an `if`, a loop or a label.
+            Stmt::Var {
+                kind: VarKind::Var,
+                declarations,
+                ..
+            } => {
+                for d in declarations {
+                    self.bind_var(&d.name);
+                }
+            }
             _ => {}
         }
     }
 
     // --- the walk ----------------------------------------------------------
 
-    fn function(&mut self, name: Option<&str>, params: &[Param], body: &Stmt, hoisted: bool) {
+    fn function(
+        &mut self,
+        name: Option<(&str, Span)>,
+        params: &[Param],
+        body: &Stmt,
+        hoisted: bool,
+    ) {
         self.enter_fn(ScopeKind::Function, hoisted);
-        if let Some(n) = name {
-            self.bind_lex(n, Kind::Const);
+        // A named function expression's own name, visible in its body.
+        if let Some((n, span)) = name {
+            let id = self.bind_lex(n, Kind::Const);
+            self.register(span, id);
         }
         for p in params {
             let id = self.bind_lex(&p.name, Kind::Param);
-            let ids = self
-                .occurrences
-                .entry((p.span.start, p.span.end))
-                .or_default();
-            if !ids.contains(&id) {
-                ids.push(id);
-            }
+            self.register(p.span, id);
         }
         match body {
             Stmt::Block { body, .. } => {
@@ -449,7 +543,11 @@ impl Walker {
             if let Some(init) = &d.init {
                 self.expr(init);
             }
-            let id = self.lookup(&d.name);
+            let id = match d.kind {
+                VarKind::Let if self.lua => self.bind_lex(&d.name, Kind::Let),
+                VarKind::Const if self.lua => self.bind_lex(&d.name, Kind::Const),
+                _ => self.lookup(&d.name),
+            };
             let in_loop = self.in_loop();
             let b = &mut self.bindings[id as usize];
             if b.kind == Kind::Var {
@@ -460,13 +558,7 @@ impl Walker {
                 }
                 b.declared = true;
             }
-            let ids = self
-                .occurrences
-                .entry((d.span.start, d.span.end))
-                .or_default();
-            if !ids.contains(&id) {
-                ids.push(id);
-            }
+            self.register(d.span, id);
         }
     }
 
@@ -497,12 +589,21 @@ impl Walker {
             Stmt::Var { declarations, .. } => self.declarators(declarations),
             Stmt::Export { declaration, .. } => match declaration {
                 ExportDecl::Var { declarations, .. } => self.declarators(declarations),
-                ExportDecl::Function {
-                    name, params, body, ..
-                } => {
-                    let _ = name;
+                ExportDecl::Function { params, body, .. } => {
                     self.function(None, params, body, true);
                 }
+                // `export default function f` declares `f` in the module
+                // (see `collect_block`).
+                ExportDecl::Default {
+                    value:
+                        Expr::Function {
+                            name: Some(_),
+                            params,
+                            body,
+                            ..
+                        },
+                    ..
+                } => self.function(None, params, body, true),
                 ExportDecl::Default { value, .. } => self.expr(value),
                 ExportDecl::List { .. } | ExportDecl::From { .. } => {}
             },
@@ -571,14 +672,18 @@ impl Walker {
                 self.expr(right);
                 self.enter(ScopeKind::Block);
                 match left {
-                    // Checked (and compiled) as a fresh binding per
-                    // iteration, like `let`.
-                    ForInLhs::VarDecl(name, _, span) => {
-                        let id = self.bind_lex(name, Kind::Let);
-                        self.occurrences
-                            .entry((span.start, span.end))
-                            .or_default()
-                            .push(id);
+                    // `for (var x …)`: the one function-scoped `x`,
+                    // written by every iteration.
+                    ForInLhs::VarDecl(name, _, span, VarKind::Var) => self.write(name, *span),
+                    // `let`/`const`: a fresh binding per iteration.
+                    ForInLhs::VarDecl(name, _, span, kind) => {
+                        let kind = if *kind == VarKind::Const {
+                            Kind::Const
+                        } else {
+                            Kind::Let
+                        };
+                        let id = self.bind_lex(name, kind);
+                        self.register(*span, id);
                     }
                     ForInLhs::Expr(e) => self.write_target(e),
                 }
@@ -602,10 +707,7 @@ impl Walker {
                 if let Some(CatchClause { param, body, span }) = handler {
                     self.enter(ScopeKind::Block);
                     let id = self.bind_lex(param, Kind::Let);
-                    self.occurrences
-                        .entry((span.start, span.end))
-                        .or_default()
-                        .push(id);
+                    self.register(*span, id);
                     self.stmt(body);
                     self.leave();
                 }
@@ -634,10 +736,30 @@ impl Walker {
                 self.leave();
             }
             Stmt::Labeled { body, .. } => self.stmt(body),
+            // A Lua `function f` assigns a visible `f`, or else declares
+            // one here; it runs in order, like any assignment.
             Stmt::FunctionDecl {
-                params, body, name, ..
-            } => {
-                let _ = name;
+                params,
+                body,
+                name,
+                span,
+                ..
+            } if self.lua => {
+                let visible = self
+                    .scopes
+                    .iter()
+                    .rev()
+                    .find_map(|s| s.names.get(name.as_str()).copied());
+                match visible {
+                    Some(_) => self.write(name, *span),
+                    None => {
+                        let id = self.bind_lex(name, Kind::Let);
+                        self.register(*span, id);
+                    }
+                }
+                self.function(None, params, body, false);
+            }
+            Stmt::FunctionDecl { params, body, .. } => {
                 self.function(None, params, body, true);
             }
         }
@@ -665,8 +787,12 @@ impl Walker {
                 }
             }
             Expr::Function {
-                name, params, body, ..
-            } => self.function(name.as_deref(), params, body, false),
+                name,
+                params,
+                body,
+                span,
+                ..
+            } => self.function(name.as_deref().map(|n| (n, *span)), params, body, false),
             Expr::Member { object, .. } => self.expr(object),
             Expr::ComputedMember {
                 object, property, ..
@@ -680,6 +806,19 @@ impl Walker {
             | Expr::New {
                 callee, arguments, ..
             } => {
+                // A direct `eval` can assign anything in scope.
+                if let Expr::Ident { name, .. } = &**callee {
+                    if name == "eval" && self.lookup("eval") == self.global_id("eval") {
+                        let in_scope: Vec<BindingId> = self
+                            .scopes
+                            .iter()
+                            .flat_map(|s| s.names.values().copied())
+                            .collect();
+                        for id in in_scope {
+                            self.bindings[id as usize].assigned = true;
+                        }
+                    }
+                }
                 self.expr(callee);
                 for a in arguments {
                     self.expr(a);
@@ -742,11 +881,19 @@ impl Walker {
             PropDef::Property { value, .. } => self.expr(value),
             PropDef::Method { params, body, .. } => self.function(None, params, body, false),
             PropDef::Getter { body, .. } => self.function(None, &[], body, false),
-            PropDef::Setter { param, body, .. } => {
-                self.enter(ScopeKind::Function);
-                self.bind_lex(param, Kind::Param);
-                self.function(None, &[], body, false);
-                self.leave();
+            // The parameter is keyed by the setter's span (it has none of
+            // its own).
+            PropDef::Setter {
+                param, body, span, ..
+            } => {
+                let param = Param {
+                    name: param.clone(),
+                    span: *span,
+                    optional: false,
+                    default: None,
+                    type_ast: None,
+                };
+                self.function(None, std::slice::from_ref(&param), body, false);
             }
             PropDef::Spread { argument, .. } => self.expr(argument),
         }
@@ -761,7 +908,7 @@ mod tests {
     /// Whether the last occurrence of `name` in `src` is stable.
     fn stable(src: &str, name: &str) -> bool {
         let program = parse(src).expect("parse");
-        let res = Resolution::of_program(&program.statements);
+        let res = Resolution::of_program(&program.statements, program.language);
         let start = src.rfind(name).expect("name in source");
         res.stable_at(Span::new(start, start + name.len()), name)
     }

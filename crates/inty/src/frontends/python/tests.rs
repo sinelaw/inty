@@ -2083,3 +2083,33 @@ fn eq_none_narrows_only_as_far_as_eq_can_be_trusted() {
     );
     assert!(!check_program(&src("==")).is_empty(), "a may be an A");
 }
+
+#[test]
+fn narrowing_holds_only_for_its_own_binding() {
+    let rejected = [
+        // A local assigned in a `try` is not the module's `x`.
+        "x = [1]\n\
+         def f(c: bool) -> int:\n\
+         \x20   try:\n\
+         \x20       x = \"s\" if c else None\n\
+         \x20       if x is None:\n\
+         \x20           return 0\n\
+         \x20   except Exception:\n\
+         \x20       pass\n\
+         \x20   return x[0] + 1\n",
+        // A `for` target is one variable, written by every iteration.
+        "def f() -> int:\n\
+         \x20   x = \"abc\"\n\
+         \x20   for x in [None]:\n\
+         \x20       pass\n\
+         \x20   return len(x.upper())\n",
+        // `True == 1`: a bool can pass `== 1`.
+        "def g(x: bool | str) -> str:\n\
+         \x20   if x == 1:\n\
+         \x20       return x\n\
+         \x20   return \"a\"\n",
+    ];
+    for src in rejected {
+        assert!(!check_program(src).is_empty(), "accepted:\n{src}");
+    }
+}

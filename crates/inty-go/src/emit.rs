@@ -1398,7 +1398,7 @@ impl<'a> Emitter<'a> {
                 self.line(&format!("for {idx} := 0; {idx} < len(*{arr}); {idx}++ {{"));
                 self.indent += 1;
                 match left {
-                    ForInLhs::VarDecl(name, _, _) => {
+                    ForInLhs::VarDecl(name, _, _, _) => {
                         let n = mangle(name);
                         let t = self.tm.render(&elem);
                         self.line(&format!("var {n} {t} = (*{arr})[{idx}]"));
@@ -2279,6 +2279,24 @@ impl<'a> Emitter<'a> {
             }
             if is_nullish(left) && rt.is_nullable() {
                 return Ok(format!("({} {} nil)", self.expr(right)?, cmp));
+            }
+            // A value whose type has no `null`/`undefined` is never
+            // either (a destructuring default's `v === undefined` on an
+            // `Int`). The operand is still evaluated, for its traps.
+            let never = !neg;
+            if is_nullish(right) && !lt.is_nullable() {
+                return Ok(format!(
+                    "func() bool {{ _ = {}; return {} }}()",
+                    self.expr(left)?,
+                    !never
+                ));
+            }
+            if is_nullish(left) && !rt.is_nullable() {
+                return Ok(format!(
+                    "func() bool {{ _ = {}; return {} }}()",
+                    self.expr(right)?,
+                    !never
+                ));
             }
         }
         let a = self.expr(left)?;

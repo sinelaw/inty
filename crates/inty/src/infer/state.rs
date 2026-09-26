@@ -258,6 +258,24 @@ pub struct InferState {
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
     pub resolution: crate::ast::resolve::Resolution,
+    /// Every program-declared binding's scheme as last declared, by
+    /// declaration: where a read finds a binding the environment it's
+    /// checked in doesn't hold (a `var` declared in a block, a use
+    /// before the declaration).
+    pub(in crate::infer) local_types: HashMap<crate::ast::resolve::BindingId, TypeScheme>,
+    /// Bindings read before any declaration of them was checked: the
+    /// fresh type the read got, which the declaration unifies with, and
+    /// where the first read was.
+    pub(in crate::infer) forward_locals:
+        HashMap<crate::ast::resolve::BindingId, (Type, String, Span)>,
+    /// Bindings some read found only in `local_types`. The environment
+    /// doesn't show them to generalisation, so their variables are held
+    /// fixed there explicitly.
+    pub(in crate::infer) escaped_locals: std::collections::HashSet<crate::ast::resolve::BindingId>,
+    /// Where each binding was first declared. Another declaration of the
+    /// same binding (`var x` twice, `for (var x of …)`, a Lua `function
+    /// f` assigning a local) must agree with it: one binding, one type.
+    pub(in crate::infer) local_decl_spans: HashMap<crate::ast::resolve::BindingId, Span>,
 
     /// The lexical environment in scope while a type annotation is being
     /// lowered, used to resolve a class-name `TypeAst::Ref` to the class's
@@ -415,6 +433,10 @@ impl InferState {
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
             resolution: Default::default(),
+            local_types: HashMap::new(),
+            forward_locals: HashMap::new(),
+            escaped_locals: Default::default(),
+            local_decl_spans: HashMap::new(),
             annotation_env: None,
             current_annotation_span: None,
             return_value_stack: Vec::new(),
@@ -1579,6 +1601,107 @@ impl InferState {
         self.named_types.get(&id).is_some_and(|d| d.nominal)
     }
 
+    /// The key an identifier `name` at `span` (a use, a declaration or an
+    /// assignment target) is bound under: the declaration binding
+    /// resolution found, or the name for a global.
+    pub(in crate::infer) fn key_of(&self, span: Span, name: &str) -> crate::infer::env::Key {
+        match self.resolution.local_at(span, name) {
+            Some(id) => crate::infer::env::Key::Local(id),
+            None => crate::infer::env::Key::Name(name.to_string()),
+        }
+    }
+
+    /// Declare the identifier `name` at `span` with `scheme`.
+    pub(in crate::infer) fn bind(
+        &mut self,
+        env: &crate::infer::TypeEnv,
+        span: Span,
+        name: &str,
+        scheme: TypeScheme,
+        mutability: crate::infer::env::Mutability,
+    ) -> Result<crate::infer::TypeEnv, crate::error::IntyError> {
+        let key = self.key_of(span, name);
+        self.rebind(env, key, span, name, scheme, mutability)
+    }
+
+    /// Bind `key` (the identifier `name` declared at `span`) to `scheme`,
+    /// replacing any binding it had here: a hoisted placeholder takes its
+    /// final scheme. A binding read before its declaration (hoisting)
+    /// takes this type, and a second declaration of the same binding
+    /// elsewhere must agree with the first.
+    pub(in crate::infer) fn rebind(
+        &mut self,
+        env: &crate::infer::TypeEnv,
+        key: crate::infer::env::Key,
+        span: Span,
+        name: &str,
+        scheme: TypeScheme,
+        mutability: crate::infer::env::Mutability,
+    ) -> Result<crate::infer::TypeEnv, crate::error::IntyError> {
+        if let crate::infer::env::Key::Local(id) = &key {
+            if let Some((forward, _, _)) = self.forward_locals.remove(id) {
+                let ty = self.instantiate(&scheme);
+                self.unify(span, &forward, &ty)?;
+            }
+            match self.local_decl_spans.get(id) {
+                Some(first) if *first != span => {
+                    if let Some(earlier) = self.local_types.get(id).cloned() {
+                        let earlier = self.instantiate(&earlier);
+                        let now = self.instantiate(&scheme);
+                        self.unify(span, &earlier, &now)?;
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    self.local_decl_spans.insert(*id, span);
+                }
+            }
+            self.local_types.insert(*id, scheme.clone());
+        }
+        Ok(env.extend_key(
+            key,
+            name,
+            crate::infer::env::Binding {
+                scheme,
+                mutability,
+                declared: None,
+            },
+        ))
+    }
+
+    /// The binding the identifier `name` at `span` refers to. A binding
+    /// of the program that `env` doesn't hold comes from `local_types`
+    /// (and is held fixed in generalisation from then on); one not
+    /// declared yet gets a fresh type its declaration will unify with.
+    /// `None` only for an unknown global.
+    pub(in crate::infer) fn read_binding(
+        &mut self,
+        env: &crate::infer::TypeEnv,
+        span: Span,
+        name: &str,
+    ) -> Option<crate::infer::env::Binding> {
+        let key = self.key_of(span, name);
+        if let Some(b) = env.lookup_key(&key) {
+            return Some(b.clone());
+        }
+        let crate::infer::env::Key::Local(id) = key else {
+            return None;
+        };
+        self.escaped_locals.insert(id);
+        let scheme = match self.local_types.get(&id) {
+            Some(s) => s.clone(),
+            None => {
+                let var = self.fresh_type_var();
+                self.forward_locals
+                    .insert(id, (var.clone(), name.to_string(), span));
+                let s = TypeScheme::mono(var);
+                self.local_types.insert(id, s.clone());
+                s
+            }
+        };
+        Some(crate::infer::env::Binding::mutable(scheme))
+    }
+
     /// Unroll a named recursive type by substituting its definition.
     pub fn unroll_named(&self, id: TypeId, args: &[Type]) -> Option<Type> {
         let def = self.named_types.get(&id)?;
@@ -1873,7 +1996,16 @@ impl InferState {
         let mut vars: HashSet<TVarName> = HashSet::new();
         let mut pvars: HashSet<crate::types::PVarName> = env_free.pvars.clone();
         let mut named: Vec<TypeId> = env_free.named.iter().copied().collect();
-        for v in &env_free.vars {
+        // Bindings reached outside the environment count as in it.
+        let mut env_vars: Vec<TVarName> = env_free.vars.iter().cloned().collect();
+        for id in &self.escaped_locals {
+            if let Some(scheme) = self.local_types.get(id) {
+                env_vars.extend(scheme.free_vars());
+                pvars.extend(scheme.free_pvars());
+                named.extend(scheme.body.ty.named_ids());
+            }
+        }
+        for v in &env_vars {
             vars.insert(v.clone());
             let var = Type::Var(v.clone());
             for resolved in [self.zonk(&var), self.main_subst.flatten(&var)] {

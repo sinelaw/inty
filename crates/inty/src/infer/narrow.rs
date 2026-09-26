@@ -247,6 +247,18 @@ pub fn apply_narrowing(
     narrow_binding(state, env, path, narrowing)
 }
 
+/// Whether `narrowing` leaves the value at `path` no possible type: the
+/// test can't come out this way, so the branch it guards is dead.
+pub fn narrowing_is_dead(
+    state: &super::state::InferState,
+    env: &TypeEnv,
+    path: &Path,
+    narrowing: &Narrowing,
+) -> bool {
+    refinement(state, env, path, narrowing)
+        .is_some_and(|(_, before, after)| after.is_never() && !before.is_never())
+}
+
 fn root_of(path: &Path) -> &Path {
     match path {
         Path::Member(p, _) => root_of(p),
@@ -255,34 +267,51 @@ fn root_of(path: &Path) -> &Path {
 }
 
 /// [`apply_narrowing`] without the stability check.
+///
+/// A narrowing that leaves no possible type (a branch the test rules
+/// out) keeps the declared type instead: the branch is dead, and any type
+/// is sound for it, but `never` would make an inexact predicate table
+/// unsound rather than merely imprecise. (The checker warns about the
+/// dead branch; see [`narrowing_is_dead`].)
 fn narrow_binding(
     state: &super::state::InferState,
     env: &TypeEnv,
     path: &Path,
     narrowing: &Narrowing,
 ) -> TypeEnv {
-    let root = path.root_ident().to_string();
-    let Some(scheme) = env.lookup(&root).cloned() else {
-        return env.clone();
+    match refinement(state, env, path, narrowing) {
+        Some((key, _, after)) if !after.is_never() => env.narrow(&key, TypeScheme::mono(after)),
+        _ => env.clone(),
+    }
+}
+
+/// The binding `path` is rooted at, its type, and its type refined by
+/// `narrowing`; `None` when nothing is ruled out.
+fn refinement(
+    state: &super::state::InferState,
+    env: &TypeEnv,
+    path: &Path,
+    narrowing: &Narrowing,
+) -> Option<(super::env::Key, Type, Type)> {
+    let Path::Ident(name, span) = root_of(path) else {
+        unreachable!("a path is rooted at an identifier")
     };
+    let key = state.key_of(*span, name);
+    let scheme = env.lookup_key(&key)?.scheme.clone();
 
     // We only narrow monomorphic bindings. A polymorphic binding (a let
     // function) wouldn't typically be the target of a narrowing — the
     // refinements we model don't apply to type schemes — and trying to
     // refine inside a quantifier would be unsound.
     if !scheme.is_mono() {
-        return env.clone();
+        return None;
     }
 
     let original_ty = state.apply_subst(scheme.ty());
     let exposed = expose_named(state, &original_ty);
     let new_ty = refine_at_path(&exposed, &path_steps(path), narrowing, state.language);
-    if new_ty == exposed {
-        // Nothing ruled out: leave the binding (and a named type) alone.
-        return env.clone();
-    }
-
-    env.narrow(&root, TypeScheme::mono(new_ty))
+    // Nothing ruled out: leave the binding (and a named type) alone.
+    (new_ty != exposed).then_some((key, exposed, new_ty))
 }
 
 /// A named (recursive) type unrolled one step when it is a union, so
@@ -404,7 +433,9 @@ fn member_compatible(ty: &Type, narrowing: &Narrowing, lang: Language) -> bool {
         Narrowing::IsNot(single) => ty != single,
         Narrowing::Nullish => could_be(ty, &Type::Null) || could_be(ty, &Type::Undefined),
         Narrowing::NotNullish => !matches!(ty, Type::Null | Type::Undefined),
-        Narrowing::PyEq(single) => could_be_value(ty, single) || !is_primitive(ty),
+        Narrowing::PyEq(single) => {
+            could_be_value(ty, single) || !is_primitive(ty) || py_bool_int_equal(ty, single)
+        }
         Narrowing::PyNotEq(single) => ty != single,
         Narrowing::IsInstance(id) => brand_could_match(ty, *id),
         Narrowing::IsNotInstance(id) => !brand_definitely_matches(ty, *id),
@@ -419,6 +450,24 @@ fn could_be_value(ty: &Type, single: &Type) -> bool {
     match single {
         Type::Literal(lit) => value_compatible_with_literal(ty, lit),
         unit => could_be(ty, unit),
+    }
+}
+
+/// Whether Python's `==` can hold between a `ty` and the singleton
+/// `single` across `bool` and the numbers: `bool` is an `int`, so
+/// `True == 1` and `0 == False`.
+fn py_bool_int_equal(ty: &Type, single: &Type) -> bool {
+    let bool_like = |t: &Type| matches!(t, Type::Boolean | Type::Literal(LitValue::Bool(_)));
+    let number_like = |t: &Type| {
+        matches!(
+            t,
+            Type::Int | Type::Number | Type::Literal(LitValue::Number(_))
+        )
+    };
+    match single {
+        Type::Literal(LitValue::Number(n)) => bool_like(ty) && (*n == 0.0 || *n == 1.0),
+        Type::Literal(LitValue::Bool(_)) => number_like(ty),
+        _ => false,
     }
 }
 
@@ -522,7 +571,7 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
         // `<CALL>` are plain objects.
         (_, "function") if ty.is_func() => true,
         (Type::Row(_), "object") if !ty.is_func() => true,
-        (Type::Array(_), "object") => true,
+        (Type::Array(_) | Type::Tuple(_) | Type::Regex, "object") => true,
         (Type::Map(_), "object") | (Type::Promise(_), "object") => true,
         (Type::Module(_), "object") => true,
         (Type::Null, "object") => true,
@@ -531,7 +580,7 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
         (Type::Literal(LitValue::Bool(_)), "boolean") => true,
         // Variables / named / unions are accepted conservatively — we
         // don't yet know what they are, so we can't rule them out.
-        (Type::Var(_) | Type::Named(_, _) | Type::Union(_), _) => true,
+        (Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Error, _) => true,
         _ => false,
     }
 }
@@ -557,10 +606,14 @@ fn value_compatible_with_literal(ty: &Type, lit: &LitValue) -> bool {
         Type::Literal(other) => other == lit,
         Type::String => matches!(lit, LitValue::String(_)),
         Type::Number => matches!(lit, LitValue::Number(_)),
-        Type::Int => matches!(lit, LitValue::Number(n) if crate::types::is_safe_int(*n)),
+        // An `Int` has no fractional part, but may be past 2^53 or not
+        // finite (`Math.floor(1 / 0)`).
+        Type::Int => {
+            matches!(lit, LitValue::Number(n) if !(n.is_finite() && n.fract() != 0.0))
+        }
         Type::Boolean => matches!(lit, LitValue::Bool(_)),
         // Unknown/abstract types are compatible — we can't rule them out.
-        Type::Var(_) | Type::Named(_, _) | Type::Union(_) => true,
+        Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Error => true,
         // A row, function, etc. cannot equal a primitive literal value.
         _ => false,
     }
@@ -620,32 +673,6 @@ pub fn typeof_fact(test: &Expr) -> Option<(Path, Narrowing)> {
             Narrowing::IsTypeof(name)
         },
     ))
-}
-
-/// True when applying a narrowing at `path` collapsed the binding's
-/// type from a non-`never` type to `never`. That means the predicate
-/// is statically unsatisfiable on this branch — the branch is dead.
-///
-/// Returns `false` if the binding wasn't found, isn't monomorphic, or
-/// was already `never` before narrowing — in those cases there's
-/// nothing useful to report.
-pub fn narrowing_collapsed_to_never(
-    state: &super::state::InferState,
-    before: &TypeEnv,
-    after: &TypeEnv,
-    path: &Path,
-) -> bool {
-    let root = path.root_ident();
-    let (Some(before_scheme), Some(after_scheme)) = (before.lookup(root), after.lookup(root))
-    else {
-        return false;
-    };
-    if !before_scheme.is_mono() || !after_scheme.is_mono() {
-        return false;
-    }
-    let before_ty = state.apply_subst(before_scheme.ty());
-    let after_ty = state.apply_subst(after_scheme.ty());
-    !before_ty.is_never() && after_ty.is_never()
 }
 
 /// Match `typeof <path>` on either operand and a string literal on the
@@ -767,7 +794,7 @@ pub fn lookup_path_type(ty: &Type, steps: &[PropName]) -> Option<Type> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{LitValue, Type, TypeScheme};
+    use crate::types::{Type, TypeScheme};
 
     fn env_with(name: &str, ty: Type) -> TypeEnv {
         TypeEnv::empty().extend(name.to_string(), TypeScheme::mono(ty))
@@ -914,32 +941,33 @@ mod tests {
     }
 
     #[test]
-    fn test_narrow_isinstance_unmatched_brand_is_never() {
-        // A value known to be one brand, tested against a different one,
-        // collapses to never (a statically dead branch).
+    fn test_narrow_isinstance_unmatched_brand_is_dead() {
+        // A value known to be one brand, tested against a different one:
+        // the branch is dead, and the binding keeps its type there.
         let env = env_with("x", Type::Named(2, vec![]));
         let state = crate::infer::InferState::new();
-        let narrowed = narrow_binding(
+        let path = Path::Ident("x".to_string(), Span::new(0, 0));
+        assert!(narrowing_is_dead(
             &state,
             &env,
-            &Path::Ident("x".to_string(), Span::new(0, 0)),
-            &Narrowing::IsInstance(1),
-        );
-        assert!(narrowed.lookup("x").unwrap().ty().is_never());
+            &path,
+            &Narrowing::IsInstance(1)
+        ));
+        let narrowed = narrow_binding(&state, &env, &path, &Narrowing::IsInstance(1));
+        assert_eq!(*narrowed.lookup("x").unwrap().ty(), Type::Named(2, vec![]));
     }
 
     #[test]
-    fn test_narrow_exhausts_to_never() {
-        // Narrow String to "a", then to NotEquals "a" — should be never.
+    fn test_narrow_exhausted_keeps_the_declared_type() {
+        // `s : "a"` tested `!== "a"`: the branch is dead. Its binding keeps
+        // `"a"` rather than `never`, so an inexact predicate can only cost
+        // precision.
         let env = env_with("s", Type::lit_string("a"));
         let state = crate::infer::InferState::new();
-        let narrowed = narrow_binding(
-            &state,
-            &env,
-            &Path::Ident("s".to_string(), Span::new(0, 0)),
-            &Narrowing::IsNot(Type::lit_string("a")),
-        );
-        let new_ty = narrowed.lookup("s").unwrap().ty();
-        assert!(new_ty.is_never(), "expected never, got {}", new_ty);
+        let path = Path::Ident("s".to_string(), Span::new(0, 0));
+        let n = Narrowing::IsNot(Type::lit_string("a"));
+        assert!(narrowing_is_dead(&state, &env, &path, &n));
+        let narrowed = narrow_binding(&state, &env, &path, &n);
+        assert_eq!(*narrowed.lookup("s").unwrap().ty(), Type::lit_string("a"));
     }
 }

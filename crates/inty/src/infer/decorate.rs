@@ -267,7 +267,7 @@ impl<'a> Decorator<'a> {
                 let (decorated_body, _) = self.decorate_stmt(body, env);
 
                 let decorated_left = match left {
-                    ForInLhs::VarDecl(name, existing_ann, decl_span) => {
+                    ForInLhs::VarDecl(name, existing_ann, decl_span, kind) => {
                         let annotation = if existing_ann.is_some() {
                             existing_ann.clone()
                         } else if let Some(ty) = self.state.get_decl_type(*decl_span) {
@@ -275,7 +275,7 @@ impl<'a> Decorator<'a> {
                         } else {
                             None
                         };
-                        ForInLhs::VarDecl(name.clone(), annotation, *decl_span)
+                        ForInLhs::VarDecl(name.clone(), annotation, *decl_span, *kind)
                     }
                     ForInLhs::Expr(e) => ForInLhs::Expr(self.decorate_expr(e, env)),
                 };
@@ -301,7 +301,7 @@ impl<'a> Decorator<'a> {
                 let (decorated_body, _) = self.decorate_stmt(body, env);
 
                 let decorated_left = match left {
-                    ForInLhs::VarDecl(name, existing_ann, decl_span) => {
+                    ForInLhs::VarDecl(name, existing_ann, decl_span, kind) => {
                         let annotation = if existing_ann.is_some() {
                             existing_ann.clone()
                         } else if let Some(ty) = self.state.get_decl_type(*decl_span) {
@@ -309,7 +309,7 @@ impl<'a> Decorator<'a> {
                         } else {
                             None
                         };
-                        ForInLhs::VarDecl(name.clone(), annotation, *decl_span)
+                        ForInLhs::VarDecl(name.clone(), annotation, *decl_span, *kind)
                     }
                     ForInLhs::Expr(e) => ForInLhs::Expr(self.decorate_expr(e, env)),
                 };

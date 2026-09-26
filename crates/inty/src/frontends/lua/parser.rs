@@ -451,17 +451,36 @@ impl Parser {
     fn repeat_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance();
-        let body = self.block_as_stmt()?;
+        let body_start = self.cur_span().start;
+        let mut body = self.block()?;
         self.expect(&Tok::Until, "'until'")?;
         let cond = self.expr()?;
-        // `repeat B until c` ≡ do B while (not c)
+        // `repeat B until c` ≡ `while true do B; if c then break end end`.
+        // The condition sits inside B's block because Lua scopes it there
+        // (it can read B's locals); a `do … while (not c)` would read an
+        // outer variable of the same name instead.
         let span = Span::new(start, self.prev_span().end);
-        let test = Expr::Unary {
-            op: UnaryOp::Not,
-            argument: Box::new(cond),
+        let cond_span = cond.span();
+        body.push(Stmt::If {
+            test: cond,
+            consequent: Box::new(Stmt::Break {
+                label: None,
+                span: cond_span,
+            }),
+            alternate: None,
+            span: cond_span,
+        });
+        Ok(Stmt::While {
+            test: Expr::Lit {
+                value: Literal::Boolean(true),
+                span,
+            },
+            body: Box::new(Stmt::Block {
+                body,
+                span: Span::new(body_start, cond_span.end),
+            }),
             span,
-        };
-        Ok(Stmt::DoWhile { body, test, span })
+        })
     }
 
     fn for_stmt(&mut self) -> Result<Stmt> {
