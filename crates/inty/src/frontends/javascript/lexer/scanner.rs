@@ -234,7 +234,7 @@ impl<'a> Scanner<'a> {
             'a'..='z' | 'A'..='Z' | '_' | '$' => self.scan_identifier(),
 
             // Unicode identifier start
-            _ if ch.is_alphabetic() => self.scan_identifier(),
+            _ if Self::is_id_start(ch) => self.scan_identifier(),
 
             // Private identifier `#name`. Used inside class bodies
             // and on `this.#name` / `other.#name` member access. The
@@ -250,7 +250,7 @@ impl<'a> Scanner<'a> {
                     }
                     .into());
                 };
-                if !(first.is_alphabetic() || first == '_' || first == '$') {
+                if !Self::is_id_start(first) {
                     return Err(LexError::UnexpectedCharacter {
                         ch: '#',
                         span: Span::new(start, self.current_pos),
@@ -259,7 +259,7 @@ impl<'a> Scanner<'a> {
                 }
                 self.advance();
                 while let Some((_, c)) = self.peek() {
-                    if c.is_alphanumeric() || c == '_' || c == '$' {
+                    if Self::is_id_continue(c) {
                         self.advance();
                     } else {
                         break;
@@ -307,6 +307,16 @@ impl<'a> Scanner<'a> {
     }
 
     fn skip_whitespace_and_comments(&mut self) -> Result<()> {
+        // Hashbang (`#!/usr/bin/env node`): only valid as the very first
+        // characters of the source, and skipped like a line comment.
+        if self.current_pos == 0 && self.source.starts_with("#!") {
+            while let Some((_, ch)) = self.peek() {
+                if ch == '\n' {
+                    break;
+                }
+                self.advance();
+            }
+        }
         loop {
             match self.peek() {
                 Some((_, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C')) => {
@@ -1450,15 +1460,26 @@ impl<'a> Scanner<'a> {
     }
 
     fn is_ident_char(ch: char) -> bool {
-        ch.is_alphanumeric() || ch == '_' || ch == '$'
+        Self::is_id_continue(ch)
+    }
+
+    /// ECMAScript `IdentifierStart`: Unicode `ID_Start`, `$` or `_`.
+    fn is_id_start(ch: char) -> bool {
+        ch == '$' || ch == '_' || unicode_ident::is_xid_start(ch)
+    }
+
+    /// ECMAScript `IdentifierPart`: Unicode `ID_Continue` (which takes in
+    /// combining marks such as the Devanagari virama in `हिन्दी`), `$`,
+    /// ZWNJ or ZWJ.
+    fn is_id_continue(ch: char) -> bool {
+        ch == '$' || ch == '\u{200C}' || ch == '\u{200D}' || unicode_ident::is_xid_continue(ch)
     }
 
     fn scan_identifier(&mut self) -> Token {
         let start = self.current_pos;
 
         while let Some((_, ch)) = self.peek() {
-            // Accept ASCII alphanumeric, _, $, or any Unicode alphanumeric
-            if ch.is_alphanumeric() || ch == '_' || ch == '$' {
+            if Self::is_id_continue(ch) {
                 self.advance();
             } else {
                 break;
@@ -1841,5 +1862,36 @@ mod tests {
             tokenize("`line1\nline2`"),
             vec![Token::TemplateNoSub("line1\nline2".to_string()), Token::Eof]
         );
+    }
+
+    #[test]
+    fn test_hashbang() {
+        assert_eq!(
+            tokenize("#!/usr/bin/env node\nvar x"),
+            vec![Token::Var, Token::Ident("x".to_string()), Token::Eof]
+        );
+        // Only the very first line may be a hashbang.
+        assert!(Scanner::new("var x;\n#!/usr/bin/env node")
+            .tokenize()
+            .is_err());
+    }
+
+    #[test]
+    fn test_unicode_identifiers() {
+        // Combining marks (the Devanagari virama U+094D and anusvara
+        // U+0902) are `ID_Continue` but not alphanumeric.
+        assert_eq!(
+            tokenize("हिन्दी हिंदी 日本語 $a1 _b"),
+            vec![
+                Token::Ident("हिन्दी".to_string()),
+                Token::Ident("हिंदी".to_string()),
+                Token::Ident("日本語".to_string()),
+                Token::Ident("$a1".to_string()),
+                Token::Ident("_b".to_string()),
+                Token::Eof
+            ]
+        );
+        // A superscript digit is numeric but not an identifier part.
+        assert!(Scanner::new("x²").tokenize().is_err());
     }
 }
