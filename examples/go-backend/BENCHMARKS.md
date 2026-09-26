@@ -6,19 +6,18 @@ unmodified JavaScript running under **Node (V8)** and **Bun
 see the [README](README.md) for what the backend supports.
 
 **Summary.**
-- **Memory:** the Go binary uses the least memory in all 15 benchmarks,
-  typically ~10 MB against 40–60 MB, and up to 19x less than Node.
-- **Speed vs both engines:** it beats Node and Bun by 2–3x on the record-
-  and object-heavy workloads (`orders`, `raytracer`), and by 1.4–4x on
-  call-heavy and dense-array code (`fib`, `sieve`).
-- **Speed vs Node alone:** it is also 1.3–2.8x faster than Node on
-  closure pipelines, a bytecode interpreter and a string DP, where Bun
-  beats it by 1.2–1.8x.
-- **Ties and losses:** pure float loops are a tie. Short-lived allocation
-  (vs V8) and integer index arithmetic done in doubles are losses.
-- **Integers:** since inty types integers as `Int` and the backend emits
-  them as Go `int`, every program is 0–42% faster than the float64 code
-  the tables below measured. See [Integers](#integers-int-as-a-go-int).
+- **Memory:** the Go binary uses the least memory in all 15 benchmarks.
+  It is typically ~10 MB against 40–60 MB, and up to 16x less than Node
+  (`game-of-life`, `sieve`).
+- **Speed vs both engines:** it is clearly faster than Node and Bun in 9
+  of the 15 benchmarks, by up to 21x (`array-hof`) and 15x
+  (`particles`). Both of those used to be losses; see
+  [What changed](#what-changed).
+- **Speed vs Node:** it is faster than Node in 11 and ties in 2 more.
+- **Losses:**
+  - `dijkstra` and `nbody` are ~10% slower than Node.
+  - The switch-dispatch interpreter (`bytecode-vm`) is 1.4x slower than
+    Bun.
 
 ## Reproducing
 
@@ -74,94 +73,117 @@ table and makes the run exit non-zero.
 ## Results
 
 These are from Node v22.22.2 (V8), Bun 1.3.11 (JavaScriptCore) and Go
-1.24.7 on a 4-core linux/amd64 cloud container. They predate the `Int`
-lowering: [Integers](#integers-int-as-a-go-int) has its before/after. Each runtime got 10
+1.24.7 on a 4-core linux/amd64 cloud container. Each runtime got 10
 processes after 1 discarded, so 30 warm iterations. Every program's
 output was byte-identical across all three. On their own, the runtimes
-take 28 ms (Node) and 3.8 ms (Bun) to start.
+take 28 ms (Node) and 3.2 ms (Bun) to start.
 
 **Steady state.** Warm iterations only, so JIT warm-up and startup are
 excluded. Median ms (IQR). Speedup = JS time / Go time, with a 95% CI:
 
 | benchmark | node warm | bun warm | inty → go warm | **vs node** [95% CI] | **vs bun** [95% CI] | output |
 | --- | ---: | ---: | ---: | ---: | ---: | :---: |
-| array-hof | 836 (781–859) | 171 (161–183) | 298 (280–322) | **2.80x** [2.55–2.97] | **0.57x** [0.53–0.63] | identical |
-| bytecode-vm | 924 (863–954) | 263 (234–280) | 452 (431–478) | **2.04x** [1.91–2.12] | **0.58x** [0.51–0.61] | identical |
-| collatz | 1516 (1470–1559) | 3257 (3165–3335) | 1036 (1017–1084) | **1.46x** [1.39–1.49] | **3.14x** [3.02–3.21] | identical |
-| dijkstra | 321 (296–330) | 346 (336–360) | 383 (348–394) | **0.84x** [0.77–0.91] | **0.90x** [0.88–0.98] | identical |
-| fib | 358 (340–375) | 237 (216–249) | 171 (168–178) | **2.09x** [1.98–2.16] | **1.39x** [1.27–1.46] | identical |
-| fuzzy-search | 628 (594–652) | 372 (348–385) | 466 (457–484) | **1.35x** [1.29–1.39] | **0.80x** [0.75–0.82] | identical |
-| game-of-life | 932 (901–984) | 897 (870–930) | 883 (864–909) | **1.06x** [1.02–1.10] | **1.02x** [0.99–1.04] | identical |
-| log-analytics | 577 (473–640) | 491 (468–546) | 454 (382–517) | **1.27x** [1.11–1.45] | **1.08x** [0.99–1.25] | identical |
-| mandelbrot | 878 (842–906) | 896 (873–926) | 883 (849–912) | **1.00x** [0.97–1.03] | **1.02x** [0.99–1.05] | identical |
-| nbody | 367 (348–387) | 501 (486–526) | 407 (388–424) | **0.90x** [0.86–0.94] | **1.23x** [1.20–1.27] | identical |
-| orders | 396 (365–471) | 631 (601–668) | 203 (192–216) | **1.95x** [1.78–2.06] | **3.10x** [2.93–3.23] | identical |
-| particles | 256 (239–272) | 606 (590–638) | 386 (374–402) | **0.66x** [0.62–0.69] | **1.57x** [1.50–1.66] | identical |
-| raytracer | 384 (363–411) | 450 (428–476) | 185 (178–191) | **2.07x** [1.98–2.22] | **2.43x** [2.31–2.58] | identical |
-| sieve | 780 (750–800) | 320 (305–340) | 196 (182–210) | **3.99x** [3.81–4.26] | **1.64x** [1.55–1.75] | identical |
-| spectral-norm | 585 (559–604) | 773 (752–792) | 586 (576–605) | **1.00x** [0.96–1.02] | **1.32x** [1.27–1.35] | identical |
+| array-hof | 780 (764–791) | 179 (158–193) | 36.7 (29.9–43.4) | **21.24x** [18.58–23.44] | **4.87x** [4.08–5.37] | identical |
+| bytecode-vm | 1066 (1058–1077) | 311 (275–344) | 430 (419–446) | **2.48x** [2.40–2.54] | **0.72x** [0.70–0.80] | identical |
+| collatz | 1805 (1787–1819) | 4057 (4042–4081) | 1134 (1126–1151) | **1.59x** [1.58–1.61] | **3.58x** [3.56–3.61] | identical |
+| dijkstra | 334 (323–345) | 358 (354–365) | 362 (359–366) | **0.92x** [0.91–0.94] | **0.99x** [0.98–1.00] | identical |
+| fib | 408 (404–411) | 297 (294–304) | 225 (224–231) | **1.81x** [1.77–1.83] | **1.32x** [1.29–1.36] | identical |
+| fuzzy-search | 710 (704–719) | 429 (426–434) | 429 (425–445) | **1.66x** [1.60–1.68] | **1.00x** [0.97–1.01] | identical |
+| game-of-life | 1096 (1058–1121) | 1057 (1054–1077) | 561 (557–567) | **1.95x** [1.89–1.97] | **1.88x** [1.88–1.91] | identical |
+| log-analytics | 562 (464–604) | 551 (522–588) | 195 (190–216) | **2.88x** [2.42–3.00] | **2.82x** [2.68–2.94] | identical |
+| mandelbrot | 1145 (1139–1152) | 1164 (1161–1173) | 1127 (1123–1132) | **1.02x** [1.01–1.02] | **1.03x** [1.03–1.04] | identical |
+| nbody | 415 (410–418) | 571 (567–578) | 469 (467–475) | **0.88x** [0.87–0.89] | **1.22x** [1.21–1.23] | identical |
+| orders | 379 (364–428) | 707 (669–745) | 144 (133–163) | **2.62x** [2.51–2.74] | **4.89x** [4.70–5.09] | identical |
+| particles | 275 (271–279) | 503 (495–522) | 33.8 (32.4–35.4) | **8.15x** [7.79–8.51] | **14.89x** [14.23–15.67] | identical |
+| raytracer | 365 (359–368) | 443 (439–453) | 130 (130–134) | **2.79x** [2.73–2.82] | **3.39x** [3.33–3.46] | identical |
+| sieve | 682 (676–690) | 275 (271–282) | 156 (147–169) | **4.36x** [4.05–4.63] | **1.76x** [1.63–1.87] | identical |
+| spectral-norm | 632 (631–634) | 883 (875–898) | 620 (618–625) | **1.02x** [1.01–1.02] | **1.42x** [1.41–1.44] | identical |
 
 **Whole process.** 4 iterations plus startup, median per process,
 node / bun / go:
 
 | benchmark | cold 1st iteration | wall | CPU (user+sys) | peak RSS |
 | --- | ---: | ---: | ---: | ---: |
-| array-hof | 877 / 190 / 286 ms | 3427 / 741 / 1173 ms | 3420 / 951 / 1826 ms | 131 / 61 / 12 MB |
-| bytecode-vm | 918 / 250 / 446 ms | 3682 / 1058 / 1801 ms | 3638 / 1055 / 1796 ms | 51 / 41 / 10 MB |
-| collatz | 1399 / 2881 / 1030 ms | 5934 / 12669 / 4177 ms | 5843 / 12513 / 4145 ms | 51 / 40 / 10 MB |
-| dijkstra | 357 / 355 / 392 ms | 1530 / 1635 / 1723 ms | 1570 / 1709 / 1818 ms | 192 / 145 / 96 MB |
-| fib | 343 / 250 / 175 ms | 1460 / 958 / 675 ms | 1417 / 948 / 674 ms | 51 / 37 / 10 MB |
-| fuzzy-search | 647 / 394 / 451 ms | 2529 / 1495 / 1847 ms | 2528 / 1518 / 1831 ms | 63 / 53 / 10 MB |
-| game-of-life | 931 / 948 / 871 ms | 3754 / 3664 / 3502 ms | 3725 / 3661 / 3483 ms | 186 / 109 / 10 MB |
-| log-analytics | 699 / 563 / 526 ms | 2467 / 2113 / 1959 ms | 4734 / 2821 / 2926 ms | 534 / 514 / 201 MB |
-| mandelbrot | 903 / 930 / 858 ms | 3553 / 3603 / 3527 ms | 3485 / 3570 / 3477 ms | 53 / 39 / 10 MB |
-| nbody | 371 / 505 / 400 ms | 1529 / 2022 / 1621 ms | 1513 / 2010 / 1598 ms | 53 / 41 / 10 MB |
-| orders | 504 / 672 / 249 ms | 1857 / 2589 / 878 ms | 2687 / 2841 / 1097 ms | 561 / 359 / 178 MB |
-| particles | 324 / 610 / 388 ms | 1128 / 2434 / 1545 ms | 1131 / 4455 / 1723 ms | 85 / 46 / 10 MB |
-| raytracer | 453 / 559 / 187 ms | 1653 / 1932 / 744 ms | 1688 / 2528 / 775 ms | 57 / 52 / 10 MB |
-| sieve | 838 / 440 / 198 ms | 3240 / 1447 / 786 ms | 3415 / 1511 / 1128 ms | 210 / 186 / 11 MB |
-| spectral-norm | 642 / 778 / 609 ms | 2436 / 3119 / 2394 ms | 2415 / 3109 / 2369 ms | 55 / 43 / 10 MB |
+| array-hof | 838 / 253 / 28.9 ms | 3228 / 812 / 150 ms | 3207 / 754 / 129 ms | 133 / 58 / 10 MB |
+| bytecode-vm | 1085 / 293 / 422 ms | 4365 / 1255 / 1720 ms | 4344 / 1231 / 1689 ms | 51 / 41 / 10 MB |
+| collatz | 1655 / 3724 / 1145 ms | 7129 / 15899 / 4547 ms | 7078 / 15885 / 4556 ms | 51 / 40 / 10 MB |
+| dijkstra | 367 / 352 / 363 ms | 1594 / 1688 / 1634 ms | 1653 / 1795 / 1765 ms | 188 / 145 / 79 MB |
+| fib | 410 / 298 / 225 ms | 1678 / 1214 / 910 ms | 1672 / 1209 / 904 ms | 51 / 37 / 10 MB |
+| fuzzy-search | 714 / 434 / 429 ms | 2886 / 1751 / 1732 ms | 2923 / 1802 / 1730 ms | 63 / 53 / 10 MB |
+| game-of-life | 1118 / 1090 / 576 ms | 4428 / 4308 / 2267 ms | 4458 / 4336 / 2300 ms | 185 / 118 / 12 MB |
+| log-analytics | 698 / 618 / 256 ms | 2377 / 2323 / 881 ms | 4456 / 2958 / 1075 ms | 531 / 592 / 145 MB |
+| mandelbrot | 1148 / 1172 / 1134 ms | 4636 / 4691 / 4526 ms | 4621 / 4679 / 4524 ms | 53 / 39 / 10 MB |
+| nbody | 417 / 579 / 470 ms | 1713 / 2318 / 1895 ms | 1712 / 2320 / 1890 ms | 53 / 41 / 10 MB |
+| orders | 496 / 747 / 217 ms | 1772 / 2912 / 672 ms | 2594 / 3209 / 954 ms | 541 / 297 / 176 MB |
+| particles | 332 / 518 / 33.8 ms | 1204 / 2074 / 136 ms | 1223 / 3870 / 137 ms | 85 / 47 / 10 MB |
+| raytracer | 451 / 534 / 131 ms | 1591 / 1898 / 527 ms | 1652 / 2467 / 528 ms | 57 / 53 / 10 MB |
+| sieve | 717 / 377 / 180 ms | 2819 / 1241 / 670 ms | 3005 / 1295 / 742 ms | 188 / 187 / 12 MB |
+| spectral-norm | 680 / 894 / 622 ms | 2633 / 3599 / 2495 ms | 2651 / 3617 / 2497 ms | 55 / 43 / 10 MB |
+
+`orders` and `raytracer` come from a second run of the same harness,
+made after the struct-size limit described below.
 
 ## What the numbers say
 
 - **Memory is the most consistent win.** The Go binary's peak RSS is
-  lower in every benchmark:
-  - about 10 MB where the JS engines sit at 40–60 MB;
-  - 11 MB vs 210 MB (Node) for `sieve`, whose `boolean[]` becomes a
-    1-byte-per-element `[]bool`;
-  - 178 MB vs 561 MB (Node) and 359 MB (Bun) for `orders`, whose million
-    records become flat structs instead of objects with boxed
-    double-valued fields.
-- **Record- and object-heavy code wins against both engines.** The Go
-  binary is 2–3x faster on `orders` (the ETL pipeline) and `raytracer`
-  (vector math on small objects). There, static types remove what both
-  JITs have to discover and guard at runtime.
-- **Call-heavy and dense-array code** (`fib`, `sieve`) is 1.4–4x faster
-  than both.
-- **Bun (JavaScriptCore) is the stronger baseline** on
-  closure-heavy array pipelines (`array-hof`), the switch-dispatch
-  interpreter (`bytecode-vm`) and the Levenshtein DP (`fuzzy-search`).
-  There it beats the Go translation by 1.2–1.8x. It is weak on double
-  `%` (`collatz`) and short-lived allocation (`particles`). Against Node,
-  the Go translation wins or ties on all of these except `particles`.
-- **Ties and losses are real too.** Tight float loops (`mandelbrot`,
-  `spectral-norm`, `nbody`) are within about 10% of the best JIT: once
-  warm, a JIT emits the same machine code Go does. V8's escape analysis
-  and young-generation GC win on short-lived small objects (`particles`).
-  Graph code with integer index arithmetic done in doubles (`dijkstra`)
-  is slower in Go.
+  lower in every benchmark. It is about 10 MB where the JS engines sit
+  at 40–60 MB, and 12 MB vs 188 MB (Node) for `sieve`, whose
+  `boolean[]` becomes a 1-byte-per-element `[]bool`.
+- **Allocation-heavy code now wins the most.** Two changes remove the
+  allocations that V8's and JavaScriptCore's young-generation GCs
+  absorb and Go's collector doesn't:
+  - `array-hof` fuses its `map`/`filter`/`reduce` chains into one loop.
+  - `particles` stores its small `{x, y}` vectors as Go values instead
+    of heap objects.
+- **Record- and object-heavy code** (`orders`, `raytracer`) is 2.6–4.9x
+  faster than both. Static types remove what both JITs have to discover
+  and guard at runtime.
+- **Integer-heavy code gains from `Int`.** `game-of-life`,
+  `log-analytics` and `sieve` do index arithmetic, which is now Go
+  `int` arithmetic (see [Integers](#integers-int-as-a-go-int)).
+- **Ties and losses:**
+  - **Tight float loops** (`mandelbrot`, `spectral-norm`) tie with
+    Node: once warm, a JIT emits the same machine code Go does.
+  - **`nbody`** is 12% slower than Node, whose escape analysis keeps
+    its bodies' fields in registers.
+  - **`dijkstra`** is 8% slower than Node on its binary heap.
+  - **`bytecode-vm`** is 1.4x slower than Bun. Bun dispatches its
+    `switch` better than Go's compare chain does.
 
-Where the Go backend loses, it's to things a better backend could fix;
-the types already carry the information:
-- **Integers as integers.** Every JS number is a `float64` here. Both
-  JITs speculate on small integers, so index arithmetic and `switch`
-  dispatch (which Go compiles to float comparison chains) are cheaper
-  for them. A range analysis that proves values integral would let
-  those become Go `int`s.
-- **Fused array pipelines.** `map` / `filter` / `reduce` go through
-  generic helpers that take a func value, so the callback isn't
-  inlined. Emitting the loop at the call site when the callback is a
-  literal would remove the indirect call.
+## What changed
+
+Profiles of the slowest programs, taken with Go's CPU profiler and
+`GODEBUG=gctrace=1`, showed each time going to memory management rather
+than computation. Three backend changes followed:
+
+- **Array pipelines are fused.** `xs.map(f).filter(g).reduce(h, 0)`
+  compiles to one loop with no intermediate arrays, when every callback
+  is pure. The same holds when an intermediate sits in a `const` that is
+  used once. In `array-hof` about 70% of the time had gone to zeroing,
+  growing and collecting the throwaway arrays.
+- **Small structs are values.** A struct type is a Go value, not a
+  pointer, when two things hold:
+  - no operation of the program at that type can tell a copy from the
+    original: no field write, identity comparison, truth test,
+    nullable type or recursion;
+  - it takes at most 4 words.
+
+  In `particles`, 62% of the CPU had gone to allocating vectors. The
+  size limit exists because a large record in a growing array is copied
+  whole every time the array grows. With 8-field `orders` records by
+  value, the first iteration took 7x longer and peak memory tripled.
+- **`new Array(n).fill(v)` is one allocation.** See fast-diff below.
+
+| benchmark | before (warm) | after (warm) | peak RSS before / after |
+| --- | ---: | ---: | ---: |
+| array-hof | 298 ms | 36.7 ms | 12 / 10 MB |
+| particles | 386 ms | 33.8 ms | 10 / 10 MB |
+| orders | 203 ms | 144 ms | 178 / 176 MB |
+| raytracer | 185 ms | 130 ms | 10 / 10 MB |
+
+The "before" column is the first published run (float64 numbers, before
+these changes). The [Integers](#integers-int-as-a-go-int) section has
+the `Int` change's share on its own.
 
 ## A real tool: md2html
 
@@ -174,18 +196,18 @@ CLI is used, as **whole processes** — startup, reading the input,
 converting, writing the HTML.
 
 `node tools/bench.mjs` translates and builds it, checks that Node, Bun
-and the Go binary produce byte-identical HTML, then runs each side 21
+and the Go binary produce byte-identical HTML, then runs each side 15
 times per input (after one discarded warm-up round), interleaved in
 random order. Wall time, CPU time (user + sys) and peak RSS come from
 `getrusage`; medians are reported.
 
 Inputs: the repository README (5.2 KB), and every Markdown file in the
-repository concatenated and repeated to 20.4 MB.
+repository concatenated and repeated to 20.5 MB.
 
 | input | node | bun | inty → go | go vs node / bun | CPU node / bun / go | peak RSS node / bun / go |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small (5.2 KB) | 72.2 ms | 37.2 ms | 3.0 ms | **23.8x / 12.3x** | 75 / 43 / 4 ms | 58 / 44 / 10 MB |
-| large (20.4 MB) | 1303 ms | 1129 ms | 821 ms | **1.59x / 1.37x** | 1734 / 2115 / 1126 ms | 332 / 459 / 149 MB |
+| small (5.2 KB) | 72.1 ms | 36.2 ms | 2.9 ms | **24.6x / 12.4x** | 76 / 42 / 3 ms | 58 / 44 / 10 MB |
+| large (20.5 MB) | 1249 ms | 1126 ms | 605 ms | **2.06x / 1.86x** | 1638 / 2082 / 769 ms | 336 / 474 / 150 MB |
 
 Node v22.22.2, Bun 1.3.11, Go 1.24.7, linux/amd64.
 
@@ -193,9 +215,9 @@ Node v22.22.2, Bun 1.3.11, Go 1.24.7, linux/amd64.
   engines spend 35–70 ms before running a line. For a tool invoked once
   per file — a build step, a pre-commit hook — this is the number that
   matters.
-- **Large inputs are throughput.** Here the gap is 1.4–1.6x in wall time,
-  with 35–50% less CPU (the engines' JIT and GC threads work in parallel
-  with the program) and less than half the memory.
+- **Large inputs are throughput.** Here the gap is 1.9–2.1x in wall
+  time, with 53–63% less CPU (the engines' JIT and GC threads work in
+  parallel with the program) and less than half the memory.
 - The Go side's one runtime-level optimisation that mattered was sizing a
   string array's `join` once (`strings.Join`); the program builds its
   output by pushing strings onto an array and joining them, as idiomatic
@@ -240,38 +262,40 @@ after one discarded warm-up round, medians of wall time, CPU time
 
 | input | node | bun | inty → go | go vs node / bun | CPU node / bun / go | peak RSS node / bun / go |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small (2 × 5 KB) | 111 ms | 71.8 ms | 14.9 ms | **7.4x / 4.8x** | 147 / 86 / 16 ms | 59 / 46 / 10 MB |
-| large (2 × 2 MB) | 1753 ms | 2343 ms | 1921 ms | 0.91x / 1.22x | 1876 / 2418 / 2922 ms | 477 / 308 / 197 MB |
-| large, `--cleanup` | 1728 ms | 2341 ms | 1916 ms | 0.90x / 1.22x | 1875 / 2415 / 2858 ms | 480 / 310 / 197 MB |
-| dense (2 × 100 KB) | 626 ms | 1205 ms | 479 ms | **1.31x / 2.51x** | 762 / 1256 / 544 ms | 93 / 89 / 13 MB |
+| small (2 × 5 KB) | 109 ms | 65.0 ms | 12.5 ms | **8.7x / 5.2x** | 146 / 80 / 13 ms | 60 / 46 / 10 MB |
+| large (2 × 2 MB) | 1072 ms | 1643 ms | 700 ms | **1.53x / 2.35x** | 1185 / 1689 / 757 ms | 217 / 245 / 86 MB |
+| large, `--cleanup` | 1078 ms | 1634 ms | 701 ms | **1.54x / 2.33x** | 1178 / 1689 / 760 ms | 218 / 245 / 86 MB |
+| dense (2 × 100 KB) | 563 ms | 947 ms | 345 ms | **1.63x / 2.75x** | 728 / 1011 / 362 ms | 72 / 64 / 10 MB |
 
 Node v22.22.2, Bun 1.3.11 (default options, i.e. without `--smol`),
 Go 1.24.7, linux/amd64.
 
-- **Small inputs:** the native binary wins by 5–7x. The gap is smaller
+- **Small inputs:** the native binary wins by 5–9x. The gap is smaller
   than for md2html because even a 5 KB diff runs a few bisections.
-- **Large input: Node wins by about 10%, and uses more than twice the
-  memory.** Each bisection builds two arrays the size of both texts,
-  about 4M elements at the top level and 21M pushes per array over the
-  whole run. They are built with `push(-1)`, as upstream does with
-  `new Array(n)` plus a fill loop. That makes this input a test of
-  allocating and page-faulting large arrays. V8 stores them as 4-byte
-  small integers; Go stores 8-byte `float64`s and returns freed pages to
-  the OS, then faults them in again. Go's CPU time exceeds its wall time
-  because of its concurrent GC. `GOGC=200` brings Go to about 1.45 s,
-  but the benchmark uses defaults.
+- **Large input:** Go is 1.5x faster than Node and 2.3x faster than
+  Bun, at 40% of the memory.
+  - Each bisection builds two arrays the size of both texts: about 4M
+    elements at the top level, and hundreds of thousands in the
+    recursive calls.
+  - Building them with `push(-1)` in a loop made this input a test of
+    allocating and page-faulting large arrays. Go lost it at 1.9 s and
+    197 MB.
+  - They are now built with `new Array(n).fill(-1)`, which inty types as
+    an array (a `new Array(n)` alone can't be read: its holes would be
+    `undefined`). The backend emits it as a single allocation.
+  - That cut Go's allocation from 897 MB to 338 MB and its GC cycles
+    from 45 to 26.
 - **Dense input:** Myers bisection is character comparisons and index
-  arithmetic on the V arrays, and Go wins: 1.3x vs Node and 2.5x vs
-  Bun, at a seventh of the memory.
-- **The runtime change this benchmark prompted:** `arr.push` now grows
-  a full array to twice its length. Go's `append` grows large slices by
-  only 1.25x, which copied the V arrays about five times over. That
-  change took the large input from about 2.5 s (a single run) to 1.92 s. It is neutral or
-  better on the other programs; `sieve` is ~20% faster as a whole
-  process.
-- **Where the types could still help:** the bisection indices are
-  integral, so a range analysis could make the V arrays `[]int32`,
-  halving the memory traffic that decides the large case.
+  arithmetic on the V arrays. Go wins: 1.6x vs Node and 2.8x vs Bun, at
+  a seventh of the memory.
+- **The one change to the upstream code:** `fill` instead of a `push`
+  loop. It is idiomatic JavaScript, and it is also 9% faster under Node
+  and 19% under Bun, with the same memory.
+- **What is left:** of Go's 86 MB peak, about 67 MB is the two
+  top-level V arrays at 8 bytes per element. V8 stores the same values
+  as 4-byte small integers. The bisection indices are integral and
+  bounded by the input length, so a range analysis could make these
+  arrays `[]int32` and bring the peak to about 53 MB.
 
 ## Integers: `Int` as a Go `int`
 

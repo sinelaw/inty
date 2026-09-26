@@ -47,7 +47,14 @@ const RUNTIME: &str = include_str!("runtime.go");
 ///
 /// Every view of an object has the same struct type (the Go code passes
 /// it around as that type), so this is per type, and sound. The second
-/// pass emits the program with the other structs as values.
+/// pass emits the program with the other structs as values — the small
+/// ones. Which of the two sound representations to use is a cost
+/// question: a value is free to create but copied whole wherever it is
+/// passed, stored or moved (an array growing, `filter` collecting). Up
+/// to [`VALUE_WORDS`] words the copy is as cheap as the pointer it
+/// replaces; a large record in a growing array is copied many times over
+/// (a million 8-field orders: 3x the peak memory and 7x the time of
+/// pointers).
 pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String> {
     let types = state
         .expr_types
@@ -61,15 +68,61 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         instantiations.clone(),
         Default::default(),
     )?;
-    let by_value: std::collections::HashSet<usize> = (0..tm.structs.len())
-        .filter(|i| !tm.needs_pointer.contains(i))
-        .collect();
+    let by_value = small_value_structs(&tm);
     if by_value.is_empty() {
         return Ok(code);
     }
     let (code, tm2) = emit_pass(program, state, types, instantiations, by_value)?;
     debug_assert_eq!(tm.structs.len(), tm2.structs.len());
     Ok(code)
+}
+
+/// The largest struct, in machine words, stored as a Go value.
+const VALUE_WORDS: usize = 4;
+
+/// The structs no operation needs a pointer for and whose values, with
+/// nested value structs inline, take at most [`VALUE_WORDS`] words.
+fn small_value_structs(tm: &crate::types::TypeMapper) -> std::collections::HashSet<usize> {
+    fn words(
+        tm: &crate::types::TypeMapper,
+        t: &GoType,
+        memo: &mut HashMap<usize, Option<usize>>,
+    ) -> usize {
+        match t {
+            GoType::Unit => 0,
+            GoType::Str | GoType::Any => 2,
+            GoType::Struct(i) => value_words(tm, *i, memo).unwrap_or(1),
+            _ => 1,
+        }
+    }
+    /// A struct's size as a value, or `None` if it isn't one.
+    fn value_words(
+        tm: &crate::types::TypeMapper,
+        i: usize,
+        memo: &mut HashMap<usize, Option<usize>>,
+    ) -> Option<usize> {
+        if let Some(&w) = memo.get(&i) {
+            return w;
+        }
+        if tm.needs_pointer.contains(&i) {
+            memo.insert(i, None);
+            return None;
+        }
+        // Recursive structs need a pointer, so this terminates.
+        memo.insert(i, None);
+        let size = tm.structs[i]
+            .fields
+            .iter()
+            .map(|(_, _, t)| words(tm, t, memo))
+            .sum::<usize>();
+        let w = (size <= VALUE_WORDS).then_some(size);
+        memo.insert(i, w);
+        w
+    }
+    let mut memo = HashMap::new();
+    (0..tm.structs.len())
+        .filter(|&i| value_words(tm, i, &mut memo).is_some())
+        .collect()
 }
 
 fn emit_pass(

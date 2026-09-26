@@ -531,3 +531,16 @@ fn pipelines_with_effects_are_not_fused() {
     .code;
     assert!(user_code(&code).contains("intyMap("), "{}", code);
 }
+
+#[test]
+fn large_structs_stay_pointers() {
+    // Copying a record whole on every array growth or `filter` costs
+    // more than its allocation saves: past 4 words a struct stays a
+    // pointer even when nothing observes its identity.
+    let small = "function p(a) { return { a: a, b: a, c: a, d: a }; }\nconsole.log(p(1).a);";
+    let code = inty_go::compile(small).unwrap().code;
+    assert!(code.contains("func p(a int) Obj1 {"), "{}", code);
+    let large = "function p(a) { return { a: a, b: a, c: a, d: a, e: a }; }\nconsole.log(p(1).a);";
+    let code = inty_go::compile(large).unwrap().code;
+    assert!(code.contains("func p(a int) *Obj1 {"), "{}", code);
+}
