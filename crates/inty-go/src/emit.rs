@@ -150,6 +150,7 @@ fn emit_pass(
         block_stack: Vec::new(),
         deferred: HashMap::new(),
         pure_funcs: HashMap::new(),
+        literal_consts: HashMap::new(),
     };
 
     // Bind every top-level name first: function bodies may refer to
@@ -181,6 +182,12 @@ fn emit_pass(
                     }
                     let t = e.decl_type(d)?;
                     globals.push_str(&format!("var {} {}\n", mangle(&d.name), e.tm.render(&t)));
+                    if let Some(init) = literal_const(*kind, d) {
+                        if matches!(t, GoType::Int | GoType::Str) {
+                            let v = e.expr_as(init, &t)?;
+                            e.literal_consts.insert(d.name.clone(), v);
+                        }
+                    }
                     e.bind(&d.name, t);
                 }
             }
@@ -245,6 +252,33 @@ fn emit_pass(
     out.push_str("}\n\n");
     out.push_str(RUNTIME);
     Ok((out, e.tm))
+}
+
+/// The literal initialiser of a top-level `const` bound to a number,
+/// string or boolean literal (a negated number too).
+fn literal_const(kind: VarKind, d: &VarDeclarator) -> Option<&Expr> {
+    if kind != VarKind::Const {
+        return None;
+    }
+    let init = d.init.as_ref()?;
+    let literal = |e: &Expr| {
+        matches!(
+            e,
+            Expr::Lit {
+                value: Literal::Number(_) | Literal::String(_) | Literal::Boolean(_),
+                ..
+            }
+        )
+    };
+    match init {
+        e if literal(e) => Some(init),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            argument,
+            ..
+        } if literal(argument) => Some(init),
+        _ => None,
+    }
 }
 
 /// A `const f = <function>` declarator: bound like a function
@@ -374,6 +408,12 @@ struct Emitter<'a> {
     /// recorded as a structural *view* of the binding (e.g. an array seen
     /// as `{length: Number | ρ}`), which isn't the variable's Go type.
     scopes: Vec<HashMap<String, Bound>>,
+    /// Top-level `const`s bound to an integer or string literal, with the
+    /// Go literal: `case` labels use it, so a `switch` over them is on
+    /// constants, which Go compiles to a jump table. (They stay Go
+    /// variables everywhere else: Go folds constant expressions with its
+    /// own rules, `1 / zero` being a compile error.)
+    literal_consts: HashMap<String, String>,
     /// Every function binding seen so far, with its specialisations.
     funcs: Vec<FuncInfo>,
     /// The specialisation mapping in force, innermost last.
@@ -1569,10 +1609,15 @@ impl<'a> Emitter<'a> {
         };
         self.line(&format!("switch {} {{", d));
         let mut pending: Vec<String> = Vec::new();
+        // Constant labels already used: Go rejects a duplicate one.
+        let mut constants: std::collections::HashSet<String> = Default::default();
         for (i, case) in cases.iter().enumerate() {
             match &case.test {
                 Some(t) => {
-                    let v = self.expr_as(t, &dt)?;
+                    let v = match self.literal_const_label(t, &dt) {
+                        Some(lit) if constants.insert(lit.clone()) => lit,
+                        _ => self.expr_as(t, &dt)?,
+                    };
                     pending.push(v);
                 }
                 None if !pending.is_empty() => {
@@ -1605,6 +1650,19 @@ impl<'a> Emitter<'a> {
         }
         self.line("}");
         Ok(())
+    }
+
+    /// The Go literal for a `case` label naming a top-level literal
+    /// `const` (not shadowed) of the discriminant's type.
+    fn literal_const_label(&mut self, test: &Expr, dt: &GoType) -> Option<String> {
+        let Expr::Ident { name, .. } = test else {
+            return None;
+        };
+        let innermost = self.scopes.iter().rposition(|s| s.contains_key(name))?;
+        if innermost != 0 || self.type_of(test).ok()? != *dt {
+            return None;
+        }
+        self.literal_consts.get(name).cloned()
     }
 
     /// An expression in statement position.

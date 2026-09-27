@@ -544,3 +544,19 @@ fn large_structs_stay_pointers() {
     let code = inty_go::compile(large).unwrap().code;
     assert!(code.contains("func p(a int) *Obj1 {"), "{}", code);
 }
+
+#[test]
+fn switch_on_literal_consts_uses_constant_labels() {
+    // Constant `case` labels let Go compile the `switch` to a jump table.
+    // The consts stay variables elsewhere (Go folds constant expressions
+    // its own way), and a repeated label (legal in JS, not as a Go
+    // constant) keeps the variable.
+    let src = "const A = 0;\nconst B = 1;\nfunction f(op) {\n\
+               switch (op) { case A: return 10; case B: return 20; case A: return 30; }\n\
+               return 0;\n}\nconsole.log(f(1) + A);";
+    let code = inty_go::compile(src).unwrap().code;
+    assert!(code.contains("var A int"), "{}", code);
+    assert!(code.contains("case 0:"), "{}", code);
+    assert!(code.contains("case 1:"), "{}", code);
+    assert!(code.contains("case A:"), "{}", code);
+}
