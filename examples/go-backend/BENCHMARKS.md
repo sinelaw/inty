@@ -284,12 +284,12 @@ random order. Wall time, CPU time (user + sys) and peak RSS come from
 `getrusage`; medians are reported.
 
 Inputs: the repository README (5.2 KB), and every Markdown file in the
-repository concatenated and repeated to 20.5 MB.
+repository concatenated and repeated to 20.3 MB.
 
 | input | node | bun | inty → go | go vs node / bun | CPU node / bun / go | peak RSS node / bun / go |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small (5.2 KB) | 72.1 ms | 36.2 ms | 2.9 ms | **24.6x / 12.4x** | 76 / 42 / 3 ms | 58 / 44 / 10 MB |
-| large (20.5 MB) | 1249 ms | 1126 ms | 605 ms | **2.06x / 1.86x** | 1638 / 2082 / 769 ms | 336 / 474 / 150 MB |
+| small (5.2 KB) | 77.0 ms | 38.1 ms | 3.0 ms | **25.3x / 12.5x** | 77 / 44 / 3 ms | 58 / 44 / 10 MB |
+| large (20.3 MB) | 1177 ms | 1165 ms | 625 ms | **1.88x / 1.86x** | 1607 / 2050 / 792 ms | 335 / 453 / 142 MB |
 
 Node v22.22.2, Bun 1.3.11, Go 1.24.7, linux/amd64.
 
@@ -297,9 +297,9 @@ Node v22.22.2, Bun 1.3.11, Go 1.24.7, linux/amd64.
   engines spend 35–70 ms before running a line. For a tool invoked once
   per file — a build step, a pre-commit hook — this is the number that
   matters.
-- **Large inputs are throughput.** Here the gap is 1.9–2.1x in wall
-  time, with 53–63% less CPU (the engines' JIT and GC threads work in
-  parallel with the program) and less than half the memory.
+- **Large inputs are throughput.** Here the gap is 1.9x in wall time,
+  with 51–61% less CPU (the engines' JIT and GC threads work in parallel
+  with the program) and less than half the memory.
 - The Go side's one runtime-level optimisation that mattered was sizing a
   string array's `join` once (`strings.Join`); the program builds its
   output by pushing strings onto an array and joining them, as idiomatic
@@ -344,17 +344,17 @@ after one discarded warm-up round, medians of wall time, CPU time
 
 | input | node | bun | inty → go | go vs node / bun | CPU node / bun / go | peak RSS node / bun / go |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| small (2 × 5 KB) | 109 ms | 65.0 ms | 12.5 ms | **8.7x / 5.2x** | 146 / 80 / 13 ms | 60 / 46 / 10 MB |
-| large (2 × 2 MB) | 1072 ms | 1643 ms | 700 ms | **1.53x / 2.35x** | 1185 / 1689 / 757 ms | 217 / 245 / 86 MB |
-| large, `--cleanup` | 1078 ms | 1634 ms | 701 ms | **1.54x / 2.33x** | 1178 / 1689 / 760 ms | 218 / 245 / 86 MB |
-| dense (2 × 100 KB) | 563 ms | 947 ms | 345 ms | **1.63x / 2.75x** | 728 / 1011 / 362 ms | 72 / 64 / 10 MB |
+| small (2 × 5 KB) | 100 ms | 64.8 ms | 11.8 ms | **8.5x / 5.5x** | 134 / 78 / 13 ms | 59 / 46 / 10 MB |
+| large (2 × 2 MB) | 1025 ms | 1468 ms | 683 ms | **1.50x / 2.15x** | 1167 / 1499 / 728 ms | 222 / 228 / 86 MB |
+| large, `--cleanup` | 1007 ms | 1491 ms | 670 ms | **1.50x / 2.23x** | 1140 / 1541 / 718 ms | 222 / 227 / 86 MB |
+| dense (2 × 100 KB) | 522 ms | 860 ms | 320 ms | **1.63x / 2.69x** | 664 / 915 / 335 ms | 72 / 66 / 10 MB |
 
 Node v22.22.2, Bun 1.3.11 (default options, i.e. without `--smol`),
 Go 1.24.7, linux/amd64.
 
 - **Small inputs:** the native binary wins by 5–9x. The gap is smaller
   than for md2html because even a 5 KB diff runs a few bisections.
-- **Large input:** Go is 1.5x faster than Node and 2.3x faster than
+- **Large input:** Go is 1.5x faster than Node and 2.2x faster than
   Bun, at 40% of the memory.
   - Each bisection builds two arrays the size of both texts: about 4M
     elements at the top level, and hundreds of thousands in the
@@ -368,16 +368,20 @@ Go 1.24.7, linux/amd64.
   - That cut Go's allocation from 897 MB to 338 MB and its GC cycles
     from 45 to 26.
 - **Dense input:** Myers bisection is character comparisons and index
-  arithmetic on the V arrays. Go wins: 1.6x vs Node and 2.8x vs Bun, at
+  arithmetic on the V arrays. Go wins: 1.6x vs Node and 2.7x vs Bun, at
   a seventh of the memory.
 - **The one change to the upstream code:** `fill` instead of a `push`
   loop. It is idiomatic JavaScript, and it is also 9% faster under Node
   and 19% under Bun, with the same memory.
 - **What is left:** of Go's 86 MB peak, about 67 MB is the two
-  top-level V arrays at 8 bytes per element. V8 stores the same values
-  as 4-byte small integers. The bisection indices are integral and
-  bounded by the input length, so a range analysis could make these
-  arrays `[]int32` and bring the peak to about 53 MB.
+  top-level V arrays at 8 bytes per element. Node's arrays take 8 bytes
+  per element too (see [Closest to Node](#closest-to-node)), and Node
+  still peaks at 222 MB. The bisection indices are integral and bounded
+  by the input length, so `Int32Array`s (a change to the port) or a
+  range analysis could bring Go's peak to about 53 MB.
+- **Not yet helped by loop-local array headers:** the bisection loops
+  call `text.charAt(i)`, and a loop with any call keeps reloading its
+  arrays' headers (see [What changed](#what-changed)).
 
 ## Integers: `Int` as a Go `int`
 
