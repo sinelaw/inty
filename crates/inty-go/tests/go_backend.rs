@@ -611,3 +611,38 @@ fn typed_array_updates_that_would_not_wrap_exactly_are_refused() {
         compile_err("const a = new Int32Array(1);\na[0] = 3;\na[0] *= 5;\nconsole.log(a[0]);");
     assert!(err.contains("typed array"), "{}", err);
 }
+
+#[test]
+fn loops_hold_array_headers_only_when_nothing_else_can_change_them() {
+    // A call-free loop indexes a local copy of the header; a store hands
+    // back the grown header.
+    let code = inty_go::compile(
+        "const xs = [1, 2];\nfor (let i = 0; i < 4; i++) { xs[i] = xs[i] + 1; }\nconsole.log(xs[0]);",
+    )
+    .unwrap()
+    .code;
+    assert!(code.contains(":= *xs"), "{}", code);
+    assert!(code.contains("= intySetH(xs, "), "{}", code);
+
+    let uncached = |src: &str| {
+        let code = inty_go::compile(src).unwrap().code;
+        let program = code.split("// ---- inty-go runtime").next().unwrap();
+        assert!(
+            !program.contains("intySetH") && !program.contains(":= *"),
+            "{}",
+            program
+        );
+    };
+    // A call could push to the array.
+    uncached("function f(a) { a.push(1); }\nconst xs = [1];\nfor (let i = 0; i < 2; i++) { f(xs); xs[0] = i; }\nconsole.log(xs.length);");
+    // Two names that may be one array, one of them stored to.
+    uncached("const a = [1];\nconst b = a;\nfor (let i = 0; i < 2; i++) { a[i] = b[0]; }\nconsole.log(a[0]);");
+    // A store through a field could grow an array the name aliases.
+    uncached("const o = {xs: [1]};\nconst ys = o.xs;\nfor (let i = 0; i < 2; i++) { o.xs[i] = ys[0]; }\nconsole.log(ys[0]);");
+    // The name itself is reassigned in the loop.
+    uncached(
+        "let xs = [1];\nfor (let i = 0; i < 2; i++) { xs = [xs[0] + 1]; }\nconsole.log(xs[0]);",
+    );
+    // A typed array a called function may replace.
+    uncached("let t = new Int32Array(1);\nfunction g() { t = new Int32Array(2); }\nfor (let i = 0; i < 2; i++) { g(); t[0] = i; }\nconsole.log(t[0]);");
+}

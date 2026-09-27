@@ -286,6 +286,21 @@ func intyFill[T any](a *[]T, v T) *[]T {
 	return a
 }
 
+// intySetH is intySet through a slice header a loop holds in a local
+// (see the emitter's `loops`): the store in place, or else the grown
+// array's new header. The rare growing path isn't inlined, so this is.
+func intySetH[T any](a *[]T, s []T, j int, v T) []T {
+	if j < len(s) {
+		s[j] = v
+		return s
+	}
+	intySetGrow(a, j, v)
+	return *a
+}
+
+//go:noinline
+func intySetGrow[T any](a *[]T, j int, v T) { intySet(a, j, v) }
+
 // Typed arrays (Int32Array, Uint8Array, Float64Array) are fixed-length
 // slices of the machine type. A store wraps an Int as JavaScript's
 // ToInt32 / ToUint8 do, which is Go's conversion; the helpers keep a
