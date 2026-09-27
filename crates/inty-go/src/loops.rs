@@ -385,3 +385,325 @@ pub enum ArrayKind<K> {
     /// An ordinary array, keyed by its Go element type.
     Growable(K),
 }
+
+/// The stores `a[j] = v`, among a loop body's statements, whose index is
+/// known to be in bounds, so that the store can't grow the array: the
+/// same statement list has already read (or stored) `a[j]`
+/// unconditionally, and nothing since can have changed `j`. A read out
+/// of bounds stops the program, and in a loop that holds `a`'s header
+/// (see [`LoopScan::cacheable`]) the array can only grow. `j` is a name
+/// or an integer literal.
+pub fn in_bounds_stores(body: &Stmt, out: &mut HashSet<Span>) {
+    match body {
+        Stmt::Block { body, .. } => in_bounds_list(body, out),
+        Stmt::If {
+            consequent,
+            alternate,
+            ..
+        } => {
+            in_bounds_stores(consequent, out);
+            if let Some(a) = alternate {
+                in_bounds_stores(a, out);
+            }
+        }
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::ForOf { body, .. }
+        | Stmt::ForIn { body, .. }
+        | Stmt::Labeled { body, .. } => in_bounds_stores(body, out),
+        Stmt::Switch { cases, .. } => {
+            for c in cases {
+                in_bounds_list(&c.consequent, out);
+            }
+        }
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            in_bounds_stores(block, out);
+            if let Some(h) = handler {
+                in_bounds_stores(&h.body, out);
+            }
+            if let Some(f) = finalizer {
+                in_bounds_stores(f, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn in_bounds_list(stmts: &[Stmt], out: &mut HashSet<Span>) {
+    for (k, s) in stmts.iter().enumerate() {
+        in_bounds_stores(s, out);
+        let Stmt::Expr {
+            expression:
+                Expr::Assign {
+                    op: AssignOp::Assign,
+                    left,
+                    right,
+                    span,
+                },
+            ..
+        } = s
+        else {
+            continue;
+        };
+        let Expr::ComputedMember {
+            object, property, ..
+        } = &**left
+        else {
+            continue;
+        };
+        let (Expr::Ident { name: array, .. }, Some(index)) = (&**object, index_key(property))
+        else {
+            continue;
+        };
+        if let Index::Name(j) = &index {
+            if assigns_in_expr(right, j) {
+                continue;
+            }
+        }
+        let known = reads(right, array, &index)
+            || stmts[..k]
+                .iter()
+                .rev()
+                .map(|p| fact(p, array, &index))
+                .find(|f| *f != Fact::Unknown)
+                == Some(Fact::InBounds);
+        if known {
+            out.insert(*span);
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+enum Index {
+    Name(String),
+    Const(i64),
+}
+
+fn index_key(e: &Expr) -> Option<Index> {
+    match e {
+        Expr::Ident { name, .. } => Some(Index::Name(name.clone())),
+        Expr::Lit {
+            value: inty::ast::Literal::Number(n),
+            ..
+        } if n.fract() == 0.0 && *n >= 0.0 && *n < 1e15 => Some(Index::Const(*n as i64)),
+        _ => None,
+    }
+}
+
+#[derive(PartialEq)]
+enum Fact {
+    /// `a[j]` was accessed, `j` unchanged since.
+    InBounds,
+    /// `j` may have changed (or we can't tell): look no further back.
+    Lost,
+    /// Says nothing: look further back.
+    Unknown,
+}
+
+/// What an earlier statement `p` says about `a[j]` at the end of it.
+fn fact(p: &Stmt, array: &str, index: &Index) -> Fact {
+    let assigns = match index {
+        Index::Name(j) => assigns_in_stmt(p, j),
+        Index::Const(_) => false,
+    };
+    if assigns {
+        return Fact::Lost;
+    }
+    let evaluated = match p {
+        Stmt::Expr { expression, .. } => Some(expression),
+        Stmt::Var { declarations, .. } => {
+            return if declarations
+                .iter()
+                .filter_map(|d| d.init.as_ref())
+                .any(|e| reads(e, array, index))
+            {
+                Fact::InBounds
+            } else {
+                Fact::Unknown
+            };
+        }
+        // An `if`'s test runs whichever branch follows.
+        Stmt::If { test, .. } => Some(test),
+        Stmt::Empty { .. } => None,
+        // Anything else that doesn't write `j` says nothing.
+        _ => None,
+    };
+    match evaluated {
+        Some(e) if reads(e, array, index) => Fact::InBounds,
+        _ => Fact::Unknown,
+    }
+}
+
+/// Whether evaluating `e` always accesses `array[index]` (so that, if it
+/// finishes, the index was in bounds): not under `&&`, `||`, `??`, `?:`
+/// or an optional chain, where it may be skipped.
+fn reads(e: &Expr, array: &str, index: &Index) -> bool {
+    let r = |x: &Expr| reads(x, array, index);
+    match e {
+        Expr::ComputedMember {
+            object, property, ..
+        } => {
+            let hit = matches!(&**object, Expr::Ident { name, .. } if name == array)
+                && index_key(property).as_ref() == Some(index);
+            hit || r(object) || r(property)
+        }
+        Expr::Member { object, .. } => r(object),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            use inty::ast::BinOp;
+            match op {
+                BinOp::And | BinOp::Or => r(left),
+                _ => r(left) || r(right),
+            }
+        }
+        Expr::NullishCoalesce { left, .. } => r(left),
+        Expr::Conditional { test, .. } => r(test),
+        Expr::Unary { argument, .. } => r(argument),
+        Expr::Assign { left, right, .. } => {
+            // `a[j] = v` stores (growing the array if needed): either way
+            // `j` is in bounds afterwards.
+            r(left) || r(right)
+        }
+        Expr::Call { arguments, .. } => arguments.iter().any(r),
+        Expr::Sequence { expressions, .. } | Expr::TemplateLiteral { expressions, .. } => {
+            expressions.iter().any(r)
+        }
+        Expr::Array { elements, .. } => elements.iter().flatten().any(r),
+        Expr::Tuple { elements, .. } => elements.iter().any(r),
+        _ => false,
+    }
+}
+
+/// Whether running `s` may assign (or declare) `name`.
+fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
+    let e = |x: &Expr| assigns(x, name);
+    let st = |x: &Stmt| assigns_in_stmt(x, name);
+    let decls = |ds: &[VarDeclarator]| {
+        ds.iter()
+            .any(|d| d.name == name || d.init.as_ref().is_some_and(e))
+    };
+    match s {
+        Stmt::Block { body, .. } => body.iter().any(st),
+        Stmt::Empty { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => false,
+        Stmt::Expr { expression, .. } => e(expression),
+        Stmt::Var { declarations, .. } => decls(declarations),
+        Stmt::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => e(test) || st(consequent) || alternate.as_deref().is_some_and(st),
+        Stmt::While { test, body, .. } | Stmt::DoWhile { body, test, .. } => e(test) || st(body),
+        Stmt::For {
+            init,
+            test,
+            update,
+            body,
+            ..
+        } => {
+            (match init {
+                Some(ForInit::VarDecl(ds)) => decls(ds),
+                Some(ForInit::Expr(x)) => e(x),
+                None => false,
+            }) || test.as_ref().is_some_and(e)
+                || update.as_ref().is_some_and(e)
+                || st(body)
+        }
+        Stmt::ForIn {
+            left, right, body, ..
+        }
+        | Stmt::ForOf {
+            left, right, body, ..
+        } => {
+            (match left {
+                ForInLhs::VarDecl(n, ..) => n == name,
+                ForInLhs::Expr(t) => matches!(t, Expr::Ident { name: n, .. } if n == name) || e(t),
+            }) || e(right)
+                || st(body)
+        }
+        Stmt::Return { argument, .. } => argument.as_ref().is_some_and(e),
+        Stmt::Throw { argument, .. } => e(argument),
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            st(block)
+                || handler
+                    .as_ref()
+                    .is_some_and(|h| h.param == name || st(&h.body))
+                || finalizer.as_deref().is_some_and(st)
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            ..
+        } => {
+            e(discriminant)
+                || cases
+                    .iter()
+                    .any(|c| c.test.as_ref().is_some_and(e) || c.consequent.iter().any(st))
+        }
+        Stmt::Labeled { body, .. } => st(body),
+        // Closures, and statements that shouldn't be in such a loop.
+        Stmt::FunctionDecl { .. } | Stmt::Import { .. } | Stmt::Export { .. } => true,
+    }
+}
+
+fn assigns_in_expr(e: &Expr, name: &str) -> bool {
+    assigns(e, name)
+}
+
+/// Whether `e` assigns (or updates) `name`.
+fn assigns(e: &Expr, name: &str) -> bool {
+    let a = |x: &Expr| assigns(x, name);
+    match e {
+        Expr::Assign { left, right, .. } => {
+            matches!(&**left, Expr::Ident { name: n, .. } if n == name) || a(left) || a(right)
+        }
+        Expr::Unary { op, argument, .. } => {
+            (matches!(
+                op,
+                UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec
+            ) && matches!(&**argument, Expr::Ident { name: n, .. } if n == name))
+                || a(argument)
+        }
+        Expr::Binary { left, right, .. } | Expr::NullishCoalesce { left, right, .. } => {
+            a(left) || a(right)
+        }
+        Expr::Conditional {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => a(test) || a(consequent) || a(alternate),
+        Expr::Member { object, .. } => a(object),
+        Expr::ComputedMember {
+            object, property, ..
+        } => a(object) || a(property),
+        Expr::Call {
+            callee, arguments, ..
+        } => a(callee) || arguments.iter().any(a),
+        Expr::Sequence { expressions, .. } | Expr::TemplateLiteral { expressions, .. } => {
+            expressions.iter().any(a)
+        }
+        Expr::Array { elements, .. } => elements.iter().flatten().any(a),
+        Expr::Tuple { elements, .. } => elements.iter().any(a),
+        Expr::Spread { argument, .. } => a(argument),
+        // Closures and anything else: assume it may.
+        Expr::Function { .. }
+        | Expr::OptionalChain { .. }
+        | Expr::Object { .. }
+        | Expr::New { .. } => true,
+        Expr::Lit { .. } | Expr::Ident { .. } | Expr::This { .. } | Expr::NewTarget { .. } => false,
+        Expr::RestArray { source, .. } | Expr::RestRow { source, .. } => a(source),
+    }
+}

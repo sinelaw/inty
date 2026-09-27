@@ -16,7 +16,7 @@
 //! runtime helpers          (runtime.go)
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use inty::ast::free_idents::free_identifiers_in_stmt;
@@ -157,6 +157,7 @@ fn emit_pass(
         ),
         headers: Vec::new(),
         header_marks: Vec::new(),
+        in_bounds: HashSet::new(),
     };
 
     // Bind every top-level name first: function bodies may refer to
@@ -441,6 +442,9 @@ struct Emitter<'a> {
     headers: Vec<(String, String)>,
     /// `headers`' length outside each loop that added to it.
     header_marks: Vec<usize>,
+    /// Stores `a[j] = v` whose index is known to be in bounds (see
+    /// `loops::in_bounds_stores`), by span.
+    in_bounds: HashSet<Span>,
 }
 
 /// A number the emitter can fold at translation time. Folding happens
@@ -1757,6 +1761,7 @@ impl<'a> Emitter<'a> {
             self.headers.push((name, h));
         }
         self.header_marks.push(depth);
+        crate::loops::in_bounds_stores(s, &mut self.in_bounds);
         Ok(true)
     }
 
@@ -1765,6 +1770,46 @@ impl<'a> Emitter<'a> {
         self.headers.truncate(depth);
         self.indent -= 1;
         self.line("}");
+    }
+
+    /// `a[i] = v` as a statement, through a loop's local header: the
+    /// bounds check written out, so the store costs no call whatever Go's
+    /// inlining budget. (Elsewhere, as in a `for` post clause, which must
+    /// be a simple statement, it is `intySetH`.)
+    fn header_store(&mut self, e: &Expr) -> Result<Option<String>> {
+        let Expr::Assign {
+            op: AssignOp::Assign,
+            left,
+            right,
+            ..
+        } = e
+        else {
+            return Ok(None);
+        };
+        let Expr::ComputedMember {
+            object, property, ..
+        } = &**left
+        else {
+            return Ok(None);
+        };
+        let Some(h) = self.header_of(object) else {
+            return Ok(None);
+        };
+        let GoType::Array(elem) = self.type_of(object)? else {
+            return Ok(None);
+        };
+        let a = self.expr(object)?;
+        let i = self.index(property)?;
+        let v = self.expr_as(right, &elem)?;
+        if self.in_bounds.contains(&e.span()) {
+            // Already accessed, so no grow: a plain store, which Go's
+            // bounds-check elimination can follow.
+            return Ok(Some(format!("{h}[{i}] = {v}")));
+        }
+        let j = self.fresh("J");
+        Ok(Some(format!(
+            "if {j} := {i}; {j} < len({h}) {{ {h}[{j}] = {v} }} else {{ {h} = intySetGrow({a}, {j}, {v}) }}"
+        )))
     }
 
     /// The local holding `object`'s slice header, if a loop holds it.
@@ -1894,6 +1939,10 @@ impl<'a> Emitter<'a> {
 
     /// An expression in statement position.
     fn expr_stmt(&mut self, e: &Expr) -> Result<()> {
+        if let Some(s) = self.header_store(e)? {
+            self.line(&s);
+            return Ok(());
+        }
         match e {
             Expr::Conditional {
                 test,
