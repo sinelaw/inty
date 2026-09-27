@@ -14,10 +14,9 @@ see the [README](README.md) for what the backend supports.
   (`particles`). Both of those used to be losses; see
   [What changed](#what-changed).
 - **Speed vs Node:** it is faster than Node in 11 and ties in 2 more.
-- **Losses:**
-  - `dijkstra` and `nbody` are ~10% slower than Node.
-  - The switch-dispatch interpreter (`bytecode-vm`) is 1.4x slower than
-    Bun.
+- **Losses:** `dijkstra` and `nbody` are ~10% slower than Node.
+  [Where Go still loses](#where-go-still-loses) has the measured
+  causes.
 
 ## Reproducing
 
@@ -84,7 +83,7 @@ excluded. Median ms (IQR). Speedup = JS time / Go time, with a 95% CI:
 | benchmark | node warm | bun warm | inty → go warm | **vs node** [95% CI] | **vs bun** [95% CI] | output |
 | --- | ---: | ---: | ---: | ---: | ---: | :---: |
 | array-hof | 780 (764–791) | 179 (158–193) | 36.7 (29.9–43.4) | **21.24x** [18.58–23.44] | **4.87x** [4.08–5.37] | identical |
-| bytecode-vm | 1066 (1058–1077) | 311 (275–344) | 430 (419–446) | **2.48x** [2.40–2.54] | **0.72x** [0.70–0.80] | identical |
+| bytecode-vm | 993 (986–1018) | 316 (306–341) | 316 (312–318) | **3.14x** [3.12–3.22] | **1.00x** [0.98–1.08] | identical |
 | collatz | 1805 (1787–1819) | 4057 (4042–4081) | 1134 (1126–1151) | **1.59x** [1.58–1.61] | **3.58x** [3.56–3.61] | identical |
 | dijkstra | 334 (323–345) | 358 (354–365) | 362 (359–366) | **0.92x** [0.91–0.94] | **0.99x** [0.98–1.00] | identical |
 | fib | 408 (404–411) | 297 (294–304) | 225 (224–231) | **1.81x** [1.77–1.83] | **1.32x** [1.29–1.36] | identical |
@@ -105,7 +104,7 @@ node / bun / go:
 | benchmark | cold 1st iteration | wall | CPU (user+sys) | peak RSS |
 | --- | ---: | ---: | ---: | ---: |
 | array-hof | 838 / 253 / 28.9 ms | 3228 / 812 / 150 ms | 3207 / 754 / 129 ms | 133 / 58 / 10 MB |
-| bytecode-vm | 1085 / 293 / 422 ms | 4365 / 1255 / 1720 ms | 4344 / 1231 / 1689 ms | 51 / 41 / 10 MB |
+| bytecode-vm | 1010 / 300 / 319 ms | 4060 / 1289 / 1275 ms | 4013 / 1295 / 1268 ms | 51 / 41 / 10 MB |
 | collatz | 1655 / 3724 / 1145 ms | 7129 / 15899 / 4547 ms | 7078 / 15885 / 4556 ms | 51 / 40 / 10 MB |
 | dijkstra | 367 / 352 / 363 ms | 1594 / 1688 / 1634 ms | 1653 / 1795 / 1765 ms | 188 / 145 / 79 MB |
 | fib | 410 / 298 / 225 ms | 1678 / 1214 / 910 ms | 1672 / 1209 / 904 ms | 51 / 37 / 10 MB |
@@ -121,7 +120,8 @@ node / bun / go:
 | spectral-norm | 680 / 894 / 622 ms | 2633 / 3599 / 2495 ms | 2651 / 3617 / 2497 ms | 55 / 43 / 10 MB |
 
 `orders` and `raytracer` come from a second run of the same harness,
-made after the struct-size limit described below.
+made after the struct-size limit described below, and `bytecode-vm`
+from a third, after its `switch` became a jump table.
 
 ## What the numbers say
 
@@ -144,11 +144,12 @@ made after the struct-size limit described below.
 - **Ties and losses:**
   - **Tight float loops** (`mandelbrot`, `spectral-norm`) tie with
     Node: once warm, a JIT emits the same machine code Go does.
-  - **`nbody`** is 12% slower than Node, whose escape analysis keeps
-    its bodies' fields in registers.
-  - **`dijkstra`** is 8% slower than Node on its binary heap.
-  - **`bytecode-vm`** is 1.4x slower than Bun. Bun dispatches its
-    `switch` better than Go's compare chain does.
+  - **`nbody`** is 12% slower than Node, and **`dijkstra`** 8%; see
+    [Where Go still loses](#where-go-still-loses).
+  - **`bytecode-vm`** ties with Bun. Its remaining cost is `%` on a
+    `Number[]` stack (the program's own annotation). JavaScriptCore
+    runs that `%` on 32-bit integers, because it stores whole doubles
+    as integers at runtime.
 
 ## What changed
 
@@ -173,6 +174,13 @@ than computation. Three backend changes followed:
   whole every time the array grows. With 8-field `orders` records by
   value, the first iteration took 7x longer and peak memory tripled.
 - **`new Array(n).fill(v)` is one allocation.** See fast-diff below.
+- **A `switch` over literal `const`s is a jump table.** `bytecode-vm`
+  dispatches on opcodes declared `const PUSH = 0`. Emitted as Go
+  variables, the `switch` compiled to a chain of comparisons. `case`
+  labels now use the constants' values, and Go builds a jump table: 430
+  ms became 316 ms, level with Bun. The consts stay Go variables
+  everywhere else, because Go folds constant expressions by its own
+  rules (`1 / zero` is a compile error, not `Infinity`).
 
 | benchmark | before (warm) | after (warm) | peak RSS before / after |
 | --- | ---: | ---: | ---: |
@@ -180,10 +188,51 @@ than computation. Three backend changes followed:
 | particles | 386 ms | 33.8 ms | 10 / 10 MB |
 | orders | 203 ms | 144 ms | 178 / 176 MB |
 | raytracer | 185 ms | 130 ms | 10 / 10 MB |
+| bytecode-vm | 452 ms | 316 ms | 10 / 10 MB |
 
 The "before" column is the first published run (float64 numbers, before
 these changes). The [Integers](#integers-int-as-a-go-int) section has
 the `Int` change's share on its own.
+
+## Where Go still loses
+
+Profiles and hand-edited variants of the generated Go attribute each
+remaining loss to its cause.
+
+**`dijkstra` (8% behind Node)** is memory-bound: the hot lines are
+loads from the graph's arrays and the heap. Two causes, measured by
+editing the generated Go:
+
+| variant | warm |
+| --- | ---: |
+| as generated | 355 ms |
+| heap index math unchecked (`2*i`, `(i-1)/2`) | 345 ms |
+| … and 4-byte (`int32`) graph arrays | **321 ms** |
+| Node | 318–322 ms |
+
+- **Checked arithmetic:** the checked multiply (`intyIMul`) and the
+  float floor on heap indices guard against values past 2^53. Here they
+  can't be past it, since they index an array.
+- **Array width:** V8 stores small integers in 4 bytes (with pointer
+  compression), where Go uses 8. That doubles the cache traffic of the
+  graph arrays.
+
+Both fixes need a range analysis that proves the values fit.
+
+**`nbody` (12% behind Node)** is limited by `sqrt` and division latency,
+which V8 pays too. The difference is `bi.vx/vy/vz`, three running sums
+that go through memory on every inner iteration:
+
+| variant | warm |
+| --- | ---: |
+| as generated | 467 ms |
+| slice header and masses hoisted into locals | 466 ms |
+| `bi`'s fields kept in locals across the inner loop | **302 ms** |
+| Node | 408–470 ms |
+
+Go can't keep them in registers, because `bj` might be the same object
+as `bi`. inty can't do it either without changing meaning: the types
+don't rule out an array holding one object twice.
 
 ## A real tool: md2html
 
