@@ -78,3 +78,19 @@ do {
   k++;
 } while (k < 2);
 console.log(`${w[0]} ${w[1]} ${w[2]} ${w[3]} ${w[4]}`);
+
+// A store is plain only after the same index was accessed unchanged.
+const g = [1, 2, 3];
+for (let r = 0; r < 2; r++) {
+  let j = 1;
+  const x = g[j];
+  g[j] = x + 10; // accessed: plain
+  j = g.length; // changed: this store grows the array
+  g[j] = x + r;
+  let q = g.length;
+  if (q > 100 && g[q] > 0) {
+    q = 0; // the read above may not have run
+  }
+  g[q] = 7;
+}
+console.log(`${g.length} ${g[1]} ${g[3]} ${g[4]} ${g[5]} ${g[6]}`);

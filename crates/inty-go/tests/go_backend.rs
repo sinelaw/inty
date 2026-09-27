@@ -614,14 +614,17 @@ fn typed_array_updates_that_would_not_wrap_exactly_are_refused() {
 
 #[test]
 fn loops_hold_array_headers_only_when_nothing_else_can_change_them() {
-    // A call-free loop indexes a local copy of the header; a store hands
-    // back the grown header.
+    // A call-free loop indexes a local copy of the header; a store that
+    // may grow the array hands back the grown header, as a statement and
+    // in a `for` post clause.
     let code = inty_go::compile(
-        "const xs = [1, 2];\nfor (let i = 0; i < 4; i++) { xs[i] = xs[i] + 1; }\nconsole.log(xs[0]);",
+        "const xs = [1, 2];\nfor (let i = 0; i < 4; i++) { xs[i + 1] = i; }\n\
+         for (let i = 0; i < 4; xs[i + 1] = i) { i++; }\nconsole.log(xs[0]);",
     )
     .unwrap()
     .code;
     assert!(code.contains(":= *xs"), "{}", code);
+    assert!(code.contains("= intySetGrow(xs, "), "{}", code);
     assert!(code.contains("= intySetH(xs, "), "{}", code);
 
     let uncached = |src: &str| {
@@ -645,4 +648,23 @@ fn loops_hold_array_headers_only_when_nothing_else_can_change_them() {
     );
     // A typed array a called function may replace.
     uncached("let t = new Int32Array(1);\nfunction g() { t = new Int32Array(2); }\nfor (let i = 0; i < 2; i++) { g(); t[0] = i; }\nconsole.log(t[0]);");
+}
+
+#[test]
+fn a_store_to_an_index_just_accessed_is_plain() {
+    // A swap reads both elements first, so neither store can grow the
+    // array: plain stores, not the growing form.
+    let code = inty_go::compile(
+        "/** function swap(Number[], Int, Int) => Undefined */\n\
+         function swap(h, i, m) {\n\
+           let k = 0;\n\
+           while (k < 1) { const t = h[m]; h[m] = h[i]; h[i] = t; k++; }\n\
+         }\n\
+         const xs = [1.5, 2.5];\nswap(xs, 0, 1);\nconsole.log(xs[0]);",
+    )
+    .unwrap()
+    .code;
+    let program = code.split("// ---- inty-go runtime").next().unwrap();
+    assert!(program.contains("[m] = intyH"), "{}", program);
+    assert!(!program.contains("intySetGrow"), "{}", program);
 }
