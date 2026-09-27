@@ -614,6 +614,12 @@ pub enum Type {
     /// when their export shapes happen to coincide. See `modules.md` §2.
     Module(ModuleType),
 
+    /// A JavaScript typed array (`Int32Array`, `Uint8Array`,
+    /// `Float64Array`): a fixed-length array of one machine number type.
+    /// Nominal and without parameters; its elements are
+    /// [`TypedArrayKind::element`].
+    TypedArray(TypedArrayKind),
+
     /// Error sentinel produced by best-effort recovery in the inference
     /// engine. When a binding fails to type-check we substitute
     /// `Type::Error` for its type so downstream uses don't cascade —
@@ -629,6 +635,45 @@ pub enum Type {
     /// any leaked occurrence is obvious in test output and `--annotate`
     /// dumps.
     Error,
+}
+
+/// Which typed array a [`Type::TypedArray`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TypedArrayKind {
+    Int32,
+    Uint8,
+    Float64,
+}
+
+impl TypedArrayKind {
+    pub const ALL: [TypedArrayKind; 3] = [
+        TypedArrayKind::Int32,
+        TypedArrayKind::Uint8,
+        TypedArrayKind::Float64,
+    ];
+
+    /// The JavaScript constructor's name, which is also the type's.
+    pub fn name(self) -> &'static str {
+        match self {
+            TypedArrayKind::Int32 => "Int32Array",
+            TypedArrayKind::Uint8 => "Uint8Array",
+            TypedArrayKind::Float64 => "Float64Array",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    /// The type of an element as read, and as accepted by a store. An
+    /// integer array's store accepts only `Int`s: JavaScript would wrap
+    /// or truncate any other number, which a program rarely means.
+    pub fn element(self) -> Type {
+        match self {
+            TypedArrayKind::Int32 | TypedArrayKind::Uint8 => Type::Int,
+            TypedArrayKind::Float64 => Type::Number,
+        }
+    }
 }
 
 /// Body of `Type::Module`. A module is identified nominally (by source
@@ -928,6 +973,7 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Named(_, _)
             | Type::Module(_)
@@ -1214,6 +1260,7 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Literal(_)
             | Type::Error => {}
@@ -1291,6 +1338,7 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::TypedArray(_)
             | Type::Error => {}
 
             Type::Var(name) => {
@@ -1519,6 +1567,7 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Undefined => (3, String::new()),
         Type::Null => (4, String::new()),
         Type::Regex => (5, String::new()),
+        Type::TypedArray(k) => (19, k.name().to_string()),
         Type::Literal(lit) => {
             let (sub, key) = lit.sort_key();
             (6, format!("{}|{}", sub, key))

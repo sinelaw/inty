@@ -48,16 +48,11 @@ impl CheckedModule {
 /// Output flavor for [`emit_declarations`]. The default `Inty`
 /// flavor matches `stdlib/*.d.js`; the `Ts` flavor produces TS
 /// `declare const NAME: T;` lines suitable for a `.d.ts` consumer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DeclarationFlavor {
+    #[default]
     Inty,
     Ts,
-}
-
-impl Default for DeclarationFlavor {
-    fn default() -> Self {
-        DeclarationFlavor::Inty
-    }
 }
 
 /// Emit `.d.js` declarations for a checked module's exports.

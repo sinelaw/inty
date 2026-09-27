@@ -98,7 +98,7 @@ fn error_code(err: &IntyError) -> &'static str {
             ParseError::Unsupported { .. } => "Unsupported",
             ParseError::LocalReferencedBeforeAssignment { .. } => "LocalReferencedBeforeAssignment",
         },
-        IntyError::Type(e) => match e {
+        IntyError::Type(e) => match &**e {
             TypeError::UnificationError { .. } => "UnificationError",
             TypeError::OccursCheck { .. } => "OccursCheck",
             TypeError::UnifyDepth { .. } => "UnifyDepth",

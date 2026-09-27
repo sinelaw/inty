@@ -34,12 +34,12 @@ pub enum SynthType {
 
 impl SynthType {
     fn matches_value(self, v: &Value) -> bool {
-        match (self, v) {
-            (SynthType::Number, Value::Number(_)) => true,
-            (SynthType::String, Value::String(_)) => true,
-            (SynthType::Boolean, Value::Boolean(_)) => true,
-            _ => false,
-        }
+        matches!(
+            (self, v),
+            (SynthType::Number, Value::Number(_))
+                | (SynthType::String, Value::String(_))
+                | (SynthType::Boolean, Value::Boolean(_))
+        )
     }
 
     fn matches_type(self, t: &Type) -> bool {
@@ -50,15 +50,24 @@ impl SynthType {
         // checker would see `0` typed as `Lit(0)` and fail the
         // "synth equals expected" check after `infer_literal` started
         // returning singletons.
-        match (self, t) {
+        matches!(
+            (self, t),
             (SynthType::Number, Type::Number | Type::Int)
-            | (SynthType::String, Type::String)
-            | (SynthType::Boolean, Type::Boolean) => true,
-            (SynthType::Number, Type::Literal(crate::types::LitValue::Number(_)))
-            | (SynthType::String, Type::Literal(crate::types::LitValue::String(_)))
-            | (SynthType::Boolean, Type::Literal(crate::types::LitValue::Bool(_))) => true,
-            _ => false,
-        }
+                | (SynthType::String, Type::String)
+                | (SynthType::Boolean, Type::Boolean)
+                | (
+                    SynthType::Number,
+                    Type::Literal(crate::types::LitValue::Number(_))
+                )
+                | (
+                    SynthType::String,
+                    Type::Literal(crate::types::LitValue::String(_))
+                )
+                | (
+                    SynthType::Boolean,
+                    Type::Literal(crate::types::LitValue::Bool(_))
+                )
+        )
     }
 }
 

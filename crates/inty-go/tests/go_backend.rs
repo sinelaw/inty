@@ -560,3 +560,54 @@ fn switch_on_literal_consts_uses_constant_labels() {
     assert!(code.contains("case 1:"), "{}", code);
     assert!(code.contains("case A:"), "{}", code);
 }
+
+#[test]
+fn int_quotients_and_literal_factors_stay_in_integers() {
+    // `Math.floor(a / b)` on Ints is integer division, and a literal
+    // factor's safe-integer check is a bound on the other operand.
+    let src = "function parent(xs) { const i = xs.length; return Math.floor((i - 1) / 2); }\n\
+               function child(i) { return 2 * i + 1; }\n\
+               function half(xs) { return Math.floor(xs.length / 2.5); }\n\
+               console.log(parent([1]) + child(3) + Math.ceil(7 / 2) + half([1]));";
+    let code = inty_go::compile(src).unwrap().code;
+    assert!(code.contains("intyFloorDiv((i - 1), 2)"), "{}", code);
+    assert!(
+        code.contains("intyIMulK(i, 2, 4503599627370495)"),
+        "{}",
+        code
+    );
+    assert!(code.contains("intyCeilDiv(7, 2)"), "{}", code);
+    // A quotient by a fraction is still a double division.
+    assert!(
+        code.contains("intyFloorInt((float64(len(*xs)) / 2.5))"),
+        "{}",
+        code
+    );
+}
+
+#[test]
+fn typed_arrays_are_slices_of_their_machine_type() {
+    let src = "const a = new Int32Array(4);\na[1] = 5;\na[1] += 2;\n\
+               const b = Uint8Array.from([1, 2]);\nconst f = new Float64Array(2).fill(0.5);\n\
+               console.log(a[1] + b[0] + f[1] + a.length);";
+    let code = inty_go::compile(src).unwrap().code;
+    assert!(code.contains("a = intyTypedNew[int32](4)"), "{}", code);
+    assert!(code.contains("(*a)[1] = intyI32(5)"), "{}", code);
+    assert!(code.contains("(*a)[1] += intyI32(2)"), "{}", code);
+    assert!(code.contains("intyTypedFrom[uint8]("), "{}", code);
+    assert!(
+        code.contains("intyFill(intyTypedNew[float64](2), 0.5)"),
+        "{}",
+        code
+    );
+    assert!(code.contains("int((*a)[1])"), "{}", code);
+}
+
+#[test]
+fn typed_array_updates_that_would_not_wrap_exactly_are_refused() {
+    // `*=` on an int32 element would need the product checked before
+    // wrapping; not supported (yet), rather than silently wrong.
+    let err =
+        compile_err("const a = new Int32Array(1);\na[0] = 3;\na[0] *= 5;\nconsole.log(a[0]);");
+    assert!(err.contains("typed array"), "{}", err);
+}

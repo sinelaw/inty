@@ -100,6 +100,7 @@ impl TidyEnv {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::TypedArray(_)
             | Type::Literal(_)
             | Type::Error => ty.clone(),
 

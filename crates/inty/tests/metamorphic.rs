@@ -7,10 +7,10 @@
 //! This file ties together four sub-modules (under `tests/metamorphic/`):
 //!
 //! - `ast`       — AST construction helpers, name collection,
-//!                 capture-avoiding rename
+//!   capture-avoiding rename
 //! - `strategy`  — proptest strategies that generate programs
 //! - `oracle`    — `CheckResult`, `check`, and the consistency
-//!                 assertion with rename/exclusion support
+//!   assertion with rename/exclusion support
 //! - `transform` — the actual transformations
 //!
 //! Each property test picks one transformation and asserts the

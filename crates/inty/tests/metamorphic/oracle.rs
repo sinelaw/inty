@@ -143,7 +143,7 @@ pub fn assert_consistent(label: &str, p: &Program, q: &Program, cmp: &Comparison
     let r_q = check(q);
 
     match (&r_p, &r_q) {
-        (CheckResult::Err, CheckResult::Err) => return,
+        (CheckResult::Err, CheckResult::Err) => (),
         (CheckResult::Ok(_), CheckResult::Err) | (CheckResult::Err, CheckResult::Ok(_)) => {
             panic!(
                 "metamorphic property `{label}` violated: one side ok, other err\n\

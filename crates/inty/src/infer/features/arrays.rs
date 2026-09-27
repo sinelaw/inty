@@ -127,6 +127,10 @@ impl InferState {
                 self.subsume(span, &index_type, &Type::Int)?;
                 Ok(Type::String)
             }
+            Type::TypedArray(kind) => {
+                self.subsume(span, &index_type, &Type::Int)?;
+                Ok(kind.element())
+            }
             Type::Map(value_type) => {
                 // Map indexing: unify index with String and return value type
                 self.subsume(span, &index_type, &Type::String)?;
@@ -141,7 +145,7 @@ impl InferState {
                 let elems = elems.clone();
                 match const_tuple_index(property, elems.len()) {
                     Some(Ok(i)) => Ok(elems[i].clone()),
-                    Some(Err(())) => Err(IntyError::Type(TypeError::PropertyNotFound {
+                    Some(Err(())) => Err(IntyError::from(TypeError::PropertyNotFound {
                         prop: const_int_of(property)
                             .map(|n| n.to_string())
                             .unwrap_or_default(),
@@ -214,6 +218,10 @@ impl InferState {
             Type::String => {
                 self.subsume(span, index_type, &Type::Int)?;
                 Ok(Type::String)
+            }
+            Type::TypedArray(kind) => {
+                self.subsume(span, index_type, &Type::Int)?;
+                Ok(kind.element())
             }
             Type::Map(value_type) => {
                 self.subsume(span, index_type, &Type::String)?;

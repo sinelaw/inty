@@ -2688,7 +2688,7 @@ fn export_default_class_extends_rejects_with_inheritance_error() {
     let mut parser =
         Parser::with_source(tokens, scanner.type_annotations().to_vec(), src.to_string());
     let result = parser.parse_program();
-    let err = result.err().expect("must error on extends");
+    let err = result.expect_err("must error on extends");
     let msg = match err {
         IntyError::Parse(p) => format!("{:?}", p),
         other => panic!("expected ParseError, got {:?}", other),
@@ -3152,12 +3152,7 @@ fn multi_error_two_independent_undefined_vars() {
     // a cascading "undefined variable" error.
     let undef_count = errs
         .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                crate::error::IntyError::Type(TypeError::UndefinedVariable { .. })
-            )
-        })
+        .filter(|e| matches!(e.as_type(), Some(TypeError::UndefinedVariable { .. })))
         .count();
     assert!(
         undef_count >= 2,
@@ -3219,9 +3214,9 @@ fn multi_error_failing_var_binds_name_to_error() {
     // Exactly one error: the original UndefinedVariable for
     // `undefinedName`. The read of `x` on the second statement must
     // not produce another.
-    let undef_for_x = errs
-        .iter()
-        .any(|e| matches!(e, crate::error::IntyError::Type(TypeError::UndefinedVariable { name, .. }) if name == "x"));
+    let undef_for_x = errs.iter().any(
+        |e| matches!(e.as_type(), Some(TypeError::UndefinedVariable { name, .. }) if name == "x"),
+    );
     assert!(
         !undef_for_x,
         "reading recovered `x` should not error: {:?}",
@@ -3265,11 +3260,11 @@ fn multi_error_duplicate_const_no_longer_aborts() {
     let _ = state.infer_program_with_env(&env, &program);
     let errs = state.take_errors();
     let has_dup = errs.iter().any(|e| {
-        matches!(e, crate::error::IntyError::Type(TypeError::Module { message, .. })
+        matches!(e.as_type(), Some(TypeError::Module { message, .. })
             if message.contains("duplicate declaration"))
     });
     let has_undef = errs.iter().any(|e| {
-        matches!(e, crate::error::IntyError::Type(TypeError::UndefinedVariable { name, .. })
+        matches!(e.as_type(), Some(TypeError::UndefinedVariable { name, .. })
             if name == "somethingElseMissing")
     });
     assert!(has_dup, "expected duplicate-const error, got: {:?}", errs);
@@ -3341,7 +3336,7 @@ fn apply_subst_overflow_surfaces_clean_diagnostic() {
     let _ = state.infer_program_with_env(&env, &program);
     let errs = state.take_errors();
     let has_overflow_diag = errs.iter().any(|e| {
-        matches!(e, crate::error::IntyError::Type(TypeError::Module { message, .. })
+        matches!(e.as_type(), Some(TypeError::Module { message, .. })
             if message.contains("recursion-depth cap"))
     });
     assert!(
@@ -3364,11 +3359,11 @@ fn apply_subst_overflow_flag_does_not_leak_between_runs() {
     let _ = state.infer_program_with_env(&env, &program);
     let errs = state.take_errors();
     assert!(
-        errs.iter().any(|e| matches!(
-            e,
-            crate::error::IntyError::Type(TypeError::Module { message, .. })
-                if message.contains("recursion-depth cap")
-        )),
+        errs.iter().any(
+            |e| matches!(e.as_type(), Some(TypeError::Module { message, .. })
+                    if message.contains("recursion-depth cap")
+            )
+        ),
         "run 1 should see the diagnostic, got: {:?}",
         errs
     );
@@ -3402,11 +3397,11 @@ fn modestly_deep_program_does_not_trigger_overflow_diagnostic() {
         .expect("modestly-deep literal should type-check");
     let errs = state.take_errors();
     assert!(
-        !errs.iter().any(|e| matches!(
-            e,
-            crate::error::IntyError::Type(TypeError::Module { message, .. })
-                if message.contains("recursion-depth cap")
-        )),
+        !errs.iter().any(
+            |e| matches!(e.as_type(), Some(TypeError::Module { message, .. })
+                    if message.contains("recursion-depth cap")
+            )
+        ),
         "shallow program must not trigger overflow diagnostic, got: {:?}",
         errs
     );
@@ -3446,7 +3441,7 @@ fn annotated_string_param_accepts_mixed_arity_slice() {
     let errs: Vec<_> = state
         .errors
         .iter()
-        .filter(|e| !matches!(e, crate::error::IntyError::Type(TypeError::Module { .. })))
+        .filter(|e| !matches!(e.as_type(), Some(TypeError::Module { .. })))
         .collect();
     assert!(errs.is_empty(), "expected no errors, got: {:?}", errs);
 }
@@ -4356,8 +4351,8 @@ fn narrowing_holds_only_for_its_own_binding() {
         // A `var` directly under an `if` is the function's.
         "const x = \"str\";\nfunction g(n) { if (n > 0) var x = null; return x.length; }".to_string(),
         // A direct `eval` can write anything in scope.
-        format!("function f() {{ let y = Math.random() > 2 ? \"s\" : null; \
-                 if (y !== null) {{ eval(\"y = null\"); return y.length; }} return 0; }}"),
+        "function f() { let y = Math.random() > 2 ? \"s\" : null; \
+                 if (y !== null) { eval(\"y = null\"); return y.length; } return 0; }".to_string(),
         // A destructuring default is checked (and can write).
         "let x = \"s\";\nconst o = { a: undefined };\nconst { a = (x = null) } = o;".to_string(),
         // `typeof` of a regex is "object".
@@ -4403,4 +4398,57 @@ fn destructuring_defaults_are_checked() {
     assert_eq!(ty("c"), Type::String);
     // A default must be of the property's type.
     assert!(infer_program_via_program_with_stdlib("const { a = \"s\" } = { a: 2 };").is_err());
+}
+
+#[test]
+fn typed_arrays_have_fixed_length_and_machine_elements() {
+    let ty = |src: &str, name: &str| -> Result<String, String> {
+        let (_, env, state) =
+            infer_program_via_program_with_stdlib(src).map_err(|e| e.to_string())?;
+        if let Some(e) = state.errors.first() {
+            return Err(e.to_string());
+        }
+        let scheme = env.lookup(name).expect("bound");
+        Ok(format!("{}", state.display_scheme(scheme)))
+    };
+    assert_eq!(
+        ty("const a = new Int32Array(4);", "a").unwrap(),
+        "Int32Array"
+    );
+    assert_eq!(
+        ty("const a = new Int32Array(4); const x = a[0];", "x").unwrap(),
+        "Int"
+    );
+    assert_eq!(
+        ty(
+            "const f = new Float64Array(2).fill(0.5); const x = f[1];",
+            "x"
+        )
+        .unwrap(),
+        "Number"
+    );
+    assert_eq!(
+        ty(
+            "const b = Uint8Array.from([1, 2]); const n = b.length;",
+            "n"
+        )
+        .unwrap(),
+        "Int"
+    );
+    // An integer array stores `Int`s only (JavaScript would truncate).
+    assert!(ty("const a = new Int32Array(1); a[0] = 1.5;", "a").is_err());
+    assert!(ty("const a = new Int32Array(1); a[0] = 3;", "a").is_ok());
+    assert!(ty("const f = new Float64Array(1); f[0] = 3;", "f").is_ok());
+    // Fixed length: no `push`. A typed array is not an ordinary array.
+    assert!(ty("const a = new Int32Array(1); a.push(1);", "a").is_err());
+    assert!(ty(
+        "const a = new Int32Array(1); const b = [1]; const c = true ? a : b;",
+        "c"
+    )
+    .is_err());
+    assert!(ty("const a = new Int32Array(1.5);", "a").is_err());
+    // An index is an `Int`.
+    assert!(ty("const a = new Int32Array(2); const x = a[0.5];", "x").is_err());
+    // Distinct kinds don't mix.
+    assert!(ty("const a = new Int32Array(1); const b = new Uint8Array(1); const c = true ? a : b; c[0] = 1;", "c").is_err());
 }

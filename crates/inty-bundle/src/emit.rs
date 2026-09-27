@@ -270,7 +270,7 @@ fn emit_export_decl(
                     let init = d
                         .init
                         .as_ref()
-                        .map(|e| pretty::print_expr(e))
+                        .map(pretty::print_expr)
                         .unwrap_or_else(|| "undefined".to_string());
                     buf.line(&format!("{}{} {} = {};", indent, kw, d.name, init));
                     continue;
@@ -278,7 +278,7 @@ fn emit_export_decl(
                 let init = d
                     .init
                     .as_ref()
-                    .map(|e| pretty::print_expr(e))
+                    .map(pretty::print_expr)
                     .unwrap_or_else(|| "undefined".to_string());
                 buf.line(&format!("{}{} {} = {};", indent, kw, d.name, init));
                 if writes_exports {

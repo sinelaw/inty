@@ -1,7 +1,7 @@
 //! Unary and binary operators.
 
 use crate::ast::{BinOp, Expr, UnaryOp};
-use crate::error::{IntyError, TypeError};
+use crate::error::TypeError;
 use crate::span::Span;
 use crate::types::{LitValue, Type, TypePred};
 
@@ -263,8 +263,8 @@ impl InferState {
                 let op_name = if matches!(op, BinOp::And) { "&&" } else { "||" };
                 if let Err(mut err) = self.subsume_either(span, &left_type, &right_type) {
                     // Add helpful context about the && or || operator
-                    if let IntyError::Type(TypeError::UnificationError { context, .. }) = &mut err {
-                        let msg = vec![
+                    if let Some(TypeError::UnificationError { context, .. }) = err.as_type_mut() {
+                        let msg = [
                             format!("In JavaScript, `{}` returns one of its operands", op_name),
                             "(not a boolean), so both operands must have".to_string(),
                             "compatible types.".to_string(),

@@ -450,16 +450,8 @@ fn completion_lists_visible_identifiers() {
         CompletionResponse::List(list) => list.items,
     };
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-    assert!(
-        labels.iter().any(|l| *l == "apple"),
-        "apple in {:?}",
-        labels
-    );
-    assert!(
-        labels.iter().any(|l| *l == "banana"),
-        "banana in {:?}",
-        labels
-    );
+    assert!(labels.contains(&"apple"), "apple in {:?}", labels);
+    assert!(labels.contains(&"banana"), "banana in {:?}", labels);
 
     shutdown(client, handle);
 }
@@ -500,8 +492,8 @@ fn completion_after_dot_lists_object_fields() {
         CompletionResponse::List(list) => list.items,
     };
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-    assert!(labels.iter().any(|l| *l == "x"), "x in {:?}", labels);
-    assert!(labels.iter().any(|l| *l == "y"), "y in {:?}", labels);
+    assert!(labels.contains(&"x"), "x in {:?}", labels);
+    assert!(labels.contains(&"y"), "y in {:?}", labels);
 
     shutdown(client, handle);
 }

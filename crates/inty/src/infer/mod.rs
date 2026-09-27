@@ -461,10 +461,10 @@ impl InferState {
                         continue;
                     }
                     let key = state.key_of(decl.span, &decl.name);
-                    if !hoisted_data.contains_key(&key) {
+                    hoisted_data.entry(key).or_insert_with(|| {
                         let var = state.fresh_type_var();
-                        hoisted_data.insert(key, (decl.name.clone(), var));
-                    }
+                        (decl.name.clone(), var)
+                    });
                 }
             };
         // Function-valued `const`s inferred with the hoisted functions
@@ -1040,7 +1040,7 @@ impl InferState {
                         // so a typo doesn't survive until import time.
                         for spec in specifiers {
                             if env.lookup(&spec.local).is_none() {
-                                return Err(IntyError::Type(TypeError::Module {
+                                return Err(IntyError::from(TypeError::Module {
                                     message: format!(
                                         "exported name `{}` is not declared in this module",
                                         spec.local

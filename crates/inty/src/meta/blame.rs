@@ -228,7 +228,7 @@ pub fn blame_triples_for_op(op: &OpInfo) -> Vec<BlameTriple> {
         enumerate_arm_probes(inputs, &mut |tag, val| {
             // Skip the case where the enumeration couldn't materialise
             // a position (the "<unprobed>" tag).
-            if tag.iter().any(|t| *t == "<unprobed>") {
+            if tag.contains(&"<unprobed>") {
                 return;
             }
             let program = match build_program(op.name, val) {

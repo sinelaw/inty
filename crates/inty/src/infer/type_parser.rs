@@ -11,12 +11,12 @@ use std::collections::HashMap;
 
 use crate::error::TypeError;
 use crate::span::Span;
-use crate::types::{LitValue, Type, TypePred};
+use crate::types::{LitValue, Type, TypePred, TypedArrayKind};
 
 use super::state::AliasDef;
 
 /// Result type for type annotation parsing.
-pub type ParseResult<T> = Result<T, TypeError>;
+pub type ParseResult<T> = Result<T, Box<TypeError>>;
 
 /// Pre-resolved JSDoc `typeof X` lookup table. The inference caller
 /// pre-instantiates each `typeof` reference (so fresh-var allocation
@@ -175,7 +175,7 @@ impl<'a> TypeParser<'a> {
         if self.peek_char() == Some('<') {
             // Rank-1 restriction: quantifiers only allowed at top level
             if !self.allow_quantifiers {
-                return Err(TypeError::Rank1Restriction { span: self.span });
+                return Err(Box::new(TypeError::Rank1Restriction { span: self.span }));
             }
             return self.parse_generic_type();
         }
@@ -389,7 +389,7 @@ impl<'a> TypeParser<'a> {
                 // precise diagnostic with a confusing "unknown
                 // type 'a'" from re-parsing the leftover input.
                 if matches!(
-                    e,
+                    *e,
                     TypeError::Rank1Restriction { .. }
                         | TypeError::OptionalParameterFollowedByRequired { .. }
                 ) {
@@ -532,11 +532,11 @@ impl<'a> TypeParser<'a> {
             match &p.presence {
                 crate::types::Presence::Pre => {
                     if let Some(opt_idx) = seen_optional {
-                        return Err(TypeError::OptionalParameterFollowedByRequired {
+                        return Err(Box::new(TypeError::OptionalParameterFollowedByRequired {
                             optional_idx: opt_idx,
                             required_idx: idx,
                             span: self.span,
-                        });
+                        }));
                     }
                 }
                 crate::types::Presence::Var(_) | crate::types::Presence::Abs => {
@@ -792,9 +792,9 @@ impl<'a> TypeParser<'a> {
                     if self.peek_char() == Some(',') || self.peek_char() == Some(';') {
                         self.pos += 1;
                     } else {
-                        return Err(self.error(format!(
-                            "expected ',' or ';' between object-type properties"
-                        )));
+                        return Err(self.error(
+                            "expected ',' or ';' between object-type properties".to_string(),
+                        ));
                     }
                     self.skip_whitespace();
                     if self.peek_char() == Some('}') {
@@ -849,9 +849,8 @@ impl<'a> TypeParser<'a> {
                 if self.peek_char() == Some(',') || self.peek_char() == Some(';') {
                     self.pos += 1;
                 } else {
-                    return Err(self.error(format!(
-                        "expected ',' or ';' between object-type properties"
-                    )));
+                    return Err(self
+                        .error("expected ',' or ';' between object-type properties".to_string()));
                 }
                 self.skip_whitespace();
                 // Trailing separator before `}` is allowed.
@@ -886,6 +885,9 @@ impl<'a> TypeParser<'a> {
             "Undefined" | "undefined" | "void" => Ok(Type::Undefined),
             "Null" | "null" => Ok(Type::Null),
             "Regex" => Ok(Type::Regex),
+            name if TypedArrayKind::from_name(name).is_some() => {
+                Ok(Type::TypedArray(TypedArrayKind::from_name(name).unwrap()))
+            }
             "never" => Ok(Type::never()),
             "true" => Ok(Type::lit_bool(true)),
             "false" => Ok(Type::lit_bool(false)),
@@ -1064,11 +1066,11 @@ impl<'a> TypeParser<'a> {
     }
 
     /// Create an error with the current span.
-    fn error(&self, message: String) -> TypeError {
-        TypeError::TypeAnnotationParse {
+    fn error(&self, message: String) -> Box<TypeError> {
+        Box::new(TypeError::TypeAnnotationParse {
             message,
             span: self.span,
-        }
+        })
     }
 }
 
@@ -1103,13 +1105,17 @@ pub fn parse_type_annotation_with_aliases(
 
 /// As [`parse_type_annotation_with_pvars`], also returning the constraints
 /// of a `<…> where C, … =>` prefix (for a declaration's scheme).
+/// A parsed annotation: its type, its named type variables, the next free
+/// variable id, and its constraints.
+pub type ParsedAnnotation = (Type, HashMap<String, u32>, u32, Vec<TypePred>);
+
 pub fn parse_type_annotation_with_preds(
     content: &str,
     span: Span,
     start_var_id: u32,
     start_pvar_id: u32,
     aliases: &HashMap<String, AliasDef>,
-) -> ParseResult<(Type, HashMap<String, u32>, u32, Vec<TypePred>)> {
+) -> ParseResult<ParsedAnnotation> {
     let mut parser = TypeParser::with_aliases(content, span, start_var_id, aliases);
     parser.seed_pvar_id(start_pvar_id);
     let ty = parser.parse()?;
@@ -1200,6 +1206,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         | Type::Undefined
         | Type::Null
         | Type::Regex
+        | Type::TypedArray(_)
         | Type::Literal(_)
         | Type::Error => ty.clone(),
         Type::Array(elem) => Type::array(substitute_alias_body(elem, subst)),
@@ -1358,7 +1365,7 @@ mod tests {
     fn rejects_required_after_optional() {
         let src = "(a?: Number, b: Number) => String";
         let err = parse_type_annotation(src, Span::new(0, src.len()), 1000).unwrap_err();
-        match err {
+        match *err {
             crate::error::TypeError::OptionalParameterFollowedByRequired {
                 optional_idx,
                 required_idx,
@@ -1378,7 +1385,7 @@ mod tests {
     fn rejects_required_after_optional_middle() {
         let src = "(a: Number, b?: Number, c: Number) => String";
         let err = parse_type_annotation(src, Span::new(0, src.len()), 1000).unwrap_err();
-        match err {
+        match *err {
             crate::error::TypeError::OptionalParameterFollowedByRequired {
                 optional_idx,
                 required_idx,
@@ -1446,7 +1453,7 @@ mod tests {
         let result =
             parse_type_annotation("<A>(f: <T>(x: T) => T, a: A) => A", Span::new(0, 33), 1000);
         match result {
-            Err(TypeError::Rank1Restriction { .. }) => {} // Expected
+            Err(e) if matches!(*e, TypeError::Rank1Restriction { .. }) => {} // Expected
             Err(e) => panic!("Expected Rank1Restriction error, got: {:?}", e),
             Ok(_) => panic!("Should reject higher-rank type in parameter position"),
         }
@@ -1458,7 +1465,7 @@ mod tests {
         // This should also fail
         let result = parse_type_annotation("(x: Number) => <T>(y: T) => T", Span::new(0, 29), 1000);
         match result {
-            Err(TypeError::Rank1Restriction { .. }) => {} // Expected
+            Err(e) if matches!(*e, TypeError::Rank1Restriction { .. }) => {} // Expected
             Err(e) => panic!("Expected Rank1Restriction error, got: {:?}", e),
             Ok(_) => panic!("Should reject higher-rank type in return position"),
         }
@@ -1483,7 +1490,7 @@ mod tests {
         let input = "(obj: { fn: <T>(x: T) => T }) => Number";
         let result = parse_type_annotation(input, Span::new(0, input.len()), 1000);
         match result {
-            Err(TypeError::Rank1Restriction { .. }) => {} // Expected
+            Err(e) if matches!(*e, TypeError::Rank1Restriction { .. }) => {} // Expected
             Err(e) => panic!("Expected Rank1Restriction error, got: {:?}", e),
             Ok(_) => panic!("Should reject polymorphic object property in function parameter"),
         }
@@ -1539,6 +1546,7 @@ mod tests {
             (Type::Undefined, Type::Undefined) => true,
             (Type::Null, Type::Null) => true,
             (Type::Regex, Type::Regex) => true,
+            (Type::TypedArray(a), Type::TypedArray(b)) => a == b,
 
             (Type::Var(TVarName::Flex(id1)), Type::Var(TVarName::Flex(id2))) => {
                 if let Some(&mapped) = var_map.get(id1) {
@@ -1678,13 +1686,13 @@ mod proptests {
             |inner| {
                 prop_oneof![
                     // Arrays
-                    inner.clone().prop_map(|t| Type::array(t)),
+                    inner.clone().prop_map(Type::array),
                     // Simple functions (no this type)
                     (prop::collection::vec(inner.clone(), 0..3), inner.clone())
                         .prop_map(|(params, ret)| Type::simple_func(params, ret)),
                     // Objects with string keys
                     prop::collection::vec(("[a-z]{1,4}", inner.clone()), 0..3)
-                        .prop_map(|props| Type::object(props)),
+                        .prop_map(Type::object),
                 ]
             },
         )
@@ -1711,6 +1719,7 @@ mod proptests {
             (Type::Undefined, Type::Undefined) => true,
             (Type::Null, Type::Null) => true,
             (Type::Regex, Type::Regex) => true,
+            (Type::TypedArray(a), Type::TypedArray(b)) => a == b,
 
             (Type::Var(TVarName::Flex(id1)), Type::Var(TVarName::Flex(id2))) => {
                 if let Some(&mapped) = var_map.get(id1) {

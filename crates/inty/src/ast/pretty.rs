@@ -1039,7 +1039,7 @@ mod tests {
             (Literal::Boolean(true), "true"),
             (Literal::Boolean(false), "false"),
             (Literal::Number(42.0), "42"),
-            (Literal::Number(3.14), "3.14"),
+            (Literal::Number(2.5), "2.5"),
             (Literal::String("hello".to_string()), "\"hello\""),
             (
                 Literal::String("say \"hi\"".to_string()),

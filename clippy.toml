@@ -1,0 +1,3 @@
+# `lsp_types::Uri` (the key type `WorkspaceEdit::changes` requires) holds a
+# `Cell` that caches a parse position; its `Hash` and `Eq` don't read it.
+ignore-interior-mutability = ["lsp_types::Uri"]

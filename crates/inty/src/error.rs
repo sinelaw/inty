@@ -161,8 +161,39 @@ pub enum IntyError {
     #[error("Parser error: {0}")]
     Parse(#[from] ParseError),
 
+    /// Boxed: a `TypeError` is large, and an `IntyError` is returned by
+    /// most of the checker's functions.
     #[error("Type error: {0}")]
-    Type(#[from] TypeError),
+    Type(Box<TypeError>),
+}
+
+impl IntyError {
+    /// The type error this is, if it is one.
+    pub fn as_type(&self) -> Option<&TypeError> {
+        match self {
+            IntyError::Type(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    pub fn as_type_mut(&mut self) -> Option<&mut TypeError> {
+        match self {
+            IntyError::Type(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<Box<TypeError>> for IntyError {
+    fn from(e: Box<TypeError>) -> Self {
+        IntyError::Type(e)
+    }
+}
+
+impl From<TypeError> for IntyError {
+    fn from(e: TypeError) -> Self {
+        IntyError::Type(Box::new(e))
+    }
 }
 
 /// Lexer errors.

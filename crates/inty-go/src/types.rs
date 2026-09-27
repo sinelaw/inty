@@ -22,6 +22,7 @@ use inty::infer::InferState;
 use inty::span::Span;
 use inty::types::{
     is_callable_key, FieldEntry, FuncParam, Presence, RowTail, RowType, TVarName, Type, TypeId,
+    TypedArrayKind,
 };
 
 use crate::{unsupported, Result};
@@ -40,6 +41,10 @@ pub enum GoType {
     Unit,
     /// `*[]T`.
     Array(Box<GoType>),
+    /// A typed array: `*[]int32`, `*[]uint8` or `*[]float64`. Its
+    /// elements are read as the kind's inty element type (`Int` or
+    /// `Number`).
+    Typed(TypedArrayKind),
     /// `*ObjN`, by index into [`TypeMapper::structs`].
     Struct(usize),
     Func(Vec<GoType>, Box<GoType>),
@@ -53,7 +58,11 @@ impl GoType {
     pub fn is_nullable(&self) -> bool {
         matches!(
             self,
-            GoType::Array(_) | GoType::Struct(_) | GoType::Func(..) | GoType::Any
+            GoType::Array(_)
+                | GoType::Typed(_)
+                | GoType::Struct(_)
+                | GoType::Func(..)
+                | GoType::Any
         )
     }
 }
@@ -112,6 +121,7 @@ impl TypeMapper {
             },
             Type::Var(_) => GoType::Any,
             Type::Array(elem) => GoType::Array(Box::new(self.map_depth(state, elem, span, d)?)),
+            Type::TypedArray(k) => GoType::Typed(*k),
             Type::Func { params, ret, .. } => self.map_func(state, params, ret, span, d)?,
             Type::Row(row) => {
                 if let Some((_, params, ret)) = ty.as_callable() {
@@ -290,6 +300,7 @@ impl TypeMapper {
             GoType::Unit => "struct{}".into(),
             GoType::Any => "any".into(),
             GoType::Array(e) => format!("*[]{}", self.render(e)),
+            GoType::Typed(k) => format!("*[]{}", typed_elem(*k)),
             GoType::Struct(i) if self.by_value.contains(i) => self.structs[*i].name.clone(),
             GoType::Struct(i) => format!("*{}", self.structs[*i].name),
             GoType::Func(ps, r) => {
@@ -600,4 +611,13 @@ pub fn field_name(js: &str) -> String {
 
 fn pretty(ty: &Type) -> String {
     format!("{}", ty)
+}
+
+/// The Go element type of a typed array.
+pub fn typed_elem(k: TypedArrayKind) -> &'static str {
+    match k {
+        TypedArrayKind::Int32 => "int32",
+        TypedArrayKind::Uint8 => "uint8",
+        TypedArrayKind::Float64 => "float64",
+    }
 }

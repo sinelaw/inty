@@ -4,6 +4,9 @@ use super::token::{Span, Spanned, Token};
 use crate::ast::{AnnotationKind, TypeAlias, TypeAnnotation};
 use crate::error::{LexError, Result};
 
+/// The tokens of a source, with its type annotations and aliases.
+pub type Tokenized = (Vec<Spanned<Token>>, Vec<TypeAnnotation>, Vec<TypeAlias>);
+
 /// The lexer/scanner for mquickjs source code.
 pub struct Scanner<'a> {
     source: &'a str,
@@ -40,9 +43,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Tokenize the entire source and return all tokens along with type annotations.
-    pub fn tokenize(
-        mut self,
-    ) -> Result<(Vec<Spanned<Token>>, Vec<TypeAnnotation>, Vec<TypeAlias>)> {
+    pub fn tokenize(mut self) -> Result<Tokenized> {
         let mut tokens = Vec::new();
 
         loop {
@@ -1204,10 +1205,10 @@ impl<'a> Scanner<'a> {
 
     /// Peek ahead to read identifier without consuming
     fn peek_keyword(&self) -> Option<String> {
-        let mut iter = self.chars.clone();
+        let iter = self.chars.clone();
         let mut result = String::new();
 
-        while let Some((_, ch)) = iter.next() {
+        for (_, ch) in iter {
             if ch.is_alphabetic() || ch == '_' || (!result.is_empty() && ch.is_alphanumeric()) {
                 result.push(ch);
             } else {
@@ -1646,7 +1647,7 @@ mod tests {
     #[test]
     fn test_numbers() {
         assert_eq!(tokenize("42"), vec![Token::Number(42.0), Token::Eof]);
-        assert_eq!(tokenize("3.14"), vec![Token::Number(3.14), Token::Eof]);
+        assert_eq!(tokenize("2.5"), vec![Token::Number(2.5), Token::Eof]);
         assert_eq!(tokenize("1e5"), vec![Token::Number(100000.0), Token::Eof]);
         assert_eq!(tokenize("0xFF"), vec![Token::Number(255.0), Token::Eof]);
         assert_eq!(tokenize("0b101"), vec![Token::Number(5.0), Token::Eof]);

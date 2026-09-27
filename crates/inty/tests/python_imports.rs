@@ -158,7 +158,7 @@ fn pyi_stub_optional_param_and_list_return() {
     let ok1 = check(
         "from coll import items\nr = items(3)\nr\n",
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     );
     assert_eq!(ok1.expect("omitting optional arg is fine"), "Int[]");
     let ok2 = check(
@@ -265,7 +265,7 @@ fn pyi_class_constructor_and_method() {
     let ty = check(
         "from geo import Point\np = Point(1, 2)\nd = p.dist()\nd\n",
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     )
     .expect("stub class construction + method");
     assert_eq!(ty, "Number");
@@ -315,7 +315,7 @@ fn pyi_distinct_stub_classes_do_not_interchange() {
     let err = check(
         "from twins import A, B\nxs = [A(), B()]\nxs\n",
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     )
     .expect_err("distinct brands don't collapse into one element type");
     assert!(err.contains("BranchMismatch"), "{}", err);
@@ -346,7 +346,7 @@ fn pyi_generic_stub_class_ties_its_type_param() {
     let ty = check(
         "from box import Box\nb = Box(5)\nr = b.get() + 1\nr\n",
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     )
     .expect("generic stub class should tie T across ctor and method");
     assert_eq!(ty, "Int");
@@ -391,7 +391,11 @@ fn isinstance_narrows_imported_stub_brand() {
     let prelude = pets_stub_and_union(&stubs);
 
     // Control: the bare union has no Dog-only member.
-    let bad = check(&format!("{prelude}r = x.bark()\n"), &dir, &[stubs.clone()]);
+    let bad = check(
+        &format!("{prelude}r = x.bark()\n"),
+        &dir,
+        std::slice::from_ref(&stubs),
+    );
     assert!(
         bad.is_err(),
         "x.bark() on a Dog | Cat union should fail without narrowing"
@@ -401,7 +405,7 @@ fn isinstance_narrows_imported_stub_brand() {
     let ok = check(
         &format!("{prelude}if isinstance(x, Dog):\n    r = x.bark()\n"),
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     );
     assert!(
         ok.is_ok(),
@@ -502,7 +506,7 @@ fn pyi_named_reexport_is_followed() {
     assert!(check(
         "from agg import helper\nr = helper(3)\nr\n",
         &dir,
-        &[stubs.clone()]
+        std::slice::from_ref(&stubs)
     )
     .is_ok());
     assert!(
@@ -542,7 +546,7 @@ fn pyi_literal_param_is_enforced() {
         check(
             "from lit import pick\npick(\"a\")\n",
             &dir,
-            &[stubs.clone()]
+            std::slice::from_ref(&stubs)
         )
         .is_ok(),
         "a valid literal member should be accepted"
@@ -566,7 +570,7 @@ fn pyi_callable_maps_to_function_type() {
     let ty = check(
         "from hof import apply\ndef g(n):\n    return n + 1\nr = apply(g, 1)\nr\n",
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     )
     .expect("matching callback should type-check");
     assert_eq!(ty, "Int");
@@ -639,7 +643,7 @@ fn imported_class_resolves_as_type_annotation() {
          def g(d: Dog):\n    return 1\n\
          f(Dog())\ng(Dog())\n",
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     );
     assert!(
         ok.is_ok(),
@@ -830,7 +834,7 @@ fn keyword_arguments_through_stub_signature() {
     let ok = check(
         "from geo import dist\nr = dist(y=2, x=1)\nr\n",
         &dir,
-        &[stubs.clone()],
+        std::slice::from_ref(&stubs),
     );
     assert_eq!(ok.expect("keyword call via stub names"), "Int");
 

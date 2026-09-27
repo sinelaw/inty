@@ -20,14 +20,14 @@ use super::super::InferResult;
 /// type-check, and so a function-valued `const` has its principal
 /// (generalised) type before the hoisted functions that use it.
 #[allow(clippy::type_complexity)]
-pub(in crate::infer) fn function_decl_parts<'a>(
-    stmt: &'a Stmt,
+pub(in crate::infer) fn function_decl_parts(
+    stmt: &Stmt,
 ) -> Option<(
-    &'a str,
-    &'a [Param],
-    &'a Stmt,
-    &'a Option<TypeAnnotation>,
-    Option<&'a crate::types::TypeAst>,
+    &str,
+    &[Param],
+    &Stmt,
+    &Option<TypeAnnotation>,
+    Option<&crate::types::TypeAst>,
     Span,
 )> {
     match stmt {
@@ -293,6 +293,7 @@ impl InferState {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::infer) fn infer_function(
         &mut self,
         env: &TypeEnv,
@@ -1474,7 +1475,7 @@ mod scc_tests {
     #[test]
     fn singleton_no_edges() {
         // a()  — no calls; one trivial SCC.
-        let sccs = tarjan_scc(&vec![Vec::new()]);
+        let sccs = tarjan_scc(&[Vec::new()]);
         assert_eq!(sccs, vec![vec![0]]);
     }
 

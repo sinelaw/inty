@@ -399,7 +399,7 @@ pub fn build_destructure_pair(obj_src: &str, prop: &str) -> (String, String, Com
 pub fn t_move_data_decl_after_first_user(p: &Program) -> Option<(Program, Comparison)> {
     use inty::ast::{ExportDecl, Stmt, VarDeclarator};
 
-    fn single_binding<'a>(s: &'a Stmt) -> Option<(&'a VarDeclarator, bool)> {
+    fn single_binding(s: &Stmt) -> Option<(&VarDeclarator, bool)> {
         // Returns (declarator, is_export). Only single-name, non-destructuring
         // forms qualify; multi-decl `var a = 1, b = 2;` is skipped because
         // the move would split it.

@@ -440,6 +440,12 @@ See [jsdoc-at-type.md](jsdoc-at-type.md) for the full rule.
 
 Built-in type names: `Number`, `String`, `Boolean`, `Null`, `Undefined`. Unknown identifiers are rejected (typos like `Stirng` are an error, not a fresh variable).
 
+Typed arrays are `Int32Array`, `Uint8Array` and `Float64Array`. Each is its own type, not an ordinary array:
+- It has a fixed length: `.length` and `.fill(v)`, but no `push`.
+- Indexing `a[i]` takes an `Int` index. It reads an `Int` from the integer kinds and a `Number` from `Float64Array`.
+- A store into an integer array must be an `Int`. JavaScript would silently wrap or truncate any other number, so `a[0] = 1.5` is rejected. An `Int` store wraps to 32 or 8 bits, exactly as in JavaScript.
+- They are made with `new Int32Array(n)` or `Int32Array.from(xs)`.
+
 ### Function types
 
 A function-type annotation is `(P1, P2, ...) => R`. Parameter names are optional. For functions, both forms below are accepted:

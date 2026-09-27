@@ -110,6 +110,7 @@ impl PrettyContext {
             Type::Undefined => write!(w, "undefined"),
             Type::Null => write!(w, "null"),
             Type::Regex => write!(w, "RegExp"),
+            Type::TypedArray(k) => write!(w, "{}", k.name()),
             Type::Var(name) => self.write_var(w, name),
             Type::Func {
                 this_type: _,
@@ -245,6 +246,7 @@ impl PrettyContext {
             Type::Undefined => write!(w, "Undefined"),
             Type::Null => write!(w, "Null"),
             Type::Regex => write!(w, "Regex"),
+            Type::TypedArray(k) => write!(w, "{}", k.name()),
 
             Type::Var(name) => self.write_var(w, name),
 

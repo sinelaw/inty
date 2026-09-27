@@ -97,11 +97,10 @@ pub fn names_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             }
             names_in_stmt(body, out);
         }
-        Stmt::Return { argument, .. } => {
-            if let Some(e) = argument {
-                names_in_expr(e, out);
-            }
-        }
+        Stmt::Return {
+            argument: Some(e), ..
+        } => names_in_expr(e, out),
+        Stmt::Return { argument: None, .. } => {}
         Stmt::If {
             test,
             consequent,

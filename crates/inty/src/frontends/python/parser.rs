@@ -29,6 +29,9 @@ struct Scope {
     globals: HashSet<String>,
 }
 
+/// A call's positional and keyword arguments.
+type CallArgs = (Vec<Expr>, Vec<(String, Expr)>);
+
 pub struct Parser {
     toks: Vec<Spanned<Tok>>,
     pos: usize,
@@ -299,7 +302,7 @@ impl Parser {
             Tok::Def => Ok(vec![self.def_stmt()?]),
             Tok::Class => Ok(vec![self.class_stmt()?]),
             Tok::Import => self.import_stmt(),
-            Tok::From => Ok(vec![self.from_import_stmt()?]),
+            Tok::From => Ok(vec![self.import_from_stmt()?]),
             Tok::If => Ok(vec![self.if_stmt()?]),
             Tok::While => Ok(vec![self.while_stmt()?]),
             Tok::For => Ok(vec![self.for_stmt()?]),
@@ -448,6 +451,7 @@ impl Parser {
     ///   - `NAME = Head[…]` where `Head` is a typing special form
     ///     (`Literal`, `Optional`, `Union`, …) — always a type, never a
     ///     value, so no ambiguity with ordinary assignment.
+    ///
     /// A type alias introduces a *type name*, not a runtime value, so it
     /// lowers to an empty statement.
     fn try_type_alias(&mut self) -> Option<Stmt> {
@@ -1210,7 +1214,7 @@ impl Parser {
     /// to a side-effect import (empty specifier list → merge all
     /// exports). The module spec — leading dots plus dotted path — is
     /// the `source`.
-    fn from_import_stmt(&mut self) -> Result<Stmt> {
+    fn import_from_stmt(&mut self) -> Result<Stmt> {
         let start = self.cur_span().start;
         self.advance(); // from
 
@@ -2054,7 +2058,7 @@ impl Parser {
     /// Parse a call's argument list into `(positional, keyword)`. A
     /// `name=value` argument is a keyword; positional arguments may not
     /// follow a keyword (a Python `SyntaxError`).
-    fn call_args(&mut self) -> Result<(Vec<Expr>, Vec<(String, Expr)>)> {
+    fn call_args(&mut self) -> Result<CallArgs> {
         let mut args = Vec::new();
         let mut kwargs: Vec<(String, Expr)> = Vec::new();
         if self.check(&Tok::RParen) {
