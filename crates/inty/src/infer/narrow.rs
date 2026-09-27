@@ -526,6 +526,7 @@ fn could_be_falsy(ty: &Type, lang: Language) -> bool {
                         | Type::Tuple(_)
                         | Type::Module(_)
                         | Type::Regex
+                        | Type::TypedArray(_)
                 ))
         }
         Language::Lua => matches!(
@@ -571,7 +572,7 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
         // `<CALL>` are plain objects.
         (_, "function") if ty.is_func() => true,
         (Type::Row(_), "object") if !ty.is_func() => true,
-        (Type::Array(_) | Type::Tuple(_) | Type::Regex, "object") => true,
+        (Type::Array(_) | Type::Tuple(_) | Type::Regex | Type::TypedArray(_), "object") => true,
         (Type::Map(_), "object") | (Type::Promise(_), "object") => true,
         (Type::Module(_), "object") => true,
         (Type::Null, "object") => true,

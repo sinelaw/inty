@@ -63,11 +63,9 @@ impl<'a> Decorator<'a> {
                         } else if let Some(ty) = self.state.get_decl_type(decl.span) {
                             // Add inferred type annotation from decl_types map
                             Some(self.type_to_annotation(ty, decl.span))
-                        } else if let Some(scheme) = env.lookup(&decl.name) {
-                            // Fallback to env lookup for top-level declarations
-                            Some(self.scheme_to_annotation(scheme, decl.span))
                         } else {
-                            None
+                            env.lookup(&decl.name)
+                                .map(|scheme| self.scheme_to_annotation(scheme, decl.span))
                         };
 
                         // Update env for subsequent declarations
@@ -111,10 +109,9 @@ impl<'a> Decorator<'a> {
                 // to get the generalized type with predicates
                 let annotation = if type_annotation.is_some() {
                     type_annotation.clone()
-                } else if let Some(scheme) = env.lookup(name) {
-                    Some(self.scheme_to_annotation(scheme, *span))
                 } else {
-                    None
+                    env.lookup(name)
+                        .map(|scheme| self.scheme_to_annotation(scheme, *span))
                 };
 
                 let (decorated_body, _) = self.decorate_stmt(body, env);
@@ -223,10 +220,10 @@ impl<'a> Decorator<'a> {
                             .map(|d| {
                                 let annotation = if d.type_annotation.is_some() {
                                     d.type_annotation.clone()
-                                } else if let Some(ty) = self.state.get_decl_type(d.span) {
-                                    Some(self.type_to_annotation(ty, d.span))
                                 } else {
-                                    None
+                                    self.state
+                                        .get_decl_type(d.span)
+                                        .map(|ty| self.type_to_annotation(ty, d.span))
                                 };
                                 VarDeclarator {
                                     name: d.name.clone(),
@@ -270,10 +267,10 @@ impl<'a> Decorator<'a> {
                     ForInLhs::VarDecl(name, existing_ann, decl_span, kind) => {
                         let annotation = if existing_ann.is_some() {
                             existing_ann.clone()
-                        } else if let Some(ty) = self.state.get_decl_type(*decl_span) {
-                            Some(self.type_to_annotation(ty, *decl_span))
                         } else {
-                            None
+                            self.state
+                                .get_decl_type(*decl_span)
+                                .map(|ty| self.type_to_annotation(ty, *decl_span))
                         };
                         ForInLhs::VarDecl(name.clone(), annotation, *decl_span, *kind)
                     }
@@ -304,10 +301,10 @@ impl<'a> Decorator<'a> {
                     ForInLhs::VarDecl(name, existing_ann, decl_span, kind) => {
                         let annotation = if existing_ann.is_some() {
                             existing_ann.clone()
-                        } else if let Some(ty) = self.state.get_decl_type(*decl_span) {
-                            Some(self.type_to_annotation(ty, *decl_span))
                         } else {
-                            None
+                            self.state
+                                .get_decl_type(*decl_span)
+                                .map(|ty| self.type_to_annotation(ty, *decl_span))
                         };
                         ForInLhs::VarDecl(name.clone(), annotation, *decl_span, *kind)
                     }

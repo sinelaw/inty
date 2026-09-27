@@ -109,14 +109,14 @@ pub fn write_error<W: Write>(
         }
     };
     // Handle UnificationError specially since it has multiple labels
-    if let IntyError::Type(TypeError::UnificationError {
+    if let Some(TypeError::UnificationError {
         expected,
         found,
         span,
         context,
         expected_origin,
         found_origin,
-    }) = error
+    }) = error.as_type()
     {
         let mut colors = ColorGenerator::new();
         let expected_color = colors.next();
@@ -252,7 +252,7 @@ pub fn write_error<W: Write>(
             ),
         },
 
-        IntyError::Type(e) => match e {
+        IntyError::Type(e) => match &**e {
             TypeError::UnificationError { .. } => {
                 unreachable!("UnificationError is handled above")
             }
@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(x_start, 11, "fixture math");
         let span = Span::new(x_start, x_start + 1);
 
-        let error = IntyError::Type(TypeError::UnificationError {
+        let error = IntyError::from(TypeError::UnificationError {
             expected: "String".to_string(),
             found: "Number".to_string(),
             span,
@@ -544,7 +544,7 @@ mod tests {
         let foo_start = source.find("foo").unwrap();
         let span = Span::new(foo_start, foo_start + 3);
 
-        let error = IntyError::Type(TypeError::UndefinedVariable {
+        let error = IntyError::from(TypeError::UndefinedVariable {
             name: "foo".to_string(),
             span,
         });
@@ -576,7 +576,7 @@ mod tests {
         let x_start = source.find("x").unwrap();
         let span = Span::new(x_start, x_start + 1);
 
-        let error = IntyError::Type(TypeError::UndefinedVariable {
+        let error = IntyError::from(TypeError::UndefinedVariable {
             name: "x".to_string(),
             span,
         });

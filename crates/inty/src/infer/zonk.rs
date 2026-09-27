@@ -112,6 +112,7 @@ fn zonk_with_visited(
         Type::Undefined => Type::Undefined,
         Type::Null => Type::Null,
         Type::Regex => Type::Regex,
+        Type::TypedArray(k) => Type::TypedArray(*k),
         Type::Error => Type::Error,
         Type::Literal(lit) => Type::Literal(lit.clone()),
         Type::Var(TVarName::Skolem(_)) => ty.clone(),
@@ -306,7 +307,7 @@ pub fn zonk_scheme(table: &mut VarTable, subst: &Subst, scheme: &TypeScheme) -> 
             .preds
             .iter()
             .map(|p| TypePred {
-                class: p.class.clone(),
+                class: p.class,
                 types: p
                     .types
                     .iter()
@@ -376,6 +377,7 @@ fn zonk_filtered(table: &mut VarTable, subst: &Subst, ty: &Type, quantified: &[T
         | Type::Undefined
         | Type::Null
         | Type::Regex
+        | Type::TypedArray(_)
         | Type::Error => ty.clone(),
         Type::Literal(lit) => Type::Literal(lit.clone()),
         Type::Func {
@@ -475,7 +477,7 @@ fn zonk_row_filtered(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Subst, Substitutable, TVarId};
+    use crate::types::{Subst, TVarId};
 
     /// Build a `Subst` mirroring a `VarTable`. Insertion discipline:
     ///

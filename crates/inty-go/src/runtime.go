@@ -286,6 +286,28 @@ func intyFill[T any](a *[]T, v T) *[]T {
 	return a
 }
 
+// Typed arrays (Int32Array, Uint8Array, Float64Array) are fixed-length
+// slices of the machine type. A store wraps an Int as JavaScript's
+// ToInt32 / ToUint8 do, which is Go's conversion; the helpers keep a
+// constant argument from being converted at compile time, where Go
+// rejects an overflow instead of wrapping it.
+
+func intyI32(v int) int32 { return int32(v) }
+func intyU8(v int) uint8  { return uint8(v) }
+
+func intyTypedNew[E int32 | uint8 | float64](n int) *[]E {
+	s := make([]E, n)
+	return &s
+}
+
+func intyTypedFrom[E int32 | uint8 | float64, S int | float64](xs *[]S) *[]E {
+	s := make([]E, len(*xs))
+	for i, v := range *xs {
+		s[i] = E(v)
+	}
+	return &s
+}
+
 func intyReverse[T any](a *[]T) *[]T {
 	s := *a
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
@@ -414,6 +436,57 @@ func intyIMul(a, b int) int {
 			"JavaScript would compute a different value")
 	}
 	return a * b
+}
+
+// intyIMulK is `a * k` for a literal k, given lim = (2^53-1)/|k|. It
+// stops exactly when intyIMul(a, k) would (|a*k| < 2^53 iff |a| <= lim),
+// with integer compares that fold into the caller.
+func intyIMulK(a, k, lim int) int {
+	if a > lim || a < -lim {
+		panic("inty: an integer product is not a safe integer (|n| < 2^53); " +
+			"JavaScript would compute a different value")
+	}
+	return a * k
+}
+
+// intyFloorDiv, intyCeilDiv and intyTruncDiv are Math.floor/ceil/trunc
+// of `a / b` on Ints, computed without doubles. They agree with the
+// double computation whenever |a|, |b| < 2^53 and b != 0: a quotient
+// that isn't an integer is at least 1/|b| from the nearest one, which is
+// more than half the spacing of doubles at |a/b| (at most |a/b| * 2^-53),
+// so rounding the double quotient never reaches an integer. Other inputs
+// take the double computation itself.
+func intyFloorDiv(a, b int) int {
+	if intyDivExact(a, b) {
+		q := a / b
+		if (a%b != 0) && ((a < 0) != (b < 0)) {
+			q--
+		}
+		return q
+	}
+	return intyFloorInt(float64(a) / float64(b))
+}
+
+func intyCeilDiv(a, b int) int {
+	if intyDivExact(a, b) {
+		q := a / b
+		if (a%b != 0) && ((a < 0) == (b < 0)) {
+			q++
+		}
+		return q
+	}
+	return intyCeilInt(float64(a) / float64(b))
+}
+
+func intyTruncDiv(a, b int) int {
+	if intyDivExact(a, b) {
+		return a / b
+	}
+	return intyTruncInt(float64(a) / float64(b))
+}
+
+func intyDivExact(a, b int) bool {
+	return b != 0 && a < intyMaxSafe && a > -intyMaxSafe && b < intyMaxSafe && b > -intyMaxSafe
 }
 
 func intyFloorInt(f float64) int { return intyToInt(math.Floor(f)) }

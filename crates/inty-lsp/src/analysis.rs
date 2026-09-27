@@ -862,8 +862,8 @@ fn active_arg_index(text: &str, start: usize, cursor: usize, max: usize) -> usiz
     let end = cursor.min(text.len());
     let mut depth: i32 = 0;
     let mut count = 0usize;
-    for i in start..end {
-        match bytes[i] {
+    for &b in bytes.get(start..end).unwrap_or(&[]) {
+        match b {
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth = (depth - 1).max(0),
             b',' if depth == 0 => count += 1,
@@ -956,11 +956,10 @@ fn visit_stmt(stmt: &Stmt, offset: usize, best: &mut Option<(String, Span)>) {
             visit_expr(right, offset, best);
             visit_stmt(body, offset, best);
         }
-        Stmt::Return { argument, .. } => {
-            if let Some(v) = argument {
-                visit_expr(v, offset, best);
-            }
-        }
+        Stmt::Return {
+            argument: Some(v), ..
+        } => visit_expr(v, offset, best),
+        Stmt::Return { argument: None, .. } => {}
         Stmt::Throw { argument, .. } => visit_expr(argument, offset, best),
         Stmt::Try {
             block,
@@ -1130,8 +1129,8 @@ const func = function() { return {id: '123', name: 'hello'}; };";
             .iter()
             .filter(|e| {
                 matches!(
-                    e,
-                    IntyError::Type(inty::error::TypeError::UndefinedVariable { .. })
+                    e.as_type(),
+                    Some(inty::error::TypeError::UndefinedVariable { .. })
                 )
             })
             .count();

@@ -443,9 +443,7 @@ fn run_bundle(args: &[String]) -> ExitCode {
     let check_result = inty::worker::run_with_inference_stack("inty-cli-bundle", move || {
         let mut state = state;
         let entry_path = std::path::Path::new(&entry_for_thread);
-        if let Err(e) = inty::modules::check_module(&mut state, env, entry_path) {
-            return Err(e);
-        }
+        inty::modules::check_module(&mut state, env, entry_path)?;
         state.resolve_constraints()
     });
     if let Err(e) = check_result {

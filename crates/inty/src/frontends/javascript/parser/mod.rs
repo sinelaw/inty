@@ -3673,7 +3673,7 @@ impl Parser {
         self.tokens
             .get(self.pos)
             .map(|s| s.span)
-            .unwrap_or(Span::default())
+            .unwrap_or_default()
     }
 
     fn prev_span(&self) -> Span {
@@ -3681,7 +3681,7 @@ impl Parser {
             self.tokens
                 .get(self.pos - 1)
                 .map(|s| s.span)
-                .unwrap_or(Span::default())
+                .unwrap_or_default()
         } else {
             Span::default()
         }
@@ -4002,7 +4002,7 @@ mod tests {
         assert!(matches!(
             parse_expr("/hello/"),
             Expr::Lit { value: Literal::Regex { pattern, flags }, .. }
-            if pattern == "hello" && flags == ""
+            if pattern == "hello" && flags.is_empty()
         ));
 
         // Test regex with flags

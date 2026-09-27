@@ -55,6 +55,16 @@ const Object;
     } */
 const Array;
 
+// Typed arrays: fixed-length arrays of one machine number type. An
+// integer array's elements are `Int`s, and a store must be one (see
+// `TypedArrayKind::element`). `from` copies an ordinary array.
+/** const Int32Array: {(Int) => Int32Array, from: (Int[]) => Int32Array} */
+const Int32Array;
+/** const Uint8Array: {(Int) => Uint8Array, from: (Int[]) => Uint8Array} */
+const Uint8Array;
+/** const Float64Array: {(Int) => Float64Array, from: (Number[]) => Float64Array} */
+const Float64Array;
+
 // Primitive constructors as callable rows. The keyless `(a) => T`
 // signature inside the row is the call form (`String("hi")`); the
 // other entries are the well-known statics. The unified callable-row

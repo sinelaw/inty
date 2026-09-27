@@ -88,7 +88,7 @@ fn resolve_inner(
         };
 
         let module_err = |msg: String| {
-            IntyError::Type(TypeError::Module {
+            IntyError::from(TypeError::Module {
                 message: msg,
                 span: *span,
             })
@@ -174,7 +174,7 @@ fn resolve_inner(
                 }
                 ImportSpecifier::Default { local, span } => {
                     // Python has no default imports; treat defensively.
-                    return Err(IntyError::Type(TypeError::Module {
+                    return Err(IntyError::from(TypeError::Module {
                         message: format!("unexpected default import {:?}", local),
                         span: *span,
                     }));
@@ -298,14 +298,14 @@ fn load_module(
         return Ok(cached.clone());
     }
     if visiting.contains(&canonical) {
-        return Err(IntyError::Type(TypeError::Module {
+        return Err(IntyError::from(TypeError::Module {
             message: format!("circular import involving {}", canonical.display()),
             span: crate::span::Span::new(0, 0),
         }));
     }
 
     let source = std::fs::read_to_string(path).map_err(|e| {
-        IntyError::Type(TypeError::Module {
+        IntyError::from(TypeError::Module {
             message: format!("failed to read {}: {}", path.display(), e),
             span: crate::span::Span::new(0, 0),
         })

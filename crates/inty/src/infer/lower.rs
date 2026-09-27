@@ -172,7 +172,7 @@ impl InferState {
                         // type-checks against the half-modelled stub.
                         None => {
                             if let Some(span) = self.current_annotation_span {
-                                self.push_error(IntyError::Type(TypeError::UnknownTypeRef {
+                                self.push_error(IntyError::from(TypeError::UnknownTypeRef {
                                     name: name.clone(),
                                     span,
                                 }));

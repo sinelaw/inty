@@ -293,6 +293,17 @@ pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     })
 }
 
+/// The members of a typed array (`Int32Array`, …) that inty knows. A
+/// typed array has a fixed length, so it has no `push`/`pop`.
+pub fn typed_array_member_type(kind: crate::types::TypedArrayKind, member: &str) -> Option<Type> {
+    let this = Type::TypedArray(kind);
+    Some(match member {
+        "length" => Type::Int,
+        "fill" => Type::simple_func(vec![kind.element()], this),
+        _ => return None,
+    })
+}
+
 /// How many inserted items `Array.prototype.splice` accepts (see
 /// [`array_method_type`]).
 pub const SPLICE_MAX_ITEMS: usize = 4;
@@ -717,6 +728,7 @@ impl InferState {
                         | Type::Literal(_)
                         | Type::Array(_)
                         | Type::Regex
+                        | Type::TypedArray(_)
                 ) =>
             {
                 return Err(TypeError::PropertyNotFound {
@@ -959,6 +971,12 @@ impl InferState {
             Type::String => {
                 int_index(self)?;
                 self.unify(span, &element, &Type::String)?;
+                Ok(())
+            }
+
+            Type::TypedArray(kind) => {
+                int_index(self)?;
+                self.unify(span, &element, &kind.element())?;
                 Ok(())
             }
 

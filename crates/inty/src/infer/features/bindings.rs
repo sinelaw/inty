@@ -119,7 +119,7 @@ fn is_syntactic_value(expr: &Expr) -> bool {
         // Array literals are values if all elements are values
         Expr::Array { elements, .. } => elements
             .iter()
-            .all(|e| e.as_ref().map_or(true, is_syntactic_value)),
+            .all(|e| e.as_ref().is_none_or(is_syntactic_value)),
 
         // Object literals are values if all property values are values
         Expr::Object { properties, .. } => properties.iter().all(|p| match p {

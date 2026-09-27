@@ -743,6 +743,11 @@ impl InferState {
                     return Ok(ty);
                 }
             }
+            Type::TypedArray(kind) => {
+                if let Some(ty) = crate::builtins::typed_array_member_type(*kind, property) {
+                    return Ok(ty);
+                }
+            }
             Type::Regex => {
                 // Regex.prototype methods. `test` is a Boolean
                 // predicate; `match`/`exec` would return
@@ -840,6 +845,7 @@ impl InferState {
                 | Type::Undefined
                 | Type::String
                 | Type::Regex
+                | Type::TypedArray(_)
         ) {
             return Err(crate::error::TypeError::PropertyNotFound {
                 prop: property.to_string(),
@@ -895,16 +901,14 @@ impl InferState {
                                     return None;
                                 }
                                 visited.insert(*next_id);
-                                if let Some(next_ty) =
+                                if let Some(Type::Row(tail_row)) =
                                     self.main_subst.get(&TVarName::Flex(*next_id))
                                 {
-                                    if let Type::Row(tail_row) = next_ty {
-                                        if let Some(entry) = tail_row.props.get(&prop_name) {
-                                            return Some(entry.ty.clone());
-                                        }
-                                        current_tail = &tail_row.tail;
-                                        continue;
+                                    if let Some(entry) = tail_row.props.get(&prop_name) {
+                                        return Some(entry.ty.clone());
                                     }
+                                    current_tail = &tail_row.tail;
+                                    continue;
                                 }
                                 return None;
                             }

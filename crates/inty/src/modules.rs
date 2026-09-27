@@ -142,7 +142,7 @@ fn build_namespace_type(
     let mut export_schemes: Vec<(String, TypeScheme)> = Vec::new();
     for entry in exports {
         let scheme = export_scheme(entry, module_env).ok_or_else(|| {
-            IntyError::Type(crate::error::TypeError::Module {
+            IntyError::from(crate::error::TypeError::Module {
                 message: format!(
                     "module {:?} declares export {:?} but its local binding is missing",
                     err_source, entry.exported
@@ -212,13 +212,13 @@ fn compute_export_table(
             }
             ExportDecl::From { kind, source, span } => {
                 let resolved_path = resolve_path(base_dir, source).map_err(|msg| {
-                    IntyError::Type(crate::error::TypeError::Module {
+                    IntyError::from(crate::error::TypeError::Module {
                         message: format!("cannot resolve re-export {:?}: {}", source, msg),
                         span: *span,
                     })
                 })?;
                 if visiting.contains(&resolved_path) {
-                    return Err(IntyError::Type(crate::error::TypeError::Module {
+                    return Err(IntyError::from(crate::error::TypeError::Module {
                         message: format!(
                             "circular re-export involving {}",
                             resolved_path.display()
@@ -240,7 +240,7 @@ fn compute_export_table(
                     ExportFromKind::Named(specs) => {
                         for spec in specs {
                             let scheme = resolve_target(&spec.local).ok_or_else(|| {
-                                IntyError::Type(crate::error::TypeError::Module {
+                                IntyError::from(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} has no export named {:?}",
                                         source, spec.local
@@ -262,7 +262,7 @@ fn compute_export_table(
                                 continue;
                             }
                             let scheme = export_scheme(entry, &target_env).ok_or_else(|| {
-                                IntyError::Type(crate::error::TypeError::Module {
+                                IntyError::from(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} export {:?} has no resolvable scheme",
                                         source, entry.exported
@@ -319,14 +319,14 @@ pub fn resolve_imports(
         } = stmt
         {
             let resolved_path = resolve_path(base_dir, source).map_err(|msg| {
-                IntyError::Type(crate::error::TypeError::Module {
+                IntyError::from(crate::error::TypeError::Module {
                     message: format!("cannot resolve import {:?}: {}", source, msg),
                     span: *span,
                 })
             })?;
 
             if visiting.contains(&resolved_path) {
-                return Err(IntyError::Type(crate::error::TypeError::Module {
+                return Err(IntyError::from(crate::error::TypeError::Module {
                     message: format!("circular import involving {}", resolved_path.display()),
                     span: *span,
                 }));
@@ -356,7 +356,7 @@ pub fn resolve_imports(
                             imported, local, ..
                         } => {
                             let scheme = lookup_export_scheme(imported).ok_or_else(|| {
-                                IntyError::Type(crate::error::TypeError::Module {
+                                IntyError::from(crate::error::TypeError::Module {
                                     message: format!(
                                         "module {:?} has no export named {:?}",
                                         source, imported
@@ -368,7 +368,7 @@ pub fn resolve_imports(
                         }
                         ImportSpecifier::Default { local, span } => {
                             let scheme = lookup_export_scheme("default").ok_or_else(|| {
-                                IntyError::Type(crate::error::TypeError::Module {
+                                IntyError::from(crate::error::TypeError::Module {
                                     message: format!("module {:?} has no default export", source),
                                     span: *span,
                                 })
@@ -426,7 +426,7 @@ fn load_module(
     let source = match builtin {
         Some((_, declarations)) => declarations.to_string(),
         None => std::fs::read_to_string(path).map_err(|e| {
-            IntyError::Type(crate::error::TypeError::Module {
+            IntyError::from(crate::error::TypeError::Module {
                 message: format!("failed to read {}: {}", path.display(), e),
                 span: crate::span::Span::new(0, 0),
             })

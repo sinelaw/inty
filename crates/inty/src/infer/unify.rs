@@ -113,6 +113,7 @@ impl InferState {
             (Type::Undefined, Type::Undefined) => Ok(()),
             (Type::Null, Type::Null) => Ok(()),
             (Type::Regex, Type::Regex) => Ok(()),
+            (Type::TypedArray(a), Type::TypedArray(b)) if a == b => Ok(()),
 
             // Functions
             (
@@ -445,8 +446,9 @@ impl InferState {
                     RowTail::Closed => {
                         // Field absent from r2 with no tail. To unify,
                         // r1's presence must commit to Abs.
-                        if let Err(_) =
-                            self.unify_presence(span, &e1.presence, &crate::types::Presence::Abs)
+                        if self
+                            .unify_presence(span, &e1.presence, &crate::types::Presence::Abs)
+                            .is_err()
                         {
                             return Err(TypeError::PropertyNotFound {
                                 prop: prop.0.clone(),
@@ -462,8 +464,9 @@ impl InferState {
                 },
                 (None, Some(e2)) => match &r1.tail {
                     RowTail::Closed => {
-                        if let Err(_) =
-                            self.unify_presence(span, &e2.presence, &crate::types::Presence::Abs)
+                        if self
+                            .unify_presence(span, &e2.presence, &crate::types::Presence::Abs)
+                            .is_err()
                         {
                             return Err(TypeError::PropertyNotFound {
                                 prop: prop.0.clone(),

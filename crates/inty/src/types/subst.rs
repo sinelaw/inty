@@ -149,11 +149,8 @@ impl Subst {
         let mut visited: HashSet<TVarName> = HashSet::new();
         visited.insert(var.clone());
 
-        loop {
-            let next_name = match &current {
-                Type::Var(v) => v.clone(),
-                _ => break,
-            };
+        while let Type::Var(v) = &current {
+            let next_name = v.clone();
             if !visited.insert(next_name.clone()) {
                 // Cycle (shouldn't happen post-occurs-check).
                 // Leave the chain as-is; don't rewrite.
@@ -509,6 +506,7 @@ impl Substitutable for Type {
             Type::Undefined => Type::Undefined,
             Type::Null => Type::Null,
             Type::Regex => Type::Regex,
+            Type::TypedArray(k) => Type::TypedArray(*k),
 
             // Variable substitution
             Type::Var(name) => {
@@ -654,7 +652,7 @@ impl Substitutable for FieldEntry {
 impl Substitutable for TypePred {
     fn apply_subst(&self, subst: &Subst) -> Self {
         TypePred {
-            class: self.class.clone(),
+            class: self.class,
             types: self.types.iter().map(|t| t.apply_subst(subst)).collect(),
         }
     }
@@ -985,7 +983,7 @@ mod tests {
         s.insert(flex(3), Type::Var(flex(0))); // chain into chain
         s.insert(flex(4), Type::Var(flex(3)));
 
-        let test_types = vec![
+        let test_types = [
             Type::Var(flex(0)),
             Type::Var(flex(3)),
             Type::Var(flex(4)),

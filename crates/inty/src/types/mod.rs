@@ -15,7 +15,7 @@ pub use tidy::TidyEnv;
 pub use ty::{
     is_safe_int, ClassName, FieldEntry, FuncParam, LitValue, ModuleType, PVarId, PVarName,
     Presence, PropName, QualType, RowTail, RowType, TVarId, TVarName, Type, TypeDef, TypeId,
-    TypePred, TypeScheme,
+    TypePred, TypeScheme, TypedArrayKind,
 };
 pub use type_ast::TypeAst;
 

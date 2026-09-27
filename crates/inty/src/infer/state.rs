@@ -137,6 +137,10 @@ impl Default for InferConfig {
     }
 }
 
+/// For each use of a polymorphic binding (keyed by its span), how its
+/// quantified variables were instantiated.
+pub type Instantiations = HashMap<(usize, usize), Vec<(TVarName, Type)>>;
+
 /// Inference state tracking type variables, substitution, and constraints.
 pub struct InferState {
     /// Counter for generating fresh type variables.
@@ -199,7 +203,7 @@ pub struct InferState {
     /// with [`Self::expr_types`] this lets a code generator monomorphise
     /// — emit one copy of a polymorphic function per concrete
     /// instantiation — without re-running inference.
-    pub instantiations: Option<HashMap<(usize, usize), Vec<(TVarName, Type)>>>,
+    pub instantiations: Option<Instantiations>,
 
     /// Type origins for error reporting.
     pub type_origins: HashMap<TVarName, TypeOrigin>,
@@ -1730,7 +1734,7 @@ impl InferState {
 
     /// Register a type class.
     pub fn register_type_class(&mut self, class: TypeClass) {
-        self.type_classes.insert(class.name.clone(), class);
+        self.type_classes.insert(class.name, class);
     }
 
     /// Instantiate a type scheme with fresh flexible variables (both
@@ -2152,7 +2156,7 @@ impl InferState {
     /// restructuring the solver loop.
     pub(crate) fn apply_subst_pred(&self, pred: &TypePred) -> TypePred {
         TypePred {
-            class: pred.class.clone(),
+            class: pred.class,
             types: pred.types.iter().map(|t| self.apply_subst(t)).collect(),
         }
     }
@@ -2172,6 +2176,7 @@ impl InferState {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::TypedArray(_)
             | Type::Error => false,
 
             Type::Var(TVarName::Flex(id)) => *id == var,
@@ -2184,7 +2189,7 @@ impl InferState {
             } => {
                 this_type
                     .as_ref()
-                    .map_or(false, |t| self.occurs_in_impl(var, t))
+                    .is_some_and(|t| self.occurs_in_impl(var, t))
                     || params.iter().any(|p| self.occurs_in_impl(var, &p.ty))
                     || self.occurs_in_impl(var, ret)
             }
@@ -2246,7 +2251,7 @@ impl InferState {
                 // (this is the key for equi-recursive types with object methods)
                 this_type
                     .as_ref()
-                    .map_or(false, |t| self.is_inside_row_type_impl(var, t, in_row))
+                    .is_some_and(|t| self.is_inside_row_type_impl(var, t, in_row))
                     || params
                         .iter()
                         .any(|p| self.is_inside_row_type_impl(var, &p.ty, in_row))

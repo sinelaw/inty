@@ -23,9 +23,9 @@ use inty::ast::free_idents::free_identifiers_in_stmt;
 use inty::ast::*;
 use inty::infer::InferState;
 use inty::span::Span;
-use inty::types::{TVarName, Type};
+use inty::types::{TVarName, Type, TypedArrayKind};
 
-use crate::types::{apply_mapping, canonical, resolve, GoType, Mapping, TypeMapper};
+use crate::types::{apply_mapping, canonical, resolve, typed_elem, GoType, Mapping, TypeMapper};
 use crate::{unsupported, Result};
 
 const RUNTIME: &str = include_str!("runtime.go");
@@ -531,6 +531,16 @@ fn num_lit(n: f64) -> String {
             s
         }
     }
+}
+
+/// `a * k` on Ints for a constant `k`: intyIMul's check, as a bound on
+/// `a` computed here (see intyIMulK).
+fn imul_k(a: &str, k: i64) -> String {
+    if k == 0 {
+        return format!("intyIMul({}, 0)", a);
+    }
+    let lim = ((1i64 << 53) - 1) / k.abs();
+    format!("intyIMulK({}, {}, {})", a, int_lit(k as f64), lim)
 }
 
 /// Go spelling of an integral value as an `int` constant.
@@ -1654,6 +1664,99 @@ impl<'a> Emitter<'a> {
 
     /// The Go literal for a `case` label naming a top-level literal
     /// `const` (not shadowed) of the discriminant's type.
+    /// The typed array a global constructor name makes, unless the name
+    /// is a program binding.
+    fn typed_constructor(&self, name: &str) -> Option<TypedArrayKind> {
+        TypedArrayKind::from_name(name).filter(|_| self.lookup(name).is_none())
+    }
+
+    /// `v` converted to a typed array's element type: a store wraps an
+    /// `Int` to 32 or 8 bits, as JavaScript's ToInt32 / ToUint8 do (the
+    /// checker admits only `Int`s there, whose wrapping Go's conversion
+    /// computes exactly).
+    fn typed_value(&mut self, k: TypedArrayKind, v: &Expr) -> Result<String> {
+        Ok(match k {
+            TypedArrayKind::Int32 => format!("intyI32({})", self.num_as(v, &GoType::Int)?),
+            TypedArrayKind::Uint8 => format!("intyU8({})", self.num_as(v, &GoType::Int)?),
+            TypedArrayKind::Float64 => self.num_as(v, &GoType::Float)?,
+        })
+    }
+
+    /// `a[i] op= v` on a typed array. For the integer kinds, `+ - & | ^`
+    /// wrap exactly as JavaScript's store of the exact result does
+    /// (arithmetic modulo 2^32 or 2^8 commutes with the wrapping);
+    /// the others would need the element widened first, and aren't
+    /// supported yet.
+    fn typed_store(
+        &mut self,
+        k: TypedArrayKind,
+        op: AssignOp,
+        object: &Expr,
+        property: &Expr,
+        right: &Expr,
+    ) -> Result<String> {
+        let place = |e: &mut Self| -> Result<String> {
+            let a = e.expr(object)?;
+            let i = e.index(property)?;
+            Ok(format!("(*{})[{}]", a, i))
+        };
+        let o = match op {
+            AssignOp::Assign => "=",
+            AssignOp::AddAssign => "+=",
+            AssignOp::SubAssign => "-=",
+            AssignOp::BitAndAssign => "&=",
+            AssignOp::BitOrAssign => "|=",
+            AssignOp::BitXorAssign => "^=",
+            AssignOp::MulAssign | AssignOp::DivAssign if k == TypedArrayKind::Float64 => {
+                if op == AssignOp::MulAssign {
+                    "*="
+                } else {
+                    "/="
+                }
+            }
+            _ => {
+                return Err(unsupported(
+                    "this update of a typed array element",
+                    right.span(),
+                ))
+            }
+        };
+        if k == TypedArrayKind::Float64 && matches!(o, "&=" | "|=" | "^=") {
+            return Err(unsupported(
+                "a bitwise update of a Float64Array element",
+                right.span(),
+            ));
+        }
+        let p = place(self)?;
+        let v = self.typed_value(k, right)?;
+        Ok(format!("{} {} {}", p, o, v))
+    }
+
+    /// The operands of a call's only argument when it is `a / b` with
+    /// both operands `Int`s.
+    fn int_quotient<'e>(&mut self, args: &'e [Expr]) -> Result<Option<(&'e Expr, &'e Expr)>> {
+        let [Expr::Binary {
+            op: BinOp::Div,
+            left,
+            right,
+            ..
+        }] = args
+        else {
+            return Ok(None);
+        };
+        let ints = self.type_of(left)? == GoType::Int && self.type_of(right)? == GoType::Int;
+        Ok(ints.then_some((&**left, &**right)))
+    }
+
+    /// The value of an `Int` operand that is a literal, or a top-level
+    /// literal `const` (as in `case` labels), given its Go spelling.
+    fn int_const(&mut self, e: &Expr, emitted: &str) -> Option<i64> {
+        const_int(emitted).or_else(|| {
+            self.literal_const_label(e, &GoType::Int)
+                .and_then(|v| const_int(&v))
+        })
+    }
+
     fn literal_const_label(&mut self, test: &Expr, dt: &GoType) -> Option<String> {
         let Expr::Ident { name, .. } = test else {
             return None;
@@ -1763,6 +1866,14 @@ impl<'a> Emitter<'a> {
     }
 
     fn assign_stmt(&mut self, op: AssignOp, left: &Expr, right: &Expr) -> Result<String> {
+        if let Expr::ComputedMember {
+            object, property, ..
+        } = left
+        {
+            if let GoType::Typed(k) = self.type_of(object)? {
+                return self.typed_store(k, op, object, property, right);
+            }
+        }
         let lt = self.type_of(left)?;
         // Plain element store: JS grows the array on `a[a.length] = v`.
         if op == AssignOp::Assign {
@@ -1808,7 +1919,10 @@ impl<'a> Emitter<'a> {
                         left.span(),
                     ));
                 }
-                Ok(format!("{p} = intyIMul({p}, {r})"))
+                match self.int_const(right, &r) {
+                    Some(k) => Ok(format!("{p} = {}", imul_k(&p, k))),
+                    None => Ok(format!("{p} = intyIMul({p}, {r})")),
+                }
             }
             AssignOp::MulAssign => direct("*="),
             AssignOp::ModAssign if lt == GoType::Int => direct("%="),
@@ -1860,6 +1974,10 @@ impl<'a> Emitter<'a> {
                     let i = self.index(property)?;
                     Ok(format!("(*{})[{}]", a, i))
                 }
+                GoType::Typed(_) => Err(unsupported(
+                    "this update of a typed array element",
+                    e.span(),
+                )),
                 _ => Err(unsupported("indexed assignment to a non-array", e.span())),
             },
             _ => Err(unsupported("assignment target", e.span())),
@@ -1957,7 +2075,7 @@ impl<'a> Emitter<'a> {
         self.tm.map(self.state, &t, span)
     }
 
-    fn to_str(&mut self, v: String, t: &GoType, span: Span) -> Result<String> {
+    fn stringify(&mut self, v: String, t: &GoType, span: Span) -> Result<String> {
         Ok(match t {
             GoType::Str => v,
             GoType::Float => format!("intyNumStr({})", v),
@@ -2114,6 +2232,16 @@ impl<'a> Emitter<'a> {
                     let i = self.index(property)?;
                     Ok(format!("(*{})[{}]", a, i))
                 }
+                GoType::Typed(k) => {
+                    let a = self.expr(object)?;
+                    let i = self.index(property)?;
+                    let e = format!("(*{})[{}]", a, i);
+                    let want = self.go_type_at(*span)?;
+                    Ok(match k {
+                        TypedArrayKind::Float64 => coerce(e, &GoType::Float, &want),
+                        _ => coerce(format!("int({})", e), &GoType::Int, &want),
+                    })
+                }
                 GoType::Str => {
                     let s = self.expr(object)?;
                     let i = self.index(property)?;
@@ -2195,7 +2323,7 @@ impl<'a> Emitter<'a> {
                     if let Some(x) = expressions.get(i) {
                         let t = self.type_of(x)?;
                         let v = self.expr(x)?;
-                        parts.push(self.to_str(v, &t, *span)?);
+                        parts.push(self.stringify(v, &t, *span)?);
                     }
                 }
                 if parts.is_empty() {
@@ -2205,7 +2333,18 @@ impl<'a> Emitter<'a> {
                 }
             }
             Expr::Tuple { span, .. } => Err(unsupported("tuple", *span)),
-            Expr::New { span, .. } => Err(unsupported("`new`", *span)),
+            Expr::New {
+                callee,
+                arguments,
+                span,
+            } => match (&**callee, arguments.as_slice()) {
+                (Expr::Ident { name, .. }, [n]) if self.typed_constructor(name).is_some() => {
+                    let k = self.typed_constructor(name).expect("checked above");
+                    let n = self.num_as(n, &GoType::Int)?;
+                    Ok(format!("intyTypedNew[{}]({})", typed_elem(k), n))
+                }
+                _ => Err(unsupported("`new`", *span)),
+            },
             Expr::NewTarget { span } => Err(unsupported("new.target", *span)),
             Expr::NullishCoalesce { span, .. } => Err(unsupported("`??`", *span)),
             Expr::OptionalChain { span, .. } => Err(unsupported("optional chaining", *span)),
@@ -2228,7 +2367,7 @@ impl<'a> Emitter<'a> {
             };
         }
         match self.type_of(object)? {
-            GoType::Array(_) if property == "length" => {
+            GoType::Array(_) | GoType::Typed(_) if property == "length" => {
                 let a = self.expr(object)?;
                 let want = self.go_type_at(span)?;
                 Ok(coerce(format!("len(*{})", a), &GoType::Int, &want))
@@ -2385,13 +2524,19 @@ impl<'a> Emitter<'a> {
         let int_result = |s: String, whole: &GoType| coerce(s, &GoType::Int, whole);
         Ok(match op {
             BinOp::Add if lt == GoType::Str || rt == GoType::Str => {
-                let a = self.to_str(a, &lt, span)?;
-                let b = self.to_str(b, &rt, span)?;
+                let a = self.stringify(a, &lt, span)?;
+                let b = self.stringify(b, &rt, span)?;
                 format!("({} + {})", a, b)
             }
             BinOp::Add if num => format!("({} + {})", wa, wb),
             BinOp::Sub if num => format!("({} - {})", wa, wb),
-            BinOp::Mul if num && whole == GoType::Int => format!("intyIMul({}, {})", wa, wb),
+            BinOp::Mul if num && whole == GoType::Int => {
+                match (self.int_const(left, &wa), self.int_const(right, &wb)) {
+                    (_, Some(k)) => imul_k(&wa, k),
+                    (Some(k), _) => imul_k(&wb, k),
+                    _ => format!("intyIMul({}, {})", wa, wb),
+                }
+            }
             BinOp::Mul if num => format!("({} * {})", wa, wb),
             BinOp::Div if num && const_num(right) == Some(0.0) => format!("({} / intyZero)", fa),
             BinOp::Div if num => format!("({} / {})", fa, fb),
@@ -2491,6 +2636,12 @@ impl<'a> Emitter<'a> {
         } = callee
         {
             if let Expr::Ident { name, .. } = &**object {
+                if let (Some(k), "from", [xs]) =
+                    (self.typed_constructor(name), property.as_str(), args)
+                {
+                    let xs = self.expr(xs)?;
+                    return Ok(format!("intyTypedFrom[{}]({})", typed_elem(k), xs));
+                }
                 if let Some(s) = self.builtin_static(name, property, args, span, stmt)? {
                     return Ok(s);
                 }
@@ -2500,6 +2651,19 @@ impl<'a> Emitter<'a> {
                     return self.array_method(object, &elem, property, args, span, stmt)
                 }
                 GoType::Str => return self.string_method(object, property, args, span),
+                GoType::Typed(k) => match (property.as_str(), args) {
+                    ("fill", [v]) => {
+                        let a = self.expr(object)?;
+                        let v = self.typed_value(k, v)?;
+                        return Ok(format!("intyFill({}, {})", a, v));
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            format!("typed array method `.{}`", property),
+                            span,
+                        ))
+                    }
+                },
                 GoType::Struct(_) => {} // a function-valued field: ordinary call below
                 _ => {
                     return Err(unsupported(
@@ -2514,7 +2678,7 @@ impl<'a> Emitter<'a> {
                 "String" if args.len() == 1 => {
                     let t = self.type_of(&args[0])?;
                     let v = self.expr(&args[0])?;
-                    return self.to_str(v, &t, span);
+                    return self.stringify(v, &t, span);
                 }
                 "isNaN" if args.len() == 1 => {
                     let v = self.num_as(&args[0], &GoType::Float)?;
@@ -2634,7 +2798,7 @@ impl<'a> Emitter<'a> {
                 let s = if t == GoType::Float {
                     format!("intyInspectNum({})", v)
                 } else {
-                    self.to_str(v, &t, a.span())?
+                    self.stringify(v, &t, a.span())?
                 };
                 if property == "log" {
                     format!("intyLog({})", s)
@@ -2656,6 +2820,21 @@ impl<'a> Emitter<'a> {
                     // JS semantics, and compiled inline (math.Min is a call).
                     _ => format!("{}({})", f, vals.join(", ")),
                 }
+            }
+            // `Math.floor(a / b)` on Ints: integer division, which gives
+            // the same result (see intyFloorDiv).
+            ("Math", f @ ("floor" | "ceil" | "trunc"))
+                if self.go_type_at(span)? == GoType::Int && self.int_quotient(args)?.is_some() =>
+            {
+                let (a, b) = self.int_quotient(args)?.expect("checked above");
+                let go = match f {
+                    "floor" => "intyFloorDiv",
+                    "ceil" => "intyCeilDiv",
+                    _ => "intyTruncDiv",
+                };
+                let a = self.expr(a)?;
+                let b = self.expr(b)?;
+                format!("{}({}, {})", go, a, b)
             }
             // To an `Int`, checked.
             ("Math", f @ ("floor" | "ceil" | "round" | "trunc"))
