@@ -6,19 +6,39 @@ and **Bun** (JavaScriptCore).
 
 ## TL;DR
 
-- **Go is never clearly slower.** It beats Node on 12 of 16 programs
-  and ties on the other 4. Against Bun: 13 wins, 3 ties.
-- **The biggest wins come from not allocating:** 31x faster than Node
-  on array pipelines (`array-hof`), 9x on code full of small objects
+- **Memory: 2x to 24x less than Node, and 1.8x to 22x less than Bun.**
+  Typically about 5x less than Node and 4x less than Bun: around 10 MB
+  where they use 40–60 MB.
+- **Speed: 2.5x faster than Node and 2.2x faster than Bun on average**
+  over the 16 programs. By kind of code:
+
+  | kind of code | vs Node | vs Bun |
+  | --- | ---: | ---: |
+  | allocation-heavy | 16.8x | 12.2x |
+  | objects and records | 3.2x | 4.2x |
+  | integers and arrays | 2.1x | 1.6x |
+  | floating-point math | 1.0x (tie) | 1.2x |
+  | real tools, large inputs | 1.6x | 2.2x |
+  | real tools, small inputs | 14.7x | 8.3x |
+
+  Averages are geometric means. Allocation-heavy: `array-hof`,
+  `particles`. Objects and records: `orders`, `raytracer`. Floating-point:
+  `mandelbrot`, `spectral-norm`, `nbody`. Integers and arrays: the other
+  9 programs. Real tools: md2html and fast-diff, whole processes.
+
+More detail:
+- **Go is never clearly slower.** It beats Node on 12 of 16 programs and
+  ties on the other 4. Against Bun: 13 wins, 3 ties.
+- **The biggest wins come from not allocating:** 31x faster than Node on
+  array pipelines (`array-hof`), 9x on code full of small objects
   (`particles`).
-- **Go always uses the least memory:** usually about 10 MB where Node
-  uses 40–60 MB, and 10 MB vs 243 MB at most.
-- **Real tools gain too:** a Markdown converter and a diff library run
-  1.5–1.9x faster than Node on large inputs, and 8–25x faster on small
-  ones, where startup time dominates.
-- **The ties:** three plain number-crunching loops (`mandelbrot`,
+- **The ties:** three floating-point loops (`mandelbrot`,
   `spectral-norm`, `nbody`), where Node's JIT makes the same machine
   code Go does, and `dijkstra` (Go 4% ahead, within noise).
+- **Small inputs are mostly startup:** a Go binary starts in about 3 ms,
+  Node in about 30. That's the 14.7x for the real tools on small inputs.
+- **The biggest memory gap** is `sieve`, 10 MB against Node's 243 MB. The
+  smallest is `dijkstra-typed`, 89 MB against 207 MB.
 - All three print exactly the same output for every program.
 
 ## Running them
