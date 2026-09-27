@@ -38,6 +38,7 @@
 //! `examples/go-backend/README.md`.
 
 mod emit;
+mod loops;
 mod types;
 
 use std::collections::HashMap;

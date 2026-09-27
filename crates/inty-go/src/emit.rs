@@ -151,6 +151,12 @@ fn emit_pass(
         deferred: HashMap::new(),
         pure_funcs: HashMap::new(),
         literal_consts: HashMap::new(),
+        resolution: inty::ast::resolve::Resolution::of_program(
+            &program.statements,
+            program.language,
+        ),
+        headers: Vec::new(),
+        header_marks: Vec::new(),
     };
 
     // Bind every top-level name first: function bodies may refer to
@@ -427,6 +433,14 @@ struct Emitter<'a> {
     deferred: HashMap<String, Expr>,
     /// Purity of user functions (see `pure_func`), memoised by name.
     pure_funcs: HashMap<String, bool>,
+    /// Which declaration each name means, and whether it's ever
+    /// reassigned (see `loops`).
+    resolution: inty::ast::resolve::Resolution,
+    /// Arrays whose slice header the enclosing loops hold in a local:
+    /// `(JS name, Go local)`, innermost last (see `loops`).
+    headers: Vec<(String, String)>,
+    /// `headers`' length outside each loop that added to it.
+    header_marks: Vec<usize>,
 }
 
 /// A number the emitter can fold at translation time. Folding happens
@@ -1173,6 +1187,21 @@ impl<'a> Emitter<'a> {
         body: &Stmt,
         ret: &GoType,
     ) -> Result<()> {
+        let saved_headers = std::mem::take(&mut self.headers);
+        let saved_marks = std::mem::take(&mut self.header_marks);
+        let r = self.function_body_inner(params, ptys, body, ret);
+        self.headers = saved_headers;
+        self.header_marks = saved_marks;
+        r
+    }
+
+    fn function_body_inner(
+        &mut self,
+        params: &[Param],
+        ptys: &[GoType],
+        body: &Stmt,
+        ret: &GoType,
+    ) -> Result<()> {
         self.scopes.push(HashMap::new());
         for (p, t) in params.iter().zip(ptys) {
             self.bind(&p.name, t.clone());
@@ -1396,6 +1425,22 @@ impl<'a> Emitter<'a> {
                     }
                 }
                 self.line("}");
+            }
+            Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. }
+                if self.new_loop_headers(s)? =>
+            {
+                self.stmt(s, rest)?;
+                self.end_loop_headers();
+            }
+            Stmt::Labeled { body, .. }
+                if matches!(
+                    &**body,
+                    Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. }
+                ) && self.new_loop_headers(body)? =>
+            {
+                // Before the label: a Go label must be on the loop itself.
+                self.stmt(s, rest)?;
+                self.end_loop_headers();
             }
             Stmt::While { test, body, .. } => {
                 if matches!(
@@ -1664,6 +1709,89 @@ impl<'a> Emitter<'a> {
 
     /// The Go literal for a `case` label naming a top-level literal
     /// `const` (not shadowed) of the discriminant's type.
+    /// Start holding, in locals, the slice headers of the arrays loop `s`
+    /// may cache (see `loops`) that no enclosing loop holds already.
+    /// Returns whether it did; `end_loop_headers` closes the block.
+    fn new_loop_headers(&mut self, s: &Stmt) -> Result<bool> {
+        let scan = crate::loops::LoopScan::of_loop(s, self.lookup("Math").is_none());
+        let mut kinds = HashMap::new();
+        for name in scan.uses.keys() {
+            if self.headers.iter().any(|(n, _)| n == name) {
+                continue;
+            }
+            if let Some(Bound::Var(t)) = self.lookup(name) {
+                let kind = match t {
+                    GoType::Typed(_) => crate::loops::ArrayKind::Fixed,
+                    GoType::Array(elem) => crate::loops::ArrayKind::Growable(self.tm.render(&elem)),
+                    _ => continue,
+                };
+                kinds.insert(name.clone(), kind);
+            }
+        }
+        let resolution = &self.resolution;
+        let names = scan.cacheable(
+            |n| match kinds.get(n) {
+                Some(crate::loops::ArrayKind::Fixed) => Some(crate::loops::ArrayKind::Fixed),
+                Some(crate::loops::ArrayKind::Growable(k)) => {
+                    Some(crate::loops::ArrayKind::Growable(k.clone()))
+                }
+                None => None,
+            },
+            |n, span| resolution.stable_at(span, n),
+        );
+        if names.is_empty() {
+            return Ok(false);
+        }
+        self.line("{");
+        self.indent += 1;
+        let depth = self.headers.len();
+        for name in names {
+            let span = scan.uses[&name].span.expect("a use has a span");
+            let a = self.expr(&Expr::Ident {
+                name: name.clone(),
+                span,
+            })?;
+            let h = self.fresh("H");
+            self.line(&format!("{h} := *{a}"));
+            self.line(&format!("_ = {h}"));
+            self.headers.push((name, h));
+        }
+        self.header_marks.push(depth);
+        Ok(true)
+    }
+
+    fn end_loop_headers(&mut self) {
+        let depth = self.header_marks.pop().expect("a loop's headers");
+        self.headers.truncate(depth);
+        self.indent -= 1;
+        self.line("}");
+    }
+
+    /// The local holding `object`'s slice header, if a loop holds it.
+    fn header_of(&self, object: &Expr) -> Option<String> {
+        let Expr::Ident { name, .. } = object else {
+            return None;
+        };
+        self.headers
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, h)| h.clone())
+    }
+
+    /// `a[i]` as a Go place: through the loop's local header if it has
+    /// one.
+    fn element(&mut self, object: &Expr, property: &Expr) -> Result<String> {
+        let i = self.index(property)?;
+        match self.header_of(object) {
+            Some(h) => Ok(format!("{}[{}]", h, i)),
+            None => {
+                let a = self.expr(object)?;
+                Ok(format!("(*{})[{}]", a, i))
+            }
+        }
+    }
+
     /// The typed array a global constructor name makes, unless the name
     /// is a program binding.
     fn typed_constructor(&self, name: &str) -> Option<TypedArrayKind> {
@@ -1695,11 +1823,7 @@ impl<'a> Emitter<'a> {
         property: &Expr,
         right: &Expr,
     ) -> Result<String> {
-        let place = |e: &mut Self| -> Result<String> {
-            let a = e.expr(object)?;
-            let i = e.index(property)?;
-            Ok(format!("(*{})[{}]", a, i))
-        };
+        let place = |e: &mut Self| e.element(object, property);
         let o = match op {
             AssignOp::Assign => "=",
             AssignOp::AddAssign => "+=",
@@ -1885,6 +2009,11 @@ impl<'a> Emitter<'a> {
                     let a = self.expr(object)?;
                     let i = self.index(property)?;
                     let v = self.expr_as(right, &elem)?;
+                    // Through a loop's local header: the store, or the
+                    // grown array's new header.
+                    if let Some(h) = self.header_of(object) {
+                        return Ok(format!("{h} = intySetH({a}, {h}, {i}, {v})"));
+                    }
                     return Ok(format!("intySet({a}, {i}, {v})"));
                 }
             }
@@ -1969,11 +2098,7 @@ impl<'a> Emitter<'a> {
             Expr::ComputedMember {
                 object, property, ..
             } => match self.type_of(object)? {
-                GoType::Array(_) => {
-                    let a = self.expr(object)?;
-                    let i = self.index(property)?;
-                    Ok(format!("(*{})[{}]", a, i))
-                }
+                GoType::Array(_) => self.element(object, property),
                 GoType::Typed(_) => Err(unsupported(
                     "this update of a typed array element",
                     e.span(),
@@ -2227,15 +2352,9 @@ impl<'a> Emitter<'a> {
                 property,
                 span,
             } => match self.type_of(object)? {
-                GoType::Array(_) => {
-                    let a = self.expr(object)?;
-                    let i = self.index(property)?;
-                    Ok(format!("(*{})[{}]", a, i))
-                }
+                GoType::Array(_) => self.element(object, property),
                 GoType::Typed(k) => {
-                    let a = self.expr(object)?;
-                    let i = self.index(property)?;
-                    let e = format!("(*{})[{}]", a, i);
+                    let e = self.element(object, property)?;
                     let want = self.go_type_at(*span)?;
                     Ok(match k {
                         TypedArrayKind::Float64 => coerce(e, &GoType::Float, &want),
@@ -2368,6 +2487,10 @@ impl<'a> Emitter<'a> {
         }
         match self.type_of(object)? {
             GoType::Array(_) | GoType::Typed(_) if property == "length" => {
+                if let Some(h) = self.header_of(object) {
+                    let want = self.go_type_at(span)?;
+                    return Ok(coerce(format!("len({})", h), &GoType::Int, &want));
+                }
                 let a = self.expr(object)?;
                 let want = self.go_type_at(span)?;
                 Ok(coerce(format!("len(*{})", a), &GoType::Int, &want))
