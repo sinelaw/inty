@@ -147,9 +147,10 @@ from a third, after its `switch` became a jump table.
   - **`nbody`** is 12% slower than Node, and **`dijkstra`** 8%; see
     [Where Go still loses](#where-go-still-loses).
   - **`bytecode-vm`** ties with Bun. Its remaining cost is `%` on a
-    `Number[]` stack (the program's own annotation). JavaScriptCore
-    runs that `%` on 32-bit integers, because it stores whole doubles
-    as integers at runtime.
+    `Number[]` stack (the program's own annotation), which Go computes
+    on doubles. JavaScriptCore most likely keeps these whole-number
+    values as 32-bit integers (as V8 does with its Smis), but that
+    isn't measured here.
 
 ## What changed
 
@@ -213,9 +214,12 @@ editing the generated Go:
 - **Checked arithmetic:** the checked multiply (`intyIMul`) and the
   float floor on heap indices guard against values past 2^53. Here they
   can't be past it, since they index an array.
-- **Array width:** V8 stores small integers in 4 bytes (with pointer
-  compression), where Go uses 8. That doubles the cache traffic of the
-  graph arrays.
+- **Array width:** Go's `[]int` takes 8 bytes per element. `int32`
+  halves the cache traffic of the graph arrays. This is a way for Go to
+  catch up, not what Node does: Node's arrays of small integers also
+  take 8 bytes per element (measured: official Node builds don't
+  enable V8's pointer compression, which would make them 4). The rest
+  of Node's lead isn't attributed yet.
 
 Both fixes need a range analysis that proves the values fit.
 
