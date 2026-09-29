@@ -188,6 +188,17 @@ impl InferState {
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                 let left_widened = self.widen(span, &left_type);
                 let right_widened = self.widen(span, &right_type);
+                // Two property reads whose receivers are known by now
+                // (`state.n >= state.xs.length` in a nested closure):
+                // resolve them first so an `Int` and a `Number` compare
+                // as numbers instead of being unified.
+                if !self.is_numeric(&left_widened)
+                    && !self.is_numeric(&right_widened)
+                    && matches!(self.zonk(&left_widened), Type::Var(_))
+                    && matches!(self.zonk(&right_widened), Type::Var(_))
+                {
+                    self.simplify_has_props()?;
+                }
                 if self.is_numeric(&left_widened) || self.is_numeric(&right_widened) {
                     self.require_num(span, &left_widened)?;
                     self.require_num(span, &right_widened)?;

@@ -121,14 +121,15 @@ const isNaN;
 const isFinite;
 
 // Date constructor and prototype. Single pragmatic shape under the
-// unified callable-row design — call/new with a Number (ms) and use
+// unified callable-row design — call/new with no argument (now) or a
+// Number (ms) and use
 // the prototype methods via member access. Multi-arity construction
 // (`new Date(y, m, d)`) and string parsing (`new Date("2024-01-01")`)
 // aren't representable without overloading; users wrap those in a
 // typed helper. The instance type is closed; `valueOf` / `getTime`
 // give Number for arithmetic, `toISOString` / `toString` for display.
 /** const Date: {
-        (Number) => {
+        (ms?: Number) => {
             getFullYear: () => Number,
             getMonth: () => Number,
             getDate: () => Number,
