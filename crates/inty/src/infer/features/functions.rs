@@ -1202,6 +1202,21 @@ struct HoistableNode {
     free: std::collections::HashSet<String>,
 }
 
+/// The names an SCC of hoistable functions (statement indices into
+/// `stmts`) reads from the enclosing scope.
+pub(in crate::infer) fn group_free_names(
+    stmts: &[Stmt],
+    group: &[usize],
+) -> std::collections::HashSet<String> {
+    let mut free = std::collections::HashSet::new();
+    for &i in group {
+        if let Some((name, params, body, _, _, _)) = function_decl_parts(&stmts[i]) {
+            free.extend(free_identifiers_in_function_body(Some(name), params, body));
+        }
+    }
+    free
+}
+
 /// Compute strongly-connected components of the hoistable-function
 /// call graph in `stmts`, returned in topological order. Each inner
 /// `Vec<usize>` lists statement indices in source order.

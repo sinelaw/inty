@@ -508,38 +508,68 @@ impl InferState {
             );
         }
         let errors_at_entry = self.errors.len();
-        for scc_indices in &scc_groups {
-            // Gather the SCC's statements in source order. Cloning
-            // is cheap relative to the inference work that follows.
-            let group_stmts: Vec<Stmt> = scc_indices.iter().map(|&i| stmts[i].clone()).collect();
-            match self.infer_function_group(&current_env, &group_stmts) {
-                Ok(new_env) => current_env = new_env,
-                Err(err) => {
-                    // Best-effort recovery: bind every member of the
-                    // failed SCC to `Type::Error`. The user already
-                    // got one diagnostic (the original `err`);
-                    // downstream uses of these names propagate Error
-                    // silently through `unify`, `infer_member`,
-                    // `infer_call`, and the type-class solver. This
-                    // keeps unrelated SCCs and source-order
-                    // statements type-checking without cascading
-                    // noise. See `docs/scc-inference.md` § "Cross-SCC
-                    // type errors".
-                    for stmt in &group_stmts {
-                        if let Some((name, _, _, _, _, span)) =
-                            crate::infer::features::functions::function_decl_parts(stmt)
-                        {
-                            current_env = current_env.extend_key(
-                                self.key_of(span, name),
-                                name,
-                                env::Binding::mutable(TypeScheme::mono(Type::Error)),
-                            );
-                        }
-                    }
-                    self.push_error(err);
+
+        // Each SCC is inferred *lazily*: as late as possible, but before
+        // anything that uses it. A group waits for the `var` / `let` /
+        // `const` declarations of this scope it reads, so its body sees
+        // their real types rather than the hoisted placeholders:
+        //
+        //     const state = { n: 1, xs: [] };
+        //     function fix() { if (state.n >= state.xs.length) … }
+        //
+        // types `fix` against `state`'s row, not a fresh variable whose
+        // property reads stay deferred (and so miss numeric comparison
+        // and narrowing). A group is inferred right before the first
+        // statement that references it, or as soon as every declaration
+        // it (and the groups it calls) reads has been inferred — at the
+        // latest at the end of the scope. Groups referenced before the
+        // declarations they read fall back to the placeholders, as
+        // before.
+        let group_free: Vec<std::collections::HashSet<String>> = scc_groups
+            .iter()
+            .map(|g| crate::infer::features::functions::group_free_names(stmts, g))
+            .collect();
+        let mut group_of_name: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (gi, g) in scc_groups.iter().enumerate() {
+            for &i in g {
+                if let Some((name, ..)) =
+                    crate::infer::features::functions::function_decl_parts(&stmts[i])
+                {
+                    group_of_name.insert(name.to_string(), gi);
                 }
             }
         }
+        let group_deps: Vec<Vec<usize>> = group_free
+            .iter()
+            .enumerate()
+            .map(|(gi, free)| {
+                let mut deps: Vec<usize> = free
+                    .iter()
+                    .filter_map(|n| group_of_name.get(n).copied())
+                    .filter(|&d| d != gi)
+                    .collect();
+                deps.sort_unstable();
+                deps.dedup();
+                deps
+            })
+            .collect();
+        // Names still waiting for their declaration statement (Pass 3).
+        let mut pending_decls: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (_, (name, _)) in hoisted_data.iter() {
+            *pending_decls.entry(name.clone()).or_insert(0) += 1;
+        }
+        let mut group_done = vec![false; scc_groups.len()];
+        self.infer_ready_groups(
+            &mut current_env,
+            stmts,
+            &scc_groups,
+            &group_free,
+            &group_deps,
+            &pending_decls,
+            &mut group_done,
+        );
 
         // Pass 3: walk the statement list in source order. Function
         // decls are skipped (already typed in Pass 2). Non-function
@@ -569,6 +599,23 @@ impl InferState {
             }
             if is_function_like_decl(stmt) {
                 continue;
+            }
+            // Groups this statement uses are typed before it.
+            if group_done.iter().any(|d| !d) {
+                let used: Vec<usize> = crate::ast::free_idents::free_identifiers_in_stmt(stmt)
+                    .iter()
+                    .filter_map(|n| group_of_name.get(n).copied())
+                    .collect();
+                for gi in used {
+                    self.infer_group_with_deps(
+                        &mut current_env,
+                        stmts,
+                        &scc_groups,
+                        &group_deps,
+                        gi,
+                        &mut group_done,
+                    );
+                }
             }
             if let Stmt::Var {
                 kind: VarKind::Const,
@@ -662,6 +709,47 @@ impl InferState {
                     self.push_error(err);
                 }
             }
+            // A declaration may be the last thing a waiting group reads.
+            let declared = match stmt {
+                Stmt::Var { declarations, .. }
+                | Stmt::Export {
+                    declaration: crate::ast::ExportDecl::Var { declarations, .. },
+                    ..
+                } => Some(declarations),
+                _ => None,
+            };
+            if let Some(declarations) = declared {
+                let mut any = false;
+                for decl in declarations {
+                    if let Some(n) = pending_decls.get_mut(&decl.name) {
+                        *n = n.saturating_sub(1);
+                        any = true;
+                    }
+                }
+                if any && group_done.iter().any(|d| !d) {
+                    pending_decls.retain(|_, n| *n > 0);
+                    self.infer_ready_groups(
+                        &mut current_env,
+                        stmts,
+                        &scc_groups,
+                        &group_free,
+                        &group_deps,
+                        &pending_decls,
+                        &mut group_done,
+                    );
+                }
+            }
+        }
+        // Whatever is left (unused, or waiting on names never declared).
+        for gi in 0..scc_groups.len() {
+            self.infer_group_with_deps(
+                &mut current_env,
+                stmts,
+                &scc_groups,
+                &group_deps,
+                gi,
+                &mut group_done,
+            );
         }
 
         // If we accumulated any errors in this `infer_stmt_list` call
@@ -673,6 +761,80 @@ impl InferState {
             return Err(self.errors[errors_at_entry].clone());
         }
         Ok((result, current_env))
+    }
+
+    /// Infer every not-yet-inferred SCC (see `infer_stmt_list`) whose
+    /// free names, and whose dependency groups' free names, include no
+    /// declaration still pending. `scc_groups` is in topological order,
+    /// so one forward sweep sees each group's dependencies first.
+    #[allow(clippy::too_many_arguments)]
+    fn infer_ready_groups(
+        &mut self,
+        current_env: &mut TypeEnv,
+        stmts: &[Stmt],
+        scc_groups: &[Vec<usize>],
+        group_free: &[std::collections::HashSet<String>],
+        group_deps: &[Vec<usize>],
+        pending_decls: &std::collections::HashMap<String, usize>,
+        group_done: &mut [bool],
+    ) {
+        let mut ready = vec![false; scc_groups.len()];
+        for gi in 0..scc_groups.len() {
+            ready[gi] = !group_free[gi].iter().any(|n| pending_decls.contains_key(n))
+                && group_deps[gi].iter().all(|&d| d < gi && (ready[d] || group_done[d]));
+        }
+        for gi in 0..scc_groups.len() {
+            if ready[gi] && !group_done[gi] {
+                self.infer_group_with_deps(current_env, stmts, scc_groups, group_deps, gi, group_done);
+            }
+        }
+    }
+
+    /// Infer SCC `gi` (after the groups it calls), unless already done.
+    fn infer_group_with_deps(
+        &mut self,
+        current_env: &mut TypeEnv,
+        stmts: &[Stmt],
+        scc_groups: &[Vec<usize>],
+        group_deps: &[Vec<usize>],
+        gi: usize,
+        group_done: &mut [bool],
+    ) {
+        if group_done[gi] {
+            return;
+        }
+        group_done[gi] = true;
+        for &d in &group_deps[gi] {
+            self.infer_group_with_deps(current_env, stmts, scc_groups, group_deps, d, group_done);
+        }
+        // Gather the SCC's statements in source order. Cloning is cheap
+        // relative to the inference work that follows.
+        let group_stmts: Vec<Stmt> = scc_groups[gi].iter().map(|&i| stmts[i].clone()).collect();
+        match self.infer_function_group(current_env, &group_stmts) {
+            Ok(new_env) => *current_env = new_env,
+            Err(err) => {
+                // Best-effort recovery: bind every member of the failed
+                // SCC to `Type::Error`. The user already got one
+                // diagnostic (the original `err`); downstream uses of
+                // these names propagate Error silently through `unify`,
+                // `infer_member`, `infer_call`, and the type-class
+                // solver. This keeps unrelated SCCs and source-order
+                // statements type-checking without cascading noise. See
+                // `docs/scc-inference.md` § "Cross-SCC type errors".
+                for stmt in &group_stmts {
+                    if let Some((name, _, _, _, _, span)) =
+                        crate::infer::features::functions::function_decl_parts(stmt)
+                    {
+                        *current_env = current_env.extend_key(
+                            self.key_of(span, name),
+                            name,
+                            env::Binding::mutable(TypeScheme::mono(Type::Error)),
+                        );
+                    }
+                }
+                self.push_error(err);
+            }
+        }
     }
 
     /// Bidirectional checking entry point: check that `expr` has type
