@@ -551,7 +551,7 @@ fn switch_on_literal_consts_uses_constant_labels() {
     // The consts stay variables elsewhere (Go folds constant expressions
     // its own way), and a repeated label (legal in JS, not as a Go
     // constant) keeps the variable.
-    let src = "const A = 0;\nconst B = 1;\nfunction f(op) {\n\
+    let src = "const A = 0;\nconst B = 1;\n/** function f(op: Int) => Int */\nfunction f(op) {\n\
                switch (op) { case A: return 10; case B: return 20; case A: return 30; }\n\
                return 0;\n}\nconsole.log(f(1) + A);";
     let code = inty_go::compile(src).unwrap().code;

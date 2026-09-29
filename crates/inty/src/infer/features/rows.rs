@@ -532,8 +532,13 @@ impl InferState {
                         }
                         props.insert(prop_name, self.zonk(&annotated_type));
                     } else {
-                        let value_type = self.check_expr(env, value, &expected_prop_ty)?;
-                        props.insert(prop_name, value_type);
+                        // A fresh object's field slot has the expected
+                        // type; the value only has to fit it (`Int` into
+                        // a `Number` field is a value flowing, not a
+                        // shared slot being reinterpreted).
+                        self.check_expr(env, value, &expected_prop_ty)?;
+                        let slot = self.zonk(&expected_prop_ty);
+                        props.insert(prop_name, slot);
                     }
                 }
                 _ => {

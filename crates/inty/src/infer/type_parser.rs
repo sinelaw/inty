@@ -943,7 +943,7 @@ impl<'a> TypeParser<'a> {
                             self.pos = saved_pos;
                         }
 
-                        if args.len() != def.params.len() {
+                        if args.len() != def.params.len() && !def.open_arity {
                             return Err(self.error(format!(
                                 "type alias '{}' expects {} type argument(s), got {}",
                                 ident,
@@ -957,6 +957,11 @@ impl<'a> TypeParser<'a> {
                         // the representation, so the type retains its
                         // identity through unification.
                         if let Some(id) = def.nominal_id {
+                            return Ok(Type::Named(id, args));
+                        }
+                        // Recursive structural alias: a reference to its
+                        // equi-recursive definition.
+                        if let Some(id) = def.rec_id {
                             return Ok(Type::Named(id, args));
                         }
 

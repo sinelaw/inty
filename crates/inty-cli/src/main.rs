@@ -821,10 +821,16 @@ fn run_inference(
                 duration: started.elapsed(),
             })
         }
-        Err(_first) => {
-            // `_first` is also at the head of `collected`, so use the
-            // accumulated list as-is to avoid duplicating it.
-            errors.extend(collected);
+        Err(first) => {
+            // `first` is usually also at the head of `collected`, so use
+            // the accumulated list as-is to avoid duplicating it. An error
+            // raised before any statement was checked (a type alias that
+            // doesn't parse) is only in `first`.
+            if collected.is_empty() {
+                errors.push(entry_error(first));
+            } else {
+                errors.extend(collected);
+            }
             Err(errors)
         }
     }

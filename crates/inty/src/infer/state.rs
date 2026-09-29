@@ -258,6 +258,10 @@ pub struct InferState {
     /// checks map a class name back to its brand. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brand_ids: HashMap<String, TypeId>,
+    /// Brand ids allocated for a program's classes before its aliases
+    /// are parsed (see `infer_program_with_env`), taken by the class's
+    /// factory when it is branded.
+    pub reserved_class_ids: HashMap<String, TypeId>,
     /// Which declaration each identifier refers to, and which bindings
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
@@ -398,6 +402,17 @@ pub struct AliasDef {
     /// instead of inlining `body`. `body` is then the representation
     /// the brand wraps. `None` for ordinary structural aliases.
     pub nominal_id: Option<crate::types::TypeId>,
+    /// When `Some(id)`, a structural alias that refers to itself
+    /// (directly or through other aliases): references resolve to the
+    /// equi-recursive `Type::Named(id, args)`, whose definition (the
+    /// body) is registered in the named-type table — transparent, unlike
+    /// a nominal brand.
+    pub rec_id: Option<crate::types::TypeId>,
+    /// A class name reserved before its class is inferred (so aliases
+    /// declared in the same file can name it): the brand's type
+    /// parameters aren't known yet, so any number of arguments is
+    /// accepted.
+    pub open_arity: bool,
 }
 
 impl Default for InferState {
@@ -436,6 +451,7 @@ impl InferState {
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
+            reserved_class_ids: HashMap::new(),
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
@@ -1109,6 +1125,25 @@ impl InferState {
             return Ok(());
         }
         self.restore_snapshot(snap);
+
+        // S-Unroll: an equi-recursive type (a recursive alias) is its
+        // unrolling, so subsume against that — one side at a time, so
+        // two recursive types never unroll each other forever (those
+        // are left to `unify`).
+        match (&sub, &sup) {
+            (Type::Named(id, args), other) | (other, Type::Named(id, args))
+                if !self.is_nominal_type(*id) && !matches!(other, Type::Named(..)) =>
+            {
+                if let Some(unrolled) = self.unroll_named(*id, args) {
+                    return if matches!(sub, Type::Named(..)) {
+                        self.subsume(span, &unrolled, &sup)
+                    } else {
+                        self.subsume(span, &sub, &unrolled)
+                    };
+                }
+            }
+            _ => {}
+        }
 
         // S-Row: structural row subsumption. With `Lit ≤ Base`
         // removed from `unify`, two rows that differ only in
