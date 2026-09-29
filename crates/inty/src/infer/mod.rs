@@ -143,6 +143,7 @@ impl InferState {
         // checking the program. Aliases are not nominal — referring
         // to `Foo<X>` is exactly equivalent to inlining `Foo`'s body
         // with the type argument substituted.
+        self.reserve_class_names(program);
         self.load_type_aliases(&program.type_aliases)?;
         // Inject constructors for declared nominal types before checking
         // the body, so `Name(repr)` resolves to a branded value.
@@ -244,78 +245,107 @@ impl InferState {
     /// own parameter names bound to fresh skolemised type-var IDs.
     /// Subsequent `Foo<args>` references substitute argument types
     /// for those parameter IDs.
+    ///
+    /// A structural alias is expanded where it is referenced, so bodies
+    /// are parsed in dependency order (an alias may refer to one declared
+    /// after it). Aliases that refer to themselves, directly or through
+    /// each other, become equi-recursive named types
+    /// (`type Tree = { kids: Tree[] }`).
     pub fn load_type_aliases(&mut self, aliases: &[crate::ast::TypeAlias]) -> InferResult<()> {
         use crate::infer::state::AliasDef;
         use crate::types::{TVarName, TypeDef};
 
+        let fresh_ids = |state: &mut Self, n: usize| -> Vec<u32> {
+            (0..n)
+                .map(|_| {
+                    let TVarName::Flex(id) = state.fresh_flex() else {
+                        unreachable!("fresh_flex returns Flex");
+                    };
+                    id
+                })
+                .collect()
+        };
+
+        // Dependency order: alias `i` depends on the structural aliases
+        // of this batch its body names. (A nominal alias is referenced by
+        // id, so nothing waits for its body.)
+        let index: std::collections::HashMap<&str, usize> = aliases
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a.name.as_str(), i))
+            .collect();
+        let deps: Vec<Vec<usize>> = aliases
+            .iter()
+            .map(|a| {
+                let mut ds: Vec<usize> = match &a.body_ast {
+                    Some(_) => Vec::new(),
+                    None => type_body_idents(&a.body)
+                        .filter_map(|n| index.get(n).copied())
+                        .filter(|&j| !aliases[j].nominal)
+                        .collect(),
+                };
+                ds.sort_unstable();
+                ds.dedup();
+                ds
+            })
+            .collect();
+        let sccs = crate::infer::features::functions::tarjan_scc(&deps);
+        let mut recursive = vec![false; aliases.len()];
+        for scc in &sccs {
+            if scc.len() > 1 || deps[scc[0]].contains(&scc[0]) {
+                for &i in scc {
+                    recursive[i] = !aliases[i].nominal;
+                }
+            }
+        }
+        // Tarjan emits dependencies first; keep source order otherwise.
+        let order: Vec<usize> = sccs
+            .into_iter()
+            .flat_map(|mut scc| {
+                scc.sort_unstable();
+                scc
+            })
+            .collect();
+
         // Pass 1: reserve a slot for every alias so each body can see
-        // its peers (mutual references). For *nominal* aliases we also
-        // allocate the brand id and parameter ids up front, so a
-        // nominal body can refer to the type recursively (e.g. a class
-        // method returning `Self`) and resolve to the right
-        // `Type::Named(id, …)`.
-        let mut nominal_param_ids: std::collections::HashMap<String, Vec<u32>> =
-            std::collections::HashMap::new();
-        for alias in aliases {
-            let nominal_id = if alias.nominal {
-                Some(self.fresh_type_id())
-            } else {
-                None
-            };
-            let params: Vec<u32> = if alias.nominal {
-                let ids: Vec<u32> = alias
-                    .params
-                    .iter()
-                    .map(|_| {
-                        let TVarName::Flex(id) = self.fresh_flex() else {
-                            unreachable!("fresh_flex returns Flex");
-                        };
-                        id
-                    })
-                    .collect();
-                nominal_param_ids.insert(alias.name.clone(), ids.clone());
-                ids
+        // its peers. Nominal and recursive aliases are referenced by id,
+        // so theirs (and their parameter ids) are allocated up front.
+        let mut param_ids: Vec<Vec<u32>> = vec![Vec::new(); aliases.len()];
+        for (i, alias) in aliases.iter().enumerate() {
+            let nominal_id = alias.nominal.then(|| self.fresh_type_id());
+            let rec_id = recursive[i].then(|| self.fresh_type_id());
+            let params = if alias.nominal || recursive[i] {
+                fresh_ids(self, alias.params.len())
             } else {
                 Vec::new()
             };
+            param_ids[i] = params.clone();
             self.type_aliases.insert(
                 alias.name.clone(),
                 AliasDef {
                     params,
                     body: Type::Undefined,
                     nominal_id,
+                    rec_id,
+                    open_arity: false,
                 },
             );
         }
 
-        // Pass 2: parse each body with the alias env visible.
-        for alias in aliases {
-            // Reuse the pass-1 parameter ids for nominal aliases (so
-            // recursive references line up); allocate fresh ids for
-            // structural aliases as before.
-            let param_ids: Vec<u32> = if alias.nominal {
-                nominal_param_ids
-                    .get(&alias.name)
-                    .cloned()
-                    .unwrap_or_default()
+        // Pass 2: parse each body with the alias env visible, in
+        // dependency order.
+        for &i in &order {
+            let alias = &aliases[i];
+            let ids: Vec<u32> = if alias.nominal || recursive[i] {
+                param_ids[i].clone()
             } else {
-                alias
-                    .params
-                    .iter()
-                    .map(|_| {
-                        let TVarName::Flex(id) = self.fresh_flex() else {
-                            unreachable!("fresh_flex returns Flex");
-                        };
-                        id
-                    })
-                    .collect()
+                fresh_ids(self, alias.params.len())
             };
 
             // Resolve the body. Frontends that lower annotations through
             // the shared `TypeAst` IR (Python) supply `body_ast`; the
             // JavaScript path supplies a `body` string parsed by the
-            // `type_parser`. Either way other alias references resolve,
-            // since the slots reserved in pass 1 are already in scope.
+            // `type_parser`.
             let body_ty = if let Some(ast) = &alias.body_ast {
                 self.lower_type_ast(ast)
             } else {
@@ -325,7 +355,7 @@ impl InferState {
                     self.next_var_id(),
                     &self.type_aliases,
                 );
-                for (name, id) in alias.params.iter().zip(param_ids.iter()) {
+                for (name, id) in alias.params.iter().zip(ids.iter()) {
                     parser.preset_var(name.clone(), *id);
                 }
                 let parsed = parser.parse()?;
@@ -333,37 +363,83 @@ impl InferState {
                 self.bump_var_id_to(next);
                 parsed
             };
-            let body = (body_ty, 0u32);
 
-            let nominal_id = self
+            let (nominal_id, rec_id) = self
                 .type_aliases
                 .get(&alias.name)
-                .and_then(|d| d.nominal_id);
+                .map(|d| (d.nominal_id, d.rec_id))
+                .unwrap_or_default();
+            let tvar_params: Vec<TVarName> = ids.iter().map(|i| TVarName::Flex(*i)).collect();
 
             // For a nominal alias, register the brand's representation
             // in the named-type registry so `unify`/member-access can
             // see through it.
             if let Some(id) = nominal_id {
-                let tvar_params: Vec<TVarName> =
-                    param_ids.iter().map(|i| TVarName::Flex(*i)).collect();
                 self.register_named_type(TypeDef::nominal(
                     id,
                     alias.name.clone(),
-                    tvar_params,
-                    body.0.clone(),
+                    tvar_params.clone(),
+                    body_ty.clone(),
                 ));
+            }
+            if let Some(id) = rec_id {
+                if matches!(body_ty, Type::Named(target, _) if target == id) {
+                    return Err(TypeError::InvalidSyntax {
+                        message: format!(
+                            "type alias '{}' is defined as itself; a recursive alias \
+                             must refer to itself inside a record, array, union or function",
+                            alias.name
+                        ),
+                        span: alias.span,
+                    }
+                    .into());
+                }
+                let mut def = TypeDef::recursive(id, tvar_params, body_ty.clone());
+                def.name = Some(alias.name.clone());
+                self.register_named_type(def);
             }
 
             self.type_aliases.insert(
                 alias.name.clone(),
                 AliasDef {
-                    params: param_ids,
-                    body: body.0,
+                    params: ids,
+                    body: body_ty,
                     nominal_id,
+                    rec_id,
+                    open_arity: false,
                 },
             );
         }
         Ok(())
+    }
+
+    /// Reserve a nominal type for each class a JavaScript program
+    /// declares, so type aliases parsed before the class is inferred
+    /// can name it (`class InsertIx {}` then `type C = { m: InsertIx }`).
+    /// The class's factory takes the reserved id when it is branded.
+    fn reserve_class_names(&mut self, program: &Program) {
+        if program.language != crate::ast::SourceLanguage::JavaScript {
+            return;
+        }
+        for name in &program.class_brands {
+            if self.type_aliases.contains_key(name)
+                || program.type_aliases.iter().any(|a| &a.name == name)
+            {
+                continue;
+            }
+            let id = self.fresh_type_id();
+            self.reserved_class_ids.insert(name.clone(), id);
+            self.type_aliases.insert(
+                name.clone(),
+                crate::infer::state::AliasDef {
+                    params: Vec::new(),
+                    body: Type::Undefined,
+                    nominal_id: Some(id),
+                    rec_id: None,
+                    open_arity: true,
+                },
+            );
+        }
     }
 
     /// Extend `base` with a value-level constructor for each declared
@@ -856,7 +932,45 @@ impl InferState {
     /// is a fresh variable, a primitive, or anything else where
     /// pushing-down has no purchase.
     pub fn check_expr(&mut self, env: &TypeEnv, expr: &Expr, expected: &Type) -> InferResult<Type> {
-        let expected = self.zonk(expected);
+        let mut expected = self.zonk(expected);
+        // A recursive alias pushes its unrolling into a literal.
+        if let (Type::Named(id, args), Expr::Object { .. } | Expr::Array { .. }) = (&expected, expr) {
+            if !self.is_nominal_type(*id) {
+                if let Some(unrolled) = self.unroll_named(*id, args) {
+                    expected = unrolled;
+                }
+            }
+        }
+        // A function literal against a known function type takes its
+        // parameter and result types from it (see
+        // `check_function_literal`).
+        if let Expr::Function {
+            name,
+            params,
+            body,
+            type_annotation: None,
+            span,
+        } = expr
+        {
+            if let Some((_, expected_params, expected_ret)) =
+                crate::infer::features::functions::extract_callable(&expected)
+            {
+                let ty = self.check_function_literal(
+                    env,
+                    name.as_deref(),
+                    params,
+                    body,
+                    expected_params,
+                    expected_ret,
+                    *span,
+                )?;
+                if let Some(types) = self.expr_types.as_mut() {
+                    types.insert((span.start, span.end), ty.clone());
+                }
+                self.subsume(*span, &ty, &expected)?;
+                return Ok(self.zonk(&ty));
+            }
+        }
         // Object-literal special case: dispatch to the contextual
         // checking path that propagates per-field expected types.
         if let Expr::Object { properties, span } = expr {
@@ -1377,4 +1491,26 @@ impl InferState {
             ),
         }
     }
+}
+
+/// The identifiers in a type annotation's source text that can be type
+/// references: a word followed by `:` (or `?:`) is a field or parameter
+/// name, not a type.
+fn type_body_idents(body: &str) -> impl Iterator<Item = &str> {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let mut out = Vec::new();
+    let mut rest = body;
+    let mut offset = 0;
+    while let Some(start) = rest.find(|c: char| c.is_alphabetic() || c == '_' || c == '$') {
+        let word_len = rest[start..].find(|c: char| !is_word(c)).unwrap_or(rest.len() - start);
+        let word = &body[offset + start..offset + start + word_len];
+        let after = rest[start + word_len..].trim_start();
+        let after = after.strip_prefix('?').unwrap_or(after).trim_start();
+        if !after.starts_with(':') {
+            out.push(word);
+        }
+        offset += start + word_len;
+        rest = &body[offset..];
+    }
+    out.into_iter()
 }

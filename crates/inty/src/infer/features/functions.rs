@@ -333,6 +333,64 @@ impl InferState {
         this_type: Type,
         span: Span,
     ) -> InferResult<Type> {
+        self.infer_function_expecting(
+            env,
+            name,
+            params,
+            body,
+            type_annotation,
+            return_type_ast,
+            this_type,
+            None,
+            span,
+        )
+    }
+
+    /// Check a function literal against a known function type — an
+    /// annotation (`/** const f: () => S */ const f = () => …`) or the
+    /// parameter it is passed to (`xs.map((x, i) => …)`). The expected
+    /// parameter types are the literal's (so its body sees them), each
+    /// `return` is checked against the expected result (so a returned
+    /// `{n: xs.length}` fits `{n: Number}`), and a literal with fewer
+    /// parameters than expected ignores the extra arguments, as
+    /// JavaScript does (`xs.map(() => 0)`): its type takes them anyway.
+    pub(in crate::infer) fn check_function_literal(
+        &mut self,
+        env: &TypeEnv,
+        name: Option<&str>,
+        params: &[Param],
+        body: &Stmt,
+        expected_params: Vec<crate::types::FuncParam>,
+        expected_ret: Type,
+        span: Span,
+    ) -> InferResult<Type> {
+        let this_type = self.fresh_type_var();
+        self.infer_function_expecting(
+            env,
+            name,
+            params,
+            body,
+            &None,
+            None,
+            this_type,
+            Some((expected_params, expected_ret)),
+            span,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn infer_function_expecting(
+        &mut self,
+        env: &TypeEnv,
+        name: Option<&str>,
+        params: &[Param],
+        body: &Stmt,
+        type_annotation: &Option<TypeAnnotation>,
+        return_type_ast: Option<&crate::types::TypeAst>,
+        this_type: Type,
+        expected: Option<(Vec<crate::types::FuncParam>, Type)>,
+        span: Span,
+    ) -> InferResult<Type> {
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()
@@ -359,7 +417,7 @@ impl InferState {
         // against it before the body is checked. Parameters with a
         // default value (`def f(x=1)`) become presence-polymorphic so a
         // call may omit the trailing argument; the rest are required.
-        let func_params: Vec<crate::types::FuncParam> = params
+        let mut func_params: Vec<crate::types::FuncParam> = params
             .iter()
             .zip(param_types.iter())
             .map(|(param, ty)| {
@@ -372,6 +430,27 @@ impl InferState {
                 fp.with_name(param.name.clone())
             })
             .collect();
+        // Checked against an expected type: the parameters are the
+        // expected ones, and the arguments the literal doesn't name are
+        // accepted and ignored.
+        let mut expected_ret = None;
+        if let Some((expected_params, ret)) = expected {
+            for (i, ep) in expected_params.iter().enumerate() {
+                match param_types.get(i) {
+                    Some(ty) if !params[i].optional => self.unify(params[i].span, ty, &ep.ty)?,
+                    Some(_) => {}
+                    None => func_params.push(crate::types::FuncParam {
+                        presence: ep.presence.clone(),
+                        ty: ep.ty.clone(),
+                        name: None,
+                    }),
+                }
+            }
+            let ret = self.zonk(&ret);
+            if !matches!(ret, Type::Var(TVarName::Flex(_))) {
+                expected_ret = Some(ret);
+            }
+        }
         let func_type = Type::wrap_callable(Type::raw_func_with_params(
             Some(this_type.clone()),
             func_params,
@@ -407,6 +486,9 @@ impl InferState {
         if let Some(ret_ast) = return_type_ast {
             let annotated_ret = self.lower_type_ast_in_env_with_span(ret_ast, env, span);
             self.unify(span, &ret_type, &annotated_ret)?;
+        }
+        if let Some(ret) = &expected_ret {
+            self.unify(span, &ret_type, ret)?;
         }
 
         if let Some(annotation) = type_annotation {
@@ -463,7 +545,8 @@ impl InferState {
         // return: a function that falls off the end returns
         // `None`/`undefined`, regardless of any trailing expression
         // statement's type.
-        let annotated = type_annotation.is_some() || return_type_ast.is_some();
+        let annotated =
+            type_annotation.is_some() || return_type_ast.is_some() || expected_ret.is_some();
         // An annotated return type is pushed into the `return`s.
         let expected_ret = match self.zonk(&ret_type) {
             Type::Var(crate::types::TVarName::Flex(_)) => None,
@@ -1027,7 +1110,12 @@ impl InferState {
             .collect();
         brand_vars.sort_by_key(|v| v.id());
 
-        let id = self.fresh_type_id();
+        // The id reserved for the class before the program's aliases
+        // were parsed, so they could name it (`type C = { m: InsertIx }`).
+        let id = self
+            .reserved_class_ids
+            .remove(name)
+            .unwrap_or_else(|| self.fresh_type_id());
         self.register_named_type(TypeDef::nominal(
             id,
             name.to_string(),
@@ -1040,13 +1128,22 @@ impl InferState {
         // it: references resolve to the brand. (Python resolves class
         // names in annotations itself.)
         if self.language == crate::ast::SourceLanguage::JavaScript {
-            self.type_aliases
-                .entry(name.to_string())
-                .or_insert_with(|| crate::infer::state::AliasDef {
-                    params: brand_vars.iter().map(|v| v.id()).collect(),
-                    body: (**ret).clone(),
-                    nominal_id: Some(id),
-                });
+            let reserved = self
+                .type_aliases
+                .get(name)
+                .is_none_or(|d| d.open_arity && d.nominal_id == Some(id));
+            if reserved {
+                self.type_aliases.insert(
+                    name.to_string(),
+                    crate::infer::state::AliasDef {
+                        params: brand_vars.iter().map(|v| v.id()).collect(),
+                        body: (**ret).clone(),
+                        nominal_id: Some(id),
+                        rec_id: None,
+                        open_arity: false,
+                    },
+                );
+            }
         }
 
         let args: Vec<Type> = brand_vars.iter().map(|v| Type::var(v.clone())).collect();
@@ -1331,7 +1428,7 @@ pub(crate) fn extract_callable(
 /// condensation — leaves first, roots last. That's exactly the
 /// order we want for binding inference: a caller's SCC sees its
 /// callees' SCCs already generalised in the environment.
-fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+pub(crate) fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
     enum Step {
         /// First visit to `v` — assign index, push onto stack, then
         /// try to descend into successors.
