@@ -696,14 +696,13 @@ impl InferState {
 
     /// Create a unification error.
     pub(crate) fn unification_error(&self, span: Span, t1: &Type, t2: &Type) -> IntyError {
-        let expected_origin = self
-            .get_origin(t1)
-            .cloned()
-            .or_else(|| self.find_origin_through_subst(t1));
-        let found_origin = self
-            .get_origin(t2)
-            .cloned()
-            .or_else(|| self.find_origin_through_subst(t2));
+        // Only a type's own origin: searching the substitution for any
+        // variable bound to an equal type (as this once did) labelled a
+        // `Number` with wherever some unrelated `Number` came from — and
+        // scanned the whole substitution on every failed unification,
+        // speculative ones included.
+        let expected_origin = self.get_origin(t1).cloned();
+        let found_origin = self.get_origin(t2).cloned();
 
         // Render brands by their declared name so a mismatch reads
         // `UserId` vs `OrderId` rather than `μ3` vs `μ4`.
@@ -718,20 +717,6 @@ impl InferState {
             found_origin,
         }
         .into()
-    }
-
-    /// Try to find an origin by looking through the substitution
-    fn find_origin_through_subst(&self, ty: &Type) -> Option<crate::error::TypeOrigin> {
-        // Look through the substitution to find if any type variable
-        // was substituted to produce this type
-        for (var, subst_ty) in self.main_subst.iter() {
-            if subst_ty == ty {
-                if let Some(origin) = self.type_origins.get(var) {
-                    return Some(origin.clone());
-                }
-            }
-        }
-        None
     }
 }
 

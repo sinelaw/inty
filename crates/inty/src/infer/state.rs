@@ -237,6 +237,12 @@ pub struct InferState {
     pub sources: crate::error::SourceMap,
     /// How many imported modules are being checked (nested).
     pub module_depth: usize,
+    /// Modules checked so far this run, by canonical path: their
+    /// environments and export tables (see `modules::load_imported`).
+    pub module_cache: HashMap<
+        std::path::PathBuf,
+        (crate::infer::TypeEnv, crate::modules::ExportTable),
+    >,
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
@@ -468,6 +474,7 @@ impl InferState {
             current_source: None,
             sources: Default::default(),
             module_depth: 0,
+            module_cache: HashMap::new(),
             config,
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),

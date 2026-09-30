@@ -226,7 +226,7 @@ fn compute_export_table(
                     }));
                 }
                 let (target_env, target_exports) =
-                    load_module(state, starting_env.clone(), &resolved_path, visiting, true)?;
+                    load_imported(state, starting_env.clone(), &resolved_path, visiting)?;
 
                 let resolve_target = |name: &str| -> Option<TypeScheme> {
                     target_exports
@@ -331,7 +331,7 @@ pub fn resolve_imports(
                 }));
             }
 
-            let (module_env, exports) = load_module(state, env.clone(), &resolved_path, visiting, true)?;
+            let (module_env, exports) = load_imported(state, env.clone(), &resolved_path, visiting)?;
 
             let lookup_export_scheme = |name: &str| -> Option<TypeScheme> {
                 exports
@@ -408,6 +408,24 @@ pub fn check_module(
 ) -> Result<(TypeEnv, ExportTable), IntyError> {
     let mut visiting = HashSet::new();
     load_module(state, starting_env, path, &mut visiting, false)
+}
+
+/// Load an imported module, once per run: a module imported again (by
+/// another importer, or by the same one) is the same module, with the
+/// same state — its checked environment and exports are reused.
+fn load_imported(
+    state: &mut InferState,
+    starting_env: TypeEnv,
+    path: &Path,
+    visiting: &mut HashSet<PathBuf>,
+) -> Result<(TypeEnv, ExportTable), IntyError> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(checked) = state.module_cache.get(&canonical) {
+        return Ok(checked.clone());
+    }
+    let checked = load_module(state, starting_env, path, visiting, true)?;
+    state.module_cache.insert(canonical, checked.clone());
+    Ok(checked)
 }
 
 /// Parse and infer a single module file, returning the inferred env and
@@ -1293,6 +1311,77 @@ mod tests {
             resolve_path(&dir.path().join("src"), "#platform").unwrap(),
             dir.path().join("lib/util.js").canonicalize().unwrap()
         );
+    }
+
+    // A module imported by two importers is one module: they share its
+    // state (so their uses must agree), and it is checked once.
+    #[test]
+    fn a_module_is_checked_once_and_shared_by_its_importers() {
+        let dir = tempdir();
+        write_file(dir.path(), "store.js", "export const state = { items: [] };");
+        write_file(
+            dir.path(),
+            "a.js",
+            "import { state } from \"./store.js\"; export function addA() { state.items.push(\"a\"); }",
+        );
+        write_file(
+            dir.path(),
+            "b.js",
+            "import { state } from \"./store.js\"; export function addB() { state.items.push(1); }",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { addA } from \"./a.js\"; import { addB } from \"./b.js\"; addA(); addB();",
+        );
+        let src = std::fs::read_to_string(dir.path().join("main.js")).unwrap();
+        let program = parse(&src).unwrap();
+        let mut state = InferState::new();
+        let env = resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            dir.path(),
+            &mut HashSet::new(),
+        );
+        assert!(
+            env.is_err() || !state.errors.is_empty(),
+            "String and Int pushed onto the same shared array must conflict"
+        );
+        // Agreeing importers: each module is checked once.
+        write_file(
+            dir.path(),
+            "b.js",
+            "import { state } from \"./store.js\"; export function addB() { state.items.push(\"b\"); }",
+        );
+        let mut state = InferState::new();
+        resolve_imports(
+            &mut state,
+            crate::builtins::initial_env(),
+            &program,
+            dir.path(),
+            &mut HashSet::new(),
+        )
+        .expect("the importers agree");
+        assert!(state.errors.is_empty());
+        assert_eq!(state.module_cache.len(), 3, "store.js, a.js, b.js once each");
+    }
+
+    // An imported module's integer-literal field is decided by its
+    // importers' uses, as in one file.
+    #[test]
+    fn an_exported_literal_field_is_decided_by_its_importers() {
+        let dir = tempdir();
+        write_file(dir.path(), "store.js", "export const view = { start: 0, count: 0 };");
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { view } from \"./store.js\";\n\
+             view.start = 0.5;\n\
+             const xs = [\"a\"];\n\
+             const x = xs[view.count];",
+        );
+        check(dir.path(), "main.js").expect("start is a Number, count an Int");
     }
 
     fn tempdir() -> TempDir {
