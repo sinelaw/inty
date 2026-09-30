@@ -318,6 +318,21 @@ pub fn array_method_type(state: &mut InferState, elem: &Type, method: &str) -> O
     js_array_method_type(state, elem, method).map(|t| with_receiver(t, Type::array(elem.clone())))
 }
 
+/// An iteration callback `(elem, index?, array?) => ret`: what `map`,
+/// `filter`, `forEach`, … pass it.
+fn element_callback(state: &mut InferState, elem: &Type, ret: Type) -> Type {
+    use crate::types::FuncParam;
+    let (p1, p2) = (state.fresh_pvar(), state.fresh_pvar());
+    state.callable_row_open_with_params(
+        vec![
+            FuncParam::required(elem.clone()),
+            FuncParam::optional(p1, Type::Int),
+            FuncParam::optional(p2, Type::array(elem.clone())),
+        ],
+        ret,
+    )
+}
+
 fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Option<Type> {
     use crate::types::FuncParam;
     let n = Type::Number;
@@ -396,57 +411,52 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
             Type::simple_func_with_params(vec![FuncParam::optional(pvar, s.clone())], s.clone())
         }
         "reverse" => Type::simple_func(vec![], arr.clone()),
-        "sort" => Type::simple_func(vec![], arr.clone()),
+        // `sort(compare?)`: the comparator's sign orders two elements.
+        "sort" => {
+            let pvar = state.fresh_pvar();
+            let cmp = state.callable_row_open(None, vec![elem.clone(), elem.clone()], Type::Number);
+            Type::simple_func_with_params(vec![FuncParam::optional(pvar, cmp)], arr.clone())
+        }
         "fill" => Type::simple_func(vec![elem.clone()], arr.clone()),
         // Returns `T | undefined` — the predicate may match nothing, in
         // which case the runtime returns `undefined`. Forces the caller
         // through narrowing before they can use the result, which is
         // the user-visible payoff that closes the loop on phase 1.
         //
-        // Callback parameter types use `callable_row_open` so callers
+        // Callback parameter types are open callable rows so callers
         // can pass any callable value — including constructors with
         // statics, e.g. `arr.find(String)` — via row polymorphism.
+        // Every iteration callback is also passed the index and the
+        // array (`xs.map((x, i) => …)`); those parameters are optional,
+        // so a function taking only the element fits too.
         "find" => Type::simple_func(
-            vec![state.callable_row_open(None, vec![elem.clone()], b.clone())],
+            vec![element_callback(state, elem, b.clone())],
             Type::union(vec![elem.clone(), Type::Undefined]),
         ),
-        "findIndex" => Type::simple_func(
-            vec![state.callable_row_open(None, vec![elem.clone()], b.clone())],
-            Type::Int,
-        ),
-        "forEach" => Type::simple_func(
-            vec![state.callable_row_open(None, vec![elem.clone()], u.clone())],
-            u.clone(),
-        ),
-        "filter" => Type::simple_func(
-            vec![state.callable_row_open(None, vec![elem.clone()], b.clone())],
-            arr.clone(),
-        ),
-        "some" => Type::simple_func(
-            vec![state.callable_row_open(None, vec![elem.clone()], b.clone())],
-            b.clone(),
-        ),
-        "every" => Type::simple_func(
-            vec![state.callable_row_open(None, vec![elem.clone()], b.clone())],
-            b.clone(),
-        ),
+        "findIndex" => Type::simple_func(vec![element_callback(state, elem, b.clone())], Type::Int),
+        "forEach" => Type::simple_func(vec![element_callback(state, elem, u.clone())], u.clone()),
+        "filter" => Type::simple_func(vec![element_callback(state, elem, b.clone())], arr.clone()),
+        "some" => Type::simple_func(vec![element_callback(state, elem, b.clone())], b.clone()),
+        "every" => Type::simple_func(vec![element_callback(state, elem, b.clone())], b.clone()),
         // Polymorphic: map produces an array of a fresh element type U.
         "map" => {
             let u_var = state.fresh_type_var();
-            let cb = state.callable_row_open(None, vec![elem.clone()], u_var.clone());
+            let cb = element_callback(state, elem, u_var.clone());
             Type::simple_func(vec![cb], Type::array(u_var))
         }
         // Polymorphic: reduce carries an accumulator of a fresh type U.
-        "reduce" => {
+        "reduce" | "reduceRight" => {
             let u_var = state.fresh_type_var();
-            let cb =
-                state.callable_row_open(None, vec![u_var.clone(), elem.clone()], u_var.clone());
-            Type::simple_func(vec![cb, u_var.clone()], u_var)
-        }
-        "reduceRight" => {
-            let u_var = state.fresh_type_var();
-            let cb =
-                state.callable_row_open(None, vec![u_var.clone(), elem.clone()], u_var.clone());
+            let (p1, p2) = (state.fresh_pvar(), state.fresh_pvar());
+            let cb = state.callable_row_open_with_params(
+                vec![
+                    FuncParam::required(u_var.clone()),
+                    FuncParam::required(elem.clone()),
+                    FuncParam::optional(p1, Type::Int),
+                    FuncParam::optional(p2, arr.clone()),
+                ],
+                u_var.clone(),
+            );
             Type::simple_func(vec![cb, u_var.clone()], u_var)
         }
         "toString" => Type::simple_func(vec![], s.clone()),
@@ -504,24 +514,27 @@ pub fn python_list_method_type(state: &mut InferState, elem: &Type, method: &str
 /// `inner` is the `T` in `Promise<T>`. Each call produces a fresh function
 /// type so call sites don't unify their result types together.
 ///
-/// `.then` here commits to the "callback must return a Promise" shape
-/// (`(T) => Promise<U>) => Promise<U>`) rather than the JS-spec
-/// `(T) => U | Promise<U>` form, because inty has no union types.
-/// Users passing a plain-value callback should return `Promise.resolve(v)`
-/// or make the function `async`.
+/// A `then` / `catch` callback may return a value or a promise of one
+/// (`(T) => U | Promise<U>`); the promise the call returns is flattened
+/// either way. The callback's result is a fresh variable `r`, recorded in
+/// `promise_results` with the `U` it determines; `infer_call` settles
+/// the pair once the callback has been checked (`settle_promise_results`).
 pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -> Option<Type> {
     Some(match method {
         "then" => {
             let u_var = state.fresh_type_var();
-            let cb =
-                state.callable_row_open(None, vec![inner.clone()], Type::promise(u_var.clone()));
+            let r_var = state.fresh_type_var();
+            state.promise_results.push((r_var.clone(), u_var.clone()));
+            let cb = state.callable_row_open(None, vec![inner.clone()], r_var);
             Type::simple_func(vec![cb], Type::promise(u_var))
         }
         "catch" => {
-            // (error -> Promise<T>) -> Promise<T>. error is a fresh var
-            // since inty has no single "Error" type.
+            // (error) => T | Promise<T>. error is a fresh var since inty
+            // has no single "Error" type.
             let err_var = state.fresh_type_var();
-            let cb = state.callable_row_open(None, vec![err_var], Type::promise(inner.clone()));
+            let r_var = state.fresh_type_var();
+            state.promise_results.push((r_var.clone(), inner.clone()));
+            let cb = state.callable_row_open(None, vec![err_var], r_var);
             Type::simple_func(vec![cb], Type::promise(inner.clone()))
         }
         "finally" => Type::simple_func(
@@ -530,6 +543,34 @@ pub fn promise_method_type(state: &mut InferState, inner: &Type, method: &str) -
         ),
         _ => return None,
     })
+}
+
+impl InferState {
+    /// Settle the `then` / `catch` callback results recorded since
+    /// `mark` (see [`promise_method_type`]): a callback returning
+    /// `Promise<V>` makes the call's promise a `Promise<V>`; one
+    /// returning a plain `V`, a `Promise<V>` too. A result still unknown
+    /// (and not a number) is taken to be a promise, as before callbacks
+    /// could return values.
+    pub(crate) fn settle_promise_results(&mut self, mark: usize, span: Span) -> Result<(), IntyError> {
+        if self.promise_results.len() <= mark {
+            return Ok(());
+        }
+        let pairs: Vec<(Type, Type)> = self.promise_results.drain(mark..).collect();
+        for (r, u) in pairs {
+            match self.zonk(&r) {
+                Type::Promise(v) => self.unify(span, &u, &v)?,
+                // A number, whichever kind: not a promise.
+                v @ Type::Var(TVarName::Flex(_)) if self.is_numeric(&v) => self.unify(span, &u, &v)?,
+                // Unknown: the conservative choice — a later non-promise
+                // is a type error rather than a mistyped flattening.
+                Type::Var(TVarName::Flex(_)) => self.unify(span, &r, &Type::promise(u))?,
+                Type::Error => {}
+                other => self.subsume(span, &other, &u)?,
+            }
+        }
+        Ok(())
+    }
 }
 
 impl InferState {
@@ -713,6 +754,7 @@ impl InferState {
             }
             return Ok(());
         }
+        let promise_mark = self.promise_results.len();
         let found = match self.infer_member_on_type(&receiver, name, span) {
             Ok(t) => t,
             // A primitive without the property: say so, rather than
@@ -753,6 +795,8 @@ impl InferState {
             }
             None => self.unify(span, result, &found)?,
         }
+        // A deferred `p.then(cb)`: the call was checked already.
+        self.settle_promise_results(promise_mark, span)?;
         Ok(())
     }
 

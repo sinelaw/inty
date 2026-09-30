@@ -262,6 +262,10 @@ pub struct InferState {
     /// are parsed (see `infer_program_with_env`), taken by the class's
     /// factory when it is branded.
     pub reserved_class_ids: HashMap<String, TypeId>,
+    /// `then` / `catch` callback results waiting for their call to
+    /// settle them: `(callback result, promised value)`. See
+    /// `builtins::promise_method_type`.
+    pub(crate) promise_results: Vec<(Type, Type)>,
     /// Which declaration each identifier refers to, and which bindings
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
@@ -452,6 +456,7 @@ impl InferState {
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
             reserved_class_ids: HashMap::new(),
+            promise_results: Vec::new(),
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
@@ -702,6 +707,21 @@ impl InferState {
             Some(t) => Type::raw_func(t, params, ret),
             None => Type::raw_static_func(params, ret),
         };
+        let mut props = std::collections::BTreeMap::new();
+        props.insert(PropName(CALLABLE_KEY.to_string()), func);
+        let tail = self.fresh_flex();
+        Type::Row(RowType::open(props, tail))
+    }
+
+    /// [`Self::callable_row_open`] for a static function with explicit
+    /// parameters (some optional).
+    pub fn callable_row_open_with_params(
+        &mut self,
+        params: Vec<crate::types::FuncParam>,
+        ret: Type,
+    ) -> Type {
+        use crate::types::{PropName, RowType, CALLABLE_KEY};
+        let func = Type::raw_func_with_params(None, params, ret);
         let mut props = std::collections::BTreeMap::new();
         props.insert(PropName(CALLABLE_KEY.to_string()), func);
         let tail = self.fresh_flex();
