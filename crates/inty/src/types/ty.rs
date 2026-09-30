@@ -230,17 +230,31 @@ pub enum ClassName {
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct TypePred {
     pub class: ClassName,
     pub types: Vec<Type>,
+    /// Where the predicate was posed, once it is part of a scheme (the
+    /// `o.name` read inside a generic function): an instance posed at a
+    /// call that fails is reported there, and "required by" here.
+    /// Not part of the predicate's identity.
+    pub origin: Option<crate::span::Span>,
 }
+
+impl PartialEq for TypePred {
+    fn eq(&self, other: &Self) -> bool {
+        self.class == other.class && self.types == other.types
+    }
+}
+
+impl Eq for TypePred {}
 
 impl TypePred {
     pub fn plus(ty: Type) -> Self {
         TypePred {
             class: ClassName::Plus,
             types: vec![ty],
+            origin: None,
         }
     }
 
@@ -248,6 +262,7 @@ impl TypePred {
         TypePred {
             class: ClassName::Num,
             types: vec![ty],
+            origin: None,
         }
     }
 
@@ -255,6 +270,7 @@ impl TypePred {
         TypePred {
             class: ClassName::NumLit,
             types: vec![ty],
+            origin: None,
         }
     }
 
@@ -262,6 +278,7 @@ impl TypePred {
         TypePred {
             class: ClassName::Arith,
             types: vec![left, right, result],
+            origin: None,
         }
     }
 
@@ -269,6 +286,7 @@ impl TypePred {
         TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
+            origin: None,
         }
     }
 
@@ -280,6 +298,7 @@ impl TypePred {
                 Type::Literal(LitValue::String(name.to_string())),
                 result,
             ],
+            origin: None,
         }
     }
 

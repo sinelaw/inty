@@ -1,0 +1,11 @@
+
+Error: Type mismatch: expected '{name: String, volume: String}', found 'Channel'
+   ╭─[ main.js:5:11 ]
+   │
+ 5 │ const c = mk();
+   │           ──┬─  
+   │             ╰─── Type mismatch: expected '{name: String, volume: String}', found 'Channel'
+   │ 
+   │ Note: Cannot unify expected '{name: String, volume: String}' with found 'Channel'
+───╯
+

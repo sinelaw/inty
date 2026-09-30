@@ -225,6 +225,7 @@ fn declarable(scheme: &TypeScheme) -> TypeScheme {
         .map(|p| TypePred {
             class: p.class,
             types: p.types.iter().map(close_call_tails).collect(),
+            origin: p.origin,
         })
         .collect();
     let mut used = ty.free_vars();

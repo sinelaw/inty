@@ -1,0 +1,7 @@
+Error: Failed to parse type annotation: unknown type 'T' — declare it with `/** type T = ... */`, or make it a type parameter: `/** function f<T>(x: T) => ... */` or `/** const f: <T>(x: T) => ... */`
+   ╭─[ main.js:1:1 ]
+   │
+ 1 │ /** function first(o: T) => Number */
+   │ ──────────────────┬──────────────────  
+   │                   ╰──────────────────── Failed to parse type annotation: unknown type 'T' — declare it with `/** type T = ... */`, or make it a type parameter: `/** function f<T>(x: T) => ... */` or `/** const f: <T>(x: T) => ... */`
+───╯

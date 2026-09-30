@@ -1,0 +1,9 @@
+Error: Array elements have different types: 'String' and 'Number'
+   ╭─[ main.js:1:22 ]
+   │
+ 1 │ const pairs = [["l", 0.5], ["r", 0.25]];
+   │                      ─┬─  
+   │                       ╰─── Array elements have different types: 'String' and 'Number'
+   │ 
+   │ Help: an array holds one element type. For a fixed group of values annotate a tuple, e.g. `/** const p: [String, Number] */` (or `[String, Number][]` for a list of them), or use a record `{ a: String, b: Number }`; for either type in any position, annotate the element union `(String | Number)[]`
+───╯

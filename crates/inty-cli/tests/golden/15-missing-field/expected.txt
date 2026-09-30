@@ -1,0 +1,13 @@
+
+Error: Type mismatch: expected '{h: Number, w: Number}', found '{w: Number | Int}'
+   ╭─[ main.js:3:16 ]
+   │
+ 3 │ const a = area({ w: 2 });
+   │                ────┬───  
+   │                    ╰───── Type mismatch: expected '{h: Number, w: Number}', found '{w: Number | Int}'
+   │ 
+   │ Help: missing field 'h'
+   │ 
+   │ Note: Cannot unify expected '{h: Number, w: Number}' with found '{w: Number | Int}'
+───╯
+

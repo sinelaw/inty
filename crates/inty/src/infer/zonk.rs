@@ -313,6 +313,7 @@ pub fn zonk_scheme(table: &mut VarTable, subst: &Subst, scheme: &TypeScheme) -> 
                     .iter()
                     .map(|t| zonk_filtered(table, subst, t, &scheme.vars))
                     .collect(),
+                origin: p.origin,
             })
             .collect(),
         ty: zonk_filtered(table, subst, &scheme.body.ty, &scheme.vars),

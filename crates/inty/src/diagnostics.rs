@@ -167,12 +167,35 @@ pub fn write_error<W: Write>(
 /// [`write_error`] for a program with imported modules: each label is
 /// rendered in the file its span is in (see [`SourceMap`]).
 pub fn write_error_in<W: Write>(
+    writer: W,
+    filename: &str,
+    source: &str,
+    map: &SourceMap,
+    error: &IntyError,
+    color: bool,
+) -> std::io::Result<()> {
+    // A requirement of a generic function that fails at a use of it: the
+    // error at the use, and where the function requires it.
+    if let Some(TypeError::RequiredBy { inner, origin }) = error.as_type() {
+        let inner = IntyError::Type(inner.clone());
+        let required = (
+            *origin,
+            "required here, in the body of the function this uses".to_string(),
+        );
+        return write_error_with(writer, filename, source, map, &inner, color, Some(required));
+    }
+    write_error_with(writer, filename, source, map, error, color, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_error_with<W: Write>(
     mut writer: W,
     filename: &str,
     source: &str,
     map: &SourceMap,
     error: &IntyError,
     color: bool,
+    related: Option<(Span, String)>,
 ) -> std::io::Result<()> {
     let files = Files {
         filename,
@@ -224,6 +247,13 @@ pub fn write_error_in<W: Write>(
 
         if let Some(ctx) = context {
             report.add_help(ctx.clone());
+        }
+        if let Some((span, what)) = &related {
+            report = report.with_label(
+                Label::new(files.loc(*span))
+                    .with_message(what)
+                    .with_color(Color::Cyan),
+            );
         }
 
         if let Some(origin) = expected_origin {
@@ -377,11 +407,34 @@ pub fn write_error_in<W: Write>(
                 span,
             } => (
                 format!(
-                    "Arity mismatch: expected {} arguments, found {}",
-                    expected, found
+                    "Arity mismatch: the function takes {} argument{}, but {} {} passed",
+                    expected,
+                    if *expected == 1 { "" } else { "s" },
+                    found,
+                    if *found == 1 { "is" } else { "are" }
                 ),
                 *span,
-                None,
+                Some(
+                    "a parameter declared `name?: T` may be left out; a callback may \
+                     take fewer parameters than it is passed"
+                        .to_string(),
+                ),
+            ),
+            TypeError::FieldPresenceMismatch {
+                field,
+                with,
+                without,
+                span,
+            } => (
+                format!(
+                    "Field '{}' is present in '{}' but missing from '{}'",
+                    field, with, without
+                ),
+                *span,
+                Some(format!(
+                    "a record type lists every field its values have; to allow '{field}' \
+                     to be left out, declare it optional (`{field}?: T`)"
+                )),
             ),
             TypeError::ConstraintNotSatisfied { class, ty, span } => (
                 format!("Type '{}' is not an instance of {}", ty, class),
@@ -463,6 +516,9 @@ pub fn write_error_in<W: Write>(
                     left, right
                 )),
             ),
+            // Unwrapped by `write_error_in`; nested ones render as their
+            // innermost error.
+            TypeError::RequiredBy { inner, origin } => (inner.to_string(), *origin, None),
             TypeError::ArrayElementMismatch { left, right, span } => (
                 format!(
                     "Array elements have different types: '{}' and '{}'",
@@ -512,6 +568,13 @@ pub fn write_error_in<W: Write>(
 
     if let Some(note_text) = note {
         report.add_help(note_text);
+    }
+    if let Some((span, what)) = &related {
+        report = report.with_label(
+            Label::new(files.loc(*span))
+                .with_message(what)
+                .with_color(Color::Cyan),
+        );
     }
 
     report.finish().write(files.cache(), &mut writer)?;

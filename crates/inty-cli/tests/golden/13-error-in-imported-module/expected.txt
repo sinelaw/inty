@@ -1,0 +1,11 @@
+
+Error: Type mismatch: expected 'Number', found 'String'
+   ╭─[ store.js:4:23 ]
+   │
+ 4 │   return state.name + state.volume * "2";
+   │                       ─────────┬────────  
+   │                                ╰────────── Type mismatch: expected 'Number', found 'String'
+   │ 
+   │ Note: Cannot unify expected 'Number' with found 'String'
+───╯
+

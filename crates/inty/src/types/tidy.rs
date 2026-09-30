@@ -203,6 +203,7 @@ impl TidyEnv {
         TypePred {
             class: pred.class,
             types: pred.types.iter().map(|t| self.tidy_type(t)).collect(),
+            origin: pred.origin,
         }
     }
 
@@ -299,6 +300,7 @@ mod tests {
                 vec![TypePred {
                     class: ClassName::Plus,
                     types: vec![Type::Var(TVarName::Flex(9))],
+                    origin: None,
                 }],
                 Type::Func {
                     this_type: None,

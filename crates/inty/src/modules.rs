@@ -478,7 +478,13 @@ fn load_module(
     // file they are in. While it is checked, errors are attributed to it;
     // on failure the attribution is left in place for the caller that
     // reports the propagated error.
-    let display = path.display().to_string();
+    // Shown relative to the working directory, like the entry file.
+    let display = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(cwd).ok())
+        .unwrap_or(path)
+        .display()
+        .to_string();
     let base = state.sources.add(display.clone(), source.clone());
     let prev_source = state.set_current_source(Some(crate::error::SourceFile {
         path: display,

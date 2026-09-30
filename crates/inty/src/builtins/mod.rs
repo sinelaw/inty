@@ -790,7 +790,7 @@ impl InferState {
             {
                 return Err(TypeError::PropertyNotFound {
                     prop: name.to_string(),
-                    obj_type: receiver.to_string(),
+                    obj_type: self.show(&receiver),
                     span,
                 }
                 .into());
@@ -916,8 +916,22 @@ impl InferState {
         self.unify(span, element, &union)
     }
 
-    /// Resolve a single type class constraint.
+    /// Resolve a single type class constraint. An instance of a scheme's
+    /// predicate (posed where a generic function is used) that fails says
+    /// where the requirement is written too (`TypeError::RequiredBy`).
     fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
+        self.resolve_constraint_here(pred, span)
+            .map_err(|e| match (pred.origin, e) {
+                (Some(origin), IntyError::Type(inner))
+                    if origin != span && !matches!(*inner, TypeError::RequiredBy { .. }) =>
+                {
+                    TypeError::RequiredBy { inner, origin }.into()
+                }
+                (_, e) => e,
+            })
+    }
+
+    fn resolve_constraint_here(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
         // Error sentinel satisfies every constraint trivially. The
         // type that flowed in already failed inference; making its
         // dependent uses fail their type-class checks too would

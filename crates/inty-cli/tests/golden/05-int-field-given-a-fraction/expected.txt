@@ -1,0 +1,13 @@
+
+Error: Type mismatch: expected 'Int', found '0.5'
+   ╭─[ main.js:4:1 ]
+   │
+ 4 │ s.volume = 0.5;
+   │ ───────┬──────  
+   │        ╰──────── Type mismatch: expected 'Int', found '0.5'
+   │ 
+   │ Help: 'volume' was inferred Int from its integer initializer and its uses; if it holds fractions, declare it a Number where the object is written: `volume /*: Number */: 0`
+   │ 
+   │ Note: Cannot unify expected 'Int' with found '0.5'
+───╯
+
