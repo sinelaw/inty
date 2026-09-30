@@ -1075,14 +1075,14 @@ impl InferState {
                 self.restore_snapshot(snap);
             }
         }
-        // Classes by name, not their brand ids.
-        let mut ctx = crate::types::PrettyContext::with_nominal_names(self.nominal_names());
-        Err(crate::error::TypeError::BranchMismatch {
-            left: ctx.format_type(&t1),
-            right: ctx.format_type(&t2),
-            span,
-        }
-        .into())
+        // Classes by name, variables renamed `a`, `b`, … (a failed
+        // speculative join isn't shown, so it skips the rendering).
+        let (left, right) = if self.quiet > 0 {
+            (String::new(), String::new())
+        } else {
+            self.show_pair(&t1, &t2)
+        };
+        Err(crate::error::TypeError::BranchMismatch { left, right, span }.into())
     }
 
     /// The union of two types (normalised), or their unification when
