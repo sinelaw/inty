@@ -658,9 +658,14 @@ impl<'a> Decorator<'a> {
                 return_type_ast: return_type_ast.clone(),
                 span: *span,
             },
-            PropDef::Spread { argument, span } => PropDef::Spread {
+            PropDef::Spread {
+                argument,
+                span,
+                inherited,
+            } => PropDef::Spread {
                 argument: self.decorate_expr(argument, env),
                 span: *span,
+                inherited: *inherited,
             },
         }
     }

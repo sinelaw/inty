@@ -2669,11 +2669,10 @@ fn object_property_shorthand() {
 }
 
 /// Phase 1.2 regression: `export default class extends X { ... }`
-/// produces the existing inheritance-rejection error rather than a
-/// confusing "expected expression" parse error.
+/// parses (it once produced a confusing "expected expression" error, then
+/// an inheritance rejection; `extends` is now lowered).
 #[test]
-fn export_default_class_extends_rejects_with_inheritance_error() {
-    use crate::error::IntyError;
+fn export_default_class_extends_parses() {
     let src = "import { B } from \"./b.js\"; export default class extends B {}";
     let mut scanner = Scanner::new(src);
     let mut tokens = Vec::new();
@@ -2687,17 +2686,13 @@ fn export_default_class_extends_rejects_with_inheritance_error() {
     }
     let mut parser =
         Parser::with_source(tokens, scanner.type_annotations().to_vec(), src.to_string());
-    let result = parser.parse_program();
-    let err = result.expect_err("must error on extends");
-    let msg = match err {
-        IntyError::Parse(p) => format!("{:?}", p),
-        other => panic!("expected ParseError, got {:?}", other),
-    };
-    assert!(
-        msg.contains("class inheritance is not supported"),
-        "diagnostic should mention inheritance: {}",
-        msg
-    );
+    parser.parse_program().expect("class inheritance parses");
+    // `super.member` doesn't: an inherited method is `this.method()`.
+    let err = crate::frontends::javascript::parse(
+        "class A { f() { return 1; } } class B extends A { g() { return super.f(); } }",
+    )
+    .expect_err("super.member is rejected");
+    assert!(format!("{err:?}").contains("super.member"), "{err:?}");
 }
 
 /// Two member accesses on the same parameter must both contribute their
