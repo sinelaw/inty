@@ -267,3 +267,127 @@ fn b6_fewer_callback_parameters() {
         each((i, j) => undefined);
     ");
 }
+
+// 7. Iteration callbacks are passed the index (and the array).
+#[test]
+fn b7_index_callbacks() {
+    ok(r#"
+        const xs = ["a", "b"];
+        const a = xs.map((x, i) => x + String(i));
+        const b = xs.filter((x, i) => i > 0);
+        xs.forEach((x, i) => { console.log(i); });
+        const c = xs.some((x, i) => i > 0);
+        const d = xs.every((x, i, all) => i < all.length);
+        const e = xs.findIndex((x, i) => i > 0);
+        const f = xs.find((x, i) => i > 0);
+        const g = xs.reduce((acc, x, i) => acc + i, 0);
+    "#);
+    // A function taking only the element still fits.
+    ok(r#"
+        /** function up(s: String) => String */
+        function up(s) { return s.toUpperCase(); }
+        const k = ["a"].map(up);
+        const n = ["1"].map(Number);
+    "#);
+    // The index is an Int.
+    err(r#"const xs = ["a"].map((x, i) => i.length);"#);
+    ok("const s = [3, 1, 2].sort((a, b) => a - b); const t = [0.5].sort();");
+}
+
+// 8. `&&` / `||` with known operand types give what can come out.
+#[test]
+fn b8_logical_operators() {
+    ok(r#"
+        /** const maybe: Undefined | { v: Number } */
+        const maybe = undefined;
+        const cond = true;
+        const r = cond && maybe ? 1 : 2;
+        const w = maybe && maybe.v;
+    "#);
+    ok(r#"
+        /** function greet(name: String) => String */
+        function greet(name) { return name || "Guest"; }
+    "#);
+    ok(r#"
+        /** const XS: { name: String, v: String }[] */
+        const XS = [{ name: "a", v: "x" }];
+        /** function g(n: String) => String */
+        function g(n) { const f = XS.find((i) => i.name === n); return (f && f.v) || ""; }
+    "#);
+    // What comes out is still checked.
+    err(r#"
+        /** const maybe: Undefined | { v: Number } */
+        const maybe = undefined;
+        /** const n: Number */
+        const n = maybe && maybe.v;
+    "#);
+}
+
+// 9. `then` / `catch` callbacks may return a value or a promise.
+#[test]
+fn b9_promise_callbacks_return_values() {
+    ok(r#"
+        /** const p: Promise<Boolean> */
+        const p = Promise.resolve(true);
+        /** const q: Promise<Boolean> */
+        const q = p.catch((e) => false);
+        /** const r: Promise<Int> */
+        const r = p.then((x) => Promise.resolve(x ? 1 : 2));
+        /** const s: Promise<String> */
+        const s = p.then((x) => x ? "a" : "b").then((y) => y + "!");
+        const t = p.catch((e) => Promise.resolve(false));
+    "#);
+    ok(r#"
+        function after(p) { return p.then((x) => x + 1); }
+        /** const q: Promise<Int> */
+        const q = after(Promise.resolve(1));
+    "#);
+    err(r#"
+        /** const p: Promise<Boolean> */
+        const p = Promise.resolve(true);
+        const q = p.catch((e) => "no");
+    "#);
+}
+
+// 10. Tuples: `[A, B]` annotations; an unannotated heterogeneous array
+// says how to write one.
+#[test]
+fn b10_tuples() {
+    ok(r#"
+        /** const pairs: [String, Number][] */
+        const pairs = [["l", 0.5], ["r", 0.25]];
+        const name = pairs[0][0].toUpperCase();
+        const gain = pairs[0][1] * 2;
+        const [a, b] = pairs[1];
+        const c = a + "!";
+        const d = b / 2;
+        /** function mk(s: String) => [String, Int] */
+        function mk(s) { return [s, s.length]; }
+    "#);
+    err(r#"/** const p: [String, Number] */ const p = [1, "a"];"#);
+    let e = err(r#"const pairs = [["l", 0.5], ["r", 0.25]];"#);
+    assert!(e.contains("Array elements have different types"), "{e}");
+}
+
+// 12. A concise arrow passed where the result is `Undefined` runs for its
+// effect.
+#[test]
+fn b12_undefined_callbacks() {
+    ok(r#"
+        /** function hint(s: String) => Undefined */
+        function hint(s) { return undefined; }
+        /** function on(f: (Number) => Undefined) => Undefined */
+        function on(f) { return undefined; }
+        on((e) => hint("x"));
+        on((e) => { hint("x"); });
+        on((e) => { if (e > 1) return; hint("y"); });
+        const arr = [1];
+        on((e) => arr.push(e));
+    "#);
+    // A block body still returns what it says.
+    err(r#"
+        /** function on(f: (Number) => Undefined) => Undefined */
+        function on(f) { return undefined; }
+        on((e) => { return 5; });
+    "#);
+}

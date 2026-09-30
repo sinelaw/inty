@@ -365,6 +365,29 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let this_type = self.fresh_type_var();
+        // A concise arrow (`(e) => list.push(e)`) where the result is
+        // `Undefined` runs for its effect: its value is discarded, like a
+        // TypeScript `void` callback's. A block body still returns what
+        // it says.
+        let discarded;
+        let body = match (self.zonk(&expected_ret), concise_body(body)) {
+            (Type::Undefined, Some((expr, ret_span))) => {
+                let mut stmts = match body {
+                    Stmt::Block { body, .. } => body[..body.len() - 1].to_vec(),
+                    _ => unreachable!("a concise body is a block"),
+                };
+                stmts.push(Stmt::Expr {
+                    expression: expr.clone(),
+                    span: ret_span,
+                });
+                discarded = Stmt::Block {
+                    body: stmts,
+                    span: ret_span,
+                };
+                &discarded
+            }
+            _ => body,
+        };
         self.infer_function_expecting(
             env,
             name,
@@ -439,11 +462,14 @@ impl InferState {
                 match param_types.get(i) {
                     Some(ty) if !params[i].optional => self.unify(params[i].span, ty, &ep.ty)?,
                     Some(_) => {}
-                    None => func_params.push(crate::types::FuncParam {
+                    // A required argument the literal ignores. (An
+                    // optional one is simply absent from its type.)
+                    None if ep.presence.is_pre() => func_params.push(crate::types::FuncParam {
                         presence: ep.presence.clone(),
                         ty: ep.ty.clone(),
                         name: None,
                     }),
+                    None => {}
                 }
             }
             let ret = self.zonk(&ret);
@@ -585,6 +611,9 @@ impl InferState {
         keywords: &[(String, Expr)],
         span: Span,
     ) -> InferResult<Type> {
+        // `then` / `catch` callbacks this call's callee records (see
+        // `builtins::promise_method_type`) are settled at its end.
+        let promise_mark = self.promise_results.len();
         // For method calls, we need to infer the object only once to avoid creating
         // different fresh type variables. We'll manually extract the method type.
         let mut deferred_this: Option<Type> = None;
@@ -768,6 +797,8 @@ impl InferState {
             let this_type_applied = self.zonk(&this_type);
             self.unify(span, &this_type_applied, &Type::Undefined)?;
         }
+
+        self.settle_promise_results(promise_mark, span)?;
 
         // The call may have pinned down receivers of pending property
         // reads — the callee's instantiated predicates, or a method's
@@ -1297,6 +1328,22 @@ struct HoistableNode {
     /// outer environment (i.e., not bound locally by params, vars,
     /// inner functions, etc.).
     free: std::collections::HashSet<String>,
+}
+
+/// The expression of a concise arrow body (`(x) => expr`), which the
+/// parser lowers to a block ending in a `return` spanning the same
+/// source as the block.
+fn concise_body(body: &Stmt) -> Option<(&Expr, Span)> {
+    match body {
+        Stmt::Block { body, span } => match body.last() {
+            Some(Stmt::Return {
+                argument: Some(expr),
+                span: ret_span,
+            }) if ret_span == span => Some((expr, *ret_span)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The names an SCC of hoistable functions (statement indices into
