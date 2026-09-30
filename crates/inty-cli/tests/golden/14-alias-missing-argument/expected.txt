@@ -1,0 +1,7 @@
+Error: Failed to parse type annotation: type 'Box' takes 1 type argument, got 0
+   ╭─[ main.js:2:1 ]
+   │
+ 2 │ /** function unbox(b: Box) => Number */
+   │ ───────────────────┬───────────────────  
+   │                    ╰───────────────────── Failed to parse type annotation: type 'Box' takes 1 type argument, got 0
+───╯

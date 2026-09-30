@@ -395,6 +395,13 @@ impl<'a> TypeParser<'a> {
                 ) {
                     return Err(e);
                 }
+                // A named first parameter (`(b: Base) => …`) is only
+                // ever a function type: its error is about the
+                // parameter's type, which the grouped reading would
+                // misreport as "unknown type 'b'".
+                if self.named_param_at(start_pos) {
+                    return Err(e);
+                }
                 // Backtrack and try as grouped type for syntax errors.
                 // If that fails too, an unknown type inside what parsed
                 // as a function's parameters is the better diagnostic:
@@ -412,6 +419,33 @@ impl<'a> TypeParser<'a> {
                 }
             }
         }
+    }
+
+    /// Whether the parenthesis at `pos` opens a named parameter list:
+    /// `(name:` or `(name?:`, which no grouped type starts with.
+    fn named_param_at(&self, pos: usize) -> bool {
+        let rest = self.input[pos..]
+            .strip_prefix('(')
+            .unwrap_or("")
+            .trim_start();
+        let name_len = rest
+            .char_indices()
+            .take_while(|&(i, c)| {
+                if i == 0 {
+                    self.is_ident_start(Some(c))
+                } else {
+                    self.is_ident_cont(Some(c))
+                }
+            })
+            .map(|(i, c)| i + c.len_utf8())
+            .last()
+            .unwrap_or(0);
+        if name_len == 0 {
+            return false;
+        }
+        let after = rest[name_len..].trim_start();
+        let after = after.strip_prefix('?').unwrap_or(after).trim_start();
+        after.starts_with(':')
     }
 
     /// Try to parse a function type, returning error if it's not a function.
@@ -1033,12 +1067,7 @@ impl<'a> TypeParser<'a> {
                         }
 
                         if args.len() != def.params.len() && !def.open_arity {
-                            return Err(self.error(format!(
-                                "type alias '{}' expects {} type argument(s), got {}",
-                                ident,
-                                def.params.len(),
-                                args.len()
-                            )));
+                            return Err(self.error(arity_message(ident, &def, args.len())));
                         }
 
                         // Nominal alias: produce a branded reference
@@ -1896,5 +1925,96 @@ mod proptests {
                 }
             }
         }
+    }
+}
+
+/// A reference to `name` with `given` type arguments where `def` takes
+/// another number. A class takes one for each type its constructor and
+/// methods leave generic (`class Base { constructor(n) { this.n = n; } }`
+/// is `Base<T>`), which it doesn't declare, so the message says where
+/// they come from and how to write them.
+fn arity_message(name: &str, def: &AliasDef, given: usize) -> String {
+    let want = def.params.len();
+    if !def.class {
+        let s = if want == 1 { "" } else { "s" };
+        return format!("type '{name}' takes {want} type argument{s}, got {given}");
+    }
+    // Where each parameter occurs: a field's type (fields first, by
+    // name), else a method's (its receiver or result).
+    let mut fields: Vec<&str> = Vec::new();
+    let mut methods: Vec<(&str, usize)> = Vec::new();
+    if let Type::Row(row) = &def.body {
+        let mut props: Vec<(bool, &str, &Type)> = row
+            .props
+            .iter()
+            .map(|(k, e)| (is_method(&e.ty), k.0.as_str(), &e.ty))
+            .collect();
+        props.sort_by_key(|&(method, name, _)| (method, name));
+        for p in &def.params {
+            let Some(&(method, prop, _)) = props
+                .iter()
+                .find(|(_, _, ty)| ty.free_vars().iter().any(|v| v.id() == *p))
+            else {
+                continue;
+            };
+            if !method {
+                fields.push(prop);
+            } else if let Some(m) = methods.iter_mut().find(|m| m.0 == prop) {
+                m.1 += 1;
+            } else {
+                methods.push((prop, 1));
+            }
+        }
+    }
+    let mut sources: Vec<String> = fields
+        .iter()
+        .map(|f| format!("the type of field '{f}'"))
+        .collect();
+    sources.extend(methods.iter().map(|(m, n)| match n {
+        1 => format!("a type in method '{m}'"),
+        n => format!("{n} types in method '{m}'"),
+    }));
+    let letters: Vec<String> = (0..want)
+        .map(|i| {
+            let c = (b'A' + (i % 26) as u8) as char;
+            if i < 26 {
+                c.to_string()
+            } else {
+                format!("{c}{}", i / 26)
+            }
+        })
+        .collect();
+    let list = letters.join(", ");
+    // When every argument is a field's type, it can be the type itself.
+    let field_hint = if methods.is_empty() && fields.len() == want {
+        let example = vec!["Number"; want].join(", ");
+        format!(
+            ", or the field type{} (`{name}<{example}>`)",
+            if want == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
+    let sources = if sources.is_empty() {
+        "types its constructor and methods leave generic".to_string()
+    } else {
+        sources.join(", ")
+    };
+    let (s, write) = if want == 1 {
+        ("", "it as a type parameter")
+    } else {
+        ("s", "them as type parameters")
+    };
+    format!(
+        "class '{name}' takes {want} type argument{s} ({sources}), got {given}: \
+         write {write}, `/** function f<{list}>(x: {name}<{list}>) => … */`{field_hint}"
+    )
+}
+
+fn is_method(ty: &Type) -> bool {
+    match ty {
+        Type::Func { .. } => true,
+        Type::Row(row) => row.props.keys().any(crate::types::is_callable_key),
+        _ => false,
     }
 }

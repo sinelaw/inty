@@ -462,6 +462,10 @@ pub struct AliasDef {
     /// parameters aren't known yet, so any number of arguments is
     /// accepted.
     pub open_arity: bool,
+    /// A JavaScript class's instance type (the brand of its factory):
+    /// its parameters are the types its constructor and methods leave
+    /// generic.
+    pub class: bool,
 }
 
 impl Default for InferState {

@@ -1,0 +1,7 @@
+Error: Failed to parse type annotation: class 'Counter' takes 3 type arguments (the type of field 'count', 2 types in method 'next'), got 0: write them as type parameters, `/** function f<A, B, C>(x: Counter<A, B, C>) => … */`
+   ╭─[ main.js:5:1 ]
+   │
+ 5 │ /** function current(c: Counter) => Number */
+   │ ──────────────────────┬──────────────────────  
+   │                       ╰──────────────────────── Failed to parse type annotation: class 'Counter' takes 3 type arguments (the type of field 'count', 2 types in method 'next'), got 0: write them as type parameters, `/** function f<A, B, C>(x: Counter<A, B, C>) => … */`
+───╯
