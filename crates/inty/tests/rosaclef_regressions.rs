@@ -427,3 +427,125 @@ fn b21_class_extends() {
         class Bad extends Base { constructor() { super(\"x\"); } }
     ");
 }
+
+// 19/20. Typed DOM events and the web platform declarations a real app
+// uses (canvas, WebSocket, ResizeObserver, fetch, Blob URLs, media
+// devices, Web Audio, storage, animation frames).
+#[test]
+fn b19_b20_web_platform() {
+    ok(r##"const el = document.createElement("canvas");
+el.addEventListener("pointerdown", (e) => { el.setPointerCapture(e.pointerId); console.log(e.clientX + 1); });
+el.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.shiftKey) e.preventDefault(); });
+el.addEventListener("wheel", (e) => { console.log(e.deltaY); });
+el.addEventListener("drop", (e) => { const dt = e.dataTransfer; if (dt) console.log(dt.files.length); });
+window.addEventListener("resize", (e) => { console.log(window.innerWidth * window.devicePixelRatio); });
+document.addEventListener("keyup", (e) => console.log(e.code));
+const n = window.prompt("name?", "x");
+const g = el.getContext("2d");
+g.fillStyle = "#fff";
+g.fillRect(0, 0, el.width, el.height);
+const w = g.measureText("hi").width;
+const grad = g.createLinearGradient(0, 0, 1, 1);
+grad.addColorStop(0, "red");
+g.fillStyle = grad;
+const ws = new WebSocket("ws://x");
+ws.binaryType = "arraybuffer";
+ws.onmessage = (m) => { const d = m.data; if (typeof d === "string") console.log(d.length); };
+ws.send("hello");
+const ro = new ResizeObserver((entries) => { for (const en of entries) console.log(en.contentRect.width); });
+ro.observe(el);
+const id = requestAnimationFrame((t) => { console.log(t); });
+const t0 = performance.now();
+const v = localStorage.getItem("k") ?? "";
+fetch("/api", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+  .then((r) => r.ok ? r.arrayBuffer() : Promise.resolve(new ArrayBuffer(0)))
+  .then((b) => console.log(b.byteLength));
+const url = URL.createObjectURL(new Blob(["x"], { type: "text/plain" }));
+navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => { s.getTracks().forEach((tr) => tr.stop()); });
+const ctx = new AudioContext();
+const gain = ctx.createGain();
+gain.gain.value = 0.5;
+gain.connect(ctx.destination);
+const node = new AudioWorkletNode(ctx, "proc", { numberOfOutputs: 1 });
+node.port.postMessage({ t: "note", key: 60 });
+node.port.onmessage = (m) => { console.log(m.data.key); };
+node.connect(ctx.destination);
+ctx.decodeAudioData(new ArrayBuffer(4)).then((buf) => console.log(buf.getChannelData(0).length));
+"##);
+    // An event is one shape: the fields the listener reads are checked.
+    err(r##"document.addEventListener("keydown", (e) => { const n = e.key * 2; });"##);
+    // A missing storage key reads as null.
+    err(r##"const v = localStorage.getItem("k"); const n = v.length;"##);
+}
+
+// 20. Core additions: console with several values, typed arrays
+// (Float32Array, subarray/set), ArrayBuffer, Map/Set types, String
+// match/matchAll, Array.from with a map function, structuredClone.
+#[test]
+fn b20_core_additions() {
+    ok(r##"console.log("a", 1, [2]);
+const buf = new ArrayBuffer(16);
+const f = new Float32Array(4);
+f[0] = 0.5;
+const u = new Uint8Array(8);
+u.set(u.subarray(0, 2), 4);
+const n = f.length + u.byteLength;
+/** const m: Map<String, Int> */
+const m = new Map();
+m.set("a", 1);
+/** const st: Set<String> */
+const st = new Set();
+const r = "a1b2".match(/\d/g);
+const k = r ? r.length : 0;
+const all = "a1".matchAll(/\d/g);
+const xs = Array.from([1, 2], (x, i) => x * i);
+const c = structuredClone({ a: 1 });
+"##);
+    err(r##"const r = "a1".match(/\d/); const n = r.length;"##);
+}
+
+// 20. The AudioWorklet global scope, with `extends AudioWorkletProcessor`.
+#[test]
+fn b20_audio_worklet() {
+    check_with_lib(inty::stdlib::AUDIO_WORKLET, r##"class Gain extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.gain = 1;
+    this.frames = 0;
+  }
+  /** process(inputs, outputs, parameters) */
+  process(inputs, outputs, parameters) {
+    const out = outputs[0];
+    for (const ch of out) for (let i = 0; i < ch.length; i++) ch[i] = ch[i] * this.gain;
+    this.frames = this.frames + 128;
+    if (this.frames > sampleRate) this.port.postMessage({ t: "second", at: currentTime });
+    return true;
+  }
+}
+registerProcessor("gain", Gain);
+"##).unwrap();
+}
+
+// 22. `Dict<V>` / `{ [String]: V }`: plain objects used as maps.
+#[test]
+fn b22_dict() {
+    ok(r##"/** const params: Dict<Number> */
+const params = { cutoff: 1200, resonance: 0.3 };
+const c = params.cutoff ?? 0;
+const r = params["resonance"];
+params["gain"] = 1;
+let total = 0;
+for (const [k, v] of Object.entries(params)) total = total + v;
+const names = Object.keys(params);
+/** type Device = { name: String, params: { [String]: Number } } */
+/** const d: Device */
+const d = { name: "filter", params: { cutoff: 100 } };
+/** function decode(text: String) => Dict<Number> */
+function decode(text) { return JSON.parse(text); }
+const back = Object.fromEntries(Object.entries(params));
+"##);
+    err(r##"/** const bad: Dict<Number> */ const bad = { a: "x" };"##);
+    // A read may miss.
+    err(r##"/** const d: Dict<Number> */ const d = { a: 1 }; const n = d.b + 1;"##);
+    ok(r##"/** const d: Dict<Number> */ const d = { a: 1 }; const n = (d.b ?? 0) + 1;"##);
+}

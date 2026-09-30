@@ -325,8 +325,25 @@ fn expose_named(state: &super::state::InferState, ty: &Type) -> Type {
         },
         _ => t.clone(),
     };
+    // A union's member unrolls whatever its body (`String | ArrayBuffer`
+    // with `ArrayBuffer` a recursive record): `typeof` can then rule it
+    // out. The unrolled member is the same (equi-recursive) type.
+    let unroll_member = |t: &Type| match t {
+        Type::Named(id, args) if !state.is_nominal_type(*id) => {
+            state.unroll_named(*id, args).unwrap_or_else(|| t.clone())
+        }
+        _ => t.clone(),
+    };
     match ty {
-        Type::Union(members) => Type::union(members.iter().map(unroll).collect::<Vec<_>>()),
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|m| match unroll(m) {
+                    u @ Type::Union(_) => u,
+                    other => unroll_member(&other),
+                })
+                .collect::<Vec<_>>(),
+        ),
         _ => unroll(ty),
     }
 }

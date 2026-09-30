@@ -390,12 +390,24 @@ fn load_extra_libs(
     report: &dyn Fn(&str, &str, &IntyError),
 ) -> Result<(TypeEnv, InferState), ExitCode> {
     for path in paths {
-        let source = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("error reading --lib file '{}': {}", path, e);
+        // `builtin:NAME`: an embedded declaration file (see
+        // `inty::stdlib::builtin_lib`).
+        let builtin = path
+            .strip_prefix("builtin:")
+            .map(|name| inty::stdlib::builtin_lib(name).ok_or(name));
+        let source = match builtin {
+            Some(Ok(text)) => text.to_string(),
+            Some(Err(name)) => {
+                eprintln!("error: no built-in declarations named '{}' (known: audioworklet)", name);
                 return Err(ExitCode::from(1));
             }
+            None => match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error reading --lib file '{}': {}", path, e);
+                    return Err(ExitCode::from(1));
+                }
+            },
         };
         match load_lib(&mut state, env.clone(), &source) {
             Ok(new_env) => env = new_env,
@@ -732,7 +744,8 @@ USAGE:
     inty lsp [--stdio]
 
 OPTIONS:
-    --lib <path>         Load an additional declaration file (can be repeated)
+    --lib <path>         Load an additional declaration file (can be repeated);
+                         `builtin:audioworklet` loads the AudioWorklet globals
     --no-stdlib          Skip the embedded core and DOM declarations
     --no-color           Disable ANSI colors in diagnostic output
     --timings            Report each module's checking time and the slowest

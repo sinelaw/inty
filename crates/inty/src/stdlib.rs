@@ -43,6 +43,18 @@ pub fn builtin_module(specifier: &str) -> Option<(&'static str, &'static str)> {
 /// `<builtin>/node:fs`.
 pub const BUILTIN_MODULE_PREFIX: &str = "<builtin>/";
 
+/// Declarations for environments other than a browser page's main
+/// thread, loaded on request: `inty --lib builtin:audioworklet`.
+pub const AUDIO_WORKLET: &str = include_str!("../stdlib/audioworklet.d.js");
+
+/// The embedded declaration file a `--lib builtin:NAME` names.
+pub fn builtin_lib(name: &str) -> Option<&'static str> {
+    match name {
+        "audioworklet" => Some(AUDIO_WORKLET),
+        _ => None,
+    }
+}
+
 pub const DEFAULT_LIBS: &[(&str, &str)] =
     &[(CORE, "<stdlib/core.d.js>"), (DOM, "<stdlib/dom.d.js>")];
 
@@ -85,8 +97,9 @@ mod tests {
 
     #[test]
     fn dom_lib_parses_and_checks() {
+        // (After core: the DOM's declarations use its `ArrayBuffer`.)
         let mut state = InferState::new();
-        let env = initial_env();
+        let env = load_lib(&mut state, initial_env(), CORE).unwrap();
         let result = load_lib(&mut state, env, DOM);
         assert!(result.is_ok(), "dom.d.js failed: {:?}", result.err());
     }

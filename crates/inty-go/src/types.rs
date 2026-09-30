@@ -618,6 +618,7 @@ pub fn typed_elem(k: TypedArrayKind) -> &'static str {
     match k {
         TypedArrayKind::Int32 => "int32",
         TypedArrayKind::Uint8 => "uint8",
+        TypedArrayKind::Float32 => "float32",
         TypedArrayKind::Float64 => "float64",
     }
 }

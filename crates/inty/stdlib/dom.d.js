@@ -28,6 +28,101 @@
 // for completeness so non-Element nodes (text, comments, fragments)
 // can be annotated narrowly.
 
+// DOM events. There are no overloads keyed by the event name, so every
+// listener gets one event shape, `DomEvent<T>`: the fields of the
+// pointer, mouse, wheel, keyboard, input, focus, touch, drag and
+// clipboard events together, the way every element here has one shape.
+// A field the event at hand doesn't have reads as `undefined` at
+// runtime (`e.key` of a pointer event), so read the fields the event
+// you listen for has. `T` is the element-like type of `target`,
+// `currentTarget` and `relatedTarget`. `PointerEvent<T>`,
+// `KeyboardEvent<T>`, … name the same shape, to say which fields a
+// handler means to read.
+
+/** type DataTransfer = {
+    dropEffect: String, effectAllowed: String, types: String[],
+    files: {length: Int, item: (Int) => {name: String, size: Number, type: String, lastModified: Number, text: () => Promise<String>} | Null},
+    getData: (String) => String, setData: (String, String) => Undefined,
+    clearData: () => Undefined
+} */
+
+/** type Touch<T> = {
+    identifier: Int, target: T, clientX: Number, clientY: Number,
+    pageX: Number, pageY: Number, screenX: Number, screenY: Number,
+    radiusX: Number, radiusY: Number, force: Number
+} */
+
+/** type DomEvent<T> = {
+    type: String, target: T, currentTarget: T, bubbles: Boolean, cancelable: Boolean,
+    defaultPrevented: Boolean, isTrusted: Boolean, timeStamp: Number,
+    preventDefault: () => Undefined, stopPropagation: () => Undefined,
+    stopImmediatePropagation: () => Undefined,
+    clientX: Number, clientY: Number, pageX: Number, pageY: Number,
+    screenX: Number, screenY: Number, offsetX: Number, offsetY: Number,
+    movementX: Number, movementY: Number, x: Number, y: Number,
+    button: Int, buttons: Int, relatedTarget: T | Null,
+    pointerId: Int, pointerType: String, pressure: Number, width: Number, height: Number,
+    isPrimary: Boolean,
+    deltaX: Number, deltaY: Number, deltaZ: Number, deltaMode: Int,
+    key: String, code: String, repeat: Boolean, isComposing: Boolean,
+    shiftKey: Boolean, ctrlKey: Boolean, metaKey: Boolean, altKey: Boolean,
+    getModifierState: (String) => Boolean,
+    data: String | Null, inputType: String,
+    touches: Touch<T>[], targetTouches: Touch<T>[], changedTouches: Touch<T>[],
+    dataTransfer: DataTransfer | Null, clipboardData: DataTransfer | Null
+} */
+
+/** type Event<T> = DomEvent<T> */
+/** type UIEvent<T> = DomEvent<T> */
+/** type MouseEvent<T> = DomEvent<T> */
+/** type PointerEvent<T> = DomEvent<T> */
+/** type WheelEvent<T> = DomEvent<T> */
+/** type KeyboardEvent<T> = DomEvent<T> */
+/** type InputEvent<T> = DomEvent<T> */
+/** type FocusEvent<T> = DomEvent<T> */
+/** type TouchEvent<T> = DomEvent<T> */
+/** type DragEvent<T> = DomEvent<T> */
+/** type ClipboardEvent<T> = DomEvent<T> */
+
+// Canvas 2D (`canvas.getContext("2d")`). A style is a CSS colour or a
+// gradient.
+/** type CanvasGradient = {addColorStop: (Number, String) => Undefined} */
+/** type CanvasRenderingContext2D<T> = {
+    canvas: T,
+    fillStyle: String | CanvasGradient, strokeStyle: String | CanvasGradient,
+    lineWidth: Number, lineCap: String,
+    lineJoin: String, font: String, textAlign: String, textBaseline: String,
+    globalAlpha: Number, globalCompositeOperation: String, imageSmoothingEnabled: Boolean,
+    shadowBlur: Number, shadowColor: String, shadowOffsetX: Number, shadowOffsetY: Number,
+    beginPath: () => Undefined, closePath: () => Undefined,
+    moveTo: (Number, Number) => Undefined, lineTo: (Number, Number) => Undefined,
+    rect: (Number, Number, Number, Number) => Undefined,
+    roundRect: (Number, Number, Number, Number, Number) => Undefined,
+    arc: (x: Number, y: Number, r: Number, start: Number, end: Number, ccw?: Boolean) => Undefined,
+    arcTo: (Number, Number, Number, Number, Number) => Undefined,
+    quadraticCurveTo: (Number, Number, Number, Number) => Undefined,
+    bezierCurveTo: (Number, Number, Number, Number, Number, Number) => Undefined,
+    ellipse: (Number, Number, Number, Number, Number, Number, Number) => Undefined,
+    fill: () => Undefined, stroke: () => Undefined, clip: () => Undefined,
+    fillRect: (Number, Number, Number, Number) => Undefined,
+    strokeRect: (Number, Number, Number, Number) => Undefined,
+    clearRect: (Number, Number, Number, Number) => Undefined,
+    fillText: (text: String, x: Number, y: Number, maxWidth?: Number) => Undefined,
+    strokeText: (text: String, x: Number, y: Number, maxWidth?: Number) => Undefined,
+    measureText: (String) => {width: Number, actualBoundingBoxAscent: Number, actualBoundingBoxDescent: Number},
+    save: () => Undefined, restore: () => Undefined,
+    translate: (Number, Number) => Undefined, rotate: (Number) => Undefined,
+    scale: (Number, Number) => Undefined,
+    setTransform: (Number, Number, Number, Number, Number, Number) => Undefined,
+    resetTransform: () => Undefined,
+    setLineDash: (Number[]) => Undefined,
+    createLinearGradient: (Number, Number, Number, Number) => CanvasGradient,
+    createRadialGradient: (Number, Number, Number, Number, Number, Number) => CanvasGradient,
+    drawImage: (image: T, dx: Number, dy: Number, dw?: Number, dh?: Number) => Undefined,
+    getImageData: (Number, Number, Number, Number) => {width: Int, height: Int, data: Uint8Array},
+    putImageData: ({width: Int, height: Int, data: Uint8Array}, Number, Number) => Undefined
+} */
+
 /** type Element<T> = {
     value: String, textContent: String, innerHTML: String, outerHTML: String,
     className: String, id: String, hidden: Boolean, disabled: Boolean,
@@ -35,9 +130,9 @@
     offsetWidth: Number, offsetHeight: Number, offsetTop: Number, offsetLeft: Number,
     scrollWidth: Number, scrollHeight: Number, scrollTop: Number, scrollLeft: Number,
     clientWidth: Number, clientHeight: Number, nodeName: String, tagName: String,
-    onclick: () => Undefined, oninput: () => Undefined, onchange: () => Undefined,
-    onkeydown: ({key: String}) => Undefined, onkeyup: ({key: String}) => Undefined,
-    onsubmit: () => Undefined, onload: () => Undefined,
+    onclick: (DomEvent<T>) => Undefined, oninput: (DomEvent<T>) => Undefined, onchange: (DomEvent<T>) => Undefined,
+    onkeydown: (DomEvent<T>) => Undefined, onkeyup: (DomEvent<T>) => Undefined,
+    onsubmit: (DomEvent<T>) => Undefined, onload: (DomEvent<T>) => Undefined,
     classList: {
         add: (String) => Undefined, remove: (String) => Undefined,
         toggle: (String) => Boolean, contains: (String) => Boolean,
@@ -48,8 +143,8 @@
     hasAttribute: (String) => Boolean,
     removeAttribute: (String) => Undefined,
     toggleAttribute: (String) => Boolean,
-    addEventListener: (String, (T) => Undefined) => Undefined,
-    removeEventListener: (String, (T) => Undefined) => Undefined,
+    addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+    removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
     dispatchEvent: (T) => Boolean,
     querySelector: (String) => T,
     querySelectorAll: (String) => T[],
@@ -86,6 +181,20 @@
     nonce: String,
     src: String,
     defer: Boolean
+    ,
+    width: Number, height: Number,
+    getContext: (String) => CanvasRenderingContext2D<T>,
+    toDataURL: () => String,
+    setPointerCapture: (Int) => Undefined, releasePointerCapture: (Int) => Undefined,
+    hasPointerCapture: (Int) => Boolean,
+    dataset: {},
+    scrollBy: (Number, Number) => Undefined, scrollTo: (Number, Number) => Undefined,
+    select: () => Undefined,
+    selectionStart: Int, selectionEnd: Int,
+    files: {length: Int, item: (Int) => {name: String, size: Number, type: String, lastModified: Number, text: () => Promise<String>} | Null},
+    play: () => Promise<Undefined>, pause: () => Undefined, currentTime: Number, paused: Boolean,
+    title: String, placeholder: String, type: String, name: String, href: String,
+    draggable: Boolean, contentEditable: String
 } */
 
 /** type Node<T> = {
@@ -95,129 +204,19 @@
     insertBefore: (T, T) => T, replaceChild: (T, T) => T,
     cloneNode: (Boolean) => T,
     contains: (T) => Boolean,
-    addEventListener: (String, (T) => Undefined) => Undefined,
-    removeEventListener: (String, (T) => Undefined) => Undefined,
+    addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+    removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
     dispatchEvent: (T) => Boolean
 } */
 
 /** const document: <T>{
-        getElementById: (String) => {
-            value: String, textContent: String, innerHTML: String, outerHTML: String,
-            className: String, id: String, hidden: Boolean, disabled: Boolean,
-            checked: Boolean, autofocus: Boolean, loading: String, tabIndex: Number,
-            offsetWidth: Number, offsetHeight: Number, offsetTop: Number, offsetLeft: Number,
-            scrollWidth: Number, scrollHeight: Number, scrollTop: Number, scrollLeft: Number,
-            clientWidth: Number, clientHeight: Number, nodeName: String, tagName: String,
-            onclick: () => Undefined, oninput: () => Undefined, onchange: () => Undefined,
-            onkeydown: ({key: String}) => Undefined, onkeyup: ({key: String}) => Undefined,
-            onsubmit: () => Undefined, onload: () => Undefined,
-            classList: {
-                add: (String) => Undefined, remove: (String) => Undefined,
-                toggle: (String) => Boolean, contains: (String) => Boolean,
-                replace: (String, String) => Boolean
-            },
-            setAttribute: (String, String) => Undefined,
-            getAttribute: (String) => String,
-            hasAttribute: (String) => Boolean,
-            removeAttribute: (String) => Undefined,
-            toggleAttribute: (String) => Boolean,
-            addEventListener: (String, (T) => Undefined) => Undefined,
-            removeEventListener: (String, (T) => Undefined) => Undefined,
-            dispatchEvent: (T) => Boolean,
-            querySelector: (String) => T,
-            querySelectorAll: (String) => T[],
-            closest: (String) => T,
-            matches: (String) => Boolean,
-            contains: (T) => Boolean,
-            cloneNode: (Boolean) => T,
-            appendChild: (T) => T,
-            removeChild: (T) => T,
-            replaceChild: (T, T) => T,
-            insertBefore: (T, T) => T,
-            before: (T) => Undefined, after: (T) => Undefined,
-            append: (T) => Undefined, prepend: (T) => Undefined,
-            remove: () => Undefined, replaceWith: (T) => Undefined,
-            getBoundingClientRect: () => {top: Number, right: Number, bottom: Number, left: Number, width: Number, height: Number, x: Number, y: Number},
-            scrollIntoView: () => Undefined,
-            focus: () => Undefined, blur: () => Undefined,
-            click: () => Undefined,
-            submit: () => Undefined, requestSubmit: () => Undefined, reset: () => Undefined,
-            showModal: () => Undefined, show: () => Undefined, close: () => Undefined,
-            open: Boolean,
-            children: T[], parentElement: T,
-            firstElementChild: T, lastElementChild: T,
-            nextElementSibling: T, previousElementSibling: T,
-            style: {
-                setProperty: (String, String) => Undefined,
-                removeProperty: (String) => String,
-                getPropertyValue: (String) => String
-            },
-            form: T,
-            getRootNode: ({composed: Boolean}) => T,
-            compareDocumentPosition: (T) => Number,
-            async: Boolean, nonce: String, src: String, defer: Boolean
-        },
-        createElement: (String) => {
-            value: String, textContent: String, innerHTML: String, outerHTML: String,
-            className: String, id: String, hidden: Boolean, disabled: Boolean,
-            checked: Boolean, autofocus: Boolean, loading: String, tabIndex: Number,
-            offsetWidth: Number, offsetHeight: Number, offsetTop: Number, offsetLeft: Number,
-            scrollWidth: Number, scrollHeight: Number, scrollTop: Number, scrollLeft: Number,
-            clientWidth: Number, clientHeight: Number, nodeName: String, tagName: String,
-            onclick: () => Undefined, oninput: () => Undefined, onchange: () => Undefined,
-            onkeydown: ({key: String}) => Undefined, onkeyup: ({key: String}) => Undefined,
-            onsubmit: () => Undefined, onload: () => Undefined,
-            classList: {
-                add: (String) => Undefined, remove: (String) => Undefined,
-                toggle: (String) => Boolean, contains: (String) => Boolean,
-                replace: (String, String) => Boolean
-            },
-            setAttribute: (String, String) => Undefined,
-            getAttribute: (String) => String,
-            hasAttribute: (String) => Boolean,
-            removeAttribute: (String) => Undefined,
-            toggleAttribute: (String) => Boolean,
-            addEventListener: (String, (T) => Undefined) => Undefined,
-            removeEventListener: (String, (T) => Undefined) => Undefined,
-            dispatchEvent: (T) => Boolean,
-            querySelector: (String) => T,
-            querySelectorAll: (String) => T[],
-            closest: (String) => T,
-            matches: (String) => Boolean,
-            contains: (T) => Boolean,
-            cloneNode: (Boolean) => T,
-            appendChild: (T) => T,
-            removeChild: (T) => T,
-            replaceChild: (T, T) => T,
-            insertBefore: (T, T) => T,
-            before: (T) => Undefined, after: (T) => Undefined,
-            append: (T) => Undefined, prepend: (T) => Undefined,
-            remove: () => Undefined, replaceWith: (T) => Undefined,
-            getBoundingClientRect: () => {top: Number, right: Number, bottom: Number, left: Number, width: Number, height: Number, x: Number, y: Number},
-            scrollIntoView: () => Undefined,
-            focus: () => Undefined, blur: () => Undefined,
-            click: () => Undefined,
-            submit: () => Undefined, requestSubmit: () => Undefined, reset: () => Undefined,
-            showModal: () => Undefined, show: () => Undefined, close: () => Undefined,
-            open: Boolean,
-            children: T[], parentElement: T,
-            firstElementChild: T, lastElementChild: T,
-            nextElementSibling: T, previousElementSibling: T,
-            style: {
-                setProperty: (String, String) => Undefined,
-                removeProperty: (String) => String,
-                getPropertyValue: (String) => String
-            },
-            form: T,
-            getRootNode: ({composed: Boolean}) => T,
-            compareDocumentPosition: (T) => Number,
-            async: Boolean, nonce: String, src: String, defer: Boolean
-        },
+        getElementById: (String) => Element<T>,
+        createElement: (String) => Element<T>,
         createDocumentFragment: () => T,
         querySelector: (String) => T,
         querySelectorAll: (String) => T[],
-        addEventListener: (String, (T) => Undefined) => Undefined,
-        removeEventListener: (String, (T) => Undefined) => Undefined,
+        addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+        removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         dispatchEvent: (T) => Boolean,
         head: T,
         body: T,
@@ -243,9 +242,9 @@ const document;
         pageXOffset: Number,
         pageYOffset: Number,
         devicePixelRatio: Number,
-        visualViewport: {width: Number, height: Number, offsetLeft: Number, offsetTop: Number, pageLeft: Number, pageTop: Number, scale: Number, addEventListener: (String, (T) => Undefined) => Undefined, removeEventListener: (String, (T) => Undefined) => Undefined},
-        addEventListener: (String, (T) => Undefined) => Undefined,
-        removeEventListener: (String, (T) => Undefined) => Undefined,
+        visualViewport: {width: Number, height: Number, offsetLeft: Number, offsetTop: Number, pageLeft: Number, pageTop: Number, scale: Number, addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined, removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined},
+        addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+        removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         dispatchEvent: (T) => Boolean,
         location: {
             href: String, pathname: String, hash: String, search: String,
@@ -274,7 +273,7 @@ const document;
             replaceState: (T, String, String) => Undefined
         },
         sessionStorage: {
-            getItem: (String) => String,
+            getItem: (String) => String | Null,
             setItem: (String, String) => Undefined,
             removeItem: (String) => Undefined,
             clear: () => Undefined,
@@ -282,7 +281,7 @@ const document;
             length: Number
         },
         localStorage: {
-            getItem: (String) => String,
+            getItem: (String) => String | Null,
             setItem: (String, String) => Undefined,
             removeItem: (String) => Undefined,
             clear: () => Undefined,
@@ -296,8 +295,8 @@ const document;
         fetch: (String) => Promise<{status: Number, ok: Boolean, statusText: String, url: String, json: () => Promise<T>, text: () => Promise<String>}>,
         alert: (String) => Undefined,
         confirm: (String) => Boolean,
-        prompt: (String) => String,
-        matchMedia: (String) => {matches: Boolean, addEventListener: (String, (T) => Undefined) => Undefined},
+        prompt: (message: String, default?: String) => String | Null,
+        matchMedia: (String) => {matches: Boolean, addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined},
         onpopstate: (T) => Undefined,
         origin: String
     } */
@@ -354,9 +353,124 @@ const Reflect;
             getRegistration: () => Promise<T>
         },
         setAppBadge: (Number) => Promise<Undefined>,
-        clearAppBadge: () => Promise<Undefined>
+        clearAppBadge: () => Promise<Undefined>,
+        mediaDevices: {
+            getUserMedia: (constraints: {audio?: Boolean, video?: Boolean}) => Promise<MediaStream>
+        }
     } */
 const navigator;
+
+// Types shared by the declarations below.
+
+/** type Blob = {
+    size: Number, type: String,
+    slice: (start?: Int, end?: Int, type?: String) => Blob,
+    text: () => Promise<String>, arrayBuffer: () => Promise<ArrayBuffer>
+} */
+
+/** type Response<T> = {
+    status: Int, ok: Boolean, statusText: String, url: String, redirected: Boolean,
+    json: () => Promise<T>, text: () => Promise<String>,
+    arrayBuffer: () => Promise<ArrayBuffer>, blob: () => Promise<Blob>,
+    headers: {get: (String) => String | Null, has: (String) => Boolean}
+} */
+
+/** type MediaStreamTrack = {kind: String, label: String, enabled: Boolean, stop: () => Undefined} */
+/** type MediaStream = {
+    id: String, active: Boolean,
+    getTracks: () => MediaStreamTrack[], getAudioTracks: () => MediaStreamTrack[],
+    getVideoTracks: () => MediaStreamTrack[]
+} */
+
+// A message channel's end (a worker's, an `AudioWorkletNode`'s `port`):
+// every message on it is an `M`.
+/** type MessagePort<M> = {
+    postMessage: (message: M, transfer?: ArrayBuffer[]) => Undefined,
+    onmessage: ({data: M}) => Undefined,
+    start: () => Undefined, close: () => Undefined
+} */
+
+// WebSocket. A message's `data` is a string for a text frame and an
+// `ArrayBuffer` for a binary one (with `binaryType = "arraybuffer"`):
+// narrow it with `typeof e.data === "string"`.
+/** type WebSocketMessage = {data: String | ArrayBuffer, type: String} */
+/** const WebSocket: (url: String, protocols?: String) => {
+        url: String, readyState: Int, bufferedAmount: Int, binaryType: String,
+        protocol: String,
+        send: (data: String | ArrayBuffer | Uint8Array | Float32Array) => Undefined,
+        close: (code?: Int, reason?: String) => Undefined,
+        onopen: ({type: String}) => Undefined,
+        onclose: ({code: Int, reason: String, wasClean: Boolean}) => Undefined,
+        onerror: ({type: String}) => Undefined,
+        onmessage: (WebSocketMessage) => Undefined,
+        addEventListener: (String, (WebSocketMessage) => Undefined) => Undefined,
+        CONNECTING: Int, OPEN: Int, CLOSING: Int, CLOSED: Int
+    } */
+const WebSocket;
+
+// ResizeObserver: the callback gets one entry per observed element that
+// changed size.
+/** const ResizeObserver: <T>((entries: {target: T, contentRect: {x: Number, y: Number, width: Number, height: Number, top: Number, left: Number, right: Number, bottom: Number}}[]) => Undefined) => {
+        observe: (T) => Undefined,
+        unobserve: (T) => Undefined,
+        disconnect: () => Undefined
+    } */
+const ResizeObserver;
+
+// Web Audio. As with elements, every node has one shape (`AudioNode<M>`,
+// `M` the messages of an `AudioWorkletNode`'s port): the fields of the
+// gain, analyser, buffer-source, oscillator and worklet nodes together.
+/** type AudioParam = {
+    value: Number, defaultValue: Number,
+    setValueAtTime: (value: Number, time: Number) => Undefined,
+    linearRampToValueAtTime: (value: Number, time: Number) => Undefined,
+    exponentialRampToValueAtTime: (value: Number, time: Number) => Undefined,
+    setTargetAtTime: (target: Number, time: Number, timeConstant: Number) => Undefined,
+    cancelScheduledValues: (time: Number) => Undefined
+} */
+/** type AudioBuffer = {
+    sampleRate: Number, length: Int, duration: Number, numberOfChannels: Int,
+    getChannelData: (Int) => Float32Array,
+    copyToChannel: (source: Float32Array, channel: Int, offset?: Int) => Undefined,
+    copyFromChannel: (target: Float32Array, channel: Int, offset?: Int) => Undefined
+} */
+/** type AudioNode<M> = {
+    numberOfInputs: Int, numberOfOutputs: Int, channelCount: Int,
+    connect: (destination: AudioNode<M>, output?: Int, input?: Int) => AudioNode<M>,
+    disconnect: () => Undefined,
+    gain: AudioParam, frequency: AudioParam, detune: AudioParam, playbackRate: AudioParam,
+    type: String,
+    fftSize: Int, frequencyBinCount: Int, smoothingTimeConstant: Number,
+    getFloatTimeDomainData: (Float32Array) => Undefined,
+    getFloatFrequencyData: (Float32Array) => Undefined,
+    getByteTimeDomainData: (Uint8Array) => Undefined,
+    getByteFrequencyData: (Uint8Array) => Undefined,
+    buffer: AudioBuffer | Null, loop: Boolean,
+    start: (when?: Number, offset?: Number, duration?: Number) => Undefined,
+    stop: (when?: Number) => Undefined,
+    onended: () => Undefined,
+    port: MessagePort<M>,
+    parameters: {get: (String) => AudioParam | Undefined}
+} */
+/** type AudioContext<M> = {
+    sampleRate: Number, currentTime: Number, state: String, baseLatency: Number,
+    destination: AudioNode<M>,
+    resume: () => Promise<Undefined>, suspend: () => Promise<Undefined>,
+    close: () => Promise<Undefined>,
+    createGain: () => AudioNode<M>, createAnalyser: () => AudioNode<M>,
+    createBufferSource: () => AudioNode<M>, createOscillator: () => AudioNode<M>,
+    createMediaStreamSource: (MediaStream) => AudioNode<M>,
+    createBuffer: (channels: Int, length: Int, sampleRate: Number) => AudioBuffer,
+    decodeAudioData: (ArrayBuffer) => Promise<AudioBuffer>,
+    audioWorklet: {addModule: (String) => Promise<Undefined>}
+} */
+/** const AudioContext: <M>(options?: {sampleRate?: Number, latencyHint?: String}) => AudioContext<M> */
+const AudioContext;
+/** const AudioWorkletNode: <M, P>(context: AudioContext<M>, name: String, options?: {
+        numberOfInputs?: Int, numberOfOutputs?: Int, outputChannelCount?: Int[],
+        processorOptions?: P
+    }) => AudioNode<M> */
+const AudioWorkletNode;
 
 // AbortController. The signal it produces is opaque (T) because
 // modelling AbortSignal as a row that contains itself isn't possible
@@ -448,7 +562,9 @@ const cancelAnimationFrame;
 // `Promise<T>` where T is polymorphic per call — callers usually
 // pass the parsed result to code that fixes its shape via further
 // property access.
-/** const fetch: <T>(String) => Promise<{status: Number, ok: Boolean, statusText: String, url: String, json: () => Promise<T>, text: () => Promise<String>, headers: {get: (String) => String}}> */
+// `fetch(url, init?)`; the request body is whatever the program sends
+// (`B`: a string, a `Blob`, `FormData`, …).
+/** const fetch: <T, B>(input: String, init?: {method?: String, headers?: Dict<String>, body?: B}) => Promise<Response<T>> */
 const fetch;
 
 // `window.location` and the bare `location` global are aliases for the
@@ -472,10 +588,9 @@ const fetch;
 const location;
 
 // Web Storage. `sessionStorage` and `localStorage` share the same
-// shape; both store String → String. Real browsers return `null` for
-// missing keys; inty collapses that to the same `String` slot.
+// shape; both store String → String. A missing key reads as `null`.
 /** const sessionStorage: {
-        getItem: (String) => String,
+        getItem: (String) => String | Null,
         setItem: (String, String) => Undefined,
         removeItem: (String) => Undefined,
         clear: () => Undefined,
@@ -485,7 +600,7 @@ const location;
 const sessionStorage;
 
 /** const localStorage: {
-        getItem: (String) => String,
+        getItem: (String) => String | Null,
         setItem: (String, String) => Undefined,
         removeItem: (String) => Undefined,
         clear: () => Undefined,
@@ -501,7 +616,7 @@ const localStorage;
 // `URL` per the WHATWG URL spec. Accepts an optional second `base`
 // argument used to resolve a relative URL against an absolute one;
 // htmx's `normalizePath` uses both 1-arg and 2-arg forms.
-/** const URL: (url: String, base?: String) => {
+/** const URL: <T>{(url: String, base?: String) => {
         href: String,
         protocol: String,
         host: String,
@@ -520,6 +635,9 @@ const localStorage;
             toString: () => String
         },
         toString: () => String
+    },
+    createObjectURL: (T) => String,
+    revokeObjectURL: (String) => Undefined
     } */
 const URL;
 
@@ -536,8 +654,8 @@ const URL;
         getAllResponseHeaders: () => String,
         overrideMimeType: (String) => Undefined,
         abort: () => Undefined,
-        addEventListener: (String, (T) => Undefined) => Undefined,
-        removeEventListener: (String, (T) => Undefined) => Undefined,
+        addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+        removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         readyState: Number,
         status: Number,
         statusText: String,
@@ -547,8 +665,8 @@ const URL;
         responseURL: String,
         responseXML: T,
         upload: {
-            addEventListener: (String, (T) => Undefined) => Undefined,
-            removeEventListener: (String, (T) => Undefined) => Undefined
+            addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
+            removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined
         },
         withCredentials: Boolean,
         timeout: Number,
@@ -582,13 +700,7 @@ const MutationObserver;
 // Blob. Binary data; first arg is the parts array, second the options
 // row (`{type: String}`). Opaque T for the parts and result of
 // arrayBuffer() since both can hold ArrayBuffer / Uint8Array etc.
-/** const Blob: <T>(T[], T) => {
-        size: Number,
-        type: String,
-        slice: (Number, Number, String) => {size: Number, type: String},
-        text: () => Promise<String>,
-        arrayBuffer: () => Promise<T>
-    } */
+/** const Blob: <T>(parts: T[], options?: {type?: String}) => Blob */
 const Blob;
 
 // DOMParser. Returns whatever document-shaped value `T` resolves to

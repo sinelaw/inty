@@ -1053,6 +1053,34 @@ impl InferState {
                 return Ok(self.zonk(&ty));
             }
         }
+        // An object literal where a `Dict<V>` is expected is one: each
+        // value fits `V` (and `...d` spreads another `Dict<V>`).
+        if let (Expr::Object { properties, span }, Type::Map(value)) = (expr, &expected) {
+            for prop in properties {
+                match prop {
+                    crate::ast::PropDef::Property { value: v, .. } => {
+                        self.check_expr(env, v, value)?;
+                    }
+                    crate::ast::PropDef::Spread { argument, span, .. } => {
+                        let ty = self.infer_expr(env, argument)?;
+                        self.subsume(*span, &ty, &expected)?;
+                    }
+                    _ => {
+                        return Err(TypeError::InvalidSyntax {
+                            message: "a `Dict` holds values, not methods or accessors"
+                                .to_string(),
+                            span: *span,
+                        }
+                        .into())
+                    }
+                }
+            }
+            let ty = self.zonk(&expected);
+            if let Some(types) = self.expr_types.as_mut() {
+                types.insert((span.start, span.end), ty.clone());
+            }
+            return Ok(ty);
+        }
         // Object-literal special case: dispatch to the contextual
         // checking path that propagates per-field expected types.
         if let Expr::Object { properties, span } = expr {

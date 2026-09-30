@@ -14,7 +14,15 @@
 // each lookup re-instantiates fresh so different call sites don't share
 // the variable.
 
-/** const console: <T>{log: (T) => Undefined, error: (T) => Undefined, warn: (T) => Undefined} */
+// Up to five values of any types per call (there are no variadic
+// function types; a call with more is an arity error).
+/** const console: <A, B, C, D, E>{
+        log: (a: A, b?: B, c?: C, d?: D, e?: E) => Undefined,
+        error: (a: A, b?: B, c?: C, d?: D, e?: E) => Undefined,
+        warn: (a: A, b?: B, c?: C, d?: D, e?: E) => Undefined,
+        info: (a: A, b?: B, c?: C, d?: D, e?: E) => Undefined,
+        debug: (a: A, b?: B, c?: C, d?: D, e?: E) => Undefined
+    } */
 const console;
 
 /** const Math: {PI: Number, E: Number, LN2: Number, LN10: Number, LOG2E: Number, LOG10E: Number, SQRT2: Number, abs: <a> where Num a => (a) => a, floor: (Number) => Int, ceil: (Number) => Int, round: (Number) => Int, trunc: (Number) => Int, sign: (Number) => Number, sqrt: (Number) => Number, cbrt: (Number) => Number, pow: (Number, Number) => Number, min: <a, b, c> where Arith a b c => (a, b) => c, max: <d, e, f> where Arith d e f => (d, e) => f, hypot: (Number, Number) => Number, log: (Number) => Number, log2: (Number) => Number, log10: (Number) => Number, exp: (Number) => Number, expm1: (Number) => Number, log1p: (Number) => Number, sin: (Number) => Number, cos: (Number) => Number, tan: (Number) => Number, asin: (Number) => Number, acos: (Number) => Number, atan: (Number) => Number, atan2: (Number, Number) => Number, sinh: (Number) => Number, cosh: (Number) => Number, tanh: (Number) => Number, random: () => Number, imul: (Number, Number) => Int, fround: (Number) => Number, clz32: (Number) => Int} */
@@ -37,7 +45,16 @@ const JSON;
 // These shadow the bare `Object` / `Array` constructors in the Rust initial
 // env, which means `new Object()` / `new Array()` no longer type-check —
 // use object/array literals (`{}` / `[]`) instead.
-/** const Object: <a, b>{keys: (a) => String[], values: (a) => b[], entries: (a) => b[][], assign: (a, b) => a, fromEntries: (a[][]) => b} */
+// `values`, `entries` and `fromEntries` work on a `Dict<V>` (a plain
+// object used as a map; an object literal passed to them is one).
+/** const Object: <a, b, v>{
+        keys: (a) => String[],
+        values: (Dict<v>) => v[],
+        entries: (Dict<v>) => [String, v][],
+        fromEntries: ([String, v][]) => Dict<v>,
+        assign: (a, b) => a,
+        freeze: (a) => a
+    } */
 const Object;
 
 // `new Array(n)` / `Array(n)` make an array of `n` holes. A hole reads
@@ -47,23 +64,52 @@ const Object;
 // type; nor has `Array(x)` with a non-integer, which makes `[x]`.)
 // A stored `const h = new Array(n)` has one element type, like any
 // other binding of a call's result (the value restriction).
-/** const Array: <a, b, c>{
+/** const Array: <a, b, c, d>{
         (Int) => {length: Int, fill: (c) => c[]},
         isArray: (a) => Boolean,
-        from: (a) => b[],
+        from: (a, mapFn?: (d, Int) => b) => b[],
         of: (a) => a[]
     } */
 const Array;
 
+// Raw binary data, as `fetch`, `WebSocket` and WebAssembly memory hand
+// it out; read and write it through a typed-array view.
+/** type ArrayBuffer = {byteLength: Int, slice: (begin: Int, end?: Int) => ArrayBuffer} */
+/** const ArrayBuffer: (Int) => ArrayBuffer */
+const ArrayBuffer;
+
 // Typed arrays: fixed-length arrays of one machine number type. An
 // integer array's elements are `Int`s, and a store must be one (see
-// `TypedArrayKind::element`). `from` copies an ordinary array.
+// `TypedArrayKind::element`). A length makes a zeroed array; `from`
+// copies an ordinary array. (A view of an `ArrayBuffer`,
+// `new Float32Array(buffer, offset, length)`, would make the argument
+// `Int | ArrayBuffer`, which an unannotated argument can't pick between;
+// declare such a view in a typed FFI module — docs/patterns.md.)
 /** const Int32Array: {(Int) => Int32Array, from: (Int[]) => Int32Array} */
 const Int32Array;
 /** const Uint8Array: {(Int) => Uint8Array, from: (Int[]) => Uint8Array} */
 const Uint8Array;
+/** const Float32Array: {(Int) => Float32Array, from: (Number[]) => Float32Array} */
+const Float32Array;
 /** const Float64Array: {(Int) => Float64Array, from: (Number[]) => Float64Array} */
 const Float64Array;
+
+// WebAssembly. A module's exports are whatever the program says they
+// are (`E`): annotate the result of `instantiate` where it is used.
+/** type WebAssemblyMemory = {buffer: ArrayBuffer, grow: (Int) => Int} */
+/** const WebAssembly: <E, I>{
+        instantiate: (bytes: ArrayBuffer | Uint8Array, imports?: I) => Promise<{instance: {exports: E}, module: {}}>,
+        Memory: (descriptor: {initial: Int, maximum?: Int}) => WebAssemblyMemory,
+        validate: (ArrayBuffer | Uint8Array) => Boolean
+    } */
+const WebAssembly;
+
+// A deep copy of a value (the structured-clone algorithm).
+/** const structuredClone: <T>(T) => T */
+const structuredClone;
+
+/** const queueMicrotask: (() => Undefined) => Undefined */
+const queueMicrotask;
 
 // Primitive constructors as callable rows. The keyless `(a) => T`
 // signature inside the row is the call form (`String("hi")`); the
@@ -204,6 +250,24 @@ const RegExp;
 // Keyed collections. Map and Set are widely used in htmx-class code
 // for caching and deduplication; WeakMap is used for DOM-keyed metadata.
 // `<K, V>` quantifies fresh per construction.
+// `Map<K, V>` and `Set<T>` also name the instance types in annotations.
+/** type Map<K, V> = {
+        get: (K) => V,
+        set: (K, V) => Undefined,
+        has: (K) => Boolean,
+        delete: (K) => Boolean,
+        clear: () => Undefined,
+        forEach: ((V, K) => Undefined) => Undefined,
+        size: Int
+    } */
+/** type Set<T> = {
+        add: (T) => Undefined,
+        has: (T) => Boolean,
+        delete: (T) => Boolean,
+        clear: () => Undefined,
+        forEach: ((T) => Undefined) => Undefined,
+        size: Int
+    } */
 /** const Map: <K, V>() => {
         get: (K) => V,
         set: (K, V) => Undefined,
