@@ -20,7 +20,8 @@
 //!
 //! Adding policy here belongs in `crate::infer::InferConfig` (phase 6).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock};
 
 use crate::ast::resolve::BindingId;
 use crate::types::{Subst, Substitutable, TVarName, TypeScheme};
@@ -85,10 +86,47 @@ pub enum Key {
 /// keeps, for each name, the key it was last bound under, for callers
 /// outside inference (a module's exports, the CLI, tests) and for type
 /// annotations, which refer to names.
+///
+/// Both maps are persistent (`im`): extending an environment — every
+/// `let`, parameter and narrowing does — shares the rest with the
+/// original instead of copying it, standard library included. Each
+/// binding also caches what generalisation needs from it (`free`), so
+/// that isn't recomputed over every binding each time.
 #[derive(Clone, Debug, Default)]
 pub struct TypeEnv {
-    bindings: HashMap<Key, Binding>,
-    names: HashMap<String, Key>,
+    bindings: im::HashMap<Key, Entry>,
+    names: im::HashMap<String, Key>,
+}
+
+/// A binding and, computed on first use, its contribution to
+/// [`TypeEnv::free`] (a function of the binding alone: the environment
+/// is taken unsubstituted).
+#[derive(Clone, Debug)]
+struct Entry {
+    binding: Arc<Binding>,
+    free: Arc<OnceLock<EnvFree>>,
+}
+
+impl Entry {
+    fn new(binding: Binding) -> Self {
+        Entry {
+            binding: Arc::new(binding),
+            free: Arc::new(OnceLock::new()),
+        }
+    }
+
+    fn free(&self) -> &EnvFree {
+        self.free.get_or_init(|| {
+            let mut free = EnvFree::default();
+            let b = &self.binding;
+            for scheme in std::iter::once(&b.scheme).chain(b.declared.as_ref()) {
+                free.vars.extend(scheme.free_vars());
+                free.pvars.extend(scheme.free_pvars());
+                free.named.extend(scheme.body.ty.named_ids());
+            }
+            free
+        })
+    }
 }
 
 impl TypeEnv {
@@ -104,12 +142,12 @@ impl TypeEnv {
 
     /// The binding `name` refers to, by the name view.
     pub fn lookup_binding(&self, name: &str) -> Option<&Binding> {
-        self.bindings.get(self.names.get(name)?)
+        self.lookup_key(self.names.get(name)?)
     }
 
     /// The binding under `key`.
     pub fn lookup_key(&self, key: &Key) -> Option<&Binding> {
-        self.bindings.get(key)
+        self.bindings.get(key).map(|e| &*e.binding)
     }
 
     /// The key `name` was last bound under.
@@ -117,11 +155,12 @@ impl TypeEnv {
         self.names.get(name)
     }
 
-    /// Bind `key` (named `name`) to `binding`.
+    /// Extend the environment with `binding` under `key`, visible as
+    /// `name`. Returns a new environment (immutable extension).
     pub fn extend_key(&self, key: Key, name: &str, binding: Binding) -> Self {
         let mut out = self.clone();
         out.names.insert(name.to_string(), key.clone());
-        out.bindings.insert(key, binding);
+        out.bindings.insert(key, Entry::new(binding));
         out
     }
 
@@ -157,18 +196,19 @@ impl TypeEnv {
     /// A copy with `key`'s type narrowed to `scheme`. The binding keeps
     /// its mutability and remembers its own scheme.
     pub fn narrow(&self, key: &Key, scheme: TypeScheme) -> Self {
-        let Some(b) = self.bindings.get(key) else {
+        let Some(b) = self.lookup_key(key) else {
             return self.clone();
         };
         let declared = b.declared.clone().unwrap_or_else(|| b.scheme.clone());
+        let mutability = b.mutability;
         let mut out = self.clone();
         out.bindings.insert(
             key.clone(),
-            Binding {
+            Entry::new(Binding {
                 scheme,
-                mutability: b.mutability,
+                mutability,
                 declared: Some(declared),
-            },
+            }),
         );
         out
     }
@@ -184,17 +224,17 @@ impl TypeEnv {
     /// `base` has none. Other bindings (declared since `base`) are kept.
     pub fn with_narrowings_of(&self, base: &TypeEnv) -> Self {
         let mut out = self.clone();
-        for (key, b) in &self.bindings {
-            let Some(declared) = &b.declared else {
+        for (key, e) in &self.bindings {
+            let Some(declared) = &e.binding.declared else {
                 continue;
             };
             let restored = match base.bindings.get(key) {
-                Some(bb) => bb.clone(),
-                None => Binding {
+                Some(be) => be.clone(),
+                None => Entry::new(Binding {
                     scheme: declared.clone(),
-                    mutability: b.mutability,
+                    mutability: e.binding.mutability,
                     declared: None,
-                },
+                }),
             };
             out.bindings.insert(key.clone(), restored);
         }
@@ -212,9 +252,16 @@ impl TypeEnv {
     /// A copy with every binding's own scheme.
     pub fn without_narrowings(&self) -> Self {
         let mut out = self.clone();
-        for b in out.bindings.values_mut() {
-            if let Some(declared) = b.declared.take() {
-                b.scheme = declared;
+        for (key, e) in &self.bindings {
+            if let Some(declared) = &e.binding.declared {
+                out.bindings.insert(
+                    key.clone(),
+                    Entry::new(Binding {
+                        scheme: declared.clone(),
+                        mutability: e.binding.mutability,
+                        declared: None,
+                    }),
+                );
             }
         }
         out
@@ -226,16 +273,16 @@ impl TypeEnv {
     /// here, so no `Local` key survives.
     pub fn globalized(&self) -> Self {
         let mut out = TypeEnv::default();
-        for (key, b) in &self.bindings {
+        for (key, e) in &self.bindings {
             if let Key::Name(n) = key {
-                out.bindings.insert(key.clone(), b.clone());
+                out.bindings.insert(key.clone(), e.clone());
                 out.names.insert(n.clone(), key.clone());
             }
         }
         for (name, key) in &self.names {
-            if let (Key::Local(_), Some(b)) = (key, self.bindings.get(key)) {
+            if let (Key::Local(_), Some(e)) = (key, self.bindings.get(key)) {
                 let global = Key::Name(name.clone());
-                out.bindings.insert(global.clone(), b.clone());
+                out.bindings.insert(global.clone(), e.clone());
                 out.names.insert(name.clone(), global);
             }
         }
@@ -245,9 +292,16 @@ impl TypeEnv {
     /// The environment with `f` applied to every binding's scheme.
     pub fn map_schemes(&self, mut f: impl FnMut(&TypeScheme) -> TypeScheme) -> Self {
         let mut out = self.clone();
-        for b in out.bindings.values_mut() {
-            b.scheme = f(&b.scheme);
-            b.declared = b.declared.as_ref().map(&mut f);
+        for (key, e) in &self.bindings {
+            let b = &e.binding;
+            out.bindings.insert(
+                key.clone(),
+                Entry::new(Binding {
+                    scheme: f(&b.scheme),
+                    mutability: b.mutability,
+                    declared: b.declared.as_ref().map(&mut f),
+                }),
+            );
         }
         out
     }
@@ -286,11 +340,8 @@ impl TypeEnv {
     /// Get all free type variables in the environment.
     pub fn free_vars(&self) -> HashSet<TVarName> {
         let mut vars = HashSet::new();
-        for binding in self.bindings.values() {
-            vars.extend(binding.scheme.free_vars());
-            if let Some(declared) = &binding.declared {
-                vars.extend(declared.free_vars());
-            }
+        for e in self.bindings.values() {
+            vars.extend(e.free().vars.iter().cloned());
         }
         vars
     }
@@ -301,12 +352,11 @@ impl TypeEnv {
     /// `InferState::generalize`.
     pub fn free(&self) -> EnvFree {
         let mut free = EnvFree::default();
-        for binding in self.bindings.values() {
-            for scheme in std::iter::once(&binding.scheme).chain(binding.declared.as_ref()) {
-                free.vars.extend(scheme.free_vars());
-                free.pvars.extend(scheme.free_pvars());
-                free.named.extend(scheme.body.ty.named_ids());
-            }
+        for e in self.bindings.values() {
+            let f = e.free();
+            free.vars.extend(f.vars.iter().cloned());
+            free.pvars.extend(f.pvars.iter().cloned());
+            free.named.extend(f.named.iter().cloned());
         }
         free
     }
@@ -335,18 +385,13 @@ impl TypeEnv {
     pub fn iter_bindings(&self) -> impl Iterator<Item = (&String, &Binding)> {
         self.names
             .iter()
-            .filter_map(|(n, k)| self.bindings.get(k).map(|b| (n, b)))
+            .filter_map(|(n, k)| self.bindings.get(k).map(|e| (n, &*e.binding)))
     }
 }
 
 impl Substitutable for TypeEnv {
     fn apply_subst(&self, subst: &Subst) -> Self {
-        let mut out = self.clone();
-        for b in out.bindings.values_mut() {
-            b.scheme = b.scheme.apply_subst(subst);
-            b.declared = b.declared.as_ref().map(|d| d.apply_subst(subst));
-        }
-        out
+        self.map_schemes(|s| s.apply_subst(subst))
     }
 
     fn free_vars(&self) -> HashSet<TVarName> {
