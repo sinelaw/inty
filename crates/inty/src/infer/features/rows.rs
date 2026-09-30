@@ -129,6 +129,8 @@ impl InferState {
         // counts; the result is closed but `row_tail` may have been
         // set and then overridden back to Closed.
         let mut had_spread = false;
+        // Fields a `class … extends` got from its base (see `inherited`).
+        let mut inherited_fields: Vec<(PropName, Type)> = Vec::new();
 
         for prop in properties {
             match prop {
@@ -334,6 +336,7 @@ impl InferState {
                 PropDef::Spread {
                     argument,
                     span: spread_span,
+                    inherited,
                 } => {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
@@ -343,7 +346,21 @@ impl InferState {
                     // overwrite anything earlier — including the
                     // result of an earlier spread or property.
                     for (k, v) in spread_row.props {
-                        props.insert(k, v);
+                        if *inherited {
+                            // A base class's field keeps its type in the
+                            // subclass, so the base's methods (typed
+                            // against the base instance) may run on a
+                            // subclass instance: their receiver
+                            // constraint is dropped.
+                            inherited_fields.push((k.clone(), v.ty.clone()));
+                            let v = FieldEntry {
+                                presence: v.presence,
+                                ty: without_receiver(&self.zonk(&v.ty)),
+                            };
+                            props.insert(k, v);
+                        } else {
+                            props.insert(k, v);
+                        }
                     }
                     // Per spec: "the result row's tail is the tail
                     // of the last spread operand if it's a row
@@ -364,6 +381,18 @@ impl InferState {
             // soundly closed for the keys we know about.
             _ => RowType::closed_entries(props),
         };
+        // A subclass keeps its base's field types: overriding one with a
+        // value (or method) of another type would break the base's
+        // methods, which run on the subclass's instances.
+        for (k, base_ty) in &inherited_fields {
+            if let Some(entry) = final_row.props.get(k) {
+                let (mine, base) = (
+                    without_receiver(&self.zonk(&entry.ty)),
+                    without_receiver(&self.zonk(base_ty)),
+                );
+                self.unify(span, &base, &mine)?;
+            }
+        }
         let obj_type = Type::Row(final_row);
 
         // Unify the shared 'this' with the complete object type so
@@ -602,6 +631,19 @@ impl InferState {
         let resolved = self.zonk(ty);
         match resolved {
             Type::Row(row) => Ok(row),
+            // A class instance (or any brand) spreads its fields, as
+            // field access sees through the brand.
+            Type::Named(id, args) if self.is_nominal_type(id) => {
+                match self.unroll_named(id, &args) {
+                    Some(unrolled) => self.coerce_to_row(&unrolled, span),
+                    None => Err(crate::error::TypeError::TypeMismatch {
+                        expected: format!("{}", Type::Row(RowType::empty_closed())),
+                        found: self.show(&Type::Named(id, args)),
+                        span,
+                    }
+                    .into()),
+                }
+            }
             Type::Var(_) => {
                 // Open row of unknown shape; pin the type variable
                 // to a fresh open row so it can be merged in.
@@ -927,5 +969,40 @@ impl InferState {
                 RowTail::Recursive(_, _) => return None,
             }
         }
+    }
+}
+
+/// A method's type without its receiver (`this`) constraint: what an
+/// inherited method is on a subclass instance, which has every field of
+/// the base instance it was typed against, at the same types.
+fn without_receiver(ty: &Type) -> Type {
+    match ty {
+        Type::Row(row) => {
+            let key = PropName(crate::types::CALLABLE_KEY.to_string());
+            match row.props.get(&key) {
+                Some(entry) if row.props.len() == 1 => {
+                    let mut row = row.clone();
+                    if let Type::Func {
+                        params, ret, ..
+                    } = &entry.ty
+                    {
+                        row.props.insert(
+                            key,
+                            FieldEntry {
+                                presence: entry.presence.clone(),
+                                ty: Type::Func {
+                                    this_type: None,
+                                    params: params.clone(),
+                                    ret: ret.clone(),
+                                },
+                            },
+                        );
+                    }
+                    Type::Row(row)
+                }
+                _ => ty.clone(),
+            }
+        }
+        _ => ty.clone(),
     }
 }

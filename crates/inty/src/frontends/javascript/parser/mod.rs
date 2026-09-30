@@ -92,6 +92,10 @@ pub struct Parser {
     /// What the token spans were shifted by (see [`parse_at`]): a span's
     /// offset into `source` is `span - base`.
     base: usize,
+    /// Inside the body of a class that `extends` another: `super` parses
+    /// (as the identifier `super`) so the constructor's `super(…)` can be
+    /// lowered.
+    super_allowed: bool,
 }
 
 impl Parser {
@@ -117,6 +121,7 @@ impl Parser {
             class_brands: Vec::new(),
             source,
             base: 0,
+            super_allowed: false,
         }
     }
 
@@ -562,7 +567,9 @@ impl Parser {
                             };
                             entries.push((name, Self::expr_to_pattern(value)?, *sp));
                         }
-                        PropDef::Spread { argument, span: sp } => {
+                        PropDef::Spread {
+                            argument, span: sp, ..
+                        } => {
                             let Expr::Ident { name, .. } = argument else {
                                 return None;
                             };
@@ -1076,20 +1083,36 @@ impl Parser {
         // Record the class for nominal branding (see `class_brands`).
         self.class_brands.push(name.clone());
 
-        // Reject `extends Parent` for now; it'd need a real prototype chain
-        // to match runtime semantics and inty has no inheritance.
-        if self.check(&Token::Extends) {
-            let span = self.current_span();
-            return Err(ParseError::UnexpectedToken {
-                found: "extends".to_string(),
-                expected: "{ (class inheritance is not supported — see \
-                    examples/spa/gaps.md § 'By design' for the \
-                    factory-function workaround)"
-                    .to_string(),
-                span,
+        // `extends Base` (an identifier naming a class or a constructor):
+        // the instance also has the base instance's fields and methods.
+        // It is lowered as the base instance spread into the returned
+        // object (`{ ...new Base(args), fields…, methods… }`, the
+        // arguments from the constructor's leading `super(args)`), which
+        // types field and method access; there is no prototype chain, so
+        // `super.method()` and overriding with a different type aren't
+        // supported.
+        let base: Option<(String, Span)> = if self.consume_if(&Token::Extends) {
+            match self.current().clone() {
+                Token::Ident(base) => {
+                    let base_span = self.current_span();
+                    self.advance();
+                    Some((base, base_span))
+                }
+                _ => {
+                    let span = self.current_span();
+                    return Err(ParseError::UnexpectedToken {
+                        found: self.current().to_string(),
+                        expected: "the name of the class being extended".to_string(),
+                        span,
+                    }
+                    .into());
+                }
             }
-            .into());
-        }
+        } else {
+            None
+        };
+        let outer_super = std::mem::replace(&mut self.super_allowed, base.is_some());
+        let mut super_args: Option<Vec<Expr>> = None;
 
         self.expect(&Token::LBrace)?;
 
@@ -1479,7 +1502,30 @@ impl Parser {
                     Stmt::Block { body, .. } => body.clone(),
                     _ => vec![body_stmt.clone()],
                 };
-                for s in stmts {
+                for (i, s) in stmts.into_iter().enumerate() {
+                    // `super(args)`, first, in a class that extends another.
+                    if let Stmt::Expr {
+                        expression: Expr::Call {
+                            callee, arguments, ..
+                        },
+                        ..
+                    } = &s
+                    {
+                        if matches!(callee.as_ref(), Expr::Ident { name, .. } if name == "super")
+                        {
+                            if i != 0 || super_args.is_some() {
+                                return Err(ParseError::UnexpectedToken {
+                                    found: "super(…)".to_string(),
+                                    expected: "super(…) as the constructor's first statement"
+                                        .to_string(),
+                                    span: s.span(),
+                                }
+                                .into());
+                            }
+                            super_args = Some(arguments.clone());
+                            continue;
+                        }
+                    }
                     match s {
                         Stmt::Expr { expression, .. } => {
                             if let Some((field, value, span)) =
@@ -1542,6 +1588,7 @@ impl Parser {
         }
 
         self.expect(&Token::RBrace)?;
+        self.super_allowed = outer_super;
         // Done parsing this class body — restore the depth.
         self.class_depth = self.class_depth.saturating_sub(1);
         let end = self.prev_span().end;
@@ -1566,8 +1613,24 @@ impl Parser {
             }
         }
 
-        // Build the object literal: field properties first, then methods.
-        let mut all_props = field_props;
+        // Build the object literal: the base instance (for `extends`),
+        // then field properties, then methods.
+        let mut all_props = Vec::new();
+        if let Some((base, base_span)) = base {
+            all_props.push(PropDef::Spread {
+                argument: Expr::New {
+                    callee: Box::new(Expr::Ident {
+                        name: base,
+                        span: base_span,
+                    }),
+                    arguments: super_args.unwrap_or_default(),
+                    span: base_span,
+                },
+                span: base_span,
+                inherited: true,
+            });
+        }
+        all_props.extend(field_props);
         all_props.extend(method_props);
         let obj_literal = Expr::Object {
             properties: all_props,
@@ -3044,6 +3107,26 @@ impl Parser {
                 })
             }
 
+            // `super(…)` in the constructor of a class that `extends`
+            // another (see `parse_class_declaration_named`, which lowers
+            // it); any other `super` is rejected there.
+            Token::Super if self.super_allowed => {
+                self.advance();
+                if !self.check(&Token::LParen) {
+                    return Err(ParseError::Unsupported {
+                        feature: "`super.member` (an inherited method is the \
+                            subclass's own: call `this.method()`)"
+                            .to_string(),
+                        span: Span::new(start, self.prev_span().end),
+                    }
+                    .into());
+                }
+                Ok(Expr::Ident {
+                    name: "super".to_string(),
+                    span: Span::new(start, self.prev_span().end),
+                })
+            }
+
             Token::Number(n) => {
                 self.advance();
                 Ok(Expr::Lit {
@@ -3253,6 +3336,7 @@ impl Parser {
             return Ok(PropDef::Spread {
                 argument,
                 span: Span::new(start, self.prev_span().end),
+                inherited: false,
             });
         }
 

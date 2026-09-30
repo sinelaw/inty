@@ -391,3 +391,39 @@ fn b12_undefined_callbacks() {
         on((e) => { return 5; });
     "#);
 }
+
+// 21. `class … extends Base`: the base instance's fields and methods,
+// from a class of the same program or a constructor a lib declares.
+#[test]
+fn b21_class_extends() {
+    check_with_lib(
+        "/** type MessagePort = { postMessage: (String) => Undefined } */\n\
+         /** const AudioWorkletProcessor: () => { port: MessagePort } */\n\
+         const AudioWorkletProcessor;",
+        "class Gain extends AudioWorkletProcessor {
+            constructor() { super(); this.gain = 0.5; }
+            process(inputs) { this.port.postMessage(\"hi\"); return this.gain > 0; }
+         }
+         const ok = new Gain().process([]);",
+    )
+    .unwrap();
+    ok("
+        class Base { constructor(n) { this.n = n; } twice() { return this.n * 2; } }
+        class Sub extends Base {
+            constructor() { super(21); this.label = \"x\"; }
+            show() { return this.label + String(this.twice()); }
+        }
+        const s = new Sub();
+        const t = s.show() + String(s.n + 1);
+    ");
+    // A base field keeps its type.
+    err("
+        class Base { constructor(n) { this.n = n; } twice() { return this.n * 2; } }
+        class Bad extends Base { constructor() { super(1); this.n = \"x\"; } }
+    ");
+    // `super(…)` passes the base constructor's arguments.
+    err("
+        class Base { constructor(n) { this.n = n * 2; } }
+        class Bad extends Base { constructor() { super(\"x\"); } }
+    ");
+}
