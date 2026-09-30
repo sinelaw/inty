@@ -271,6 +271,21 @@ impl InferState {
                 // unify `Lit(true) ~ Lit(false)`.
                 let left_type = left_type.widen_fresh_literals();
                 let right_type = right_type.widen_fresh_literals();
+                // With both types known, the result is what can come
+                // out: `a && b` is `a` when `a` is falsy, else `b`;
+                // `a || b` is `a` when it is truthy, else `b`. So
+                // `cond && maybeObj` is `Boolean | Undefined | {…}` and
+                // `name || "Guest"` a `String`. (With an unknown side
+                // they must agree, as before: nothing is guessed.)
+                let (l, r) = (self.zonk(&left_type), self.zonk(&right_type));
+                if !matches!(l, Type::Var(_)) && !matches!(r, Type::Var(_)) {
+                    if let Some(part) = logical_part(&l, matches!(op, BinOp::Or)) {
+                        return Ok(match part {
+                            Type::Union(ref m) if m.is_empty() => r,
+                            part => self.union_of(span, &part, &r),
+                        });
+                    }
+                }
                 let op_name = if matches!(op, BinOp::And) { "&&" } else { "||" };
                 if let Err(mut err) = self.subsume_either(span, &left_type, &right_type) {
                     // Add helpful context about the && or || operator
@@ -337,4 +352,36 @@ impl InferState {
         self.subsume(span, &r, &result)?;
         Ok(self.zonk(&result))
     }
+}
+
+/// The part of `ty` that `a && b` (`truthy = false`: the falsy values) or
+/// `a || b` (`truthy = true`: the truthy values) returns as `a` itself.
+/// `None` when a part of `ty` isn't known yet.
+fn logical_part(ty: &Type, truthy: bool) -> Option<Type> {
+    let members: Vec<Type> = match ty {
+        Type::Union(m) => m.clone(),
+        other => vec![other.clone()],
+    };
+    let mut kept = Vec::new();
+    for m in members {
+        let keep = match &m {
+            Type::Var(_) | Type::Error => return None,
+            Type::Null | Type::Undefined => !truthy,
+            Type::Literal(LitValue::Bool(b)) => *b == truthy,
+            Type::Literal(LitValue::Number(n)) => (*n != 0.0 && !n.is_nan()) == truthy,
+            Type::Literal(LitValue::String(s)) => !s.is_empty() == truthy,
+            // Either way.
+            Type::Boolean | Type::Number | Type::Int | Type::String => true,
+            // Objects, arrays, functions, promises, … are always truthy.
+            _ => truthy,
+        };
+        if keep {
+            kept.push(m);
+        }
+    }
+    Some(match kept.len() {
+        0 => Type::never(),
+        1 => kept.pop().expect("one"),
+        _ => InferState::normalise_union_members(kept),
+    })
 }
