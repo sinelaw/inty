@@ -80,7 +80,13 @@ pub fn print_error_plain(filename: &str, source: &str, error: &IntyError) {
 
 /// [`print_error`] / [`print_error_plain`] for a program with imported
 /// modules: labels are rendered in the file their span is in.
-pub fn print_error_in(filename: &str, source: &str, map: &SourceMap, error: &IntyError, color: bool) {
+pub fn print_error_in(
+    filename: &str,
+    source: &str,
+    map: &SourceMap,
+    error: &IntyError,
+    color: bool,
+) {
     let _ = write_error_in(std::io::stderr(), filename, source, map, error, color);
 }
 
@@ -113,7 +119,14 @@ pub fn write_warning<W: Write>(
     warning: &InferWarning,
     color: bool,
 ) -> std::io::Result<()> {
-    write_warning_in(writer, filename, source, &SourceMap::default(), warning, color)
+    write_warning_in(
+        writer,
+        filename,
+        source,
+        &SourceMap::default(),
+        warning,
+        color,
+    )
 }
 
 /// [`write_warning`] for a program with imported modules.
@@ -161,7 +174,14 @@ pub fn write_error<W: Write>(
     error: &IntyError,
     color: bool,
 ) -> std::io::Result<()> {
-    write_error_in(writer, filename, source, &SourceMap::default(), error, color)
+    write_error_in(
+        writer,
+        filename,
+        source,
+        &SourceMap::default(),
+        error,
+        color,
+    )
 }
 
 /// [`write_error`] for a program with imported modules: each label is
@@ -239,11 +259,7 @@ fn write_error_with<W: Write>(
         let mut report = Report::build(ReportKind::Error, main.clone())
             .with_config(config)
             .with_message(&msg)
-            .with_label(
-                Label::new(main)
-                    .with_message(&msg)
-                    .with_color(error_color),
-            );
+            .with_label(Label::new(main).with_message(&msg).with_color(error_color));
 
         if let Some(ctx) = context {
             report.add_help(ctx.clone());

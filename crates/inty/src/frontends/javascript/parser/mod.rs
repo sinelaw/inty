@@ -1505,14 +1505,14 @@ impl Parser {
                 for (i, s) in stmts.into_iter().enumerate() {
                     // `super(args)`, first, in a class that extends another.
                     if let Stmt::Expr {
-                        expression: Expr::Call {
-                            callee, arguments, ..
-                        },
+                        expression:
+                            Expr::Call {
+                                callee, arguments, ..
+                            },
                         ..
                     } = &s
                     {
-                        if matches!(callee.as_ref(), Expr::Ident { name, .. } if name == "super")
-                        {
+                        if matches!(callee.as_ref(), Expr::Ident { name, .. } if name == "super") {
                             if i != 0 || super_args.is_some() {
                                 return Err(ParseError::UnexpectedToken {
                                     found: "super(…)".to_string(),

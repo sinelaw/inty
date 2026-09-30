@@ -4143,7 +4143,11 @@ fn javascript_class_names_are_types_in_annotations() {
         &[],
     )
     .unwrap_err();
-    assert!(err.contains("Array elements have different types"), "{}", err);
+    assert!(
+        err.contains("Array elements have different types"),
+        "{}",
+        err
+    );
 }
 
 #[test]

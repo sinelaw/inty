@@ -745,15 +745,18 @@ impl InferState {
                 .then(|| (std::time::Instant::now(), self.timing_nested));
             let checked = self.infer_stmt(&current_env, stmt);
             if let Some((started, nested)) = timed {
-                let time = started.elapsed().saturating_sub(self.timing_nested - nested);
+                let time = started
+                    .elapsed()
+                    .saturating_sub(self.timing_nested - nested);
                 let name = match stmt {
                     Stmt::Var {
                         kind, declarations, ..
                     }
                     | Stmt::Export {
-                        declaration: crate::ast::ExportDecl::Var {
-                            kind, declarations, ..
-                        },
+                        declaration:
+                            crate::ast::ExportDecl::Var {
+                                kind, declarations, ..
+                            },
                         ..
                     } => format!(
                         "{} {}",
@@ -921,11 +924,20 @@ impl InferState {
         let mut ready = vec![false; scc_groups.len()];
         for gi in 0..scc_groups.len() {
             ready[gi] = !group_free[gi].iter().any(|n| pending_decls.contains_key(n))
-                && group_deps[gi].iter().all(|&d| d < gi && (ready[d] || group_done[d]));
+                && group_deps[gi]
+                    .iter()
+                    .all(|&d| d < gi && (ready[d] || group_done[d]));
         }
         for gi in 0..scc_groups.len() {
             if ready[gi] && !group_done[gi] {
-                self.infer_group_with_deps(current_env, stmts, scc_groups, group_deps, gi, group_done);
+                self.infer_group_with_deps(
+                    current_env,
+                    stmts,
+                    scc_groups,
+                    group_deps,
+                    gi,
+                    group_done,
+                );
             }
         }
     }
@@ -1016,7 +1028,8 @@ impl InferState {
     pub fn check_expr(&mut self, env: &TypeEnv, expr: &Expr, expected: &Type) -> InferResult<Type> {
         let mut expected = self.zonk(expected);
         // A recursive alias pushes its unrolling into a literal.
-        if let (Type::Named(id, args), Expr::Object { .. } | Expr::Array { .. }) = (&expected, expr) {
+        if let (Type::Named(id, args), Expr::Object { .. } | Expr::Array { .. }) = (&expected, expr)
+        {
             if !self.is_nominal_type(*id) {
                 if let Some(unrolled) = self.unroll_named(*id, args) {
                     expected = unrolled;
@@ -1067,8 +1080,7 @@ impl InferState {
                     }
                     _ => {
                         return Err(TypeError::InvalidSyntax {
-                            message: "a `Dict` holds values, not methods or accessors"
-                                .to_string(),
+                            message: "a `Dict` holds values, not methods or accessors".to_string(),
                             span: *span,
                         }
                         .into())
@@ -1129,9 +1141,10 @@ impl InferState {
         }
         // An array literal where a tuple is expected is that tuple.
         if let (Expr::Array { elements, span }, Type::Tuple(elems)) = (expr, &expected) {
-            let plain = elements
-                .iter()
-                .all(|e| e.as_ref().is_some_and(|e| !matches!(e, Expr::Spread { .. })));
+            let plain = elements.iter().all(|e| {
+                e.as_ref()
+                    .is_some_and(|e| !matches!(e, Expr::Spread { .. }))
+            });
             if plain && elements.len() == elems.len() {
                 for (e, t) in elements.iter().flatten().zip(elems.iter()) {
                     self.check_expr(env, e, t)?;
@@ -1628,7 +1641,9 @@ fn type_body_idents(body: &str) -> impl Iterator<Item = &str> {
     let mut rest = body;
     let mut offset = 0;
     while let Some(start) = rest.find(|c: char| c.is_alphabetic() || c == '_' || c == '$') {
-        let word_len = rest[start..].find(|c: char| !is_word(c)).unwrap_or(rest.len() - start);
+        let word_len = rest[start..]
+            .find(|c: char| !is_word(c))
+            .unwrap_or(rest.len() - start);
         let word = &body[offset + start..offset + start + word_len];
         let after = rest[start + word_len..].trim_start();
         let after = after.strip_prefix('?').unwrap_or(after).trim_start();

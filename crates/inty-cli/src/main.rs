@@ -246,7 +246,9 @@ fn main() -> ExitCode {
                     Some(src) => {
                         print_error_in(&src.path, &src.text, &state.sources, &located.error, color)
                     }
-                    None => print_error_in(&filename, &source, &state.sources, &located.error, color),
+                    None => {
+                        print_error_in(&filename, &source, &state.sources, &located.error, color)
+                    }
                 }
             }
             ExitCode::from(1)
@@ -398,7 +400,10 @@ fn load_extra_libs(
         let source = match builtin {
             Some(Ok(text)) => text.to_string(),
             Some(Err(name)) => {
-                eprintln!("error: no built-in declarations named '{}' (known: audioworklet)", name);
+                eprintln!(
+                    "error: no built-in declarations named '{}' (known: audioworklet)",
+                    name
+                );
                 return Err(ExitCode::from(1));
             }
             None => match fs::read_to_string(path) {

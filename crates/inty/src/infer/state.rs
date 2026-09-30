@@ -265,10 +265,8 @@ pub struct InferState {
     pub(in crate::infer) timing_nested: std::time::Duration,
     /// Modules checked so far this run, by canonical path: their
     /// environments and export tables (see `modules::load_imported`).
-    pub module_cache: HashMap<
-        std::path::PathBuf,
-        (crate::infer::TypeEnv, crate::modules::ExportTable),
-    >,
+    pub module_cache:
+        HashMap<std::path::PathBuf, (crate::infer::TypeEnv, crate::modules::ExportTable)>,
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
@@ -1378,9 +1376,14 @@ impl InferState {
                 .collect()
         };
         let (ek, fk) = (visible(&e), visible(&f));
-        let missing: Vec<&String> = ek.iter().filter(|k| !f.props.contains_key(&crate::types::PropName((*k).clone()))).collect();
+        let missing: Vec<&String> = ek
+            .iter()
+            .filter(|k| !f.props.contains_key(&crate::types::PropName((*k).clone())))
+            .collect();
         let extra: Vec<&String> = if e.is_closed() {
-            fk.iter().filter(|k| !e.props.contains_key(&crate::types::PropName((*k).clone()))).collect()
+            fk.iter()
+                .filter(|k| !e.props.contains_key(&crate::types::PropName((*k).clone())))
+                .collect()
         } else {
             Vec::new()
         };
@@ -1393,7 +1396,11 @@ impl InferState {
         };
         match (missing.is_empty(), extra.is_empty()) {
             (true, true) => None,
-            (false, true) => Some(format!("missing field{} {}", plural(missing.len()), list(&missing))),
+            (false, true) => Some(format!(
+                "missing field{} {}",
+                plural(missing.len()),
+                list(&missing)
+            )),
             (true, false) => Some(format!(
                 "unexpected field{} {} (the expected record type is closed)",
                 plural(extra.len()),

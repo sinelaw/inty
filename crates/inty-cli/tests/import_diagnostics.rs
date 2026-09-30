@@ -136,7 +136,11 @@ fn several_files_share_the_modules_they_import() {
 #[test]
 fn timings_report_modules_and_declarations() {
     let dir = tmp_dir();
-    write(&dir, "lib.js", "export function double(x) { return x * 2; }\n");
+    write(
+        &dir,
+        "lib.js",
+        "export function double(x) { return x * 2; }\n",
+    );
     write(
         &dir,
         "main.js",

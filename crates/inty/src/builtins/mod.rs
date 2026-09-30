@@ -201,7 +201,10 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
         ),
         "search" => Type::simple_func(vec![Type::union(vec![s.clone(), Type::Regex])], Type::Int),
         "localeCompare" => Type::simple_func(vec![s.clone()], n.clone()),
-        "at" => Type::simple_func(vec![Type::Int], Type::union(vec![s.clone(), Type::Undefined])),
+        "at" => Type::simple_func(
+            vec![Type::Int],
+            Type::union(vec![s.clone(), Type::Undefined]),
+        ),
         "codePointAt" => Type::simple_func(vec![Type::Int], Type::Int),
         "normalize" => optional_last(state, vec![], s.clone(), s.clone()),
         _ => {
@@ -604,7 +607,11 @@ impl InferState {
     /// returning a plain `V`, a `Promise<V>` too. A result still unknown
     /// (and not a number) is taken to be a promise, as before callbacks
     /// could return values.
-    pub(crate) fn settle_promise_results(&mut self, mark: usize, span: Span) -> Result<(), IntyError> {
+    pub(crate) fn settle_promise_results(
+        &mut self,
+        mark: usize,
+        span: Span,
+    ) -> Result<(), IntyError> {
         if self.promise_results.len() <= mark {
             return Ok(());
         }
@@ -613,7 +620,9 @@ impl InferState {
             match self.zonk(&r) {
                 Type::Promise(v) => self.unify(span, &u, &v)?,
                 // A number, whichever kind: not a promise.
-                v @ Type::Var(TVarName::Flex(_)) if self.is_numeric(&v) => self.unify(span, &u, &v)?,
+                v @ Type::Var(TVarName::Flex(_)) if self.is_numeric(&v) => {
+                    self.unify(span, &u, &v)?
+                }
                 // Unknown: the conservative choice — a later non-promise
                 // is a type error rather than a mistyped flattening.
                 Type::Var(TVarName::Flex(_)) => self.unify(span, &r, &Type::promise(u))?,
