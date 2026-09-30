@@ -1047,6 +1047,7 @@ impl InferState {
         for stmt in group {
             if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
                 self.pending_constraints = pending.clone();
+                self.constraint_removals += 1;
                 let key = self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
                 let ty = hoisted
                     .lookup_key(&key)

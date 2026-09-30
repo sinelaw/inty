@@ -194,6 +194,7 @@ impl InferState {
     /// Resolve the numeric constraints the improvement rules decide,
     /// repeatedly (one can decide another).
     pub(crate) fn simplify_numeric(&mut self) -> Result<(), IntyError> {
+        self.constraint_removals += 1;
         if !self
             .pending_constraints
             .iter()
@@ -429,6 +430,7 @@ impl InferState {
         blocked: &HashSet<TVarName>,
         polarity: Option<&std::collections::HashMap<TVarName, u8>>,
     ) -> Result<bool, IntyError> {
+        self.constraint_removals += 1;
         let preds: Vec<TypePred> = self
             .pending_constraints
             .iter()

@@ -577,6 +577,7 @@ impl InferState {
     /// Resolve pending type class constraints.
     /// This should be called after inference to check that all constraints are satisfiable.
     pub fn resolve_constraints(&mut self) -> Result<(), IntyError> {
+        self.constraint_removals += 1;
         // Resolving one constraint can make another's container concrete
         // (an `Indexable` whose container is still a variable is deferred),
         // so iterate until nothing changes. Previously a single pass
@@ -668,6 +669,7 @@ impl InferState {
     /// property reads that really depend on its quantified variables,
     /// and after calls, so a result type is known as early as possible.
     pub(crate) fn simplify_has_props(&mut self) -> Result<(), IntyError> {
+        self.constraint_removals += 1;
         self.simplify_numeric()?;
         loop {
             let ready: Vec<usize> = (0..self.pending_constraints.len())

@@ -327,6 +327,12 @@ pub struct InferState {
     /// attempt, a join) could bind an integral literal's variable to a
     /// union and only fail when the constraint is next looked at.
     pub(in crate::infer) numeric_vars: std::collections::HashSet<TVarName>,
+    /// `numeric_vars` in insertion order, so a snapshot restore can
+    /// remove what a speculative branch added.
+    pub(in crate::infer) numeric_log: Vec<TVarName>,
+    /// Bumped wherever pending constraints are removed (solving,
+    /// generalising), to check that no speculative branch does.
+    pub(crate) constraint_removals: u64,
     /// Numeric variables [`Self::generalize_mutable`] keeps monomorphic.
     pinned_numeric: Vec<TVarName>,
 
@@ -385,9 +391,14 @@ pub(in crate::infer) enum UnfoldAssumption {
 /// snapshot/restore pair is the only way to use it.
 #[derive(Debug, Clone)]
 pub(crate) struct InferSnapshot {
-    pub(crate) subst: Subst,
-    pub(crate) constraints: Vec<PendingConstraint>,
-    pub(crate) numeric_vars: std::collections::HashSet<TVarName>,
+    pub(crate) subst: crate::types::subst::SubstMark,
+    /// How many constraints were pending: a speculative branch only
+    /// adds to them, so rolling back truncates.
+    pub(crate) constraints: usize,
+    /// `constraint_removals` at the snapshot, to check that claim.
+    pub(crate) constraint_removals: u64,
+    /// How many variables had become number-kinded (`numeric_log`).
+    pub(crate) numeric_vars: usize,
     pub(crate) trail: TrailMark,
 }
 
@@ -436,7 +447,7 @@ impl InferState {
         InferState {
             name_source: 0,
             pvar_source: 0,
-            main_subst: Subst::empty(),
+            main_subst: Subst::with_trail(),
             var_table: VarTable::new(),
             named_types: HashMap::new(),
             type_id_source: 0,
@@ -468,6 +479,8 @@ impl InferState {
             return_expected_stack: Vec::new(),
             subsume_in_place: 0,
             numeric_vars: Default::default(),
+            numeric_log: Vec::new(),
+            constraint_removals: 0,
             pinned_numeric: Vec::new(),
             unit_type: Type::Undefined,
             language: crate::ast::SourceLanguage::JavaScript,
@@ -809,20 +822,33 @@ impl InferState {
     /// `join`, and the row-subsume / array-subsume sub-rules; every
     /// speculative path goes through it so the trail and the
     /// HashMap mirror stay in lockstep.
+    ///
+    /// Nothing is copied: the substitution and the var table keep undo
+    /// trails, pending constraints and number-kinded variables are only
+    /// added to while speculating, so a restore undoes or truncates.
+    /// (Cloning them made every `subsume` cost time in proportion to
+    /// everything inferred so far — quadratic checking.)
     pub(crate) fn snapshot_inference(&self) -> InferSnapshot {
         InferSnapshot {
-            subst: self.main_subst.clone(),
-            constraints: self.pending_constraints.clone(),
-            numeric_vars: self.numeric_vars.clone(),
+            subst: self.main_subst.mark(),
+            constraints: self.pending_constraints.len(),
+            constraint_removals: self.constraint_removals,
+            numeric_vars: self.numeric_log.len(),
             trail: self.var_table.snapshot(),
         }
     }
 
     /// Restore a snapshot taken by [`Self::snapshot_inference`].
     pub(crate) fn restore_snapshot(&mut self, snap: InferSnapshot) {
-        self.main_subst = snap.subst;
-        self.pending_constraints = snap.constraints;
-        self.numeric_vars = snap.numeric_vars;
+        self.main_subst.undo_to(snap.subst);
+        debug_assert_eq!(
+            self.constraint_removals, snap.constraint_removals,
+            "a speculative branch removed pending constraints"
+        );
+        self.pending_constraints.truncate(snap.constraints);
+        for v in self.numeric_log.drain(snap.numeric_vars..) {
+            self.numeric_vars.remove(&v);
+        }
         self.var_table.restore(snap.trail);
         // Post-restore probe (debug only): the var_table and
         // main_subst should still agree on every key that survives
@@ -1348,9 +1374,9 @@ impl InferState {
             match &ty {
                 Type::Var(w @ TVarName::Flex(_)) => {
                     if self.numeric_vars.contains(&var) {
-                        self.numeric_vars.insert(w.clone());
+                        self.mark_numeric(w.clone());
                     } else if self.numeric_vars.contains(w) {
-                        self.numeric_vars.insert(var.clone());
+                        self.mark_numeric(var.clone());
                     }
                 }
                 Type::Int
@@ -1774,12 +1800,19 @@ impl InferState {
         Some(subst.apply(&def.body))
     }
 
+    /// Record that `v` is number-kinded.
+    fn mark_numeric(&mut self, v: TVarName) {
+        if self.numeric_vars.insert(v.clone()) {
+            self.numeric_log.push(v);
+        }
+    }
+
     /// Add a pending constraint.
     pub fn add_constraint(&mut self, pred: TypePred, span: Span) {
         if crate::infer::features::numeric::is_numeric_class(pred.class) {
             for t in &pred.types {
                 if let Type::Var(v @ TVarName::Flex(_)) = self.zonk(t) {
-                    self.numeric_vars.insert(v);
+                    self.mark_numeric(v);
                 }
             }
         }
@@ -1893,6 +1926,7 @@ impl InferState {
     }
 
     pub fn generalize(&mut self, env_free: &crate::infer::EnvFree, ty: &Type) -> TypeScheme {
+        self.constraint_removals += 1;
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
         // for performance reasons; without flattening here, a
