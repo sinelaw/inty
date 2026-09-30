@@ -553,6 +553,15 @@ impl InferState {
     /// `infer_program*` API returns via `Err`; later errors are only
     /// visible to callers that drain `errors` after the run.
     pub fn push_error(&mut self, err: IntyError) {
+        // A statement list re-raises the first error it recorded (see
+        // `infer_stmt_list`), and the recovery around it (a function
+        // group, an enclosing statement) records what it catches: keep
+        // one. Spans are distinct across modules, so an equal error is
+        // the same diagnostic.
+        let shown = format!("{err:?}");
+        if self.errors.iter().any(|e| format!("{e:?}") == shown) {
+            return;
+        }
         self.errors.push(err);
         self.error_sources.push(self.current_source.clone());
     }
