@@ -1,0 +1,9 @@
+Error: Branches have different types: 'Box<a>' and 'Pair<a, String>'
+   ╭─[ main.js:4:16 ]
+   │
+ 4 │   const made = flag ? new Box(x) : new Pair(x, "y");
+   │                ──────────────────┬─────────────────  
+   │                                  ╰─────────────────── Branches have different types: 'Box<a>' and 'Pair<a, String>'
+   │ 
+   │ Help: inty doesn't infer a union from branches; annotate the result (e.g. `/** const v: Box<a> | Pair<a, String> */`) if one is meant
+───╯

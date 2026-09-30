@@ -1,0 +1,9 @@
+Error: Array elements have different types: 'Base<Number | Int>' and 'Sub<a>'
+   ╭─[ main.js:3:26 ]
+   │
+ 3 │ const xs = [new Base(1), new Sub()];
+   │                          ────┬────  
+   │                              ╰────── Array elements have different types: 'Base<Number | Int>' and 'Sub<a>'
+   │ 
+   │ Help: an array holds one element type. For a fixed group of values annotate a tuple, e.g. `/** const p: [Base<Number | Int>, Sub<a>] */` (or `[Base<Number | Int>, Sub<a>][]` for a list of them), or use a record `{ a: Base<Number | Int>, b: Sub<a> }`; for either type in any position, annotate the element union `(Base<Number | Int> | Sub<a>)[]`
+───╯
