@@ -1250,6 +1250,8 @@ impl<'a> Scanner<'a> {
         let mut paren_depth: i32 = 0;
         let mut brace_depth: i32 = 0;
         let mut angle_depth: i32 = 0;
+        // `[A, B]` tuple types.
+        let mut bracket_depth: i32 = 0;
         // Inside a scheme's `where C, … =>` clause, whose commas separate
         // constraints, not declarators.
         let mut in_where = false;
@@ -1259,7 +1261,7 @@ impl<'a> Scanner<'a> {
             if ch == '*' && self.peek_next() == Some('/') {
                 break;
             }
-            let top = paren_depth == 0 && brace_depth == 0 && angle_depth == 0;
+            let top = paren_depth == 0 && brace_depth == 0 && angle_depth == 0 && bracket_depth == 0;
             if top && !in_where && ch.is_whitespace() && content.ends_with("where") {
                 let before = content[..content.len() - 5].chars().last();
                 if before.is_some_and(|c| c.is_whitespace() || c == '>') {
@@ -1286,6 +1288,10 @@ impl<'a> Scanner<'a> {
                 brace_depth += 1;
             } else if ch == '}' {
                 brace_depth = brace_depth.saturating_sub(1);
+            } else if ch == '[' {
+                bracket_depth += 1;
+            } else if ch == ']' {
+                bracket_depth = bracket_depth.saturating_sub(1);
             } else if ch == '<' {
                 angle_depth += 1;
             } else if ch == '>' && angle_depth > 0 {

@@ -386,6 +386,22 @@ pub fn write_error<W: Write>(
                     left, right
                 )),
             ),
+            TypeError::ArrayElementMismatch { left, right, span } => (
+                format!(
+                    "Array elements have different types: '{}' and '{}'",
+                    left, right
+                ),
+                *span,
+                Some(format!(
+                    "an array holds one element type. For a fixed group of values \
+                     annotate a tuple, e.g. `/** const p: [{l}, {r}] */` (or \
+                     `[{l}, {r}][]` for a list of them), or use a record \
+                     `{{ a: {l}, b: {r} }}`; for either type in any position, \
+                     annotate the element union `({l} | {r})[]`",
+                    l = left,
+                    r = right
+                )),
+            ),
             TypeError::TypeMismatch {
                 expected,
                 found,

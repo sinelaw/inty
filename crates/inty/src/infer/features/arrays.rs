@@ -62,7 +62,31 @@ impl InferState {
                 }
                 other => self.infer_expr(env, other)?,
             };
-            acc = self.join(span, &acc, &elem_ty)?;
+            acc = match self.join(span, &acc, &elem_ty) {
+                Ok(t) => t,
+                Err(e)
+                    if matches!(e.as_type(), Some(TypeError::BranchMismatch { .. }))
+                        && self.language == crate::ast::SourceLanguage::JavaScript =>
+                {
+                    // Named by their base types: `[String, Number]`, not
+                    // `[String, 0.5]`.
+                    let mut ctx =
+                        crate::types::PrettyContext::with_nominal_names(self.nominal_names());
+                    let base = |t: &Type| {
+                        t.widen_fresh_literals_with(&mut |lit| match lit {
+                            LitValue::Number(n) if crate::types::is_safe_int(*n) => Type::Int,
+                            lit => lit.base_type(),
+                        })
+                    };
+                    let (l, r) = (self.zonk(&acc), self.zonk(&elem_ty));
+                    return Err(IntyError::from(TypeError::ArrayElementMismatch {
+                        left: ctx.format_type(&base(&l)),
+                        right: ctx.format_type(&base(&r)),
+                        span: elem.span(),
+                    }));
+                }
+                Err(e) => return Err(e),
+            };
         }
 
         Ok(Type::array(self.zonk(&acc)))
@@ -283,3 +307,4 @@ fn const_tuple_index(e: &Expr, len: usize) -> Option<Result<usize, ()>> {
         Some(Err(()))
     }
 }
+

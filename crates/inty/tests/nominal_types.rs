@@ -112,7 +112,7 @@ fn js_structurally_identical_classes_are_distinct_brands() {
         xs
     ";
     let err = check_named(bad).expect_err("distinct brands don't join");
-    assert!(err.contains("BranchMismatch"), "{}", err);
+    assert!(err.contains("ArrayElementMismatch"), "{}", err);
     let src = "
         class A {}
         class B {}

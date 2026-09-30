@@ -1017,6 +1017,22 @@ impl InferState {
             }
             return Ok(ty);
         }
+        // An array literal where a tuple is expected is that tuple.
+        if let (Expr::Array { elements, span }, Type::Tuple(elems)) = (expr, &expected) {
+            let plain = elements
+                .iter()
+                .all(|e| e.as_ref().is_some_and(|e| !matches!(e, Expr::Spread { .. })));
+            if plain && elements.len() == elems.len() {
+                for (e, t) in elements.iter().flatten().zip(elems.iter()) {
+                    self.check_expr(env, e, t)?;
+                }
+                let ty = self.zonk(&expected);
+                if let Some(types) = self.expr_types.as_mut() {
+                    types.insert((span.start, span.end), ty.clone());
+                }
+                return Ok(ty);
+            }
+        }
         if let (Expr::Array { elements, span }, Type::Array(elem)) = (expr, &expected) {
             if elements.iter().all(|e| e.is_some()) {
                 for e in elements.iter().flatten() {

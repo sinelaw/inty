@@ -322,14 +322,14 @@ impl PrettyContext {
             }
 
             Type::Tuple(elems) => {
-                write!(w, "(")?;
+                write!(w, "[")?;
                 for (i, e) in elems.iter().enumerate() {
                     if i > 0 {
                         write!(w, ", ")?;
                     }
                     self.write_type(w, e, false)?;
                 }
-                write!(w, ")")
+                write!(w, "]")
             }
 
             Type::Promise(inner) => {
