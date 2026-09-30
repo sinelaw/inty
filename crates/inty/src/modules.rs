@@ -448,6 +448,11 @@ fn load_module(
     let env_with_imports =
         resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting)?;
     let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
+    // The module is complete: what its checking left pending is decided
+    // now, while it is the module being checked (errors point into it),
+    // rather than carried into every importer (where each
+    // generalisation would scan it again).
+    state.resolve_constraints()?;
     // Through the substitution: a binding's type can be a variable the end
     // of inference decided (`export let n = 0` defaults to `Int`), and
     // what reads the environment next (declarations, importers) has no
