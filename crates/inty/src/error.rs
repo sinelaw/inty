@@ -414,6 +414,16 @@ pub enum TypeError {
         right: String,
         span: Span,
     },
+
+    /// The elements of an array literal have different types. An array
+    /// has one element type; a fixed group of values is a tuple
+    /// (`[String, Number]`) or a record.
+    #[error("Array elements have different types: {left} and {right}")]
+    ArrayElementMismatch {
+        left: String,
+        right: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -440,6 +450,7 @@ impl TypeError {
             TypeError::InvalidSyntax { span, .. } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
             TypeError::BranchMismatch { span, .. } => *span,
+            TypeError::ArrayElementMismatch { span, .. } => *span,
         }
     }
 }

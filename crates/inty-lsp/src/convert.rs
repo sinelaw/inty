@@ -121,6 +121,7 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::InvalidSyntax { .. } => "InvalidSyntax",
             TypeError::TypeMismatch { .. } => "TypeMismatch",
             TypeError::BranchMismatch { .. } => "BranchMismatch",
+            TypeError::ArrayElementMismatch { .. } => "ArrayElementMismatch",
             TypeError::UnknownTypeRef { .. } => "UnknownTypeRef",
         },
     }

@@ -614,6 +614,32 @@ impl<'a> TypeParser<'a> {
 
         match self.peek_char() {
             Some('{') => self.parse_object_type(),
+            // A tuple `[A, B]`: a fixed-length array whose elements each
+            // have their own type (`const pan = ["l", 0.5]`).
+            Some('[') => {
+                self.pos += 1;
+                let mut elems = Vec::new();
+                loop {
+                    self.skip_whitespace();
+                    if self.peek_char() == Some(']') && !elems.is_empty() {
+                        self.pos += 1;
+                        break;
+                    }
+                    elems.push(self.parse_type()?);
+                    self.skip_whitespace();
+                    match self.peek_char() {
+                        Some(',') => self.pos += 1,
+                        Some(']') => {
+                            self.pos += 1;
+                            break;
+                        }
+                        _ => {
+                            return Err(self.error("expected ',' or ']' in a tuple type".to_string()))
+                        }
+                    }
+                }
+                Ok(Type::Tuple(elems))
+            }
             Some('(') => {
                 // Could be grouped type or function type
                 self.parse_func_or_grouped()
