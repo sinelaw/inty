@@ -699,6 +699,8 @@ impl InferState {
                     };
                     self.push_error(err.into());
                 }
+                // A declaration, like any other `const`.
+                result = Type::Undefined;
                 continue;
             }
             if is_function_like_decl(stmt) {
