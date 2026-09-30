@@ -93,7 +93,6 @@ use std::path::{Path, PathBuf};
 
 use crate::ast::{ExportDecl, ExportFromKind, Expr, ImportSpecifier, Program, Stmt};
 use crate::error::IntyError;
-use crate::frontends::javascript::parse;
 use crate::infer::{InferState, TypeEnv};
 use crate::types::{ModuleType, Type, TypeScheme};
 
@@ -227,7 +226,7 @@ fn compute_export_table(
                     }));
                 }
                 let (target_env, target_exports) =
-                    load_module(state, starting_env.clone(), &resolved_path, visiting)?;
+                    load_module(state, starting_env.clone(), &resolved_path, visiting, true)?;
 
                 let resolve_target = |name: &str| -> Option<TypeScheme> {
                     target_exports
@@ -332,7 +331,7 @@ pub fn resolve_imports(
                 }));
             }
 
-            let (module_env, exports) = load_module(state, env.clone(), &resolved_path, visiting)?;
+            let (module_env, exports) = load_module(state, env.clone(), &resolved_path, visiting, true)?;
 
             let lookup_export_scheme = |name: &str| -> Option<TypeScheme> {
                 exports
@@ -408,16 +407,21 @@ pub fn check_module(
     path: &Path,
 ) -> Result<(TypeEnv, ExportTable), IntyError> {
     let mut visiting = HashSet::new();
-    load_module(state, starting_env, path, &mut visiting)
+    load_module(state, starting_env, path, &mut visiting, false)
 }
 
 /// Parse and infer a single module file, returning the inferred env and
 /// the module's effective export table (with re-exports resolved).
+///
+/// An imported module (`imported`) leaves the numeric variables its
+/// bindings reach for its importers to decide; an entry module defaults
+/// them like everything else.
 fn load_module(
     state: &mut InferState,
     starting_env: TypeEnv,
     path: &Path,
     visiting: &mut HashSet<PathBuf>,
+    imported: bool,
 ) -> Result<(TypeEnv, ExportTable), IntyError> {
     let builtin = path
         .to_str()
@@ -433,7 +437,18 @@ fn load_module(
         })?,
     };
 
-    let program = parse(&source)?;
+    // The module's spans get a range of their own, so its diagnostics
+    // (and a label in one that points into it from elsewhere) say which
+    // file they are in. While it is checked, errors are attributed to it;
+    // on failure the attribution is left in place for the caller that
+    // reports the propagated error.
+    let display = path.display().to_string();
+    let base = state.sources.add(display.clone(), source.clone());
+    let prev_source = state.set_current_source(Some(crate::error::SourceFile {
+        path: display,
+        text: source.clone(),
+    }));
+    let program = crate::frontends::javascript::parse_at(&source, base)?;
 
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     visiting.insert(canonical.clone());
@@ -447,12 +462,21 @@ fn load_module(
     // is shared with both passes.
     let env_with_imports =
         resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting)?;
-    let (_ty, module_env) = state.infer_program_with_env(&env_with_imports, &program)?;
+    let depth = std::mem::replace(&mut state.module_depth, usize::from(imported));
+    let inferred = state.infer_program_with_env(&env_with_imports, &program);
+    state.module_depth = depth;
+    let (_ty, module_env) = inferred?;
     // The module is complete: what its checking left pending is decided
     // now, while it is the module being checked (errors point into it),
     // rather than carried into every importer (where each
-    // generalisation would scan it again).
-    state.resolve_constraints()?;
+    // generalisation would scan it again) — except the numeric variables
+    // its bindings reach, which its importers' uses decide.
+    let keep = if imported {
+        state.reachable_vars(&module_env)
+    } else {
+        Default::default()
+    };
+    state.resolve_constraints_keeping(&keep)?;
     // Through the substitution: a binding's type can be a variable the end
     // of inference decided (`export let n = 0` defaults to `Int`), and
     // what reads the environment next (declarations, importers) has no
@@ -468,6 +492,7 @@ fn load_module(
     let exports = compute_export_table(state, &starting_env, &program, &base_dir, visiting)?;
 
     visiting.remove(&canonical);
+    state.set_current_source(prev_source);
 
     Ok((module_env, exports))
 }
@@ -748,6 +773,7 @@ fn wildcard_match(pattern: &str, text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontends::javascript::parse;
     use std::io::Write;
 
     fn write_file(dir: &Path, name: &str, content: &str) -> PathBuf {

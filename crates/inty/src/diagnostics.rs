@@ -2,9 +2,9 @@
 
 use std::io::Write;
 
-use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind, Source};
+use ariadne::{Color, ColorGenerator, Config, Fmt, Label, Report, ReportKind};
 
-use crate::error::{IntyError, LexError, ParseError, TypeError};
+use crate::error::{IntyError, LexError, ParseError, SourceMap, TypeError};
 use crate::infer::InferWarning;
 use crate::span::Span;
 
@@ -37,6 +37,37 @@ fn char_range(source: &str, span: Span) -> std::ops::Range<usize> {
     start..end
 }
 
+/// The files a diagnostic's labels can point into: the one it is
+/// reported against (`filename` / `source`, where a span below
+/// [`SourceMap::BASE`] is) and the imported modules of a [`SourceMap`].
+struct Files<'a> {
+    filename: &'a str,
+    source: &'a str,
+    map: &'a SourceMap,
+}
+
+impl Files<'_> {
+    /// The file `span` is in and its character range there.
+    fn loc(&self, span: Span) -> (String, std::ops::Range<usize>) {
+        match self.map.locate(span) {
+            Some((file, local)) => (file.path.clone(), char_range(&file.text, local)),
+            None => (self.filename.to_string(), char_range(self.source, span)),
+        }
+    }
+
+    /// An ariadne cache holding every file.
+    fn cache(&self) -> impl ariadne::Cache<String> + '_ {
+        let mut all: Vec<(String, String)> =
+            vec![(self.filename.to_string(), self.source.to_string())];
+        for (path, text) in self.map.files() {
+            if path != self.filename {
+                all.push((path.to_string(), text.to_string()));
+            }
+        }
+        ariadne::sources(all)
+    }
+}
+
 /// Print a inty error with colored diagnostics to stderr.
 pub fn print_error(filename: &str, source: &str, error: &IntyError) {
     let _ = write_error(std::io::stderr(), filename, source, error, true);
@@ -45,6 +76,23 @@ pub fn print_error(filename: &str, source: &str, error: &IntyError) {
 /// Print a inty error to stderr without ANSI color escapes.
 pub fn print_error_plain(filename: &str, source: &str, error: &IntyError) {
     let _ = write_error(std::io::stderr(), filename, source, error, false);
+}
+
+/// [`print_error`] / [`print_error_plain`] for a program with imported
+/// modules: labels are rendered in the file their span is in.
+pub fn print_error_in(filename: &str, source: &str, map: &SourceMap, error: &IntyError, color: bool) {
+    let _ = write_error_in(std::io::stderr(), filename, source, map, error, color);
+}
+
+/// [`print_warning`] for a program with imported modules.
+pub fn print_warning_in(
+    filename: &str,
+    source: &str,
+    map: &SourceMap,
+    warning: &InferWarning,
+    color: bool,
+) {
+    let _ = write_warning_in(std::io::stderr(), filename, source, map, warning, color);
 }
 
 /// Print a non-fatal inference warning with colored diagnostics to stderr.
@@ -59,27 +107,42 @@ pub fn print_warning_plain(filename: &str, source: &str, warning: &InferWarning)
 
 /// Render a non-fatal inference warning into `writer`.
 pub fn write_warning<W: Write>(
-    mut writer: W,
+    writer: W,
     filename: &str,
     source: &str,
     warning: &InferWarning,
     color: bool,
 ) -> std::io::Result<()> {
+    write_warning_in(writer, filename, source, &SourceMap::default(), warning, color)
+}
+
+/// [`write_warning`] for a program with imported modules.
+pub fn write_warning_in<W: Write>(
+    mut writer: W,
+    filename: &str,
+    source: &str,
+    map: &SourceMap,
+    warning: &InferWarning,
+    color: bool,
+) -> std::io::Result<()> {
+    let files = Files {
+        filename,
+        source,
+        map,
+    };
     let config = Config::new().with_color(color);
-    let range = char_range(source, warning.span);
-    let report = Report::build(ReportKind::Warning, (filename, range.clone()))
+    let loc = files.loc(warning.span);
+    let report = Report::build(ReportKind::Warning, loc.clone())
         .with_config(config)
         .with_message(&warning.message)
         .with_label(
-            Label::new((filename, range))
+            Label::new(loc)
                 .with_message(&warning.message)
                 .with_color(Color::Yellow),
         );
 
     writeln!(writer)?;
-    report
-        .finish()
-        .write((filename, Source::from(source)), &mut writer)?;
+    report.finish().write(files.cache(), &mut writer)?;
     writeln!(writer)?;
     Ok(())
 }
@@ -92,12 +155,30 @@ pub fn write_warning<W: Write>(
 /// suppress ANSI escape sequences — the CLI uses this for `--no-color`
 /// and tests use it to assert on plain text directly.
 pub fn write_error<W: Write>(
-    mut writer: W,
+    writer: W,
     filename: &str,
     source: &str,
     error: &IntyError,
     color: bool,
 ) -> std::io::Result<()> {
+    write_error_in(writer, filename, source, &SourceMap::default(), error, color)
+}
+
+/// [`write_error`] for a program with imported modules: each label is
+/// rendered in the file its span is in (see [`SourceMap`]).
+pub fn write_error_in<W: Write>(
+    mut writer: W,
+    filename: &str,
+    source: &str,
+    map: &SourceMap,
+    error: &IntyError,
+    color: bool,
+) -> std::io::Result<()> {
+    let files = Files {
+        filename,
+        source,
+        map,
+    };
     let config = Config::new().with_color(color);
     // `Fmt::fg` always emits ANSI escapes, independent of ariadne's Config.
     // Wrap it so message strings stay plain when `color` is false.
@@ -131,12 +212,12 @@ pub fn write_error<W: Write>(
             found
         );
 
-        let main_range = char_range(source, *span);
-        let mut report = Report::build(ReportKind::Error, (filename, main_range.clone()))
+        let main = files.loc(*span);
+        let mut report = Report::build(ReportKind::Error, main.clone())
             .with_config(config)
             .with_message(&msg)
             .with_label(
-                Label::new((filename, main_range))
+                Label::new(main)
                     .with_message(&msg)
                     .with_color(error_color),
             );
@@ -146,9 +227,8 @@ pub fn write_error<W: Write>(
         }
 
         if let Some(origin) = expected_origin {
-            let origin_range = char_range(source, origin.span());
             report = report.with_label(
-                Label::new((filename, origin_range))
+                Label::new(files.loc(origin.span()))
                     .with_message(format!(
                         "{} type: from {}",
                         tint("Expected", expected_color),
@@ -159,9 +239,8 @@ pub fn write_error<W: Write>(
         }
 
         if let Some(origin) = found_origin {
-            let origin_range = char_range(source, origin.span());
             report = report.with_label(
-                Label::new((filename, origin_range))
+                Label::new(files.loc(origin.span()))
                     .with_message(format!(
                         "{} type: from {}",
                         tint("Found", found_color),
@@ -181,9 +260,7 @@ pub fn write_error<W: Write>(
         ));
 
         writeln!(writer)?;
-        report
-            .finish()
-            .write((filename, Source::from(source)), &mut writer)?;
+        report.finish().write(files.cache(), &mut writer)?;
         writeln!(writer)?;
         return Ok(());
     }
@@ -423,12 +500,12 @@ pub fn write_error<W: Write>(
         },
     };
 
-    let range = char_range(source, span);
-    let mut report = Report::build(ReportKind::Error, (filename, range.clone()))
+    let loc = files.loc(span);
+    let mut report = Report::build(ReportKind::Error, loc.clone())
         .with_config(config)
         .with_message(&message)
         .with_label(
-            Label::new((filename, range))
+            Label::new(loc)
                 .with_message(&message)
                 .with_color(Color::Red),
         );
@@ -437,9 +514,7 @@ pub fn write_error<W: Write>(
         report.add_help(note_text);
     }
 
-    report
-        .finish()
-        .write((filename, Source::from(source)), &mut writer)?;
+    report.finish().write(files.cache(), &mut writer)?;
     Ok(())
 }
 

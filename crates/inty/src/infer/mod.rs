@@ -194,8 +194,14 @@ impl InferState {
         ) = outer_locals;
         // The program's own numeric variables (`let i = 0` at the top
         // level) get their defaults here, as a function's do when it's
-        // generalised.
-        if let Err(e) = self.default_numeric(&Default::default(), None, false) {
+        // generalised — except, in an imported module, those its
+        // bindings reach: the importers' uses decide those (see
+        // `resolve_constraints_keeping`).
+        let keep = match (&result, self.module_depth > 0) {
+            (Ok((_, env)), true) => self.reachable_vars(env),
+            _ => Default::default(),
+        };
+        if let Err(e) = self.default_numeric(&keep, None, false) {
             self.push_error(e);
         }
 

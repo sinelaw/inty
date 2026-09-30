@@ -7,7 +7,7 @@
 pub mod lexer;
 pub mod parser;
 
-pub use parser::{parse, Parser};
+pub use parser::{parse, parse_at, Parser};
 
 use crate::ast::Program;
 use crate::error::Result;
