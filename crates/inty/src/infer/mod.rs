@@ -336,6 +336,7 @@ impl InferState {
                     nominal_id,
                     rec_id,
                     open_arity: false,
+                    class: false,
                 },
             );
         }
@@ -415,6 +416,7 @@ impl InferState {
                     nominal_id,
                     rec_id,
                     open_arity: false,
+                    class: false,
                 },
             );
         }
@@ -445,6 +447,7 @@ impl InferState {
                     nominal_id: Some(id),
                     rec_id: None,
                     open_arity: true,
+                    class: true,
                 },
             );
         }

@@ -1174,6 +1174,7 @@ impl InferState {
                         nominal_id: Some(id),
                         rec_id: None,
                         open_arity: false,
+                        class: true,
                     },
                 );
             }
