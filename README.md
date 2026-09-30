@@ -85,16 +85,27 @@ annotation grammar, are documented separately:
 
 ## Future Work
 
-Class inheritance (`extends`, `super`) and `static` class members are
-deliberately out of scope — see [examples/spa/gaps.md § "By design"](examples/spa/gaps.md).
-The only structurally useful thing they unlock is library-specific
-instance-shape derivation (Stimulus-style `static targets` ↦ `this.fooTarget`),
-which is closer to TypeScript's mapped types than to row polymorphism and is
-also out of scope.
+`static` class members are deliberately out of scope — see
+[examples/spa/gaps.md § "By design"](examples/spa/gaps.md). The only
+structurally useful thing they unlock is library-specific instance-shape
+derivation (Stimulus-style `static targets` ↦ `this.fooTarget`), which is
+closer to TypeScript's mapped types than to row polymorphism. Class
+inheritance is supported in a restricted form (`extends` lowers to the base
+instance's fields and methods; no `super.method()`), see
+[docs/type-system.md](docs/type-system.md#class-bodies-fields-private-fields-accessors).
 
-Open: making `&&` / `||` flow-narrowing-aware so default-value patterns like
-`name || "Guest"` work without forcing operands' types to match. The
-principal-typing property would need a careful rule.
+Open: polymorphic record fields (rank-2), and one-event-per-name DOM typing,
+which needs them — see [docs/design-notes.md](docs/design-notes.md).
+
+## Using inty on a real project
+
+[docs/patterns.md](docs/patterns.md) collects the patterns a real ~6k-line
+vanilla-JS application (Rosaclef) settled on — typed FFI boundaries, brand
+newtypes, dictionaries — and which workarounds are no longer needed.
+[docs/performance.md](docs/performance.md) describes how checking scales
+(`inty --timings`, checking several files in one run), and
+[docs/rosaclef-report.md](docs/rosaclef-report.md) the fixes that project's
+report led to.
 
 ## Self-testing
 

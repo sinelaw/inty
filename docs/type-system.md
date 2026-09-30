@@ -182,6 +182,8 @@ Reading a member of, or indexing into, a union pushes the operation through ever
 
 In JavaScript annotations a class's name is its type (`/** const xs: (A | B)[] */`); Python annotations already name classes (`x: Dog | Cat = …`).
 
+`&&` and `||` return one of their operands. When both operand types are known, the result is what can come out: `a && b` is the falsy part of `a`'s type together with `b`'s, `a || b` the truthy part together with `b`'s. So `cond && maybeObj` (a `Boolean` and an `Undefined | {…}`) is `Boolean | Undefined | {…}`, fine as a test, and `name || "Guest"` with `name: String` is a `String`. An object, array or function is always truthy, so `obj && obj.x` is just `obj.x`'s type. With an operand whose type isn't known yet the two must agree, as before: nothing is guessed. The right operand is checked in the environment the left one leaves (`found && found.v` reads `v` of the narrowed `found`).
+
 ### Sum Types: Discriminated Unions & Narrowing (Predicate Refinement)
 
 `typeof e === "..."`, `e === literal`, and `e.kind === "..."` *refine* a union-typed binding within a branch. Use this to write sum types in the canonical tagged-union style — a single value that is exactly one of several known shapes, distinguished by a literal discriminator:
@@ -263,6 +265,29 @@ is the body's IIFE — `obj.foo` reads its return type. `set foo(v)
 { … }` is parse-accepted but the field is not declared from the
 setter (initialise via `this.foo = …` in the constructor).
 
+**Inheritance.** `class Sub extends Base { … }`, where `Base` is a class
+of the program or a constructor a declaration file declares
+(`/** const Base: (…) => {…} */`), gives `Sub`'s instances `Base`'s fields
+and methods. It is lowered as the base instance spread into the object
+the class makes — `{ ...new Base(args), fields…, methods… }`, the
+arguments taken from the constructor's leading `super(args)` — so there is
+no prototype chain at the type level:
+
+```javascript
+class Base { constructor(n) { this.n = n; } twice() { return this.n * 2; } }
+class Sub extends Base {
+  constructor() { super(21); this.label = "x"; }
+  show() { return this.label + String(this.twice()); }   // an inherited method
+}
+```
+
+A base field keeps its type in the subclass (overriding `n` with a
+`String` is an error), which is what lets an inherited method, typed
+against the base instance, run on a subclass instance. `super.method()`
+is rejected (call `this.method()`), and so are `static` members. An
+AudioWorklet processor is the typical use: `class P extends
+AudioWorkletProcessor { … }`, checked with `--lib builtin:audioworklet`.
+
 ### Modules (ES `import` / `export`)
 
 inty resolves `import` statements relative to the importing file's
@@ -309,9 +334,23 @@ ancestor of the importing file. The format mirrors tsconfig-paths:
 }
 ```
 
-Resolution order: direct relative/absolute → exact-match `paths` →
-wildcard `paths` → `baseUrl`. Third-party `.d.js` stubs live wherever
-the `paths` map points; inty doesn't ship npm-package types itself.
+Resolution order: a relative or absolute path names a file; any other
+specifier goes through the exact-match `paths`, then the wildcard
+`paths` (most specific first), then the nearest `package.json`'s
+`"imports"` (Node's `#name` subpath imports, conditions and `*` patterns
+included; a `.d.js` next to the mapped `.js` is preferred, since the
+runtime file is usually untyped), then a same-named file, then
+`baseUrl`. A mapped specifier wins over a file of the same name, as in
+Node. Third-party `.d.js` stubs live wherever the `paths` map points;
+inty doesn't ship npm-package types itself.
+
+Each module is checked once per run, and every importer sees the same
+module: its state (a mutable exported object) is shared, so two
+importers' uses of it must agree. A module's leftover constraints are
+solved when it has been checked, so an error in it is reported in it;
+an integer-literal field its importers write a fraction into is a
+`Number`, as in one file. `inty a.js b.js …` checks several files in one
+run the same way.
 
 ## Unsupported JavaScript Idioms
 
@@ -436,13 +475,21 @@ See [jsdoc-at-type.md](jsdoc-at-type.md) for the full rule.
 /** var maybe: Number? */             // postfix `?` desugars to `T | Undefined`
 /** var u: Number | String */         // union
 /** var pt: {x: Number, y: Number} */ // record (closed row)
+/** var pair: [String, Number] */     // tuple
+/** var gains: Dict<Number> */        // plain object used as a map; also `{ [String]: Number }`
+/** var seen: Set<String> */          // the instance types of `new Map()` / `new Set()`
+/** var index: Map<String, Int> */
 ```
 
-Built-in type names: `Number`, `String`, `Boolean`, `Null`, `Undefined`. Unknown identifiers are rejected (typos like `Stirng` are an error, not a fresh variable).
+Built-in type names: `Number`, `Int`, `String`, `Boolean`, `Null`, `Undefined`. Unknown identifiers are rejected (typos like `Stirng` are an error, not a fresh variable).
 
-Typed arrays are `Int32Array`, `Uint8Array` and `Float64Array`. Each is its own type, not an ordinary array:
-- It has a fixed length: `.length` and `.fill(v)`, but no `push`.
-- Indexing `a[i]` takes an `Int` index. It reads an `Int` from the integer kinds and a `Number` from `Float64Array`.
+A **tuple** `[A, B]` is a fixed-length array whose elements have their own types. An array literal where one is expected is one; `t[0]` with a constant index reads that element, and `const [a, b] = t` destructures it. An array literal with elements of different types and no annotation is an error that suggests a tuple (or a record, or an element union).
+
+A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
+
+Typed arrays are `Int32Array`, `Uint8Array`, `Float32Array` and `Float64Array`. Each is its own type, not an ordinary array:
+- It has a fixed length: `.length`, `.fill(v)`, `.subarray(start?, end?)`, `.slice(start?, end?)`, `.set(other, offset?)`, `.buffer` and `.byteLength`, but no `push`.
+- Indexing `a[i]` takes an `Int` index. It reads an `Int` from the integer kinds and a `Number` from the float kinds.
 - A store into an integer array must be an `Int`. JavaScript would silently wrap or truncate any other number, so `a[0] = 1.5` is rejected. An `Int` store wraps to 32 or 8 bits, exactly as in JavaScript.
 - They are made with `new Int32Array(n)` or `Int32Array.from(xs)`.
 
@@ -504,6 +551,17 @@ Nullary aliases are allowed and expanded at use (a bare `Func` resolves to the b
 
 Arity is enforced — `Pair` (no args) or `Pair<A, B>` for the 1-parameter alias above are both errors.
 
+An alias may refer to one declared after it, in the same file or a `--lib` file (as may a class). An alias that refers to itself, directly or through others, is a recursive (equi-recursive) type, printed by its name:
+
+```javascript
+/** type Tree = { label: String, kids: Tree[] } */
+/** type List<T> = { head: T, tail: List<T> | Null } */
+```
+
+One defined as itself (`type Bad = Bad`) is an error.
+
+`/** nominal type InsertIx = Int */` declares a *nominal* type instead: a brand that keeps its identity through unification (an `InsertIx` is not a `TrackIx`, nor an `Int`), while comparisons and field access see through it. See [patterns.md](patterns.md#brand-newtypes).
+
 ### Callable rows (functions with statics)
 
 A row may carry a keyless call signature plus named fields. Used for things like `String` and `JSON` in stubs:
@@ -529,11 +587,11 @@ Quick reference for the JavaScript surface inty accepts:
 | Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
-| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`); no inheritance, no `static` members |
+| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`), `extends` with `super(args)` (see [Class Bodies](#class-bodies-fields-private-fields-accessors)); no `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`                                          |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |
-| Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `class extends`, `super`, `static` members |
+| Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members |
 | Modules        | ES `import`/`export` with `inty.json` paths/baseUrl — see [Modules](#modules-es-import--export) above     |
 | Annotations    | inline `var x /*: T */`, doc-comment `/** var x: T */`, postfix `T?` for `T \| Undefined` — see [../declare.md](../declare.md) |
 
