@@ -658,6 +658,32 @@ impl InferState {
                 deps
             })
             .collect();
+        // For each group, the groups that declare one of its functions'
+        // names again, later in the source (`function a() {…} … function
+        // a(x) {…}`): the later declaration is the binding.
+        let mut superseded_by: Vec<Vec<usize>> = vec![Vec::new(); scc_groups.len()];
+        {
+            let mut decls: std::collections::HashMap<&str, Vec<(usize, usize)>> =
+                std::collections::HashMap::new();
+            for (gi, group) in scc_groups.iter().enumerate() {
+                for &i in group {
+                    if let Some((name, ..)) =
+                        crate::infer::features::functions::function_decl_parts(&stmts[i])
+                    {
+                        decls.entry(name).or_default().push((i, gi));
+                    }
+                }
+            }
+            for same_name in decls.values().filter(|d| d.len() > 1) {
+                for &(i, gi) in same_name {
+                    for &(j, gj) in same_name {
+                        if j > i && gj != gi && !superseded_by[gi].contains(&gj) {
+                            superseded_by[gi].push(gj);
+                        }
+                    }
+                }
+            }
+        }
         // Names still waiting for their declaration statement (Pass 3).
         let mut pending_decls: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -671,6 +697,7 @@ impl InferState {
             &scc_groups,
             &group_free,
             &group_deps,
+            &superseded_by,
             &pending_decls,
             &mut group_done,
         );
@@ -718,6 +745,7 @@ impl InferState {
                         stmts,
                         &scc_groups,
                         &group_deps,
+                        &superseded_by,
                         gi,
                         &mut group_done,
                     );
@@ -882,6 +910,7 @@ impl InferState {
                         &scc_groups,
                         &group_free,
                         &group_deps,
+                        &superseded_by,
                         &pending_decls,
                         &mut group_done,
                     );
@@ -895,6 +924,7 @@ impl InferState {
                 stmts,
                 &scc_groups,
                 &group_deps,
+                &superseded_by,
                 gi,
                 &mut group_done,
             );
@@ -923,6 +953,7 @@ impl InferState {
         scc_groups: &[Vec<usize>],
         group_free: &[std::collections::HashSet<String>],
         group_deps: &[Vec<usize>],
+        superseded_by: &[Vec<usize>],
         pending_decls: &std::collections::HashMap<String, usize>,
         group_done: &mut [bool],
     ) {
@@ -940,6 +971,7 @@ impl InferState {
                     stmts,
                     scc_groups,
                     group_deps,
+                    superseded_by,
                     gi,
                     group_done,
                 );
@@ -948,12 +980,14 @@ impl InferState {
     }
 
     /// Infer SCC `gi` (after the groups it calls), unless already done.
+    #[allow(clippy::too_many_arguments)]
     fn infer_group_with_deps(
         &mut self,
         current_env: &mut TypeEnv,
         stmts: &[Stmt],
         scc_groups: &[Vec<usize>],
         group_deps: &[Vec<usize>],
+        superseded_by: &[Vec<usize>],
         gi: usize,
         group_done: &mut [bool],
     ) {
@@ -962,11 +996,44 @@ impl InferState {
         }
         group_done[gi] = true;
         for &d in &group_deps[gi] {
-            self.infer_group_with_deps(current_env, stmts, scc_groups, group_deps, d, group_done);
+            self.infer_group_with_deps(
+                current_env,
+                stmts,
+                scc_groups,
+                group_deps,
+                superseded_by,
+                d,
+                group_done,
+            );
         }
         // Gather the SCC's statements in source order. Cloning is cheap
         // relative to the inference work that follows.
         let group_stmts: Vec<Stmt> = scc_groups[gi].iter().map(|&i| stmts[i].clone()).collect();
+        // A function declared again later is, as at runtime, the later
+        // declaration: if that one's group was inferred first (it was
+        // ready sooner), this group's binding of the name mustn't
+        // replace it.
+        let later_names: std::collections::HashSet<&str> = superseded_by[gi]
+            .iter()
+            .filter(|&&gj| group_done[gj])
+            .flat_map(|&gj| scc_groups[gj].iter())
+            .filter_map(|&j| crate::infer::features::functions::function_decl_parts(&stmts[j]))
+            .map(|(name, ..)| name)
+            .collect();
+        let superseded: Vec<(env::Key, String, env::Binding)> = if !later_names.is_empty() {
+            scc_groups[gi]
+                .iter()
+                .filter_map(|&i| crate::infer::features::functions::function_decl_parts(&stmts[i]))
+                .filter(|(name, ..)| later_names.contains(name))
+                .filter_map(|(name, _, _, _, _, span)| {
+                    let key = self.key_of(span, name);
+                    let binding = current_env.lookup_key(&key)?.clone();
+                    Some((key, name.to_string(), binding))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let started = self.timing_top_level().then(std::time::Instant::now);
         let inferred = self.infer_function_group(current_env, &group_stmts);
         if let Some(started) = started {
@@ -986,7 +1053,13 @@ impl InferState {
             }
         }
         match inferred {
-            Ok(new_env) => *current_env = new_env,
+            Ok(new_env) => {
+                *current_env = superseded
+                    .into_iter()
+                    .fold(new_env, |env, (key, name, binding)| {
+                        env.extend_key(key, &name, binding)
+                    });
+            }
             Err(err) => {
                 // Best-effort recovery: bind every member of the failed
                 // SCC to `Type::Error`. The user already got one
