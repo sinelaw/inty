@@ -450,8 +450,11 @@ fn write_error_with<W: Write>(
                 "Rank-1 restriction: type parameters not allowed in nested position".to_string(),
                 *span,
                 Some(
-                    "Type parameters (<T>) can only appear at the outermost level of a type. \
-                    Nested type parameters would require Rank-2 or higher polymorphism."
+                    "inty's polymorphism is rank-1: only a binding's whole type can be generic \
+                    (`/** function f<T>(x: T) => T */`), not a record field or a parameter \
+                    (`{ id: <T>(T) => T }`). Keep a generic function at the top level and call \
+                    it by name, or give the field the one type all its uses share. \
+                    (A function stored in a record likewise has one type for all its uses.)"
                         .to_string(),
                 ),
             ),

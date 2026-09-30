@@ -1,0 +1,9 @@
+Error: Rank-1 restriction: type parameters not allowed in nested position
+   ╭─[ main.js:1:1 ]
+   │
+ 1 │ /** function useAll(u: { id: <T>(T) => T }) => Int */
+   │ ──────────────────────────┬──────────────────────────  
+   │                           ╰──────────────────────────── Rank-1 restriction: type parameters not allowed in nested position
+   │ 
+   │ Help: inty's polymorphism is rank-1: only a binding's whole type can be generic (`/** function f<T>(x: T) => T */`), not a record field or a parameter (`{ id: <T>(T) => T }`). Keep a generic function at the top level and call it by name, or give the field the one type all its uses share. (A function stored in a record likewise has one type for all its uses.)
+───╯
