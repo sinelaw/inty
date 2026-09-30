@@ -28,6 +28,11 @@ struct Summary {
 
 struct Args {
     input: Option<String>,
+    /// Further input files: `inty a.js b.js` checks each, sharing the
+    /// modules they import (each checked once).
+    more_inputs: Vec<String>,
+    /// `--timings`: report per-module and per-declaration checking time.
+    timings: bool,
     /// Extra user-supplied declaration files (paths).
     extra_libs: Vec<String>,
     /// Skip the built-in stdlib (core.d.js, dom.d.js).
@@ -41,6 +46,8 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
     let mut extra_libs = Vec::new();
     let mut no_stdlib = false;
     let mut no_color = false;
+    let mut more_inputs = Vec::new();
+    let mut timings = false;
 
     let mut iter = raw.into_iter().skip(1);
     while let Some(arg) = iter.next() {
@@ -65,6 +72,9 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
             "--no-color" | "--no-colour" => {
                 no_color = true;
             }
+            "--timings" => {
+                timings = true;
+            }
             _ if arg.starts_with("--lib=") => {
                 extra_libs.push(arg["--lib=".len()..].to_string());
             }
@@ -73,15 +83,21 @@ fn parse_args(raw: Vec<String>) -> Result<Args, String> {
             }
             _ => {
                 if input.is_some() {
-                    return Err(format!("unexpected extra argument: {}", arg));
+                    more_inputs.push(arg);
+                } else {
+                    input = Some(arg);
                 }
-                input = Some(arg);
             }
         }
+    }
+    if !more_inputs.is_empty() && input.as_deref() == Some("-") {
+        return Err("stdin ('-') can't be checked together with other files".to_string());
     }
 
     Ok(Args {
         input,
+        more_inputs,
+        timings,
         extra_libs,
         no_stdlib,
         no_color,
@@ -175,6 +191,24 @@ fn main() -> ExitCode {
         Ok(r) => r,
         Err(code) => return code,
     };
+    if args.timings {
+        state.timings = Some(Vec::new());
+    }
+
+    if !args.more_inputs.is_empty() {
+        let mut files = vec![input];
+        files.extend(args.more_inputs.iter().cloned());
+        let color = !args.no_color;
+        let timings = args.timings;
+        let (code, state) = inty::worker::run_with_inference_stack("inty-cli-infer", move || {
+            let code = check_many(&mut state, env, &files, color);
+            (code, state)
+        });
+        if timings {
+            print_timings(&state, None);
+        }
+        return code;
+    }
 
     // Route inference through the shared worker helper. See
     // `inty::worker` for the rationale (8 MB Linux main-thread
@@ -197,6 +231,10 @@ fn main() -> ExitCode {
         print_warning_in(&filename, &source, &state.sources, warning, color);
     }
 
+    if args.timings {
+        print_timings(&state, Some((&filename, &source)));
+    }
+
     match result {
         Ok(summary) => {
             print_summary(&filename, &summary, state.warnings.len());
@@ -212,6 +250,101 @@ fn main() -> ExitCode {
                 }
             }
             ExitCode::from(1)
+        }
+    }
+}
+
+/// Check several entry files in one run (`inty a.js b.js …`). They share
+/// one state, so a module imported by several — or itself given as an
+/// entry — is checked once. Each file's diagnostics are reported; the
+/// decorated program isn't printed.
+fn check_many(state: &mut InferState, env: TypeEnv, files: &[String], color: bool) -> ExitCode {
+    let started = Instant::now();
+    let mut failed = 0;
+    let mut checked = 0;
+    for file in files {
+        let path = std::path::Path::new(file);
+        if Language::from_path(file).unwrap_or(Language::JavaScript) != Language::JavaScript {
+            eprintln!("error: {file}: only JavaScript files can be checked together");
+            failed += 1;
+            continue;
+        }
+        let result = inty::modules::check_entry(state, env.clone(), path);
+        let mut errors = state.take_located_errors();
+        match result {
+            Ok(Some(_)) => checked += 1,
+            // Already checked, imported by an earlier file.
+            Ok(None) => {}
+            Err(e) => errors.push(LocatedError {
+                error: e,
+                source: state.current_source(),
+            }),
+        }
+        state.set_current_source(None);
+        if !errors.is_empty() {
+            failed += 1;
+            for located in errors {
+                let (p, text) = match &located.source {
+                    Some(src) => (src.path.clone(), src.text.clone()),
+                    None => (file.clone(), fs::read_to_string(path).unwrap_or_default()),
+                };
+                print_error_in(&p, &text, &state.sources, &located.error, color);
+            }
+        }
+    }
+    if let Err(e) = state.resolve_constraints() {
+        failed += 1;
+        print_error_in("<program>", "", &state.sources, &e, color);
+    }
+    for warning in &state.warnings {
+        print_warning_in("<program>", "", &state.sources, warning, color);
+    }
+    let modules = state.module_cache.len();
+    if failed > 0 {
+        eprintln!("{failed} of {} files had errors", files.len());
+        return ExitCode::from(1);
+    }
+    println!(
+        "All checks passed: {} files ({} modules checked, {} as imports) in {:.2}s",
+        files.len(),
+        modules,
+        modules.saturating_sub(checked),
+        started.elapsed().as_secs_f64()
+    );
+    ExitCode::SUCCESS
+}
+
+/// `--timings`: each module's own checking time (its imports excluded)
+/// and the slowest top-level declarations, to stderr.
+fn print_timings(state: &InferState, entry: Option<(&str, &str)>) {
+    let location = |span: inty::span::Span| -> String {
+        let (path, text, offset) = match state.sources.locate(span) {
+            Some((file, local)) => (file.path.as_str(), file.text.as_str(), local.start),
+            None => match entry {
+                Some((path, text)) => (path, text, span.start),
+                None => return String::new(),
+            },
+        };
+        let line = text[..offset.min(text.len())].matches('\n').count() + 1;
+        format!("{path}:{line}")
+    };
+    eprintln!("Timings (each module's own time; imports excluded):");
+    let mut modules = state.module_timings.clone();
+    modules.sort_by(|a, b| b.1.cmp(&a.1));
+    for (path, time) in &modules {
+        eprintln!("  {:>9.1} ms  {}", time.as_secs_f64() * 1000.0, path);
+    }
+    if let Some(decls) = &state.timings {
+        let mut decls = decls.clone();
+        decls.sort_by(|a, b| b.time.cmp(&a.time));
+        eprintln!("Slowest top-level declarations:");
+        for d in decls.iter().take(20) {
+            eprintln!(
+                "  {:>9.1} ms  {}  ({})",
+                d.time.as_secs_f64() * 1000.0,
+                d.name,
+                location(d.span)
+            );
         }
     }
 }
@@ -594,6 +727,7 @@ fn print_help() {
 
 USAGE:
     inty [OPTIONS] <file.js>
+    inty [OPTIONS] <file.js> <file.js>...
     inty [OPTIONS] -
     inty lsp [--stdio]
 
@@ -601,6 +735,8 @@ OPTIONS:
     --lib <path>         Load an additional declaration file (can be repeated)
     --no-stdlib          Skip the embedded core and DOM declarations
     --no-color           Disable ANSI colors in diagnostic output
+    --timings            Report each module's checking time and the slowest
+                         top-level declarations (to stderr)
     -h, --help           Print help information
     -V, --version        Print version information
 
@@ -630,6 +766,8 @@ DESCRIPTION:
 
 EXAMPLES:
     inty example.js                         Check example.js
+    inty src/*.js                           Check several files; a module they
+                                            share is checked once
     inty --lib types/lodash.d.js app.js     Add a lib before checking
     inty --no-stdlib small.js               Check without any libs
     echo "var x = 1" | inty -               Check from stdin

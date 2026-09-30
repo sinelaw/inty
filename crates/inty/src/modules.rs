@@ -410,6 +410,24 @@ pub fn check_module(
     load_module(state, starting_env, path, &mut visiting, false)
 }
 
+/// Check `path` as one of several entry modules of a run (`inty a.js
+/// b.js`): like [`check_module`], but a module already checked this run —
+/// as another entry, or imported by one — isn't checked again (`Ok(None)`),
+/// and one checked now is reused by later importers.
+pub fn check_entry(
+    state: &mut InferState,
+    starting_env: TypeEnv,
+    path: &Path,
+) -> Result<Option<(TypeEnv, ExportTable)>, IntyError> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if state.module_cache.contains_key(&canonical) {
+        return Ok(None);
+    }
+    let checked = load_module(state, starting_env, path, &mut HashSet::new(), false)?;
+    state.module_cache.insert(canonical, checked.clone());
+    Ok(Some(checked))
+}
+
 /// Load an imported module, once per run: a module imported again (by
 /// another importer, or by the same one) is the same module, with the
 /// same state — its checked environment and exports are reused.
@@ -480,6 +498,7 @@ fn load_module(
     // is shared with both passes.
     let env_with_imports =
         resolve_imports(state, starting_env.clone(), &program, &base_dir, visiting)?;
+    let started = std::time::Instant::now();
     let depth = std::mem::replace(&mut state.module_depth, usize::from(imported));
     let inferred = state.infer_program_with_env(&env_with_imports, &program);
     state.module_depth = depth;
@@ -495,6 +514,11 @@ fn load_module(
         Default::default()
     };
     state.resolve_constraints_keeping(&keep)?;
+    if state.timings.is_some() {
+        state
+            .module_timings
+            .push((path.display().to_string(), started.elapsed()));
+    }
     // Through the substitution: a binding's type can be a variable the end
     // of inference decided (`export let n = 0` defaults to `Int`), and
     // what reads the environment next (declarations, importers) has no
