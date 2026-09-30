@@ -776,6 +776,42 @@ impl<'a> TypeParser<'a> {
         self.expect_char('{')?;
         self.skip_whitespace();
 
+        // An index signature, `{ [String]: V }` or `{ [key: String]: V }`:
+        // a `Dict<V>`.
+        if self.peek_char() == Some('[') {
+            self.pos += 1;
+            self.skip_whitespace();
+            let save = self.pos;
+            if self.is_ident_start(self.peek_char()) {
+                let _ = self.parse_ident()?;
+                self.skip_whitespace();
+                if self.peek_char() == Some(':') {
+                    self.pos += 1;
+                } else {
+                    self.pos = save;
+                }
+            }
+            self.skip_whitespace();
+            let key = self.parse_type()?;
+            if key != Type::String {
+                return Err(self.error(
+                    "an index signature's key is `String` (`{ [String]: V }`)".to_string(),
+                ));
+            }
+            self.skip_whitespace();
+            self.expect_char(']')?;
+            self.skip_whitespace();
+            self.expect_char(':')?;
+            let value = self.parse_type()?;
+            self.skip_whitespace();
+            if self.peek_char() == Some(',') || self.peek_char() == Some(';') {
+                self.pos += 1;
+                self.skip_whitespace();
+            }
+            self.expect_char('}')?;
+            return Ok(Type::Map(Box::new(value)));
+        }
+
         let mut props: Vec<(String, crate::types::FieldEntry)> = Vec::new();
 
         // Object property types inherit the current allow_quantifiers context:
@@ -929,6 +965,19 @@ impl<'a> TypeParser<'a> {
             "never" => Ok(Type::never()),
             "true" => Ok(Type::lit_bool(true)),
             "false" => Ok(Type::lit_bool(false)),
+            // `Dict<V>`: a plain object used as a string-keyed map.
+            "Dict" => {
+                self.skip_whitespace();
+                if self.peek_char() != Some('<') {
+                    return Err(self.error("expected '<V>' after 'Dict'".to_string()));
+                }
+                self.expect_char('<')?;
+                self.skip_whitespace();
+                let value = self.parse_type()?;
+                self.skip_whitespace();
+                self.expect_char('>')?;
+                Ok(Type::Map(Box::new(value)))
+            }
             "Promise" => {
                 // `Promise<T>` — the inner type is required.
                 self.skip_whitespace();

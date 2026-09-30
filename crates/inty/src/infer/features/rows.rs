@@ -748,6 +748,10 @@ impl InferState {
         use crate::ast::SourceLanguage;
         let language = self.language;
         match obj_type {
+            // `d.key` on a JavaScript `Dict<V>` reads that key.
+            Type::Map(value) if language == SourceLanguage::JavaScript => {
+                return Ok(self.dict_read(value));
+            }
             Type::Array(elem_ty) => {
                 if property == "length" {
                     return Ok(Type::Int);
@@ -791,7 +795,7 @@ impl InferState {
                 }
             }
             Type::TypedArray(kind) => {
-                if let Some(ty) = crate::builtins::typed_array_member_type(*kind, property) {
+                if let Some(ty) = crate::builtins::typed_array_member_type(self, *kind, property) {
                     return Ok(ty);
                 }
             }

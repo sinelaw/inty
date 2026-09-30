@@ -661,13 +661,15 @@ pub enum Type {
 pub enum TypedArrayKind {
     Int32,
     Uint8,
+    Float32,
     Float64,
 }
 
 impl TypedArrayKind {
-    pub const ALL: [TypedArrayKind; 3] = [
+    pub const ALL: [TypedArrayKind; 4] = [
         TypedArrayKind::Int32,
         TypedArrayKind::Uint8,
+        TypedArrayKind::Float32,
         TypedArrayKind::Float64,
     ];
 
@@ -676,6 +678,7 @@ impl TypedArrayKind {
         match self {
             TypedArrayKind::Int32 => "Int32Array",
             TypedArrayKind::Uint8 => "Uint8Array",
+            TypedArrayKind::Float32 => "Float32Array",
             TypedArrayKind::Float64 => "Float64Array",
         }
     }
@@ -690,7 +693,7 @@ impl TypedArrayKind {
     pub fn element(self) -> Type {
         match self {
             TypedArrayKind::Int32 | TypedArrayKind::Uint8 => Type::Int,
-            TypedArrayKind::Float64 => Type::Number,
+            TypedArrayKind::Float32 | TypedArrayKind::Float64 => Type::Number,
         }
     }
 }

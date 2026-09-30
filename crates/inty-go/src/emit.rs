@@ -1851,6 +1851,7 @@ impl<'a> Emitter<'a> {
         Ok(match k {
             TypedArrayKind::Int32 => format!("intyI32({})", self.num_as(v, &GoType::Int)?),
             TypedArrayKind::Uint8 => format!("intyU8({})", self.num_as(v, &GoType::Int)?),
+            TypedArrayKind::Float32 => format!("float32({})", self.num_as(v, &GoType::Float)?),
             TypedArrayKind::Float64 => self.num_as(v, &GoType::Float)?,
         })
     }
@@ -1890,6 +1891,12 @@ impl<'a> Emitter<'a> {
                 ))
             }
         };
+        if k == TypedArrayKind::Float32 && o != "=" {
+            return Err(unsupported(
+                "an update of a Float32Array element",
+                right.span(),
+            ));
+        }
         if k == TypedArrayKind::Float64 && matches!(o, "&=" | "|=" | "^=") {
             return Err(unsupported(
                 "a bitwise update of a Float64Array element",
@@ -2407,6 +2414,9 @@ impl<'a> Emitter<'a> {
                     let want = self.go_type_at(*span)?;
                     Ok(match k {
                         TypedArrayKind::Float64 => coerce(e, &GoType::Float, &want),
+                        TypedArrayKind::Float32 => {
+                            coerce(format!("float64({})", e), &GoType::Float, &want)
+                        }
                         _ => coerce(format!("int({})", e), &GoType::Int, &want),
                     })
                 }

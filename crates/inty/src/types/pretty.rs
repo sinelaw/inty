@@ -56,8 +56,9 @@ pub struct PrettyContext {
     /// mismatch is about).
     focus: HashSet<String>,
     /// Diagnostics: types printed by an alias's name when they are its
-    /// body (`Channel` rather than its record).
-    aliases: Vec<(String, Type)>,
+    /// body with its parameters (listed) instantiated (`Channel`,
+    /// `DomEvent<a>`, rather than their records).
+    aliases: Vec<(String, Vec<u32>, Type)>,
 }
 
 impl PrettyContext {
@@ -87,9 +88,9 @@ impl PrettyContext {
         self
     }
 
-    /// Print a type that is one of these aliases' bodies by the alias's
-    /// name.
-    pub fn naming_aliases(mut self, aliases: Vec<(String, Type)>) -> Self {
+    /// Print a type that is one of these aliases' bodies (the body's
+    /// parameter variables instantiated) by the alias's name.
+    pub fn naming_aliases(mut self, aliases: Vec<(String, Vec<u32>, Type)>) -> Self {
         self.aliases = aliases;
         self
     }
@@ -267,8 +268,29 @@ impl PrettyContext {
     /// Write a type to the given writer.
     fn write_type<W: Write>(&mut self, w: &mut W, ty: &Type, in_func_arg: bool) -> fmt::Result {
         if !self.aliases.is_empty() && matches!(ty, Type::Row(_) | Type::Union(_)) {
-            if let Some((name, _)) = self.aliases.iter().find(|(_, body)| body == ty) {
-                return write!(w, "{}", name);
+            let found = self.aliases.iter().find_map(|(name, params, body)| {
+                let mut bound = std::collections::HashMap::new();
+                match_alias(body, ty, params, &mut bound).then(|| {
+                    let args: Vec<Type> = params
+                        .iter()
+                        .map(|p| bound.get(p).cloned().unwrap_or(Type::Var(TVarName::Flex(*p))))
+                        .collect();
+                    (name.clone(), args)
+                })
+            });
+            if let Some((name, args)) = found {
+                write!(w, "{}", name)?;
+                if !args.is_empty() {
+                    write!(w, "<")?;
+                    for (i, a) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(w, ", ")?;
+                        }
+                        self.write_type(w, a, false)?;
+                    }
+                    write!(w, ">")?;
+                }
+                return Ok(());
             }
         }
         match ty {
@@ -372,7 +394,7 @@ impl PrettyContext {
             }
 
             Type::Map(value) => {
-                write!(w, "Map<")?;
+                write!(w, "Dict<")?;
                 self.write_type(w, value, false)?;
                 write!(w, ">")
             }
@@ -918,5 +940,64 @@ mod tests {
         assert!(s.contains("<a>"), "missing <a> in {}", s);
         assert!(s.contains("where Plus"), "missing predicate in {}", s);
         assert!(s.contains("(a, a) => a"), "missing body in {}", s);
+    }
+}
+
+/// Whether `ty` is `pattern` with its `params` (variable ids) replaced by
+/// some types — recorded in `bound`, consistently.
+fn match_alias(
+    pattern: &Type,
+    ty: &Type,
+    params: &[u32],
+    bound: &mut std::collections::HashMap<u32, Type>,
+) -> bool {
+    match (pattern, ty) {
+        (Type::Var(TVarName::Flex(p)), _) if params.contains(p) => match bound.get(p) {
+            Some(b) => b == ty,
+            None => {
+                bound.insert(*p, ty.clone());
+                true
+            }
+        },
+        (Type::Row(a), Type::Row(b)) => {
+            a.tail == b.tail
+                && a.props.len() == b.props.len()
+                && a.props.iter().all(|(k, e)| {
+                    b.props
+                        .get(k)
+                        .is_some_and(|f| e.presence == f.presence && match_alias(&e.ty, &f.ty, params, bound))
+                })
+        }
+        (Type::Union(a), Type::Union(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| match_alias(x, y, params, bound))
+        }
+        (Type::Array(a), Type::Array(b)) | (Type::Promise(a), Type::Promise(b)) => {
+            match_alias(a, b, params, bound)
+        }
+        (
+            Type::Func {
+                this_type: t1,
+                params: p1,
+                ret: r1,
+            },
+            Type::Func {
+                this_type: t2,
+                params: p2,
+                ret: r2,
+            },
+        ) => {
+            p1.len() == p2.len()
+                && match (t1, t2) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => match_alias(a, b, params, bound),
+                    _ => false,
+                }
+                && p1
+                    .iter()
+                    .zip(p2)
+                    .all(|(x, y)| x.presence == y.presence && match_alias(&x.ty, &y.ty, params, bound))
+                && match_alias(r1, r2, params, bound)
+        }
+        (a, b) => a == b,
     }
 }

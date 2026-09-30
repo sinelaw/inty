@@ -1,20 +1,20 @@
 
-Error: Type mismatch: expected '{id: Number}', found '{id: String, … and 81 more}'
+Error: Type mismatch: expected '{id: Number}', found '{id: String, … and 106 more}'
    ╭─[ main.js:3:11 ]
    │
  3 │ const n = el;
    │           ─┬  
-   │            ╰── Type mismatch: expected '{id: Number}', found '{id: String, … and 81 more}'
+   │            ╰── Type mismatch: expected '{id: Number}', found '{id: String, … and 106 more}'
    │ 
-   │ Help: unexpected fields 'addEventListener', 'after', 'append', 'appendChild', 'async', … and 76 more (the expected record type is closed)
+   │ Help: unexpected fields 'addEventListener', 'after', 'append', 'appendChild', 'async', … and 101 more (the expected record type is closed)
    │ 
-   │ Note: Cannot unify expected '{id: Number}' with found '{id: String, … and 81 more}'
+   │ Note: Cannot unify expected '{id: Number}' with found '{id: String, … and 106 more}'
 ───╯
 
-Error: Property 'clientXYZ' not found in type {addEventListener: (String, (a) => Undefined) => Undefined, after: (a) => Undefined, append: (a) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 76 more}
+Error: Property 'clientXYZ' not found in type {addEventListener: (String, (DomEvent<a>) => Undefined) => Undefined, after: (a) => Undefined, append: (a) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 101 more}
    ╭─[ main.js:4:11 ]
    │
  4 │ const x = el.clientXYZ;
    │           ──────┬─────  
-   │                 ╰─────── Property 'clientXYZ' not found in type {addEventListener: (String, (a) => Undefined) => Undefined, after: (a) => Undefined, append: (a) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 76 more}
+   │                 ╰─────── Property 'clientXYZ' not found in type {addEventListener: (String, (DomEvent<a>) => Undefined) => Undefined, after: (a) => Undefined, append: (a) => Undefined, appendChild: (a) => a, async: Boolean, autofocus: Boolean, … and 101 more}
 ───╯

@@ -184,6 +184,26 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
         "padEnd" => optional_last(state, vec![n.clone()], s.clone(), s.clone()),
         "concat" => Type::simple_func(vec![s.clone()], s.clone()),
         "toString" => Type::simple_func(vec![], s.clone()),
+        // `match(re)`: the whole match and the capture groups, or `null`
+        // when nothing matches (so the result must be checked). A group
+        // that didn't participate reads as `undefined` at runtime but is
+        // typed `String`, as elsewhere for array reads.
+        "match" => Type::simple_func(
+            vec![Type::union(vec![s.clone(), Type::Regex])],
+            Type::union(vec![Type::array(s.clone()), Type::Null]),
+        ),
+        // `matchAll(re)`: one such array per match (an iterator in
+        // JavaScript; an array here, which `for … of` and spreading
+        // treat alike).
+        "matchAll" => Type::simple_func(
+            vec![Type::union(vec![s.clone(), Type::Regex])],
+            Type::array(Type::array(s.clone())),
+        ),
+        "search" => Type::simple_func(vec![Type::union(vec![s.clone(), Type::Regex])], Type::Int),
+        "localeCompare" => Type::simple_func(vec![s.clone()], n.clone()),
+        "at" => Type::simple_func(vec![Type::Int], Type::union(vec![s.clone(), Type::Undefined])),
+        "codePointAt" => Type::simple_func(vec![Type::Int], Type::Int),
+        "normalize" => optional_last(state, vec![], s.clone(), s.clone()),
         _ => {
             let _ = (state, n, s, b);
             return None;
@@ -295,11 +315,43 @@ pub fn regex_method_type(state: &mut InferState, method: &str) -> Option<Type> {
 
 /// The members of a typed array (`Int32Array`, …) that inty knows. A
 /// typed array has a fixed length, so it has no `push`/`pop`.
-pub fn typed_array_member_type(kind: crate::types::TypedArrayKind, member: &str) -> Option<Type> {
+pub fn typed_array_member_type(
+    state: &mut InferState,
+    kind: crate::types::TypedArrayKind,
+    member: &str,
+) -> Option<Type> {
+    use crate::types::FuncParam;
     let this = Type::TypedArray(kind);
     Some(match member {
-        "length" => Type::Int,
+        "length" | "byteLength" | "byteOffset" => Type::Int,
         "fill" => Type::simple_func(vec![kind.element()], this),
+        // `subarray(start?, end?)` views the same buffer; `slice` copies.
+        "subarray" | "slice" => {
+            let (p1, p2) = (state.fresh_pvar(), state.fresh_pvar());
+            Type::simple_func_with_params(
+                vec![
+                    FuncParam::optional(p1, Type::Int),
+                    FuncParam::optional(p2, Type::Int),
+                ],
+                this,
+            )
+        }
+        // `set(source, offset?)`: copy another array of the same kind in.
+        "set" => {
+            let p = state.fresh_pvar();
+            Type::simple_func_with_params(
+                vec![FuncParam::required(this), FuncParam::optional(p, Type::Int)],
+                Type::Undefined,
+            )
+        }
+        // The stdlib's `ArrayBuffer`.
+        "buffer" => {
+            let def = state.type_aliases.get("ArrayBuffer")?;
+            match def.rec_id {
+                Some(id) => Type::Named(id, Vec::new()),
+                None => def.body.clone(),
+            }
+        }
         _ => return None,
     })
 }

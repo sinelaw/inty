@@ -156,9 +156,10 @@ impl InferState {
                 Ok(kind.element())
             }
             Type::Map(value_type) => {
-                // Map indexing: unify index with String and return value type
+                // Map indexing: unify index with String and return value
+                // type — in JavaScript, or `undefined` for a missing key.
                 self.subsume(span, &index_type, &Type::String)?;
-                Ok(value_type.as_ref().clone())
+                Ok(self.dict_read(value_type))
             }
             Type::Tuple(elems) => {
                 // Tuple indexing is by a *constant* integer (heterogeneous,
@@ -249,7 +250,7 @@ impl InferState {
             }
             Type::Map(value_type) => {
                 self.subsume(span, index_type, &Type::String)?;
-                Ok(value_type.as_ref().clone())
+                Ok(self.dict_read(value_type))
             }
             Type::Tuple(elems) => {
                 // No source-level index expression here (union elimination),
@@ -308,3 +309,15 @@ fn const_tuple_index(e: &Expr, len: usize) -> Option<Result<usize, ()>> {
     }
 }
 
+impl InferState {
+    /// What reading a key of a `Dict<V>` gives: in JavaScript a missing
+    /// key reads as `undefined`, so `V | Undefined` (narrow it, or
+    /// `d[k] ?? fallback`); Python raises instead, so `V`.
+    pub(in crate::infer) fn dict_read(&self, value: &Type) -> Type {
+        if self.language == crate::ast::SourceLanguage::JavaScript {
+            Type::union(vec![value.clone(), Type::Undefined])
+        } else {
+            value.clone()
+        }
+    }
+}

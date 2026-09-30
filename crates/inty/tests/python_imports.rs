@@ -246,8 +246,8 @@ fn pyi_dict_maps_to_string_keyed_map() {
     write(&stubs, "m.pyi", "def lookup() -> dict[str, int]: ...\n");
     let ty = check("from m import lookup\nr = lookup()\nr\n", &dir, &[stubs]).expect("dict");
     assert!(
-        ty.contains("Map") || ty.contains("Number"),
-        "dict[str,int] -> Map<Number>, got {}",
+        ty.contains("Dict") || ty.contains("Number"),
+        "dict[str,int] -> Dict<Number>, got {}",
         ty
     );
 }

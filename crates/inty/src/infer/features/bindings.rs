@@ -239,6 +239,25 @@ impl InferState {
         // Check for assignment to immutable bindings
         self.check_assignment_target(env, left, span)?;
 
+        // A function assigned to a slot of a known function type (an event
+        // handler: `ws.onmessage = (m) => …`) is checked against it, as a
+        // callback argument is: its parameters get the slot's types.
+        if op == AssignOp::Assign
+            && matches!(right, Expr::Function { .. })
+            && matches!(left, Expr::Member { .. } | Expr::Ident { .. })
+            && lhs_polytype(self, env, left).is_none()
+        {
+            let left_type = self.infer_expr(env, left)?;
+            if crate::infer::features::functions::extract_callable(&self.zonk(&left_type)).is_some()
+            {
+                self.check_expr(env, right, &left_type)?;
+                return Ok(self.zonk(&left_type));
+            }
+            let right_type = self.infer_expr(env, right)?;
+            self.subsume(span, &right_type, &left_type)?;
+            return Ok(self.zonk(&left_type));
+        }
+
         let right_type = self.infer_expr(env, right)?;
 
         // Subsumption check: if the LHS resolves to a polymorphic scheme
