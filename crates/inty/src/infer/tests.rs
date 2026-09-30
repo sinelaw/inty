@@ -4452,3 +4452,15 @@ fn typed_arrays_have_fixed_length_and_machine_elements() {
     // Distinct kinds don't mix.
     assert!(ty("const a = new Int32Array(1); const b = new Uint8Array(1); const c = true ? a : b; c[0] = 1;", "c").is_err());
 }
+
+/// A `const` bound to a function is a declaration like any other: the
+/// program's result after it is `Undefined`, not the preceding
+/// expression's type (found by the metamorphic soak: inserting `;` or
+/// wrapping `true` in a call changed the program's type).
+#[test]
+fn const_function_statement_yields_undefined() {
+    let (ty, _, state) =
+        infer_program_via_program_with_stdlib("true;\nconst a = function() { return null; };")
+            .unwrap();
+    assert_eq!(state.apply_subst(&ty), Type::Undefined);
+}
