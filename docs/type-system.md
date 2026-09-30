@@ -182,6 +182,8 @@ Reading a member of, or indexing into, a union pushes the operation through ever
 
 In JavaScript annotations a class's name is its type (`/** const xs: (A | B)[] */`); Python annotations already name classes (`x: Dog | Cat = …`).
 
+A class's type takes a type argument for each type its constructor and methods leave generic — a field set from a constructor parameter, the receiver of a method that reads `this` — though the class declares none. `class Box { constructor(v) { this.v = v; } }` is `Box<T>`: write `Box<Number>`, or pass a type parameter through (`/** function f<A>(b: Box<A>) => A */`). The error for a bare `Box` says which fields and methods the arguments come from.
+
 `&&` and `||` return one of their operands. When both operand types are known, the result is what can come out: `a && b` is the falsy part of `a`'s type together with `b`'s, `a || b` the truthy part together with `b`'s. So `cond && maybeObj` (a `Boolean` and an `Undefined | {…}`) is `Boolean | Undefined | {…}`, fine as a test, and `name || "Guest"` with `name: String` is a `String`. An object, array or function is always truthy, so `obj && obj.x` is just `obj.x`'s type. With an operand whose type isn't known yet the two must agree, as before: nothing is guessed. The right operand is checked in the environment the left one leaves (`found && found.v` reads `v` of the narrowed `found`).
 
 ### Sum Types: Discriminated Unions & Narrowing (Predicate Refinement)
