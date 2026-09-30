@@ -85,3 +85,67 @@ fn parse_error_in_imported_module_points_at_that_module() {
         "the parse error lives in helpers.py, so the importer must not be blamed, got:\n{output}"
     );
 }
+
+/// Run the `inty` binary with `args` (colour disabled) in `dir`; returns
+/// (success, stdout, stderr).
+fn run_inty_args(dir: &Path, args: &[&str]) -> (bool, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_inty"))
+        .current_dir(dir)
+        .arg("--no-color")
+        .args(args)
+        .output()
+        .expect("spawn inty");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn several_files_share_the_modules_they_import() {
+    let dir = tmp_dir();
+    write(&dir, "store.js", "export const state = { n: 0 };\n");
+    write(
+        &dir,
+        "a.js",
+        "import { state } from \"./store.js\";\nexport function a() { state.n = state.n + 1; }\n",
+    );
+    write(
+        &dir,
+        "b.js",
+        "import { state } from \"./store.js\";\nimport { a } from \"./a.js\";\nexport function b() { a(); return state.n; }\n",
+    );
+    let (ok, stdout, stderr) = run_inty_args(&dir, &["store.js", "a.js", "b.js"]);
+    assert!(ok, "{stdout}{stderr}");
+    assert!(
+        stdout.contains("All checks passed: 3 files (3 modules checked"),
+        "{stdout}"
+    );
+    // A conflicting use in another file is reported in that file.
+    write(
+        &dir,
+        "c.js",
+        "import { state } from \"./store.js\";\nstate.n = \"many\";\n",
+    );
+    let (ok, stdout, stderr) = run_inty_args(&dir, &["a.js", "b.js", "c.js"]);
+    assert!(!ok, "{stdout}{stderr}");
+    assert!(stderr.contains("c.js:2"), "{stderr}");
+}
+
+#[test]
+fn timings_report_modules_and_declarations() {
+    let dir = tmp_dir();
+    write(&dir, "lib.js", "export function double(x) { return x * 2; }\n");
+    write(
+        &dir,
+        "main.js",
+        "import { double } from \"./lib.js\";\nfunction twice(n) { return double(double(n)); }\nconst r = twice(3);\n",
+    );
+    let (ok, _stdout, stderr) = run_inty_args(&dir, &["--timings", "main.js"]);
+    assert!(ok, "{stderr}");
+    assert!(stderr.contains("Timings"), "{stderr}");
+    assert!(stderr.contains("lib.js"), "{stderr}");
+    assert!(stderr.contains("function twice  (main.js:2)"), "{stderr}");
+    assert!(stderr.contains("const r  (main.js:3)"), "{stderr}");
+}

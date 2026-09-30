@@ -26,7 +26,7 @@ mod tests;
 pub use decorate::decorate_with_types;
 pub use env::{EnvFree, TypeEnv};
 pub use narrow::{apply_narrowing, Narrowing, Path};
-pub use state::{InferConfig, InferState, InferWarning, PendingConstraint, TypeClass};
+pub use state::{DeclTiming, InferConfig, InferState, InferWarning, PendingConstraint, TypeClass};
 pub use type_parser::{
     parse_type_annotation, parse_type_annotation_with_aliases, parse_type_annotation_with_pvars,
 };
@@ -168,9 +168,11 @@ impl InferState {
         // What the program leaves behind — a module's exports, the
         // top-level symbols — has each binding's own type, not one
         // narrowed by top-level control flow.
+        let depth = std::mem::replace(&mut self.stmt_list_depth, 0);
         let result = self
             .infer_stmt_list(&env, &program.statements)
             .map(|(ty, env)| (ty, env.without_narrowings().globalized()));
+        self.stmt_list_depth = depth;
         // Every binding read before its declaration must have met it
         // since: one that didn't means a declaration was bound under a
         // key its uses don't resolve to, and its reads were unconstrained.
@@ -506,6 +508,23 @@ impl InferState {
         env: &TypeEnv,
         stmts: &[Stmt],
     ) -> InferResult<(Type, TypeEnv)> {
+        self.stmt_list_depth += 1;
+        let result = self.infer_stmt_list_inner(env, stmts);
+        self.stmt_list_depth -= 1;
+        result
+    }
+
+    /// Whether the statement list being checked is a program's top level
+    /// and `--timings` is on.
+    fn timing_top_level(&self) -> bool {
+        self.stmt_list_depth == 1 && self.timings.is_some()
+    }
+
+    fn infer_stmt_list_inner(
+        &mut self,
+        env: &TypeEnv,
+        stmts: &[Stmt],
+    ) -> InferResult<(Type, TypeEnv)> {
         // Track names declared via `const` in this scope to reject
         // duplicate declarations, which are almost always bugs and match
         // standard JS semantics for const. Synthesised destructuring
@@ -721,7 +740,46 @@ impl InferState {
                     }
                 }
             }
-            match self.infer_stmt(&current_env, stmt) {
+            let timed = self
+                .timing_top_level()
+                .then(|| (std::time::Instant::now(), self.timing_nested));
+            let checked = self.infer_stmt(&current_env, stmt);
+            if let Some((started, nested)) = timed {
+                let time = started.elapsed().saturating_sub(self.timing_nested - nested);
+                let name = match stmt {
+                    Stmt::Var {
+                        kind, declarations, ..
+                    }
+                    | Stmt::Export {
+                        declaration: crate::ast::ExportDecl::Var {
+                            kind, declarations, ..
+                        },
+                        ..
+                    } => format!(
+                        "{} {}",
+                        match kind {
+                            VarKind::Const => "const",
+                            VarKind::Let => "let",
+                            VarKind::Var => "var",
+                        },
+                        declarations
+                            .iter()
+                            .map(|d| d.name.as_str())
+                            .filter(|n| !n.starts_with('$'))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    _ => "statement".to_string(),
+                };
+                if let Some(t) = self.timings.as_mut() {
+                    t.push(state::DeclTiming {
+                        name,
+                        span: stmt.span(),
+                        time,
+                    });
+                }
+            }
+            match checked {
                 Ok((ty, new_env)) => {
                     result = ty;
                     current_env = new_env;
@@ -892,7 +950,25 @@ impl InferState {
         // Gather the SCC's statements in source order. Cloning is cheap
         // relative to the inference work that follows.
         let group_stmts: Vec<Stmt> = scc_groups[gi].iter().map(|&i| stmts[i].clone()).collect();
-        match self.infer_function_group(current_env, &group_stmts) {
+        let started = self.timing_top_level().then(std::time::Instant::now);
+        let inferred = self.infer_function_group(current_env, &group_stmts);
+        if let Some(started) = started {
+            let time = started.elapsed();
+            self.timing_nested += time;
+            let names: Vec<&str> = group_stmts
+                .iter()
+                .filter_map(|s| crate::infer::features::functions::function_decl_parts(s))
+                .map(|(name, ..)| name)
+                .collect();
+            if let Some(t) = self.timings.as_mut() {
+                t.push(state::DeclTiming {
+                    name: format!("function {}", names.join(", ")),
+                    span: group_stmts[0].span(),
+                    time,
+                });
+            }
+        }
+        match inferred {
             Ok(new_env) => *current_env = new_env,
             Err(err) => {
                 // Best-effort recovery: bind every member of the failed

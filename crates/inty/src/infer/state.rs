@@ -97,6 +97,17 @@ pub struct PendingConstraint {
     pub span: Span,
 }
 
+/// How long checking one top-level declaration took (`--timings`): a
+/// statement, or a group of (mutually recursive) function declarations.
+#[derive(Debug, Clone)]
+pub struct DeclTiming {
+    /// `function f`, `const a, b`, … or `statement`.
+    pub name: String,
+    /// Where it is (a `SourceMap` span for an imported module's).
+    pub span: Span,
+    pub time: std::time::Duration,
+}
+
 /// A non-fatal diagnostic raised during inference. Warnings are
 /// collected on `InferState` and surfaced after inference completes;
 /// they do not abort type-checking.
@@ -237,6 +248,18 @@ pub struct InferState {
     pub sources: crate::error::SourceMap,
     /// How many imported modules are being checked (nested).
     pub module_depth: usize,
+    /// `--timings`: when `Some`, the time each top-level declaration of
+    /// every program took (see [`DeclTiming`]).
+    pub timings: Option<Vec<DeclTiming>>,
+    /// `--timings`: each module's own checking time (its imports
+    /// excluded), in the order they finished.
+    pub module_timings: Vec<(String, std::time::Duration)>,
+    /// Nesting of `infer_stmt_list` within the current program: 1 is its
+    /// top level.
+    pub(in crate::infer) stmt_list_depth: usize,
+    /// Time top-level function groups took while a top-level statement
+    /// was being checked (so the statement's own time excludes them).
+    pub(in crate::infer) timing_nested: std::time::Duration,
     /// Modules checked so far this run, by canonical path: their
     /// environments and export tables (see `modules::load_imported`).
     pub module_cache: HashMap<
@@ -475,6 +498,10 @@ impl InferState {
             sources: Default::default(),
             module_depth: 0,
             module_cache: HashMap::new(),
+            timings: None,
+            module_timings: Vec::new(),
+            stmt_list_depth: 0,
+            timing_nested: std::time::Duration::ZERO,
             config,
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
