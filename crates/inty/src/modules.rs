@@ -559,53 +559,50 @@ fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
             name
         )));
     }
-    // Direct relative / absolute resolution. Tried first so existing
-    // `./foo.js` style imports keep working with no config in sight.
     let raw = Path::new(source);
     let direct_candidate = if raw.is_absolute() {
         raw.to_path_buf()
     } else {
         base_dir.join(raw)
     };
-    if let Some(p) = try_extensions(&direct_candidate) {
-        return Ok(p);
+    // A relative or absolute path names a file.
+    let is_path = source.starts_with('.') || raw.is_absolute();
+    if is_path {
+        if let Some(p) = try_extensions(&direct_candidate) {
+            return Ok(p);
+        }
     }
 
-    // Path-alias / baseUrl resolution via the nearest inty.json. This
-    // is what makes bare specifiers like `@hotwired/stimulus` and
-    // root-relative names like `controllers/foo` resolvable, given a
-    // user-supplied stub or layout config. See `IntyConfig` docs.
-    if let Some(cfg) = find_inty_config(base_dir)? {
-        // Exact-match path entries first: `"@hotwired/stimulus":
-        // ["./inty-stubs/..."]`.
-        if let Some(targets) = cfg.paths.get(source) {
-            for t in targets {
-                let anchored = anchor_under_config(&cfg, t);
-                if let Some(p) = try_extensions(&anchored) {
-                    return Ok(p);
-                }
-            }
+    // A mapped specifier wins over a same-named file on disk, as with
+    // Node's `package.json` "imports": first the nearest inty.json's
+    // "paths" (what the checker should see — typically a `.d.js`), then
+    // the nearest package.json's "imports" (what the runtime loads,
+    // where a `.d.js` next to a mapped `.js` is preferred). This is what
+    // makes bare specifiers like `@hotwired/stimulus` and `#platform`
+    // resolvable, given a user-supplied stub or layout config. See
+    // `IntyConfig` docs.
+    let config = if is_path { None } else { find_inty_config(base_dir)? };
+    if let Some(cfg) = &config {
+        if let Some(p) = resolve_config_paths(cfg, source) {
+            return Ok(p);
         }
-        // Wildcard path entries: `"controllers/*": ["./controllers/*"]`.
-        // Single `*` per pattern, matching tsconfig-paths convention.
-        for (pattern, targets) in &cfg.paths {
-            if let Some(rest) = wildcard_match(pattern, source) {
-                for t in targets {
-                    let resolved_template = t.replace('*', &rest);
-                    let anchored = anchor_under_config(&cfg, &resolved_template);
-                    if let Some(p) = try_extensions(&anchored) {
-                        return Ok(p);
-                    }
-                }
-            }
+    }
+    if !is_path && source.starts_with('#') {
+        if let Some(p) = resolve_package_import(base_dir, source)? {
+            return Ok(p);
         }
-        // Last-resort baseUrl: `import "controllers/foo"` with
-        // `baseUrl: "./app/javascript"` tries
-        // `./app/javascript/controllers/foo.js`. Skipped for module
-        // specs that look obviously like third-party packages
-        // (`@scope/name` or anything starting with `.`/`/`).
+    }
+    if !is_path {
+        if let Some(p) = try_extensions(&direct_candidate) {
+            return Ok(p);
+        }
+    }
+    // Last-resort baseUrl: `import "controllers/foo"` with
+    // `baseUrl: "./app/javascript"` tries
+    // `./app/javascript/controllers/foo.js`.
+    if let Some(cfg) = &config {
         if let Some(base) = &cfg.base_url {
-            let base = anchor_under_config(&cfg, base);
+            let base = anchor_under_config(cfg, base);
             let candidate = base.join(source);
             if let Some(p) = try_extensions(&candidate) {
                 return Ok(p);
@@ -614,11 +611,110 @@ fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
     }
 
     Err(format!(
-        "no such file (tried {}, {}.js, {}.d.js; also checked inty.json paths/baseUrl)",
+        "no such file (tried {}, {}.js, {}.d.js; also checked inty.json paths/baseUrl \
+         and package.json imports)",
         direct_candidate.display(),
         direct_candidate.display(),
         direct_candidate.display()
     ))
+}
+
+/// Resolve `source` through an inty.json's "paths": exact entries first
+/// (`"@hotwired/stimulus": ["./inty-stubs/..."]`), then single-`*`
+/// patterns (`"controllers/*": ["./controllers/*"]`, the tsconfig-paths
+/// convention).
+fn resolve_config_paths(cfg: &IntyConfig, source: &str) -> Option<PathBuf> {
+    if let Some(targets) = cfg.paths.get(source) {
+        for t in targets {
+            if let Some(p) = try_extensions(&anchor_under_config(cfg, t)) {
+                return Some(p);
+            }
+        }
+    }
+    let mut patterns: Vec<(&String, &Vec<String>)> = cfg.paths.iter().collect();
+    // Longest prefix first, so the most specific pattern wins whatever the
+    // map's order.
+    patterns.sort_by_key(|(k, _)| std::cmp::Reverse(k.find('*').unwrap_or(k.len())));
+    for (pattern, targets) in patterns {
+        if let Some(rest) = wildcard_match(pattern, source) {
+            for t in targets {
+                let resolved_template = t.replace('*', &rest);
+                if let Some(p) = try_extensions(&anchor_under_config(cfg, &resolved_template)) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a `#name` specifier through the nearest package.json's
+/// "imports" (Node's subpath imports): an exact key or a single-`*`
+/// pattern, whose target is a path or a conditions object (the first of
+/// "types", "inty", "import", "node", "default" that resolves). A
+/// declaration file next to the target (`platform.d.js` for
+/// `platform.js`) is preferred: the checker wants the typed surface.
+fn resolve_package_import(base_dir: &Path, source: &str) -> Result<Option<PathBuf>, String> {
+    let mut here: Option<&Path> = Some(base_dir);
+    while let Some(dir) = here {
+        let candidate = dir.join("package.json");
+        if candidate.is_file() {
+            let content = std::fs::read_to_string(&candidate)
+                .map_err(|e| format!("reading {}: {}", candidate.display(), e))?;
+            let json: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("parsing {}: {}", candidate.display(), e))?;
+            let Some(imports) = json.get("imports").and_then(|v| v.as_object()) else {
+                // Node uses the nearest package.json, "imports" or not.
+                return Ok(None);
+            };
+            let (target, rest) = match imports.get(source) {
+                Some(t) => (t, None),
+                None => {
+                    let mut found = None;
+                    for (pattern, t) in imports {
+                        if let Some(rest) = wildcard_match(pattern, source).filter(|_| pattern.contains('*')) {
+                            found = Some((t, Some(rest)));
+                            break;
+                        }
+                    }
+                    match found {
+                        Some(f) => f,
+                        None => return Ok(None),
+                    }
+                }
+            };
+            let Some(target) = package_target(target) else {
+                return Ok(None);
+            };
+            let target = match rest {
+                Some(rest) => target.replace('*', &rest),
+                None => target.to_string(),
+            };
+            let path = dir.join(target);
+            let declaration = match path.to_str().and_then(|p| p.strip_suffix(".js")) {
+                Some(stem) if !stem.ends_with(".d") => Some(PathBuf::from(format!("{stem}.d.js"))),
+                _ => None,
+            };
+            if let Some(p) = declaration.as_deref().and_then(try_extensions) {
+                return Ok(Some(p));
+            }
+            return Ok(try_extensions(&path));
+        }
+        here = dir.parent();
+    }
+    Ok(None)
+}
+
+/// The path a package.json "imports" target names: a string, or the
+/// first condition inty understands.
+fn package_target(target: &serde_json::Value) -> Option<&str> {
+    match target {
+        serde_json::Value::String(s) => Some(s),
+        serde_json::Value::Object(conditions) => ["types", "inty", "import", "node", "default"]
+            .iter()
+            .find_map(|c| conditions.get(*c).and_then(package_target)),
+        _ => None,
+    }
 }
 
 /// Match `text` against a pattern containing at most one `*`. Returns
@@ -1094,6 +1190,78 @@ mod tests {
         write_file(dir.path(), "main.js", "import { y } from \"./a.js\";");
         let err = resolve(dir.path(), "main.js").expect_err("cycle should error");
         assert!(format!("{}", err).contains("circular"));
+    }
+
+    // Bug 11 (Rosaclef): a mapped specifier wins over a same-named file.
+    #[test]
+    fn inty_json_paths_win_over_a_same_named_file() {
+        let dir = tempdir();
+        std::fs::create_dir_all(dir.path().join("types")).unwrap();
+        // An untyped runtime file that happens to match the specifier.
+        write_file(dir.path(), "#platform.js", "export const now = 1;");
+        write_file(
+            dir.path(),
+            "types/platform.d.js",
+            "/** const now: () => Number */ export const now;",
+        );
+        write_file(
+            dir.path(),
+            "inty.json",
+            r##"{ "paths": { "#platform": ["./types/platform.d.js"] } }"##,
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { now } from \"#platform\"; const t = now() + 0.5;",
+        );
+        check(dir.path(), "main.js").expect("the mapped .d.js is used");
+        assert_eq!(
+            resolve_path(dir.path(), "#platform").unwrap(),
+            dir.path().join("types/platform.d.js").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn package_json_imports_resolve_to_the_declaration_file() {
+        let dir = tempdir();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        write_file(dir.path(), "lib/platform.js", "export const now = () => 0;");
+        write_file(
+            dir.path(),
+            "lib/platform.d.js",
+            "/** const now: () => Number */ export const now;",
+        );
+        write_file(dir.path(), "lib/util.js", "export const two = 2;");
+        write_file(
+            dir.path(),
+            "package.json",
+            r##"{ "imports": {
+                "#platform": "./lib/platform.js",
+                "#util/*": { "node": "./lib/*.js", "default": "./nope/*.js" }
+            } }"##,
+        );
+        write_file(
+            dir.path(),
+            "src/main.js",
+            "import { now } from \"#platform\"; import { two } from \"#util/util\";\n\
+             const t = now() + two;",
+        );
+        check(&dir.path().join("src"), "main.js").expect("package imports resolve");
+        assert_eq!(
+            resolve_path(&dir.path().join("src"), "#platform").unwrap(),
+            dir.path().join("lib/platform.d.js").canonicalize().unwrap()
+        );
+        // inty.json still wins over package.json.
+        write_file(
+            dir.path(),
+            "inty.json",
+            r##"{ "paths": { "#platform": ["./lib/util.js"] } }"##,
+        );
+        assert_eq!(
+            resolve_path(&dir.path().join("src"), "#platform").unwrap(),
+            dir.path().join("lib/util.js").canonicalize().unwrap()
+        );
     }
 
     fn tempdir() -> TempDir {
