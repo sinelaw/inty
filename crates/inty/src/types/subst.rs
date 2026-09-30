@@ -95,7 +95,25 @@ impl Drop for ApplySubstGuard {
 pub struct Subst {
     map: HashMap<TVarName, Type>,
     presences: HashMap<PVarName, Presence>,
+    /// Undo log (Warren's trail, as in `VarTable`): each mutation's
+    /// prior entry, so a speculative branch is rolled back by undoing
+    /// its writes instead of the caller cloning the whole map. `None`
+    /// (the default) records nothing; the inference state's main
+    /// substitution enables it (`with_trail`).
+    trail: Option<Vec<SubstUndo>>,
 }
+
+/// One entry of [`Subst`]'s undo log: a key and what it mapped to
+/// before a write (`None`: unbound).
+#[derive(Clone, Debug)]
+enum SubstUndo {
+    Type(TVarName, Option<Type>),
+    Presence(PVarName, Option<Presence>),
+}
+
+/// A point in a [`Subst`]'s undo log (see [`Subst::mark`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubstMark(usize);
 
 impl Subst {
     /// Create an empty substitution.
@@ -103,6 +121,54 @@ impl Subst {
         Subst {
             map: HashMap::new(),
             presences: HashMap::new(),
+            trail: None,
+        }
+    }
+
+    /// An empty substitution that records its writes, so it can be
+    /// rolled back to a [`Subst::mark`] with [`Subst::undo_to`].
+    pub fn with_trail() -> Self {
+        Subst {
+            trail: Some(Vec::new()),
+            ..Subst::empty()
+        }
+    }
+
+    /// The current point of the undo log.
+    pub fn mark(&self) -> SubstMark {
+        SubstMark(self.trail.as_ref().map_or(0, Vec::len))
+    }
+
+    /// Undo every write made since `mark`, newest first. Cheap:
+    /// O(writes undone).
+    pub fn undo_to(&mut self, mark: SubstMark) {
+        let Some(trail) = self.trail.as_mut() else {
+            debug_assert!(false, "undo_to on a substitution without a trail");
+            return;
+        };
+        while trail.len() > mark.0 {
+            match trail.pop().expect("trail not empty") {
+                SubstUndo::Type(var, Some(prev)) => {
+                    self.map.insert(var, prev);
+                }
+                SubstUndo::Type(var, None) => {
+                    self.map.remove(&var);
+                }
+                SubstUndo::Presence(pvar, Some(prev)) => {
+                    self.presences.insert(pvar, prev);
+                }
+                SubstUndo::Presence(pvar, None) => {
+                    self.presences.remove(&pvar);
+                }
+            }
+        }
+    }
+
+    /// Write `var ↦ ty`, logging the previous entry.
+    fn write(&mut self, var: TVarName, ty: Type) {
+        let prev = self.map.insert(var.clone(), ty);
+        if let Some(trail) = self.trail.as_mut() {
+            trail.push(SubstUndo::Type(var, prev));
         }
     }
 
@@ -113,6 +179,7 @@ impl Subst {
         Subst {
             map,
             presences: HashMap::new(),
+            trail: None,
         }
     }
 
@@ -170,7 +237,7 @@ impl Subst {
         // itself (we don't want to write a binding for an unbound
         // variable).
         for k in &chain {
-            self.map.insert(k.clone(), current.clone());
+            self.write(k.clone(), current.clone());
         }
         Some(current)
     }
@@ -192,17 +259,23 @@ impl Subst {
 
     /// Insert a type mapping into the substitution.
     pub fn insert(&mut self, var: TVarName, ty: Type) {
-        self.map.insert(var, ty);
+        self.write(var, ty);
     }
 
     /// Insert a presence mapping into the substitution.
     pub fn insert_presence(&mut self, pvar: PVarName, pres: Presence) {
-        self.presences.insert(pvar, pres);
+        let prev = self.presences.insert(pvar.clone(), pres);
+        if let Some(trail) = self.trail.as_mut() {
+            trail.push(SubstUndo::Presence(pvar, prev));
+        }
     }
 
     /// Remove a type variable from the substitution.
     pub fn remove(&mut self, var: &TVarName) {
-        self.map.remove(var);
+        let prev = self.map.remove(var);
+        if let (Some(trail), Some(prev)) = (self.trail.as_mut(), prev) {
+            trail.push(SubstUndo::Type(var.clone(), Some(prev)));
+        }
     }
 
     /// Get the domain (set of type variables) of this substitution.
@@ -272,6 +345,7 @@ impl Subst {
         Subst {
             map: result,
             presences,
+            trail: None,
         }
     }
 
@@ -301,6 +375,7 @@ impl Subst {
         Subst {
             map,
             presences: self.presences.clone(),
+            trail: None,
         }
     }
 
@@ -473,6 +548,7 @@ impl FromIterator<(TVarName, Type)> for Subst {
         Subst {
             map: iter.into_iter().collect(),
             presences: HashMap::new(),
+            trail: None,
         }
     }
 }
