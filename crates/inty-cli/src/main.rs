@@ -8,12 +8,12 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use inty::ast::pretty::print_program;
-use inty::diagnostics::{print_error, print_error_plain, print_warning, print_warning_plain};
+use inty::diagnostics::{print_error, print_error_in, print_error_plain, print_warning_in};
 use inty::error::{IntyError, LocatedError};
 use inty::frontends::javascript::lexer::{Scanner, Token};
 use inty::frontends::javascript::parser::Parser;
 use inty::frontends::Language;
-use inty::infer::{decorate_with_types, InferState, InferWarning, TypeEnv};
+use inty::infer::{decorate_with_types, InferState, TypeEnv};
 use inty::stdlib::{initial_env_with_stdlib, load_lib};
 /// Counters reported after a successful run — surfaced in the summary
 /// line so the user gets a confirming signal that scales with the work
@@ -170,14 +170,6 @@ fn main() -> ExitCode {
         }
     };
 
-    let report_warning = |path: &str, source: &str, warning: &InferWarning| {
-        if args.no_color {
-            print_warning_plain(path, source, warning);
-        } else {
-            print_warning(path, source, warning);
-        }
-    };
-
     // Load any extra user-supplied lib files.
     let (env, mut state) = match load_extra_libs(env, state, &args.extra_libs, &report) {
         Ok(r) => r,
@@ -197,8 +189,12 @@ fn main() -> ExitCode {
     });
     let state = thread_state;
 
+    // Imported modules' spans say which file they are in (`SourceMap`);
+    // what doesn't (the entry's, or a module's lexing error) renders
+    // against the file the error was raised in.
+    let color = !args.no_color;
     for warning in &state.warnings {
-        report_warning(&filename, &source, warning);
+        print_warning_in(&filename, &source, &state.sources, warning, color);
     }
 
     match result {
@@ -208,11 +204,11 @@ fn main() -> ExitCode {
         }
         Err(errors) => {
             for located in errors {
-                // An imported module's error carries that module's source;
-                // entry-file errors (`None`) render against the entry.
                 match &located.source {
-                    Some(src) => report(&src.path, &src.text, &located.error),
-                    None => report(&filename, &source, &located.error),
+                    Some(src) => {
+                        print_error_in(&src.path, &src.text, &state.sources, &located.error, color)
+                    }
+                    None => print_error_in(&filename, &source, &state.sources, &located.error, color),
                 }
             }
             ExitCode::from(1)
@@ -336,14 +332,6 @@ fn run_declarations(args: &[String]) -> ExitCode {
         }
     };
 
-    let report_err = |source_label: &str, source: &str, error: &IntyError| {
-        if no_color {
-            print_error_plain(source_label, source, error);
-        } else {
-            print_error(source_label, source, error);
-        }
-    };
-
     // check_module + resolve_constraints together are the heavy
     // inference path. Route through the worker helper so htmx-class
     // entry modules get the same 64 MB stack the `inty <file>` path
@@ -352,21 +340,27 @@ fn run_declarations(args: &[String]) -> ExitCode {
     let check_result = inty::worker::run_with_inference_stack("inty-cli-decl", move || {
         let check =
             inty::modules::check_module(&mut state, env, std::path::Path::new(&path_for_thread));
-        match check {
+        let checked = match check {
             Ok((module_env, exports)) => {
                 state.resolve_constraints().map(|()| (module_env, exports))
             }
             Err(e) => Err(e),
+        };
+        let sources = std::mem::take(&mut state.sources);
+        match checked {
+            Ok((module_env, exports)) => Ok((module_env, exports, sources)),
+            Err(e) => Err((e, sources)),
         }
     });
-    let (module_env, exports) = match check_result {
+    let (module_env, exports, sources) = match check_result {
         Ok(r) => r,
-        Err(e) => {
+        Err((e, sources)) => {
             let source = fs::read_to_string(&path).unwrap_or_default();
-            report_err(&path, &source, &e);
+            print_error_in(&path, &source, &sources, &e, !no_color);
             return ExitCode::from(1);
         }
     };
+    let _ = sources;
 
     let module = inty::declarations::CheckedModule::new(module_env, exports);
     print!(
@@ -443,13 +437,14 @@ fn run_bundle(args: &[String]) -> ExitCode {
     let check_result = inty::worker::run_with_inference_stack("inty-cli-bundle", move || {
         let mut state = state;
         let entry_path = std::path::Path::new(&entry_for_thread);
-        inty::modules::check_module(&mut state, env, entry_path)?;
-        state.resolve_constraints()
+        let checked = inty::modules::check_module(&mut state, env, entry_path)
+            .and_then(|_| state.resolve_constraints());
+        checked.map_err(|e| (e, std::mem::take(&mut state.sources)))
     });
-    if let Err(e) = check_result {
+    if let Err((e, sources)) = check_result {
         let entry_path = std::path::Path::new(&entry);
         let source = fs::read_to_string(entry_path).unwrap_or_default();
-        print_error_plain(&entry, &source, &e);
+        print_error_in(&entry, &source, &sources, &e, false);
         return ExitCode::from(1);
     }
     let entry_path = std::path::Path::new(&entry);

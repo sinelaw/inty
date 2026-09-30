@@ -577,6 +577,19 @@ impl InferState {
     /// Resolve pending type class constraints.
     /// This should be called after inference to check that all constraints are satisfiable.
     pub fn resolve_constraints(&mut self) -> Result<(), IntyError> {
+        self.resolve_constraints_keeping(&Default::default())
+    }
+
+    /// [`Self::resolve_constraints`], except that the numeric variables
+    /// in `keep` aren't defaulted: an imported module's, which the
+    /// bindings it leaves for its importers reach. Their uses there
+    /// decide them (`store.volume = 0.5` in another module makes the
+    /// field a `Number`), as in a single file; the end of the program
+    /// defaults what's left.
+    pub fn resolve_constraints_keeping(
+        &mut self,
+        keep: &std::collections::HashSet<TVarName>,
+    ) -> Result<(), IntyError> {
         self.constraint_removals += 1;
         // Resolving one constraint can make another's container concrete
         // (an `Indexable` whose container is still a variable is deferred),
@@ -585,7 +598,7 @@ impl InferState {
         // type unconstrained.
         // Numeric variables first: an `Int` index or a `Number` receiver
         // can decide what's left.
-        self.default_numeric(&Default::default(), None, false)?;
+        self.default_numeric(keep, None, false)?;
         let mut constraints = std::mem::take(&mut self.pending_constraints);
         loop {
             let before = constraints.len();
@@ -605,7 +618,7 @@ impl InferState {
             }
             if deferred.len() == before {
                 self.pending_constraints = deferred;
-                let numeric = self.default_numeric(&Default::default(), None, false)?;
+                let numeric = self.default_numeric(keep, None, false)?;
                 deferred = std::mem::take(&mut self.pending_constraints);
                 if numeric {
                     constraints = deferred;
@@ -649,7 +662,7 @@ impl InferState {
                     // down: no use of it depends on the element type. Its
                     // numeric variables still get their default.
                     self.pending_constraints = rest;
-                    if self.default_numeric(&Default::default(), None, true)? {
+                    if self.default_numeric(keep, None, true)? {
                         constraints = std::mem::take(&mut self.pending_constraints);
                         continue;
                     }

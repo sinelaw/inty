@@ -89,6 +89,9 @@ pub struct Parser {
     /// in class-body field declarations. Empty when the parser is
     /// constructed without a source (legacy callers in tests).
     source: String,
+    /// What the token spans were shifted by (see [`parse_at`]): a span's
+    /// offset into `source` is `span - base`.
+    base: usize,
 }
 
 impl Parser {
@@ -113,6 +116,7 @@ impl Parser {
             class_depth: 0,
             class_brands: Vec::new(),
             source,
+            base: 0,
         }
     }
 
@@ -1320,10 +1324,13 @@ impl Parser {
                         .into());
                     }
                     let content = if !self.source.is_empty()
-                        && type_end <= self.source.len()
+                        && type_start >= self.base
+                        && type_end - self.base <= self.source.len()
                         && type_start <= type_end
                     {
-                        self.source[type_start..type_end].trim().to_string()
+                        self.source[type_start - self.base..type_end - self.base]
+                            .trim()
+                            .to_string()
                     } else {
                         // Parser was constructed without source — TS-style
                         // inline annotations are only available when going
@@ -3697,8 +3704,8 @@ impl Parser {
         if self.source.is_empty() {
             return false;
         }
-        let prev_end = self.prev_span().end;
-        let cur_start = self.current_span().start;
+        let prev_end = self.prev_span().end.saturating_sub(self.base);
+        let cur_start = self.current_span().start.saturating_sub(self.base);
         if cur_start <= prev_end {
             return false;
         }
@@ -3896,12 +3903,29 @@ impl Parser {
 
 /// Parse source code into an AST
 pub fn parse(source: &str) -> Result<Program> {
+    parse_at(source, 0)
+}
+
+/// [`parse`], with every span shifted by `base`: the span range a
+/// [`crate::error::SourceMap`] reserved for the file. (A lexing error's
+/// span stays unshifted, local to `source`.)
+pub fn parse_at(source: &str, base: usize) -> Result<Program> {
     use crate::frontends::javascript::lexer::Scanner;
 
     let scanner = Scanner::new(source);
-    let (tokens, type_annotations, type_aliases) = scanner.tokenize()?;
+    let (mut tokens, mut type_annotations, mut type_aliases) = scanner.tokenize()?;
+    if base != 0 {
+        let shift = |s: &mut crate::span::Span| {
+            s.start += base;
+            s.end += base;
+        };
+        tokens.iter_mut().for_each(|t| shift(&mut t.span));
+        type_annotations.iter_mut().for_each(|a| shift(&mut a.span));
+        type_aliases.iter_mut().for_each(|a| shift(&mut a.span));
+    }
 
     let mut parser = Parser::with_source(tokens, type_annotations, source.to_string());
+    parser.base = base;
     let mut program = parser.parse_program()?;
     program.type_aliases = type_aliases;
     Ok(program)

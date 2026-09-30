@@ -140,6 +140,63 @@ pub struct SourceFile {
     pub text: String,
 }
 
+/// Where the spans of an imported module live: each module's spans are
+/// shifted into a range of their own, from [`SourceMap::BASE`] up, so a
+/// span alone says which file it is in — a diagnostic about one module
+/// can point into another (the use that required what failed). Spans
+/// below `BASE` are the entry program's (or, for a parse error, the
+/// file being parsed).
+#[derive(Debug, Clone, Default)]
+pub struct SourceMap {
+    /// `(base, file)`, bases ascending.
+    files: Vec<(usize, std::sync::Arc<SourceFile>)>,
+}
+
+impl SourceMap {
+    /// Where the first module's spans start.
+    pub const BASE: usize = 1 << 40;
+
+    /// Reserve a span range for `file`, returning its base.
+    pub fn add(&mut self, path: String, text: String) -> usize {
+        let base = match self.files.last() {
+            Some((b, f)) => b + f.text.len() + 1,
+            None => Self::BASE,
+        };
+        self.files
+            .push((base, std::sync::Arc::new(SourceFile { path, text })));
+        base
+    }
+
+    /// The file `span` is in and the span within it, for a span of a
+    /// registered module; `None` for an entry-program span.
+    pub fn locate(&self, span: crate::span::Span) -> Option<(&SourceFile, crate::span::Span)> {
+        if span.start < Self::BASE {
+            return None;
+        }
+        let i = self.files.partition_point(|(b, _)| *b <= span.start);
+        let (base, file) = self.files.get(i.checked_sub(1)?)?;
+        Some((
+            file,
+            crate::span::Span::new(span.start - base, span.end.saturating_sub(*base)),
+        ))
+    }
+
+    /// Every registered file's `(path, text)`.
+    pub fn files(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.files
+            .iter()
+            .map(|(_, f)| (f.path.as_str(), f.text.as_str()))
+    }
+
+    /// The registered file with the given base.
+    pub fn file_at(&self, base: usize) -> Option<SourceFile> {
+        self.files
+            .iter()
+            .find(|(b, _)| *b == base)
+            .map(|(_, f)| (**f).clone())
+    }
+}
+
 /// An error paired with the source file its span refers to. `source` is
 /// `None` for the entry/primary file (the common single-file case); it is
 /// `Some` when the error originates in an imported module.

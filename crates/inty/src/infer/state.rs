@@ -233,6 +233,10 @@ pub struct InferState {
     /// module loader while inferring an imported module and restored
     /// afterwards; `None` means the entry source.
     current_source: Option<SourceFile>,
+    /// The span ranges of imported modules (see `SourceMap`).
+    pub sources: crate::error::SourceMap,
+    /// How many imported modules are being checked (nested).
+    pub module_depth: usize,
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
@@ -462,6 +466,8 @@ impl InferState {
             errors: Vec::new(),
             error_sources: Vec::new(),
             current_source: None,
+            sources: Default::default(),
+            module_depth: 0,
             config,
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
@@ -2049,6 +2055,16 @@ impl InferState {
             let scheme_preds = crate::infer::features::numeric::tidy_scheme_preds(scheme_preds);
             TypeScheme::qualified_with_presence(gen_vars, gen_pvars, scheme_preds, ty)
         }
+    }
+
+    /// The type variables `env`'s bindings reach (through the
+    /// substitution and named types): what a module leaves for its
+    /// importers to decide.
+    pub fn reachable_vars(
+        &mut self,
+        env: &crate::infer::TypeEnv,
+    ) -> std::collections::HashSet<TVarName> {
+        self.env_fixed_vars(&env.free(), &Type::Undefined).0
     }
 
     /// The type and presence variables generalisation must leave alone.
