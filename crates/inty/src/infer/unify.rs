@@ -452,7 +452,10 @@ impl InferState {
         for prop in &all_props {
             match (r1.props.get(prop), r2.props.get(prop)) {
                 (Some(e1), Some(e2)) => {
-                    if self.unify_presence(span, &e1.presence, &e2.presence).is_err() {
+                    if self
+                        .unify_presence(span, &e1.presence, &e2.presence)
+                        .is_err()
+                    {
                         return Err(self.field_presence_error(span, prop, r1, r2));
                     }
                     self.unify(span, &e1.ty, &e2.ty)?;
@@ -716,7 +719,10 @@ impl InferState {
     /// two differ.
     pub(crate) fn show_pair(&self, t1: &Type, t2: &Type) -> (String, String) {
         let mut tidy = crate::types::TidyEnv::new();
-        let (a, b) = (self.display_form(&mut tidy, t1), self.display_form(&mut tidy, t2));
+        let (a, b) = (
+            self.display_form(&mut tidy, t1),
+            self.display_form(&mut tidy, t2),
+        );
         // The fields a mismatch of two records is about: those both have,
         // with different types; else those the smaller has and the larger
         // lacks.
@@ -804,7 +810,13 @@ impl InferState {
     }
 
     /// `prop` is present in one of `r1`, `r2` and absent from the other.
-    fn field_presence_error(&self, span: Span, prop: &PropName, r1: &RowType, r2: &RowType) -> IntyError {
+    fn field_presence_error(
+        &self,
+        span: Span,
+        prop: &PropName,
+        r1: &RowType,
+        r2: &RowType,
+    ) -> IntyError {
         if self.quiet > 0 {
             return self.unification_error(span, &Type::Undefined, &Type::Undefined);
         }

@@ -331,7 +331,8 @@ pub fn resolve_imports(
                 }));
             }
 
-            let (module_env, exports) = load_imported(state, env.clone(), &resolved_path, visiting)?;
+            let (module_env, exports) =
+                load_imported(state, env.clone(), &resolved_path, visiting)?;
 
             let lookup_export_scheme = |name: &str| -> Option<TypeScheme> {
                 exports
@@ -659,7 +660,11 @@ fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
     // makes bare specifiers like `@hotwired/stimulus` and `#platform`
     // resolvable, given a user-supplied stub or layout config. See
     // `IntyConfig` docs.
-    let config = if is_path { None } else { find_inty_config(base_dir)? };
+    let config = if is_path {
+        None
+    } else {
+        find_inty_config(base_dir)?
+    };
     if let Some(cfg) = &config {
         if let Some(p) = resolve_config_paths(cfg, source) {
             return Ok(p);
@@ -750,7 +755,9 @@ fn resolve_package_import(base_dir: &Path, source: &str) -> Result<Option<PathBu
                 None => {
                     let mut found = None;
                     for (pattern, t) in imports {
-                        if let Some(rest) = wildcard_match(pattern, source).filter(|_| pattern.contains('*')) {
+                        if let Some(rest) =
+                            wildcard_match(pattern, source).filter(|_| pattern.contains('*'))
+                        {
                             found = Some((t, Some(rest)));
                             break;
                         }
@@ -1296,7 +1303,10 @@ mod tests {
         check(dir.path(), "main.js").expect("the mapped .d.js is used");
         assert_eq!(
             resolve_path(dir.path(), "#platform").unwrap(),
-            dir.path().join("types/platform.d.js").canonicalize().unwrap()
+            dir.path()
+                .join("types/platform.d.js")
+                .canonicalize()
+                .unwrap()
         );
     }
 
@@ -1348,7 +1358,11 @@ mod tests {
     #[test]
     fn a_module_is_checked_once_and_shared_by_its_importers() {
         let dir = tempdir();
-        write_file(dir.path(), "store.js", "export const state = { items: [] };");
+        write_file(
+            dir.path(),
+            "store.js",
+            "export const state = { items: [] };",
+        );
         write_file(
             dir.path(),
             "a.js",
@@ -1394,7 +1408,11 @@ mod tests {
         )
         .expect("the importers agree");
         assert!(state.errors.is_empty());
-        assert_eq!(state.module_cache.len(), 3, "store.js, a.js, b.js once each");
+        assert_eq!(
+            state.module_cache.len(),
+            3,
+            "store.js, a.js, b.js once each"
+        );
     }
 
     // An imported module's integer-literal field is decided by its
@@ -1402,7 +1420,11 @@ mod tests {
     #[test]
     fn an_exported_literal_field_is_decided_by_its_importers() {
         let dir = tempdir();
-        write_file(dir.path(), "store.js", "export const view = { start: 0, count: 0 };");
+        write_file(
+            dir.path(),
+            "store.js",
+            "export const view = { start: 0, count: 0 };",
+        );
         write_file(
             dir.path(),
             "main.js",

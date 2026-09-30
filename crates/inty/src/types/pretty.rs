@@ -273,7 +273,12 @@ impl PrettyContext {
                 match_alias(body, ty, params, &mut bound).then(|| {
                     let args: Vec<Type> = params
                         .iter()
-                        .map(|p| bound.get(p).cloned().unwrap_or(Type::Var(TVarName::Flex(*p))))
+                        .map(|p| {
+                            bound
+                                .get(p)
+                                .cloned()
+                                .unwrap_or(Type::Var(TVarName::Flex(*p)))
+                        })
                         .collect();
                     (name.clone(), args)
                 })
@@ -963,13 +968,16 @@ fn match_alias(
             a.tail == b.tail
                 && a.props.len() == b.props.len()
                 && a.props.iter().all(|(k, e)| {
-                    b.props
-                        .get(k)
-                        .is_some_and(|f| e.presence == f.presence && match_alias(&e.ty, &f.ty, params, bound))
+                    b.props.get(k).is_some_and(|f| {
+                        e.presence == f.presence && match_alias(&e.ty, &f.ty, params, bound)
+                    })
                 })
         }
         (Type::Union(a), Type::Union(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| match_alias(x, y, params, bound))
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(x, y)| match_alias(x, y, params, bound))
         }
         (Type::Array(a), Type::Array(b)) | (Type::Promise(a), Type::Promise(b)) => {
             match_alias(a, b, params, bound)
@@ -992,10 +1000,9 @@ fn match_alias(
                     (Some(a), Some(b)) => match_alias(a, b, params, bound),
                     _ => false,
                 }
-                && p1
-                    .iter()
-                    .zip(p2)
-                    .all(|(x, y)| x.presence == y.presence && match_alias(&x.ty, &y.ty, params, bound))
+                && p1.iter().zip(p2).all(|(x, y)| {
+                    x.presence == y.presence && match_alias(&x.ty, &y.ty, params, bound)
+                })
                 && match_alias(r1, r2, params, bound)
         }
         (a, b) => a == b,

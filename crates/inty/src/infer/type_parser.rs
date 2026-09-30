@@ -646,7 +646,9 @@ impl<'a> TypeParser<'a> {
                             break;
                         }
                         _ => {
-                            return Err(self.error("expected ',' or ']' in a tuple type".to_string()))
+                            return Err(
+                                self.error("expected ',' or ']' in a tuple type".to_string())
+                            )
                         }
                     }
                 }

@@ -369,7 +369,7 @@ fn logical_part(ty: &Type, truthy: bool) -> Option<Type> {
             Type::Null | Type::Undefined => !truthy,
             Type::Literal(LitValue::Bool(b)) => *b == truthy,
             Type::Literal(LitValue::Number(n)) => (*n != 0.0 && !n.is_nan()) == truthy,
-            Type::Literal(LitValue::String(s)) => !s.is_empty() == truthy,
+            Type::Literal(LitValue::String(s)) => s.is_empty() != truthy,
             // Either way.
             Type::Boolean | Type::Number | Type::Int | Type::String => true,
             // Objects, arrays, functions, promises, … are always truthy.

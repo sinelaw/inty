@@ -23,7 +23,10 @@ fn check(src: &str) -> Result<(), String> {
 #[track_caller]
 fn ok(src: &str) {
     if let Err(e) = check(src) {
-        panic!("expected to type-check, got:\n{}\n--- source ---\n{}", e, src);
+        panic!(
+            "expected to type-check, got:\n{}\n--- source ---\n{}",
+            e, src
+        );
     }
 }
 
@@ -507,7 +510,9 @@ const c = structuredClone({ a: 1 });
 // 20. The AudioWorklet global scope, with `extends AudioWorkletProcessor`.
 #[test]
 fn b20_audio_worklet() {
-    check_with_lib(inty::stdlib::AUDIO_WORKLET, r##"class Gain extends AudioWorkletProcessor {
+    check_with_lib(
+        inty::stdlib::AUDIO_WORKLET,
+        r##"class Gain extends AudioWorkletProcessor {
   constructor() {
     super();
     this.gain = 1;
@@ -523,7 +528,9 @@ fn b20_audio_worklet() {
   }
 }
 registerProcessor("gain", Gain);
-"##).unwrap();
+"##,
+    )
+    .unwrap();
 }
 
 // 22. `Dict<V>` / `{ [String]: V }`: plain objects used as maps.

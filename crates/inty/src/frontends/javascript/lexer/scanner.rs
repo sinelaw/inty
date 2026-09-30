@@ -1261,7 +1261,8 @@ impl<'a> Scanner<'a> {
             if ch == '*' && self.peek_next() == Some('/') {
                 break;
             }
-            let top = paren_depth == 0 && brace_depth == 0 && angle_depth == 0 && bracket_depth == 0;
+            let top =
+                paren_depth == 0 && brace_depth == 0 && angle_depth == 0 && bracket_depth == 0;
             if top && !in_where && ch.is_whitespace() && content.ends_with("where") {
                 let before = content[..content.len() - 5].chars().last();
                 if before.is_some_and(|c| c.is_whitespace() || c == '>') {

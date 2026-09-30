@@ -354,6 +354,7 @@ impl InferState {
     /// `{n: xs.length}` fits `{n: Number}`), and a literal with fewer
     /// parameters than expected ignores the extra arguments, as
     /// JavaScript does (`xs.map(() => 0)`): its type takes them anyway.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::infer) fn check_function_literal(
         &mut self,
         env: &TypeEnv,

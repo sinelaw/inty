@@ -986,10 +986,7 @@ fn without_receiver(ty: &Type) -> Type {
             match row.props.get(&key) {
                 Some(entry) if row.props.len() == 1 => {
                     let mut row = row.clone();
-                    if let Type::Func {
-                        params, ret, ..
-                    } = &entry.ty
-                    {
+                    if let Type::Func { params, ret, .. } = &entry.ty {
                         row.props.insert(
                             key,
                             FieldEntry {
