@@ -246,6 +246,9 @@ pub struct InferState {
     current_source: Option<SourceFile>,
     /// The span ranges of imported modules (see `SourceMap`).
     pub sources: crate::error::SourceMap,
+    /// Nesting of [`Self::quietly`]: while positive, a failed unification
+    /// is being speculated and its error will be discarded.
+    pub(crate) quiet: u32,
     /// How many imported modules are being checked (nested).
     pub module_depth: usize,
     /// `--timings`: when `Some`, the time each top-level declaration of
@@ -497,6 +500,7 @@ impl InferState {
             current_source: None,
             sources: Default::default(),
             module_depth: 0,
+            quiet: 0,
             module_cache: HashMap::new(),
             timings: None,
             module_timings: Vec::new(),
@@ -878,6 +882,16 @@ impl InferState {
         }
     }
 
+    /// Run a speculative attempt whose error is discarded (the caller
+    /// restores a snapshot on failure): errors raised meanwhile skip
+    /// rendering their types (see `unification_error`).
+    pub(crate) fn quietly<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.quiet += 1;
+        let result = f(self);
+        self.quiet -= 1;
+        result
+    }
+
     /// Restore a snapshot taken by [`Self::snapshot_inference`].
     pub(crate) fn restore_snapshot(&mut self, snap: InferSnapshot) {
         self.main_subst.undo_to(snap.subst);
@@ -933,6 +947,7 @@ impl InferState {
             .map(|p| TypePred {
                 class: p.class,
                 types: p.types.iter().map(|t| self.main_subst.flatten(t)).collect(),
+                origin: p.origin,
             })
             .collect();
         TypeScheme {
@@ -1036,7 +1051,7 @@ impl InferState {
         {
             let (a, b) = (self.widen(span, &t1), self.widen(span, &t2));
             let snap = self.snapshot_inference();
-            if self.unify(span, &a, &b).is_ok() {
+            if self.quietly(|s| s.unify(span, &a, &b)).is_ok() {
                 return Ok(self.zonk(&a));
             }
             self.restore_snapshot(snap);
@@ -1052,7 +1067,7 @@ impl InferState {
                     continue;
                 }
                 let snap = self.snapshot_inference();
-                if self.subsume(span, small, big).is_ok() {
+                if self.quietly(|s| s.subsume(span, small, big)).is_ok() {
                     return Ok(self.zonk(big));
                 }
                 self.restore_snapshot(snap);
@@ -1128,7 +1143,7 @@ impl InferState {
         // observable side-effect when it falls back to the union path.
         let snap = self.snapshot_inference();
 
-        if self.unify(span, &t1, &t2).is_ok() {
+        if self.quietly(|s| s.unify(span, &t1, &t2)).is_ok() {
             return self.zonk(&t1);
         }
 
@@ -1207,7 +1222,7 @@ impl InferState {
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
         let snap = self.snapshot_inference();
-        if self.unify(span, &sub, &sup).is_ok() {
+        if self.quietly(|s| s.unify(span, &sub, &sup)).is_ok() {
             return Ok(());
         }
         self.restore_snapshot(snap);
@@ -1248,7 +1263,10 @@ impl InferState {
                 self.subsume_in_place += 1;
                 for (k, sub_field) in &r1.props {
                     let sup_field = r2.props.get(k).expect("keys checked equal");
-                    if self.subsume(span, &sub_field.ty, &sup_field.ty).is_err() {
+                    if self
+                        .quietly(|s| s.subsume(span, &sub_field.ty, &sup_field.ty))
+                        .is_err()
+                    {
                         all_ok = false;
                         break;
                     }
@@ -1265,7 +1283,7 @@ impl InferState {
         if let (Type::Array(e1), Type::Array(e2)) = (&sub, &sup) {
             let snap = self.snapshot_inference();
             self.subsume_in_place += 1;
-            let ok = self.subsume(span, e1, e2).is_ok();
+            let ok = self.quietly(|s| s.subsume(span, e1, e2)).is_ok();
             self.subsume_in_place -= 1;
             if ok {
                 return Ok(());
@@ -1296,7 +1314,7 @@ impl InferState {
                 }
                 let snap = self.snapshot_inference();
                 let m_resolved = self.zonk(m);
-                let ok = self.subsume(span, &sub, &m_resolved).is_ok();
+                let ok = self.quietly(|s| s.subsume(span, &sub, &m_resolved)).is_ok();
                 // Roll back on every probe; we re-run on the chosen
                 // arm below so the committed substitution comes from
                 // a single, deliberate call.
@@ -1328,7 +1346,67 @@ impl InferState {
         // is one-directional in `unify`), but its error was discarded
         // on rollback, so the only user-visible label comes from this
         // line.
-        Err(self.unification_error(span, &sup, &sub))
+        let mut err = self.unification_error(span, &sup, &sub);
+        if self.quiet == 0 {
+            if let (Some(note), Some(crate::error::TypeError::UnificationError { context, .. })) =
+                (self.row_difference(&sup, &sub), err.as_type_mut())
+            {
+                context.get_or_insert(note);
+            }
+        }
+        Err(err)
+    }
+
+    /// For two record types, which fields one has and the other lacks:
+    /// what a mismatch between them is usually about.
+    fn row_difference(&self, expected: &Type, found: &Type) -> Option<String> {
+        let (Type::Row(e), Type::Row(f)) = (self.flatten_type(expected), self.flatten_type(found))
+        else {
+            return None;
+        };
+        let visible = |r: &crate::types::RowType| -> Vec<String> {
+            r.props
+                .iter()
+                .filter(|(k, v)| {
+                    k.0 != crate::types::CALLABLE_KEY
+                        && matches!(
+                            self.main_subst.resolve_presence(&v.presence),
+                            crate::types::Presence::Pre
+                        )
+                })
+                .map(|(k, _)| k.0.clone())
+                .collect()
+        };
+        let (ek, fk) = (visible(&e), visible(&f));
+        let missing: Vec<&String> = ek.iter().filter(|k| !f.props.contains_key(&crate::types::PropName((*k).clone()))).collect();
+        let extra: Vec<&String> = if e.is_closed() {
+            fk.iter().filter(|k| !e.props.contains_key(&crate::types::PropName((*k).clone()))).collect()
+        } else {
+            Vec::new()
+        };
+        let list = |ks: &[&String]| {
+            let mut shown: Vec<String> = ks.iter().take(5).map(|k| format!("'{k}'")).collect();
+            if ks.len() > 5 {
+                shown.push(format!("… and {} more", ks.len() - 5));
+            }
+            shown.join(", ")
+        };
+        match (missing.is_empty(), extra.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(format!("missing field{} {}", plural(missing.len()), list(&missing))),
+            (true, false) => Some(format!(
+                "unexpected field{} {} (the expected record type is closed)",
+                plural(extra.len()),
+                list(&extra)
+            )),
+            (false, false) => Some(format!(
+                "missing field{} {}; unexpected field{} {}",
+                plural(missing.len()),
+                list(&missing),
+                plural(extra.len()),
+                list(&extra)
+            )),
+        }
     }
 
     /// "Either-direction" subsumption used by symmetric operators
@@ -1339,7 +1417,7 @@ impl InferState {
     /// with the original error if neither does.
     pub fn subsume_either(&mut self, span: Span, t1: &Type, t2: &Type) -> InferResult<()> {
         let snap = self.snapshot_inference();
-        if self.subsume(span, t1, t2).is_ok() {
+        if self.quietly(|s| s.subsume(span, t1, t2)).is_ok() {
             return Ok(());
         }
         self.restore_snapshot(snap);
@@ -2046,7 +2124,10 @@ impl InferState {
                 let mut rest = Vec::new();
                 let mut took = false;
                 for constraint in remaining {
-                    let pred = self.apply_subst_pred(&constraint.pred);
+                    let mut pred = self.apply_subst_pred(&constraint.pred);
+                    // Where the requirement is written, for a failure of
+                    // one of its instances at a call.
+                    pred.origin.get_or_insert(constraint.span);
                     if pred.free_vars().iter().any(|v| gen_var_set.contains(v)) {
                         for t in &pred.types {
                             let t = self.main_subst.flatten(t);
@@ -2203,6 +2284,7 @@ impl InferState {
                     .iter()
                     .map(|t| self.main_subst.flatten(t))
                     .collect(),
+                origin: c.pred.origin,
             })
             .collect();
         loop {
@@ -2297,6 +2379,7 @@ impl InferState {
         TypePred {
             class: pred.class,
             types: pred.types.iter().map(|t| self.apply_subst(t)).collect(),
+            origin: pred.origin,
         }
     }
 
@@ -2572,5 +2655,13 @@ mod tests {
         assert_eq!(skolems.len(), 1);
         assert!(skolems[0].is_skolem());
         assert!(ty.is_var());
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
     }
 }

@@ -854,7 +854,7 @@ impl InferState {
         ) {
             return Err(crate::error::TypeError::PropertyNotFound {
                 prop: property.to_string(),
-                obj_type: receiver.to_string(),
+                obj_type: self.show(&receiver),
                 span,
             }
             .into());

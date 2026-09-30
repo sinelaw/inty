@@ -320,7 +320,36 @@ impl InferState {
                     } else {
                         right_type.clone()
                     };
-                self.subsume(span, &rhs_for_assign, &left_type)?;
+                if let Err(mut e) = self.subsume(span, &rhs_for_assign, &left_type) {
+                    // A slot inferred `Int` (an integer initializer, and
+                    // nothing that needed more) given a fraction: say how
+                    // to declare it a `Number`.
+                    let fraction = matches!(
+                        self.zonk(&rhs_for_assign),
+                        Type::Number | Type::Literal(crate::types::LitValue::Number(_))
+                    );
+                    if lhs_resolved == Type::Int && fraction {
+                        let hint = match left {
+                            Expr::Member { property, .. } => Some(format!(
+                                "'{property}' was inferred Int from its integer initializer \
+                                 and its uses; if it holds fractions, declare it a Number \
+                                 where the object is written: `{property} /*: Number */: 0`"
+                            )),
+                            Expr::Ident { name, .. } => Some(format!(
+                                "'{name}' was inferred Int from its integer initializer \
+                                 and its uses; if it holds fractions, declare it a Number: \
+                                 `/** let {name}: Number */`"
+                            )),
+                            _ => None,
+                        };
+                        if let (Some(hint), Some(TypeError::UnificationError { context, .. })) =
+                            (hint, e.as_type_mut())
+                        {
+                            *context = Some(hint);
+                        }
+                    }
+                    return Err(e);
+                }
             }
 
             AssignOp::AddAssign => {

@@ -730,6 +730,7 @@ impl Substitutable for TypePred {
         TypePred {
             class: self.class,
             types: self.types.iter().map(|t| t.apply_subst(subst)).collect(),
+            origin: self.origin,
         }
     }
 

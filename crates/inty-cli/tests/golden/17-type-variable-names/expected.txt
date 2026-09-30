@@ -1,0 +1,22 @@
+
+Error: Type mismatch: expected '{a: String, b: Number}', found '{a: Number | Int, b: Number | Int}'
+   ╭─[ main.js:4:11 ]
+   │
+ 4 │ const p = pair(1, 2);
+   │           ─────┬────  
+   │                ╰────── Type mismatch: expected '{a: String, b: Number}', found '{a: Number | Int, b: Number | Int}'
+   │ 
+   │ Note: Cannot unify expected '{a: String, b: Number}' with found '{a: Number | Int, b: Number | Int}'
+───╯
+
+
+Error: Type mismatch: expected 'String', found '(a) => {v: a}'
+   ╭─[ main.js:8:11 ]
+   │
+ 8 │ const w = wrap;
+   │           ──┬─  
+   │             ╰─── Type mismatch: expected 'String', found '(a) => {v: a}'
+   │ 
+   │ Note: Cannot unify expected 'String' with found '(a) => {v: a}'
+───╯
+

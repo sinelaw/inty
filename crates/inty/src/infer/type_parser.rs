@@ -395,9 +395,21 @@ impl<'a> TypeParser<'a> {
                 ) {
                     return Err(e);
                 }
-                // Backtrack and try as grouped type for syntax errors
+                // Backtrack and try as grouped type for syntax errors.
+                // If that fails too, an unknown type inside what parsed
+                // as a function's parameters is the better diagnostic:
+                // `(o: T) => N` names `T`, not the grouped reading's `o`.
                 self.pos = start_pos;
-                self.parse_grouped_type()
+                let unknown_in_function = matches!(
+                    &*e,
+                    TypeError::TypeAnnotationParse { message, .. }
+                        if message.starts_with("unknown type")
+                );
+                match self.parse_grouped_type() {
+                    Ok(ty) => Ok(ty),
+                    Err(_) if unknown_in_function => Err(e),
+                    Err(grouped) => Err(grouped),
+                }
             }
         }
     }
@@ -1016,9 +1028,10 @@ impl<'a> TypeParser<'a> {
                     // typos like `Stirng` and forgotten quantifiers
                     // surface as errors at the annotation site.
                     Err(self.error(format!(
-                        "unknown type '{}' — declare it with `/** type {} = ... */` \
-                         or bind it as a parameter (e.g. `<{}>(...) => ...`)",
-                        ident, ident, ident
+                        "unknown type '{0}' — declare it with `/** type {0} = ... */`, \
+                         or make it a type parameter: `/** function f<{0}>(x: {0}) => ... */` \
+                         or `/** const f: <{0}>(x: {0}) => ... */`",
+                        ident
                     )))
                 }
             }

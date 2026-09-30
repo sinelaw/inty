@@ -122,6 +122,8 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::TypeMismatch { .. } => "TypeMismatch",
             TypeError::BranchMismatch { .. } => "BranchMismatch",
             TypeError::ArrayElementMismatch { .. } => "ArrayElementMismatch",
+            TypeError::RequiredBy { .. } => "RequiredBy",
+            TypeError::FieldPresenceMismatch { .. } => "FieldPresenceMismatch",
             TypeError::UnknownTypeRef { .. } => "UnknownTypeRef",
         },
     }

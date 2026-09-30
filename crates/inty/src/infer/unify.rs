@@ -151,20 +151,33 @@ impl InferState {
                 // one side require that side's presence to unify
                 // with Abs.
                 let n = params1.len().max(params2.len());
+                // A parameter one side requires and the other lacks is a
+                // wrong number of arguments.
+                let arity = |_| -> IntyError {
+                    TypeError::ArityMismatch {
+                        expected: params1.len(),
+                        found: params2.len(),
+                        span,
+                    }
+                    .into()
+                };
                 for i in 0..n {
                     match (params1.get(i), params2.get(i)) {
                         (Some(p1), Some(p2)) => {
-                            self.unify_presence(span, &p1.presence, &p2.presence)?;
+                            self.unify_presence(span, &p1.presence, &p2.presence)
+                                .map_err(arity)?;
                             self.unify(span, &p1.ty, &p2.ty)?;
                         }
                         (Some(p1), None) => {
                             // Surplus formal on the left side: its
                             // presence must reduce to Abs for the
                             // shorter side to be callable here.
-                            self.unify_presence(span, &p1.presence, &crate::types::Presence::Abs)?;
+                            self.unify_presence(span, &p1.presence, &crate::types::Presence::Abs)
+                                .map_err(arity)?;
                         }
                         (None, Some(p2)) => {
-                            self.unify_presence(span, &p2.presence, &crate::types::Presence::Abs)?;
+                            self.unify_presence(span, &p2.presence, &crate::types::Presence::Abs)
+                                .map_err(arity)?;
                         }
                         (None, None) => unreachable!(),
                     }
@@ -439,7 +452,9 @@ impl InferState {
         for prop in &all_props {
             match (r1.props.get(prop), r2.props.get(prop)) {
                 (Some(e1), Some(e2)) => {
-                    self.unify_presence(span, &e1.presence, &e2.presence)?;
+                    if self.unify_presence(span, &e1.presence, &e2.presence).is_err() {
+                        return Err(self.field_presence_error(span, prop, r1, r2));
+                    }
                     self.unify(span, &e1.ty, &e2.ty)?;
                 }
                 (Some(e1), None) => match &r2.tail {
@@ -452,7 +467,7 @@ impl InferState {
                         {
                             return Err(TypeError::PropertyNotFound {
                                 prop: prop.0.clone(),
-                                obj_type: Type::Row(r2.clone()).to_string(),
+                                obj_type: self.show(&Type::Row(r2.clone())),
                                 span,
                             }
                             .into());
@@ -470,7 +485,7 @@ impl InferState {
                         {
                             return Err(TypeError::PropertyNotFound {
                                 prop: prop.0.clone(),
-                                obj_type: Type::Row(r1.clone()).to_string(),
+                                obj_type: self.show(&Type::Row(r1.clone())),
                                 span,
                             }
                             .into());
@@ -694,8 +709,139 @@ impl InferState {
         self.extend_subst(span, TVarName::Flex(var), rec_ref)
     }
 
+    /// Two types as a diagnostic shows them side by side: variables
+    /// named `a`, `b`, … for this message (a number-kinded one as
+    /// "Int or Number"); brands, recursive aliases and aliases whose body
+    /// a type is by name; big records trimmed to the fields where the
+    /// two differ.
+    pub(crate) fn show_pair(&self, t1: &Type, t2: &Type) -> (String, String) {
+        let mut tidy = crate::types::TidyEnv::new();
+        let (a, b) = (self.display_form(&mut tidy, t1), self.display_form(&mut tidy, t2));
+        // The fields a mismatch of two records is about: those both have,
+        // with different types; else those the smaller has and the larger
+        // lacks.
+        let focus: std::collections::HashSet<String> = match (&a, &b) {
+            (Type::Row(r1), Type::Row(r2)) => {
+                let differing: std::collections::HashSet<String> = r1
+                    .props
+                    .iter()
+                    .filter(|(k, e)| r2.props.get(*k).is_some_and(|e2| e2.ty != e.ty))
+                    .map(|(k, _)| k.0.clone())
+                    .collect();
+                if differing.is_empty() {
+                    let (small, large) = if r1.props.len() <= r2.props.len() {
+                        (r1, r2)
+                    } else {
+                        (r2, r1)
+                    };
+                    small
+                        .props
+                        .keys()
+                        .filter(|k| !large.props.contains_key(*k))
+                        .map(|k| k.0.clone())
+                        .collect()
+                } else {
+                    differing
+                }
+            }
+            _ => Default::default(),
+        };
+        let mut ctx = self.diagnostic_printer(focus);
+        (ctx.format_type(&a), ctx.format_type(&b))
+    }
+
+    /// A type as a diagnostic shows it (see [`Self::show_pair`]).
+    pub(crate) fn show(&self, ty: &Type) -> String {
+        let mut tidy = crate::types::TidyEnv::new();
+        let shown = self.display_form(&mut tidy, ty);
+        self.diagnostic_printer(Default::default())
+            .format_type(&shown)
+    }
+
+    /// `ty` resolved and tidied for display, a number-kinded variable
+    /// shown as `Int | Number` (which it is, not yet known).
+    fn display_form(&self, tidy: &mut crate::types::TidyEnv, ty: &Type) -> Type {
+        let flat = self.flatten_type(ty);
+        let numeric: Vec<TVarName> = flat
+            .free_vars()
+            .into_iter()
+            .filter(|v| self.numeric_vars.contains(v))
+            .collect();
+        let flat = if numeric.is_empty() {
+            flat
+        } else {
+            let either = Type::Union(vec![Type::Int, Type::Number]);
+            let subst: crate::types::Subst =
+                numeric.into_iter().map(|v| (v, either.clone())).collect();
+            subst.apply(&flat)
+        };
+        tidy.tidy_type(&flat)
+    }
+
+    /// The printer diagnostics use: brands and recursive aliases by
+    /// name, other aliases by name when a type is one's body, records of
+    /// more than eight fields trimmed to `focus`.
+    fn diagnostic_printer(
+        &self,
+        focus: std::collections::HashSet<String>,
+    ) -> crate::types::PrettyContext {
+        let aliases = self
+            .type_aliases
+            .iter()
+            .filter(|(_, d)| d.params.is_empty() && d.nominal_id.is_none() && d.rec_id.is_none())
+            .filter(|(_, d)| matches!(d.body, Type::Row(_) | Type::Union(_)))
+            .map(|(n, d)| (n.clone(), d.body.clone()))
+            .collect();
+        crate::types::PrettyContext::with_nominal_names(self.nominal_names())
+            .trimming_rows(8, focus)
+            .naming_aliases(aliases)
+    }
+
+    /// `prop` is present in one of `r1`, `r2` and absent from the other.
+    fn field_presence_error(&self, span: Span, prop: &PropName, r1: &RowType, r2: &RowType) -> IntyError {
+        if self.quiet > 0 {
+            return self.unification_error(span, &Type::Undefined, &Type::Undefined);
+        }
+        let present = |r: &RowType| {
+            r.props
+                .get(prop)
+                .map(|e| {
+                    matches!(
+                        self.main_subst.resolve_presence(&e.presence),
+                        crate::types::Presence::Pre
+                    )
+                })
+                .unwrap_or(false)
+        };
+        let (with, without) = if present(r1) { (r1, r2) } else { (r2, r1) };
+        let focus: std::collections::HashSet<String> = [prop.0.clone()].into();
+        let mut tidy = crate::types::TidyEnv::new();
+        let with = self.display_form(&mut tidy, &Type::Row(with.clone()));
+        let without = self.display_form(&mut tidy, &Type::Row(without.clone()));
+        let mut ctx = self.diagnostic_printer(focus);
+        TypeError::FieldPresenceMismatch {
+            field: prop.0.clone(),
+            with: ctx.format_type(&with),
+            without: ctx.format_type(&without),
+            span,
+        }
+        .into()
+    }
+
     /// Create a unification error.
     pub(crate) fn unification_error(&self, span: Span, t1: &Type, t2: &Type) -> IntyError {
+        // Speculating: the error is discarded, so don't render it.
+        if self.quiet > 0 {
+            return TypeError::UnificationError {
+                expected: String::new(),
+                found: String::new(),
+                span,
+                context: None,
+                expected_origin: None,
+                found_origin: None,
+            }
+            .into();
+        }
         // Only a type's own origin: searching the substitution for any
         // variable bound to an equal type (as this once did) labelled a
         // `Number` with wherever some unrelated `Number` came from — and
@@ -704,13 +850,10 @@ impl InferState {
         let expected_origin = self.get_origin(t1).cloned();
         let found_origin = self.get_origin(t2).cloned();
 
-        // Render brands by their declared name so a mismatch reads
-        // `UserId` vs `OrderId` rather than `μ3` vs `μ4`.
-        let mut ctx = crate::types::PrettyContext::with_nominal_names(self.nominal_names());
-
+        let (expected, found) = self.show_pair(t1, t2);
         TypeError::UnificationError {
-            expected: ctx.format_type(t1),
-            found: ctx.format_type(t2),
+            expected,
+            found,
             span,
             context: None,
             expected_origin,

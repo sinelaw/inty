@@ -48,22 +48,50 @@ pub struct PrettyContext {
     /// with access to the named-type registry seed it via
     /// [`PrettyContext::with_nominal_names`].
     nominal_names: std::collections::HashMap<crate::types::TypeId, String>,
+    /// Diagnostics: a record with more fields than this shows only the
+    /// fields in `focus` (or, with none of them, its first few) and
+    /// "… and N more" — DOM element rows run to hundreds of fields.
+    row_limit: Option<usize>,
+    /// Diagnostics: the fields a record always shows (the ones a
+    /// mismatch is about).
+    focus: HashSet<String>,
+    /// Diagnostics: types printed by an alias's name when they are its
+    /// body (`Channel` rather than its record).
+    aliases: Vec<(String, Type)>,
 }
 
 impl PrettyContext {
     /// Create a pretty-printing context. Stateless apart from the
     /// (usually empty) nominal-name map.
     pub fn new() -> Self {
-        PrettyContext {
-            nominal_names: std::collections::HashMap::new(),
-        }
+        Self::with_nominal_names(std::collections::HashMap::new())
     }
 
     /// Create a context that renders the given nominal `TypeId`s by name.
     pub fn with_nominal_names(
         nominal_names: std::collections::HashMap<crate::types::TypeId, String>,
     ) -> Self {
-        PrettyContext { nominal_names }
+        PrettyContext {
+            nominal_names,
+            row_limit: None,
+            focus: HashSet::new(),
+            aliases: Vec::new(),
+        }
+    }
+
+    /// Print records of more than `limit` fields trimmed to the `focus`
+    /// fields (see the fields' docs).
+    pub fn trimming_rows(mut self, limit: usize, focus: HashSet<String>) -> Self {
+        self.row_limit = Some(limit);
+        self.focus = focus;
+        self
+    }
+
+    /// Print a type that is one of these aliases' bodies by the alias's
+    /// name.
+    pub fn naming_aliases(mut self, aliases: Vec<(String, Type)>) -> Self {
+        self.aliases = aliases;
+        self
     }
 
     /// Render a tvar's integer ID as a display letter. After tidy
@@ -238,6 +266,11 @@ impl PrettyContext {
 
     /// Write a type to the given writer.
     fn write_type<W: Write>(&mut self, w: &mut W, ty: &Type, in_func_arg: bool) -> fmt::Result {
+        if !self.aliases.is_empty() && matches!(ty, Type::Row(_) | Type::Union(_)) {
+            if let Some((name, _)) = self.aliases.iter().find(|(_, body)| body == ty) {
+                return write!(w, "{}", name);
+            }
+        }
         match ty {
             Type::Number => write!(w, "Number"),
             Type::Int => write!(w, "Int"),
@@ -457,9 +490,34 @@ impl PrettyContext {
             self.write_type(w, &call_entry.ty, false)?;
             first = false;
         }
+        // Diagnostics: a huge record shows the fields that matter.
+        let shown = row
+            .props
+            .iter()
+            .filter(|(p, e)| *p != &callable_key && !matches!(e.presence, Presence::Abs))
+            .count();
+        let trimmed = self.row_limit.is_some_and(|limit| shown > limit);
+        let keep = |prop: &PropName, i: usize, focus: &HashSet<String>, limit: usize| -> bool {
+            if focus.is_empty() {
+                i < limit.min(6)
+            } else {
+                focus.contains(&prop.0)
+            }
+        };
+        let limit = self.row_limit.unwrap_or(usize::MAX);
+        let focus = std::mem::take(&mut self.focus);
+        let mut hidden = 0;
+        let mut index = 0;
         for (prop, entry) in &row.props {
             if prop == &callable_key {
                 continue;
+            }
+            if trimmed && !matches!(entry.presence, Presence::Abs) {
+                index += 1;
+                if !keep(prop, index - 1, &focus, limit) {
+                    hidden += 1;
+                    continue;
+                }
             }
             // Phase 1b will render `Abs` fields as omitted entirely and
             // `Var(theta)` as `prop?: T`. For phase 1a all entries are
@@ -481,6 +539,13 @@ impl PrettyContext {
                 write!(w, "{}{}: ", prop.0, if optional_marker { "?" } else { "" })?;
             }
             self.write_type(w, &entry.ty, false)?;
+        }
+        self.focus = focus;
+        if hidden > 0 {
+            if !first {
+                write!(w, ", ")?;
+            }
+            write!(w, "… and {} more", hidden)?;
         }
 
         match &row.tail {

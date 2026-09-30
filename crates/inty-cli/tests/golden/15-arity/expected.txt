@@ -1,0 +1,9 @@
+Error: Arity mismatch: the function takes 1 argument, but 0 are passed
+   ╭─[ main.js:3:11 ]
+   │
+ 3 │ const r = f();
+   │           ─┬─  
+   │            ╰─── Arity mismatch: the function takes 1 argument, but 0 are passed
+   │ 
+   │ Help: a parameter declared `name?: T` may be left out; a callback may take fewer parameters than it is passed
+───╯

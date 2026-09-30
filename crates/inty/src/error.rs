@@ -472,6 +472,23 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// A field one record type has and the other lacks (or has only
+    /// optionally): `field` is present in `with` and absent from
+    /// `without`.
+    #[error("Field '{field}' is present in {with} but missing from {without}")]
+    FieldPresenceMismatch {
+        field: String,
+        with: String,
+        without: String,
+        span: Span,
+    },
+
+    /// `inner` failed at a use of a generic function (its `span`) because
+    /// of a requirement written in the function's body, at `origin`
+    /// (`o.name.toUpperCase()` with `o.name` a number).
+    #[error("{inner}")]
+    RequiredBy { inner: Box<TypeError>, origin: Span },
+
     /// The elements of an array literal have different types. An array
     /// has one element type; a fixed group of values is a tuple
     /// (`[String, Number]`) or a record.
@@ -508,6 +525,8 @@ impl TypeError {
             TypeError::TypeMismatch { span, .. } => *span,
             TypeError::BranchMismatch { span, .. } => *span,
             TypeError::ArrayElementMismatch { span, .. } => *span,
+            TypeError::RequiredBy { inner, .. } => inner.span(),
+            TypeError::FieldPresenceMismatch { span, .. } => *span,
         }
     }
 }
