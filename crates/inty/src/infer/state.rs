@@ -249,6 +249,11 @@ pub struct InferState {
     /// Nesting of [`Self::quietly`]: while positive, a failed unification
     /// is being speculated and its error will be discarded.
     pub(crate) quiet: u32,
+    /// Nesting of assignment targets being typed (`o.f` in `o.f = g`):
+    /// while positive, a read gives a binding's or field's exact type —
+    /// what may be stored there — not a read's instance of it (see
+    /// `number_inputs_on_read`).
+    pub(crate) in_write_target: u32,
     /// How many imported modules are being checked (nested).
     pub module_depth: usize,
     /// `--timings`: when `Some`, the time each top-level declaration of
@@ -503,6 +508,7 @@ impl InferState {
             sources: Default::default(),
             module_depth: 0,
             quiet: 0,
+            in_write_target: 0,
             module_cache: HashMap::new(),
             timings: None,
             module_timings: Vec::new(),
@@ -959,6 +965,7 @@ impl InferState {
                 class: p.class,
                 types: p.types.iter().map(|t| self.main_subst.flatten(t)).collect(),
                 origin: p.origin,
+                read: p.read,
             })
             .collect();
         TypeScheme {
@@ -1448,7 +1455,8 @@ impl InferState {
     /// literal-subsumption rule: a literal type is dropped from the union
     /// when its base type (`Number`/`String`/`Boolean`) is also present
     /// (e.g. `"a" | String` collapses to `String`, but `"a" | "b"` stays
-    /// a closed literal union).
+    /// a closed literal union). Likewise `Int`, a refinement of `Number`:
+    /// `Int | Number` is `Number`, as `numeric_lub` joins them.
     pub(crate) fn normalise_union_members(members: Vec<Type>) -> Type {
         let mut has_number = false;
         let mut has_string = false;
@@ -1468,6 +1476,7 @@ impl InferState {
                 Type::Literal(LitValue::String(_)) => !has_string,
                 Type::Literal(LitValue::Number(_)) => !has_number,
                 Type::Literal(LitValue::Bool(_)) => !has_boolean,
+                Type::Int => !has_number,
                 _ => true,
             })
             .collect();
@@ -2305,6 +2314,7 @@ impl InferState {
                     .map(|t| self.main_subst.flatten(t))
                     .collect(),
                 origin: c.pred.origin,
+                read: c.pred.read,
             })
             .collect();
         loop {
@@ -2400,6 +2410,7 @@ impl InferState {
             class: pred.class,
             types: pred.types.iter().map(|t| self.apply_subst(t)).collect(),
             origin: pred.origin,
+            read: pred.read,
         }
     }
 

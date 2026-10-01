@@ -4464,3 +4464,181 @@ fn const_function_statement_yields_undefined() {
             .unwrap();
     assert_eq!(state.apply_subst(&ty), Type::Undefined);
 }
+
+#[test]
+fn int_comparator_fits_sort_however_the_receiver_is_known() {
+    // `sort`'s comparator returns a `Number`: at a call, any number
+    // (`number_inputs_as_num`). So one returning an `Int` fits, whether the
+    // array's type is known at the call or only when a generic function
+    // using `sort` is called (a deferred `HasProp`). Equating the
+    // comparator's result with `Number` there made `Arith Int Int Number`.
+    let ty = |src: &str, name: &str| -> Result<String, String> {
+        let (_, env, state) =
+            infer_program_via_program_with_stdlib(src).map_err(|e| e.to_string())?;
+        if let Some(e) = state.errors.first() {
+            return Err(e.to_string());
+        }
+        let scheme = env.lookup(name).expect("bound");
+        Ok(format!("{}", state.display_scheme(scheme)))
+    };
+    let table = "const TABLE = [\"C\", \"D\"];\n";
+    // The elements are used as an index: they must stay `Int`s.
+    assert_eq!(
+        ty(
+            &format!(
+                "{table}function low(xs) {{\n\
+                   const sorted = xs.slice().sort((a, b) => a - b);\n\
+                   return TABLE[sorted[0] % 2];\n\
+                 }}\n\
+                 const r = low([64, 60]);"
+            ),
+            "r"
+        )
+        .unwrap(),
+        "String"
+    );
+    assert_eq!(
+        ty(
+            &format!(
+                "{table}function low(ns) {{\n\
+                   const sorted = ns.slice().sort((a, b) => a.pitch - b.pitch);\n\
+                   return TABLE[sorted[0].pitch % 2];\n\
+                 }}\n\
+                 const r = low([{{ pitch: 64 }}, {{ pitch: 60 }}]);"
+            ),
+            "r"
+        )
+        .unwrap(),
+        "String"
+    );
+    // Nothing makes the elements `Number`s.
+    assert_eq!(
+        ty(
+            "function low(xs) { return xs.slice().sort((a, b) => a - b); }\n\
+             const r = low([64, 60]);",
+            "r"
+        )
+        .unwrap(),
+        "Int[]"
+    );
+    // A comparator that is a function value, not a literal: the same.
+    for src in [
+        "const cmp = (a, b) => a - b; const s = [3, 1].sort(cmp); const k = [\"a\"][s[0]];",
+        "/** function cmp(Int, Int) => Int */ function cmp(a, b) { return a - b; }\n\
+         const s = [3, 1].sort(cmp); const k = [\"a\"][s[0]];",
+        "function f(xs, cmp) { return xs.sort(cmp); }\n\
+         /** function cmp(Int, Int) => Int */ function cmp(a, b) { return a - b; }\n\
+         const s = f([3, 1], cmp); const k = [\"a\"][s[0]];",
+    ] {
+        assert_eq!(ty(src, "k").unwrap(), "String", "{src}");
+    }
+    // A comparator joining an `Int` and a `Number` with `||`: `Int | Number`
+    // is a `Number`.
+    let notes = "/** const xs: {start: Number, pitch: Int}[] */\n\
+                 const xs = [{ start: 0.5, pitch: 1 }];\n";
+    assert_eq!(
+        ty(
+            &format!("{notes}const s = xs.sort((a, b) => a.start - b.start || a.pitch - b.pitch);"),
+            "s"
+        )
+        .unwrap(),
+        "{pitch: Int, start: Number}[]"
+    );
+    assert_eq!(
+        ty(
+            &format!("{notes}const s = xs.map((a) => a.start || a.pitch);"),
+            "s"
+        )
+        .unwrap(),
+        "Number[]"
+    );
+    // A fraction is still no index, and a comparator still returns a number.
+    assert!(ty(
+        &format!(
+            "{table}function low(xs) {{\n\
+               const sorted = xs.slice().sort((a, b) => a - b);\n\
+               return TABLE[sorted[0] % 2];\n\
+             }}\n\
+             const r = low([64.5, 60]);"
+        ),
+        "r"
+    )
+    .is_err());
+    assert!(ty(
+        &format!(
+            "{table}function low(ns) {{\n\
+               const sorted = ns.slice().sort((a, b) => a.pitch - b.pitch);\n\
+               return TABLE[sorted[0].pitch % 2];\n\
+             }}\n\
+             const r = low([{{ pitch: 64.5 }}, {{ pitch: 60 }}]);"
+        ),
+        "r"
+    )
+    .is_err());
+    assert!(ty("const s = [3, 1].sort((a, b) => \"x\");", "s").is_err());
+    assert!(ty(
+        "function f(xs) { return xs.sort((a, b) => \"x\"); } const s = f([3, 1]);",
+        "s"
+    )
+    .is_err());
+}
+
+#[test]
+fn number_in_contravariant_position_is_any_number() {
+    // `Number` in a contravariant position of a value's type (a parameter,
+    // a callback's result) means any number at each use: since
+    // `Int ≤ Number`, `(Number) => X ≤ (Int) => X`. Where a value may be
+    // stored, its type stays exact.
+    let check = |src: &str| -> Result<(), String> {
+        let (_, _, state) =
+            infer_program_via_program_with_stdlib(src).map_err(|e| e.to_string())?;
+        match state.errors.first() {
+            Some(e) => Err(e.to_string()),
+            None => Ok(()),
+        }
+    };
+    for src in [
+        // A function value where an `(Int) => a` is wanted.
+        "function k(cb) { return cb(1); } const r = k(Math.sqrt);",
+        "/** function half(x: Number) => Number */ function half(x) { return x / 2; }\n\
+         function k(cb) { return cb(1); } const r = k(half);",
+        // The same read through a receiver known only at the call.
+        "function k(cb) { return cb(1); } function g(o) { return k(o.f); }\n\
+         const r = g({ f: Math.sqrt });",
+        // A user-declared callback result, on a receiver known only later.
+        "/** function mySort(xs: Int[], cmp: (Int, Int) => Number) => Int[] */\n\
+         function mySort(xs, cmp) { return xs.slice().sort(cmp); }\n\
+         const lib = { mySort: mySort };\n\
+         function low(o, xs) { const s = o.mySort(xs, (a, b) => a - b); return [\"C\"][s[0]]; }\n\
+         const r = low(lib, [64, 60]);",
+        "/** function mySort(xs: Int[], cmp: (Int, Int) => Number) => Int[] */\n\
+         function mySort(xs, cmp) { return xs.slice().sort(cmp); }\n\
+         /** function byVal(Int, Int) => Int */ function byVal(a, b) { return a - b; }\n\
+         const r = mySort([3, 1], byVal);",
+        // An `Int`-returning function stored where a `Number` result is
+        // declared: covariant results.
+        "/** const fs: ((Number) => Number)[] */ const fs = [];\n\
+         fs.push(Math.floor);",
+    ] {
+        assert_eq!(check(src), Ok(()), "{src}");
+    }
+    let only_int = "/** function onlyInt(x: Int) => Int */ function onlyInt(x) { return x; }\n";
+    for src in [
+        // What may be stored takes any number: an `Int`-only function
+        // doesn't fit, assigned, pushed or destructured.
+        "/** const o: {f: (Number) => Number} */ const o = { f: Math.sqrt }; o.f = onlyInt;",
+        "/** let f: (Number) => Number */ let f = Math.sqrt; f = onlyInt;",
+        "/** let f: (Number) => Number */ let f = Math.sqrt; f ||= onlyInt;",
+        "/** let f: (Number) => Number */ let f = Math.sqrt; [f] = [onlyInt];",
+        "function set(o) { o.f = onlyInt; }\n\
+         /** const o: {f: (Number) => Number} */ const o = { f: Math.sqrt }; set(o);",
+        "/** let fs: ((Number) => Number)[] */ let fs = [Math.sqrt]; fs.push(onlyInt);",
+        // A callback's parameter is covariant: it's given fractions.
+        "function app(g) { return g(0.5); } const r = app(onlyInt);",
+        "const r = [0.5].map(onlyInt);",
+        // A `Number` result stays one.
+        "const r = [\"a\"][Math.sqrt(4)];",
+    ] {
+        assert!(check(&format!("{only_int}{src}")).is_err(), "{src}");
+    }
+}

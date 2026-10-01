@@ -256,6 +256,15 @@ impl VarTable {
         }
     }
 
+    /// Whether `id`'s root is bound to a type satisfying `f`, looked at
+    /// in place (no clone of the bound type).
+    pub fn root_bound_satisfies(&mut self, id: TVarId, f: impl FnOnce(&Type) -> bool) -> bool {
+        match self.find_if_present(id) {
+            Some(root) => matches!(&self.cells[root as usize], Resolution::Bound(t) if f(t)),
+            None => false,
+        }
+    }
+
     /// Tolerant variant of [`Self::root_resolution`] for read-only
     /// callers like `zonk`. Returns `None` when `id` is out of
     /// range; the caller should treat that as "leave the variable

@@ -805,6 +805,7 @@ impl InferState {
         name: &str,
         result: &Type,
         this: Option<&Type>,
+        read: bool,
         span: Span,
     ) -> Result<(), IntyError> {
         let receiver = self.zonk(receiver);
@@ -819,10 +820,11 @@ impl InferState {
             // gets its own constraint.
             for m in members {
                 match self.zonk(m) {
-                    m @ Type::Var(TVarName::Flex(_)) => {
-                        self.add_constraint(TypePred::has_prop(m, name, result.clone()), span)
-                    }
-                    m => self.resolve_has_prop(&m, name, result, None, span)?,
+                    m @ Type::Var(TVarName::Flex(_)) => self.add_constraint(
+                        TypePred::has_prop_read(m, name, result.clone(), read),
+                        span,
+                    ),
+                    m => self.resolve_has_prop(&m, name, result, None, read, span)?,
                 }
             }
             if let Some(this) = this {
@@ -869,6 +871,11 @@ impl InferState {
                 let receiver = self.method_receiver(&receiver);
                 self.unify(span, this, &receiver)?;
             }
+            // A read: as reading it from a known receiver gives.
+            None if read => {
+                let found = self.number_inputs_as_num(span, &found);
+                self.unify(span, result, &found)?
+            }
             None => self.unify(span, result, &found)?,
         }
         // A deferred `p.then(cb)`: the call was checked already.
@@ -888,13 +895,14 @@ impl InferState {
     ) -> Result<(), IntyError> {
         use crate::infer::extract_callable;
         use crate::types::Presence;
-        let (site_z, callee_z) = (self.zonk(site), self.zonk(callee));
+        let callee = self.number_inputs_as_num(span, callee);
+        let (site_z, callee_z) = (self.zonk(site), self.zonk(&callee));
         let (Some((_, args, site_ret)), Some((_, params, ret))) =
             (extract_callable(&site_z), extract_callable(&callee_z))
         else {
             // Not a function after all (or not yet known): relate the
             // types as they are, which reports the mismatch.
-            return self.unify(span, site, callee);
+            return self.unify(span, site, &callee);
         };
         for i in 0..args.len().max(params.len()) {
             match (args.get(i), params.get(i)) {
@@ -981,15 +989,27 @@ impl InferState {
     /// predicate (posed where a generic function is used) that fails says
     /// where the requirement is written too (`TypeError::RequiredBy`).
     fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
+        if matches!(
+            pred.class,
+            ClassName::Num | ClassName::NumLit | ClassName::Arith
+        ) {
+            return self.resolving_numeric(pred, span, |s| s.resolve_constraint_here(pred, span));
+        }
         self.resolve_constraint_here(pred, span)
-            .map_err(|e| match (pred.origin, e) {
-                (Some(origin), IntyError::Type(inner))
-                    if origin != span && !matches!(*inner, TypeError::RequiredBy { .. }) =>
-                {
-                    TypeError::RequiredBy { inner, origin }.into()
-                }
-                (_, e) => e,
-            })
+            .map_err(|e| self.required_by(pred, span, e))
+    }
+
+    /// `e`, from `pred` failing at `span`: for an instance of a scheme's
+    /// predicate, also where the scheme's function requires it.
+    pub(crate) fn required_by(&self, pred: &TypePred, span: Span, e: IntyError) -> IntyError {
+        match (pred.origin, e) {
+            (Some(origin), IntyError::Type(inner))
+                if origin != span && !matches!(*inner, TypeError::RequiredBy { .. }) =>
+            {
+                TypeError::RequiredBy { inner, origin }.into()
+            }
+            (_, e) => e,
+        }
     }
 
     fn resolve_constraint_here(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
@@ -1024,7 +1044,7 @@ impl InferState {
                     .expect("HasProp predicates are built by TypePred::has_prop");
                 let (recv, result) = (recv.clone(), result.clone());
                 let this = pred.method_this().cloned();
-                self.resolve_has_prop(&recv, name, &result, this.as_ref(), span)
+                self.resolve_has_prop(&recv, name, &result, this.as_ref(), pred.read, span)
             }
         }
     }

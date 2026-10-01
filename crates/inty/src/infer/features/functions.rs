@@ -690,6 +690,9 @@ impl InferState {
             return Ok(Type::Error);
         }
 
+        // A `Number` the callee only takes is any number, for this call.
+        let callee_type = self.number_inputs_as_num(span, &callee_type);
+
         // Keyword arguments take a dedicated path: they're resolved to
         // parameter positions by *name* against the callee's named params,
         // which the synthesised-row positional path below can't see.
