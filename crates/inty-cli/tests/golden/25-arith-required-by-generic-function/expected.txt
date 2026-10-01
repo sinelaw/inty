@@ -1,0 +1,19 @@
+
+Error: Type mismatch: expected 'Int', found 'Number'
+   ╭─[ main.js:6:11 ]
+   │
+ 6 │ const r = h({ a: 0.5, b: 1, f: (i) => TABLE[i] });
+   │           ┬  
+   │           ╰── Type mismatch: expected 'Int', found 'Number'
+   │
+   ├─[ main.js:6:11 ]
+   │
+ 3 │   const d = o.a - o.b;
+   │             ────┬────  
+   │                 ╰────── required here, in the body of the function this uses
+   │ 
+   │ Help: from the constraint `Arith` on this arithmetic (`+ - * %`): operands 'Number' and 'Number | Int', result 'Int'. The result is 'Int' exactly when both operands are 'Int', and 'Number' when either is 'Number'
+   │ 
+   │ Note: Cannot unify expected 'Int' with found 'Number'
+───╯
+

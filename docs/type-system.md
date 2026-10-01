@@ -74,6 +74,8 @@ inference doesn't decide what `obj` is when it meets `obj.name` on a value whose
 
 `+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row. Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
 
+Numbers are classes too: `Int` is the refinement of `Number` without a fractional part, `Num a` says `a` is one of the two, and `Arith a b c` gives the type of `a - b` (`Int` exactly when both operands are). A `Number` a function only *takes* — a parameter, or the result of a callback it is passed — is any number at a call: each call gets a fresh `Num` variable for it. So `xs.sort((a, b) => a - b)` on `Int`s equates the comparator's result with that variable, and `Arith` makes it an `Int`; whether `xs`'s type is known at the call or only once a generic function containing it is called, the same equations are solved. (`Int | Number` is `Number`.)
+
 A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a> where Plus a => (a, a) => a */`, and the annotation parser reads the `where` clause back (`Plus t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them.
 
 ### Method Chaining & Builders (Equi-recursive Types)

@@ -1,0 +1,17 @@
+
+Error: Type mismatch: expected 'Int', found 'Number'
+   ╭─[ main.js:6:11 ]
+   │
+ 6 │ const r = low([64.5, 60]);
+   │           ─┬─  
+   │            ╰─── Type mismatch: expected 'Int', found 'Number'
+   │
+   ├─[ main.js:6:11 ]
+   │
+ 4 │   return TABLE[sorted[0] % 2];
+   │                ────┬────  
+   │                    ╰────── required here, in the body of the function this uses
+   │ 
+   │ Note: Cannot unify expected 'Int' with found 'Number'
+───╯
+

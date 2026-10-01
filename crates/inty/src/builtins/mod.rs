@@ -888,13 +888,14 @@ impl InferState {
     ) -> Result<(), IntyError> {
         use crate::infer::extract_callable;
         use crate::types::Presence;
-        let (site_z, callee_z) = (self.zonk(site), self.zonk(callee));
+        let callee = self.number_inputs_as_num(span, callee);
+        let (site_z, callee_z) = (self.zonk(site), self.zonk(&callee));
         let (Some((_, args, site_ret)), Some((_, params, ret))) =
             (extract_callable(&site_z), extract_callable(&callee_z))
         else {
             // Not a function after all (or not yet known): relate the
             // types as they are, which reports the mismatch.
-            return self.unify(span, site, callee);
+            return self.unify(span, site, &callee);
         };
         for i in 0..args.len().max(params.len()) {
             match (args.get(i), params.get(i)) {
@@ -981,15 +982,27 @@ impl InferState {
     /// predicate (posed where a generic function is used) that fails says
     /// where the requirement is written too (`TypeError::RequiredBy`).
     fn resolve_constraint(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
+        if matches!(
+            pred.class,
+            ClassName::Num | ClassName::NumLit | ClassName::Arith
+        ) {
+            return self.resolving_numeric(pred, span, |s| s.resolve_constraint_here(pred, span));
+        }
         self.resolve_constraint_here(pred, span)
-            .map_err(|e| match (pred.origin, e) {
-                (Some(origin), IntyError::Type(inner))
-                    if origin != span && !matches!(*inner, TypeError::RequiredBy { .. }) =>
-                {
-                    TypeError::RequiredBy { inner, origin }.into()
-                }
-                (_, e) => e,
-            })
+            .map_err(|e| self.required_by(pred, span, e))
+    }
+
+    /// `e`, from `pred` failing at `span`: for an instance of a scheme's
+    /// predicate, also where the scheme's function requires it.
+    pub(crate) fn required_by(&self, pred: &TypePred, span: Span, e: IntyError) -> IntyError {
+        match (pred.origin, e) {
+            (Some(origin), IntyError::Type(inner))
+                if origin != span && !matches!(*inner, TypeError::RequiredBy { .. }) =>
+            {
+                TypeError::RequiredBy { inner, origin }.into()
+            }
+            (_, e) => e,
+        }
     }
 
     fn resolve_constraint_here(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {

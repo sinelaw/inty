@@ -67,6 +67,32 @@ impl InferState {
         widened
     }
 
+    /// `callee`, the type of a function being called, with each `Number`
+    /// it only takes as input — a parameter, a callback's result — made a
+    /// fresh `Num` variable: a function taking any number takes an `Int`
+    /// too, so the call may pick either. `sort((a, b) => a - b)` then only
+    /// equates the comparator's result with that variable, and `Arith`
+    /// decides it (`Int` for `Int`s); equating it with `Number` would have
+    /// made the operands `Number`s. The same equation is posed whether the
+    /// receiver is known at the call or only when a deferred `HasProp`
+    /// resolves, so the two agree.
+    ///
+    /// Only for the call (the callee's own type is unchanged), and not
+    /// inside an array, an object or a union: an `Int[]` is no `Number[]`.
+    pub(crate) fn number_inputs_as_num(&mut self, span: Span, callee: &Type) -> Type {
+        let callee = self.zonk(callee);
+        let mut fresh = Vec::new();
+        let out = number_inputs(&callee, POS, &mut || {
+            let v = self.fresh_type_var();
+            fresh.push(v.clone());
+            v
+        });
+        for v in fresh {
+            self.add_constraint(TypePred::num(v), span);
+        }
+        out
+    }
+
     /// The numeric kind of `ty`, as far as it's known now.
     pub(crate) fn num_kind(&mut self, ty: &Type) -> NumKind {
         match self.zonk(ty) {
@@ -156,8 +182,8 @@ impl InferState {
         use NumKind::*;
         match (ka, kb, kc) {
             (_, _, Int) => {
-                self.unify_num(span, a, Type::Int)?;
-                self.unify_num(span, b, Type::Int)
+                self.unify_operand(span, a, Type::Int)?;
+                self.unify_operand(span, b, Type::Int)
             }
             (Number, _, _) | (_, Number, _) => self.unify_num(span, c, Type::Number),
             (Int, Int, _) => self.unify_num(span, c, Type::Int),
@@ -188,6 +214,15 @@ impl InferState {
         match self.zonk(slot) {
             lit @ Type::Literal(_) => self.subsume(span, &lit, &ty),
             _ => self.unify(span, slot, &ty),
+        }
+    }
+
+    /// [`Self::unify_num`] for an operand the result requires to be `ty`:
+    /// a mismatch expects `ty` and finds the operand.
+    fn unify_operand(&mut self, span: Span, slot: &Type, ty: Type) -> Result<(), IntyError> {
+        match self.zonk(slot) {
+            lit @ Type::Literal(_) => self.subsume(span, &lit, &ty),
+            _ => self.unify(span, &ty, slot),
         }
     }
 
@@ -230,6 +265,55 @@ impl InferState {
     }
 
     fn resolve_numeric_pred(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
+        self.resolving_numeric(pred, span, |s| s.resolve_numeric_pred_here(pred, span))
+    }
+
+    /// Run `resolve`, the resolution of the numeric `pred`, keeping track
+    /// of which constraint it was: what it re-poses keeps `pred`'s origin,
+    /// and an error says which constraint failed — `Arith`'s, with its
+    /// types — and, for one a generic function's body posed (`pred.origin`),
+    /// where (`TypeError::RequiredBy`): the operator in the body, not just
+    /// the call that instantiated it.
+    pub(crate) fn resolving_numeric(
+        &mut self,
+        pred: &TypePred,
+        span: Span,
+        resolve: impl FnOnce(&mut Self) -> Result<(), IntyError>,
+    ) -> Result<(), IntyError> {
+        let mark = self.pending_constraints.len();
+        let before = self.apply_subst_pred(pred);
+        let result = resolve(self);
+        if let Some(origin) = pred.origin {
+            for c in self.pending_constraints.iter_mut().skip(mark) {
+                if is_numeric_class(c.pred.class) {
+                    c.pred.origin.get_or_insert(origin);
+                }
+            }
+        }
+        result.map_err(|mut e| {
+            if before.class == ClassName::Arith && self.quiet == 0 {
+                let note = self.describe_arith(&before);
+                if let Some(crate::error::TypeError::UnificationError { context, .. }) =
+                    e.as_type_mut()
+                {
+                    context.get_or_insert(note);
+                }
+            }
+            self.required_by(pred, span, e)
+        })
+    }
+
+    /// What `Arith a b c` requires, for an error solving it.
+    fn describe_arith(&mut self, pred: &TypePred) -> String {
+        let [a, b, c] = [0, 1, 2].map(|i| self.show(&pred.types[i]));
+        format!(
+            "from the constraint `Arith` on this arithmetic (`+ - * %`): operands \
+             '{a}' and '{b}', result '{c}'. The result is 'Int' exactly when both \
+             operands are 'Int', and 'Number' when either is 'Number'"
+        )
+    }
+
+    fn resolve_numeric_pred_here(&mut self, pred: &TypePred, span: Span) -> Result<(), IntyError> {
         match pred.class {
             ClassName::Num => self.resolve_num(&pred.types[0], span),
             ClassName::NumLit => match self.zonk(&pred.types[0]) {
@@ -474,6 +558,42 @@ impl InferState {
 const POS: u8 = 1;
 const NEG: u8 = 2;
 const INV: u8 = 4;
+
+/// `ty` (at polarity `pol`) with each `Number` at a `NEG` position — one
+/// reached through function parameters and results and a callable row's
+/// call signature only — replaced by `fresh()`.
+fn number_inputs(ty: &Type, pol: u8, fresh: &mut dyn FnMut() -> Type) -> Type {
+    match ty {
+        Type::Number if pol == NEG => fresh(),
+        Type::Func {
+            this_type,
+            params,
+            ret,
+        } => {
+            let flip = if pol == POS { NEG } else { POS };
+            Type::Func {
+                this_type: this_type.clone(),
+                params: params
+                    .iter()
+                    .map(|p| crate::types::FuncParam {
+                        ty: number_inputs(&p.ty, flip, fresh),
+                        ..p.clone()
+                    })
+                    .collect(),
+                ret: Box::new(number_inputs(ret, pol, fresh)),
+            }
+        }
+        Type::Row(row) => {
+            let key = crate::types::PropName(crate::types::CALLABLE_KEY.to_string());
+            let mut row = row.clone();
+            if let Some(call) = row.props.get_mut(&key) {
+                call.ty = number_inputs(&call.ty, pol, fresh);
+            }
+            Type::Row(row)
+        }
+        other => other.clone(),
+    }
+}
 
 /// Where each variable occurs in `ty`: as a result (`POS`), a parameter
 /// (`NEG`), or somewhere neither subsumption direction applies (`INV` —

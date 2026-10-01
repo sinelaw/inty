@@ -4464,3 +4464,121 @@ fn const_function_statement_yields_undefined() {
             .unwrap();
     assert_eq!(state.apply_subst(&ty), Type::Undefined);
 }
+
+#[test]
+fn int_comparator_fits_sort_however_the_receiver_is_known() {
+    // `sort`'s comparator returns a `Number`: at a call, any number
+    // (`number_inputs_as_num`). So one returning an `Int` fits, whether the
+    // array's type is known at the call or only when a generic function
+    // using `sort` is called (a deferred `HasProp`). Equating the
+    // comparator's result with `Number` there made `Arith Int Int Number`.
+    let ty = |src: &str, name: &str| -> Result<String, String> {
+        let (_, env, state) =
+            infer_program_via_program_with_stdlib(src).map_err(|e| e.to_string())?;
+        if let Some(e) = state.errors.first() {
+            return Err(e.to_string());
+        }
+        let scheme = env.lookup(name).expect("bound");
+        Ok(format!("{}", state.display_scheme(scheme)))
+    };
+    let table = "const TABLE = [\"C\", \"D\"];\n";
+    // The elements are used as an index: they must stay `Int`s.
+    assert_eq!(
+        ty(
+            &format!(
+                "{table}function low(xs) {{\n\
+                   const sorted = xs.slice().sort((a, b) => a - b);\n\
+                   return TABLE[sorted[0] % 2];\n\
+                 }}\n\
+                 const r = low([64, 60]);"
+            ),
+            "r"
+        )
+        .unwrap(),
+        "String"
+    );
+    assert_eq!(
+        ty(
+            &format!(
+                "{table}function low(ns) {{\n\
+                   const sorted = ns.slice().sort((a, b) => a.pitch - b.pitch);\n\
+                   return TABLE[sorted[0].pitch % 2];\n\
+                 }}\n\
+                 const r = low([{{ pitch: 64 }}, {{ pitch: 60 }}]);"
+            ),
+            "r"
+        )
+        .unwrap(),
+        "String"
+    );
+    // Nothing makes the elements `Number`s.
+    assert_eq!(
+        ty(
+            "function low(xs) { return xs.slice().sort((a, b) => a - b); }\n\
+             const r = low([64, 60]);",
+            "r"
+        )
+        .unwrap(),
+        "Int[]"
+    );
+    // A comparator that is a function value, not a literal: the same.
+    for src in [
+        "const cmp = (a, b) => a - b; const s = [3, 1].sort(cmp); const k = [\"a\"][s[0]];",
+        "/** function cmp(Int, Int) => Int */ function cmp(a, b) { return a - b; }\n\
+         const s = [3, 1].sort(cmp); const k = [\"a\"][s[0]];",
+        "function f(xs, cmp) { return xs.sort(cmp); }\n\
+         /** function cmp(Int, Int) => Int */ function cmp(a, b) { return a - b; }\n\
+         const s = f([3, 1], cmp); const k = [\"a\"][s[0]];",
+    ] {
+        assert_eq!(ty(src, "k").unwrap(), "String", "{src}");
+    }
+    // A comparator joining an `Int` and a `Number` with `||`: `Int | Number`
+    // is a `Number`.
+    let notes = "/** const xs: {start: Number, pitch: Int}[] */\n\
+                 const xs = [{ start: 0.5, pitch: 1 }];\n";
+    assert_eq!(
+        ty(
+            &format!("{notes}const s = xs.sort((a, b) => a.start - b.start || a.pitch - b.pitch);"),
+            "s"
+        )
+        .unwrap(),
+        "{pitch: Int, start: Number}[]"
+    );
+    assert_eq!(
+        ty(
+            &format!("{notes}const s = xs.map((a) => a.start || a.pitch);"),
+            "s"
+        )
+        .unwrap(),
+        "Number[]"
+    );
+    // A fraction is still no index, and a comparator still returns a number.
+    assert!(ty(
+        &format!(
+            "{table}function low(xs) {{\n\
+               const sorted = xs.slice().sort((a, b) => a - b);\n\
+               return TABLE[sorted[0] % 2];\n\
+             }}\n\
+             const r = low([64.5, 60]);"
+        ),
+        "r"
+    )
+    .is_err());
+    assert!(ty(
+        &format!(
+            "{table}function low(ns) {{\n\
+               const sorted = ns.slice().sort((a, b) => a.pitch - b.pitch);\n\
+               return TABLE[sorted[0].pitch % 2];\n\
+             }}\n\
+             const r = low([{{ pitch: 64.5 }}, {{ pitch: 60 }}]);"
+        ),
+        "r"
+    )
+    .is_err());
+    assert!(ty("const s = [3, 1].sort((a, b) => \"x\");", "s").is_err());
+    assert!(ty(
+        "function f(xs) { return xs.sort((a, b) => \"x\"); } const s = f([3, 1]);",
+        "s"
+    )
+    .is_err());
+}

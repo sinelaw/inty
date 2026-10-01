@@ -1448,7 +1448,8 @@ impl InferState {
     /// literal-subsumption rule: a literal type is dropped from the union
     /// when its base type (`Number`/`String`/`Boolean`) is also present
     /// (e.g. `"a" | String` collapses to `String`, but `"a" | "b"` stays
-    /// a closed literal union).
+    /// a closed literal union). Likewise `Int`, a refinement of `Number`:
+    /// `Int | Number` is `Number`, as `numeric_lub` joins them.
     pub(crate) fn normalise_union_members(members: Vec<Type>) -> Type {
         let mut has_number = false;
         let mut has_string = false;
@@ -1468,6 +1469,7 @@ impl InferState {
                 Type::Literal(LitValue::String(_)) => !has_string,
                 Type::Literal(LitValue::Number(_)) => !has_number,
                 Type::Literal(LitValue::Bool(_)) => !has_boolean,
+                Type::Int => !has_number,
                 _ => true,
             })
             .collect();
