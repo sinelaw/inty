@@ -228,6 +228,21 @@ impl InferState {
     }
 
     /// Infer the type of an assignment.
+    /// The type of an assignment target (`x`, `o.f`, `[a, b]`): what may
+    /// be stored there, exactly — not a read's instance of it (see
+    /// `InferState::number_inputs_on_read`). A function assigned to
+    /// `o.f: (Number) => X` must take any number.
+    pub(in crate::infer) fn infer_target(
+        &mut self,
+        env: &TypeEnv,
+        target: &Expr,
+    ) -> InferResult<Type> {
+        self.in_write_target += 1;
+        let ty = self.infer_expr(env, target);
+        self.in_write_target -= 1;
+        ty
+    }
+
     pub(in crate::infer) fn infer_assign(
         &mut self,
         env: &TypeEnv,
@@ -247,7 +262,7 @@ impl InferState {
             && matches!(left, Expr::Member { .. } | Expr::Ident { .. })
             && lhs_polytype(self, env, left).is_none()
         {
-            let left_type = self.infer_expr(env, left)?;
+            let left_type = self.infer_target(env, left)?;
             if crate::infer::features::functions::extract_callable(&self.zonk(&left_type)).is_some()
             {
                 self.check_expr(env, right, &left_type)?;
@@ -309,7 +324,7 @@ impl InferState {
             }
         }
 
-        let left_type = self.infer_expr(env, left)?;
+        let left_type = self.infer_target(env, left)?;
 
         match op {
             AssignOp::Assign

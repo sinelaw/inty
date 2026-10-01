@@ -878,7 +878,12 @@ impl InferState {
         let receiver = self.zonk(obj_type);
         if matches!(receiver, Type::Var(TVarName::Flex(_))) {
             self.add_constraint(
-                TypePred::has_prop(receiver, property, result_type.clone()),
+                TypePred::has_prop_read(
+                    receiver,
+                    property,
+                    result_type.clone(),
+                    self.in_write_target == 0,
+                ),
                 span,
             );
             return Ok(result_type);

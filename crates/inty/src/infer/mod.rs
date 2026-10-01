@@ -1287,6 +1287,11 @@ impl InferState {
             let span = expr.span();
             types.insert((span.start, span.end), ty.clone());
         }
+        // A read of a variable or a property: a `Number` in a
+        // contravariant position of its type is any number, for this use.
+        if matches!(expr, Expr::Ident { .. } | Expr::Member { .. }) {
+            return Ok(self.number_inputs_on_read(expr.span(), &ty));
+        }
         Ok(ty)
     }
 

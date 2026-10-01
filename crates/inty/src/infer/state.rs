@@ -249,6 +249,11 @@ pub struct InferState {
     /// Nesting of [`Self::quietly`]: while positive, a failed unification
     /// is being speculated and its error will be discarded.
     pub(crate) quiet: u32,
+    /// Nesting of assignment targets being typed (`o.f` in `o.f = g`):
+    /// while positive, a read gives a binding's or field's exact type —
+    /// what may be stored there — not a read's instance of it (see
+    /// `number_inputs_on_read`).
+    pub(crate) in_write_target: u32,
     /// How many imported modules are being checked (nested).
     pub module_depth: usize,
     /// `--timings`: when `Some`, the time each top-level declaration of
@@ -503,6 +508,7 @@ impl InferState {
             sources: Default::default(),
             module_depth: 0,
             quiet: 0,
+            in_write_target: 0,
             module_cache: HashMap::new(),
             timings: None,
             module_timings: Vec::new(),
@@ -959,6 +965,7 @@ impl InferState {
                 class: p.class,
                 types: p.types.iter().map(|t| self.main_subst.flatten(t)).collect(),
                 origin: p.origin,
+                read: p.read,
             })
             .collect();
         TypeScheme {
@@ -2307,6 +2314,7 @@ impl InferState {
                     .map(|t| self.main_subst.flatten(t))
                     .collect(),
                 origin: c.pred.origin,
+                read: c.pred.read,
             })
             .collect();
         loop {
@@ -2402,6 +2410,7 @@ impl InferState {
             class: pred.class,
             types: pred.types.iter().map(|t| self.apply_subst(t)).collect(),
             origin: pred.origin,
+            read: pred.read,
         }
     }
 

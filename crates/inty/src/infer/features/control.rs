@@ -547,7 +547,7 @@ impl InferState {
                 )?
             }
             ForInLhs::Expr(expr) => {
-                let lhs_type = self.infer_expr(env, expr)?;
+                let lhs_type = self.infer_target(env, expr)?;
                 self.subsume(span, &lhs_type, &Type::String)?;
                 env.clone()
             }
@@ -585,7 +585,7 @@ impl InferState {
                 )?
             }
             ForInLhs::Expr(expr) => {
-                let lhs_type = self.infer_expr(env, expr)?;
+                let lhs_type = self.infer_target(env, expr)?;
                 self.subsume(span, &lhs_type, &elem_type)?;
                 env.clone()
             }

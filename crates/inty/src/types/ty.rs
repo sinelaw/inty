@@ -239,11 +239,18 @@ pub struct TypePred {
     /// call that fails is reported there, and "required by" here.
     /// Not part of the predicate's identity.
     pub origin: Option<crate::span::Span>,
+    /// A `HasProp` posed by reading the property as a value (not as an
+    /// assignment target): resolved to the field's type with each
+    /// `Number` it only takes made a `Num` variable, as a read of a
+    /// known receiver gives (`InferState::number_inputs_on_read`). False
+    /// — the field's exact type — wherever it isn't known to be a read,
+    /// which is always sound.
+    pub read: bool,
 }
 
 impl PartialEq for TypePred {
     fn eq(&self, other: &Self) -> bool {
-        self.class == other.class && self.types == other.types
+        self.class == other.class && self.types == other.types && self.read == other.read
     }
 }
 
@@ -255,6 +262,7 @@ impl TypePred {
             class: ClassName::Plus,
             types: vec![ty],
             origin: None,
+            read: false,
         }
     }
 
@@ -263,6 +271,7 @@ impl TypePred {
             class: ClassName::Num,
             types: vec![ty],
             origin: None,
+            read: false,
         }
     }
 
@@ -271,6 +280,7 @@ impl TypePred {
             class: ClassName::NumLit,
             types: vec![ty],
             origin: None,
+            read: false,
         }
     }
 
@@ -279,6 +289,7 @@ impl TypePred {
             class: ClassName::Arith,
             types: vec![left, right, result],
             origin: None,
+            read: false,
         }
     }
 
@@ -287,6 +298,7 @@ impl TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
             origin: None,
+            read: false,
         }
     }
 
@@ -299,6 +311,7 @@ impl TypePred {
                 result,
             ],
             origin: None,
+            read: false,
         }
     }
 
@@ -306,6 +319,14 @@ impl TypePred {
     /// call's `this`, which is bound to the receiver (unrolled, if it's
     /// a nominal type, as a call on a known receiver does) when the
     /// constraint is resolved.
+    /// [`Self::has_prop`] for a read of the property as a value (see
+    /// [`TypePred::read`]).
+    pub fn has_prop_read(receiver: Type, name: &str, result: Type, read: bool) -> Self {
+        let mut pred = Self::has_prop(receiver, name, result);
+        pred.read = read;
+        pred
+    }
+
     pub fn has_method(receiver: Type, name: &str, result: Type, this: Type) -> Self {
         let mut pred = Self::has_prop(receiver, name, result);
         pred.types.push(this);

@@ -67,18 +67,25 @@ impl InferState {
         widened
     }
 
-    /// `callee`, the type of a function being called, with each `Number`
-    /// it only takes as input — a parameter, a callback's result — made a
-    /// fresh `Num` variable: a function taking any number takes an `Int`
-    /// too, so the call may pick either. `sort((a, b) => a - b)` then only
-    /// equates the comparator's result with that variable, and `Arith`
-    /// decides it (`Int` for `Int`s); equating it with `Number` would have
-    /// made the operands `Number`s. The same equation is posed whether the
-    /// receiver is known at the call or only when a deferred `HasProp`
-    /// resolves, so the two agree.
+    /// `ty`, the type of a value being used, with each `Number` in a
+    /// contravariant (input) position — a parameter, a callback's result
+    /// (covariant in the callback, which is itself a parameter) — made a
+    /// fresh `Num` variable. `Number` in input position means any number:
+    /// since `Int ≤ Number`, contravariance gives `(Number) => X ≤
+    /// (Int) => X`, so each use may pick either (`<r> where Num r => (r) =>
+    /// X`, as Haskell would declare it). A `Number` in a covariant (output)
+    /// position stays: the value may be fractional.
+    /// `sort((a, b) => a - b)` then only equates the comparator's result
+    /// with that variable, and `Arith` decides it (`Int` for `Int`s), and
+    /// `k(Math.sqrt)` passes `sqrt` where an `(Int) => a` is wanted.
     ///
-    /// Only for the call (the callee's own type is unchanged), and not
-    /// inside an array, an object or a union: an `Int[]` is no `Number[]`.
+    /// Applied wherever a value is used — a read of a variable or a
+    /// property (`number_inputs_on_read`), the function a call calls
+    /// (direct or deferred) — so it doesn't matter whether its type was
+    /// known first. Not inside an array or an object's field, which are
+    /// invariant (mutable storage: an `Int[]` is no `Number[]`), nor a union
+    /// (left exact). And never to the type itself, so what may be stored in
+    /// a binding or field is unchanged.
     pub(crate) fn number_inputs_as_num(&mut self, span: Span, callee: &Type) -> Type {
         let callee = self.zonk(callee);
         let mut fresh = Vec::new();
@@ -91,6 +98,28 @@ impl InferState {
             self.add_constraint(TypePred::num(v), span);
         }
         out
+    }
+
+    /// [`Self::number_inputs_as_num`] for a read of a variable or a
+    /// property, unless it's an assignment target (`in_write_target`):
+    /// a target's type is what may be stored, exactly. Values that aren't
+    /// functions are returned as they are, without expanding them.
+    pub(crate) fn number_inputs_on_read(&mut self, span: Span, ty: &Type) -> Type {
+        let callable = |t: &Type| match t {
+            Type::Func { .. } => true,
+            Type::Row(row) => row.props.contains_key(&crate::types::PropName(
+                crate::types::CALLABLE_KEY.to_string(),
+            )),
+            _ => false,
+        };
+        let is_callable = match ty {
+            Type::Var(TVarName::Flex(id)) => self.var_table.root_bound_satisfies(*id, callable),
+            t => callable(t),
+        };
+        if self.in_write_target > 0 || !is_callable {
+            return ty.clone();
+        }
+        self.number_inputs_as_num(span, ty)
     }
 
     /// The numeric kind of `ty`, as far as it's known now.
@@ -559,9 +588,11 @@ const POS: u8 = 1;
 const NEG: u8 = 2;
 const INV: u8 = 4;
 
-/// `ty` (at polarity `pol`) with each `Number` at a `NEG` position — one
-/// reached through function parameters and results and a callable row's
-/// call signature only — replaced by `fresh()`.
+/// `ty` (at polarity `pol`) with each `Number` at a `NEG` (contravariant)
+/// position replaced by `fresh()`. Polarity flips at a parameter
+/// (contravariant) and is kept at a result (covariant); the walk only
+/// descends through those and a callable row's call signature — not into
+/// arrays or object fields (invariant), unions or `this`, left exact.
 fn number_inputs(ty: &Type, pol: u8, fresh: &mut dyn FnMut() -> Type) -> Type {
     match ty {
         Type::Number if pol == NEG => fresh(),

@@ -805,6 +805,7 @@ impl InferState {
         name: &str,
         result: &Type,
         this: Option<&Type>,
+        read: bool,
         span: Span,
     ) -> Result<(), IntyError> {
         let receiver = self.zonk(receiver);
@@ -819,10 +820,11 @@ impl InferState {
             // gets its own constraint.
             for m in members {
                 match self.zonk(m) {
-                    m @ Type::Var(TVarName::Flex(_)) => {
-                        self.add_constraint(TypePred::has_prop(m, name, result.clone()), span)
-                    }
-                    m => self.resolve_has_prop(&m, name, result, None, span)?,
+                    m @ Type::Var(TVarName::Flex(_)) => self.add_constraint(
+                        TypePred::has_prop_read(m, name, result.clone(), read),
+                        span,
+                    ),
+                    m => self.resolve_has_prop(&m, name, result, None, read, span)?,
                 }
             }
             if let Some(this) = this {
@@ -868,6 +870,11 @@ impl InferState {
                 self.apply_deferred_call(span, result, &found)?;
                 let receiver = self.method_receiver(&receiver);
                 self.unify(span, this, &receiver)?;
+            }
+            // A read: as reading it from a known receiver gives.
+            None if read => {
+                let found = self.number_inputs_as_num(span, &found);
+                self.unify(span, result, &found)?
             }
             None => self.unify(span, result, &found)?,
         }
@@ -1037,7 +1044,7 @@ impl InferState {
                     .expect("HasProp predicates are built by TypePred::has_prop");
                 let (recv, result) = (recv.clone(), result.clone());
                 let this = pred.method_this().cloned();
-                self.resolve_has_prop(&recv, name, &result, this.as_ref(), span)
+                self.resolve_has_prop(&recv, name, &result, this.as_ref(), pred.read, span)
             }
         }
     }
