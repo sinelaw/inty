@@ -187,6 +187,11 @@ pub struct InferState {
     /// Pending type class constraints to resolve.
     pub pending_constraints: Vec<PendingConstraint>,
 
+    /// The container of the computed member inferred last
+    /// (`infer_computed_member`), so an assignment to `c[i]` can require
+    /// `c` to take stores (`IndexWrite`).
+    pub(crate) last_index_container: Option<Type>,
+
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
     pub decl_types: HashMap<usize, Type>,
@@ -488,6 +493,7 @@ impl InferState {
             type_id_source: 0,
             type_classes: HashMap::new(),
             pending_constraints: Vec::new(),
+            last_index_container: None,
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -2192,7 +2198,7 @@ impl InferState {
             let scheme_preds: Vec<TypePred> = scheme_preds
                 .into_iter()
                 .filter(|pred| {
-                    if pred.class != ClassName::Plus {
+                    if !matches!(pred.class, ClassName::Plus | ClassName::IndexWrite) {
                         return true;
                     }
                     let ty = self.main_subst.flatten(&pred.types[0]);
@@ -2200,7 +2206,12 @@ impl InferState {
                         return true;
                     }
                     let span = pred.origin.unwrap_or_default();
-                    if let Err(e) = self.resolve_plus(&ty, span) {
+                    let decided = if pred.class == ClassName::Plus {
+                        self.resolve_plus(&ty, span)
+                    } else {
+                        self.resolve_index_write(&ty, span)
+                    };
+                    if let Err(e) = decided {
                         self.push_error(e);
                     }
                     false

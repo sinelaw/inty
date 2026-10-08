@@ -4716,3 +4716,35 @@ fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
     "#;
     assert!(infer_program_with_state(accepted).is_ok());
 }
+
+#[test]
+fn test_a_string_index_cant_be_assigned() {
+    // A string's characters are read-only: a store throws a `TypeError` in
+    // strict code, and `dynamics` gets stuck. Indexing it is fine.
+    for source in [
+        r#"
+        const s = "ab";
+        s[0] = "c";
+        "#,
+        r#"
+        function f(x) { x[0] = "c"; return x; }
+        const t = f("ab");
+        "#,
+        r#"
+        let s = "ab";
+        s[0]++;
+        "#,
+    ] {
+        assert!(check_program(source, &[]).is_err(), "{source}");
+    }
+    let accepted = r#"
+        const s = "ab";
+        const c = s[0];
+        const xs = [1, 2];
+        xs[0] = 3;
+        xs[1]++;
+        function set0(c, v) { c[0] = v; return c; }
+        const ys = set0([1], 2);
+    "#;
+    assert!(check_program(accepted, &[]).is_ok());
+}

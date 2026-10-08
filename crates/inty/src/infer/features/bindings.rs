@@ -309,7 +309,13 @@ impl InferState {
             }
         }
 
+        self.last_index_container = None;
         let left_type = self.infer_expr(env, left)?;
+        if matches!(left, Expr::ComputedMember { .. }) {
+            if let Some(container) = self.last_index_container.take() {
+                self.require_index_write(&container, span)?;
+            }
+        }
 
         match op {
             AssignOp::Assign

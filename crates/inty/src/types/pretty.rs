@@ -685,6 +685,10 @@ impl PrettyContext {
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
             }
+            ClassName::IndexWrite => {
+                write!(w, "IndexWrite ")?;
+                self.write_type(w, &pred.types[0], true)?;
+            }
             ClassName::Indexable => {
                 write!(w, "Indexable ")?;
                 self.write_type(w, &pred.types[0], true)?;
@@ -842,6 +846,7 @@ impl Display for ClassName {
             ClassName::Num | ClassName::NumLit => write!(f, "Num"),
             ClassName::Arith => write!(f, "Arith"),
             ClassName::Indexable => write!(f, "Indexable"),
+            ClassName::IndexWrite => write!(f, "IndexWrite"),
             ClassName::HasProp => write!(f, "HasProp"),
         }
     }

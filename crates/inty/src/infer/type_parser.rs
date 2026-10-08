@@ -314,6 +314,13 @@ impl<'a> TypeParser<'a> {
             self.preds.push(TypePred::arith(a, b, c));
             return Ok(());
         }
+        if keyword("IndexWrite") {
+            self.pos += "IndexWrite".len();
+            self.skip_whitespace();
+            let t = self.parse_simple_type()?;
+            self.preds.push(TypePred::index_write(t));
+            return Ok(());
+        }
         if keyword("Indexable") {
             self.pos += "Indexable".len();
             let mut ts = Vec::new();

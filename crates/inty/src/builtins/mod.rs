@@ -1018,6 +1018,7 @@ impl InferState {
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
+            ClassName::IndexWrite => self.resolve_index_write(&pred.types[0], span),
             ClassName::HasProp => {
                 let (recv, name, result) = pred
                     .as_has_prop()
@@ -1061,6 +1062,44 @@ impl InferState {
                 span,
             }
             .into()),
+        }
+    }
+
+    /// Resolve `IndexWrite c`: an element of any indexable container can be
+    /// stored but a string's; a variable nothing pinned down holds no
+    /// value, so its stores never run.
+    pub(crate) fn resolve_index_write(
+        &mut self,
+        container: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.apply_subst(container) {
+            Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
+                Err(TypeError::ConstraintNotSatisfied {
+                    class: "IndexWrite (a string's characters can't be assigned)".to_string(),
+                    ty: "String".to_string(),
+                    span,
+                }
+                .into())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The container of an assignment's computed-member target must take
+    /// stores (`IndexWrite`): decided now for a known type, posed for a
+    /// variable.
+    pub(crate) fn require_index_write(
+        &mut self,
+        container: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.apply_subst(container) {
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::index_write(container.clone()), span);
+                Ok(())
+            }
+            _ => self.resolve_index_write(container, span),
         }
     }
 

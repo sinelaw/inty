@@ -217,6 +217,11 @@ pub enum ClassName {
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
+    /// `IndexWrite c`: an element of `c` can be stored (`c[i] = v`): an
+    /// array, a typed array, a map or an object, not a string (whose
+    /// characters are read-only: a store throws a `TypeError` in strict
+    /// code).
+    IndexWrite,
     /// Property access on a value whose type isn't known yet:
     /// `HasProp(receiver, "name", result)` says reading `.name` from a
     /// `receiver` gives a `result`. The name is carried as a string
@@ -286,6 +291,14 @@ impl TypePred {
         TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
+            origin: None,
+        }
+    }
+
+    pub fn index_write(container: Type) -> Self {
+        TypePred {
+            class: ClassName::IndexWrite,
+            types: vec![container],
             origin: None,
         }
     }
