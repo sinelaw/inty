@@ -30,8 +30,8 @@ jobs:
       run: lake build
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
-    # inty against the Lean model on generated programs; see
-    # crates/inty/tests/differential.rs.
+    # inty against the Lean model and Node (preinstalled on the runner) on
+    # generated programs; see crates/inty/tests/differential.rs.
     - name: Differential test
       working-directory: .
       run: cargo test -p inty --test differential -- --nocapture

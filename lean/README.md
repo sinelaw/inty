@@ -241,13 +241,27 @@ interpreter's result. The test fails on:
   on getting stuck (`eval_mono` makes the model's answer independent of its
   fuel; a timeout on either side is not compared);
 - inty and the model typing a program differently, unless inty's own types
-  show a feature the model doesn't have yet.
+  show a feature the model doesn't have yet;
+- a real JavaScript engine (Node, running `tests/differential/engine.js`)
+  disagreeing with either interpreter where that interpreter finishes, or
+  raising a native error (`TypeError`, `ReferenceError`) on a program inty
+  or the model accepts. `never_stuck` is about the model's `eval`; agreement with
+  the engine is the (sampled, not proved) evidence that `eval` is
+  JavaScript on this fragment.
 
 ```sh
 cd lean && lake build && cd ..
 cargo test -p inty --test differential -- --nocapture
 INTY_DIFF_CASES=20000 INTY_DIFF_SEED=7 cargo test -p inty --test differential
 ```
+
+Over 100,000 programs (five seeds), Node agreed with both interpreters
+wherever they finished and raised no error on a program either accepted.
+Where `dynamics` gets stuck, Node raises a `TypeError` or `ReferenceError`
+in about half the cases and coerces in the rest (`1 - "a"`,
+`typeof unbound`): the gap between inty's stricter semantics and
+JavaScript's. As a control, an engine that runs `-` as `+` fails 152 of
+3000 programs.
 
 Over 200,000 programs (ten seeds), the interpreters never disagreed, and
 the model never accepted a program inty rejects, except as below. The

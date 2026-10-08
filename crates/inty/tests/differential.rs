@@ -1,7 +1,8 @@
-//! Differential testing against the Lean model (`lean/`).
+//! Differential testing against the Lean model (`lean/`) and a JavaScript
+//! engine.
 //!
 //! Generates random programs in the formalized core calculus, writes each
-//! one as JavaScript for inty and in the model's wire format
+//! one as JavaScript for inty and the engine and in the model's wire format
 //! (`lean/Inty/Wire.lean`) for `inty-model`, and compares:
 //!
 //! - **soundness**: a program inty accepts must not get stuck in
@@ -11,7 +12,12 @@
 //! - **semantics**: when both interpreters finish, they agree on the value,
 //!   or on getting stuck;
 //! - **typing**: inty and the model's inference accept the same programs,
-//!   at the same type.
+//!   at the same type;
+//! - **the engine**: where `dynamics` or the model finishes, Node agrees
+//!   with it, and Node raises no native error (`TypeError`,
+//!   `ReferenceError`) on a program inty or the model accepts. This ties
+//!   both interpreters, and so the model's soundness theorem, to real
+//!   JavaScript.
 //!
 //! Disagreements the model doesn't cover yet are counted per category and
 //! printed; any other disagreement fails the test.
@@ -19,6 +25,8 @@
 //! The model is `lean/.lake/build/bin/inty-model` (`cd lean && lake build`),
 //! or `INTY_LEAN_MODEL`. Without it the test is skipped. `INTY_DIFF_CASES`
 //! sets the number of programs (default 3000), `INTY_DIFF_SEED` the seed.
+//! The engine is `node` (or `INTY_NODE`) running `tests/differential/engine.js`;
+//! without it the engine comparison is skipped, except on CI.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -544,6 +552,10 @@ enum Run {
     Stuck(String),
     Timeout,
     Unsupported,
+    /// The engine raised its own error (a `TypeError`, say).
+    NativeError(String),
+    /// The engine hit a resource limit: its stack, a string's length, time.
+    Limit,
 }
 
 fn core_type(t: &Type) -> String {
@@ -651,6 +663,31 @@ fn inty_run(program: &inty::ast::Program) -> Run {
     }
 }
 
+/// An interpreter's verdict in the model's wire format (`value V`,
+/// `thrown V`, ...), as both the model and the engine print it.
+fn parse_run(run: &str) -> Run {
+    // Canonicalise NaN the same way as inty's side.
+    let value = |v: &str| match v.strip_prefix("num ") {
+        Some(bits) => number_wire(f64::from_bits(bits.parse().expect(run))),
+        None => v.to_string(),
+    };
+    if run == "timeout" {
+        Run::Timeout
+    } else if run == "limit" {
+        Run::Limit
+    } else if let Some(v) = run.strip_prefix("value ") {
+        Run::Value(value(v))
+    } else if let Some(v) = run.strip_prefix("thrown ") {
+        Run::Thrown(value(v))
+    } else if let Some(v) = run.strip_prefix("returned ") {
+        Run::Returned(value(v))
+    } else if let Some(name) = run.strip_prefix("error ") {
+        Run::NativeError(name.to_string())
+    } else {
+        Run::Stuck(run.strip_prefix("stuck ").expect(run).to_string())
+    }
+}
+
 fn parse_model_line(line: &str) -> (Typing, Run) {
     let (typing, run) = line
         .split_once(';')
@@ -660,52 +697,65 @@ fn parse_model_line(line: &str) -> (Typing, Run) {
         "ambiguous" => Typing::Ambiguous,
         t => Typing::Type(t.strip_prefix("type ").expect(line).to_string()),
     };
-    // Canonicalise NaN the same way as inty's side.
-    let value = |v: &str| match v.strip_prefix("num ") {
-        Some(bits) => number_wire(f64::from_bits(bits.parse().expect(line))),
-        None => v.to_string(),
-    };
-    let run = if run == "timeout" {
-        Run::Timeout
-    } else if let Some(v) = run.strip_prefix("value ") {
-        Run::Value(value(v))
-    } else if let Some(v) = run.strip_prefix("thrown ") {
-        Run::Thrown(value(v))
-    } else if let Some(v) = run.strip_prefix("returned ") {
-        Run::Returned(value(v))
-    } else {
-        Run::Stuck(run.strip_prefix("stuck ").expect(line).to_string())
-    };
-    (typing, run)
+    (typing, parse_run(run))
 }
 
-/// Run the model on every program, in one process.
-fn run_model(model: &PathBuf, programs: &[Core]) -> Vec<(Typing, Run)> {
-    let mut child = Command::new(model)
+/// Run a process on one line per input, and read its one line per input.
+fn run_lines(mut command: Command, what: &str, input: String, n: usize) -> Vec<String> {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .expect("start inty-model");
-    let input: String = programs.iter().map(|p| wire(p) + "\n").collect();
-    if let Some(path) = std::env::var_os("INTY_DIFF_DUMP") {
-        std::fs::write(path, &input).unwrap();
-    }
+        .unwrap_or_else(|e| panic!("start {what}: {e}"));
     let mut stdin = child.stdin.take().unwrap();
     let writer = std::thread::spawn(move || {
         stdin.write_all(input.as_bytes()).unwrap();
     });
-    let out: Vec<(Typing, Run)> = BufReader::new(child.stdout.take().unwrap())
+    let out: Vec<String> = BufReader::new(child.stdout.take().unwrap())
         .lines()
-        .map(|l| parse_model_line(&l.unwrap()))
+        .map(|l| l.unwrap())
         .collect();
     writer.join().unwrap();
-    assert!(child.wait().unwrap().success(), "inty-model failed");
-    assert_eq!(
-        out.len(),
-        programs.len(),
-        "inty-model answered too few lines"
-    );
+    assert!(child.wait().unwrap().success(), "{what} failed");
+    assert_eq!(out.len(), n, "{what} answered too few lines");
     out
+}
+
+/// Run the model on every program, in one process.
+fn run_model(model: &PathBuf, programs: &[Core]) -> Vec<(Typing, Run)> {
+    let input: String = programs.iter().map(|p| wire(p) + "\n").collect();
+    if let Some(path) = std::env::var_os("INTY_DIFF_DUMP") {
+        std::fs::write(path, &input).unwrap();
+    }
+    run_lines(Command::new(model), "inty-model", input, programs.len())
+        .iter()
+        .map(|l| parse_model_line(l))
+        .collect()
+}
+
+/// Run every program in a JavaScript engine (`tests/differential/engine.js`
+/// under Node, or `INTY_NODE`), in one process. `None` when there is no
+/// engine; on CI that fails the test instead.
+fn run_engine(sources: &[String]) -> Option<Vec<Run>> {
+    let node = std::env::var_os("INTY_NODE").unwrap_or_else(|| "node".into());
+    if Command::new(&node).arg("--version").output().is_err() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "no JavaScript engine ({node:?}) on CI"
+        );
+        return None;
+    }
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/differential/engine.js");
+    let mut command = Command::new(node);
+    command.arg(script);
+    // The generated JavaScript is one line per program.
+    let input: String = sources.iter().map(|s| s.clone() + "\n").collect();
+    Some(
+        run_lines(command, "the JavaScript engine", input, sources.len())
+            .iter()
+            .map(|l| parse_run(l))
+            .collect(),
+    )
 }
 
 fn model_path() -> Option<PathBuf> {
@@ -792,12 +842,19 @@ fn inty_agrees_with_the_lean_model() {
     };
     let programs: Vec<Core> = (0..cases).map(|_| gen.program()).collect();
     let answers = run_model(&model, &programs);
+    let sources: Vec<String> = programs.iter().map(javascript).collect();
+    let engine = run_engine(&sources);
+    if engine.is_none() {
+        eprintln!("no JavaScript engine (node): not comparing with one");
+    }
 
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut known: BTreeMap<&str, (usize, String)> = BTreeMap::new();
     let mut failures = Vec::new();
-    for (core, (model_typing, model_run)) in programs.iter().zip(answers) {
-        let js = javascript(core);
+    let mut engine_stuck: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    for (i, (core, (model_typing, model_run))) in programs.iter().zip(answers).enumerate() {
+        let js = sources[i].clone();
+        let engine_run = engine.as_ref().map(|e| e[i].clone());
         if std::env::var_os("INTY_DIFF_TRACE").is_some() {
             eprintln!("{js}");
         }
@@ -823,12 +880,13 @@ fn inty_agrees_with_the_lean_model() {
             });
         let report = |what: &str| {
             format!(
-                "{what}\n  js:    {js}\n  core:  {}\n  inty:  {:?} / {:?}\n  model: {:?} / {:?}",
+                "{what}\n  js:     {js}\n  core:   {}\n  inty:   {:?} / {:?}\n  model:  {:?} / {:?}\n  engine: {:?}",
                 wire(core),
                 typing,
                 run,
                 model_typing,
-                model_run
+                model_run,
+                engine_run
             )
         };
         let accepted = matches!(typing, Typing::Type(_));
@@ -859,6 +917,47 @@ fn inty_agrees_with_the_lean_model() {
         if finished(&run) && finished(&model_run) && run != model_run {
             failures.push(report("the interpreters disagree"));
         }
+        // The engine. Where an interpreter finishes, the engine agrees; a
+        // program inty or the model accepts raises no native error (it may
+        // still exhaust a resource, as unbounded recursion does).
+        if let Some(engine_run) = &engine_run {
+            let finished = |r: &Run| matches!(r, Run::Value(_) | Run::Thrown(_));
+            if finished(&run) && &run != engine_run {
+                failures.push(report("inty's dynamics and the engine disagree"));
+            }
+            if finished(&model_run) && &model_run != engine_run {
+                failures.push(report("the model and the engine disagree"));
+            }
+            if let Run::NativeError(name) = engine_run {
+                if accepted {
+                    failures.push(report(&format!(
+                        "inty accepts a program that raises {name}"
+                    )));
+                }
+                if model_accepted {
+                    failures.push(report(&format!(
+                        "the model accepts a program that raises {name}"
+                    )));
+                }
+            }
+            // Where the dynamics gets stuck, JavaScript raises an error or
+            // coerces; count which.
+            if let Run::Stuck(why) = &run {
+                let what = match engine_run {
+                    Run::NativeError(name) => format!("raises {name}"),
+                    Run::Limit => "hits a limit".into(),
+                    _ => "coerces".into(),
+                };
+                let entry = engine_stuck
+                    .entry(format!("{why}: the engine {what}"))
+                    .or_insert((0, js.clone()));
+                entry.0 += 1;
+                if js.len() < entry.1.len() {
+                    entry.1 = js.clone();
+                }
+            }
+        }
+
         // Typing. inty's `never` (what doesn't complete) is the model's
         // unconstrained type variable.
         let same = typing == model_typing
@@ -880,6 +979,12 @@ fn inty_agrees_with_the_lean_model() {
     eprintln!("{cases} programs (seed {seed:#x}):");
     for (k, n) in &counts {
         eprintln!("  {n:5}  {k}");
+    }
+    if !engine_stuck.is_empty() {
+        eprintln!("where inty's dynamics gets stuck:");
+        for (k, (n, example)) in &engine_stuck {
+            eprintln!("  {n:5}  {k}, as in\n           {example}");
+        }
     }
     for (why, (n, example)) in &known {
         eprintln!("  {n:5}  known divergence: {why}; for example\n{example}");
