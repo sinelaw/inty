@@ -4577,3 +4577,30 @@ fn plus_on_known_type_is_decided_at_generalisation() {
     let on_variable = "const d = function (y) { return y + y; }; 1;";
     assert!(errors(on_variable).is_empty());
 }
+
+/// A `catch` binds whatever was thrown, which can be any value: its type is
+/// rigid, so it can't be used at a concrete type.
+#[test]
+fn caught_exception_is_opaque() {
+    let errors = |src: &str| {
+        let program = parse_for_multi_error_test(src);
+        let mut state = InferState::new();
+        let r = state.infer_program_with_env(&initial_env(), &program);
+        let mut errs = state.take_errors();
+        if let Err(e) = r {
+            errs.push(e);
+        }
+        errs
+    };
+    assert!(!errors("let r = 0; try { throw \"s\"; } catch (e) { r = e - 1; }").is_empty());
+    assert!(!errors(
+        "const f = function (x) { return x.length; }; try { throw 3; } catch (e) { f(e); }"
+    )
+    .is_empty());
+    // Passing it on, testing it, and rethrowing it are fine.
+    assert!(errors(
+        "const id = function (x) { return x; }; \
+         try { throw 1; } catch (e) { const t = typeof id(e); if (e) { throw e; } }"
+    )
+    .is_empty());
+}

@@ -620,10 +620,13 @@ impl InferState {
         let unsure_env = body_env.with_narrowings_of(env);
 
         if let Some(catch) = handler {
-            // The caught exception object is unmodelled, so its binding is a
-            // fresh (opaque) variable. The handler runs against the
-            // try-body's environment.
-            let param_type = self.fresh_type_var();
+            // Anything can be thrown, from here or from any function
+            // called, so the caught value's type is rigid (a skolem): it
+            // can be passed on, tested and rethrown, but not used at a
+            // concrete type. A flexible variable would let `e - 1` pin it
+            // to `Number` whatever was thrown. The handler runs against
+            // the try-body's environment.
+            let param_type = Type::Var(self.fresh_skolem());
             let catch_env = self.bind(
                 &unsure_env,
                 catch.span,

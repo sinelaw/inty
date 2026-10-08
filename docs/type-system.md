@@ -593,7 +593,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
 | Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`), `extends` with `super(args)` (see [Class Bodies](#class-bodies-fields-private-fields-accessors)); no `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
-| Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`                                          |
+| Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |
 | Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members |
 | Modules        | ES `import`/`export` with `inty.json` paths/baseUrl — see [Modules](#modules-es-import--export) above     |
