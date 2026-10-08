@@ -320,3 +320,27 @@ fn switch_with_fallthrough_blocked_by_break() {
     ";
     assert_number(src, 2.0);
 }
+
+/// Arithmetic at a span the checker typed `Int` is checked; the same
+/// arithmetic elsewhere is plain JavaScript.
+#[test]
+fn int_arithmetic_is_checked_only_where_typed_int() {
+    use std::collections::HashSet;
+    let src = "1073741824 * 1073741824";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let unchecked = crate::dynamics::run_to_end(&program).unwrap();
+    assert!(matches!(unchecked, Value::Number(n) if n == 1152921504606846976.0));
+
+    let crate::ast::Stmt::Expr {
+        expression: expr, ..
+    } = &program.statements[0]
+    else {
+        panic!("expected an expression statement");
+    };
+    let span = expr.span();
+    let int_ops: HashSet<(usize, usize)> = [(span.start, span.end)].into_iter().collect();
+    match crate::dynamics::run_to_end_checked(&program, 100, int_ops) {
+        Err(Stuck::IntRange { op: "*", .. }) => {}
+        other => panic!("expected an Int range fault, got {:?}", other),
+    }
+}

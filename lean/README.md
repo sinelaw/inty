@@ -200,7 +200,10 @@ cheapest proofs first and the hardest last.
    scheme, the assignment rule quantifies over rigid variables, and `Ty`
    needs a notion of rigid variable.
 7. **Literal types, `Int`, unions and subsumption**: `Int ≤ Number` with
-   the `Num` and `Arith` classes, and inty's join rules
+   the `Num` and `Arith` classes. `Int` arithmetic is checked (a result
+   past ±2^53, or `% 0`, is a fault: `Stuck::IntRange` in `dynamics`), so
+   the model needs a fault outcome beside `timeout`, and a number model it
+   can reason about rather than `Float`. Then inty's join rules
    ("declared, not guessed", `docs/type-system.md`). Subsumption treats a
    mutable array or record as invariant: only a value is subsumed into a
    union, never the element type of a container someone can write to (#96).

@@ -12,6 +12,12 @@
 //!   both are `Int`, `Number` when either is. A lub, not an equation, so
 //!   `i * 0.5` doesn't make `i` a `Number`.
 //!
+//! `Int` arithmetic is checked: a result past ±2^53 (or `NaN` from `% 0`)
+//! isn't an `Int` but a fault. The soundness oracle's dynamics reports it
+//! as `Stuck::IntRange`, not as a soundness violation. The Go backend
+//! stops at an out-of-range product or `% 0`; it leaves `+` and `-`
+//! unchecked for speed, computing exactly where JavaScript would round.
+//!
 //! `Arith`'s improvement rules (all sound: they follow from `c = a ⊔ b`):
 //! `a` and `b` known → `c`; either `Number` → `c = Number`; `c = Int` →
 //! `a = b = Int`; `c = Number` and one side `Int` → the other `Number`.

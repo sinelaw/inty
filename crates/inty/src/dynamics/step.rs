@@ -13,11 +13,12 @@
 //! into a `Block`-like form so non-terminating typed programs raise
 //! `Stuck::FuelExhausted` cleanly.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::ast::{
     AssignOp, BinOp, Expr, ForInLhs, ForInit, Literal, PropDef, PropKey, Stmt, UnaryOp,
 };
+use crate::span::Span;
 use crate::types::PropName;
 
 use super::env::RuntimeEnv;
@@ -49,6 +50,16 @@ pub enum Stuck {
     /// An uncaught `throw`. The payload is the thrown value.
     UncaughtThrow(Value),
     FuelExhausted,
+    /// `Int` arithmetic (`+ - * % //`, their compound assignments, `++`,
+    /// `--`) whose result is not a safe integer: `|n| ≥ 2^53` (where a
+    /// double may already have rounded), or `NaN` from `% 0`. Arithmetic
+    /// on `Int`s is checked: leaving the range is a fault (the Go backend
+    /// stops at a product or `% 0`), not a soundness violation. Only raised for the
+    /// expressions in [`State::int_ops`].
+    IntRange {
+        op: &'static str,
+        value: f64,
+    },
 }
 
 impl std::fmt::Display for Stuck {
@@ -70,6 +81,14 @@ impl std::fmt::Display for Stuck {
             Stuck::NotImplemented(s) => write!(f, "not implemented in dynamics: {}", s),
             Stuck::UncaughtThrow(v) => write!(f, "uncaught throw: {}", v),
             Stuck::FuelExhausted => write!(f, "fuel exhausted"),
+            Stuck::IntRange { op, value } => {
+                write!(
+                    f,
+                    "Int {}: {} is not a safe integer",
+                    op,
+                    Value::Number(*value)
+                )
+            }
         }
     }
 }
@@ -79,6 +98,11 @@ impl std::fmt::Display for Stuck {
 pub struct State {
     pub heap: Heap,
     pub fuel: usize,
+    /// The `(start, end)` spans of the expressions the checker typed
+    /// `Int`. Arithmetic at one of these is checked (`Stuck::IntRange`);
+    /// the dynamics has no types of its own, so it's empty unless a
+    /// caller fills it from inference.
+    pub int_ops: HashSet<(usize, usize)>,
 }
 
 impl State {
@@ -86,6 +110,24 @@ impl State {
         State {
             heap: Heap::new(),
             fuel,
+            int_ops: HashSet::new(),
+        }
+    }
+
+    /// `value`, the result of `op` at the expression spanning `span`,
+    /// unless that expression is `Int` arithmetic and `value` is not an
+    /// integer below 2^53 in magnitude (`Number.isSafeInteger`; a result
+    /// of exactly 2^53 may be a rounded 2^53 + 1). `-0` passes: it is an
+    /// integer, and a Go `int` holds it as `0`.
+    fn check_int(&self, span: Span, op: &'static str, value: Value) -> Result<Value, Stuck> {
+        match value {
+            Value::Number(n)
+                if self.int_ops.contains(&(span.start, span.end))
+                    && !(n.fract() == 0.0 && n.abs() < 9007199254740992.0) =>
+            {
+                Err(Stuck::IntRange { op, value: n })
+            }
+            v => Ok(v),
         }
     }
 
@@ -310,20 +352,19 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
 
         Expr::NewTarget { .. } => Ok(Value::Undefined),
 
-        Expr::Unary {
-            op,
-            argument,
-            span: _,
-        } => {
+        Expr::Unary { op, argument, span } => {
             // `delete` and `typeof` need to inspect the syntactic form
             // before evaluating; both are ok with eager evaluation in
             // this minimal model.
             let v = eval_expr(state, env, argument)?;
-            apply_unary(state, env, *op, argument, v)
+            apply_unary(state, env, *op, argument, v, *span)
         }
 
         Expr::Binary {
-            op, left, right, ..
+            op,
+            left,
+            right,
+            span,
         } => {
             // `&&` and `||` short-circuit on the left operand.
             if matches!(op, BinOp::And | BinOp::Or) {
@@ -336,11 +377,18 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             }
             let l = eval_expr(state, env, left)?;
             let r = eval_expr(state, env, right)?;
-            apply_binary(*op, &l, &r)
+            let v = apply_binary(*op, &l, &r)?;
+            match int_op_name(*op) {
+                Some(name) => state.check_int(*span, name, v),
+                None => Ok(v),
+            }
         }
 
         Expr::Assign {
-            op, left, right, ..
+            op,
+            left,
+            right,
+            span,
         } => {
             // Short-circuit assignment (`??=`, `||=`, `&&=`): evaluate
             // LHS first, decide whether to fire, then evaluate RHS
@@ -372,7 +420,11 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                 _ => {
                     let cur = eval_expr(state, env, left)?;
                     let bin = compound_to_binop(*op);
-                    apply_binary(bin, &cur, &rhs)?
+                    let v = apply_binary(bin, &cur, &rhs)?;
+                    match int_op_name(bin) {
+                        Some(name) => state.check_int(*span, name, v)?,
+                        None => v,
+                    }
                 }
             };
             assign_to(state, env, left, new_value.clone())?;
@@ -752,6 +804,19 @@ fn apply(
     }
 }
 
+/// The operators that are `Int` arithmetic when the checker types them
+/// `Int` (the `Arith` class): their results are checked.
+fn int_op_name(op: BinOp) -> Option<&'static str> {
+    match op {
+        BinOp::Add => Some("+"),
+        BinOp::Sub => Some("-"),
+        BinOp::Mul => Some("*"),
+        BinOp::Mod => Some("%"),
+        BinOp::FloorDiv => Some("//"),
+        _ => None,
+    }
+}
+
 fn compound_to_binop(op: AssignOp) -> BinOp {
     match op {
         AssignOp::Assign => unreachable!("Assign handled separately"),
@@ -850,6 +915,7 @@ fn apply_unary(
     op: UnaryOp,
     arg_expr: &Expr,
     v: Value,
+    span: Span,
 ) -> Result<Value, Stuck> {
     match op {
         UnaryOp::Neg => match v {
@@ -895,12 +961,12 @@ fn apply_unary(
                     })
                 }
             };
-            let delta = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
-                1.0
+            let (delta, name) = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
+                (1.0, "++")
             } else {
-                -1.0
+                (-1.0, "--")
             };
-            let new_val = Value::Number(cur + delta);
+            let new_val = state.check_int(span, name, Value::Number(cur + delta))?;
             assign_to(state, _env, arg_expr, new_val.clone())?;
             if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
                 Ok(new_val)

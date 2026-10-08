@@ -18,7 +18,7 @@
 //! how we widen coverage as the type system grows.
 
 use crate::builtins::initial_env;
-use crate::dynamics::{run_to_end_with_fuel, Stuck, Value};
+use crate::dynamics::{run_to_end_checked, run_to_end_with_fuel, Stuck, Value};
 use crate::frontends::javascript::lexer::{Scanner, Token};
 use crate::frontends::javascript::parser::Parser;
 use crate::infer::InferState;
@@ -86,6 +86,10 @@ pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
             (0i32..100).prop_map(|n| n.to_string()),
             Just("0".to_string()),
             Just("1".to_string()),
+            // near the edge of the safe-integer range, where `Int`
+            // arithmetic overflows
+            Just("1073741824".to_string()),
+            Just("9007199254740991".to_string()),
         ]
         .boxed();
     }
@@ -99,6 +103,8 @@ pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
             .prop_map(|(a, b)| format!("({} - {})", a, b)),
         (arb_number(depth - 1), arb_number(depth - 1))
             .prop_map(|(a, b)| format!("({} * {})", a, b)),
+        (arb_number(depth - 1), arb_number(depth - 1))
+            .prop_map(|(a, b)| format!("({} % {})", a, b)),
         // a fraction: the `Int`/`Number` split
         arb_number(depth - 1).prop_map(|a| format!("({} / 2)", a)),
         // unary
@@ -193,13 +199,23 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
         }
     }
 
-    // Type-check.
+    // Type-check, recording each expression's type.
     let mut infer = InferState::new();
+    infer.expr_types = Some(std::collections::HashMap::new());
     let env = initial_env();
     let ty = infer
         .infer_program(&env, &program)
         .map_err(|e| format!("infer error: {}", e))?;
     let ty = infer.apply_subst(&ty);
+    // The expressions typed `Int`: their arithmetic is checked.
+    let int_ops = infer
+        .expr_types
+        .take()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, t)| infer.flatten_type(t) == Type::Int)
+        .map(|(span, _)| span)
+        .collect();
     if !expected.matches_type(&ty) {
         return Err(format!(
             "synthesized program at expected type {:?} inferred to {} — generator bug",
@@ -207,11 +223,16 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
         ));
     }
 
-    // Reduce.
-    let value = run_to_end_with_fuel(&program, 5_000).map_err(|s| match s {
-        Stuck::FuelExhausted => "fuel exhausted (not a soundness violation)".to_string(),
-        other => format!("STUCK: {}", other),
-    })?;
+    // Reduce. `Int` arithmetic that leaves the safe-integer range is a
+    // defined fault, not a soundness violation: the program stops there.
+    let value = match run_to_end_checked(&program, 5_000, int_ops) {
+        Ok(value) => value,
+        Err(Stuck::IntRange { .. }) => return Ok(()),
+        Err(Stuck::FuelExhausted) => {
+            return Err("fuel exhausted (not a soundness violation)".to_string())
+        }
+        Err(other) => return Err(format!("STUCK: {}", other)),
+    };
 
     if !expected.matches_value(&value) {
         return Err(format!(
@@ -219,8 +240,9 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
             expected, value
         ));
     }
-    // An `Int` has no fractional part. (Arithmetic can still make a `-0`
-    // from `Int`s — `-0 * 1` — which a Go `int` holds as 0: a known corner.)
+    // An `Int` is a safe integer: checked arithmetic faults rather than
+    // leave the range. (It can still make a `-0` from `Int`s — `-0 * 1` —
+    // which a Go `int` holds as 0: a known corner.)
     if ty == Type::Int && !matches!(value, Value::Number(n) if crate::types::is_safe_int(n.abs())) {
         return Err(format!("value-type mismatch: expected Int, got {}", value));
     }
@@ -248,6 +270,26 @@ mod tests {
             check_program(src, *ty).unwrap_or_else(|e| {
                 panic!("{:?} on `{}`: {}", ty, src, e);
             });
+        }
+    }
+
+    /// `Int` arithmetic that leaves the safe-integer range faults (a
+    /// checked-arithmetic fault, not a soundness violation) instead of
+    /// producing an `Int` that isn't a safe integer.
+    #[test]
+    fn int_arithmetic_out_of_range_faults() {
+        for src in [
+            "1073741824 * 1073741824",
+            "9007199254740992 + 9007199254740992",
+            "9007199254740991 + 2",
+            "-9007199254740992 - 9007199254740992",
+            "5 % 0",
+            "0 % 0",
+            "(function(x) { return x * x; })(1073741824)",
+            "(function() { var i = 9007199254740992; i += 9007199254740992; return i; })()",
+            "(function() { var i = 9007199254740992; i++; i++; return i; })()",
+        ] {
+            check_program(src, SynthType::Number).unwrap_or_else(|e| panic!("`{}`: {}", src, e));
         }
     }
 
