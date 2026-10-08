@@ -4544,3 +4544,36 @@ fn mutable_containers_are_invariant() {
     )
     .is_ok());
 }
+
+/// A `Plus` on a known type is decided when a binding is generalised, not
+/// carried in its scheme to each use: a binding whose body adds two
+/// functions is an error even if nothing uses it. On a variable it stays,
+/// as `<a> where Plus a`.
+#[test]
+fn plus_on_known_type_is_decided_at_generalisation() {
+    let errors = |src: &str| {
+        let program = parse_for_multi_error_test(src);
+        let mut state = InferState::new();
+        let r = state.infer_program_with_env(&initial_env(), &program);
+        let mut errs = state.take_errors();
+        if let Err(e) = r {
+            errs.push(e);
+        }
+        if let Err(e) = state.resolve_constraints() {
+            errs.push(e);
+        }
+        errs
+    };
+    let unused =
+        "const x = function () { const g = function (y) { return y; }; return g + g; }; 1;";
+    let errs = errors(unused);
+    assert!(
+        errs.iter().any(|e| matches!(
+            e.as_type(),
+            Some(TypeError::ConstraintNotSatisfied { class, .. }) if class == "Plus"
+        )),
+        "{errs:?}"
+    );
+    let on_variable = "const d = function (y) { return y + y; }; 1;";
+    assert!(errors(on_variable).is_empty());
+}

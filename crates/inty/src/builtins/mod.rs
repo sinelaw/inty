@@ -1030,7 +1030,7 @@ impl InferState {
     }
 
     /// Resolve Plus constraint: type must be Number or String.
-    fn resolve_plus(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
+    pub(crate) fn resolve_plus(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
         let ty = self.apply_subst(ty);
 
         match &ty {

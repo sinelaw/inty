@@ -2184,6 +2184,28 @@ impl InferState {
                 }
             }
             self.pending_constraints = remaining;
+            // A `Plus` whose type is already known is decided here, not
+            // carried in the scheme to be found out at each use: a binding
+            // whose body adds two functions is an error even if nothing
+            // uses it (lean/ROADMAP.md, phase 1). On a variable it stays,
+            // as `<a> where Plus a`.
+            let scheme_preds: Vec<TypePred> = scheme_preds
+                .into_iter()
+                .filter(|pred| {
+                    if pred.class != ClassName::Plus {
+                        return true;
+                    }
+                    let ty = self.main_subst.flatten(&pred.types[0]);
+                    if matches!(ty, Type::Var(_)) {
+                        return true;
+                    }
+                    let span = pred.origin.unwrap_or_default();
+                    if let Err(e) = self.resolve_plus(&ty, span) {
+                        self.push_error(e);
+                    }
+                    false
+                })
+                .collect();
             gen_vars.sort_by_key(|v| v.id());
             gen_pvars.sort_by_key(|p| p.id());
 
