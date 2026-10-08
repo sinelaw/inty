@@ -4,7 +4,8 @@ A machine-checked model of inty's type system, in Lean 4 (core library only,
 no Mathlib). It covers a small core calculus, with let-polymorphism under the
 value restriction, type schemes that carry class constraints (inty's
 `<a> where Plus a => (a, a) => a`), a heap with `let` and assignment,
-loops, `break`, `continue` and `try`, a
+loops, `break`, `continue` and `try`, objects with row-polymorphic record
+types and property constraints (`a has {name: b}`), a
 complete type-soundness proof, and an executable type-inference algorithm
 proved sound and complete. It is laid out so
 that each inty feature can be added the way it is added to the Rust code: a
@@ -22,7 +23,8 @@ pins the version.
 ## What is proved
 
 `Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
-`τ`, class constraints `C` that hold, context `Γ`, world `W` (the scheme of
+`τ`, labels `L` (records have a slot for each), class constraints `C` each
+an instance or on a type variable (`HoldsOrVar`), context `Γ`, world `W` (the scheme of
 each cell of the heap), environment `env` whose variables' cells have the
 schemes `Γ` gives them, heap `h` that `W` describes for `clock` calls,
 enclosing function's return type `R`, and every clock, writing
@@ -30,7 +32,7 @@ enclosing function's return type `R`, and every clock, writing
 after,
 
 ```
-HasType C Γ R e τ → Holds C → G W Γ env → HeapOK clock W h →
+HasType L C Γ R e τ → HoldsOrVar C → G W Γ env → HeapOK clock W h →
   c ≤ clock ∧
   (r = timeout ∨ ∃ W', W <+: W' ∧ HeapOK c W' h' ∧
     ((∃ v, r = ok v ∧ V c W' τ v) ∨ r.Abrupt ∨
@@ -60,8 +62,13 @@ instance of its scheme.
 finds is a valid typing,
 
 ```
-inferProgram e = some τ → HasType [] [] none e τ
+inferProgram e = some τ → ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups C [] none e τ
 ```
+
+The constraints `C` are what inference leaves on type variables (`Plus a`,
+or a property read on a value of unknown type): inty accepts the program
+with them in place, and they can't fail, since no value has a type
+variable's type.
 
 so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
 gets stuck.
@@ -72,8 +79,9 @@ and Milner's completeness; the freshness invariants follow Naraschewski and
 Nipkow's proof of algorithm W):
 
 ```
-ctxFtv Γ = [] → e.scoped (Γ.map fun _ => false) → HasType [] Γ none e τ' →
-  ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ inferIn Γ e ≠ none
+ctxFtv Γ = [] → (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) →
+  HasType L C Γ none e τ' →
+  ∃ o, infer L Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn L Γ e = some τ
 ```
 
 `scoped` is the pair of scope checks JavaScript makes: a program assigns
@@ -103,19 +111,20 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 
 | Lean | inty |
 |---|---|
-| `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the parameters' and the result's), type variables | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; `number` stands for both `Int` and `Number`) |
+| `Ty`: a type variable, or a constructor (`Con`) applied to types: `number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally` | `ast::Expr`, `ast::Stmt` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals, property reads and writes | `ast::Expr`, `ast::Stmt` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
 | `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
-| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes, constraints, instances | `classes::ClassName`, the instance tables in `src/classes` |
+| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop` |
+| `improveAll` (deciding constraints on known types), `fixedVars` and `genVars` (what a `let` quantifies) | `simplify_has_props`, `env_fixed_vars`, `InferState::generalize` |
 | `Entails C p` (`p` is an instance, or assumed in `C`) | a scheme's constraints in scope while checking its body |
 | `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
 | `Out.preds` (pending class constraints) | the constraints `src/infer` resolves once types are known |
-| `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock and a heap, every binding a cell) | `src/dynamics` (`Value`, `Stuck`, fuel, `heap.rs`, `RuntimeEnv`) |
+| `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock and a heap, every binding a cell, an object a cell of its fields) | `src/dynamics` (`Value`, `Stuck`, fuel, `heap.rs`, `RuntimeEnv`, `Cell::Object`) |
 | `Prim`, `builtinCtx`, `builtinEnv`, `builtinHeap` (native functions, with their types) | `Value::Builtin`, `src/builtins` |
 | `Value.truthy`, `Value.typeString` | `Value::truthy`, `Value::type_string` |
 | `World`, `V`, `HeapOK`, `G`, `eval_sound` (semantic typing) | `src/meta/soundness.rs` |
@@ -146,8 +155,20 @@ These choices are meant to hold up as the calculus grows.
   model can serve as a test oracle against the Rust implementation, as
   Cedar's Lean model does for Cedar's Rust code (differential random
   testing).
-- **Types and expressions nest lists** (a function's parameters, a call's
-  arguments), as rows, unions and tuples will. Lean derives neither
+- **Every type former is a constructor applied to types** (`Ty.app c
+  args`), so substitution, free variables, unification and their lemmas
+  are written once, and a new type former (arrays, `Map`, literal types)
+  adds a `Con` and its rules, not cases to every proof. `Ty.fn`,
+  `Ty.record` and the rest are pattern-matchable abbreviations.
+- **Rows are Rémy's flat rows over the program's labels.** A record type
+  has a slot for every label of the program (`L`, a parameter of the typing
+  rules and of inference), with a presence and a type. An open row, inty's
+  `{x: T | r}`, is a record whose other slots are variables. Within the
+  program's labels this is equivalent to Rémy's rows with presence, which
+  inty implements with tails, and it keeps unification plain Robinson
+  unification: no type equality up to permutation.
+- **Types and expressions nest lists** (a constructor's arguments, a call's
+  arguments). Lean derives neither
   equality nor induction for nested inductive types, so `Ty.ind`, `PTy.ind`
   and `Expr.ind` are induction principles with a hypothesis for each list
   element, and functions on them recurse through a list by a mutual
@@ -192,16 +213,25 @@ These choices are meant to hold up as the calculus grows.
   does, and states them as invariants (`Below`, `Within`). Unification (`Inty/Unify.lean`) terminates by a measure and is
   proved most general (`unify_mgu`): every unifier factors through the one
   it finds.
-- **Class constraints are assumptions in the judgement.** `HasType C Γ R e τ`
-  types `e` assuming the constraints in `C` hold, as in HM(X). A class is a
-  `Cls` with its instances in `Inst` (`Inty/Classes.lean`); `Plus` is the
-  only one so far, and adding one is adding its instances and the operator
-  rules that use it. A
-  `const` types its initialiser assuming its scheme's constraints, and each
-  use of the variable must establish them. Inference records a pending
-  constraint at each `+`; a `const` takes the ones mentioning a generalised
-  variable into its scheme, and the rest must be resolved by the end of the
-  program.
+- **Class constraints are assumptions in the judgement.** `HasType L C Γ R e τ`
+  types `e` assuming the constraints in `C`, as in HM(X). A class is a
+  `Cls` with its instances in `Inst` (`Inty/Classes.lean`): `Plus`, and
+  `HasProp l a b`, a property read or write on a value of unknown type,
+  whose receiver determines the field (a functional dependency). A `const`
+  types its initialiser assuming its scheme's constraints, and each use of
+  the variable must establish them. Inference records a pending constraint
+  at each `+` and each property access; before a `const` generalises, it
+  decides the ones on known types (`improveAll`), and it doesn't quantify a
+  field type whose receiver the environment fixes.
+- **A constraint left on a type variable is harmless.** No value has a
+  type variable's type, so code relying on such a constraint never runs:
+  the soundness theorem assumes only `HoldsOrVar C`, and inference accepts
+  a program whose leftover constraints are instances or on type variables,
+  as inty does.
+- **An object is a cell holding its fields**, as in `dynamics`; the world
+  describes the cell by the record's contents type (`Con.contents`), and
+  `V` of a record is a reference to such a cell, so aliasing and writes
+  need nothing new.
 - **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
   and `Arith` classes, is phase 5 of the roadmap.
 
@@ -227,7 +257,7 @@ Lean's exhaustiveness checks point at every case still missing.
 
 ## Roadmap
 
-[ROADMAP.md](ROADMAP.md) plans the rest: twelve phases to a complete model
+[ROADMAP.md](ROADMAP.md) plans the rest: seven phases to a complete model
 of inty's type system, with the ground rules that keep it faithful to what
 inty implements and documents.
 

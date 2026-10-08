@@ -51,6 +51,9 @@ Paths like `src/infer` are relative to `crates/inty`.
 - `let` and assignment to a variable; `while`, `break`, `continue`,
   `try`/`catch`, `try`/`finally`.
 - Algorithm W, proved sound and complete.
+- Generic types (a constructor applied to types), Rémy's flat rows,
+  `HasProp` with improvement and inty's generalisation, object literals,
+  reads and writes (phase 3, in progress).
 - Differential testing against inty and Node.
 
 ## Phases
@@ -81,9 +84,11 @@ Done: `infer_complete` (`Inty/InferComplete.lean`), for the whole calculus,
 and to be kept for every later phase. The decisions it needed:
 
 - **Ambiguous constraints.** A constraint left on a type variable at the
-  end is satisfiable, and inty leaves it in place and accepts the program
-  (`resolve_plus`), so `inferProgram` accepts it too, typing the program at
-  a default instance (`defaultSubst`). Completeness is stated for
+  end can't fail, since no value has a type variable's type, and inty
+  leaves it in place and accepts the program (`resolve_plus`), so
+  `inferProgram` accepts it too, and soundness assumes only that every
+  constraint is an instance or on a type variable (`HoldsOrVar`, which
+  replaced defaulting to `Number` in phase 3). Completeness is stated for
   constrained types: the inferred type, with its pending constraints, has
   every valid type as a solved instance.
 - **Constraints in a `const`'s scheme.** `HasType` used to let a scheme
@@ -186,11 +191,28 @@ touching the generic proofs.
   constraint left on a type variable is harmless, since no value has a
   type variable's type (`HoldsOrVar`); inty defaults a `HasProp` left so
   to an open row (`default_has_prop`).
-- **Objects, containers and built-in properties.** Object literals, reads,
-  writes and spread (`{...o, p: e}` copies `o`'s slots); arrays, tuples
-  and `Map` with their `Indexable` instances; the properties of strings and
-  arrays (`s.length`, `xs.length`) as `HasProp` instances. An object or
-  array value is cells of the heap.
+- **Objects, containers and built-in properties.** Object literals, reads
+  and writes (done: an object is a cell of its fields, so a write adds a
+  missing property, as in JavaScript); spread; arrays, tuples and `Map`
+  with their `Indexable` instances; the properties of strings and arrays
+  (`s.length`, `xs.length`) as `HasProp` instances.
+- **Spread needs a decision, and inty a fix.** `{a: 1, ...o}` with `o` of
+  an open row: `o`'s own `a`, if it has one, wins, but inty types the
+  result's `a` as the literal's (`function f(o) { return {a: 1, ...o}; }`,
+  then `f({a: "s"}).a - 1` is accepted and gets stuck). The sound rule makes
+  a field written before a spread agree with the operand's field of that
+  name; merging two open rows needs a presence that is "either", which
+  plain unification can't express, so a merge constraint on presences
+  (resolved once they are known) is the likely design.
+- **Generalisation quantifies every variable the environment doesn't fix.**
+  inty quantifies from the type outward (the type's variables, then those
+  of the constraints on them) and leaves a constraint the type doesn't
+  reach pending. The model takes it into the scheme. Such a constraint's
+  variables appear in no type, then or later, so it stays on type
+  variables either way, and the two accept the same programs; only the
+  printed schemes differ. Leaving it pending would let the declarative
+  rules discharge it with a scheme's own (possibly unsatisfiable)
+  assumptions, which breaks completeness.
 
 ### 4. Numbers and the remaining base types
 
