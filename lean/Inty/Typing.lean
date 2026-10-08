@@ -49,11 +49,18 @@ inductive HasType : List Pred → Ctx → Option Ty → Expr → Ty → Prop whe
   | var : Γ[i]? = some s → τs.length = s.arity →
       (∀ c ∈ s.instPreds τs, Entails C c) →
       HasType C Γ R (.var i) (s.inst τs)
-  /-- A function's body returns `τ₂`, by `return` or as its value. -/
-  | func : HasType C (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) (some τ₂) body τ₂ →
-      HasType C Γ R (.func body) (.arrow τ₁ τ₂)
-  | app : HasType C Γ R f (.arrow τ₁ τ₂) → HasType C Γ R a τ₁ →
-      HasType C Γ R (.app f a) τ₂
+  /-- A function's body sees its parameters, itself and `this`, and returns
+  `ρ`, by `return` or as its value. -/
+  | func : τs.length = n →
+      HasType C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) body ρ →
+      HasType C Γ R (.func n body) (.fn θ τs ρ)
+  /-- A call has one argument per parameter, each of its parameter's type. A
+  call outside any receiver binds `this` to `undefined`, so the function's
+  `this` type must be `undefined`: inty unifies it with `Undefined`
+  (`src/infer/features/functions.rs`), which rejects a detached method. -/
+  | app : HasType C Γ R f (.fn .undefined τs ρ) → args.length = τs.length →
+      (∀ p ∈ args.zip τs, HasType C Γ R p.1 p.2) →
+      HasType C Γ R (.app f args) ρ
   /-- `const x = e₁; e₂` gives `x` a scheme `s`. The first premise says `e₁`
   has every opening of `s` at fresh type variables, assuming the opened
   constraints: `m` ranges over all starting points above a finite set `L`,

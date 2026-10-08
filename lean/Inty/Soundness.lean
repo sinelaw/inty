@@ -39,11 +39,13 @@ def Lands (p : Result × Nat) (k : Nat) (P Q : Nat → Value → Prop) : Prop :=
   p.2 ≤ k ∧ (p.1 = .timeout ∨ (∃ v, p.1 = .ok v ∧ P p.2 v) ∨ (∃ v, p.1 = .thrown v) ∨
     (∃ v, p.1 = .returned v ∧ Q p.2 v))
 
+mutual
 /-- `V k τ v`: the value `v` has type `τ` for `k` more calls. A base type
 has its values. A type variable has none: a closed program can't make a
 value of a type it knows nothing about. A function type is what calling the
-function does. The definition is by recursion on `τ`; the index only says
-how far a function's promise reaches. -/
+function does: with any `this` and arguments of its types. The definition
+is by recursion on `τ`; the index only says how far a function's promise
+reaches. -/
 def V : Nat → Ty → Value → Prop
   | _, .number, v => ∃ n, v = .number n
   | _, .string, v => ∃ s, v = .string s
@@ -51,14 +53,29 @@ def V : Nat → Ty → Value → Prop
   | _, .undefined, v => v = .undefined
   | _, .null, v => v = .null
   | _, .var _, _ => False
-  | k, .arrow τ₁ τ₂, f => ∀ j ≤ k, ∀ a, V j τ₁ a →
-      Lands (call j f a) j (fun c v => V c τ₂ v) (fun _ _ => False)
+  | k, .fn θ τs ρ, f => ∀ j ≤ k, ∀ thisv args, V j θ thisv → VList j τs args →
+      Lands (call j f thisv args) j (fun c v => V c ρ v) (fun _ _ => False)
+/-- `VList k τs vs`: one value of each type. -/
+def VList : Nat → List Ty → List Value → Prop
+  | _, [], [] => True
+  | k, τ :: τs, v :: vs => V k τ v ∧ VList k τs vs
+  | _, _, _ => False
+end
 
 /-- A value good for `k` calls is good for fewer. -/
 theorem V.mono {j k : Nat} (h : j ≤ k) : ∀ {τ : Ty} {v : Value}, V k τ v → V j τ v
-  | .arrow _ _, _, hv => fun i hi a ha => hv i (Nat.le_trans hi h) a ha
+  | .fn _ _ _, _, hv => fun i hi thisv args ht ha => hv i (Nat.le_trans hi h) thisv args ht ha
   | .number, _, hv | .string, _, hv | .boolean, _, hv | .undefined, _, hv | .null, _, hv
   | .var _, _, hv => hv
+
+theorem VList.mono {j k : Nat} (h : j ≤ k) : ∀ {τs : List Ty} {vs : List Value},
+    VList k τs vs → VList j τs vs
+  | [], [], _ => trivial
+  | _ :: _, _ :: _, ⟨hv, hvs⟩ => ⟨V.mono h hv, VList.mono h hvs⟩
+
+theorem VList.length : ∀ {τs : List Ty} {vs : List Value}, VList k τs vs → vs.length = τs.length
+  | [], [], _ => rfl
+  | _ :: _, _ :: _, ⟨_, hvs⟩ => by simp [VList.length hvs]
 
 /-- A safe outcome at `τ`, in a function returning `R`, from a clock of `k`. -/
 def Safe (p : Result × Nat) (k : Nat) (τ : Ty) (R : Option Ty) : Prop :=
@@ -125,6 +142,12 @@ theorem G.mono {j k : Nat} (h : j ≤ k) : ∀ {Γ : Ctx} {env : Env}, G k Γ en
   | [], [], _ => trivial
   | _ :: _, _ :: _, ⟨hv, hG⟩ => ⟨fun τs hl hp => V.mono h (hv τs hl hp), G.mono h hG⟩
 
+/-- Extending an environment with values of the types of monotypes. -/
+theorem G.append : ∀ {τs : List Ty} {vs : List Value}, VList k τs vs → G k Γ env →
+    G k (τs.map .mono ++ Γ) (vs ++ env)
+  | [], [], _, hG => hG
+  | _ :: _, _ :: _, ⟨hv, hvs⟩, hG => ⟨SchemeV.mono_iff.mpr hv, G.append hvs hG⟩
+
 theorem G.lookup : ∀ {i : Nat} {Γ : Ctx} {env : Env} {s : Scheme}, G k Γ env →
     Γ[i]? = some s → ∃ v, env[i]? = some v ∧ SchemeV k s v
   | _, [], _, _, _, hi => by simp at hi
@@ -160,7 +183,7 @@ theorem IsValue.run_value (hv : e.IsValue) (ht : HasType C Γ R e τ) (henv : G 
     ∃ v, run k env e = (.ok v, k) := by
   cases hv with
   | lit => rename_i l; exact ⟨l.eval, by simp [run]⟩
-  | func => rename_i body; exact ⟨.closure env body, by simp [run]⟩
+  | func => rename_i n body; exact ⟨.closure env n body, by simp [run]⟩
   | var =>
     cases ht with
     | var hi _ _ =>
@@ -194,6 +217,69 @@ theorem Safe.bindC_forall {p : Result × Nat} {s : Scheme} {K : Value → Nat �
       exact ⟨hle, .inr (.inr (.inr ⟨v, rfl, hv⟩))⟩
     · cases h
 
+/-! ## Arguments -/
+
+/-- A safe outcome of running arguments of the types `τs`: their values,
+or an outcome other than a value that is safe. -/
+def SafeArgs (p : Except Result (List Value) × Nat) (k : Nat) (τs : List Ty)
+    (R : Option Ty) : Prop :=
+  p.2 ≤ k ∧ match p.1 with
+    | .ok vs => VList p.2 τs vs
+    | .error r => r = .timeout ∨ (∃ v, r = .thrown v) ∨
+        (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V p.2 τr v)
+
+/-- Continuing safe arguments with a safe continuation is safe. -/
+theorem Safe.bindArgs {p : Except Result (List Value) × Nat}
+    {K : List Value → Nat → Result × Nat} (h : SafeArgs p k τs R)
+    (hK : ∀ vs, p.1 = .ok vs → VList p.2 τs vs → Safe (K vs p.2) p.2 τ R) :
+    Safe (Inty.bindArgs p K) k τ R := by
+  obtain ⟨r, c⟩ := p
+  obtain ⟨hc, h⟩ := h
+  cases r with
+  | ok vs => exact (hK vs rfl h).weaken hc
+  | error r =>
+    simp only [Inty.bindArgs]
+    rcases h with rfl | ⟨v, rfl⟩ | ⟨v, rfl, hv⟩
+    · exact ⟨hc, .inl rfl⟩
+    · exact ⟨hc, .inr (.inr (.inl ⟨v, rfl⟩))⟩
+    · exact ⟨hc, .inr (.inr (.inr ⟨v, rfl, hv⟩))⟩
+
+/-- Well-typed arguments, each safe by the fundamental lemma, run safely. -/
+theorem runArgs_sound {C : List Pred} {Γ : Ctx} {R : Option Ty} (hC : Holds C) :
+    ∀ (args : List Expr) (τs : List Ty) {k : Nat} {env : Env},
+      (∀ a ∈ args, ∀ {k C Γ R env τ}, HasType C Γ R a τ → Holds C → G k Γ env →
+        Safe (run k env a) k τ R) →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasType C Γ R p.1 p.2) → G k Γ env →
+      SafeArgs (runArgs k env args) k τs R
+  | [], [], k, env, _, _, _, _ => by simp [runArgs, SafeArgs, VList]
+  | [], _ :: _, _, _, _, hlen, _, _ | _ :: _, [], _, _, _, hlen, _, _ => by simp at hlen
+  | a :: as, τ :: τs, k, env, ih, hlen, ht, henv => by
+    have ha := ih a (by simp) (ht (a, τ) (by simp)) hC henv
+    have hc₁ := run_clock_le k env a
+    generalize hp : run k env a = p at ha hc₁
+    obtain ⟨r, c₁⟩ := p
+    obtain ⟨_, hr⟩ := ha
+    simp only at hc₁
+    rcases hr with h | ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, hv⟩ <;> simp only at h <;> subst h
+    · simp only [runArgs, hp]
+      exact ⟨hc₁, .inl rfl⟩
+    · have has := runArgs_sound hC as τs (fun a' ha' => ih a' (by simp [ha']))
+        (by simpa using hlen) (fun q hq => ht q (by simp [hq])) (G.mono hc₁ henv)
+      have hc₂ := runArgs_clock_le c₁ env as
+      rw [← Nat.min_eq_left hc₁] at has hc₂
+      simp only [runArgs, hp]
+      generalize runArgs (min c₁ k) env as = q at has hc₂
+      obtain ⟨r', c₂⟩ := q
+      rw [Nat.min_eq_left hc₁] at hc₂
+      obtain ⟨_, hq⟩ := has
+      cases r' with
+      | ok vs => exact ⟨by simp only at hc₂ ⊢; omega, V.mono hc₂ hv, hq⟩
+      | error r' => exact ⟨by simp only at hc₂ ⊢; omega, hq⟩
+    · simp only [runArgs, hp]
+      exact ⟨hc₁, .inr (.inl ⟨v, rfl⟩)⟩
+    · simp only [runArgs, hp]
+      exact ⟨hc₁, .inr (.inr ⟨v, rfl, hv⟩)⟩
+
 /-! ## The fundamental lemma -/
 
 /-- Type soundness: a well-typed expression, run with any clock in an
@@ -203,7 +289,7 @@ derivation that isn't a subderivation. -/
 theorem run_sound (e : Expr) :
     ∀ {k C Γ R env τ}, HasType C Γ R e τ → Holds C → G k Γ env →
       Safe (run k env e) k τ R := by
-  induction e with
+  induction e using Expr.ind with
   | lit l =>
     intro k C Γ R env τ ht hC henv
     cases ht with
@@ -215,46 +301,49 @@ theorem run_sound (e : Expr) :
       obtain ⟨v, hv, hvt⟩ := G.lookup henv hi
       simp only [run, hv]
       exact Safe.ok (Nat.le_refl k) (hvt _ hlen (fun c h => (hc c h).holds hC))
-  | func body ih =>
+  | func n body ih =>
     intro k C Γ R env τ ht hC henv
     cases ht with
-    | @func _ τ₁ τ₂ _ _ _ hb =>
+    | @func _ _ _ ρ _ _ θ τs hlen hb =>
       -- The closure is good for `j` calls, by induction on `j`: a call
       -- with `i + 1` to spare runs the body with `i`, where the closure
       -- itself (the function's own name) need only be good for `i`.
-      have hclo : ∀ j, j ≤ k → V j (.arrow τ₁ τ₂) (.closure env body) := by
+      have hclo : ∀ j, j ≤ k → V j (.fn θ τs ρ) (.closure env n body) := by
         intro j
         induction j with
         | zero =>
-          intro _ i hi a _
+          intro _ i hi thisv args _ hargs
           obtain rfl : i = 0 := by omega
+          simp only [call, hargs.length, hlen, ite_true]
           exact ⟨Nat.le_refl 0, .inl rfl⟩
         | succ j ihj =>
-          intro hj i hi a ha
+          intro hj i hi thisv args hthis hargs
+          simp only [call, hargs.length, hlen, ite_true]
           cases i with
           | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
           | succ i =>
-            have hG : G i (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ)
-                (a :: .closure env body :: env) :=
-              ⟨SchemeV.mono_iff.mpr (V.mono (by omega) ha),
-                SchemeV.mono_iff.mpr (V.mono (by omega) (ihj (by omega))),
-                G.mono (by omega) henv⟩
-            simp only [call]
+            have hG : G i (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ)
+                (args ++ .closure env n body :: thisv :: env) :=
+              G.append (VList.mono (by omega) hargs)
+                ⟨SchemeV.mono_iff.mpr (V.mono (by omega) (ihj (by omega))),
+                  SchemeV.mono_iff.mpr (V.mono (by omega) hthis),
+                  G.mono (by omega) henv⟩
             exact (Safe.catchReturn (ih hb hC hG)).weaken (by omega)
       simp only [run]
       exact Safe.ok (Nat.le_refl k) (hclo k (Nat.le_refl k))
-  | app f a ihf iha =>
+  | app f args ihf iha =>
     intro k C Γ R env τ ht hC henv
     cases ht with
-    | app hf ha =>
+    | app hf hlen hargs =>
       rw [run_app]
       refine Safe.bindC (ihf hf hC henv) fun vf _ hvf => ?_
       have hc₁ := run_clock_le k env f
       rw [Nat.min_eq_left hc₁]
-      refine Safe.bindC (iha ha hC (G.mono hc₁ henv)) fun va _ hva => ?_
-      have hc₂ := run_clock_le (run k env f).2 env a
+      refine Safe.bindArgs (runArgs_sound hC args _ iha hlen hargs (G.mono hc₁ henv))
+        fun vs _ hvs => ?_
+      have hc₂ := runArgs_clock_le (run k env f).2 env args
       rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
-      exact Lands.safe (V.mono hc₂ hvf _ (Nat.le_refl _) va hva)
+      exact Lands.safe (V.mono hc₂ hvf _ (Nat.le_refl _) .undefined vs rfl hvs)
   | let_ e₁ e₂ ih₁ ih₂ =>
     intro k C Γ R env τ ht hC henv
     cases ht with

@@ -14,28 +14,32 @@ native function at a time, each with its proof.
 
 namespace Inty
 
-/-- `Math.abs : number → number`. -/
-theorem Prim.abs_sound (k : Nat) : V k (.arrow .number .number) (.prim .abs) := by
-  intro j _ a ha
-  obtain ⟨n, rfl⟩ := ha
-  exact ⟨Nat.le_refl j, .inr (.inl ⟨_, rfl, ⟨_, rfl⟩⟩)⟩
+/-- `Math.abs : (number) => number`, called with any `this`. -/
+theorem Prim.abs_sound (k : Nat) (θ : Ty) : V k (.fn θ [.number] .number) (.prim .abs) := by
+  intro j _ _ args _ hargs
+  match args, hargs with
+  | [_], ⟨⟨n, rfl⟩, _⟩ => exact ⟨Nat.le_refl j, .inr (.inl ⟨_, rfl, ⟨_, rfl⟩⟩)⟩
 
-/-- `Boolean : ∀ a. a → boolean`: it takes any value. -/
-theorem Prim.truthy_sound (k : Nat) (τ : Ty) : V k (.arrow τ .boolean) (.prim .truthy) := by
-  intro j _ a _
-  exact ⟨Nat.le_refl j, .inr (.inl ⟨_, rfl, ⟨_, rfl⟩⟩)⟩
+/-- `Boolean : <a>(a) => boolean`: it takes any value. -/
+theorem Prim.truthy_sound (k : Nat) (θ τ : Ty) :
+    V k (.fn θ [τ] .boolean) (.prim .truthy) := by
+  intro j _ _ args _ hargs
+  match args, hargs with
+  | [_], _ => exact ⟨Nat.le_refl j, .inr (.inl ⟨_, rfl, ⟨_, rfl⟩⟩)⟩
 
 /-- The builtins' types, innermost first: `Boolean` is variable 0 and
-`Math.abs` variable 1 of a program run with them. -/
-def builtinCtx : Ctx := [⟨1, .arrow (.bound 0) .boolean, []⟩, .mono (.arrow .number .number)]
+`Math.abs` variable 1 of a program run with them. Called outside a
+receiver, their `this` is `undefined`. -/
+def builtinCtx : Ctx :=
+  [⟨1, .fn .undefined [.bound 0] .boolean, []⟩, .mono (.fn .undefined [.number] .number)]
 
 /-- The builtins themselves. -/
 def builtinEnv : Env := [.prim .truthy, .prim .abs]
 
 /-- The builtins have their types. -/
 theorem builtins_sound (k : Nat) : G k builtinCtx builtinEnv :=
-  ⟨fun τs _ _ => by simpa [Scheme.inst, PTy.inst] using Prim.truthy_sound k _,
-    SchemeV.mono_iff.mpr (Prim.abs_sound k), trivial⟩
+  ⟨fun τs _ _ => by simpa [Scheme.inst, PTy.inst] using Prim.truthy_sound k _ _,
+    SchemeV.mono_iff.mpr (Prim.abs_sound k _), trivial⟩
 
 /-- A program well typed in the builtins' context never gets stuck in their
 environment, whatever the clock. -/

@@ -39,8 +39,9 @@ inductive Value where
   | boolean (b : Bool)
   | undefined
   | null
-  /-- A closure over its definition-time environment. -/
-  | closure (env : List Value) (body : Expr)
+  /-- A closure over its definition-time environment, of `arity`
+  parameters. -/
+  | closure (env : List Value) (arity : Nat) (body : Expr)
   /-- A native function, `dynamics::Value::Builtin`. -/
   | prim (p : Prim)
   deriving Repr
@@ -54,6 +55,10 @@ inductive Stuck where
   | undefinedVariable
   | notCallable
   | typeMismatch
+  /-- A call with the wrong number of arguments, `Stuck::ArityMismatch`.
+  JavaScript ignores extra arguments and leaves missing ones `undefined`;
+  inty's semantics, like its typing, holds a call to its function's arity. -/
+  | arityMismatch
   deriving DecidableEq, Repr
 
 /-- The outcome of running with a given clock. `timeout` (out of clock) is
@@ -105,10 +110,11 @@ def BinOp.eval : BinOp → Value → Value → Result
   | .minus, .number a, .number b => .ok (.number (a - b))
   | _, _, _ => .stuck .typeMismatch
 
-def Prim.apply : Prim → Value → Result
-  | .abs, .number n => .ok (.number n.abs)
-  | .abs, _ => .stuck .typeMismatch
-  | .truthy, v => .ok (.boolean v.truthy)
+def Prim.apply : Prim → List Value → Result
+  | .abs, [.number n] => .ok (.number n.abs)
+  | .abs, [_] => .stuck .typeMismatch
+  | .truthy, [v] => .ok (.boolean v.truthy)
+  | _, _ => .stuck .arityMismatch
 
 /-- A call's result: a `return` from the body is the call's value. -/
 def Result.catchReturn : Result → Result
@@ -131,6 +137,15 @@ private theorem lex_of_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
   · exact .left _ _ h
   · exact .right _ hs
 
+/-- Continue with `k` on the values of a list of arguments and the clock
+left; an argument that doesn't give a value stops there. -/
+def bindArgs (p : Except Result (List Value) × Nat) (k : List Value → Nat → Result × Nat) :
+    Result × Nat :=
+  match p with
+  | (.ok vs, c) => k vs c
+  | (.error r, c) => (r, c)
+
+mutual
 /-- Run with `clock` calls to spare; the result, and the calls still to
 spare. A clock coming back from a subterm is clamped to the clock it was
 given (`min c clock`), which it never exceeds (`run_clock_le`); that is
@@ -142,20 +157,23 @@ def run (clock : Nat) (env : Env) (e : Expr) : Result × Nat :=
     match env[i]? with
     | some v => (.ok v, clock)
     | none => (.stuck .undefinedVariable, clock)
-  | .func body => (.ok (.closure env body), clock)
-  -- The callee, then the argument, then the call, as in `dynamics`: a
-  -- callee that isn't a function is found out only at the call.
-  | .app f a =>
+  | .func n body => (.ok (.closure env n body), clock)
+  -- The callee, then the arguments in order, then the call, as in
+  -- `dynamics`: a callee that isn't a function is found out only at the
+  -- call. A call outside any receiver has `this` `undefined`.
+  | .app f args =>
     bindC (run clock env f) fun vf c₁ =>
-    bindC (run (min c₁ clock) env a) fun va c₂ =>
+    bindArgs (runArgs (min c₁ clock) env args) fun vs c₂ =>
     match vf with
-    | .closure cenv body =>
-      match _h : min c₂ clock with
-      | 0 => (.timeout, 0)
-      | c + 1 =>
-        let p := run c (va :: vf :: cenv) body
-        (p.1.catchReturn, p.2)
-    | .prim p => (p.apply va, min c₂ clock)
+    | .closure cenv n body =>
+      if vs.length = n then
+        match _h : min c₂ clock with
+        | 0 => (.timeout, 0)
+        | c + 1 =>
+          let p := run c (vs ++ vf :: .undefined :: cenv) body
+          (p.1.catchReturn, p.2)
+      else (.stuck .arityMismatch, min c₂ clock)
+    | .prim p => (p.apply vs, min c₂ clock)
     | _ => (.stuck .notCallable, min c₂ clock)
   | .let_ e₁ e₂ =>
     bindC (run clock env e₁) fun v c₁ => run (min c₁ clock) (v :: env) e₂
@@ -176,25 +194,53 @@ decreasing_by
     | exact lex_of_le (Nat.min_le_right _ _) (by simp <;> omega)
     | exact .left _ _ (show _ < clock by omega)
 
-/-- Calling `vf` on `va` with `c` calls to spare. -/
-def call (c : Nat) (vf va : Value) : Result × Nat :=
-  match vf, c with
-  | .closure _ _, 0 => (.timeout, 0)
-  | .closure cenv body, c + 1 =>
-    let p := run c (va :: vf :: cenv) body
-    (p.1.catchReturn, p.2)
-  | .prim p, c => (p.apply va, c)
-  | _, c => (.stuck .notCallable, c)
+/-- Run a list of arguments in order: their values, or the first outcome
+that isn't one. -/
+def runArgs (clock : Nat) (env : Env) (args : List Expr) :
+    Except Result (List Value) × Nat :=
+  match args with
+  | [] => (.ok [], clock)
+  | e :: es =>
+    match run clock env e with
+    | (.ok v, c₁) =>
+      match runArgs (min c₁ clock) env es with
+      | (.ok vs, c₂) => (.ok (v :: vs), c₂)
+      | (.error r, c₂) => (.error r, c₂)
+    | (r, c₁) => (.error r, c₁)
+termination_by (clock, sizeOf args)
+decreasing_by
+  all_goals first
+    | exact lex_of_le (Nat.le_refl _) (by simp <;> omega)
+    | exact lex_of_le (Nat.min_le_right _ _) (by simp <;> omega)
+end
+
+/-- Calling `vf` on `args`, with `this` bound to `thisv`, with `c` calls to
+spare. -/
+def call (c : Nat) (vf thisv : Value) (args : List Value) : Result × Nat :=
+  match vf with
+  | .closure cenv n body =>
+    if args.length = n then
+      match c with
+      | 0 => (.timeout, 0)
+      | c + 1 =>
+        let p := run c (args ++ vf :: thisv :: cenv) body
+        (p.1.catchReturn, p.2)
+    else (.stuck .arityMismatch, c)
+  | .prim p => (p.apply args, c)
+  | _ => (.stuck .notCallable, c)
 
 /-- `run` on a call, without the termination proof's dependent match. -/
-theorem run_app (clock : Nat) (env : Env) (f a : Expr) :
-    run clock env (.app f a) =
+theorem run_app (clock : Nat) (env : Env) (f : Expr) (args : List Expr) :
+    run clock env (.app f args) =
       bindC (run clock env f) fun vf c₁ =>
-      bindC (run (min c₁ clock) env a) fun va c₂ => call (min c₂ clock) vf va := by
+      bindArgs (runArgs (min c₁ clock) env args) fun vs c₂ =>
+        call (min c₂ clock) vf .undefined vs := by
   rw [run]
-  congr 1; funext vf c₁; congr 1; funext va c₂
+  congr 1; funext vf c₁; congr 1; funext vs c₂
   generalize min c₂ clock = m
-  cases vf <;> cases m <;> rfl
+  cases vf <;> simp only [call] <;> try rfl
+  split <;> try rfl
+  cases m <;> rfl
 
 /-- The result of running with `clock` calls to spare. -/
 def eval (clock : Nat) (env : Env) (e : Expr) : Result := (run clock env e).1

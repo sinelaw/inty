@@ -17,39 +17,58 @@ theorem Ty.subst_single {a : Nat} {τ : Ty} (h : a ∉ τ.ftv) : τ.subst [(a, �
     have : b ≠ a := fun e => h (e ▸ hb)
     simp [Subst.find, this])
 
-theorem unify_sound :
-    ∀ {fuel : Nat} {τ₁ τ₂ : Ty} {σ : Subst}, unify fuel τ₁ τ₂ = some σ →
-      τ₁.subst σ = τ₂.subst σ
-  | 0, _, _, _, h => by simp [unify] at h
-  | fuel + 1, τ₁, τ₂, σ, h => by
-    unfold unify at h
-    split at h
-    · split at h <;> cases h
-      · subst_vars; rfl
-      · rename_i hne
-        have : ¬_ = _ := Ne.symm hne
-        simp [Ty.subst, Subst.find, this]
-    · split at h
-      · cases h
-      · cases h; rename_i hocc
-        simp [Ty.subst, Subst.find, Ty.subst_single hocc]
-    · split at h
-      · cases h
-      · cases h; rename_i hocc
-        simp [Ty.subst, Subst.find, Ty.subst_single hocc]
-    · split at h
+theorem unify_sound_both : ∀ fuel : Nat,
+    (∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify fuel τ₁ τ₂ = some σ → τ₁.subst σ = τ₂.subst σ) ∧
+    (∀ {τs₁ τs₂ : List Ty} {σ : Subst}, unifyList fuel τs₁ τs₂ = some σ →
+      τs₁.map (·.subst σ) = τs₂.map (·.subst σ))
+  | 0 => ⟨fun h => by simp [unify] at h, fun {τs₁ τs₂ σ} h => by
+      cases τs₁ <;> cases τs₂ <;> simp [unifyList] at h ⊢⟩
+  | fuel + 1 => by
+    have ih := unify_sound_both fuel
+    refine ⟨fun {τ₁ τ₂ σ} h => ?_, fun {τs₁ τs₂ σ} h => ?_⟩
+    · unfold unify at h
+      split at h
+      · split at h <;> cases h
+        · subst_vars; rfl
+        · rename_i hne
+          have : ¬_ = _ := Ne.symm hne
+          simp [Ty.subst, Subst.find, this]
+      · split at h
+        · cases h
+        · cases h; rename_i hocc
+          simp [Ty.subst, Subst.find, Ty.subst_single hocc]
+      · split at h
+        · cases h
+        · cases h; rename_i hocc
+          simp [Ty.subst, Subst.find, Ty.subst_single hocc]
+      · split at h
+        · cases h
+        rename_i σ' h'
+        cases h
+        have e := ih.2 h'
+        simp only [List.map_cons, List.cons.injEq] at e
+        simp [e.1, e.2.1, e.2.2]
+      · split at h
+        · cases h; subst_vars; rfl
+        · cases h
+    · cases τs₁ <;> cases τs₂ <;> simp only [unifyList, reduceCtorEq] at h
+      · cases h; rfl
+      rename_i τ₁ τs₁ τ₂ τs₂
+      split at h
       · cases h
       rename_i σ₁ h₁
       split at h
       · cases h
       rename_i σ₂ h₂
       cases h
-      have e₁ := unify_sound h₁
-      have e₂ := unify_sound h₂
+      have e₁ := ih.1 h₁
+      have e₂ := ih.2 h₂
+      simp only [List.map_map, Function.comp_def] at e₂
       simp [e₁, e₂]
-    · split at h
-      · cases h; subst_vars; rfl
-      · cases h
+
+theorem unify_sound {fuel : Nat} {τ₁ τ₂ : Ty} {σ : Subst} (h : unify fuel τ₁ τ₂ = some σ) :
+    τ₁.subst σ = τ₂.subst σ :=
+  (unify_sound_both fuel).1 h
 
 /-- Under `φ`, every constraint in `P` is an instance or assumed in `C`. -/
 def Sat (C : List Pred) (P : List Pred) (φ : Subst) : Prop := ∀ c ∈ P, Entails C (c.subst φ)
@@ -81,8 +100,43 @@ theorem Lit.ty_sound (l : Lit) : LitTy l l.ty := by cases l <;> constructor
 theorem Expr.isValue_sound {e : Expr} (h : e.isValue = true) : e.IsValue := by
   cases e <;> first | constructor | simp [Expr.isValue] at h
 
+/-- What `infer_sound` says of one expression. -/
+def InferSound (e : Expr) : Prop :=
+  ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer Γ R e n = some o →
+    ∀ φ C, Sat C o.preds φ →
+      HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e (o.τ.subst φ)
+
+/-- Inferring arguments, each sound, is sound: one type per argument, each
+a valid typing under the inferred substitution and any further one that
+resolves the constraints. -/
+theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound a) →
+    ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : OutArgs}, inferArgs Γ R args n = some o →
+      ∀ φ C, Sat C o.preds φ → o.τs.length = args.length ∧
+        ∀ p ∈ args.zip (o.τs.map (·.subst φ)),
+          HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) p.1 p.2
+  | [], _, Γ, R, n, o, h, φ, C, _ => by
+    simp only [inferArgs, Option.some.injEq] at h; subst h; simp
+  | a :: as, ih, Γ, R, n, o, h, φ, C, hsat => by
+    simp only [inferArgs] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have ha := ih a (by simp) h₁ _ C hsat.1
+    have has := inferArgs_sound as (fun a' ha' => ih a' (by simp [ha'])) h₂ φ C hsat.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at ha has ⊢
+    refine ⟨by simp [has.1], fun p hp => ?_⟩
+    simp only [List.map_cons, List.zip_cons_cons, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ha
+    · exact has.2 p hp
+
 /-- Soundness of Algorithm W: the inferred type, under the inferred
-substitution and any further substitution that resolves the `Plus`
+substitution and any further substitution that resolves the class
 constraints, is a valid typing. -/
 theorem infer_sound :
     ∀ {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer Γ R e n = some o →
@@ -90,7 +144,7 @@ theorem infer_sound :
         HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
           (o.τ.subst φ) := by
   intro e
-  induction e with
+  induction e using Expr.ind with
   | lit l =>
     intro Γ R n o h φ C hsat
     simp only [infer, Option.some.injEq] at h; subst h
@@ -107,7 +161,7 @@ theorem infer_sound :
       obtain ⟨c₀, hc₀, rfl⟩ := List.mem_map.mp hc
       exact hsat c₀ hc₀
     · cases h
-  | func body ih =>
+  | func k body ih =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
     split at h
@@ -119,11 +173,12 @@ theorem infer_sound :
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map] at hsat
     have := ih h₁ _ C hsat
-    simp only [Ctx.subst_cons, Scheme.mono_subst, Ty.subst_arrow, Ty.subst_compose,
-      Ctx.subst_compose, Ret.subst_compose, Ret.subst_some] at this ⊢
+    simp only [Ctx.subst, List.map_append, List.map_map, List.map_cons, Function.comp_def,
+      Scheme.mono_subst, Ty.subst_fn, Ty.subst_compose, Ret.subst_compose,
+      Ret.subst_some] at this ⊢
     rw [← unify_sound hu] at this
-    exact .func this
-  | app f a ihf iha =>
+    exact .func (by simp [varBlock]) (by simpa [Function.comp_def] using this)
+  | app f args ihf iha =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
     split at h
@@ -138,10 +193,11 @@ theorem infer_sound :
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map, Sat.append] at hsat
     have hf := ihf h₁ _ C hsat.1
-    have ha := iha h₂ _ C hsat.2
+    have ha := inferArgs_sound args iha h₂ _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hf ha ⊢
     rw [unify_sound hu] at hf
-    exact .app hf ha
+    simp only [Ty.subst_fn, Ty.subst_undefined, List.map_map, Function.comp_def] at hf ha
+    exact .app hf (by simp [ha.1]) ha.2
   | let_ e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h

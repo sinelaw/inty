@@ -23,7 +23,10 @@ Two simplifications, both safe for soundness:
 
 namespace Inty
 
-/-- Robinson unification: a substitution that makes `τ₁` and `τ₂` equal. -/
+mutual
+/-- Robinson unification: a substitution that makes `τ₁` and `τ₂` equal.
+Function types unify when their `this` types, parameter lists (of the same
+length) and result types do. -/
 def unify : Nat → Ty → Ty → Option Subst
   | 0, _, _ => none
   | fuel + 1, τ₁, τ₂ =>
@@ -31,14 +34,24 @@ def unify : Nat → Ty → Ty → Option Subst
     | .var a, .var b => if a = b then some [] else some [(a, .var b)]
     | .var a, τ => if a ∈ τ.ftv then none else some [(a, τ)]
     | τ, .var a => if a ∈ τ.ftv then none else some [(a, τ)]
-    | .arrow d₁ c₁, .arrow d₂ c₂ =>
-      match unify fuel d₁ d₂ with
+    | .fn t₁ ps₁ r₁, .fn t₂ ps₂ r₂ =>
+      match unifyList fuel (t₁ :: r₁ :: ps₁) (t₂ :: r₂ :: ps₂) with
       | none => none
-      | some σ₁ =>
-        match unify fuel (c₁.subst σ₁) (c₂.subst σ₁) with
-        | none => none
-        | some σ₂ => some (Subst.compose σ₂ σ₁)
+      | some σ => some σ
     | τ₁, τ₂ => if τ₁ = τ₂ then some [] else none
+/-- Unify two lists of types of the same length, pairwise, left to right. -/
+def unifyList : Nat → List Ty → List Ty → Option Subst
+  | _, [], [] => some []
+  | 0, _, _ => none
+  | fuel + 1, τ₁ :: τs₁, τ₂ :: τs₂ =>
+    match unify fuel τ₁ τ₂ with
+    | none => none
+    | some σ₁ =>
+      match unifyList fuel (τs₁.map (·.subst σ₁)) (τs₂.map (·.subst σ₁)) with
+      | none => none
+      | some σ₂ => some (Subst.compose σ₂ σ₁)
+  | _, _, _ => none
+end
 
 /-- How deep unification may recurse. -/
 def unifyFuel : Nat := 1000
@@ -53,7 +66,7 @@ def Lit.ty : Lit → Ty
 
 /-- Decides `Expr.IsValue`. -/
 def Expr.isValue : Expr → Bool
-  | .lit _ | .var _ | .func _ => true
+  | .lit _ | .var _ | .func _ _ => true
   | _ => false
 
 /-- The result of inferring an expression: a substitution to apply to the
@@ -98,6 +111,16 @@ def letScheme (e₁ : Expr) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds
       preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
   else (.mono τ₁, preds)
 
+/-- The result of inferring a list of arguments: a substitution, each
+argument's type under it, the class constraints, and the next unused type
+variable. -/
+structure OutArgs where
+  σ : Subst
+  τs : List Ty
+  preds : List Pred
+  next : Nat
+
+mutual
 /-- Algorithm W. `R` is the enclosing function's return type (`none` at the
 top level) and `n` the first unused type variable. -/
 def infer : Ctx → Option Ty → Expr → Nat → Option Out
@@ -106,26 +129,31 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
     match Γ[i]? with
     | some s => some ⟨[], s.open n, s.openPreds n, n + s.arity⟩
     | none => none
-  | Γ, _, .func body, n =>
-    let α := Ty.var n
-    let β := Ty.var (n + 1)
-    match infer (.mono α :: .mono (.arrow α β) :: Γ) (some β) body (n + 2) with
+  -- `this` is the variable `n`, the parameters `n + 1, …`, and the result
+  -- the variable after them.
+  | Γ, _, .func k body, n =>
+    let θ := Ty.var n
+    let τs := varBlock (n + 1) k
+    let ρ := Ty.var (n + 1 + k)
+    match infer (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) body
+        (n + 2 + k) with
     | none => none
     | some o =>
-      match unify unifyFuel (β.subst o.σ) o.τ with
+      match unify unifyFuel (ρ.subst o.σ) o.τ with
       | none => none
       | some σ' =>
         let σ := Subst.compose σ' o.σ
-        some ⟨σ, (Ty.arrow α β).subst σ, o.preds.map (·.subst σ'), o.next⟩
-  | Γ, R, .app f a, n =>
+        some ⟨σ, (Ty.fn θ τs ρ).subst σ, o.preds.map (·.subst σ'), o.next⟩
+  -- A call outside any receiver: the callee's `this` is `undefined`.
+  | Γ, R, .app f args, n =>
     match infer Γ R f n with
     | none => none
     | some o₁ =>
-      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) a o₁.next with
+      match inferArgs (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) args o₁.next with
       | none => none
       | some o₂ =>
         let β := Ty.var o₂.next
-        match unify unifyFuel (o₁.τ.subst o₂.σ) (.arrow o₂.τ β) with
+        match unify unifyFuel (o₁.τ.subst o₂.σ) (.fn .undefined o₂.τs β) with
         | none => none
         | some σ₃ =>
           some ⟨Subst.compose σ₃ (Subst.compose o₂.σ o₁.σ), β.subst σ₃,
@@ -219,6 +247,20 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | none => none
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+
+/-- Infer a list of arguments, left to right, threading the substitution. -/
+def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
+  | _, _, [], n => some ⟨[], [], [], n⟩
+  | Γ, R, a :: as, n =>
+    match infer Γ R a n with
+    | none => none
+    | some o₁ =>
+      match inferArgs (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) as o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ :: o₂.τs,
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+end
 
 /-- Infer the type of a program in a context with no free type variables,
 such as the builtins'. Every constraint must end up an instance. -/

@@ -75,9 +75,9 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 
 | Lean | inty |
 |---|---|
-| `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `arrow`, type variables | `types::Type` (an `arrow` is the call signature of a callable row; `number` stands for both `Int` and `Number`) |
+| `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `fn` (the type of `this`, the parameters' and the result's), type variables | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named one-parameter functions (recursive), application, `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences | `ast::Expr`, `ast::Stmt` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences | `ast::Expr`, `ast::Stmt` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction) | `is_syntactic_value`, `src/infer/features/bindings.rs` |
@@ -114,6 +114,12 @@ These choices are meant to hold up as the calculus grows.
   model can serve as a test oracle against the Rust implementation, as
   Cedar's Lean model does for Cedar's Rust code (differential random
   testing).
+- **Types and expressions nest lists** (a function's parameters, a call's
+  arguments), as rows, unions and tuples will. Lean derives neither
+  equality nor induction for nested inductive types, so `Ty.ind`, `PTy.ind`
+  and `Expr.ind` are induction principles with a hypothesis for each list
+  element, and functions on them recurse through a list by a mutual
+  function on the list, which keeps them structural.
 - **Term variables are de Bruijn indices.** The typing context and the
   runtime environment are lists indexed the same way.
 - **Type schemes are locally nameless.** A scheme's quantified variables
@@ -219,7 +225,10 @@ Where `dynamics` gets stuck, Node raises a `TypeError` or `ReferenceError`
 in about half the cases and coerces in the rest (`1 - "a"`,
 `typeof unbound`): the gap between inty's stricter semantics and
 JavaScript's. As a control, an engine that runs `-` as `+` fails 152 of
-3000 programs.
+3000 programs. The engine runs each program in strict mode, which inty
+assumes throughout (`docs/scc-inference.md`): it found that in sloppy mode
+`(function () { return this; })()` is the global object, where inty, its
+dynamics and the model all have `undefined`.
 
 Over 200,000 programs (ten seeds), the interpreters never disagreed, and
 the model never accepted a program inty rejects, except as below. The

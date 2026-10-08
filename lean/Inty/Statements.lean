@@ -85,11 +85,18 @@ example : V k .boolean v ↔ ∃ b, v = .boolean b := Iff.rfl
 example : V k .undefined v ↔ v = .undefined := Iff.rfl
 example : V k .null v ↔ v = .null := Iff.rfl
 example : V k (.var a) v ↔ False := Iff.rfl
-example : V k (.arrow τ₁ τ₂) f ↔ ∀ j ≤ k, ∀ a, V j τ₁ a →
-    (call j f a).2 ≤ j ∧ ((call j f a).1 = .timeout ∨
-      (∃ v, (call j f a).1 = .ok v ∧ V (call j f a).2 τ₂ v) ∨
-      (∃ v, (call j f a).1 = .thrown v) ∨ (∃ v, (call j f a).1 = .returned v ∧ False)) :=
+example : V k (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ thisv args, V j θ thisv → VList j τs args →
+    (call j f thisv args).2 ≤ j ∧ ((call j f thisv args).1 = .timeout ∨
+      (∃ v, (call j f thisv args).1 = .ok v ∧ V (call j f thisv args).2 ρ v) ∨
+      (∃ v, (call j f thisv args).1 = .thrown v) ∨
+      (∃ v, (call j f thisv args).1 = .returned v ∧ False)) :=
   Iff.rfl
+example : VList k [] vs ↔ vs = [] := by cases vs <;> simp [VList]
+example : VList k (τ :: τs) vs ↔ ∃ v vs', vs = v :: vs' ∧ V k τ v ∧ VList k τs vs' := by
+  cases vs with
+  | nil => simp [VList]
+  | cons v vs => exact ⟨fun ⟨h₁, h₂⟩ => ⟨v, vs, rfl, h₁, h₂⟩, fun ⟨_, _, e, h₁, h₂⟩ => by
+      cases e; exact ⟨h₁, h₂⟩⟩
 
 /-! ## The class instances
 
@@ -102,7 +109,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ :
 
 /-- The builtins' types, which their soundness proofs establish. -/
 example : builtinCtx =
-    [⟨1, .arrow (.bound 0) .boolean, []⟩, .mono (.arrow .number .number)] := rfl
+    [⟨1, .fn .undefined [.bound 0] .boolean, []⟩, .mono (.fn .undefined [.number] .number)] :=
+  rfl
 
 /-! ## Programs the typing rules reject -/
 
@@ -144,9 +152,33 @@ example : ¬ HasType [] [] none (.unop .neg (str "a")) τ := by
   | unop hop h₁ => cases hop; cases h₁ with | lit hl => cases hl
 
 /-- `1(2)`: a number is not a function. -/
-example : ¬ HasType [] [] none (.app (num 1) (num 2)) τ := by
+example : ¬ HasType [] [] none (.app (num 1) [num 2]) τ := by
   intro h
   cases h with
-  | app hf _ => cases hf with | lit hl => cases hl
+  | app hf _ _ => cases hf with | lit hl => cases hl
+
+/-- `(function f(x) { return x; })(1, 2)`: one argument per parameter. -/
+example : ¬ HasType [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by
+  intro h
+  cases h with
+  | app hf hlen _ => cases hf with | func hn _ => simp at hlen; omega
+
+/-- `(function f() { return -this; })()`: a call outside a receiver makes
+`this` `undefined`, which `-` doesn't take. -/
+example : ¬ HasType [] [] none (.app (.func 0 (.unop .neg (.var 1))) []) τ := by
+  intro h
+  cases h with
+  | app hf _ _ =>
+    cases hf with
+    | func hn hb =>
+      rw [List.length_eq_zero_iff] at hn; subst hn
+      cases hb with
+      | unop hop he =>
+        cases hop
+        generalize hτ : Ty.number = τ' at he
+        cases he with
+        | var hi _ _ =>
+          simp at hi; subst hi
+          simp [Scheme.mono, Scheme.inst, Ty.toPTy, PTy.inst] at hτ
 
 end Inty.Statements

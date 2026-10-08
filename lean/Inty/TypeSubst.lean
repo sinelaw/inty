@@ -23,8 +23,14 @@ theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
     rw [← Scheme.instPreds_subst] at hc'
     obtain ⟨c₀, hc₀, rfl⟩ := List.mem_map.mp hc'
     exact (hc c₀ hc₀).subst σ
-  | func _ ih => exact .func (by simpa [Ty.subst] using ih)
-  | app _ _ ihf iha => exact .app (by simpa [Ty.subst] using ihf) iha
+  | func hlen _ ih =>
+    refine .func (by simpa using hlen) ?_
+    simpa [List.map_append, Function.comp_def] using ih
+  | app _ hlen _ ihf iha =>
+    refine .app (by simpa using ihf) (by simpa using hlen) (fun p hp => ?_)
+    rw [List.zip_map_right] at hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact iha q hq
   | let_ s L _ hv _ ih₁ ih₂ =>
     refine .let_ (s.subst σ) (L ++ σ.map Prod.fst) (fun m hm => ?_) ?_ (by simpa using ih₂)
     · have hσ : ∀ p ∈ σ, p.1 < m := fun p hp => hm p.1 (by simp; exact .inr ⟨_, hp⟩)

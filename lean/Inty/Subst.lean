@@ -13,14 +13,6 @@ namespace Inty
 
 /-! ## Substitution on each type former -/
 
-@[simp] theorem Ty.subst_number (σ : Subst) : Ty.number.subst σ = .number := rfl
-@[simp] theorem Ty.subst_string (σ : Subst) : Ty.string.subst σ = .string := rfl
-@[simp] theorem Ty.subst_boolean (σ : Subst) : Ty.boolean.subst σ = .boolean := rfl
-@[simp] theorem Ty.subst_undefined (σ : Subst) : Ty.undefined.subst σ = .undefined := rfl
-@[simp] theorem Ty.subst_null (σ : Subst) : Ty.null.subst σ = .null := rfl
-@[simp] theorem Ty.subst_arrow (σ : Subst) (d c : Ty) :
-    (Ty.arrow d c).subst σ = .arrow (d.subst σ) (c.subst σ) := rfl
-
 /-! ## Composition -/
 
 /-- `compose σ₂ σ₁` applies `σ₁`, then `σ₂`. -/
@@ -50,8 +42,11 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
 
 @[simp] theorem Ty.subst_compose (σ₂ σ₁ : Subst) (τ : Ty) :
     τ.subst (Subst.compose σ₂ σ₁) = (τ.subst σ₁).subst σ₂ := by
-  induction τ with
-  | arrow d c ihd ihc => simp [Ty.subst, ihd, ihc]
+  induction τ using Ty.ind with
+  | fn t ps r iht ihps ihr =>
+    simp only [Ty.subst_fn, List.map_map, iht, ihr]
+    congr 1
+    exact List.map_congr_left ihps
   | var a =>
     simp only [Ty.subst, Subst.find_compose]
     cases σ₁.find a <;> rfl
@@ -59,8 +54,11 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
 
 @[simp] theorem PTy.subst_compose (σ₂ σ₁ : Subst) (p : PTy) :
     p.subst (Subst.compose σ₂ σ₁) = (p.subst σ₁).subst σ₂ := by
-  induction p with
-  | arrow d c ihd ihc => simp [PTy.subst, ihd, ihc]
+  induction p using PTy.ind with
+  | fn t ps r iht ihps ihr =>
+    simp only [PTy.subst, PTy.substs_eq, List.map_map, iht, ihr]
+    congr 1
+    exact List.map_congr_left ihps
   | free a =>
     simp only [PTy.subst, Ty.toPTy_subst, Subst.find_compose]
     cases σ₁.find a <;> rfl
@@ -121,19 +119,23 @@ theorem Ctx.getElem?_subst (σ : Subst) (Γ : List Scheme) (i : Nat) :
 
 theorem Ty.subst_congr {σ σ' : Subst} {τ : Ty}
     (h : ∀ a ∈ τ.ftv, σ.find a = σ'.find a) : τ.subst σ = τ.subst σ' := by
-  induction τ with
-  | arrow d c ihd ihc =>
-    simp only [Ty.ftv, List.mem_append] at h
-    simp [Ty.subst, ihd (fun a ha => h a (.inl ha)), ihc (fun a ha => h a (.inr ha))]
+  induction τ using Ty.ind with
+  | fn t ps r iht ihps ihr =>
+    simp only [Ty.ftv, Ty.ftvs_eq, List.mem_append, List.mem_flatMap] at h
+    simp only [Ty.subst_fn, iht (fun a ha => h a (.inl (.inl ha))),
+      ihr (fun a ha => h a (.inr ha)), Ty.fn.injEq, true_and, and_true]
+    exact List.map_congr_left (fun p hp => ihps p hp (fun a ha => h a (.inl (.inr ⟨p, hp, ha⟩))))
   | var a => simp [Ty.subst, h a (by simp [Ty.ftv])]
   | _ => rfl
 
 theorem PTy.subst_congr {σ σ' : Subst} {p : PTy}
     (h : ∀ a ∈ p.ftv, σ.find a = σ'.find a) : p.subst σ = p.subst σ' := by
-  induction p with
-  | arrow d c ihd ihc =>
-    simp only [PTy.ftv, List.mem_append] at h
-    simp [PTy.subst, ihd (fun a ha => h a (.inl ha)), ihc (fun a ha => h a (.inr ha))]
+  induction p using PTy.ind with
+  | fn t ps r iht ihps ihr =>
+    simp only [PTy.ftv, PTy.ftvs_eq, List.mem_append, List.mem_flatMap] at h
+    simp only [PTy.subst, PTy.substs_eq, iht (fun a ha => h a (.inl (.inl ha))),
+      ihr (fun a ha => h a (.inr ha)), PTy.fn.injEq, true_and, and_true]
+    exact List.map_congr_left (fun p hp => ihps p hp (fun a ha => h a (.inl (.inr ⟨p, hp, ha⟩))))
   | free a => simp [PTy.subst, h a (by simp [PTy.ftv])]
   | _ => rfl
 
@@ -188,6 +190,7 @@ theorem findIdx_none : ∀ {l : List Nat} {a : Nat}, a ∉ l → findIdx l a = n
     simp only [List.mem_cons, not_or] at h
     simp [findIdx, h.1, findIdx_none h.2]
 
+mutual
 /-- `PTy` with the variables `ᾱ` quantified: `ᾱ[i]` becomes `bound i`. -/
 def Ty.gen (ᾱ : List Nat) : Ty → PTy
   | .number => .number
@@ -195,11 +198,18 @@ def Ty.gen (ᾱ : List Nat) : Ty → PTy
   | .boolean => .boolean
   | .undefined => .undefined
   | .null => .null
-  | .arrow d c => .arrow (d.gen ᾱ) (c.gen ᾱ)
+  | .fn t ps r => .fn (t.gen ᾱ) (Ty.gens ᾱ ps) (r.gen ᾱ)
   | .var a =>
     match findIdx ᾱ a with
     | some i => .bound i
     | none => .free a
+def Ty.gens (ᾱ : List Nat) : List Ty → List PTy
+  | [] => []
+  | τ :: τs => τ.gen ᾱ :: Ty.gens ᾱ τs
+end
+
+@[simp] theorem Ty.gens_eq (ᾱ : List Nat) (τs : List Ty) : Ty.gens ᾱ τs = τs.map (Ty.gen ᾱ) := by
+  induction τs <;> simp_all [Ty.gens]
 
 /-- A constraint with the variables `ᾱ` quantified. -/
 def Pred.gen (ᾱ : List Nat) (p : Pred) : PPred := ⟨p.cls, p.args.map (Ty.gen ᾱ)⟩
@@ -227,8 +237,11 @@ theorem renameBlock_find : ∀ (ᾱ : List Nat) (m a : Nat),
 `φ` for the rest is generalising, substituting `φ`, then opening at `m`. -/
 theorem Ty.gen_inst (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) :
     τ.subst (renameBlock ᾱ m ++ φ) = ((τ.gen ᾱ).subst φ).inst (varBlock m ᾱ.length) := by
-  induction τ with
-  | arrow d c ihd ihc => simp [Ty.subst, Ty.gen, PTy.subst, PTy.inst, ihd, ihc]
+  induction τ using Ty.ind with
+  | fn t ps r iht ihps ihr =>
+    simp only [Ty.subst_fn, Ty.gen, PTy.subst, PTy.inst, Ty.gens_eq, PTy.substs_eq,
+      PTy.insts_eq, List.map_map, iht, ihr, Ty.fn.injEq, true_and, and_true]
+    exact List.map_congr_left ihps
   | var a =>
     simp only [Ty.subst, Ty.gen, Subst.find_append, renameBlock_find]
     cases h : findIdx ᾱ a with

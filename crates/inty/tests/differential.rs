@@ -50,9 +50,11 @@ enum Core {
     Null,
     /// A de Bruijn index; one past the scope is an unbound variable.
     Var(usize),
-    /// `function f(x) { body }`: in `body`, 0 is `x` and 1 is `f`.
-    Func(Box<Core>),
-    App(Box<Core>, Box<Core>),
+    /// `function f(x₀, …, xₙ₋₁) { body }`: in `body`, `i < n` is `xᵢ`, `n`
+    /// is `f` and `n + 1` is `this`.
+    Func(usize, Box<Core>),
+    /// A call outside any receiver, so `this` is `undefined`.
+    App(Box<Core>, Vec<Core>),
     /// `const v = e₁; e₂`; only at the top of a program or function body.
     Let(Box<Core>, Box<Core>),
     Cond(Box<Core>, Box<Core>, Box<Core>),
@@ -84,8 +86,16 @@ fn wire(e: &Core) -> String {
         Undef => "(undef)".into(),
         Null => "(null)".into(),
         Var(i) => format!("(var {})", i),
-        Func(body) => format!("(func {})", wire(body)),
-        App(f, a) => format!("(app {} {})", wire(f), wire(a)),
+        Func(n, body) => format!("(func {} {})", n, wire(body)),
+        App(f, args) => {
+            let args: Vec<String> = args.iter().map(wire).collect();
+            format!(
+                "(app {}{}{})",
+                wire(f),
+                if args.is_empty() { "" } else { " " },
+                args.join(" ")
+            )
+        }
         Let(e1, e2) => format!("(let {} {})", wire(e1), wire(e2)),
         Cond(c, t, e) => format!("(cond {} {} {})", wire(c), wire(t), wire(e)),
         Not(e) => format!("(not {})", wire(e)),
@@ -126,8 +136,8 @@ fn fractional(e: &Core) -> Core {
     let f = |e: &Core| b(fractional(e));
     match e {
         Num(m, x) => Num(m * 10 + 5, x + 1),
-        Func(body) => Func(f(body)),
-        App(x, y) => App(f(x), f(y)),
+        Func(n, body) => Func(*n, f(body)),
+        App(x, args) => App(f(x), args.iter().map(fractional).collect()),
         Let(x, y) => Let(f(x), f(y)),
         Cond(c, t, e) => Cond(f(c), f(t), f(e)),
         Not(x) => Not(f(x)),
@@ -175,15 +185,36 @@ impl Js {
             Undef => "(void 0)".into(),
             Null => "null".into(),
             Var(i) => self.name(*i),
-            Func(body) => {
-                let (f, x) = (self.fresh("f"), self.fresh("x"));
+            Func(n, body) => {
+                let f = self.fresh("f");
+                let xs: Vec<String> = (0..*n).map(|_| self.fresh("x")).collect();
+                // `this` is printed as `this` where it is the innermost
+                // function's; a function inside it that refers to it
+                // needs an alias.
+                let alias = refers_from_inner(body, n + 1, false).then(|| self.fresh("t"));
+                self.names
+                    .push(alias.clone().unwrap_or_else(|| "this".into()));
                 self.names.push(f.clone());
-                self.names.push(x.clone());
+                for x in xs.iter().rev() {
+                    self.names.push(x.clone());
+                }
                 let body = self.stmts(body, "return ");
-                self.names.truncate(self.names.len() - 2);
-                format!("(function {}({}) {{ {} }})", f, x, body)
+                self.names.truncate(self.names.len() - n - 2);
+                let prelude = alias
+                    .map(|t| format!("const {t} = this; "))
+                    .unwrap_or_default();
+                format!(
+                    "(function {}({}) {{ {}{} }})",
+                    f,
+                    xs.join(", "),
+                    prelude,
+                    body
+                )
             }
-            App(f, a) => format!("({})({})", self.expr(f), self.expr(a)),
+            App(f, args) => {
+                let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
+                format!("({})({})", self.expr(f), args.join(", "))
+            }
             Let(..) | Ret(_) | Throw(_) | Seq(..) => {
                 unreachable!("statements only in statement position: {e:?}")
             }
@@ -225,6 +256,30 @@ impl Js {
     }
 }
 
+/// Whether `e` refers to variable `i` from inside a function nested in it
+/// (`inner`: already inside one), where JavaScript's `this` would mean the
+/// nested function's.
+fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
+    match e {
+        Var(j) => inner && *j == i,
+        Func(n, body) => refers_from_inner(body, i + n + 2, true),
+        Let(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
+        App(f, args) => {
+            refers_from_inner(f, i, inner) || args.iter().any(|a| refers_from_inner(a, i, inner))
+        }
+        Cond(c, t, e) => {
+            refers_from_inner(c, i, inner)
+                || refers_from_inner(t, i, inner)
+                || refers_from_inner(e, i, inner)
+        }
+        Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) => refers_from_inner(x, i, inner),
+        Plus(x, y) | Minus(x, y) | Seq(x, y) => {
+            refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner)
+        }
+        Num(..) | Str(_) | Bool(_) | Undef | Null => false,
+    }
+}
+
 fn javascript(e: &Core) -> String {
     Js {
         names: Vec::new(),
@@ -260,14 +315,16 @@ enum T {
     Bool,
     Undef,
     Null,
-    Arrow(Box<T>, Box<T>),
+    /// A function's parameter and result types. Its `this` is `undefined`:
+    /// the generated programs only call functions outside a receiver.
+    Arrow(Vec<T>, Box<T>),
 }
 
 /// What a variable in scope may be used as.
 #[derive(Clone, Debug)]
 enum Binding {
     Mono(T),
-    /// `const id = function (x) { return x; }`: any `a → a`.
+    /// `const id = function (x) { return x; }`: any `(a) => a`.
     PolyId,
     /// Untyped generation doesn't track types.
     Unknown,
@@ -293,7 +350,11 @@ impl Gen {
 
     fn ty(&mut self, depth: usize) -> T {
         if depth > 0 && self.rng.chance(25) {
-            T::Arrow(b2(self.ty(depth - 1)), b2(self.ty(depth - 1)))
+            let n = self.rng.below(3);
+            T::Arrow(
+                (0..n).map(|_| self.ty(depth - 1)).collect(),
+                b2(self.ty(depth - 1)),
+            )
         } else {
             self.base()
         }
@@ -330,7 +391,7 @@ impl Gen {
         let fits: Vec<usize> = (0..scope.len())
             .filter(|&i| match &scope[scope.len() - 1 - i] {
                 Binding::Mono(u) => u == t,
-                Binding::PolyId => matches!(t, T::Arrow(a, r) if a == r),
+                Binding::PolyId => matches!(t, T::Arrow(ps, r) if ps.len() == 1 && ps[0] == **r),
                 Binding::Unknown => false,
             })
             .collect();
@@ -355,7 +416,7 @@ impl Gen {
                 scope.push(Binding::PolyId);
                 let rest = self.typed(t, d, scope, true);
                 scope.pop();
-                return Let(b(Func(b(Var(0)))), b(rest));
+                return Let(b(Func(1, b(Var(0)))), b(rest));
             }
             let s = self.ty(1);
             let e1 = self.typed(&s, d, scope, false);
@@ -374,9 +435,11 @@ impl Gen {
                 )
             }
             1 => {
-                let s = self.ty(1);
-                let f = self.typed(&T::Arrow(b2(s.clone()), b2(t.clone())), d, scope, false);
-                App(b(f), b(self.typed(&s, d, scope, false)))
+                let n = self.rng.below(3);
+                let ss: Vec<T> = (0..n).map(|_| self.ty(1)).collect();
+                let f = self.typed(&T::Arrow(ss.clone(), b2(t.clone())), d, scope, false);
+                let args = ss.iter().map(|s| self.typed(s, d, scope, false)).collect();
+                App(b(f), args)
             }
             _ => match t {
                 T::Num => match self.rng.below(4) {
@@ -403,14 +466,19 @@ impl Gen {
                     0 => Not(b(self.any(d, scope, false))),
                     _ => Bool(self.rng.chance(50)),
                 },
-                T::Arrow(a, r) => {
+                T::Arrow(ps, r) => {
+                    // `this`, the function itself, then the parameters,
+                    // the first innermost.
+                    scope.push(Binding::Mono(T::Undef));
                     scope.push(Binding::Mono(t.clone()));
-                    scope.push(Binding::Mono((**a).clone()));
+                    for p in ps.iter().rev() {
+                        scope.push(Binding::Mono(p.clone()));
+                    }
                     self.funcs.push(Some((**r).clone()));
                     let body = self.typed(r, d, scope, true);
                     self.funcs.pop();
-                    scope.truncate(scope.len() - 2);
-                    Func(b(body))
+                    scope.truncate(scope.len() - ps.len() - 2);
+                    Func(ps.len(), b(body))
                 }
                 _ => self.literal(t).unwrap(),
             },
@@ -487,15 +555,21 @@ impl Gen {
         }
         match self.rng.below(if stmt { 11 } else { 10 }) {
             0 => {
-                scope.push(Binding::Unknown);
-                scope.push(Binding::Unknown);
+                let n = self.rng.below(3);
+                for _ in 0..n + 2 {
+                    scope.push(Binding::Unknown);
+                }
                 self.funcs.push(None);
                 let body = self.any(d, scope, true);
                 self.funcs.pop();
-                scope.truncate(scope.len() - 2);
-                Func(b(body))
+                scope.truncate(scope.len() - n - 2);
+                Func(n, b(body))
             }
-            1 | 2 => App(b(self.any(d, scope, false)), b(self.any(d, scope, false))),
+            1 | 2 => {
+                let f = self.any(d, scope, false);
+                let n = self.rng.below(3);
+                App(b(f), (0..n).map(|_| self.any(d, scope, false)).collect())
+            }
             3 => Cond(
                 b(self.any(d, scope, false)),
                 b(self.any(d, scope, false)),
@@ -659,6 +733,7 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Err(Stuck::UndefinedVariable(_)) => Run::Stuck("undefinedVariable".into()),
         Err(Stuck::NotCallable(_)) => Run::Stuck("notCallable".into()),
         Err(Stuck::TypeMismatch { .. }) => Run::Stuck("typeMismatch".into()),
+        Err(Stuck::ArityMismatch { .. }) => Run::Stuck("arityMismatch".into()),
         Err(other) => Run::Stuck(format!("other {}", other)),
     }
 }

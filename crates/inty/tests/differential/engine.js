@@ -1,7 +1,7 @@
 // The JavaScript engine oracle for crates/inty/tests/differential.rs.
 //
-// Reads one program per line on stdin, runs each as a script in a fresh
-// realm, and prints one verdict per line, in the model's value wire format
+// Reads one program per line on stdin, runs each as a strict-mode script in
+// a fresh realm, and prints one verdict per line, in the model's value wire format
 // (lean/Inty/Wire.lean):
 //
 //   value V    the script's completion value
@@ -37,9 +37,13 @@ function wire(v) {
   }
 }
 
+// inty assumes strict mode throughout (docs/scc-inference.md). It matters
+// here for `this`: in a call outside a receiver it is `undefined`, where
+// sloppy mode makes it the global object.
 function run(source) {
   try {
-    return `value ${wire(vm.runInNewContext(source, {}, { timeout: 200 }))}`;
+    const strict = `"use strict"; ${source}`;
+    return `value ${wire(vm.runInNewContext(strict, {}, { timeout: 200 }))}`;
   } catch (e) {
     // The generated programs throw only primitives and functions, so an
     // object is the engine's own error (from the script's realm, where

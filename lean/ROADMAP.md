@@ -57,9 +57,13 @@ Paths like `src/infer` are relative to `crates/inty`.
 
 The parts every later feature touches.
 
-- **Functions.** Several parameters, `this`, and optional parameters
-  (presence variables, as `types::FuncParam`). Arity rules as in
-  `src/infer/features/functions.rs`.
+- **Functions.** Done: functions of any number of parameters, with
+  `this`; a call outside a receiver binds `this` to `undefined` and has one
+  argument per parameter, as in `src/infer/features/functions.rs` and
+  `dynamics`. Optional parameters (presence variables, `types::FuncParam`)
+  arise in JavaScript only from annotations and the standard library
+  (`slice(start, end?)`), and in Python from defaults, so they come with
+  phases 10 and 12.
 - **A general constraint language.** Done: a constraint is a class applied
   to types (`Pred`), instances are `Inst` (`Inty/Classes.lean`), and
   entailment is an instance or an assumption in scope (HM(X); Jones,
