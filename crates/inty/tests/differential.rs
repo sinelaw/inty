@@ -782,10 +782,10 @@ fn env_or(name: &str, default: u64) -> u64 {
 /// feature inty's types show it used.
 fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Option<&'static str> {
     match (inty, model) {
-        // A `Plus` constraint nothing resolves (lean/README.md, roadmap
-        // step 2): inty defaults it; the model has no defaulting.
+        // A `Plus` constraint nothing resolves (lean/ROADMAP.md, phase
+        // 1): inty defaults it; the model has no defaulting.
         (Typing::Type(_), Typing::Ambiguous) => Some("ambiguous Plus constraint"),
-        // Roadmap step 7: `c ? 1 : null` is `Number | Null` in inty, and
+        // Roadmap phase 6: `c ? 1 : null` is `Number | Null` in inty, and
         // `c ? undefined : x` is `Undefined | t`, where the model unifies.
         (Typing::Type(_), Typing::Reject) if features.contains("unions") => {
             Some("unions (a nullable join)")
@@ -793,7 +793,7 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(t), Typing::Type(_)) if t.starts_with("union(") => {
             Some("unions (a nullable join)")
         }
-        // Roadmap step 10: `function f(x) { return f; }`.
+        // Roadmap phase 8: `function f(x) { return f; }`.
         (Typing::Type(_), Typing::Reject) if features.contains("recursive types") => {
             Some("equi-recursive types")
         }
@@ -807,7 +807,7 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(t), Typing::Type(_)) if t == "never" => {
             Some("never (a function that only throws)")
         }
-        // Roadmap step 7, the other way: the model folds `Int` into
+        // Roadmap phase 5, the other way: the model folds `Int` into
         // `number`, but in inty `Int ≤ Number` holds for values only, so
         // `(a) => Int` and `(b) => Number` don't join. Evidence: inty
         // accepts the program once no literal is an `Int`.

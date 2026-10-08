@@ -109,7 +109,7 @@ These choices are meant to hold up as the calculus grows.
   expression. Running out of clock is distinct from getting stuck, so the
   soundness theorem holds even for diverging programs. Amin and Rompf extend the
   approach to mutable references with a syntactic store typing (§4.1), which
-  inty's objects and `let` cells need; see roadmap step 6 for what inty adds.
+  inty's objects and `let` cells need; see phase 2 of the roadmap for what inty adds.
 - **The interpreter is executable.** `eval` is an ordinary function, so the
   model can serve as a test oracle against the Rust implementation, as
   Cedar's Lean model does for Cedar's Rust code (differential random
@@ -153,7 +153,7 @@ These choices are meant to hold up as the calculus grows.
   variable into its scheme, and the rest must be resolved by the end of the
   program.
 - **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
-  and `Arith` classes, is a roadmap item.
+  and `Arith` classes, is phase 5 of the roadmap.
 
 ## Adding a feature
 
@@ -176,86 +176,9 @@ Lean's exhaustiveness checks point at every case still missing.
 
 ## Roadmap
 
-Each step keeps `lake build` green, with no `sorry`. The order puts the
-cheapest proofs first and the hardest last. Semantic value typing, with the
-call clock it needs, is done (see the design choices); the steps below build
-on it.
-
-1. ~~**Let-polymorphism.**~~ Done: type variables and schemes, `const`
-   generalising under the value restriction, and the type substitution
-   lemma. A value in the environment has every instance of its variable's
-   scheme whose constraints hold. Schemes carry `Plus` constraints.
-2. **Inference.** Soundness is done: Algorithm W, executable, proved sound
-   against `HasType`. Completeness needs three decisions first:
-   - **Ambiguous constraints.** `HasType` accepts `!(function (y) { return
-     y + y; })` at both `Number` and `String`, while `inferProgram` rejects
-     it (a `Plus` constraint nothing resolves) and the Rust checker accepts
-     it. Either default, as Rust does for `Num`, or make such programs
-     untypable in the spec, as CakeML does to keep principal types.
-     Completeness is then stated for constrained types: the inferred type,
-     with its pending constraints, has every valid type as a solved
-     instance.
-   - **Well-scoped schemes.** A scheme may mention `bound i` past its arity
-     (instantiated as `undefined`). Harmless for soundness, but "more
-     general than" should range over well-scoped schemes only, by a
-     well-formedness predicate or by construction.
-   - **Termination of unification.** Its fuel counts recursion depth, so
-     it fails on unifiable types nested about 1000 deep. fhm's measure
-     (number of variables, then size) proves termination, but a definition
-     by well-founded recursion doesn't reduce in the kernel, so the
-     `by decide` example would move to `#guard`. Rows allocate fresh
-     variables during unification, which that measure doesn't cover.
-   [fhm](https://github.com/Arrow7000/fhm) is the Lean 4 template (its
-   completeness needs freshness invariants and a rigid-variable set), as is
-   CakeML's verified type inference.
-3. ~~**Differential testing.**~~ Done; see below.
-4. ~~**Statements and abrupt completion.**~~ Done for `return`, `throw` and
-   sequencing: `returned` and `thrown` results, the enclosing function's
-   return type in the judgement, and `if` statements as conditionals in
-   statement position. A `const` doesn't generalise a variable the return
-   type mentions. Loops and `break` come with mutable state (step 6), where
-   they can do something.
-5. **Records and row polymorphism.** Record types, the `HasProp`
-   constraint, and method chains through `this`. Garrigue's Coq development
-   of ML structural polymorphism (record and variant constraints in a
-   kinding environment, recursive types through kinds rather than μ-binders,
-   inference proved sound and principal with cofinite quantification) fits
-   inty's `a has {name: b}` better than Rémy rows over μ-types.
-6. **Mutable state.** A store threaded through `run` beside the clock, and
-   a store typing that only grows: `V` gains it as a world, a Kripke logical
-   relation (Ahmed, Dreyer and Rossberg), where Amin and Rompf §4.1 use a
-   syntactic one. inty also generalises
-   `var` and `let` bindings and checks a later assignment against the
-   binding's scheme, with its variables rigid (`id = function (x) { return
-   x - 1; }` is rejected for a polymorphic `id`). So a cell's store type is a
-   scheme, the assignment rule quantifies over rigid variables, and `Ty`
-   needs a notion of rigid variable.
-7. **Literal types, `Int`, unions and subsumption**: `Int ≤ Number` with
-   the `Num` and `Arith` classes. `Int` arithmetic is checked (a result
-   past ±2^53, or `% 0`, is a fault: `Stuck::IntRange` in `dynamics`), so
-   the model needs a fault outcome beside `timeout`, and a number model it
-   can reason about rather than `Float`. Then inty's join rules
-   ("declared, not guessed", `docs/type-system.md`). Subsumption treats a
-   mutable array or record as invariant: only a value is subsumed into a
-   union, never the element type of a container someone can write to (#96).
-8. **Narrowing** of bindings that never change (`docs/flow-narrowing-safe.md`).
-   This is Typed Racket's rule; "Revisiting Soundness for Occurrence
-   Typing, Semantically" (arXiv 2609.16299) gives a Lean mechanization of its
-   soundness.
-9. **More type classes and callable rows.** Schemes carry `Plus`
-   constraints already, but `Indexable` and `HasProp` need more than extra
-   arguments: the Rust solver improves types through their functional
-   dependencies (a container determines its index and element types, a
-   receiver its property's type), so inference unifies where `Plus` only
-   checks, and the declarative rules must justify each improvement. Also
-   functions as rows carrying a call signature alongside statics.
-10. **Equi-recursive types.** Types up to unfolding, unification without
-    the occurs check, and `HasType.subst` under recursive binders. `V` is
-    then defined by well-founded recursion on the index and the type, with
-    `V k (μ a. τ)` unfolding to the body: inty's recursive types recur
-    through function types, and a call takes a tick, so a function type's
-    clause can refer to its argument and result at smaller indices. This is
-    what the step index is for.
+[ROADMAP.md](ROADMAP.md) plans the rest: twelve phases to a complete model
+of inty's type system, with the ground rules that keep it faithful to what
+inty implements and documents.
 
 ## Differential testing
 
@@ -299,14 +222,14 @@ Over 200,000 programs (ten seeds), the interpreters never disagreed, and
 the model never accepted a program inty rejects, except as below. The
 disagreements in typing all fall into features the model lacks:
 
-| Divergence | inty | model | Roadmap |
+| Divergence | inty | model | Roadmap phase |
 |---|---|---|---|
-| Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 7 |
-| A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 7 |
-| Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 7 |
-| Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 10 |
-| `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 7 |
-| A `Plus` constraint nothing resolves | accepts (defaulting) | ambiguous | 2 |
+| Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 6 |
+| A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 6 |
+| Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 6 |
+| Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 8 |
+| `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 5 |
+| A `Plus` constraint nothing resolves | accepts (defaulting) | ambiguous | 1 |
 
 Each row is recognised from evidence, not guessed: a union or `μ` in the
 types inty gave the program's expressions, or inty accepting the program
