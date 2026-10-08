@@ -11,6 +11,7 @@ JavaScript and for this model as an s-expression, one program per line:
 (num M E)   M × 10^-E      (str s:abc)   a string, `s:` then [a-z]*
 (bool true) (undef) (null) (var i)       (func BODY)   (app F A)
 (let E₁ E₂) (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
+(ret E)     (throw E)      (seq A B)
 ```
 
 `inty-model` (`Main.lean`) answers each line with the model's verdicts, as
@@ -77,6 +78,12 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (a, rest) ← parseExpr rest
     let (b, rest) ← parseExpr rest
     some (.binop .minus a b, rest)
+  | "ret", rest => do let (e, rest) ← parseExpr rest; some (.ret e, rest)
+  | "throw", rest => do let (e, rest) ← parseExpr rest; some (.throw_ e, rest)
+  | "seq", rest => do
+    let (a, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr rest
+    some (.seq a b, rest)
   | _, _ => none
 end
 
@@ -105,7 +112,7 @@ def satisfiable : Ty → Bool
 a type variable is left that nothing resolves; or `reject`, which includes a
 `Plus` constraint no type could satisfy (on `undefined`, or on a function). -/
 def inferVerdict (e : Expr) : String :=
-  match infer [] e 0 with
+  match infer [] none e 0 with
   | none => "reject"
   | some o =>
     if o.plus.all Ty.isPlusInst then s!"type {tyWire o.τ}"
@@ -131,6 +138,9 @@ def evalVerdict (fuel : Nat) (e : Expr) : String :=
   | .ok v => s!"value {valueWire v}"
   | .stuck s => s!"stuck {stuckWire s}"
   | .timeout => "timeout"
+  | .thrown v => s!"thrown {valueWire v}"
+  -- Only inside a function; at the top level the typing rules rule it out.
+  | .returned v => s!"returned {valueWire v}"
 
 /-- The answer to one line. -/
 def verdict (fuel : Nat) (line : String) : String :=
@@ -144,5 +154,8 @@ def verdict (fuel : Nat) (line : String) : String :=
 #guard verdict 100 "(not (func (plus (var 0) (var 0))))" == "ambiguous;value bool false"
 #guard verdict 100 "(let (func (var 0)) (app (var 0) (str s:)))" == "type string;value str s:"
 #guard verdict 100 "(app (num 1 0" == "error unparsable"
+#guard verdict 100 "(app (func (seq (ret (str s:a)) (str s:b))) (null))" == "type string;value str s:a"
+#guard verdict 100 "(throw (num 1 0))" == s!"type var;thrown num {(1 : Float).toBits}"
+#guard verdict 100 "(ret (num 1 0))" == "reject;returned num 4607182418800017408"
 
 end Inty.Wire

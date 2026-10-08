@@ -36,7 +36,7 @@ inductive ValTy : Value → Ty → Prop where
   | undefined : ValTy .undefined .undefined
   | null : ValTy .null .null
   | closure : Holds C → EnvTy env Γ →
-      HasType C (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) body τ₂ →
+      HasType C (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) (some τ₂) body τ₂ →
       ValTy (.closure env body) (.arrow τ₁ τ₂)
 
 /-- `EnvTy env Γ`: each value in `env` has every instance of the scheme `Γ`
@@ -47,10 +47,35 @@ inductive EnvTy : Env → Ctx → Prop where
       EnvTy env Γ → EnvTy (v :: env) (s :: Γ)
 end
 
-/-- A result is safe at `τ` when it is a value of type `τ`, or ran out of
-fuel. It is never `stuck`. -/
-def Safe (r : Result) (τ : Ty) : Prop :=
-  r = .timeout ∨ ∃ v, r = .ok v ∧ ValTy v τ
+/-- A result is safe at `τ`, in a function returning `R`: a value of type
+`τ`, a `return` of a value of the return type, a `throw` of any value, or
+out of fuel. It is never `stuck`. -/
+def Safe (r : Result) (τ : Ty) (R : Option Ty) : Prop :=
+  r = .timeout ∨ (∃ v, r = .ok v ∧ ValTy v τ) ∨ (∃ v, r = .thrown v) ∨
+    (∃ τr v, R = some τr ∧ r = .returned v ∧ ValTy v τr)
+
+theorem Safe.ok (h : ValTy v τ) : Safe (.ok v) τ R := .inr (.inl ⟨v, rfl, h⟩)
+
+theorem Safe.not_stuck (h : Safe r τ R) : r ≠ .stuck s := by
+  rcases h with rfl | ⟨_, rfl, _⟩ | ⟨_, rfl⟩ | ⟨_, _, _, rfl, _⟩ <;> simp
+
+/-- Continuing a safe result with a safe continuation is safe. -/
+theorem Safe.bind {k : Value → Result} (h : Safe r τ₁ R)
+    (hk : ∀ v, ValTy v τ₁ → Safe (k v) τ R) : Safe (r.bind k) τ R := by
+  rcases h with rfl | ⟨v, rfl, hv⟩ | ⟨v, rfl⟩ | ⟨τr, v, hR, rfl, hv⟩
+  · exact .inl rfl
+  · exact hk v hv
+  · exact .inr (.inr (.inl ⟨v, rfl⟩))
+  · exact .inr (.inr (.inr ⟨τr, v, hR, rfl, hv⟩))
+
+/-- A call's body returns its function's result type, by `return` or as its
+value. -/
+theorem Safe.catchReturn (h : Safe r τ (some τ)) : Safe r.catchReturn τ R := by
+  rcases h with rfl | ⟨v, rfl, hv⟩ | ⟨v, rfl⟩ | ⟨τr, v, hR, rfl, hv⟩
+  · exact .inl rfl
+  · exact Safe.ok hv
+  · exact .inr (.inr (.inl ⟨v, rfl⟩))
+  · cases hR; exact Safe.ok hv
 
 -- `EnvTy` is mutually inductive, so this recurses on the index instead of
 -- inducting on the environment.
@@ -66,86 +91,95 @@ theorem Lit.eval_sound (h : LitTy l τ) : ValTy l.eval τ := by
   cases h <;> constructor
 
 theorem UnOp.eval_sound (hop : UnOpTy op τ₁ τ) (hv : ValTy v τ₁) :
-    Safe (op.eval v) τ := by
-  right
+    Safe (op.eval v) τ R := by
   cases hop with
-  | not => exact ⟨_, rfl, .boolean⟩
-  | typeof => exact ⟨_, rfl, .string⟩
-  | neg => cases hv; exact ⟨_, rfl, .number⟩
+  | not => exact Safe.ok .boolean
+  | typeof => exact Safe.ok .string
+  | neg => cases hv; exact Safe.ok .number
 
 theorem BinOp.eval_sound (hC : Holds C) (hop : BinOpTy C op τ₁ τ₂ τ)
-    (hv₁ : ValTy v₁ τ₁) (hv₂ : ValTy v₂ τ₂) : Safe (op.eval v₁ v₂) τ := by
-  right
+    (hv₁ : ValTy v₁ τ₁) (hv₂ : ValTy v₂ τ₂) : Safe (op.eval v₁ v₂) τ R := by
   cases hop with
   | plus hc =>
     cases hc.holds hC with
-    | number => cases hv₁; cases hv₂; exact ⟨_, rfl, .number⟩
-    | string => cases hv₁; cases hv₂; exact ⟨_, rfl, .string⟩
-  | minus => cases hv₁; cases hv₂; exact ⟨_, rfl, .number⟩
+    | number => cases hv₁; cases hv₂; exact Safe.ok .number
+    | string => cases hv₁; cases hv₂; exact Safe.ok .string
+  | minus => cases hv₁; cases hv₂; exact Safe.ok .number
 
-/-- Evaluating a syntactic value never gets stuck. -/
-theorem IsValue.not_stuck (hv : e.IsValue) (ht : HasType C Γ e τ) (henv : EnvTy env Γ)
-    (fuel : Nat) (s : Stuck) : eval fuel env e ≠ .stuck s := by
+/-- Evaluating a syntactic value only runs out of fuel or gives a value. -/
+theorem IsValue.eval_value (hv : e.IsValue) (ht : HasType C Γ R e τ) (henv : EnvTy env Γ)
+    (fuel : Nat) : eval fuel env e = .timeout ∨ ∃ v, eval fuel env e = .ok v := by
   cases fuel with
-  | zero => simp [eval]
+  | zero => exact .inl rfl
   | succ fuel =>
     cases hv with
-    | lit => simp [eval]
-    | func => simp [eval]
+    | lit => exact .inr ⟨_, rfl⟩
+    | func => exact .inr ⟨_, rfl⟩
     | var =>
       cases ht with
       | var hi _ _ =>
         obtain ⟨v, hv, _⟩ := EnvTy.lookup henv hi
-        simp [eval, hv]
+        exact .inr ⟨v, by simp only [eval, hv]⟩
 
-/-- A result that isn't stuck, and is safe at every instance of a scheme
-whose constraints hold, is one value with all those types, or a timeout. -/
-theorem Safe.forall {r : Result} {s : Scheme} (hns : ∀ st, r ≠ .stuck st)
-    (h : ∀ τs, τs.length = s.arity → Holds (s.instPlus τs) → Safe r (s.inst τs)) :
-    r = .timeout ∨ ∃ v, r = .ok v ∧
-      ∀ τs, τs.length = s.arity → Holds (s.instPlus τs) → ValTy v (s.inst τs) := by
+/-- `Safe.bind` for a `const`'s initialiser, safe at every instance of its
+scheme whose constraints hold. Either some instance's constraints hold, or
+the initialiser is a syntactic value, which can't complete abruptly. -/
+theorem Safe.bind_forall {r : Result} {s : Scheme} {k : Value → Result}
+    (hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPlus τs)) ∨
+      (r = .timeout ∨ ∃ v, r = .ok v))
+    (h : ∀ τs, τs.length = s.arity → Holds (s.instPlus τs) → Safe r (s.inst τs) R)
+    (hk : ∀ v, (∀ τs, τs.length = s.arity → Holds (s.instPlus τs) → ValTy v (s.inst τs)) →
+      Safe (k v) τ R) : Safe (r.bind k) τ R := by
   cases r with
-  | timeout => exact .inl rfl
-  | stuck st => exact absurd rfl (hns st)
   | ok v =>
-    refine .inr ⟨v, rfl, fun τs hlen hp => ?_⟩
-    rcases h τs hlen hp with h | ⟨_, h, hv⟩
-    · cases h
-    · cases h; exact hv
+    refine hk v (fun τs hl hp => ?_)
+    rcases h τs hl hp with h | ⟨_, h, hv⟩ | ⟨_, h⟩ | ⟨_, _, _, h, _⟩ <;> cases h
+    exact hv
+  | timeout => exact .inl rfl
+  | thrown v => exact .inr (.inr (.inl ⟨v, rfl⟩))
+  | stuck st =>
+    rcases hw with ⟨τs, hl, hp⟩ | hw
+    · exact absurd (h τs hl hp) (fun hs => Safe.not_stuck hs rfl)
+    · rcases hw with h | ⟨_, h⟩ <;> cases h
+  | returned v =>
+    rcases hw with ⟨τs, hl, hp⟩ | hw
+    · rcases h τs hl hp with h | ⟨_, h, _⟩ | ⟨_, h⟩ | ⟨τr, _, hR, h, hv⟩ <;> cases h
+      exact .inr (.inr (.inr ⟨τr, v, hR, rfl, hv⟩))
+    · rcases hw with h | ⟨_, h⟩ <;> cases h
 
 /-- Type soundness. -/
 theorem eval_sound (fuel : Nat) :
-    ∀ {C Γ env e τ}, HasType C Γ e τ → Holds C → EnvTy env Γ →
-      Safe (eval fuel env e) τ := by
+    ∀ {C Γ R env e τ}, HasType C Γ R e τ → Holds C → EnvTy env Γ →
+      Safe (eval fuel env e) τ R := by
   induction fuel with
-  | zero => intro _ _ _ _ _ _ _ _; exact .inl rfl
+  | zero => intro _ _ _ _ _ _ _ _ _; exact .inl rfl
   | succ fuel ih =>
-    intro C Γ env e τ ht hC henv
+    intro C Γ R env e τ ht hC henv
     cases ht with
-    | lit hl => exact .inr ⟨_, rfl, Lit.eval_sound hl⟩
+    | lit hl => exact Safe.ok (Lit.eval_sound hl)
     | var hi hlen hc =>
       obtain ⟨v, hv, hvt⟩ := EnvTy.lookup henv hi
-      exact .inr ⟨v, by simp [eval, hv], hvt _ hlen (fun c h => (hc c h).holds hC)⟩
-    | func hb => exact .inr ⟨_, rfl, .closure hC henv hb⟩
+      simp only [eval, hv]
+      exact Safe.ok (hvt _ hlen (fun c h => (hc c h).holds hC))
+    | func hb => exact Safe.ok (.closure hC henv hb)
     | app hf ha =>
-      rcases ih hf hC henv with hr | ⟨vf, hr, hvf⟩
-      · exact .inl (by simp [eval, hr])
-      rcases ih ha hC henv with hr' | ⟨va, hr', hva⟩
-      · exact .inl (by simp [eval, hr, hr'])
+      simp only [eval]
+      refine Safe.bind (ih hf hC henv) fun vf hvf => Safe.bind (ih ha hC henv) fun va hva => ?_
       cases hvf with
       | closure hC' hcenv hbody =>
-        have := ih hbody hC' (.cons (fun _ _ _ => by simpa using hva)
-          (.cons (fun _ _ _ => by simpa using ValTy.closure hC' hcenv hbody) hcenv))
-        simpa [Safe, eval, hr, hr'] using this
+        exact Safe.catchReturn (ih hbody hC' (.cons (fun _ _ _ => by simpa using hva)
+          (.cons (fun _ _ _ => by simpa using ValTy.closure hC' hcenv hbody) hcenv)))
     | let_ s L hgen hval h₂ =>
       rename_i e₁ e₂
       -- Type `e₁` at each instance of `s`: open `s` at variables above
       -- everything in sight, then substitute the instance's types for them.
-      let m := maxPlusOne (L ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Ty.ftv)
-      have hm : ∀ a, a ∈ L ∨ a ∈ ctxFtv Γ ∨ a ∈ s.ftv ∨ a ∈ C.flatMap Ty.ftv → a < m :=
-        fun a ha => lt_maxPlusOne a (by rcases ha with h | h | h | h <;> simp [h])
+      let m := maxPlusOne (L ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Ty.ftv ++
+        (R.map Ty.ftv).getD [])
+      have hm : ∀ a, a ∈ L ∨ a ∈ ctxFtv Γ ∨ a ∈ s.ftv ∨ a ∈ C.flatMap Ty.ftv ∨
+          a ∈ (R.map Ty.ftv).getD [] → a < m :=
+        fun a ha => lt_maxPlusOne a (by rcases ha with h | h | h | h | h <;> simp [h])
       have hinst : ∀ τs, τs.length = s.arity →
-          HasType (C ++ s.instPlus τs) Γ e₁ (s.inst τs) := by
+          HasType (C ++ s.instPlus τs) Γ R e₁ (s.inst τs) := by
         intro τs hlen
         have h := (hgen m (fun a ha => hm a (.inl ha))).subst (Subst.block m τs)
         have hfresh : ∀ a, a < m → (Subst.block m τs).find a = none := fun a ha =>
@@ -153,44 +187,55 @@ theorem eval_sound (fuel : Nat) :
         have hCσ : C.map (·.subst (Subst.block m τs)) = C := by
           conv => rhs; rw [← List.map_id C]
           exact List.map_congr_left (fun c hc => Ty.subst_id (fun a ha =>
-            hfresh a (hm a (.inr (.inr (.inr (List.mem_flatMap.mpr ⟨c, hc, ha⟩)))))))
-        rwa [List.map_append, hCσ,
+            hfresh a (hm a (.inr (.inr (.inr (.inl (List.mem_flatMap.mpr ⟨c, hc, ha⟩))))))))
+        have hRσ : R.map (·.subst (Subst.block m τs)) = R := by
+          cases R with
+          | none => rfl
+          | some τr =>
+            simp only [Option.map_some, Option.some.injEq]
+            exact Ty.subst_id (fun a ha =>
+              hfresh a (hm a (.inr (.inr (.inr (.inr (by simpa using ha)))))))
+        rwa [List.map_append, hCσ, hRσ,
           Scheme.openPlus_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen,
           ctx_subst_id (fun a ha => hfresh a (hm a (.inr (.inl ha)))),
           Scheme.open_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen] at h
       have hsafe : ∀ τs, τs.length = s.arity → Holds (s.instPlus τs) →
-          Safe (eval fuel env e₁) (s.inst τs) := fun τs hlen hp =>
+          Safe (eval fuel env e₁) (s.inst τs) R := fun τs hlen hp =>
         ih (hinst τs hlen) (hC.append hp) henv
-      have hns : ∀ st, eval fuel env e₁ ≠ .stuck st := by
+      have hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPlus τs)) ∨
+          (eval fuel env e₁ = .timeout ∨ ∃ v, eval fuel env e₁ = .ok v) := by
         rcases hval with ⟨ha, hp⟩ | hv
-        · intro st hst
-          rcases hsafe [] (by simp [ha]) (by simp [Holds, Scheme.instPlus, hp])
-            with h | ⟨_, h, _⟩ <;> rw [hst] at h <;> cases h
-        · exact IsValue.not_stuck hv (hgen m (fun a ha => hm a (.inl ha))) henv fuel
-      rcases Safe.forall hns hsafe with hr | ⟨v, hr, hv⟩
-      · exact .inl (by simp [eval, hr])
-      simpa [Safe, eval, hr] using ih h₂ hC (.cons hv henv)
+        · exact .inl ⟨[], by simp [ha], by simp [Holds, Scheme.instPlus, hp]⟩
+        · exact .inr (IsValue.eval_value hv (hgen m (fun a ha => hm a (.inl ha))) henv fuel)
+      simp only [eval]
+      exact Safe.bind_forall hw hsafe fun v hv => ih h₂ hC (.cons hv henv)
     | cond hc htt hte =>
-      rcases ih hc hC henv with hr | ⟨v, hr, _⟩
-      · exact .inl (by simp [eval, hr])
-      by_cases hb : v.truthy
-      · simpa [Safe, eval, hr, hb] using ih htt hC henv
-      · simpa [Safe, eval, hr, hb] using ih hte hC henv
+      simp only [eval]
+      refine Safe.bind (ih hc hC henv) fun v _ => ?_
+      split
+      · exact ih htt hC henv
+      · exact ih hte hC henv
     | unop hop he =>
-      rcases ih he hC henv with hr | ⟨v, hr, hv⟩
-      · exact .inl (by simp [eval, hr])
-      simpa [Safe, eval, hr] using UnOp.eval_sound hop hv
+      simp only [eval]
+      exact Safe.bind (ih he hC henv) fun v hv => UnOp.eval_sound hop hv
     | binop hop h₁ h₂ =>
-      rcases ih h₁ hC henv with hr | ⟨v₁, hr, hv₁⟩
-      · exact .inl (by simp [eval, hr])
-      rcases ih h₂ hC henv with hr' | ⟨v₂, hr', hv₂⟩
-      · exact .inl (by simp [eval, hr, hr'])
-      simpa [Safe, eval, hr, hr'] using BinOp.eval_sound hC hop hv₁ hv₂
+      simp only [eval]
+      exact Safe.bind (ih h₁ hC henv) fun v₁ hv₁ =>
+        Safe.bind (ih h₂ hC henv) fun v₂ hv₂ => BinOp.eval_sound hC hop hv₁ hv₂
+    | ret he =>
+      simp only [eval]
+      exact Safe.bind (ih he hC henv) fun v hv => .inr (.inr (.inr ⟨_, v, rfl, rfl, hv⟩))
+    | throw_ he =>
+      simp only [eval]
+      exact Safe.bind (ih he hC henv) fun v _ => .inr (.inr (.inl ⟨v, rfl⟩))
+    | seq h₁ h₂ =>
+      simp only [eval]
+      exact Safe.bind (ih h₁ hC henv) fun _ _ => ih h₂ hC henv
 
-/-- A closed program, well typed with no assumptions, never gets stuck,
-whatever the fuel. -/
-theorem never_stuck (h : HasType [] [] e τ) (fuel : Nat) (s : Stuck) :
-    eval fuel [] e ≠ .stuck s := by
-  rcases eval_sound fuel h (fun _ h => by cases h) .nil with hr | ⟨_, hr, _⟩ <;> simp [hr]
+/-- A closed program, well typed with no assumptions and outside any
+function, never gets stuck, whatever the fuel. -/
+theorem never_stuck (h : HasType [] [] none e τ) (fuel : Nat) (s : Stuck) :
+    eval fuel [] e ≠ .stuck s :=
+  Safe.not_stuck (eval_sound fuel h (fun _ h => by cases h) .nil)
 
 end Inty

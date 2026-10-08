@@ -59,6 +59,12 @@ inductive Expr where
   | cond (c t e : Expr)
   | unop (op : UnOp) (e : Expr)
   | binop (op : BinOp) (e₁ e₂ : Expr)
+  /-- `return e;`: leaves the enclosing function with `e`'s value. -/
+  | ret (e : Expr)
+  /-- `throw e;`. -/
+  | throw_ (e : Expr)
+  /-- `e₁; e₂`: `e₁` for its effects, then `e₂`. -/
+  | seq (e₁ e₂ : Expr)
   deriving Repr
 
 /-- Syntactic values, which the value restriction lets a `const` generalise:

@@ -12,6 +12,22 @@ fuel counts something else.
 
 namespace Inty
 
+/-- If more fuel doesn't change `r` unless it timed out, nor `K`'s results,
+then it doesn't change `r.bind K` unless that timed out. -/
+theorem Result.bind_mono {r r' : Result} {K K' : Value → Result}
+    (hr : r ≠ .timeout → r' = r) (hk : ∀ v, K v ≠ .timeout → K' v = K v)
+    (h : r.bind K ≠ .timeout) : r'.bind K' = r.bind K := by
+  have hne : r ≠ .timeout := by intro hc; subst hc; exact h rfl
+  rw [hr hne]
+  cases r with
+  | ok v => exact hk v h
+  | _ => rfl
+
+theorem Result.catchReturn_mono {r r' : Result} (hr : r ≠ .timeout → r' = r)
+    (h : r.catchReturn ≠ .timeout) : r'.catchReturn = r.catchReturn := by
+  have hne : r ≠ .timeout := by intro hc; subst hc; exact h rfl
+  rw [hr hne]
+
 theorem eval_mono (n : Nat) :
     ∀ {env : Env} {e : Expr} (k : Nat), eval n env e ≠ .timeout →
       eval (n + k) env e = eval n env e := by
@@ -24,56 +40,31 @@ theorem eval_mono (n : Nat) :
     | lit | var | func => rfl
     | app f a =>
       simp only [eval] at h ⊢
-      have hf : eval n env f ≠ .timeout := fun hc => by simp [hc] at h
-      rw [ih k hf]
-      split
-      · rename_i vf hvf
-        rw [hvf] at h
-        have ha : eval n env a ≠ .timeout := fun hc => by simp [hc] at h
-        rw [ih k ha]
-        split
-        · rename_i va hva
-          rw [hva] at h
-          split
-          · rename_i cenv body
-            exact ih k h
-          · rfl
-        · rfl
-      · rfl
+      refine Result.bind_mono (ih k) (fun vf h => Result.bind_mono (ih k) (fun va h => ?_) h) h
+      cases vf with
+      | closure cenv body => exact Result.catchReturn_mono (ih k) h
+      | _ => rfl
     | let_ e₁ e₂ =>
       simp only [eval] at h ⊢
-      have h₁ : eval n env e₁ ≠ .timeout := fun hc => by simp [hc] at h
-      rw [ih k h₁]
-      split
-      · rename_i v hv
-        rw [hv] at h
-        exact ih k h
-      · rfl
+      exact Result.bind_mono (ih k) (fun v h => ih k h) h
     | cond c t e =>
       simp only [eval] at h ⊢
-      have hc : eval n env c ≠ .timeout := fun hc' => by simp [hc'] at h
-      rw [ih k hc]
+      refine Result.bind_mono (ih k) (fun v h => ?_) h
       split
-      · rename_i v hv
-        rw [hv] at h
-        split
-        · rename_i ht; simp only [ht, ite_true] at h; exact ih k h
-        · rename_i ht; simp only [ht] at h; exact ih k h
-      · rfl
+      · rename_i ht; simp only [ht, ite_true] at h; exact ih k h
+      · rename_i ht; simp only [ht] at h; exact ih k h
     | unop op e =>
       simp only [eval] at h ⊢
-      have he : eval n env e ≠ .timeout := fun hc => by simp [hc] at h
-      rw [ih k he]
+      exact Result.bind_mono (ih k) (fun _ _ => rfl) h
     | binop op e₁ e₂ =>
       simp only [eval] at h ⊢
-      have h₁ : eval n env e₁ ≠ .timeout := fun hc => by simp [hc] at h
-      rw [ih k h₁]
-      split
-      · rename_i v₁ hv₁
-        rw [hv₁] at h
-        have h₂ : eval n env e₂ ≠ .timeout := fun hc => by simp [hc] at h
-        rw [ih k h₂]
-      · rfl
+      exact Result.bind_mono (ih k) (fun v h => Result.bind_mono (ih k) (fun _ _ => rfl) h) h
+    | ret e | throw_ e =>
+      simp only [eval] at h ⊢
+      exact Result.bind_mono (ih k) (fun _ _ => rfl) h
+    | seq e₁ e₂ =>
+      simp only [eval] at h ⊢
+      exact Result.bind_mono (ih k) (fun _ h => ih k h) h
 
 /-- Any two budgets that both finish agree. -/
 theorem eval_fuel_agree {n m : Nat} (hn : eval n env e ≠ .timeout)

@@ -53,6 +53,12 @@ enum Core {
     Neg(Box<Core>),
     Plus(Box<Core>, Box<Core>),
     Minus(Box<Core>, Box<Core>),
+    /// `return e;`, in a function's statement position.
+    Ret(Box<Core>),
+    /// `throw e;`, in statement position.
+    Throw(Box<Core>),
+    /// `e₁; e₂`, in statement position.
+    Seq(Box<Core>, Box<Core>),
 }
 
 use Core::*;
@@ -79,6 +85,30 @@ fn wire(e: &Core) -> String {
         Neg(e) => format!("(neg {})", wire(e)),
         Plus(x, y) => format!("(plus {} {})", wire(x), wire(y)),
         Minus(x, y) => format!("(minus {} {})", wire(x), wire(y)),
+        Ret(e) => format!("(ret {})", wire(e)),
+        Throw(e) => format!("(throw {})", wire(e)),
+        Seq(x, y) => format!("(seq {} {})", wire(x), wire(y)),
+    }
+}
+
+/// Whether a program ends in a statement rather than an expression: inty
+/// then types the program `Undefined`, whatever the statement.
+fn ends_in_statement(e: &Core) -> bool {
+    match e {
+        Let(_, rest) | Seq(_, rest) => ends_in_statement(rest),
+        Throw(_) | Ret(_) => true,
+        Cond(_, t, f) => is_stmt(t) || is_stmt(f),
+        _ => false,
+    }
+}
+
+/// Whether `e` must be printed as statements: JavaScript has no expression
+/// form for it.
+fn is_stmt(e: &Core) -> bool {
+    match e {
+        Ret(_) | Throw(_) | Seq(..) | Let(..) => true,
+        Cond(_, t, f) => is_stmt(t) || is_stmt(f),
+        _ => false,
     }
 }
 
@@ -97,6 +127,9 @@ fn fractional(e: &Core) -> Core {
         Neg(x) => Neg(f(x)),
         Plus(x, y) => Plus(f(x), f(y)),
         Minus(x, y) => Minus(f(x), f(y)),
+        Ret(x) => Ret(f(x)),
+        Throw(x) => Throw(f(x)),
+        Seq(x, y) => Seq(f(x), f(y)),
         other => other.clone(),
     }
 }
@@ -138,12 +171,14 @@ impl Js {
                 let (f, x) = (self.fresh("f"), self.fresh("x"));
                 self.names.push(f.clone());
                 self.names.push(x.clone());
-                let body = self.body(body, "return ");
+                let body = self.stmts(body, "return ");
                 self.names.truncate(self.names.len() - 2);
                 format!("(function {}({}) {{ {} }})", f, x, body)
             }
             App(f, a) => format!("({})({})", self.expr(f), self.expr(a)),
-            Let(..) => unreachable!("`const` only in statement position"),
+            Let(..) | Ret(_) | Throw(_) | Seq(..) => {
+                unreachable!("statements only in statement position: {e:?}")
+            }
             Cond(c, t, e) => format!("({} ? {} : {})", self.expr(c), self.expr(t), self.expr(e)),
             Not(e) => format!("!({})", self.expr(e)),
             Typeof(e) => format!("typeof ({})", self.expr(e)),
@@ -153,22 +188,32 @@ impl Js {
         }
     }
 
-    /// A program or function body: its `const`s, then `last` and the value
+    /// A program or function body: statements, then `last` and the value
     /// (`return` in a function, an expression statement at the top).
-    fn body(&mut self, e: &Core, last: &str) -> String {
-        let mut out = String::new();
-        let mut pushed = 0;
-        let mut e = e;
-        while let Let(e1, e2) = e {
-            let v = self.fresh("v");
-            out += &format!("const {} = {}; ", v, self.expr(e1));
-            self.names.push(v);
-            pushed += 1;
-            e = e2;
+    fn stmts(&mut self, e: &Core, last: &str) -> String {
+        match e {
+            Let(e1, e2) => {
+                let v = self.fresh("v");
+                let init = self.expr(e1);
+                self.names.push(v.clone());
+                let rest = self.stmts(e2, last);
+                self.names.pop();
+                format!("const {} = {}; {}", v, init, rest)
+            }
+            Seq(e1, e2) => {
+                let first = self.stmts(e1, "");
+                format!("{} {}", first, self.stmts(e2, last))
+            }
+            Ret(e) => format!("return {};", self.expr(e)),
+            Throw(e) => format!("throw {};", self.expr(e)),
+            Cond(c, t, f) if is_stmt(t) || is_stmt(f) => format!(
+                "if ({}) {{ {} }} else {{ {} }}",
+                self.expr(c),
+                self.stmts(t, last),
+                self.stmts(f, last)
+            ),
+            e => format!("{}{};", last, self.expr(e)),
         }
-        out += &format!("{}{};", last, self.expr(e));
-        self.names.truncate(self.names.len() - pushed);
-        out
     }
 }
 
@@ -177,7 +222,7 @@ fn javascript(e: &Core) -> String {
         names: Vec::new(),
         next: 0,
     }
-    .body(e, "")
+    .stmts(e, "")
 }
 
 // ---- Generation ----------------------------------------------------------
@@ -222,6 +267,9 @@ enum Binding {
 
 struct Gen {
     rng: Rng,
+    /// The return types of the functions being generated, innermost last
+    /// (`None` for an untyped one); empty at the top level.
+    funcs: Vec<Option<T>>,
 }
 
 impl Gen {
@@ -287,6 +335,11 @@ impl Gen {
             }
         }
         let d = depth.saturating_sub(1);
+        if stmt && depth > 0 && self.rng.chance(30) {
+            if let Some(s) = self.statement(t, d, scope) {
+                return s;
+            }
+        }
         if stmt && depth > 0 && self.rng.chance(25) {
             // `const`: sometimes the polymorphic identity, used at
             // several types below.
@@ -345,12 +398,51 @@ impl Gen {
                 T::Arrow(a, r) => {
                     scope.push(Binding::Mono(t.clone()));
                     scope.push(Binding::Mono((**a).clone()));
+                    self.funcs.push(Some((**r).clone()));
                     let body = self.typed(r, d, scope, true);
+                    self.funcs.pop();
                     scope.truncate(scope.len() - 2);
                     Func(b(body))
                 }
                 _ => self.literal(t).unwrap(),
             },
+        }
+    }
+
+    /// A statement of type `t` (it completes with a `t`, or not at all):
+    /// `return`, `throw`, a sequence, or an `if` with statement branches.
+    /// `None` when none fits here.
+    fn statement(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Option<Core> {
+        let in_func = !self.funcs.is_empty();
+        match self.rng.below(4) {
+            0 if in_func => {
+                let e = match self.funcs.last().cloned().flatten() {
+                    Some(rt) => self.typed(&rt, d, scope, false),
+                    None => self.any(d, scope, false),
+                };
+                Some(Ret(b(e)))
+            }
+            1 => Some(Throw(b(self.any(d, scope, false)))),
+            2 => {
+                let first = if self.rng.chance(50) {
+                    self.any(d, scope, true)
+                } else {
+                    let s = self.ty(1);
+                    self.typed(&s, d, scope, true)
+                };
+                Some(Seq(b(first), b(self.typed(t, d, scope, true))))
+            }
+            // An `if` statement only in a function, where its branches end
+            // in `return`.
+            3 if in_func => {
+                let c = self.any(d, scope, false);
+                Some(Cond(
+                    b(c),
+                    b(self.typed(t, d, scope, true)),
+                    b(self.typed(t, d, scope, true)),
+                ))
+            }
+            _ => None,
         }
     }
 
@@ -369,11 +461,29 @@ impl Gen {
             };
         }
         let d = depth - 1;
+        if stmt && self.rng.chance(20) {
+            let in_func = !self.funcs.is_empty();
+            match self.rng.below(4) {
+                0 if in_func => return Ret(b(self.any(d, scope, false))),
+                1 => return Throw(b(self.any(d, scope, false))),
+                2 => return Seq(b(self.any(d, scope, true)), b(self.any(d, scope, true))),
+                3 if in_func => {
+                    return Cond(
+                        b(self.any(d, scope, false)),
+                        b(self.any(d, scope, true)),
+                        b(self.any(d, scope, true)),
+                    )
+                }
+                _ => {}
+            }
+        }
         match self.rng.below(if stmt { 11 } else { 10 }) {
             0 => {
                 scope.push(Binding::Unknown);
                 scope.push(Binding::Unknown);
+                self.funcs.push(None);
                 let body = self.any(d, scope, true);
+                self.funcs.pop();
                 scope.truncate(scope.len() - 2);
                 Func(b(body))
             }
@@ -427,6 +537,10 @@ enum Typing {
 #[derive(Clone, Debug, PartialEq)]
 enum Run {
     Value(String),
+    /// An uncaught `throw` of this value.
+    Thrown(String),
+    /// A `return` that escaped to the top (the model only; typing rules it out).
+    Returned(String),
     Stuck(String),
     Timeout,
     Unsupported,
@@ -441,6 +555,8 @@ fn core_type(t: &Type) -> String {
         Type::Null => "null".into(),
         Type::Func { .. } | Type::Row(_) => "fun".into(),
         Type::Var(_) => "var".into(),
+        // The empty union: what doesn't complete, such as a `throw`.
+        Type::Union(ts) if ts.is_empty() => "never".into(),
         Type::Union(ts) => {
             let parts: Vec<String> = ts.iter().map(core_type).collect();
             if parts.iter().all(|p| p == &parts[0]) {
@@ -461,20 +577,44 @@ fn inty_typing(program: &inty::ast::Program) -> (Typing, Features) {
     let mut state = InferState::new();
     state.expr_types = Some(std::collections::HashMap::new());
     // As the CLI checks: infer, then resolve the class constraints.
+    let mut errors = Vec::new();
     let typing = match state.infer_program(&initial_env(), program) {
-        Ok(ty) if state.take_errors().is_empty() && state.resolve_constraints().is_ok() => {
-            Typing::Type(core_type(&state.apply_subst(&ty)))
+        Ok(ty) => {
+            errors.extend(state.take_errors().iter().map(|e| e.to_string()));
+            if let Err(e) = state.resolve_constraints() {
+                errors.push(e.to_string());
+            }
+            if errors.is_empty() {
+                Typing::Type(core_type(&state.apply_subst(&ty)))
+            } else {
+                Typing::Reject
+            }
         }
-        _ => Typing::Reject,
+        Err(e) => {
+            errors.push(e.to_string());
+            Typing::Reject
+        }
     };
+    // The evidence: the types inty gave the program's expressions, and its
+    // errors (inference may stop before recording the types that show it).
+    let mut shown: Vec<String> = state
+        .expr_types
+        .take()
+        .unwrap_or_default()
+        .values()
+        .map(|ty| format!("{}", state.flatten_type(ty)))
+        .collect();
+    shown.extend(errors);
     let mut features = Features::new();
-    for ty in state.expr_types.take().unwrap_or_default().values() {
-        let ty = state.flatten_type(ty);
-        if format!("{}", ty).contains('μ') {
+    for text in &shown {
+        if text.contains('μ') {
             features.insert("recursive types");
         }
-        if core_type(&ty).contains("union(") {
+        if text.contains(" | ") {
             features.insert("unions");
+        }
+        if text.contains("never") {
+            features.insert("never");
         }
     }
     (typing, features)
@@ -486,17 +626,22 @@ fn number_wire(n: f64) -> String {
     format!("num {}", n.to_bits())
 }
 
+fn value_wire(v: Value) -> String {
+    match v {
+        Value::Number(n) => number_wire(n),
+        Value::String(s) => format!("str s:{}", s),
+        Value::Boolean(v) => format!("bool {}", v),
+        Value::Undefined => "undef".into(),
+        Value::Null => "null".into(),
+        Value::Closure(_) | Value::Builtin(_) => "fun".into(),
+        other => format!("other {}", other),
+    }
+}
+
 fn inty_run(program: &inty::ast::Program) -> Run {
     match run_to_end_with_fuel(program, 1_500) {
-        Ok(v) => Run::Value(match v {
-            Value::Number(n) => number_wire(n),
-            Value::String(s) => format!("str s:{}", s),
-            Value::Boolean(v) => format!("bool {}", v),
-            Value::Undefined => "undef".into(),
-            Value::Null => "null".into(),
-            Value::Closure(_) | Value::Builtin(_) => "fun".into(),
-            other => format!("other {}", other),
-        }),
+        Ok(v) => Run::Value(value_wire(v)),
+        Err(Stuck::UncaughtThrow(v)) => Run::Thrown(value_wire(v)),
         Err(Stuck::FuelExhausted) => Run::Timeout,
         Err(Stuck::NotImplemented(_)) => Run::Unsupported,
         Err(Stuck::UndefinedVariable(_)) => Run::Stuck("undefinedVariable".into()),
@@ -515,14 +660,19 @@ fn parse_model_line(line: &str) -> (Typing, Run) {
         "ambiguous" => Typing::Ambiguous,
         t => Typing::Type(t.strip_prefix("type ").expect(line).to_string()),
     };
+    // Canonicalise NaN the same way as inty's side.
+    let value = |v: &str| match v.strip_prefix("num ") {
+        Some(bits) => number_wire(f64::from_bits(bits.parse().expect(line))),
+        None => v.to_string(),
+    };
     let run = if run == "timeout" {
         Run::Timeout
     } else if let Some(v) = run.strip_prefix("value ") {
-        // Canonicalise NaN the same way as inty's side.
-        Run::Value(match v.strip_prefix("num ") {
-            Some(bits) => number_wire(f64::from_bits(bits.parse().expect(line))),
-            None => v.to_string(),
-        })
+        Run::Value(value(v))
+    } else if let Some(v) = run.strip_prefix("thrown ") {
+        Run::Thrown(value(v))
+    } else if let Some(v) = run.strip_prefix("returned ") {
+        Run::Returned(value(v))
     } else {
         Run::Stuck(run.strip_prefix("stuck ").expect(line).to_string())
     };
@@ -537,6 +687,9 @@ fn run_model(model: &PathBuf, programs: &[Core]) -> Vec<(Typing, Run)> {
         .spawn()
         .expect("start inty-model");
     let input: String = programs.iter().map(|p| wire(p) + "\n").collect();
+    if let Some(path) = std::env::var_os("INTY_DIFF_DUMP") {
+        std::fs::write(path, &input).unwrap();
+    }
     let mut stdin = child.stdin.take().unwrap();
     let writer = std::thread::spawn(move || {
         stdin.write_all(input.as_bytes()).unwrap();
@@ -594,6 +747,16 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Reject) if features.contains("recursive types") => {
             Some("equi-recursive types")
         }
+        // inty types what never returns (a function that only throws)
+        // `never`, the empty union, which unifies with nothing else and
+        // can't be called, as in TypeScript; the model leaves it a free
+        // type variable.
+        (Typing::Reject, Typing::Type(_) | Typing::Ambiguous) if features.contains("never") => {
+            Some("never (a function that only throws)")
+        }
+        (Typing::Type(t), Typing::Type(_)) if t == "never" => {
+            Some("never (a function that only throws)")
+        }
         // Roadmap step 7, the other way: the model folds `Int` into
         // `number`, but in inty `Int ≤ Number` holds for values only, so
         // `(a) => Int` and `(b) => Number` don't join. Evidence: inty
@@ -625,6 +788,7 @@ fn inty_agrees_with_the_lean_model() {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     let mut gen = Gen {
         rng: Rng((z ^ (z >> 31)) | 1),
+        funcs: Vec::new(),
     };
     let programs: Vec<Core> = (0..cases).map(|_| gen.program()).collect();
     let answers = run_model(&model, &programs);
@@ -691,14 +855,18 @@ fn inty_agrees_with_the_lean_model() {
             ));
         }
         // Semantics: both finished, so they must agree.
-        let finished = |r: &Run| matches!(r, Run::Value(_) | Run::Stuck(_));
+        let finished = |r: &Run| matches!(r, Run::Value(_) | Run::Stuck(_) | Run::Thrown(_));
         if finished(&run) && finished(&model_run) && run != model_run {
             failures.push(report("the interpreters disagree"));
         }
-        // Typing.
-        if typing != model_typing
-            && (accepted || model_accepted || model_typing == Typing::Ambiguous)
-        {
+        // Typing. inty's `never` (what doesn't complete) is the model's
+        // unconstrained type variable.
+        let same = typing == model_typing
+            || (typing == Typing::Type("never".into())
+                && model_typing == Typing::Type("var".into()))
+            // A program ending in a statement: compare acceptance only.
+            || (ends_in_statement(core) && accepted && model_accepted);
+        if !same && (accepted || model_accepted || model_typing == Typing::Ambiguous) {
             match known_divergence(&typing, &features, &model_typing) {
                 Some(why) => {
                     let entry = known.entry(why).or_insert((0, report(why)));

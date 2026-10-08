@@ -24,7 +24,7 @@ def double : Expr :=
   .let_ (.func (.binop .plus (.var 0) (.var 0))) (.app (.var 0) (str "ab"))
 
 -- One derivation types `double` monomorphically, at `String → String`.
-example : HasType [] [] double .string :=
+example : HasType [] [] none double .string :=
   .let_mono (τ₁ := .arrow .string .string)
     (.func (.binop (.plus (.inl .string)) (.var_mono rfl) (.var_mono rfl)))
     (.app (.var_mono rfl) (.lit .string))
@@ -33,7 +33,7 @@ example : HasType [] [] double .string :=
 
 /-- `+` is overloaded, but each use picks one instance: the same function body
 also types at `Number`. -/
-example : HasType [] [] (.func (.binop .plus (.var 0) (.var 0)))
+example : HasType [] [] none (.func (.binop .plus (.var 0) (.var 0)))
     (.arrow .number .number) :=
   .func (.binop (.plus (.inl .number)) (.var_mono rfl) (.var_mono rfl))
 
@@ -48,7 +48,7 @@ def polyId : Expr :=
 def idScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0), []⟩
 
 -- `id` is used at `Number → Number` and at `String → String`.
-example : HasType [] [] polyId .string :=
+example : HasType [] [] none polyId .string :=
   .let_ idScheme [] (fun _ _ => .func (.var_mono rfl)) (.inr .func)
     (.let_mono
       (.app (.var (s := idScheme) (τs := [.number]) rfl rfl nofun) (.lit .number))
@@ -68,7 +68,7 @@ def polyDouble : Expr :=
 def doubleScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0), [.bound 0]⟩
 
 -- The body is typed assuming `Plus α`; each use establishes it.
-example : HasType [] [] polyDouble .string :=
+example : HasType [] [] none polyDouble .string :=
   .let_ doubleScheme []
     (fun m _ => .func (.binop (.plus (.inr (by simp [Scheme.openPlus, Scheme.instPlus,
       doubleScheme, varBlock, PTy.inst]))) (.var_mono rfl) (.var_mono rfl)))
@@ -94,7 +94,7 @@ def countdown : Expr :=
     (str "done")))
     (num 3)
 
-example : HasType [] [] countdown .string :=
+example : HasType [] [] none countdown .string :=
   .app
     (.func (.cond (.var_mono rfl)
       (.app (.var_mono rfl) (.binop .minus (.var_mono rfl) (.lit .number)))
@@ -108,7 +108,7 @@ example : HasType [] [] countdown .string :=
 /-- `1 + "a"`: inty rejects it, and the semantics gets stuck on it. -/
 def mixedPlus : Expr := .binop .plus (num 1) (str "a")
 
-example : ¬ HasType [] [] mixedPlus τ := by
+example : ¬ HasType [] [] none mixedPlus τ := by
   intro h
   cases h with
   | binop hop h₁ h₂ =>
@@ -119,7 +119,7 @@ example : ¬ HasType [] [] mixedPlus τ := by
 
 /-- A test may have any type and is read by truthiness:
 `"" ? 1 : 2` is `2`. -/
-example : HasType [] [] (.cond (str "") (num 1) (num 2)) .number :=
+example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
   .cond (.lit .string) (.lit .number) (.lit .number)
 
 #guard match eval 10 [] (.cond (str "") (num 1) (num 2)) with
@@ -142,7 +142,7 @@ example : HasType [] [] (.cond (str "") (num 1) (num 2)) .number :=
 #guard inferProgram countdown == some .string
 #guard inferProgram mixedPlus == none
 -- `id`'s scheme quantifies its one variable once: `∀ α. α → α`.
-#guard (letScheme (.func (.var 0)) [] (.arrow (.var 0) (.var 0)) []).1.arity == 1
+#guard (letScheme (.func (.var 0)) [] none (.arrow (.var 0) (.var 0)) []).1.arity == 1
 -- `id` alone gets the most general type, `α → α`.
 #guard inferProgram (.func (.var 0)) == some (.arrow (.var 0) (.var 0))
 -- A `const` generalises `double` with its `Plus` constraint, so it is used
@@ -153,6 +153,28 @@ example : HasType [] [] (.cond (str "") (num 1) (num 2)) .number :=
 -- At the top level, nothing resolves the constraint of an unused `+`.
 #guard inferProgram (.func (.binop .plus (.var 0) (.var 0))) == none
 
-example : HasType [] [] polyId .string := inferProgram_sound (by decide)
+example : HasType [] [] none polyId .string := inferProgram_sound (by decide)
+
+/-! ## Statements -/
+
+/-- `function f(x) { if (x) { return "pos"; } else { throw x; } }`, applied
+to `1`: an early `return` and a `throw`, each standing for any type. -/
+def early : Expr :=
+  .app (.func (.cond (.var 0) (.ret (str "pos")) (.throw_ (.var 0)))) (num 1)
+
+example : HasType [] [] none early .string :=
+  .app (.func (.cond (.var_mono rfl) (.ret (.lit .string)) (.throw_ (.var_mono rfl))))
+    (.lit .number)
+
+#guard isString "pos" (eval 10 [] early)
+#guard inferProgram early == some .string
+-- `0` takes the other branch: the `throw` reaches the top.
+#guard match eval 10 [] (.app (.func (.cond (.var 0) (.ret (str "pos")) (.throw_ (.var 0))))
+    (num 0)) with
+  | .thrown (.number n) => n == 0
+  | _ => false
+
+/-- `return` outside a function is rejected. -/
+example : ¬ HasType [] [] none (.ret (num 1)) τ := nofun
 
 end Inty.Examples

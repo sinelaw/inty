@@ -19,8 +19,8 @@ theorem Entails.subst (σ : Subst) (h : Entails C τ) :
     Entails (C.map (·.subst σ)) (τ.subst σ) :=
   h.elim (fun h => .inl (h.subst σ)) (fun h => .inr (List.mem_map_of_mem h))
 
-theorem HasType.subst (σ : Subst) (h : HasType C Γ e τ) :
-    HasType (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) e (τ.subst σ) := by
+theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
+    HasType (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) := by
   induction h with
   | lit hl => cases hl <;> exact .lit (by constructor)
   | var hi hlen hc =>
@@ -48,5 +48,8 @@ theorem HasType.subst (σ : Subst) (h : HasType C Γ e τ) :
     cases hop with
     | plus hc => exact .binop (.plus (hc.subst σ)) ih₁ ih₂
     | minus => exact .binop .minus ih₁ ih₂
+  | ret _ ih => exact .ret ih
+  | throw_ _ ih => exact .throw_ ih
+  | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
 
 end Inty

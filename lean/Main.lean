@@ -7,7 +7,9 @@ partial def loop (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) : IO Unit := do
   if line.isEmpty then return
   let line := line.trimRight
   unless line.isEmpty do
-    stdout.putStrLn (Inty.Wire.verdict 10000 line)
+    -- Fuel bounds recursion depth. Kept low: a recursive call that
+    -- doubles a string (`f(x + x)`) grows it exponentially in the depth.
+    stdout.putStrLn (Inty.Wire.verdict 40 line)
     stdout.flush
   loop stdin stdout
 

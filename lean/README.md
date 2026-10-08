@@ -21,12 +21,19 @@ pins the version.
 
 `Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
 `τ`, `Plus` assumptions `C` that hold, context `Γ` and environment `env`
-matching `Γ`, and every amount of fuel,
+matching `Γ`, enclosing function's return type `R`, and every amount of
+fuel,
 
 ```
-HasType C Γ e τ → Holds C → EnvTy env Γ →
-  eval fuel env e = timeout ∨ ∃ v, eval fuel env e = ok v ∧ ValTy v τ
+HasType C Γ R e τ → Holds C → EnvTy env Γ →
+  eval fuel env e = timeout ∨ (∃ v, eval fuel env e = ok v ∧ ValTy v τ) ∨
+  (∃ v, eval fuel env e = thrown v) ∨
+  (∃ τr v, R = some τr ∧ eval fuel env e = returned v ∧ ValTy v τr)
 ```
+
+That is CakeML's shape of theorem (Owens et al., "Functional Big-step
+Semantics", ESOP 2016): for every clock, a value of the right type, an
+exception, or out of time, and never stuck.
 
 Its corollary `Inty.never_stuck` says a closed well-typed program never
 evaluates to `stuck`. That is the property `src/meta/soundness.rs` samples
@@ -57,7 +64,8 @@ is not proved yet.
 |---|---|
 | `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `arrow`, type variables | `types::Type` (an `arrow` is the call signature of a callable row; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named one-parameter functions (recursive), application, `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-` | `ast::Expr` |
+| `Expr`: literals, variables, named one-parameter functions (recursive), application, `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences | `ast::Expr`, `ast::Stmt` |
+| `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`; `Result.bind` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction) | `is_syntactic_value`, `src/infer/features/bindings.rs` |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
@@ -173,8 +181,12 @@ cheapest proofs first and the hardest last.
    completeness needs freshness invariants and a rigid-variable set), as is
    CakeML's verified type inference.
 3. ~~**Differential testing.**~~ Done; see below.
-4. **Statements and abrupt completion.** `return`, `throw`, `break` and loops
-   as extra `Result` forms, as `dynamics` has them.
+4. ~~**Statements and abrupt completion.**~~ Done for `return`, `throw` and
+   sequencing: `returned` and `thrown` results, the enclosing function's
+   return type in the judgement, and `if` statements as conditionals in
+   statement position. A `const` doesn't generalise a variable the return
+   type mentions. Loops and `break` come with mutable state (step 6), where
+   they can do something.
 5. **Records and row polymorphism.** Record types, the `HasProp`
    constraint, and method chains through `this`. Garrigue's Coq development
    of ML structural polymorphism (record and variant constraints in a
@@ -244,6 +256,7 @@ disagreements in typing all fall into features the model lacks:
 | Divergence | inty | model | Roadmap |
 |---|---|---|---|
 | Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 7 |
+| A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 7 |
 | Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 7 |
 | Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 10 |
 | `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 7 |

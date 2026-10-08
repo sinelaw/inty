@@ -48,18 +48,20 @@ inductive BinOpTy (C : List Ty) : BinOp → Ty → Ty → Ty → Prop where
   | plus : Entails C τ → BinOpTy C .plus τ τ τ
   | minus : BinOpTy C .minus .number .number .number
 
-/-- The typing judgement: under the `Plus` assumptions `C` and the context
-`Γ`, `e` has type `τ`. -/
-inductive HasType : List Ty → Ctx → Expr → Ty → Prop where
-  | lit : LitTy l τ → HasType C Γ (.lit l) τ
+/-- The typing judgement: under the `Plus` assumptions `C`, the context `Γ`
+and the enclosing function's return type `R` (`none` at the top level),
+`e` has type `τ`. -/
+inductive HasType : List Ty → Ctx → Option Ty → Expr → Ty → Prop where
+  | lit : LitTy l τ → HasType C Γ R (.lit l) τ
   /-- A variable has any instance of its scheme whose constraints hold. -/
   | var : Γ[i]? = some s → τs.length = s.arity →
       (∀ c ∈ s.instPlus τs, Entails C c) →
-      HasType C Γ (.var i) (s.inst τs)
-  | func : HasType C (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) body τ₂ →
-      HasType C Γ (.func body) (.arrow τ₁ τ₂)
-  | app : HasType C Γ f (.arrow τ₁ τ₂) → HasType C Γ a τ₁ →
-      HasType C Γ (.app f a) τ₂
+      HasType C Γ R (.var i) (s.inst τs)
+  /-- A function's body returns `τ₂`, by `return` or as its value. -/
+  | func : HasType C (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) (some τ₂) body τ₂ →
+      HasType C Γ R (.func body) (.arrow τ₁ τ₂)
+  | app : HasType C Γ R f (.arrow τ₁ τ₂) → HasType C Γ R a τ₁ →
+      HasType C Γ R (.app f a) τ₂
   /-- `const x = e₁; e₂` gives `x` a scheme `s`. The first premise says `e₁`
   has every opening of `s` at fresh type variables, assuming the opened
   constraints: `m` ranges over all starting points above a finite set `L`,
@@ -69,27 +71,33 @@ inductive HasType : List Ty → Ctx → Expr → Ty → Prop where
   only a syntactic value generalises; anything else gets a scheme with no
   quantified variables and no constraints. -/
   | let_ (s : Scheme) (L : List Nat) :
-      (∀ m, (∀ a ∈ L, a < m) → HasType (C ++ s.openPlus m) Γ e₁ (s.open m)) →
+      (∀ m, (∀ a ∈ L, a < m) → HasType (C ++ s.openPlus m) Γ R e₁ (s.open m)) →
       (s.arity = 0 ∧ s.plus = []) ∨ e₁.IsValue →
-      HasType C (s :: Γ) e₂ τ₂ →
-      HasType C Γ (.let_ e₁ e₂) τ₂
+      HasType C (s :: Γ) R e₂ τ₂ →
+      HasType C Γ R (.let_ e₁ e₂) τ₂
   /-- Both branches have one type, as in Hindley–Milner: inty doesn't guess
   that disagreeing branches form a union. -/
-  | cond : HasType C Γ c τc → HasType C Γ t τ → HasType C Γ e τ →
-      HasType C Γ (.cond c t e) τ
-  | unop : UnOpTy op τ₁ τ → HasType C Γ e τ₁ →
-      HasType C Γ (.unop op e) τ
-  | binop : BinOpTy C op τ₁ τ₂ τ → HasType C Γ e₁ τ₁ → HasType C Γ e₂ τ₂ →
-      HasType C Γ (.binop op e₁ e₂) τ
+  | cond : HasType C Γ R c τc → HasType C Γ R t τ → HasType C Γ R e τ →
+      HasType C Γ R (.cond c t e) τ
+  | unop : UnOpTy op τ₁ τ → HasType C Γ R e τ₁ →
+      HasType C Γ R (.unop op e) τ
+  | binop : BinOpTy C op τ₁ τ₂ τ → HasType C Γ R e₁ τ₁ → HasType C Γ R e₂ τ₂ →
+      HasType C Γ R (.binop op e₁ e₂) τ
+  /-- `return e;` gives the enclosing function's return type; it doesn't
+  complete, so it may stand for any type. -/
+  | ret : HasType C Γ (some τr) e τr → HasType C Γ (some τr) (.ret e) τ
+  /-- `throw e;` throws any value and doesn't complete. -/
+  | throw_ : HasType C Γ R e τe → HasType C Γ R (.throw_ e) τ
+  | seq : HasType C Γ R e₁ τ₁ → HasType C Γ R e₂ τ → HasType C Γ R (.seq e₁ e₂) τ
 
 /-- A variable whose scheme is a monotype has that type. -/
 theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :
-    HasType C Γ (.var i) τ := by
-  simpa using HasType.var (C := C) (τs := []) h rfl (by simp [Scheme.instPlus, Scheme.mono])
+    HasType C Γ R (.var i) τ := by
+  simpa using HasType.var (C := C) (R := R) (τs := []) h rfl (by simp [Scheme.instPlus, Scheme.mono])
 
 /-- A monomorphic `const`. -/
-theorem HasType.let_mono (h₁ : HasType C Γ e₁ τ₁)
-    (h₂ : HasType C (.mono τ₁ :: Γ) e₂ τ₂) : HasType C Γ (.let_ e₁ e₂) τ₂ :=
+theorem HasType.let_mono (h₁ : HasType C Γ R e₁ τ₁)
+    (h₂ : HasType C (.mono τ₁ :: Γ) R e₂ τ₂) : HasType C Γ R (.let_ e₁ e₂) τ₂ :=
   .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPlus,
     Scheme.instPlus, Scheme.mono, Scheme.inst] using h₁) (.inl ⟨rfl, rfl⟩) h₂
 

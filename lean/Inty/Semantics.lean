@@ -38,11 +38,16 @@ inductive Stuck where
   deriving DecidableEq, Repr
 
 /-- The outcome of running with a given amount of fuel. `timeout` is
-`Stuck::FuelExhausted`, which is not a soundness violation. -/
+`Stuck::FuelExhausted`, which is not a soundness violation. `returned` and
+`thrown` are abrupt completions, as `dynamics::StmtOutcome::{Return,
+Throw}`: a call turns a `returned` into its value, and a `thrown` propagates
+to the top, where `dynamics` reports it as `Stuck::UncaughtThrow`. -/
 inductive Result where
   | ok (v : Value)
   | stuck (s : Stuck)
   | timeout
+  | returned (v : Value)
+  | thrown (v : Value)
   deriving Repr
 
 /-- JavaScript truthiness, as `dynamics::Value::truthy`. -/
@@ -81,6 +86,27 @@ def BinOp.eval : BinOp → Value → Value → Result
   | .minus, .number a, .number b => .ok (.number (a - b))
   | _, _, _ => .stuck .typeMismatch
 
+/-- Continue with `k` on a value; any other outcome (stuck, out of fuel,
+returned, thrown) passes through unchanged. -/
+def Result.bind (r : Result) (k : Value → Result) : Result :=
+  match r with
+  | .ok v => k v
+  | r => r
+
+/-- A call's result: a `return` from the body is the call's value. -/
+def Result.catchReturn : Result → Result
+  | .returned v => .ok v
+  | r => r
+
+@[simp] theorem Result.ok_bind (v : Value) (k : Value → Result) : (Result.ok v).bind k = k v := rfl
+@[simp] theorem Result.stuck_bind (s : Stuck) (k : Value → Result) :
+    (Result.stuck s).bind k = .stuck s := rfl
+@[simp] theorem Result.timeout_bind (k : Value → Result) : Result.timeout.bind k = .timeout := rfl
+@[simp] theorem Result.returned_bind (v : Value) (k : Value → Result) :
+    (Result.returned v).bind k = .returned v := rfl
+@[simp] theorem Result.thrown_bind (v : Value) (k : Value → Result) :
+    (Result.thrown v).bind k = .thrown v := rfl
+
 /-- Evaluate with `fuel` steps of recursion. -/
 def eval : Nat → Env → Expr → Result
   | 0, _, _ => .timeout
@@ -95,33 +121,19 @@ def eval : Nat → Env → Expr → Result
     -- The callee, then the argument, then the call, as in `dynamics`: a
     -- callee that isn't a function is found out only at the call.
     | .app f a =>
-      match eval fuel env f with
-      | .ok vf =>
-        match eval fuel env a with
-        | .ok va =>
-          match vf with
-          | .closure cenv body => eval fuel (va :: vf :: cenv) body
-          | _ => .stuck .notCallable
-        | r => r
-      | r => r
-    | .let_ e₁ e₂ =>
-      match eval fuel env e₁ with
-      | .ok v => eval fuel (v :: env) e₂
-      | r => r
+      (eval fuel env f).bind fun vf =>
+      (eval fuel env a).bind fun va =>
+      match vf with
+      | .closure cenv body => (eval fuel (va :: vf :: cenv) body).catchReturn
+      | _ => .stuck .notCallable
+    | .let_ e₁ e₂ => (eval fuel env e₁).bind fun v => eval fuel (v :: env) e₂
     | .cond c t e =>
-      match eval fuel env c with
-      | .ok v => if v.truthy then eval fuel env t else eval fuel env e
-      | r => r
-    | .unop op e =>
-      match eval fuel env e with
-      | .ok v => op.eval v
-      | r => r
+      (eval fuel env c).bind fun v => if v.truthy then eval fuel env t else eval fuel env e
+    | .unop op e => (eval fuel env e).bind op.eval
     | .binop op e₁ e₂ =>
-      match eval fuel env e₁ with
-      | .ok v₁ =>
-        match eval fuel env e₂ with
-        | .ok v₂ => op.eval v₁ v₂
-        | r => r
-      | r => r
+      (eval fuel env e₁).bind fun v₁ => (eval fuel env e₂).bind fun v₂ => op.eval v₁ v₂
+    | .ret e => (eval fuel env e).bind .returned
+    | .throw_ e => (eval fuel env e).bind .thrown
+    | .seq e₁ e₂ => (eval fuel env e₁).bind fun _ => eval fuel env e₂
 
 end Inty
