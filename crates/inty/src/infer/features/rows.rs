@@ -444,7 +444,15 @@ impl InferState {
             let mut chosen: Option<Type> = None;
             let mut count = 0;
             for m in members {
-                let m_resolved = self.zonk(m);
+                let mut m_resolved = self.zonk(m);
+                // A recursive alias arm (`B | Null`) is its unrolling.
+                if let Type::Named(id, args) = &m_resolved {
+                    if !self.is_nominal_type(*id) {
+                        if let Some(unrolled) = self.unroll_named(*id, args) {
+                            m_resolved = unrolled;
+                        }
+                    }
+                }
                 if let Type::Row(row) = &m_resolved {
                     if row.is_closed()
                         && row

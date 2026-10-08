@@ -1313,8 +1313,11 @@ impl InferState {
             return Ok(());
         }
 
-        // Rule 2b (S-UnionR): pick a union arm.
-        if let Type::Union(members) = &sup {
+        // Rule 2b (S-UnionR): pick a union arm — for a value, not inside
+        // an array or object (`subsume_in_place`): a `String[]` read as a
+        // `(String | Number)[]` could be pushed a number, and the
+        // `String[]` alias would then hold one.
+        if let (Type::Union(members), 0) = (&sup, self.subsume_in_place) {
             // A number variable (an integral literal's type, an operand)
             // can only be one of the number arms.
             let numeric_var = matches!(sub, Type::Var(_)) && self.is_numeric(&sub);

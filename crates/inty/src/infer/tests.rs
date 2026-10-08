@@ -4464,3 +4464,33 @@ fn const_function_statement_yields_undefined() {
             .unwrap();
     assert_eq!(state.apply_subst(&ty), Type::Undefined);
 }
+
+#[test]
+fn mutable_array_is_invariant_in_its_element() {
+    // A `String[]` read as a `(String | Number)[]` could be pushed a
+    // number through the wider alias, and the `String[]` would hold it.
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** function f(list: (String | Number)[]) => Undefined */ \
+        function f(list) { list.push(420); } \
+        f(xs);"
+    )
+    .is_err());
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** const ys: (String | Number)[] */ \
+        const ys = xs;"
+    )
+    .is_err());
+    // A fresh literal's elements are values, and fit the union.
+    assert!(infer_program_with_state(
+        "\
+        /** const ys: (String | Number)[] */ \
+        const ys = ['hi', 1];"
+    )
+    .is_ok());
+}

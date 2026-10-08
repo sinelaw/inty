@@ -1238,10 +1238,15 @@ impl InferState {
             if elements.iter().all(|e| e.is_some()) {
                 for e in elements.iter().flatten() {
                     match e {
-                        // `...xs`: an array whose elements fit.
+                        // `...xs`: an array whose elements fit. They are
+                        // copied into the new array, so each fits as a
+                        // value (`Int[]` spreads into `(Number | String)[]`).
                         Expr::Spread { argument, span } => {
                             let arg_ty = self.infer_expr(env, argument)?;
-                            self.subsume(*span, &arg_ty, &expected)?;
+                            match self.zonk(&arg_ty) {
+                                Type::Array(arg_elem) => self.subsume(*span, &arg_elem, elem)?,
+                                _ => self.subsume(*span, &arg_ty, &expected)?,
+                            }
                         }
                         e => {
                             self.check_expr(env, e, elem)?;
