@@ -4466,7 +4466,7 @@ fn const_function_statement_yields_undefined() {
 }
 
 #[test]
-fn mutable_array_is_invariant_in_its_element() {
+fn mutable_containers_are_invariant() {
     // A `String[]` read as a `(String | Number)[]` could be pushed a
     // number through the wider alias, and the `String[]` would hold it.
     assert!(infer_program_with_state(
@@ -4486,11 +4486,34 @@ fn mutable_array_is_invariant_in_its_element() {
         const ys = xs;"
     )
     .is_err());
-    // A fresh literal's elements are values, and fit the union.
+    // A literal-typed array is not a `String[]`: pushing `"zzz"` through
+    // the alias would leave the `("a" | "b")[]` holding it.
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: (\"a\" | \"b\")[] */ \
+        const xs = [\"a\"]; \
+        /** const ys: String[] */ \
+        const ys = xs;"
+    )
+    .is_err());
+    // A record field is mutable too: `p.x = 1` would write into `o`.
+    assert!(infer_program_with_state(
+        "\
+        const o = { x: \"a\" }; \
+        /** const p: { x: String | Number } */ \
+        const p = o;"
+    )
+    .is_err());
+    // A fresh literal's elements and fields are values, and fit.
     assert!(infer_program_with_state(
         "\
         /** const ys: (String | Number)[] */ \
-        const ys = ['hi', 1];"
+        const ys = ['hi', 1]; \
+        /** const p: { x: String | Number } */ \
+        const p = { x: \"a\" }; \
+        /** type Shape = { kind: \"circle\", r: Number } | { kind: \"sq\", s: Number } */ \
+        /** const shapes: Shape[] */ \
+        const shapes = [{ kind: \"circle\", r: 1 }, { kind: \"sq\", s: 2 }];"
     )
     .is_ok());
 }

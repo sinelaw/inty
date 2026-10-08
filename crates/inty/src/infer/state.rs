@@ -351,9 +351,6 @@ pub struct InferState {
     /// Per return frame, the annotated return type `return`s are
     /// checked against (instead of being joined), if there is one.
     pub(in crate::infer) return_expected_stack: Vec<Option<Type>>,
-    /// How many array elements / object fields `subsume` is inside:
-    /// `Int ≤ Number` only holds outside them (see S-IntNum).
-    pub(in crate::infer) subsume_in_place: u32,
     /// Variables a numeric constraint (`Num`, `NumLit`, `Arith`) is on:
     /// their *kind* is "number", so unification refuses to bind one to
     /// anything but `Int`, `Number` or another variable (which inherits
@@ -523,7 +520,6 @@ impl InferState {
             current_annotation_span: None,
             return_value_stack: Vec::new(),
             return_expected_stack: Vec::new(),
-            subsume_in_place: 0,
             numeric_vars: Default::default(),
             numeric_log: Vec::new(),
             constraint_removals: 0,
@@ -1179,9 +1175,14 @@ impl InferState {
     ///    first is order-dependent and a known footgun. Zero or two-
     ///    plus matches reports a unification error at `span`.
     ///
-    /// Other subtyping rules (function variance, deep row width
-    /// subsumption beyond what `unify_rows` already does) are left
-    /// to grow into this judgement as use cases land.
+    /// Subsumption is shallow: it applies to the value flowing, never
+    /// inside an array, record, map or set. Those are mutable, so their
+    /// contents are invariant and compared by `unify` — a `String[]`
+    /// read as a `(String | Number)[]` could be pushed a number through
+    /// that alias, and the `String[]` would then hold it (TAPL §15.5:
+    /// `Ref T` is invariant). A fresh literal still fits a wider type:
+    /// `check_expr` pushes the expected element/field types into it.
+    /// Covariance belongs only to an immutable type constructor.
     pub fn subsume(&mut self, span: Span, sub: &Type, sup: &Type) -> InferResult<()> {
         let sub = self.zonk(sub);
         let sup = self.zonk(sup);
@@ -1209,24 +1210,20 @@ impl InferState {
         // is one of them too, `Int` by default — `NumLit v`. Binding `v`
         // instead would guess (`isPunct(r)` fixing a result `r` that turns
         // out an `Int`).
-        if self.subsume_in_place == 0 {
-            match (&sub, &sup) {
-                (Type::Var(TVarName::Flex(_)), Type::Number) => {
-                    self.add_constraint(TypePred::num(sub.clone()), span);
-                    return Ok(());
-                }
-                (Type::Int, Type::Var(TVarName::Flex(_))) => {
-                    self.add_constraint(TypePred::num_lit(sup.clone()), span);
-                    return Ok(());
-                }
-                _ => {}
+        match (&sub, &sup) {
+            (Type::Var(TVarName::Flex(_)), Type::Number) => {
+                self.add_constraint(TypePred::num(sub.clone()), span);
+                return Ok(());
             }
+            (Type::Int, Type::Var(TVarName::Flex(_))) => {
+                self.add_constraint(TypePred::num_lit(sup.clone()), span);
+                return Ok(());
+            }
+            _ => {}
         }
 
-        // S-IntNum: every `Int` is a `Number` — for a value, not inside
-        // an array or object (`subsume_in_place`): an `Int[]` read as a
-        // `Number[]` could be pushed a fraction.
-        if sub == Type::Int && sup == Type::Number && self.subsume_in_place == 0 {
+        // S-IntNum: every `Int` is a `Number`.
+        if sub == Type::Int && sup == Type::Number {
             return Ok(());
         }
 
@@ -1257,51 +1254,6 @@ impl InferState {
             _ => {}
         }
 
-        // S-Row: structural row subsumption. With `Lit ≤ Base`
-        // removed from `unify`, two rows that differ only in
-        // a literal-vs-base position no longer unify directly —
-        // recurse here so e.g. `{kind: Lit("circle"), r: Lit(10)}
-        // ≤ {kind: Lit("circle"), r: Number}` succeeds via per-
-        // field subsumption.
-        if let (Type::Row(r1), Type::Row(r2)) = (&sub, &sup) {
-            if r1.is_closed()
-                && r2.is_closed()
-                && r1.props.len() == r2.props.len()
-                && r1.props.keys().eq(r2.props.keys())
-            {
-                let snap = self.snapshot_inference();
-                let mut all_ok = true;
-                self.subsume_in_place += 1;
-                for (k, sub_field) in &r1.props {
-                    let sup_field = r2.props.get(k).expect("keys checked equal");
-                    if self
-                        .quietly(|s| s.subsume(span, &sub_field.ty, &sup_field.ty))
-                        .is_err()
-                    {
-                        all_ok = false;
-                        break;
-                    }
-                }
-                self.subsume_in_place -= 1;
-                if all_ok {
-                    return Ok(());
-                }
-                self.restore_snapshot(snap);
-            }
-        }
-
-        // S-Array: covariant element subsumption.
-        if let (Type::Array(e1), Type::Array(e2)) = (&sub, &sup) {
-            let snap = self.snapshot_inference();
-            self.subsume_in_place += 1;
-            let ok = self.quietly(|s| s.subsume(span, e1, e2)).is_ok();
-            self.subsume_in_place -= 1;
-            if ok {
-                return Ok(());
-            }
-            self.restore_snapshot(snap);
-        }
-
         // Rule 2a (S-UnionL): a union value subsumes into `sup` iff
         // every arm does. Sound by definition — a value of type
         // ⋃τᵢ may be any τᵢ at runtime, so each must fit.
@@ -1313,11 +1265,8 @@ impl InferState {
             return Ok(());
         }
 
-        // Rule 2b (S-UnionR): pick a union arm — for a value, not inside
-        // an array or object (`subsume_in_place`): a `String[]` read as a
-        // `(String | Number)[]` could be pushed a number, and the
-        // `String[]` alias would then hold one.
-        if let (Type::Union(members), 0) = (&sup, self.subsume_in_place) {
+        // Rule 2b (S-UnionR): pick a union arm.
+        if let Type::Union(members) = &sup {
             // A number variable (an integral literal's type, an operand)
             // can only be one of the number arms.
             let numeric_var = matches!(sub, Type::Var(_)) && self.is_numeric(&sub);
