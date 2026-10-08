@@ -162,12 +162,12 @@ theorem infer_sound :
       simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
       refine .let_ _ [] (fun m _ => ?_) (.inr (Expr.isValue_sound hv)) he₂
       let Γ₁ := Ctx.subst o₁.σ Γ
-      let ᾱ := o₁.τ.ftv.filter (fun a => a ∉ ctxFtv Γ₁)
+      let ᾱ := (o₁.τ.ftv.filter (fun a => a ∉ ctxFtv Γ₁)).eraseDups
       let φ₀ := Subst.compose φ o₂.σ
       let ψ := renameBlock ᾱ m ++ φ₀
       have hΓ : Ctx.subst ψ Γ₁ = Ctx.subst φ₀ Γ₁ := Ctx.subst_congr (fun a ha =>
         renameBlock_append_find m _ (fun hα => by
-          simp only [ᾱ, List.mem_filter, decide_eq_true_eq] at hα; exact hα.2 ha))
+          simp only [ᾱ, List.mem_eraseDups, List.mem_filter, decide_eq_true_eq] at hα; exact hα.2 ha))
       rw [← Scheme.subst_compose, ← Ctx.subst_compose, ← hΓ,
         ← generalize_open ᾱ m φ₀, ← generalize_openPlus ᾱ m φ₀]
       refine ih₁ h₁ ψ _ (fun c hc => ?_)

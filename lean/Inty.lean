@@ -8,4 +8,5 @@ import Inty.Soundness
 import Inty.Infer
 import Inty.InferSound
 import Inty.Examples
+import Inty.Statements
 import Inty.Axioms

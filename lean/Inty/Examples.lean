@@ -141,6 +141,8 @@ example : HasType [] [] (.cond (str "") (num 1) (num 2)) .number :=
 #guard inferProgram polyId == some .string
 #guard inferProgram countdown == some .string
 #guard inferProgram mixedPlus == none
+-- `id`'s scheme quantifies its one variable once: `∀ α. α → α`.
+#guard (letScheme (.func (.var 0)) [] (.arrow (.var 0) (.var 0)) []).1.arity == 1
 -- `id` alone gets the most general type, `α → α`.
 #guard inferProgram (.func (.var 0)) == some (.arrow (.var 0) (.var 0))
 -- A `const` generalises `double` with its `Plus` constraint, so it is used

@@ -83,9 +83,9 @@ These choices are meant to hold up as the calculus grows.
   `stuck`. Terms are never substituted into, so there are no term
   substitution lemmas.
   Running out of fuel is distinct from getting stuck, so the soundness
-  theorem holds even for diverging programs. The approach extends to mutable
-  state (thread a store, and type it with a store typing that only grows),
-  which inty's objects and `let` cells need.
+  theorem holds even for diverging programs. Amin and Rompf extend the
+  approach to mutable references with a syntactic store typing (§4.1), which
+  inty's objects and `let` cells need; see roadmap step 6 for what inty adds.
 - **The interpreter is executable.** `eval` is an ordinary function, so the
   model can serve as a test oracle against the Rust implementation, as
   Cedar's Lean model does for Cedar's Rust code (differential random
@@ -104,8 +104,9 @@ These choices are meant to hold up as the calculus grows.
   completeness is next.
 - **Values are typed by a value-typing relation** (`ValTy`): a closure has
   type `τ₁ → τ₂` when its body is well typed in a context its captured
-  environment satisfies. Once recursive types arrive, `ValTy` is planned to
-  become a step-indexed logical relation.
+  environment satisfies. It is inductive, not a logical relation, so it
+  needs no step indices; a switch to semantic typing (as the occurrence
+  typing paper makes) would bring them.
 - **Inference is proved sound without freshness invariants.** The theorem
   says the inferred type is valid under the inferred substitution and any
   further substitution that resolves the pending `Plus` constraints. Stated
@@ -147,11 +148,37 @@ cheapest proofs first and the hardest last.
    lemma. A value in the environment has every instance of its variable's
    scheme whose constraints hold. Schemes carry `Plus` constraints.
 2. **Inference.** Soundness is done: Algorithm W, executable, proved sound
-   against `HasType`. What remains is completeness with principal types,
-   which needs a termination proof for unification in place of its fuel,
-   plus the invariant that inference's fresh variables really are fresh.
-   [fhm](https://github.com/Arrow7000/fhm) is a Lean 4 template for this,
-   including SCC grouping of recursive bindings (`docs/scc-inference.md`).
+   against `HasType`. Completeness needs three decisions first:
+   - **Ambiguous constraints.** `HasType` accepts `!(function (y) { return
+     y + y; })` at both `Number` and `String`, while `inferProgram` rejects
+     it (a `Plus` constraint nothing resolves) and the Rust checker accepts
+     it. Either default, as Rust does for `Num`, or make such programs
+     untypable in the spec, as CakeML does to keep principal types.
+     Completeness is then stated for constrained types: the inferred type,
+     with its pending constraints, has every valid type as a solved
+     instance.
+   - **Well-scoped schemes.** A scheme may mention `bound i` past its arity
+     (instantiated as `undefined`). Harmless for soundness, but "more
+     general than" should range over well-scoped schemes only, by a
+     well-formedness predicate or by construction.
+   - **Termination of unification.** Its fuel counts recursion depth, so
+     it fails on unifiable types nested about 1000 deep. fhm's measure
+     (number of variables, then size) proves termination, but a definition
+     by well-founded recursion doesn't reduce in the kernel, so the
+     `by decide` example would move to `#guard`. Rows allocate fresh
+     variables during unification, which that measure doesn't cover.
+   [fhm](https://github.com/Arrow7000/fhm) is the Lean 4 template (its
+   completeness needs freshness invariants and a rigid-variable set), as is
+   CakeML's verified type inference.
+3. **Differential testing**, next. A compiled `lean_exe` (interpreted
+   `#eval` is too slow for large programs) reads a serialised core AST and
+   prints the checker's and interpreter's verdicts; the Rust side lowers the
+   programs `src/meta/soundness.rs` generates and compares acceptance,
+   getting stuck, and the result's type. First prove that more fuel never
+   changes a result, so the Lean verdict doesn't depend on the fuel chosen.
+   Fuel is counted differently (recursion depth here, a global step counter
+   in `dynamics`), so a timeout on either side is not a mismatch. Generate
+   programs adversarially too, not only well-typed ones.
 3. **Differential testing.** A `lean_exe` that reads a serialised core AST
    and prints the checker's and interpreter's verdicts. The Rust side lowers
    the programs `src/meta/soundness.rs` generates and compares. Fuel is
@@ -159,10 +186,19 @@ cheapest proofs first and the hardest last.
    `dynamics`), so a timeout on either side is not a mismatch.
 4. **Statements and abrupt completion.** `return`, `throw`, `break` and loops
    as extra `Result` forms, as `dynamics` has them.
-5. **Records and row polymorphism.** Record types with Rémy-style row
-   variables, the `HasProp` constraint, and method chains through `this`.
-6. **Mutable state.** A store threaded through `eval`, `let` cells and
-   object fields, and a store typing that only grows.
+5. **Records and row polymorphism.** Record types, the `HasProp`
+   constraint, and method chains through `this`. Garrigue's Coq development
+   of ML structural polymorphism (record and variant constraints in a
+   kinding environment, recursive types through kinds rather than μ-binders,
+   inference proved sound and principal with cofinite quantification) fits
+   inty's `a has {name: b}` better than Rémy rows over μ-types.
+6. **Mutable state.** A store threaded through `eval`, typed by a syntactic
+   store typing that only grows (Amin and Rompf §4.1). inty also generalises
+   `var` and `let` bindings and checks a later assignment against the
+   binding's scheme, with its variables rigid (`id = function (x) { return
+   x - 1; }` is rejected for a polymorphic `id`). So a cell's store type is a
+   scheme, the assignment rule quantifies over rigid variables, and `Ty`
+   needs a notion of rigid variable.
 7. **Literal types, `Int`, unions and subsumption**: `Int ≤ Number` with
    the `Num` and `Arith` classes, and inty's join rules
    ("declared, not guessed", `docs/type-system.md`). Subsumption treats a
@@ -172,12 +208,18 @@ cheapest proofs first and the hardest last.
    This is Typed Racket's rule; "Revisiting Soundness for Occurrence
    Typing, Semantically" (arXiv 2609.16299) gives a Lean mechanization of its
    soundness.
-9. **More type classes and callable rows**: schemes carry `Plus`
-   constraints already; `Indexable` and `HasProp` are the same machinery
-   with more arguments. Also functions as rows carrying a call signature
-   alongside statics.
-10. **Equi-recursive types.** `ValTy` becomes step-indexed, because a
-    recursive type is not structurally smaller than its unfolding.
+9. **More type classes and callable rows.** Schemes carry `Plus`
+   constraints already, but `Indexable` and `HasProp` need more than extra
+   arguments: the Rust solver improves types through their functional
+   dependencies (a container determines its index and element types, a
+   receiver its property's type), so inference unifies where `Plus` only
+   checks, and the declarative rules must justify each improvement. Also
+   functions as rows carrying a call signature alongside statics.
+10. **Equi-recursive types.** The cost is in the types, not in `ValTy`:
+    types up to unfolding, unification without the occurs check, and
+    `HasType.subst` under recursive binders. An unfolding rule is an
+    ordinary inductive rule, and Amin and Rompf handle recursive self types
+    without step indices.
 
 ## Working with AI agents
 
@@ -186,7 +228,9 @@ agents do the proof engineering well, while the definitions and theorem
 statements need human review. A wrong statement compiles just as well as a
 right one. So review changes to `Types`, `Syntax`, `Typing`, `Semantics`
 and the statements of `eval_sound`, `HasType.subst` and `inferProgram_sound`
-closely, and treat proofs as checked by Lean.
+closely, and treat proofs as checked by Lean. `Inty/Statements.lean` restates
+each headline theorem, so a change to one shows up in the diff, and lists
+programs the typing rules must reject.
 [lean-lsp-mcp](https://github.com/project-numina/lean-lsp-mcp) gives an agent
 goal states and diagnostics:
 

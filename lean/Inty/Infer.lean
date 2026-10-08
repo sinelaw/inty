@@ -66,10 +66,11 @@ structure Out where
 
 /-- The scheme a `const` gives its variable, and the constraints left
 pending. A syntactic value generalises the variables of its type that the
-context doesn't mention, taking along the constraints that mention them. -/
+context doesn't mention, each once, taking along the constraints that mention
+them. -/
 def letScheme (e₁ : Expr) (Γ₁ : Ctx) (τ₁ : Ty) (plus : List Ty) : Scheme × List Ty :=
   if e₁.isValue then
-    let ᾱ := τ₁.ftv.filter (fun a => a ∉ ctxFtv Γ₁)
+    let ᾱ := (τ₁.ftv.filter (fun a => a ∉ ctxFtv Γ₁)).eraseDups
     (generalize ᾱ τ₁ (plus.filter (fun c => c.ftv.any (· ∈ ᾱ))),
       plus.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
   else (.mono τ₁, plus)
