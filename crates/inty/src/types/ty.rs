@@ -222,6 +222,10 @@ pub enum ClassName {
     /// characters are read-only: a store throws a `TypeError` in strict
     /// code).
     IndexWrite,
+    /// `FieldWrite r`: a property of `r` can be stored (`r.p = v`): an
+    /// object, not an array, a string or a function (whose properties
+    /// are built in).
+    FieldWrite,
     /// Property access on a value whose type isn't known yet:
     /// `HasProp(receiver, "name", result)` says reading `.name` from a
     /// `receiver` gives a `result`. The name is carried as a string
@@ -291,6 +295,14 @@ impl TypePred {
         TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
+            origin: None,
+        }
+    }
+
+    pub fn field_write(receiver: Type) -> Self {
+        TypePred {
+            class: ClassName::FieldWrite,
+            types: vec![receiver],
             origin: None,
         }
     }

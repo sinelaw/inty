@@ -825,6 +825,8 @@ impl InferState {
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
         let obj_type = self.zonk(&obj_type);
+        // (After the object's own members.)
+        self.last_member_receiver = Some(obj_type.clone());
         self.infer_member_on_type(&obj_type, property, span)
     }
 

@@ -4718,7 +4718,7 @@ fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
 }
 
 #[test]
-fn test_a_string_index_cant_be_assigned() {
+fn test_stores_only_into_what_takes_them() {
     // A string's characters are read-only: a store throws a `TypeError` in
     // strict code, and `dynamics` gets stuck. Indexing it is fine.
     for source in [
@@ -4734,6 +4734,20 @@ fn test_a_string_index_cant_be_assigned() {
         let s = "ab";
         s[0]++;
         "#,
+        // Nor a built-in property: a string's, an array's (which `dynamics`
+        // doesn't store), a function's.
+        r#"
+        function f(o) { o.length = 0; return o; }
+        const s = f("ab");
+        "#,
+        r#"
+        const xs = [1, 2];
+        xs.length = 1;
+        "#,
+        r#"
+        const f = function () { return 1; };
+        f.call = 2;
+        "#,
     ] {
         assert!(check_program(source, &[]).is_err(), "{source}");
     }
@@ -4745,6 +4759,10 @@ fn test_a_string_index_cant_be_assigned() {
         xs[1]++;
         function set0(c, v) { c[0] = v; return c; }
         const ys = set0([1], 2);
+        const o = {length: 1};
+        o.length = 2;
+        function setA(r, v) { r.a = v; return r; }
+        const p = setA({a: 1}, 2);
     "#;
     assert!(check_program(accepted, &[]).is_ok());
 }

@@ -18,17 +18,14 @@ impl InferState {
         argument: &Expr,
         span: Span,
     ) -> InferResult<Type> {
-        self.last_index_container = None;
-        let arg_type = self.infer_expr(env, argument)?;
-        if matches!(
+        let arg_type = if matches!(
             op,
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
-        ) && matches!(argument, Expr::ComputedMember { .. })
-        {
-            if let Some(container) = self.last_index_container.take() {
-                self.require_index_write(&container, span)?;
-            }
-        }
+        ) {
+            self.infer_store_target(env, argument, span)?
+        } else {
+            self.infer_expr(env, argument)?
+        };
 
         match op {
             // `-3` is the literal `-3` (and `-0` isn't an `Int`: it isn't 0).

@@ -227,6 +227,34 @@ impl InferState {
         Ok(())
     }
 
+    /// The type of an assignment's target (`x`, `r.p`, `c[i]`), whose
+    /// receiver must take the store: an object's property (`FieldWrite`),
+    /// an element of a container that isn't a string (`IndexWrite`).
+    pub(in crate::infer) fn infer_store_target(
+        &mut self,
+        env: &TypeEnv,
+        target: &Expr,
+        span: Span,
+    ) -> InferResult<Type> {
+        self.last_index_container = None;
+        self.last_member_receiver = None;
+        let ty = self.infer_expr(env, target)?;
+        match target {
+            Expr::ComputedMember { .. } => {
+                if let Some(container) = self.last_index_container.take() {
+                    self.require_index_write(&container, span)?;
+                }
+            }
+            Expr::Member { .. } => {
+                if let Some(receiver) = self.last_member_receiver.take() {
+                    self.require_field_write(&receiver, span)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(ty)
+    }
+
     /// Infer the type of an assignment.
     pub(in crate::infer) fn infer_assign(
         &mut self,
@@ -247,7 +275,7 @@ impl InferState {
             && matches!(left, Expr::Member { .. } | Expr::Ident { .. })
             && lhs_polytype(self, env, left).is_none()
         {
-            let left_type = self.infer_expr(env, left)?;
+            let left_type = self.infer_store_target(env, left, span)?;
             if crate::infer::features::functions::extract_callable(&self.zonk(&left_type)).is_some()
             {
                 self.check_expr(env, right, &left_type)?;
@@ -309,13 +337,7 @@ impl InferState {
             }
         }
 
-        self.last_index_container = None;
-        let left_type = self.infer_expr(env, left)?;
-        if matches!(left, Expr::ComputedMember { .. }) {
-            if let Some(container) = self.last_index_container.take() {
-                self.require_index_write(&container, span)?;
-            }
-        }
+        let left_type = self.infer_store_target(env, left, span)?;
 
         match op {
             AssignOp::Assign

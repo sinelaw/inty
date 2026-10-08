@@ -1019,6 +1019,7 @@ impl InferState {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
             ClassName::IndexWrite => self.resolve_index_write(&pred.types[0], span),
+            ClassName::FieldWrite => self.resolve_field_write(&pred.types[0], span),
             ClassName::HasProp => {
                 let (recv, name, result) = pred
                     .as_has_prop()
@@ -1083,6 +1084,48 @@ impl InferState {
                 .into())
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Resolve `FieldWrite r`: an object's property can be stored, not a
+    /// built-in one of an array, a string or a function (which `dynamics`
+    /// doesn't store, and a string's a strict program can't); a variable
+    /// nothing pinned down holds no value.
+    pub(crate) fn resolve_field_write(
+        &mut self,
+        receiver: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        let receiver = self.apply_subst(receiver);
+        let builtin = match &receiver {
+            Type::Row(row) => row.props.keys().any(|k| k.0 == crate::types::CALLABLE_KEY),
+            Type::Var(_) | Type::Named(..) | Type::Error => false,
+            _ => true,
+        };
+        if builtin {
+            return Err(TypeError::ConstraintNotSatisfied {
+                class: "FieldWrite (only an object's properties can be assigned)".to_string(),
+                ty: self.show(&receiver),
+                span,
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    /// The receiver of an assignment's member target must take stores
+    /// (`FieldWrite`): decided now for a known type, posed for a variable.
+    pub(crate) fn require_field_write(
+        &mut self,
+        receiver: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.apply_subst(receiver) {
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::field_write(receiver.clone()), span);
+                Ok(())
+            }
+            _ => self.resolve_field_write(receiver, span),
         }
     }
 

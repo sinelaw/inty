@@ -191,6 +191,9 @@ pub struct InferState {
     /// (`infer_computed_member`), so an assignment to `c[i]` can require
     /// `c` to take stores (`IndexWrite`).
     pub(crate) last_index_container: Option<Type>,
+    /// The receiver of the member inferred last (`infer_member`), so an
+    /// assignment to `r.p` can require `r` to take stores (`FieldWrite`).
+    pub(crate) last_member_receiver: Option<Type>,
 
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
@@ -494,6 +497,7 @@ impl InferState {
             type_classes: HashMap::new(),
             pending_constraints: Vec::new(),
             last_index_container: None,
+            last_member_receiver: None,
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -2198,7 +2202,10 @@ impl InferState {
             let scheme_preds: Vec<TypePred> = scheme_preds
                 .into_iter()
                 .filter(|pred| {
-                    if !matches!(pred.class, ClassName::Plus | ClassName::IndexWrite) {
+                    if !matches!(
+                        pred.class,
+                        ClassName::Plus | ClassName::IndexWrite | ClassName::FieldWrite
+                    ) {
                         return true;
                     }
                     let ty = self.main_subst.flatten(&pred.types[0]);
@@ -2206,10 +2213,10 @@ impl InferState {
                         return true;
                     }
                     let span = pred.origin.unwrap_or_default();
-                    let decided = if pred.class == ClassName::Plus {
-                        self.resolve_plus(&ty, span)
-                    } else {
-                        self.resolve_index_write(&ty, span)
+                    let decided = match pred.class {
+                        ClassName::Plus => self.resolve_plus(&ty, span),
+                        ClassName::IndexWrite => self.resolve_index_write(&ty, span),
+                        _ => self.resolve_field_write(&ty, span),
                     };
                     if let Err(e) = decided {
                         self.push_error(e);

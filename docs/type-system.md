@@ -74,7 +74,7 @@ An object spread (`{a: 1, ...o}`) takes the operand's fields over the ones befor
 
 ### Operator Overloading (Type Classes)
 
-`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
+`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned (`xs.length = 0` is an error; `xs = []` replaces the array). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
 
 A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a> where Plus a => (a, a) => a */`, and the annotation parser reads the `where` clause back (`Plus t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them. A `Plus` on a type that is already known is decided when the binding is generalised rather than carried into its scheme, so `const f = function () { return g + g; }` with `g` a function is an error even if `f` is never called.
 
