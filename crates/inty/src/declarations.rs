@@ -129,7 +129,7 @@ fn with_has_props_as_rows(scheme: &TypeScheme) -> TypeScheme {
     if fields.is_empty() {
         return scheme.clone();
     }
-    let mut next = scheme
+    let first = scheme
         .vars
         .iter()
         .map(|v| v.id())
@@ -139,9 +139,8 @@ fn with_has_props_as_rows(scheme: &TypeScheme) -> TypeScheme {
         + 1;
     let mut vars = scheme.vars.clone();
     let mut subst = Subst::empty();
-    for (v, props) in fields {
+    for (next, (v, props)) in (first..).zip(fields) {
         let tail = TVarName::Flex(next);
-        next += 1;
         vars.push(tail.clone());
         subst.insert(v, Type::Row(RowType::open_entries(props, tail)));
     }

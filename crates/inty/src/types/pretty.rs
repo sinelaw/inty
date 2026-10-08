@@ -847,6 +847,67 @@ impl Display for ClassName {
     }
 }
 
+/// Whether `ty` is `pattern` with its `params` (variable ids) replaced by
+/// some types — recorded in `bound`, consistently.
+fn match_alias(
+    pattern: &Type,
+    ty: &Type,
+    params: &[u32],
+    bound: &mut std::collections::HashMap<u32, Type>,
+) -> bool {
+    match (pattern, ty) {
+        (Type::Var(TVarName::Flex(p)), _) if params.contains(p) => match bound.get(p) {
+            Some(b) => b == ty,
+            None => {
+                bound.insert(*p, ty.clone());
+                true
+            }
+        },
+        (Type::Row(a), Type::Row(b)) => {
+            a.tail == b.tail
+                && a.props.len() == b.props.len()
+                && a.props.iter().all(|(k, e)| {
+                    b.props.get(k).is_some_and(|f| {
+                        e.presence == f.presence && match_alias(&e.ty, &f.ty, params, bound)
+                    })
+                })
+        }
+        (Type::Union(a), Type::Union(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|(x, y)| match_alias(x, y, params, bound))
+        }
+        (Type::Array(a), Type::Array(b)) | (Type::Promise(a), Type::Promise(b)) => {
+            match_alias(a, b, params, bound)
+        }
+        (
+            Type::Func {
+                this_type: t1,
+                params: p1,
+                ret: r1,
+            },
+            Type::Func {
+                this_type: t2,
+                params: p2,
+                ret: r2,
+            },
+        ) => {
+            p1.len() == p2.len()
+                && match (t1, t2) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => match_alias(a, b, params, bound),
+                    _ => false,
+                }
+                && p1.iter().zip(p2).all(|(x, y)| {
+                    x.presence == y.presence && match_alias(&x.ty, &y.ty, params, bound)
+                })
+                && match_alias(r1, r2, params, bound)
+        }
+        (a, b) => a == b,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,66 +1006,5 @@ mod tests {
         assert!(s.contains("<a>"), "missing <a> in {}", s);
         assert!(s.contains("where Plus"), "missing predicate in {}", s);
         assert!(s.contains("(a, a) => a"), "missing body in {}", s);
-    }
-}
-
-/// Whether `ty` is `pattern` with its `params` (variable ids) replaced by
-/// some types — recorded in `bound`, consistently.
-fn match_alias(
-    pattern: &Type,
-    ty: &Type,
-    params: &[u32],
-    bound: &mut std::collections::HashMap<u32, Type>,
-) -> bool {
-    match (pattern, ty) {
-        (Type::Var(TVarName::Flex(p)), _) if params.contains(p) => match bound.get(p) {
-            Some(b) => b == ty,
-            None => {
-                bound.insert(*p, ty.clone());
-                true
-            }
-        },
-        (Type::Row(a), Type::Row(b)) => {
-            a.tail == b.tail
-                && a.props.len() == b.props.len()
-                && a.props.iter().all(|(k, e)| {
-                    b.props.get(k).is_some_and(|f| {
-                        e.presence == f.presence && match_alias(&e.ty, &f.ty, params, bound)
-                    })
-                })
-        }
-        (Type::Union(a), Type::Union(b)) => {
-            a.len() == b.len()
-                && a.iter()
-                    .zip(b)
-                    .all(|(x, y)| match_alias(x, y, params, bound))
-        }
-        (Type::Array(a), Type::Array(b)) | (Type::Promise(a), Type::Promise(b)) => {
-            match_alias(a, b, params, bound)
-        }
-        (
-            Type::Func {
-                this_type: t1,
-                params: p1,
-                ret: r1,
-            },
-            Type::Func {
-                this_type: t2,
-                params: p2,
-                ret: r2,
-            },
-        ) => {
-            p1.len() == p2.len()
-                && match (t1, t2) {
-                    (None, None) => true,
-                    (Some(a), Some(b)) => match_alias(a, b, params, bound),
-                    _ => false,
-                }
-                && p1.iter().zip(p2).all(|(x, y)| {
-                    x.presence == y.presence && match_alias(&x.ty, &y.ty, params, bound)
-                })
-                && match_alias(r1, r2, params, bound)
-        }
-        (a, b) => a == b,
     }
 }

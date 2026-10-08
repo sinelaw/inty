@@ -2521,6 +2521,14 @@ impl InferState {
     }
 }
 
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2678,13 +2686,5 @@ mod tests {
         assert_eq!(skolems.len(), 1);
         assert!(skolems[0].is_skolem());
         assert!(ty.is_var());
-    }
-}
-
-fn plural(n: usize) -> &'static str {
-    if n == 1 {
-        ""
-    } else {
-        "s"
     }
 }

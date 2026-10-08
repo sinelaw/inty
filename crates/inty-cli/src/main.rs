@@ -332,13 +332,13 @@ fn print_timings(state: &InferState, entry: Option<(&str, &str)>) {
     };
     eprintln!("Timings (each module's own time; imports excluded):");
     let mut modules = state.module_timings.clone();
-    modules.sort_by(|a, b| b.1.cmp(&a.1));
+    modules.sort_by_key(|m| std::cmp::Reverse(m.1));
     for (path, time) in &modules {
         eprintln!("  {:>9.1} ms  {}", time.as_secs_f64() * 1000.0, path);
     }
     if let Some(decls) = &state.timings {
         let mut decls = decls.clone();
-        decls.sort_by(|a, b| b.time.cmp(&a.time));
+        decls.sort_by_key(|d| std::cmp::Reverse(d.time));
         eprintln!("Slowest top-level declarations:");
         for d in decls.iter().take(20) {
             eprintln!(

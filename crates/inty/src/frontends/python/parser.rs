@@ -1945,10 +1945,7 @@ impl Parser {
     ) -> Result<Expr> {
         let start = self.cur_span().start;
         let mut left = next(self)?;
-        loop {
-            let Some((_, op)) = ops.iter().find(|(t, _)| self.check(t)) else {
-                break;
-            };
+        while let Some((_, op)) = ops.iter().find(|(t, _)| self.check(t)) {
             let op = *op;
             self.advance();
             let right = next(self)?;

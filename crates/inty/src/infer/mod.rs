@@ -687,7 +687,7 @@ impl InferState {
         // Names still waiting for their declaration statement (Pass 3).
         let mut pending_decls: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        for (_, (name, _)) in hoisted_data.iter() {
+        for (name, _) in hoisted_data.values() {
             *pending_decls.entry(name.clone()).or_insert(0) += 1;
         }
         let mut group_done = vec![false; scc_groups.len()];

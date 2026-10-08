@@ -362,10 +362,7 @@ impl StubReader<'_> {
         }
         let parens = self.eat(&Tok::LParen);
         let mut names = Vec::new();
-        loop {
-            let Some(imported) = self.name_here() else {
-                break;
-            };
+        while let Some(imported) = self.name_here() {
             self.advance();
             let local = if self.eat(&Tok::As) {
                 match self.name_here() {
