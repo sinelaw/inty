@@ -1183,8 +1183,9 @@ impl InferState {
                 Ok(())
             }
 
-            // String indexing: String[Number] = String
-            Type::String => {
+            // String indexing: String[Number] = String (a string literal's
+            // too: `"xyz"[0]`)
+            Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
                 int_index(self)?;
                 self.unify(span, &element, &Type::String)?;
                 Ok(())

@@ -46,6 +46,14 @@ inductive Con where
   program writes it; the soundness proof's world gives it to the cell of
   each object. -/
   | contents
+  /-- An array, applied to its element type (`Type::Array`). -/
+  | array
+  /-- What an array's cell holds, applied to the element type: like
+  `contents`, only the soundness proof's world mentions it. -/
+  | elems
+  /-- A tuple, applied to its components' types. Inference uses it to state
+  several equations as one (`unify` on two tuples). -/
+  | tuple
   deriving DecidableEq, Repr
 
 /-- Monotypes: a type variable, or a constructor applied to types. A type
@@ -129,6 +137,8 @@ instance : DecidableEq PTy := PTy.decEq
 @[match_pattern] abbrev Ty.slot (p τ : Ty) : Ty := .app .slot [p, τ]
 @[match_pattern] abbrev Ty.pre : Ty := .app .pre []
 @[match_pattern] abbrev Ty.abs : Ty := .app .abs []
+@[match_pattern] abbrev Ty.array (τ : Ty) : Ty := .app .array [τ]
+@[match_pattern] abbrev Ty.tuple (τs : List Ty) : Ty := .app .tuple τs
 
 @[match_pattern] abbrev PTy.number : PTy := .app .number []
 @[match_pattern] abbrev PTy.string : PTy := .app .string []
@@ -176,7 +186,24 @@ inductive Cls where
   for `p`, so a spread of a row whose fields aren't known yet has a
   principal type. -/
   | merge
+  /-- `Indexable c i e`: indexing a `c` by an `i` gives an `e` (`c[i]`):
+  an array by a number, its element; a string by a number, a string. The
+  container determines the rest. -/
+  | indexable
+  /-- `IndexWrite c`: an element of a `c` can be stored (`c[i] = v`): an
+  array's, not a string's. -/
+  | indexWrite
+  /-- `FieldWrite r`: a property of an `r` can be stored (`r.p = v`): an
+  object's, not an array's or a string's built-in one. -/
+  | fieldWrite
   deriving DecidableEq, Repr
+
+/-- How many types a class is applied to. -/
+def Cls.arity : Cls → Nat
+  | .plus | .indexWrite | .fieldWrite => 1
+  | .hasProp _ => 2
+  | .indexable => 3
+  | .merge => 4
 
 /-- A class constraint: a class applied to types, such as `Plus a`. -/
 structure Pred where

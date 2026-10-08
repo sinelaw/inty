@@ -111,15 +111,15 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 
 | Lean | inty |
 |---|---|
-| `Ty`: a type variable, or a constructor (`Con`) applied to types: `number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`) |
+| `Ty`: a type variable, or a constructor (`Con`) applied to types: `number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type), `array` | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals, property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to) | `ast::Expr`, `ast::Stmt` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals, property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v` | `ast::Expr`, `ast::Stmt` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
 | `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
-| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`, `Merge`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop`; `Merge` is a spread's per-field merge (`merge_spread` in `src/infer/features/rows.rs`, which decides it at once) |
+| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`, `Merge`, `Indexable`, `IndexWrite`, `FieldWrite`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop`; `Merge` is a spread's per-field merge (`merge_spread` in `src/infer/features/rows.rs`, which decides it at once) |
 | `improveAll` (deciding constraints on known types), `fixedVars` and `genVars` (what a `let` quantifies) | `simplify_has_props`, `env_fixed_vars`, `InferState::generalize` |
 | `Entails C p` (`p` is an instance, or assumed in `C`) | a scheme's constraints in scope while checking its body |
 | `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
@@ -245,8 +245,13 @@ These choices are meant to hold up as the calculus grows.
   state), and the top level decides them. inty decides each at once,
   making a field the operand may lack agree with the one it overrides, so
   it rejects that call; the model is the more precise of the two.
+- **An index out of bounds is a fault.** An array is a cell of its
+  elements; `e[i]` with `i` not a whole number below the length is
+  `Result.fault`, which soundness allows, as `dynamics`' `OutOfBounds`
+  (JavaScript reads `undefined`). A store at the length appends.
 - **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
-  and `Arith` classes, is phase 5 of the roadmap.
+  and `Arith` classes, is phase 4 of the roadmap; so is inty's rule that
+  an index is an `Int`, where the model takes any number.
 
 ## Adding a feature
 
@@ -328,17 +333,19 @@ disagreements in typing all fall into features the model lacks:
 
 | Divergence | inty | model | Roadmap phase |
 |---|---|---|---|
-| Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 6 |
-| A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 6 |
-| Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 6 |
-| Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 8 |
-| `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 5 |
-| A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 10 |
+| Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 5 |
+| A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 5 |
+| Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 5 |
+| Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 6 |
+| `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 4 |
+| An index that is a `Number`: `xs[n - 0.5]` | rejects (an index is an `Int`) | accepts (a fractional index is out of bounds, a fault) | 4 |
+| A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
 | A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 2 (statements apart from expressions) |
 
 Each row is recognised from evidence, not guessed: a union or `μ` in the
-types inty gave the program's expressions, or inty accepting the program
-once its number literals are made fractional. The harness's first run also
+types inty gave the program's expressions, inty accepting the program
+once its number literals are made fractional, or an error of inty's
+between `Int` and `Number`. The harness's first run also
 found that `meta::soundness::check_program` never called
 `resolve_constraints`, so it could accept programs the CLI rejects; it does
 now.

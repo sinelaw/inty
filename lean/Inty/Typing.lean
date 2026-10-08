@@ -40,8 +40,8 @@ inductive BinOpTy (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
   | plus : Entails C ⟨.plus, [τ]⟩ → BinOpTy C .plus τ τ τ
   | minus : BinOpTy C .minus .number .number .number
 
-/-- A scheme's constraints are on its quantified variables: `Plus a`, as in
-`<a> where Plus a => …`, or `HasProp l a σ`, as in
+/-- A scheme's constraints are on its quantified variables: their first
+argument is one, as in `<a> where Plus a => …` or
 `<a, b> where a has {name: b} => …`. inty decides a constraint on a type
 already known when it generalises (`InferState::generalize`), so no scheme
 carries one that could fail at a use; and a `HasProp` whose receiver the
@@ -55,8 +55,8 @@ variables in the arguments that determine its result. (Deciding it when
 the presence is known would make the rule depend on when that is, which
 no rule closed under substitution can.) -/
 def Scheme.Simple (s : Scheme) : Prop :=
-  ∀ p ∈ s.preds, (∃ i < s.arity,
-    p = ⟨.plus, [.bound i]⟩ ∨ ∃ l σ, p = ⟨.hasProp l, [.bound i, σ]⟩) ∨
+  ∀ p ∈ s.preds, (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧
+      ∃ i < s.arity, ∃ rest, p.args = .bound i :: rest) ∨
     ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < s.arity
 
 /-- The typing judgement: with records over the program's labels `L`, under
@@ -141,9 +141,10 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ →
       HasType L C Γ R (.get e l) σ
   /-- `e.l = v` stores a value of the field's type, which is the
-  assignment's. -/
-  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → HasType L C Γ R v σ →
-      HasType L C Γ R (.set e l v) σ
+  assignment's, in an object (`FieldWrite`: not an array's or a string's
+  `length`). -/
+  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite, [τ]⟩ →
+      HasType L C Γ R v σ → HasType L C Γ R (.set e l v) σ
   /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p` and
   type `τ`, merged over `e₁`'s slot `s` gives the result's slot `r`
   (`Merge p τ s r`): `e₂`'s field if it has one, `e₁`'s if not. -/
@@ -153,6 +154,16 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
       HasType L C Γ R e₂ (.record L (List.zipWith Ty.slot ps τs)) →
       (∀ p ∈ mergePreds ps τs ss rs, Entails C p) →
       HasType L C Γ R (.spread e₁ e₂) (.record L rs)
+  /-- An array literal's elements have one type, as in Hindley–Milner. -/
+  | arr : (∀ e ∈ es, HasType L C Γ R e τ) → HasType L C Γ R (.arr es) (.array τ)
+  /-- `e[i]`: `Indexable τ ι σ`, an array's element or a string's
+  character, or what a scheme's constraint promises. -/
+  | index : HasType L C Γ R e τ → HasType L C Γ R i ι → Entails C ⟨.indexable, [τ, ι, σ]⟩ →
+      HasType L C Γ R (.index e i) σ
+  /-- `e[i] = v` stores a value of the element type, in a container that
+  takes stores (`IndexWrite`, not a string). -/
+  | setIndex : HasType L C Γ R e τ → HasType L C Γ R i ι → Entails C ⟨.indexable, [τ, ι, σ]⟩ →
+      Entails C ⟨.indexWrite, [τ]⟩ → HasType L C Γ R v σ → HasType L C Γ R (.setIndex e i v) σ
 
 /-- A variable whose scheme is a monotype has that type. -/
 theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :

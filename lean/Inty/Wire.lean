@@ -16,6 +16,7 @@ JavaScript and for this model as an s-expression, one program per line:
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
 (obj (field s:x E) …)   an object literal     (get E s:x)   (set E s:x V)
 (spread A B)   `{...A, ...B}`
+(arr E₀ E₁ …)  `[E₀, E₁, …]`    (index E I)  `E[I]`    (setindex E I V)  `E[I] = V`
 ```
 
 `inty-model` (`Main.lean`) answers each line with the model's verdicts, as
@@ -127,6 +128,18 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (a, rest) ← parseExpr rest
     let (b, rest) ← parseExpr rest
     some (.spread a b, rest)
+  | "arr", rest => do
+    let (es, rest) ← parseMany rest
+    some (.arr es, rest)
+  | "index", rest => do
+    let (e, rest) ← parseExpr rest
+    let (i, rest) ← parseExpr rest
+    some (.index e i, rest)
+  | "setindex", rest => do
+    let (e, rest) ← parseExpr rest
+    let (i, rest) ← parseExpr rest
+    let (v, rest) ← parseExpr rest
+    some (.setIndex e i v, rest)
   | _, _ => none
 
 /-- A property label, written `s:` then the label. -/
@@ -171,6 +184,7 @@ def tyWire : Ty → String
   | .null => "null"
   | .fn .. => "fun"
   | .record .. => "obj"
+  | .array _ => "array"
   -- inty's type for what a `catch` binds is a rigid type variable.
   | .unknown | .var _ => "var"
   | _ => "other"
@@ -194,8 +208,11 @@ def valueWire : Value → String
   | .null => "null"
   | .closure .. | .prim _ => "fun"
   | .obj _ => "obj"
-  -- An object's contents are in its cell, never a program's value.
+  | .arr _ => "arr"
+  -- An object's and an array's contents are in its cell, never a
+  -- program's value.
   | .fields _ => "fields"
+  | .items _ => "items"
 
 def stuckWire : Stuck → String
   | .undefinedVariable => "undefinedVariable"
@@ -219,6 +236,8 @@ def evalVerdict (clock : Nat) (e : Expr) : String :=
   -- Only in a program that fails the scope checks.
   | .broke => "stuck break"
   | .continued => "stuck continue"
+  -- A fault the typing rules allow, such as an index out of bounds.
+  | .fault .outOfBounds => "fault outOfBounds"
 
 /-- The answer to one line. -/
 def verdict (clock : Nat) (line : String) : String :=
@@ -285,5 +304,21 @@ def verdict (clock : Nat) (line : String) : String :=
   "(let (func 1 (spread (obj (field s:a (num 1 0))) (var 0))) (minus (get (app (var 0) (obj)) s:a) (num 1 0)))"
   == s!"type number;value num {(0 : Float).toBits}"
 #guard verdict 100 "(spread (num 1 0) (obj))" == "reject;stuck notSpreadable"
+-- Arrays: one element type; an index in bounds reads and writes, one just
+-- past the end appends, and any other is a fault.
+#guard verdict 100 "(index (arr (num 1 0) (num 2 0)) (num 1 0))" ==
+  s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100 "(arr (num 1 0) (str s:a))" == "reject;value arr"
+#guard verdict 100 "(get (arr (num 1 0) (num 2 0)) s:length)" ==
+  s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100 "(index (str s:ab) (num 1 0))" == "type string;value str s:b"
+#guard verdict 100 "(index (arr (num 1 0)) (num 3 0))" == "type number;fault outOfBounds"
+#guard verdict 100
+  "(let (arr (num 1 0)) (seq (setindex (var 0) (num 1 0) (num 5 0)) (get (var 0) s:length)))" ==
+  s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100 "(setindex (str s:ab) (num 0 0) (str s:c))" == "reject;stuck badAssignmentTarget"
+#guard verdict 100 "(set (arr) s:length (num 0 0))" == "reject;stuck badAssignmentTarget"
+#guard verdict 100 "(let (func 1 (index (var 0) (num 0 0))) (app (var 0) (arr (bool true))))" ==
+  "type boolean;value bool true"
 
 end Inty.Wire

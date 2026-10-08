@@ -51,6 +51,11 @@ inductive Value where
   /-- What an object's cell holds, `dynamics`' `Cell::Object`: its
   properties' values, the latest first. No program has it as a value. -/
   | fields (fs : List (String × Value))
+  /-- An array: the cell holding its elements, `Value::Array`. -/
+  | arr (ℓ : Nat)
+  /-- What an array's cell holds, `Cell::Array`. No program has it as a
+  value. -/
+  | items (vs : List Value)
   deriving Repr
 
 /-- A runtime environment: the cell of each variable, innermost first. As in
@@ -84,6 +89,14 @@ inductive Stuck where
   | notSpreadable
   deriving DecidableEq, Repr
 
+/-- A fault inty documents as allowed: the program stops there, and it is
+no soundness violation (`Stuck::OutOfBounds`). -/
+inductive Fault where
+  /-- An element read at an index the array or string hasn't, or a store
+  past an array's end. -/
+  | outOfBounds
+  deriving DecidableEq, Repr
+
 /-- The outcome of running with a given clock. `timeout` (out of clock) is
 `Stuck::FuelExhausted`, which is not a soundness violation. `returned` and
 `thrown` are abrupt completions, as `dynamics::StmtOutcome::{Return,
@@ -92,6 +105,8 @@ to the top, where `dynamics` reports it as `Stuck::UncaughtThrow`. -/
 inductive Result where
   | ok (v : Value)
   | stuck (s : Stuck)
+  /-- A documented fault: allowed, and not stuck. -/
+  | fault (f : Fault)
   | timeout
   | returned (v : Value)
   | thrown (v : Value)
@@ -107,7 +122,7 @@ def Value.truthy : Value → Bool
   | .string s => !s.isEmpty
   | .boolean b => b
   | .undefined | .null => false
-  | .closure .. | .prim _ | .obj _ | .fields _ => true
+  | .closure .. | .prim _ | .obj _ | .fields _ | .arr _ | .items _ => true
 
 /-- JavaScript `typeof`, as `dynamics::Value::type_string`. -/
 def Value.typeString : Value → String
@@ -115,7 +130,7 @@ def Value.typeString : Value → String
   | .string _ => "string"
   | .boolean _ => "boolean"
   | .undefined => "undefined"
-  | .null | .obj _ | .fields _ => "object"
+  | .null | .obj _ | .fields _ | .arr _ | .items _ => "object"
   | .closure .. | .prim _ => "function"
 
 def Lit.eval : Lit → Value
@@ -143,9 +158,9 @@ def Prim.apply : Prim → List Value → Result
   | .truthy, [v] => .ok (.boolean v.truthy)
   | _, _ => .stuck .arityMismatch
 
-/-- Reading the property `l` of `v`, as `dynamics::step::read_member`. A
-string has properties of its own (`length`, its methods), which come with
-the standard library; any other is not found. -/
+/-- Reading the property `l` of `v`, as `dynamics::step::read_member`. An
+array and a string have their `length`; their methods come with the
+standard library, and any other property is not found. -/
 def Value.getProp (h : Heap) (l : String) : Value → Result
   | .obj ℓ =>
     match h[ℓ]? with
@@ -154,8 +169,44 @@ def Value.getProp (h : Heap) (l : String) : Value → Result
       | some v => .ok v
       | none => .stuck .propertyNotFound
     | _ => .stuck .notIndexable
-  | .string _ => .stuck .propertyNotFound
+  | .arr ℓ =>
+    match h[ℓ]? with
+    | some (.items vs) =>
+      if l = "length" then .ok (.number vs.length.toFloat) else .stuck .propertyNotFound
+    | _ => .stuck .notIndexable
+  | .string s => if l = "length" then .ok (.number s.length.toFloat) else .stuck .propertyNotFound
   | _ => .stuck .notIndexable
+
+/-- A number as an index: a non-negative integer, as `dynamics`'
+`array_index` (`n as usize`, checked to give `n` back). -/
+def _root_.Float.toIndex? (n : Float) : Option Nat :=
+  if n.toUInt64.toFloat == n then some n.toUInt64.toNat else none
+
+/-- Reading `o[i]`, as `dynamics::step::read_index`: an array's or a
+string's element (a fault at an index it hasn't), an object's property by a
+string (or `undefined`; a label is never a number's digits, so a number
+reads `undefined` too). -/
+def Value.index (h : Heap) : Value → Value → Result
+  | .arr ℓ, .number n =>
+    match h[ℓ]? with
+    | some (.items vs) =>
+      match n.toIndex?.bind (vs[·]?) with
+      | some v => .ok v
+      | none => .fault .outOfBounds
+    | _ => .stuck .notIndexable
+  | .string s, .number n =>
+    match n.toIndex?.bind (s.toList[·]?) with
+    | some c => .ok (.string (String.singleton c))
+    | none => .fault .outOfBounds
+  | .obj ℓ, .string k =>
+    match h[ℓ]? with
+    | some (.fields fs) => .ok ((fs.lookup k).getD .undefined)
+    | _ => .stuck .notIndexable
+  | .obj ℓ, .number _ =>
+    match h[ℓ]? with
+    | some (.fields _) => .ok .undefined
+    | _ => .stuck .notIndexable
+  | _, _ => .stuck .notIndexable
 
 /-- Storing `v` in the property `l` of `o`, which it adds if `o` hasn't it,
 as in JavaScript and `dynamics`: the outcome and the heap. -/
@@ -166,6 +217,24 @@ def Value.setProp (o : Value) (h : Heap) (l : String) (v : Value) : Result × He
     | some (.fields fs) => (.ok v, h.set ℓ (.fields ((l, v) :: fs.filter (·.1 != l))))
     | _ => (.stuck .badAssignmentTarget, h)
   | _ => (.stuck .badAssignmentTarget, h)
+
+/-- Storing `v` at `o[i]`, as `dynamics::step::write_place`: an array's
+element in bounds, or just past the end (a push), and a fault further; an
+object's property by a string. The outcome and the heap. -/
+def Value.setIndex (o : Value) (h : Heap) (i v : Value) : Result × Heap :=
+  match o, i with
+  | .arr ℓ, .number n =>
+    match h[ℓ]? with
+    | some (.items vs) =>
+      match n.toIndex? with
+      | some k =>
+        if k < vs.length then (.ok v, h.set ℓ (.items (vs.set k v)))
+        else if k = vs.length then (.ok v, h.set ℓ (.items (vs ++ [v])))
+        else (.fault .outOfBounds, h)
+      | none => (.fault .outOfBounds, h)
+    | _ => (.stuck .badAssignmentTarget, h)
+  | .obj ℓ, .string k => Value.setProp (.obj ℓ) h k v
+  | _, _ => (.stuck .badAssignmentTarget, h)
 
 /-- An object literal's cell: its fields, the later of two with one label
 first, as in JavaScript. -/
@@ -297,12 +366,13 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
     match run clock env heap body with
     | (.thrown v, c₁, h₁) => run (min c₁ clock) (h₁.length :: env) (h₁ ++ [v]) handler
     | p => p
-  -- Out of clock or stuck, the program stops there, as `dynamics` does: a
-  -- stuck program is not a JavaScript exception.
+  -- Out of clock, stuck or at a fault, the program stops there, as
+  -- `dynamics` does: none is a JavaScript exception.
   | .tryFinally body fin =>
     match run clock env heap body with
     | (.timeout, c₁, h₁) => (.timeout, c₁, h₁)
     | (.stuck s, c₁, h₁) => (.stuck s, c₁, h₁)
+    | (.fault f, c₁, h₁) => (.fault f, c₁, h₁)
     | (r, c₁, h₁) =>
       match run (min c₁ clock) env h₁ fin with
       | (.ok _, c₂, h₂) => (r, c₂, h₂)
@@ -330,6 +400,20 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
           match v₂.fieldsOf h₂ with
           | none => (.stuck .notSpreadable, c₂, h₂)
           | some fs₂ => (.ok (.obj h₂.length), c₂, h₂ ++ [.fields (fs₂ ++ fs₁)])
+  -- The elements in order, then a cell for them.
+  | .arr es =>
+    bindArgs (runArgs clock env heap es) fun vs c₁ h₁ =>
+      (.ok (.arr h₁.length), c₁, h₁ ++ [.items vs])
+  | .index e i =>
+    bindC (run clock env heap e) fun vo c₁ h₁ =>
+    bindC (run (min c₁ clock) env h₁ i) fun vi c₂ h₂ => (vo.index h₂ vi, c₂, h₂)
+  -- The container, the index, then the value, as in JavaScript.
+  | .setIndex e i v =>
+    bindC (run clock env heap e) fun vo c₁ h₁ =>
+    bindC (run (min c₁ clock) env h₁ i) fun vi c₂ h₂ =>
+    bindC (run (min c₂ clock) env h₂ v) fun vv c₃ h₃ =>
+      let p := vo.setIndex h₃ vi vv
+      (p.1, c₃, p.2)
 termination_by (clock, sizeOf e)
 decreasing_by
   all_goals first

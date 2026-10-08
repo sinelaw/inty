@@ -45,10 +45,10 @@ def HeapInv (P : Scheme → Value → Prop) (W : World) (h : Heap) : Prop :=
   h.length = W.length ∧ ∀ (ℓ : Nat) s, W[ℓ]? = some s → ∃ v, h[ℓ]? = some v ∧ P s v
 
 /-- An abrupt completion that runs on past a call: a `throw` of any value,
-or a `break` or `continue`, which a well-scoped program keeps inside its
-loop (`Expr.jumpsInLoop`). -/
+a `break` or `continue`, which a well-scoped program keeps inside its loop
+(`Expr.jumpsInLoop`), or a documented fault, at which the program stops. -/
 def Result.Abrupt : Result → Prop
-  | .thrown _ | .broke | .continued => True
+  | .thrown _ | .broke | .continued | .fault _ => True
   | _ => False
 
 theorem Result.Abrupt.bindC {p : Ran} {K : Value → Nat → Heap → Ran} (h : p.1.Abrupt) :
@@ -94,7 +94,8 @@ calling the function does (see the module docs). A record is an object
 whose cell the world describes as holding the record's contents, and the
 contents are the fields present, each of its type, and none of the fields
 absent; a slot whose presence isn't known (a variable) has no contents,
-as a type variable has no values. A slot, a presence, or a constructor
+as a type variable has no values. An array is likewise a cell, of its
+elements, each of the element type. A slot, a presence, or a constructor
 applied to the wrong number of types has no values. -/
 def V (k : Nat) (W : World) : Ty → Value → Prop
   | .number, v => ∃ n, v = .number n
@@ -118,6 +119,8 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
       ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
       ∀ l s, Ty.field l ls slots = some s →
         (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none
+  | .array τ, v => ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.mono (.app .elems [τ]))
+  | .app .elems [τ], v => ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w
   | _, _ => False
 termination_by τ => (k, sizeOf τ)
 decreasing_by
@@ -171,11 +174,19 @@ theorem V_contents : V k W (.app .contents [.record ls slots]) v ↔ ∃ fs, v =
         (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := by
   rw [V.eq_def]
 
-/-- Apart from functions, records and objects' contents, a type's values
+theorem V_array : V k W (.array τ) v ↔ ∃ ℓ, v = .arr ℓ ∧
+      W[ℓ]? = some (.mono (.app .elems [τ])) := by
+  rw [V.eq_def]
+
+theorem V_elems : V k W (.app .elems [τ]) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := by
+  rw [V.eq_def]
+
+/-- Apart from functions, records, arrays and their cells, a type's values
 don't depend on the index or the world. -/
 theorem V.base {k k' : Nat} {W W' : World} {τ : Ty} {v : Value}
     (hfn : ∀ θ τs ρ, τ ≠ .fn θ τs ρ) (hrec : ∀ ls slots, τ ≠ .record ls slots)
-    (hcon : ∀ ls slots, τ ≠ .app .contents [.record ls slots]) :
+    (hcon : ∀ ls slots, τ ≠ .app .contents [.record ls slots])
+    (harr : ∀ σ, τ ≠ .array σ) (hel : ∀ σ, τ ≠ .app .elems [σ]) :
     V k W τ v ↔ V k' W' τ v := by
   rw [V.eq_def, V.eq_def]
   split <;> simp_all
@@ -213,8 +224,21 @@ theorem V.mono_lt {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
           refine ⟨fs, rfl, fun l σ hl => ?_, ha⟩
           obtain ⟨v', h₁, h₂⟩ := hf l σ hl
           exact ⟨v', h₁, V.mono_lt hjk hW n (Nat.lt_of_lt_of_le (sizeOf_field_lt hl) (Nat.le_of_lt_succ hn)) h₂⟩
-        · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
-            (fun ls slots e => hrec ⟨ls, slots, e⟩) (fun ls slots e => hcon ⟨ls, slots, e⟩)).mp hv
+        · by_cases harr : ∃ σ, τ = .array σ
+          · obtain ⟨σ, rfl⟩ := harr
+            rw [V_array] at hv ⊢
+            obtain ⟨ℓ, rfl, hℓ⟩ := hv
+            exact ⟨ℓ, rfl, prefix_getElem? hW hℓ⟩
+          · by_cases hel : ∃ σ, τ = .app .elems [σ]
+            · obtain ⟨σ, rfl⟩ := hel
+              rw [V_elems] at hv ⊢
+              obtain ⟨vs, rfl, hvs⟩ := hv
+              refine ⟨vs, rfl, fun w hw => V.mono_lt hjk hW n ?_ (hvs w hw)⟩
+              have : sizeOf σ < sizeOf (Ty.app .elems [σ]) := by simp; omega
+              omega
+            · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
+                (fun ls slots e => hrec ⟨ls, slots, e⟩) (fun ls slots e => hcon ⟨ls, slots, e⟩)
+                (fun σ e => harr ⟨σ, e⟩) (fun σ e => hel ⟨σ, e⟩)).mp hv
 
 /-- A value good for `k` calls in `W` is good for fewer, in a larger world. -/
 theorem V.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {τ : Ty} {v : Value}
@@ -610,16 +634,32 @@ theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c :
       obtain ⟨v', h₁, h₂⟩ := hfs l σ hf
       simp only [Value.getProp, hcv, h₁]
       exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH h₂
+    | lengthArray =>
+      rw [V_array] at hv
+      obtain ⟨ℓ, rfl, hℓ⟩ := hv
+      obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
+      obtain ⟨vs, rfl, -⟩ := V_elems.mp (SchemeV.mono_iff.mp hsv)
+      simp only [Value.getProp, hcv, ite_true]
+      exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (by simp)
+    | lengthString =>
+      obtain ⟨s, rfl⟩ := V_string.mp hv
+      simp only [Value.getProp, ite_true]
+      exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (by simp)
   · simp only [List.cons.injEq] at he; rw [he.1] at hv; simp at hv
 
 /-- Writing a field: the object's contents keep their type. -/
 theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} {c : Nat}
     {W : World} {h : Heap} {R : Option Ty}
-    (hp : Entails C ⟨.hasProp l, [τ, σ]⟩) (hC : HoldsOrVar C) (hvo : V c W τ vo)
-    (hvv : V c W σ vv) (hH : HeapOK c W h) :
+    (hp : Entails C ⟨.hasProp l, [τ, σ]⟩) (hw : Entails C ⟨.fieldWrite, [τ]⟩) (hC : HoldsOrVar C)
+    (hvo : V c W τ vo) (hvv : V c W σ vv) (hH : HeapOK c W h) :
     Safe ((vo.setProp h l vv).1, c, (vo.setProp h l vv).2) c W σ R := by
   rcases hp.holdsOrVar hC with hi | ⟨a, _, he⟩
   · cases hi with
+    | lengthArray | lengthString =>
+      exfalso
+      rcases hw.holdsOrVar hC with hi | ⟨a, _, he⟩
+      · cases hi
+      · simp at he
     | hasProp hf =>
       rename_i ls slots
       rw [V_record] at hvo
@@ -650,6 +690,93 @@ theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} 
         simp only [List.lookup_cons, hne]
         rw [lookup_filter_ne e]
         exact h₁
+  · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
+
+/-- A fault is safe: the program stops there. -/
+theorem Safe.fault {f : Fault} {c : Nat} {W : World} {h : Heap} {τ : Ty} {R : Option Ty}
+    (hH : HeapOK c W h) : Safe (.fault f, c, h) c W τ R :=
+  ⟨Nat.le_refl c, .inr ⟨W, List.prefix_refl W, hH, .inr (.inl trivial)⟩⟩
+
+theorem VList.replicate {k : Nat} {W : World} {τ : Ty} :
+    ∀ {n : Nat} {vs : List Value}, VList k W (List.replicate n τ) vs → ∀ w ∈ vs, V k W τ w
+  | 0, [], _, w, hw => by cases hw
+  | _ + 1, v :: vs, h, w, hw => by
+    rw [List.replicate_succ, VList_cons] at h
+    rcases List.mem_cons.mp hw with rfl | hw
+    · exact h.1
+    · exact VList.replicate h.2 w hw
+  | 0, _ :: _, h, _, _ => by simp at h
+  | _ + 1, [], h, _, _ => by rw [List.replicate_succ] at h; simp at h
+
+/-- Reading an element: an instance of `Indexable` says the container has
+elements of the type, and an index it hasn't is a fault. -/
+theorem index_sound {C : List Pred} {τ ι σ : Ty} {vo vi : Value} {c : Nat} {W : World}
+    {h : Heap} {R : Option Ty} (hp : Entails C ⟨.indexable, [τ, ι, σ]⟩) (hC : HoldsOrVar C)
+    (hvo : V c W τ vo) (hvi : V c W ι vi) (hH : HeapOK c W h) :
+    Safe (vo.index h vi, c, h) c W σ R := by
+  rcases hp.holdsOrVar hC with hi | ⟨a, _, he⟩
+  · cases hi with
+    | indexArray =>
+      rw [V_array] at hvo
+      obtain ⟨ℓ, rfl, hℓ⟩ := hvo
+      obtain ⟨n, rfl⟩ := V_number.mp hvi
+      obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
+      obtain ⟨vs, rfl, hvs⟩ := V_elems.mp (SchemeV.mono_iff.mp hsv)
+      simp only [Value.index, hcv]
+      split
+      · rename_i v hv
+        obtain ⟨k, -, hk⟩ := Option.bind_eq_some_iff.mp hv
+        exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (hvs v (List.mem_of_getElem? hk))
+      · exact Safe.fault hH
+    | indexString =>
+      obtain ⟨s, rfl⟩ := V_string.mp hvo
+      obtain ⟨n, rfl⟩ := V_number.mp hvi
+      simp only [Value.index]
+      split
+      · exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (by simp)
+      · exact Safe.fault hH
+  · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
+
+/-- Storing an element: an array's cell keeps its type, and an index past
+its end is a fault. -/
+theorem setIndex_sound {C : List Pred} {τ ι σ : Ty} {vo vi vv : Value} {c : Nat} {W : World}
+    {h : Heap} {R : Option Ty} (hp : Entails C ⟨.indexable, [τ, ι, σ]⟩)
+    (hw : Entails C ⟨.indexWrite, [τ]⟩) (hC : HoldsOrVar C) (hvo : V c W τ vo)
+    (hvi : V c W ι vi) (hvv : V c W σ vv) (hH : HeapOK c W h) :
+    Safe ((vo.setIndex h vi vv).1, c, (vo.setIndex h vi vv).2) c W σ R := by
+  rcases hw.holdsOrVar hC with hi | ⟨a, _, he⟩
+  · cases hi with
+    | writeArray =>
+      rename_i ε
+      -- The element type is the array's.
+      have hσ : σ = ε ∧ ι = .number := by
+        rcases hp.holdsOrVar hC with hi | ⟨a, _, he⟩
+        · cases hi with
+          | indexArray => exact ⟨rfl, rfl⟩
+        · simp at he
+      obtain ⟨rfl, rfl⟩ := hσ
+      rw [V_array] at hvo
+      obtain ⟨ℓ, rfl, hℓ⟩ := hvo
+      obtain ⟨n, rfl⟩ := V_number.mp hvi
+      obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
+      obtain ⟨vs, rfl, hvs⟩ := V_elems.mp (SchemeV.mono_iff.mp hsv)
+      simp only [Value.setIndex, hcv]
+      split
+      · rename_i k _
+        split
+        · refine Safe.ok (Nat.le_refl c) (List.prefix_refl W)
+            (hH.set hℓ (SchemeV.mono_iff.mpr (V_elems.mpr ⟨_, rfl, fun w hw => ?_⟩))) hvv
+          rcases List.mem_or_eq_of_mem_set hw with hw | rfl
+          · exact hvs w hw
+          · exact hvv
+        · split
+          · refine Safe.ok (Nat.le_refl c) (List.prefix_refl W)
+              (hH.set hℓ (SchemeV.mono_iff.mpr (V_elems.mpr ⟨_, rfl, fun w hw => ?_⟩))) hvv
+            rcases List.mem_append.mp hw with hw | hw
+            · exact hvs w hw
+            · simp only [List.mem_singleton] at hw; subst hw; exact hvv
+          · exact Safe.fault hH
+      · exact Safe.fault hH
   · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
 
 /-- A slot of a spread's result, with the operand's slot and the slot it is
@@ -1108,10 +1235,13 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           · simp only at hs; subst hs; exact ⟨hc₂, .inl rfl⟩
           · simp only at hv'; subst hv'; exact again W₂ hW₂ hH₂
           · simp only at habr
-            cases r <;> simp only [Result.Abrupt] at habr
-            · exact ⟨hc₂, .inr ⟨W₂, hW₂, hH₂, .inr (.inl trivial)⟩⟩
-            · exact Safe.ok hc₂ hW₂ hH₂ (by simp)
-            · exact again W₂ hW₂ hH₂
+            cases r
+            case broke => exact Safe.ok hc₂ hW₂ hH₂ (by simp)
+            case continued => exact again W₂ hW₂ hH₂
+            all_goals
+              first
+                | exact ⟨hc₂, .inr ⟨W₂, hW₂, hH₂, .inr (.inl habr)⟩⟩
+                | simp [Result.Abrupt] at habr
           · simp only at hv'; subst hv'
             exact ⟨hc₂, .inr ⟨W₂, hW₂, hH₂, .inr (.inr ⟨v', rfl, hret⟩)⟩⟩
         · exact Safe.ok (Nat.le_refl _) (List.prefix_refl _) hH₁ (by simp)
@@ -1175,6 +1305,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         case stuck s =>
           exfalso
           rcases hs with ⟨_, e, _⟩ | e | ⟨_, e, _⟩ <;> simp [Result.Abrupt] at e
+        case fault f => exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, hs⟩⟩
         all_goals
           simp only
           rw [Nat.min_eq_left hc₁]
@@ -1218,13 +1349,13 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
   | set e l v ihe ihv =>
     intro k C Γ R W env h τ ht hC hG hH
     cases ht with
-    | set he hp hv =>
+    | set he hp hw hv =>
       simp only [run]
       refine Safe.bindC (ihe he hC hG hH) fun vo W₁ _ hW₁ hH₁ hvo => ?_
       have hc₁ := run_clock_le k env h e
       rw [Nat.min_eq_left hc₁]
       refine Safe.bindC (ihv hv hC (G.mono hW₁ hG) hH₁) fun vv W₂ _ hW₂ hH₂ hvv => ?_
-      exact setProp_sound hp hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvv hH₂
+      exact setProp_sound hp hw hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvv hH₂
   | spread e₁ e₂ ih₁ ih₂ =>
     intro k C Γ R W env h τ ht hC hG hH
     cases ht with
@@ -1254,6 +1385,54 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           | _ + 1, hs, _ => simp at hs)
       · rw [V_record, hH₂.1]
         exact ⟨_, rfl, by simp⟩
+
+  | arr es ih =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | @arr _ _ _ _ σ hes =>
+      simp only [run]
+      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasType L C Γ R p.1 p.2 :=
+        fun p hp => by
+          obtain ⟨h₁, h₂⟩ := List.of_mem_zip hp
+          rw [List.eq_of_mem_replicate h₂]; exact hes _ h₁
+      refine Safe.bindArgs (runArgs_sound hC es _ ih (by simp) hargs hG hH)
+        fun vs W₁ _ hW₁ hH₁ hvs => ?_
+      have hb : (runArgs k env h es).2.2.length = W₁.length := hH₁.1
+      have hW₂ := List.prefix_append W₁ [Scheme.mono (.app .elems [σ])]
+      refine Safe.ok (Nat.le_refl _) hW₂ ?_ ?_
+      · exact hH₁.alloc (by simp) (fun i s' v' hs hv' => by
+          match i, hs, hv' with
+          | 0, hs, hv' =>
+            simp at hs hv'; subst hs hv'
+            exact SchemeV.mono_iff.mpr (V_elems.mpr ⟨_, rfl, fun w hw =>
+              (VList.replicate hvs w hw).mono (Nat.le_refl _) hW₂⟩)
+          | _ + 1, hs, _ => simp at hs)
+      · rw [V_array, hb]
+        exact ⟨_, rfl, by simp⟩
+  | index e i ihe ihi =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | index he hi hp =>
+      simp only [run]
+      refine Safe.bindC (ihe he hC hG hH) fun vo W₁ _ hW₁ hH₁ hvo => ?_
+      have hc₁ := run_clock_le k env h e
+      rw [Nat.min_eq_left hc₁]
+      refine Safe.bindC (ihi hi hC (G.mono hW₁ hG) hH₁) fun vi W₂ _ hW₂ hH₂ hvi => ?_
+      exact index_sound hp hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvi hH₂
+  | setIndex e i v ihe ihi ihv =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | setIndex he hi hp hw hv =>
+      simp only [run]
+      refine Safe.bindC (ihe he hC hG hH) fun vo W₁ _ hW₁ hH₁ hvo => ?_
+      have hc₁ := run_clock_le k env h e
+      rw [Nat.min_eq_left hc₁]
+      refine Safe.bindC (ihi hi hC (G.mono hW₁ hG) hH₁) fun vi W₂ _ hW₂ hH₂ hvi => ?_
+      have hc₂ := run_clock_le (run k env h e).2.1 env (run k env h e).2.2 i
+      rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
+      refine Safe.bindC (ihv hv hC (G.mono (hW₁.trans hW₂) hG) hH₂) fun vv W₃ _ hW₃ hH₃ hvv => ?_
+      exact setIndex_sound hp hw hC ((hvo.mono (run_clock_le _ _ _ _) hW₂).mono
+        (run_clock_le _ _ _ _) hW₃) (hvi.mono (run_clock_le _ _ _ _) hW₃) hvv hH₃
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/

@@ -53,7 +53,9 @@ Paths like `src/infer` are relative to `crates/inty`.
 - Algorithm W, proved sound and complete.
 - Generic types (a constructor applied to types), Rémy's flat rows,
   `HasProp` with improvement and inty's generalisation, object literals,
-  reads, writes and spread (phase 3, in progress).
+  reads, writes and spread; arrays, indexing (`Indexable`, `IndexWrite`)
+  and `length`, with an index out of bounds a fault (phase 3, in
+  progress).
 - Differential testing against inty and Node.
 
 ## Phases
@@ -193,9 +195,25 @@ touching the generic proofs.
   to an open row (`default_has_prop`).
 - **Objects, containers and built-in properties.** Object literals, reads,
   writes and spread (done: an object is a cell of its fields, so a write
-  adds a missing property, as in JavaScript); arrays, tuples and `Map`
-  with their `Indexable` instances; the properties of strings and arrays
-  (`s.length`, `xs.length`) as `HasProp` instances.
+  adds a missing property, as in JavaScript); arrays (done: literals,
+  `e[i]` by `Indexable τ ι σ`, `e[i] = v` by `Indexable` and `IndexWrite
+  τ`, which strings lack, and `e.l = v` by `FieldWrite τ`, which only
+  objects have; `s.length` and `xs.length` as `HasProp` instances), then
+  tuples and `Map` with their `Indexable` instances. A class's first
+  argument determines the rest, so improvement and its completeness are
+  written once over each class's arity (`Pred.decide`,
+  `Pred.decide_complete`), and a new instance adds an arm to each.
+- **Arrays (done).** An array is a cell of its elements, as an object is
+  of its fields. An index that isn't a whole number in bounds is a fault
+  (`Result.fault`, which `Safe` allows), as `dynamics` makes it
+  (`Stuck::OutOfBounds`), where JavaScript reads `undefined`; a store at
+  the length appends. Writing the model found four inty bugs, all fixed:
+  stores into a string's characters were accepted (`s[0] = "c"`, a
+  `TypeError` in strict code), as were stores of a built-in property
+  (`xs.length = 0`, `f.call = 1`) and out-of-bounds reads and writes,
+  which `dynamics` let through; and a string literal couldn't be indexed
+  (`"xyz"[0]` was rejected). inty wants an index to be an `Int`, where
+  the model takes any number (phase 4).
 - **Spread (done).** inty was unsound three ways: `{a: 1, ...o}` with `o`
   an open row kept the literal's `a` (`f({a: "s"}).a - 1` was accepted), a
   closed spread after an open one closed the result, and an open operand
@@ -230,7 +248,7 @@ touching the generic proofs.
   `dynamics`).
 - Arrays and records invariant while mutable (#96).
 - `Int ≤ Number`, at the top level only; the `Num`, `NumLit` and `Arith`
-  classes; defaulting; checked `Int` arithmetic (`Stuck::IntRange`) as a
+  classes; defaulting; `Int` indices; checked `Int` arithmetic (`Stuck::IntRange`) as a
   fault. `Float` is opaque in Lean, so proofs rely on inty's runtime range
   checks, and a bit-level binary64 model, tested against Node, where inty
   doesn't check.

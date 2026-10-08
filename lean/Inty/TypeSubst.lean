@@ -16,10 +16,11 @@ theorem Scheme.Simple.subst {s : Scheme} (hs : s.Simple) (σ : Subst) : (s.subst
   intro p hp
   simp only [Scheme.subst, List.mem_map] at hp
   obtain ⟨q, hq, rfl⟩ := hp
-  rcases hs q hq with ⟨i, hi, h | ⟨l, τ, h⟩⟩ | ⟨q', τ, t, r, h, hb⟩ <;> subst h
-  · exact .inl ⟨i, hi, .inl (by simp [PPred.subst, PTy.subst])⟩
-  · exact .inl ⟨i, hi, .inr ⟨l, τ.subst σ, by simp [PPred.subst, PTy.subst]⟩⟩
-  · exact .inr ⟨q'.subst σ, τ.subst σ, t.subst σ, r.subst σ, by simp [PPred.subst],
+  rcases hs q hq with ⟨hcls, hlen, i, hi, rest, h⟩ | ⟨q', τ, t, r, h, hb⟩
+  · refine .inl ⟨hcls, by simpa [PPred.subst] using hlen, i, hi, rest.map (·.subst σ), ?_⟩
+    simp [PPred.subst, h, PTy.subst]
+  · subst h
+    exact .inr ⟨q'.subst σ, τ.subst σ, t.subst σ, r.subst σ, by simp [PPred.subst],
       by simpa [Scheme.subst] using hb⟩
 
 theorem objSlots_subst (σ : Subst) (L ls : List String) (τs absent : List Ty) :
@@ -90,7 +91,9 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact ih q hq
   | get _ hp ih => exact .get ih (by simpa [Pred.subst] using hp.subst σ)
-  | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.subst] using hp.subst σ) ihv
+  | set _ hp hw _ ihe ihv =>
+    exact .set ihe (by simpa [Pred.subst] using hp.subst σ) (by simpa [Pred.subst] using hw.subst σ)
+      ihv
   | @spread _ _ _ _ _ _ ps τs _ hps hτs hss hrs _ _ hm ih₁ ih₂ =>
     simp only [Ty.subst_app] at ih₁ ih₂ ⊢
     refine .spread (ps := ps.map (·.subst σ)) (τs := τs.map (·.subst σ))
@@ -100,5 +103,10 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
     · rw [← mergePreds_subst] at hp
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact (hm q hq).subst σ
+  | arr _ ih => exact .arr ih
+  | index _ _ hp ihe ihi => exact .index ihe ihi (by simpa [Pred.subst] using hp.subst σ)
+  | setIndex _ _ hp hw _ ihe ihi ihv =>
+    exact .setIndex ihe ihi (by simpa [Pred.subst] using hp.subst σ)
+      (by simpa [Pred.subst] using hw.subst σ) ihv
 
 end Inty

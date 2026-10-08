@@ -89,12 +89,19 @@ example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType e.labels.era
   inferProgram_complete
 
 example : Pred.OnVarShaped p ↔
-    (∃ a, p = ⟨.plus, [.var a]⟩) ∨ (∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩) ∨
+    (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ a rest, p.args = .var a :: rest) ∨
       ∃ a τ s r, p = ⟨.merge, [.var a, τ, s, r]⟩ := Iff.rfl
 
 example : Pred.AssumableAt top p ↔
-    (∃ a, p = ⟨.plus, [.var a]⟩) ∨ (∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩) ∨
+    (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ a rest, p.args = .var a :: rest) ∨
       ∃ q τ s r, p = ⟨.merge, [q, τ, s, r]⟩ ∧ (top = true → ∃ a, q = .var a) := Iff.rfl
+
+example : Cls.arity c = match c with
+    | .plus | .indexWrite | .fieldWrite => 1
+    | .hasProp _ => 2
+    | .indexable => 3
+    | .merge => 4 := by
+  cases c <;> rfl
 
 example : ∀ (c : Nat) (env : Env) (h : Heap) (e : Expr), (run c env h e).2.1 ≤ c :=
   run_clock_le
@@ -126,8 +133,12 @@ example : V k W (.app .contents [.record ls slots]) v ↔ ∃ fs, v = .fields fs
       ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
     ∀ l s, Ty.field l ls slots = some s →
       (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := V_contents
-example : Result.Abrupt r ↔ (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued := by
-  cases r <;> simp [Result.Abrupt]
+example : V k W (.array τ) v ↔ ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.mono (.app .elems [τ])) :=
+  V_array
+example : V k W (.app .elems [τ]) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := V_elems
+example : Result.Abrupt r ↔
+    (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued ∨ ∃ f, r = .fault f := by
+  cases r <;> simp [Result.Abrupt] <;> exact ⟨.outOfBounds, trivial⟩
 example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
     (∀ i < j, HeapOK i W' h) → V j W' θ thisv → VList j W' τs args →
     (call j h f thisv args).2.1 ≤ j ∧ ((call j h f thisv args).1 = .timeout ∨
@@ -168,21 +179,42 @@ example : Entails C p ↔ Inst p ∨ p ∈ C := Iff.rfl
 
 example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ ∨
     (∃ l ls fs σ, Ty.field l ls fs = some (.slot .pre σ) ∧ p = ⟨.hasProp l, [.record ls fs, σ]⟩) ∨
-    (∃ τ s, p = ⟨.merge, [.pre, τ, s, .slot .pre τ]⟩) ∨ ∃ τ s, p = ⟨.merge, [.abs, τ, s, s]⟩ :=
+    (∃ τ s, p = ⟨.merge, [.pre, τ, s, .slot .pre τ]⟩) ∨ (∃ τ s, p = ⟨.merge, [.abs, τ, s, s]⟩) ∨
+    (∃ τ, p = ⟨.hasProp "length", [.array τ, .number]⟩) ∨
+    p = ⟨.hasProp "length", [.string, .number]⟩ ∨
+    (∃ τ, p = ⟨.indexable, [.array τ, .number, τ]⟩) ∨
+    p = ⟨.indexable, [.string, .number, .string]⟩ ∨
+    (∃ τ, p = ⟨.indexWrite, [.array τ]⟩) ∨
+    ∃ ls slots, p = ⟨.fieldWrite, [.record ls slots]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
     | plusString => exact .inr (.inl rfl)
     | hasProp hf => exact .inr (.inr (.inl ⟨_, _, _, _, hf, rfl⟩))
     | mergePre => exact .inr (.inr (.inr (.inl ⟨_, _, rfl⟩)))
-    | mergeAbs => exact .inr (.inr (.inr (.inr ⟨_, _, rfl⟩))),
+    | mergeAbs => exact .inr (.inr (.inr (.inr (.inl ⟨_, _, rfl⟩))))
+    | lengthArray => exact .inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))
+    | lengthString => exact .inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))
+    | indexArray => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))))
+    | indexString => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))))
+    | writeArray =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))))))
+    | writeRecord =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, rfl⟩))))))))),
    fun h => by
-    rcases h with rfl | rfl | ⟨l, ls, fs, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩
+    rcases h with rfl | rfl | ⟨l, ls, fs, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, rfl⟩ |
+      rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | ⟨ls, slots, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
     · exact .mergePre
-    · exact .mergeAbs⟩
+    · exact .mergeAbs
+    · exact .lengthArray
+    · exact .lengthString
+    · exact .indexArray
+    · exact .indexString
+    · exact .writeArray
+    · exact .writeRecord⟩
 
 /-- A constraint left on a type variable is all `HoldsOrVar` allows beside
 the instances. -/
@@ -254,11 +286,14 @@ example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1]) "y") τ := by
     cases he with
     | obj hτs _ _ _ _ =>
       rcases hp with hi | hi
-      · cases hi with
-        | hasProp hf =>
+      · generalize hq : (⟨.hasProp "y", _⟩ : Pred) = q at hi
+        cases hi <;> simp only [Pred.mk.injEq, Cls.hasProp.injEq, List.cons.injEq] at hq
+        case hasProp hf =>
+          obtain ⟨rfl, ⟨-, -⟩, -⟩ := hq
           have := objSlots_field hf
           obtain ⟨_, rfl⟩ := List.length_eq_one_iff.mp hτs
           simp [Ty.field] at this
+        all_goals simp at hq
       · cases hi
 
 /-- `(1).x`: a number has no fields. -/
@@ -267,13 +302,26 @@ example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
   cases h with
   | get he hp =>
     cases he with
-    | lit hl => cases hl; rcases hp with hi | hi <;> cases hi
+    | lit hl =>
+      cases hl
+      rcases hp with hi | hi
+      · generalize hq : (⟨.hasProp "x", _⟩ : Pred) = q at hi
+        cases hi <;> simp at hq
+      · cases hi
 
 /-- `1(2)`: a number is not a function. -/
 example : ¬ HasType L [] [] none (.app (num 1) [num 2]) τ := by
   intro h
   cases h with
   | app hf _ _ => cases hf with | lit hl => cases hl
+
+/-- `"ab"[0] = "c"`: strings take no stores. -/
+example : ¬ HasType L [] [] none (.setIndex (str "ab") (num 0) (str "c")) τ := by
+  intro h
+  cases h with
+  | setIndex he _ _ hw _ =>
+    cases he with
+    | lit hl => cases hl; rcases hw with hi | hi <;> cases hi
 
 /-- `(function f(x) { return x; })(1, 2)`: one argument per parameter. -/
 example : ¬ HasType L [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by

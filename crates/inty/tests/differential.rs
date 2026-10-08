@@ -90,6 +90,12 @@ enum Core {
     Set(Box<Core>, String, Box<Core>),
     /// `{...e₁, ...e₂}`.
     Spread(Box<Core>, Box<Core>),
+    /// An array literal `[e₀, …]`.
+    Arr(Vec<Core>),
+    /// `e[i]`.
+    Index(Box<Core>, Box<Core>),
+    /// `e[i] = v`.
+    SetIndex(Box<Core>, Box<Core>, Box<Core>),
 }
 
 use Core::*;
@@ -148,6 +154,12 @@ fn wire(e: &Core) -> String {
         Get(e, l) => format!("(get {} s:{})", wire(e), l),
         Set(e, l, v) => format!("(set {} s:{} {})", wire(e), l, wire(v)),
         Spread(x, y) => format!("(spread {} {})", wire(x), wire(y)),
+        Arr(es) => {
+            let es: Vec<String> = es.iter().map(|e| format!(" {}", wire(e))).collect();
+            format!("(arr{})", es.concat())
+        }
+        Index(e, i) => format!("(index {} {})", wire(e), wire(i)),
+        SetIndex(e, i, v) => format!("(setindex {} {} {})", wire(e), wire(i), wire(v)),
     }
 }
 
@@ -202,6 +214,9 @@ fn fractional(e: &Core) -> Core {
         Get(x, l) => Get(f(x), l.clone()),
         Set(x, l, y) => Set(f(x), l.clone(), f(y)),
         Spread(x, y) => Spread(f(x), f(y)),
+        Arr(es) => Arr(es.iter().map(fractional).collect()),
+        Index(x, i) => Index(f(x), f(i)),
+        SetIndex(x, i, y) => SetIndex(f(x), f(i), f(y)),
         other => other.clone(),
     }
 }
@@ -271,7 +286,7 @@ impl Js {
                 // with the object as `this`; the calculus's calls have no
                 // receiver, as `(0, o.f)(…)` hasn't.
                 let callee = match **f {
-                    Get(..) => format!("(0, {})", self.expr(f)),
+                    Get(..) | Index(..) => format!("(0, {})", self.expr(f)),
                     _ => format!("({})", self.expr(f)),
                 };
                 format!("{}({})", callee, args.join(", "))
@@ -297,6 +312,14 @@ impl Js {
             Get(e, l) => format!("({}).{}", self.expr(e), l),
             Set(e, l, v) => format!("(({}).{} = {})", self.expr(e), l, self.expr(v)),
             Spread(x, y) => format!("({{...({}), ...({})}})", self.expr(x), self.expr(y)),
+            Arr(es) => {
+                let es: Vec<String> = es.iter().map(|e| self.expr(e)).collect();
+                format!("[{}]", es.join(", "))
+            }
+            Index(e, i) => format!("({})[{}]", self.expr(e), self.expr(i)),
+            SetIndex(e, i, v) => {
+                format!("(({})[{}] = {})", self.expr(e), self.expr(i), self.expr(v))
+            }
         }
     }
 
@@ -372,15 +395,25 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
                 || refers_from_inner(e, i, inner)
         }
         Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) => refers_from_inner(x, i, inner),
-        Plus(x, y) | Minus(x, y) | Seq(x, y) | While(x, y) | TryFinally(x, y) | Spread(x, y) => {
-            refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner)
-        }
+        Plus(x, y)
+        | Minus(x, y)
+        | Seq(x, y)
+        | While(x, y)
+        | TryFinally(x, y)
+        | Spread(x, y)
+        | Index(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner),
         TryCatch(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
         Break | Continue => false,
         Num(..) | Str(_) | Bool(_) | Undef | Null => false,
         Obj(fields) => fields.iter().any(|(_, e)| refers_from_inner(e, i, inner)),
         Get(x, _) => refers_from_inner(x, i, inner),
         Set(x, _, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner),
+        Arr(es) => es.iter().any(|e| refers_from_inner(e, i, inner)),
+        SetIndex(x, j, y) => {
+            refers_from_inner(x, i, inner)
+                || refers_from_inner(j, i, inner)
+                || refers_from_inner(y, i, inner)
+        }
     }
 }
 
@@ -424,6 +457,8 @@ enum T {
     Arrow(Vec<T>, Box<T>),
     /// An object with these fields, sorted by label.
     Obj(Vec<(String, T)>),
+    /// An array of these elements.
+    Arr(Box<T>),
 }
 
 /// The property labels the generated programs use.
@@ -481,6 +516,9 @@ impl Gen {
     }
 
     fn ty(&mut self, depth: usize) -> T {
+        if depth > 0 && self.rng.chance(8) {
+            return T::Arr(b2(self.ty(depth - 1)));
+        }
         if depth > 0 && self.rng.chance(15) {
             let l = self.label();
             let t = self.ty(depth - 1);
@@ -518,7 +556,7 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
-            T::Arrow(..) | T::Obj(_) => return None,
+            T::Arrow(..) | T::Obj(_) | T::Arr(_) => return None,
         })
     }
 
@@ -564,6 +602,28 @@ impl Gen {
                 Get(b(obj), l)
             } else {
                 Set(b(obj), l, b(self.typed(t, d, scope, false)))
+            };
+        }
+        // A read, or a write, of an array's element of this type (or a
+        // string's character), or an array's or a string's `length`.
+        if depth > 0 && self.rng.chance(10) {
+            let i = self.index(d, scope);
+            if *t == T::Str && self.rng.chance(30) {
+                return Index(b(self.typed(&T::Str, d, scope, false)), b(i));
+            }
+            if *t == T::Num && self.rng.chance(30) {
+                let c = if self.rng.chance(50) {
+                    T::Str
+                } else {
+                    T::Arr(b2(self.ty(1)))
+                };
+                return Get(b(self.typed(&c, d, scope, false)), "length".into());
+            }
+            let a = self.typed(&T::Arr(b2(t.clone())), d, scope, false);
+            return if self.rng.chance(70) {
+                Index(b(a), b(i))
+            } else {
+                SetIndex(b(a), b(i), b(self.typed(t, d, scope, false)))
             };
         }
         if stmt && depth > 0 && self.rng.chance(25) {
@@ -664,6 +724,10 @@ impl Gen {
                     let e2 = self.typed(&T::Obj(later), d, scope, false);
                     Spread(b(e1), b(e2))
                 }
+                T::Arr(u) => {
+                    let n = self.rng.below(4);
+                    Arr((0..n).map(|_| self.typed(u, d, scope, false)).collect())
+                }
                 // An object literal, its fields in any order.
                 T::Obj(fields) => {
                     let mut fields: Vec<(String, Core)> = fields
@@ -677,6 +741,16 @@ impl Gen {
                 }
                 _ => self.literal(t).unwrap(),
             },
+        }
+    }
+
+    /// An array index: mostly a small one, in bounds or just past the end;
+    /// sometimes any number.
+    fn index(&mut self, d: usize, scope: &mut Vec<Binding>) -> Core {
+        if self.rng.chance(70) {
+            Num(self.rng.below(3) as u64, 0)
+        } else {
+            self.typed(&T::Num, d, scope, false)
         }
     }
 
@@ -866,6 +940,21 @@ impl Gen {
                     Set(b(o), l, b(self.any(d, scope, false)))
                 }
             }
+            5 if self.rng.chance(30) => {
+                let a = self.any(d, scope, false);
+                // Numeric indices only: the model reads a property of an
+                // object by a string index, but inty doesn't.
+                let i = Num(self.rng.below(3) as u64, 0);
+                if self.rng.chance(60) {
+                    Index(b(a), b(i))
+                } else {
+                    SetIndex(b(a), b(i), b(self.any(d, scope, false)))
+                }
+            }
+            5 if self.rng.chance(20) => {
+                let n = self.rng.below(3);
+                Arr((0..n).map(|_| self.any(d, scope, false)).collect())
+            }
             5 => Typeof(b(self.any(d, scope, false))),
             6 => Neg(b(self.any(d, scope, false))),
             7 | 8 => Plus(b(self.any(d, scope, false)), b(self.any(d, scope, false))),
@@ -918,6 +1007,8 @@ enum Run {
     /// A `return` that escaped to the top (the model only; typing rules it out).
     Returned(String),
     Stuck(String),
+    /// A fault the type system allows, such as an index out of bounds.
+    Fault(String),
     Timeout,
     Unsupported,
     /// The engine raised its own error (a `TypeError`, say).
@@ -936,6 +1027,7 @@ fn core_type(t: &Type) -> String {
         Type::Func { .. } => "fun".into(),
         Type::Row(_) if t.as_callable().is_some() => "fun".into(),
         Type::Row(_) => "obj".into(),
+        Type::Array(_) => "array".into(),
         Type::Var(_) => "var".into(),
         // The empty union: what doesn't complete, such as a `throw`.
         Type::Union(ts) if ts.is_empty() => "never".into(),
@@ -1018,11 +1110,19 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
         .values()
         .map(|ty| format!("{}", state.flatten_type(ty)))
         .collect();
-    shown.extend(errors);
     let mut features = Features::new();
     if fewer_params {
         features.insert("fewer parameters");
     }
+    // An error between `Int` and `Number` (`Int[]` and `Number[]`, say,
+    // which don't unify): the model has only `number`.
+    if errors
+        .iter()
+        .any(|e| e.contains("Int") && e.contains("Number"))
+    {
+        features.insert("Int");
+    }
+    shown.extend(errors);
     for text in &shown {
         if text.contains('μ') {
             features.insert("recursive types");
@@ -1032,6 +1132,10 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
         }
         if text.contains("never") {
             features.insert("never");
+        }
+        // An array or string index inty wants an `Int`.
+        if text.contains("expected Int") || text.ends_with("found Int") {
+            features.insert("Int index");
         }
     }
     (typing, features)
@@ -1052,6 +1156,7 @@ fn value_wire(v: Value) -> String {
         Value::Null => "null".into(),
         Value::Closure(_) | Value::Builtin(_) => "fun".into(),
         Value::Object(_) => "obj".into(),
+        Value::Array(_) => "arr".into(),
         other => format!("other {}", other),
     }
 }
@@ -1061,6 +1166,7 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Ok(v) => Run::Value(value_wire(v)),
         Err(Stuck::UncaughtThrow(v)) => Run::Thrown(value_wire(v)),
         Err(Stuck::FuelExhausted) => Run::Timeout,
+        Err(Stuck::OutOfBounds { .. }) => Run::Fault("outOfBounds".into()),
         // Spreading what isn't an object: JavaScript copies a primitive's
         // own properties, which the model and `dynamics` don't.
         Err(Stuck::NotImplemented(what)) if what.contains("spread") => {
@@ -1096,6 +1202,8 @@ fn parse_run(run: &str) -> Run {
         Run::Thrown(value(v))
     } else if let Some(v) = run.strip_prefix("returned ") {
         Run::Returned(value(v))
+    } else if let Some(why) = run.strip_prefix("fault ") {
+        Run::Fault(why.to_string())
     } else if let Some(name) = run.strip_prefix("error ") {
         Run::NativeError(name.to_string())
     } else {
@@ -1196,7 +1304,7 @@ fn env_or(name: &str, default: u64) -> u64 {
 /// feature inty's types show it used.
 fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Option<&'static str> {
     match (inty, model) {
-        // Roadmap phase 6: `c ? 1 : null` is `Number | Null` in inty, and
+        // Roadmap phase 5: `c ? 1 : null` is `Number | Null` in inty, and
         // `c ? undefined : x` is `Undefined | t`, where the model unifies.
         (Typing::Type(_), Typing::Reject) if features.contains("unions") => {
             Some("unions (a nullable join)")
@@ -1204,13 +1312,13 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(t), Typing::Type(_)) if t.starts_with("union(") => {
             Some("unions (a nullable join)")
         }
-        // Roadmap phase 10 (optional parameters): a function literal with
+        // Roadmap phase 7 (optional parameters): a function literal with
         // fewer parameters than the function type expected of it, which
         // ignores the extra arguments, as JavaScript does.
         (Typing::Type(_), Typing::Reject) if features.contains("fewer parameters") => {
             Some("fewer parameters than the expected function type")
         }
-        // Roadmap phase 8: `function f(x) { return f; }`.
+        // Roadmap phase 6: `function f(x) { return f; }`.
         (Typing::Type(_), Typing::Reject) if features.contains("recursive types") => {
             Some("equi-recursive types")
         }
@@ -1232,12 +1340,18 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Type(m)) if m == "var" => {
             Some("what doesn't complete (the model's free type variable)")
         }
-        // Roadmap phase 5, the other way: the model folds `Int` into
+        // Roadmap phase 4, the other way: the model folds `Int` into
         // `number`, but in inty `Int ≤ Number` holds for values only, so
         // `(a) => Int` and `(b) => Number` don't join. Evidence: inty
         // accepts the program once no literal is an `Int`.
         (Typing::Reject, Typing::Type(_)) if features.contains("Int") => {
             Some("Int and Number (the model has only number)")
+        }
+        // Roadmap phase 4: inty wants an array's or a string's index to be
+        // an `Int`; the model takes any number, a fractional one being out
+        // of bounds (a fault).
+        (Typing::Reject, Typing::Type(_)) if features.contains("Int index") => {
+            Some("Int indices (the model has only number)")
         }
         // inty's nullable join (`c ? undefined : x` is `Undefined | t`
         // even for an unknown `t`) can make an HM-typable program an
@@ -1341,7 +1455,12 @@ fn inty_agrees_with_the_lean_model() {
             ));
         }
         // Semantics: both finished, so they must agree.
-        let finished = |r: &Run| matches!(r, Run::Value(_) | Run::Stuck(_) | Run::Thrown(_));
+        let finished = |r: &Run| {
+            matches!(
+                r,
+                Run::Value(_) | Run::Stuck(_) | Run::Thrown(_) | Run::Fault(_)
+            )
+        };
         if finished(&run) && finished(&model_run) && run != model_run {
             failures.push(report("the interpreters disagree"));
         }
@@ -1356,7 +1475,10 @@ fn inty_agrees_with_the_lean_model() {
             if finished(&model_run) && &model_run != engine_run {
                 failures.push(report("the model and the engine disagree"));
             }
-            if let Run::NativeError(name) = engine_run {
+            // An index out of bounds is a fault in inty and the model, where
+            // JavaScript reads `undefined` and goes on, perhaps to an error.
+            let faulted = matches!(run, Run::Fault(_)) || matches!(model_run, Run::Fault(_));
+            if let (Run::NativeError(name), false) = (engine_run, faulted) {
                 if accepted {
                     failures.push(report(&format!(
                         "inty accepts a program that raises {name}"

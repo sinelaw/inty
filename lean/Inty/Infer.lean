@@ -70,8 +70,9 @@ theorem Ret.subst_congr {σ σ' : Subst} {R : Option Ty}
 /-- Whether a scheme's constraint is on one of its `k` quantified variables
 (`Scheme.Simple`). -/
 def PPred.isSimple (k : Nat) : PPred → Bool
-  | ⟨.plus, [.bound i]⟩ | ⟨.hasProp _, [.bound i, _]⟩ => decide (i < k)
   | ⟨.merge, [q, τ, t, _]⟩ => (q.bvs ++ τ.bvs ++ t.bvs).any (· < k)
+  | ⟨.merge, _⟩ => false
+  | ⟨c, .bound i :: rest⟩ => decide (i < k) && decide (rest.length + 1 = c.arity)
   | _ => false
 
 /-! ## Constraints whose arguments determine one another
@@ -88,33 +89,57 @@ inductive Improve where
   | fail
   | eq (τ₁ τ₂ : Ty)
 
-/-- Deciding a constraint on a known type, as inty's `resolve_has_prop`: a
-record's field `l` must be present, at the type the read gives. A `Merge`
-is decided only at the top level (`top`): where a binding generalises, it
-stays as it is, so that the decision doesn't depend on whether its
-presence is known by then (see `Scheme.Simple`). Its presence decides it:
-the operand's field if present, the slot written over if absent. -/
-def Pred.improve : Bool → Pred → Improve
-  | _, ⟨.hasProp _, [.var _, _]⟩ => .keep
-  | _, ⟨.hasProp l, [.record ls slots, σ]⟩ =>
+/-- Deciding a constraint whose first argument is known, as inty's
+`resolve_has_prop` and `resolve_indexable`: a record's field `l` must be
+present, at the type the read gives; an array's or a string's `length` is
+a number; an array's element has the array's type, a string's character
+is a string; a store into an array or an object holds. A `Merge`'s
+presence decides it: the operand's field if present, the slot written over
+if absent. -/
+def Pred.decide : Cls → Ty → List Ty → Improve
+  | .hasProp l, .record ls slots, [σ] =>
     match Ty.field l ls slots with
     | some s => .eq s (.slot .pre σ)
     | none => .fail
-  | _, ⟨.hasProp _, _⟩ => .fail
-  | _, ⟨.plus, _⟩ => .keep
-  | false, ⟨.merge, _⟩ => .keep
-  | true, ⟨.merge, [.var _, _, _, _]⟩ => .keep
-  | true, ⟨.merge, [.pre, τ, _, r]⟩ => .eq r (.slot .pre τ)
-  | true, ⟨.merge, [.abs, _, s, r]⟩ => .eq r s
-  | true, ⟨.merge, _⟩ => .fail
+  | .hasProp l, .array _, [σ] => if l = "length" then .eq σ .number else .fail
+  | .hasProp l, .string, [σ] => if l = "length" then .eq σ .number else .fail
+  | .indexable, .array τ, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, τ])
+  | .indexable, .string, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, .string])
+  -- (An instance holds: a trivial equation drops it.)
+  | .indexWrite, .array _, [] => .eq .number .number
+  | .fieldWrite, .record _ _, [] => .eq .number .number
+  | .merge, .pre, [τ, _, r] => .eq r (.slot .pre τ)
+  | .merge, .abs, [_, s, r] => .eq r s
+  | _, _, _ => .fail
 
-/-- The arguments a constraint's determining arguments fix: a `HasProp`'s
-receiver fixes its field's type, and a `Merge`'s operand slot and the slot
-it is written over fix the result. -/
+/-- A constraint of the class `c` on the arguments `args`: on a type
+variable it waits (if it has the class's arity), on a known type it is
+decided. -/
+def Pred.improveArgs (c : Cls) : List Ty → Improve
+  | .var _ :: rest => if rest.length + 1 = c.arity then .keep else .fail
+  | t :: rest => Pred.decide c t rest
+  | [] => .fail
+
+/-- Deciding a constraint on a known type. A `Plus` waits until the end
+(`Pred.settled`). A `Merge` is decided only at the top level (`top`): where
+a binding generalises, it stays as it is, so that the decision doesn't
+depend on whether its presence is known by then (see `Scheme.Simple`). -/
+def Pred.improve (top : Bool) (p : Pred) : Improve :=
+  match p.cls with
+  | .plus => .keep
+  | .merge => if top then Pred.improveArgs .merge p.args else .keep
+  | c => Pred.improveArgs c p.args
+
+/-- The arguments a constraint's determining arguments fix: a constraint's
+first argument fixes the rest (a `HasProp`'s receiver its field's type, an
+`Indexable`'s container its index and element), and a `Merge`'s operand
+slot and the slot it is written over fix the result. -/
 def Pred.fundep : Pred → Option (List Ty × List Ty)
-  | ⟨.hasProp _, [r, σ]⟩ => some ([r], [σ])
+  | ⟨.plus, _⟩ => none
   | ⟨.merge, [q, τ, t, r]⟩ => some ([q, τ, t], [r])
-  | _ => none
+  | ⟨.merge, _⟩ => none
+  | ⟨_, c :: rest⟩ => some ([c], rest)
+  | ⟨_, []⟩ => none
 
 /-- Decide the first constraint that can be decided: `none` if one fails,
 `some none` if none can be, or the equation it comes to and the others. -/
@@ -423,7 +448,8 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | none => none
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ,
-          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩],
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
+            [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩, ⟨.fieldWrite, [o₁.τ.subst o₂.σ]⟩],
           o₂.next⟩
   -- `{...e₁, ...e₂}`: `e₁` a record, `e₂` a record each of whose slots is
   -- a presence and a type, and a `Merge` for each label, all at fresh
@@ -452,6 +478,45 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
               (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ mergePreds ps τs ss rs).map
                 (·.subst σ₄₃),
               o₂.next + 4 * k⟩
+  -- `[e₀, …]`: one type for the elements, a fresh variable.
+  | Γ, R, .arr es, n =>
+    match inferArgs Γ R es n with
+    | none => none
+    | some o =>
+      match unify (.tuple o.τs) (.tuple (List.replicate o.τs.length (.var o.next))) with
+      | none => none
+      | some σ' =>
+        some ⟨Subst.compose σ' o.σ, (Ty.array (.var o.next)).subst σ', o.preds.map (·.subst σ'),
+          o.next + 1⟩
+  -- `e[i]`: `Indexable τ ι β`, for a fresh `β`.
+  | Γ, R, .index e i, n =>
+    match infer Γ R e n with
+    | none => none
+    | some o₁ =>
+      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) i o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, .var o₂.next,
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
+            [⟨.indexable, [o₁.τ.subst o₂.σ, o₂.τ, .var o₂.next]⟩],
+          o₂.next + 1⟩
+  -- `e[i] = v`: `Indexable τ ι ρ` and `IndexWrite τ`, `ρ` being `v`'s type.
+  | Γ, R, .setIndex e i v, n =>
+    match infer Γ R e n with
+    | none => none
+    | some o₁ =>
+      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) i o₁.next with
+      | none => none
+      | some o₂ =>
+        match infer (Ctx.subst o₂.σ (Ctx.subst o₁.σ Γ)) (Ret.subst o₂.σ (Ret.subst o₁.σ R)) v
+            o₂.next with
+        | none => none
+        | some o₃ =>
+          let τc := (o₁.τ.subst o₂.σ).subst o₃.σ
+          some ⟨Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ), o₃.τ,
+            (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst o₃.σ) ++ o₃.preds ++
+              [⟨.indexable, [τc, o₂.τ.subst o₃.σ, o₃.τ]⟩, ⟨.indexWrite, [τc]⟩],
+            o₃.next⟩
 
 /-- Infer a list of arguments, left to right, threading the substitution. -/
 def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
@@ -499,7 +564,9 @@ def Expr.labels : Expr → List String
   | .obj ls es => ls ++ Expr.labelsList es
   | .get e l => l :: e.labels
   | .set e l v => l :: (e.labels ++ v.labels)
-  | .spread a b => a.labels ++ b.labels
+  | .spread a b | .index a b => a.labels ++ b.labels
+  | .arr es => Expr.labelsList es
+  | .setIndex a b c => a.labels ++ b.labels ++ c.labels
 /-- `labels`, for a list of expressions. -/
 def Expr.labelsList : List Expr → List String
   | [] => []

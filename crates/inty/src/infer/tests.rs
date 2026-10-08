@@ -4766,3 +4766,13 @@ fn test_stores_only_into_what_takes_them() {
     "#;
     assert!(check_program(accepted, &[]).is_ok());
 }
+
+#[test]
+fn test_indexing_a_string_literal() {
+    // A string literal's type is a singleton, which indexes as a string.
+    let source = r#"
+        const c = "xyz"[0];
+        const d = c + "!";
+    "#;
+    assert!(check_program(source, &[]).is_ok());
+}

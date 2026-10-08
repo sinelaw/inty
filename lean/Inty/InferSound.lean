@@ -42,14 +42,16 @@ theorem Expr.isValue_sound {e : Expr} (h : e.isValue = true) : e.IsValue := by
   cases e <;> first | constructor | simp [Expr.isValue] at h
 
 theorem PPred.isSimple_spec {k : Nat} {p : PPred} (h : p.isSimple k = true) :
-    (∃ i < k, p = ⟨.plus, [.bound i]⟩ ∨ ∃ l σ, p = ⟨.hasProp l, [.bound i, σ]⟩) ∨
+    (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ i < k, ∃ rest, p.args = .bound i :: rest) ∨
       ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < k := by
   unfold PPred.isSimple at h
   split at h
-  · exact .inl ⟨_, of_decide_eq_true h, .inl rfl⟩
-  · exact .inl ⟨_, of_decide_eq_true h, .inr ⟨_, _, rfl⟩⟩
   · obtain ⟨i, hi, hik⟩ := List.any_eq_true.mp h
     exact .inr ⟨_, _, _, _, rfl, i, hi, of_decide_eq_true hik⟩
+  · cases h
+  · rename_i c i rest _ hc
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .inl ⟨hc, by simpa using h.2, _, h.1, rest, rfl⟩
   · cases h
 
 /-- A scheme whose constraints pass the check is simple. -/
@@ -58,30 +60,79 @@ theorem Scheme.simple_of_check {s : Scheme} (h : s.preds.all (PPred.isSimple s.a
 
 /-! ## Improvement -/
 
-/-- A constraint whose decision is an equation is an instance wherever the
-equation holds. -/
-theorem Pred.improve_sound {top : Bool} {p : Pred} {a b : Ty} (h : p.improve top = .eq a b)
-    {ψ : Subst} (hab : a.subst ψ = b.subst ψ) : Inst (p.subst ψ) := by
-  unfold Pred.improve at h
+/-- A decision on a known first argument that is an equation is an instance
+wherever the equation holds. -/
+theorem Pred.decide_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
+    (h : Pred.decide c t rest = .eq a b) {ψ : Subst} (hab : a.subst ψ = b.subst ψ) :
+    Inst (Pred.subst ψ ⟨c, t :: rest⟩) := by
+  unfold Pred.decide at h
   split at h
-  · cases h
-  · split at h
+  all_goals first | (cases h; done) | skip
+  · -- A record's field.
+    split at h
     · rename_i hs
       cases h
       simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
       exact .hasProp (by rw [Ty.field_subst, hs]; simpa using hab)
     · cases h
+  · -- An array's `length`.
+    split at h
+    · rename_i hl
+      cases h; subst hl
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, hab]
+      exact .lengthArray
+    · cases h
+  · -- A string's `length`.
+    split at h
+    · rename_i hl
+      cases h; subst hl
+      simp only [Pred.subst, List.map_cons, List.map_nil, hab]
+      exact .lengthString
+    · cases h
   · cases h
+    simp only [Ty.subst_app, List.map_cons, List.map_nil, Ty.app.injEq, List.cons.injEq,
+      true_and, and_true] at hab
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, hab.1, hab.2]
+    exact .indexArray
   · cases h
+    simp only [Ty.subst_app, List.map_cons, List.map_nil, Ty.app.injEq, List.cons.injEq,
+      true_and, and_true] at hab
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, hab.1, hab.2]
+    exact .indexString
   · cases h
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+    exact .writeArray
   · cases h
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+    exact .writeRecord
   · cases h
     simp only [Pred.subst, List.map_cons, List.map_nil, hab]
     exact .mergePre
   · cases h
     simp only [Pred.subst, List.map_cons, List.map_nil, hab]
     exact .mergeAbs
+
+theorem Pred.improveArgs_sound {c : Cls} {args : List Ty} {a b : Ty}
+    (h : Pred.improveArgs c args = .eq a b) {ψ : Subst} (hab : a.subst ψ = b.subst ψ) :
+    Inst (Pred.subst ψ ⟨c, args⟩) := by
+  unfold Pred.improveArgs at h
+  split at h
+  · split at h <;> cases h
+  · exact Pred.decide_sound h hab
   · cases h
+
+/-- A constraint whose decision is an equation is an instance wherever the
+equation holds. -/
+theorem Pred.improve_sound {top : Bool} {p : Pred} {a b : Ty} (h : p.improve top = .eq a b)
+    {ψ : Subst} (hab : a.subst ψ = b.subst ψ) : Inst (p.subst ψ) := by
+  obtain ⟨cls, args⟩ := p
+  cases cls <;> simp only [Pred.improve] at h
+  case merge =>
+    split at h
+    · exact Pred.improveArgs_sound h hab
+    · cases h
+  case plus => cases h
+  all_goals exact Pred.improveArgs_sound h hab
 
 theorem improveOne_some {top : Bool} : ∀ {ps : List Pred} {a b : Ty} {rest : List Pred},
     improveOne top ps = some (some ((a, b), rest)) →
@@ -195,6 +246,14 @@ theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound L 
     rcases hp with rfl | hp
     · exact ha
     · exact has.2 p hp
+
+theorem mem_zip_replicate {α β : Type} {a : α} {b : β} :
+    ∀ {l : List α}, a ∈ l → (a, b) ∈ l.zip (List.replicate l.length b)
+  | x :: l, h => by
+    rcases List.mem_cons.mp h with rfl | h
+    · simp [List.replicate_succ]
+    · simp only [List.length_cons, List.replicate_succ, List.zip_cons_cons, List.mem_cons]
+      exact .inr (mem_zip_replicate h)
 
 /-- The spread rule, at the types a substitution gives. -/
 theorem HasType.spread_subst {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
@@ -583,11 +642,13 @@ theorem infer_sound :
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    simp only [Sat.map, Sat.append, Sat.singleton] at hsat
+    simp only [Sat.map, Sat.append] at hsat
     have he := ihe h₁ _ C hsat.1.1
     have hv := ihv h₂ φ C hsat.1.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he hv ⊢
-    exact .set he (by simpa [Pred.subst, Ty.subst_compose] using hsat.2) hv
+    exact .set he (by simpa [Pred.subst, Ty.subst_compose] using hsat.2 _ List.mem_cons_self)
+      (by simpa [Pred.subst, Ty.subst_compose] using
+        hsat.2 _ (List.mem_cons_of_mem _ List.mem_cons_self)) hv
   | spread e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
@@ -620,6 +681,69 @@ theorem infer_sound :
     rw [← Ty.subst_compose]
     exact HasType.spread_subst (by simp [varBlock]) (by simp [varBlock]) (by simp [varBlock])
       (by simp [varBlock]) he₁ he₂ hsat.2
+
+  | arr es ih =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i σ' hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map] at hsat
+    have ha := inferArgs_sound es ih h₁ (Subst.compose φ σ') C hsat
+    have hu' := unify_sound hu
+    simp only [Ty.subst_app, Ty.app.injEq, true_and, List.map_replicate] at hu'
+    have hτs : o₁.τs.map (·.subst (Subst.compose φ σ')) =
+        List.replicate es.length (((Ty.var o₁.next).subst σ').subst φ) := by
+      rw [← ha.1]
+      have : o₁.τs.map (·.subst (Subst.compose φ σ')) = (o₁.τs.map (·.subst σ')).map (·.subst φ) := by
+        simp [Function.comp_def]
+      rw [this, hu', List.map_replicate]
+    rw [hτs] at ha
+    have hargs := fun e (he : e ∈ es) => ha.2 _ (mem_zip_replicate he)
+    simp only [Ctx.subst_compose, Ret.subst_compose] at hargs
+    simp only [Ctx.subst_compose, Ret.subst_compose, Ty.subst_app, List.map_cons, List.map_nil]
+    exact .arr hargs
+  | index e i ihe ihi =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append, Sat.singleton] at hsat
+    have he := ihe h₁ _ C hsat.1.1
+    have hi := ihi h₂ φ C hsat.1.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he hi ⊢
+    exact .index he hi (by simpa [Pred.subst, Ty.subst_compose] using hsat.2)
+  | setIndex e i v ihe ihi ihv =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i o₃ h₃
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have he := ihe h₁ _ C hsat.1.1.1
+    have hi := ihi h₂ _ C hsat.1.1.2
+    have hv := ihv h₃ φ C hsat.1.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he hi hv ⊢
+    exact .setIndex he hi
+      (by simpa [Pred.subst, Ty.subst_compose] using hsat.2 _ List.mem_cons_self)
+      (by simpa [Pred.subst, Ty.subst_compose] using
+        hsat.2 _ (List.mem_cons_of_mem _ List.mem_cons_self)) hv
 
 /-- A program inference accepts in a context with no free type variables is
 well typed in it, assuming the constraints left, each of which is an

@@ -66,6 +66,17 @@ inductive Inst : Pred → Prop where
   /-- `Merge abs τ s s`: the operand hasn't the field, so the slot it is
   written over stays. -/
   | mergeAbs : Inst ⟨.merge, [.abs, τ, s, s]⟩
+  /-- An array's and a string's `length` (`builtins::resolve_has_prop`). -/
+  | lengthArray : Inst ⟨.hasProp "length", [.array τ, .number]⟩
+  | lengthString : Inst ⟨.hasProp "length", [.string, .number]⟩
+  /-- `Indexable τ[] Number τ` and `Indexable String Number String`
+  (`resolve_indexable`). -/
+  | indexArray : Inst ⟨.indexable, [.array τ, .number, τ]⟩
+  | indexString : Inst ⟨.indexable, [.string, .number, .string]⟩
+  /-- `IndexWrite τ[]` (`resolve_index_write`). -/
+  | writeArray : Inst ⟨.indexWrite, [.array τ]⟩
+  /-- `FieldWrite {…}` (`resolve_field_write`). -/
+  | writeRecord : Inst ⟨.fieldWrite, [.record ls slots]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -77,6 +88,12 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
     exact .hasProp (by rw [Ty.field_subst, hf]; rfl)
   | mergePre => exact .mergePre
   | mergeAbs => exact .mergeAbs
+  | lengthArray => exact .lengthArray
+  | lengthString => exact .lengthString
+  | indexArray => exact .indexArray
+  | indexString => exact .indexString
+  | writeArray => exact .writeArray
+  | writeRecord => exact .writeRecord
 
 /-- The `Merge` constraints of a spread, label by label: the operand's
 presences `ps` and types `τs`, the slots `ss` it is written over, and the
@@ -112,6 +129,11 @@ def Pred.isInst : Pred → Bool
   | ⟨.hasProp l, [.record ls fs, σ]⟩ => decide (Ty.field l ls fs = some (.slot .pre σ))
   | ⟨.merge, [.pre, τ, _, r]⟩ => decide (r = .slot .pre τ)
   | ⟨.merge, [.abs, _, s, r]⟩ => decide (r = s)
+  | ⟨.hasProp l, [.array _, .number]⟩ | ⟨.hasProp l, [.string, .number]⟩ => decide (l = "length")
+  | ⟨.indexable, [.array τ, .number, e]⟩ => decide (e = τ)
+  | ⟨.indexable, [.string, .number, .string]⟩ => true
+  | ⟨.indexWrite, [.array _]⟩ => true
+  | ⟨.fieldWrite, [.record _ _]⟩ => true
   | _ => false
 
 theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
@@ -122,6 +144,12 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · exact .hasProp (of_decide_eq_true h)
   · rw [of_decide_eq_true h]; exact .mergePre
   · rw [of_decide_eq_true h]; exact .mergeAbs
+  · rw [of_decide_eq_true h]; exact .lengthArray
+  · rw [of_decide_eq_true h]; exact .lengthString
+  · rw [of_decide_eq_true h]; exact .indexArray
+  · exact .indexString
+  · exact .writeArray
+  · exact .writeRecord
   · cases h
 
 /-- The constraint is on a type variable: its first argument (`Plus`'s

@@ -76,7 +76,8 @@ example : HasType L [] [] none polyDouble .string :=
     (fun m _ => .func rfl (.binop (.plus (.inr (by simp [Scheme.openPreds, Scheme.instPreds,
       doubleScheme, varBlock, PPred.inst, PTy.inst, List.range']))) (.var_mono rfl)
       (.var_mono rfl)))
-    (.inr ⟨.func, rfl⟩) (fun p hp => .inl ⟨1, by decide, .inl (by simpa [doubleScheme] using hp)⟩)
+    (.inr ⟨.func, rfl⟩) (fun p hp => by
+      simp [doubleScheme] at hp; subst hp; exact .inl ⟨by decide, rfl, 1, by decide, [], rfl⟩)
     (.let_mono
       (.app (.var (s := doubleScheme) (τs := [.undefined, .number]) rfl rfl (fun c hc => by
         simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc

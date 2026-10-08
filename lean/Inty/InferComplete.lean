@@ -231,6 +231,12 @@ theorem Ctx.Below.mono {n n' : Nat} {Γ : Ctx} (h : Ctx.Below n Γ) (hn : n ≤ 
 theorem Ret.Below.mono {n n' : Nat} {R : Option Ty} (h : Ret.Below n R) (hn : n ≤ n') :
     Ret.Below n' R := fun a ha => Nat.lt_of_lt_of_le (h a ha) hn
 
+theorem Pred.below_of_args {n : Nat} {p : Pred} (h : ∀ τ ∈ p.args, τ.Below n) : p.Below n :=
+  fun a ha => by
+    simp only [Pred.ftv, List.mem_flatMap] at ha
+    obtain ⟨τ, hτ, ha⟩ := ha
+    exact h τ hτ a ha
+
 theorem Pred.Below.mono {n n' : Nat} {p : Pred} (h : p.Below n) (hn : n ≤ n') : p.Below n' :=
   fun a ha => Nat.lt_of_lt_of_le (h a ha) hn
 
@@ -334,39 +340,73 @@ theorem Ty.Below.var {n a : Nat} (h : a < n) : (Ty.var a).Below n := by
 
 /-! ## Improvement stays below the bound -/
 
-theorem Pred.improve_below {n : Nat} {top : Bool} {p : Pred} {a b : Ty} (hp : p.Below n)
-    (h : p.improve top = .eq a b) : a.Below n ∧ b.Below n := by
-  unfold Pred.improve at h
+/-- A decision's equation mentions only the constraint's variables. -/
+theorem Pred.decide_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
+    (hp : Pred.Below n ⟨c, t :: rest⟩) (h : Pred.decide c t rest = .eq a b) :
+    a.Below n ∧ b.Below n := by
+  have ht : t.Below n := fun x hx => hp x (by simp [Pred.ftv, hx])
+  have hr : ∀ τ ∈ rest, τ.Below n := fun τ hτ x hx =>
+    hp x (by simp only [Pred.ftv, List.flatMap_cons, List.mem_append, List.mem_flatMap]; exact .inr ⟨τ, hτ, hx⟩)
+  have hnum : Ty.number.Below n := fun x hx => by simp [Ty.ftv] at hx
+  unfold Pred.decide at h
   split at h
-  · cases h
+  all_goals first | (cases h; done) | skip
   · split at h
     · rename_i hs
       cases h
-      have hmem := (List.of_mem_zip (Ty.field_mem hs)).2
-      refine ⟨fun x hx => hp x ?_, fun x hx => hp x ?_⟩
-      · simp only [Pred.ftv, List.flatMap_cons, List.mem_append, Ty.ftv_app, List.mem_flatMap]
-        exact .inl ⟨_, hmem, hx⟩
-      · simp only [Ty.ftv_app, List.flatMap_cons, List.flatMap_nil, List.mem_append,
-          List.append_nil] at hx
-        simp only [Pred.ftv, List.flatMap_cons, List.mem_append, List.flatMap_nil, List.append_nil]
-        rcases hx with hx | hx
-        · simp at hx
-        · exact .inr hx
+      refine ⟨fun x hx => ht x ?_, Ty.Below.app.mpr (fun τ hτ => ?_)⟩
+      · simp only [Ty.ftv_app, List.mem_flatMap]
+        exact ⟨_, (List.of_mem_zip (Ty.field_mem hs)).2, hx⟩
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+        rcases hτ with rfl | rfl
+        · intro x hx; simp [Ty.ftv] at hx
+        · exact hr _ (by simp)
+    · cases h
+  · split at h
+    · cases h; exact ⟨hr _ (by simp), hnum⟩
+    · cases h
+  · split at h
+    · cases h; exact ⟨hr _ (by simp), hnum⟩
     · cases h
   · cases h
+    refine ⟨Ty.Below.app.mpr (fun τ hτ => hr τ (by simpa using hτ)), Ty.Below.app.mpr (fun τ hτ => ?_)⟩
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+    rcases hτ with rfl | rfl
+    · exact hnum
+    · exact fun x hx => ht x (by simp [hx])
   · cases h
+    refine ⟨Ty.Below.app.mpr (fun τ hτ => hr τ (by simpa using hτ)), Ty.Below.app.mpr (fun τ hτ => ?_)⟩
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+    rcases hτ with rfl | rfl <;> intro x hx <;> simp [Ty.ftv] at hx
+  · cases h; exact ⟨hnum, hnum⟩
+  · cases h; exact ⟨hnum, hnum⟩
   · cases h
+    refine ⟨hr _ (by simp), Ty.Below.app.mpr (fun τ hτ => ?_)⟩
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+    rcases hτ with rfl | rfl
+    · intro x hx; simp [Ty.ftv] at hx
+    · exact hr _ (by simp)
+  · cases h; exact ⟨hr _ (by simp), hr _ (by simp)⟩
+
+theorem Pred.improveArgs_below {n : Nat} {c : Cls} {args : List Ty} {a b : Ty}
+    (hp : Pred.Below n ⟨c, args⟩) (h : Pred.improveArgs c args = .eq a b) :
+    a.Below n ∧ b.Below n := by
+  unfold Pred.improveArgs at h
+  split at h
+  · split at h <;> cases h
+  · exact Pred.decide_below hp h
   · cases h
-  · cases h
-    refine ⟨fun x hx => hp x (by simp [Pred.ftv, hx]), fun x hx => hp x ?_⟩
-    simp only [Ty.ftv_app, List.flatMap_cons, List.flatMap_nil, List.mem_append,
-      List.append_nil] at hx
-    rcases hx with hx | hx
-    · simp at hx
-    · simp [Pred.ftv, hx]
-  · cases h
-    exact ⟨fun x hx => hp x (by simp [Pred.ftv, hx]), fun x hx => hp x (by simp [Pred.ftv, hx])⟩
-  · cases h
+
+theorem Pred.improve_below {n : Nat} {top : Bool} {p : Pred} {a b : Ty} (hp : p.Below n)
+    (h : p.improve top = .eq a b) : a.Below n ∧ b.Below n := by
+  obtain ⟨cls, args⟩ := p
+  cases cls <;> simp only [Pred.improve] at h
+  case plus => cases h
+  case merge =>
+    split at h
+    · exact Pred.improveArgs_below hp h
+    · cases h
+  all_goals exact Pred.improveArgs_below hp h
 
 theorem improveOne_sub {top : Bool} : ∀ {ps : List Pred} {a b : Ty} {rest : List Pred},
     improveOne top ps = some (some ((a, b), rest)) →
@@ -933,16 +973,13 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hτ₂, ?_⟩
     intro p hp
-    simp only [List.mem_append, List.mem_map, List.mem_singleton] at hp
-    rcases hp with (⟨q, hq, rfl⟩ | hp) | rfl
+    simp only [List.mem_append, List.mem_map] at hp
+    have hr := hσ₂.subst_below (hτ₁.mono hn₂)
+    rcases hp with (⟨q, hq, rfl⟩ | hp) | hp
     · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
     · exact hp₂ p hp
-    · intro a ha
-      simp only [Pred.ftv, List.flatMap_cons, List.flatMap_nil, List.append_nil,
-        List.mem_append] at ha
-      rcases ha with ha | ha
-      · exact hσ₂.subst_below (hτ₁.mono hn₂) a ha
-      · exact hτ₂ a ha
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
+      rcases hp with rfl | rfl <;> exact Pred.below_of_args (by simp [hr, hτ₂])
   | spread e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o hΓ hR h
     simp only [infer] at h
@@ -989,6 +1026,83 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact (hσ₂.pred_below ((hp₁ q' hq').mono hn₂)).mono hle
     · exact (hp₂ q hq').mono hle
     · exact mergePreds_below hb₁ hb₂ hb₀ hb₃ q hq'
+  | arr es ih =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i σ' hu
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferArgs_inv es (fun a ha => ih a ha) hΓ hR h₁
+    have hle : o₁.next ≤ o₁.next + 1 := Nat.le_succ _
+    have hα : (Ty.var o₁.next).Below (o₁.next + 1) := Ty.Below.var (Nat.lt_succ_self _)
+    have hσ' := unify_within (Ty.Below.app.mpr (fun τ hτ => (hτs₁ τ hτ).mono hle))
+      (Ty.Below.app.mpr (fun τ hτ => by rw [List.eq_of_mem_replicate hτ]; exact hα)) hu
+    refine ⟨by dsimp only; omega, (hσ₁.mono hle).compose hσ',
+      hσ'.subst_below (Ty.Below.app.mpr (fun τ hτ => by
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ; subst hτ; exact hα)), ?_⟩
+    intro p hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact hσ'.pred_below ((hp₁ q hq).mono hle)
+  | index e i ihe ihi =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihi (hσ₁.ctx_below (hΓ.mono hn₁))
+      (hσ₁.ret_below (hR.mono hn₁)) h₂
+    have hle : o₂.next ≤ o₂.next + 1 := Nat.le_succ _
+    refine ⟨by dsimp only; omega, ((hσ₁.mono hn₂).compose hσ₂).mono hle,
+      Ty.Below.var (Nat.lt_succ_self _), ?_⟩
+    intro p hp
+    simp only [List.mem_append, List.mem_map, List.mem_singleton] at hp
+    rcases hp with (⟨q, hq, rfl⟩ | hp) | rfl
+    · exact (hσ₂.pred_below ((hp₁ q hq).mono hn₂)).mono hle
+    · exact (hp₂ p hp).mono hle
+    · refine Pred.below_of_args ?_
+      simp only [List.mem_cons, List.not_mem_nil, or_false]
+      rintro τ (rfl | rfl | rfl)
+      · exact (hσ₂.subst_below (hτ₁.mono hn₂)).mono hle
+      · exact hτ₂.mono hle
+      · exact Ty.Below.var (Nat.lt_succ_self _)
+  | setIndex e i v ihe ihi ihv =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i o₃ h₃
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihi (hσ₁.ctx_below (hΓ.mono hn₁))
+      (hσ₁.ret_below (hR.mono hn₁)) h₂
+    obtain ⟨hn₃, hσ₃, hτ₃, hp₃⟩ := ihv (hσ₂.ctx_below ((hσ₁.ctx_below (hΓ.mono hn₁)).mono hn₂))
+      (hσ₂.ret_below ((hσ₁.ret_below (hR.mono hn₁)).mono hn₂)) h₃
+    refine ⟨by dsimp only; omega, (((hσ₁.mono hn₂).compose hσ₂).mono hn₃).compose hσ₃, hτ₃, ?_⟩
+    have hc := hσ₃.subst_below ((hσ₂.subst_below (hτ₁.mono hn₂)).mono hn₃)
+    have hi := hσ₃.subst_below (hτ₂.mono hn₃)
+    intro p hp
+    simp only [List.mem_append, List.mem_map] at hp
+    rcases hp with (⟨q, (⟨q', hq', rfl⟩ | hq), rfl⟩ | hp) | hp
+    · exact hσ₃.pred_below ((hσ₂.pred_below ((hp₁ q' hq').mono hn₂)).mono hn₃)
+    · exact hσ₃.pred_below ((hp₂ q hq).mono hn₃)
+    · exact hp₃ p hp
+    · simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
+      rcases hp with rfl | rfl <;> exact Pred.below_of_args (by simp [hc, hi, hτ₃])
 
 /-! ## Agreement of substitutions -/
 
@@ -1298,15 +1412,28 @@ theorem HasType.generalize_ctx {C' : List Pred} {Γ₀ : Ctx} {R : Option Ty} {e
   | get _ hp ih =>
     intro C Δ Γ s s' hΓ hC hgen hw
     exact .get (ih hΓ hC hgen (hw.imp id fun h => by simpa [Expr.writes] using h)) hp
-  | set _ hp _ ihe ihv =>
+  | set _ hp hw₀ _ ihe ihv =>
     intro C Δ Γ s s' hΓ hC hgen hw
     have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
-    exact .set (ihe hΓ hC hgen (hw'.imp id (·.1))) hp (ihv hΓ hC hgen (hw'.imp id (·.2)))
+    exact .set (ihe hΓ hC hgen (hw'.imp id (·.1))) hp hw₀ (ihv hΓ hC hgen (hw'.imp id (·.2)))
   | spread hps hτs hss hrs _ _ hm ih₁ ih₂ =>
     intro C Δ Γ s s' hΓ hC hgen hw
     have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
     exact .spread hps hτs hss hrs (ih₁ hΓ hC hgen (hw'.imp id (·.1))) (ih₂ hΓ hC hgen
       (hw'.imp id (·.2))) hm
+  | arr _ ih =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .arr (fun a ha => ih a ha hΓ hC hgen (hw'.imp id fun h => Expr.writesList_false h a ha))
+  | index _ _ hp ihe ihi =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .index (ihe hΓ hC hgen (hw'.imp id (·.1))) (ihi hΓ hC hgen (hw'.imp id (·.2))) hp
+  | setIndex _ _ hp hw₀ _ ihe ihi ihv =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .setIndex (ihe hΓ hC hgen (hw'.imp id (·.1.1))) (ihi hΓ hC hgen (hw'.imp id (·.1.2)))
+      hp hw₀ (ihv hΓ hC hgen (hw'.imp id (·.2)))
 
 /-! ## Instantiating a generalised scheme -/
 
@@ -1408,10 +1535,10 @@ theorem Pred.subst_block_below {m : Nat} {τs : List Ty} {p : Pred} (h : ∀ a �
 theorem Expr.isValue_complete {e : Expr} (h : e.IsValue) : e.isValue = true := by
   cases h <;> rfl
 
-/-- A constraint on a type variable: `Plus a`, `HasProp l a σ`, or
-`Merge a τ s r`. -/
+/-- A constraint on a type variable, with its class's arity: `Plus a`,
+`HasProp l a σ`, `Indexable a ι σ`, …, or `Merge a τ s r`. -/
 def Pred.OnVarShaped (p : Pred) : Prop :=
-  (∃ a, p = ⟨.plus, [.var a]⟩) ∨ (∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩) ∨
+  (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ a rest, p.args = .var a :: rest) ∨
     ∃ a τ s r, p = ⟨.merge, [.var a, τ, s, r]⟩
 
 /-- What an assumption may be where improvement decides constraints, at the
@@ -1421,167 +1548,212 @@ generalises, any `Merge`, since a scheme's `Merge` may have a known
 presence (`Scheme.Simple`) and improvement there leaves every `Merge` as
 it is. -/
 def Pred.AssumableAt (top : Bool) (p : Pred) : Prop :=
-  (∃ a, p = ⟨.plus, [.var a]⟩) ∨ (∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩) ∨
+  (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ a rest, p.args = .var a :: rest) ∨
     ∃ q τ s r, p = ⟨.merge, [q, τ, s, r]⟩ ∧ (top = true → ∃ a, q = .var a)
 
 theorem Pred.OnVarShaped.assumable {p : Pred} (h : p.OnVarShaped) (top : Bool) :
     p.AssumableAt top := by
-  rcases h with h | h | ⟨a, τ, s, r, rfl⟩
+  rcases h with h | ⟨a, τ, s, r, rfl⟩
   · exact .inl h
-  · exact .inr (.inl h)
-  · exact .inr (.inr ⟨_, τ, s, r, rfl, fun _ => ⟨a, rfl⟩⟩)
+  · exact .inr ⟨_, τ, s, r, rfl, fun _ => ⟨a, rfl⟩⟩
 
 /-! ### Improvement loses nothing -/
 
-/-- A constraint improvement keeps is a `Plus`, a `HasProp` on a type
-variable, or a `Merge`, on a type variable at the top level. -/
+/-- A constraint on a known type that is an instance is decided by an
+equation that holds. -/
+theorem Pred.decide_complete {c : Cls} {t : Ty} {rest : List Ty} {φ : Subst} (hc : c ≠ .plus)
+    (ht : ∀ a, t ≠ .var a) (hi : Inst ⟨c, (t :: rest).map (·.subst φ)⟩) :
+    ∃ a b, Pred.decide c t rest = .eq a b ∧ a.subst φ = b.subst φ := by
+  cases t with
+  | var a => exact absurd rfl (ht a)
+  | app con xs =>
+  generalize hq : (⟨c, (Ty.app con xs :: rest).map (·.subst φ)⟩ : Pred) = q at hi
+  cases hi <;> simp only [Pred.mk.injEq, List.map_cons, Ty.subst_app, Ty.app.injEq,
+      List.map_eq_cons_iff, List.map_eq_nil_iff, List.cons.injEq] at hq
+  case plusNumber | plusString => exact absurd hq.1 hc
+  case hasProp hf =>
+    obtain ⟨rfl, ⟨rfl, rfl⟩, σ, _, rfl, rfl, rfl⟩ := hq
+    rw [Ty.field_subst] at hf
+    cases hs : Ty.field _ _ xs with
+    | none => rw [hs] at hf; cases hf
+    | some s =>
+      rw [hs] at hf
+      refine ⟨s, .slot .pre σ, by simp [Pred.decide, hs], ?_⟩
+      simpa using hf
+  case mergePre =>
+    obtain ⟨rfl, ⟨rfl, rfl⟩, τ, _, rfl, rfl, s, _, rfl, rfl, r, _, rfl, hr, rfl⟩ := hq
+    exact ⟨r, .slot .pre τ, by simp [Pred.decide], by simpa using hr⟩
+  case mergeAbs =>
+    obtain ⟨rfl, ⟨rfl, rfl⟩, τ, _, rfl, rfl, s, _, rfl, rfl, r, _, rfl, hr, rfl⟩ := hq
+    exact ⟨r, s, by simp [Pred.decide], hr⟩
+  case lengthArray =>
+    obtain ⟨rfl, ⟨rfl, x, _, rfl, rfl, rfl⟩, σ, _, rfl, hσ, rfl⟩ := hq
+    exact ⟨σ, .number, by simp [Pred.decide], by simpa using hσ⟩
+  case lengthString =>
+    obtain ⟨rfl, ⟨rfl, rfl⟩, σ, _, rfl, hσ, rfl⟩ := hq
+    exact ⟨σ, .number, by simp [Pred.decide], by simpa using hσ⟩
+  case indexArray =>
+    obtain ⟨rfl, ⟨rfl, x, _, rfl, rfl, rfl⟩, i, _, rfl, hi, e, _, rfl, he, rfl⟩ := hq
+    exact ⟨.tuple [i, e], .tuple [.number, x], by simp [Pred.decide],
+      by simp [Ty.subst_app, hi, he]⟩
+  case indexString =>
+    obtain ⟨rfl, ⟨rfl, rfl⟩, i, _, rfl, hi, e, _, rfl, he, rfl⟩ := hq
+    exact ⟨.tuple [i, e], .tuple [.number, .string], by simp [Pred.decide],
+      by simp [Ty.subst_app, hi, he]⟩
+  case writeArray =>
+    obtain ⟨rfl, ⟨rfl, x, _, rfl, rfl, rfl⟩, rfl⟩ := hq
+    exact ⟨.number, .number, by simp [Pred.decide], rfl⟩
+  case writeRecord =>
+    obtain ⟨rfl, ⟨rfl, -⟩, rfl⟩ := hq
+    exact ⟨.number, .number, by simp [Pred.decide], rfl⟩
+
+/-- An instance's first argument determines the rest: their variables are
+its own (but for `Merge`, whose result the first three determine). -/
+theorem Inst.fundep_ftv {c : Cls} {d : Ty} {rest : List Ty} (h : Inst ⟨c, d :: rest⟩)
+    (hc : c ≠ .merge) : ∀ x ∈ rest, ∀ b ∈ x.ftv, b ∈ d.ftv := by
+  generalize hq : (⟨c, d :: rest⟩ : Pred) = q at h
+  cases h <;> simp only [Pred.mk.injEq, List.cons.injEq] at hq <;>
+    obtain ⟨rfl, rfl, rfl⟩ := hq
+  case mergePre | mergeAbs => exact absurd rfl hc
+  case hasProp hf =>
+    intro x hx b hb
+    simp only [List.mem_singleton] at hx; subst hx
+    simp only [Ty.ftv_app, List.mem_flatMap]
+    exact ⟨_, (List.of_mem_zip (Ty.field_mem hf)).2, by simp [Ty.ftv_app, hb]⟩
+  case indexArray =>
+    intro x hx b hb
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+    rcases hx with rfl | rfl
+    · simp [Ty.ftv_app] at hb
+    · simp [Ty.ftv_app, hb]
+  case indexString =>
+    intro x hx b hb
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+    rcases hx with rfl | rfl <;> simp [Ty.ftv_app] at hb
+  all_goals intro x hx b hb; simp_all [Ty.ftv_app]
+
+/-- An instance has its class's arity. -/
+theorem Inst.arity {p : Pred} (h : Inst p) : p.args.length = p.cls.arity := by
+  cases h <;> rfl
+
+/-- An entailed constraint has its class's arity. -/
+theorem Entails.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) {p : Pred}
+    (h : Entails C p) : p.args.length = p.cls.arity := by
+  rcases h with h | h
+  · exact h.arity
+  · rcases hC p h with ⟨-, hl, -⟩ | ⟨q, τ, s, r, rfl, -⟩
+    · exact hl
+    · rfl
+
+/-- An entailed constraint is on a type variable, or, if its first argument
+is a known type, an instance (where a `Merge` assumption may have a known
+presence, `top` is false, and improvement leaves `Merge`s alone). -/
+theorem Entails.var_or_inst {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top)
+    {p : Pred} {φ : Subst} (hm : p.cls = .merge → top = true) (h : Entails C (p.subst φ)) :
+    (∃ a rest, p.args = .var a :: rest) ∨
+      (Inst (p.subst φ) ∧ ∀ a rest, p.args ≠ .var a :: rest) := by
+  obtain ⟨cls, args⟩ := p
+  match args with
+  | .var a :: rest => exact .inl ⟨a, rest, rfl⟩
+  | [] =>
+    refine .inr ⟨?_, fun a rest e => by cases e⟩
+    rcases h with h | h
+    · exact h
+    · rcases hC _ h with ⟨-, -, a, rest, e⟩ | ⟨q, τ, s, r, e, -⟩ <;> simp [Pred.subst] at e
+  | .app k xs :: rest =>
+    refine .inr ⟨?_, fun a rest e => by cases e⟩
+    rcases h with h | h
+    · exact h
+    · rcases hC _ h with ⟨-, -, a, rest', e⟩ | ⟨q, τ, s, r, e, hv⟩
+      · simp [Pred.subst, Ty.subst_app] at e
+      · simp only [Pred.subst, Pred.mk.injEq] at e
+        obtain ⟨y, rfl⟩ := hv (hm e.1)
+        simp [Ty.subst_app] at e
+
+theorem Pred.decide_ne_keep {c : Cls} {t : Ty} {rest : List Ty} : Pred.decide c t rest ≠ .keep := by
+  unfold Pred.decide
+  split
+  all_goals first | (split <;> simp) | simp
+
+/-- A constraint improvement keeps is a `Plus`, a `Merge` where a binding
+generalises, or a constraint on a type variable with its class's arity. -/
 theorem Pred.improve_keep {top : Bool} {p : Pred} (h : p.improve top = .keep) :
-    (∃ args, p = ⟨.plus, args⟩) ∨ (∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩) ∨
-      ∃ args, p = ⟨.merge, args⟩ ∧ (top = true → ∃ a τ s r, args = [.var a, τ, s, r]) := by
-  unfold Pred.improve at h
-  split at h
-  · exact .inr (.inl ⟨_, _, _, rfl⟩)
-  · split at h <;> cases h
-  · cases h
-  · exact .inl ⟨_, rfl⟩
-  · exact .inr (.inr ⟨_, rfl, fun ht => by cases ht⟩)
-  · exact .inr (.inr ⟨_, rfl, fun _ => ⟨_, _, _, _, rfl⟩⟩)
-  · cases h
-  · cases h
-  · cases h
+    p.cls = .plus ∨ (p.cls = .merge ∧ top = false) ∨
+      (p.cls ≠ .plus ∧ (p.cls = .merge → top = true) ∧ p.args.length = p.cls.arity ∧
+        ∃ a rest, p.args = .var a :: rest) := by
+  obtain ⟨cls, args⟩ := p
+  have hargs : Pred.improveArgs cls args = .keep →
+      args.length = cls.arity ∧ ∃ a rest, args = .var a :: rest := by
+    intro h
+    unfold Pred.improveArgs at h
+    split at h
+    · split at h
+      · exact ⟨by simp; omega, _, _, rfl⟩
+      · cases h
+    · exact absurd h Pred.decide_ne_keep
+    · cases h
+  cases cls <;> simp only [Pred.improve] at h
+  case plus => exact .inl rfl
+  case merge =>
+    cases top
+    · exact .inr (.inl ⟨rfl, rfl⟩)
+    · simp only [ite_true] at h
+      exact .inr (.inr ⟨by simp, fun _ => rfl, hargs h⟩)
+  all_goals exact .inr (.inr ⟨by simp, by simp, hargs h⟩)
+
+/-- What improvement decides of a constraint, other than keeping it. -/
+theorem Pred.improve_decides {top : Bool} {p : Pred} {i : Improve} (h : p.improve top = i)
+    (hi : i ≠ .keep) : p.cls ≠ .plus ∧ (p.cls = .merge → top = true) ∧
+      Pred.improveArgs p.cls p.args = i := by
+  obtain ⟨cls, args⟩ := p
+  cases cls <;> simp only [Pred.improve] at h
+  case plus => exact absurd h.symm hi
+  case merge =>
+    cases top
+    · exact absurd h.symm hi
+    · exact ⟨by simp, fun _ => rfl, by simpa using h⟩
+  all_goals exact ⟨by simp, by simp, h⟩
 
 /-- A constraint whose decision is an equation is entailed, by assumptions
 on type variables, only where the equation holds. -/
 theorem Pred.improve_eq {top : Bool} {p : Pred} {a b : Ty} (h : p.improve top = .eq a b)
     {φ : Subst} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) (he : Entails C (p.subst φ)) :
     a.subst φ = b.subst φ := by
-  unfold Pred.improve at h
-  split at h
-  · cases h
-  · split at h
-    · rename_i hf
-      cases h
-      rcases he with hi | hm
-      · cases hi with
-        | hasProp hf' =>
-          simp only [Ty.substs_eq] at hf'
-          rw [Ty.field_subst, hf] at hf'
-          simpa using hf'
-      · rcases hC _ hm with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, -⟩ <;>
-          simp [Pred.subst] at hx
-    · cases h
-  · cases h
-  · cases h
-  · cases h
-  · cases h
-  · cases h
-    rcases he with hi | hm
-    · generalize hq : Pred.subst φ _ = q at hi
-      cases hi <;> simp_all [Pred.subst]
-    · rcases hC _ hm with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, hv⟩
-      · simp [Pred.subst] at hx
-      · simp [Pred.subst] at hx
-      · obtain ⟨y, rfl⟩ := hv rfl
-        simp [Pred.subst] at hx
-  · cases h
-    rcases he with hi | hm
-    · generalize hq : Pred.subst φ _ = q at hi
-      cases hi <;> simp_all [Pred.subst]
-    · rcases hC _ hm with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, hv⟩
-      · simp [Pred.subst] at hx
-      · simp [Pred.subst] at hx
-      · obtain ⟨y, rfl⟩ := hv rfl
-        simp [Pred.subst] at hx
-  · cases h
+  obtain ⟨hp, hm, h'⟩ := Pred.improve_decides h (by simp)
+  clear h
+  obtain ⟨cls, args⟩ := p
+  simp only at hp hm h'
+  unfold Pred.improveArgs at h'
+  split at h'
+  · split at h' <;> cases h'
+  · rename_i t rest hvar
+    rcases he.var_or_inst hC hm with ⟨x, r, e⟩ | ⟨hi, -⟩
+    · simp only [List.cons.injEq] at e; exact absurd e.1 (hvar x)
+    · obtain ⟨a', b', hd, hab⟩ := Pred.decide_complete hp (fun x e => hvar x e) hi
+      rw [hd] at h'; cases h'; exact hab
+  · cases h'
 
 /-- A constraint improvement rejects is entailed by no assumptions on type
 variables. -/
 theorem Pred.improve_fail {top : Bool} {p : Pred} (h : p.improve top = .fail) {φ : Subst}
     {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) : ¬ Entails C (p.subst φ) := by
-  unfold Pred.improve at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · rename_i hf
-      rintro (hi | hm)
-      · cases hi with
-        | hasProp hf' =>
-          simp only [Ty.substs_eq] at hf'
-          rw [Ty.field_subst, hf] at hf'; cases hf'
-      · rcases hC _ hm with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, -⟩ <;>
-          simp [Pred.subst] at hx
-  · rename_i l args hvar hrec
-    have hshape : ∀ t₁ t₂, args.map (·.subst φ) = [t₁, t₂] →
-        (∀ a, t₁ ≠ .var a) ∧ (∀ ls slots, t₁ ≠ .record ls slots) := by
-      intro t₁ t₂ h
-      obtain ⟨a₁, a₂, rfl⟩ : ∃ a₁ a₂, args = [a₁, a₂] := by
-        rcases args with _ | ⟨a₁, _ | ⟨a₂, _ | _⟩⟩ <;> simp at h
-        exact ⟨a₁, a₂, rfl⟩
-      simp only [List.map_cons, List.map_nil, List.cons.injEq, and_true] at h
-      obtain ⟨rfl, rfl⟩ := h
-      cases a₁ with
-      | var x => exact absurd rfl (hvar x a₂)
-      | app c xs =>
-        refine ⟨fun a e => by simp at e, fun ls slots e => ?_⟩
-        simp only [Ty.subst_app, Ty.app.injEq] at e
-        obtain ⟨rfl, -⟩ := e
-        exact absurd rfl (hrec ls xs a₂)
-    rintro (hi | hm)
-    · generalize hq : Pred.subst φ ⟨.hasProp l, args⟩ = q at hi
-      cases hi with
-      | plusNumber | plusString | mergePre | mergeAbs => simp [Pred.subst] at hq
-      | hasProp _ =>
-        simp only [Pred.subst, Pred.mk.injEq] at hq
-        exact (hshape _ _ hq.2).2 _ _ rfl
-    · rcases hC _ hm with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, -⟩
-      · simp [Pred.subst] at hx
-      · simp only [Pred.subst, Pred.mk.injEq] at hx
-        exact (hshape _ _ hx.2).1 x rfl
-      · simp [Pred.subst] at hx
-  · cases h
-  · cases h
-  · cases h
-  · cases h
-  · cases h
-  · rename_i args hvar hpre habs
-    -- The presence, once substituted, is neither `pre`, `abs` nor a variable.
-    have hshape : ∀ t ts, args.map (·.subst φ) = t :: ts → ts.length = 3 →
-        t ≠ .pre ∧ t ≠ .abs ∧ ∀ a, t ≠ .var a := by
-      intro t ts h hl
-      obtain ⟨a₁, a₂, a₃, a₄, rfl⟩ : ∃ a₁ a₂ a₃ a₄, args = [a₁, a₂, a₃, a₄] := by
-        have hlen : args.length = 4 := by
-          have := congrArg List.length h; simp at this; omega
-        rcases args with _ | ⟨a₁, _ | ⟨a₂, _ | ⟨a₃, _ | ⟨a₄, _ | _⟩⟩⟩⟩ <;> simp at hlen
-        exact ⟨a₁, a₂, a₃, a₄, rfl⟩
-      simp only [List.map_cons, List.map_nil, List.cons.injEq] at h
-      obtain ⟨rfl, -⟩ := h
-      cases a₁ with
-      | var x => exact absurd rfl (hvar x a₂ a₃ a₄)
-      | app c xs =>
-        refine ⟨fun e => ?_, fun e => ?_, fun a e => by simp at e⟩
-        · simp only [Ty.subst_app, Ty.app.injEq, List.map_eq_nil_iff] at e
-          obtain ⟨rfl, rfl⟩ := e
-          exact hpre a₂ a₃ a₄ rfl
-        · simp only [Ty.subst_app, Ty.app.injEq, List.map_eq_nil_iff] at e
-          obtain ⟨rfl, rfl⟩ := e
-          exact habs a₂ a₃ a₄ rfl
-    rintro (hi | hm)
-    · generalize hq : Pred.subst φ ⟨.merge, args⟩ = q at hi
-      cases hi with
-      | plusNumber | plusString | hasProp _ => simp [Pred.subst] at hq
-      | mergePre =>
-        simp only [Pred.subst, Pred.mk.injEq, true_and] at hq
-        exact (hshape _ _ hq rfl).1 rfl
-      | mergeAbs =>
-        simp only [Pred.subst, Pred.mk.injEq, true_and] at hq
-        exact (hshape _ _ hq rfl).2.1 rfl
-    · rcases hC _ hm with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, hv⟩
-      · simp [Pred.subst] at hx
-      · simp [Pred.subst] at hx
-      · obtain ⟨y, rfl⟩ := hv rfl
-        simp only [Pred.subst, Pred.mk.injEq, true_and] at hx
-        exact (hshape _ _ hx rfl).2.2 y rfl
+  intro he
+  have hlen := he.arity hC
+  obtain ⟨hp, hm, h'⟩ := Pred.improve_decides h (by simp)
+  clear h
+  obtain ⟨cls, args⟩ := p
+  simp only [Pred.subst, List.length_map] at hp hm h' hlen
+  unfold Pred.improveArgs at h'
+  split at h'
+  · split at h'
+    · cases h'
+    · rename_i hne; simp at hlen; omega
+  · rename_i t rest hvar
+    rcases he.var_or_inst hC hm with ⟨x, r, e⟩ | ⟨hi, -⟩
+    · simp only [List.cons.injEq] at e; exact absurd e.1 (hvar x)
+    · obtain ⟨a', b', hd, -⟩ := Pred.decide_complete hp (fun x e => hvar x e) hi
+      rw [hd] at h'; cases h'
+  · simp at hlen; cases cls <;> simp [Cls.arity] at hlen
 
 theorem improveOne_none {top : Bool} : ∀ {ps : List Pred}, improveOne top ps = none →
     ∃ p ∈ ps, p.improve top = .fail
@@ -1818,13 +1990,32 @@ theorem Pred.subst_ftv_lt {p : Pred} {φ : Subst} {m : Nat}
   exact Ty.subst_ftv_lt (fun c hc => h c (List.mem_flatMap.mpr ⟨τ, hτ, hc⟩)) b hb
 
 theorem Pred.fundep_some {p : Pred} {ds rs : List Ty} (h : p.fundep = some (ds, rs)) :
-    (∃ l r σ, p = ⟨.hasProp l, [r, σ]⟩ ∧ ds = [r] ∧ rs = [σ]) ∨
+    (p.cls ≠ .plus ∧ p.cls ≠ .merge ∧ ∃ d, p.args = d :: rs ∧ ds = [d]) ∨
       ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ds = [q, τ, t] ∧ rs = [r] := by
-  unfold Pred.fundep at h
-  split at h
-  · cases h; exact .inl ⟨_, _, _, rfl, rfl, rfl⟩
-  · cases h; exact .inr ⟨_, _, _, _, rfl, rfl, rfl⟩
-  · cases h
+  obtain ⟨cls, args⟩ := p
+  cases cls
+  case plus => simp [Pred.fundep] at h
+  case merge =>
+    match args, h with
+    | [q, τ, t, r], h =>
+      simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact .inr ⟨_, _, _, _, rfl, rfl, rfl⟩
+    | [], h | [_], h | [_, _], h | [_, _, _], h | _ :: _ :: _ :: _ :: _ :: _, h =>
+      simp [Pred.fundep] at h
+  all_goals
+    match args, h with
+    | d :: rest, h =>
+      simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      exact .inl ⟨by simp, by simp, d, rfl, rfl⟩
+    | [], h => simp [Pred.fundep] at h
+
+theorem Pred.fundep_of_args {p : Pred} {d : Ty} {rest : List Ty} (hp : p.cls ≠ .plus)
+    (hm : p.cls ≠ .merge) (h : p.args = d :: rest) : p.fundep = some ([d], rest) := by
+  obtain ⟨cls, args⟩ := p
+  simp only at hp hm h; subst h
+  cases cls <;> simp_all [Pred.fundep]
 
 /-- A quantified variable of a scheme body, opened at `m`, is the variable
 `m + i`. -/
@@ -1850,11 +2041,10 @@ theorem Scheme.Simple.openPreds_block {s : Scheme} (hs : s.Simple) {m : Nat} {p 
       ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ v, m ≤ v ∧ v ∈ q.ftv ++ τ.ftv ++ t.ftv := by
   simp only [Scheme.openPreds, Scheme.instPreds, List.mem_map] at hp
   obtain ⟨q, hq, rfl⟩ := hp
-  rcases hs q hq with ⟨i, hi, hq' | ⟨l, σ, hq'⟩⟩ | ⟨q₀, τ₀, t₀, r₀, hq', i, hib, hi⟩ <;> subst hq'
-  · exact .inl ⟨m + i, by omega, [], by simp [PPred.inst, PTy.inst, varBlock, hi],
-      by simp [PPred.inst]⟩
-  · exact .inl ⟨m + i, by omega, _, by simp [PPred.inst, PTy.inst, varBlock, hi]; rfl,
-      by simp [PPred.inst]⟩
+  rcases hs q hq with ⟨hcls, -, i, hi, rest, hq'⟩ | ⟨q₀, τ₀, t₀, r₀, hq', i, hib, hi⟩
+  · exact .inl ⟨m + i, by omega, rest.map (·.inst (varBlock m s.arity)),
+      by simp [PPred.inst, hq', PTy.inst, varBlock, hi], hcls⟩
+  subst hq'
   · refine .inr ⟨q₀.inst (varBlock m s.arity), τ₀.inst (varBlock m s.arity),
       t₀.inst (varBlock m s.arity), r₀.inst (varBlock m s.arity),
       by simp only [PPred.inst, List.map_cons, List.map_nil], m + i, by omega, ?_⟩
@@ -2088,11 +2278,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         · exact hC p hp
         · simp only [Scheme.openPreds, Scheme.instPreds, List.mem_map] at hp
           obtain ⟨q, hq, rfl⟩ := hp
-          rcases hsimp q hq with ⟨i, hi, hq' | ⟨l, σ, hq'⟩⟩ | ⟨q₀, τ₀, t₀, r₀, hq', -⟩ <;>
-            subst hq'
-          · exact .inl ⟨m + i, by simp [PPred.inst, PTy.inst, varBlock, hi]⟩
-          · exact .inr (.inl ⟨l, m + i, _, by simp [PPred.inst, PTy.inst, varBlock, hi]; rfl⟩)
-          · exact .inr (.inr ⟨_, _, _, _, rfl, fun h => by cases h⟩)
+          rcases hsimp q hq with ⟨hcls, hlen, i, hi, rest, hq'⟩ | ⟨q₀, τ₀, t₀, r₀, hq', -⟩
+          · exact .inl ⟨hcls, by simpa [PPred.inst] using hlen, m + i,
+              rest.map (·.inst (varBlock m s.arity)), by simp [PPred.inst, hq', PTy.inst, varBlock, hi]⟩
+          · subst hq'
+            exact .inr ⟨_, _, _, _, rfl, fun h => by cases h⟩
       obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ih₁ hΓ hR hC₁ rfl rfl (hgen m hmF)
       obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e₁ hΓ hR h₁
       -- Improvement succeeds, and `φ₁` absorbs it.
@@ -2128,38 +2318,33 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           | none => simp [hd] at hv
           | some d =>
             obtain ⟨ds, rs⟩ := d
-            rcases Pred.fundep_some hd with ⟨l, r, σ, rfl, rfl, rfl⟩ | ⟨q, τ, t, r, rfl, rfl, rfl⟩
+            rcases Pred.fundep_some hd with ⟨hcp, hcm, d, hargs, rfl⟩ |
+              ⟨q, τ, t, r, rfl, rfl, rfl⟩
             · simp only [hd, Option.map_some, Option.getD_some, List.flatMap_cons,
                 List.flatMap_nil, List.append_nil] at hds hv
-              -- The receiver is sent below `m`, so the field is.
-              have hr : ∀ b ∈ (r.subst φ₁).ftv, b < m := Ty.subst_ftv_lt hds
+              -- The determining argument is sent below `m`, so the rest are.
+              have hr : ∀ b ∈ (d.subst φ₁).ftv, b < m := Ty.subst_ftv_lt hds
               intro b hb
-              have hbσ : b ∈ (σ.subst φ₁).ftv := Ty.ftv_subst_mem hv hb
+              obtain ⟨x, hx, hvx⟩ := List.mem_flatMap.mp hv
+              have hbx : b ∈ (x.subst φ₁).ftv := Ty.ftv_subst_mem hvx hb
               rcases hsat₁' _ hp with hi | hm'
-              · generalize hq : Pred.subst φ₁ ⟨.hasProp l, [r, σ]⟩ = q at hi
-                cases hi with
-                | plusNumber | plusString | mergePre | mergeAbs => simp [Pred.subst] at hq
-                | hasProp hf =>
-                  simp only [Pred.subst, Pred.mk.injEq, List.map_cons, List.map_nil,
-                    List.cons.injEq, and_true] at hq
-                  obtain ⟨-, hr', hσ'⟩ := hq
-                  refine hr b ?_
-                  rw [hr']
-                  simp only [Ty.ftv_app, List.mem_flatMap]
-                  refine ⟨_, (List.of_mem_zip (Ty.field_mem hf)).2, ?_⟩
-                  simp only [Ty.ftv_app, List.flatMap_cons, List.flatMap_nil, List.mem_append,
-                    List.append_nil]
-                  exact .inr (by rw [← hσ']; exact hbσ)
+              · have hi' : Inst ⟨p.cls, d.subst φ₁ :: rs.map (·.subst φ₁)⟩ := by
+                  simpa [Pred.subst, hargs] using hi
+                exact hr b (Inst.fundep_ftv hi' hcm _ (List.mem_map_of_mem hx) b hbx)
               · rcases List.mem_append.mp hm' with hm' | hm'
-                · have : b ∈ (Pred.subst φ₁ ⟨.hasProp l, [r, σ]⟩).ftv := by
-                    simp [Pred.ftv, Pred.subst, hbσ]
+                · have : b ∈ (p.subst φ₁).ftv := by
+                    simp only [Pred.ftv, Pred.subst, hargs, List.map_cons, List.flatMap_cons,
+                      List.mem_append, List.mem_flatMap, List.mem_map]
+                    exact .inr ⟨_, ⟨x, hx, rfl⟩, hbx⟩
                   exact hmC _ hm' b this
                 · rcases hsimp.openPreds_block hm' with ⟨v', hv', rest, he, -⟩ |
                     ⟨q', τ', t', r', he, -⟩
-                  · simp only [Pred.subst, List.map_cons, List.cons.injEq] at he
+                  · simp only [Pred.subst, hargs, List.map_cons, List.cons.injEq] at he
                     have := hr v' (by rw [he.1]; simp)
                     omega
-                  · simp [Pred.subst] at he
+                  · have := congrArg Pred.cls he
+                    simp only [Pred.subst] at this
+                    exact absurd this hcm
             · simp only [hd, Option.map_some, Option.getD_some, List.flatMap_cons,
                 List.flatMap_nil, List.append_nil] at hds hv
               -- The operand's slot and the slot written over are sent below
@@ -2176,7 +2361,6 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
               rcases hsat₁' _ hp with hi | hm'
               · generalize hq' : Pred.subst φ₁ ⟨.merge, [q, τ, t, r]⟩ = q'' at hi
                 cases hi with
-                | plusNumber | plusString | hasProp _ => simp [Pred.subst] at hq'
                 | mergePre =>
                   simp only [Pred.subst, Pred.mk.injEq, List.map_cons, List.map_nil,
                     List.cons.injEq, and_true, true_and] at hq'
@@ -2193,6 +2377,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
                   obtain ⟨-, -, ht', hr'⟩ := hq'
                   rw [hr', ← ht'] at hbr
                   exact hd' b (by simp [hbr])
+                | _ => simp [Pred.subst] at hq'
               · rcases List.mem_append.mp hm' with hm' | hm'
                 · have : b ∈ (Pred.subst φ₁ ⟨.merge, [q, τ, t, r]⟩).ftv := by
                     simp [Pred.ftv, Pred.subst, hbr]
@@ -2265,68 +2450,68 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
             obtain ⟨hgp, hgα⟩ := List.mem_filter.mp hg
             obtain ⟨a, ha, haα⟩ := List.any_eq_true.mp hgα
             simp only [decide_eq_true_eq] at haα
-            rcases Pred.improve_keep (hkeep g hgp) with ⟨args, rfl⟩ | ⟨l, r, σ, rfl⟩ |
-              ⟨args, rfl, -⟩
+            have he := hsat₁' _ hgp
+            have hl := he.arity hC₁
+            rcases Pred.improve_keep (hkeep g hgp) with hcls | ⟨hcls, -⟩ |
+              ⟨hcp, hcm, -, r, rest, hargs⟩
             · -- `Plus τ`: the type is a variable.
+              obtain ⟨gc, args⟩ := g
+              simp only at hcls; subst hcls
+              simp only [Pred.subst, List.length_map, Cls.arity] at hl
               obtain ⟨b, rfl⟩ : ∃ b, args = [.var b] := by
-                rcases hsat₁' _ hgp with hi | hm'
-                · generalize hq : Pred.subst φ₁ ⟨.plus, args⟩ = q at hi
-                  cases hi <;> simp only [Pred.subst, Pred.mk.injEq, true_and] at hq <;>
-                    match args, hq, ha with
-                    | [.var b], _, _ => exact ⟨b, rfl⟩
-                    | [.app _ []], _, ha => simp [Pred.ftv] at ha
-                    | [.app _ (_ :: _)], hq, _ => simp at hq
-                    | [], hq, _ => simp at hq
-                    | _ :: _ :: _, hq, _ => simp at hq
-                · rcases hC₁ _ hm' with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, -⟩
-                  · simp only [Pred.subst, Pred.mk.injEq, true_and] at hx
-                    match args, hx with
-                    | [.var b], _ => exact ⟨b, rfl⟩
-                    | [.app _ _], hx => simp at hx
-                    | [], hx => simp at hx
-                    | _ :: _ :: _, hx => simp at hx
-                  · simp [Pred.subst] at hx
-                  · simp [Pred.subst] at hx
+                rcases he.var_or_inst hC₁ (by simp) with ⟨b, rest, e⟩ | ⟨hi, hnv⟩
+                · simp only at e; subst e
+                  obtain rfl : rest = [] := List.eq_nil_of_length_eq_zero (by simpa using hl)
+                  exact ⟨b, rfl⟩
+                · exfalso
+                  match args, hl, hnv, hi, ha with
+                  | [.var b], _, hnv, _, _ => exact hnv b [] rfl
+                  | [.app k xs], _, _, hi, ha =>
+                    generalize hq : Pred.subst φ₁ ⟨.plus, [.app k xs]⟩ = q at hi
+                    cases hi <;> simp [Pred.subst, Ty.subst_app] at hq <;>
+                      obtain ⟨rfl, rfl⟩ := hq <;> simp [Pred.ftv, Ty.ftv_app] at ha
+                  | [], hl, _, _, _ => simp at hl
+                  | _ :: _ :: _, hl, _, _, _ => simp at hl
               simp only [Pred.ftv, List.flatMap_cons, List.flatMap_nil, List.append_nil,
                 Ty.ftv_var, List.mem_singleton] at ha
               subst ha
               obtain ⟨i, hi⟩ := findIdx_some haα
-              simp [Pred.gen, Ty.gen, hi, PPred.isSimple, findIdx_lt hi]
-            · -- `HasProp l r σ`: the receiver is generalised, since a fixed one
-              -- would fix the field too.
+              simp [Pred.gen, Ty.gen, hi, PPred.isSimple, findIdx_lt hi, Cls.arity]
+            rotate_left
+            · -- A constraint on a variable: the variable is generalised, since
+              -- a fixed one would fix the rest too.
+              have hcm : g.cls ≠ .merge := fun e => by simpa using hcm e
               have hrα : r ∈ ᾱ := by
                 rcases hcover r (List.mem_append_right _
-                    (List.mem_flatMap.mpr ⟨_, hgp, by simp [Pred.ftv]⟩)) with h | hr
+                    (List.mem_flatMap.mpr ⟨_, hgp, by simp [Pred.ftv, hargs]⟩)) with h | hr
                 · exact h
                 · exfalso
-                  have hfire : Pred.fires (fixedVars preds₁ env) ⟨.hasProp l, [.var r, σ]⟩ = true := by
-                    simp [Pred.fires, Pred.fundep, hr]
+                  have hfd : g.fundep = some ([.var r], rest) := Pred.fundep_of_args hcp hcm hargs
+                  have hfire : Pred.fires (fixedVars preds₁ env) g = true := by
+                    simp [Pred.fires, hfd, hr]
                   have hσfix := fixLoop_closed _ _ _ (Nat.le_refl _) _ hgp hfire
-                  simp only [Pred.fixes, Pred.fundep, List.flatMap_cons, List.flatMap_nil,
-                    List.append_nil] at hσfix
-                  simp only [Pred.ftv, List.flatMap_cons, List.flatMap_nil, List.append_nil,
-                    Ty.ftv_var, List.mem_append, List.mem_singleton] at ha
+                  simp only [Pred.fixes, hfd] at hσfix
+                  simp only [Pred.ftv, hargs, List.flatMap_cons, Ty.ftv_var, List.mem_append,
+                    List.mem_singleton] at ha
                   rcases ha with rfl | ha
                   · exact hfixed _ haα hr
                   · exact hfixed _ haα (hσfix a ha)
               obtain ⟨i, hi⟩ := findIdx_some hrα
-              simp [Pred.gen, Ty.gen, hi, PPred.isSimple, findIdx_lt hi]
+              obtain ⟨gc, args⟩ := g
+              simp only at hargs hcp hcm hl; subst hargs
+              simp only [Pred.subst, List.length_map, List.length_cons] at hl
+              cases gc <;> simp_all [Pred.gen, Ty.gen, PPred.isSimple, findIdx_lt hi]
             · -- `Merge q τ t r`: a variable of the operand's slot or of the
               -- slot written over is generalised, since fixed ones would fix
               -- the result too.
+              obtain ⟨gc, args⟩ := g
+              simp only at hcls; subst hcls
+              simp only [Pred.subst, List.length_map, Cls.arity] at hl
               obtain ⟨q, τ, t, r, rfl⟩ : ∃ q τ t r, args = [q, τ, t, r] := by
-                rcases hsat₁' _ hgp with hi | hm'
-                · generalize hq : Pred.subst φ₁ ⟨.merge, args⟩ = q at hi
-                  cases hi with
-                  | plusNumber | plusString | hasProp _ => simp [Pred.subst] at hq
-                  | mergePre | mergeAbs =>
-                    simp only [Pred.subst, Pred.mk.injEq, true_and] at hq
-                    exact exists_four_of_map hq
-                · rcases hC₁ _ hm' with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨q', τ', s', r', hx, -⟩
-                  · simp [Pred.subst] at hx
-                  · simp [Pred.subst] at hx
-                  · simp only [Pred.subst, Pred.mk.injEq, true_and] at hx
-                    exact exists_four_of_map hx
+                match args, hl with
+                | [q, τ, t, r], _ => exact ⟨q, τ, t, r, rfl⟩
+                | [], hl | [_], hl | [_, _], hl | [_, _, _], hl | _ :: _ :: _ :: _ :: _ :: _, hl =>
+                  simp at hl
               by_cases hdet : ∃ v ∈ q.ftv ++ τ.ftv ++ t.ftv, v ∈ ᾱ
               · obtain ⟨v, hv, hvα⟩ := hdet
                 obtain ⟨i, hi⟩ := findIdx_some hvα
@@ -2672,19 +2857,22 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
   | set e l v ihe ihv =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
-    | set he hpr hv =>
+    | set he hpr hw hv =>
       obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihe hΓ hR hC hΓ' hR' he
       obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e hΓ hR h₁
       obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := ihv (ψ := φ₁) (hσ₁.ctx_below (hΓ.mono hn₁))
         (hσ₁.ret_below (hR.mono hn₁)) hC (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) hv
       refine ⟨⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
-          [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩], o₂.next⟩,
+          [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩, ⟨.fieldWrite, [o₁.τ.subst o₂.σ]⟩], o₂.next⟩,
         by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂, ?_⟩
       refine Sat.app (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂) ?_
       intro c hc
-      simp only [List.mem_singleton] at hc; subst hc
-      simp only [Pred.subst, List.map_cons, List.map_nil, hag₂.ty hτb₁, hτ₁, hτ₂]
-      exact hpr
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl
+      · simp only [Pred.subst, List.map_cons, List.map_nil, hag₂.ty hτb₁, hτ₁, hτ₂]
+        exact hpr
+      · simp only [Pred.subst, List.map_cons, List.map_nil, hag₂.ty hτb₁, hτ₁]
+        exact hw
   | spread e₁ e₂ ih₁ ih₂ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -2760,48 +2948,123 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
             exact List.mem_map_of_mem hp
           exact hm _ hmem
 
+  | arr es ih =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | arr hes =>
+      rename_i τe
+      obtain ⟨o, h, φ, hag, hτs, hsat⟩ := inferArgs_complete es (List.replicate es.length τe) ih
+        hΓ hR hC hΓ' hR' (by simp) (fun p hp => by
+          obtain ⟨a, b⟩ := p
+          obtain ⟨ha, hb⟩ : a ∈ es ∧ b = τe := by
+            refine ⟨(List.of_mem_zip hp).1, ?_⟩
+            have := (List.of_mem_zip hp).2
+            exact List.eq_of_mem_replicate this
+          subst hb
+          exact hes a ha)
+      obtain ⟨hn, hσ, hτsb, hp⟩ := inferArgs_inv es (fun a _ => infer_inv L a) hΓ hR h
+      have hlen : o.τs.length = es.length := by
+        simpa using congrArg List.length hτs
+      have hu : (Ty.tuple o.τs).subst ((o.next, τe) :: φ) =
+          (Ty.tuple (List.replicate o.τs.length (.var o.next))).subst ((o.next, τe) :: φ) := by
+        simp only [Ty.subst_app, List.map_replicate, Ty.app.injEq, true_and]
+        rw [List.map_congr_left (fun τ hτ => Ty.subst_cons_fresh (hτsb τ hτ)), hτs, hlen]
+        simp [Ty.subst, Subst.find]
+      obtain ⟨σ', hσ', habs⟩ := unify_mgu hu
+      refine ⟨_, by simp only [infer, h, hσ']; rfl, (o.next, τe) :: φ,
+        Agree.absorb (hag.fresh hσ hn) habs, ?_, ?_⟩
+      · show ((Ty.array (.var o.next)).subst σ').subst _ = _
+        rw [habs]; simp [Ty.subst, Subst.find]
+      · exact Sat.absorb habs (Sat.fresh hp hsat)
+  | index e i ihe ihi =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | index he hi hpr =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihe hΓ hR hC hΓ' hR' he
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := ihi (ψ := φ₁) hΓ₁ hR₁ hC
+        (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) hi
+      obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := infer_inv L i hΓ₁ hR₁ h₂
+      refine ⟨_, by simp only [infer, h₁, h₂]; rfl, (o₂.next, τ') :: φ₂,
+        (hag₁.trans hσ₁ hn₁ hag₂).fresh ((hσ₁.mono hn₂).compose hσ₂) (by omega),
+        by simp [Ty.subst, Subst.find], ?_⟩
+      refine Sat.app (Sat.fresh (fun p hp => ?_) (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)) ?_
+      · simp only [List.mem_append, List.mem_map] at hp
+        rcases hp with ⟨q, hq, rfl⟩ | hp
+        · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        · exact hp₂ p hp
+      · intro c hc
+        simp only [List.mem_singleton] at hc; subst hc
+        simp only [Pred.subst, List.map_cons, List.map_nil,
+          Ty.subst_cons_fresh (hσ₂.subst_below (hτb₁.mono hn₂)), Ty.subst_cons_fresh hτb₂,
+          hag₂.ty hτb₁, hτ₁, hτ₂]
+        simpa [Ty.subst, Subst.find] using hpr
+  | setIndex e i v ihe ihi ihv =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | setIndex he hi hpr hw hv =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihe hΓ hR hC hΓ' hR' he
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := ihi (ψ := φ₁) hΓ₁ hR₁ hC
+        (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) hi
+      obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := infer_inv L i hΓ₁ hR₁ h₂
+      have hΓ₂ := hσ₂.ctx_below (hΓ₁.mono hn₂)
+      have hR₂ := hσ₂.ret_below (hR₁.mono hn₂)
+      obtain ⟨o₃, h₃, φ₃, hag₃, hτ₃, hsat₃⟩ := ihv (ψ := φ₂) hΓ₂ hR₂ hC
+        (by rw [hΓ', hag₂.ctx hΓ₁, hag₁.ctx hΓ]) (by rw [hR', hag₂.ret hR₁, hag₁.ret hR]) hv
+      have hb₁ : (o₁.τ.subst o₂.σ).Below o₂.next := hσ₂.subst_below (hτb₁.mono hn₂)
+      have hP : ∀ p ∈ o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, p.Below o₂.next := by
+        intro p hp
+        simp only [List.mem_append, List.mem_map] at hp
+        rcases hp with ⟨q, hq, rfl⟩ | hp
+        · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        · exact hp₂ p hp
+      refine ⟨⟨Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ), o₃.τ,
+          (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst o₃.σ) ++ o₃.preds ++
+            [⟨.indexable, [(o₁.τ.subst o₂.σ).subst o₃.σ, o₂.τ.subst o₃.σ, o₃.τ]⟩,
+              ⟨.indexWrite, [(o₁.τ.subst o₂.σ).subst o₃.σ]⟩], o₃.next⟩,
+        by simp only [infer, h₁, h₂, h₃], φ₃,
+        (hag₁.trans hσ₁ hn₁ hag₂).trans ((hσ₁.mono hn₂).compose hσ₂) (by omega) hag₃, hτ₃, ?_⟩
+      refine Sat.app (Sat.app (Sat.agree hag₃ hP (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂))
+        hsat₃) ?_
+      intro c hc
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl
+      · simp only [Pred.subst, List.map_cons, List.map_nil, hag₃.ty hb₁, hag₃.ty hτb₂,
+          hag₂.ty hτb₁, hτ₁, hτ₂, hτ₃]
+        exact hpr
+      · simp only [Pred.subst, List.map_cons, List.map_nil, hag₃.ty hb₁, hag₂.ty hτb₁, hτ₁]
+        exact hw
 /-- What improvement leaves of entailed constraints is settled: an instance,
 or on a type variable. -/
 theorem Pred.settled_of_keep {C : List Pred} (hC : ∀ c ∈ C, c.OnVarShaped) {p : Pred}
     {φ : Subst} (hk : p.improve true = .keep) (he : Entails C (p.subst φ)) :
     p.settled = true := by
+  have hC' : ∀ c ∈ C, c.AssumableAt true := fun c hc => (hC c hc).assumable true
   simp only [Pred.settled, Bool.or_eq_true]
-  rcases Pred.improve_keep hk with ⟨args, rfl⟩ | ⟨l, a, σ, rfl⟩ | ⟨args, rfl, hv⟩
-  · rcases he with hi | hm
-    · generalize hq : Pred.subst φ ⟨.plus, args⟩ = q at hi
-      obtain ⟨τ, rfl, hτ⟩ : ∃ τ, args = [τ] ∧ (τ.subst φ = .number ∨ τ.subst φ = .string) := by
-        cases hi with
-        | plusNumber =>
-          simp only [Pred.subst, Pred.mk.injEq, true_and] at hq
-          match args, hq with
-          | [τ], hq => exact ⟨τ, rfl, .inl (by simpa using hq)⟩
-          | [], hq => simp at hq
-          | _ :: _ :: _, hq => simp at hq
-        | plusString =>
-          simp only [Pred.subst, Pred.mk.injEq, true_and] at hq
-          match args, hq with
-          | [τ], hq => exact ⟨τ, rfl, .inr (by simpa using hq)⟩
-          | [], hq => simp at hq
-          | _ :: _ :: _, hq => simp at hq
-        | hasProp _ | mergePre | mergeAbs => simp [Pred.subst] at hq
-      cases τ with
-      | var b => exact .inr (by simp [Pred.onVar])
-      | app c xs =>
-        rcases hτ with hτ | hτ <;> simp only [Ty.subst_app, Ty.app.injEq] at hτ <;>
-          obtain ⟨rfl, hxs⟩ := hτ <;> obtain rfl : xs = [] := List.eq_nil_of_map_eq_nil hxs <;>
-          exact .inl rfl
-    · rcases hC _ hm with ⟨x, hx⟩ | ⟨l', x, σ', hx⟩ | ⟨x, τ', s', r', hx⟩
-      · simp only [Pred.subst, Pred.mk.injEq, true_and] at hx
-        match args, hx with
-        | [.var b], _ => exact .inr (by simp [Pred.onVar])
-        | [.app _ _], hx => simp at hx
-        | [], hx => simp at hx
-        | _ :: _ :: _, hx => simp at hx
-      · simp [Pred.subst] at hx
-      · simp [Pred.subst] at hx
-  · exact .inr (by simp [Pred.onVar])
-  · obtain ⟨b, τ, s', r, rfl⟩ := hv rfl
-    exact .inr (by simp [Pred.onVar])
+  obtain ⟨cls, args⟩ := p
+  have hvar : ∀ a rest, args = .var a :: rest → Pred.onVar ⟨cls, args⟩ = true := by
+    intro a rest e; simp [Pred.onVar, e]
+  rcases Pred.improve_keep hk with hcls | ⟨-, h⟩ | ⟨-, -, -, a, rest, e⟩
+  · simp only at hcls; subst hcls
+    rcases he.var_or_inst hC' (by simp) with ⟨a, rest, e⟩ | ⟨hi, hnv⟩
+    · exact .inr (hvar a rest e)
+    · -- `Plus` on a known type that is an instance is one.
+      left
+      generalize hq : Pred.subst φ ⟨.plus, args⟩ = q at hi
+      match args, hq, hi, hnv with
+      | .var a :: rest, _, _, hnv => exact absurd rfl (hnv a rest)
+      | [.app k xs], hq, hi, _ =>
+        cases hi <;> simp [Pred.subst, Ty.subst_app] at hq <;> obtain ⟨rfl, rfl⟩ := hq <;>
+          simp [Pred.isInst]
+      | .app _ _ :: _ :: _, hq, hi, _ => cases hi <;> simp [Pred.subst] at hq
+      | [], hq, hi, _ => cases hi <;> simp [Pred.subst] at hq
+  · cases h
+  · exact .inr (hvar a rest e)
 
 /-- Completeness, for a program in a closed context (such as the builtins'):
 if it has a type, under assumptions on type variables, and passes the scope

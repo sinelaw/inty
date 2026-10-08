@@ -10,7 +10,7 @@
 //   limit      a resource limit: the stack, a string's length, the time
 //
 // where V is `num BITS` (the float64's bits, so NaN and -0 survive),
-// `str s:TEXT`, `bool B`, `undef`, `null`, `fun` or `obj`.
+// `str s:TEXT`, `bool B`, `undef`, `null`, `fun`, `arr` or `obj`.
 
 "use strict";
 
@@ -33,7 +33,7 @@ function wire(v) {
     case "function":
       return "fun";
     case "object":
-      return v === null ? "null" : "obj";
+      return v === null ? "null" : Array.isArray(v) ? "arr" : "obj";
     default:
       return `other ${typeof v}`;
   }
