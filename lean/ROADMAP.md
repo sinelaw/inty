@@ -75,8 +75,9 @@ The parts every later feature touches.
 
 ### 1. Completeness of inference
 
-Proved for the core, then kept for every later phase. The decisions it
-needs first:
+Proved for the core, then kept for every later phase. Done for programs
+without `const` (`Inty/InferComplete.lean`); `const` remains, which needs
+the scheme rule tightened as below. The decisions it needed:
 
 - **Ambiguous constraints.** Decided: a constraint left on a type
   variable at the end is satisfiable, and inty leaves it in place and
@@ -84,6 +85,13 @@ needs first:
   typing the program at a default instance (`defaultSubst`). Completeness
   is stated for constrained types: the inferred type, with its pending
   constraints, has every valid type as a solved instance.
+- **Constraints in a `const`'s scheme.** `HasType` lets a scheme carry a
+  constraint that mentions none of its quantified variables, assumed while
+  typing the initialiser and checked only where the variable is used: so it
+  accepts `const x = function () { return true + true; }` when `x` is
+  unused, which inty, and inference, reject. The rule must require each of a
+  scheme's constraints to mention one of its quantified variables, as
+  inty's generalisation does.
 - **Well-scoped schemes.** A scheme may mention `bound i` past its arity.
   "More general than" ranges over well-scoped schemes only, by a
   well-formedness predicate or by construction.

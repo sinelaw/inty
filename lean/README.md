@@ -55,8 +55,21 @@ inferProgram e = some τ → HasType [] [] none e τ
 ```
 
 so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
-gets stuck. Completeness, that inference finds a type whenever one exists,
-is not proved yet.
+gets stuck.
+
+`Inty.infer_complete` (in `Inty/InferComplete.lean`): for programs without
+`const` so far, inference finds a type whenever one exists, one of which
+every valid type is an instance (Damas and Milner's completeness; the
+freshness invariants follow Naraschewski and Nipkow's proof of algorithm
+W):
+
+```
+ctxFtv Γ = [] → e.letFree → HasType [] Γ none e τ' →
+  ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ inferIn Γ e ≠ none
+```
+
+(`inferIn_complete`, `inferProgram_complete`). It rests on unification
+being most general (`Inty.unify_mgu`).
 
 `Inty.never_stuck_with_builtins` (in `Inty/Builtins.lean`): the same for a
 program run with native functions in scope, `Math.abs : number → number`

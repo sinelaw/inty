@@ -1,4 +1,5 @@
 import Inty.Builtins
+import Inty.InferComplete
 
 /-!
 # Pinned statements
@@ -65,6 +66,15 @@ example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
 example : ∀ {e : Expr} {τ : Ty}, inferIn builtinCtx e = some τ →
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv e ≠ .stuck s :=
   inferIn_builtins_never_stuck
+
+example : ∀ {Γ : Ctx} {e : Expr} {τ' : Ty}, ctxFtv Γ = [] → e.letFree = true →
+    HasType [] Γ none e τ' →
+    ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn Γ e = some τ :=
+  inferIn_complete
+
+example : ∀ {e : Expr} {τ' : Ty}, e.letFree = true → HasType [] [] none e τ' →
+    ∃ τ, inferProgram e = some τ :=
+  inferProgram_complete
 
 example : ∀ (c : Nat) (env : Env) (e : Expr), (run c env e).2 ≤ c :=
   run_clock_le

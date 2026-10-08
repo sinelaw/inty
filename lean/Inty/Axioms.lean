@@ -1,4 +1,5 @@
 import Inty.Builtins
+import Inty.InferComplete
 
 /-!
 # Axiom audit
@@ -37,3 +38,6 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.unify_mgu' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.unify_mgu
+
+/-- info: 'Inty.inferIn_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferIn_complete
