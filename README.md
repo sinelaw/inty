@@ -4,17 +4,22 @@ Inty is a static type checker with full type inference. Source code you check
 with inty is just plain source in its surface language — no transpilation, no
 added syntax — and runs as-is in the corresponding runtime.
 
+Inty is an alternative to TypeScript.
+
 Inty's inference engine is language-agnostic: a frontend lowers its surface
 syntax onto a shared AST, and the type checker works on that AST.
 
 Frontends:
 
-- **JavaScript** — the primary frontend. Vanilla JS, optional JSDoc-style annotations.
-- **Python** — a deliberately limited subset that lowers cleanly onto the type system.
-- **Lua** — early sketch; the frontend parses a small subset, but it's not shipped end-to-end (no playground, no LSP integration).
+- **JavaScript** - the primary frontend. You write vanilla JS, with optional JSDoc-style annotations, and inty type checks it for you.
 
-The type system was designed to cover the common ground of these languages,
-while deliberately leaving out parts that are "too dynamic", or considered
+And also:
+
+- **Python** - *experimental* a deliberately limited subset that lowers cleanly onto the type system.
+- **Lua** - *experimental* early sketch; the frontend parses a small subset, but it's not shipped end-to-end (no playground, no LSP integration).
+
+The type system was designed to cover JavaScript's "good parts" and the common ground of these languages,
+while deliberately leaving out parts that are too dynamic, or considered
 generally harmful.
 
 inty is available as a CLI, an LSP server, and a WASM library.
