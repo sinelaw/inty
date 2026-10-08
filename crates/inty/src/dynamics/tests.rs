@@ -359,4 +359,3 @@ fn try_catches_a_throw_from_a_call() {
         3.0,
     );
 }
-

@@ -642,7 +642,11 @@ impl Gen {
         *self.loops.last_mut().unwrap() -= 1;
         scope.pop();
         let step = Assign(0, b(Minus(b(Var(0)), b(Num(1, 0)))));
-        Let(true, b(Num(n, 0)), b(While(b(Var(0)), b(Seq(b(step), b(body))))))
+        Let(
+            true,
+            b(Num(n, 0)),
+            b(While(b(Var(0)), b(Seq(b(step), b(body))))),
+        )
     }
 
     /// Any program: types aren't tracked, so many are ill typed.
@@ -682,9 +686,7 @@ impl Gen {
                 // `try`/`catch` only where typed: inty doesn't type a
                 // statement's value, and two branches of any types would
                 // tell the model and inty apart.
-                6 => {
-                    return TryFinally(b(self.any(d, scope, true)), b(self.any(d, scope, true)))
-                }
+                6 => return TryFinally(b(self.any(d, scope, true)), b(self.any(d, scope, true))),
                 _ => {}
             }
         }
@@ -838,7 +840,11 @@ fn literal_arity(text: &str) -> Option<usize> {
     let open = rest.find('(')?;
     let close = rest[open..].find(')')? + open;
     let params = rest[open + 1..close].trim();
-    Some(if params.is_empty() { 0 } else { params.split(',').count() })
+    Some(if params.is_empty() {
+        0
+    } else {
+        params.split(',').count()
+    })
 }
 
 fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features) {
