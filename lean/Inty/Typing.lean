@@ -4,9 +4,11 @@ import Inty.Types
 /-!
 # Declarative typing
 
-`HasType Γ e τ` is the specification the inference engine (`src/infer`)
+`HasType C Γ e τ` is the specification the inference engine (`src/infer`)
 implements: it says which types an expression may have, not how to find one.
-Inference soundness and completeness against it is a later layer.
+`C` lists the types assumed to be `Plus` instances: a polymorphic function
+whose body uses `+` on its parameter is typed assuming its scheme's
+constraints, and each use of it must establish them.
 
 The operator rules are split out as `UnOpTy` / `BinOpTy`, one constructor per
 operator rule, mirroring the operator catalog in `src/operators`. Type-class
@@ -36,52 +38,59 @@ inductive UnOpTy : UnOp → Ty → Ty → Prop where
   | typeof : UnOpTy .typeof τ .string
   | neg : UnOpTy .neg .number .number
 
-/-- Typing rules of the binary operators: operand types, result type. Both
-operands of `+` have the same type, one instance of `Plus`: inty's `+` never
-mixes a `Number` with a `String`. -/
-inductive BinOpTy : BinOp → Ty → Ty → Ty → Prop where
-  | plus : PlusInst τ → BinOpTy .plus τ τ τ
-  | minus : BinOpTy .minus .number .number .number
+/-- `τ` is a `Plus` instance, or assumed to be one. -/
+def Entails (C : List Ty) (τ : Ty) : Prop := PlusInst τ ∨ τ ∈ C
 
-/-- The typing judgement. -/
-inductive HasType : Ctx → Expr → Ty → Prop where
-  | lit : LitTy l τ → HasType Γ (.lit l) τ
-  /-- A variable has any instance of its scheme. -/
+/-- Typing rules of the binary operators under assumptions `C`: operand
+types, result type. Both operands of `+` have the same type, one instance of
+`Plus`: inty's `+` never mixes a `Number` with a `String`. -/
+inductive BinOpTy (C : List Ty) : BinOp → Ty → Ty → Ty → Prop where
+  | plus : Entails C τ → BinOpTy C .plus τ τ τ
+  | minus : BinOpTy C .minus .number .number .number
+
+/-- The typing judgement: under the `Plus` assumptions `C` and the context
+`Γ`, `e` has type `τ`. -/
+inductive HasType : List Ty → Ctx → Expr → Ty → Prop where
+  | lit : LitTy l τ → HasType C Γ (.lit l) τ
+  /-- A variable has any instance of its scheme whose constraints hold. -/
   | var : Γ[i]? = some s → τs.length = s.arity →
-      HasType Γ (.var i) (s.inst τs)
-  | func : HasType (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) body τ₂ →
-      HasType Γ (.func body) (.arrow τ₁ τ₂)
-  | app : HasType Γ f (.arrow τ₁ τ₂) → HasType Γ a τ₁ →
-      HasType Γ (.app f a) τ₂
+      (∀ c ∈ s.instPlus τs, Entails C c) →
+      HasType C Γ (.var i) (s.inst τs)
+  | func : HasType C (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) body τ₂ →
+      HasType C Γ (.func body) (.arrow τ₁ τ₂)
+  | app : HasType C Γ f (.arrow τ₁ τ₂) → HasType C Γ a τ₁ →
+      HasType C Γ (.app f a) τ₂
   /-- `const x = e₁; e₂` gives `x` a scheme `s`. The first premise says `e₁`
-  has every opening of `s` at fresh type variables: `m` ranges over all
-  starting points above a finite set `L`, which is how a locally nameless
-  development says "for fresh variables" (cofinite quantification). It
-  implies the usual side condition, that the generalised variables don't
-  occur free in `Γ`. Under the value restriction only a syntactic value
-  generalises; anything else gets a scheme of arity 0. -/
+  has every opening of `s` at fresh type variables, assuming the opened
+  constraints: `m` ranges over all starting points above a finite set `L`,
+  which is how a locally nameless development says "for fresh variables"
+  (cofinite quantification). It implies the usual side condition, that the
+  generalised variables don't occur free in `Γ`. Under the value restriction
+  only a syntactic value generalises; anything else gets a scheme with no
+  quantified variables and no constraints. -/
   | let_ (s : Scheme) (L : List Nat) :
-      (∀ m, (∀ a ∈ L, a < m) → HasType Γ e₁ (s.open m)) →
-      s.arity = 0 ∨ e₁.IsValue →
-      HasType (s :: Γ) e₂ τ₂ →
-      HasType Γ (.let_ e₁ e₂) τ₂
+      (∀ m, (∀ a ∈ L, a < m) → HasType (C ++ s.openPlus m) Γ e₁ (s.open m)) →
+      (s.arity = 0 ∧ s.plus = []) ∨ e₁.IsValue →
+      HasType C (s :: Γ) e₂ τ₂ →
+      HasType C Γ (.let_ e₁ e₂) τ₂
   /-- Both branches have one type, as in Hindley–Milner: inty doesn't guess
   that disagreeing branches form a union. -/
-  | cond : HasType Γ c τc → HasType Γ t τ → HasType Γ e τ →
-      HasType Γ (.cond c t e) τ
-  | unop : UnOpTy op τ₁ τ → HasType Γ e τ₁ →
-      HasType Γ (.unop op e) τ
-  | binop : BinOpTy op τ₁ τ₂ τ → HasType Γ e₁ τ₁ → HasType Γ e₂ τ₂ →
-      HasType Γ (.binop op e₁ e₂) τ
+  | cond : HasType C Γ c τc → HasType C Γ t τ → HasType C Γ e τ →
+      HasType C Γ (.cond c t e) τ
+  | unop : UnOpTy op τ₁ τ → HasType C Γ e τ₁ →
+      HasType C Γ (.unop op e) τ
+  | binop : BinOpTy C op τ₁ τ₂ τ → HasType C Γ e₁ τ₁ → HasType C Γ e₂ τ₂ →
+      HasType C Γ (.binop op e₁ e₂) τ
 
 /-- A variable whose scheme is a monotype has that type. -/
 theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :
-    HasType Γ (.var i) τ := by
-  simpa using HasType.var (τs := []) h rfl
+    HasType C Γ (.var i) τ := by
+  simpa using HasType.var (C := C) (τs := []) h rfl (by simp [Scheme.instPlus, Scheme.mono])
 
 /-- A monomorphic `const`. -/
-theorem HasType.let_mono (h₁ : HasType Γ e₁ τ₁)
-    (h₂ : HasType (.mono τ₁ :: Γ) e₂ τ₂) : HasType Γ (.let_ e₁ e₂) τ₂ :=
-  .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open] using h₁) (.inl rfl) h₂
+theorem HasType.let_mono (h₁ : HasType C Γ e₁ τ₁)
+    (h₂ : HasType C (.mono τ₁ :: Γ) e₂ τ₂) : HasType C Γ (.let_ e₁ e₂) τ₂ :=
+  .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPlus,
+    Scheme.instPlus, Scheme.mono, Scheme.inst] using h₁) (.inl ⟨rfl, rfl⟩) h₂
 
 end Inty

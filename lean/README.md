@@ -2,8 +2,9 @@
 
 A machine-checked model of inty's type system, in Lean 4 (core library only,
 no Mathlib). It covers a small core calculus, with let-polymorphism under the
-value restriction, a complete type-soundness proof, and an executable
-type-inference algorithm proved sound. It is laid out so
+value restriction and type schemes that carry class constraints (inty's
+`<a> where Plus a => (a, a) => a`), a complete type-soundness proof, and an
+executable type-inference algorithm proved sound. It is laid out so
 that each inty feature can be added the way it is added to the Rust code: a
 typing rule, an operator arm and a runtime arm, plus one new case in the
 proof. Paths like `src/dynamics` are relative to `crates/inty`.
@@ -19,10 +20,11 @@ pins the version.
 ## What is proved
 
 `Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
-`τ`, context `Γ` and environment `env` matching `Γ`, and every amount of fuel,
+`τ`, `Plus` assumptions `C` that hold, context `Γ` and environment `env`
+matching `Γ`, and every amount of fuel,
 
 ```
-HasType Γ e τ → EnvTy env Γ →
+HasType C Γ e τ → Holds C → EnvTy env Γ →
   eval fuel env e = timeout ∨ ∃ v, eval fuel env e = ok v ∧ ValTy v τ
 ```
 
@@ -39,7 +41,7 @@ instance of its scheme.
 finds is a valid typing,
 
 ```
-inferProgram e = some τ → HasType [] e τ
+inferProgram e = some τ → HasType [] [] e τ
 ```
 
 so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
@@ -54,12 +56,13 @@ is not proved yet.
 | Lean | inty |
 |---|---|
 | `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `arrow`, type variables | `types::Type` (an `arrow` is the call signature of a callable row; `number` stands for both `Int` and `Number`) |
-| `Scheme` (`∀ α₀ … αₖ₋₁. τ`, body a `PTy`) | `types::TypeScheme` |
+| `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
 | `Expr`: literals, variables, named one-parameter functions (recursive), application, `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-` | `ast::Expr` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction) | `is_syntactic_value`, `src/infer/features/bindings.rs` |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
 | `PlusInst` | the `Plus` instance table, `src/classes` |
+| `Entails C τ` (`τ` is an instance, or assumed to be one) | a scheme's constraints in scope while checking its body |
 | `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
 | `Out.plus` (pending `Plus` constraints) | the constraints `src/infer` resolves once types are known |
 | `Value`, `Stuck`, `eval` (fuel-bounded interpreter) | `src/dynamics` (`Value`, `Stuck`, fuel) |
@@ -108,9 +111,14 @@ These choices are meant to hold up as the calculus grows.
   further substitution that resolves the pending `Plus` constraints. Stated
   that way, a `const`'s generalisation is justified by renaming, and the
   proof never needs inference's fresh variables to be fresh; completeness
-  will. Unification is bounded by fuel for the same reason. A `+` defers
-  its `Plus` constraint until the program is checked, and a `const` doesn't
-  generalise a variable such a constraint mentions.
+  will. Unification is bounded by fuel for the same reason.
+- **Class constraints are assumptions in the judgement.** `HasType C Γ e τ`
+  types `e` assuming the types in `C` are `Plus` instances, as in HM(X). A
+  `const` types its initialiser assuming its scheme's constraints, and each
+  use of the variable must establish them. Inference records a pending
+  constraint at each `+`; a `const` takes the ones mentioning a generalised
+  variable into its scheme, and the rest must be resolved by the end of the
+  program.
 - **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
   and `Arith` classes, is a roadmap item.
 
@@ -137,7 +145,7 @@ cheapest proofs first and the hardest last.
 1. ~~**Let-polymorphism.**~~ Done: type variables and schemes, `const`
    generalising under the value restriction, and the type substitution
    lemma. A value in the environment has every instance of its variable's
-   scheme.
+   scheme whose constraints hold. Schemes carry `Plus` constraints.
 2. **Inference.** Soundness is done: Algorithm W, executable, proved sound
    against `HasType`. What remains is completeness with principal types,
    which needs a termination proof for unification in place of its fuel,
@@ -164,10 +172,10 @@ cheapest proofs first and the hardest last.
    This is Typed Racket's rule; "Revisiting Soundness for Occurrence
    Typing, Semantically" (arXiv 2609.16299) gives a Lean mechanization of its
    soundness.
-9. **Constrained schemes, more type classes, callable rows**: schemes that
-   carry class constraints (`<a> where Plus a => (a, a) => a`; for now a
-   function using `+` on its parameter stays monomorphic), `Indexable`, and
-   functions as rows carrying a call signature alongside statics.
+9. **More type classes and callable rows**: schemes carry `Plus`
+   constraints already; `Indexable` and `HasProp` are the same machinery
+   with more arguments. Also functions as rows carrying a call signature
+   alongside statics.
 10. **Equi-recursive types.** `ValTy` becomes step-indexed, because a
     recursive type is not structurally smaller than its unfolding.
 

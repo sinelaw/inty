@@ -23,20 +23,19 @@ def isString (s : String) : Result → Bool
 def double : Expr :=
   .let_ (.func (.binop .plus (.var 0) (.var 0))) (.app (.var 0) (str "ab"))
 
--- `double` is monomorphic: its body needs one `Plus` instance, and schemes
--- don't carry class constraints yet.
-example : HasType [] double .string :=
+-- One derivation types `double` monomorphically, at `String → String`.
+example : HasType [] [] double .string :=
   .let_mono (τ₁ := .arrow .string .string)
-    (.func (.binop (.plus .string) (.var_mono rfl) (.var_mono rfl)))
+    (.func (.binop (.plus (.inl .string)) (.var_mono rfl) (.var_mono rfl)))
     (.app (.var_mono rfl) (.lit .string))
 
 #guard isString "abab" (eval 10 [] double)
 
 /-- `+` is overloaded, but each use picks one instance: the same function body
 also types at `Number`. -/
-example : HasType [] (.func (.binop .plus (.var 0) (.var 0)))
+example : HasType [] [] (.func (.binop .plus (.var 0) (.var 0)))
     (.arrow .number .number) :=
-  .func (.binop (.plus .number) (.var_mono rfl) (.var_mono rfl))
+  .func (.binop (.plus (.inl .number)) (.var_mono rfl) (.var_mono rfl))
 
 /-- Let-polymorphism:
 `const id = function (x) { return x; }; const n = id(1); id("a")` -/
@@ -46,16 +45,43 @@ def polyId : Expr :=
       (.app (.var 1) (str "a")))
 
 /-- `id`'s scheme, `∀ α. α → α`. -/
-def idScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0)⟩
+def idScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0), []⟩
 
 -- `id` is used at `Number → Number` and at `String → String`.
-example : HasType [] polyId .string :=
+example : HasType [] [] polyId .string :=
   .let_ idScheme [] (fun _ _ => .func (.var_mono rfl)) (.inr .func)
     (.let_mono
-      (.app (.var (s := idScheme) (τs := [.number]) rfl rfl) (.lit .number))
-      (.app (.var (s := idScheme) (τs := [.string]) rfl rfl) (.lit .string)))
+      (.app (.var (s := idScheme) (τs := [.number]) rfl rfl nofun) (.lit .number))
+      (.app (.var (s := idScheme) (τs := [.string]) rfl rfl nofun) (.lit .string)))
 
 #guard isString "a" (eval 10 [] polyId)
+
+/-- A constrained scheme:
+`const double = function (x) { return x + x; }; const n = double(1); double("a")` -/
+def polyDouble : Expr :=
+  .let_ (.func (.binop .plus (.var 0) (.var 0)))
+    (.let_ (.app (.var 0) (num 1))
+      (.app (.var 1) (str "a")))
+
+/-- `double`'s scheme, `∀ α. Plus α ⇒ α → α`, inty's
+`<a> where Plus a => (a) => a`. -/
+def doubleScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0), [.bound 0]⟩
+
+-- The body is typed assuming `Plus α`; each use establishes it.
+example : HasType [] [] polyDouble .string :=
+  .let_ doubleScheme []
+    (fun m _ => .func (.binop (.plus (.inr (by simp [Scheme.openPlus, Scheme.instPlus,
+      doubleScheme, varBlock, PTy.inst]))) (.var_mono rfl) (.var_mono rfl)))
+    (.inr .func)
+    (.let_mono
+      (.app (.var (s := doubleScheme) (τs := [.number]) rfl rfl (fun c hc => by
+        simp [Scheme.instPlus, doubleScheme, PTy.inst] at hc; subst hc; exact .inl .number))
+        (.lit .number))
+      (.app (.var (s := doubleScheme) (τs := [.string]) rfl rfl (fun c hc => by
+        simp [Scheme.instPlus, doubleScheme, PTy.inst] at hc; subst hc; exact .inl .string))
+        (.lit .string)))
+
+#guard isString "aa" (eval 20 [] polyDouble)
 
 /-- The value restriction: `id(id)` is not a syntactic value, so a `const`
 bound to it gets a monomorphic scheme. -/
@@ -68,7 +94,7 @@ def countdown : Expr :=
     (str "done")))
     (num 3)
 
-example : HasType [] countdown .string :=
+example : HasType [] [] countdown .string :=
   .app
     (.func (.cond (.var_mono rfl)
       (.app (.var_mono rfl) (.binop .minus (.var_mono rfl) (.lit .number)))
@@ -82,7 +108,7 @@ example : HasType [] countdown .string :=
 /-- `1 + "a"`: inty rejects it, and the semantics gets stuck on it. -/
 def mixedPlus : Expr := .binop .plus (num 1) (str "a")
 
-example : ¬ HasType [] mixedPlus τ := by
+example : ¬ HasType [] [] mixedPlus τ := by
   intro h
   cases h with
   | binop hop h₁ h₂ =>
@@ -93,7 +119,7 @@ example : ¬ HasType [] mixedPlus τ := by
 
 /-- A test may have any type and is read by truthiness:
 `"" ? 1 : 2` is `2`. -/
-example : HasType [] (.cond (str "") (num 1) (num 2)) .number :=
+example : HasType [] [] (.cond (str "") (num 1) (num 2)) .number :=
   .cond (.lit .string) (.lit .number) (.lit .number)
 
 #guard match eval 10 [] (.cond (str "") (num 1) (num 2)) with
@@ -117,10 +143,14 @@ example : HasType [] (.cond (str "") (num 1) (num 2)) .number :=
 #guard inferProgram mixedPlus == none
 -- `id` alone gets the most general type, `α → α`.
 #guard inferProgram (.func (.var 0)) == some (.arrow (.var 0) (.var 0))
--- A `+` whose operands nothing pins down is rejected: schemes can't carry
--- the `Plus` constraint yet.
+-- A `const` generalises `double` with its `Plus` constraint, so it is used
+-- at both instances; a use at `Boolean` is rejected.
+#guard inferProgram polyDouble == some .string
+#guard inferProgram (.let_ (.func (.binop .plus (.var 0) (.var 0)))
+  (.app (.var 0) (.lit (.boolean true)))) == none
+-- At the top level, nothing resolves the constraint of an unused `+`.
 #guard inferProgram (.func (.binop .plus (.var 0) (.var 0))) == none
 
-example : HasType [] polyId .string := inferProgram_sound (by decide)
+example : HasType [] [] polyId .string := inferProgram_sound (by decide)
 
 end Inty.Examples

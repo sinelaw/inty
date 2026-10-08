@@ -38,10 +38,13 @@ inductive PTy where
   | bound (i : Nat)
   deriving DecidableEq, Repr
 
-/-- A type scheme `∀ α₀ … α_{arity-1}. body`. -/
+/-- A type scheme `∀ α₀ … α_{arity-1}. plus ⇒ body`: `plus` lists the types
+that must be instances of the `Plus` class, as in inty's
+`<a> where Plus a => (a, a) => a`. -/
 structure Scheme where
   arity : Nat
   body : PTy
+  plus : List PTy := []
   deriving DecidableEq, Repr
 
 /-- A typing context: the type scheme of each variable, innermost first. -/
@@ -70,14 +73,22 @@ def PTy.inst (τs : List Ty) : PTy → Ty
   | .bound i => τs.getD i .undefined
 
 /-- A monotype as a scheme that quantifies nothing. -/
-def Scheme.mono (τ : Ty) : Scheme := ⟨0, τ.toPTy⟩
+def Scheme.mono (τ : Ty) : Scheme := ⟨0, τ.toPTy, []⟩
 
 def Scheme.inst (s : Scheme) (τs : List Ty) : Ty := s.body.inst τs
 
+/-- The constraints of an instance. -/
+def Scheme.instPlus (s : Scheme) (τs : List Ty) : List Ty := s.plus.map (·.inst τs)
+
+/-- The type variables `m, m+1, …, m+k-1`. -/
+def varBlock (m k : Nat) : List Ty := (List.range' m k).map .var
+
 /-- Open a scheme with the type variables `m, m+1, …`, one per quantified
 variable. -/
-def Scheme.open (s : Scheme) (m : Nat) : Ty :=
-  s.inst ((List.range' m s.arity).map .var)
+def Scheme.open (s : Scheme) (m : Nat) : Ty := s.inst (varBlock m s.arity)
+
+/-- The constraints of a scheme opened at `m`. -/
+def Scheme.openPlus (s : Scheme) (m : Nat) : List Ty := s.instPlus (varBlock m s.arity)
 
 /-! ## Free type variables -/
 
@@ -91,7 +102,7 @@ def PTy.ftv : PTy → List Nat
   | .free a => [a]
   | _ => []
 
-def Scheme.ftv (s : Scheme) : List Nat := s.body.ftv
+def Scheme.ftv (s : Scheme) : List Nat := s.body.ftv ++ s.plus.flatMap PTy.ftv
 
 def ctxFtv (Γ : List Scheme) : List Nat := Γ.flatMap Scheme.ftv
 
@@ -114,7 +125,8 @@ def PTy.subst (σ : Subst) : PTy → PTy
   | .free a => ((σ.find a).getD (.var a)).toPTy
   | p => p
 
-def Scheme.subst (σ : Subst) (s : Scheme) : Scheme := ⟨s.arity, s.body.subst σ⟩
+def Scheme.subst (σ : Subst) (s : Scheme) : Scheme :=
+  ⟨s.arity, s.body.subst σ, s.plus.map (·.subst σ)⟩
 
 /-! ## Lemmas -/
 
@@ -147,6 +159,10 @@ theorem PTy.inst_subst (σ : Subst) (τs : List Ty) (p : PTy) :
 theorem Scheme.inst_subst (σ : Subst) (τs : List Ty) (s : Scheme) :
     (s.inst τs).subst σ = (s.subst σ).inst (τs.map (·.subst σ)) :=
   PTy.inst_subst σ τs s.body
+
+theorem Scheme.instPlus_subst (σ : Subst) (τs : List Ty) (s : Scheme) :
+    (s.instPlus τs).map (·.subst σ) = (s.subst σ).instPlus (τs.map (·.subst σ)) := by
+  simp [Scheme.instPlus, Scheme.subst, PTy.inst_subst]
 
 /-- A substitution that leaves alone every variable it doesn't map. -/
 theorem Subst.find_none {σ : Subst} {a : Nat} (h : ∀ p ∈ σ, p.1 ≠ a) :
@@ -183,22 +199,36 @@ theorem ctx_subst_id {σ : Subst} {Γ : List Scheme}
   | cons s Γ ih =>
     simp only [ctxFtv, List.flatMap_cons, List.mem_append] at h
     have hs : s.subst σ = s := by
-      cases s; simp only [Scheme.subst, Scheme.mk.injEq, true_and]
-      exact PTy.subst_id (fun a ha => h a (.inl ha))
+      obtain ⟨k, p, ps⟩ := s
+      simp only [Scheme.ftv, List.mem_append, List.mem_flatMap] at h
+      simp only [Scheme.subst, Scheme.mk.injEq, true_and]
+      refine ⟨PTy.subst_id (fun a ha => h a (.inl (.inl ha))), ?_⟩
+      conv => rhs; rw [← List.map_id ps]
+      exact List.map_congr_left (fun q hq =>
+        PTy.subst_id (fun a ha => h a (.inl (.inr ⟨q, hq, ha⟩))))
     simp [hs, ih (fun a ha => h a (.inr (by simpa [ctxFtv] using ha)))]
 
 /-- Substituting for variables below `m` commutes with opening at `m`. -/
-theorem Scheme.open_subst {σ : Subst} {m : Nat} (s : Scheme)
-    (h : ∀ p ∈ σ, p.1 < m) : (s.open m).subst σ = (s.subst σ).open m := by
-  simp only [Scheme.open, Scheme.inst_subst, List.map_map]
+theorem PTy.open_subst {σ : Subst} {m : Nat} (k : Nat) (p : PTy)
+    (h : ∀ q ∈ σ, q.1 < m) : (p.inst (varBlock m k)).subst σ = (p.subst σ).inst (varBlock m k) := by
+  simp only [varBlock, PTy.inst_subst, List.map_map]
   congr 1
   apply List.map_congr_left
   intro a ha
   have hm : m ≤ a := by
     obtain ⟨i, _, rfl⟩ := List.mem_range'.mp ha; omega
   have : σ.find a = none :=
-    Subst.find_none (fun p hp e => by have := h p hp; omega)
+    Subst.find_none (fun q hq e => by have := h q hq; omega)
   simp [Ty.subst, this]
+
+theorem Scheme.open_subst {σ : Subst} {m : Nat} (s : Scheme)
+    (h : ∀ p ∈ σ, p.1 < m) : (s.open m).subst σ = (s.subst σ).open m :=
+  PTy.open_subst _ s.body h
+
+theorem Scheme.openPlus_subst {σ : Subst} {m : Nat} (s : Scheme)
+    (h : ∀ p ∈ σ, p.1 < m) : (s.openPlus m).map (·.subst σ) = (s.subst σ).openPlus m := by
+  simp only [Scheme.openPlus, Scheme.instPlus, Scheme.subst, List.map_map]
+  exact List.map_congr_left (fun p _ => PTy.open_subst _ p h)
 
 /-- The substitution sending `m + i` to `τs[i]`. -/
 def Subst.block (m : Nat) (τs : List Ty) : Subst :=
@@ -225,14 +255,10 @@ theorem Subst.block_find (m : Nat) (τs : List Ty) :
       rw [ite_eq_right_iff.mpr (fun h => absurd h (by omega))]
       simpa [Nat.add_assoc, Nat.add_comm 1 i] using this
 
-/-- Opening a scheme above its free variables, then substituting, is
-instantiation. -/
-theorem Scheme.open_block (s : Scheme) {m : Nat} {τs : List Ty}
-    (hm : ∀ a ∈ s.ftv, a < m) (hlen : τs.length = s.arity) :
-    (s.open m).subst (Subst.block m τs) = s.inst τs := by
-  obtain ⟨k, p⟩ := s
-  simp only [Scheme.open, Scheme.inst, Scheme.ftv] at *
-  subst hlen
+/-- Opening above the free variables, then substituting, is instantiation. -/
+theorem PTy.open_block (p : PTy) {m : Nat} {τs : List Ty}
+    (hm : ∀ a ∈ p.ftv, a < m) :
+    (p.inst (varBlock m τs.length)).subst (Subst.block m τs) = p.inst τs := by
   induction p with
   | arrow d c ihd ihc =>
     simp only [PTy.ftv, List.mem_append] at hm
@@ -244,11 +270,24 @@ theorem Scheme.open_block (s : Scheme) {m : Nat} {τs : List Ty}
       Subst.find_none (fun p hp e => by have := Subst.block_keys p hp; omega)
     simp [PTy.inst, Ty.subst, this]
   | bound i =>
-    simp only [PTy.inst, List.getD_eq_getElem?_getD, List.getElem?_map]
+    simp only [varBlock, PTy.inst, List.getD_eq_getElem?_getD, List.getElem?_map]
     by_cases hi : i < τs.length
     · simp [hi, Ty.subst, Subst.block_find]
     · simp [hi, Ty.subst]
   | _ => rfl
+
+theorem Scheme.open_block (s : Scheme) {m : Nat} {τs : List Ty}
+    (hm : ∀ a ∈ s.ftv, a < m) (hlen : τs.length = s.arity) :
+    (s.open m).subst (Subst.block m τs) = s.inst τs := by
+  simp only [Scheme.open, Scheme.inst, ← hlen]
+  exact PTy.open_block _ (fun a ha => hm a (List.mem_append_left _ ha))
+
+theorem Scheme.openPlus_block (s : Scheme) {m : Nat} {τs : List Ty}
+    (hm : ∀ a ∈ s.ftv, a < m) (hlen : τs.length = s.arity) :
+    (s.openPlus m).map (·.subst (Subst.block m τs)) = s.instPlus τs := by
+  simp only [Scheme.openPlus, Scheme.instPlus, List.map_map, ← hlen]
+  exact List.map_congr_left (fun p hp => PTy.open_block p (fun a ha =>
+    hm a (List.mem_append_right _ (List.mem_flatMap.mpr ⟨p, hp, ha⟩))))
 
 /-- A bound above every element of a list. -/
 def maxPlusOne (l : List Nat) : Nat := l.foldr (fun a m => max (a + 1) m) 0

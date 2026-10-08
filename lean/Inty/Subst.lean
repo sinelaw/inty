@@ -130,8 +130,12 @@ theorem Ctx.subst_congr {σ σ' : Subst} {Γ : List Scheme}
   | cons s Γ ih =>
     simp only [ctxFtv, List.flatMap_cons, List.mem_append] at h
     have hs : s.subst σ = s.subst σ' := by
-      cases s; simp only [Scheme.subst, Scheme.mk.injEq, true_and]
-      exact PTy.subst_congr (fun a ha => h a (.inl ha))
+      obtain ⟨k, p, ps⟩ := s
+      simp only [Scheme.ftv, List.mem_append, List.mem_flatMap] at h
+      simp only [Scheme.subst, Scheme.mk.injEq, true_and]
+      exact ⟨PTy.subst_congr (fun a ha => h a (.inl (.inl ha))),
+        List.map_congr_left (fun q hq =>
+          PTy.subst_congr (fun a ha => h a (.inl (.inr ⟨q, hq, ha⟩))))⟩
     simp [hs, ih (fun a ha => h a (.inr (by simpa [ctxFtv] using ha)))]
 
 /-! ## Generalisation -/
@@ -169,10 +173,9 @@ def Ty.gen (ᾱ : List Nat) : Ty → PTy
     | some i => .bound i
     | none => .free a
 
-/-- Generalise `τ` over its free variables not in `avoid`. -/
-def generalize (avoid : List Nat) (τ : Ty) : Scheme :=
-  let ᾱ := τ.ftv.filter (fun a => a ∉ avoid)
-  ⟨ᾱ.length, τ.gen ᾱ⟩
+/-- The scheme quantifying `ᾱ` in `τ`, with constraints `G`. -/
+def generalize (ᾱ : List Nat) (τ : Ty) (G : List Ty) : Scheme :=
+  ⟨ᾱ.length, τ.gen ᾱ, G.map (Ty.gen ᾱ)⟩
 
 /-- The substitution renaming `ᾱ[i]` to `m + i`. -/
 def renameBlock : List Nat → Nat → Subst
@@ -190,11 +193,9 @@ theorem renameBlock_find : ∀ (ᾱ : List Nat) (m a : Nat),
       cases findIdx l a <;> simp [Nat.add_assoc, Nat.add_comm 1]
 
 /-- Renaming the generalised variables to the block at `m` and substituting
-`φ` for the rest is opening the substituted scheme at `m`. -/
-theorem Ty.gen_open (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) :
-    τ.subst (renameBlock ᾱ m ++ φ) =
-      (Scheme.subst φ ⟨ᾱ.length, τ.gen ᾱ⟩).open m := by
-  simp only [Scheme.open, Scheme.inst, Scheme.subst]
+`φ` for the rest is generalising, substituting `φ`, then opening at `m`. -/
+theorem Ty.gen_inst (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) :
+    τ.subst (renameBlock ᾱ m ++ φ) = ((τ.gen ᾱ).subst φ).inst (varBlock m ᾱ.length) := by
   induction τ with
   | arrow d c ihd ihc => simp [Ty.subst, Ty.gen, PTy.subst, PTy.inst, ihd, ihc]
   | var a =>
@@ -202,9 +203,17 @@ theorem Ty.gen_open (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) :
     cases h : findIdx ᾱ a with
     | some i =>
       have := findIdx_lt h
-      simp [PTy.subst, PTy.inst, List.getD_eq_getElem?_getD, this]
+      simp [PTy.subst, PTy.inst, varBlock, List.getD_eq_getElem?_getD, this]
     | none => simp [PTy.subst]
   | _ => rfl
+
+theorem generalize_open (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) (G : List Ty) :
+    τ.subst (renameBlock ᾱ m ++ φ) = ((generalize ᾱ τ G).subst φ).open m :=
+  Ty.gen_inst ᾱ m φ τ
+
+theorem generalize_openPlus (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) (G : List Ty) :
+    G.map (·.subst (renameBlock ᾱ m ++ φ)) = ((generalize ᾱ τ G).subst φ).openPlus m := by
+  simp [generalize, Scheme.subst, Scheme.openPlus, Scheme.instPlus, Ty.gen_inst]
 
 /-- A substitution that renames only variables outside `τ` leaves `τ` to the
 rest of it. -/
@@ -214,5 +223,8 @@ theorem renameBlock_append_find {ᾱ : List Nat} {a : Nat} (m : Nat) (φ : Subst
 
 @[simp] theorem Scheme.mono_open (τ : Ty) (m : Nat) : (Scheme.mono τ).open m = τ := by
   simp [Scheme.open]
+
+@[simp] theorem Scheme.mono_openPlus (τ : Ty) (m : Nat) : (Scheme.mono τ).openPlus m = [] := by
+  simp [Scheme.openPlus, Scheme.instPlus, Scheme.mono]
 
 end Inty

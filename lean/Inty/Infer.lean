@@ -13,10 +13,11 @@ Two simplifications, both safe for soundness:
 
 - Unification is bounded by fuel (`unifyFuel`), so it is total without a
   termination proof. Completeness, the next step, needs that proof.
-- `+` records a constraint that its operand type is an instance of `Plus`,
-  resolved once the whole program is checked. A `const` doesn't generalise a
-  variable that a pending constraint mentions; schemes don't carry class
-  constraints yet (inty's `<a> where Plus a => …`).
+- `+` records a constraint that its operand type is an instance of `Plus`.
+  A `const` that generalises a variable takes the constraints mentioning it
+  into its scheme (inty's `<a> where Plus a => …`), and each use of the
+  `const` instantiates them again. The rest stay pending until the whole
+  program is checked.
 -/
 
 namespace Inty
@@ -63,12 +64,22 @@ structure Out where
   plus : List Ty
   next : Nat
 
+/-- The scheme a `const` gives its variable, and the constraints left
+pending. A syntactic value generalises the variables of its type that the
+context doesn't mention, taking along the constraints that mention them. -/
+def letScheme (e₁ : Expr) (Γ₁ : Ctx) (τ₁ : Ty) (plus : List Ty) : Scheme × List Ty :=
+  if e₁.isValue then
+    let ᾱ := τ₁.ftv.filter (fun a => a ∉ ctxFtv Γ₁)
+    (generalize ᾱ τ₁ (plus.filter (fun c => c.ftv.any (· ∈ ᾱ))),
+      plus.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
+  else (.mono τ₁, plus)
+
 /-- Algorithm W. `n` is the first unused type variable. -/
 def infer : Ctx → Expr → Nat → Option Out
   | _, .lit l, n => some ⟨[], l.ty, [], n⟩
   | Γ, .var i, n =>
     match Γ[i]? with
-    | some s => some ⟨[], s.open n, [], n + s.arity⟩
+    | some s => some ⟨[], s.open n, s.openPlus n, n + s.arity⟩
     | none => none
   | Γ, .func body, n =>
     let α := Ty.var n
@@ -99,13 +110,11 @@ def infer : Ctx → Expr → Nat → Option Out
     | none => none
     | some o₁ =>
       let Γ₁ := Ctx.subst o₁.σ Γ
-      let s :=
-        if e₁.isValue then generalize (ctxFtv Γ₁ ++ o₁.plus.flatMap Ty.ftv) o₁.τ
-        else .mono o₁.τ
+      let (s, rest) := letScheme e₁ Γ₁ o₁.τ o₁.plus
       match infer (s :: Γ₁) e₂ o₁.next with
       | none => none
       | some o₂ =>
-        some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.plus.map (·.subst o₂.σ) ++ o₂.plus,
+        some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, rest.map (·.subst o₂.σ) ++ o₂.plus,
           o₂.next⟩
   | Γ, .cond c t e, n =>
     match infer Γ c n with
