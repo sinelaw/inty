@@ -60,6 +60,16 @@ pub enum Stuck {
         op: &'static str,
         value: f64,
     },
+    /// Reading an array's or a string's element at an index it hasn't (or
+    /// at one that isn't a non-negative integer), or storing an array's
+    /// past its end. JavaScript reads `undefined` and makes a hole; inty
+    /// types an element read as the element type, so, like `IntRange`,
+    /// this is a fault the program stops at (the Go backend panics), not
+    /// a soundness violation.
+    OutOfBounds {
+        index: f64,
+        len: usize,
+    },
 }
 
 impl std::fmt::Display for Stuck {
@@ -87,6 +97,14 @@ impl std::fmt::Display for Stuck {
                     "Int {}: {} is not a safe integer",
                     op,
                     Value::Number(*value)
+                )
+            }
+            Stuck::OutOfBounds { index, len } => {
+                write!(
+                    f,
+                    "index {} out of bounds (length {})",
+                    Value::Number(*index),
+                    len
                 )
             }
         }
@@ -770,22 +788,32 @@ fn apply_builtin(
     }
 }
 
+/// `n` as an index: a non-negative integer.
+fn array_index(n: f64) -> Option<usize> {
+    let idx = n as usize;
+    (idx as f64 == n).then_some(idx)
+}
+
 fn read_index(heap: &Heap, obj: &Value, index: &Value) -> Result<Value, Stuck> {
     match (obj, index) {
-        (Value::Array(loc), Value::Number(n)) => {
-            let idx = *n as usize;
-            match heap.get(*loc) {
-                Some(Cell::Array(v)) => Ok(v.get(idx).cloned().unwrap_or(Value::Undefined)),
-                _ => Err(Stuck::NotImplemented("array loc not Array cell")),
+        (Value::Array(loc), Value::Number(n)) => match heap.get(*loc) {
+            Some(Cell::Array(v)) => {
+                array_index(*n)
+                    .and_then(|idx| v.get(idx).cloned())
+                    .ok_or(Stuck::OutOfBounds {
+                        index: *n,
+                        len: v.len(),
+                    })
             }
-        }
-        (Value::String(s), Value::Number(n)) => {
-            let idx = *n as usize;
-            Ok(s.chars()
-                .nth(idx)
-                .map(|c| Value::String(c.to_string()))
-                .unwrap_or(Value::Undefined))
-        }
+            _ => Err(Stuck::NotImplemented("array loc not Array cell")),
+        },
+        (Value::String(s), Value::Number(n)) => array_index(*n)
+            .and_then(|idx| s.chars().nth(idx))
+            .map(|c| Value::String(c.to_string()))
+            .ok_or(Stuck::OutOfBounds {
+                index: *n,
+                len: s.chars().count(),
+            }),
         (Value::Object(loc), Value::String(prop)) => match heap.get(*loc) {
             Some(Cell::Object(props)) => Ok(props
                 .get(&PropName(prop.clone()))
@@ -949,19 +977,25 @@ fn write_place(
             _ => Err(Stuck::BadAssignmentTarget),
         },
         Place::Index(obj, idx) => match (obj, idx) {
-            (Value::Array(loc), Value::Number(n)) => {
-                let idx = *n as usize;
-                match state.heap.get_mut(*loc) {
-                    Some(Cell::Array(v)) => {
-                        if idx >= v.len() {
-                            v.resize(idx + 1, Value::Undefined);
-                        }
+            // In bounds, or just past the end (a push); further would make
+            // a hole.
+            (Value::Array(loc), Value::Number(n)) => match state.heap.get_mut(*loc) {
+                Some(Cell::Array(v)) => match array_index(*n) {
+                    Some(idx) if idx < v.len() => {
                         v[idx] = value;
                         Ok(())
                     }
-                    _ => Err(Stuck::BadAssignmentTarget),
-                }
-            }
+                    Some(idx) if idx == v.len() => {
+                        v.push(value);
+                        Ok(())
+                    }
+                    _ => Err(Stuck::OutOfBounds {
+                        index: *n,
+                        len: v.len(),
+                    }),
+                },
+                _ => Err(Stuck::BadAssignmentTarget),
+            },
             (Value::Object(loc), Value::String(prop)) => match state.heap.get_mut(*loc) {
                 Some(Cell::Object(props)) => {
                     props.insert(PropName(prop.clone()), value);

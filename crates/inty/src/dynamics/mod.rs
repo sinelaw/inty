@@ -79,6 +79,7 @@ pub fn is_stuck(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Option<Stuc
         Ok(_) => None,
         Err(Stuck::FuelExhausted) => None, // not stuck — just out of fuel
         Err(Stuck::IntRange { .. }) => None, // a checked-arithmetic fault
+        Err(Stuck::OutOfBounds { .. }) => None, // an index fault
         Err(reason) => Some(reason),
     }
 }

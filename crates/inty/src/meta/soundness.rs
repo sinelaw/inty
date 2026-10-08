@@ -230,7 +230,7 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
     // defined fault, not a soundness violation: the program stops there.
     let value = match run_to_end_checked(&program, 5_000, int_ops) {
         Ok(value) => value,
-        Err(Stuck::IntRange { .. }) => return Ok(()),
+        Err(Stuck::IntRange { .. }) | Err(Stuck::OutOfBounds { .. }) => return Ok(()),
         Err(Stuck::FuelExhausted) => {
             return Err("fuel exhausted (not a soundness violation)".to_string())
         }

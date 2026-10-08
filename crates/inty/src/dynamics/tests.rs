@@ -380,3 +380,29 @@ fn assignment_evaluates_its_target_once_and_first() {
     );
     assert_number("let x = 1; x += (x = 10); x", 11.0);
 }
+
+/// An element read at an index the array or string hasn't, or a store past
+/// an array's end, is a fault (JavaScript reads `undefined` and makes a
+/// hole); a store just past the end pushes.
+#[test]
+fn indexing_out_of_bounds_is_a_fault() {
+    for source in [
+        "[1, 2][2]",
+        "[1, 2][-1]",
+        "[1, 2][0.5]",
+        "\"ab\"[2]",
+        "const xs = [1]; xs[2] = 3; xs[0]",
+    ] {
+        assert!(
+            matches!(run(source), Err(Stuck::OutOfBounds { .. })),
+            "{source}: {:?}",
+            run(source)
+        );
+    }
+    assert!(matches!(run("[1, 2][1]"), Ok(Value::Number(n)) if n == 2.0));
+    assert!(matches!(run("\"ab\"[1]"), Ok(Value::String(s)) if s == "b"));
+    assert!(matches!(
+        run("const xs = [1]; xs[1] = 3; xs[1] + xs.length"),
+        Ok(Value::Number(n)) if n == 5.0
+    ));
+}
