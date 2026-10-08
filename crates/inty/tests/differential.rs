@@ -55,8 +55,11 @@ enum Core {
     Func(usize, Box<Core>),
     /// A call outside any receiver, so `this` is `undefined`.
     App(Box<Core>, Vec<Core>),
-    /// `const v = e₁; e₂`; only at the top of a program or function body.
-    Let(Box<Core>, Box<Core>),
+    /// `const v = e₁; e₂` (`false`) or `let v = e₁; e₂` (`true`); only in
+    /// statement position.
+    Let(bool, Box<Core>, Box<Core>),
+    /// `x = e`, for a `let` or a parameter.
+    Assign(usize, Box<Core>),
     Cond(Box<Core>, Box<Core>, Box<Core>),
     Not(Box<Core>),
     Typeof(Box<Core>),
@@ -96,7 +99,13 @@ fn wire(e: &Core) -> String {
                 args.join(" ")
             )
         }
-        Let(e1, e2) => format!("(let {} {})", wire(e1), wire(e2)),
+        Let(m, e1, e2) => format!(
+            "({} {} {})",
+            if *m { "letmut" } else { "let" },
+            wire(e1),
+            wire(e2)
+        ),
+        Assign(i, e) => format!("(assign {} {})", i, wire(e)),
         Cond(c, t, e) => format!("(cond {} {} {})", wire(c), wire(t), wire(e)),
         Not(e) => format!("(not {})", wire(e)),
         Typeof(e) => format!("(typeof {})", wire(e)),
@@ -113,7 +122,7 @@ fn wire(e: &Core) -> String {
 /// then types the program `Undefined`, whatever the statement.
 fn ends_in_statement(e: &Core) -> bool {
     match e {
-        Let(_, rest) | Seq(_, rest) => ends_in_statement(rest),
+        Let(_, _, rest) | Seq(_, rest) => ends_in_statement(rest),
         Throw(_) | Ret(_) => true,
         Cond(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
@@ -138,7 +147,8 @@ fn fractional(e: &Core) -> Core {
         Num(m, x) => Num(m * 10 + 5, x + 1),
         Func(n, body) => Func(*n, f(body)),
         App(x, args) => App(f(x), args.iter().map(fractional).collect()),
-        Let(x, y) => Let(f(x), f(y)),
+        Let(m, x, y) => Let(*m, f(x), f(y)),
+        Assign(i, x) => Assign(*i, f(x)),
         Cond(c, t, e) => Cond(f(c), f(t), f(e)),
         Not(x) => Not(f(x)),
         Typeof(x) => Typeof(f(x)),
@@ -218,6 +228,7 @@ impl Js {
             Let(..) | Ret(_) | Throw(_) | Seq(..) => {
                 unreachable!("statements only in statement position: {e:?}")
             }
+            Assign(i, e) => format!("({} = {})", self.name(*i), self.expr(e)),
             Cond(c, t, e) => format!("({} ? {} : {})", self.expr(c), self.expr(t), self.expr(e)),
             Not(e) => format!("!({})", self.expr(e)),
             Typeof(e) => format!("typeof ({})", self.expr(e)),
@@ -231,13 +242,14 @@ impl Js {
     /// (`return` in a function, an expression statement at the top).
     fn stmts(&mut self, e: &Core, last: &str) -> String {
         match e {
-            Let(e1, e2) => {
+            Let(m, e1, e2) => {
                 let v = self.fresh("v");
                 let init = self.expr(e1);
                 self.names.push(v.clone());
                 let rest = self.stmts(e2, last);
                 self.names.pop();
-                format!("const {} = {}; {}", v, init, rest)
+                let keyword = if *m { "let" } else { "const" };
+                format!("{} {} = {}; {}", keyword, v, init, rest)
             }
             Seq(e1, e2) => {
                 let first = self.stmts(e1, "");
@@ -263,7 +275,8 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
     match e {
         Var(j) => inner && *j == i,
         Func(n, body) => refers_from_inner(body, i + n + 2, true),
-        Let(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
+        Let(_, x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
+        Assign(j, x) => (inner && *j == i) || refers_from_inner(x, i, inner),
         App(f, args) => {
             refers_from_inner(f, i, inner) || args.iter().any(|a| refers_from_inner(a, i, inner))
         }
@@ -324,10 +337,14 @@ enum T {
 #[derive(Clone, Debug)]
 enum Binding {
     Mono(T),
+    /// A `let` or a parameter, of one type: it may be assigned.
+    Mut(T),
     /// `const id = function (x) { return x; }`: any `(a) => a`.
     PolyId,
     /// Untyped generation doesn't track types.
     Unknown,
+    /// Untyped, and assignable: a `let` or a parameter.
+    UnknownMut,
 }
 
 struct Gen {
@@ -390,13 +407,22 @@ impl Gen {
         // A variable of the right type.
         let fits: Vec<usize> = (0..scope.len())
             .filter(|&i| match &scope[scope.len() - 1 - i] {
-                Binding::Mono(u) => u == t,
+                Binding::Mono(u) | Binding::Mut(u) => u == t,
                 Binding::PolyId => matches!(t, T::Arrow(ps, r) if ps.len() == 1 && ps[0] == **r),
-                Binding::Unknown => false,
+                Binding::Unknown | Binding::UnknownMut => false,
             })
             .collect();
         if !fits.is_empty() && self.rng.chance(if depth == 0 { 80 } else { 30 }) {
             return Var(fits[self.rng.below(fits.len())]);
+        }
+        // An assignment to a `let` or a parameter of this type, whose value
+        // is the assignment's.
+        let assignable: Vec<usize> = (0..scope.len())
+            .filter(|&i| matches!(&scope[scope.len() - 1 - i], Binding::Mut(u) if u == t))
+            .collect();
+        if depth > 0 && !assignable.is_empty() && self.rng.chance(20) {
+            let i = assignable[self.rng.below(assignable.len())];
+            return Assign(i, b(self.typed(t, depth - 1, scope, false)));
         }
         if depth == 0 {
             if let Some(l) = self.literal(t) {
@@ -416,14 +442,20 @@ impl Gen {
                 scope.push(Binding::PolyId);
                 let rest = self.typed(t, d, scope, true);
                 scope.pop();
-                return Let(b(Func(1, b(Var(0)))), b(rest));
+                return Let(false, b(Func(1, b(Var(0)))), b(rest));
             }
+            // `const`, or `let`, which may be assigned below.
             let s = self.ty(1);
             let e1 = self.typed(&s, d, scope, false);
-            scope.push(Binding::Mono(s));
+            let mutable = self.rng.chance(50);
+            scope.push(if mutable {
+                Binding::Mut(s)
+            } else {
+                Binding::Mono(s)
+            });
             let rest = self.typed(t, d, scope, true);
             scope.pop();
-            return Let(b(e1), b(rest));
+            return Let(mutable, b(e1), b(rest));
         }
         match self.rng.below(6) {
             0 => {
@@ -472,7 +504,7 @@ impl Gen {
                     scope.push(Binding::Mono(T::Undef));
                     scope.push(Binding::Mono(t.clone()));
                     for p in ps.iter().rev() {
-                        scope.push(Binding::Mono(p.clone()));
+                        scope.push(Binding::Mut(p.clone()));
                     }
                     self.funcs.push(Some((**r).clone()));
                     let body = self.typed(r, d, scope, true);
@@ -556,8 +588,12 @@ impl Gen {
         match self.rng.below(if stmt { 11 } else { 10 }) {
             0 => {
                 let n = self.rng.below(3);
-                for _ in 0..n + 2 {
-                    scope.push(Binding::Unknown);
+                // `this` and the function's own name can't be assigned;
+                // the parameters can.
+                scope.push(Binding::Unknown);
+                scope.push(Binding::Unknown);
+                for _ in 0..n {
+                    scope.push(Binding::UnknownMut);
                 }
                 self.funcs.push(None);
                 let body = self.any(d, scope, true);
@@ -570,11 +606,27 @@ impl Gen {
                 let n = self.rng.below(3);
                 App(b(f), (0..n).map(|_| self.any(d, scope, false)).collect())
             }
-            3 => Cond(
-                b(self.any(d, scope, false)),
-                b(self.any(d, scope, false)),
-                b(self.any(d, scope, false)),
-            ),
+            3 => {
+                // An assignment to a `let` or a parameter, of any value.
+                let assignable: Vec<usize> = (0..scope.len())
+                    .filter(|&i| {
+                        matches!(
+                            &scope[scope.len() - 1 - i],
+                            Binding::UnknownMut | Binding::Mut(_)
+                        )
+                    })
+                    .collect();
+                if !assignable.is_empty() && self.rng.chance(50) {
+                    let i = assignable[self.rng.below(assignable.len())];
+                    Assign(i, b(self.any(d, scope, false)))
+                } else {
+                    Cond(
+                        b(self.any(d, scope, false)),
+                        b(self.any(d, scope, false)),
+                        b(self.any(d, scope, false)),
+                    )
+                }
+            }
             4 => Not(b(self.any(d, scope, false))),
             5 => Typeof(b(self.any(d, scope, false))),
             6 => Neg(b(self.any(d, scope, false))),
@@ -582,10 +634,15 @@ impl Gen {
             9 => Minus(b(self.any(d, scope, false)), b(self.any(d, scope, false))),
             _ => {
                 let e1 = self.any(d, scope, false);
-                scope.push(Binding::Unknown);
+                let mutable = self.rng.chance(50);
+                scope.push(if mutable {
+                    Binding::UnknownMut
+                } else {
+                    Binding::Unknown
+                });
                 let rest = self.any(d, scope, true);
                 scope.pop();
-                Let(b(e1), b(rest))
+                Let(mutable, b(e1), b(rest))
             }
         }
     }

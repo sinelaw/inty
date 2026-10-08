@@ -70,13 +70,17 @@ def PPred.isPlusBound : PPred → Bool
   | ⟨.plus, [.bound _]⟩ => true
   | _ => false
 
-/-- The scheme a `const` gives its variable, and the constraints left
-pending. A syntactic value generalises the variables of its type that
-neither the context nor the enclosing function's return type mentions, each once, taking along the constraints that mention
-them. -/
-def letScheme (e₁ : Expr) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds : List Pred) :
+/-- Whether a binding generalises: its initialiser is a syntactic value and
+the rest of its scope never assigns to it. -/
+def Expr.generalises (e₁ e₂ : Expr) : Bool := e₁.isValue && !e₂.writes 0
+
+/-- The scheme a `const` or `let` gives its variable, and the constraints
+left pending. When it generalises (`gen`), it generalises the variables of
+its type that neither the context nor the enclosing function's return type
+mentions, each once, taking along the constraints that mention them. -/
+def letScheme (gen : Bool) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds : List Pred) :
     Scheme × List Pred :=
-  if e₁.isValue then
+  if gen then
     let ᾱ := (τ₁.ftv.filter (fun a => a ∉ ctxFtv Γ₁ ++ Ret.ftv R₁)).eraseDups
     (generalize ᾱ τ₁ (preds.filter (fun c => c.ftv.any (· ∈ ᾱ))),
       preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
@@ -129,12 +133,12 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         | some σ₃ =>
           some ⟨Subst.compose σ₃ (Subst.compose o₂.σ o₁.σ), β.subst σ₃,
             (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst σ₃), o₂.next + 1⟩
-  | Γ, R, .let_ e₁ e₂, n =>
+  | Γ, R, .let_ _ e₁ e₂, n =>
     match infer Γ R e₁ n with
     | none => none
     | some o₁ =>
       let Γ₁ := Ctx.subst o₁.σ Γ
-      let (s, rest) := letScheme e₁ Γ₁ (Ret.subst o₁.σ R) o₁.τ o₁.preds
+      let (s, rest) := letScheme (Expr.generalises e₁ e₂) Γ₁ (Ret.subst o₁.σ R) o₁.τ o₁.preds
       -- A constraint the scheme would carry on a type already known is
       -- decided now, as inty's `generalize` does: it can't hold.
       if s.preds.all PPred.isPlusBound then
@@ -143,6 +147,21 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         | some o₂ =>
           some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, rest.map (·.subst o₂.σ) ++ o₂.preds,
             o₂.next⟩
+      else none
+  -- `x = e`: `x`'s scheme is a monotype, which `e`'s type is unified with.
+  | Γ, R, .assign i e, n =>
+    match Γ[i]? with
+    | none => none
+    | some s =>
+      if s.arity = 0 ∧ s.preds = [] then
+        match infer Γ R e n with
+        | none => none
+        | some o =>
+          match unify ((s.inst []).subst o.σ) o.τ with
+          | none => none
+          | some σ' =>
+            some ⟨Subst.compose σ' o.σ, (s.inst []).subst (Subst.compose σ' o.σ),
+              o.preds.map (·.subst σ'), o.next⟩
       else none
   | Γ, R, .cond c t e, n =>
     match infer Γ R c n with
@@ -238,14 +257,18 @@ def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
 end
 
 /-- Infer the type of a program in a context with no free type variables,
-such as the builtins'. Every constraint left must be satisfiable: an
-instance, or a constraint on a type variable, which inty leaves in place
-and which the program's type here defaults (`defaultSubst`). -/
+such as the builtins', none of whose variables is mutable. It may assign
+only to its own `let`s and parameters (`Expr.assignsMutable`). Every
+constraint left must be satisfiable: an instance, or a constraint on a type
+variable, which inty leaves in place and which the program's type here
+defaults (`defaultSubst`). -/
 def inferIn (Γ : Ctx) (e : Expr) : Option Ty :=
-  match infer Γ none e 0 with
-  | none => none
-  | some o =>
-    if o.preds.all Pred.satisfiable then some (o.τ.subst (defaultSubst o.preds)) else none
+  if e.assignsMutable (Γ.map fun _ => false) then
+    match infer Γ none e 0 with
+    | none => none
+    | some o =>
+      if o.preds.all Pred.satisfiable then some (o.τ.subst (defaultSubst o.preds)) else none
+  else none
 
 /-- Infer the type of a closed program. -/
 def inferProgram (e : Expr) : Option Ty := inferIn [] e

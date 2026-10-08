@@ -388,6 +388,10 @@ theorem Scheme.inst_subst (σ : Subst) (τs : List Ty) (s : Scheme) :
     (s.inst τs).subst σ = (s.subst σ).inst (τs.map (·.subst σ)) :=
   PTy.inst_subst σ τs s.body
 
+theorem Scheme.inst_nil_subst (σ : Subst) (s : Scheme) :
+    (s.inst []).subst σ = (s.subst σ).inst [] := by
+  simpa using Scheme.inst_subst σ [] s
+
 theorem PPred.inst_subst (σ : Subst) (τs : List Ty) (p : PPred) :
     (p.inst τs).subst σ = (p.subst σ).inst (τs.map (·.subst σ)) := by
   simp [PPred.inst, Pred.subst, PPred.subst, PTy.inst_subst]

@@ -45,6 +45,11 @@ theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
       exact ih₁ m (fun a ha => hm a (by simp [ha]))
     · simpa [Scheme.subst] using hv
     · exact hs.subst σ
+  | assign hi ha hp _ ih =>
+    rw [Scheme.inst_subst]
+    refine .assign (by simp [List.getElem?_map, hi]) (by simpa [Scheme.subst] using ha)
+      (by simp [Scheme.subst, hp]) ?_
+    simpa [Scheme.inst_subst] using ih
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih =>
     cases hop with

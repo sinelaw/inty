@@ -294,13 +294,19 @@ theorem Scheme.openPreds_below {n : Nat} {s : Scheme} (hs : ∀ a ∈ s.ftv, a <
       List.mem_flatMap.mpr ⟨r, hr, ha⟩⟩)); omega
   · exact varBlock_below τ hτ a ha
 
+theorem Scheme.inst_nil_below {n : Nat} {s : Scheme} (hs : ∀ a ∈ s.ftv, a < n) :
+    (s.inst []).Below n := fun a ha => by
+  rcases PTy.ftv_inst ha with ha | ⟨τ, hτ, _⟩
+  · exact hs a (List.mem_append_left _ ha)
+  · cases hτ
+
 theorem Scheme.mono_ftv (τ : Ty) : (Scheme.mono τ).ftv = τ.ftv := by
   simp [Scheme.mono, Scheme.ftv, Ty.toPTy_ftv]
 
-theorem letScheme_below {n : Nat} {e₁ : Expr} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty}
+theorem letScheme_below {n : Nat} {gen : Bool} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty}
     {preds : List Pred} (hτ : τ₁.Below n) (hp : ∀ p ∈ preds, p.Below n) :
-    (∀ a ∈ (letScheme e₁ Γ₁ R₁ τ₁ preds).1.ftv, a < n) ∧
-      ∀ p ∈ (letScheme e₁ Γ₁ R₁ τ₁ preds).2, p.Below n := by
+    (∀ a ∈ (letScheme gen Γ₁ R₁ τ₁ preds).1.ftv, a < n) ∧
+      ∀ p ∈ (letScheme gen Γ₁ R₁ τ₁ preds).2, p.Below n := by
   simp only [letScheme]
   split
   · refine ⟨fun a ha => ?_, fun p hp' => hp p (List.mem_filter.mp hp').1⟩
@@ -447,16 +453,17 @@ theorem infer_inv : ∀ e, InferInv e := by
     rcases hq with ⟨q', hq', rfl⟩ | hq
     · exact hσ₂.pred_below ((hp₁ q' hq').mono hn₂)
     · exact hp₂ q hq
-  | let_ e₁ e₂ ih₁ ih₂ =>
+  | let_ _ e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
     rename_i o₁ h₁
     obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ hΓ hR h₁
-    have hls := letScheme_below (e₁ := e₁) (Γ₁ := Ctx.subst o₁.σ Γ) (R₁ := Ret.subst o₁.σ R)
-      hτ₁ hp₁
-    generalize letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.preds = ls at h hls
+    have hls := letScheme_below (gen := Expr.generalises e₁ e₂) (Γ₁ := Ctx.subst o₁.σ Γ)
+      (R₁ := Ret.subst o₁.σ R) hτ₁ hp₁
+    generalize letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ
+      o₁.preds = ls at h hls
     obtain ⟨s, rest⟩ := ls
     split at h
     rotate_left
@@ -473,6 +480,30 @@ theorem infer_inv : ∀ e, InferInv e := by
     rcases hp with ⟨q, hq, rfl⟩ | hp
     · exact hσ₂.pred_below ((hls.2 q hq).mono hn₂)
     · exact hp₂ p hp
+  | assign i e ih =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i s hs
+    split at h
+    rotate_left
+    · cases h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i σ' hu
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih hΓ hR h₁
+    have hsb : (s.inst []).Below n := Scheme.inst_nil_below (hΓ.lookup hs)
+    have hσ' := unify_within (hσ₁.subst_below (hsb.mono hn₁)) hτ₁ hu
+    refine ⟨hn₁, hσ₁.compose hσ', ?_, ?_⟩
+    · rw [Ty.subst_compose]; exact hσ'.subst_below (hσ₁.subst_below (hsb.mono hn₁))
+    · intro p hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      exact hσ'.pred_below (hp₁ q hq)
   | cond c t e ihc iht ihe =>
     intro Γ R n o hΓ hR h
     simp only [infer] at h
@@ -829,15 +860,27 @@ theorem getElem?_middle {α : Type} (Δ Γ : List α) (x y : α) (i : Nat) (hi :
     rw [List.getElem?_append_right (by omega), List.getElem?_append_right (by omega)]
     simp [show Δ.length + j + 1 - Δ.length = j + 1 by omega]
 
-/-- Typing survives replacing a scheme in the context by a more general one. -/
+theorem Expr.writesList_false : ∀ {i : Nat} {args : List Expr}, Expr.writesList i args = false →
+    ∀ a ∈ args, a.writes i = false
+  | _, [], _, _, ha => by cases ha
+  | _, b :: bs, h, a, ha => by
+    simp only [Expr.writesList, Bool.or_eq_false_iff] at h
+    rcases List.mem_cons.mp ha with rfl | ha
+    · exact h.1
+    · exact Expr.writesList_false h.2 a ha
+
+/-- Typing survives replacing a scheme in the context by a more general one,
+if the variable is never assigned or the new scheme is a monotype: an
+assignment needs its variable's scheme to be one. -/
 theorem HasType.generalize_ctx {C' : List Pred} {Γ₀ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty}
     (h : HasType C' Γ₀ R e τ) :
     ∀ {C : List Pred} {Δ Γ : Ctx} {s s' : Scheme}, Γ₀ = Δ ++ s :: Γ → (∀ c ∈ C, c ∈ C') →
-      Generalizes C s' s → HasType C' (Δ ++ s' :: Γ) R e τ := by
+      Generalizes C s' s → (s'.arity = 0 ∧ s'.preds = []) ∨ e.writes Δ.length = false →
+      HasType C' (Δ ++ s' :: Γ) R e τ := by
   induction h with
   | lit hl => intros; exact .lit hl
   | @var Γ₀ i s₀ C' R τs hi hlen hc =>
-    intro C Δ Γ s s' hΓ hC hgen
+    intro C Δ Γ s s' hΓ hC hgen _
     subst hΓ
     by_cases hiΔ : i = Δ.length
     · subst hiΔ
@@ -852,31 +895,63 @@ theorem HasType.generalize_ctx {C' : List Pred} {Γ₀ : Ctx} {R : Option Ty} {e
         · exact hc c h
     · exact .var (by rw [← getElem?_middle Δ Γ s s' i hiΔ]; exact hi) hlen hc
   | @func n C' Γ₀ ρ body R θ τs hlen _ ih =>
-    intro C Δ Γ s s' hΓ hC hgen
+    intro C Δ Γ s s' hΓ hC hgen hw
     subst hΓ
     refine .func hlen ?_
     have := ih (Δ := τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Δ) (Γ := Γ) (s := s)
-      (by simp only [List.append_assoc, List.cons_append]) hC hgen
+      (by simp only [List.append_assoc, List.cons_append]) hC hgen (hw.imp id fun h => by
+        simp only [Expr.writes] at h
+        simpa [hlen, Nat.add_comm, Nat.add_left_comm, Nat.add_assoc] using h)
     simpa only [List.append_assoc, List.cons_append] using this
   | app _ hlen _ ihf iha =>
-    intro C Δ Γ s s' hΓ hC hgen
-    exact .app (ihf hΓ hC hgen) hlen (fun p hp => iha p hp hΓ hC hgen)
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .app (ihf hΓ hC hgen (hw'.imp id (·.1))) hlen (fun p hp => iha p hp hΓ hC hgen
+      (hw'.imp id fun h => Expr.writesList_false h.2 _ (List.of_mem_zip hp).1))
   | let_ s₀ L _ hv hsimp _ ih₁ ih₂ =>
-    intro C Δ Γ s s' hΓ hC hgen
-    refine .let_ s₀ L (fun m hm => ih₁ m hm hΓ (fun c h => List.mem_append_left _ (hC c h)) hgen)
-      hv hsimp ?_
-    have := ih₂ (Δ := s₀ :: Δ) (by rw [hΓ]; rfl) hC hgen
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    refine .let_ s₀ L (fun m hm => ih₁ m hm hΓ (fun c h => List.mem_append_left _ (hC c h)) hgen
+      (hw'.imp id (·.1))) hv hsimp ?_
+    have := ih₂ (Δ := s₀ :: Δ) (by rw [hΓ]; rfl) hC hgen (hw'.imp id (·.2))
     simpa using this
+  | @assign Γ₀ i s₀ C' R e₀ hi ha hp _ ih =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    subst hΓ
+    by_cases hiΔ : i = Δ.length
+    · subst hiΔ
+      rcases hw with ⟨ha', hp'⟩ | hw
+      · simp at hi; subst hi
+        obtain ⟨τs', hlen', heq, _⟩ := hgen [] (by simp [ha])
+        rw [ha'] at hlen'
+        obtain rfl := List.eq_nil_of_length_eq_zero hlen'
+        rw [← heq]
+        exact .assign (by simp) ha' hp' (heq ▸ ih rfl hC hgen (.inl ⟨ha', hp'⟩))
+      · simp [Expr.writes] at hw
+    · exact .assign (by rw [← getElem?_middle Δ Γ s s' i hiΔ]; exact hi) ha hp
+        (ih rfl hC hgen (hw.imp id fun h => by simp [Expr.writes] at h; exact h.2))
   | cond _ _ _ ihc iht ihe =>
-    intro C Δ Γ s s' hΓ hC hgen
-    exact .cond (ihc hΓ hC hgen) (iht hΓ hC hgen) (ihe hΓ hC hgen)
-  | unop hop _ ih => intro C Δ Γ s s' hΓ hC hgen; exact .unop hop (ih hΓ hC hgen)
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .cond (ihc hΓ hC hgen (hw'.imp id (·.1.1))) (iht hΓ hC hgen (hw'.imp id (·.1.2)))
+      (ihe hΓ hC hgen (hw'.imp id (·.2)))
+  | unop hop _ ih =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    exact .unop hop (ih hΓ hC hgen (hw.imp id fun h => by simpa [Expr.writes] using h))
   | binop hop _ _ ih₁ ih₂ =>
-    intro C Δ Γ s s' hΓ hC hgen; exact .binop hop (ih₁ hΓ hC hgen) (ih₂ hΓ hC hgen)
-  | ret _ ih => intro C Δ Γ s s' hΓ hC hgen; exact .ret (ih hΓ hC hgen)
-  | throw_ _ ih => intro C Δ Γ s s' hΓ hC hgen; exact .throw_ (ih hΓ hC hgen)
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .binop hop (ih₁ hΓ hC hgen (hw'.imp id (·.1))) (ih₂ hΓ hC hgen (hw'.imp id (·.2)))
+  | ret _ ih =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    exact .ret (ih hΓ hC hgen (hw.imp id fun h => by simpa [Expr.writes] using h))
+  | throw_ _ ih =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    exact .throw_ (ih hΓ hC hgen (hw.imp id fun h => by simpa [Expr.writes] using h))
   | seq _ _ ih₁ ih₂ =>
-    intro C Δ Γ s s' hΓ hC hgen; exact .seq (ih₁ hΓ hC hgen) (ih₂ hΓ hC hgen)
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .seq (ih₁ hΓ hC hgen (hw'.imp id (·.1))) (ih₂ hΓ hC hgen (hw'.imp id (·.2)))
 
 /-! ## Instantiating a generalised scheme -/
 
@@ -1038,8 +1113,8 @@ theorem findIdx_some : ∀ {l : List Nat} {a : Nat}, a ∈ l → ∃ i, findIdx 
       obtain ⟨i, hi⟩ := findIdx_some ((List.mem_cons.mp h).resolve_left hne)
       exact ⟨i + 1, by simp [hi]⟩
 
-theorem letScheme_rest {e₁ : Expr} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred} :
-    ∀ c ∈ (letScheme e₁ Γ₁ R₁ τ₁ preds).2, c ∈ preds := by
+theorem letScheme_rest {gen : Bool} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred} :
+    ∀ c ∈ (letScheme gen Γ₁ R₁ τ₁ preds).2, c ∈ preds := by
   intro c hc
   simp only [letScheme] at hc
   split at hc
@@ -1069,8 +1144,8 @@ theorem Ty.subst_zip_map_not_mem {ᾱ : List Nat} {f : Nat → Ty} {σ : Subst} 
 /-- What a value's scheme is: its type with the variables `ᾱ` generalised,
 each of the others in the context or the return type, and with constraints
 from those inferred that mention one of `ᾱ`. -/
-theorem letScheme_value {e₁ : Expr} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred}
-    (hv : e₁.isValue = true) : ∃ ᾱ G, (letScheme e₁ Γ₁ R₁ τ₁ preds).1 = generalize ᾱ τ₁ G ∧
+theorem letScheme_value {gen : Bool} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred}
+    (hv : gen = true) : ∃ ᾱ G, (letScheme gen Γ₁ R₁ τ₁ preds).1 = generalize ᾱ τ₁ G ∧
       (∀ a ∈ τ₁.ftv, a ∉ ᾱ → a ∈ ctxFtv Γ₁ ∨ a ∈ Ret.ftv R₁) ∧
       ∀ g ∈ G, g ∈ preds ∧ ∃ a ∈ g.ftv, a ∈ ᾱ := by
   refine ⟨(τ₁.ftv.filter (fun a => a ∉ ctxFtv Γ₁ ++ Ret.ftv R₁)).eraseDups,
@@ -1258,7 +1333,7 @@ theorem infer_complete : ∀ e, InferComplete e := by
           obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
         · exact Sat.fresh hp₂ hsat₂
-  | let_ e₁ e₂ ih₁ ih₂ =>
+  | let_ mb e₁ e₂ ih₁ ih₂ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
     | let_ s L hgen hval hsimp h₂ =>
@@ -1318,20 +1393,29 @@ theorem infer_complete : ∀ e, InferComplete e := by
         · rcases List.mem_append.mp h with h | h
           · exact .inr h
           · exact .inl (hinst₀ _ h)
-      have hls := letScheme_below (e₁ := e₁) (Γ₁ := Ctx.subst o₁.σ Γ) (R₁ := Ret.subst o₁.σ R)
-        hτb₁ hp₁
-      have hrest := letScheme_rest (e₁ := e₁) (Γ₁ := Ctx.subst o₁.σ Γ) (R₁ := Ret.subst o₁.σ R)
-        (τ₁ := o₁.τ) (preds := o₁.preds)
+      have hls := letScheme_below (gen := Expr.generalises e₁ e₂) (Γ₁ := Ctx.subst o₁.σ Γ)
+        (R₁ := Ret.subst o₁.σ R) hτb₁ hp₁
+      have hrest := letScheme_rest (gen := Expr.generalises e₁ e₂) (Γ₁ := Ctx.subst o₁.σ Γ)
+        (R₁ := Ret.subst o₁.σ R) (τ₁ := o₁.τ) (preds := o₁.preds)
       -- The scheme inference finds passes its check, and is more general
       -- than `s`.
-      have key : (letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.preds).1.preds.all
-            PPred.isPlusBound = true ∧
-          Generalizes C ((letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ
-            o₁.preds).1.subst φs) s := by
-        by_cases hv : e₁.isValue = true
+      have key : (letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ
+            o₁.preds).1.preds.all PPred.isPlusBound = true ∧
+          Generalizes C ((letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R)
+            o₁.τ o₁.preds).1.subst φs) s ∧
+          (((letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ
+            o₁.preds).1.subst φs).arity = 0 ∧
+            ((letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ
+              o₁.preds).1.subst φs).preds = [] ∨ e₂.writes 0 = false) := by
+        by_cases hv : Expr.generalises e₁ e₂ = true
         · obtain ⟨ᾱ, G, hs₁, hfree, hG⟩ := letScheme_value (Γ₁ := Ctx.subst o₁.σ Γ)
             (R₁ := Ret.subst o₁.σ R) (τ₁ := o₁.τ) (preds := o₁.preds) hv
           rw [hs₁]
+          have hw : e₂.writes 0 = false := by
+            simp only [Expr.generalises, Bool.and_eq_true, Bool.not_eq_eq_eq_not,
+              Bool.not_true] at hv
+            exact hv.2
+          refine and_assoc.mp ⟨?_, .inr hw⟩
           -- Each generalised constraint is `Plus` on a generalised variable.
           have hGv : ∀ g ∈ G, ∃ b ∈ ᾱ, g = ⟨.plus, [.var b]⟩ := by
             intro g hg
@@ -1376,24 +1460,26 @@ theorem infer_complete : ∀ e, InferComplete e := by
               obtain ⟨b, hb, rfl⟩ := hGv g hg
               have := hblock τs hlen _ hgp
               simpa only [Pred.subst, List.map_cons, List.map_nil, hin b hb] using this
-        · -- Not a value: `s` quantifies nothing.
+        · -- Not generalised: `s` quantifies nothing.
           have harity : s.arity = 0 ∧ s.preds = [] :=
-            hval.resolve_right (fun h => hv (Expr.isValue_complete h))
+            hval.resolve_right (fun ⟨hv', hw'⟩ => hv (by
+              simp [Expr.generalises, Expr.isValue_complete hv', hw']))
           simp only [letScheme, hv, Bool.false_eq_true, ↓reduceIte]
           refine ⟨by simp [Scheme.mono], fun τs hlen =>
             ⟨[], by simp [Scheme.mono, Scheme.subst], ?_, by
-              simp [Scheme.instPreds, Scheme.mono, Scheme.subst]⟩⟩
+              simp [Scheme.instPreds, Scheme.mono, Scheme.subst]⟩,
+            .inl ⟨by simp [Scheme.mono, Scheme.subst], by simp [Scheme.mono, Scheme.subst]⟩⟩
           have hτs : τs = [] := List.eq_nil_of_length_eq_zero (hlen.trans harity.1)
           have hτs₀ : τs₀ = [] := List.eq_nil_of_length_eq_zero (hlen₀.trans harity.1)
           subst hτs hτs₀
           rw [Scheme.mono_subst, Scheme.mono_inst, hφs, Ty.subst_compose, hτ₁]
           exact Scheme.open_block s hms hlen₀
-      rcases hlsq : letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.preds with
-        ⟨s₁, rest⟩
+      rcases hlsq : letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ
+        o₁.preds with ⟨s₁, rest⟩
       rw [hlsq] at hls hrest key
-      obtain ⟨hall, hgz⟩ := key
+      obtain ⟨hall, hgz, hw⟩ := key
       have h₂' := h₂.generalize_ctx (Δ := []) (Γ := Ctx.subst ψ Γ) (s := s) (s' := s₁.subst φs)
-        rfl (fun c h => h) hgz
+        rfl (fun c h => h) hgz hw
       obtain ⟨o₂, h₂o, φ₂, hag₂, hτ₂, hsat₂⟩ := ih₂ (Γ := s₁ :: Ctx.subst o₁.σ Γ)
         (R := Ret.subst o₁.σ R) (ψ := φs) (Ctx.Below.cons hls.1 hΓ₁) hR₁ hC
         (by simp only [List.nil_append, Ctx.subst_cons, hagS.ctx hΓ]) (hagS.ret hR).symm h₂'
@@ -1401,6 +1487,28 @@ theorem infer_complete : ∀ e, InferComplete e := by
         ?_, φ₂, hagS.trans hσ₁ hn₁ hag₂, hτ₂,
         Sat.app (Sat.agree hag₂ hls.2 (fun p hp => hsatS p (hrest p hp))) hsat₂⟩
       simp only [infer, h₁, hlsq, hall, ↓reduceIte, h₂o]
+  | assign i e ih =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | @assign _ _ s' _ _ _ hi ha hp he =>
+      subst hΓ'
+      rw [Ctx.getElem?_subst] at hi
+      cases hs : Γ[i]? with
+      | none => simp [hs] at hi
+      | some s =>
+        simp only [hs, Option.map_some, Option.some.injEq] at hi; subst hi
+        have ha' : s.arity = 0 := by simpa [Scheme.subst] using ha
+        have hp' : s.preds = [] := by simpa [Scheme.subst] using hp
+        rw [← Scheme.inst_nil_subst] at he ⊢
+        obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ih hΓ hR hC rfl hR' he
+        have hsb : (s.inst []).Below n := Scheme.inst_nil_below (hΓ.lookup hs)
+        have hu : ((s.inst []).subst o₁.σ).subst φ₁ = o₁.τ.subst φ₁ := by
+          rw [hag₁.ty hsb, hτ₁]
+        obtain ⟨σ', hσ', habs⟩ := unify_mgu hu
+        refine ⟨_, by simp only [infer, hs, ha', hp', and_self, ↓reduceIte, h₁, hσ']; rfl, φ₁,
+          hag₁.absorb habs, ?_, Sat.absorb habs hsat₁⟩
+        show ((s.inst []).subst (Subst.compose σ' o₁.σ)).subst φ₁ = _
+        rw [Ty.subst_compose, habs, hag₁.ty hsb]
   | cond c t e ihc iht ihe =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -1536,10 +1644,10 @@ theorem Pred.satisfiable_of_inst {p : Pred} {φ : Subst} (h : Inst (p.subst φ))
     | _ :: _ :: _, hq => simp at hq
 
 /-- Completeness, for a program in a closed context (such as the builtins'):
-if it has a type, inference accepts it, finding a type of which that one is
-an instance. -/
+if it has a type, and assigns only to its own `let`s and parameters,
+inference accepts it, finding a type of which that one is an instance. -/
 theorem inferIn_complete {Γ : Ctx} {e : Expr} {τ' : Ty} (hΓ : ctxFtv Γ = [])
-    (ht : HasType [] Γ none e τ') :
+    (hm : e.assignsMutable (Γ.map fun _ => false) = true) (ht : HasType [] Γ none e τ') :
     ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn Γ e = some τ := by
   have hclosed : Ctx.subst [] Γ = Γ := by simp
   obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete e (n := 0) (ψ := []) (R := none)
@@ -1548,12 +1656,13 @@ theorem inferIn_complete {Γ : Ctx} {e : Expr} {τ' : Ty} (hΓ : ctxFtv Γ = [])
   refine ⟨o, h, ⟨φ, hτ⟩, o.τ.subst (defaultSubst o.preds), ?_⟩
   have hall : o.preds.all Pred.satisfiable = true := List.all_eq_true.mpr (fun p hp =>
     Pred.satisfiable_of_inst ((hsat p hp).elim id (fun h => by cases h)))
-  simp [inferIn, h, hall]
+  simp [inferIn, hm, h, hall]
 
-/-- Completeness for closed programs. -/
-theorem inferProgram_complete {e : Expr} {τ' : Ty}
+/-- Completeness for closed programs: one that has a type, and assigns only
+to its own `let`s and parameters, is accepted. -/
+theorem inferProgram_complete {e : Expr} {τ' : Ty} (hm : e.assignsMutable [] = true)
     (ht : HasType [] [] none e τ') : ∃ τ, inferProgram e = some τ := by
-  obtain ⟨_, _, _, h⟩ := inferIn_complete rfl ht
+  obtain ⟨_, _, _, h⟩ := inferIn_complete (Γ := []) rfl hm ht
   exact h
 
 end Inty

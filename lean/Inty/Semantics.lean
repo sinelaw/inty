@@ -40,14 +40,19 @@ inductive Value where
   | undefined
   | null
   /-- A closure over its definition-time environment, of `arity`
-  parameters. -/
-  | closure (env : List Value) (arity : Nat) (body : Expr)
+  parameters. The environment holds the variables' cells, so the closure
+  sees later assignments to them, as in JavaScript. -/
+  | closure (env : List Nat) (arity : Nat) (body : Expr)
   /-- A native function, `dynamics::Value::Builtin`. -/
   | prim (p : Prim)
   deriving Repr
 
-/-- A runtime environment: the value of each variable, innermost first. -/
-abbrev Env := List Value
+/-- A runtime environment: the cell of each variable, innermost first. As in
+`dynamics` (`RuntimeEnv`), every binding is a cell, `const` or not. -/
+abbrev Env := List Nat
+
+/-- The heap: the value in each cell. A cell is never freed. -/
+abbrev Heap := List Value
 
 /-- Why evaluation got stuck, mirroring `dynamics::step::Stuck`. A
 well-typed program never produces one. -/
@@ -121,15 +126,18 @@ def Result.catchReturn : Result → Result
   | .returned v => .ok v
   | r => r
 
-/-- Continue with `k` on a value and the clock left; any other outcome
-(stuck, out of clock, returned, thrown) stops there, with its clock. -/
-def bindC (p : Result × Nat) (k : Value → Nat → Result × Nat) : Result × Nat :=
+/-- What running gives: the outcome, the clock left, and the heap. -/
+abbrev Ran := Result × Nat × Heap
+
+/-- Continue with `k` on a value, the clock left and the heap; any other
+outcome (stuck, out of clock, returned, thrown) stops there. -/
+def bindC (p : Ran) (k : Value → Nat → Heap → Ran) : Ran :=
   match p with
-  | (.ok v, c) => k v c
+  | (.ok v, c, h) => k v c h
   | p => p
 
-@[simp] theorem ok_bindC (v : Value) (c : Nat) (k : Value → Nat → Result × Nat) :
-    bindC (.ok v, c) k = k v c := rfl
+@[simp] theorem ok_bindC (v : Value) (c : Nat) (h : Heap) (k : Value → Nat → Heap → Ran) :
+    bindC (.ok v, c, h) k = k v c h := rfl
 
 private theorem lex_of_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
     Prod.Lex (· < ·) (· < ·) (c', s') (c, s) := by
@@ -137,56 +145,78 @@ private theorem lex_of_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
   · exact .left _ _ h
   · exact .right _ hs
 
-/-- Continue with `k` on the values of a list of arguments and the clock
-left; an argument that doesn't give a value stops there. -/
-def bindArgs (p : Except Result (List Value) × Nat) (k : List Value → Nat → Result × Nat) :
-    Result × Nat :=
+/-- What running arguments gives: their values or the outcome that stopped
+them, the clock left, and the heap. -/
+abbrev RanArgs := Except Result (List Value) × Nat × Heap
+
+/-- Continue with `k` on the values of a list of arguments, the clock left
+and the heap; an argument that doesn't give a value stops there. -/
+def bindArgs (p : RanArgs) (k : List Value → Nat → Heap → Ran) : Ran :=
   match p with
-  | (.ok vs, c) => k vs c
-  | (.error r, c) => (r, c)
+  | (.ok vs, c, h) => k vs c h
+  | (.error r, c, h) => (r, c, h)
+
+/-- A call's environment: cells for the arguments, the function itself and
+`this`, stored after the heap `h`, then the closure's. -/
+def callEnv (h : Heap) (n : Nat) (cenv : Env) : Env := List.range' h.length (n + 2) ++ cenv
 
 mutual
-/-- Run with `clock` calls to spare; the result, and the calls still to
-spare. A clock coming back from a subterm is clamped to the clock it was
-given (`min c clock`), which it never exceeds (`run_clock_le`); that is
-CakeML's `fix_clock`, there for the termination proof. -/
-def run (clock : Nat) (env : Env) (e : Expr) : Result × Nat :=
+/-- Run with `clock` calls to spare, in `env`, on the heap `heap`: the
+outcome, the calls still to spare, and the heap after. A clock coming back
+from a subterm is clamped to the clock it was given (`min c clock`), which
+it never exceeds (`run_clock_le`); that is CakeML's `fix_clock`, there for
+the termination proof. -/
+def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
   match e with
-  | .lit l => (.ok l.eval, clock)
+  | .lit l => (.ok l.eval, clock, heap)
   | .var i =>
     match env[i]? with
-    | some v => (.ok v, clock)
-    | none => (.stuck .undefinedVariable, clock)
-  | .func n body => (.ok (.closure env n body), clock)
+    | some ℓ =>
+      match heap[ℓ]? with
+      | some v => (.ok v, clock, heap)
+      | none => (.stuck .undefinedVariable, clock, heap)
+    | none => (.stuck .undefinedVariable, clock, heap)
+  | .func n body => (.ok (.closure env n body), clock, heap)
   -- The callee, then the arguments in order, then the call, as in
   -- `dynamics`: a callee that isn't a function is found out only at the
-  -- call. A call outside any receiver has `this` `undefined`.
+  -- call. A call outside any receiver has `this` `undefined`. A call
+  -- takes a tick, a native one too.
   | .app f args =>
-    bindC (run clock env f) fun vf c₁ =>
-    bindArgs (runArgs (min c₁ clock) env args) fun vs c₂ =>
+    bindC (run clock env heap f) fun vf c₁ h₁ =>
+    bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
     match vf with
     | .closure cenv n body =>
       if vs.length = n then
         match _h : min c₂ clock with
-        | 0 => (.timeout, 0)
+        | 0 => (.timeout, 0, h₂)
         | c + 1 =>
-          let p := run c (vs ++ vf :: .undefined :: cenv) body
+          let p := run c (callEnv h₂ n cenv) (h₂ ++ vs ++ [vf, .undefined]) body
           (p.1.catchReturn, p.2)
-      else (.stuck .arityMismatch, min c₂ clock)
-    | .prim p => (p.apply vs, min c₂ clock)
-    | _ => (.stuck .notCallable, min c₂ clock)
-  | .let_ e₁ e₂ =>
-    bindC (run clock env e₁) fun v c₁ => run (min c₁ clock) (v :: env) e₂
+      else (.stuck .arityMismatch, min c₂ clock, h₂)
+    | .prim p =>
+      match min c₂ clock with
+      | 0 => (.timeout, 0, h₂)
+      | c + 1 => (p.apply vs, c, h₂)
+    | _ => (.stuck .notCallable, min c₂ clock, h₂)
+  | .let_ _ e₁ e₂ =>
+    bindC (run clock env heap e₁) fun v c₁ h₁ =>
+      run (min c₁ clock) (h₁.length :: env) (h₁ ++ [v]) e₂
+  | .assign i e =>
+    bindC (run clock env heap e) fun v c₁ h₁ =>
+      match env[i]? with
+      | some ℓ => if ℓ < h₁.length then (.ok v, c₁, h₁.set ℓ v)
+        else (.stuck .undefinedVariable, c₁, h₁)
+      | none => (.stuck .undefinedVariable, c₁, h₁)
   | .cond c t e =>
-    bindC (run clock env c) fun v c₁ =>
-      if v.truthy then run (min c₁ clock) env t else run (min c₁ clock) env e
-  | .unop op e => bindC (run clock env e) fun v c₁ => (op.eval v, c₁)
+    bindC (run clock env heap c) fun v c₁ h₁ =>
+      if v.truthy then run (min c₁ clock) env h₁ t else run (min c₁ clock) env h₁ e
+  | .unop op e => bindC (run clock env heap e) fun v c₁ h₁ => (op.eval v, c₁, h₁)
   | .binop op e₁ e₂ =>
-    bindC (run clock env e₁) fun v₁ c₁ =>
-    bindC (run (min c₁ clock) env e₂) fun v₂ c₂ => (op.eval v₁ v₂, c₂)
-  | .ret e => bindC (run clock env e) fun v c₁ => (.returned v, c₁)
-  | .throw_ e => bindC (run clock env e) fun v c₁ => (.thrown v, c₁)
-  | .seq e₁ e₂ => bindC (run clock env e₁) fun _ c₁ => run (min c₁ clock) env e₂
+    bindC (run clock env heap e₁) fun v₁ c₁ h₁ =>
+    bindC (run (min c₁ clock) env h₁ e₂) fun v₂ c₂ h₂ => (op.eval v₁ v₂, c₂, h₂)
+  | .ret e => bindC (run clock env heap e) fun v c₁ h₁ => (.returned v, c₁, h₁)
+  | .throw_ e => bindC (run clock env heap e) fun v c₁ h₁ => (.thrown v, c₁, h₁)
+  | .seq e₁ e₂ => bindC (run clock env heap e₁) fun _ c₁ h₁ => run (min c₁ clock) env h₁ e₂
 termination_by (clock, sizeOf e)
 decreasing_by
   all_goals first
@@ -196,17 +226,16 @@ decreasing_by
 
 /-- Run a list of arguments in order: their values, or the first outcome
 that isn't one. -/
-def runArgs (clock : Nat) (env : Env) (args : List Expr) :
-    Except Result (List Value) × Nat :=
+def runArgs (clock : Nat) (env : Env) (heap : Heap) (args : List Expr) : RanArgs :=
   match args with
-  | [] => (.ok [], clock)
+  | [] => (.ok [], clock, heap)
   | e :: es =>
-    match run clock env e with
-    | (.ok v, c₁) =>
-      match runArgs (min c₁ clock) env es with
-      | (.ok vs, c₂) => (.ok (v :: vs), c₂)
-      | (.error r, c₂) => (.error r, c₂)
-    | (r, c₁) => (.error r, c₁)
+    match run clock env heap e with
+    | (.ok v, c₁, h₁) =>
+      match runArgs (min c₁ clock) env h₁ es with
+      | (.ok vs, c₂, h₂) => (.ok (v :: vs), c₂, h₂)
+      | (.error r, c₂, h₂) => (.error r, c₂, h₂)
+    | (r, c₁, h₁) => (.error r, c₁, h₁)
 termination_by (clock, sizeOf args)
 decreasing_by
   all_goals first
@@ -215,34 +244,37 @@ decreasing_by
 end
 
 /-- Calling `vf` on `args`, with `this` bound to `thisv`, with `c` calls to
-spare. -/
-def call (c : Nat) (vf thisv : Value) (args : List Value) : Result × Nat :=
+spare, on the heap `h`. -/
+def call (c : Nat) (h : Heap) (vf thisv : Value) (args : List Value) : Ran :=
   match vf with
   | .closure cenv n body =>
     if args.length = n then
       match c with
-      | 0 => (.timeout, 0)
+      | 0 => (.timeout, 0, h)
       | c + 1 =>
-        let p := run c (args ++ vf :: thisv :: cenv) body
+        let p := run c (callEnv h n cenv) (h ++ args ++ [vf, thisv]) body
         (p.1.catchReturn, p.2)
-    else (.stuck .arityMismatch, c)
-  | .prim p => (p.apply args, c)
-  | _ => (.stuck .notCallable, c)
+    else (.stuck .arityMismatch, c, h)
+  | .prim p =>
+    match c with
+    | 0 => (.timeout, 0, h)
+    | c + 1 => (p.apply args, c, h)
+  | _ => (.stuck .notCallable, c, h)
 
 /-- `run` on a call, without the termination proof's dependent match. -/
-theorem run_app (clock : Nat) (env : Env) (f : Expr) (args : List Expr) :
-    run clock env (.app f args) =
-      bindC (run clock env f) fun vf c₁ =>
-      bindArgs (runArgs (min c₁ clock) env args) fun vs c₂ =>
-        call (min c₂ clock) vf .undefined vs := by
+theorem run_app (clock : Nat) (env : Env) (heap : Heap) (f : Expr) (args : List Expr) :
+    run clock env heap (.app f args) =
+      bindC (run clock env heap f) fun vf c₁ h₁ =>
+      bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
+        call (min c₂ clock) h₂ vf .undefined vs := by
   rw [run]
-  congr 1; funext vf c₁; congr 1; funext vs c₂
+  congr 1; funext vf c₁ h₁; congr 1; funext vs c₂ h₂
   generalize min c₂ clock = m
   cases vf <;> simp only [call] <;> try rfl
   split <;> try rfl
   cases m <;> rfl
 
 /-- The result of running with `clock` calls to spare. -/
-def eval (clock : Nat) (env : Env) (e : Expr) : Result := (run clock env e).1
+def eval (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Result := (run clock env heap e).1
 
 end Inty

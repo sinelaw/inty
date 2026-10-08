@@ -11,14 +11,27 @@ the operational semantics must not get stuck on it"), proved for every
 program of the calculus.
 
 Values are typed semantically, by what they do rather than by how they were
-written: a step-indexed logical relation `V k τ v` (Appel and McAllester,
-TOPLAS 2001; Ahmed, ESOP 2006), with the interpreter's clock as the step
-index, as in CakeML. A function has type `τ₁ → τ₂` at index `k` when calling
-it with any clock `j ≤ k` on any argument of type `τ₁` gives back a result
-of type `τ₂`, at the clock left. So a native function (`Prim`), which no
-typing derivation describes, has a type all the same (`Inty.Builtins`), and
-so will the recursive and mutable values of later steps. The fundamental
-lemma (`run_sound`) says a well-typed expression is in the relation.
+written: a step-indexed Kripke logical relation `V k W τ v` (Appel and
+McAllester, TOPLAS 2001; Ahmed, ESOP 2006; Ahmed, Appel and Virga's model of
+general references), with the interpreter's clock as the step index, as in
+CakeML. The world `W` gives each cell of the heap its scheme. Cells are
+never freed and never change scheme, so worlds only grow, by extension
+(`<+:`). A function has type `θ, (τs) => ρ` at index `k` in `W` when calling
+it with any clock `j ≤ k`, in any larger world, on any heap that world
+describes and on arguments of its types, gives back a result of type `ρ`
+in a still larger world that describes the heap after. So a native function
+(`Prim`), which no typing derivation describes, has a type all the same
+(`Inty.Builtins`).
+
+The heap a call starts from need only be described one tick down, and the
+one it ends with at the clock left, which is below the clock it was called
+with: a call takes a tick. So `V` at index `k` refers to `V` at arbitrary
+types only at indices below `k`, and is defined by well-founded recursion on
+the index and then the type. Since a world maps cells to syntactic schemes,
+not to semantic types, there is no circularity to solve.
+
+The fundamental lemma (`run_sound`) says a well-typed expression is in the
+relation.
 -/
 
 namespace Inty
@@ -32,320 +45,506 @@ theorem Holds.append {C D : List Pred} (hC : Holds C) (hD : Holds D) : Holds (C 
 theorem Entails.holds {C : List Pred} (hC : Holds C) (h : Entails C p) : Inst p :=
   h.elim id (hC p)
 
-/-- An outcome that isn't stuck, with at most `k` left on the clock: out of
-clock, a value satisfying `P`, a `throw` of any value, or a `return` of a
-value satisfying `Q`. `P` and `Q` are given the clock left. -/
-def Lands (p : Result × Nat) (k : Nat) (P Q : Nat → Value → Prop) : Prop :=
-  p.2 ≤ k ∧ (p.1 = .timeout ∨ (∃ v, p.1 = .ok v ∧ P p.2 v) ∨ (∃ v, p.1 = .thrown v) ∨
-    (∃ v, p.1 = .returned v ∧ Q p.2 v))
+/-- A world: the scheme of each cell allocated so far. -/
+abbrev World := List Scheme
+
+/-- The heap `h` has a cell for each of `W`'s, holding a value that `P`
+relates to its scheme. -/
+def HeapInv (P : Scheme → Value → Prop) (W : World) (h : Heap) : Prop :=
+  h.length = W.length ∧ ∀ (ℓ : Nat) s, W[ℓ]? = some s → ∃ v, h[ℓ]? = some v ∧ P s v
+
+/-- What a call does, from a clock of `j` in the world `W`: it runs out of
+clock, or it takes a tick and ends in a larger world, with a heap `Hp`
+accepts, giving back a value `Q` accepts or throwing. -/
+def Lands (p : Ran) (j : Nat) (W : World) (Hp : Nat → World → Heap → Prop)
+    (Q : Nat → World → Value → Prop) : Prop :=
+  p.2.1 ≤ j ∧ (p.1 = .timeout ∨ (p.2.1 < j ∧ ∃ W', W <+: W' ∧ Hp p.2.1 W' p.2.2 ∧
+    ((∃ v, p.1 = .ok v ∧ Q p.2.1 W' v) ∨ ∃ v, p.1 = .thrown v)))
+
+private theorem lex_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
+    Prod.Lex (· < ·) (· < ·) (c', s') (c, s) := by
+  rcases Nat.lt_or_eq_of_le hc with h | rfl
+  · exact .left _ _ h
+  · exact .right _ hs
 
 mutual
-/-- `V k τ v`: the value `v` has type `τ` for `k` more calls. A base type
-has its values. A type variable has none: a closed program can't make a
-value of a type it knows nothing about. A function type is what calling the
-function does: with any `this` and arguments of its types. The definition
-is by recursion on `τ`; the index only says how far a function's promise
-reaches. -/
-def V : Nat → Ty → Value → Prop
-  | _, .number, v => ∃ n, v = .number n
-  | _, .string, v => ∃ s, v = .string s
-  | _, .boolean, v => ∃ b, v = .boolean b
-  | _, .undefined, v => v = .undefined
-  | _, .null, v => v = .null
-  | _, .var _, _ => False
-  | k, .fn θ τs ρ, f => ∀ j ≤ k, ∀ thisv args, V j θ thisv → VList j τs args →
-      Lands (call j f thisv args) j (fun c v => V c ρ v) (fun _ _ => False)
-/-- `VList k τs vs`: one value of each type. -/
-def VList : Nat → List Ty → List Value → Prop
-  | _, [], [] => True
-  | k, τ :: τs, v :: vs => V k τ v ∧ VList k τs vs
-  | _, _, _ => False
+/-- `V k W τ v`: the value `v` has type `τ` for `k` more calls, in the world
+`W`. A base type has its values. A type variable has none: a closed program
+can't make a value of a type it knows nothing about. A function type is what
+calling the function does (see the module docs). -/
+def V (k : Nat) (W : World) : Ty → Value → Prop
+  | .number, v => ∃ n, v = .number n
+  | .string, v => ∃ s, v = .string s
+  | .boolean, v => ∃ b, v = .boolean b
+  | .undefined, v => v = .undefined
+  | .null, v => v = .null
+  | .var _, _ => False
+  | .fn θ τs ρ, f => ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
+      (∀ i, i < j → HeapInv (fun s v => ∀ τs', τs'.length = s.arity →
+        Holds (s.instPreds τs') → V i W' (s.inst τs') v) W' h) →
+      V j W' θ thisv → VList j W' τs args →
+      Lands (call j h f thisv args) j W'
+        (fun c W'' h'' => c < j → HeapInv (fun s v => ∀ τs', τs'.length = s.arity →
+          Holds (s.instPreds τs') → V c W'' (s.inst τs') v) W'' h'')
+        (fun c W'' v => c < j → V c W'' ρ v)
+termination_by τ => (k, sizeOf τ)
+decreasing_by
+  all_goals first
+    | exact .left _ _ (by omega)
+    | exact lex_le (by omega) (by simp; omega)
+/-- `VList k W τs vs`: one value of each type. -/
+def VList (k : Nat) (W : World) : List Ty → List Value → Prop
+  | [], [] => True
+  | τ :: τs, v :: vs => V k W τ v ∧ VList k W τs vs
+  | _, _ => False
+termination_by τs => (k, sizeOf τs)
+decreasing_by
+  all_goals first
+    | exact .left _ _ (by omega)
+    | exact lex_le (by omega) (by simp; omega)
 end
 
-/-- A value good for `k` calls is good for fewer. -/
-theorem V.mono {j k : Nat} (h : j ≤ k) : ∀ {τ : Ty} {v : Value}, V k τ v → V j τ v
-  | .fn _ _ _, _, hv => fun i hi thisv args ht ha => hv i (Nat.le_trans hi h) thisv args ht ha
+/-- A value has every instance of the scheme whose constraints hold. -/
+def SchemeV (k : Nat) (W : World) (s : Scheme) (v : Value) : Prop :=
+  ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → V k W (s.inst τs) v
+
+/-- The heap is described by the world, at index `k`. -/
+def HeapOK (k : Nat) (W : World) (h : Heap) : Prop := HeapInv (SchemeV k W) W h
+
+/-- The function clause of `V`, in terms of `HeapOK`. -/
+theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
+    V k W (.fn θ τs ρ) f ↔ ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
+      (∀ i, i < j → HeapOK i W' h) → V j W' θ thisv → VList j W' τs args →
+      Lands (call j h f thisv args) j W' (fun c W'' h'' => c < j → HeapOK c W'' h'')
+        (fun c W'' v => c < j → V c W'' ρ v) := by
+  rw [V]; rfl
+
+@[simp] theorem V_number : V k W .number v ↔ ∃ n, v = .number n := by rw [V]
+@[simp] theorem V_string : V k W .string v ↔ ∃ s, v = .string s := by rw [V]
+@[simp] theorem V_boolean : V k W .boolean v ↔ ∃ b, v = .boolean b := by rw [V]
+@[simp] theorem V_undefined : V k W .undefined v ↔ v = .undefined := by rw [V]
+@[simp] theorem V_null : V k W .null v ↔ v = .null := by rw [V]
+@[simp] theorem V_var : V k W (.var a) v ↔ False := by rw [V]
+
+@[simp] theorem VList_nil : VList k W [] [] := by rw [VList]; trivial
+@[simp] theorem VList_cons : VList k W (τ :: τs) (v :: vs) ↔ V k W τ v ∧ VList k W τs vs := by
+  rw [VList]
+@[simp] theorem VList_nil_cons : ¬ VList k W [] (v :: vs) := by simp [VList]
+@[simp] theorem VList_cons_nil : ¬ VList k W (τ :: τs) [] := by simp [VList]
+
+/-- A value good for `k` calls in `W` is good for fewer, in a larger world. -/
+theorem V.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
+    ∀ {τ : Ty} {v : Value}, V k W τ v → V j W' τ v
+  | .fn _ _ _, _, hv => by
+    rw [V_fn] at hv ⊢
+    intro i hi W'' hW'' h thisv args hh ht ha
+    exact hv i (Nat.le_trans hi hjk) W'' (hW.trans hW'') h thisv args hh ht ha
   | .number, _, hv | .string, _, hv | .boolean, _, hv | .undefined, _, hv | .null, _, hv
-  | .var _, _, hv => hv
+  | .var _, _, hv => by rw [V] at hv ⊢; exact hv
 
-theorem VList.mono {j k : Nat} (h : j ≤ k) : ∀ {τs : List Ty} {vs : List Value},
-    VList k τs vs → VList j τs vs
-  | [], [], _ => trivial
-  | _ :: _, _ :: _, ⟨hv, hvs⟩ => ⟨V.mono h hv, VList.mono h hvs⟩
+theorem VList.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
+    ∀ {τs : List Ty} {vs : List Value}, VList k W τs vs → VList j W' τs vs
+  | [], [], _ => by simp
+  | _ :: _, _ :: _, h => by
+    rw [VList_cons] at h ⊢; exact ⟨V.mono hjk hW h.1, VList.mono hjk hW h.2⟩
+  | [], _ :: _, h | _ :: _, [], h => by simp at h
 
-theorem VList.length : ∀ {τs : List Ty} {vs : List Value}, VList k τs vs → vs.length = τs.length
+theorem VList.length : ∀ {τs : List Ty} {vs : List Value}, VList k W τs vs →
+    vs.length = τs.length
   | [], [], _ => rfl
-  | _ :: _, _ :: _, ⟨_, hvs⟩ => by simp [VList.length hvs]
+  | _ :: _, _ :: _, h => by rw [VList_cons] at h; simp [VList.length h.2]
+  | [], _ :: _, h | _ :: _, [], h => by simp at h
 
-/-- A safe outcome at `τ`, in a function returning `R`, from a clock of `k`. -/
-def Safe (p : Result × Nat) (k : Nat) (τ : Ty) (R : Option Ty) : Prop :=
-  Lands p k (fun c v => V c τ v) (fun c v => ∃ τr, R = some τr ∧ V c τr v)
+theorem SchemeV.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W')
+    (h : SchemeV k W s v) : SchemeV j W' s v :=
+  fun τs hl hp => V.mono hjk hW (h τs hl hp)
 
-theorem Lands.weaken (h : Lands p c P Q) (hc : c ≤ k) : Lands p k P Q :=
-  ⟨Nat.le_trans h.1 hc, h.2⟩
+theorem SchemeV.mono_iff {k : Nat} {τ : Ty} {v : Value} :
+    SchemeV k W (.mono τ) v ↔ V k W τ v :=
+  ⟨fun h => by simpa using h [] rfl (by simp [Holds, Scheme.instPreds, Scheme.mono]),
+    fun h τs _ _ => by simpa using h⟩
 
-theorem Safe.ok (hc : c ≤ k) (h : V c τ v) : Safe (.ok v, c) k τ R :=
-  ⟨hc, .inr (.inl ⟨v, rfl, h⟩)⟩
+/-- A scheme with no quantified variables has one instance. -/
+theorem SchemeV.of_arity_zero {k : Nat} {s : Scheme} (ha : s.arity = 0)
+    (h : V k W (s.inst []) v) : SchemeV k W s v := fun τs hl _ => by
+  rw [ha] at hl; rw [List.eq_nil_of_length_eq_zero hl]; exact h
 
-theorem Safe.not_stuck (h : Safe p k τ R) : p.1 ≠ .stuck s := by
-  rcases h.2 with h | ⟨_, h, _⟩ | ⟨_, h⟩ | ⟨_, h, _⟩ <;> rw [h] <;> simp
+theorem prefix_getElem? {W W' : World} (hW : W <+: W') {ℓ : Nat} {s : Scheme}
+    (hs : W[ℓ]? = some s) : W'[ℓ]? = some s := by
+  obtain ⟨t, rfl⟩ := hW
+  rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hs).1, hs]
 
-/-- A call's outcome is safe at its result type, in any function. -/
-theorem Lands.safe (h : Lands p k (fun c v => V c τ v) (fun _ _ => False)) : Safe p k τ R := by
-  rcases h with ⟨hc, h | h | h | ⟨_, _, h⟩⟩
-  · exact ⟨hc, .inl h⟩
-  · exact ⟨hc, .inr (.inl h)⟩
-  · exact ⟨hc, .inr (.inr (.inl h))⟩
-  · exact h.elim
+theorem HeapOK.mono {j k : Nat} {W : World} {h : Heap} (hjk : j ≤ k) (hH : HeapOK k W h) :
+    HeapOK j W h :=
+  ⟨hH.1, fun ℓ s hs => by
+    obtain ⟨v, hv, hsv⟩ := hH.2 ℓ s hs
+    exact ⟨v, hv, hsv.mono hjk (List.prefix_refl W)⟩⟩
 
-/-- Continuing a safe outcome with a safe continuation is safe. -/
-theorem Safe.bindC {K : Value → Nat → Result × Nat} (h : Safe p k τ₁ R)
-    (hK : ∀ v, p.1 = .ok v → V p.2 τ₁ v → Safe (K v p.2) p.2 τ R) : Safe (Inty.bindC p K) k τ R := by
-  obtain ⟨r, c⟩ := p
-  obtain ⟨hc, h⟩ := h
-  rcases h with h | ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, hv⟩ <;> simp only at h <;> subst h
-  · exact ⟨hc, .inl rfl⟩
-  · exact (hK v rfl hv).weaken hc
-  · exact ⟨hc, .inr (.inr (.inl ⟨v, rfl⟩))⟩
-  · exact ⟨hc, .inr (.inr (.inr ⟨v, rfl, hv⟩))⟩
+/-- New cells at the end of the heap, holding values of their schemes. -/
+theorem HeapOK.alloc {k : Nat} {W : World} {h : Heap} {ss : World} {vs : List Value}
+    (hH : HeapOK k W h) (hlen : vs.length = ss.length)
+    (hnew : ∀ (i : Nat) s v, ss[i]? = some s → vs[i]? = some v → SchemeV k (W ++ ss) s v) :
+    HeapOK k (W ++ ss) (h ++ vs) := by
+  refine ⟨by simp [hH.1, hlen], fun ℓ s hs => ?_⟩
+  by_cases hℓ : ℓ < W.length
+  · rw [List.getElem?_append_left hℓ] at hs
+    obtain ⟨v, hv, hsv⟩ := hH.2 ℓ s hs
+    refine ⟨v, ?_, hsv.mono (Nat.le_refl k) (List.prefix_append W ss)⟩
+    rw [List.getElem?_append_left (by rw [hH.1]; exact hℓ), hv]
+  · rw [List.getElem?_append_right (by omega)] at hs
+    have hi : ℓ - W.length < vs.length := by
+      rw [hlen]; exact (List.getElem?_eq_some_iff.mp hs).1
+    obtain ⟨v, hv⟩ : ∃ v, vs[ℓ - W.length]? = some v := ⟨_, List.getElem?_eq_getElem hi⟩
+    refine ⟨v, ?_, hnew _ s v hs hv⟩
+    rw [List.getElem?_append_right (by rw [hH.1]; omega), hH.1, hv]
 
-/-- A call's body returns its function's result type, by `return` or as its
-value. -/
-theorem Safe.catchReturn (h : Safe p k τ (some τ)) :
-    Lands (p.1.catchReturn, p.2) k (fun c v => V c τ v) (fun _ _ => False) := by
-  obtain ⟨r, c⟩ := p
-  obtain ⟨hc, h⟩ := h
-  rcases h with h | ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, τr, hR, hv⟩ <;> simp only at h <;> subst h
-  · exact ⟨hc, .inl rfl⟩
-  · exact ⟨hc, .inr (.inl ⟨v, rfl, hv⟩)⟩
-  · exact ⟨hc, .inr (.inr (.inl ⟨v, rfl⟩))⟩
-  · cases hR; exact ⟨hc, .inr (.inl ⟨v, rfl, hv⟩)⟩
+/-- Storing a value of a cell's scheme in it. -/
+theorem HeapOK.set {k : Nat} {W : World} {h : Heap} {ℓ : Nat} {s : Scheme} {v : Value}
+    (hH : HeapOK k W h) (hs : W[ℓ]? = some s) (hv : SchemeV k W s v) :
+    HeapOK k W (h.set ℓ v) := by
+  refine ⟨by simp [hH.1], fun ℓ' s' hs' => ?_⟩
+  by_cases e : ℓ = ℓ'
+  · subst e
+    rw [hs] at hs'; cases hs'
+    have : ℓ < h.length := by rw [hH.1]; exact (List.getElem?_eq_some_iff.mp hs).1
+    exact ⟨v, by simp [this], hv⟩
+  · obtain ⟨v', hv', hsv'⟩ := hH.2 ℓ' s' hs'
+    exact ⟨v', by rw [List.getElem?_set_ne e]; exact hv', hsv'⟩
 
 /-! ## Environments -/
 
-/-- A value has every instance of the scheme whose constraints hold. -/
-def SchemeV (k : Nat) (s : Scheme) (v : Value) : Prop :=
-  ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → V k (s.inst τs) v
-
-theorem SchemeV.mono_iff {k : Nat} {τ : Ty} {v : Value} :
-    SchemeV k (.mono τ) v ↔ V k τ v :=
-  ⟨fun h => by simpa using h [] rfl (by simp [Holds, Scheme.instPreds, Scheme.mono]),
-    fun h _ _ _ => by simpa using h⟩
-
-/-- `G k Γ env`: each value in `env` has the scheme `Γ` gives its variable. -/
-def G (k : Nat) : Ctx → Env → Prop
+/-- `G W Γ env`: each variable's cell has the scheme `Γ` gives it. -/
+def G (W : World) : Ctx → Env → Prop
   | [], [] => True
-  | s :: Γ, v :: env => SchemeV k s v ∧ G k Γ env
+  | s :: Γ, ℓ :: env => W[ℓ]? = some s ∧ G W Γ env
   | _, _ => False
 
-theorem G.mono {j k : Nat} (h : j ≤ k) : ∀ {Γ : Ctx} {env : Env}, G k Γ env → G j Γ env
+theorem G.mono {W W' : World} (hW : W <+: W') : ∀ {Γ : Ctx} {env : Env}, G W Γ env → G W' Γ env
   | [], [], _ => trivial
-  | _ :: _, _ :: _, ⟨hv, hG⟩ => ⟨fun τs hl hp => V.mono h (hv τs hl hp), G.mono h hG⟩
+  | _ :: _, _ :: _, ⟨hs, hG⟩ => ⟨prefix_getElem? hW hs, G.mono hW hG⟩
 
-/-- Extending an environment with values of the types of monotypes. -/
-theorem G.append : ∀ {τs : List Ty} {vs : List Value}, VList k τs vs → G k Γ env →
-    G k (τs.map .mono ++ Γ) (vs ++ env)
-  | [], [], _, hG => hG
-  | _ :: _, _ :: _, ⟨hv, hvs⟩, hG => ⟨SchemeV.mono_iff.mpr hv, G.append hvs hG⟩
-
-theorem G.lookup : ∀ {i : Nat} {Γ : Ctx} {env : Env} {s : Scheme}, G k Γ env →
-    Γ[i]? = some s → ∃ v, env[i]? = some v ∧ SchemeV k s v
+theorem G.lookup : ∀ {i : Nat} {Γ : Ctx} {env : Env} {s : Scheme}, G W Γ env →
+    Γ[i]? = some s → ∃ ℓ, env[i]? = some ℓ ∧ W[ℓ]? = some s
   | _, [], _, _, _, hi => by simp at hi
-  | 0, _ :: _, _ :: _, _, ⟨hv, _⟩, hi => by simp at hi; subst hi; exact ⟨_, rfl, hv⟩
+  | 0, _ :: _, _ :: _, _, ⟨hs, _⟩, hi => by simp at hi; subst hi; exact ⟨_, rfl, hs⟩
   | i + 1, _ :: _, _ :: _, _, ⟨_, hG⟩, hi => by simpa using G.lookup hG (by simpa using hi)
+
+/-- Variables for a block of cells. -/
+theorem G.block {W : World} {Γ : Ctx} {env : Env} :
+    ∀ (ss : List Scheme) (base : Nat), (∀ (i : Nat) (hi : i < ss.length), W[base + i]? = some ss[i]) →
+      G W Γ env → G W (ss ++ Γ) (List.range' base ss.length ++ env)
+  | [], _, _, hG => hG
+  | s :: ss, base, h, hG => by
+    refine ⟨h 0 (by simp), ?_⟩
+    exact G.block ss (base + 1) (fun i hi => by
+      rw [show base + 1 + i = base + (i + 1) by omega]; exact h (i + 1) (by simp; omega)) hG
+
+theorem VList.getElem? : ∀ {τs : List Ty} {vs : List Value} {i : Nat} {τ : Ty} {v : Value},
+    VList k W τs vs → τs[i]? = some τ → vs[i]? = some v → V k W τ v
+  | [], _, _, _, _, _, hτ, _ => by simp at hτ
+  | _ :: _, [], _, _, _, h, _, _ => by simp at h
+  | _ :: _, _ :: _, 0, _, _, h, hτ, hv => by
+    rw [VList_cons] at h; simp at hτ hv; subst hτ hv; exact h.1
+  | _ :: _, _ :: _, i + 1, _, _, h, hτ, hv => by
+    rw [VList_cons] at h; simp at hτ hv; exact VList.getElem? h.2 hτ hv
+
+/-- Cells for values of a list of types. -/
+theorem HeapOK.allocList {k : Nat} {W : World} {h : Heap} {τs : List Ty} {vs : List Value}
+    (hH : HeapOK k W h) (hvs : VList k (W ++ τs.map .mono) τs vs) :
+    HeapOK k (W ++ τs.map .mono) (h ++ vs) :=
+  hH.alloc (by simp [hvs.length]) (fun i s v hs hv => by
+    simp only [List.getElem?_map] at hs
+    cases hτ : τs[i]? with
+    | none => simp [hτ] at hs
+    | some τ =>
+      simp only [hτ, Option.map_some, Option.some.injEq] at hs; subst hs
+      exact SchemeV.mono_iff.mpr (hvs.getElem? hτ hv))
+
+/-! ## Safe outcomes -/
+
+/-- A safe outcome at `τ`, in a function returning `R`, from a clock of `k`
+in the world `W`: out of clock, or a larger world describing the heap
+after, with a value of `τ`, a `throw` of any value, or a `return` of a value
+of the return type. -/
+def Safe (p : Ran) (k : Nat) (W : World) (τ : Ty) (R : Option Ty) : Prop :=
+  p.2.1 ≤ k ∧ (p.1 = .timeout ∨ ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧
+    ((∃ v, p.1 = .ok v ∧ V p.2.1 W' τ v) ∨ (∃ v, p.1 = .thrown v) ∨
+      (∃ v, p.1 = .returned v ∧ ∃ τr, R = some τr ∧ V p.2.1 W' τr v)))
+
+theorem Safe.ok {W' : World} (hc : c ≤ k) (hW : W <+: W') (hH : HeapOK c W' h)
+    (hv : V c W' τ v) : Safe (.ok v, c, h) k W τ R :=
+  ⟨hc, .inr ⟨W', hW, hH, .inl ⟨v, rfl, hv⟩⟩⟩
+
+theorem Safe.weaken {W' : World} (h : Safe p c W' τ R) (hc : c ≤ k) (hW : W <+: W') :
+    Safe p k W τ R := by
+  obtain ⟨hp, h | ⟨W'', hW'', hH, hr⟩⟩ := h
+  · exact ⟨Nat.le_trans hp hc, .inl h⟩
+  · exact ⟨Nat.le_trans hp hc, .inr ⟨W'', hW.trans hW'', hH, hr⟩⟩
+
+theorem Safe.not_stuck (h : Safe p k W τ R) : p.1 ≠ .stuck s := by
+  rcases h.2 with h | ⟨_, _, _, ⟨_, h, _⟩ | ⟨_, h⟩ | ⟨_, h, _⟩⟩ <;> rw [h] <;> simp
+
+/-- Continuing a safe outcome with a safe continuation is safe. -/
+theorem Safe.bindC {K : Value → Nat → Heap → Ran} (h : Safe p k W τ₁ R)
+    (hK : ∀ v W', p.1 = .ok v → W <+: W' → HeapOK p.2.1 W' p.2.2 → V p.2.1 W' τ₁ v →
+      Safe (K v p.2.1 p.2.2) p.2.1 W' τ R) : Safe (Inty.bindC p K) k W τ R := by
+  obtain ⟨r, c, hp⟩ := p
+  obtain ⟨hc, h⟩ := h
+  rcases h with h | ⟨W', hW, hH, ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, hv⟩⟩ <;> simp only at h <;> subst h
+  · exact ⟨hc, .inl rfl⟩
+  · exact (hK v W' rfl hW hH hv).weaken hc hW
+  · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl ⟨v, rfl⟩)⟩⟩
+  · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr ⟨v, rfl, hv⟩)⟩⟩
+
+/-- A call's outcome is safe at its result type, in any function. -/
+theorem Lands.safe (h : Lands p j W (fun c W' h' => c < j → HeapOK c W' h')
+    (fun c W' v => c < j → V c W' τ v)) : Safe p j W τ R := by
+  obtain ⟨hc, h | ⟨hlt, W', hW, hH, ⟨v, hr, hv⟩ | ⟨v, hr⟩⟩⟩ := h
+  · exact ⟨hc, .inl h⟩
+  · exact ⟨hc, .inr ⟨W', hW, hH hlt, .inl ⟨v, hr, hv hlt⟩⟩⟩
+  · exact ⟨hc, .inr ⟨W', hW, hH hlt, .inr (.inl ⟨v, hr⟩)⟩⟩
+
+/-- A call's body, run with a tick less than the call was given, returns
+its function's result type, by `return` or as its value. -/
+theorem Safe.catchReturn {W₁ : World} (h : Safe p i W₁ ρ (some ρ)) (hij : i < j)
+    (hW : W <+: W₁) :
+    Lands (p.1.catchReturn, p.2) j W (fun c W' h' => c < j → HeapOK c W' h')
+      (fun c W' v => c < j → V c W' ρ v) := by
+  obtain ⟨r, c, hp⟩ := p
+  obtain ⟨hc, h⟩ := h
+  simp only at hc
+  rcases h with h | ⟨W', hW', hH, ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, τr, hR, hv⟩⟩ <;>
+    simp only at h <;> subst h
+  · exact ⟨by simp only; omega, .inl rfl⟩
+  · exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
+      .inl ⟨v, rfl, fun _ => hv⟩⟩⟩
+  · exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
+      .inr ⟨v, rfl⟩⟩⟩
+  · cases hR
+    exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
+      .inl ⟨v, rfl, fun _ => hv⟩⟩⟩
 
 /-! ## Operators -/
 
-theorem Lit.eval_sound (h : LitTy l τ) : V k τ l.eval := by
-  cases h
-  all_goals first | exact ⟨_, rfl⟩ | rfl
+theorem Lit.eval_sound (h : LitTy l τ) : V k W τ l.eval := by
+  cases h <;> simp [Lit.eval]
 
-theorem UnOp.eval_sound (hop : UnOpTy op τ₁ τ) (hv : V c τ₁ v) (hc : c ≤ k) :
-    Safe (op.eval v, c) k τ R := by
+theorem UnOp.eval_sound {W' : World} (hop : UnOpTy op τ₁ τ) (hv : V c W' τ₁ v) (hc : c ≤ k)
+    (hW : W <+: W') (hH : HeapOK c W' h) : Safe (op.eval v, c, h) k W τ R := by
   cases hop with
-  | not => exact Safe.ok hc ⟨_, rfl⟩
-  | typeof => exact Safe.ok hc ⟨_, rfl⟩
-  | neg => obtain ⟨n, rfl⟩ := hv; exact Safe.ok hc ⟨_, rfl⟩
+  | not => exact Safe.ok hc hW hH (by simp)
+  | typeof => exact Safe.ok hc hW hH (by simp)
+  | neg => simp at hv; obtain ⟨n, rfl⟩ := hv; exact Safe.ok hc hW hH (by simp)
 
-theorem BinOp.eval_sound (hC : Holds C) (hop : BinOpTy C op τ₁ τ₂ τ)
-    (hv₁ : V c τ₁ v₁) (hv₂ : V c τ₂ v₂) (hc : c ≤ k) : Safe (op.eval v₁ v₂, c) k τ R := by
+theorem BinOp.eval_sound {W' : World} (hC : Holds C) (hop : BinOpTy C op τ₁ τ₂ τ)
+    (hv₁ : V c W' τ₁ v₁) (hv₂ : V c W' τ₂ v₂) (hc : c ≤ k) (hW : W <+: W')
+    (hH : HeapOK c W' h) : Safe (op.eval v₁ v₂, c, h) k W τ R := by
   cases hop with
   | plus hp =>
     cases hp.holds hC with
     | plusNumber =>
-      obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂; exact Safe.ok hc ⟨_, rfl⟩
+      simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
+      exact Safe.ok hc hW hH (by simp)
     | plusString =>
-      obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂; exact Safe.ok hc ⟨_, rfl⟩
-  | minus => obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂; exact Safe.ok hc ⟨_, rfl⟩
+      simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
+      exact Safe.ok hc hW hH (by simp)
+  | minus =>
+    simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
+    exact Safe.ok hc hW hH (by simp)
 
-/-- Running a syntactic value gives a value, and takes no clock. -/
-theorem IsValue.run_value (hv : e.IsValue) (ht : HasType C Γ R e τ) (henv : G k Γ env) :
-    ∃ v, run k env e = (.ok v, k) := by
+/-- Running a syntactic value gives a value, and takes no clock and no
+cell. -/
+theorem IsValue.run_value (hv : e.IsValue) (ht : HasType C Γ R e τ) (hG : G W Γ env)
+    (hH : HeapOK k W h) : ∃ v, run k env h e = (.ok v, k, h) := by
   cases hv with
   | lit => rename_i l; exact ⟨l.eval, by simp [run]⟩
   | func => rename_i n body; exact ⟨.closure env n body, by simp [run]⟩
   | var =>
     cases ht with
     | var hi _ _ =>
-      obtain ⟨v, hv, _⟩ := G.lookup henv hi
-      exact ⟨v, by simp [run, hv]⟩
-
-/-- `Safe.bindC` for a `const`'s initialiser, safe at every instance of its
-scheme whose constraints hold. Either some instance's constraints hold, or
-the initialiser is a syntactic value, which can't complete abruptly. -/
-theorem Safe.bindC_forall {p : Result × Nat} {s : Scheme} {K : Value → Nat → Result × Nat}
-    (hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPreds τs)) ∨ ∃ v, p.1 = .ok v)
-    (hle : p.2 ≤ k)
-    (h : ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → Safe p k (s.inst τs) R)
-    (hK : ∀ v, p.1 = .ok v → SchemeV p.2 s v → Safe (K v p.2) p.2 τ R) :
-    Safe (Inty.bindC p K) k τ R := by
-  obtain ⟨r, c⟩ := p
-  cases r with
-  | ok v =>
-    refine (hK v rfl fun τs hl hp => ?_).weaken hle
-    rcases (h τs hl hp).2 with h | ⟨_, h, hv⟩ | ⟨_, h⟩ | ⟨_, h, _⟩ <;> cases h
-    exact hv
-  | timeout => exact ⟨hle, .inl rfl⟩
-  | thrown v => exact ⟨hle, .inr (.inr (.inl ⟨v, rfl⟩))⟩
-  | stuck st =>
-    rcases hw with ⟨τs, hl, hp⟩ | ⟨_, h⟩
-    · exact absurd rfl (Safe.not_stuck (h τs hl hp))
-    · cases h
-  | returned v =>
-    rcases hw with ⟨τs, hl, hp⟩ | ⟨_, h⟩
-    · rcases (h τs hl hp).2 with h | ⟨_, h, _⟩ | ⟨_, h⟩ | ⟨_, h, hv⟩ <;> cases h
-      exact ⟨hle, .inr (.inr (.inr ⟨v, rfl, hv⟩))⟩
-    · cases h
+      obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
+      obtain ⟨v, hv, _⟩ := hH.2 ℓ _ hs
+      exact ⟨v, by simp [run, hℓ, hv]⟩
 
 /-! ## Arguments -/
 
 /-- A safe outcome of running arguments of the types `τs`: their values,
 or an outcome other than a value that is safe. -/
-def SafeArgs (p : Except Result (List Value) × Nat) (k : Nat) (τs : List Ty)
-    (R : Option Ty) : Prop :=
-  p.2 ≤ k ∧ match p.1 with
-    | .ok vs => VList p.2 τs vs
-    | .error r => r = .timeout ∨ (∃ v, r = .thrown v) ∨
-        (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V p.2 τr v)
+def SafeArgs (p : RanArgs) (k : Nat) (W : World) (τs : List Ty) (R : Option Ty) : Prop :=
+  p.2.1 ≤ k ∧ match p.1 with
+    | .ok vs => ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧ VList p.2.1 W' τs vs
+    | .error r => r = .timeout ∨ ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧
+        ((∃ v, r = .thrown v) ∨ (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V p.2.1 W' τr v))
 
 /-- Continuing safe arguments with a safe continuation is safe. -/
-theorem Safe.bindArgs {p : Except Result (List Value) × Nat}
-    {K : List Value → Nat → Result × Nat} (h : SafeArgs p k τs R)
-    (hK : ∀ vs, p.1 = .ok vs → VList p.2 τs vs → Safe (K vs p.2) p.2 τ R) :
-    Safe (Inty.bindArgs p K) k τ R := by
-  obtain ⟨r, c⟩ := p
+theorem Safe.bindArgs {p : RanArgs} {K : List Value → Nat → Heap → Ran}
+    (h : SafeArgs p k W τs R)
+    (hK : ∀ vs W', p.1 = .ok vs → W <+: W' → HeapOK p.2.1 W' p.2.2 → VList p.2.1 W' τs vs →
+      Safe (K vs p.2.1 p.2.2) p.2.1 W' τ R) :
+    Safe (Inty.bindArgs p K) k W τ R := by
+  obtain ⟨r, c, hp⟩ := p
   obtain ⟨hc, h⟩ := h
   cases r with
-  | ok vs => exact (hK vs rfl h).weaken hc
+  | ok vs =>
+    obtain ⟨W', hW, hH, hvs⟩ := h
+    exact (hK vs W' rfl hW hH hvs).weaken hc hW
   | error r =>
     simp only [Inty.bindArgs]
-    rcases h with rfl | ⟨v, rfl⟩ | ⟨v, rfl, hv⟩
+    rcases h with rfl | ⟨W', hW, hH, ⟨v, rfl⟩ | ⟨v, rfl, hv⟩⟩
     · exact ⟨hc, .inl rfl⟩
-    · exact ⟨hc, .inr (.inr (.inl ⟨v, rfl⟩))⟩
-    · exact ⟨hc, .inr (.inr (.inr ⟨v, rfl, hv⟩))⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl ⟨v, rfl⟩)⟩⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr ⟨v, rfl, hv⟩)⟩⟩
+
+/-- What the fundamental lemma says of one expression. -/
+def RunSound (e : Expr) : Prop :=
+  ∀ {k C Γ R W env h τ}, HasType C Γ R e τ → Holds C → G W Γ env → HeapOK k W h →
+    Safe (run k env h e) k W τ R
 
 /-- Well-typed arguments, each safe by the fundamental lemma, run safely. -/
 theorem runArgs_sound {C : List Pred} {Γ : Ctx} {R : Option Ty} (hC : Holds C) :
-    ∀ (args : List Expr) (τs : List Ty) {k : Nat} {env : Env},
-      (∀ a ∈ args, ∀ {k C Γ R env τ}, HasType C Γ R a τ → Holds C → G k Γ env →
-        Safe (run k env a) k τ R) →
-      args.length = τs.length → (∀ p ∈ args.zip τs, HasType C Γ R p.1 p.2) → G k Γ env →
-      SafeArgs (runArgs k env args) k τs R
-  | [], [], k, env, _, _, _, _ => by simp [runArgs, SafeArgs, VList]
-  | [], _ :: _, _, _, _, hlen, _, _ | _ :: _, [], _, _, _, hlen, _, _ => by simp at hlen
-  | a :: as, τ :: τs, k, env, ih, hlen, ht, henv => by
-    have ha := ih a (by simp) (ht (a, τ) (by simp)) hC henv
-    have hc₁ := run_clock_le k env a
-    generalize hp : run k env a = p at ha hc₁
-    obtain ⟨r, c₁⟩ := p
+    ∀ (args : List Expr) (τs : List Ty) {k : Nat} {W : World} {env : Env} {h : Heap},
+      (∀ a ∈ args, RunSound a) →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasType C Γ R p.1 p.2) → G W Γ env →
+      HeapOK k W h → SafeArgs (runArgs k env h args) k W τs R
+  | [], [], k, W, env, h, _, _, _, _, hH => by
+    simp only [runArgs, SafeArgs]; exact ⟨Nat.le_refl k, W, List.prefix_refl W, hH, by simp⟩
+  | [], _ :: _, _, _, _, _, _, hlen, _, _, _ | _ :: _, [], _, _, _, _, _, hlen, _, _, _ => by
+    simp at hlen
+  | a :: as, τ :: τs, k, W, env, h, ih, hlen, ht, hG, hH => by
+    have ha := ih a (by simp) (ht (a, τ) (by simp)) hC hG hH
+    have hc₁ := run_clock_le k env h a
+    generalize hp : run k env h a = p at ha hc₁
+    obtain ⟨r, c₁, h₁⟩ := p
     obtain ⟨_, hr⟩ := ha
     simp only at hc₁
-    rcases hr with h | ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, hv⟩ <;> simp only at h <;> subst h
+    rcases hr with hr | ⟨W₁, hW₁, hH₁, ⟨v, hr, hv⟩ | ⟨v, hr⟩ | ⟨v, hr, hv⟩⟩ <;>
+      simp only at hr <;> subst hr
     · simp only [runArgs, hp]
       exact ⟨hc₁, .inl rfl⟩
     · have has := runArgs_sound hC as τs (fun a' ha' => ih a' (by simp [ha']))
-        (by simpa using hlen) (fun q hq => ht q (by simp [hq])) (G.mono hc₁ henv)
-      have hc₂ := runArgs_clock_le c₁ env as
+        (by simpa using hlen) (fun q hq => ht q (by simp [hq])) (G.mono hW₁ hG) hH₁
+      have hc₂ := runArgs_clock_le c₁ env h₁ as
       rw [← Nat.min_eq_left hc₁] at has hc₂
       simp only [runArgs, hp]
-      generalize runArgs (min c₁ k) env as = q at has hc₂
-      obtain ⟨r', c₂⟩ := q
+      generalize runArgs (min c₁ k) env h₁ as = q at has hc₂
+      obtain ⟨r', c₂, h₂⟩ := q
       rw [Nat.min_eq_left hc₁] at hc₂
       obtain ⟨_, hq⟩ := has
+      simp only at hc₂
       cases r' with
-      | ok vs => exact ⟨by simp only at hc₂ ⊢; omega, V.mono hc₂ hv, hq⟩
-      | error r' => exact ⟨by simp only at hc₂ ⊢; omega, hq⟩
+      | ok vs =>
+        obtain ⟨W₂, hW₂, hH₂, hvs⟩ := hq
+        exact ⟨by simp only; omega, W₂, hW₁.trans hW₂, hH₂,
+          (VList_cons).mpr ⟨V.mono hc₂ hW₂ hv, hvs⟩⟩
+      | error r' =>
+        rcases hq with hq | ⟨W₂, hW₂, hH₂, hq⟩
+        · exact ⟨by simp only; omega, .inl hq⟩
+        · exact ⟨by simp only; omega, .inr ⟨W₂, hW₁.trans hW₂, hH₂, hq⟩⟩
     · simp only [runArgs, hp]
-      exact ⟨hc₁, .inr (.inl ⟨v, rfl⟩)⟩
+      exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, .inl ⟨v, rfl⟩⟩⟩
     · simp only [runArgs, hp]
-      exact ⟨hc₁, .inr (.inr ⟨v, rfl, hv⟩)⟩
+      exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, .inr ⟨v, rfl, hv⟩⟩⟩
 
 /-! ## The fundamental lemma -/
 
-/-- Type soundness: a well-typed expression, run with any clock in an
-environment of the right types, is safe. By induction on the expression;
-the typing rule for `const` types its initialiser at each instance by a
-derivation that isn't a subderivation. -/
-theorem run_sound (e : Expr) :
-    ∀ {k C Γ R env τ}, HasType C Γ R e τ → Holds C → G k Γ env →
-      Safe (run k env e) k τ R := by
+/-- A call's cells: the arguments, the function and `this`, after the
+caller's. -/
+theorem G.call {W : World} {Γ : Ctx} {env : Env} {h : Heap} {θ ρ : Ty} {τs : List Ty}
+    (hG : G W Γ env) (hlen : h.length = W.length) :
+    G (W ++ τs.map Scheme.mono ++ [Scheme.mono (.fn θ τs ρ), Scheme.mono θ])
+      (τs.map Scheme.mono ++ Scheme.mono (.fn θ τs ρ) :: Scheme.mono θ :: Γ)
+      (callEnv h τs.length env) := by
+  have e₁ : τs.map Scheme.mono ++ Scheme.mono (.fn θ τs ρ) :: Scheme.mono θ :: Γ =
+      (τs.map Scheme.mono ++ [Scheme.mono (.fn θ τs ρ), Scheme.mono θ]) ++ Γ := by simp
+  have e₂ : callEnv h τs.length env =
+      List.range' h.length
+        (τs.map Scheme.mono ++ [Scheme.mono (.fn θ τs ρ), Scheme.mono θ]).length ++ env := by
+    simp [callEnv]
+  rw [e₁, e₂, List.append_assoc W]
+  refine G.block _ _ (fun i hi => ?_) (G.mono (List.prefix_append _ _) hG)
+  rw [hlen, List.getElem?_append_right (by omega)]
+  simp
+
+theorem run_sound (e : Expr) : RunSound e := by
   induction e using Expr.ind with
   | lit l =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
-    | lit hl => simp only [run]; exact Safe.ok (Nat.le_refl k) (Lit.eval_sound hl)
+    | lit hl =>
+      simp only [run]; exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (Lit.eval_sound hl)
   | var i =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | var hi hlen hc =>
-      obtain ⟨v, hv, hvt⟩ := G.lookup henv hi
-      simp only [run, hv]
-      exact Safe.ok (Nat.le_refl k) (hvt _ hlen (fun c h => (hc c h).holds hC))
+      obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
+      obtain ⟨v, hv, hsv⟩ := hH.2 ℓ _ hs
+      simp only [run, hℓ, hv]
+      exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH
+        (hsv _ hlen (fun c h => (hc c h).holds hC))
   | func n body ih =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | @func _ _ _ ρ _ _ θ τs hlen hb =>
-      -- The closure is good for `j` calls, by induction on `j`: a call
-      -- with `i + 1` to spare runs the body with `i`, where the closure
-      -- itself (the function's own name) need only be good for `i`.
-      have hclo : ∀ j, j ≤ k → V j (.fn θ τs ρ) (.closure env n body) := by
+      subst hlen
+      -- The closure is good for `j` calls in any world its environment is
+      -- typed in, by induction on `j`: a call with `i + 1` to spare runs the
+      -- body with `i`, where the closure itself (the function's own name)
+      -- need only be good for `i`.
+      have hclo : ∀ j W, G W Γ env → V j W (.fn θ τs ρ) (.closure env τs.length body) := by
         intro j
         induction j with
         | zero =>
-          intro _ i hi thisv args _ hargs
+          intro W _
+          rw [V_fn]
+          intro i hi W' _ h' thisv args _ _ hargs
           obtain rfl : i = 0 := by omega
-          simp only [call, hargs.length, hlen, ite_true]
+          simp only [call, hargs.length]
           exact ⟨Nat.le_refl 0, .inl rfl⟩
         | succ j ihj =>
-          intro hj i hi thisv args hthis hargs
-          simp only [call, hargs.length, hlen, ite_true]
+          intro W hGW
+          rw [V_fn]
+          intro i hi W' hW' h' thisv args hh hthis hargs
+          simp only [call, hargs.length]
           cases i with
           | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
           | succ i =>
-            have hG : G i (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ)
-                (args ++ .closure env n body :: thisv :: env) :=
-              G.append (VList.mono (by omega) hargs)
-                ⟨SchemeV.mono_iff.mpr (V.mono (by omega) (ihj (by omega))),
-                  SchemeV.mono_iff.mpr (V.mono (by omega) hthis),
-                  G.mono (by omega) henv⟩
-            exact (Safe.catchReturn (ih hb hC hG)).weaken (by omega)
+            have hH' : HeapOK i W' h' := hh i (by omega)
+            have hW₁ : W' <+: W' ++ τs.map .mono := List.prefix_append _ _
+            have hW₂ : W' <+: W' ++ τs.map .mono ++ [.mono (.fn θ τs ρ), .mono θ] :=
+              hW₁.trans (List.prefix_append _ _)
+            have hcells : HeapOK i (W' ++ τs.map .mono ++ [.mono (.fn θ τs ρ), .mono θ])
+                (h' ++ args ++ [.closure env τs.length body, thisv]) := by
+              refine (hH'.allocList (hargs.mono (j := i) (by omega) hW₁)).alloc (by simp)
+                (fun idx s v hs hv => ?_)
+              match idx, hs, hv with
+              | 0, hs, hv =>
+                simp at hs hv; subst hs hv
+                exact SchemeV.mono_iff.mpr
+                  ((ihj _ (G.mono (hW'.trans hW₂) hGW)).mono (by omega) (List.prefix_refl _))
+              | 1, hs, hv =>
+                simp at hs hv; subst hs hv
+                exact SchemeV.mono_iff.mpr (hthis.mono (by omega) hW₂)
+              | _ + 2, hs, _ => simp at hs
+            have hGb := G.call (θ := θ) (ρ := ρ) (τs := τs) (G.mono hW' hGW) hH'.1
+            exact (ih hb hC hGb hcells).catchReturn (j := i + 1) (by omega) hW₂
       simp only [run]
-      exact Safe.ok (Nat.le_refl k) (hclo k (Nat.le_refl k))
+      exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (hclo k W hG)
   | app f args ihf iha =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | app hf hlen hargs =>
       rw [run_app]
-      refine Safe.bindC (ihf hf hC henv) fun vf _ hvf => ?_
-      have hc₁ := run_clock_le k env f
+      refine Safe.bindC (ihf hf hC hG hH) fun vf W₁ _ hW₁ hH₁ hvf => ?_
+      have hc₁ := run_clock_le k env h f
       rw [Nat.min_eq_left hc₁]
-      refine Safe.bindArgs (runArgs_sound hC args _ iha hlen hargs (G.mono hc₁ henv))
-        fun vs _ hvs => ?_
-      have hc₂ := runArgs_clock_le (run k env f).2 env args
+      refine Safe.bindArgs (runArgs_sound hC args _ iha hlen hargs (G.mono hW₁ hG) hH₁)
+        fun vs W₂ _ hW₂ hH₂ hvs => ?_
+      have hc₂ := runArgs_clock_le (run k env h f).2.1 env (run k env h f).2.2 args
       rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
-      exact Lands.safe (V.mono hc₂ hvf _ (Nat.le_refl _) .undefined vs rfl hvs)
-  | let_ e₁ e₂ ih₁ ih₂ =>
-    intro k C Γ R env τ ht hC henv
+      exact Lands.safe (V_fn.mp (V.mono hc₂ hW₂ hvf) _ (Nat.le_refl _) W₂ (List.prefix_refl _)
+        _ .undefined vs (fun i hi => hH₂.mono (by omega)) (by simp) hvs)
+  | let_ mb e₁ e₂ ih₁ ih₂ =>
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | let_ s L hgen hval _ h₂ =>
       -- Type `e₁` at each instance of `s`: open `s` at variables above
@@ -377,79 +576,121 @@ theorem run_sound (e : Expr) :
           ctx_subst_id (fun a ha => hfresh a (hm a (.inr (.inl ha)))),
           Scheme.open_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen] at h
       have hsafe : ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) →
-          Safe (run k env e₁) k (s.inst τs) R := fun τs hlen hp =>
-        ih₁ (hinst τs hlen) (hC.append hp) henv
-      have hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPreds τs)) ∨
-          ∃ v, (run k env e₁).1 = .ok v := by
-        rcases hval with ⟨ha, hp⟩ | hv
-        · exact .inl ⟨[], by simp [ha], by simp [Holds, Scheme.instPreds, hp]⟩
-        · obtain ⟨v, hv⟩ := IsValue.run_value hv (hgen m (fun a ha => hm a (.inl ha))) henv
-          exact .inr ⟨v, by rw [hv]⟩
-      have hc₁ := run_clock_le k env e₁
+          Safe (run k env h e₁) k W (s.inst τs) R := fun τs hlen hp =>
+        ih₁ (hinst τs hlen) (hC.append hp) hG hH
+      -- What follows the initialiser: its value in a new cell.
+      have hK : ∀ v c₁ h₁ W₁, c₁ ≤ k → W <+: W₁ → HeapOK c₁ W₁ h₁ → SchemeV c₁ W₁ s v →
+          Safe (run (min c₁ k) (h₁.length :: env) (h₁ ++ [v]) e₂) c₁ W₁ τ R := by
+        intro v c₁ h₁ W₁ hc hW₁ hH₁ hv
+        rw [Nat.min_eq_left hc]
+        have hW₂ : W₁ <+: W₁ ++ [s] := List.prefix_append _ _
+        have hcell : HeapOK c₁ (W₁ ++ [s]) (h₁ ++ [v]) :=
+          hH₁.alloc (by simp) (fun i s' v' hs hv' => by
+            match i, hs, hv' with
+            | 0, hs, hv' =>
+              simp at hs hv'; subst hs hv'; exact hv.mono (Nat.le_refl _) hW₂
+            | _ + 1, hs, _ => simp at hs)
+        have hG₂ : G (W₁ ++ [s]) (s :: Γ) (h₁.length :: env) :=
+          ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
+        exact (ih₂ h₂ hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
       simp only [run]
-      refine Safe.bindC_forall hw hc₁ hsafe fun v _ hv => ?_
-      rw [Nat.min_eq_left hc₁]
-      exact ih₂ h₂ hC ⟨hv, G.mono hc₁ henv⟩
+      rcases hval with ⟨ha, hp⟩ | ⟨hv, _⟩
+      · -- One instance: no quantified variables, no constraints.
+        refine Safe.bindC (hsafe [] (by simp [ha]) (by simp [Holds, Scheme.instPreds, hp]))
+          fun v W₁ _ hW₁ hH₁ hv => ?_
+        exact hK v _ _ W₁ (run_clock_le k env h e₁) hW₁ hH₁ (SchemeV.of_arity_zero ha hv)
+      · -- A syntactic value: it allocates nothing, so each instance's world
+        -- is `W` itself.
+        obtain ⟨v, hrun⟩ := IsValue.run_value hv (hgen m (fun a ha => hm a (.inl ha))) hG hH
+        rw [hrun, ok_bindC]
+        refine hK v k h W (Nat.le_refl k) (List.prefix_refl W) hH fun τs hl hp => ?_
+        have hs := hsafe τs hl hp
+        rw [hrun] at hs
+        obtain ⟨_, hs⟩ := hs
+        rcases hs with hs | ⟨W', hW', hH', ⟨v', hv', hvv⟩ | ⟨_, hv'⟩ | ⟨_, hv', _⟩⟩
+        · simp at hs
+        · simp at hv'; subst hv'
+          obtain rfl := hW'.eq_of_length (by rw [← hH'.1, hH.1])
+          exact hvv
+        · simp at hv'
+        · simp at hv'
+  | assign i e ih =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | assign hi ha _ he =>
+      obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
+      simp only [run]
+      refine Safe.bindC (ih he hC hG hH) fun v W₁ _ hW₁ hH₁ hv => ?_
+      have hs₁ := prefix_getElem? hW₁ hs
+      have hlt : ℓ < (run k env h e).2.2.length := by
+        rw [hH₁.1]; exact (List.getElem?_eq_some_iff.mp hs₁).1
+      simp only [hℓ, hlt, ite_true]
+      exact Safe.ok (Nat.le_refl _) (List.prefix_refl _)
+        (hH₁.set hs₁ (SchemeV.of_arity_zero ha hv)) hv
   | cond c t e ihc iht ihe =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | cond hc htt hte =>
       simp only [run]
-      refine Safe.bindC (ihc hc hC henv) fun v _ _ => ?_
-      have hc₁ := run_clock_le k env c
+      refine Safe.bindC (ihc hc hC hG hH) fun v W₁ _ hW₁ hH₁ _ => ?_
+      have hc₁ := run_clock_le k env h c
       rw [Nat.min_eq_left hc₁]
       split
-      · exact iht htt hC (G.mono hc₁ henv)
-      · exact ihe hte hC (G.mono hc₁ henv)
+      · exact iht htt hC (G.mono hW₁ hG) hH₁
+      · exact ihe hte hC (G.mono hW₁ hG) hH₁
   | unop op e ih =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | unop hop he =>
       simp only [run]
-      exact Safe.bindC (ih he hC henv) fun v _ hv => UnOp.eval_sound hop hv (Nat.le_refl _)
+      exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv =>
+        UnOp.eval_sound hop hv (Nat.le_refl _) (List.prefix_refl W₁) hH₁
   | binop op e₁ e₂ ih₁ ih₂ =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | binop hop h₁ h₂ =>
       simp only [run]
-      refine Safe.bindC (ih₁ h₁ hC henv) fun v₁ _ hv₁ => ?_
-      have hc₁ := run_clock_le k env e₁
+      refine Safe.bindC (ih₁ h₁ hC hG hH) fun v₁ W₁ _ hW₁ hH₁ hv₁ => ?_
+      have hc₁ := run_clock_le k env h e₁
       rw [Nat.min_eq_left hc₁]
-      refine Safe.bindC (ih₂ h₂ hC (G.mono hc₁ henv)) fun v₂ _ hv₂ => ?_
-      exact BinOp.eval_sound hC hop (V.mono (run_clock_le _ env e₂) hv₁) hv₂ (Nat.le_refl _)
+      refine Safe.bindC (ih₂ h₂ hC (G.mono hW₁ hG) hH₁) fun v₂ W₂ _ hW₂ hH₂ hv₂ => ?_
+      exact BinOp.eval_sound hC hop (V.mono (run_clock_le _ env _ e₂) hW₂ hv₁) hv₂
+        (Nat.le_refl _) (List.prefix_refl W₂) hH₂
   | ret e ih =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | ret he =>
       simp only [run]
-      exact Safe.bindC (ih he hC henv) fun v _ hv =>
-        ⟨Nat.le_refl _, .inr (.inr (.inr ⟨v, rfl, _, rfl, hv⟩))⟩
+      exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv =>
+        ⟨Nat.le_refl _, .inr ⟨W₁, List.prefix_refl W₁, hH₁, .inr (.inr ⟨v, rfl, _, rfl, hv⟩)⟩⟩
   | throw_ e ih =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | throw_ he =>
       simp only [run]
-      exact Safe.bindC (ih he hC henv) fun v _ _ => ⟨Nat.le_refl _, .inr (.inr (.inl ⟨v, rfl⟩))⟩
+      exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ _ =>
+        ⟨Nat.le_refl _, .inr ⟨W₁, List.prefix_refl W₁, hH₁, .inr (.inl ⟨v, rfl⟩)⟩⟩
   | seq e₁ e₂ ih₁ ih₂ =>
-    intro k C Γ R env τ ht hC henv
+    intro k C Γ R W env h τ ht hC hG hH
     cases ht with
     | seq h₁ h₂ =>
       simp only [run]
-      refine Safe.bindC (ih₁ h₁ hC henv) fun _ _ _ => ?_
-      have hc₁ := run_clock_le k env e₁
+      refine Safe.bindC (ih₁ h₁ hC hG hH) fun _ W₁ _ hW₁ hH₁ _ => ?_
+      have hc₁ := run_clock_le k env h e₁
       rw [Nat.min_eq_left hc₁]
-      exact ih₂ h₂ hC (G.mono hc₁ henv)
+      exact ih₂ h₂ hC (G.mono hW₁ hG) hH₁
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/
-theorem eval_sound (clock : Nat) (h : HasType C Γ R e τ) (hC : Holds C)
-    (henv : G clock Γ env) : Safe (run clock env e) clock τ R :=
-  run_sound e h hC henv
+theorem eval_sound (clock : Nat) (ht : HasType C Γ R e τ) (hC : Holds C)
+    (hG : G W Γ env) (hH : HeapOK clock W h) : Safe (run clock env h e) clock W τ R :=
+  run_sound e ht hC hG hH
 
 /-- A closed program, well typed with no assumptions and outside any
 function, never gets stuck, whatever the clock. -/
-theorem never_stuck (h : HasType [] [] none e τ) (clock : Nat) (s : Stuck) :
-    eval clock [] e ≠ .stuck s :=
-  Safe.not_stuck (run_sound e h (fun _ h => by cases h) (by simp [G]))
+theorem never_stuck (ht : HasType [] [] none e τ) (clock : Nat) (s : Stuck) :
+    eval clock [] [] e ≠ .stuck s :=
+  Safe.not_stuck (run_sound e ht (W := []) (fun _ h => by cases h) (by simp [G])
+    ⟨rfl, fun _ _ h => by simp at h⟩)
 
 end Inty

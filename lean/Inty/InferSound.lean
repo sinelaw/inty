@@ -57,13 +57,13 @@ theorem Ty.gen_eq_bound {ᾱ : List Nat} {τ : Ty} {i : Nat} (h : τ.gen ᾱ = .
 
 /-- The scheme `letScheme` gives, once checked, carries only `Plus` on its
 quantified variables. -/
-theorem letScheme_simple {e₁ : Expr} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred}
-    (h : (letScheme e₁ Γ₁ R₁ τ₁ preds).1.preds.all PPred.isPlusBound = true) :
-    (letScheme e₁ Γ₁ R₁ τ₁ preds).1.Simple := by
+theorem letScheme_simple {gen : Bool} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred}
+    (h : (letScheme gen Γ₁ R₁ τ₁ preds).1.preds.all PPred.isPlusBound = true) :
+    (letScheme gen Γ₁ R₁ τ₁ preds).1.Simple := by
   intro p hp
   obtain ⟨i, rfl⟩ := PPred.isPlusBound_spec (List.all_eq_true.mp h p hp)
   refine ⟨i, ?_, rfl⟩
-  by_cases hv : e₁.isValue = true
+  by_cases hv : gen = true
   · simp only [letScheme, hv, ite_true, generalize, List.mem_map] at hp ⊢
     obtain ⟨g, _, hg⟩ := hp
     obtain ⟨c, args⟩ := g
@@ -174,21 +174,22 @@ theorem infer_sound :
     rw [unify_sound hu] at hf
     simp only [Ty.subst_fn, Ty.subst_undefined, List.map_map, Function.comp_def] at hf ha
     exact .app hf (by simp [ha.1]) ha.2
-  | let_ e₁ e₂ ih₁ ih₂ =>
+  | let_ mb e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
     split at h
     · cases h
     rename_i o₁ h₁
-    generalize hls : letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.preds = ls at h
+    generalize hls : letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R)
+      o₁.τ o₁.preds = ls at h
     obtain ⟨s, rest⟩ := ls
     split at h
     rotate_left
     · cases h
     rename_i hcheck
     have hs : s.Simple := by
-      have h' := letScheme_simple (e₁ := e₁) (Γ₁ := Ctx.subst o₁.σ Γ) (R₁ := Ret.subst o₁.σ R)
-        (τ₁ := o₁.τ) (preds := o₁.preds)
+      have h' := letScheme_simple (gen := Expr.generalises e₁ e₂) (Γ₁ := Ctx.subst o₁.σ Γ)
+        (R₁ := Ret.subst o₁.σ R) (τ₁ := o₁.τ) (preds := o₁.preds)
       rw [hls] at h'; exact h' hcheck
     split at h
     · cases h
@@ -202,7 +203,9 @@ theorem infer_sound :
     · -- Generalised: rename the generalised variables to the block at `m`.
       rename_i hv
       simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
-      refine .let_ _ [] (fun m _ => ?_) (.inr (Expr.isValue_sound hv)) ((hs.subst _).subst _) he₂
+      simp only [Expr.generalises, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hv
+      refine .let_ _ [] (fun m _ => ?_) (.inr ⟨Expr.isValue_sound hv.1, hv.2⟩)
+        ((hs.subst _).subst _) he₂
       let Γ₁ := Ctx.subst o₁.σ Γ
       let R₁ := Ret.subst o₁.σ R
       let ᾱ := (o₁.τ.ftv.filter (fun a => a ∉ ctxFtv Γ₁ ++ Ret.ftv R₁)).eraseDups
@@ -230,6 +233,30 @@ theorem infer_sound :
       refine .let_ _ [] (fun m _ => ?_) (.inl ⟨rfl, by simp [Scheme.mono, Scheme.subst]⟩)
         ((hs.subst _).subst _) he₂
       simpa using ih₁ h₁ _ C hsat.1
+  | assign i e ih =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i s hs
+    split at h
+    rotate_left
+    · cases h
+    rename_i hmono
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i σ' hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map] at hsat
+    have he := ih h₁ _ C hsat
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he ⊢
+    rw [← unify_sound hu] at he
+    simp only [Scheme.inst_nil_subst] at he ⊢
+    exact .assign (by simp [Ctx.getElem?_subst, hs]) (by simp [hmono.1])
+      (by simp [Scheme.subst, hmono.2]) he
   | cond c t e ihc iht ihe =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
@@ -363,6 +390,9 @@ theorem inferIn_sound {Γ : Ctx} {e : Expr} {τ : Ty} (hΓ : ctxFtv Γ = [])
     (h : inferIn Γ e = some τ) : HasType [] Γ none e τ := by
   simp only [inferIn] at h
   split at h
+  rotate_left
+  · cases h
+  split at h
   · cases h
   rename_i o ho
   split at h
@@ -382,7 +412,7 @@ theorem inferProgram_sound {e : Expr} {τ : Ty} (h : inferProgram e = some τ) :
 
 /-- A program inference accepts never gets stuck, whatever the clock. -/
 theorem inferProgram_never_stuck {e : Expr} {τ : Ty} (h : inferProgram e = some τ)
-    (clock : Nat) (s : Stuck) : eval clock [] e ≠ .stuck s :=
+    (clock : Nat) (s : Stuck) : eval clock [] [] e ≠ .stuck s :=
   never_stuck (inferProgram_sound h) clock s
 
 end Inty

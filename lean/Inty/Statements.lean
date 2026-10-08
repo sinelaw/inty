@@ -20,22 +20,23 @@ open Inty
 
 /-! ## Headline theorems -/
 
-example : ∀ (clock : Nat) {C : List Pred} {Γ : Ctx} {R : Option Ty} {env : Env} {e : Expr}
-    {τ : Ty}, HasType C Γ R e τ → Holds C → G clock Γ env →
-      (run clock env e).2 ≤ clock ∧
-      ((run clock env e).1 = .timeout ∨
-        (∃ v, (run clock env e).1 = .ok v ∧ V (run clock env e).2 τ v) ∨
-        (∃ v, (run clock env e).1 = .thrown v) ∨
-        (∃ v, (run clock env e).1 = .returned v ∧
-          ∃ τr, R = some τr ∧ V (run clock env e).2 τr v)) :=
-  fun clock _ _ _ _ _ _ h hC henv => eval_sound clock h hC henv
+example : ∀ (clock : Nat) {C : List Pred} {Γ : Ctx} {R : Option Ty} {W : World} {env : Env}
+    {h : Heap} {e : Expr} {τ : Ty}, HasType C Γ R e τ → Holds C → G W Γ env → HeapOK clock W h →
+      (run clock env h e).2.1 ≤ clock ∧
+      ((run clock env h e).1 = .timeout ∨ ∃ W', W <+: W' ∧
+        HeapOK (run clock env h e).2.1 W' (run clock env h e).2.2 ∧
+        ((∃ v, (run clock env h e).1 = .ok v ∧ V (run clock env h e).2.1 W' τ v) ∨
+          (∃ v, (run clock env h e).1 = .thrown v) ∨
+          (∃ v, (run clock env h e).1 = .returned v ∧
+            ∃ τr, R = some τr ∧ V (run clock env h e).2.1 W' τr v))) :=
+  fun clock _ _ _ _ _ _ _ _ ht hC hG hH => eval_sound clock ht hC hG hH
 
 example : ∀ {e : Expr} {τ : Ty}, HasType [] [] none e τ →
-    ∀ (clock : Nat) (s : Stuck), eval clock [] e ≠ .stuck s :=
+    ∀ (clock : Nat) (s : Stuck), eval clock [] [] e ≠ .stuck s :=
   never_stuck
 
 example : ∀ {e : Expr} {τ : Ty}, HasType [] builtinCtx none e τ →
-    ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv e ≠ .stuck s :=
+    ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   never_stuck_with_builtins
 
 example : ∀ {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty} (σ : Subst),
@@ -60,11 +61,11 @@ example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ → HasType [] [] n
   inferProgram_sound
 
 example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
-    ∀ (clock : Nat) (s : Stuck), eval clock [] e ≠ .stuck s :=
+    ∀ (clock : Nat) (s : Stuck), eval clock [] [] e ≠ .stuck s :=
   inferProgram_never_stuck
 
 example : ∀ {e : Expr} {τ : Ty}, inferIn builtinCtx e = some τ →
-    ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv e ≠ .stuck s :=
+    ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   inferIn_builtins_never_stuck
 
 example : ∀ (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst} {C : List Pred}
@@ -74,23 +75,24 @@ example : ∀ (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst} {C : 
     ∃ o, infer Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat C o.preds φ :=
   infer_complete
 
-example : ∀ {Γ : Ctx} {e : Expr} {τ' : Ty}, ctxFtv Γ = [] → HasType [] Γ none e τ' →
+example : ∀ {Γ : Ctx} {e : Expr} {τ' : Ty}, ctxFtv Γ = [] →
+    e.assignsMutable (Γ.map fun _ => false) = true → HasType [] Γ none e τ' →
     ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn Γ e = some τ :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, HasType [] [] none e τ' →
+example : ∀ {e : Expr} {τ' : Ty}, e.assignsMutable [] = true → HasType [] [] none e τ' →
     ∃ τ, inferProgram e = some τ :=
   inferProgram_complete
 
-example : ∀ (c : Nat) (env : Env) (e : Expr), (run c env e).2 ≤ c :=
+example : ∀ (c : Nat) (env : Env) (h : Heap) (e : Expr), (run c env h e).2.1 ≤ c :=
   run_clock_le
 
-example : ∀ (c : Nat) (env : Env) (e : Expr) (k : Nat), (run c env e).1 ≠ .timeout →
-    run (c + k) env e = ((run c env e).1, (run c env e).2 + k) :=
+example : ∀ (c : Nat) (env : Env) (h : Heap) (e : Expr) (k : Nat), (run c env h e).1 ≠ .timeout →
+    run (c + k) env h e = ((run c env h e).1, (run c env h e).2.1 + k, (run c env h e).2.2) :=
   run_mono
 
-example : ∀ (n : Nat) {env : Env} {e : Expr} (k : Nat), eval n env e ≠ .timeout →
-    eval (n + k) env e = eval n env e :=
+example : ∀ (n : Nat) {env : Env} {h : Heap} {e : Expr} (k : Nat), eval n env h e ≠ .timeout →
+    eval (n + k) env h e = eval n env h e :=
   eval_mono
 
 /-! ## The value relation
@@ -98,24 +100,43 @@ example : ∀ (n : Nat) {env : Env} {e : Expr} (k : Nat), eval n env e ≠ .time
 `eval_sound` is only as strong as `V`: a `V` that holds of everything would
 make it trivial. So its clauses are pinned too. -/
 
-example : V k .number v ↔ ∃ n, v = .number n := Iff.rfl
-example : V k .string v ↔ ∃ s, v = .string s := Iff.rfl
-example : V k .boolean v ↔ ∃ b, v = .boolean b := Iff.rfl
-example : V k .undefined v ↔ v = .undefined := Iff.rfl
-example : V k .null v ↔ v = .null := Iff.rfl
-example : V k (.var a) v ↔ False := Iff.rfl
-example : V k (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ thisv args, V j θ thisv → VList j τs args →
-    (call j f thisv args).2 ≤ j ∧ ((call j f thisv args).1 = .timeout ∨
-      (∃ v, (call j f thisv args).1 = .ok v ∧ V (call j f thisv args).2 ρ v) ∨
-      (∃ v, (call j f thisv args).1 = .thrown v) ∨
-      (∃ v, (call j f thisv args).1 = .returned v ∧ False)) :=
-  Iff.rfl
-example : VList k [] vs ↔ vs = [] := by cases vs <;> simp [VList]
-example : VList k (τ :: τs) vs ↔ ∃ v vs', vs = v :: vs' ∧ V k τ v ∧ VList k τs vs' := by
+example : V k W .number v ↔ ∃ n, v = .number n := V_number
+example : V k W .string v ↔ ∃ s, v = .string s := V_string
+example : V k W .boolean v ↔ ∃ b, v = .boolean b := V_boolean
+example : V k W .undefined v ↔ v = .undefined := V_undefined
+example : V k W .null v ↔ v = .null := V_null
+example : V k W (.var a) v ↔ False := V_var
+example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
+    (∀ i < j, HeapOK i W' h) → V j W' θ thisv → VList j W' τs args →
+    (call j h f thisv args).2.1 ≤ j ∧ ((call j h f thisv args).1 = .timeout ∨
+      ((call j h f thisv args).2.1 < j ∧ ∃ W'', W' <+: W'' ∧
+        HeapOK (call j h f thisv args).2.1 W'' (call j h f thisv args).2.2 ∧
+        ((∃ v, (call j h f thisv args).1 = .ok v ∧ V (call j h f thisv args).2.1 W'' ρ v) ∨
+          ∃ v, (call j h f thisv args).1 = .thrown v))) := by
+  rw [V_fn]
+  constructor
+  · intro H j hj W' hW h thisv args hh ht ha
+    obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hh ht ha
+    · exact ⟨hc, .inl H⟩
+    · exact ⟨hc, .inr ⟨hlt, W'', hW'', hH hlt, hr.imp (fun ⟨v, e, hv⟩ => ⟨v, e, hv hlt⟩) id⟩⟩
+  · intro H j hj W' hW h thisv args hh ht ha
+    obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hh ht ha
+    · exact ⟨hc, .inl H⟩
+    · exact ⟨hc, .inr ⟨hlt, W'', hW'', fun _ => hH,
+        hr.imp (fun ⟨v, e, hv⟩ => ⟨v, e, fun _ => hv⟩) id⟩⟩
+example : VList k W [] vs ↔ vs = [] := by cases vs <;> simp
+example : VList k W (τ :: τs) vs ↔ ∃ v vs', vs = v :: vs' ∧ V k W τ v ∧ VList k W τs vs' := by
   cases vs with
-  | nil => simp [VList]
-  | cons v vs => exact ⟨fun ⟨h₁, h₂⟩ => ⟨v, vs, rfl, h₁, h₂⟩, fun ⟨_, _, e, h₁, h₂⟩ => by
+  | nil => simp
+  | cons v vs =>
+    simp only [VList_cons]
+    exact ⟨fun ⟨h₁, h₂⟩ => ⟨v, vs, rfl, h₁, h₂⟩, fun ⟨_, _, e, h₁, h₂⟩ => by
       cases e; exact ⟨h₁, h₂⟩⟩
+example : HeapOK k W h ↔ h.length = W.length ∧ ∀ (ℓ : Nat) s, W[ℓ]? = some s →
+    ∃ v, h[ℓ]? = some v ∧
+      ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → V k W (s.inst τs) v := Iff.rfl
+example : G W (s :: Γ) (ℓ :: env) ↔ W[ℓ]? = some s ∧ G W Γ env := Iff.rfl
+example : G W [] env ↔ env = [] := by cases env <;> simp [G]
 
 /-! ## The class instances
 
@@ -135,6 +156,16 @@ example : builtinCtx =
 
 private def num (n : Float) : Expr := .lit (.number n)
 private def str (s : String) : Expr := .lit (.string s)
+
+/-- `const x = 1; x = 2`: assigning to a `const` is rejected, by the scope
+check beside the typing rules. -/
+example : (Expr.let_ false (num 1) (.assign 0 (num 2))).assignsMutable [] = false := rfl
+
+/-- `x = 1` for a variable whose scheme is polymorphic: an assigned variable
+is a monotype. -/
+example : ¬ HasType [] [⟨1, .bound 0, []⟩] none (.assign 0 (num 1)) τ := by
+  intro h
+  cases h with | assign hi ha _ _ => simp at hi; subst hi; simp at ha
 
 /-- An unbound variable. -/
 example : ¬ HasType [] [] none (.var 0) τ := by

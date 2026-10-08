@@ -2,9 +2,10 @@
 
 A machine-checked model of inty's type system, in Lean 4 (core library only,
 no Mathlib). It covers a small core calculus, with let-polymorphism under the
-value restriction and type schemes that carry class constraints (inty's
-`<a> where Plus a => (a, a) => a`), a complete type-soundness proof, and an
-executable type-inference algorithm proved sound. It is laid out so
+value restriction, type schemes that carry class constraints (inty's
+`<a> where Plus a => (a, a) => a`), a heap with `let` and assignment, a
+complete type-soundness proof, and an executable type-inference algorithm
+proved sound and complete. It is laid out so
 that each inty feature can be added the way it is added to the Rust code: a
 typing rule, an operator arm and a runtime arm, plus one new case in the
 proof. Paths like `src/dynamics` are relative to `crates/inty`.
@@ -20,23 +21,27 @@ pins the version.
 ## What is proved
 
 `Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
-`τ`, class constraints `C` that hold, context `Γ` and environment `env`
-matching `Γ` for `clock` calls, enclosing function's return type `R`, and
-every clock, writing `(r, c) = run clock env e` for the result and the clock
-left,
+`τ`, class constraints `C` that hold, context `Γ`, world `W` (the scheme of
+each cell of the heap), environment `env` whose variables' cells have the
+schemes `Γ` gives them, heap `h` that `W` describes for `clock` calls,
+enclosing function's return type `R`, and every clock, writing
+`(r, c, h') = run clock env h e` for the result, the clock left and the heap
+after,
 
 ```
-HasType C Γ R e τ → Holds C → G clock Γ env →
+HasType C Γ R e τ → Holds C → G W Γ env → HeapOK clock W h →
   c ≤ clock ∧
-  (r = timeout ∨ (∃ v, r = ok v ∧ V c τ v) ∨ (∃ v, r = thrown v) ∨
-   (∃ v, r = returned v ∧ ∃ τr, R = some τr ∧ V c τr v))
+  (r = timeout ∨ ∃ W', W <+: W' ∧ HeapOK c W' h' ∧
+    ((∃ v, r = ok v ∧ V c W' τ v) ∨ (∃ v, r = thrown v) ∨
+     (∃ v, r = returned v ∧ ∃ τr, R = some τr ∧ V c W' τr v)))
 ```
 
 That is CakeML's shape of theorem (Owens et al., "Functional Big-step
 Semantics", ESOP 2016): for every clock, a value of the right type, an
-exception, or out of time, and never stuck. `V k τ v` is a step-indexed
-logical relation: `v` behaves as a `τ` for `k` more calls (see the design
-choices). `Inty/Statements.lean` pins each of its clauses.
+exception, or out of time, and never stuck. `V k W τ v` is a step-indexed
+Kripke logical relation: `v` behaves as a `τ` for `k` more calls, in any
+heap that a world extending `W` describes (see the design choices).
+`Inty/Statements.lean` pins each of its clauses.
 
 Its corollary `Inty.never_stuck` says a closed well-typed program never
 evaluates to `stuck`. That is the property `src/meta/soundness.rs` samples
@@ -63,9 +68,13 @@ and Milner's completeness; the freshness invariants follow Naraschewski and
 Nipkow's proof of algorithm W):
 
 ```
-ctxFtv Γ = [] → HasType [] Γ none e τ' →
+ctxFtv Γ = [] → e.assignsMutable (Γ.map fun _ => false) → HasType [] Γ none e τ' →
   ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ inferIn Γ e ≠ none
 ```
+
+`assignsMutable` is the scope check that a program assigns only to its own
+`let`s and parameters, never to a `const`; it is a check beside the typing
+rules, not one of them, since such an assignment would be type-safe.
 
 (`inferIn_complete`, `inferProgram_complete`). It rests on unification
 being most general (`Inty.unify_mgu`).
@@ -89,19 +98,20 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 |---|---|
 | `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `fn` (the type of `this`, the parameters' and the result's), type variables | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences | `ast::Expr`, `ast::Stmt` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences | `ast::Expr`, `ast::Stmt` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
-| `Expr.IsValue` (the value restriction) | `is_syntactic_value`, `src/infer/features/bindings.rs` |
+| `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
+| `Expr.assignsMutable` (no assignment to a `const`) | `check_assignment_target` |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
 | `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes, constraints, instances | `classes::ClassName`, the instance tables in `src/classes` |
 | `Entails C p` (`p` is an instance, or assumed in `C`) | a scheme's constraints in scope while checking its body |
 | `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
 | `Out.preds` (pending class constraints) | the constraints `src/infer` resolves once types are known |
-| `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock) | `src/dynamics` (`Value`, `Stuck`, fuel) |
-| `Prim`, `builtinCtx`, `builtinEnv` (native functions, with their types) | `Value::Builtin`, `src/builtins` |
+| `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock and a heap, every binding a cell) | `src/dynamics` (`Value`, `Stuck`, fuel, `heap.rs`, `RuntimeEnv`) |
+| `Prim`, `builtinCtx`, `builtinEnv`, `builtinHeap` (native functions, with their types) | `Value::Builtin`, `src/builtins` |
 | `Value.truthy`, `Value.typeString` | `Value::truthy`, `Value::type_string` |
-| `V`, `G`, `eval_sound` (semantic typing) | `src/meta/soundness.rs` |
+| `World`, `V`, `HeapOK`, `G`, `eval_sound` (semantic typing) | `src/meta/soundness.rs` |
 
 `Inty/Examples.lean` has small programs with their typing derivations; the
 interpreter runs them at build time (`#guard`).
@@ -119,9 +129,12 @@ These choices are meant to hold up as the calculus grows.
   clock counts calls, and `run` returns what is left of it for the rest of
   the program; it terminates by well-founded recursion on the clock and the
   expression. Running out of clock is distinct from getting stuck, so the
-  soundness theorem holds even for diverging programs. Amin and Rompf extend the
-  approach to mutable references with a syntactic store typing (§4.1), which
-  inty's objects and `let` cells need; see phase 2 of the roadmap for what inty adds.
+  soundness theorem holds even for diverging programs. As in `dynamics`,
+  every binding is a cell of a heap that `run` threads beside the clock, and
+  a closure captures its variables' cells, so it sees later assignments to
+  them. A call stores its arguments, the function itself and `this` in
+  fresh cells. Amin and Rompf extend the approach to mutable references with
+  a syntactic store typing (§4.1), as this model does.
 - **The interpreter is executable.** `eval` is an ordinary function, so the
   model can serve as a test oracle against the Rust implementation, as
   Cedar's Lean model does for Cedar's Rust code (differential random
@@ -144,19 +157,26 @@ These choices are meant to hold up as the calculus grows.
 - **Typing is extrinsic and declarative.** `HasType` is a relation on plain
   syntax, separate from any algorithm. Inference is proved sound and complete
   against it.
-- **Values are typed semantically**, by a step-indexed logical relation
-  (Appel and McAllester, TOPLAS 2001; Ahmed, ESOP 2006) whose index is the
-  interpreter's clock, as in CakeML: `V k (τ₁ → τ₂) f` says that calling
-  `f` with any clock `j ≤ k` on any `V j τ₁` argument gives back a `V c τ₂`
-  value at the clock `c` left, or throws, or runs out. A type variable has
-  no values. The relation is defined by recursion on the type; the index is
-  what lets a recursive function's body assume the function itself, one
-  call down. Typing values by behaviour rather than by derivation is what
-  admits native functions (`Inty/Builtins.lean`), and later recursive types
-  and mutable state, which a syntactic value typing can't describe. This
-  needed the clock to count calls and be threaded: with fuel bounding
-  recursion depth, a result computed under `k` steps is good only for fewer,
-  and the indices don't line up.
+- **Values are typed semantically**, by a step-indexed Kripke logical
+  relation (Appel and McAllester, TOPLAS 2001; Ahmed, ESOP 2006; Ahmed,
+  Appel and Virga's model of general references) whose index is the
+  interpreter's clock, as in CakeML. A world gives each cell its scheme;
+  cells never change scheme, so worlds only grow (`<+:`). `V k W (τ₁ → τ₂) f`
+  says that calling `f` with any clock `j ≤ k`, in any larger world, on a
+  heap that world describes one tick down and on any `V j τ₁` argument,
+  takes a tick and gives back a `V c τ₂` value at the clock `c` left, in a
+  still larger world describing the heap after, or throws, or runs out. A
+  type variable has no values. Since worlds map cells to syntactic schemes,
+  `V` at index `k` needs `V` at arbitrary types only below `k`, and is
+  defined by well-founded recursion on the index and then the type. The
+  index is also what lets a recursive function's body assume the function
+  itself, one call down. Typing values by behaviour rather than by
+  derivation is what admits native functions (`Inty/Builtins.lean`), and
+  recursive types later, which a syntactic value typing can't describe.
+  This needed the clock to count calls and be threaded: with fuel bounding
+  recursion depth, a result computed under `k` steps is good only for
+  fewer, and the indices don't line up. Iris (via iris-lean) was the
+  alternative; see the roadmap's phase 2 for why not, for now.
 - **Inference is proved sound without freshness invariants.** The theorem
   says the inferred type is valid under the inferred substitution and any
   further substitution that resolves the pending class constraints. Stated
@@ -187,9 +207,10 @@ This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
 3. Semantics: an arm in `run` (or `UnOp.eval` / `BinOp.eval`, or
    `Prim.apply` for a native function).
 4. Inference: an arm in `infer`.
-5. Proof: a case in `HasType.subst`, `run_sound` (or `UnOp.eval_sound` /
-   `BinOp.eval_sound`), `run_clock_le`, `run_mono` and `infer_sound`, and a
-   clause of `V` for a new type former. A native function needs only its
+5. Proof: a case in `HasType.subst`, `HasType.generalize_ctx`, `run_sound`
+   (or `UnOp.eval_sound` / `BinOp.eval_sound`), `run_clock_le`, `run_mono`,
+   `infer_inv`, `infer_sound` and `infer_complete`, and a clause of `V` for a
+   new type former. A native function needs only its
    `V` proof (`Prim.abs_sound`).
 6. An example in `Inty/Examples.lean`.
 7. The wire format (`Inty/Wire.lean`) and the differential test's

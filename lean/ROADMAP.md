@@ -46,8 +46,9 @@ Paths like `src/infer` are relative to `crates/inty`.
 - Hindley–Milner let-polymorphism under the value restriction, with
   schemes carrying `Plus` constraints.
 - `return`, `throw` and statement sequences.
-- An interpreter with a call clock, and soundness by a step-indexed
-  logical relation, including native builtins.
+- An interpreter with a call clock and a heap, and soundness by a
+  step-indexed Kripke logical relation, including native builtins.
+- `let` and assignment to a variable.
 - Algorithm W, proved sound and complete.
 - Differential testing against inty and Node.
 
@@ -106,6 +107,9 @@ and to be kept for every later phase. The decisions it needed:
   are written by hand, in annotations.
 
 ### 2. State and control
+
+Done: the heap, `let` and assignment, with soundness and inference sound
+and complete. Still to do: loops, `break`, `continue`, `switch` and `try`.
 
 - **A heap, as `dynamics` has.** Every binding is a cell: a `const`,
   a `let`, a parameter. `run` threads the heap beside the clock, and a

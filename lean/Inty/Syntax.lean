@@ -54,9 +54,12 @@ inductive Expr where
   | func (arity : Nat) (body : Expr)
   /-- A call `f(a₀, …)`, outside any receiver: `this` is `undefined`. -/
   | app (f : Expr) (args : List Expr)
-  /-- `const x = e₁; e₂`, with `x` as `var 0` in `e₂`. `x` is generalised
-  when `e₁` is a syntactic value. -/
-  | let_ (e₁ e₂ : Expr)
+  /-- `const x = e₁; e₂` (`mutable` false) or `let x = e₁; e₂` (`mutable`
+  true), with `x` as `var 0` in `e₂`. `x` is generalised when `e₁` is a
+  syntactic value and `e₂` never assigns to it. -/
+  | let_ (mutable : Bool) (e₁ e₂ : Expr)
+  /-- `x = e`, for the variable `var i`: `e`'s value, stored in `x`. -/
+  | assign (i : Nat) (e : Expr)
   /-- `c ? t : e`. The test may have any type and is read by truthiness, as
   in `dynamics::Value::truthy`. -/
   | cond (c t e : Expr)
@@ -81,7 +84,8 @@ inductive Expr.IsValue : Expr → Prop where
 theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (var : ∀ i, motive (.var i)) (func : ∀ n body, motive body → motive (.func n body))
     (app : ∀ f args, motive f → (∀ a ∈ args, motive a) → motive (.app f args))
-    (let_ : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.let_ e₁ e₂))
+    (let_ : ∀ m e₁ e₂, motive e₁ → motive e₂ → motive (.let_ m e₁ e₂))
+    (assign : ∀ i e, motive e → motive (.assign i e))
     (cond : ∀ c t e, motive c → motive t → motive e → motive (.cond c t e))
     (unop : ∀ op e, motive e → motive (.unop op e))
     (binop : ∀ op e₁ e₂, motive e₁ → motive e₂ → motive (.binop op e₁ e₂))
@@ -89,29 +93,69 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (seq : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.seq e₁ e₂)) : ∀ e, motive e
   | .lit l => lit l
   | .var i => var i
-  | .func n body => func n body (Expr.ind lit var func app let_ cond unop binop ret throw_ seq body)
+  | .func n body => func n body (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq body)
   | .app f args =>
-    app f args (Expr.ind lit var func app let_ cond unop binop ret throw_ seq f)
-      (fun a _ => Expr.ind lit var func app let_ cond unop binop ret throw_ seq a)
-  | .let_ e₁ e₂ =>
-    let_ e₁ e₂ (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e₁)
-      (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e₂)
+    app f args (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq f)
+      (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq a)
+  | .let_ m e₁ e₂ =>
+    let_ m e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₂)
   | .cond c t e =>
-    cond c t e (Expr.ind lit var func app let_ cond unop binop ret throw_ seq c)
-      (Expr.ind lit var func app let_ cond unop binop ret throw_ seq t)
-      (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e)
-  | .unop op e => unop op e (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e)
+    cond c t e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq c)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq t)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
+  | .assign i e => assign i e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
+  | .unop op e => unop op e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
   | .binop op e₁ e₂ =>
-    binop op e₁ e₂ (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e₁)
-      (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e₂)
-  | .ret e => ret e (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e)
-  | .throw_ e => throw_ e (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e)
+    binop op e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₂)
+  | .ret e => ret e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
+  | .throw_ e => throw_ e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
   | .seq e₁ e₂ =>
-    seq e₁ e₂ (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e₁)
-      (Expr.ind lit var func app let_ cond unop binop ret throw_ seq e₂)
+    seq e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₂)
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
   all_goals first | omega | (have := List.sizeOf_lt_of_mem ‹_›; omega)
+
+mutual
+/-- Whether `e` assigns to the variable `var i` (in a function in it, too). -/
+def Expr.writes (i : Nat) : Expr → Bool
+  | .lit _ | .var _ => false
+  | .func n body => body.writes (i + n + 2)
+  | .app f args => f.writes i || Expr.writesList i args
+  | .let_ _ e₁ e₂ => e₁.writes i || e₂.writes (i + 1)
+  | .assign j e => j == i || e.writes i
+  | .cond c t e => c.writes i || t.writes i || e.writes i
+  | .unop _ e | .ret e | .throw_ e => e.writes i
+  | .binop _ e₁ e₂ | .seq e₁ e₂ => e₁.writes i || e₂.writes i
+/-- `writes`, for a list of arguments. -/
+def Expr.writesList (i : Nat) : List Expr → Bool
+  | [] => false
+  | e :: es => e.writes i || Expr.writesList i es
+end
+
+mutual
+/-- Whether every assignment is to a variable `mutables` says is mutable: a
+`let` or a parameter, not a `const`, a function's own name (which a named
+function expression binds immutably) or `this`. inty rejects assigning to
+a `const` (`check_assignment_target`). It is a scope check beside the
+typing rules, not one of them: the assignment would be type-safe. -/
+def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
+  | .lit _ | .var _ => true
+  | .func n body => body.assignsMutable (List.replicate n true ++ false :: false :: mutables)
+  | .app f args => f.assignsMutable mutables && Expr.assignsMutableList mutables args
+  | .let_ m e₁ e₂ => e₁.assignsMutable mutables && e₂.assignsMutable (m :: mutables)
+  | .assign j e => mutables[j]? == some true && e.assignsMutable mutables
+  | .cond c t e => c.assignsMutable mutables && t.assignsMutable mutables &&
+      e.assignsMutable mutables
+  | .unop _ e | .ret e | .throw_ e => e.assignsMutable mutables
+  | .binop _ e₁ e₂ | .seq e₁ e₂ => e₁.assignsMutable mutables && e₂.assignsMutable mutables
+/-- `assignsMutable`, for a list of arguments. -/
+def Expr.assignsMutableList (mutables : List Bool) : List Expr → Bool
+  | [] => true
+  | e :: es => e.assignsMutable mutables && Expr.assignsMutableList mutables es
+end
 
 end Inty

@@ -10,7 +10,8 @@ JavaScript and for this model as an s-expression, one program per line:
 ```
 (num M E)   M × 10^-E      (str s:abc)   a string, `s:` then [a-z]*
 (bool true) (undef) (null) (var i)  (func N BODY)  (app F A₀ A₁ …)
-(let E₁ E₂) (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
+(let E₁ E₂) (letmut E₁ E₂) (assign I E)   `const`, `let` and `x = e`
+(cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 ```
 
@@ -62,7 +63,15 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
   | "let", rest => do
     let (e₁, rest) ← parseExpr rest
     let (e₂, rest) ← parseExpr rest
-    some (.let_ e₁ e₂, rest)
+    some (.let_ false e₁ e₂, rest)
+  | "letmut", rest => do
+    let (e₁, rest) ← parseExpr rest
+    let (e₂, rest) ← parseExpr rest
+    some (.let_ true e₁ e₂, rest)
+  | "assign", i :: rest => do
+    let i ← i.toNat?
+    let (e, rest) ← parseExpr rest
+    some (.assign i e, rest)
   | "cond", rest => do
     let (c, rest) ← parseExpr rest
     let (t, rest) ← parseExpr rest
@@ -112,10 +121,12 @@ def tyWire : Ty → String
   | .var _ => "var"
 
 /-- Inference's verdict: `type T`, or `reject`, which includes a constraint
-no type could satisfy (`Plus` on `undefined`, or on a function). A
-constraint left on a type variable is satisfiable, and inty leaves it in
-place; `T` keeps the variable, as inty's type does. -/
+no type could satisfy (`Plus` on `undefined`, or on a function) and an
+assignment to a `const`. A constraint left on a type variable is
+satisfiable, and inty leaves it in place; `T` keeps the variable, as inty's
+type does. -/
 def inferVerdict (e : Expr) : String :=
+  if !e.assignsMutable [] then "reject" else
   match infer [] none e 0 with
   | none => "reject"
   | some o =>
@@ -137,7 +148,7 @@ def stuckWire : Stuck → String
 
 /-- The interpreter's verdict: `value V`, `stuck R`, or `timeout`. -/
 def evalVerdict (clock : Nat) (e : Expr) : String :=
-  match eval clock [] e with
+  match eval clock [] [] e with
   | .ok v => s!"value {valueWire v}"
   | .stuck s => s!"stuck {stuckWire s}"
   | .timeout => "timeout"
@@ -163,5 +174,11 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100 "(app (func 1 (seq (ret (str s:a)) (str s:b))) (null))" == "type string;value str s:a"
 #guard verdict 100 "(throw (num 1 0))" == s!"type var;thrown num {(1 : Float).toBits}"
 #guard verdict 100 "(ret (num 1 0))" == "reject;returned num 4607182418800017408"
+#guard verdict 100 "(letmut (num 1 0) (seq (assign 0 (str s:a)) (var 0)))" ==
+  "reject;value str s:a"
+#guard verdict 100 "(letmut (num 1 0) (seq (assign 0 (num 2 0)) (var 0)))" ==
+  s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100 "(let (num 1 0) (assign 0 (num 2 0)))" ==
+  s!"reject;value num {(2 : Float).toBits}"
 
 end Inty.Wire

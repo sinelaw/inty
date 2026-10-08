@@ -21,7 +21,7 @@ def isString (s : String) : Result → Bool
 
 /-- `const double = function (x) { return x + x; }; double("ab")` -/
 def double : Expr :=
-  .let_ (.func 1 (.binop .plus (.var 0) (.var 0))) (.app (.var 0) [str "ab"])
+  .let_ false (.func 1 (.binop .plus (.var 0) (.var 0))) (.app (.var 0) [str "ab"])
 
 -- One derivation types `double` monomorphically, at `String → String`.
 example : HasType [] [] none double .string :=
@@ -29,7 +29,7 @@ example : HasType [] [] none double .string :=
     (.func rfl (.binop (.plus (.inl .plusString)) (.var_mono rfl) (.var_mono rfl)))
     (.app (.var_mono rfl) rfl (by simp; exact .lit .string))
 
-#guard isString "abab" (eval 10 [] double)
+#guard isString "abab" (eval 10 [] [] double)
 
 /-- `+` is overloaded, but each use picks one instance: the same function body
 also types at `Number`. -/
@@ -40,8 +40,8 @@ example : HasType [] [] none (.func 1 (.binop .plus (.var 0) (.var 0)))
 /-- Let-polymorphism:
 `const id = function (x) { return x; }; const n = id(1); id("a")` -/
 def polyId : Expr :=
-  .let_ (.func 1 (.var 0))
-    (.let_ (.app (.var 0) [num 1])
+  .let_ false (.func 1 (.var 0))
+    (.let_ false (.app (.var 0) [num 1])
       (.app (.var 1) [str "a"]))
 
 /-- `id`'s scheme, `∀ θ α. this: θ, (α) => α`. -/
@@ -49,7 +49,7 @@ def idScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), []⟩
 
 -- `id` is used at `Number → Number` and at `String → String`.
 example : HasType [] [] none polyId .string :=
-  .let_ idScheme [] (fun _ _ => .func rfl (.var_mono rfl)) (.inr .func)
+  .let_ idScheme [] (fun _ _ => .func rfl (.var_mono rfl)) (.inr ⟨.func, rfl⟩)
     (fun _ h => by simp [idScheme] at h)
     (.let_mono
       (.app (.var (s := idScheme) (τs := [.undefined, .number]) rfl rfl nofun) rfl
@@ -57,13 +57,13 @@ example : HasType [] [] none polyId .string :=
       (.app (.var (s := idScheme) (τs := [.undefined, .string]) rfl rfl nofun) rfl
         (by simp; exact .lit .string)))
 
-#guard isString "a" (eval 10 [] polyId)
+#guard isString "a" (eval 10 [] [] polyId)
 
 /-- A constrained scheme:
 `const double = function (x) { return x + x; }; const n = double(1); double("a")` -/
 def polyDouble : Expr :=
-  .let_ (.func 1 (.binop .plus (.var 0) (.var 0)))
-    (.let_ (.app (.var 0) [num 1])
+  .let_ false (.func 1 (.binop .plus (.var 0) (.var 0)))
+    (.let_ false (.app (.var 0) [num 1])
       (.app (.var 1) [str "a"]))
 
 /-- `double`'s scheme, `∀ θ α. Plus α ⇒ this: θ, (α) => α`, inty's
@@ -76,7 +76,7 @@ example : HasType [] [] none polyDouble .string :=
     (fun m _ => .func rfl (.binop (.plus (.inr (by simp [Scheme.openPreds, Scheme.instPreds,
       doubleScheme, varBlock, PPred.inst, PTy.inst, List.range']))) (.var_mono rfl)
       (.var_mono rfl)))
-    (.inr .func) (fun p hp => ⟨1, by decide, by simpa [doubleScheme] using hp⟩)
+    (.inr ⟨.func, rfl⟩) (fun p hp => ⟨1, by decide, by simpa [doubleScheme] using hp⟩)
     (.let_mono
       (.app (.var (s := doubleScheme) (τs := [.undefined, .number]) rfl rfl (fun c hc => by
         simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
@@ -87,7 +87,7 @@ example : HasType [] [] none polyDouble .string :=
         exact .inl .plusString))
         rfl (by simp; exact .lit .string)))
 
-#guard isString "aa" (eval 20 [] polyDouble)
+#guard isString "aa" (eval 20 [] [] polyDouble)
 
 /-- The value restriction: `id(id)` is not a syntactic value, so a `const`
 bound to it gets a monomorphic scheme. -/
@@ -107,9 +107,9 @@ example : HasType [] [] none countdown .string :=
       (.lit .string)))
     rfl (by simp; exact .lit .number)
 
-#guard isString "done" (eval 20 [] countdown)
+#guard isString "done" (eval 20 [] [] countdown)
 -- With too little clock it times out, which is not a soundness violation.
-#guard match eval 3 [] countdown with | .timeout => true | _ => false
+#guard match eval 3 [] [] countdown with | .timeout => true | _ => false
 
 /-- `1 + "a"`: inty rejects it, and the semantics gets stuck on it. -/
 def mixedPlus : Expr := .binop .plus (num 1) (str "a")
@@ -121,20 +121,20 @@ example : ¬ HasType [] [] none mixedPlus τ := by
     cases hop with
     | plus _ => cases h₁ with | lit hl => cases hl; cases h₂ with | lit hl => cases hl
 
-#guard match eval 10 [] mixedPlus with | .stuck .typeMismatch => true | _ => false
+#guard match eval 10 [] [] mixedPlus with | .stuck .typeMismatch => true | _ => false
 
 /-- A test may have any type and is read by truthiness:
 `"" ? 1 : 2` is `2`. -/
 example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
   .cond (.lit .string) (.lit .number) (.lit .number)
 
-#guard match eval 10 [] (.cond (str "") (num 1) (num 2)) with
+#guard match eval 10 [] [] (.cond (str "") (num 1) (num 2)) with
   | .ok (.number n) => n == 2
   | _ => false
 
 -- `1(y)` with `y` unbound: the argument is evaluated before the callee is
 -- found not to be a function, as in `dynamics`, so it gets stuck on `y`.
-#guard match eval 10 [] (.app (num 1) [.var 5]) with
+#guard match eval 10 [] [] (.app (num 1) [.var 5]) with
   | .stuck .undefinedVariable => true
   | _ => false
 
@@ -148,7 +148,7 @@ example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 #guard inferProgram countdown == some .string
 #guard inferProgram mixedPlus == none
 -- `id`'s scheme quantifies each of its variables once: `∀ θ α. this: θ, (α) => α`.
-#guard (letScheme (.func 1 (.var 0)) [] none (.fn (.var 0) [.var 1] (.var 1)) []).1.arity == 2
+#guard (letScheme true [] none (.fn (.var 0) [.var 1] (.var 1)) []).1.arity == 2
 -- `id` alone gets the most general type: its `this`, and its parameter's
 -- type for its result.
 #guard inferProgram (.func 1 (.var 0)) == some (.fn (.var 0) [.var 1] (.var 1))
@@ -159,12 +159,12 @@ example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 -- A `const` generalises `double` with its `Plus` constraint, so it is used
 -- at both instances; a use at `Boolean` is rejected.
 #guard inferProgram polyDouble == some .string
-#guard inferProgram (.let_ (.func 1 (.binop .plus (.var 0) (.var 0)))
+#guard inferProgram (.let_ false (.func 1 (.binop .plus (.var 0) (.var 0)))
   (.app (.var 0) [.lit (.boolean true)])) == none
 -- `const x = function () { const g = function (y) { return y; }; return g + g; }; 1`:
 -- `x`'s scheme would carry `Plus` on a function type, which can't hold, so
 -- it is an error when `x` is generalised, though nothing uses `x`.
-#guard inferProgram (.let_ (.func 0 (.let_ (.func 1 (.var 0)) (.binop .plus (.var 0) (.var 0))))
+#guard inferProgram (.let_ false (.func 0 (.let_ false (.func 1 (.var 0)) (.binop .plus (.var 0) (.var 0))))
   (num 1)) == none
 -- At the top level, nothing resolves the constraint of an unused `+`. inty
 -- leaves it in place and accepts the program, which has a type at every
@@ -176,6 +176,40 @@ example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 -- by `decide` would have the kernel run inference, which it can't do in
 -- reasonable memory on types with nested lists; the `#guard`s run it
 -- compiled.)
+
+/-! ## `let` and assignment -/
+
+/-- `let x = 1; x = x - 1; x` -/
+def countDown : Expr :=
+  .let_ true (num 1) (.seq (.assign 0 (.binop .minus (.var 0) (num 1))) (.var 0))
+
+#guard match eval 10 [] [] countDown with | .ok (.number n) => n == 0 | _ => false
+#guard inferProgram countDown == some .number
+
+/-- A closure sees a later assignment to a variable it captured:
+`let x = 1; const f = function () { return x; }; x = 2; f()` is `2`. -/
+def captured : Expr :=
+  .let_ true (num 1)
+    (.let_ false (.func 0 (.var 2)) (.seq (.assign 1 (num 2)) (.app (.var 0) [])))
+
+#guard match eval 10 [] [] captured with | .ok (.number n) => n == 2 | _ => false
+#guard inferProgram captured == some .number
+
+-- Assigning to a `const` is rejected, though it would be type-safe.
+#guard inferProgram (.let_ false (num 1) (.assign 0 (num 2))) == none
+-- Assigning a value of another type is rejected.
+#guard inferProgram (.let_ true (num 1) (.assign 0 (str "a"))) == none
+
+/-- A `let` that is written has one type: `let id = function (x) { return x; };
+id = id; id(1); id("a")` is rejected, and without the assignment it is
+accepted. -/
+def reassignedId (written : Bool) : Expr :=
+  .let_ true (.func 1 (.var 0))
+    (.seq (if written then .assign 0 (.var 0) else .lit .undefined)
+      (.seq (.app (.var 0) [num 1]) (.app (.var 0) [str "a"])))
+
+#guard inferProgram (reassignedId true) == none
+#guard inferProgram (reassignedId false) == some .string
 
 /-! ## Statements -/
 
@@ -189,10 +223,10 @@ example : HasType [] [] none early .string :=
       (.cond (.var_mono rfl) (.ret (.lit .string)) (.throw_ (.var_mono rfl))))
     rfl (by simp; exact .lit .number)
 
-#guard isString "pos" (eval 10 [] early)
+#guard isString "pos" (eval 10 [] [] early)
 #guard inferProgram early == some .string
 -- `0` takes the other branch: the `throw` reaches the top.
-#guard match eval 10 [] (.app (.func 1 (.cond (.var 0) (.ret (str "pos")) (.throw_ (.var 0))))
+#guard match eval 10 [] [] (.app (.func 1 (.cond (.var 0) (.ret (str "pos")) (.throw_ (.var 0))))
     [num 0]) with
   | .thrown (.number n) => n == 0
   | _ => false
@@ -208,7 +242,7 @@ With the builtins in scope, `Boolean` is variable 0 and `Math.abs` variable
 /-- `Math.abs(-2)` -/
 def absNeg : Expr := .app (.var 1) [.unop .neg (num 2)]
 
-#guard match eval 1 builtinEnv absNeg with | .ok (.number n) => n == 2 | _ => false
+#guard match eval 1 builtinEnv builtinHeap absNeg with | .ok (.number n) => n == 2 | _ => false
 #guard inferIn builtinCtx absNeg == some .number
 
 -- So, by `inferIn_builtins_never_stuck`, it never gets stuck: `Math.abs` is
@@ -219,12 +253,12 @@ def absNeg : Expr := .app (.var 1) [.unop .neg (num 2)]
 def truthiness : Expr :=
   .cond (.app (.var 0) [str ""]) (.app (.var 0) [num 0]) (.app (.var 0) [.var 1])
 
-#guard match eval 1 builtinEnv truthiness with | .ok (.boolean b) => b | _ => false
+#guard match eval 3 builtinEnv builtinHeap truthiness with | .ok (.boolean b) => b | _ => false
 #guard inferIn builtinCtx truthiness == some .boolean
 
 -- `Math.abs("a")` is rejected, and would be stuck.
 #guard inferIn builtinCtx (.app (.var 1) [str "a"]) == none
-#guard match eval 1 builtinEnv (.app (.var 1) [str "a"]) with
+#guard match eval 1 builtinEnv builtinHeap (.app (.var 1) [str "a"]) with
   | .stuck .typeMismatch => true | _ => false
 
 end Inty.Examples
