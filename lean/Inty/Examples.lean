@@ -50,6 +50,7 @@ def idScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), []⟩
 -- `id` is used at `Number → Number` and at `String → String`.
 example : HasType [] [] none polyId .string :=
   .let_ idScheme [] (fun _ _ => .func rfl (.var_mono rfl)) (.inr .func)
+    (fun _ h => by simp [idScheme] at h)
     (.let_mono
       (.app (.var (s := idScheme) (τs := [.undefined, .number]) rfl rfl nofun) rfl
         (by simp; exact .lit .number))
@@ -75,7 +76,7 @@ example : HasType [] [] none polyDouble .string :=
     (fun m _ => .func rfl (.binop (.plus (.inr (by simp [Scheme.openPreds, Scheme.instPreds,
       doubleScheme, varBlock, PPred.inst, PTy.inst, List.range']))) (.var_mono rfl)
       (.var_mono rfl)))
-    (.inr .func)
+    (.inr .func) (fun p hp => ⟨1, by decide, by simpa [doubleScheme] using hp⟩)
     (.let_mono
       (.app (.var (s := doubleScheme) (τs := [.undefined, .number]) rfl rfl (fun c hc => by
         simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
@@ -160,6 +161,11 @@ example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 #guard inferProgram polyDouble == some .string
 #guard inferProgram (.let_ (.func 1 (.binop .plus (.var 0) (.var 0)))
   (.app (.var 0) [.lit (.boolean true)])) == none
+-- `const x = function () { const g = function (y) { return y; }; return g + g; }; 1`:
+-- `x`'s scheme would carry `Plus` on a function type, which can't hold, so
+-- it is an error when `x` is generalised, though nothing uses `x`.
+#guard inferProgram (.let_ (.func 0 (.let_ (.func 1 (.var 0)) (.binop .plus (.var 0) (.var 0))))
+  (num 1)) == none
 -- At the top level, nothing resolves the constraint of an unused `+`. inty
 -- leaves it in place and accepts the program, which has a type at every
 -- instance; the typing here defaults it, to `Number`.

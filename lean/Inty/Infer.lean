@@ -65,6 +65,11 @@ theorem Ret.subst_congr {σ σ' : Subst} {R : Option Ty}
   | none => rfl
   | some τ => simp only [Ret.subst_some, Option.some.injEq]; exact Ty.subst_congr (by simpa [Ret.ftv] using h)
 
+/-- Whether a scheme's constraint is `Plus` on a quantified variable. -/
+def PPred.isPlusBound : PPred → Bool
+  | ⟨.plus, [.bound _]⟩ => true
+  | _ => false
+
 /-- The scheme a `const` gives its variable, and the constraints left
 pending. A syntactic value generalises the variables of its type that
 neither the context nor the enclosing function's return type mentions, each once, taking along the constraints that mention
@@ -130,11 +135,15 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
     | some o₁ =>
       let Γ₁ := Ctx.subst o₁.σ Γ
       let (s, rest) := letScheme e₁ Γ₁ (Ret.subst o₁.σ R) o₁.τ o₁.preds
-      match infer (s :: Γ₁) (Ret.subst o₁.σ R) e₂ o₁.next with
-      | none => none
-      | some o₂ =>
-        some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, rest.map (·.subst o₂.σ) ++ o₂.preds,
-          o₂.next⟩
+      -- A constraint the scheme would carry on a type already known is
+      -- decided now, as inty's `generalize` does: it can't hold.
+      if s.preds.all PPred.isPlusBound then
+        match infer (s :: Γ₁) (Ret.subst o₁.σ R) e₂ o₁.next with
+        | none => none
+        | some o₂ =>
+          some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, rest.map (·.subst o₂.σ) ++ o₂.preds,
+            o₂.next⟩
+      else none
   | Γ, R, .cond c t e, n =>
     match infer Γ R c n with
     | none => none

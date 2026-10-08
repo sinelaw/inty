@@ -40,6 +40,14 @@ inductive BinOpTy (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
   | plus : Entails C ⟨.plus, [τ]⟩ → BinOpTy C .plus τ τ τ
   | minus : BinOpTy C .minus .number .number .number
 
+/-- A scheme's constraints are `Plus` on its quantified variables, as in
+`<a> where Plus a => …`. inty decides a constraint on a type already known
+when it generalises (`InferState::generalize`), so no scheme carries one
+that could fail at a use; one on a variable it can't fail, since a
+`Number` satisfies it. -/
+def Scheme.Simple (s : Scheme) : Prop :=
+  ∀ p ∈ s.preds, ∃ i < s.arity, p = ⟨.plus, [.bound i]⟩
+
 /-- The typing judgement: under the `Plus` assumptions `C`, the context `Γ`
 and the enclosing function's return type `R` (`none` at the top level),
 `e` has type `τ`. -/
@@ -68,10 +76,11 @@ inductive HasType : List Pred → Ctx → Option Ty → Expr → Ty → Prop whe
   (cofinite quantification). It implies the usual side condition, that the
   generalised variables don't occur free in `Γ`. Under the value restriction
   only a syntactic value generalises; anything else gets a scheme with no
-  quantified variables and no constraints. -/
+  quantified variables and no constraints. Its constraints are `Plus` on
+  its quantified variables (`Scheme.Simple`). -/
   | let_ (s : Scheme) (L : List Nat) :
       (∀ m, (∀ a ∈ L, a < m) → HasType (C ++ s.openPreds m) Γ R e₁ (s.open m)) →
-      (s.arity = 0 ∧ s.preds = []) ∨ e₁.IsValue →
+      (s.arity = 0 ∧ s.preds = []) ∨ e₁.IsValue → s.Simple →
       HasType C (s :: Γ) R e₂ τ₂ →
       HasType C Γ R (.let_ e₁ e₂) τ₂
   /-- Both branches have one type, as in Hindley–Milner: inty doesn't guess
@@ -98,6 +107,7 @@ theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :
 theorem HasType.let_mono (h₁ : HasType C Γ R e₁ τ₁)
     (h₂ : HasType C (.mono τ₁ :: Γ) R e₂ τ₂) : HasType C Γ R (.let_ e₁ e₂) τ₂ :=
   .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPreds,
-    Scheme.instPreds, Scheme.mono, Scheme.inst] using h₁) (.inl ⟨rfl, rfl⟩) h₂
+    Scheme.instPreds, Scheme.mono, Scheme.inst] using h₁) (.inl ⟨rfl, rfl⟩)
+    (fun _ h => by simp [Scheme.mono] at h) h₂
 
 end Inty

@@ -459,6 +459,9 @@ theorem infer_inv : ∀ e, InferInv e := by
     generalize letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.preds = ls at h hls
     obtain ⟨s, rest⟩ := ls
     split at h
+    rotate_left
+    · cases h
+    split at h
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h

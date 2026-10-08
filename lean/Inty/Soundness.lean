@@ -347,7 +347,7 @@ theorem run_sound (e : Expr) :
   | let_ e₁ e₂ ih₁ ih₂ =>
     intro k C Γ R env τ ht hC henv
     cases ht with
-    | let_ s L hgen hval h₂ =>
+    | let_ s L hgen hval _ h₂ =>
       -- Type `e₁` at each instance of `s`: open `s` at variables above
       -- everything in sight, then substitute the instance's types for them.
       let m := maxPlusOne (L ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Pred.ftv ++

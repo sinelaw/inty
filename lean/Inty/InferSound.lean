@@ -41,6 +41,41 @@ theorem Lit.ty_sound (l : Lit) : LitTy l l.ty := by cases l <;> constructor
 theorem Expr.isValue_sound {e : Expr} (h : e.isValue = true) : e.IsValue := by
   cases e <;> first | constructor | simp [Expr.isValue] at h
 
+theorem PPred.isPlusBound_spec {p : PPred} (h : p.isPlusBound = true) :
+    ∃ i, p = ⟨.plus, [.bound i]⟩ := by
+  obtain ⟨c, args⟩ := p
+  cases c
+  match args, h with
+  | [.bound i], _ => exact ⟨i, rfl⟩
+
+theorem Ty.gen_eq_bound {ᾱ : List Nat} {τ : Ty} {i : Nat} (h : τ.gen ᾱ = .bound i) :
+    i < ᾱ.length := by
+  cases τ <;> simp only [Ty.gen, reduceCtorEq] at h
+  split at h
+  · cases h; exact findIdx_lt ‹_›
+  · cases h
+
+/-- The scheme `letScheme` gives, once checked, carries only `Plus` on its
+quantified variables. -/
+theorem letScheme_simple {e₁ : Expr} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred}
+    (h : (letScheme e₁ Γ₁ R₁ τ₁ preds).1.preds.all PPred.isPlusBound = true) :
+    (letScheme e₁ Γ₁ R₁ τ₁ preds).1.Simple := by
+  intro p hp
+  obtain ⟨i, rfl⟩ := PPred.isPlusBound_spec (List.all_eq_true.mp h p hp)
+  refine ⟨i, ?_, rfl⟩
+  by_cases hv : e₁.isValue = true
+  · simp only [letScheme, hv, ite_true, generalize, List.mem_map] at hp ⊢
+    obtain ⟨g, _, hg⟩ := hp
+    obtain ⟨c, args⟩ := g
+    simp only [Pred.gen, PPred.mk.injEq] at hg
+    match args, hg with
+    | [τ], hg =>
+      simp only [List.map_cons, List.map_nil, List.cons.injEq, and_true] at hg
+      exact Ty.gen_eq_bound hg.2
+    | [], hg => simp at hg
+    | _ :: _ :: _, hg => simp at hg
+  · simp [letScheme, hv, Scheme.mono] at hp
+
 /-- What `infer_sound` says of one expression. -/
 def InferSound (e : Expr) : Prop :=
   ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer Γ R e n = some o →
@@ -148,6 +183,14 @@ theorem infer_sound :
     generalize hls : letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.preds = ls at h
     obtain ⟨s, rest⟩ := ls
     split at h
+    rotate_left
+    · cases h
+    rename_i hcheck
+    have hs : s.Simple := by
+      have h' := letScheme_simple (e₁ := e₁) (Γ₁ := Ctx.subst o₁.σ Γ) (R₁ := Ret.subst o₁.σ R)
+        (τ₁ := o₁.τ) (preds := o₁.preds)
+      rw [hls] at h'; exact h' hcheck
+    split at h
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
@@ -159,7 +202,7 @@ theorem infer_sound :
     · -- Generalised: rename the generalised variables to the block at `m`.
       rename_i hv
       simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
-      refine .let_ _ [] (fun m _ => ?_) (.inr (Expr.isValue_sound hv)) he₂
+      refine .let_ _ [] (fun m _ => ?_) (.inr (Expr.isValue_sound hv)) ((hs.subst _).subst _) he₂
       let Γ₁ := Ctx.subst o₁.σ Γ
       let R₁ := Ret.subst o₁.σ R
       let ᾱ := (o₁.τ.ftv.filter (fun a => a ∉ ctxFtv Γ₁ ++ Ret.ftv R₁)).eraseDups
@@ -184,7 +227,8 @@ theorem infer_sound :
         rw [hc']
         exact (hsat.1 c hr).weaken _
     · simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
-      refine .let_ _ [] (fun m _ => ?_) (.inl ⟨rfl, by simp [Scheme.mono, Scheme.subst]⟩) he₂
+      refine .let_ _ [] (fun m _ => ?_) (.inl ⟨rfl, by simp [Scheme.mono, Scheme.subst]⟩)
+        ((hs.subst _).subst _) he₂
       simpa using ih₁ h₁ _ C hsat.1
   | cond c t e ihc iht ihe =>
     intro Γ R n o h φ C hsat

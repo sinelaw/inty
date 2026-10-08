@@ -12,6 +12,13 @@ for them.
 
 namespace Inty
 
+theorem Scheme.Simple.subst {s : Scheme} (hs : s.Simple) (σ : Subst) : (s.subst σ).Simple := by
+  intro p hp
+  simp only [Scheme.subst, List.mem_map] at hp
+  obtain ⟨q, hq, rfl⟩ := hp
+  obtain ⟨i, hi, rfl⟩ := hs q hq
+  exact ⟨i, hi, by simp [PPred.subst, PTy.subst]⟩
+
 theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
     HasType (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) := by
   induction h with
@@ -31,12 +38,13 @@ theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq
-  | let_ s L _ hv _ ih₁ ih₂ =>
-    refine .let_ (s.subst σ) (L ++ σ.map Prod.fst) (fun m hm => ?_) ?_ (by simpa using ih₂)
+  | let_ s L _ hv hs _ ih₁ ih₂ =>
+    refine .let_ (s.subst σ) (L ++ σ.map Prod.fst) (fun m hm => ?_) ?_ ?_ (by simpa using ih₂)
     · have hσ : ∀ p ∈ σ, p.1 < m := fun p hp => hm p.1 (by simp; exact .inr ⟨_, hp⟩)
       rw [← Scheme.open_subst s hσ, ← Scheme.openPreds_subst s hσ, ← List.map_append]
       exact ih₁ m (fun a ha => hm a (by simp [ha]))
     · simpa [Scheme.subst] using hv
+    · exact hs.subst σ
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih =>
     cases hop with
