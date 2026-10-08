@@ -542,13 +542,21 @@ impl InferState {
 
         // The function's own name first, so a parameter of the same name
         // shadows it (`function f(f) { return f; }` returns the argument).
+        // A named function expression's own name is immutable: assigning
+        // to it is a `TypeError` in strict mode. A declaration's name is
+        // the enclosing scope's, which can be reassigned.
         if let Some(fn_name) = name {
+            let mutability = if self.resolution.constant_at(span, fn_name) {
+                Mutability::Immutable
+            } else {
+                Mutability::Mutable
+            };
             body_env = self.bind(
                 &body_env,
                 span,
                 fn_name,
                 TypeScheme::mono(func_type.clone()),
-                Mutability::Mutable,
+                mutability,
             )?;
         }
 

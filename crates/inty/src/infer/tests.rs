@@ -4591,6 +4591,17 @@ fn plus_on_known_type_is_decided_at_generalisation() {
     assert!(errors(on_variable).is_empty());
 }
 
+/// A named function expression's own name is immutable in its body, as in
+/// strict-mode JavaScript, where assigning to it is a `TypeError`; a function
+/// declaration's name can be reassigned.
+#[test]
+fn function_expression_name_is_immutable() {
+    let expr = "const g = function f() { f = function () { return 2; }; return 1; }; g();";
+    assert!(infer_program_with_state(expr).is_err());
+    let decl = "function f() { f = function () { return 2; }; return 1; } f();";
+    assert!(infer_program_with_state(decl).is_ok());
+}
+
 /// A `catch` binds whatever was thrown, which can be any value: its type is
 /// rigid, so it can't be used at a concrete type.
 #[test]
