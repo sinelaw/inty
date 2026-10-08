@@ -4486,6 +4486,33 @@ fn mutable_containers_are_invariant() {
         const ys = xs;"
     )
     .is_err());
+    // The error says the mismatch is the array's invariance, and how to
+    // get around it.
+    let err = infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** const ys: (String | Number)[] */ \
+        const ys = xs;",
+    )
+    .err()
+    .expect("an invariance error");
+    let msg = format!("{:?}", err);
+    assert!(msg.contains("must match exactly"), "{msg}");
+    assert!(msg.contains("function f<a>(xs: a[])"), "{msg}");
+    // Both suggestions type-check: a generic parameter, and a copy.
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** function count<a>(xs: a[]) => Number */ \
+        function count(xs) { return xs.length; } \
+        count(xs); \
+        /** function f(list: (String | Number)[]) => Undefined */ \
+        function f(list) { list.push(420); } \
+        f([...xs]);"
+    )
+    .is_ok());
     // A literal-typed array is not a `String[]`: pushing `"zzz"` through
     // the alias would leave the `("a" | "b")[]` holding it.
     assert!(infer_program_with_state(

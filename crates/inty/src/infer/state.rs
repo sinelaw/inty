@@ -1311,13 +1311,64 @@ impl InferState {
         // line.
         let mut err = self.unification_error(span, &sup, &sub);
         if self.quiet == 0 {
+            let note = match self.row_difference(&sup, &sub) {
+                Some(note) => Some(note),
+                None => self.invariance_note(span, &sub, &sup),
+            };
             if let (Some(note), Some(crate::error::TypeError::UnificationError { context, .. })) =
-                (self.row_difference(&sup, &sub), err.as_type_mut())
+                (note, err.as_type_mut())
             {
                 context.get_or_insert(note);
             }
         }
         Err(err)
+    }
+
+    /// When `sub` would fit `sup` if arrays and records were covariant,
+    /// the mismatch is only their invariance: say why, and what to do.
+    fn invariance_note(&mut self, span: Span, sub: &Type, sup: &Type) -> Option<String> {
+        let snap = self.snapshot_inference();
+        let fits = self.quietly(|s| s.fits_covariantly(span, sub, sup));
+        self.restore_snapshot(snap);
+        match (fits, self.flatten_type(sup)) {
+            (true, Type::Array(_)) => Some(
+                "an array can be written to, so its element type must match exactly \
+                 (a push through the expected type could add an element this array \
+                 doesn't allow). If it's a function parameter that's only read, make it \
+                 generic: `function f<a>(xs: a[]) => …`. Otherwise pass a copy, `[...xs]`, \
+                 or declare the array with the wider type"
+                    .to_string(),
+            ),
+            (true, _) => Some(
+                "a record's fields can be assigned, so each field's type must match \
+                 exactly (an assignment through the expected type could store a value \
+                 this record doesn't allow). If it's a function parameter whose fields \
+                 are only read, make it generic: `function f<a>(r: {x: a}) => …`. \
+                 Otherwise declare the record with the wider type"
+                    .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Would `sub ≤ sup` hold if array elements and record fields were
+    /// covariant? Only for a diagnostic — it is unsound as a rule.
+    fn fits_covariantly(&mut self, span: Span, sub: &Type, sup: &Type) -> bool {
+        let inner = |s: &mut Self, a: &Type, b: &Type| {
+            s.subsume(span, a, b).is_ok() || s.fits_covariantly(span, a, b)
+        };
+        match (self.flatten_type(sub), self.flatten_type(sup)) {
+            (Type::Array(a), Type::Array(b)) | (Type::Map(a), Type::Map(b)) => inner(self, &a, &b),
+            (Type::Row(r1), Type::Row(r2))
+                if r1.is_closed() && r2.is_closed() && r1.props.keys().eq(r2.props.keys()) =>
+            {
+                r1.props
+                    .iter()
+                    .zip(r2.props.values())
+                    .all(|((_, f1), f2)| inner(self, &f1.ty, &f2.ty))
+            }
+            _ => false,
+        }
     }
 
     /// For two record types, which fields one has and the other lacks:
