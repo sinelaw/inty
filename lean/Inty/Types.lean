@@ -42,6 +42,10 @@ inductive Con where
   | pre
   /-- The presence of a field that isn't, `Presence::Abs`. -/
   | abs
+  /-- What an object's cell holds, applied to the object's record type: no
+  program writes it; the soundness proof's world gives it to the cell of
+  each object. -/
+  | contents
   deriving DecidableEq, Repr
 
 /-- Monotypes: a type variable, or a constructor applied to types. A type

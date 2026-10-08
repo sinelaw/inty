@@ -189,6 +189,8 @@ def valueWire : Value → String
   | .null => "null"
   | .closure .. | .prim _ => "fun"
   | .obj _ => "obj"
+  -- An object's contents are in its cell, never a program's value.
+  | .fields _ => "fields"
 
 def stuckWire : Stuck → String
   | .undefinedVariable => "undefinedVariable"
@@ -197,6 +199,7 @@ def stuckWire : Stuck → String
   | .arityMismatch => "arityMismatch"
   | .notIndexable => "notIndexable"
   | .propertyNotFound => "propertyNotFound"
+  | .badAssignmentTarget => "badAssignmentTarget"
 
 /-- The interpreter's verdict: `value V`, `stuck R`, or `timeout`. -/
 def evalVerdict (clock : Nat) (e : Expr) : String :=
@@ -254,6 +257,10 @@ def verdict (clock : Nat) (line : String) : String :=
   "(let (func 1 (get (var 0) s:x)) (plus (app (var 0) (obj (field s:x (num 1 0)))) (app (var 0) (obj (field s:x (num 2 0)) (field s:y (null))))))"
   == s!"type number;value num {(3 : Float).toBits}"
 #guard verdict 100 "(get (num 1 0) s:x)" == "reject;stuck notIndexable"
+-- Writing a property an object hasn't adds it, as in JavaScript; the typing
+-- rules reject it, since a record has the fields of its literal.
+#guard verdict 100 "(let (obj) (seq (set (var 0) s:y (num 1 0)) (get (var 0) s:y)))" ==
+  s!"reject;value num {(1 : Float).toBits}"
 -- A later field overrides an earlier one, as in JavaScript.
 #guard verdict 100 "(get (obj (field s:x (num 1 0)) (field s:x (str s:a))) s:x)" ==
   "type string;value str s:a"

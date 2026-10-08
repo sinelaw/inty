@@ -45,11 +45,12 @@ inductive Value where
   | closure (env : List Nat) (arity : Nat) (body : Expr)
   /-- A native function, `dynamics::Value::Builtin`. -/
   | prim (p : Prim)
-  /-- An object: the cell of each property. `dynamics` keeps an object's
-  properties together in one cell (`Cell::Object`); a cell per property
-  behaves the same, since an object has the same properties all its life
-  here: a well-typed program never adds one. -/
-  | obj (fields : List (String × Nat))
+  /-- An object: the cell holding its properties, as `dynamics`'
+  `Value::Object`. -/
+  | obj (ℓ : Nat)
+  /-- What an object's cell holds, `dynamics`' `Cell::Object`: its
+  properties' values, the latest first. No program has it as a value. -/
+  | fields (fs : List (String × Value))
   deriving Repr
 
 /-- A runtime environment: the cell of each variable, innermost first. As in
@@ -74,6 +75,9 @@ inductive Stuck where
   | notIndexable
   /-- A property the object doesn't have, `Stuck::PropertyNotFound`. -/
   | propertyNotFound
+  /-- Writing a property of something that isn't an object,
+  `Stuck::BadAssignmentTarget`. -/
+  | badAssignmentTarget
   deriving DecidableEq, Repr
 
 /-- The outcome of running with a given clock. `timeout` (out of clock) is
@@ -99,7 +103,7 @@ def Value.truthy : Value → Bool
   | .string s => !s.isEmpty
   | .boolean b => b
   | .undefined | .null => false
-  | .closure .. | .prim _ | .obj _ => true
+  | .closure .. | .prim _ | .obj _ | .fields _ => true
 
 /-- JavaScript `typeof`, as `dynamics::Value::type_string`. -/
 def Value.typeString : Value → String
@@ -107,7 +111,7 @@ def Value.typeString : Value → String
   | .string _ => "string"
   | .boolean _ => "boolean"
   | .undefined => "undefined"
-  | .null | .obj _ => "object"
+  | .null | .obj _ | .fields _ => "object"
   | .closure .. | .prim _ => "function"
 
 def Lit.eval : Lit → Value
@@ -135,30 +139,33 @@ def Prim.apply : Prim → List Value → Result
   | .truthy, [v] => .ok (.boolean v.truthy)
   | _, _ => .stuck .arityMismatch
 
-/-- Reading the property `l` of `v`, as `dynamics::step::read_member`. -/
+/-- Reading the property `l` of `v`, as `dynamics::step::read_member`. A
+string has properties of its own (`length`, its methods), which come with
+the standard library; any other is not found. -/
 def Value.getProp (h : Heap) (l : String) : Value → Result
-  | .obj fs =>
-    match fs.lookup l with
-    | some ℓ =>
-      match h[ℓ]? with
+  | .obj ℓ =>
+    match h[ℓ]? with
+    | some (.fields fs) =>
+      match fs.lookup l with
       | some v => .ok v
       | none => .stuck .propertyNotFound
-    | none => .stuck .propertyNotFound
+    | _ => .stuck .notIndexable
+  | .string _ => .stuck .propertyNotFound
   | _ => .stuck .notIndexable
 
-/-- Storing `v` in the property `l` of `o`: the outcome and the heap. -/
+/-- Storing `v` in the property `l` of `o`, which it adds if `o` hasn't it,
+as in JavaScript and `dynamics`: the outcome and the heap. -/
 def Value.setProp (o : Value) (h : Heap) (l : String) (v : Value) : Result × Heap :=
   match o with
-  | .obj fs =>
-    match fs.lookup l with
-    | some ℓ => if ℓ < h.length then (.ok v, h.set ℓ v) else (.stuck .propertyNotFound, h)
-    | none => (.stuck .propertyNotFound, h)
-  | _ => (.stuck .notIndexable, h)
+  | .obj ℓ =>
+    match h[ℓ]? with
+    | some (.fields fs) => (.ok v, h.set ℓ (.fields ((l, v) :: fs.filter (·.1 != l))))
+    | _ => (.stuck .badAssignmentTarget, h)
+  | _ => (.stuck .badAssignmentTarget, h)
 
-/-- An object whose properties `ls` are in the cells from `base` on. A label
-the literal repeats is the last occurrence's, as in JavaScript, so the
-fields are listed last first. -/
-def objAt (ls : List String) (base n : Nat) : Value := .obj (ls.zip (List.range' base n)).reverse
+/-- An object literal's cell: its fields, the later of two with one label
+first, as in JavaScript. -/
+def objFields (ls : List String) (vs : List Value) : Value := .fields (ls.zip vs).reverse
 
 /-- A call's result: a `return` from the body is the call's value. -/
 def Result.catchReturn : Result → Result
@@ -290,7 +297,7 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
   -- The fields in order, then a cell for each.
   | .obj ls es =>
     bindArgs (runArgs clock env heap es) fun vs c₁ h₁ =>
-      (.ok (objAt ls h₁.length vs.length), c₁, h₁ ++ vs)
+      (.ok (.obj h₁.length), c₁, h₁ ++ [objFields ls vs])
   | .get e l => bindC (run clock env heap e) fun v c₁ h₁ => (v.getProp h₁ l, c₁, h₁)
   -- The object, then the value, as in JavaScript.
   | .set e l v =>

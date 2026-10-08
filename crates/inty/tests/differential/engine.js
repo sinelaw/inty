@@ -5,12 +5,12 @@
 // (lean/Inty/Wire.lean):
 //
 //   value V    the script's completion value
-//   thrown V   an uncaught `throw` of a primitive or a function
+//   thrown V   an uncaught `throw` of a value the program made
 //   error N    a native error the engine raised (TypeError, ...)
 //   limit      a resource limit: the stack, a string's length, the time
 //
 // where V is `num BITS` (the float64's bits, so NaN and -0 survive),
-// `str s:TEXT`, `bool B`, `undef`, `null` or `fun`.
+// `str s:TEXT`, `bool B`, `undef`, `null`, `fun` or `obj`.
 
 "use strict";
 
@@ -32,8 +32,10 @@ function wire(v) {
       return "undef";
     case "function":
       return "fun";
+    case "object":
+      return v === null ? "null" : "obj";
     default:
-      return v === null ? "null" : `other ${typeof v}`;
+      return `other ${typeof v}`;
   }
 }
 
@@ -45,10 +47,10 @@ function run(source) {
     const strict = `"use strict"; ${source}`;
     return `value ${wire(vm.runInNewContext(strict, {}, { timeout: 200 }))}`;
   } catch (e) {
-    // The generated programs throw only primitives and functions, so an
-    // object is the engine's own error (from the script's realm, where
-    // `instanceof Error` doesn't hold).
-    if (e === null || typeof e !== "object") return `thrown ${wire(e)}`;
+    // The engine's own errors have a stack; the plain objects a program
+    // makes don't (they come from the script's realm, where `instanceof
+    // Error` doesn't hold).
+    if (e === null || typeof e !== "object" || !("stack" in e)) return `thrown ${wire(e)}`;
     if (e.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") return "limit";
     if (e.name === "RangeError") return "limit";
     return `error ${e.name}`;

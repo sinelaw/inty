@@ -82,6 +82,12 @@ enum Core {
     TryCatch(Box<Core>, Box<Core>),
     /// `try { body } finally { fin }`.
     TryFinally(Box<Core>, Box<Core>),
+    /// An object literal `{l₀: e₀, …}`, its fields in order.
+    Obj(Vec<(String, Core)>),
+    /// `e.l`.
+    Get(Box<Core>, String),
+    /// `e.l = v`.
+    Set(Box<Core>, String, Box<Core>),
 }
 
 use Core::*;
@@ -130,6 +136,15 @@ fn wire(e: &Core) -> String {
         Continue => "(continue)".into(),
         TryCatch(x, y) => format!("(trycatch {} {})", wire(x), wire(y)),
         TryFinally(x, y) => format!("(tryfinally {} {})", wire(x), wire(y)),
+        Obj(fields) => {
+            let fields: Vec<String> = fields
+                .iter()
+                .map(|(l, e)| format!(" (field s:{} {})", l, wire(e)))
+                .collect();
+            format!("(obj{})", fields.concat())
+        }
+        Get(e, l) => format!("(get {} s:{})", wire(e), l),
+        Set(e, l, v) => format!("(set {} s:{} {})", wire(e), l, wire(v)),
     }
 }
 
@@ -177,6 +192,12 @@ fn fractional(e: &Core) -> Core {
         While(x, y) => While(f(x), f(y)),
         TryCatch(x, y) => TryCatch(f(x), f(y)),
         TryFinally(x, y) => TryFinally(f(x), f(y)),
+        Obj(fields) => Obj(fields
+            .iter()
+            .map(|(l, e)| (l.clone(), fractional(e)))
+            .collect()),
+        Get(x, l) => Get(f(x), l.clone()),
+        Set(x, l, y) => Set(f(x), l.clone(), f(y)),
         other => other.clone(),
     }
 }
@@ -242,7 +263,14 @@ impl Js {
             }
             App(f, args) => {
                 let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
-                format!("({})({})", self.expr(f), args.join(", "))
+                // A call of a property is a method call in JavaScript,
+                // with the object as `this`; the calculus's calls have no
+                // receiver, as `(0, o.f)(…)` hasn't.
+                let callee = match **f {
+                    Get(..) => format!("(0, {})", self.expr(f)),
+                    _ => format!("({})", self.expr(f)),
+                };
+                format!("{}({})", callee, args.join(", "))
             }
             Let(..) | Ret(_) | Throw(_) | Seq(..) | While(..) | Break | Continue | TryCatch(..)
             | TryFinally(..) => {
@@ -255,6 +283,15 @@ impl Js {
             Neg(e) => format!("-({})", self.expr(e)),
             Plus(x, y) => format!("({} + {})", self.expr(x), self.expr(y)),
             Minus(x, y) => format!("({} - {})", self.expr(x), self.expr(y)),
+            Obj(fields) => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|(l, e)| format!("{}: {}", l, self.expr(e)))
+                    .collect();
+                format!("({{{}}})", fields.join(", "))
+            }
+            Get(e, l) => format!("({}).{}", self.expr(e), l),
+            Set(e, l, v) => format!("(({}).{} = {})", self.expr(e), l, self.expr(v)),
         }
     }
 
@@ -336,6 +373,9 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
         TryCatch(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
         Break | Continue => false,
         Num(..) | Str(_) | Bool(_) | Undef | Null => false,
+        Obj(fields) => fields.iter().any(|(_, e)| refers_from_inner(e, i, inner)),
+        Get(x, _) => refers_from_inner(x, i, inner),
+        Set(x, _, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner),
     }
 }
 
@@ -377,7 +417,12 @@ enum T {
     /// A function's parameter and result types. Its `this` is `undefined`:
     /// the generated programs only call functions outside a receiver.
     Arrow(Vec<T>, Box<T>),
+    /// An object with these fields, sorted by label.
+    Obj(Vec<(String, T)>),
 }
+
+/// The property labels the generated programs use.
+const LABELS: [&str; 3] = ["a", "b", "c"];
 
 /// What a variable in scope may be used as.
 #[derive(Clone, Debug)]
@@ -414,7 +459,28 @@ impl Gen {
         }
     }
 
+    /// An object type with the field `l` of type `t`, and others.
+    fn obj_with(&mut self, l: &str, t: &T, depth: usize) -> T {
+        let mut fields = vec![(l.to_string(), t.clone())];
+        for other in LABELS {
+            if other != l && self.rng.chance(30) {
+                fields.push((other.to_string(), self.ty(depth.saturating_sub(1))));
+            }
+        }
+        fields.sort_by(|x, y| x.0.cmp(&y.0));
+        T::Obj(fields)
+    }
+
+    fn label(&mut self) -> String {
+        LABELS[self.rng.below(LABELS.len())].to_string()
+    }
+
     fn ty(&mut self, depth: usize) -> T {
+        if depth > 0 && self.rng.chance(15) {
+            let l = self.label();
+            let t = self.ty(depth - 1);
+            return self.obj_with(&l, &t, depth);
+        }
         if depth > 0 && self.rng.chance(25) {
             let n = self.rng.below(3);
             T::Arrow(
@@ -447,7 +513,7 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
-            T::Arrow(..) => return None,
+            T::Arrow(..) | T::Obj(_) => return None,
         })
     }
 
@@ -483,6 +549,17 @@ impl Gen {
             if let Some(s) = self.statement(t, d, scope) {
                 return s;
             }
+        }
+        // A read, or a write, of a property of this type.
+        if depth > 0 && self.rng.chance(12) {
+            let l = self.label();
+            let o = self.obj_with(&l, t, d);
+            let obj = self.typed(&o, d, scope, false);
+            return if self.rng.chance(70) {
+                Get(b(obj), l)
+            } else {
+                Set(b(obj), l, b(self.typed(t, d, scope, false)))
+            };
         }
         if stmt && depth > 0 && self.rng.chance(25) {
             // `const`: sometimes the polymorphic identity, used at
@@ -562,6 +639,17 @@ impl Gen {
                     self.funcs.pop();
                     scope.truncate(scope.len() - ps.len() - 2);
                     Func(ps.len(), b(body))
+                }
+                // An object literal, its fields in any order.
+                T::Obj(fields) => {
+                    let mut fields: Vec<(String, Core)> = fields
+                        .iter()
+                        .map(|(l, u)| (l.clone(), self.typed(u, d, scope, false)))
+                        .collect();
+                    if fields.len() > 1 && self.rng.chance(50) {
+                        fields.reverse();
+                    }
+                    Obj(fields)
                 }
                 _ => self.literal(t).unwrap(),
             },
@@ -734,7 +822,23 @@ impl Gen {
                     )
                 }
             }
+            4 if self.rng.chance(40) => {
+                let n = self.rng.below(3);
+                let fields = (0..n)
+                    .map(|_| (self.label(), self.any(d, scope, false)))
+                    .collect();
+                Obj(fields)
+            }
             4 => Not(b(self.any(d, scope, false))),
+            5 if self.rng.chance(40) => {
+                let o = self.any(d, scope, false);
+                let l = self.label();
+                if self.rng.chance(60) {
+                    Get(b(o), l)
+                } else {
+                    Set(b(o), l, b(self.any(d, scope, false)))
+                }
+            }
             5 => Typeof(b(self.any(d, scope, false))),
             6 => Neg(b(self.any(d, scope, false))),
             7 | 8 => Plus(b(self.any(d, scope, false)), b(self.any(d, scope, false))),
@@ -802,7 +906,9 @@ fn core_type(t: &Type) -> String {
         Type::Boolean | Type::Literal(LitValue::Bool(_)) => "boolean".into(),
         Type::Undefined => "undefined".into(),
         Type::Null => "null".into(),
-        Type::Func { .. } | Type::Row(_) => "fun".into(),
+        Type::Func { .. } => "fun".into(),
+        Type::Row(_) if t.as_callable().is_some() => "fun".into(),
+        Type::Row(_) => "obj".into(),
         Type::Var(_) => "var".into(),
         // The empty union: what doesn't complete, such as a `throw`.
         Type::Union(ts) if ts.is_empty() => "never".into(),
@@ -918,6 +1024,7 @@ fn value_wire(v: Value) -> String {
         Value::Undefined => "undef".into(),
         Value::Null => "null".into(),
         Value::Closure(_) | Value::Builtin(_) => "fun".into(),
+        Value::Object(_) => "obj".into(),
         other => format!("other {}", other),
     }
 }
@@ -932,6 +1039,9 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Err(Stuck::NotCallable(_)) => Run::Stuck("notCallable".into()),
         Err(Stuck::TypeMismatch { .. }) => Run::Stuck("typeMismatch".into()),
         Err(Stuck::ArityMismatch { .. }) => Run::Stuck("arityMismatch".into()),
+        Err(Stuck::NotIndexable(_)) => Run::Stuck("notIndexable".into()),
+        Err(Stuck::PropertyNotFound { .. }) => Run::Stuck("propertyNotFound".into()),
+        Err(Stuck::BadAssignmentTarget) => Run::Stuck("badAssignmentTarget".into()),
         Err(other) => Run::Stuck(format!("other {}", other)),
     }
 }

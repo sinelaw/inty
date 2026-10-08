@@ -114,9 +114,11 @@ example : V k W .undefined v ↔ v = .undefined := V_undefined
 example : V k W .null v ↔ v = .null := V_null
 example : V k W .unknown v ↔ True := V_unknown
 example : V k W (.var a) v ↔ False := V_var
-example : V k W (.record ls slots) v ↔ ∃ fs, v = .obj fs ∧ ∀ l σ,
-    Ty.field l ls slots = some (.slot .pre σ) →
-    ∃ ℓ, fs.lookup l = some ℓ ∧ W[ℓ]? = some (.mono σ) := V_record
+example : V k W (.record ls slots) v ↔ ∃ ℓ, v = .obj ℓ ∧
+    W[ℓ]? = some (.mono (.app .contents [.record ls slots])) := V_record
+example : V k W (.app .contents [.record ls slots]) v ↔ ∃ fs, v = .fields fs ∧
+    ∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
+    ∃ v', fs.lookup l = some v' ∧ V k W σ v' := V_contents
 example : Result.Abrupt r ↔ (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued := by
   cases r <;> simp [Result.Abrupt]
 example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
