@@ -51,26 +51,26 @@ theorem unify_sound :
       · cases h; subst_vars; rfl
       · cases h
 
-/-- Under `φ`, every type in `P` is a `Plus` instance or assumed in `C`. -/
-def Sat (C : List Ty) (P : List Ty) (φ : Subst) : Prop := ∀ c ∈ P, Entails C (c.subst φ)
+/-- Under `φ`, every constraint in `P` is an instance or assumed in `C`. -/
+def Sat (C : List Pred) (P : List Pred) (φ : Subst) : Prop := ∀ c ∈ P, Entails C (c.subst φ)
 
-@[simp] theorem Sat.nil (C : List Ty) (φ : Subst) : Sat C [] φ := by simp [Sat]
+@[simp] theorem Sat.nil (C : List Pred) (φ : Subst) : Sat C [] φ := by simp [Sat]
 
-@[simp] theorem Sat.append {C P Q : List Ty} {φ : Subst} :
+@[simp] theorem Sat.append {C P Q : List Pred} {φ : Subst} :
     Sat C (P ++ Q) φ ↔ Sat C P φ ∧ Sat C Q φ := by
   simp only [Sat, List.mem_append]
   exact ⟨fun h => ⟨fun c hc => h c (.inl hc), fun c hc => h c (.inr hc)⟩,
     fun h c hc => hc.elim (h.1 c) (h.2 c)⟩
 
-@[simp] theorem Sat.map {C P : List Ty} {σ φ : Subst} :
+@[simp] theorem Sat.map {C P : List Pred} {σ φ : Subst} :
     Sat C (P.map (·.subst σ)) φ ↔ Sat C P (Subst.compose φ σ) := by
   simp [Sat]
 
-@[simp] theorem Sat.singleton {C : List Ty} {τ : Ty} {φ : Subst} :
-    Sat C [τ] φ ↔ Entails C (τ.subst φ) := by
+@[simp] theorem Sat.singleton {C : List Pred} {p : Pred} {φ : Subst} :
+    Sat C [p] φ ↔ Entails C (p.subst φ) := by
   simp [Sat]
 
-theorem Entails.weaken {C : List Ty} (D : List Ty) (h : Entails C τ) : Entails (C ++ D) τ :=
+theorem Entails.weaken {C : List Pred} (D : List Pred) (h : Entails C p) : Entails (C ++ D) p :=
   h.elim .inl (fun h => .inr (List.mem_append_left _ h))
 
 theorem Lit.ty_sound (l : Lit) : LitTy l l.ty := by cases l <;> constructor
@@ -86,7 +86,7 @@ substitution and any further substitution that resolves the `Plus`
 constraints, is a valid typing. -/
 theorem infer_sound :
     ∀ {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer Γ R e n = some o →
-      ∀ φ C, Sat C o.plus φ →
+      ∀ φ C, Sat C o.preds φ →
         HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
           (o.τ.subst φ) := by
   intro e
@@ -103,7 +103,7 @@ theorem infer_sound :
       simp only [Option.some.injEq] at h; subst h
       simp only [Ctx.subst_nil, Scheme.open, Scheme.inst_subst]
       refine .var (by rw [Ctx.getElem?_subst, hs]; rfl) (by simp [varBlock]) (fun c hc => ?_)
-      rw [← Scheme.instPlus_subst] at hc
+      rw [← Scheme.instPreds_subst] at hc
       obtain ⟨c₀, hc₀, rfl⟩ := List.mem_map.mp hc
       exact hsat c₀ hc₀
     · cases h
@@ -148,7 +148,7 @@ theorem infer_sound :
     split at h
     · cases h
     rename_i o₁ h₁
-    generalize hls : letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.plus = ls at h
+    generalize hls : letScheme e₁ (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) o₁.τ o₁.preds = ls at h
     obtain ⟨s, rest⟩ := ls
     split at h
     · cases h
@@ -176,13 +176,13 @@ theorem infer_sound :
       have hR : Ret.subst ψ R₁ = Ret.subst φ₀ R₁ := Ret.subst_congr (fun a ha =>
         renameBlock_append_find m _ (hout a (List.mem_append_right _ ha)))
       rw [← Scheme.subst_compose, ← Ctx.subst_compose, ← Ret.subst_compose, ← hΓ, ← hR,
-        ← generalize_open ᾱ m φ₀, ← generalize_openPlus ᾱ m φ₀]
+        ← generalize_open ᾱ m φ₀, ← generalize_openPreds ᾱ m φ₀]
       refine ih₁ h₁ ψ _ (fun c hc => ?_)
       by_cases hg : c.ftv.any (· ∈ ᾱ) = true
       · exact .inr (List.mem_append_right _ (List.mem_map_of_mem (List.mem_filter.mpr ⟨hc, hg⟩)))
-      · have hr : c ∈ o₁.plus.filter (fun c => !c.ftv.any (· ∈ ᾱ)) :=
+      · have hr : c ∈ o₁.preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)) :=
           List.mem_filter.mpr ⟨hc, by simpa using hg⟩
-        have hc' : c.subst ψ = c.subst φ₀ := Ty.subst_congr (fun a ha =>
+        have hc' : c.subst ψ = c.subst φ₀ := Pred.subst_congr (fun a ha =>
           renameBlock_append_find m _ (fun hα => hg (List.any_eq_true.mpr ⟨a, ha, by simpa using hα⟩)))
         rw [hc']
         exact (hsat.1 c hr).weaken _
@@ -257,7 +257,7 @@ theorem infer_sound :
       have he₂ := ih₂ h₂ _ C hsat.1.2
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ hsat ⊢
       rw [unify_sound hu] at he₁
-      exact .binop (.plus hsat.2) he₁ he₂
+      exact .binop (.plus (by simpa [Pred.subst] using hsat.2)) he₁ he₂
     | minus =>
       simp only at h
       split at h
@@ -327,10 +327,9 @@ theorem inferIn_sound {Γ : Ctx} {e : Expr} {τ : Ty} (hΓ : ctxFtv Γ = [])
   split at h
   · rename_i hall
     simp only [Option.some.injEq] at h; subst h
-    have hsat : Sat [] o.plus [] := fun c hc => by
+    have hsat : Sat [] o.preds [] := fun c hc => by
       have := List.all_eq_true.mp hall c hc
-      refine .inl ?_
-      cases c <;> simp_all [Ty.isPlusInst] <;> constructor
+      exact .inl (by simpa using Pred.isInst_sound this)
     have hσ : Ctx.subst o.σ Γ = Γ := ctx_subst_id (fun a ha => by simp [hΓ] at ha)
     simpa [hσ] using infer_sound ho [] [] hsat
   · cases h

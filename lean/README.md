@@ -20,7 +20,7 @@ pins the version.
 ## What is proved
 
 `Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
-`τ`, `Plus` assumptions `C` that hold, context `Γ` and environment `env`
+`τ`, class constraints `C` that hold, context `Γ` and environment `env`
 matching `Γ` for `clock` calls, enclosing function's return type `R`, and
 every clock, writing `(r, c) = run clock env e` for the result and the clock
 left,
@@ -82,10 +82,10 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction) | `is_syntactic_value`, `src/infer/features/bindings.rs` |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
-| `PlusInst` | the `Plus` instance table, `src/classes` |
-| `Entails C τ` (`τ` is an instance, or assumed to be one) | a scheme's constraints in scope while checking its body |
+| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes, constraints, instances | `classes::ClassName`, the instance tables in `src/classes` |
+| `Entails C p` (`p` is an instance, or assumed in `C`) | a scheme's constraints in scope while checking its body |
 | `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
-| `Out.plus` (pending `Plus` constraints) | the constraints `src/infer` resolves once types are known |
+| `Out.preds` (pending class constraints) | the constraints `src/infer` resolves once types are known |
 | `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock) | `src/dynamics` (`Value`, `Stuck`, fuel) |
 | `Prim`, `builtinCtx`, `builtinEnv` (native functions, with their types) | `Value::Builtin`, `src/builtins` |
 | `Value.truthy`, `Value.typeString` | `Value::truthy`, `Value::type_string` |
@@ -141,12 +141,15 @@ These choices are meant to hold up as the calculus grows.
   and the indices don't line up.
 - **Inference is proved sound without freshness invariants.** The theorem
   says the inferred type is valid under the inferred substitution and any
-  further substitution that resolves the pending `Plus` constraints. Stated
+  further substitution that resolves the pending class constraints. Stated
   that way, a `const`'s generalisation is justified by renaming, and the
   proof never needs inference's fresh variables to be fresh; completeness
   will. Unification is bounded by fuel for the same reason.
-- **Class constraints are assumptions in the judgement.** `HasType C Γ e τ`
-  types `e` assuming the types in `C` are `Plus` instances, as in HM(X). A
+- **Class constraints are assumptions in the judgement.** `HasType C Γ R e τ`
+  types `e` assuming the constraints in `C` hold, as in HM(X). A class is a
+  `Cls` with its instances in `Inst` (`Inty/Classes.lean`); `Plus` is the
+  only one so far, and adding one is adding its instances and the operator
+  rules that use it. A
   `const` types its initialiser assuming its scheme's constraints, and each
   use of the variable must establish them. Inference records a pending
   constraint at each `+`; a `const` takes the ones mentioning a generalised

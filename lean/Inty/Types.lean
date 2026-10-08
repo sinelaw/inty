@@ -38,13 +38,33 @@ inductive PTy where
   | bound (i : Nat)
   deriving DecidableEq, Repr
 
-/-- A type scheme `∀ α₀ … α_{arity-1}. plus ⇒ body`: `plus` lists the types
-that must be instances of the `Plus` class, as in inty's
+/-- Type classes, as `classes::ClassName`. Their instances are in
+`Inty.Classes`. -/
+inductive Cls where
+  /-- `Plus a`: the types `+` is defined on. -/
+  | plus
+  deriving DecidableEq, Repr
+
+/-- A class constraint: a class applied to types, such as `Plus a`. -/
+structure Pred where
+  cls : Cls
+  args : List Ty
+  deriving DecidableEq, Repr
+
+/-- A class constraint in a scheme, which may mention its quantified
+variables. -/
+structure PPred where
+  cls : Cls
+  args : List PTy
+  deriving DecidableEq, Repr
+
+/-- A type scheme `∀ α₀ … α_{arity-1}. preds ⇒ body`: `preds` are the class
+constraints an instance must satisfy, as in inty's
 `<a> where Plus a => (a, a) => a`. -/
 structure Scheme where
   arity : Nat
   body : PTy
-  plus : List PTy := []
+  preds : List PPred := []
   deriving DecidableEq, Repr
 
 /-- A typing context: the type scheme of each variable, innermost first. -/
@@ -72,13 +92,15 @@ def PTy.inst (τs : List Ty) : PTy → Ty
   | .free a => .var a
   | .bound i => τs.getD i .undefined
 
+def PPred.inst (τs : List Ty) (p : PPred) : Pred := ⟨p.cls, p.args.map (·.inst τs)⟩
+
 /-- A monotype as a scheme that quantifies nothing. -/
 def Scheme.mono (τ : Ty) : Scheme := ⟨0, τ.toPTy, []⟩
 
 def Scheme.inst (s : Scheme) (τs : List Ty) : Ty := s.body.inst τs
 
 /-- The constraints of an instance. -/
-def Scheme.instPlus (s : Scheme) (τs : List Ty) : List Ty := s.plus.map (·.inst τs)
+def Scheme.instPreds (s : Scheme) (τs : List Ty) : List Pred := s.preds.map (·.inst τs)
 
 /-- The type variables `m, m+1, …, m+k-1`. -/
 def varBlock (m k : Nat) : List Ty := (List.range' m k).map .var
@@ -88,7 +110,7 @@ variable. -/
 def Scheme.open (s : Scheme) (m : Nat) : Ty := s.inst (varBlock m s.arity)
 
 /-- The constraints of a scheme opened at `m`. -/
-def Scheme.openPlus (s : Scheme) (m : Nat) : List Ty := s.instPlus (varBlock m s.arity)
+def Scheme.openPreds (s : Scheme) (m : Nat) : List Pred := s.instPreds (varBlock m s.arity)
 
 /-! ## Free type variables -/
 
@@ -102,7 +124,11 @@ def PTy.ftv : PTy → List Nat
   | .free a => [a]
   | _ => []
 
-def Scheme.ftv (s : Scheme) : List Nat := s.body.ftv ++ s.plus.flatMap PTy.ftv
+def Pred.ftv (p : Pred) : List Nat := p.args.flatMap Ty.ftv
+
+def PPred.ftv (p : PPred) : List Nat := p.args.flatMap PTy.ftv
+
+def Scheme.ftv (s : Scheme) : List Nat := s.body.ftv ++ s.preds.flatMap PPred.ftv
 
 def ctxFtv (Γ : List Scheme) : List Nat := Γ.flatMap Scheme.ftv
 
@@ -125,8 +151,12 @@ def PTy.subst (σ : Subst) : PTy → PTy
   | .free a => ((σ.find a).getD (.var a)).toPTy
   | p => p
 
+def Pred.subst (σ : Subst) (p : Pred) : Pred := ⟨p.cls, p.args.map (·.subst σ)⟩
+
+def PPred.subst (σ : Subst) (p : PPred) : PPred := ⟨p.cls, p.args.map (·.subst σ)⟩
+
 def Scheme.subst (σ : Subst) (s : Scheme) : Scheme :=
-  ⟨s.arity, s.body.subst σ, s.plus.map (·.subst σ)⟩
+  ⟨s.arity, s.body.subst σ, s.preds.map (·.subst σ)⟩
 
 /-! ## Lemmas -/
 
@@ -160,9 +190,13 @@ theorem Scheme.inst_subst (σ : Subst) (τs : List Ty) (s : Scheme) :
     (s.inst τs).subst σ = (s.subst σ).inst (τs.map (·.subst σ)) :=
   PTy.inst_subst σ τs s.body
 
-theorem Scheme.instPlus_subst (σ : Subst) (τs : List Ty) (s : Scheme) :
-    (s.instPlus τs).map (·.subst σ) = (s.subst σ).instPlus (τs.map (·.subst σ)) := by
-  simp [Scheme.instPlus, Scheme.subst, PTy.inst_subst]
+theorem PPred.inst_subst (σ : Subst) (τs : List Ty) (p : PPred) :
+    (p.inst τs).subst σ = (p.subst σ).inst (τs.map (·.subst σ)) := by
+  simp [PPred.inst, Pred.subst, PPred.subst, PTy.inst_subst]
+
+theorem Scheme.instPreds_subst (σ : Subst) (τs : List Ty) (s : Scheme) :
+    (s.instPreds τs).map (·.subst σ) = (s.subst σ).instPreds (τs.map (·.subst σ)) := by
+  simp [Scheme.instPreds, Scheme.subst, PPred.inst_subst]
 
 /-- A substitution that leaves alone every variable it doesn't map. -/
 theorem Subst.find_none {σ : Subst} {a : Nat} (h : ∀ p ∈ σ, p.1 ≠ a) :
@@ -192,6 +226,22 @@ theorem PTy.subst_id {σ : Subst} {p : PTy} (h : ∀ a ∈ p.ftv, σ.find a = no
   | free a => simp [PTy.subst, h a (by simp [PTy.ftv]), Ty.toPTy]
   | _ => rfl
 
+theorem Pred.subst_id {σ : Subst} {p : Pred} (h : ∀ a ∈ p.ftv, σ.find a = none) :
+    p.subst σ = p := by
+  obtain ⟨c, args⟩ := p
+  simp only [Pred.subst, Pred.mk.injEq, true_and]
+  conv => rhs; rw [← List.map_id args]
+  exact List.map_congr_left (fun τ hτ =>
+    Ty.subst_id (fun a ha => h a (List.mem_flatMap.mpr ⟨τ, hτ, ha⟩)))
+
+theorem PPred.subst_id {σ : Subst} {p : PPred} (h : ∀ a ∈ p.ftv, σ.find a = none) :
+    p.subst σ = p := by
+  obtain ⟨c, args⟩ := p
+  simp only [PPred.subst, PPred.mk.injEq, true_and]
+  conv => rhs; rw [← List.map_id args]
+  exact List.map_congr_left (fun q hq =>
+    PTy.subst_id (fun a ha => h a (List.mem_flatMap.mpr ⟨q, hq, ha⟩)))
+
 theorem ctx_subst_id {σ : Subst} {Γ : List Scheme}
     (h : ∀ a ∈ ctxFtv Γ, σ.find a = none) : Γ.map (Scheme.subst σ) = Γ := by
   induction Γ with
@@ -205,7 +255,7 @@ theorem ctx_subst_id {σ : Subst} {Γ : List Scheme}
       refine ⟨PTy.subst_id (fun a ha => h a (.inl (.inl ha))), ?_⟩
       conv => rhs; rw [← List.map_id ps]
       exact List.map_congr_left (fun q hq =>
-        PTy.subst_id (fun a ha => h a (.inl (.inr ⟨q, hq, ha⟩))))
+        PPred.subst_id (fun a ha => h a (.inl (.inr ⟨q, hq, ha⟩))))
     simp [hs, ih (fun a ha => h a (.inr (by simpa [ctxFtv] using ha)))]
 
 /-- Substituting for variables below `m` commutes with opening at `m`. -/
@@ -225,10 +275,17 @@ theorem Scheme.open_subst {σ : Subst} {m : Nat} (s : Scheme)
     (h : ∀ p ∈ σ, p.1 < m) : (s.open m).subst σ = (s.subst σ).open m :=
   PTy.open_subst _ s.body h
 
-theorem Scheme.openPlus_subst {σ : Subst} {m : Nat} (s : Scheme)
-    (h : ∀ p ∈ σ, p.1 < m) : (s.openPlus m).map (·.subst σ) = (s.subst σ).openPlus m := by
-  simp only [Scheme.openPlus, Scheme.instPlus, Scheme.subst, List.map_map]
-  exact List.map_congr_left (fun p _ => PTy.open_subst _ p h)
+theorem PPred.open_subst {σ : Subst} {m : Nat} (k : Nat) (p : PPred)
+    (h : ∀ q ∈ σ, q.1 < m) :
+    (p.inst (varBlock m k)).subst σ = (p.subst σ).inst (varBlock m k) := by
+  simp only [PPred.inst, Pred.subst, PPred.subst, List.map_map, Pred.mk.injEq,
+    true_and]
+  exact List.map_congr_left (fun q _ => PTy.open_subst k q h)
+
+theorem Scheme.openPreds_subst {σ : Subst} {m : Nat} (s : Scheme)
+    (h : ∀ p ∈ σ, p.1 < m) : (s.openPreds m).map (·.subst σ) = (s.subst σ).openPreds m := by
+  simp only [Scheme.openPreds, Scheme.instPreds, Scheme.subst, List.map_map]
+  exact List.map_congr_left (fun p _ => PPred.open_subst _ p h)
 
 /-- The substitution sending `m + i` to `τs[i]`. -/
 def Subst.block (m : Nat) (τs : List Ty) : Subst :=
@@ -282,11 +339,18 @@ theorem Scheme.open_block (s : Scheme) {m : Nat} {τs : List Ty}
   simp only [Scheme.open, Scheme.inst, ← hlen]
   exact PTy.open_block _ (fun a ha => hm a (List.mem_append_left _ ha))
 
-theorem Scheme.openPlus_block (s : Scheme) {m : Nat} {τs : List Ty}
+theorem PPred.open_block (p : PPred) {m : Nat} {τs : List Ty}
+    (hm : ∀ a ∈ p.ftv, a < m) :
+    (p.inst (varBlock m τs.length)).subst (Subst.block m τs) = p.inst τs := by
+  simp only [PPred.inst, Pred.subst, List.map_map, Pred.mk.injEq, true_and]
+  exact List.map_congr_left (fun q hq =>
+    PTy.open_block q (fun a ha => hm a (List.mem_flatMap.mpr ⟨q, hq, ha⟩)))
+
+theorem Scheme.openPreds_block (s : Scheme) {m : Nat} {τs : List Ty}
     (hm : ∀ a ∈ s.ftv, a < m) (hlen : τs.length = s.arity) :
-    (s.openPlus m).map (·.subst (Subst.block m τs)) = s.instPlus τs := by
-  simp only [Scheme.openPlus, Scheme.instPlus, List.map_map, ← hlen]
-  exact List.map_congr_left (fun p hp => PTy.open_block p (fun a ha =>
+    (s.openPreds m).map (·.subst (Subst.block m τs)) = s.instPreds τs := by
+  simp only [Scheme.openPreds, Scheme.instPreds, List.map_map, ← hlen]
+  exact List.map_congr_left (fun p hp => PPred.open_block p (fun a ha =>
     hm a (List.mem_append_right _ (List.mem_flatMap.mpr ⟨p, hp, ha⟩))))
 
 /-- A bound above every element of a list. -/

@@ -19,7 +19,7 @@ open Inty
 
 /-! ## Headline theorems -/
 
-example : ∀ (clock : Nat) {C : List Ty} {Γ : Ctx} {R : Option Ty} {env : Env} {e : Expr}
+example : ∀ (clock : Nat) {C : List Pred} {Γ : Ctx} {R : Option Ty} {env : Env} {e : Expr}
     {τ : Ty}, HasType C Γ R e τ → Holds C → G clock Γ env →
       (run clock env e).2 ≤ clock ∧
       ((run clock env e).1 = .timeout ∨
@@ -37,7 +37,7 @@ example : ∀ {e : Expr} {τ : Ty}, HasType [] builtinCtx none e τ →
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv e ≠ .stuck s :=
   never_stuck_with_builtins
 
-example : ∀ {C : List Ty} {Γ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty} (σ : Subst),
+example : ∀ {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty} (σ : Subst),
     HasType C Γ R e τ →
       HasType (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) :=
   fun σ h => h.subst σ
@@ -47,7 +47,7 @@ example : ∀ {fuel : Nat} {τ₁ τ₂ : Ty} {σ : Subst}, unify fuel τ₁ τ�
   unify_sound
 
 example : ∀ {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out},
-    infer Γ R e n = some o → ∀ φ C, (∀ c ∈ o.plus, Entails C (c.subst φ)) →
+    infer Γ R e n = some o → ∀ φ C, (∀ c ∈ o.preds, Entails C (c.subst φ)) →
       HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
         (o.τ.subst φ) :=
   infer_sound
@@ -90,6 +90,15 @@ example : V k (.arrow τ₁ τ₂) f ↔ ∀ j ≤ k, ∀ a, V j τ₁ a →
       (∃ v, (call j f a).1 = .ok v ∧ V (call j f a).2 τ₂ v) ∨
       (∃ v, (call j f a).1 = .thrown v) ∨ (∃ v, (call j f a).1 = .returned v ∧ False)) :=
   Iff.rfl
+
+/-! ## The class instances
+
+As with `V`, a larger instance table weakens what `eval_sound` says. -/
+
+example : Entails C p ↔ Inst p ∨ p ∈ C := Iff.rfl
+
+example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ :=
+  ⟨fun h => by cases h <;> simp, fun h => by rcases h with rfl | rfl <;> constructor⟩
 
 /-- The builtins' types, which their soundness proofs establish. -/
 example : builtinCtx =

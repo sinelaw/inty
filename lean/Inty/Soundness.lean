@@ -23,14 +23,14 @@ lemma (`run_sound`) says a well-typed expression is in the relation.
 
 namespace Inty
 
-/-- Every type in `C` is a `Plus` instance. -/
-def Holds (C : List Ty) : Prop := ∀ c ∈ C, PlusInst c
+/-- Every constraint in `C` is an instance. -/
+def Holds (C : List Pred) : Prop := ∀ p ∈ C, Inst p
 
-theorem Holds.append {C D : List Ty} (hC : Holds C) (hD : Holds D) : Holds (C ++ D) :=
+theorem Holds.append {C D : List Pred} (hC : Holds C) (hD : Holds D) : Holds (C ++ D) :=
   fun c hc => (List.mem_append.mp hc).elim (hC c) (hD c)
 
-theorem Entails.holds {C : List Ty} (hC : Holds C) (h : Entails C τ) : PlusInst τ :=
-  h.elim id (hC τ)
+theorem Entails.holds {C : List Pred} (hC : Holds C) (h : Entails C p) : Inst p :=
+  h.elim id (hC p)
 
 /-- An outcome that isn't stuck, with at most `k` left on the clock: out of
 clock, a value satisfying `P`, a `throw` of any value, or a `return` of a
@@ -108,11 +108,11 @@ theorem Safe.catchReturn (h : Safe p k τ (some τ)) :
 
 /-- A value has every instance of the scheme whose constraints hold. -/
 def SchemeV (k : Nat) (s : Scheme) (v : Value) : Prop :=
-  ∀ τs, τs.length = s.arity → Holds (s.instPlus τs) → V k (s.inst τs) v
+  ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → V k (s.inst τs) v
 
 theorem SchemeV.mono_iff {k : Nat} {τ : Ty} {v : Value} :
     SchemeV k (.mono τ) v ↔ V k τ v :=
-  ⟨fun h => by simpa using h [] rfl (by simp [Holds, Scheme.instPlus, Scheme.mono]),
+  ⟨fun h => by simpa using h [] rfl (by simp [Holds, Scheme.instPreds, Scheme.mono]),
     fun h _ _ _ => by simpa using h⟩
 
 /-- `G k Γ env`: each value in `env` has the scheme `Γ` gives its variable. -/
@@ -149,9 +149,9 @@ theorem BinOp.eval_sound (hC : Holds C) (hop : BinOpTy C op τ₁ τ₂ τ)
   cases hop with
   | plus hp =>
     cases hp.holds hC with
-    | number =>
+    | plusNumber =>
       obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂; exact Safe.ok hc ⟨_, rfl⟩
-    | string =>
+    | plusString =>
       obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂; exact Safe.ok hc ⟨_, rfl⟩
   | minus => obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂; exact Safe.ok hc ⟨_, rfl⟩
 
@@ -171,9 +171,9 @@ theorem IsValue.run_value (hv : e.IsValue) (ht : HasType C Γ R e τ) (henv : G 
 scheme whose constraints hold. Either some instance's constraints hold, or
 the initialiser is a syntactic value, which can't complete abruptly. -/
 theorem Safe.bindC_forall {p : Result × Nat} {s : Scheme} {K : Value → Nat → Result × Nat}
-    (hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPlus τs)) ∨ ∃ v, p.1 = .ok v)
+    (hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPreds τs)) ∨ ∃ v, p.1 = .ok v)
     (hle : p.2 ≤ k)
-    (h : ∀ τs, τs.length = s.arity → Holds (s.instPlus τs) → Safe p k (s.inst τs) R)
+    (h : ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → Safe p k (s.inst τs) R)
     (hK : ∀ v, p.1 = .ok v → SchemeV p.2 s v → Safe (K v p.2) p.2 τ R) :
     Safe (Inty.bindC p K) k τ R := by
   obtain ⟨r, c⟩ := p
@@ -261,20 +261,20 @@ theorem run_sound (e : Expr) :
     | let_ s L hgen hval h₂ =>
       -- Type `e₁` at each instance of `s`: open `s` at variables above
       -- everything in sight, then substitute the instance's types for them.
-      let m := maxPlusOne (L ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Ty.ftv ++
+      let m := maxPlusOne (L ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Pred.ftv ++
         (R.map Ty.ftv).getD [])
-      have hm : ∀ a, a ∈ L ∨ a ∈ ctxFtv Γ ∨ a ∈ s.ftv ∨ a ∈ C.flatMap Ty.ftv ∨
+      have hm : ∀ a, a ∈ L ∨ a ∈ ctxFtv Γ ∨ a ∈ s.ftv ∨ a ∈ C.flatMap Pred.ftv ∨
           a ∈ (R.map Ty.ftv).getD [] → a < m :=
         fun a ha => lt_maxPlusOne a (by rcases ha with h | h | h | h | h <;> simp [h])
       have hinst : ∀ τs, τs.length = s.arity →
-          HasType (C ++ s.instPlus τs) Γ R e₁ (s.inst τs) := by
+          HasType (C ++ s.instPreds τs) Γ R e₁ (s.inst τs) := by
         intro τs hlen
         have h := (hgen m (fun a ha => hm a (.inl ha))).subst (Subst.block m τs)
         have hfresh : ∀ a, a < m → (Subst.block m τs).find a = none := fun a ha =>
           Subst.find_none (fun p hp e => by have := Subst.block_keys p hp; omega)
         have hCσ : C.map (·.subst (Subst.block m τs)) = C := by
           conv => rhs; rw [← List.map_id C]
-          exact List.map_congr_left (fun c hc => Ty.subst_id (fun a ha =>
+          exact List.map_congr_left (fun c hc => Pred.subst_id (fun a ha =>
             hfresh a (hm a (.inr (.inr (.inr (.inl (List.mem_flatMap.mpr ⟨c, hc, ha⟩))))))))
         have hRσ : R.map (·.subst (Subst.block m τs)) = R := by
           cases R with
@@ -284,16 +284,16 @@ theorem run_sound (e : Expr) :
             exact Ty.subst_id (fun a ha =>
               hfresh a (hm a (.inr (.inr (.inr (.inr (by simpa using ha)))))))
         rwa [List.map_append, hCσ, hRσ,
-          Scheme.openPlus_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen,
+          Scheme.openPreds_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen,
           ctx_subst_id (fun a ha => hfresh a (hm a (.inr (.inl ha)))),
           Scheme.open_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen] at h
-      have hsafe : ∀ τs, τs.length = s.arity → Holds (s.instPlus τs) →
+      have hsafe : ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) →
           Safe (run k env e₁) k (s.inst τs) R := fun τs hlen hp =>
         ih₁ (hinst τs hlen) (hC.append hp) henv
-      have hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPlus τs)) ∨
+      have hw : (∃ τs, τs.length = s.arity ∧ Holds (s.instPreds τs)) ∨
           ∃ v, (run k env e₁).1 = .ok v := by
         rcases hval with ⟨ha, hp⟩ | hv
-        · exact .inl ⟨[], by simp [ha], by simp [Holds, Scheme.instPlus, hp]⟩
+        · exact .inl ⟨[], by simp [ha], by simp [Holds, Scheme.instPreds, hp]⟩
         · obtain ⟨v, hv⟩ := IsValue.run_value hv (hgen m (fun a ha => hm a (.inl ha))) henv
           exact .inr ⟨v, by rw [hv]⟩
       have hc₁ := run_clock_le k env e₁

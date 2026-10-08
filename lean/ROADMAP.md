@@ -60,12 +60,14 @@ The parts every later feature touches.
 - **Functions.** Several parameters, `this`, and optional parameters
   (presence variables, as `types::FuncParam`). Arity rules as in
   `src/infer/features/functions.rs`.
-- **A general constraint language.** A class is a name with parameters,
-  instances, and improvement rules (functional dependencies). Entailment is
-  instance resolution plus the assumptions in scope (HM(X); Jones,
-  "Qualified Types"). `Plus` becomes the first class defined this way.
-  Defaulting (`Num` to `Number`, `NumLit` to `Int`) is a rule of the
-  specification.
+- **A general constraint language.** Done: a constraint is a class applied
+  to types (`Pred`), instances are `Inst` (`Inty/Classes.lean`), and
+  entailment is an instance or an assumption in scope (HM(X); Jones,
+  "Qualified Types"). `Plus` is the first class defined this way. Still to
+  come with the classes that need them: improvement rules (functional
+  dependencies), first for `HasProp` in phase 3, and defaulting (`Num` to
+  `Number`, `NumLit` to `Int`) as a rule of the specification, in phases 1
+  and 5.
 
 ### 1. Completeness of inference
 

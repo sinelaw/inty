@@ -26,7 +26,7 @@ def double : Expr :=
 -- One derivation types `double` monomorphically, at `String → String`.
 example : HasType [] [] none double .string :=
   .let_mono (τ₁ := .arrow .string .string)
-    (.func (.binop (.plus (.inl .string)) (.var_mono rfl) (.var_mono rfl)))
+    (.func (.binop (.plus (.inl .plusString)) (.var_mono rfl) (.var_mono rfl)))
     (.app (.var_mono rfl) (.lit .string))
 
 #guard isString "abab" (eval 10 [] double)
@@ -35,7 +35,7 @@ example : HasType [] [] none double .string :=
 also types at `Number`. -/
 example : HasType [] [] none (.func (.binop .plus (.var 0) (.var 0)))
     (.arrow .number .number) :=
-  .func (.binop (.plus (.inl .number)) (.var_mono rfl) (.var_mono rfl))
+  .func (.binop (.plus (.inl .plusNumber)) (.var_mono rfl) (.var_mono rfl))
 
 /-- Let-polymorphism:
 `const id = function (x) { return x; }; const n = id(1); id("a")` -/
@@ -65,20 +65,22 @@ def polyDouble : Expr :=
 
 /-- `double`'s scheme, `∀ α. Plus α ⇒ α → α`, inty's
 `<a> where Plus a => (a) => a`. -/
-def doubleScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0), [.bound 0]⟩
+def doubleScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0), [⟨.plus, [.bound 0]⟩]⟩
 
 -- The body is typed assuming `Plus α`; each use establishes it.
 example : HasType [] [] none polyDouble .string :=
   .let_ doubleScheme []
-    (fun m _ => .func (.binop (.plus (.inr (by simp [Scheme.openPlus, Scheme.instPlus,
-      doubleScheme, varBlock, PTy.inst]))) (.var_mono rfl) (.var_mono rfl)))
+    (fun m _ => .func (.binop (.plus (.inr (by simp [Scheme.openPreds, Scheme.instPreds,
+      doubleScheme, varBlock, PPred.inst, PTy.inst]))) (.var_mono rfl) (.var_mono rfl)))
     (.inr .func)
     (.let_mono
       (.app (.var (s := doubleScheme) (τs := [.number]) rfl rfl (fun c hc => by
-        simp [Scheme.instPlus, doubleScheme, PTy.inst] at hc; subst hc; exact .inl .number))
+        simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
+        exact .inl .plusNumber))
         (.lit .number))
       (.app (.var (s := doubleScheme) (τs := [.string]) rfl rfl (fun c hc => by
-        simp [Scheme.instPlus, doubleScheme, PTy.inst] at hc; subst hc; exact .inl .string))
+        simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
+        exact .inl .plusString))
         (.lit .string)))
 
 #guard isString "aa" (eval 20 [] polyDouble)

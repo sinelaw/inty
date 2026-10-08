@@ -1,6 +1,7 @@
 import Inty.Types
 import Inty.Subst
 import Inty.Syntax
+import Inty.Classes
 import Inty.Typing
 import Inty.TypeSubst
 import Inty.Semantics

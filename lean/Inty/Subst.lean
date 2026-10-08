@@ -66,6 +66,14 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
     cases σ₁.find a <;> rfl
   | _ => rfl
 
+@[simp] theorem Pred.subst_compose (σ₂ σ₁ : Subst) (p : Pred) :
+    p.subst (Subst.compose σ₂ σ₁) = (p.subst σ₁).subst σ₂ := by
+  simp [Pred.subst]
+
+@[simp] theorem PPred.subst_compose (σ₂ σ₁ : Subst) (p : PPred) :
+    p.subst (Subst.compose σ₂ σ₁) = (p.subst σ₁).subst σ₂ := by
+  simp [PPred.subst]
+
 @[simp] theorem Scheme.subst_compose (σ₂ σ₁ : Subst) (s : Scheme) :
     s.subst (Subst.compose σ₂ σ₁) = (s.subst σ₁).subst σ₂ := by
   simp [Scheme.subst]
@@ -75,6 +83,12 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
 
 @[simp] theorem PTy.subst_nil (p : PTy) : p.subst [] = p :=
   PTy.subst_id (σ := []) (fun _ _ => rfl)
+
+@[simp] theorem Pred.subst_nil (p : Pred) : p.subst [] = p := by
+  cases p; simp [Pred.subst]
+
+@[simp] theorem PPred.subst_nil (p : PPred) : p.subst [] = p := by
+  cases p; simp [PPred.subst]
 
 @[simp] theorem Scheme.subst_nil (s : Scheme) : s.subst [] = s := by
   cases s; simp [Scheme.subst]
@@ -123,6 +137,20 @@ theorem PTy.subst_congr {σ σ' : Subst} {p : PTy}
   | free a => simp [PTy.subst, h a (by simp [PTy.ftv])]
   | _ => rfl
 
+theorem Pred.subst_congr {σ σ' : Subst} {p : Pred}
+    (h : ∀ a ∈ p.ftv, σ.find a = σ'.find a) : p.subst σ = p.subst σ' := by
+  obtain ⟨c, args⟩ := p
+  simp only [Pred.subst, Pred.mk.injEq, true_and]
+  exact List.map_congr_left (fun τ hτ =>
+    Ty.subst_congr (fun a ha => h a (List.mem_flatMap.mpr ⟨τ, hτ, ha⟩)))
+
+theorem PPred.subst_congr {σ σ' : Subst} {p : PPred}
+    (h : ∀ a ∈ p.ftv, σ.find a = σ'.find a) : p.subst σ = p.subst σ' := by
+  obtain ⟨c, args⟩ := p
+  simp only [PPred.subst, PPred.mk.injEq, true_and]
+  exact List.map_congr_left (fun q hq =>
+    PTy.subst_congr (fun a ha => h a (List.mem_flatMap.mpr ⟨q, hq, ha⟩)))
+
 theorem Ctx.subst_congr {σ σ' : Subst} {Γ : List Scheme}
     (h : ∀ a ∈ ctxFtv Γ, σ.find a = σ'.find a) : Ctx.subst σ Γ = Ctx.subst σ' Γ := by
   induction Γ with
@@ -135,7 +163,7 @@ theorem Ctx.subst_congr {σ σ' : Subst} {Γ : List Scheme}
       simp only [Scheme.subst, Scheme.mk.injEq, true_and]
       exact ⟨PTy.subst_congr (fun a ha => h a (.inl (.inl ha))),
         List.map_congr_left (fun q hq =>
-          PTy.subst_congr (fun a ha => h a (.inl (.inr ⟨q, hq, ha⟩))))⟩
+          PPred.subst_congr (fun a ha => h a (.inl (.inr ⟨q, hq, ha⟩))))⟩
     simp [hs, ih (fun a ha => h a (.inr (by simpa [ctxFtv] using ha)))]
 
 /-! ## Generalisation -/
@@ -173,9 +201,12 @@ def Ty.gen (ᾱ : List Nat) : Ty → PTy
     | some i => .bound i
     | none => .free a
 
+/-- A constraint with the variables `ᾱ` quantified. -/
+def Pred.gen (ᾱ : List Nat) (p : Pred) : PPred := ⟨p.cls, p.args.map (Ty.gen ᾱ)⟩
+
 /-- The scheme quantifying `ᾱ` in `τ`, with constraints `G`. -/
-def generalize (ᾱ : List Nat) (τ : Ty) (G : List Ty) : Scheme :=
-  ⟨ᾱ.length, τ.gen ᾱ, G.map (Ty.gen ᾱ)⟩
+def generalize (ᾱ : List Nat) (τ : Ty) (G : List Pred) : Scheme :=
+  ⟨ᾱ.length, τ.gen ᾱ, G.map (Pred.gen ᾱ)⟩
 
 /-- The substitution renaming `ᾱ[i]` to `m + i`. -/
 def renameBlock : List Nat → Nat → Subst
@@ -207,13 +238,14 @@ theorem Ty.gen_inst (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) :
     | none => simp [PTy.subst]
   | _ => rfl
 
-theorem generalize_open (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) (G : List Ty) :
+theorem generalize_open (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) (G : List Pred) :
     τ.subst (renameBlock ᾱ m ++ φ) = ((generalize ᾱ τ G).subst φ).open m :=
   Ty.gen_inst ᾱ m φ τ
 
-theorem generalize_openPlus (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) (G : List Ty) :
-    G.map (·.subst (renameBlock ᾱ m ++ φ)) = ((generalize ᾱ τ G).subst φ).openPlus m := by
-  simp [generalize, Scheme.subst, Scheme.openPlus, Scheme.instPlus, Ty.gen_inst]
+theorem generalize_openPreds (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) (G : List Pred) :
+    G.map (·.subst (renameBlock ᾱ m ++ φ)) = ((generalize ᾱ τ G).subst φ).openPreds m := by
+  simp [generalize, Scheme.subst, Scheme.openPreds, Scheme.instPreds, Pred.gen, Pred.subst,
+    PPred.subst, PPred.inst, Ty.gen_inst]
 
 /-- A substitution that renames only variables outside `τ` leaves `τ` to the
 rest of it. -/
@@ -224,7 +256,7 @@ theorem renameBlock_append_find {ᾱ : List Nat} {a : Nat} (m : Nat) (φ : Subst
 @[simp] theorem Scheme.mono_open (τ : Ty) (m : Nat) : (Scheme.mono τ).open m = τ := by
   simp [Scheme.open]
 
-@[simp] theorem Scheme.mono_openPlus (τ : Ty) (m : Nat) : (Scheme.mono τ).openPlus m = [] := by
-  simp [Scheme.openPlus, Scheme.instPlus, Scheme.mono]
+@[simp] theorem Scheme.mono_openPreds (τ : Ty) (m : Nat) : (Scheme.mono τ).openPreds m = [] := by
+  simp [Scheme.openPreds, Scheme.instPreds, Scheme.mono]
 
 end Inty

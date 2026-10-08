@@ -1,26 +1,21 @@
 import Inty.Syntax
-import Inty.Types
+import Inty.Classes
 
 /-!
 # Declarative typing
 
-`HasType C Γ e τ` is the specification the inference engine (`src/infer`)
+`HasType C Γ R e τ` is the specification the inference engine (`src/infer`)
 implements: it says which types an expression may have, not how to find one.
-`C` lists the types assumed to be `Plus` instances: a polymorphic function
+`C` lists the class constraints assumed to hold: a polymorphic function
 whose body uses `+` on its parameter is typed assuming its scheme's
-constraints, and each use of it must establish them.
+constraints (`Plus a`), and each use of it must establish them.
 
 The operator rules are split out as `UnOpTy` / `BinOpTy`, one constructor per
-operator rule, mirroring the operator catalog in `src/operators`. Type-class
-instances are `PlusInst`, mirroring the instance tables in `src/classes`.
+operator rule, mirroring the operator catalog in `src/operators`. Class
+instances and entailment are in `Inty.Classes`.
 -/
 
 namespace Inty
-
-/-- Instances of the `Plus` class: the types `+` is defined on. -/
-inductive PlusInst : Ty → Prop where
-  | number : PlusInst .number
-  | string : PlusInst .string
 
 /-- The type of a literal: its base type. Literal types (`42`, `"err"`) come
 later, and so does `Int`: inty types an integral literal as `Int` or
@@ -38,24 +33,21 @@ inductive UnOpTy : UnOp → Ty → Ty → Prop where
   | typeof : UnOpTy .typeof τ .string
   | neg : UnOpTy .neg .number .number
 
-/-- `τ` is a `Plus` instance, or assumed to be one. -/
-def Entails (C : List Ty) (τ : Ty) : Prop := PlusInst τ ∨ τ ∈ C
-
 /-- Typing rules of the binary operators under assumptions `C`: operand
 types, result type. Both operands of `+` have the same type, one instance of
 `Plus`: inty's `+` never mixes a `Number` with a `String`. -/
-inductive BinOpTy (C : List Ty) : BinOp → Ty → Ty → Ty → Prop where
-  | plus : Entails C τ → BinOpTy C .plus τ τ τ
+inductive BinOpTy (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
+  | plus : Entails C ⟨.plus, [τ]⟩ → BinOpTy C .plus τ τ τ
   | minus : BinOpTy C .minus .number .number .number
 
 /-- The typing judgement: under the `Plus` assumptions `C`, the context `Γ`
 and the enclosing function's return type `R` (`none` at the top level),
 `e` has type `τ`. -/
-inductive HasType : List Ty → Ctx → Option Ty → Expr → Ty → Prop where
+inductive HasType : List Pred → Ctx → Option Ty → Expr → Ty → Prop where
   | lit : LitTy l τ → HasType C Γ R (.lit l) τ
   /-- A variable has any instance of its scheme whose constraints hold. -/
   | var : Γ[i]? = some s → τs.length = s.arity →
-      (∀ c ∈ s.instPlus τs, Entails C c) →
+      (∀ c ∈ s.instPreds τs, Entails C c) →
       HasType C Γ R (.var i) (s.inst τs)
   /-- A function's body returns `τ₂`, by `return` or as its value. -/
   | func : HasType C (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) (some τ₂) body τ₂ →
@@ -71,8 +63,8 @@ inductive HasType : List Ty → Ctx → Option Ty → Expr → Ty → Prop where
   only a syntactic value generalises; anything else gets a scheme with no
   quantified variables and no constraints. -/
   | let_ (s : Scheme) (L : List Nat) :
-      (∀ m, (∀ a ∈ L, a < m) → HasType (C ++ s.openPlus m) Γ R e₁ (s.open m)) →
-      (s.arity = 0 ∧ s.plus = []) ∨ e₁.IsValue →
+      (∀ m, (∀ a ∈ L, a < m) → HasType (C ++ s.openPreds m) Γ R e₁ (s.open m)) →
+      (s.arity = 0 ∧ s.preds = []) ∨ e₁.IsValue →
       HasType C (s :: Γ) R e₂ τ₂ →
       HasType C Γ R (.let_ e₁ e₂) τ₂
   /-- Both branches have one type, as in Hindley–Milner: inty doesn't guess
@@ -93,12 +85,12 @@ inductive HasType : List Ty → Ctx → Option Ty → Expr → Ty → Prop where
 /-- A variable whose scheme is a monotype has that type. -/
 theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :
     HasType C Γ R (.var i) τ := by
-  simpa using HasType.var (C := C) (R := R) (τs := []) h rfl (by simp [Scheme.instPlus, Scheme.mono])
+  simpa using HasType.var (C := C) (R := R) (τs := []) h rfl (by simp [Scheme.instPreds, Scheme.mono])
 
 /-- A monomorphic `const`. -/
 theorem HasType.let_mono (h₁ : HasType C Γ R e₁ τ₁)
     (h₂ : HasType C (.mono τ₁ :: Γ) R e₂ τ₂) : HasType C Γ R (.let_ e₁ e₂) τ₂ :=
-  .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPlus,
-    Scheme.instPlus, Scheme.mono, Scheme.inst] using h₁) (.inl ⟨rfl, rfl⟩) h₂
+  .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPreds,
+    Scheme.instPreds, Scheme.mono, Scheme.inst] using h₁) (.inl ⟨rfl, rfl⟩) h₂
 
 end Inty

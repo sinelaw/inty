@@ -102,12 +102,6 @@ def tyWire : Ty → String
   | .arrow .. => "fun"
   | .var _ => "var"
 
-/-- Whether a pending `Plus` constraint could still hold: it is on a type
-variable, or on an instance. -/
-def satisfiable : Ty → Bool
-  | .var _ => true
-  | τ => τ.isPlusInst
-
 /-- Inference's verdict: `type T`; `ambiguous`, when a `Plus` constraint on
 a type variable is left that nothing resolves; or `reject`, which includes a
 `Plus` constraint no type could satisfy (on `undefined`, or on a function). -/
@@ -115,8 +109,8 @@ def inferVerdict (e : Expr) : String :=
   match infer [] none e 0 with
   | none => "reject"
   | some o =>
-    if o.plus.all Ty.isPlusInst then s!"type {tyWire o.τ}"
-    else if o.plus.all satisfiable then "ambiguous"
+    if o.preds.all Pred.isInst then s!"type {tyWire o.τ}"
+    else if o.preds.all Pred.satisfiable then "ambiguous"
     else "reject"
 
 def valueWire : Value → String
