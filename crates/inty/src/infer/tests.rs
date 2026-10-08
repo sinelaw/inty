@@ -4660,3 +4660,44 @@ fn test_while_true_with_break_falls_through() {
     "#;
     assert!(infer_program_with_state(forever).is_ok());
 }
+
+#[test]
+fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
+    // A spread operand of unknown shape may hold any field written before
+    // it, and then wins: the two must agree on its type. (Taking the
+    // operand's tail alone typed `f({a: "s"}).a` as an `Int`.)
+    let rejected = [
+        r#"
+        function f(o) { return {a: 1, ...o}; }
+        const n = f({a: "s"}).a - 1;
+        "#,
+        // Two open operands: the later one's unknown part may hide the
+        // earlier one's fields, so they share it.
+        r#"
+        function g(o1, o2) { return {...o1, ...o2}; }
+        const r = {a: "s", ...g({a: 1}, {})};
+        "#,
+    ];
+    for source in rejected {
+        assert!(infer_program_with_state(source).is_err(), "{source}");
+    }
+    let accepted = r#"
+        function f(o) { return {a: 1, ...o}; }
+        const x = f({b: "s"}).b.length;
+        const y = f({}).a - 1;
+        const z = f({a: 2}).a - 1;
+        function h(o) { return {...o, ...{b: 1}}; }
+        const q = h({a: "s"}).a.length;
+        const p = h({b: "s"}).b - 1;
+        // A closed spread after an open one keeps the open one's fields
+        // (`r.a` was typed `String`).
+        const r = {a: "s", ...h({a: 1})};
+        const n = r.a - 1;
+        const defaults = {a: 1, b: "x"};
+        function opts(o) { return {...defaults, ...o}; }
+        const oo = opts({a: 3}).b.length;
+        function g(o1, o2) { return {...o1, ...o2}; }
+        const w = g({a: 1}, {a: 2}).a - 1;
+    "#;
+    assert!(infer_program_with_state(accepted).is_ok());
+}

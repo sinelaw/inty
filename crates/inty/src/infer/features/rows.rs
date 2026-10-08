@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
 use crate::span::Span;
 use crate::types::{
-    FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme,
+    FieldEntry, Presence, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme,
 };
 
 use super::super::env::TypeEnv;
@@ -102,10 +102,8 @@ impl InferState {
     ///
     /// Properties are walked in source order. Object spreads
     /// (`...expr`) merge the spread argument's row in right-bias
-    /// fashion: keys later in source order overwrite earlier ones.
-    /// Per spec, the result row's tail is the tail of the last
-    /// spread operand if that tail is a row variable; otherwise the
-    /// row is closed.
+    /// fashion: keys later in source order overwrite earlier ones,
+    /// where the operand has them (see `merge_spread`).
     pub(in crate::infer) fn infer_object(
         &mut self,
         env: &TypeEnv,
@@ -341,33 +339,25 @@ impl InferState {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
                     let resolved = self.zonk(&arg_ty);
-                    let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
-                    // Right-biased merge: this spread's properties
-                    // overwrite anything earlier — including the
-                    // result of an earlier spread or property.
-                    for (k, v) in spread_row.props {
-                        if *inherited {
-                            // A base class's field keeps its type in the
-                            // subclass, so the base's methods (typed
-                            // against the base instance) may run on a
-                            // subclass instance: their receiver
-                            // constraint is dropped.
+                    let mut spread_row = self.coerce_to_row(&resolved, *spread_span)?;
+                    if *inherited {
+                        // A base class's field keeps its type in the
+                        // subclass, so the base's methods (typed
+                        // against the base instance) may run on a
+                        // subclass instance: their receiver
+                        // constraint is dropped.
+                        for (k, v) in spread_row.props.iter_mut() {
                             inherited_fields.push((k.clone(), v.ty.clone()));
-                            let v = FieldEntry {
-                                presence: v.presence,
-                                ty: without_receiver(&self.zonk(&v.ty)),
-                            };
-                            props.insert(k, v);
-                        } else {
-                            props.insert(k, v);
+                            v.ty = without_receiver(&self.zonk(&v.ty));
                         }
                     }
-                    // Per spec: "the result row's tail is the tail
-                    // of the last spread operand if it's a row
-                    // variable." A `Closed` tail flips the result
-                    // back to closed; an `Open(α)` tail makes the
-                    // result open at `α` (any later spread overwrites).
-                    row_tail = spread_row.tail;
+                    let so_far = RowType {
+                        props: std::mem::take(&mut props),
+                        tail: row_tail,
+                    };
+                    let merged = self.merge_spread(*spread_span, so_far, spread_row)?;
+                    props = merged.props;
+                    row_tail = merged.tail;
                 }
             }
         }
@@ -402,6 +392,123 @@ impl InferState {
 
         let _ = had_spread;
         Ok(self.zonk(&obj_type))
+    }
+
+    /// The row of `{...so_far, ...spread}`: the operand's fields win,
+    /// except where it may lack one.
+    ///
+    /// Field by field (`e` before, `v` the operand's): a present `v`
+    /// wins, an absent one leaves `e`; where `v` may be either, `e` and
+    /// `v` must agree on the type, and the result is present if `e` is
+    /// (otherwise their presences must agree too, as a presence can't be
+    /// "either"). An open row's unknown part may hold any label the other
+    /// side names, so it is first extended with those labels, at fresh
+    /// presences and types; two open rows then share their unknown parts.
+    /// (Taking the operand's tail alone, as this used to, was unsound:
+    /// with `function f(o) { return {a: 1, ...o}; }`, `f({a: "s"}).a`
+    /// was an `Int`.) A recursive tail counts as closed, as it does for
+    /// the finished literal.
+    fn merge_spread(
+        &mut self,
+        span: Span,
+        so_far: RowType,
+        spread: RowType,
+    ) -> InferResult<RowType> {
+        let spread = self.row_view(spread);
+        let so_far = self.extend_row_with(span, so_far, spread.props.keys().cloned())?;
+        let spread = self.row_view(spread);
+        let spread = self.extend_row_with(span, spread, so_far.props.keys().cloned())?;
+        let mut so_far = self.row_view(so_far);
+        let tail = match (so_far.tail.clone(), spread.tail.clone()) {
+            (RowTail::Open(a), RowTail::Open(b)) => {
+                self.unify(
+                    span,
+                    &Type::Row(RowType::empty_open(a)),
+                    &Type::Row(RowType::empty_open(b.clone())),
+                )?;
+                RowTail::Open(b)
+            }
+            (RowTail::Open(a), _) | (_, RowTail::Open(a)) => RowTail::Open(a),
+            _ => RowTail::Closed,
+        };
+        for (k, v) in spread.props {
+            let merged = match so_far.props.remove(&k) {
+                None => v,
+                Some(e) => {
+                    let ep = self.main_subst.resolve_presence(&e.presence);
+                    let vp = self.main_subst.resolve_presence(&v.presence);
+                    match (ep, vp) {
+                        (_, Presence::Pre) => v,
+                        (_, Presence::Abs) => e,
+                        (Presence::Abs, _) => v,
+                        (Presence::Pre, _) => {
+                            self.unify(span, &e.ty, &v.ty)?;
+                            e
+                        }
+                        (ep @ Presence::Var(_), vp) => {
+                            self.unify_presence(span, &ep, &vp)?;
+                            self.unify(span, &e.ty, &v.ty)?;
+                            v
+                        }
+                    }
+                }
+            };
+            so_far.props.insert(k, merged);
+        }
+        Ok(RowType {
+            props: so_far.props,
+            tail,
+        })
+    }
+
+    /// `row`, its open tail extended with those of `labels` it doesn't
+    /// name, each at a fresh presence and type.
+    fn extend_row_with(
+        &mut self,
+        span: Span,
+        row: RowType,
+        labels: impl Iterator<Item = PropName>,
+    ) -> InferResult<RowType> {
+        let RowTail::Open(tail) = row.tail.clone() else {
+            return Ok(row);
+        };
+        let mut extra = BTreeMap::new();
+        for k in labels.filter(|k| !row.props.contains_key(k)) {
+            let entry = FieldEntry {
+                presence: Presence::Var(self.fresh_pvar()),
+                ty: self.fresh_type_var(),
+            };
+            extra.insert(k, entry);
+        }
+        if extra.is_empty() {
+            return Ok(row);
+        }
+        let rest = self.fresh_flex();
+        self.unify(
+            span,
+            &Type::Row(RowType::empty_open(tail)),
+            &Type::Row(RowType::open_entries(extra, rest)),
+        )?;
+        Ok(self.row_view(row))
+    }
+
+    /// `row` with the fields its bound tail variables hold (zonking
+    /// leaves a bound tail in place).
+    fn row_view(&mut self, row: RowType) -> RowType {
+        let mut row = row;
+        while let RowTail::Open(v) = row.tail.clone() {
+            match self.zonk(&Type::Var(v.clone())) {
+                Type::Row(rest) => {
+                    for (k, e) in rest.props {
+                        row.props.entry(k).or_insert(e);
+                    }
+                    row.tail = rest.tail;
+                }
+                Type::Var(w) if w != v => row.tail = RowTail::Open(w),
+                _ => break,
+            }
+        }
+        row
     }
 
     /// Bidirectional checking for an object literal against an

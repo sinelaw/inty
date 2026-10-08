@@ -70,6 +70,8 @@ lastChar(42);        // error: a number has neither
 
 inference doesn't decide what `obj` is when it meets `obj.name` on a value whose type isn't known yet. It records the constraint and resolves it once the type is known: a string's or array's built-in property (each read gets its own copy of a built-in method's type, so `s.slice(i)` and `s.slice(i, j)` can both be called on the same parameter), or an object's field. A constraint still open when the function is generalised becomes part of its type, like `Plus` below; the receiver determines the result, so a constraint on a variable the environment fixes fixes its result too (see `env_fixed_vars`). A receiver nothing ever pins down is read as an object with that field, which is what inty inferred for every property access before `HasProp`.
 
+An object spread (`{a: 1, ...o}`) takes the operand's fields over the ones before it. When the operand's shape is only partly known, it may or may not have `a`, so the result's `a` is the literal's only if `o`'s `a`, when there is one, has the same type: `function f(o) { return {a: 1, ...o}; }` accepts `f({})` and `f({a: 2})` but not `f({a: "s"})`. Likewise two operands of unknown shape (`{...o1, ...o2}`) must agree on the fields neither names.
+
 ### Operator Overloading (Type Classes)
 
 `+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row. Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
