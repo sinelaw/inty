@@ -358,7 +358,7 @@ run the same way.
 
 A binding's type is fixed at declaration. Operators that combine values still need their operands' types to agree. Output below is verbatim from `inty --no-color`.
 
-**No variable type changes.** Assignment unifies with the binding's existing type.
+**No variable type changes.** Assignment unifies with the binding's existing type. A `let` or `var` that is assigned after its initialiser has one type, never a polymorphic one: `let id = function (x) { return x; }` can be called at two types only if it is never reassigned, as a `const` can.
 
 ```javascript
 // ❌ Rejected

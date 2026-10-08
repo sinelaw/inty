@@ -107,19 +107,33 @@ and to be kept for every later phase. The decisions it needed:
 
 ### 2. State and control
 
-- A heap threaded through `run` beside the clock. Cells, assignment, and
-  `let` and `var` bindings, generalised and checked against later
-  assignments with rigid variables, as inty does: `id = function (x) {
-  return x - 1; }` is rejected for a polymorphic `id`.
-- Loops, `break`, `continue`, `switch`, `try` / `catch` / `finally`.
-- **Decision point: Iris or a hand-built relation.** First, a time-boxed
-  trial restating the current calculus and fundamental lemma in
-  [iris-lean](https://github.com/leanprover-community/iris-lean). It shows
-  whether its weakest preconditions and adequacy theorem apply to our
-  language, and what the small-step semantics they need costs next to the
-  executable interpreter, which stays the test oracle either way. The
-  alternative is a Kripke logical relation: `V` indexed by a store typing
-  that only grows (Ahmed, Dreyer and Rossberg).
+- **A heap, as `dynamics` has.** Every binding is a cell: a `const`,
+  a `let`, a parameter. `run` threads the heap beside the clock, and a
+  call stores its arguments in fresh cells.
+- **Assignment and `let`.** A `let` that is never written is generalised
+  as a `const` is. One that is written has one type, and an assignment
+  unifies with it (inty used to generalise it and check each assignment
+  against the polymorphic type with rigid variables, which no typing rule
+  can state, since a rule could always pick a less general type; inty now
+  does this). Assigning to a `const` is rejected by a scope check beside
+  the typing rules.
+- Loops, `break`, `continue`, `switch`, `try` / `catch` / `finally`. A
+  caught exception has an opaque type: anything can be thrown (inty used
+  to give it a flexible variable, which was unsound: `e - 1` on a thrown
+  string got stuck in `dynamics`).
+- **Decision: a hand-built Kripke logical relation, not Iris.** The
+  trial found iris-lean usable: it builds against our Lean (4.34.1),
+  needs only batteries and Qq, takes about 17 minutes, and has weakest
+  preconditions, adequacy and HeapLang. But its adequacy theorem is about
+  a small-step semantics, which we would have to write beside the
+  interpreter and prove to agree with it for every construct. Our store
+  holds values of syntactic types, so a world can map each location to a
+  scheme (Ahmed, Appel and Virga's stratified model), with no circularity
+  to solve: `V k W τ v` is defined by well-founded recursion on the index
+  and the type, a function's promise quantifies over larger worlds, and
+  the heap invariant is required one tick down. The theorems stay about
+  the executable interpreter. Iris remains the option for the day the
+  store needs invariants richer than a type per location.
 
 ### 3. Records and rows
 

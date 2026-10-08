@@ -888,8 +888,9 @@ fn test_monomorphic_object_property_assignment() {
 // ========================================================================
 // Subsumption checking on reassignment to polymorphic mutable bindings.
 //
-// When a var/let is generalized to a polytype σ at its declaration, every
-// subsequent assignment must produce a value at-least-as-polymorphic as σ.
+// A var/let written after its initialiser is monomorphic, so these concern
+// polymorphic record fields, written through an alias. Every assignment
+// must produce a value at-least-as-polymorphic as the field's polytype.
 // Without this check, assigning a less-polymorphic function to a polymorphic
 // var lets later uses of the var instantiate the original (now-stale)
 // polytype, producing inferred types that disagree with runtime values.
@@ -920,15 +921,11 @@ fn test_polymorphic_var_reassignment_unsound() {
 }
 
 #[test]
-fn test_polymorphic_var_assignment_skolem_escape() {
-    // The RHS of `x = function(y) { return z; }` captures `z` from the
-    // enclosing function. Naively skolemizing x's polytype `<a>(a) => a`
-    // and unifying with `(?γ) => typeof z` would bind z's flex var to
-    // the fresh skolem α — leaking α into the surrounding env. After
-    // that, `leak`'s inferred signature contains a free skolem and
-    // calling `leak(42)` produces a confusing "expected 'a', found
-    // Number" mismatch. The subsumption check must detect the escape
-    // and reject the assignment cleanly.
+fn test_reassigned_var_is_monomorphic() {
+    // A `var` written after its initialiser isn't generalized: `x` has one
+    // type, `(a) => a` at a single `a`, and the assignment unifies with it.
+    // Capturing `z` then just makes `z`'s type that `a` — nothing rigid is
+    // involved, so nothing can escape.
     let source = r#"
         function id(a) { return a; }
         function leak(z) {
@@ -937,13 +934,29 @@ fn test_polymorphic_var_assignment_skolem_escape() {
           return z;
         }
     "#;
-    let result = infer_program_with_state(source);
-    assert!(
-        result.is_err(),
-        "Capturing an outer-scope variable in the RHS of a polymorphic \
-         reassignment must be rejected — otherwise a skolem leaks into the \
-         enclosing function's signature"
-    );
+    assert!(infer_program_with_state(source).is_ok());
+    // The one type serves the initialiser and the assignment; a reassigned
+    // `let` can't be used at two types.
+    let mono = r#"
+        let f = function (x) { return x; };
+        f = function (x) { return x - 1; };
+        const c = f(2);
+    "#;
+    assert!(infer_program_with_state(mono).is_ok());
+    let two_types = r#"
+        let g = function (x) { return x; };
+        g = function (x) { return x; };
+        const a = g(1);
+        const b = g("s");
+    "#;
+    assert!(infer_program_with_state(two_types).is_err());
+    // A `let` never written is generalized, as a `const` is.
+    let poly = r#"
+        let h = function (x) { return x; };
+        const a = h(1);
+        const b = h("s");
+    "#;
+    assert!(infer_program_with_state(poly).is_ok());
 }
 
 #[test]

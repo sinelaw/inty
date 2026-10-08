@@ -153,6 +153,14 @@ impl Resolution {
         self.binding_at(span, name)
             .is_some_and(|id| self.stable[id as usize])
     }
+
+    /// Whether the identifier `name` at `span` refers to a binding that may
+    /// be written after its initialiser. Unlike `!stable_at`, an
+    /// identifier the resolution doesn't know is not written.
+    pub fn written_at(&self, span: Span, name: &str) -> bool {
+        self.binding_at(span, name)
+            .is_some_and(|id| !self.stable[id as usize])
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

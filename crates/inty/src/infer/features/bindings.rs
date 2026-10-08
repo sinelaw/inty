@@ -509,6 +509,12 @@ impl InferState {
             //    giving them a polytype lets writes silently violate the
             //    polymorphism. Polymorphic record/array storage must be
             //    opted in via an explicit type annotation (case 1).
+            // 3. A `let` or `var` that is written after its initialiser is
+            //    never generalized: an assignment unifies with its one
+            //    type. (Generalizing it would leave each assignment to be
+            //    checked at least as polymorphic as the initialiser, which
+            //    no typing rule can state: the rules could always pick a
+            //    less general type for the binding.)
             if is_declaration || decl.init.as_ref().is_some_and(is_syntactic_value) {
                 self.simplify_has_props()?;
             }
@@ -519,6 +525,8 @@ impl InferState {
                 match &decl.init {
                     Some(init)
                         if is_syntactic_value(init)
+                            && (kind == VarKind::Const
+                                || !self.resolution.written_at(decl.span, &decl.name))
                             && (self.config.generalize_mutable_var_containers
                                 || !is_mutable_container_literal(init)) =>
                     {
