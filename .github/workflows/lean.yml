@@ -1,0 +1,26 @@
+name: Lean
+
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "lean/**", ".github/workflows/lean.yml" ]
+  pull_request:
+    branches: [ "main" ]
+    paths: [ "lean/**", ".github/workflows/lean.yml" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lean
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install elan
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+          | sh -s -- -y --default-toolchain none
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+    # Checks every proof. Warnings are errors, so a `sorry` fails the build.
+    - name: Build
+      run: lake build

@@ -1,0 +1,8 @@
+name = "inty"
+defaultTargets = ["Inty"]
+
+[[lean_lib]]
+name = "Inty"
+# A `sorry` is a warning; treating warnings as errors keeps every proof
+# complete.
+leanOptions = { warningAsError = true }
