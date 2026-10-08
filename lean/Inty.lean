@@ -10,6 +10,7 @@ import Inty.Clock
 import Inty.Unify
 import Inty.Infer
 import Inty.InferSound
+import Inty.InferComplete
 import Inty.Builtins
 import Inty.Examples
 import Inty.Statements
