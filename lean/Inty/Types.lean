@@ -44,6 +44,9 @@ structure Scheme where
   body : PTy
   deriving DecidableEq, Repr
 
+/-- A typing context: the type scheme of each variable, innermost first. -/
+abbrev Ctx := List Scheme
+
 /-- A monotype as a scheme body. -/
 def Ty.toPTy : Ty → PTy
   | .number => .number

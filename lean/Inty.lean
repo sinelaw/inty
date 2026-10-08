@@ -1,8 +1,11 @@
 import Inty.Types
+import Inty.Subst
 import Inty.Syntax
 import Inty.Typing
 import Inty.TypeSubst
 import Inty.Semantics
 import Inty.Soundness
+import Inty.Infer
+import Inty.InferSound
 import Inty.Examples
 import Inty.Axioms

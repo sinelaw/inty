@@ -2,7 +2,8 @@
 
 A machine-checked model of inty's type system, in Lean 4 (core library only,
 no Mathlib). It covers a small core calculus, with let-polymorphism under the
-value restriction, and a complete type-soundness proof. It is laid out so
+value restriction, a complete type-soundness proof, and an executable
+type-inference algorithm proved sound. It is laid out so
 that each inty feature can be added the way it is added to the Rust code: a
 typing rule, an operator arm and a runtime arm, plus one new case in the
 proof. Paths like `src/dynamics` are relative to `crates/inty`.
@@ -32,8 +33,21 @@ must not get stuck on it"), here proved for all programs of the calculus.
 The key lemma for polymorphism is `Inty.HasType.subst` (in
 `Inty/TypeSubst.lean`): typing is preserved by substituting types for type
 variables. The soundness proof uses it to type a generalised `const` at each
-instance of its scheme. `Inty/Axioms.lean` pins the axioms these theorems use
-to Lean's standard ones (`propext`, `Classical.choice`, `Quot.sound`).
+instance of its scheme.
+
+`Inty.inferProgram_sound` (in `Inty/InferSound.lean`): whatever type inference
+finds is a valid typing,
+
+```
+inferProgram e = some τ → HasType [] e τ
+```
+
+so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
+gets stuck. Completeness, that inference finds a type whenever one exists,
+is not proved yet.
+
+`Inty/Axioms.lean` pins the axioms these theorems use to Lean's standard ones
+(`propext`, `Classical.choice`, `Quot.sound`).
 
 ## The calculus
 
@@ -46,6 +60,8 @@ to Lean's standard ones (`propext`, `Classical.choice`, `Quot.sound`).
 | `Expr.IsValue` (the value restriction) | `is_syntactic_value`, `src/infer/features/bindings.rs` |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
 | `PlusInst` | the `Plus` instance table, `src/classes` |
+| `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
+| `Out.plus` (pending `Plus` constraints) | the constraints `src/infer` resolves once types are known |
 | `Value`, `Stuck`, `eval` (fuel-bounded interpreter) | `src/dynamics` (`Value`, `Stuck`, fuel) |
 | `Value.truthy`, `Value.typeString` | `Value::truthy`, `Value::type_string` |
 | `ValTy`, `EnvTy`, `eval_sound` | `src/meta/soundness.rs` |
@@ -81,12 +97,20 @@ These choices are meant to hold up as the calculus grows.
   stands in for "the generalised variables aren't free in `Γ`" without
   renaming lemmas (Charguéraud's mini-ML, and fhm, do the same).
 - **Typing is extrinsic and declarative.** `HasType` is a relation on plain
-  syntax, separate from any algorithm. Inference will be proved sound, then
-  complete, against it.
+  syntax, separate from any algorithm. Inference is proved sound against it;
+  completeness is next.
 - **Values are typed by a value-typing relation** (`ValTy`): a closure has
   type `τ₁ → τ₂` when its body is well typed in a context its captured
   environment satisfies. Once recursive types arrive, `ValTy` is planned to
   become a step-indexed logical relation.
+- **Inference is proved sound without freshness invariants.** The theorem
+  says the inferred type is valid under the inferred substitution and any
+  further substitution that resolves the pending `Plus` constraints. Stated
+  that way, a `const`'s generalisation is justified by renaming, and the
+  proof never needs inference's fresh variables to be fresh; completeness
+  will. Unification is bounded by fuel for the same reason. A `+` defers
+  its `Plus` constraint until the program is checked, and a `const` doesn't
+  generalise a variable such a constraint mentions.
 - **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
   and `Arith` classes, is a roadmap item.
 
@@ -97,10 +121,11 @@ This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
 1. Syntax: a constructor in `Expr` (and in `Ty` / `Value` if needed).
 2. Typing: a rule in `HasType`, or an arm in `UnOpTy` / `BinOpTy`.
 3. Semantics: an arm in `eval` (or `UnOp.eval` / `BinOp.eval`).
-4. Proof: a case in `HasType.subst` and in `eval_sound` (or in
-   `UnOp.eval_sound` / `BinOp.eval_sound`), plus a `ValTy` constructor for
-   any new value form.
-5. An example in `Inty/Examples.lean`.
+4. Inference: an arm in `infer`.
+5. Proof: a case in `HasType.subst`, `eval_sound` (or `UnOp.eval_sound` /
+   `BinOp.eval_sound`) and `infer_sound`, plus a `ValTy` constructor for any
+   new value form.
+6. An example in `Inty/Examples.lean`.
 
 Lean's exhaustiveness checks point at every case still missing.
 
@@ -113,10 +138,12 @@ cheapest proofs first and the hardest last.
    generalising under the value restriction, and the type substitution
    lemma. A value in the environment has every instance of its variable's
    scheme.
-2. **Inference.** An executable unification-based algorithm (Algorithm W),
-   proved sound against `HasType`, then complete with principal types.
-   [fhm](https://github.com/Arrow7000/fhm) is a Lean 4 template for exactly
-   this, including SCC grouping of recursive bindings (`docs/scc-inference.md`).
+2. **Inference.** Soundness is done: Algorithm W, executable, proved sound
+   against `HasType`. What remains is completeness with principal types,
+   which needs a termination proof for unification in place of its fuel,
+   plus the invariant that inference's fresh variables really are fresh.
+   [fhm](https://github.com/Arrow7000/fhm) is a Lean 4 template for this,
+   including SCC grouping of recursive bindings (`docs/scc-inference.md`).
 3. **Differential testing.** A `lean_exe` that reads a serialised core AST
    and prints the checker's and interpreter's verdicts. The Rust side lowers
    the programs `src/meta/soundness.rs` generates and compares. Fuel is
@@ -150,7 +177,8 @@ The evidence so far (System Capless, Typed Racket, fhm) suggests a split:
 agents do the proof engineering well, while the definitions and theorem
 statements need human review. A wrong statement compiles just as well as a
 right one. So review changes to `Types`, `Syntax`, `Typing`, `Semantics`
-and the statements of `eval_sound` and `HasType.subst` closely, and treat proofs as checked by Lean.
+and the statements of `eval_sound`, `HasType.subst` and `inferProgram_sound`
+closely, and treat proofs as checked by Lean.
 [lean-lsp-mcp](https://github.com/project-numina/lean-lsp-mcp) gives an agent
 goal states and diagnostics:
 

@@ -1,4 +1,4 @@
-import Inty.Soundness
+import Inty.InferSound
 
 /-!
 # Examples
@@ -105,5 +105,22 @@ example : HasType [] (.cond (str "") (num 1) (num 2)) .number :=
 #guard match eval 10 [] (.app (num 1) (.var 5)) with
   | .stuck .undefinedVariable => true
   | _ => false
+
+/-! ## Inference
+
+`inferProgram` runs at build time. Each type it finds is a valid typing, by
+`inferProgram_sound`. -/
+
+#guard inferProgram double == some .string
+#guard inferProgram polyId == some .string
+#guard inferProgram countdown == some .string
+#guard inferProgram mixedPlus == none
+-- `id` alone gets the most general type, `α → α`.
+#guard inferProgram (.func (.var 0)) == some (.arrow (.var 0) (.var 0))
+-- A `+` whose operands nothing pins down is rejected: schemes can't carry
+-- the `Plus` constraint yet.
+#guard inferProgram (.func (.binop .plus (.var 0) (.var 0))) == none
+
+example : HasType [] polyId .string := inferProgram_sound (by decide)
 
 end Inty.Examples

@@ -1,4 +1,4 @@
-import Inty.Soundness
+import Inty.InferSound
 
 /-!
 # Axiom audit
@@ -16,3 +16,9 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.HasType.subst' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Inty.HasType.subst
+
+/-- info: 'Inty.inferProgram_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferProgram_sound
+
+/-- info: 'Inty.inferProgram_never_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferProgram_never_stuck

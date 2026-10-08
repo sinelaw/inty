@@ -15,9 +15,6 @@ instances are `PlusInst`, mirroring the instance tables in `src/classes`.
 
 namespace Inty
 
-/-- A typing context: the type scheme of each variable, innermost first. -/
-abbrev Ctx := List Scheme
-
 /-- Instances of the `Plus` class: the types `+` is defined on. -/
 inductive PlusInst : Ty → Prop where
   | number : PlusInst .number
