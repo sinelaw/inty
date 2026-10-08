@@ -702,24 +702,31 @@ theorem lookup_append_some {l : String} {v : Value} {fs₁ fs₂ : List (String 
       simp only [List.cons_append, List.lookup_cons, e]
       exact ih h
 
-/-- A spread of two objects: each `Merge` is an instance, since an object's
-contents have no slot of unknown presence, so the merged fields have the
-result's type. -/
-theorem spreadFields_sound {C : List Pred} {L : List String} {ps τs ss rs : List Ty}
-    {v₁ v₂ : Value} {c : Nat} {W : World} {h : Heap} (hC : HoldsOrVar C)
+/-- A record's value is an object, whose fields have the record's
+contents. -/
+theorem fieldsOf_sound {L : List String} {ss : List Ty} {v : Value} {c : Nat} {W : World}
+    {h : Heap} (hv : V c W (.record L ss) v) (hH : HeapOK c W h) :
+    ∃ fs, v.fieldsOf h = some fs ∧ V c W (.app .contents [.record L ss]) (.fields fs) := by
+  rw [V_record] at hv
+  obtain ⟨ℓ, rfl, hℓ⟩ := hv
+  obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
+  have hV := SchemeV.mono_iff.mp hsv
+  obtain ⟨fs, rfl, -⟩ := V_contents.mp hV
+  exact ⟨fs, by simp [Value.fieldsOf, hcv], hV⟩
+
+/-- A spread of two objects' fields: each `Merge` is an instance, since an
+object's contents have no slot of unknown presence, so the merged fields
+have the result's type. -/
+theorem spread_contents_sound {C : List Pred} {L : List String} {ps τs ss rs : List Ty}
+    {fs₁ fs₂ : List (String × Value)} {c : Nat} {W : World} (hC : HoldsOrVar C)
     (hps : ps.length = L.length) (hτs : τs.length = L.length) (hss : ss.length = L.length)
     (hrs : rs.length = L.length) (hm : ∀ p ∈ mergePreds ps τs ss rs, Entails C p)
-    (hv₁ : V c W (.record L ss) v₁) (hv₂ : V c W (.record L (List.zipWith Ty.slot ps τs)) v₂)
-    (hH : HeapOK c W h) :
-    ∃ fs, spreadFields h v₁ v₂ = some fs ∧ V c W (.app .contents [.record L rs]) (.fields fs) := by
-  rw [V_record] at hv₁ hv₂
-  obtain ⟨ℓ₁, rfl, hℓ₁⟩ := hv₁
-  obtain ⟨ℓ₂, rfl, hℓ₂⟩ := hv₂
-  obtain ⟨cv₁, hcv₁, hsv₁⟩ := hH.2 ℓ₁ _ hℓ₁
-  obtain ⟨cv₂, hcv₂, hsv₂⟩ := hH.2 ℓ₂ _ hℓ₂
-  obtain ⟨fs₁, rfl, hpre₁, habs₁⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv₁)
-  obtain ⟨fs₂, rfl, hpre₂, habs₂⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv₂)
-  refine ⟨fs₂ ++ fs₁, by simp [spreadFields, hcv₁, hcv₂], ?_⟩
+    (hv₁ : V c W (.app .contents [.record L ss]) (.fields fs₁))
+    (hv₂ : V c W (.app .contents [.record L (List.zipWith Ty.slot ps τs)]) (.fields fs₂)) :
+    V c W (.app .contents [.record L rs]) (.fields (fs₂ ++ fs₁)) := by
+  obtain ⟨_, he₁, hpre₁, habs₁⟩ := V_contents.mp hv₁
+  obtain ⟨_, he₂, hpre₂, habs₂⟩ := V_contents.mp hv₂
+  cases he₁; cases he₂
   -- Each label: the operand has its field (`pre`) or hasn't (`abs`).
   have key : ∀ l r, Ty.field l L rs = some r →
       (∃ τ, r = .slot .pre τ ∧ ∃ v', fs₂.lookup l = some v' ∧ V c W τ v') ∨
@@ -1225,15 +1232,18 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       rename_i ss ps τs rs
       simp only [run]
       refine Safe.bindC (ih₁ he₁ hC hG hH) fun v₁ W₁ _ hW₁ hH₁ hv₁ => ?_
+      obtain ⟨fs₁, hf₁, hV₁⟩ := fieldsOf_sound hv₁ hH₁
+      simp only [hf₁]
       have hc₁ := run_clock_le k env h e₁
       rw [Nat.min_eq_left hc₁]
       refine Safe.bindC (ih₂ he₂ hC (G.mono hW₁ hG) hH₁) fun v₂ W₂ _ hW₂ hH₂ hv₂ => ?_
-      obtain ⟨fs, hfs, hV⟩ := spreadFields_sound hC hps hτs hss hrs hm
-        (hv₁.mono (run_clock_le _ _ _ _) hW₂) hv₂ hH₂
-      generalize run (run k env h e₁).2.1 env (run k env h e₁).2.2 e₂ = p at hfs hH₂ hV ⊢
+      obtain ⟨fs₂, hf₂, hV₂⟩ := fieldsOf_sound hv₂ hH₂
+      have hV := spread_contents_sound hC hps hτs hss hrs hm
+        (hV₁.mono (run_clock_le _ _ _ _) hW₂) hV₂
+      generalize run (run k env h e₁).2.1 env (run k env h e₁).2.2 e₂ = p at hf₂ hH₂ hV ⊢
       obtain ⟨r₂, c₂, h₂⟩ := p
-      simp only at hfs hH₂ hV ⊢
-      rw [hfs]
+      simp only at hf₂ hH₂ hV ⊢
+      rw [hf₂]
       have hW₃ := List.prefix_append W₂ [Scheme.mono (.app .contents [.record L rs])]
       refine Safe.ok (Nat.le_refl _) hW₃ ?_ ?_
       · exact hH₂.alloc (by simp) (fun i s' v' hs hv' => by

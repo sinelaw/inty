@@ -171,14 +171,14 @@ def Value.setProp (o : Value) (h : Heap) (l : String) (v : Value) : Result × He
 first, as in JavaScript. -/
 def objFields (ls : List String) (vs : List Value) : Value := .fields (ls.zip vs).reverse
 
-/-- The fields of `{...o₁, ...o₂}`: `o₂`'s, then `o₁`'s, so a lookup finds
-`o₂`'s first, as the later spread wins in JavaScript and `dynamics`. -/
-def spreadFields (h : Heap) : Value → Value → Option (List (String × Value))
-  | .obj ℓ₁, .obj ℓ₂ =>
-    match h[ℓ₁]?, h[ℓ₂]? with
-    | some (.fields fs₁), some (.fields fs₂) => some (fs₂ ++ fs₁)
-    | _, _ => none
-  | _, _ => none
+/-- An object's fields, what a spread copies; `none` for what isn't an
+object. -/
+def Value.fieldsOf (h : Heap) : Value → Option (List (String × Value))
+  | .obj ℓ =>
+    match h[ℓ]? with
+    | some (.fields fs) => some fs
+    | _ => none
+  | _ => none
 
 /-- A call's result: a `return` from the body is the call's value. -/
 def Result.catchReturn : Result → Result
@@ -318,13 +318,18 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
     bindC (run (min c₁ clock) env h₁ v) fun vv c₂ h₂ =>
       let p := vo.setProp h₂ l vv
       (p.1, c₂, p.2)
-  -- Both objects, then a new cell for the merged fields.
+  -- Each operand's fields are copied once it is evaluated, as in
+  -- JavaScript and `dynamics`, then a new cell holds them: `e₂`'s first,
+  -- so a lookup finds them before `e₁`'s.
   | .spread e₁ e₂ =>
     bindC (run clock env heap e₁) fun v₁ c₁ h₁ =>
-    bindC (run (min c₁ clock) env h₁ e₂) fun v₂ c₂ h₂ =>
-      match spreadFields h₂ v₁ v₂ with
-      | some fs => (.ok (.obj h₂.length), c₂, h₂ ++ [.fields fs])
-      | none => (.stuck .notSpreadable, c₂, h₂)
+      match v₁.fieldsOf h₁ with
+      | none => (.stuck .notSpreadable, c₁, h₁)
+      | some fs₁ =>
+        bindC (run (min c₁ clock) env h₁ e₂) fun v₂ c₂ h₂ =>
+          match v₂.fieldsOf h₂ with
+          | none => (.stuck .notSpreadable, c₂, h₂)
+          | some fs₂ => (.ok (.obj h₂.length), c₂, h₂ ++ [.fields (fs₂ ++ fs₁)])
 termination_by (clock, sizeOf e)
 decreasing_by
   all_goals first

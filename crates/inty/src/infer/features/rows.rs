@@ -414,13 +414,27 @@ impl InferState {
         so_far: RowType,
         spread: RowType,
     ) -> InferResult<RowType> {
-        // A spread copies an object's own properties, never a function's
-        // call signature: take it out of the operand, its unknown part
-        // included (`{...f}` was callable).
+        // The operand is an object, not a function: a spread copies own
+        // properties, never a call signature (`{...f}` was callable, and
+        // `dynamics` doesn't spread a function), so its call signature,
+        // its unknown part's included, is absent.
         let callable = PropName(crate::types::CALLABLE_KEY.to_string());
         let spread = self.row_view(spread);
         let mut spread = self.extend_row_with(span, spread, std::iter::once(callable.clone()))?;
-        spread.props.remove(&callable);
+        let operand = Type::Row(spread.clone());
+        if let Some(call) = spread.props.remove(&callable) {
+            if self
+                .unify_presence(span, &call.presence, &Presence::Abs)
+                .is_err()
+            {
+                return Err(crate::error::TypeError::TypeMismatch {
+                    expected: "an object".to_string(),
+                    found: self.show(&operand),
+                    span,
+                }
+                .into());
+            }
+        }
         let so_far = self.extend_row_with(span, so_far, spread.props.keys().cloned())?;
         let spread = self.row_view(spread);
         let spread = self.extend_row_with(span, spread, so_far.props.keys().cloned())?;

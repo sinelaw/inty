@@ -88,6 +88,8 @@ enum Core {
     Get(Box<Core>, String),
     /// `e.l = v`.
     Set(Box<Core>, String, Box<Core>),
+    /// `{...e₁, ...e₂}`.
+    Spread(Box<Core>, Box<Core>),
 }
 
 use Core::*;
@@ -145,6 +147,7 @@ fn wire(e: &Core) -> String {
         }
         Get(e, l) => format!("(get {} s:{})", wire(e), l),
         Set(e, l, v) => format!("(set {} s:{} {})", wire(e), l, wire(v)),
+        Spread(x, y) => format!("(spread {} {})", wire(x), wire(y)),
     }
 }
 
@@ -198,6 +201,7 @@ fn fractional(e: &Core) -> Core {
             .collect()),
         Get(x, l) => Get(f(x), l.clone()),
         Set(x, l, y) => Set(f(x), l.clone(), f(y)),
+        Spread(x, y) => Spread(f(x), f(y)),
         other => other.clone(),
     }
 }
@@ -292,6 +296,7 @@ impl Js {
             }
             Get(e, l) => format!("({}).{}", self.expr(e), l),
             Set(e, l, v) => format!("(({}).{} = {})", self.expr(e), l, self.expr(v)),
+            Spread(x, y) => format!("({{...({}), ...({})}})", self.expr(x), self.expr(y)),
         }
     }
 
@@ -367,7 +372,7 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
                 || refers_from_inner(e, i, inner)
         }
         Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) => refers_from_inner(x, i, inner),
-        Plus(x, y) | Minus(x, y) | Seq(x, y) | While(x, y) | TryFinally(x, y) => {
+        Plus(x, y) | Minus(x, y) | Seq(x, y) | While(x, y) | TryFinally(x, y) | Spread(x, y) => {
             refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner)
         }
         TryCatch(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
@@ -640,6 +645,25 @@ impl Gen {
                     scope.truncate(scope.len() - ps.len() - 2);
                     Func(ps.len(), b(body))
                 }
+                // A spread: each field from the later operand, the earlier
+                // one, or both (the later one's winning, the earlier one's
+                // of any type).
+                T::Obj(fields) if depth > 0 && self.rng.chance(30) => {
+                    let (mut earlier, mut later) = (Vec::new(), Vec::new());
+                    for (l, u) in fields {
+                        match self.rng.below(3) {
+                            0 => earlier.push((l.clone(), u.clone())),
+                            1 => later.push((l.clone(), u.clone())),
+                            _ => {
+                                earlier.push((l.clone(), self.ty(0)));
+                                later.push((l.clone(), u.clone()));
+                            }
+                        }
+                    }
+                    let e1 = self.typed(&T::Obj(earlier), d, scope, false);
+                    let e2 = self.typed(&T::Obj(later), d, scope, false);
+                    Spread(b(e1), b(e2))
+                }
                 // An object literal, its fields in any order.
                 T::Obj(fields) => {
                     let mut fields: Vec<(String, Core)> = fields
@@ -821,6 +845,9 @@ impl Gen {
                         b(self.any(d, scope, false)),
                     )
                 }
+            }
+            4 if self.rng.chance(15) => {
+                Spread(b(self.any(d, scope, false)), b(self.any(d, scope, false)))
             }
             4 if self.rng.chance(40) => {
                 let n = self.rng.below(3);
@@ -1034,6 +1061,11 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Ok(v) => Run::Value(value_wire(v)),
         Err(Stuck::UncaughtThrow(v)) => Run::Thrown(value_wire(v)),
         Err(Stuck::FuelExhausted) => Run::Timeout,
+        // Spreading what isn't an object: JavaScript copies a primitive's
+        // own properties, which the model and `dynamics` don't.
+        Err(Stuck::NotImplemented(what)) if what.contains("spread") => {
+            Run::Stuck("notSpreadable".into())
+        }
         Err(Stuck::NotImplemented(_)) => Run::Unsupported,
         Err(Stuck::UndefinedVariable(_)) => Run::Stuck("undefinedVariable".into()),
         Err(Stuck::NotCallable(_)) => Run::Stuck("notCallable".into()),

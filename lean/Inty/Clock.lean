@@ -143,8 +143,10 @@ theorem run_clock_le_both :
         Nat.le_trans (ih₂ _ _) (Nat.min_le_right _ _)
   · intro clock env heap e₁ e₂ ih₁ ih₂
     rw [run]
-    exact bindC_le ih₁ fun _ _ =>
-      bindC_le (Nat.le_trans (ih₂ _ _) (Nat.min_le_right _ _)) fun _ _ => by
+    refine bindC_le ih₁ fun _ _ => ?_
+    split
+    · exact ih₁
+    · exact bindC_le (Nat.le_trans (ih₂ _ _) (Nat.min_le_right _ _)) fun _ _ => by
         split <;> exact Nat.le_trans (ih₂ _ _) (Nat.min_le_right _ _)
   · intros; simp [runArgs]
   · intro clock env heap e es v c₁ h₁ hrun vs c h hargs ih₁ ih₂
@@ -407,7 +409,11 @@ theorem run_mono_both :
     have hc := run_clock_le clock env heap e₁
     have ih₂' := ih₂ (run clock env heap e₁).2.1 (run clock env heap e₁).2.2
     simp only [Nat.min_eq_left hc, Nat.min_eq_left (Nat.add_le_add_right hc k)] at h ih₂' ⊢
-    exact bindC_mono (ih₂' k) (fun _ _ _ => by split <;> rfl) h
+    cases hf : vo.fieldsOf (run clock env heap e₁).2.2 with
+    | none => rfl
+    | some fs₁ =>
+      simp only [hf] at h ⊢
+      exact bindC_mono (ih₂' k) (fun _ _ _ => by split <;> rfl) h
   · intros; simp [runArgs, RanArgs.addClock]
   · intro clock env heap e es v c₁ h₁ hrun vs c h hargs ih₁ ih₂ k _
     have hc : c₁ ≤ clock := by simpa [hrun] using run_clock_le clock env heap e

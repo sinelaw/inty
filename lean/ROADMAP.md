@@ -53,7 +53,7 @@ Paths like `src/infer` are relative to `crates/inty`.
 - Algorithm W, proved sound and complete.
 - Generic types (a constructor applied to types), Rémy's flat rows,
   `HasProp` with improvement and inty's generalisation, object literals,
-  reads and writes (phase 3, in progress).
+  reads, writes and spread (phase 3, in progress).
 - Differential testing against inty and Node.
 
 ## Phases
@@ -191,19 +191,29 @@ touching the generic proofs.
   constraint left on a type variable is harmless, since no value has a
   type variable's type (`HoldsOrVar`); inty defaults a `HasProp` left so
   to an open row (`default_has_prop`).
-- **Objects, containers and built-in properties.** Object literals, reads
-  and writes (done: an object is a cell of its fields, so a write adds a
-  missing property, as in JavaScript); spread; arrays, tuples and `Map`
+- **Objects, containers and built-in properties.** Object literals, reads,
+  writes and spread (done: an object is a cell of its fields, so a write
+  adds a missing property, as in JavaScript); arrays, tuples and `Map`
   with their `Indexable` instances; the properties of strings and arrays
   (`s.length`, `xs.length`) as `HasProp` instances.
-- **Spread needs a decision, and inty a fix.** `{a: 1, ...o}` with `o` of
-  an open row: `o`'s own `a`, if it has one, wins, but inty types the
-  result's `a` as the literal's (`function f(o) { return {a: 1, ...o}; }`,
-  then `f({a: "s"}).a - 1` is accepted and gets stuck). The sound rule makes
-  a field written before a spread agree with the operand's field of that
-  name; merging two open rows needs a presence that is "either", which
-  plain unification can't express, so a merge constraint on presences
-  (resolved once they are known) is the likely design.
+- **Spread (done).** inty was unsound three ways: `{a: 1, ...o}` with `o`
+  an open row kept the literal's `a` (`f({a: "s"}).a - 1` was accepted), a
+  closed spread after an open one closed the result, and an open operand
+  after another dropped the first; and `{...f}` kept a function's call
+  signature. inty now extends each side's open tail with the other's
+  labels and merges by presence, and rejects spreading a function. The
+  model decides each label's slot by a `Merge` constraint that waits for
+  the operand's presence, so a spread of a row not yet known has a
+  principal type; a scheme keeps its `Merge`s as they are, and the top
+  level decides them. inty instead decides at once, making a field the
+  operand may lack agree with the one it overrides, and unifies two open
+  operands' unknown parts: sound, but it rejects
+  `(function (o) { return {...{a: 1}, ...o}; })({a: "s"})`, which the model
+  accepts, and its verdict can depend on the order of inference. Matching
+  the model would need a deferred spread constraint in inty (a row-level
+  `Spread a b c`, decided once `b` is known), which is still to do.
+  Evaluation copies each operand's fields once it is evaluated, as
+  JavaScript and `dynamics` do.
 - **Generalisation quantifies every variable the environment doesn't fix.**
   inty quantifies from the type outward (the type's variables, then those
   of the constraints on them) and leaves a constraint the type doesn't

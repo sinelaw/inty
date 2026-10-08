@@ -113,13 +113,13 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 |---|---|
 | `Ty`: a type variable, or a constructor (`Con`) applied to types: `number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals, property reads and writes | `ast::Expr`, `ast::Stmt` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals, property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to) | `ast::Expr`, `ast::Stmt` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
 | `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
-| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop` |
+| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`, `Merge`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop`; `Merge` is a spread's per-field merge (`merge_spread` in `src/infer/features/rows.rs`, which decides it at once) |
 | `improveAll` (deciding constraints on known types), `fixedVars` and `genVars` (what a `let` quantifies) | `simplify_has_props`, `env_fixed_vars`, `InferState::generalize` |
 | `Entails C p` (`p` is an instance, or assumed in `C`) | a scheme's constraints in scope while checking its body |
 | `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
@@ -231,7 +231,20 @@ These choices are meant to hold up as the calculus grows.
 - **An object is a cell holding its fields**, as in `dynamics`; the world
   describes the cell by the record's contents type (`Con.contents`), and
   `V` of a record is a reference to such a cell, so aliasing and writes
-  need nothing new.
+  need nothing new. The contents have the fields present and none of the
+  absent ones, and a slot whose presence is a variable has no contents, as
+  a type variable has no values.
+- **A spread merges slot by slot, when the operand's presence is known.**
+  `{...e₁, ...e₂}`'s slot for each label is `Merge p τ s r`: `e₂`'s
+  presence `p` and type `τ` over `e₁`'s slot `s` give `r`, `e₂`'s field if
+  `p` is `pre`, `s` if `abs`. With `p` a variable the constraint waits, so
+  `function f(o) { return {a: 1, ...o}; }` has a principal type, under
+  which `f({a: "s"}).a` is a string. A scheme keeps its `Merge`s as they
+  are (deciding them where a binding generalises would depend on whether
+  `p` is known by then, which no rule closed under substitution can
+  state), and the top level decides them. inty decides each at once,
+  making a field the operand may lack agree with the one it overrides, so
+  it rejects that call; the model is the more precise of the two.
 - **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
   and `Arith` classes, is phase 5 of the roadmap.
 
