@@ -92,8 +92,10 @@ every value. A type variable has none: a closed program can't make a value
 of a type it knows nothing about. A function type is what
 calling the function does (see the module docs). A record is an object
 whose cell the world describes as holding the record's contents, and the
-contents are the fields present, each of its type. A slot, a presence, or
-a constructor applied to the wrong number of types has no values. -/
+contents are the fields present, each of its type, and none of the fields
+absent; a slot whose presence isn't known (a variable) has no contents,
+as a type variable has no values. A slot, a presence, or a constructor
+applied to the wrong number of types has no values. -/
 def V (k : Nat) (W : World) : Ty → Value → Prop
   | .number, v => ∃ n, v = .number n
   | .string, v => ∃ s, v = .string s
@@ -111,9 +113,11 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
         (fun c W'' v => c < j → V c W'' ρ v)
   | .record ls slots, v => ∃ ℓ, v = .obj ℓ ∧
       W[ℓ]? = some (.mono (.app .contents [.record ls slots]))
-  | .app .contents [.record ls slots], v => ∃ fs, v = .fields fs ∧ ∀ l σ,
+  | .app .contents [.record ls slots], v => ∃ fs, v = .fields fs ∧ (∀ l σ,
       (h : Ty.field l ls slots = some (.slot .pre σ)) →
-      ∃ v', fs.lookup l = some v' ∧ V k W σ v'
+      ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
+      ∀ l s, Ty.field l ls slots = some s →
+        (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none
   | _, _ => False
 termination_by τ => (k, sizeOf τ)
 decreasing_by
@@ -161,8 +165,10 @@ theorem V_record : V k W (.record ls slots) v ↔ ∃ ℓ, v = .obj ℓ ∧
   rw [V.eq_def]
 
 theorem V_contents : V k W (.app .contents [.record ls slots]) v ↔ ∃ fs, v = .fields fs ∧
-      ∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
-      ∃ v', fs.lookup l = some v' ∧ V k W σ v' := by
+      (∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
+        ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
+      ∀ l s, Ty.field l ls slots = some s →
+        (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := by
   rw [V.eq_def]
 
 /-- Apart from functions, records and objects' contents, a type's values
@@ -203,8 +209,8 @@ theorem V.mono_lt {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
       · by_cases hcon : ∃ ls slots, τ = .app .contents [.record ls slots]
         · obtain ⟨ls, slots, rfl⟩ := hcon
           rw [V_contents] at hv ⊢
-          obtain ⟨fs, rfl, hf⟩ := hv
-          refine ⟨fs, rfl, fun l σ hl => ?_⟩
+          obtain ⟨fs, rfl, hf, ha⟩ := hv
+          refine ⟨fs, rfl, fun l σ hl => ?_, ha⟩
           obtain ⟨v', h₁, h₂⟩ := hf l σ hl
           exact ⟨v', h₁, V.mono_lt hjk hW n (Nat.lt_of_lt_of_le (sizeOf_field_lt hl) (Nat.le_of_lt_succ hn)) h₂⟩
         · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
@@ -535,17 +541,58 @@ theorem objSlots_field {l : String} {σ : Ty} {ls : List String} {τs : List Ty}
     · simp only [e, ite_false] at h
       exact objSlots_field (L := L) (absent := absent) h
 
+/-- Each slot of an object literal's type is present, at the type of the
+field's last occurrence, or absent, the literal having no such field. -/
+theorem objSlots_field_cases {l : String} {s : Ty} {ls : List String} {τs : List Ty} :
+    ∀ {L : List String} {absent : List Ty},
+      Ty.field l L (objSlots L ls τs absent) = some s →
+      (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ Ty.field l ls.reverse τs.reverse = none
+  | [], _, h => by simp [Ty.field] at h
+  | _ :: _, [], h => by simp [objSlots, Ty.field] at h
+  | l' :: L, a :: absent, h => by
+    simp only [objSlots, List.zip_cons_cons, List.map_cons, Ty.field] at h
+    by_cases e : l' = l
+    · subst e
+      simp only [ite_true, Option.some.injEq] at h
+      revert h
+      cases hf : Ty.field l' ls.reverse τs.reverse with
+      | none => intro h; exact .inr ⟨a, h.symm, rfl⟩
+      | some σ => intro h; exact .inl ⟨σ, h.symm⟩
+    · simp only [e, ite_false] at h
+      exact objSlots_field_cases (L := L) (absent := absent) h
+
+/-- A label with no field has no value. -/
+theorem field_none_lookup {l : String} : ∀ {ls : List String} {τs : List Ty} {vs : List Value},
+    vs.length = τs.length → Ty.field l ls τs = none → (ls.zip vs).lookup l = none
+  | [], _, _, _, _ => rfl
+  | _ :: _, [], vs, hl, _ => by
+    rw [List.eq_nil_of_length_eq_zero (l := vs) (by simpa using hl)]; rfl
+  | _ :: _, _ :: _, [], hl, _ => by simp at hl
+  | l' :: ls, τ :: τs, v :: vs, hl, h => by
+    simp only [Ty.field] at h
+    split at h
+    · cases h
+    · rename_i e
+      have hne : (l == l') = false := by simpa using Ne.symm e
+      simp only [List.zip_cons_cons, List.lookup_cons, hne]
+      exact field_none_lookup (by simpa using hl) h
+
 /-- An object literal's cell holds the contents of its record type. -/
 theorem objFields_sound {k : Nat} {W : World} {L ls : List String} {τs absent : List Ty}
     {vs : List Value} (hlen : τs.length = ls.length) (hvs : VList k W τs vs) :
     V k W (.app .contents [.record L (objSlots L ls τs absent)]) (objFields ls vs) := by
   rw [V_contents]
-  refine ⟨_, rfl, fun l σ hl => ?_⟩
   have hzip : (ls.zip vs).reverse = ls.reverse.zip vs.reverse := by
     simp only [List.zip_eq_zipWith]
     exact List.reverse_zipWith (by simp [hvs.length, hlen])
-  rw [hzip]
-  exact field_lookup hvs.reverse (objSlots_field hl)
+  refine ⟨_, rfl, fun l σ hl => ?_, fun l s hl => ?_⟩
+  · rw [hzip]
+    exact field_lookup hvs.reverse (objSlots_field hl)
+  · rcases objSlots_field_cases hl with h | ⟨σ, rfl, hf⟩
+    · exact .inl h
+    · refine .inr ⟨σ, rfl, ?_⟩
+      rw [hzip]
+      exact field_none_lookup (by simp [hvs.length]) hf
 
 /-- Reading a field: an instance of `HasProp` says the object's contents
 have it, and a type variable has no values. -/
@@ -559,7 +606,7 @@ theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c :
       rw [V_record] at hv
       obtain ⟨ℓ, rfl, hℓ⟩ := hv
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-      obtain ⟨fs, rfl, hfs⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv)
+      obtain ⟨fs, rfl, hfs, -⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv)
       obtain ⟨v', h₁, h₂⟩ := hfs l σ hf
       simp only [Value.getProp, hcv, h₁]
       exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH h₂
@@ -578,11 +625,20 @@ theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} 
       rw [V_record] at hvo
       obtain ⟨ℓ, rfl, hℓ⟩ := hvo
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-      obtain ⟨fs, rfl, hfs⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv)
+      obtain ⟨fs, rfl, hfs, habs⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv)
       simp only [Value.setProp, hcv]
       refine Safe.ok (Nat.le_refl c) (List.prefix_refl W) (hH.set hℓ (SchemeV.mono_iff.mpr ?_)) hvv
       rw [V_contents]
-      refine ⟨_, rfl, fun l' σ' hl' => ?_⟩
+      refine ⟨_, rfl, fun l' σ' hl' => ?_, fun l' s' hl' => ?_⟩
+      rotate_left
+      · rcases habs l' s' hl' with h | ⟨σ', rfl, hn⟩
+        · exact .inl h
+        · refine .inr ⟨σ', rfl, ?_⟩
+          have e : l' ≠ l := by rintro rfl; rw [hf] at hl'; cases hl'
+          have hne : (l' == l) = false := by simpa using e
+          simp only [List.lookup_cons, hne]
+          rw [lookup_filter_ne e]
+          exact hn
       by_cases e : l' = l
       · subst e
         rw [hf] at hl'
@@ -595,6 +651,101 @@ theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} 
         rw [lookup_filter_ne e]
         exact h₁
   · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
+
+/-- A slot of a spread's result, with the operand's slot and the slot it is
+written over for the same label, and the `Merge` relating them. -/
+theorem field_merge {l : String} {r : Ty} : ∀ {L : List String} {ps τs ss rs : List Ty},
+    ps.length = L.length → τs.length = L.length → ss.length = L.length →
+    rs.length = L.length → Ty.field l L rs = some r →
+    ∃ p τ s, Ty.field l L (List.zipWith Ty.slot ps τs) = some (.slot p τ) ∧
+      Ty.field l L ss = some s ∧ (⟨.merge, [p, τ, s, r]⟩ : Pred) ∈ mergePreds ps τs ss rs
+  | [], _, _, _, _, _, _, _, _, h => by simp [Ty.field] at h
+  | l' :: L, p :: ps, τ :: τs, s :: ss, r' :: rs, h₁, h₂, h₃, h₄, h => by
+    simp only [List.length_cons, Nat.add_right_cancel_iff] at h₁ h₂ h₃ h₄
+    simp only [List.zipWith_cons_cons, Ty.field, mergePreds] at h ⊢
+    by_cases e : l' = l
+    · simp only [e, ite_true, Option.some.injEq] at h ⊢
+      subst h
+      exact ⟨p, τ, s, rfl, rfl, List.mem_cons_self⟩
+    · simp only [e, ite_false] at h ⊢
+      obtain ⟨p', τ', s', hp, hs, hm⟩ := field_merge h₁ h₂ h₃ h₄ h
+      exact ⟨p', τ', s', hp, hs, List.mem_cons_of_mem _ hm⟩
+  | _ :: _, [], _, _, _, h₁, _, _, _, _ | _ :: _, _ :: _, [], _, _, _, h₂, _, _, _
+  | _ :: _, _ :: _, _ :: _, [], _, _, _, h₃, _, _
+  | _ :: _, _ :: _, _ :: _, _ :: _, [], _, _, _, h₄, _ => by simp at *
+
+theorem lookup_append_none {l : String} {fs₁ fs₂ : List (String × Value)}
+    (h : fs₂.lookup l = none) : (fs₂ ++ fs₁).lookup l = fs₁.lookup l := by
+  induction fs₂ with
+  | nil => rfl
+  | cons a fs₂ ih =>
+    obtain ⟨l', v⟩ := a
+    by_cases e : (l == l') = true
+    · simp [List.lookup_cons, e] at h
+    · simp only [Bool.not_eq_true] at e
+      simp only [List.lookup_cons, e] at h
+      simp only [List.cons_append, List.lookup_cons, e]
+      exact ih h
+
+theorem lookup_append_some {l : String} {v : Value} {fs₁ fs₂ : List (String × Value)}
+    (h : fs₂.lookup l = some v) : (fs₂ ++ fs₁).lookup l = some v := by
+  induction fs₂ with
+  | nil => cases h
+  | cons a fs₂ ih =>
+    obtain ⟨l', v'⟩ := a
+    by_cases e : (l == l') = true
+    · simp only [List.lookup_cons, e] at h
+      simp only [List.cons_append, List.lookup_cons, e]
+      exact h
+    · simp only [Bool.not_eq_true] at e
+      simp only [List.lookup_cons, e] at h
+      simp only [List.cons_append, List.lookup_cons, e]
+      exact ih h
+
+/-- A spread of two objects: each `Merge` is an instance, since an object's
+contents have no slot of unknown presence, so the merged fields have the
+result's type. -/
+theorem spreadFields_sound {C : List Pred} {L : List String} {ps τs ss rs : List Ty}
+    {v₁ v₂ : Value} {c : Nat} {W : World} {h : Heap} (hC : HoldsOrVar C)
+    (hps : ps.length = L.length) (hτs : τs.length = L.length) (hss : ss.length = L.length)
+    (hrs : rs.length = L.length) (hm : ∀ p ∈ mergePreds ps τs ss rs, Entails C p)
+    (hv₁ : V c W (.record L ss) v₁) (hv₂ : V c W (.record L (List.zipWith Ty.slot ps τs)) v₂)
+    (hH : HeapOK c W h) :
+    ∃ fs, spreadFields h v₁ v₂ = some fs ∧ V c W (.app .contents [.record L rs]) (.fields fs) := by
+  rw [V_record] at hv₁ hv₂
+  obtain ⟨ℓ₁, rfl, hℓ₁⟩ := hv₁
+  obtain ⟨ℓ₂, rfl, hℓ₂⟩ := hv₂
+  obtain ⟨cv₁, hcv₁, hsv₁⟩ := hH.2 ℓ₁ _ hℓ₁
+  obtain ⟨cv₂, hcv₂, hsv₂⟩ := hH.2 ℓ₂ _ hℓ₂
+  obtain ⟨fs₁, rfl, hpre₁, habs₁⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv₁)
+  obtain ⟨fs₂, rfl, hpre₂, habs₂⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv₂)
+  refine ⟨fs₂ ++ fs₁, by simp [spreadFields, hcv₁, hcv₂], ?_⟩
+  -- Each label: the operand has its field (`pre`) or hasn't (`abs`).
+  have key : ∀ l r, Ty.field l L rs = some r →
+      (∃ τ, r = .slot .pre τ ∧ ∃ v', fs₂.lookup l = some v' ∧ V c W τ v') ∨
+      (Ty.field l L ss = some r ∧ fs₂.lookup l = none) := by
+    intro l r hr
+    obtain ⟨p, τ, s, hp, hs, hpm⟩ := field_merge hps hτs hss hrs hr
+    rcases (hm _ hpm).holdsOrVar hC with hi | ⟨a, _, he⟩
+    · cases hi with
+      | mergePre => exact .inl ⟨τ, rfl, hpre₂ l τ hp⟩
+      | mergeAbs =>
+        rcases habs₂ l _ hp with ⟨σ, hσ⟩ | ⟨σ, -, hn⟩
+        · cases hσ
+        · exact .inr ⟨hs, hn⟩
+    · simp only [List.cons.injEq] at he
+      rw [he.1] at hp
+      rcases habs₂ l _ hp with ⟨σ, hσ⟩ | ⟨σ, hσ, -⟩ <;> cases hσ
+  rw [V_contents]
+  refine ⟨_, rfl, fun l σ hl => ?_, fun l r hl => ?_⟩
+  · rcases key l _ hl with ⟨τ, hτ, v', h₁, h₂⟩ | ⟨hs, hn⟩
+    · cases hτ; exact ⟨v', lookup_append_some h₁, h₂⟩
+    · rw [lookup_append_none hn]; exact hpre₁ l σ hs
+  · rcases key l r hl with ⟨τ, rfl, -⟩ | ⟨hs, hn⟩
+    · exact .inl ⟨τ, rfl⟩
+    · rcases habs₁ l r hs with h' | ⟨σ, rfl, hn₁⟩
+      · exact .inl h'
+      · exact .inr ⟨σ, rfl, by rw [lookup_append_none hn]; exact hn₁⟩
 
 /-! ## Arguments -/
 
@@ -1067,6 +1218,32 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       rw [Nat.min_eq_left hc₁]
       refine Safe.bindC (ihv hv hC (G.mono hW₁ hG) hH₁) fun vv W₂ _ hW₂ hH₂ hvv => ?_
       exact setProp_sound hp hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvv hH₂
+  | spread e₁ e₂ ih₁ ih₂ =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | spread hps hτs hss hrs he₁ he₂ hm =>
+      rename_i ss ps τs rs
+      simp only [run]
+      refine Safe.bindC (ih₁ he₁ hC hG hH) fun v₁ W₁ _ hW₁ hH₁ hv₁ => ?_
+      have hc₁ := run_clock_le k env h e₁
+      rw [Nat.min_eq_left hc₁]
+      refine Safe.bindC (ih₂ he₂ hC (G.mono hW₁ hG) hH₁) fun v₂ W₂ _ hW₂ hH₂ hv₂ => ?_
+      obtain ⟨fs, hfs, hV⟩ := spreadFields_sound hC hps hτs hss hrs hm
+        (hv₁.mono (run_clock_le _ _ _ _) hW₂) hv₂ hH₂
+      generalize run (run k env h e₁).2.1 env (run k env h e₁).2.2 e₂ = p at hfs hH₂ hV ⊢
+      obtain ⟨r₂, c₂, h₂⟩ := p
+      simp only at hfs hH₂ hV ⊢
+      rw [hfs]
+      have hW₃ := List.prefix_append W₂ [Scheme.mono (.app .contents [.record L rs])]
+      refine Safe.ok (Nat.le_refl _) hW₃ ?_ ?_
+      · exact hH₂.alloc (by simp) (fun i s' v' hs hv' => by
+          match i, hs, hv' with
+          | 0, hs, hv' =>
+            simp at hs hv'; subst hs hv'
+            exact SchemeV.mono_iff.mpr (hV.mono (Nat.le_refl _) hW₃)
+          | _ + 1, hs, _ => simp at hs)
+      · rw [V_record, hH₂.1]
+        exact ⟨_, rfl, by simp⟩
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/

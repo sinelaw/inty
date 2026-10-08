@@ -46,10 +46,18 @@ inductive BinOpTy (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
 already known when it generalises (`InferState::generalize`), so no scheme
 carries one that could fail at a use; and a `HasProp` whose receiver the
 environment fixes fixes its field type too (`env_fixed_vars`), so it stays
-outside the scheme. -/
+outside the scheme.
+
+A `Merge` is different: its decision waits for the operand's presence,
+which a later substitution may decide, so it stays in the scheme as it is
+whatever its presence, as long as it mentions one of the scheme's
+variables in the arguments that determine its result. (Deciding it when
+the presence is known would make the rule depend on when that is, which
+no rule closed under substitution can.) -/
 def Scheme.Simple (s : Scheme) : Prop :=
-  ∀ p ∈ s.preds, ∃ i < s.arity,
-    p = ⟨.plus, [.bound i]⟩ ∨ ∃ l σ, p = ⟨.hasProp l, [.bound i, σ]⟩
+  ∀ p ∈ s.preds, (∃ i < s.arity,
+    p = ⟨.plus, [.bound i]⟩ ∨ ∃ l σ, p = ⟨.hasProp l, [.bound i, σ]⟩) ∨
+    ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < s.arity
 
 /-- The typing judgement: with records over the program's labels `L`, under
 the class assumptions `C`, the context `Γ` and the enclosing function's
@@ -136,6 +144,15 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   assignment's. -/
   | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → HasType L C Γ R v σ →
       HasType L C Γ R (.set e l v) σ
+  /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p` and
+  type `τ`, merged over `e₁`'s slot `s` gives the result's slot `r`
+  (`Merge p τ s r`): `e₂`'s field if it has one, `e₁`'s if not. -/
+  | spread : ps.length = L.length → τs.length = L.length → ss.length = L.length →
+      rs.length = L.length →
+      HasType L C Γ R e₁ (.record L ss) →
+      HasType L C Γ R e₂ (.record L (List.zipWith Ty.slot ps τs)) →
+      (∀ p ∈ mergePreds ps τs ss rs, Entails C p) →
+      HasType L C Γ R (.spread e₁ e₂) (.record L rs)
 
 /-- A variable whose scheme is a monotype has that type. -/
 theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :

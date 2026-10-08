@@ -91,6 +91,11 @@ inductive Expr where
   /-- `e.l = v`: storing `v`'s value in a property, which must exist; the
   value is the assignment's. -/
   | set (e : Expr) (l : String) (v : Expr)
+  /-- `{...e₁, ...e₂}`: a new object with `e₂`'s properties and those of
+  `e₁` that `e₂` hasn't. A literal with spreads and fields lowers to
+  these, a run of fields being an object literal: `{a: 1, ...o}` is
+  `{...{a: 1}, ...o}`. -/
+  | spread (e₁ e₂ : Expr)
   deriving Repr
 
 /-- Syntactic values, which the value restriction lets a `const` generalise:
@@ -117,75 +122,81 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (tryFinally : ∀ body fin, motive body → motive fin → motive (.tryFinally body fin))
     (obj : ∀ ls es, (∀ a ∈ es, motive a) → motive (.obj ls es))
     (get : ∀ e l, motive e → motive (.get e l))
-    (set : ∀ e l v, motive e → motive v → motive (.set e l v)) :
+    (set : ∀ e l v, motive e → motive v → motive (.set e l v))
+    (spread : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.spread e₁ e₂)) :
     ∀ e, motive e
   | .lit l => lit l
   | .var i => var i
   | .func n body => func n body (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set body)
+        tryCatch tryFinally obj get set spread body)
   | .app f args =>
     app f args (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set f)
+        tryCatch tryFinally obj get set spread f)
       (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set a)
+        tryCatch tryFinally obj get set spread a)
   | .let_ m e₁ e₂ =>
     let_ m e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e₁)
+        tryCatch tryFinally obj get set spread e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e₂)
+        tryCatch tryFinally obj get set spread e₂)
   | .cond c t e =>
     cond c t e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set c)
+        tryCatch tryFinally obj get set spread c)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set t)
+        tryCatch tryFinally obj get set spread t)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e)
+        tryCatch tryFinally obj get set spread e)
   | .assign i e => assign i e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e)
+        tryCatch tryFinally obj get set spread e)
   | .unop op e => unop op e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e)
+        tryCatch tryFinally obj get set spread e)
   | .binop op e₁ e₂ =>
     binop op e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e₁)
+        tryCatch tryFinally obj get set spread e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e₂)
+        tryCatch tryFinally obj get set spread e₂)
   | .ret e => ret e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e)
+        tryCatch tryFinally obj get set spread e)
   | .throw_ e => throw_ e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e)
+        tryCatch tryFinally obj get set spread e)
   | .seq e₁ e₂ =>
     seq e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e₁)
+        tryCatch tryFinally obj get set spread e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e₂)
+        tryCatch tryFinally obj get set spread e₂)
   | .while_ c body =>
     while_ c body
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set c)
+        tryCatch tryFinally obj get set spread c)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set body)
+        tryCatch tryFinally obj get set spread body)
   | .break_ => break_
   | .continue_ => continue_
   | .tryCatch body handler =>
     tryCatch body handler
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set body)
+        tryCatch tryFinally obj get set spread body)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set handler)
+        tryCatch tryFinally obj get set spread handler)
   | .tryFinally body fin =>
     tryFinally body fin
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set body)
+        tryCatch tryFinally obj get set spread body)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set fin)
+        tryCatch tryFinally obj get set spread fin)
   | .obj ls es => obj ls es (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set a)
+        tryCatch tryFinally obj get set spread a)
   | .get e l => get e l (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e)
+        tryCatch tryFinally obj get set spread e)
   | .set e l v => set e l v (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set e)
+        tryCatch tryFinally obj get set spread e)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set v)
+        tryCatch tryFinally obj get set spread v)
+  | .spread e₁ e₂ => spread e₁ e₂
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread e₂)
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -201,7 +212,8 @@ def Expr.writes (i : Nat) : Expr → Bool
   | .assign j e => j == i || e.writes i
   | .cond c t e => c.writes i || t.writes i || e.writes i
   | .unop _ e | .ret e | .throw_ e => e.writes i
-  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ => e₁.writes i || e₂.writes i
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ | .spread e₁ e₂ =>
+    e₁.writes i || e₂.writes i
   | .break_ | .continue_ => false
   | .tryCatch body handler => body.writes i || handler.writes (i + 1)
   | .obj _ es => Expr.writesList i es
@@ -228,7 +240,7 @@ def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
   | .cond c t e => c.assignsMutable mutables && t.assignsMutable mutables &&
       e.assignsMutable mutables
   | .unop _ e | .ret e | .throw_ e => e.assignsMutable mutables
-  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ =>
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ | .spread e₁ e₂ =>
     e₁.assignsMutable mutables && e₂.assignsMutable mutables
   | .break_ | .continue_ => true
   -- What a `catch` binds can be assigned.
@@ -250,8 +262,8 @@ def Expr.jumpsInLoop (inLoop : Bool) : Expr → Bool
   | .lit _ | .var _ => true
   | .func _ body => body.jumpsInLoop false
   | .app f args => f.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop args
-  | .let_ _ e₁ e₂ | .binop _ e₁ e₂ | .seq e₁ e₂ | .tryCatch e₁ e₂ | .tryFinally e₁ e₂ =>
-    e₁.jumpsInLoop inLoop && e₂.jumpsInLoop inLoop
+  | .let_ _ e₁ e₂ | .binop _ e₁ e₂ | .seq e₁ e₂ | .tryCatch e₁ e₂ | .tryFinally e₁ e₂
+  | .spread e₁ e₂ => e₁.jumpsInLoop inLoop && e₂.jumpsInLoop inLoop
   | .assign _ e | .unop _ e | .ret e | .throw_ e => e.jumpsInLoop inLoop
   | .cond c t e => c.jumpsInLoop inLoop && t.jumpsInLoop inLoop && e.jumpsInLoop inLoop
   | .while_ c body => c.jumpsInLoop inLoop && body.jumpsInLoop true

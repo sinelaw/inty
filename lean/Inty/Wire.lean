@@ -15,6 +15,7 @@ JavaScript and for this model as an s-expression, one program per line:
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
 (obj (field s:x E) …)   an object literal     (get E s:x)   (set E s:x V)
+(spread A B)   `{...A, ...B}`
 ```
 
 `inty-model` (`Main.lean`) answers each line with the model's verdicts, as
@@ -122,6 +123,10 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (l, rest) ← parseLabel rest
     let (v, rest) ← parseExpr rest
     some (.set e l v, rest)
+  | "spread", rest => do
+    let (a, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr rest
+    some (.spread a b, rest)
   | _, _ => none
 
 /-- A property label, written `s:` then the label. -/
@@ -200,6 +205,7 @@ def stuckWire : Stuck → String
   | .notIndexable => "notIndexable"
   | .propertyNotFound => "propertyNotFound"
   | .badAssignmentTarget => "badAssignmentTarget"
+  | .notSpreadable => "notSpreadable"
 
 /-- The interpreter's verdict: `value V`, `stuck R`, or `timeout`. -/
 def evalVerdict (clock : Nat) (e : Expr) : String :=
@@ -264,5 +270,20 @@ def verdict (clock : Nat) (line : String) : String :=
 -- A later field overrides an earlier one, as in JavaScript.
 #guard verdict 100 "(get (obj (field s:x (num 1 0)) (field s:x (str s:a))) s:x)" ==
   "type string;value str s:a"
+-- A spread's later operand wins where it has the field, the earlier one
+-- where it hasn't.
+#guard verdict 100 "(get (spread (obj (field s:x (num 1 0))) (obj (field s:x (str s:a)))) s:x)" ==
+  "type string;value str s:a"
+#guard verdict 100 "(get (spread (obj (field s:x (num 1 0))) (obj (field s:y (null)))) s:x)" ==
+  s!"type number;value num {(1 : Float).toBits}"
+-- `function (o) { return {a: 1, ...o}; }`: the result's `a` is `o`'s if it
+-- has one, so its type waits for `o`'s.
+#guard verdict 100
+  "(let (func 1 (spread (obj (field s:a (num 1 0))) (var 0))) (minus (get (app (var 0) (obj (field s:a (str s:s)))) s:a) (num 1 0)))"
+  == "reject;stuck typeMismatch"
+#guard verdict 100
+  "(let (func 1 (spread (obj (field s:a (num 1 0))) (var 0))) (minus (get (app (var 0) (obj)) s:a) (num 1 0)))"
+  == s!"type number;value num {(0 : Float).toBits}"
+#guard verdict 100 "(spread (num 1 0) (obj))" == "reject;stuck notSpreadable"
 
 end Inty.Wire

@@ -78,6 +78,10 @@ inductive Stuck where
   /-- Writing a property of something that isn't an object,
   `Stuck::BadAssignmentTarget`. -/
   | badAssignmentTarget
+  /-- Spreading something that isn't an object: `dynamics` reports
+  `Stuck::NotImplemented` (JavaScript spreads a primitive's own
+  properties, which a number hasn't). -/
+  | notSpreadable
   deriving DecidableEq, Repr
 
 /-- The outcome of running with a given clock. `timeout` (out of clock) is
@@ -166,6 +170,15 @@ def Value.setProp (o : Value) (h : Heap) (l : String) (v : Value) : Result × He
 /-- An object literal's cell: its fields, the later of two with one label
 first, as in JavaScript. -/
 def objFields (ls : List String) (vs : List Value) : Value := .fields (ls.zip vs).reverse
+
+/-- The fields of `{...o₁, ...o₂}`: `o₂`'s, then `o₁`'s, so a lookup finds
+`o₂`'s first, as the later spread wins in JavaScript and `dynamics`. -/
+def spreadFields (h : Heap) : Value → Value → Option (List (String × Value))
+  | .obj ℓ₁, .obj ℓ₂ =>
+    match h[ℓ₁]?, h[ℓ₂]? with
+    | some (.fields fs₁), some (.fields fs₂) => some (fs₂ ++ fs₁)
+    | _, _ => none
+  | _, _ => none
 
 /-- A call's result: a `return` from the body is the call's value. -/
 def Result.catchReturn : Result → Result
@@ -305,6 +318,13 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
     bindC (run (min c₁ clock) env h₁ v) fun vv c₂ h₂ =>
       let p := vo.setProp h₂ l vv
       (p.1, c₂, p.2)
+  -- Both objects, then a new cell for the merged fields.
+  | .spread e₁ e₂ =>
+    bindC (run clock env heap e₁) fun v₁ c₁ h₁ =>
+    bindC (run (min c₁ clock) env h₁ e₂) fun v₂ c₂ h₂ =>
+      match spreadFields h₂ v₁ v₂ with
+      | some fs => (.ok (.obj h₂.length), c₂, h₂ ++ [.fields fs])
+      | none => (.stuck .notSpreadable, c₂, h₂)
 termination_by (clock, sizeOf e)
 decreasing_by
   all_goals first

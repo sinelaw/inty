@@ -42,11 +42,14 @@ theorem Expr.isValue_sound {e : Expr} (h : e.isValue = true) : e.IsValue := by
   cases e <;> first | constructor | simp [Expr.isValue] at h
 
 theorem PPred.isSimple_spec {k : Nat} {p : PPred} (h : p.isSimple k = true) :
-    ∃ i < k, p = ⟨.plus, [.bound i]⟩ ∨ ∃ l σ, p = ⟨.hasProp l, [.bound i, σ]⟩ := by
+    (∃ i < k, p = ⟨.plus, [.bound i]⟩ ∨ ∃ l σ, p = ⟨.hasProp l, [.bound i, σ]⟩) ∨
+      ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < k := by
   unfold PPred.isSimple at h
   split at h
-  · exact ⟨_, of_decide_eq_true h, .inl rfl⟩
-  · exact ⟨_, of_decide_eq_true h, .inr ⟨_, _, rfl⟩⟩
+  · exact .inl ⟨_, of_decide_eq_true h, .inl rfl⟩
+  · exact .inl ⟨_, of_decide_eq_true h, .inr ⟨_, _, rfl⟩⟩
+  · obtain ⟨i, hi, hik⟩ := List.any_eq_true.mp h
+    exact .inr ⟨_, _, _, _, rfl, i, hi, of_decide_eq_true hik⟩
   · cases h
 
 /-- A scheme whose constraints pass the check is simple. -/
@@ -57,8 +60,8 @@ theorem Scheme.simple_of_check {s : Scheme} (h : s.preds.all (PPred.isSimple s.a
 
 /-- A constraint whose decision is an equation is an instance wherever the
 equation holds. -/
-theorem Pred.improve_sound {p : Pred} {a b : Ty} (h : p.improve = .eq a b) {ψ : Subst}
-    (hab : a.subst ψ = b.subst ψ) : Inst (p.subst ψ) := by
+theorem Pred.improve_sound {top : Bool} {p : Pred} {a b : Ty} (h : p.improve top = .eq a b)
+    {ψ : Subst} (hab : a.subst ψ = b.subst ψ) : Inst (p.subst ψ) := by
   unfold Pred.improve at h
   split at h
   · cases h
@@ -70,10 +73,19 @@ theorem Pred.improve_sound {p : Pred} {a b : Ty} (h : p.improve = .eq a b) {ψ :
     · cases h
   · cases h
   · cases h
+  · cases h
+  · cases h
+  · cases h
+    simp only [Pred.subst, List.map_cons, List.map_nil, hab]
+    exact .mergePre
+  · cases h
+    simp only [Pred.subst, List.map_cons, List.map_nil, hab]
+    exact .mergeAbs
+  · cases h
 
-theorem improveOne_some : ∀ {ps : List Pred} {a b : Ty} {rest : List Pred},
-    improveOne ps = some (some ((a, b), rest)) →
-      ∃ p, p.improve = .eq a b ∧ ∀ q ∈ ps, q = p ∨ q ∈ rest
+theorem improveOne_some {top : Bool} : ∀ {ps : List Pred} {a b : Ty} {rest : List Pred},
+    improveOne top ps = some (some ((a, b), rest)) →
+      ∃ p, p.improve top = .eq a b ∧ ∀ q ∈ ps, q = p ∨ q ∈ rest
   | [], _, _, _, h => by simp [improveOne] at h
   | p :: ps, a, b, rest, h => by
     simp only [improveOne] at h
@@ -97,8 +109,9 @@ theorem improveOne_some : ∀ {ps : List Pred} {a b : Ty} {rest : List Pred},
 
 /-- What improvement leaves, satisfied, satisfies what it was given, under
 the improving substitution. -/
-theorem improveAll_sound : ∀ (k : Nat) {ps : List Pred} {σ : Subst} {ps' : List Pred},
-    improveAll k ps = some (σ, ps') → ∀ {C : List Pred} {φ : Subst}, Sat C ps' φ →
+theorem improveAll_sound {top : Bool} :
+    ∀ (k : Nat) {ps : List Pred} {σ : Subst} {ps' : List Pred},
+    improveAll top k ps = some (σ, ps') → ∀ {C : List Pred} {φ : Subst}, Sat C ps' φ →
       Sat C ps (Subst.compose φ σ)
   | 0, ps, σ, ps', h, C, φ, hs => by
     simp only [improveAll, Option.some.injEq, Prod.mk.injEq] at h
@@ -182,6 +195,22 @@ theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound L 
     rcases hp with rfl | hp
     · exact ha
     · exact has.2 p hp
+
+/-- The spread rule, at the types a substitution gives. -/
+theorem HasType.spread_subst {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
+    {e₁ e₂ : Expr} {ψ : Subst} {ps τs ss rs : List Ty}
+    (hps : ps.length = L.length) (hτs : τs.length = L.length) (hss : ss.length = L.length)
+    (hrs : rs.length = L.length)
+    (h₁ : HasType L C Γ R e₁ ((Ty.record L ss).subst ψ))
+    (h₂ : HasType L C Γ R e₂ ((Ty.record L (List.zipWith Ty.slot ps τs)).subst ψ))
+    (hm : Sat C (mergePreds ps τs ss rs) ψ) :
+    HasType L C Γ R (.spread e₁ e₂) ((Ty.record L rs).subst ψ) := by
+  simp only [Ty.subst_app, zipWith_slot_subst] at h₁ h₂ ⊢
+  refine .spread (by simpa using hps) (by simpa using hτs) (by simpa using hss)
+    (by simpa using hrs) h₁ h₂ (fun p hp => ?_)
+  rw [← mergePreds_subst] at hp
+  obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+  exact hm q hq
 
 /-- Soundness of Algorithm W: the inferred type, under the inferred
 substitution and any further substitution that resolves the class
@@ -559,6 +588,38 @@ theorem infer_sound :
     have hv := ihv h₂ φ C hsat.1.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he hv ⊢
     exact .set he (by simpa [Pred.subst, Ty.subst_compose] using hsat.2) hv
+  | spread e₁ e₂ ih₁ ih₂ =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i σ₃ hu₃
+    split at h
+    · cases h
+    rename_i σ₄ hu₄
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have he₁ := ih₁ h₁ _ C hsat.1.1
+    have he₂ := ih₂ h₂ _ C hsat.1.2
+    have hτ₁ : Ty.subst ((φ.compose (σ₄.compose σ₃)).compose o₂.σ) o₁.τ =
+        (Ty.record L (varBlock o₂.next L.length)).subst (φ.compose (σ₄.compose σ₃)) := by
+      simp only [Ty.subst_compose]; rw [unify_sound hu₃]
+    have hτ₂ : Ty.subst (φ.compose (σ₄.compose σ₃)) o₂.τ =
+        (Ty.record L (List.zipWith Ty.slot (varBlock (o₂.next + L.length) L.length)
+          (varBlock (o₂.next + 2 * L.length) L.length))).subst (φ.compose (σ₄.compose σ₃)) := by
+      simp only [Ty.subst_compose]; rw [unify_sound hu₄]
+    rw [hτ₁] at he₁
+    rw [hτ₂] at he₂
+    simp only [Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
+    rw [← Ty.subst_compose]
+    exact HasType.spread_subst (by simp [varBlock]) (by simp [varBlock]) (by simp [varBlock])
+      (by simp [varBlock]) he₁ he₂ hsat.2
 
 /-- A program inference accepts in a context with no free type variables is
 well typed in it, assuming the constraints left, each of which is an

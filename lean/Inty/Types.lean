@@ -170,6 +170,12 @@ inductive Cls where
   a value of type `a` gives a `b`. It is what a property read on a value
   whose type isn't known yet records. -/
   | hasProp (l : String)
+  /-- `Merge p τ s r`: a spread operand whose slot for some label has the
+  presence `p` and the type `τ`, written over a slot `s`, gives the slot
+  `r`: the operand's field if it has one, `s` if not. Its decision waits
+  for `p`, so a spread of a row whose fields aren't known yet has a
+  principal type. -/
+  | merge
   deriving DecidableEq, Repr
 
 /-- A class constraint: a class applied to types, such as `Plus a`. -/
@@ -286,6 +292,23 @@ end
 @[simp] theorem PTy.ftv_app (c : Con) (args : List PTy) :
     (PTy.app c args).ftv = args.flatMap PTy.ftv := by simp [PTy.ftv]
 
+mutual
+/-- A scheme body's quantified variables, as their indices. -/
+def PTy.bvs : PTy → List Nat
+  | .free _ => []
+  | .bound i => [i]
+  | .app _ args => PTy.bvss args
+def PTy.bvss : List PTy → List Nat
+  | [] => []
+  | p :: ps => p.bvs ++ PTy.bvss ps
+end
+
+@[simp] theorem PTy.bvss_eq (ps : List PTy) : PTy.bvss ps = ps.flatMap PTy.bvs := by
+  induction ps <;> simp_all [PTy.bvss]
+
+@[simp] theorem PTy.bvs_app (c : Con) (args : List PTy) :
+    (PTy.app c args).bvs = args.flatMap PTy.bvs := by simp [PTy.bvs]
+
 def Pred.ftv (p : Pred) : List Nat := p.args.flatMap Ty.ftv
 
 def PPred.ftv (p : PPred) : List Nat := p.args.flatMap PTy.ftv
@@ -369,6 +392,24 @@ def Scheme.subst (σ : Subst) (s : Scheme) : Scheme :=
   | var a => rfl
   | app c args ih =>
     simp only [Ty.toPTy_app, PTy.subst_app, Ty.subst_app, List.map_map, PTy.app.injEq, true_and]
+    exact List.map_congr_left ih
+
+@[simp] theorem Ty.toPTy_bvs (τ : Ty) : τ.toPTy.bvs = [] := by
+  induction τ using Ty.ind with
+  | var a => rfl
+  | app c args ih =>
+    simp only [Ty.toPTy_app, PTy.bvs_app, List.flatMap_map, List.flatMap_eq_nil_iff]
+    exact ih
+
+/-- Substitution touches only the free variables. -/
+@[simp] theorem PTy.bvs_subst (σ : Subst) (p : PTy) : (p.subst σ).bvs = p.bvs := by
+  induction p using PTy.ind with
+  | free a => simp [PTy.subst, PTy.bvs]
+  | bound i => rfl
+  | app c args ih =>
+    simp only [PTy.subst_app, PTy.bvs_app, List.flatMap_map]
+    simp only [List.flatMap]
+    congr 1
     exact List.map_congr_left ih
 
 @[simp] theorem Scheme.mono_subst (σ : Subst) (τ : Ty) :

@@ -71,6 +71,7 @@ theorem Ret.subst_congr {σ σ' : Subst} {R : Option Ty}
 (`Scheme.Simple`). -/
 def PPred.isSimple (k : Nat) : PPred → Bool
   | ⟨.plus, [.bound i]⟩ | ⟨.hasProp _, [.bound i, _]⟩ => decide (i < k)
+  | ⟨.merge, [q, τ, t, _]⟩ => (q.bvs ++ τ.bvs ++ t.bvs).any (· < k)
   | _ => false
 
 /-! ## Constraints whose arguments determine one another
@@ -88,32 +89,43 @@ inductive Improve where
   | eq (τ₁ τ₂ : Ty)
 
 /-- Deciding a constraint on a known type, as inty's `resolve_has_prop`: a
-record's field `l` must be present, at the type the read gives. -/
-def Pred.improve : Pred → Improve
-  | ⟨.hasProp _, [.var _, _]⟩ => .keep
-  | ⟨.hasProp l, [.record ls slots, σ]⟩ =>
+record's field `l` must be present, at the type the read gives. A `Merge`
+is decided only at the top level (`top`): where a binding generalises, it
+stays as it is, so that the decision doesn't depend on whether its
+presence is known by then (see `Scheme.Simple`). Its presence decides it:
+the operand's field if present, the slot written over if absent. -/
+def Pred.improve : Bool → Pred → Improve
+  | _, ⟨.hasProp _, [.var _, _]⟩ => .keep
+  | _, ⟨.hasProp l, [.record ls slots, σ]⟩ =>
     match Ty.field l ls slots with
     | some s => .eq s (.slot .pre σ)
     | none => .fail
-  | ⟨.hasProp _, _⟩ => .fail
-  | ⟨.plus, _⟩ => .keep
+  | _, ⟨.hasProp _, _⟩ => .fail
+  | _, ⟨.plus, _⟩ => .keep
+  | false, ⟨.merge, _⟩ => .keep
+  | true, ⟨.merge, [.var _, _, _, _]⟩ => .keep
+  | true, ⟨.merge, [.pre, τ, _, r]⟩ => .eq r (.slot .pre τ)
+  | true, ⟨.merge, [.abs, _, s, r]⟩ => .eq r s
+  | true, ⟨.merge, _⟩ => .fail
 
 /-- The arguments a constraint's determining arguments fix: a `HasProp`'s
-receiver fixes its field's type. -/
+receiver fixes its field's type, and a `Merge`'s operand slot and the slot
+it is written over fix the result. -/
 def Pred.fundep : Pred → Option (List Ty × List Ty)
   | ⟨.hasProp _, [r, σ]⟩ => some ([r], [σ])
+  | ⟨.merge, [q, τ, t, r]⟩ => some ([q, τ, t], [r])
   | _ => none
 
 /-- Decide the first constraint that can be decided: `none` if one fails,
 `some none` if none can be, or the equation it comes to and the others. -/
-def improveOne : List Pred → Option (Option ((Ty × Ty) × List Pred))
+def improveOne (top : Bool) : List Pred → Option (Option ((Ty × Ty) × List Pred))
   | [] => some none
   | p :: ps =>
-    match p.improve with
+    match p.improve top with
     | .fail => none
     | .eq τ₁ τ₂ => some (some ((τ₁, τ₂), ps))
     | .keep =>
-      match improveOne ps with
+      match improveOne top ps with
       | none => none
       | some none => some none
       | some (some (e, rest)) => some (some (e, p :: rest))
@@ -121,17 +133,17 @@ def improveOne : List Pred → Option (Option ((Ty × Ty) × List Pred))
 /-- Decide the constraints on known types, repeatedly (deciding one can make
 another's receiver known), as inty's `simplify_has_props`: the
 substitution the improvements come to, and the constraints left. -/
-def improveAll : Nat → List Pred → Option (Subst × List Pred)
+def improveAll (top : Bool) : Nat → List Pred → Option (Subst × List Pred)
   | 0, ps => some ([], ps)
   | k + 1, ps =>
-    match improveOne ps with
+    match improveOne top ps with
     | none => none
     | some none => some ([], ps)
     | some (some ((τ₁, τ₂), rest)) =>
       match unify τ₁ τ₂ with
       | none => none
       | some σ =>
-        match improveAll k (rest.map (·.subst σ)) with
+        match improveAll top k (rest.map (·.subst σ)) with
         | none => none
         | some (σ', ps') => some (Subst.compose σ' σ, ps')
 
@@ -245,7 +257,7 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
     match infer Γ R e₁ n with
     | none => none
     | some o₁ =>
-      match improveAll o₁.preds.length o₁.preds with
+      match improveAll false o₁.preds.length o₁.preds with
       | none => none
       | some (σi, preds₁) =>
         let σ₁ := Subst.compose σi o₁.σ
@@ -413,6 +425,33 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ,
           o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩],
           o₂.next⟩
+  -- `{...e₁, ...e₂}`: `e₁` a record, `e₂` a record each of whose slots is
+  -- a presence and a type, and a `Merge` for each label, all at fresh
+  -- variables after `e₂`'s: the slots written over, the presences, the
+  -- types, and the result's slots.
+  | Γ, R, .spread e₁ e₂, n =>
+    match infer Γ R e₁ n with
+    | none => none
+    | some o₁ =>
+      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) e₂ o₁.next with
+      | none => none
+      | some o₂ =>
+        let k := L.length
+        let ss := varBlock o₂.next k
+        let ps := varBlock (o₂.next + k) k
+        let τs := varBlock (o₂.next + 2 * k) k
+        let rs := varBlock (o₂.next + 3 * k) k
+        match unify (o₁.τ.subst o₂.σ) (.record L ss) with
+        | none => none
+        | some σ₃ =>
+          match unify (o₂.τ.subst σ₃) ((Ty.record L (List.zipWith Ty.slot ps τs)).subst σ₃) with
+          | none => none
+          | some σ₄ =>
+            let σ₄₃ := Subst.compose σ₄ σ₃
+            some ⟨Subst.compose σ₄₃ (Subst.compose o₂.σ o₁.σ), (Ty.record L rs).subst σ₄₃,
+              (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ mergePreds ps τs ss rs).map
+                (·.subst σ₄₃),
+              o₂.next + 4 * k⟩
 
 /-- Infer a list of arguments, left to right, threading the substitution. -/
 def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
@@ -442,7 +481,7 @@ def inferIn (L : List String) (Γ : Ctx) (e : Expr) : Option Ty :=
     match infer L Γ none e 0 with
     | none => none
     | some o =>
-      match improveAll o.preds.length o.preds with
+      match improveAll true o.preds.length o.preds with
       | none => none
       | some (σi, preds) => if preds.all Pred.settled then some (o.τ.subst σi) else none
   else none
@@ -460,6 +499,7 @@ def Expr.labels : Expr → List String
   | .obj ls es => ls ++ Expr.labelsList es
   | .get e l => l :: e.labels
   | .set e l v => l :: (e.labels ++ v.labels)
+  | .spread a b => a.labels ++ b.labels
 /-- `labels`, for a list of expressions. -/
 def Expr.labelsList : List Expr → List String
   | [] => []

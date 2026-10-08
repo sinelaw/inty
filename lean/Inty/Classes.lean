@@ -61,6 +61,11 @@ inductive Inst : Pred → Prop where
   /-- `HasProp l {…, l: σ, …} σ`: a record has the fields that are
   present. -/
   | hasProp : Ty.field l ls fs = some (.slot .pre σ) → Inst ⟨.hasProp l, [.record ls fs, σ]⟩
+  /-- `Merge pre τ s (pre τ)`: the operand's field wins. -/
+  | mergePre : Inst ⟨.merge, [.pre, τ, s, .slot .pre τ]⟩
+  /-- `Merge abs τ s s`: the operand hasn't the field, so the slot it is
+  written over stays. -/
+  | mergeAbs : Inst ⟨.merge, [.abs, τ, s, s]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -70,6 +75,29 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | hasProp hf =>
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
     exact .hasProp (by rw [Ty.field_subst, hf]; rfl)
+  | mergePre => exact .mergePre
+  | mergeAbs => exact .mergeAbs
+
+/-- The `Merge` constraints of a spread, label by label: the operand's
+presences `ps` and types `τs`, the slots `ss` it is written over, and the
+slots `rs` it gives. -/
+def mergePreds : List Ty → List Ty → List Ty → List Ty → List Pred
+  | p :: ps, τ :: τs, s :: ss, r :: rs => ⟨.merge, [p, τ, s, r]⟩ :: mergePreds ps τs ss rs
+  | _, _, _, _ => []
+
+theorem mergePreds_subst (σ : Subst) : ∀ (ps τs ss rs : List Ty),
+    (mergePreds ps τs ss rs).map (·.subst σ) =
+      mergePreds (ps.map (·.subst σ)) (τs.map (·.subst σ)) (ss.map (·.subst σ))
+        (rs.map (·.subst σ))
+  | p :: ps, τ :: τs, s :: ss, r :: rs => by
+    simp only [mergePreds, List.map_cons, ← mergePreds_subst σ ps τs ss rs]; rfl
+  | [], _, _, _ | _ :: _, [], _, _ | _ :: _, _ :: _, [], _ | _ :: _, _ :: _, _ :: _, [] => by
+    simp [mergePreds]
+
+theorem zipWith_slot_subst (σ : Subst) (ps τs : List Ty) :
+    (List.zipWith Ty.slot ps τs).map (·.subst σ) =
+      List.zipWith Ty.slot (ps.map (·.subst σ)) (τs.map (·.subst σ)) := by
+  simp [List.map_zipWith, List.zipWith_map]
 
 /-- `p` is an instance, or assumed in `C`. -/
 def Entails (C : List Pred) (p : Pred) : Prop := Inst p ∨ p ∈ C
@@ -82,6 +110,8 @@ theorem Entails.subst (σ : Subst) (h : Entails C p) :
 def Pred.isInst : Pred → Bool
   | ⟨.plus, [.number]⟩ | ⟨.plus, [.string]⟩ => true
   | ⟨.hasProp l, [.record ls fs, σ]⟩ => decide (Ty.field l ls fs = some (.slot .pre σ))
+  | ⟨.merge, [.pre, τ, _, r]⟩ => decide (r = .slot .pre τ)
+  | ⟨.merge, [.abs, _, s, r]⟩ => decide (r = s)
   | _ => false
 
 theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
@@ -90,10 +120,12 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · exact .plusNumber
   · exact .plusString
   · exact .hasProp (of_decide_eq_true h)
+  · rw [of_decide_eq_true h]; exact .mergePre
+  · rw [of_decide_eq_true h]; exact .mergeAbs
   · cases h
 
 /-- The constraint is on a type variable: its first argument (`Plus`'s
-type, `HasProp`'s receiver) is one. -/
+type, `HasProp`'s receiver, `Merge`'s presence) is one. -/
 def Pred.OnVar (p : Pred) : Prop := ∃ a rest, p.args = .var a :: rest
 
 /-- Decides `Pred.OnVar`. -/

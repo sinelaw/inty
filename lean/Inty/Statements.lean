@@ -73,7 +73,7 @@ example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L builtinCtx e = s
 
 example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst}
     {C : List Pred} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
-    Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.OnVarShaped) →
+    Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
     Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType L C Γ' R' e τ' →
     ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat C o.preds φ :=
   infer_complete
@@ -89,7 +89,12 @@ example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType e.labels.era
   inferProgram_complete
 
 example : Pred.OnVarShaped p ↔
-    (∃ a, p = ⟨.plus, [.var a]⟩) ∨ ∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩ := Iff.rfl
+    (∃ a, p = ⟨.plus, [.var a]⟩) ∨ (∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩) ∨
+      ∃ a τ s r, p = ⟨.merge, [.var a, τ, s, r]⟩ := Iff.rfl
+
+example : Pred.AssumableAt top p ↔
+    (∃ a, p = ⟨.plus, [.var a]⟩) ∨ (∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩) ∨
+      ∃ q τ s r, p = ⟨.merge, [q, τ, s, r]⟩ ∧ (top = true → ∃ a, q = .var a) := Iff.rfl
 
 example : ∀ (c : Nat) (env : Env) (h : Heap) (e : Expr), (run c env h e).2.1 ≤ c :=
   run_clock_le
@@ -117,8 +122,10 @@ example : V k W (.var a) v ↔ False := V_var
 example : V k W (.record ls slots) v ↔ ∃ ℓ, v = .obj ℓ ∧
     W[ℓ]? = some (.mono (.app .contents [.record ls slots])) := V_record
 example : V k W (.app .contents [.record ls slots]) v ↔ ∃ fs, v = .fields fs ∧
-    ∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
-    ∃ v', fs.lookup l = some v' ∧ V k W σ v' := V_contents
+    (∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
+      ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
+    ∀ l s, Ty.field l ls slots = some s →
+      (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := V_contents
 example : Result.Abrupt r ↔ (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued := by
   cases r <;> simp [Result.Abrupt]
 example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
@@ -160,17 +167,22 @@ As with `V`, a larger instance table weakens what `eval_sound` says. -/
 example : Entails C p ↔ Inst p ∨ p ∈ C := Iff.rfl
 
 example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ ∨
-    ∃ l ls fs σ, Ty.field l ls fs = some (.slot .pre σ) ∧ p = ⟨.hasProp l, [.record ls fs, σ]⟩ :=
+    (∃ l ls fs σ, Ty.field l ls fs = some (.slot .pre σ) ∧ p = ⟨.hasProp l, [.record ls fs, σ]⟩) ∨
+    (∃ τ s, p = ⟨.merge, [.pre, τ, s, .slot .pre τ]⟩) ∨ ∃ τ s, p = ⟨.merge, [.abs, τ, s, s]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
     | plusString => exact .inr (.inl rfl)
-    | hasProp hf => exact .inr (.inr ⟨_, _, _, _, hf, rfl⟩),
+    | hasProp hf => exact .inr (.inr (.inl ⟨_, _, _, _, hf, rfl⟩))
+    | mergePre => exact .inr (.inr (.inr (.inl ⟨_, _, rfl⟩)))
+    | mergeAbs => exact .inr (.inr (.inr (.inr ⟨_, _, rfl⟩))),
    fun h => by
-    rcases h with rfl | rfl | ⟨l, ls, fs, σ, hf, rfl⟩
+    rcases h with rfl | rfl | ⟨l, ls, fs, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩
     · exact .plusNumber
     · exact .plusString
-    · exact .hasProp hf⟩
+    · exact .hasProp hf
+    · exact .mergePre
+    · exact .mergeAbs⟩
 
 /-- A constraint left on a type variable is all `HoldsOrVar` allows beside
 the instances. -/
