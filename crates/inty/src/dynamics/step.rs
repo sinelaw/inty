@@ -352,12 +352,44 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
 
         Expr::NewTarget { .. } => Ok(Value::Undefined),
 
-        Expr::Unary { op, argument, span } => {
+        // `++x`, `o.p--`: the target is evaluated once, read, then written.
+        Expr::Unary { op, argument, span }
+            if matches!(
+                op,
+                UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
+            ) =>
+        {
+            let place = eval_place(state, env, argument)?;
+            let cur = match read_place(state, env, &place)? {
+                Value::Number(n) => n,
+                other => {
+                    return Err(Stuck::TypeMismatch {
+                        op: "++/--",
+                        expected: "number",
+                        got: other.type_string(),
+                    })
+                }
+            };
+            let (delta, name) = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
+                (1.0, "++")
+            } else {
+                (-1.0, "--")
+            };
+            let new_val = state.check_int(*span, name, Value::Number(cur + delta))?;
+            write_place(state, env, &place, new_val.clone())?;
+            if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
+                Ok(new_val)
+            } else {
+                Ok(Value::Number(cur))
+            }
+        }
+
+        Expr::Unary { op, argument, .. } => {
             // `delete` and `typeof` need to inspect the syntactic form
             // before evaluating; both are ok with eager evaluation in
             // this minimal model.
             let v = eval_expr(state, env, argument)?;
-            apply_unary(state, env, *op, argument, v, *span)
+            apply_unary(*op, v)
         }
 
         Expr::Binary {
@@ -395,11 +427,16 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             // only when needed. RHS evaluation must be conditional —
             // `a ??= expensive()` is observable when `expensive` has
             // side effects.
+            // The target's object (and index) are evaluated once, first,
+            // as JavaScript evaluates the reference before the right side;
+            // a compound assignment reads the target before the right side
+            // too.
+            let place = eval_place(state, env, left)?;
             if matches!(
                 op,
                 AssignOp::NullishAssign | AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign
             ) {
-                let cur = eval_expr(state, env, left)?;
+                let cur = read_place(state, env, &place)?;
                 let should_assign = match op {
                     AssignOp::NullishAssign => matches!(cur, Value::Null | Value::Undefined),
                     AssignOp::LogicalAndAssign => cur.truthy(),
@@ -408,17 +445,17 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                 };
                 if should_assign {
                     let rhs = eval_expr(state, env, right)?;
-                    assign_to(state, env, left, rhs.clone())?;
+                    write_place(state, env, &place, rhs.clone())?;
                     return Ok(rhs);
                 }
                 return Ok(cur);
             }
 
-            let rhs = eval_expr(state, env, right)?;
             let new_value = match op {
-                AssignOp::Assign => rhs,
+                AssignOp::Assign => eval_expr(state, env, right)?,
                 _ => {
-                    let cur = eval_expr(state, env, left)?;
+                    let cur = read_place(state, env, &place)?;
+                    let rhs = eval_expr(state, env, right)?;
                     let bin = compound_to_binop(*op);
                     let v = apply_binary(bin, &cur, &rhs)?;
                     match int_op_name(bin) {
@@ -427,7 +464,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                     }
                 }
             };
-            assign_to(state, env, left, new_value.clone())?;
+            write_place(state, env, &place, new_value.clone())?;
             Ok(new_value)
         }
 
@@ -841,14 +878,55 @@ fn compound_to_binop(op: AssignOp) -> BinOp {
     }
 }
 
-fn assign_to(
+/// What an assignment target evaluates to: the storage it names, with its
+/// object and index already evaluated, once, as JavaScript evaluates a
+/// reference before the value stored in it.
+enum Place<'a> {
+    /// A variable; reading or writing it has no effect of its own.
+    Var(&'a Expr),
+    Member(Value, &'a str),
+    Index(Value, Value),
+    Invalid,
+}
+
+fn eval_place<'a>(
     state: &mut State,
     env: &RuntimeEnv,
-    target: &Expr,
+    target: &'a Expr,
+) -> Result<Place<'a>, Stuck> {
+    Ok(match target {
+        Expr::Ident { .. } => Place::Var(target),
+        Expr::Member {
+            object, property, ..
+        } => Place::Member(eval_expr(state, env, object)?, property),
+        Expr::ComputedMember {
+            object, property, ..
+        } => {
+            let obj = eval_expr(state, env, object)?;
+            let idx = eval_expr(state, env, property)?;
+            Place::Index(obj, idx)
+        }
+        _ => Place::Invalid,
+    })
+}
+
+fn read_place(state: &mut State, env: &RuntimeEnv, place: &Place) -> Result<Value, Stuck> {
+    match place {
+        Place::Var(e) => eval_expr(state, env, e),
+        Place::Member(obj, property) => read_member(&state.heap, obj, property),
+        Place::Index(obj, idx) => read_index(&state.heap, obj, idx),
+        Place::Invalid => Err(Stuck::BadAssignmentTarget),
+    }
+}
+
+fn write_place(
+    state: &mut State,
+    env: &RuntimeEnv,
+    place: &Place,
     value: Value,
 ) -> Result<(), Stuck> {
-    match target {
-        Expr::Ident { name, .. } => {
+    match place {
+        Place::Var(Expr::Ident { name, .. }) => {
             let loc = env
                 .lookup(name)
                 .ok_or_else(|| Stuck::UndefinedVariable(name.clone()))?;
@@ -860,66 +938,58 @@ fn assign_to(
                 _ => Err(Stuck::BadAssignmentTarget),
             }
         }
-        Expr::Member {
-            object, property, ..
-        } => {
-            let obj = eval_expr(state, env, object)?;
-            match obj {
-                Value::Object(loc) => match state.heap.get_mut(loc) {
-                    Some(Cell::Object(props)) => {
-                        props.insert(PropName(property.clone()), value);
-                        Ok(())
-                    }
-                    _ => Err(Stuck::BadAssignmentTarget),
-                },
-                _ => Err(Stuck::BadAssignmentTarget),
-            }
-        }
-        Expr::ComputedMember {
-            object, property, ..
-        } => {
-            let obj = eval_expr(state, env, object)?;
-            let idx = eval_expr(state, env, property)?;
-            match (&obj, &idx) {
-                (Value::Array(loc), Value::Number(n)) => {
-                    let idx = *n as usize;
-                    match state.heap.get_mut(*loc) {
-                        Some(Cell::Array(v)) => {
-                            if idx >= v.len() {
-                                v.resize(idx + 1, Value::Undefined);
-                            }
-                            v[idx] = value;
-                            Ok(())
-                        }
-                        _ => Err(Stuck::BadAssignmentTarget),
-                    }
+        Place::Member(obj, property) => match obj {
+            Value::Object(loc) => match state.heap.get_mut(*loc) {
+                Some(Cell::Object(props)) => {
+                    props.insert(PropName(property.to_string()), value);
+                    Ok(())
                 }
-                (Value::Object(loc), Value::String(prop)) => match state.heap.get_mut(*loc) {
-                    Some(Cell::Object(props)) => {
-                        props.insert(PropName(prop.clone()), value);
+                _ => Err(Stuck::BadAssignmentTarget),
+            },
+            _ => Err(Stuck::BadAssignmentTarget),
+        },
+        Place::Index(obj, idx) => match (obj, idx) {
+            (Value::Array(loc), Value::Number(n)) => {
+                let idx = *n as usize;
+                match state.heap.get_mut(*loc) {
+                    Some(Cell::Array(v)) => {
+                        if idx >= v.len() {
+                            v.resize(idx + 1, Value::Undefined);
+                        }
+                        v[idx] = value;
                         Ok(())
                     }
                     _ => Err(Stuck::BadAssignmentTarget),
-                },
-                _ => Err(Stuck::BadAssignmentTarget),
+                }
             }
-        }
-        _ => Err(Stuck::BadAssignmentTarget),
+            (Value::Object(loc), Value::String(prop)) => match state.heap.get_mut(*loc) {
+                Some(Cell::Object(props)) => {
+                    props.insert(PropName(prop.clone()), value);
+                    Ok(())
+                }
+                _ => Err(Stuck::BadAssignmentTarget),
+            },
+            _ => Err(Stuck::BadAssignmentTarget),
+        },
+        Place::Var(_) | Place::Invalid => Err(Stuck::BadAssignmentTarget),
     }
+}
+
+fn assign_to(
+    state: &mut State,
+    env: &RuntimeEnv,
+    target: &Expr,
+    value: Value,
+) -> Result<(), Stuck> {
+    let place = eval_place(state, env, target)?;
+    write_place(state, env, &place, value)
 }
 
 // ---------------------------------------------------------------------
 // Operator semantics.
 // ---------------------------------------------------------------------
 
-fn apply_unary(
-    state: &mut State,
-    _env: &RuntimeEnv,
-    op: UnaryOp,
-    arg_expr: &Expr,
-    v: Value,
-    span: Span,
-) -> Result<Value, Stuck> {
+fn apply_unary(op: UnaryOp, v: Value) -> Result<Value, Stuck> {
     match op {
         UnaryOp::Neg => match v {
             Value::Number(n) => Ok(Value::Number(-n)),
@@ -954,28 +1024,7 @@ fn apply_unary(
             other => Ok(other),
         },
         UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
-            let cur = match v {
-                Value::Number(n) => n,
-                other => {
-                    return Err(Stuck::TypeMismatch {
-                        op: "++/--",
-                        expected: "number",
-                        got: other.type_string(),
-                    })
-                }
-            };
-            let (delta, name) = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
-                (1.0, "++")
-            } else {
-                (-1.0, "--")
-            };
-            let new_val = state.check_int(span, name, Value::Number(cur + delta))?;
-            assign_to(state, _env, arg_expr, new_val.clone())?;
-            if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
-                Ok(new_val)
-            } else {
-                Ok(Value::Number(cur))
-            }
+            unreachable!("updates are evaluated through their place")
         }
     }
 }

@@ -359,3 +359,24 @@ fn try_catches_a_throw_from_a_call() {
         3.0,
     );
 }
+
+/// An assignment evaluates its target's object before the value, once, as
+/// JavaScript does; a compound assignment or update reads the target before
+/// the right side.
+#[test]
+fn assignment_evaluates_its_target_once_and_first() {
+    assert_string(
+        "const obj = {x: 1}; let log = \"\"; \
+         const o = function () { log = log + \"o\"; return obj; }; \
+         const v = function () { log = log + \"v\"; return 2; }; \
+         o().x = v(); log",
+        "ov",
+    );
+    assert_number(
+        "const obj = {x: 1}; let n = 0; \
+         const o = function () { n = n + 1; return obj; }; \
+         o().x += 1; o().x++; n * 10 + obj.x",
+        23.0,
+    );
+    assert_number("let x = 1; x += (x = 10); x", 11.0);
+}
