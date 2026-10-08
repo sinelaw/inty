@@ -4677,6 +4677,16 @@ fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
         function g(o1, o2) { return {...o1, ...o2}; }
         const r = {a: "s", ...g({a: 1}, {})};
         "#,
+        // A spread copies own properties, not a function's call signature.
+        r#"
+        const f = function () { return 1; };
+        const n = ({...f})();
+        "#,
+        r#"
+        function h(o) { return {...o}; }
+        const f = function () { return 1; };
+        const n = h(f)();
+        "#,
     ];
     for source in rejected {
         assert!(infer_program_with_state(source).is_err(), "{source}");

@@ -414,7 +414,13 @@ impl InferState {
         so_far: RowType,
         spread: RowType,
     ) -> InferResult<RowType> {
+        // A spread copies an object's own properties, never a function's
+        // call signature: take it out of the operand, its unknown part
+        // included (`{...f}` was callable).
+        let callable = PropName(crate::types::CALLABLE_KEY.to_string());
         let spread = self.row_view(spread);
+        let mut spread = self.extend_row_with(span, spread, std::iter::once(callable.clone()))?;
+        spread.props.remove(&callable);
         let so_far = self.extend_row_with(span, so_far, spread.props.keys().cloned())?;
         let spread = self.row_view(spread);
         let spread = self.extend_row_with(span, spread, so_far.props.keys().cloned())?;
