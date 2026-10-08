@@ -4464,3 +4464,83 @@ fn const_function_statement_yields_undefined() {
             .unwrap();
     assert_eq!(state.apply_subst(&ty), Type::Undefined);
 }
+
+#[test]
+fn mutable_containers_are_invariant() {
+    // A `String[]` read as a `(String | Number)[]` could be pushed a
+    // number through the wider alias, and the `String[]` would hold it.
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** function f(list: (String | Number)[]) => Undefined */ \
+        function f(list) { list.push(420); } \
+        f(xs);"
+    )
+    .is_err());
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** const ys: (String | Number)[] */ \
+        const ys = xs;"
+    )
+    .is_err());
+    // The error says the mismatch is the array's invariance, and how to
+    // get around it.
+    let err = infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** const ys: (String | Number)[] */ \
+        const ys = xs;",
+    )
+    .err()
+    .expect("an invariance error");
+    let msg = format!("{:?}", err);
+    assert!(msg.contains("must match exactly"), "{msg}");
+    assert!(msg.contains("function f<a>(xs: a[])"), "{msg}");
+    // Both suggestions type-check: a generic parameter, and a copy.
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: String[] */ \
+        const xs = ['hi']; \
+        /** function count<a>(xs: a[]) => Number */ \
+        function count(xs) { return xs.length; } \
+        count(xs); \
+        /** function f(list: (String | Number)[]) => Undefined */ \
+        function f(list) { list.push(420); } \
+        f([...xs]);"
+    )
+    .is_ok());
+    // A literal-typed array is not a `String[]`: pushing `"zzz"` through
+    // the alias would leave the `("a" | "b")[]` holding it.
+    assert!(infer_program_with_state(
+        "\
+        /** const xs: (\"a\" | \"b\")[] */ \
+        const xs = [\"a\"]; \
+        /** const ys: String[] */ \
+        const ys = xs;"
+    )
+    .is_err());
+    // A record field is mutable too: `p.x = 1` would write into `o`.
+    assert!(infer_program_with_state(
+        "\
+        const o = { x: \"a\" }; \
+        /** const p: { x: String | Number } */ \
+        const p = o;"
+    )
+    .is_err());
+    // A fresh literal's elements and fields are values, and fit.
+    assert!(infer_program_with_state(
+        "\
+        /** const ys: (String | Number)[] */ \
+        const ys = ['hi', 1]; \
+        /** const p: { x: String | Number } */ \
+        const p = { x: \"a\" }; \
+        /** type Shape = { kind: \"circle\", r: Number } | { kind: \"sq\", s: Number } */ \
+        /** const shapes: Shape[] */ \
+        const shapes = [{ kind: \"circle\", r: 1 }, { kind: \"sq\", s: 2 }];"
+    )
+    .is_ok());
+}

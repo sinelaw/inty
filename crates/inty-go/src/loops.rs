@@ -352,20 +352,18 @@ impl LoopScan {
                 continue;
             }
             match kind_of(name) {
-                Some(ArrayKind::Fixed) => {
-                    if !self.calls || u.span.is_some_and(|s| stable(name, s)) {
-                        out.push(name.clone());
-                    }
+                Some(ArrayKind::Fixed)
+                    if !self.calls || u.span.is_some_and(|s| stable(name, s)) =>
+                {
+                    out.push(name.clone());
                 }
-                Some(ArrayKind::Growable(key)) => {
-                    if !self.calls && !self.foreign_store {
-                        growable
-                            .entry(key)
-                            .or_default()
-                            .push((name.clone(), u.stored));
-                    }
+                Some(ArrayKind::Growable(key)) if !self.calls && !self.foreign_store => {
+                    growable
+                        .entry(key)
+                        .or_default()
+                        .push((name.clone(), u.stored));
                 }
-                None => {}
+                _ => {}
             }
         }
         for (_, group) in growable {

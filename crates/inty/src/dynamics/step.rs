@@ -741,7 +741,7 @@ fn apply(
         let self_loc = state.alloc_var(Value::Closure(closure.clone()));
         call_env = call_env.extend(name.clone(), self_loc);
     }
-    for (param, arg) in closure.params.iter().zip(args.into_iter()) {
+    for (param, arg) in closure.params.iter().zip(args) {
         let loc = state.alloc_var(arg);
         call_env = call_env.extend(param.clone(), loc);
     }

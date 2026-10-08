@@ -444,7 +444,15 @@ impl InferState {
             let mut chosen: Option<Type> = None;
             let mut count = 0;
             for m in members {
-                let m_resolved = self.zonk(m);
+                let mut m_resolved = self.zonk(m);
+                // A recursive alias arm (`B | Null`) is its unrolling.
+                if let Type::Named(id, args) = &m_resolved {
+                    if !self.is_nominal_type(*id) {
+                        if let Some(unrolled) = self.unroll_named(*id, args) {
+                            m_resolved = unrolled;
+                        }
+                    }
+                }
                 if let Type::Row(row) = &m_resolved {
                     if row.is_closed()
                         && row
@@ -936,37 +944,34 @@ impl InferState {
                     visited.insert(*id);
 
                     // Look up what this variable is bound to
-                    if let Some(ty) = self.main_subst.get(&TVarName::Flex(*id)) {
-                        match ty {
-                            Type::Row(tail_row) => {
-                                // Check if property is in this row
+                    let ty = self.main_subst.get(&TVarName::Flex(*id))?;
+                    match ty {
+                        Type::Row(tail_row) => {
+                            // Check if property is in this row
+                            if let Some(entry) = tail_row.props.get(&prop_name) {
+                                return Some(entry.ty.clone());
+                            }
+                            // Continue with this row's tail
+                            current_tail = &tail_row.tail;
+                        }
+                        Type::Var(TVarName::Flex(next_id)) => {
+                            // The variable is bound to another variable, follow it
+                            if visited.contains(next_id) {
+                                return None;
+                            }
+                            visited.insert(*next_id);
+                            if let Some(Type::Row(tail_row)) =
+                                self.main_subst.get(&TVarName::Flex(*next_id))
+                            {
                                 if let Some(entry) = tail_row.props.get(&prop_name) {
                                     return Some(entry.ty.clone());
                                 }
-                                // Continue with this row's tail
                                 current_tail = &tail_row.tail;
+                                continue;
                             }
-                            Type::Var(TVarName::Flex(next_id)) => {
-                                // The variable is bound to another variable, follow it
-                                if visited.contains(next_id) {
-                                    return None;
-                                }
-                                visited.insert(*next_id);
-                                if let Some(Type::Row(tail_row)) =
-                                    self.main_subst.get(&TVarName::Flex(*next_id))
-                                {
-                                    if let Some(entry) = tail_row.props.get(&prop_name) {
-                                        return Some(entry.ty.clone());
-                                    }
-                                    current_tail = &tail_row.tail;
-                                    continue;
-                                }
-                                return None;
-                            }
-                            _ => return None,
+                            return None;
                         }
-                    } else {
-                        return None;
+                        _ => return None,
                     }
                 }
                 RowTail::Open(TVarName::Skolem(_)) => return None,

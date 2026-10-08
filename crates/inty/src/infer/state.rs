@@ -351,9 +351,6 @@ pub struct InferState {
     /// Per return frame, the annotated return type `return`s are
     /// checked against (instead of being joined), if there is one.
     pub(in crate::infer) return_expected_stack: Vec<Option<Type>>,
-    /// How many array elements / object fields `subsume` is inside:
-    /// `Int ≤ Number` only holds outside them (see S-IntNum).
-    pub(in crate::infer) subsume_in_place: u32,
     /// Variables a numeric constraint (`Num`, `NumLit`, `Arith`) is on:
     /// their *kind* is "number", so unification refuses to bind one to
     /// anything but `Int`, `Number` or another variable (which inherits
@@ -523,7 +520,6 @@ impl InferState {
             current_annotation_span: None,
             return_value_stack: Vec::new(),
             return_expected_stack: Vec::new(),
-            subsume_in_place: 0,
             numeric_vars: Default::default(),
             numeric_log: Vec::new(),
             constraint_removals: 0,
@@ -1179,9 +1175,14 @@ impl InferState {
     ///    first is order-dependent and a known footgun. Zero or two-
     ///    plus matches reports a unification error at `span`.
     ///
-    /// Other subtyping rules (function variance, deep row width
-    /// subsumption beyond what `unify_rows` already does) are left
-    /// to grow into this judgement as use cases land.
+    /// Subsumption is shallow: it applies to the value flowing, never
+    /// inside an array, record, map or set. Those are mutable, so their
+    /// contents are invariant and compared by `unify` — a `String[]`
+    /// read as a `(String | Number)[]` could be pushed a number through
+    /// that alias, and the `String[]` would then hold it (TAPL §15.5:
+    /// `Ref T` is invariant). A fresh literal still fits a wider type:
+    /// `check_expr` pushes the expected element/field types into it.
+    /// Covariance belongs only to an immutable type constructor.
     pub fn subsume(&mut self, span: Span, sub: &Type, sup: &Type) -> InferResult<()> {
         let sub = self.zonk(sub);
         let sup = self.zonk(sup);
@@ -1209,24 +1210,20 @@ impl InferState {
         // is one of them too, `Int` by default — `NumLit v`. Binding `v`
         // instead would guess (`isPunct(r)` fixing a result `r` that turns
         // out an `Int`).
-        if self.subsume_in_place == 0 {
-            match (&sub, &sup) {
-                (Type::Var(TVarName::Flex(_)), Type::Number) => {
-                    self.add_constraint(TypePred::num(sub.clone()), span);
-                    return Ok(());
-                }
-                (Type::Int, Type::Var(TVarName::Flex(_))) => {
-                    self.add_constraint(TypePred::num_lit(sup.clone()), span);
-                    return Ok(());
-                }
-                _ => {}
+        match (&sub, &sup) {
+            (Type::Var(TVarName::Flex(_)), Type::Number) => {
+                self.add_constraint(TypePred::num(sub.clone()), span);
+                return Ok(());
             }
+            (Type::Int, Type::Var(TVarName::Flex(_))) => {
+                self.add_constraint(TypePred::num_lit(sup.clone()), span);
+                return Ok(());
+            }
+            _ => {}
         }
 
-        // S-IntNum: every `Int` is a `Number` — for a value, not inside
-        // an array or object (`subsume_in_place`): an `Int[]` read as a
-        // `Number[]` could be pushed a fraction.
-        if sub == Type::Int && sup == Type::Number && self.subsume_in_place == 0 {
+        // S-IntNum: every `Int` is a `Number`.
+        if sub == Type::Int && sup == Type::Number {
             return Ok(());
         }
 
@@ -1255,51 +1252,6 @@ impl InferState {
                 }
             }
             _ => {}
-        }
-
-        // S-Row: structural row subsumption. With `Lit ≤ Base`
-        // removed from `unify`, two rows that differ only in
-        // a literal-vs-base position no longer unify directly —
-        // recurse here so e.g. `{kind: Lit("circle"), r: Lit(10)}
-        // ≤ {kind: Lit("circle"), r: Number}` succeeds via per-
-        // field subsumption.
-        if let (Type::Row(r1), Type::Row(r2)) = (&sub, &sup) {
-            if r1.is_closed()
-                && r2.is_closed()
-                && r1.props.len() == r2.props.len()
-                && r1.props.keys().eq(r2.props.keys())
-            {
-                let snap = self.snapshot_inference();
-                let mut all_ok = true;
-                self.subsume_in_place += 1;
-                for (k, sub_field) in &r1.props {
-                    let sup_field = r2.props.get(k).expect("keys checked equal");
-                    if self
-                        .quietly(|s| s.subsume(span, &sub_field.ty, &sup_field.ty))
-                        .is_err()
-                    {
-                        all_ok = false;
-                        break;
-                    }
-                }
-                self.subsume_in_place -= 1;
-                if all_ok {
-                    return Ok(());
-                }
-                self.restore_snapshot(snap);
-            }
-        }
-
-        // S-Array: covariant element subsumption.
-        if let (Type::Array(e1), Type::Array(e2)) = (&sub, &sup) {
-            let snap = self.snapshot_inference();
-            self.subsume_in_place += 1;
-            let ok = self.quietly(|s| s.subsume(span, e1, e2)).is_ok();
-            self.subsume_in_place -= 1;
-            if ok {
-                return Ok(());
-            }
-            self.restore_snapshot(snap);
         }
 
         // Rule 2a (S-UnionL): a union value subsumes into `sup` iff
@@ -1359,13 +1311,64 @@ impl InferState {
         // line.
         let mut err = self.unification_error(span, &sup, &sub);
         if self.quiet == 0 {
+            let note = match self.row_difference(&sup, &sub) {
+                Some(note) => Some(note),
+                None => self.invariance_note(span, &sub, &sup),
+            };
             if let (Some(note), Some(crate::error::TypeError::UnificationError { context, .. })) =
-                (self.row_difference(&sup, &sub), err.as_type_mut())
+                (note, err.as_type_mut())
             {
                 context.get_or_insert(note);
             }
         }
         Err(err)
+    }
+
+    /// When `sub` would fit `sup` if arrays and records were covariant,
+    /// the mismatch is only their invariance: say why, and what to do.
+    fn invariance_note(&mut self, span: Span, sub: &Type, sup: &Type) -> Option<String> {
+        let snap = self.snapshot_inference();
+        let fits = self.quietly(|s| s.fits_covariantly(span, sub, sup));
+        self.restore_snapshot(snap);
+        match (fits, self.flatten_type(sup)) {
+            (true, Type::Array(_)) => Some(
+                "an array can be written to, so its element type must match exactly \
+                 (a push through the expected type could add an element this array \
+                 doesn't allow). If it's a function parameter that's only read, make it \
+                 generic: `function f<a>(xs: a[]) => …`. Otherwise pass a copy, `[...xs]`, \
+                 or declare the array with the wider type"
+                    .to_string(),
+            ),
+            (true, _) => Some(
+                "a record's fields can be assigned, so each field's type must match \
+                 exactly (an assignment through the expected type could store a value \
+                 this record doesn't allow). If it's a function parameter whose fields \
+                 are only read, make it generic: `function f<a>(r: {x: a}) => …`. \
+                 Otherwise declare the record with the wider type"
+                    .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Would `sub ≤ sup` hold if array elements and record fields were
+    /// covariant? Only for a diagnostic — it is unsound as a rule.
+    fn fits_covariantly(&mut self, span: Span, sub: &Type, sup: &Type) -> bool {
+        let inner = |s: &mut Self, a: &Type, b: &Type| {
+            s.subsume(span, a, b).is_ok() || s.fits_covariantly(span, a, b)
+        };
+        match (self.flatten_type(sub), self.flatten_type(sup)) {
+            (Type::Array(a), Type::Array(b)) | (Type::Map(a), Type::Map(b)) => inner(self, &a, &b),
+            (Type::Row(r1), Type::Row(r2))
+                if r1.is_closed() && r2.is_closed() && r1.props.keys().eq(r2.props.keys()) =>
+            {
+                r1.props
+                    .iter()
+                    .zip(r2.props.values())
+                    .all(|((_, f1), f2)| inner(self, &f1.ty, &f2.ty))
+            }
+            _ => false,
+        }
     }
 
     /// For two record types, which fields one has and the other lacks:
@@ -2518,6 +2521,14 @@ impl InferState {
     }
 }
 
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2675,13 +2686,5 @@ mod tests {
         assert_eq!(skolems.len(), 1);
         assert!(skolems[0].is_skolem());
         assert!(ty.is_var());
-    }
-}
-
-fn plural(n: usize) -> &'static str {
-    if n == 1 {
-        ""
-    } else {
-        "s"
     }
 }
