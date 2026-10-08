@@ -263,11 +263,14 @@ def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
 end
 
 /-- Infer the type of a program in a context with no free type variables,
-such as the builtins'. Every constraint must end up an instance. -/
+such as the builtins'. Every constraint left must be satisfiable: an
+instance, or a constraint on a type variable, which inty leaves in place
+and which the program's type here defaults (`defaultSubst`). -/
 def inferIn (Γ : Ctx) (e : Expr) : Option Ty :=
   match infer Γ none e 0 with
   | none => none
-  | some o => if o.preds.all Pred.isInst then some o.τ else none
+  | some o =>
+    if o.preds.all Pred.satisfiable then some (o.τ.subst (defaultSubst o.preds)) else none
 
 /-- Infer the type of a closed program. -/
 def inferProgram (e : Expr) : Option Ty := inferIn [] e

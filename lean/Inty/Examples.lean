@@ -160,8 +160,11 @@ example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 #guard inferProgram polyDouble == some .string
 #guard inferProgram (.let_ (.func 1 (.binop .plus (.var 0) (.var 0)))
   (.app (.var 0) [.lit (.boolean true)])) == none
--- At the top level, nothing resolves the constraint of an unused `+`.
-#guard inferProgram (.func 1 (.binop .plus (.var 0) (.var 0))) == none
+-- At the top level, nothing resolves the constraint of an unused `+`. inty
+-- leaves it in place and accepts the program, which has a type at every
+-- instance; the typing here defaults it, to `Number`.
+#guard inferProgram (.func 1 (.binop .plus (.var 0) (.var 0))) ==
+  some (.fn (.var 0) [.number] .number)
 
 -- Each of these types is a valid typing, by `inferProgram_sound`. (A proof
 -- by `decide` would have the kernel run inference, which it can't do in

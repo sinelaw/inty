@@ -611,7 +611,6 @@ fn b2(t: T) -> Box<T> {
 #[derive(Clone, Debug, PartialEq)]
 enum Typing {
     Type(String),
-    Ambiguous,
     Reject,
 }
 
@@ -769,7 +768,6 @@ fn parse_model_line(line: &str) -> (Typing, Run) {
         .unwrap_or_else(|| panic!("bad model line: {line}"));
     let typing = match typing {
         "reject" => Typing::Reject,
-        "ambiguous" => Typing::Ambiguous,
         t => Typing::Type(t.strip_prefix("type ").expect(line).to_string()),
     };
     (typing, parse_run(run))
@@ -857,9 +855,6 @@ fn env_or(name: &str, default: u64) -> u64 {
 /// feature inty's types show it used.
 fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Option<&'static str> {
     match (inty, model) {
-        // A `Plus` constraint nothing resolves (lean/ROADMAP.md, phase
-        // 1): inty defaults it; the model has no defaulting.
-        (Typing::Type(_), Typing::Ambiguous) => Some("ambiguous Plus constraint"),
         // Roadmap phase 6: `c ? 1 : null` is `Number | Null` in inty, and
         // `c ? undefined : x` is `Undefined | t`, where the model unifies.
         (Typing::Type(_), Typing::Reject) if features.contains("unions") => {
@@ -876,7 +871,7 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // `never`, the empty union, which unifies with nothing else and
         // can't be called, as in TypeScript; the model leaves it a free
         // type variable.
-        (Typing::Reject, Typing::Type(_) | Typing::Ambiguous) if features.contains("never") => {
+        (Typing::Reject, Typing::Type(_)) if features.contains("never") => {
             Some("never (a function that only throws)")
         }
         (Typing::Type(t), Typing::Type(_)) if t == "never" => {
@@ -892,7 +887,7 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // inty's nullable join (`c ? undefined : x` is `Undefined | t`
         // even for an unknown `t`) can make an HM-typable program an
         // infinite type, or fail to unify.
-        (Typing::Reject, Typing::Type(_) | Typing::Ambiguous) if features.contains("unions") => {
+        (Typing::Reject, Typing::Type(_)) if features.contains("unions") => {
             Some("unions (inty's nullable join rejects an HM-typable program)")
         }
         _ => None,
@@ -972,7 +967,6 @@ fn inty_agrees_with_the_lean_model() {
                 if accepted { "accepts" } else { "rejects" },
                 match model_typing {
                     Typing::Type(_) => "accepts",
-                    Typing::Ambiguous => "is ambiguous",
                     _ => "rejects",
                 }
             ))
@@ -1040,7 +1034,7 @@ fn inty_agrees_with_the_lean_model() {
                 && model_typing == Typing::Type("var".into()))
             // A program ending in a statement: compare acceptance only.
             || (ends_in_statement(core) && accepted && model_accepted);
-        if !same && (accepted || model_accepted || model_typing == Typing::Ambiguous) {
+        if !same && (accepted || model_accepted) {
             match known_divergence(&typing, &features, &model_typing) {
                 Some(why) => {
                     let entry = known.entry(why).or_insert((0, report(why)));

@@ -383,11 +383,11 @@ theorem inferIn_sound {Γ : Ctx} {e : Expr} {τ : Ty} (hΓ : ctxFtv Γ = [])
   split at h
   · rename_i hall
     simp only [Option.some.injEq] at h; subst h
-    have hsat : Sat [] o.preds [] := fun c hc => by
-      have := List.all_eq_true.mp hall c hc
-      exact .inl (by simpa using Pred.isInst_sound this)
-    have hσ : Ctx.subst o.σ Γ = Γ := ctx_subst_id (fun a ha => by simp [hΓ] at ha)
-    simpa [hσ] using infer_sound ho [] [] hsat
+    have hsat : Sat [] o.preds (defaultSubst o.preds) := fun c hc =>
+      .inl (defaultSubst_inst hc (List.all_eq_true.mp hall c hc))
+    have hclosed : ∀ σ : Subst, Ctx.subst σ Γ = Γ := fun σ =>
+      ctx_subst_id (fun a ha => by simp [hΓ] at ha)
+    simpa [hclosed] using infer_sound ho _ [] hsat
   · cases h
 
 /-- A program inference accepts is well typed. -/

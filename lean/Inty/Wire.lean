@@ -111,16 +111,15 @@ def tyWire : Ty → String
   | .fn .. => "fun"
   | .var _ => "var"
 
-/-- Inference's verdict: `type T`; `ambiguous`, when a `Plus` constraint on
-a type variable is left that nothing resolves; or `reject`, which includes a
-`Plus` constraint no type could satisfy (on `undefined`, or on a function). -/
+/-- Inference's verdict: `type T`, or `reject`, which includes a constraint
+no type could satisfy (`Plus` on `undefined`, or on a function). A
+constraint left on a type variable is satisfiable, and inty leaves it in
+place; `T` keeps the variable, as inty's type does. -/
 def inferVerdict (e : Expr) : String :=
   match infer [] none e 0 with
   | none => "reject"
   | some o =>
-    if o.preds.all Pred.isInst then s!"type {tyWire o.τ}"
-    else if o.preds.all Pred.satisfiable then "ambiguous"
-    else "reject"
+    if o.preds.all Pred.satisfiable then s!"type {tyWire o.τ}" else "reject"
 
 def valueWire : Value → String
   | .number n => s!"num {n.toBits}"
@@ -155,7 +154,7 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100 "(app (func 1 (var 0)) (num 15 1))" ==
   s!"type number;value num {(1.5 : Float).toBits}"
 #guard verdict 100 "(plus (num 1 0) (str s:a))" == "reject;stuck typeMismatch"
-#guard verdict 100 "(not (func 1 (plus (var 0) (var 0))))" == "ambiguous;value bool false"
+#guard verdict 100 "(not (func 1 (plus (var 0) (var 0))))" == "type boolean;value bool false"
 #guard verdict 100 "(let (func 1 (var 0)) (app (var 0) (str s:)))" == "type string;value str s:"
 #guard verdict 100 "(app (func 2 (var 1)) (num 1 0) (str s:a))" == "type string;value str s:a"
 #guard verdict 100 "(app (func 0 (var 1)))" == "type undefined;value undef"

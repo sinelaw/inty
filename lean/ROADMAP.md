@@ -78,13 +78,12 @@ The parts every later feature touches.
 Proved for the core, then kept for every later phase. The decisions it
 needs first:
 
-- **Ambiguous constraints.** `HasType` accepts `!(function (y) { return
-  y + y; })` at both `Number` and `String`, while `inferProgram` rejects
-  it and inty accepts it. Either the specification defaults, as inty does
-  for `Num`, or it makes such programs untypable, as CakeML does to keep
-  principal types. Completeness is stated for constrained types: the
-  inferred type, with its pending constraints, has every valid type as a
-  solved instance.
+- **Ambiguous constraints.** Decided: a constraint left on a type
+  variable at the end is satisfiable, and inty leaves it in place and
+  accepts the program (`resolve_plus`), so `inferProgram` accepts it too,
+  typing the program at a default instance (`defaultSubst`). Completeness
+  is stated for constrained types: the inferred type, with its pending
+  constraints, has every valid type as a solved instance.
 - **Well-scoped schemes.** A scheme may mention `bound i` past its arity.
   "More general than" ranges over well-scoped schemes only, by a
   well-formedness predicate or by construction.

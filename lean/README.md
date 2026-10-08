@@ -241,7 +241,6 @@ disagreements in typing all fall into features the model lacks:
 | Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 6 |
 | Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 8 |
 | `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 5 |
-| A `Plus` constraint nothing resolves | accepts (defaulting) | ambiguous | 1 |
 
 Each row is recognised from evidence, not guessed: a union or `μ` in the
 types inty gave the program's expressions, or inty accepting the program
