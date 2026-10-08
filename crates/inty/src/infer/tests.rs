@@ -4628,3 +4628,35 @@ fn caught_exception_is_opaque() {
     )
     .is_empty());
 }
+
+#[test]
+fn test_try_finally_that_returns_doesnt_fall_through() {
+    // `try { return … } finally { … }` always returns: the function's
+    // result has no implicit `undefined`, so it joins with one that
+    // returns the same type.
+    let source = r#"
+        const f = function () { try { return null; } finally { 1; } };
+        const g = function () { return null; };
+        const h = true ? f : g;
+    "#;
+    assert!(infer_program_with_state(source).is_ok());
+}
+
+#[test]
+fn test_while_true_with_break_falls_through() {
+    // A `while (true)` left by `break` falls off the function's end, so the
+    // function can return `undefined`; using its result as a number is an
+    // error (it was accepted when the result was typed `never`).
+    let source = r#"
+        const f = function () { while (true) { break; } };
+        const a = true ? f() : 1;
+        const r = a - 1;
+    "#;
+    assert!(infer_program_with_state(source).is_err());
+    let forever = r#"
+        const f = function () { while (true) { } };
+        const a = true ? f() : 1;
+        const r = a - 1;
+    "#;
+    assert!(infer_program_with_state(forever).is_ok());
+}

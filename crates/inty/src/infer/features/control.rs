@@ -69,7 +69,7 @@ fn apply_facts(
 /// Whether `body` (a loop's) contains a `break` that can leave the loop:
 /// an unlabeled one outside any nested loop or `switch`, or any labeled
 /// one (conservatively). Nested functions are not searched.
-fn breaks_out(body: &Stmt) -> bool {
+pub(in crate::infer) fn breaks_out(body: &Stmt) -> bool {
     fn walk(s: &Stmt, nested: bool) -> bool {
         match s {
             Stmt::Break { label, .. } => label.is_some() || !nested,

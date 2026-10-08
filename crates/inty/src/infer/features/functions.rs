@@ -1604,8 +1604,9 @@ fn definitely_returns(stmt: &Stmt) -> bool {
             ..
         } => definitely_returns(consequent) && definitely_returns(alt),
         // `try` completes abnormally only if every path that can reach the
-        // end returns: the body (and, if present, the handler). A
-        // `finally` that returns dominates everything.
+        // end returns: the body, and the handler if there is one (without
+        // one, an exception leaves the `try` abruptly). A `finally` that
+        // returns dominates everything.
         Stmt::Try {
             block,
             handler,
@@ -1618,21 +1619,17 @@ fn definitely_returns(stmt: &Stmt) -> bool {
                 }
             }
             definitely_returns(block)
-                && handler
-                    .as_ref()
-                    .is_some_and(|h| definitely_returns(&h.body))
+                && handler.as_ref().is_none_or(|h| definitely_returns(&h.body))
         }
-        // `while True:` (with no `break`) never falls through. We don't
-        // scan for `break`; treating it as terminating is the common
-        // infinite-loop / loop-until-return idiom.
-        Stmt::While { test, .. } => {
+        // `while True:` never falls through, unless a `break` leaves it.
+        Stmt::While { test, body, .. } => {
             matches!(
                 test,
                 Expr::Lit {
                     value: Literal::Boolean(true),
                     ..
                 }
-            )
+            ) && !super::control::breaks_out(body)
         }
         _ => false,
     }
