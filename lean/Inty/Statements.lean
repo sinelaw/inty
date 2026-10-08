@@ -1,5 +1,4 @@
-import Inty.InferSound
-import Inty.Fuel
+import Inty.Builtins
 
 /-!
 # Pinned statements
@@ -20,16 +19,23 @@ open Inty
 
 /-! ## Headline theorems -/
 
-example : ∀ (fuel : Nat) {C : List Ty} {Γ : Ctx} {R : Option Ty} {env : Env} {e : Expr}
-    {τ : Ty}, HasType C Γ R e τ → Holds C → EnvTy env Γ →
-      eval fuel env e = .timeout ∨ (∃ v, eval fuel env e = .ok v ∧ ValTy v τ) ∨
-        (∃ v, eval fuel env e = .thrown v) ∨
-        (∃ τr v, R = some τr ∧ eval fuel env e = .returned v ∧ ValTy v τr) :=
-  eval_sound
+example : ∀ (clock : Nat) {C : List Ty} {Γ : Ctx} {R : Option Ty} {env : Env} {e : Expr}
+    {τ : Ty}, HasType C Γ R e τ → Holds C → G clock Γ env →
+      (run clock env e).2 ≤ clock ∧
+      ((run clock env e).1 = .timeout ∨
+        (∃ v, (run clock env e).1 = .ok v ∧ V (run clock env e).2 τ v) ∨
+        (∃ v, (run clock env e).1 = .thrown v) ∨
+        (∃ v, (run clock env e).1 = .returned v ∧
+          ∃ τr, R = some τr ∧ V (run clock env e).2 τr v)) :=
+  fun clock _ _ _ _ _ _ h hC henv => eval_sound clock h hC henv
 
 example : ∀ {e : Expr} {τ : Ty}, HasType [] [] none e τ →
-    ∀ (fuel : Nat) (s : Stuck), eval fuel [] e ≠ .stuck s :=
+    ∀ (clock : Nat) (s : Stuck), eval clock [] e ≠ .stuck s :=
   never_stuck
+
+example : ∀ {e : Expr} {τ : Ty}, HasType [] builtinCtx none e τ →
+    ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv e ≠ .stuck s :=
+  never_stuck_with_builtins
 
 example : ∀ {C : List Ty} {Γ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty} (σ : Subst),
     HasType C Γ R e τ →
@@ -50,12 +56,44 @@ example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ → HasType [] [] n
   inferProgram_sound
 
 example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
-    ∀ (fuel : Nat) (s : Stuck), eval fuel [] e ≠ .stuck s :=
+    ∀ (clock : Nat) (s : Stuck), eval clock [] e ≠ .stuck s :=
   inferProgram_never_stuck
+
+example : ∀ {e : Expr} {τ : Ty}, inferIn builtinCtx e = some τ →
+    ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv e ≠ .stuck s :=
+  inferIn_builtins_never_stuck
+
+example : ∀ (c : Nat) (env : Env) (e : Expr), (run c env e).2 ≤ c :=
+  run_clock_le
+
+example : ∀ (c : Nat) (env : Env) (e : Expr) (k : Nat), (run c env e).1 ≠ .timeout →
+    run (c + k) env e = ((run c env e).1, (run c env e).2 + k) :=
+  run_mono
 
 example : ∀ (n : Nat) {env : Env} {e : Expr} (k : Nat), eval n env e ≠ .timeout →
     eval (n + k) env e = eval n env e :=
   eval_mono
+
+/-! ## The value relation
+
+`eval_sound` is only as strong as `V`: a `V` that holds of everything would
+make it trivial. So its clauses are pinned too. -/
+
+example : V k .number v ↔ ∃ n, v = .number n := Iff.rfl
+example : V k .string v ↔ ∃ s, v = .string s := Iff.rfl
+example : V k .boolean v ↔ ∃ b, v = .boolean b := Iff.rfl
+example : V k .undefined v ↔ v = .undefined := Iff.rfl
+example : V k .null v ↔ v = .null := Iff.rfl
+example : V k (.var a) v ↔ False := Iff.rfl
+example : V k (.arrow τ₁ τ₂) f ↔ ∀ j ≤ k, ∀ a, V j τ₁ a →
+    (call j f a).2 ≤ j ∧ ((call j f a).1 = .timeout ∨
+      (∃ v, (call j f a).1 = .ok v ∧ V (call j f a).2 τ₂ v) ∨
+      (∃ v, (call j f a).1 = .thrown v) ∨ (∃ v, (call j f a).1 = .returned v ∧ False)) :=
+  Iff.rfl
+
+/-- The builtins' types, which their soundness proofs establish. -/
+example : builtinCtx =
+    [⟨1, .arrow (.bound 0) .boolean, []⟩, .mono (.arrow .number .number)] := rfl
 
 /-! ## Programs the typing rules reject -/
 

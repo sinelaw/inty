@@ -5,9 +5,10 @@ import Inty.Typing
 import Inty.TypeSubst
 import Inty.Semantics
 import Inty.Soundness
-import Inty.Fuel
+import Inty.Clock
 import Inty.Infer
 import Inty.InferSound
+import Inty.Builtins
 import Inty.Examples
 import Inty.Statements
 import Inty.Wire

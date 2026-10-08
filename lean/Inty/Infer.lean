@@ -224,11 +224,14 @@ def Ty.isPlusInst : Ty → Bool
   | .number | .string => true
   | _ => false
 
-/-- Infer the type of a closed program. Every `+` must end up at an instance
-of `Plus`. -/
-def inferProgram (e : Expr) : Option Ty :=
-  match infer [] none e 0 with
+/-- Infer the type of a program in a context with no free type variables,
+such as the builtins'. Every `+` must end up at an instance of `Plus`. -/
+def inferIn (Γ : Ctx) (e : Expr) : Option Ty :=
+  match infer Γ none e 0 with
   | none => none
   | some o => if o.plus.all Ty.isPlusInst then some o.τ else none
+
+/-- Infer the type of a closed program. -/
+def inferProgram (e : Expr) : Option Ty := inferIn [] e
 
 end Inty

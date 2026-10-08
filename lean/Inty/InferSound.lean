@@ -5,7 +5,7 @@ import Inty.Soundness
 # Soundness of inference
 
 Whatever `infer` returns is a valid typing: `inferProgram e = some τ` implies
-`HasType [] e τ`. With `never_stuck` (`Inty.Soundness`), a program inference
+`HasType [] [] none e τ`. With `never_stuck` (`Inty.Soundness`), a program inference
 accepts never gets stuck.
 -/
 
@@ -316,10 +316,11 @@ theorem infer_sound :
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
     exact .seq he₁ he₂
 
-/-- A program inference accepts is well typed. -/
-theorem inferProgram_sound {e : Expr} {τ : Ty} (h : inferProgram e = some τ) :
-    HasType [] [] none e τ := by
-  simp only [inferProgram] at h
+/-- A program inference accepts in a context with no free type variables is
+well typed in it. -/
+theorem inferIn_sound {Γ : Ctx} {e : Expr} {τ : Ty} (hΓ : ctxFtv Γ = [])
+    (h : inferIn Γ e = some τ) : HasType [] Γ none e τ := by
+  simp only [inferIn] at h
   split at h
   · cases h
   rename_i o ho
@@ -330,12 +331,18 @@ theorem inferProgram_sound {e : Expr} {τ : Ty} (h : inferProgram e = some τ) :
       have := List.all_eq_true.mp hall c hc
       refine .inl ?_
       cases c <;> simp_all [Ty.isPlusInst] <;> constructor
-    simpa using infer_sound ho [] [] hsat
+    have hσ : Ctx.subst o.σ Γ = Γ := ctx_subst_id (fun a ha => by simp [hΓ] at ha)
+    simpa [hσ] using infer_sound ho [] [] hsat
   · cases h
 
-/-- A program inference accepts never gets stuck, whatever the fuel. -/
+/-- A program inference accepts is well typed. -/
+theorem inferProgram_sound {e : Expr} {τ : Ty} (h : inferProgram e = some τ) :
+    HasType [] [] none e τ :=
+  inferIn_sound rfl h
+
+/-- A program inference accepts never gets stuck, whatever the clock. -/
 theorem inferProgram_never_stuck {e : Expr} {τ : Ty} (h : inferProgram e = some τ)
-    (fuel : Nat) (s : Stuck) : eval fuel [] e ≠ .stuck s :=
-  never_stuck (inferProgram_sound h) fuel s
+    (clock : Nat) (s : Stuck) : eval clock [] e ≠ .stuck s :=
+  never_stuck (inferProgram_sound h) clock s
 
 end Inty

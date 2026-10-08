@@ -21,19 +21,22 @@ pins the version.
 
 `Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
 `τ`, `Plus` assumptions `C` that hold, context `Γ` and environment `env`
-matching `Γ`, enclosing function's return type `R`, and every amount of
-fuel,
+matching `Γ` for `clock` calls, enclosing function's return type `R`, and
+every clock, writing `(r, c) = run clock env e` for the result and the clock
+left,
 
 ```
-HasType C Γ R e τ → Holds C → EnvTy env Γ →
-  eval fuel env e = timeout ∨ (∃ v, eval fuel env e = ok v ∧ ValTy v τ) ∨
-  (∃ v, eval fuel env e = thrown v) ∨
-  (∃ τr v, R = some τr ∧ eval fuel env e = returned v ∧ ValTy v τr)
+HasType C Γ R e τ → Holds C → G clock Γ env →
+  c ≤ clock ∧
+  (r = timeout ∨ (∃ v, r = ok v ∧ V c τ v) ∨ (∃ v, r = thrown v) ∨
+   (∃ v, r = returned v ∧ ∃ τr, R = some τr ∧ V c τr v))
 ```
 
 That is CakeML's shape of theorem (Owens et al., "Functional Big-step
 Semantics", ESOP 2016): for every clock, a value of the right type, an
-exception, or out of time, and never stuck.
+exception, or out of time, and never stuck. `V k τ v` is a step-indexed
+logical relation: `v` behaves as a `τ` for `k` more calls (see the design
+choices). `Inty/Statements.lean` pins each of its clauses.
 
 Its corollary `Inty.never_stuck` says a closed well-typed program never
 evaluates to `stuck`. That is the property `src/meta/soundness.rs` samples
@@ -48,12 +51,22 @@ instance of its scheme.
 finds is a valid typing,
 
 ```
-inferProgram e = some τ → HasType [] [] e τ
+inferProgram e = some τ → HasType [] [] none e τ
 ```
 
 so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
 gets stuck. Completeness, that inference finds a type whenever one exists,
 is not proved yet.
+
+`Inty.never_stuck_with_builtins` (in `Inty/Builtins.lean`): the same for a
+program run with native functions in scope, `Math.abs : number → number`
+and `Boolean : ∀ a. a → boolean`. No typing derivation describes them; they
+are in `V` by what they do (`Prim.abs_sound`, `Prim.truthy_sound`). With
+`Inty.inferIn_sound`, a program inference accepts with the builtins never
+gets stuck with them.
+
+`Inty.run_mono` (in `Inty/Clock.lean`): more clock doesn't change a result
+that didn't run out, so the model's verdicts don't depend on its clock.
 
 `Inty/Axioms.lean` pins the axioms these theorems use to Lean's standard ones
 (`propext`, `Classical.choice`, `Quot.sound`).
@@ -65,7 +78,7 @@ is not proved yet.
 | `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `arrow`, type variables | `types::Type` (an `arrow` is the call signature of a callable row; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
 | `Expr`: literals, variables, named one-parameter functions (recursive), application, `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences | `ast::Expr`, `ast::Stmt` |
-| `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`; `Result.bind` | `dynamics::StmtOutcome`, `Stuck` |
+| `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction) | `is_syntactic_value`, `src/infer/features/bindings.rs` |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
@@ -73,9 +86,10 @@ is not proved yet.
 | `Entails C τ` (`τ` is an instance, or assumed to be one) | a scheme's constraints in scope while checking its body |
 | `unify`, `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, the per-feature rules) |
 | `Out.plus` (pending `Plus` constraints) | the constraints `src/infer` resolves once types are known |
-| `Value`, `Stuck`, `eval` (fuel-bounded interpreter) | `src/dynamics` (`Value`, `Stuck`, fuel) |
+| `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock) | `src/dynamics` (`Value`, `Stuck`, fuel) |
+| `Prim`, `builtinCtx`, `builtinEnv` (native functions, with their types) | `Value::Builtin`, `src/builtins` |
 | `Value.truthy`, `Value.typeString` | `Value::truthy`, `Value::type_string` |
-| `ValTy`, `EnvTy`, `eval_sound` | `src/meta/soundness.rs` |
+| `V`, `G`, `eval_sound` (semantic typing) | `src/meta/soundness.rs` |
 
 `Inty/Examples.lean` has small programs with their typing derivations; the
 interpreter runs them at build time (`#guard`).
@@ -84,14 +98,16 @@ interpreter runs them at build time (`#guard`).
 
 These choices are meant to hold up as the calculus grows.
 
-- **The semantics is a definitional interpreter with fuel** (Amin and Rompf,
-  "Type Soundness Proofs with Definitional Interpreters", POPL 2017), not a
-  substitution-based small-step relation. It has the same shape as
-  `src/dynamics`: closures over environments, a fuel bound, and an explicit
-  `stuck`. Terms are never substituted into, so there are no term
-  substitution lemmas.
-  Running out of fuel is distinct from getting stuck, so the soundness
-  theorem holds even for diverging programs. Amin and Rompf extend the
+- **The semantics is a definitional interpreter with a clock** (Amin and
+  Rompf, "Type Soundness Proofs with Definitional Interpreters", POPL 2017;
+  CakeML's functional big-step semantics), not a substitution-based
+  small-step relation. It has the same shape as `src/dynamics`: closures
+  over environments, a bound on the work, and an explicit `stuck`. Terms are
+  never substituted into, so there are no term substitution lemmas. The
+  clock counts calls, and `run` returns what is left of it for the rest of
+  the program; it terminates by well-founded recursion on the clock and the
+  expression. Running out of clock is distinct from getting stuck, so the
+  soundness theorem holds even for diverging programs. Amin and Rompf extend the
   approach to mutable references with a syntactic store typing (§4.1), which
   inty's objects and `let` cells need; see roadmap step 6 for what inty adds.
 - **The interpreter is executable.** `eval` is an ordinary function, so the
@@ -110,11 +126,19 @@ These choices are meant to hold up as the calculus grows.
 - **Typing is extrinsic and declarative.** `HasType` is a relation on plain
   syntax, separate from any algorithm. Inference is proved sound against it;
   completeness is next.
-- **Values are typed by a value-typing relation** (`ValTy`): a closure has
-  type `τ₁ → τ₂` when its body is well typed in a context its captured
-  environment satisfies. It is inductive, not a logical relation, so it
-  needs no step indices; a switch to semantic typing (as the occurrence
-  typing paper makes) would bring them.
+- **Values are typed semantically**, by a step-indexed logical relation
+  (Appel and McAllester, TOPLAS 2001; Ahmed, ESOP 2006) whose index is the
+  interpreter's clock, as in CakeML: `V k (τ₁ → τ₂) f` says that calling
+  `f` with any clock `j ≤ k` on any `V j τ₁` argument gives back a `V c τ₂`
+  value at the clock `c` left, or throws, or runs out. A type variable has
+  no values. The relation is defined by recursion on the type; the index is
+  what lets a recursive function's body assume the function itself, one
+  call down. Typing values by behaviour rather than by derivation is what
+  admits native functions (`Inty/Builtins.lean`), and later recursive types
+  and mutable state, which a syntactic value typing can't describe. This
+  needed the clock to count calls and be threaded: with fuel bounding
+  recursion depth, a result computed under `k` steps is good only for fewer,
+  and the indices don't line up.
 - **Inference is proved sound without freshness invariants.** The theorem
   says the inferred type is valid under the inferred substitution and any
   further substitution that resolves the pending `Plus` constraints. Stated
@@ -137,11 +161,13 @@ This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
 
 1. Syntax: a constructor in `Expr` (and in `Ty` / `Value` if needed).
 2. Typing: a rule in `HasType`, or an arm in `UnOpTy` / `BinOpTy`.
-3. Semantics: an arm in `eval` (or `UnOp.eval` / `BinOp.eval`).
+3. Semantics: an arm in `run` (or `UnOp.eval` / `BinOp.eval`, or
+   `Prim.apply` for a native function).
 4. Inference: an arm in `infer`.
-5. Proof: a case in `HasType.subst`, `eval_sound` (or `UnOp.eval_sound` /
-   `BinOp.eval_sound`) and `infer_sound`, plus a `ValTy` constructor for any
-   new value form.
+5. Proof: a case in `HasType.subst`, `run_sound` (or `UnOp.eval_sound` /
+   `BinOp.eval_sound`), `run_clock_le`, `run_mono` and `infer_sound`, and a
+   clause of `V` for a new type former. A native function needs only its
+   `V` proof (`Prim.abs_sound`).
 6. An example in `Inty/Examples.lean`.
 7. The wire format (`Inty/Wire.lean`) and the differential test's
    generator and JavaScript printer (`crates/inty/tests/differential.rs`).
@@ -151,7 +177,9 @@ Lean's exhaustiveness checks point at every case still missing.
 ## Roadmap
 
 Each step keeps `lake build` green, with no `sorry`. The order puts the
-cheapest proofs first and the hardest last.
+cheapest proofs first and the hardest last. Semantic value typing, with the
+call clock it needs, is done (see the design choices); the steps below build
+on it.
 
 1. ~~**Let-polymorphism.**~~ Done: type variables and schemes, `const`
    generalising under the value restriction, and the type substitution
@@ -193,8 +221,10 @@ cheapest proofs first and the hardest last.
    kinding environment, recursive types through kinds rather than μ-binders,
    inference proved sound and principal with cofinite quantification) fits
    inty's `a has {name: b}` better than Rémy rows over μ-types.
-6. **Mutable state.** A store threaded through `eval`, typed by a syntactic
-   store typing that only grows (Amin and Rompf §4.1). inty also generalises
+6. **Mutable state.** A store threaded through `run` beside the clock, and
+   a store typing that only grows: `V` gains it as a world, a Kripke logical
+   relation (Ahmed, Dreyer and Rossberg), where Amin and Rompf §4.1 use a
+   syntactic one. inty also generalises
    `var` and `let` bindings and checks a later assignment against the
    binding's scheme, with its variables rigid (`id = function (x) { return
    x - 1; }` is rejected for a polymorphic `id`). So a cell's store type is a
@@ -219,11 +249,13 @@ cheapest proofs first and the hardest last.
    receiver its property's type), so inference unifies where `Plus` only
    checks, and the declarative rules must justify each improvement. Also
    functions as rows carrying a call signature alongside statics.
-10. **Equi-recursive types.** The cost is in the types, not in `ValTy`:
-    types up to unfolding, unification without the occurs check, and
-    `HasType.subst` under recursive binders. An unfolding rule is an
-    ordinary inductive rule, and Amin and Rompf handle recursive self types
-    without step indices.
+10. **Equi-recursive types.** Types up to unfolding, unification without
+    the occurs check, and `HasType.subst` under recursive binders. `V` is
+    then defined by well-founded recursion on the index and the type, with
+    `V k (μ a. τ)` unfolding to the body: inty's recursive types recur
+    through function types, and a call takes a tick, so a function type's
+    clause can refer to its argument and result at smaller indices. This is
+    what the step index is for.
 
 ## Differential testing
 
@@ -239,7 +271,7 @@ interpreter's result. The test fails on:
   `inferProgram_never_stuck` rules out);
 - a program on which both interpreters finish but disagree, on the value or
   on getting stuck (`eval_mono` makes the model's answer independent of its
-  fuel; a timeout on either side is not compared);
+  clock; a timeout on either side is not compared);
 - inty and the model typing a program differently, unless inty's own types
   show a feature the model doesn't have yet;
 - a real JavaScript engine (Node, running `tests/differential/engine.js`)

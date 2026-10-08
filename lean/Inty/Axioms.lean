@@ -1,5 +1,4 @@
-import Inty.InferSound
-import Inty.Fuel
+import Inty.Builtins
 
 /-!
 # Axiom audit
@@ -26,3 +25,12 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.eval_mono' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.eval_mono
+
+/-- info: 'Inty.never_stuck_with_builtins' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.never_stuck_with_builtins
+
+/-- info: 'Inty.inferIn_builtins_never_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferIn_builtins_never_stuck
+
+/-- info: 'Inty.run_mono' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.run_mono

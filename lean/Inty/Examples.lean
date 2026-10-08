@@ -1,4 +1,4 @@
-import Inty.InferSound
+import Inty.Builtins
 
 /-!
 # Examples
@@ -102,7 +102,7 @@ example : HasType [] [] none countdown .string :=
     (.lit .number)
 
 #guard isString "done" (eval 20 [] countdown)
--- With too little fuel it times out, which is not a soundness violation.
+-- With too little clock it times out, which is not a soundness violation.
 #guard match eval 3 [] countdown with | .timeout => true | _ => false
 
 /-- `1 + "a"`: inty rejects it, and the semantics gets stuck on it. -/
@@ -176,5 +176,33 @@ example : HasType [] [] none early .string :=
 
 /-- `return` outside a function is rejected. -/
 example : ¬ HasType [] [] none (.ret (num 1)) τ := nofun
+
+/-! ## Builtins
+
+With the builtins in scope, `Boolean` is variable 0 and `Math.abs` variable
+1. -/
+
+/-- `Math.abs(-2)` -/
+def absNeg : Expr := .app (.var 1) (.unop .neg (num 2))
+
+#guard match eval 1 builtinEnv absNeg with | .ok (.number n) => n == 2 | _ => false
+#guard inferIn builtinCtx absNeg == some .number
+
+/-- Its inferred type makes it safe: `Math.abs` is in the relation because of
+what it does (`Prim.abs_sound`), with no derivation behind it. -/
+example : ∀ clock s, eval clock builtinEnv absNeg ≠ .stuck s :=
+  inferIn_builtins_never_stuck (τ := .number) (by decide)
+
+/-- `Boolean` is polymorphic: `Boolean("") ? Boolean(0) : Boolean(Math.abs)`. -/
+def truthiness : Expr :=
+  .cond (.app (.var 0) (str "")) (.app (.var 0) (num 0)) (.app (.var 0) (.var 1))
+
+#guard match eval 1 builtinEnv truthiness with | .ok (.boolean b) => b | _ => false
+#guard inferIn builtinCtx truthiness == some .boolean
+
+-- `Math.abs("a")` is rejected, and would be stuck.
+#guard inferIn builtinCtx (.app (.var 1) (str "a")) == none
+#guard match eval 1 builtinEnv (.app (.var 1) (str "a")) with
+  | .stuck .typeMismatch => true | _ => false
 
 end Inty.Examples

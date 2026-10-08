@@ -125,7 +125,7 @@ def valueWire : Value → String
   | .boolean b => s!"bool {b}"
   | .undefined => "undef"
   | .null => "null"
-  | .closure .. => "fun"
+  | .closure .. | .prim _ => "fun"
 
 def stuckWire : Stuck → String
   | .undefinedVariable => "undefinedVariable"
@@ -133,8 +133,8 @@ def stuckWire : Stuck → String
   | .typeMismatch => "typeMismatch"
 
 /-- The interpreter's verdict: `value V`, `stuck R`, or `timeout`. -/
-def evalVerdict (fuel : Nat) (e : Expr) : String :=
-  match eval fuel [] e with
+def evalVerdict (clock : Nat) (e : Expr) : String :=
+  match eval clock [] e with
   | .ok v => s!"value {valueWire v}"
   | .stuck s => s!"stuck {stuckWire s}"
   | .timeout => "timeout"
@@ -143,10 +143,10 @@ def evalVerdict (fuel : Nat) (e : Expr) : String :=
   | .returned v => s!"returned {valueWire v}"
 
 /-- The answer to one line. -/
-def verdict (fuel : Nat) (line : String) : String :=
+def verdict (clock : Nat) (line : String) : String :=
   match parse line with
   | none => "error unparsable"
-  | some e => s!"{inferVerdict e};{evalVerdict fuel e}"
+  | some e => s!"{inferVerdict e};{evalVerdict clock e}"
 
 #guard verdict 100 "(app (func (var 0)) (num 15 1))" ==
   s!"type number;value num {(1.5 : Float).toBits}"

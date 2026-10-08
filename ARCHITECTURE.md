@@ -98,7 +98,7 @@ The generator is deliberately conservative — it emits only the constructions w
 
 ### 5. Lean formalization (`lean/`)
 
-A Lean 4 model of a core calculus of the type system — declarative Hindley–Milner typing with let-polymorphism and `Plus`-constrained schemes, a fuel-bounded interpreter mirroring `src/dynamics`, a machine-checked proof that well-typed programs never get stuck, and an executable Algorithm W proved sound against the typing rules. It proves for the core calculus what the soundness proptest samples; see [lean/README.md](lean/README.md) for what it covers and the roadmap to the full system. Build with `cd lean && lake build`, which also builds `inty-model`; `tests/differential.rs` then runs inty, the model and Node on generated programs and compares their typing and evaluation (skipped when the model isn't built).
+A Lean 4 model of a core calculus of the type system — declarative Hindley–Milner typing with let-polymorphism and `Plus`-constrained schemes, an interpreter with a call clock mirroring `src/dynamics`, a machine-checked proof by a step-indexed logical relation that well-typed programs never get stuck (also with native builtins in scope), and an executable Algorithm W proved sound against the typing rules. It proves for the core calculus what the soundness proptest samples; see [lean/README.md](lean/README.md) for what it covers and the roadmap to the full system. Build with `cd lean && lake build`, which also builds `inty-model`; `tests/differential.rs` then runs inty, the model and Node on generated programs and compares their typing and evaluation (skipped when the model isn't built).
 
 ### Adding a typing feature
 
