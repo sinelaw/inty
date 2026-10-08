@@ -383,6 +383,64 @@ theorem infer_sound :
     have he₂ := ih₂ h₂ _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
     exact .seq he₁ he₂
+  | while_ c body ihc ihb =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have hc := ihc h₁ _ C hsat.1
+    have hb := ihb h₂ _ C hsat.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hc hb ⊢
+    exact .while_ hc hb
+  | break_ =>
+    intro Γ R n o h φ C hsat
+    simp only [infer, Option.some.injEq] at h; subst h
+    exact .break_
+  | continue_ =>
+    intro Γ R n o h φ C hsat
+    simp only [infer, Option.some.injEq] at h; subst h
+    exact .continue_
+  | tryCatch body handler ihb ihh =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i σ₃ hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have hb := ihb h₁ _ C hsat.1
+    have hh := ihh h₂ _ C hsat.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose, Ctx.subst_cons,
+      Scheme.mono_subst, Ty.subst_unknown] at hb hh ⊢
+    rw [unify_sound hu] at hb
+    exact .tryCatch hb hh
+  | tryFinally body fin ihb ihf =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have hb := ihb h₁ _ C hsat.1
+    have hf := ihf h₂ _ C hsat.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hb hf ⊢
+    exact .tryFinally hb hf
 
 /-- A program inference accepts in a context with no free type variables is
 well typed in it. -/

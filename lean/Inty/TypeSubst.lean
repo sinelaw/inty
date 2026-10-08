@@ -63,5 +63,10 @@ theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
+  | while_ _ _ ihc ihb => exact .while_ ihc ihb
+  | break_ => exact .break_
+  | continue_ => exact .continue_
+  | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
+  | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
 
 end Inty

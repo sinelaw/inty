@@ -13,6 +13,7 @@ JavaScript and for this model as an s-expression, one program per line:
 (let E₁ E₂) (letmut E₁ E₂) (assign I E)   `const`, `let` and `x = e`
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
+(while C B) (break) (continue) (trycatch B H) (tryfinally B F)
 ```
 
 `inty-model` (`Main.lean`) answers each line with the model's verdicts, as
@@ -94,6 +95,20 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (a, rest) ← parseExpr rest
     let (b, rest) ← parseExpr rest
     some (.seq a b, rest)
+  | "while", rest => do
+    let (c, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr rest
+    some (.while_ c b, rest)
+  | "break", rest => some (.break_, rest)
+  | "continue", rest => some (.continue_, rest)
+  | "trycatch", rest => do
+    let (b, rest) ← parseExpr rest
+    let (h, rest) ← parseExpr rest
+    some (.tryCatch b h, rest)
+  | "tryfinally", rest => do
+    let (b, rest) ← parseExpr rest
+    let (f, rest) ← parseExpr rest
+    some (.tryFinally b f, rest)
   | _, _ => none
 
 /-- Parse expressions up to a closing `)`, which is left in place. -/
@@ -118,15 +133,17 @@ def tyWire : Ty → String
   | .undefined => "undefined"
   | .null => "null"
   | .fn .. => "fun"
-  | .var _ => "var"
+  -- inty's type for what a `catch` binds is a rigid type variable.
+  | .unknown | .var _ => "var"
 
 /-- Inference's verdict: `type T`, or `reject`, which includes a constraint
-no type could satisfy (`Plus` on `undefined`, or on a function) and an
-assignment to a `const`. A constraint left on a type variable is
+no type could satisfy (`Plus` on `undefined`, or on a function) and a
+program failing the scope checks (an assignment to a `const`, a `break`
+outside a loop). A constraint left on a type variable is
 satisfiable, and inty leaves it in place; `T` keeps the variable, as inty's
 type does. -/
 def inferVerdict (e : Expr) : String :=
-  if !e.assignsMutable [] then "reject" else
+  if !e.scoped [] then "reject" else
   match infer [] none e 0 with
   | none => "reject"
   | some o =>
@@ -155,6 +172,9 @@ def evalVerdict (clock : Nat) (e : Expr) : String :=
   | .thrown v => s!"thrown {valueWire v}"
   -- Only inside a function; at the top level the typing rules rule it out.
   | .returned v => s!"returned {valueWire v}"
+  -- Only in a program that fails the scope checks.
+  | .broke => "stuck break"
+  | .continued => "stuck continue"
 
 /-- The answer to one line. -/
 def verdict (clock : Nat) (line : String) : String :=
@@ -170,6 +190,9 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100 "(app (func 2 (var 1)) (num 1 0) (str s:a))" == "type string;value str s:a"
 #guard verdict 100 "(app (func 0 (var 1)))" == "type undefined;value undef"
 #guard verdict 100 "(app (func 2 (var 1)) (num 1 0))" == "reject;stuck arityMismatch"
+-- An extra argument is ignored, as in JavaScript; the typing rules still
+-- want one argument per parameter (optional parameters come with phase 10).
+#guard verdict 100 "(app (func 0 (str s:a)) (num 1 0))" == "reject;value str s:a"
 #guard verdict 100 "(app (num 1 0" == "error unparsable"
 #guard verdict 100 "(app (func 1 (seq (ret (str s:a)) (str s:b))) (null))" == "type string;value str s:a"
 #guard verdict 100 "(throw (num 1 0))" == s!"type var;thrown num {(1 : Float).toBits}"
@@ -180,5 +203,9 @@ def verdict (clock : Nat) (line : String) : String :=
   s!"type number;value num {(2 : Float).toBits}"
 #guard verdict 100 "(let (num 1 0) (assign 0 (num 2 0)))" ==
   s!"reject;value num {(2 : Float).toBits}"
+#guard verdict 100 "(trycatch (throw (str s:x)) (typeof (var 0)))" == "type string;value str s:string"
+#guard verdict 100 "(break)" == "reject;stuck break"
+#guard verdict 100 "(letmut (num 2 0) (seq (while (var 0) (assign 0 (minus (var 0) (num 1 0)))) (var 0)))"
+  == s!"type number;value num {(0 : Float).toBits}"
 
 end Inty.Wire

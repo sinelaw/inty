@@ -3,7 +3,8 @@
 A machine-checked model of inty's type system, in Lean 4 (core library only,
 no Mathlib). It covers a small core calculus, with let-polymorphism under the
 value restriction, type schemes that carry class constraints (inty's
-`<a> where Plus a => (a, a) => a`), a heap with `let` and assignment, a
+`<a> where Plus a => (a, a) => a`), a heap with `let` and assignment,
+loops, `break`, `continue` and `try`, a
 complete type-soundness proof, and an executable type-inference algorithm
 proved sound and complete. It is laid out so
 that each inty feature can be added the way it is added to the Rust code: a
@@ -32,9 +33,12 @@ after,
 HasType C Γ R e τ → Holds C → G W Γ env → HeapOK clock W h →
   c ≤ clock ∧
   (r = timeout ∨ ∃ W', W <+: W' ∧ HeapOK c W' h' ∧
-    ((∃ v, r = ok v ∧ V c W' τ v) ∨ (∃ v, r = thrown v) ∨
+    ((∃ v, r = ok v ∧ V c W' τ v) ∨ r.Abrupt ∨
      (∃ v, r = returned v ∧ ∃ τr, R = some τr ∧ V c W' τr v)))
 ```
+
+where an abrupt completion is a `throw` of any value, a `break` or a
+`continue`.
 
 That is CakeML's shape of theorem (Owens et al., "Functional Big-step
 Semantics", ESOP 2016): for every clock, a value of the right type, an
@@ -68,13 +72,16 @@ and Milner's completeness; the freshness invariants follow Naraschewski and
 Nipkow's proof of algorithm W):
 
 ```
-ctxFtv Γ = [] → e.assignsMutable (Γ.map fun _ => false) → HasType [] Γ none e τ' →
+ctxFtv Γ = [] → e.scoped (Γ.map fun _ => false) → HasType [] Γ none e τ' →
   ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ inferIn Γ e ≠ none
 ```
 
-`assignsMutable` is the scope check that a program assigns only to its own
-`let`s and parameters, never to a `const`; it is a check beside the typing
-rules, not one of them, since such an assignment would be type-safe.
+`scoped` is the pair of scope checks JavaScript makes: a program assigns
+only to its own `let`s and parameters, never to a `const`
+(`assignsMutable`), and has `break` and `continue` only inside a loop
+(`jumpsInLoop`). They are checks beside the typing rules, not among them:
+an assignment to a `const` would be type-safe, and a stray `break` is
+safe too, just not JavaScript.
 
 (`inferIn_complete`, `inferProgram_complete`). It rests on unification
 being most general (`Inty.unify_mgu`).
@@ -96,13 +103,13 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 
 | Lean | inty |
 |---|---|
-| `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `fn` (the type of `this`, the parameters' and the result's), type variables | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; `number` stands for both `Int` and `Number`) |
+| `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the parameters' and the result's), type variables | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; `number` stands for both `Int` and `Number`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences | `ast::Expr`, `ast::Stmt` |
-| `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally` | `ast::Expr`, `ast::Stmt` |
+| `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
-| `Expr.assignsMutable` (no assignment to a `const`) | `check_assignment_target` |
+| `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
 | `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes, constraints, instances | `classes::ClassName`, the instance tables in `src/classes` |
 | `Entails C p` (`p` is an instance, or assumed in `C`) | a scheme's constraints in scope while checking its body |
@@ -265,6 +272,13 @@ assumes throughout (`docs/scc-inference.md`): it found that in sloppy mode
 `(function () { return this; })()` is the global object, where inty, its
 dynamics and the model all have `undefined`.
 
+With phase 2 (`let`, assignment, loops, `try`), over 100,000 more programs
+(five seeds) agreed. They found three bugs in inty: a caught exception
+typed with a flexible variable (unsound), a named function expression's
+own name assignable (a `TypeError` in JavaScript), and `dynamics` not
+catching a `throw` out of a called function, and getting stuck on extra
+arguments, which inty's typing lets a function literal ignore.
+
 Over 200,000 programs (ten seeds), the interpreters never disagreed, and
 the model never accepted a program inty rejects, except as below. The
 disagreements in typing all fall into features the model lacks:
@@ -276,6 +290,8 @@ disagreements in typing all fall into features the model lacks:
 | Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 6 |
 | Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 8 |
 | `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 5 |
+| A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 10 |
+| A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 2 (statements apart from expressions) |
 
 Each row is recognised from evidence, not guessed: a union or `μ` in the
 types inty gave the program's expressions, or inty accepting the program

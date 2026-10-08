@@ -48,7 +48,8 @@ Paths like `src/infer` are relative to `crates/inty`.
 - `return`, `throw` and statement sequences.
 - An interpreter with a call clock and a heap, and soundness by a
   step-indexed Kripke logical relation, including native builtins.
-- `let` and assignment to a variable.
+- `let` and assignment to a variable; `while`, `break`, `continue`,
+  `try`/`catch`, `try`/`finally`.
 - Algorithm W, proved sound and complete.
 - Differential testing against inty and Node.
 
@@ -108,8 +109,22 @@ and to be kept for every later phase. The decisions it needed:
 
 ### 2. State and control
 
-Done: the heap, `let` and assignment, with soundness and inference sound
-and complete. Still to do: loops, `break`, `continue`, `switch` and `try`.
+Done: the heap, `let` and assignment, `while`, `break`, `continue`,
+`try`/`catch` and `try`/`finally`, with soundness and inference sound and
+complete. A loop takes a tick per iteration, so `run` still terminates;
+`break` and `continue` are abrupt completions like `throw`, with a scope
+check that they are in a loop. Still to do:
+
+- `switch` comes with phase 7: its cases match by `===`, which compares
+  functions by identity, and with the narrowing and exhaustiveness checks
+  of a `switch`.
+- **Statements apart from expressions.** The model treats a statement as an
+  expression with a value, as a JavaScript program's completion value is.
+  inty types statements without one: `if (c) { 1; } else { "a"; }` and the
+  same `try`/`catch` are accepted, where the model wants both branches of
+  one type. The differential test generates only the programs both agree
+  on; the model needs a separate statement judgement, whose "value" is
+  only what `return` returns.
 
 - **A heap, as `dynamics` has.** Every binding is a cell: a `const`,
   a `let`, a parameter. `run` threads the heap beside the clock, and a
@@ -121,10 +136,12 @@ and complete. Still to do: loops, `break`, `continue`, `switch` and `try`.
   can state, since a rule could always pick a less general type; inty now
   does this). Assigning to a `const` is rejected by a scope check beside
   the typing rules.
-- Loops, `break`, `continue`, `switch`, `try` / `catch` / `finally`. A
-  caught exception has an opaque type: anything can be thrown (inty used
-  to give it a flexible variable, which was unsound: `e - 1` on a thrown
-  string got stuck in `dynamics`).
+- Loops, `break`, `continue`, `try` / `catch` / `finally`. A caught
+  exception has the opaque type `unknown`, whose values are all values:
+  anything can be thrown (inty used to give it a flexible variable, which
+  was unsound: `e - 1` on a thrown string got stuck in `dynamics`). A
+  stuck body doesn't run `finally`, as in `dynamics`, since getting stuck
+  is not a JavaScript exception.
 - **Decision: a hand-built Kripke logical relation, not Iris.** The
   trial found iris-lean usable: it builds against our Lean (4.34.1),
   needs only batteries and Qq, takes about 17 minutes, and has weakest

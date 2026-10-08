@@ -31,7 +31,7 @@ theorem run_clock_le_both :
     (∀ c env h e, (run c env h e).2.1 ≤ c) ∧ (∀ c env h es, (runArgs c env h es).2.1 ≤ c) := by
   refine run.mutual_induct (fun c env h e => (run c env h e).2.1 ≤ c)
     (fun c env h es => (runArgs c env h es).2.1 ≤ c)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
   · intros; simp [run]
   · intro _ _ _ _ _ h₁ _ h₂; simp [run, h₁, h₂]
   · intro _ _ _ _ _ h₁ h₂; simp [run, h₁, h₂]
@@ -74,6 +74,65 @@ theorem run_clock_le_both :
   · intro clock env heap e₁ e₂ ih₁ ih₂
     rw [run]
     exact bindC_le ih₁ fun _ _ => Nat.le_trans (ih₂ _ _) (Nat.min_le_right _ _)
+  · intro clock env heap test body iht ihb ihw
+    rw [run]
+    refine bindC_le iht fun v _ => ?_
+    have hb := ihb (run clock env heap test).2.1 (run clock env heap test).2.2
+    split
+    · generalize run (min (run clock env heap test).2.1 clock) env (run clock env heap test).2.2
+        body = p at hb ⊢
+      obtain ⟨r, c₂, h₂⟩ := p
+      simp only at hb
+      cases r
+      case broke => simp only; omega
+      case ok | continued =>
+        simp only
+        split
+        · simp
+        · rename_i c hm; exact Nat.le_trans (ihw _ _ c hm) (by omega)
+      all_goals simp only; omega
+    · simp only; exact iht
+  · intros; simp [run]
+  · intros; simp [run]
+  · intro clock env heap body handler v c₁ h₁ hrun ihb ihh
+    rw [hrun] at ihb
+    simp only [run, hrun]
+    exact Nat.le_trans ihh (Nat.min_le_right _ _)
+  · intro clock env heap body handler hnot ihb
+    rw [run]
+    generalize hp : run clock env heap body = p at ihb hnot
+    obtain ⟨r, c₁, h₁⟩ := p
+    cases r
+    case thrown v => exact absurd rfl (hnot v c₁ h₁)
+    all_goals exact ihb
+  · intro clock env heap body fin c₁ h₁ hrun ihb
+    rw [hrun] at ihb
+    simp only [run, hrun]; exact ihb
+  · intro clock env heap body fin s c₁ h₁ hrun ihb
+    rw [hrun] at ihb
+    simp only [run, hrun]; exact ihb
+  · intro clock env heap body fin r c₁ h₁ hr hst hrun v c h hfin ihb ihf
+    rw [hfin] at ihf
+    rw [hrun] at ihb
+    rw [run, hrun]
+    simp only at ihf ihb
+    cases r
+    case timeout => exact absurd rfl hr
+    case stuck s => exact absurd rfl (hst s)
+    all_goals (simp only; rw [hfin]; simp only; omega)
+  · intro clock env heap body fin r c₁ h₁ hr hst hrun hfin ihb ihf
+    rw [run, hrun]
+    cases r
+    case timeout => exact absurd rfl hr
+    case stuck s => exact absurd rfl (hst s)
+    all_goals
+      simp only
+      generalize hq : run (min c₁ clock) env h₁ fin = q at ihf hfin ⊢
+      obtain ⟨r', c₂, h₂⟩ := q
+      simp only at ihf
+      cases r'
+      case ok v => exact absurd rfl (hfin v c₂ h₂)
+      all_goals simp only; omega
   · intros; simp [runArgs]
   · intro clock env heap e es v c₁ h₁ hrun vs c h hargs ih₁ ih₂
     rw [hargs] at ih₂
@@ -138,7 +197,7 @@ theorem run_mono_both :
       run (c + k) env h e = (run c env h e).addClock k)
     (fun c env h es => ∀ k, (runArgs c env h es).1 ≠ .error .timeout →
       runArgs (c + k) env h es = (runArgs c env h es).addClock k)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
   · intros; simp [run, Ran.addClock]
   · intro _ _ _ _ _ h₁ _ h₂; simp [run, h₁, h₂, Ran.addClock]
   · intro _ _ _ _ _ h₁ h₂; simp [run, h₁, h₂, Ran.addClock]
@@ -161,12 +220,12 @@ theorem run_mono_both :
       at *
     cases vf with
     | closure cenv n body =>
-      by_cases hn : vs.length = n
+      by_cases hn : n ≤ vs.length
       · cases c₂ with
         | zero => simp [call, hn] at h
         | succ c =>
-          have hb : (run c (callEnv h₂ n cenv) (h₂ ++ vs ++ [.closure cenv n body, .undefined])
-              body).1 ≠ .timeout := by
+          have hb : (run c (callEnv h₂ n cenv)
+              (h₂ ++ vs.take n ++ [.closure cenv n body, .undefined]) body).1 ≠ .timeout := by
             intro hb; apply h; simp only [call, hn, ite_true, hb, Result.catchReturn]
           rw [show c + 1 + k = (c + k) + 1 by omega]
           simp only [call, hn, ite_true,
@@ -225,6 +284,97 @@ theorem run_mono_both :
     have ih₂' := ih₂ (run clock env heap e₁).2.1 (run clock env heap e₁).2.2
     simp only [Nat.min_eq_left hc, Nat.min_eq_left (Nat.add_le_add_right hc k)] at h ih₂' ⊢
     exact ih₂' k h
+  · intro clock env heap test body iht ihb ihw k h
+    rw [run_while] at h ⊢
+    rw [run_while]
+    refine bindC_mono (iht k) (fun v _ h => ?_) h
+    have hc := run_clock_le clock env heap test
+    have ihb' := ihb (run clock env heap test).2.1 (run clock env heap test).2.2
+    simp only [Nat.min_eq_left hc, Nat.min_eq_left (Nat.add_le_add_right hc k)] at h ihb' ⊢
+    split
+    · rename_i hv
+      simp only [hv, ite_true] at h
+      have hc₂ := run_clock_le (run clock env heap test).2.1 env (run clock env heap test).2.2 body
+      generalize hq : run (run clock env heap test).2.1 env (run clock env heap test).2.2 body = q
+        at h ihb' hc₂ ⊢
+      obtain ⟨r, c₂, h₂⟩ := q
+      simp only at hc₂
+      cases r
+      case timeout => simp [loopNext] at h
+      case broke => rw [ihb' k (by simp)]; rfl
+      case ok | continued =>
+        rw [ihb' k (by simp)]
+        simp only [loopNext, Ran.addClock] at h ⊢
+        rw [Nat.min_eq_left (show c₂ ≤ clock by omega)] at h ⊢
+        rw [Nat.min_eq_left (show c₂ + k ≤ clock + k by omega)]
+        cases c₂ with
+        | zero => simp at h
+        | succ c =>
+          rw [show c + 1 + k = (c + k) + 1 by omega]
+          exact ihw _ _ c (Nat.min_eq_left (show c + 1 ≤ clock by omega)) k h
+      all_goals (rw [ihb' k (by simp)]; rfl)
+    · rfl
+  · intros; simp [run, Ran.addClock]
+  · intros; simp [run, Ran.addClock]
+  · intro clock env heap body handler v c₁ h₁ hrun ihb ihh k h
+    have hc : c₁ ≤ clock := by simpa [hrun] using run_clock_le clock env heap body
+    have e₁ := ihb k (by simp [hrun])
+    rw [hrun] at e₁
+    have ihh' := ihh k
+    rw [Nat.min_eq_left hc] at ihh'
+    simp only [run, hrun, Nat.min_eq_left hc] at h ⊢
+    rw [e₁]
+    simp only [Ran.addClock, Nat.min_eq_left (Nat.add_le_add_right hc k)]
+    exact ihh' h
+  · intro clock env heap body handler hnot ihb k h
+    simp only [run] at h ⊢
+    generalize hp : run clock env heap body = p at h hnot ihb ⊢
+    obtain ⟨r, c₁, h₁⟩ := p
+    cases r
+    case thrown v => exact absurd rfl (hnot v c₁ h₁)
+    case timeout => exact absurd rfl h
+    all_goals (rw [ihb k (by simp)]; rfl)
+  · intro clock env heap body fin c₁ h₁ hrun ihb k h
+    simp [run, hrun] at h
+  · intro clock env heap body fin s c₁ h₁ hrun ihb k h
+    have e₁ := ihb k (by simp [hrun])
+    rw [hrun] at e₁
+    simp only [run, hrun, e₁, Ran.addClock]
+  · intro clock env heap body fin r c₁ h₁ hr hst hrun v c h hfin ihb ihf k hne
+    have hc : c₁ ≤ clock := by simpa [hrun] using run_clock_le clock env heap body
+    have e₁ := ihb k (by simpa [hrun] using hr)
+    rw [hrun] at e₁
+    have ihf' := ihf k
+    rw [Nat.min_eq_left hc] at ihf' hfin
+    have e₂ := ihf' (by simp [hfin])
+    rw [hfin] at e₂
+    simp only [run, hrun, e₁]
+    cases r
+    case timeout => exact absurd rfl hr
+    case stuck s => exact absurd rfl (hst s)
+    all_goals
+      simp only [Ran.addClock, Nat.min_eq_left hc, Nat.min_eq_left (Nat.add_le_add_right hc k)]
+      simp only [Ran.addClock] at e₂
+      rw [e₂, hfin]
+  · intro clock env heap body fin r c₁ h₁ hr hst hrun hfin ihb ihf k hne
+    have hc : c₁ ≤ clock := by simpa [hrun] using run_clock_le clock env heap body
+    have e₁ := ihb k (by simpa [hrun] using hr)
+    rw [hrun] at e₁
+    have ihf' := ihf k
+    rw [Nat.min_eq_left hc] at ihf' hfin
+    simp only [run, hrun, e₁] at hne ⊢
+    cases r
+    case timeout => exact absurd rfl hr
+    case stuck s => exact absurd rfl (hst s)
+    all_goals
+      simp only [Ran.addClock, Nat.min_eq_left hc, Nat.min_eq_left (Nat.add_le_add_right hc k)]
+        at hne ⊢
+      generalize hq : run c₁ env h₁ fin = q at hne hfin ihf' ⊢
+      obtain ⟨r', c₂, h₂⟩ := q
+      cases r'
+      case ok => exact absurd rfl (hfin _ _ _)
+      case timeout => simp at hne
+      all_goals (rw [ihf' (by simp)]; rfl)
   · intros; simp [runArgs, RanArgs.addClock]
   · intro clock env heap e es v c₁ h₁ hrun vs c h hargs ih₁ ih₂ k _
     have hc : c₁ ≤ clock := by simpa [hrun] using run_clock_le clock env heap e

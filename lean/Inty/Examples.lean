@@ -211,6 +211,57 @@ def reassignedId (written : Bool) : Expr :=
 #guard inferProgram (reassignedId true) == none
 #guard inferProgram (reassignedId false) == some .string
 
+/-! ## Loops and exceptions -/
+
+/-- `let i = 3; let s = 0; while (i) { s = s + i; i = i - 1; } s` -/
+def sumDown : Expr :=
+  .let_ true (num 3) (.let_ true (num 0)
+    (.seq (.while_ (.var 1)
+      (.seq (.assign 0 (.binop .plus (.var 0) (.var 1)))
+        (.assign 1 (.binop .minus (.var 1) (num 1)))))
+      (.var 0)))
+
+#guard match eval 20 [] [] sumDown with | .ok (.number n) => n == 6 | _ => false
+#guard inferProgram sumDown == some .number
+
+/-- `let i = 0; while (true) { i = i + 1; if (i - 3) {} else { break; } } i` -/
+def breakOut : Expr :=
+  .let_ true (num 0)
+    (.seq (.while_ (.lit (.boolean true))
+      (.seq (.assign 0 (.binop .plus (.var 0) (num 1)))
+        (.cond (.binop .minus (.var 0) (num 3)) (.lit .undefined) .break_)))
+      (.var 0))
+
+#guard match eval 20 [] [] breakOut with | .ok (.number n) => n == 3 | _ => false
+#guard inferProgram breakOut == some .number
+-- An endless loop runs out of clock, as an endless recursion does.
+#guard match eval 50 [] [] (.while_ (.lit (.boolean true)) (.lit .undefined)) with
+  | .timeout => true | _ => false
+
+-- `break;` outside a loop is rejected, as JavaScript rejects it.
+#guard inferProgram .break_ == none
+#guard inferProgram (.while_ (num 1) (.func 0 .break_)) == none
+
+/-- `try { throw "x"; } catch (e) { typeof e }`: anything can be thrown, so
+the caught value can be tested but not used at a type. -/
+def caught : Expr := .tryCatch (.throw_ (str "x")) (.unop .typeof (.var 0))
+
+#guard isString "string" (eval 10 [] [] caught)
+#guard inferProgram caught == some .string
+-- `try { throw "s"; } catch (e) { e - 1 }` is rejected: `e` could be a string.
+#guard inferProgram (.tryCatch (.throw_ (str "s")) (.binop .minus (.var 0) (num 1))) == none
+
+/-- `let x = 1; try { x = 2; } finally { x = 3; } x` -/
+def finallyRuns : Expr :=
+  .let_ true (num 1)
+    (.seq (.tryFinally (.assign 0 (num 2)) (.assign 0 (num 3))) (.var 0))
+
+#guard match eval 10 [] [] finallyRuns with | .ok (.number n) => n == 3 | _ => false
+#guard inferProgram finallyRuns == some .number
+-- A `throw` in the body still runs `finally`, and goes on after it.
+#guard match eval 10 [] [] (.tryFinally (.throw_ (num 1)) (num 2)) with
+  | .thrown (.number n) => n == 1 | _ => false
+
 /-! ## Statements -/
 
 /-- `function f(x) { if (x) { return "pos"; } else { throw x; } }`, applied

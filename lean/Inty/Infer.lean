@@ -241,6 +241,40 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | none => none
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+  | Γ, R, .while_ c body, n =>
+    match infer Γ R c n with
+    | none => none
+    | some o₁ =>
+      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) body o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, .undefined, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
+          o₂.next⟩
+  -- `break` and `continue` have any type, a fresh variable.
+  | _, _, .break_, n | _, _, .continue_, n => some ⟨[], .var n, [], n + 1⟩
+  -- The caught value has the opaque type `unknown`; both branches have one
+  -- type.
+  | Γ, R, .tryCatch body handler, n =>
+    match infer Γ R body n with
+    | none => none
+    | some o₁ =>
+      match infer (.mono .unknown :: Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) handler o₁.next with
+      | none => none
+      | some o₂ =>
+        match unify (o₁.τ.subst o₂.σ) o₂.τ with
+        | none => none
+        | some σ₃ =>
+          some ⟨Subst.compose σ₃ (Subst.compose o₂.σ o₁.σ), o₂.τ.subst σ₃,
+            (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst σ₃), o₂.next⟩
+  | Γ, R, .tryFinally body fin, n =>
+    match infer Γ R body n with
+    | none => none
+    | some o₁ =>
+      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) fin o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
+          o₂.next⟩
 
 /-- Infer a list of arguments, left to right, threading the substitution. -/
 def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
@@ -257,13 +291,14 @@ def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
 end
 
 /-- Infer the type of a program in a context with no free type variables,
-such as the builtins', none of whose variables is mutable. It may assign
-only to its own `let`s and parameters (`Expr.assignsMutable`). Every
+such as the builtins', none of whose variables is mutable. It must pass
+the scope checks (`Expr.scoped`): it assigns only to its own `let`s and
+parameters, and has `break` and `continue` only in loops. Every
 constraint left must be satisfiable: an instance, or a constraint on a type
 variable, which inty leaves in place and which the program's type here
 defaults (`defaultSubst`). -/
 def inferIn (Γ : Ctx) (e : Expr) : Option Ty :=
-  if e.assignsMutable (Γ.map fun _ => false) then
+  if e.scoped (Γ.map fun _ => false) then
     match infer Γ none e 0 with
     | none => none
     | some o =>

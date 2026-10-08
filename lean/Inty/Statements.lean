@@ -26,7 +26,7 @@ example : ∀ (clock : Nat) {C : List Pred} {Γ : Ctx} {R : Option Ty} {W : Worl
       ((run clock env h e).1 = .timeout ∨ ∃ W', W <+: W' ∧
         HeapOK (run clock env h e).2.1 W' (run clock env h e).2.2 ∧
         ((∃ v, (run clock env h e).1 = .ok v ∧ V (run clock env h e).2.1 W' τ v) ∨
-          (∃ v, (run clock env h e).1 = .thrown v) ∨
+          (run clock env h e).1.Abrupt ∨
           (∃ v, (run clock env h e).1 = .returned v ∧
             ∃ τr, R = some τr ∧ V (run clock env h e).2.1 W' τr v))) :=
   fun clock _ _ _ _ _ _ _ _ ht hC hG hH => eval_sound clock ht hC hG hH
@@ -76,11 +76,11 @@ example : ∀ (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst} {C : 
   infer_complete
 
 example : ∀ {Γ : Ctx} {e : Expr} {τ' : Ty}, ctxFtv Γ = [] →
-    e.assignsMutable (Γ.map fun _ => false) = true → HasType [] Γ none e τ' →
+    e.scoped (Γ.map fun _ => false) = true → HasType [] Γ none e τ' →
     ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn Γ e = some τ :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, e.assignsMutable [] = true → HasType [] [] none e τ' →
+example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType [] [] none e τ' →
     ∃ τ, inferProgram e = some τ :=
   inferProgram_complete
 
@@ -105,14 +105,17 @@ example : V k W .string v ↔ ∃ s, v = .string s := V_string
 example : V k W .boolean v ↔ ∃ b, v = .boolean b := V_boolean
 example : V k W .undefined v ↔ v = .undefined := V_undefined
 example : V k W .null v ↔ v = .null := V_null
+example : V k W .unknown v ↔ True := V_unknown
 example : V k W (.var a) v ↔ False := V_var
+example : Result.Abrupt r ↔ (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued := by
+  cases r <;> simp [Result.Abrupt]
 example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
     (∀ i < j, HeapOK i W' h) → V j W' θ thisv → VList j W' τs args →
     (call j h f thisv args).2.1 ≤ j ∧ ((call j h f thisv args).1 = .timeout ∨
       ((call j h f thisv args).2.1 < j ∧ ∃ W'', W' <+: W'' ∧
         HeapOK (call j h f thisv args).2.1 W'' (call j h f thisv args).2.2 ∧
         ((∃ v, (call j h f thisv args).1 = .ok v ∧ V (call j h f thisv args).2.1 W'' ρ v) ∨
-          ∃ v, (call j h f thisv args).1 = .thrown v))) := by
+          (call j h f thisv args).1.Abrupt))) := by
   rw [V_fn]
   constructor
   · intro H j hj W' hW h thisv args hh ht ha
@@ -156,6 +159,10 @@ example : builtinCtx =
 
 private def num (n : Float) : Expr := .lit (.number n)
 private def str (s : String) : Expr := .lit (.string s)
+
+/-- `break;` outside a loop is rejected, by the scope check, as JavaScript
+rejects it. -/
+example : Expr.break_.scoped [] = false := rfl
 
 /-- `const x = 1; x = 2`: assigning to a `const` is rejected, by the scope
 check beside the typing rules. -/

@@ -105,6 +105,21 @@ inductive HasType : List Pred → Ctx → Option Ty → Expr → Ty → Prop whe
   /-- `throw e;` throws any value and doesn't complete. -/
   | throw_ : HasType C Γ R e τe → HasType C Γ R (.throw_ e) τ
   | seq : HasType C Γ R e₁ τ₁ → HasType C Γ R e₂ τ → HasType C Γ R (.seq e₁ e₂) τ
+  /-- `while (c) body`: any test, read by truthiness; it completes with
+  `undefined` (`infer_stmt_while`). -/
+  | while_ : HasType C Γ R c τc → HasType C Γ R body τb → HasType C Γ R (.while_ c body) .undefined
+  /-- `break;` and `continue;` don't complete, so they stand for any type.
+  (That they are in a loop is checked apart, by `Expr.jumpsInLoop`.) -/
+  | break_ : HasType C Γ R .break_ τ
+  | continue_ : HasType C Γ R .continue_ τ
+  /-- `try { body } catch (e) { handler }`: anything can be thrown, so `e`
+  has the opaque type `unknown` (inty's rigid type variable). -/
+  | tryCatch : HasType C Γ R body τ → HasType C (.mono .unknown :: Γ) R handler τ →
+      HasType C Γ R (.tryCatch body handler) τ
+  /-- `try { body } finally { fin }` has `body`'s type; `fin`'s value is
+  dropped. -/
+  | tryFinally : HasType C Γ R body τ → HasType C Γ R fin τf →
+      HasType C Γ R (.tryFinally body fin) τ
 
 /-- A variable whose scheme is a monotype has that type. -/
 theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :

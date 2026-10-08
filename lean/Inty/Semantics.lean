@@ -60,9 +60,9 @@ inductive Stuck where
   | undefinedVariable
   | notCallable
   | typeMismatch
-  /-- A call with the wrong number of arguments, `Stuck::ArityMismatch`.
-  JavaScript ignores extra arguments and leaves missing ones `undefined`;
-  inty's semantics, like its typing, holds a call to its function's arity. -/
+  /-- A call with too few arguments, `Stuck::ArityMismatch`. JavaScript
+  leaves missing ones `undefined`; inty's semantics, like its typing,
+  requires them. Extra ones are ignored, as in JavaScript. -/
   | arityMismatch
   deriving DecidableEq, Repr
 
@@ -77,6 +77,10 @@ inductive Result where
   | timeout
   | returned (v : Value)
   | thrown (v : Value)
+  /-- `break;`, on its way to its loop. -/
+  | broke
+  /-- `continue;`, on its way to its loop. -/
+  | continued
   deriving Repr
 
 /-- JavaScript truthiness, as `dynamics::Value::truthy`. -/
@@ -180,17 +184,18 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
   -- The callee, then the arguments in order, then the call, as in
   -- `dynamics`: a callee that isn't a function is found out only at the
   -- call. A call outside any receiver has `this` `undefined`. A call
-  -- takes a tick, a native one too.
+  -- takes a tick, a native one too. Extra arguments are ignored, as in
+  -- JavaScript and `dynamics`; missing ones are an error.
   | .app f args =>
     bindC (run clock env heap f) fun vf c₁ h₁ =>
     bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
     match vf with
     | .closure cenv n body =>
-      if vs.length = n then
+      if n ≤ vs.length then
         match _h : min c₂ clock with
         | 0 => (.timeout, 0, h₂)
         | c + 1 =>
-          let p := run c (callEnv h₂ n cenv) (h₂ ++ vs ++ [vf, .undefined]) body
+          let p := run c (callEnv h₂ n cenv) (h₂ ++ vs.take n ++ [vf, .undefined]) body
           (p.1.catchReturn, p.2)
       else (.stuck .arityMismatch, min c₂ clock, h₂)
     | .prim p =>
@@ -217,6 +222,36 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
   | .ret e => bindC (run clock env heap e) fun v c₁ h₁ => (.returned v, c₁, h₁)
   | .throw_ e => bindC (run clock env heap e) fun v c₁ h₁ => (.thrown v, c₁, h₁)
   | .seq e₁ e₂ => bindC (run clock env heap e₁) fun _ c₁ h₁ => run (min c₁ clock) env h₁ e₂
+  -- Each iteration takes a tick, so a loop runs out of clock, as a
+  -- recursive function does. A `break` leaves the loop with `undefined`.
+  | .while_ test body =>
+    bindC (run clock env heap test) fun v c₁ h₁ =>
+      if v.truthy then
+        match run (min c₁ clock) env h₁ body with
+        | (.ok _, c₂, h₂) | (.continued, c₂, h₂) =>
+          match _h : min c₂ clock with
+          | 0 => (.timeout, 0, h₂)
+          | c + 1 => run c env h₂ (.while_ test body)
+        | (.broke, c₂, h₂) => (.ok .undefined, c₂, h₂)
+        | p => p
+      else (.ok .undefined, c₁, h₁)
+  | .break_ => (.broke, clock, heap)
+  | .continue_ => (.continued, clock, heap)
+  -- The caught value goes in a new cell.
+  | .tryCatch body handler =>
+    match run clock env heap body with
+    | (.thrown v, c₁, h₁) => run (min c₁ clock) (h₁.length :: env) (h₁ ++ [v]) handler
+    | p => p
+  -- Out of clock or stuck, the program stops there, as `dynamics` does: a
+  -- stuck program is not a JavaScript exception.
+  | .tryFinally body fin =>
+    match run clock env heap body with
+    | (.timeout, c₁, h₁) => (.timeout, c₁, h₁)
+    | (.stuck s, c₁, h₁) => (.stuck s, c₁, h₁)
+    | (r, c₁, h₁) =>
+      match run (min c₁ clock) env h₁ fin with
+      | (.ok _, c₂, h₂) => (r, c₂, h₂)
+      | p => p
 termination_by (clock, sizeOf e)
 decreasing_by
   all_goals first
@@ -248,11 +283,11 @@ spare, on the heap `h`. -/
 def call (c : Nat) (h : Heap) (vf thisv : Value) (args : List Value) : Ran :=
   match vf with
   | .closure cenv n body =>
-    if args.length = n then
+    if n ≤ args.length then
       match c with
       | 0 => (.timeout, 0, h)
       | c + 1 =>
-        let p := run c (callEnv h n cenv) (h ++ args ++ [vf, thisv]) body
+        let p := run c (callEnv h n cenv) (h ++ args.take n ++ [vf, thisv]) body
         (p.1.catchReturn, p.2)
     else (.stuck .arityMismatch, c, h)
   | .prim p =>
@@ -273,6 +308,33 @@ theorem run_app (clock : Nat) (env : Env) (heap : Heap) (f : Expr) (args : List 
   cases vf <;> simp only [call] <;> try rfl
   split <;> try rfl
   cases m <;> rfl
+
+/-- What a loop does after its test and body, given what the body gave:
+loop again (`k`) with a tick less, leave it, or stop there. -/
+def loopNext (clock : Nat) (p : Ran) (k : Nat → Heap → Ran) : Ran :=
+  match p with
+  | (.ok _, c₂, h₂) | (.continued, c₂, h₂) =>
+    match min c₂ clock with
+    | 0 => (.timeout, 0, h₂)
+    | c + 1 => k c h₂
+  | (.broke, c₂, h₂) => (.ok .undefined, c₂, h₂)
+  | p => p
+
+/-- `run` on a loop, without the termination proof's dependent match. -/
+theorem run_while (clock : Nat) (env : Env) (heap : Heap) (test body : Expr) :
+    run clock env heap (.while_ test body) =
+      bindC (run clock env heap test) fun v c₁ h₁ =>
+        if v.truthy then
+          loopNext clock (run (min c₁ clock) env h₁ body) fun c h₂ =>
+            run c env h₂ (.while_ test body)
+        else (.ok .undefined, c₁, h₁) := by
+  rw [run]
+  congr 1; funext v c₁ h₁
+  split
+  · simp only [loopNext]
+    split <;> try rfl
+    all_goals (rename_i c₂ h₂ _; generalize min c₂ clock = m; cases m <;> rfl)
+  · rfl
 
 /-- The result of running with `clock` calls to spare. -/
 def eval (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Result := (run clock env heap e).1

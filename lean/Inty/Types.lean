@@ -18,6 +18,11 @@ inductive Ty where
   | boolean
   | undefined
   | null
+  /-- What a `catch` binds: any value at all, since anything can be thrown.
+  Nothing can be done with it but what any type allows: passing it on,
+  testing it, `typeof`, rethrowing it. inty gives it a rigid type variable
+  (a skolem). -/
+  | unknown
   /-- A function: the type of `this` in its body, its parameters' types, and
   its result's. In inty a function value is a row carrying a call signature
   (`Type::Func` inside a row); this is that signature alone. -/
@@ -34,6 +39,7 @@ inductive PTy where
   | boolean
   | undefined
   | null
+  | unknown
   | fn (this : PTy) (params : List PTy) (ret : PTy)
   | free (a : Nat)
   | bound (i : Nat)
@@ -48,7 +54,7 @@ simp lemma rewrites each list function to a `map`. -/
 mutual
 def Ty.decEq : (a b : Ty) → Decidable (a = b)
   | .number, .number | .string, .string | .boolean, .boolean | .undefined, .undefined
-  | .null, .null => isTrue rfl
+  | .null, .null | .unknown, .unknown => isTrue rfl
   | .fn a₁ a₂ a₃, .fn b₁ b₂ b₃ =>
     match Ty.decEq a₁ b₁, Ty.decEqs a₂ b₂, Ty.decEq a₃ b₃ with
     | isTrue h₁, isTrue h₂, isTrue h₃ => isTrue (by subst h₁ h₂ h₃; rfl)
@@ -56,19 +62,19 @@ def Ty.decEq : (a b : Ty) → Decidable (a = b)
       isFalse (by intro e; cases e; exact h rfl)
   | .var a, .var b => if h : a = b then isTrue (h ▸ rfl) else isFalse (by intro e; cases e; exact h rfl)
   | .number, .string | .number, .boolean | .number, .undefined | .number, .null
-  | .number, .fn .. | .number, .var _
-  | .string, .number | .string, .boolean | .string, .undefined | .string, .null
-  | .string, .fn .. | .string, .var _
-  | .boolean, .number | .boolean, .string | .boolean, .undefined | .boolean, .null
-  | .boolean, .fn .. | .boolean, .var _
-  | .undefined, .number | .undefined, .string | .undefined, .boolean | .undefined, .null
-  | .undefined, .fn .. | .undefined, .var _
+  | .number, .unknown | .number, .fn .. | .number, .var _ | .string, .number
+  | .string, .boolean | .string, .undefined | .string, .null | .string, .unknown
+  | .string, .fn .. | .string, .var _ | .boolean, .number | .boolean, .string
+  | .boolean, .undefined | .boolean, .null | .boolean, .unknown | .boolean, .fn ..
+  | .boolean, .var _ | .undefined, .number | .undefined, .string | .undefined, .boolean
+  | .undefined, .null | .undefined, .unknown | .undefined, .fn .. | .undefined, .var _
   | .null, .number | .null, .string | .null, .boolean | .null, .undefined
-  | .null, .fn .. | .null, .var _
-  | .fn .., .number | .fn .., .string | .fn .., .boolean | .fn .., .undefined
-  | .fn .., .null | .fn .., .var _
-  | .var _, .number | .var _, .string | .var _, .boolean | .var _, .undefined
-  | .var _, .null | .var _, .fn .. => isFalse (by intro e; cases e)
+  | .null, .unknown | .null, .fn .. | .null, .var _ | .unknown, .number
+  | .unknown, .string | .unknown, .boolean | .unknown, .undefined | .unknown, .null
+  | .unknown, .fn .. | .unknown, .var _ | .fn .., .number | .fn .., .string
+  | .fn .., .boolean | .fn .., .undefined | .fn .., .null | .fn .., .unknown
+  | .fn .., .var _ | .var _, .number | .var _, .string | .var _, .boolean
+  | .var _, .undefined | .var _, .null | .var _, .unknown | .var _, .fn .. => isFalse (by intro e; cases e)
 def Ty.decEqs : (a b : List Ty) → Decidable (a = b)
   | [], [] => isTrue rfl
   | a :: as, b :: bs =>
@@ -83,7 +89,7 @@ instance : DecidableEq Ty := Ty.decEq
 mutual
 def PTy.decEq : (a b : PTy) → Decidable (a = b)
   | .number, .number | .string, .string | .boolean, .boolean | .undefined, .undefined
-  | .null, .null => isTrue rfl
+  | .null, .null | .unknown, .unknown => isTrue rfl
   | .fn a₁ a₂ a₃, .fn b₁ b₂ b₃ =>
     match PTy.decEq a₁ b₁, PTy.decEqs a₂ b₂, PTy.decEq a₃ b₃ with
     | isTrue h₁, isTrue h₂, isTrue h₃ => isTrue (by subst h₁ h₂ h₃; rfl)
@@ -92,21 +98,23 @@ def PTy.decEq : (a b : PTy) → Decidable (a = b)
   | .free a, .free b | .bound a, .bound b =>
     if h : a = b then isTrue (h ▸ rfl) else isFalse (by intro e; cases e; exact h rfl)
   | .number, .string | .number, .boolean | .number, .undefined | .number, .null
-  | .number, .fn .. | .number, .free _ | .number, .bound _
+  | .number, .unknown | .number, .fn .. | .number, .free _ | .number, .bound _
   | .string, .number | .string, .boolean | .string, .undefined | .string, .null
-  | .string, .fn .. | .string, .free _ | .string, .bound _
+  | .string, .unknown | .string, .fn .. | .string, .free _ | .string, .bound _
   | .boolean, .number | .boolean, .string | .boolean, .undefined | .boolean, .null
-  | .boolean, .fn .. | .boolean, .free _ | .boolean, .bound _
+  | .boolean, .unknown | .boolean, .fn .. | .boolean, .free _ | .boolean, .bound _
   | .undefined, .number | .undefined, .string | .undefined, .boolean | .undefined, .null
-  | .undefined, .fn .. | .undefined, .free _ | .undefined, .bound _
+  | .undefined, .unknown | .undefined, .fn .. | .undefined, .free _ | .undefined, .bound _
   | .null, .number | .null, .string | .null, .boolean | .null, .undefined
-  | .null, .fn .. | .null, .free _ | .null, .bound _
+  | .null, .unknown | .null, .fn .. | .null, .free _ | .null, .bound _
+  | .unknown, .number | .unknown, .string | .unknown, .boolean | .unknown, .undefined
+  | .unknown, .null | .unknown, .fn .. | .unknown, .free _ | .unknown, .bound _
   | .fn .., .number | .fn .., .string | .fn .., .boolean | .fn .., .undefined
-  | .fn .., .null | .fn .., .free _ | .fn .., .bound _
+  | .fn .., .null | .fn .., .unknown | .fn .., .free _ | .fn .., .bound _
   | .free _, .number | .free _, .string | .free _, .boolean | .free _, .undefined
-  | .free _, .null | .free _, .fn .. | .free _, .bound _
+  | .free _, .null | .free _, .unknown | .free _, .fn .. | .free _, .bound _
   | .bound _, .number | .bound _, .string | .bound _, .boolean | .bound _, .undefined
-  | .bound _, .null | .bound _, .fn .. | .bound _, .free _ => isFalse (by intro e; cases e)
+  | .bound _, .null | .bound _, .unknown | .bound _, .fn .. | .bound _, .free _ => isFalse (by intro e; cases e)
 def PTy.decEqs : (a b : List PTy) → Decidable (a = b)
   | [], [] => isTrue rfl
   | a :: as, b :: bs =>
@@ -121,6 +129,7 @@ instance : DecidableEq PTy := PTy.decEq
 /-- Induction on `Ty`, with a hypothesis for each parameter type. -/
 theorem Ty.ind {motive : Ty → Prop} (number : motive .number) (string : motive .string)
     (boolean : motive .boolean) (undefined : motive .undefined) (null : motive .null)
+    (unknown : motive .unknown)
     (fn : ∀ t ps r, motive t → (∀ p ∈ ps, motive p) → motive r → motive (.fn t ps r))
     (var : ∀ a, motive (.var a)) : ∀ τ, motive τ
   | .number => number
@@ -128,10 +137,11 @@ theorem Ty.ind {motive : Ty → Prop} (number : motive .number) (string : motive
   | .boolean => boolean
   | .undefined => undefined
   | .null => null
+  | .unknown => unknown
   | .fn t ps r =>
-    fn t ps r (Ty.ind number string boolean undefined null fn var t)
-      (fun p _ => Ty.ind number string boolean undefined null fn var p)
-      (Ty.ind number string boolean undefined null fn var r)
+    fn t ps r (Ty.ind number string boolean undefined null unknown fn var t)
+      (fun p _ => Ty.ind number string boolean undefined null unknown fn var p)
+      (Ty.ind number string boolean undefined null unknown fn var r)
   | .var a => var a
 termination_by τ => sizeOf τ
 decreasing_by
@@ -141,6 +151,7 @@ decreasing_by
 /-- Induction on `PTy`, with a hypothesis for each parameter type. -/
 theorem PTy.ind {motive : PTy → Prop} (number : motive .number) (string : motive .string)
     (boolean : motive .boolean) (undefined : motive .undefined) (null : motive .null)
+    (unknown : motive .unknown)
     (fn : ∀ t ps r, motive t → (∀ p ∈ ps, motive p) → motive r → motive (.fn t ps r))
     (free : ∀ a, motive (.free a)) (bound : ∀ i, motive (.bound i)) : ∀ p, motive p
   | .number => number
@@ -148,10 +159,11 @@ theorem PTy.ind {motive : PTy → Prop} (number : motive .number) (string : moti
   | .boolean => boolean
   | .undefined => undefined
   | .null => null
+  | .unknown => unknown
   | .fn t ps r =>
-    fn t ps r (PTy.ind number string boolean undefined null fn free bound t)
-      (fun p _ => PTy.ind number string boolean undefined null fn free bound p)
-      (PTy.ind number string boolean undefined null fn free bound r)
+    fn t ps r (PTy.ind number string boolean undefined null unknown fn free bound t)
+      (fun p _ => PTy.ind number string boolean undefined null unknown fn free bound p)
+      (PTy.ind number string boolean undefined null unknown fn free bound r)
   | .free a => free a
   | .bound i => bound i
 termination_by p => sizeOf p
@@ -199,6 +211,7 @@ def Ty.toPTy : Ty → PTy
   | .boolean => .boolean
   | .undefined => .undefined
   | .null => .null
+  | .unknown => .unknown
   | .fn t ps r => .fn t.toPTy (Ty.toPTys ps) r.toPTy
   | .var a => .free a
 def Ty.toPTys : List Ty → List PTy
@@ -218,6 +231,7 @@ def PTy.inst (τs : List Ty) : PTy → Ty
   | .boolean => .boolean
   | .undefined => .undefined
   | .null => .null
+  | .unknown => .unknown
   | .fn t ps r => .fn (t.inst τs) (PTy.insts τs ps) (r.inst τs)
   | .free a => .var a
   | .bound i => τs.getD i .undefined
@@ -314,6 +328,7 @@ end
 @[simp] theorem Ty.subst_boolean (σ : Subst) : Ty.boolean.subst σ = .boolean := rfl
 @[simp] theorem Ty.subst_undefined (σ : Subst) : Ty.undefined.subst σ = .undefined := rfl
 @[simp] theorem Ty.subst_null (σ : Subst) : Ty.null.subst σ = .null := rfl
+@[simp] theorem Ty.subst_unknown (σ : Subst) : Ty.unknown.subst σ = .unknown := rfl
 
 @[simp] theorem Ty.subst_fn (σ : Subst) (t : Ty) (ps : List Ty) (r : Ty) :
     (Ty.fn t ps r).subst σ = .fn (t.subst σ) (ps.map (·.subst σ)) (r.subst σ) := by

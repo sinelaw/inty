@@ -664,6 +664,77 @@ theorem infer_inv : ∀ e, InferInv e := by
     · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
     · exact hp₂ p hp
 
+  | while_ c body ihc ihb =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, _, hp₁⟩ := ihc hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihb (hσ₁.ctx_below (hΓ.mono hn₁))
+      (hσ₁.ret_below (hR.mono hn₁)) h₂
+    refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, fun a ha => by simp [Ty.ftv] at ha,
+      ?_⟩
+    intro p hp
+    simp only [List.mem_append, List.mem_map] at hp
+    rcases hp with ⟨q, hq, rfl⟩ | hp
+    · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+    · exact hp₂ p hp
+  | break_ | continue_ =>
+    intro Γ R n o _ _ h
+    simp only [infer, Option.some.injEq] at h; subst h
+    exact ⟨Nat.le_succ _, .nil _, .var (Nat.lt_succ_self _), by simp⟩
+  | tryCatch body handler ihb ihh =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i σ₃ hu
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihb hΓ hR h₁
+    have hunk : Ty.unknown.Below o₁.next := fun a ha => by simp [Ty.ftv] at ha
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihh (Ctx.Below.mono_cons hunk (hσ₁.ctx_below (hΓ.mono hn₁)))
+      (hσ₁.ret_below (hR.mono hn₁)) h₂
+    have hσ₃ := unify_within (hσ₂.subst_below (hτ₁.mono hn₂)) hτ₂ hu
+    refine ⟨Nat.le_trans hn₁ hn₂, ((hσ₁.mono hn₂).compose hσ₂).compose hσ₃,
+      hσ₃.subst_below hτ₂, ?_⟩
+    intro p hp
+    simp only [List.mem_map, List.mem_append] at hp
+    obtain ⟨q, hq, rfl⟩ := hp
+    refine hσ₃.pred_below ?_
+    rcases hq with ⟨q', hq', rfl⟩ | hq
+    · exact hσ₂.pred_below ((hp₁ q' hq').mono hn₂)
+    · exact hp₂ q hq
+  | tryFinally body fin ihb ihf =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihb hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihf (hσ₁.ctx_below (hΓ.mono hn₁))
+      (hσ₁.ret_below (hR.mono hn₁)) h₂
+    refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hσ₂.subst_below (hτ₁.mono hn₂), ?_⟩
+    intro p hp
+    simp only [List.mem_append, List.mem_map] at hp
+    rcases hp with ⟨q, hq, rfl⟩ | hp
+    · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+    · exact hp₂ p hp
+
 /-! ## Agreement of substitutions -/
 
 theorem PTy.subst_congr' {σ σ' : Subst} {p : PTy}
@@ -952,6 +1023,22 @@ theorem HasType.generalize_ctx {C' : List Pred} {Γ₀ : Ctx} {R : Option Ty} {e
     intro C Δ Γ s s' hΓ hC hgen hw
     have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
     exact .seq (ih₁ hΓ hC hgen (hw'.imp id (·.1))) (ih₂ hΓ hC hgen (hw'.imp id (·.2)))
+  | while_ _ _ ihc ihb =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .while_ (ihc hΓ hC hgen (hw'.imp id (·.1))) (ihb hΓ hC hgen (hw'.imp id (·.2)))
+  | break_ => intros; exact .break_
+  | continue_ => intros; exact .continue_
+  | tryCatch _ _ ihb ihh =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    refine .tryCatch (ihb hΓ hC hgen (hw'.imp id (·.1))) ?_
+    have := ihh (Δ := .mono .unknown :: Δ) (by rw [hΓ]; rfl) hC hgen (hw'.imp id (·.2))
+    simpa using this
+  | tryFinally _ _ ihb ihf =>
+    intro C Δ Γ s s' hΓ hC hgen hw
+    have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
+    exact .tryFinally (ihb hΓ hC hgen (hw'.imp id (·.1))) (ihf hΓ hC hgen (hw'.imp id (·.2)))
 
 /-! ## Instantiating a generalised scheme -/
 
@@ -1630,6 +1717,65 @@ theorem infer_complete : ∀ e, InferComplete e := by
         by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂,
         Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
+  | while_ c body ihc ihb =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | while_ hc hb =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, _, hsat₁⟩ := ihc hΓ hR hC hΓ' hR' hc
+      obtain ⟨hn₁, hσ₁, _, hp₁⟩ := infer_inv c hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, _, hsat₂⟩ := ihb (ψ := φ₁) hΓ₁ hR₁ hC
+        (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) hb
+      exact ⟨⟨Subst.compose o₂.σ o₁.σ, .undefined, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
+        o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, rfl,
+        Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
+  | break_ =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | break_ =>
+      exact ⟨⟨[], .var n, [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
+        fun a ha => by simp [Ty.subst, Subst.find, Nat.ne_of_lt ha],
+        by simp [Ty.subst, Subst.find], by simp [Sat]⟩
+  | continue_ =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | continue_ =>
+      exact ⟨⟨[], .var n, [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
+        fun a ha => by simp [Ty.subst, Subst.find, Nat.ne_of_lt ha],
+        by simp [Ty.subst, Subst.find], by simp [Sat]⟩
+  | tryCatch body handler ihb ihh =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | tryCatch hb hh =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihb hΓ hR hC hΓ' hR' hb
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv body hΓ hR h₁
+      have hunk : Ty.unknown.Below o₁.next := fun a ha => by simp [Ty.ftv] at ha
+      have hΓ₁ := Ctx.Below.mono_cons hunk (hσ₁.ctx_below (hΓ.mono hn₁))
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := ihh (ψ := φ₁) hΓ₁ hR₁ hC
+        (by simp only [Ctx.subst_cons, Scheme.mono_subst, Ty.subst_unknown]; rw [hΓ', hag₁.ctx hΓ])
+        (by rw [hR', hag₁.ret hR]) hh
+      have hu : (o₁.τ.subst o₂.σ).subst φ₂ = o₂.τ.subst φ₂ := by rw [hag₂.ty hτb₁, hτ₁, hτ₂]
+      obtain ⟨σ₃, hσ₃, habs⟩ := unify_mgu hu
+      refine ⟨_, by simp only [infer, h₁, h₂, hσ₃]; rfl, φ₂, (hag₁.trans hσ₁ hn₁ hag₂).absorb habs,
+        ?_, Sat.absorb habs (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)⟩
+      show (o₂.τ.subst σ₃).subst φ₂ = τ'
+      rw [habs, hτ₂]
+  | tryFinally body fin ihb ihf =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    cases ht with
+    | tryFinally hb hf =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihb hΓ hR hC hΓ' hR' hb
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv body hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, _, hsat₂⟩ := ihf (ψ := φ₁) hΓ₁ hR₁ hC
+        (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) hf
+      exact ⟨⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
+        o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂,
+        by rw [hag₂.ty hτb₁, hτ₁], Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
+
 /-- A constraint some substitution makes an instance is satisfiable. -/
 theorem Pred.satisfiable_of_inst {p : Pred} {φ : Subst} (h : Inst (p.subst φ)) :
     p.satisfiable = true := by
@@ -1644,10 +1790,10 @@ theorem Pred.satisfiable_of_inst {p : Pred} {φ : Subst} (h : Inst (p.subst φ))
     | _ :: _ :: _, hq => simp at hq
 
 /-- Completeness, for a program in a closed context (such as the builtins'):
-if it has a type, and assigns only to its own `let`s and parameters,
-inference accepts it, finding a type of which that one is an instance. -/
+if it has a type, and passes the scope checks (`Expr.scoped`), inference
+accepts it, finding a type of which that one is an instance. -/
 theorem inferIn_complete {Γ : Ctx} {e : Expr} {τ' : Ty} (hΓ : ctxFtv Γ = [])
-    (hm : e.assignsMutable (Γ.map fun _ => false) = true) (ht : HasType [] Γ none e τ') :
+    (hm : e.scoped (Γ.map fun _ => false) = true) (ht : HasType [] Γ none e τ') :
     ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn Γ e = some τ := by
   have hclosed : Ctx.subst [] Γ = Γ := by simp
   obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete e (n := 0) (ψ := []) (R := none)
@@ -1658,9 +1804,9 @@ theorem inferIn_complete {Γ : Ctx} {e : Expr} {τ' : Ty} (hΓ : ctxFtv Γ = [])
     Pred.satisfiable_of_inst ((hsat p hp).elim id (fun h => by cases h)))
   simp [inferIn, hm, h, hall]
 
-/-- Completeness for closed programs: one that has a type, and assigns only
-to its own `let`s and parameters, is accepted. -/
-theorem inferProgram_complete {e : Expr} {τ' : Ty} (hm : e.assignsMutable [] = true)
+/-- Completeness for closed programs: one that has a type and passes the
+scope checks is accepted. -/
+theorem inferProgram_complete {e : Expr} {τ' : Ty} (hm : e.scoped [] = true)
     (ht : HasType [] [] none e τ') : ∃ τ, inferProgram e = some τ := by
   obtain ⟨_, _, _, h⟩ := inferIn_complete (Γ := []) rfl hm ht
   exact h

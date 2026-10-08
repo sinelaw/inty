@@ -198,6 +198,7 @@ def Ty.gen (ᾱ : List Nat) : Ty → PTy
   | .boolean => .boolean
   | .undefined => .undefined
   | .null => .null
+  | .unknown => .unknown
   | .fn t ps r => .fn (t.gen ᾱ) (Ty.gens ᾱ ps) (r.gen ᾱ)
   | .var a =>
     match findIdx ᾱ a with

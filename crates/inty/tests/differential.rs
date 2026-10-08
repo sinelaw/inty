@@ -72,6 +72,16 @@ enum Core {
     Throw(Box<Core>),
     /// `e₁; e₂`, in statement position.
     Seq(Box<Core>, Box<Core>),
+    /// `while (c) { body }`, in statement position; it completes with
+    /// `undefined`.
+    While(Box<Core>, Box<Core>),
+    /// `break;` and `continue;`, inside a loop.
+    Break,
+    Continue,
+    /// `try { body } catch (e) { handler }`, with `e` bound in `handler`.
+    TryCatch(Box<Core>, Box<Core>),
+    /// `try { body } finally { fin }`.
+    TryFinally(Box<Core>, Box<Core>),
 }
 
 use Core::*;
@@ -115,6 +125,11 @@ fn wire(e: &Core) -> String {
         Ret(e) => format!("(ret {})", wire(e)),
         Throw(e) => format!("(throw {})", wire(e)),
         Seq(x, y) => format!("(seq {} {})", wire(x), wire(y)),
+        While(c, body) => format!("(while {} {})", wire(c), wire(body)),
+        Break => "(break)".into(),
+        Continue => "(continue)".into(),
+        TryCatch(x, y) => format!("(trycatch {} {})", wire(x), wire(y)),
+        TryFinally(x, y) => format!("(tryfinally {} {})", wire(x), wire(y)),
     }
 }
 
@@ -123,7 +138,7 @@ fn wire(e: &Core) -> String {
 fn ends_in_statement(e: &Core) -> bool {
     match e {
         Let(_, _, rest) | Seq(_, rest) => ends_in_statement(rest),
-        Throw(_) | Ret(_) => true,
+        Throw(_) | Ret(_) | While(..) | Break | Continue | TryCatch(..) | TryFinally(..) => true,
         Cond(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
     }
@@ -133,7 +148,8 @@ fn ends_in_statement(e: &Core) -> bool {
 /// form for it.
 fn is_stmt(e: &Core) -> bool {
     match e {
-        Ret(_) | Throw(_) | Seq(..) | Let(..) => true,
+        Ret(_) | Throw(_) | Seq(..) | Let(..) | While(..) | Break | Continue | TryCatch(..)
+        | TryFinally(..) => true,
         Cond(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
     }
@@ -158,6 +174,9 @@ fn fractional(e: &Core) -> Core {
         Ret(x) => Ret(f(x)),
         Throw(x) => Throw(f(x)),
         Seq(x, y) => Seq(f(x), f(y)),
+        While(x, y) => While(f(x), f(y)),
+        TryCatch(x, y) => TryCatch(f(x), f(y)),
+        TryFinally(x, y) => TryFinally(f(x), f(y)),
         other => other.clone(),
     }
 }
@@ -225,7 +244,8 @@ impl Js {
                 let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
                 format!("({})({})", self.expr(f), args.join(", "))
             }
-            Let(..) | Ret(_) | Throw(_) | Seq(..) => {
+            Let(..) | Ret(_) | Throw(_) | Seq(..) | While(..) | Break | Continue | TryCatch(..)
+            | TryFinally(..) => {
                 unreachable!("statements only in statement position: {e:?}")
             }
             Assign(i, e) => format!("({} = {})", self.name(*i), self.expr(e)),
@@ -257,6 +277,30 @@ impl Js {
             }
             Ret(e) => format!("return {};", self.expr(e)),
             Throw(e) => format!("throw {};", self.expr(e)),
+            // A loop completes with `undefined`: in a function, the
+            // function returns it; at the top, it is the program's value
+            // (where a bare loop's would be its body's last).
+            While(c, body) => format!(
+                "while ({}) {{ {} }} {}(void 0);",
+                self.expr(c),
+                self.stmts(body, ""),
+                last
+            ),
+            Break => "break;".into(),
+            Continue => "continue;".into(),
+            TryCatch(body, handler) => {
+                let body = self.stmts(body, last);
+                let v = self.fresh("e");
+                self.names.push(v.clone());
+                let handler = self.stmts(handler, last);
+                self.names.pop();
+                format!("try {{ {} }} catch ({}) {{ {} }}", body, v, handler)
+            }
+            TryFinally(body, fin) => format!(
+                "try {{ {} }} finally {{ {} }}",
+                self.stmts(body, last),
+                self.stmts(fin, "")
+            ),
             Cond(c, t, f) if is_stmt(t) || is_stmt(f) => format!(
                 "if ({}) {{ {} }} else {{ {} }}",
                 self.expr(c),
@@ -286,9 +330,11 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
                 || refers_from_inner(e, i, inner)
         }
         Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) => refers_from_inner(x, i, inner),
-        Plus(x, y) | Minus(x, y) | Seq(x, y) => {
+        Plus(x, y) | Minus(x, y) | Seq(x, y) | While(x, y) | TryFinally(x, y) => {
             refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner)
         }
+        TryCatch(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
+        Break | Continue => false,
         Num(..) | Str(_) | Bool(_) | Undef | Null => false,
     }
 }
@@ -352,6 +398,9 @@ struct Gen {
     /// The return types of the functions being generated, innermost last
     /// (`None` for an untyped one); empty at the top level.
     funcs: Vec<Option<T>>,
+    /// How many loops enclose the point being generated, in the innermost
+    /// function (the first entry is the top level's).
+    loops: Vec<usize>,
 }
 
 impl Gen {
@@ -507,7 +556,9 @@ impl Gen {
                         scope.push(Binding::Mut(p.clone()));
                     }
                     self.funcs.push(Some((**r).clone()));
+                    self.loops.push(0);
                     let body = self.typed(r, d, scope, true);
+                    self.loops.pop();
                     self.funcs.pop();
                     scope.truncate(scope.len() - ps.len() - 2);
                     Func(ps.len(), b(body))
@@ -522,7 +573,8 @@ impl Gen {
     /// `None` when none fits here.
     fn statement(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Option<Core> {
         let in_func = !self.funcs.is_empty();
-        match self.rng.below(4) {
+        let in_loop = self.loops.last().is_some_and(|&n| n > 0);
+        match self.rng.below(9) {
             0 if in_func => {
                 let e = match self.funcs.last().cloned().flatten() {
                     Some(rt) => self.typed(&rt, d, scope, false),
@@ -550,8 +602,47 @@ impl Gen {
                     b(self.typed(t, d, scope, true)),
                 ))
             }
+            // A counted loop, then the rest.
+            4 => {
+                let rest = self.typed(t, d, scope, true);
+                Some(Seq(b(self.counted_loop(d, scope, false)), b(rest)))
+            }
+            5 | 6 if in_loop => Some(if self.rng.chance(50) { Break } else { Continue }),
+            // Both branches have the type: inty doesn't type a statement's
+            // value, but the model does.
+            7 => {
+                let body = self.typed(t, d, scope, true);
+                scope.push(Binding::Unknown);
+                let handler = self.typed(t, d, scope, true);
+                scope.pop();
+                Some(TryCatch(b(body), b(handler)))
+            }
+            8 => {
+                let body = self.typed(t, d, scope, true);
+                let s = self.ty(1);
+                let fin = self.typed(&s, d, scope, true);
+                Some(TryFinally(b(body), b(fin)))
+            }
             _ => None,
         }
+    }
+
+    /// `let i = n; while (i) { i = i - 1; body }`, whose body may `break` and
+    /// `continue`. Typed (`any` false) or not.
+    fn counted_loop(&mut self, d: usize, scope: &mut Vec<Binding>, any: bool) -> Core {
+        let n = 1 + self.rng.below(3) as u64;
+        scope.push(Binding::Mut(T::Num));
+        *self.loops.last_mut().unwrap() += 1;
+        let body = if any {
+            self.any(d, scope, true)
+        } else {
+            let s = self.ty(1);
+            self.typed(&s, d, scope, true)
+        };
+        *self.loops.last_mut().unwrap() -= 1;
+        scope.pop();
+        let step = Assign(0, b(Minus(b(Var(0)), b(Num(1, 0)))));
+        Let(true, b(Num(n, 0)), b(While(b(Var(0)), b(Seq(b(step), b(body))))))
     }
 
     /// Any program: types aren't tracked, so many are ill typed.
@@ -571,7 +662,8 @@ impl Gen {
         let d = depth - 1;
         if stmt && self.rng.chance(20) {
             let in_func = !self.funcs.is_empty();
-            match self.rng.below(4) {
+            let in_loop = self.loops.last().is_some_and(|&n| n > 0);
+            match self.rng.below(8) {
                 0 if in_func => return Ret(b(self.any(d, scope, false))),
                 1 => return Throw(b(self.any(d, scope, false))),
                 2 => return Seq(b(self.any(d, scope, true)), b(self.any(d, scope, true))),
@@ -581,6 +673,17 @@ impl Gen {
                         b(self.any(d, scope, true)),
                         b(self.any(d, scope, true)),
                     )
+                }
+                4 => {
+                    let rest = self.any(d, scope, true);
+                    return Seq(b(self.counted_loop(d, scope, true)), b(rest));
+                }
+                5 if in_loop => return if self.rng.chance(50) { Break } else { Continue },
+                // `try`/`catch` only where typed: inty doesn't type a
+                // statement's value, and two branches of any types would
+                // tell the model and inty apart.
+                6 => {
+                    return TryFinally(b(self.any(d, scope, true)), b(self.any(d, scope, true)))
                 }
                 _ => {}
             }
@@ -596,7 +699,9 @@ impl Gen {
                     scope.push(Binding::UnknownMut);
                 }
                 self.funcs.push(None);
+                self.loops.push(0);
                 let body = self.any(d, scope, true);
+                self.loops.pop();
                 self.funcs.pop();
                 scope.truncate(scope.len() - n - 2);
                 Func(n, b(body))
@@ -715,7 +820,28 @@ fn core_type(t: &Type) -> String {
 /// the types inty gave the program's expressions.
 type Features = std::collections::BTreeSet<&'static str>;
 
-fn inty_typing(program: &inty::ast::Program) -> (Typing, Features) {
+/// A function type's number of parameters: a `Func`'s, or a row's call
+/// signature's.
+fn param_count(t: &Type) -> Option<usize> {
+    match t {
+        Type::Func { params, .. } => Some(params.len()),
+        Type::Row(row) => row.props.values().find_map(|f| param_count(&f.ty)),
+        _ => None,
+    }
+}
+
+/// The parameters of the function literal written at the start of `text`
+/// (`(function f(x, y) { …`), as the generator prints them.
+fn literal_arity(text: &str) -> Option<usize> {
+    let text = text.strip_prefix('(').unwrap_or(text);
+    let rest = text.strip_prefix("function ")?;
+    let open = rest.find('(')?;
+    let close = rest[open..].find(')')? + open;
+    let params = rest[open + 1..close].trim();
+    Some(if params.is_empty() { 0 } else { params.split(',').count() })
+}
+
+fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features) {
     let mut state = InferState::new();
     state.expr_types = Some(std::collections::HashMap::new());
     // As the CLI checks: infer, then resolve the class constraints.
@@ -739,15 +865,25 @@ fn inty_typing(program: &inty::ast::Program) -> (Typing, Features) {
     };
     // The evidence: the types inty gave the program's expressions, and its
     // errors (inference may stop before recording the types that show it).
-    let mut shown: Vec<String> = state
-        .expr_types
-        .take()
-        .unwrap_or_default()
+    let expr_types = state.expr_types.take().unwrap_or_default();
+    // A function literal typed with more parameters than it has: inty
+    // checks a literal against the function type expected of it, and
+    // lets it ignore the extra arguments, as JavaScript does.
+    let fewer_params = expr_types.iter().any(|(&(start, end), ty)| {
+        let Some(arity) = source.get(start..end).and_then(literal_arity) else {
+            return false;
+        };
+        param_count(&state.flatten_type(ty)).is_some_and(|n| n > arity)
+    });
+    let mut shown: Vec<String> = expr_types
         .values()
         .map(|ty| format!("{}", state.flatten_type(ty)))
         .collect();
     shown.extend(errors);
     let mut features = Features::new();
+    if fewer_params {
+        features.insert("fewer parameters");
+    }
     for text in &shown {
         if text.contains('μ') {
             features.insert("recursive types");
@@ -920,6 +1056,12 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(t), Typing::Type(_)) if t.starts_with("union(") => {
             Some("unions (a nullable join)")
         }
+        // Roadmap phase 10 (optional parameters): a function literal with
+        // fewer parameters than the function type expected of it, which
+        // ignores the extra arguments, as JavaScript does.
+        (Typing::Type(_), Typing::Reject) if features.contains("fewer parameters") => {
+            Some("fewer parameters than the expected function type")
+        }
         // Roadmap phase 8: `function f(x) { return f; }`.
         (Typing::Type(_), Typing::Reject) if features.contains("recursive types") => {
             Some("equi-recursive types")
@@ -933,6 +1075,14 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         }
         (Typing::Type(t), Typing::Type(_)) if t == "never" => {
             Some("never (a function that only throws)")
+        }
+        // The model types a program that can't complete normally (it only
+        // throws, or a function in it falls off its end only after a
+        // `throw`) with a free type variable, which no value has; inty
+        // gives it a type of its own, such as `undefined` for a function
+        // body that ends in a statement.
+        (Typing::Type(_), Typing::Type(m)) if m == "var" => {
+            Some("what doesn't complete (the model's free type variable)")
         }
         // Roadmap phase 5, the other way: the model folds `Int` into
         // `number`, but in inty `Int ≤ Number` holds for values only, so
@@ -966,6 +1116,7 @@ fn inty_agrees_with_the_lean_model() {
     let mut gen = Gen {
         rng: Rng((z ^ (z >> 31)) | 1),
         funcs: Vec::new(),
+        loops: vec![0],
     };
     let programs: Vec<Core> = (0..cases).map(|_| gen.program()).collect();
     let answers = run_model(&model, &programs);
@@ -997,9 +1148,12 @@ fn inty_agrees_with_the_lean_model() {
                     })
                 };
                 let program = parse(&source);
-                let (typing, mut features) = inty_typing(&program);
+                let (typing, mut features) = inty_typing(&program, &source);
                 if typing == Typing::Reject
-                    && matches!(inty_typing(&parse(&fractional_source)).0, Typing::Type(_))
+                    && matches!(
+                        inty_typing(&parse(&fractional_source), &fractional_source).0,
+                        Typing::Type(_)
+                    )
                 {
                     features.insert("Int");
                 }

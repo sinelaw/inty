@@ -71,6 +71,18 @@ inductive Expr where
   | throw_ (e : Expr)
   /-- `e₁; e₂`: `e₁` for its effects, then `e₂`. -/
   | seq (e₁ e₂ : Expr)
+  /-- `while (c) body`; it completes with `undefined`. -/
+  | while_ (c body : Expr)
+  /-- `break;`, out of the innermost loop. -/
+  | break_
+  /-- `continue;`, to the innermost loop's next test. -/
+  | continue_
+  /-- `try { body } catch (e) { handler }`, with `e` as `var 0` in
+  `handler`. -/
+  | tryCatch (body handler : Expr)
+  /-- `try { body } finally { fin }`: `fin` runs however `body` completes,
+  and its own abrupt completion, if any, wins. -/
+  | tryFinally (body fin : Expr)
   deriving Repr
 
 /-- Syntactic values, which the value restriction lets a `const` generalise:
@@ -90,30 +102,71 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (unop : ∀ op e, motive e → motive (.unop op e))
     (binop : ∀ op e₁ e₂, motive e₁ → motive e₂ → motive (.binop op e₁ e₂))
     (ret : ∀ e, motive e → motive (.ret e)) (throw_ : ∀ e, motive e → motive (.throw_ e))
-    (seq : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.seq e₁ e₂)) : ∀ e, motive e
+    (seq : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.seq e₁ e₂))
+    (while_ : ∀ c body, motive c → motive body → motive (.while_ c body))
+    (break_ : motive .break_) (continue_ : motive .continue_)
+    (tryCatch : ∀ body handler, motive body → motive handler → motive (.tryCatch body handler))
+    (tryFinally : ∀ body fin, motive body → motive fin → motive (.tryFinally body fin)) :
+    ∀ e, motive e
   | .lit l => lit l
   | .var i => var i
-  | .func n body => func n body (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq body)
+  | .func n body => func n body (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally body)
   | .app f args =>
-    app f args (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq f)
-      (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq a)
+    app f args (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally f)
+      (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally a)
   | .let_ m e₁ e₂ =>
-    let_ m e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₁)
-      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₂)
+    let_ m e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e₂)
   | .cond c t e =>
-    cond c t e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq c)
-      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq t)
-      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
-  | .assign i e => assign i e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
-  | .unop op e => unop op e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
+    cond c t e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally c)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally t)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e)
+  | .assign i e => assign i e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e)
+  | .unop op e => unop op e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e)
   | .binop op e₁ e₂ =>
-    binop op e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₁)
-      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₂)
-  | .ret e => ret e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
-  | .throw_ e => throw_ e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e)
+    binop op e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e₂)
+  | .ret e => ret e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e)
+  | .throw_ e => throw_ e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e)
   | .seq e₁ e₂ =>
-    seq e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₁)
-      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq e₂)
+    seq e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally e₂)
+  | .while_ c body =>
+    while_ c body
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally c)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally body)
+  | .break_ => break_
+  | .continue_ => continue_
+  | .tryCatch body handler =>
+    tryCatch body handler
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally body)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally handler)
+  | .tryFinally body fin =>
+    tryFinally body fin
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally body)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally fin)
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -129,7 +182,9 @@ def Expr.writes (i : Nat) : Expr → Bool
   | .assign j e => j == i || e.writes i
   | .cond c t e => c.writes i || t.writes i || e.writes i
   | .unop _ e | .ret e | .throw_ e => e.writes i
-  | .binop _ e₁ e₂ | .seq e₁ e₂ => e₁.writes i || e₂.writes i
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ => e₁.writes i || e₂.writes i
+  | .break_ | .continue_ => false
+  | .tryCatch body handler => body.writes i || handler.writes (i + 1)
 /-- `writes`, for a list of arguments. -/
 def Expr.writesList (i : Nat) : List Expr → Bool
   | [] => false
@@ -151,11 +206,40 @@ def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
   | .cond c t e => c.assignsMutable mutables && t.assignsMutable mutables &&
       e.assignsMutable mutables
   | .unop _ e | .ret e | .throw_ e => e.assignsMutable mutables
-  | .binop _ e₁ e₂ | .seq e₁ e₂ => e₁.assignsMutable mutables && e₂.assignsMutable mutables
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ =>
+    e₁.assignsMutable mutables && e₂.assignsMutable mutables
+  | .break_ | .continue_ => true
+  -- What a `catch` binds can be assigned.
+  | .tryCatch body handler =>
+    body.assignsMutable mutables && handler.assignsMutable (true :: mutables)
 /-- `assignsMutable`, for a list of arguments. -/
 def Expr.assignsMutableList (mutables : List Bool) : List Expr → Bool
   | [] => true
   | e :: es => e.assignsMutable mutables && Expr.assignsMutableList mutables es
 end
+
+mutual
+/-- Whether every `break` and `continue` is inside a loop (`inLoop`) of the
+same function: JavaScript rejects the program otherwise. -/
+def Expr.jumpsInLoop (inLoop : Bool) : Expr → Bool
+  | .lit _ | .var _ => true
+  | .func _ body => body.jumpsInLoop false
+  | .app f args => f.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop args
+  | .let_ _ e₁ e₂ | .binop _ e₁ e₂ | .seq e₁ e₂ | .tryCatch e₁ e₂ | .tryFinally e₁ e₂ =>
+    e₁.jumpsInLoop inLoop && e₂.jumpsInLoop inLoop
+  | .assign _ e | .unop _ e | .ret e | .throw_ e => e.jumpsInLoop inLoop
+  | .cond c t e => c.jumpsInLoop inLoop && t.jumpsInLoop inLoop && e.jumpsInLoop inLoop
+  | .while_ c body => c.jumpsInLoop inLoop && body.jumpsInLoop true
+  | .break_ | .continue_ => inLoop
+/-- `jumpsInLoop`, for a list of arguments. -/
+def Expr.jumpsInLoopList (inLoop : Bool) : List Expr → Bool
+  | [] => true
+  | e :: es => e.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop es
+end
+
+/-- The checks beside the typing rules, both of scope: assignments only to
+mutable variables, `break` and `continue` only in loops. -/
+def Expr.scoped (mutables : List Bool) (e : Expr) : Bool :=
+  e.assignsMutable mutables && e.jumpsInLoop false
 
 end Inty

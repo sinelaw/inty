@@ -53,13 +53,31 @@ relates to its scheme. -/
 def HeapInv (P : Scheme → Value → Prop) (W : World) (h : Heap) : Prop :=
   h.length = W.length ∧ ∀ (ℓ : Nat) s, W[ℓ]? = some s → ∃ v, h[ℓ]? = some v ∧ P s v
 
+/-- An abrupt completion that runs on past a call: a `throw` of any value,
+or a `break` or `continue`, which a well-scoped program keeps inside its
+loop (`Expr.jumpsInLoop`). -/
+def Result.Abrupt : Result → Prop
+  | .thrown _ | .broke | .continued => True
+  | _ => False
+
+theorem Result.Abrupt.bindC {p : Ran} {K : Value → Nat → Heap → Ran} (h : p.1.Abrupt) :
+    Inty.bindC p K = p := by
+  obtain ⟨r, c, hp⟩ := p
+  cases r <;> simp_all [Result.Abrupt, Inty.bindC]
+
+theorem Result.Abrupt.catchReturn {r : Result} (h : r.Abrupt) : r.catchReturn = r := by
+  cases r <;> simp_all [Result.Abrupt, Result.catchReturn]
+
+theorem Result.Abrupt.ne_stuck {r : Result} (h : r.Abrupt) : r ≠ .stuck s := by
+  cases r <;> simp_all [Result.Abrupt]
+
 /-- What a call does, from a clock of `j` in the world `W`: it runs out of
 clock, or it takes a tick and ends in a larger world, with a heap `Hp`
-accepts, giving back a value `Q` accepts or throwing. -/
+accepts, giving back a value `Q` accepts or completing abruptly. -/
 def Lands (p : Ran) (j : Nat) (W : World) (Hp : Nat → World → Heap → Prop)
     (Q : Nat → World → Value → Prop) : Prop :=
   p.2.1 ≤ j ∧ (p.1 = .timeout ∨ (p.2.1 < j ∧ ∃ W', W <+: W' ∧ Hp p.2.1 W' p.2.2 ∧
-    ((∃ v, p.1 = .ok v ∧ Q p.2.1 W' v) ∨ ∃ v, p.1 = .thrown v)))
+    ((∃ v, p.1 = .ok v ∧ Q p.2.1 W' v) ∨ p.1.Abrupt)))
 
 private theorem lex_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
     Prod.Lex (· < ·) (· < ·) (c', s') (c, s) := by
@@ -69,8 +87,9 @@ private theorem lex_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
 
 mutual
 /-- `V k W τ v`: the value `v` has type `τ` for `k` more calls, in the world
-`W`. A base type has its values. A type variable has none: a closed program
-can't make a value of a type it knows nothing about. A function type is what
+`W`. A base type has its values, and `unknown` (what a `catch` binds) has
+every value. A type variable has none: a closed program can't make a value
+of a type it knows nothing about. A function type is what
 calling the function does (see the module docs). -/
 def V (k : Nat) (W : World) : Ty → Value → Prop
   | .number, v => ∃ n, v = .number n
@@ -78,6 +97,7 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .boolean, v => ∃ b, v = .boolean b
   | .undefined, v => v = .undefined
   | .null, v => v = .null
+  | .unknown, _ => True
   | .var _, _ => False
   | .fn θ τs ρ, f => ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
       (∀ i, i < j → HeapInv (fun s v => ∀ τs', τs'.length = s.arity →
@@ -124,6 +144,7 @@ theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
 @[simp] theorem V_boolean : V k W .boolean v ↔ ∃ b, v = .boolean b := by rw [V]
 @[simp] theorem V_undefined : V k W .undefined v ↔ v = .undefined := by rw [V]
 @[simp] theorem V_null : V k W .null v ↔ v = .null := by rw [V]
+@[simp] theorem V_unknown : V k W .unknown v ↔ True := by rw [V]
 @[simp] theorem V_var : V k W (.var a) v ↔ False := by rw [V]
 
 @[simp] theorem VList_nil : VList k W [] [] := by rw [VList]; trivial
@@ -140,7 +161,7 @@ theorem V.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
     intro i hi W'' hW'' h thisv args hh ht ha
     exact hv i (Nat.le_trans hi hjk) W'' (hW.trans hW'') h thisv args hh ht ha
   | .number, _, hv | .string, _, hv | .boolean, _, hv | .undefined, _, hv | .null, _, hv
-  | .var _, _, hv => by rw [V] at hv ⊢; exact hv
+  | .unknown, _, hv | .var _, _, hv => by rw [V] at hv ⊢; exact hv
 
 theorem VList.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
     ∀ {τs : List Ty} {vs : List Value}, VList k W τs vs → VList j W' τs vs
@@ -264,11 +285,11 @@ theorem HeapOK.allocList {k : Nat} {W : World} {h : Heap} {τs : List Ty} {vs : 
 
 /-- A safe outcome at `τ`, in a function returning `R`, from a clock of `k`
 in the world `W`: out of clock, or a larger world describing the heap
-after, with a value of `τ`, a `throw` of any value, or a `return` of a value
-of the return type. -/
+after, with a value of `τ`, an abrupt completion (a `throw` of any value,
+a `break`, a `continue`), or a `return` of a value of the return type. -/
 def Safe (p : Ran) (k : Nat) (W : World) (τ : Ty) (R : Option Ty) : Prop :=
   p.2.1 ≤ k ∧ (p.1 = .timeout ∨ ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧
-    ((∃ v, p.1 = .ok v ∧ V p.2.1 W' τ v) ∨ (∃ v, p.1 = .thrown v) ∨
+    ((∃ v, p.1 = .ok v ∧ V p.2.1 W' τ v) ∨ p.1.Abrupt ∨
       (∃ v, p.1 = .returned v ∧ ∃ τr, R = some τr ∧ V p.2.1 W' τr v)))
 
 theorem Safe.ok {W' : World} (hc : c ≤ k) (hW : W <+: W') (hH : HeapOK c W' h)
@@ -282,7 +303,32 @@ theorem Safe.weaken {W' : World} (h : Safe p c W' τ R) (hc : c ≤ k) (hW : W <
   · exact ⟨Nat.le_trans hp hc, .inr ⟨W'', hW.trans hW'', hH, hr⟩⟩
 
 theorem Safe.not_stuck (h : Safe p k W τ R) : p.1 ≠ .stuck s := by
-  rcases h.2 with h | ⟨_, _, _, ⟨_, h, _⟩ | ⟨_, h⟩ | ⟨_, h, _⟩⟩ <;> rw [h] <;> simp
+  rcases h.2 with h | ⟨_, _, _, ⟨_, h, _⟩ | h | ⟨_, h, _⟩⟩
+  · rw [h]; simp
+  · rw [h]; simp
+  · exact h.ne_stuck
+  · rw [h]; simp
+
+/-- An outcome other than a value is safe at any type. -/
+theorem Safe.retype (h : Safe p k W τ R) (hok : ∀ v, p.1 ≠ .ok v) : Safe p k W τ' R := by
+  obtain ⟨hc, h | ⟨W', hW, hH, ⟨v, hv, _⟩ | habr | hret⟩⟩ := h
+  · exact ⟨hc, .inl h⟩
+  · exact absurd hv (hok v)
+  · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
+  · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr hret)⟩⟩
+
+/-- What `Safe` says of an outcome that isn't out of clock holds with less
+clock and in a larger world. -/
+theorem outcome_mono {r : Result} {c c' : Nat} {W W' : World}
+    (h : (∃ v, r = .ok v ∧ V c W τ v) ∨ r.Abrupt ∨
+      (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V c W τr v))
+    (hc : c' ≤ c) (hW : W <+: W') :
+    (∃ v, r = .ok v ∧ V c' W' τ v) ∨ r.Abrupt ∨
+      (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V c' W' τr v) := by
+  rcases h with ⟨v, e, hv⟩ | h | ⟨v, e, τr, hR, hv⟩
+  · exact .inl ⟨v, e, hv.mono hc hW⟩
+  · exact .inr (.inl h)
+  · exact .inr (.inr ⟨v, e, τr, hR, hv.mono hc hW⟩)
 
 /-- Continuing a safe outcome with a safe continuation is safe. -/
 theorem Safe.bindC {K : Value → Nat → Heap → Ran} (h : Safe p k W τ₁ R)
@@ -290,19 +336,19 @@ theorem Safe.bindC {K : Value → Nat → Heap → Ran} (h : Safe p k W τ₁ R)
       Safe (K v p.2.1 p.2.2) p.2.1 W' τ R) : Safe (Inty.bindC p K) k W τ R := by
   obtain ⟨r, c, hp⟩ := p
   obtain ⟨hc, h⟩ := h
-  rcases h with h | ⟨W', hW, hH, ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, hv⟩⟩ <;> simp only at h <;> subst h
-  · exact ⟨hc, .inl rfl⟩
-  · exact (hK v W' rfl hW hH hv).weaken hc hW
-  · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl ⟨v, rfl⟩)⟩⟩
-  · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr ⟨v, rfl, hv⟩)⟩⟩
+  rcases h with h | ⟨W', hW, hH, ⟨v, h, hv⟩ | habr | ⟨v, h, hv⟩⟩
+  · simp only at h; subst h; exact ⟨hc, .inl rfl⟩
+  · simp only at h; subst h; exact (hK v W' rfl hW hH hv).weaken hc hW
+  · rw [habr.bindC]; exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
+  · simp only at h; subst h; exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr ⟨v, rfl, hv⟩)⟩⟩
 
 /-- A call's outcome is safe at its result type, in any function. -/
 theorem Lands.safe (h : Lands p j W (fun c W' h' => c < j → HeapOK c W' h')
     (fun c W' v => c < j → V c W' τ v)) : Safe p j W τ R := by
-  obtain ⟨hc, h | ⟨hlt, W', hW, hH, ⟨v, hr, hv⟩ | ⟨v, hr⟩⟩⟩ := h
+  obtain ⟨hc, h | ⟨hlt, W', hW, hH, ⟨v, hr, hv⟩ | habr⟩⟩ := h
   · exact ⟨hc, .inl h⟩
   · exact ⟨hc, .inr ⟨W', hW, hH hlt, .inl ⟨v, hr, hv hlt⟩⟩⟩
-  · exact ⟨hc, .inr ⟨W', hW, hH hlt, .inr (.inl ⟨v, hr⟩)⟩⟩
+  · exact ⟨hc, .inr ⟨W', hW, hH hlt, .inr (.inl habr)⟩⟩
 
 /-- A call's body, run with a tick less than the call was given, returns
 its function's result type, by `return` or as its value. -/
@@ -313,14 +359,16 @@ theorem Safe.catchReturn {W₁ : World} (h : Safe p i W₁ ρ (some ρ)) (hij : 
   obtain ⟨r, c, hp⟩ := p
   obtain ⟨hc, h⟩ := h
   simp only at hc
-  rcases h with h | ⟨W', hW', hH, ⟨v, h, hv⟩ | ⟨v, h⟩ | ⟨v, h, τr, hR, hv⟩⟩ <;>
-    simp only at h <;> subst h
-  · exact ⟨by simp only; omega, .inl rfl⟩
-  · exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
+  rcases h with h | ⟨W', hW', hH, ⟨v, h, hv⟩ | habr | ⟨v, h, τr, hR, hv⟩⟩
+  · simp only at h; subst h; exact ⟨by simp only; omega, .inl rfl⟩
+  · simp only at h; subst h
+    exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
       .inl ⟨v, rfl, fun _ => hv⟩⟩⟩
-  · exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
-      .inr ⟨v, rfl⟩⟩⟩
-  · cases hR
+  · simp only at habr
+    exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
+      .inr (by simp only [habr.catchReturn]; exact habr)⟩⟩
+  · simp only at h; subst h
+    cases hR
     exact ⟨by simp only; omega, .inr ⟨by simp only; omega, W', hW.trans hW', fun _ => hH,
       .inl ⟨v, rfl, fun _ => hv⟩⟩⟩
 
@@ -374,7 +422,7 @@ def SafeArgs (p : RanArgs) (k : Nat) (W : World) (τs : List Ty) (R : Option Ty)
   p.2.1 ≤ k ∧ match p.1 with
     | .ok vs => ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧ VList p.2.1 W' τs vs
     | .error r => r = .timeout ∨ ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧
-        ((∃ v, r = .thrown v) ∨ (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V p.2.1 W' τr v))
+        (r.Abrupt ∨ (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V p.2.1 W' τr v))
 
 /-- Continuing safe arguments with a safe continuation is safe. -/
 theorem Safe.bindArgs {p : RanArgs} {K : List Value → Nat → Heap → Ran}
@@ -390,9 +438,9 @@ theorem Safe.bindArgs {p : RanArgs} {K : List Value → Nat → Heap → Ran}
     exact (hK vs W' rfl hW hH hvs).weaken hc hW
   | error r =>
     simp only [Inty.bindArgs]
-    rcases h with rfl | ⟨W', hW, hH, ⟨v, rfl⟩ | ⟨v, rfl, hv⟩⟩
+    rcases h with rfl | ⟨W', hW, hH, habr | ⟨v, rfl, hv⟩⟩
     · exact ⟨hc, .inl rfl⟩
-    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl ⟨v, rfl⟩)⟩⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr ⟨v, rfl, hv⟩)⟩⟩
 
 /-- What the fundamental lemma says of one expression. -/
@@ -417,11 +465,12 @@ theorem runArgs_sound {C : List Pred} {Γ : Ctx} {R : Option Ty} (hC : Holds C) 
     obtain ⟨r, c₁, h₁⟩ := p
     obtain ⟨_, hr⟩ := ha
     simp only at hc₁
-    rcases hr with hr | ⟨W₁, hW₁, hH₁, ⟨v, hr, hv⟩ | ⟨v, hr⟩ | ⟨v, hr, hv⟩⟩ <;>
-      simp only at hr <;> subst hr
-    · simp only [runArgs, hp]
+    rcases hr with hr | ⟨W₁, hW₁, hH₁, ⟨v, hr, hv⟩ | habr | ⟨v, hr, hv⟩⟩
+    · simp only at hr; subst hr
+      simp only [runArgs, hp]
       exact ⟨hc₁, .inl rfl⟩
-    · have has := runArgs_sound hC as τs (fun a' ha' => ih a' (by simp [ha']))
+    · simp only at hr; subst hr
+      have has := runArgs_sound hC as τs (fun a' ha' => ih a' (by simp [ha']))
         (by simpa using hlen) (fun q hq => ht q (by simp [hq])) (G.mono hW₁ hG) hH₁
       have hc₂ := runArgs_clock_le c₁ env h₁ as
       rw [← Nat.min_eq_left hc₁] at has hc₂
@@ -440,9 +489,11 @@ theorem runArgs_sound {C : List Pred} {Γ : Ctx} {R : Option Ty} (hC : Holds C) 
         rcases hq with hq | ⟨W₂, hW₂, hH₂, hq⟩
         · exact ⟨by simp only; omega, .inl hq⟩
         · exact ⟨by simp only; omega, .inr ⟨W₂, hW₁.trans hW₂, hH₂, hq⟩⟩
-    · simp only [runArgs, hp]
-      exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, .inl ⟨v, rfl⟩⟩⟩
-    · simp only [runArgs, hp]
+    · simp only at habr
+      cases r <;> simp only [Result.Abrupt] at habr <;> simp only [runArgs, hp] <;>
+        exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, .inl trivial⟩⟩
+    · simp only at hr; subst hr
+      simp only [runArgs, hp]
       exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, .inr ⟨v, rfl, hv⟩⟩⟩
 
 /-! ## The fundamental lemma -/
@@ -498,13 +549,14 @@ theorem run_sound (e : Expr) : RunSound e := by
           rw [V_fn]
           intro i hi W' _ h' thisv args _ _ hargs
           obtain rfl : i = 0 := by omega
-          simp only [call, hargs.length]
+          simp only [call, hargs.length, Nat.le_refl, ↓reduceIte]
           exact ⟨Nat.le_refl 0, .inl rfl⟩
         | succ j ihj =>
           intro W hGW
           rw [V_fn]
           intro i hi W' hW' h' thisv args hh hthis hargs
-          simp only [call, hargs.length]
+          simp only [call, hargs.length, Nat.le_refl, ↓reduceIte,
+            List.take_of_length_le (Nat.le_of_eq hargs.length)]
           cases i with
           | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
           | succ i =>
@@ -607,12 +659,12 @@ theorem run_sound (e : Expr) : RunSound e := by
         have hs := hsafe τs hl hp
         rw [hrun] at hs
         obtain ⟨_, hs⟩ := hs
-        rcases hs with hs | ⟨W', hW', hH', ⟨v', hv', hvv⟩ | ⟨_, hv'⟩ | ⟨_, hv', _⟩⟩
+        rcases hs with hs | ⟨W', hW', hH', ⟨v', hv', hvv⟩ | hv' | ⟨_, hv', _⟩⟩
         · simp at hs
         · simp at hv'; subst hv'
           obtain rfl := hW'.eq_of_length (by rw [← hH'.1, hH.1])
           exact hvv
-        · simp at hv'
+        · simp [Result.Abrupt] at hv'
         · simp at hv'
   | assign i e ih =>
     intro k C Γ R W env h τ ht hC hG hH
@@ -669,7 +721,7 @@ theorem run_sound (e : Expr) : RunSound e := by
     | throw_ he =>
       simp only [run]
       exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ _ =>
-        ⟨Nat.le_refl _, .inr ⟨W₁, List.prefix_refl W₁, hH₁, .inr (.inl ⟨v, rfl⟩)⟩⟩
+        ⟨Nat.le_refl _, .inr ⟨W₁, List.prefix_refl W₁, hH₁, .inr (.inl trivial)⟩⟩
   | seq e₁ e₂ ih₁ ih₂ =>
     intro k C Γ R W env h τ ht hC hG hH
     cases ht with
@@ -679,6 +731,123 @@ theorem run_sound (e : Expr) : RunSound e := by
       have hc₁ := run_clock_le k env h e₁
       rw [Nat.min_eq_left hc₁]
       exact ih₂ h₂ hC (G.mono hW₁ hG) hH₁
+
+  | while_ c body ihc ihb =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | while_ hc hb =>
+      -- By induction on the clock: each iteration takes a tick.
+      induction k using Nat.strongRecOn generalizing W h with
+      | _ k ihk =>
+        rw [run_while]
+        refine Safe.bindC (ihc hc hC hG hH) fun v W₁ _ hW₁ hH₁ _ => ?_
+        have hc₁ := run_clock_le k env h c
+        rw [Nat.min_eq_left hc₁]
+        split
+        · have hsb := ihb hb hC (G.mono hW₁ hG) hH₁
+          have hc₂ := run_clock_le (run k env h c).2.1 env (run k env h c).2.2 body
+          generalize run (run k env h c).2.1 env (run k env h c).2.2 body = p at hsb hc₂ ⊢
+          obtain ⟨r, c₂, h₂⟩ := p
+          obtain ⟨-, hs⟩ := hsb
+          simp only at hc₂
+          -- The loop again, from where the body left it.
+          have again : ∀ W₂, W₁ <+: W₂ → HeapOK c₂ W₂ h₂ →
+              Safe (match min c₂ k with
+                | 0 => (.timeout, 0, h₂)
+                | c' + 1 => run c' env h₂ (.while_ c body))
+                (run k env h c).2.1 W₁ .undefined R := by
+            intro W₂ hW₂ hH₂
+            rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
+            cases c₂ with
+            | zero => exact ⟨Nat.zero_le _, .inl rfl⟩
+            | succ c' =>
+              exact (ihk c' (by omega) (G.mono (hW₁.trans hW₂) hG)
+                (hH₂.mono (by omega))).weaken (by omega) hW₂
+          rcases hs with hs | ⟨W₂, hW₂, hH₂, ⟨v', hv', _⟩ | habr | ⟨v', hv', hret⟩⟩
+          · simp only at hs; subst hs; exact ⟨hc₂, .inl rfl⟩
+          · simp only at hv'; subst hv'; exact again W₂ hW₂ hH₂
+          · simp only at habr
+            cases r <;> simp only [Result.Abrupt] at habr
+            · exact ⟨hc₂, .inr ⟨W₂, hW₂, hH₂, .inr (.inl trivial)⟩⟩
+            · exact Safe.ok hc₂ hW₂ hH₂ (by simp)
+            · exact again W₂ hW₂ hH₂
+          · simp only at hv'; subst hv'
+            exact ⟨hc₂, .inr ⟨W₂, hW₂, hH₂, .inr (.inr ⟨v', rfl, hret⟩)⟩⟩
+        · exact Safe.ok (Nat.le_refl _) (List.prefix_refl _) hH₁ (by simp)
+  | break_ =>
+    intro k C Γ R W env h τ _ _ _ hH
+    simp only [run]
+    exact ⟨Nat.le_refl _, .inr ⟨W, List.prefix_refl W, hH, .inr (.inl trivial)⟩⟩
+  | continue_ =>
+    intro k C Γ R W env h τ _ _ _ hH
+    simp only [run]
+    exact ⟨Nat.le_refl _, .inr ⟨W, List.prefix_refl W, hH, .inr (.inl trivial)⟩⟩
+  | tryCatch body handler ihb ihh =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | tryCatch hb hh =>
+      have hsb := ihb hb hC hG hH
+      have hc₁ := run_clock_le k env h body
+      simp only [run]
+      generalize run k env h body = p at hsb hc₁ ⊢
+      obtain ⟨r, c₁, h₁⟩ := p
+      obtain ⟨-, hs⟩ := hsb
+      simp only at hc₁
+      cases r
+      case thrown v =>
+        simp only
+        rcases hs with hs | ⟨W₁, hW₁, hH₁, _⟩
+        · cases hs
+        · -- The caught value, in a new cell of the opaque type.
+          have hW₂ : W₁ <+: W₁ ++ [.mono .unknown] := List.prefix_append _ _
+          have hcell : HeapOK c₁ (W₁ ++ [.mono .unknown]) (h₁ ++ [v]) :=
+            hH₁.alloc (by simp) (fun i s' v' hs' hv' => by
+              match i, hs', hv' with
+              | 0, hs', hv' =>
+                simp at hs' hv'; subst hs' hv'; exact SchemeV.mono_iff.mpr (by simp)
+              | _ + 1, hs', _ => simp at hs')
+          have hG₂ : G (W₁ ++ [.mono .unknown]) (.mono .unknown :: Γ) (h₁.length :: env) :=
+            ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
+          rw [Nat.min_eq_left hc₁]
+          exact (ihh hh hC hG₂ hcell).weaken hc₁ (hW₁.trans hW₂)
+      all_goals exact ⟨hc₁, hs⟩
+  | tryFinally body fin ihb ihf =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | tryFinally hb hf =>
+      have hsb := ihb hb hC hG hH
+      have hc₁ := run_clock_le k env h body
+      simp only [run]
+      generalize run k env h body = p at hsb hc₁ ⊢
+      obtain ⟨r, c₁, h₁⟩ := p
+      obtain ⟨-, hs⟩ := hsb
+      simp only at hc₁
+      rcases hs with hs | ⟨W₁, hW₁, hH₁, hs⟩
+      · simp only at hs; subst hs; exact ⟨hc₁, .inl rfl⟩
+      · have hne : r ≠ .timeout := by
+          rintro rfl
+          rcases hs with ⟨_, e, _⟩ | e | ⟨_, e, _⟩ <;> simp [Result.Abrupt] at e
+        have hsf := ihf hf hC (G.mono hW₁ hG) hH₁
+        have hc₂ := run_clock_le c₁ env h₁ fin
+        cases r
+        case timeout => exact absurd rfl hne
+        case stuck s =>
+          exfalso
+          rcases hs with ⟨_, e, _⟩ | e | ⟨_, e, _⟩ <;> simp [Result.Abrupt] at e
+        all_goals
+          simp only
+          rw [Nat.min_eq_left hc₁]
+          generalize run c₁ env h₁ fin = q at hsf hc₂ ⊢
+          obtain ⟨r', c₂, h₂⟩ := q
+          obtain ⟨-, hq⟩ := hsf
+          simp only at hc₂
+          cases r'
+          case ok v' =>
+            simp only
+            rcases hq with hq | ⟨W₂, hW₂, hH₂, _⟩
+            · cases hq
+            · exact ⟨by simp only; omega, .inr ⟨W₂, hW₁.trans hW₂, hH₂, outcome_mono hs hc₂ hW₂⟩⟩
+          all_goals exact (Safe.retype ⟨hc₂, hq⟩ (by simp)).weaken hc₁ hW₁
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/
