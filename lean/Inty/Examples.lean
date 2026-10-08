@@ -24,7 +24,7 @@ def double : Expr :=
   .let_ false (.func 1 (.binop .plus (.var 0) (.var 0))) (.app (.var 0) [str "ab"])
 
 -- One derivation types `double` monomorphically, at `String → String`.
-example : HasType [] [] none double .string :=
+example : HasType L [] [] none double .string :=
   .let_mono (τ₁ := .fn .undefined [.string] .string)
     (.func rfl (.binop (.plus (.inl .plusString)) (.var_mono rfl) (.var_mono rfl)))
     (.app (.var_mono rfl) rfl (by simp; exact .lit .string))
@@ -33,7 +33,7 @@ example : HasType [] [] none double .string :=
 
 /-- `+` is overloaded, but each use picks one instance: the same function body
 also types at `Number`. -/
-example : HasType [] [] none (.func 1 (.binop .plus (.var 0) (.var 0)))
+example : HasType L [] [] none (.func 1 (.binop .plus (.var 0) (.var 0)))
     (.fn .undefined [.number] .number) :=
   .func rfl (.binop (.plus (.inl .plusNumber)) (.var_mono rfl) (.var_mono rfl))
 
@@ -48,7 +48,7 @@ def polyId : Expr :=
 def idScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), []⟩
 
 -- `id` is used at `Number → Number` and at `String → String`.
-example : HasType [] [] none polyId .string :=
+example : HasType L [] [] none polyId .string :=
   .let_ idScheme [] (fun _ _ => .func rfl (.var_mono rfl)) (.inr ⟨.func, rfl⟩)
     (fun _ h => by simp [idScheme] at h)
     (.let_mono
@@ -71,12 +71,12 @@ def polyDouble : Expr :=
 def doubleScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), [⟨.plus, [.bound 1]⟩]⟩
 
 -- The body is typed assuming `Plus α`; each use establishes it.
-example : HasType [] [] none polyDouble .string :=
+example : HasType L [] [] none polyDouble .string :=
   .let_ doubleScheme []
     (fun m _ => .func rfl (.binop (.plus (.inr (by simp [Scheme.openPreds, Scheme.instPreds,
       doubleScheme, varBlock, PPred.inst, PTy.inst, List.range']))) (.var_mono rfl)
       (.var_mono rfl)))
-    (.inr ⟨.func, rfl⟩) (fun p hp => ⟨1, by decide, by simpa [doubleScheme] using hp⟩)
+    (.inr ⟨.func, rfl⟩) (fun p hp => ⟨1, by decide, .inl (by simpa [doubleScheme] using hp)⟩)
     (.let_mono
       (.app (.var (s := doubleScheme) (τs := [.undefined, .number]) rfl rfl (fun c hc => by
         simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
@@ -100,7 +100,7 @@ def countdown : Expr :=
     (str "done")))
     [num 3]
 
-example : HasType [] [] none countdown .string :=
+example : HasType L [] [] none countdown .string :=
   .app
     (.func (θ := .undefined) (τs := [.number]) (ρ := .string) rfl (.cond (.var_mono rfl)
       (.app (.var_mono rfl) rfl (by simp; exact .binop .minus (.var_mono rfl) (.lit .number)))
@@ -114,7 +114,7 @@ example : HasType [] [] none countdown .string :=
 /-- `1 + "a"`: inty rejects it, and the semantics gets stuck on it. -/
 def mixedPlus : Expr := .binop .plus (num 1) (str "a")
 
-example : ¬ HasType [] [] none mixedPlus τ := by
+example : ¬ HasType L [] [] none mixedPlus τ := by
   intro h
   cases h with
   | binop hop h₁ h₂ =>
@@ -125,7 +125,7 @@ example : ¬ HasType [] [] none mixedPlus τ := by
 
 /-- A test may have any type and is read by truthiness:
 `"" ? 1 : 2` is `2`. -/
-example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
+example : HasType L [] [] none (.cond (str "") (num 1) (num 2)) .number :=
   .cond (.lit .string) (.lit .number) (.lit .number)
 
 #guard match eval 10 [] [] (.cond (str "") (num 1) (num 2)) with
@@ -167,10 +167,11 @@ example : HasType [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 #guard inferProgram (.let_ false (.func 0 (.let_ false (.func 1 (.var 0)) (.binop .plus (.var 0) (.var 0))))
   (num 1)) == none
 -- At the top level, nothing resolves the constraint of an unused `+`. inty
--- leaves it in place and accepts the program, which has a type at every
--- instance; the typing here defaults it, to `Number`.
+-- leaves it on its type variable and accepts the program, and so does
+-- inference here: a constraint on a type variable can't fail
+-- (`HoldsOrVar`).
 #guard inferProgram (.func 1 (.binop .plus (.var 0) (.var 0))) ==
-  some (.fn (.var 0) [.number] .number)
+  some (.fn (.var 0) [.var 1] (.var 1))
 
 -- Each of these types is a valid typing, by `inferProgram_sound`. (A proof
 -- by `decide` would have the kernel run inference, which it can't do in
@@ -269,7 +270,7 @@ to `1`: an early `return` and a `throw`, each standing for any type. -/
 def early : Expr :=
   .app (.func 1 (.cond (.var 0) (.ret (str "pos")) (.throw_ (.var 0)))) [num 1]
 
-example : HasType [] [] none early .string :=
+example : HasType L [] [] none early .string :=
   .app (.func (θ := .undefined) (τs := [.number]) (ρ := .string) rfl
       (.cond (.var_mono rfl) (.ret (.lit .string)) (.throw_ (.var_mono rfl))))
     rfl (by simp; exact .lit .number)
@@ -283,7 +284,7 @@ example : HasType [] [] none early .string :=
   | _ => false
 
 /-- `return` outside a function is rejected. -/
-example : ¬ HasType [] [] none (.ret (num 1)) τ := nofun
+example : ¬ HasType L [] [] none (.ret (num 1)) τ := nofun
 
 /-! ## Builtins
 
@@ -294,7 +295,7 @@ With the builtins in scope, `Boolean` is variable 0 and `Math.abs` variable
 def absNeg : Expr := .app (.var 1) [.unop .neg (num 2)]
 
 #guard match eval 1 builtinEnv builtinHeap absNeg with | .ok (.number n) => n == 2 | _ => false
-#guard inferIn builtinCtx absNeg == some .number
+#guard inferIn [] builtinCtx absNeg == some .number
 
 -- So, by `inferIn_builtins_never_stuck`, it never gets stuck: `Math.abs` is
 -- in the relation because of what it does (`Prim.abs_sound`), with no
@@ -305,10 +306,10 @@ def truthiness : Expr :=
   .cond (.app (.var 0) [str ""]) (.app (.var 0) [num 0]) (.app (.var 0) [.var 1])
 
 #guard match eval 3 builtinEnv builtinHeap truthiness with | .ok (.boolean b) => b | _ => false
-#guard inferIn builtinCtx truthiness == some .boolean
+#guard inferIn [] builtinCtx truthiness == some .boolean
 
 -- `Math.abs("a")` is rejected, and would be stuck.
-#guard inferIn builtinCtx (.app (.var 1) [str "a"]) == none
+#guard inferIn [] builtinCtx (.app (.var 1) [str "a"]) == none
 #guard match eval 1 builtinEnv builtinHeap (.app (.var 1) [str "a"]) with
   | .stuck .typeMismatch => true | _ => false
 

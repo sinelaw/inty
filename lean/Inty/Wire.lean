@@ -14,6 +14,7 @@ JavaScript and for this model as an s-expression, one program per line:
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
+(obj (field s:x E) …)   an object literal     (get E s:x)   (set E s:x V)
 ```
 
 `inty-model` (`Main.lean`) answers each line with the model's verdicts, as
@@ -109,7 +110,38 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (b, rest) ← parseExpr rest
     let (f, rest) ← parseExpr rest
     some (.tryFinally b f, rest)
+  | "obj", rest => do
+    let (fs, rest) ← parseFields rest
+    some (.obj (fs.map Prod.fst) (fs.map Prod.snd), rest)
+  | "get", rest => do
+    let (e, rest) ← parseExpr rest
+    let (l, rest) ← parseLabel rest
+    some (.get e l, rest)
+  | "set", rest => do
+    let (e, rest) ← parseExpr rest
+    let (l, rest) ← parseLabel rest
+    let (v, rest) ← parseExpr rest
+    some (.set e l v, rest)
   | _, _ => none
+
+/-- A property label, written `s:` then the label. -/
+partial def parseLabel : List String → Option (String × List String)
+  | l :: rest => if l.startsWith "s:" then some ((l.drop 2).toString, rest) else none
+  | [] => none
+
+/-- An object literal's fields, `(field s:x E)` each, up to a closing `)`,
+which is left in place. -/
+partial def parseFields : List String → Option (List (String × Expr) × List String)
+  | ")" :: rest => some ([], ")" :: rest)
+  | "(" :: "field" :: ts => do
+    let (l, rest) ← parseLabel ts
+    let (e, rest) ← parseExpr rest
+    match rest with
+    | ")" :: rest => do
+      let (fs, rest) ← parseFields rest
+      some ((l, e) :: fs, rest)
+    | _ => none
+  | _ => none
 
 /-- Parse expressions up to a closing `)`, which is left in place. -/
 partial def parseMany : List String → Option (List Expr × List String)
@@ -133,21 +165,21 @@ def tyWire : Ty → String
   | .undefined => "undefined"
   | .null => "null"
   | .fn .. => "fun"
+  | .record .. => "obj"
   -- inty's type for what a `catch` binds is a rigid type variable.
   | .unknown | .var _ => "var"
+  | _ => "other"
 
 /-- Inference's verdict: `type T`, or `reject`, which includes a constraint
-no type could satisfy (`Plus` on `undefined`, or on a function) and a
-program failing the scope checks (an assignment to a `const`, a `break`
-outside a loop). A constraint left on a type variable is
-satisfiable, and inty leaves it in place; `T` keeps the variable, as inty's
-type does. -/
+no type could satisfy (`Plus` on `undefined`, or on a function; a property
+an object doesn't have) and a program failing the scope checks (an
+assignment to a `const`, a `break` outside a loop). A constraint left on a
+type variable is harmless, and inty leaves it in place; `T` keeps the
+variable, as inty's type does. -/
 def inferVerdict (e : Expr) : String :=
-  if !e.scoped [] then "reject" else
-  match infer [] none e 0 with
+  match inferProgram e with
   | none => "reject"
-  | some o =>
-    if o.preds.all Pred.satisfiable then s!"type {tyWire o.τ}" else "reject"
+  | some τ => s!"type {tyWire τ}"
 
 def valueWire : Value → String
   | .number n => s!"num {n.toBits}"
@@ -156,12 +188,15 @@ def valueWire : Value → String
   | .undefined => "undef"
   | .null => "null"
   | .closure .. | .prim _ => "fun"
+  | .obj _ => "obj"
 
 def stuckWire : Stuck → String
   | .undefinedVariable => "undefinedVariable"
   | .notCallable => "notCallable"
   | .typeMismatch => "typeMismatch"
   | .arityMismatch => "arityMismatch"
+  | .notIndexable => "notIndexable"
+  | .propertyNotFound => "propertyNotFound"
 
 /-- The interpreter's verdict: `value V`, `stuck R`, or `timeout`. -/
 def evalVerdict (clock : Nat) (e : Expr) : String :=
@@ -207,5 +242,20 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100 "(break)" == "reject;stuck break"
 #guard verdict 100 "(letmut (num 2 0) (seq (while (var 0) (assign 0 (minus (var 0) (num 1 0)))) (var 0)))"
   == s!"type number;value num {(0 : Float).toBits}"
+#guard verdict 100 "(get (obj (field s:x (num 1 0)) (field s:y (str s:a))) s:y)" ==
+  "type string;value str s:a"
+#guard verdict 100 "(get (obj (field s:x (num 1 0))) s:y)" == "reject;stuck propertyNotFound"
+#guard verdict 100 "(let (obj (field s:x (num 1 0))) (seq (set (var 0) s:x (num 2 0)) (get (var 0) s:x)))"
+  == s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100 "(let (obj (field s:x (num 1 0))) (set (var 0) s:x (str s:a)))" ==
+  "reject;value str s:a"
+-- A function reading a property works on any object with it.
+#guard verdict 100
+  "(let (func 1 (get (var 0) s:x)) (plus (app (var 0) (obj (field s:x (num 1 0)))) (app (var 0) (obj (field s:x (num 2 0)) (field s:y (null))))))"
+  == s!"type number;value num {(3 : Float).toBits}"
+#guard verdict 100 "(get (num 1 0) s:x)" == "reject;stuck notIndexable"
+-- A later field overrides an earlier one, as in JavaScript.
+#guard verdict 100 "(get (obj (field s:x (num 1 0)) (field s:x (str s:a))) s:x)" ==
+  "type string;value str s:a"
 
 end Inty.Wire

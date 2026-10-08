@@ -36,15 +36,6 @@ relation.
 
 namespace Inty
 
-/-- Every constraint in `C` is an instance. -/
-def Holds (C : List Pred) : Prop := ∀ p ∈ C, Inst p
-
-theorem Holds.append {C D : List Pred} (hC : Holds C) (hD : Holds D) : Holds (C ++ D) :=
-  fun c hc => (List.mem_append.mp hc).elim (hC c) (hD c)
-
-theorem Entails.holds {C : List Pred} (hC : Holds C) (h : Entails C p) : Inst p :=
-  h.elim id (hC p)
-
 /-- A world: the scheme of each cell allocated so far. -/
 abbrev World := List Scheme
 
@@ -90,7 +81,11 @@ mutual
 `W`. A base type has its values, and `unknown` (what a `catch` binds) has
 every value. A type variable has none: a closed program can't make a value
 of a type it knows nothing about. A function type is what
-calling the function does (see the module docs). -/
+calling the function does (see the module docs). A record is an object
+with a cell for each field present, which the world gives the field's
+type: the record's fields are the cells' contents, so a record's clause
+needs nothing of `V` itself. A slot, a presence, or a constructor applied
+to the wrong number of types has no values. -/
 def V (k : Nat) (W : World) : Ty → Value → Prop
   | .number, v => ∃ n, v = .number n
   | .string, v => ∃ s, v = .string s
@@ -98,15 +93,18 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .undefined, v => v = .undefined
   | .null, v => v = .null
   | .unknown, _ => True
-  | .var _, _ => False
   | .fn θ τs ρ, f => ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
       (∀ i, i < j → HeapInv (fun s v => ∀ τs', τs'.length = s.arity →
-        Holds (s.instPreds τs') → V i W' (s.inst τs') v) W' h) →
+        HoldsOrVar (s.instPreds τs') → V i W' (s.inst τs') v) W' h) →
       V j W' θ thisv → VList j W' τs args →
       Lands (call j h f thisv args) j W'
         (fun c W'' h'' => c < j → HeapInv (fun s v => ∀ τs', τs'.length = s.arity →
-          Holds (s.instPreds τs') → V c W'' (s.inst τs') v) W'' h'')
+          HoldsOrVar (s.instPreds τs') → V c W'' (s.inst τs') v) W'' h'')
         (fun c W'' v => c < j → V c W'' ρ v)
+  | .record ls slots, v => ∃ fs, v = .obj fs ∧ ∀ l σ,
+      Ty.field l ls slots = some (.slot .pre σ) →
+      ∃ ℓ, fs.lookup l = some ℓ ∧ W[ℓ]? = some (.mono σ)
+  | _, _ => False
 termination_by τ => (k, sizeOf τ)
 decreasing_by
   all_goals first
@@ -126,7 +124,7 @@ end
 
 /-- A value has every instance of the scheme whose constraints hold. -/
 def SchemeV (k : Nat) (W : World) (s : Scheme) (v : Value) : Prop :=
-  ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → V k W (s.inst τs) v
+  ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → V k W (s.inst τs) v
 
 /-- The heap is described by the world, at index `k`. -/
 def HeapOK (k : Nat) (W : World) (h : Heap) : Prop := HeapInv (SchemeV k W) W h
@@ -139,13 +137,26 @@ theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
         (fun c W'' v => c < j → V c W'' ρ v) := by
   rw [V]; rfl
 
-@[simp] theorem V_number : V k W .number v ↔ ∃ n, v = .number n := by rw [V]
-@[simp] theorem V_string : V k W .string v ↔ ∃ s, v = .string s := by rw [V]
-@[simp] theorem V_boolean : V k W .boolean v ↔ ∃ b, v = .boolean b := by rw [V]
-@[simp] theorem V_undefined : V k W .undefined v ↔ v = .undefined := by rw [V]
-@[simp] theorem V_null : V k W .null v ↔ v = .null := by rw [V]
-@[simp] theorem V_unknown : V k W .unknown v ↔ True := by rw [V]
-@[simp] theorem V_var : V k W (.var a) v ↔ False := by rw [V]
+@[simp] theorem V_number : V k W .number v ↔ ∃ n, v = .number n := by rw [V.eq_def]
+@[simp] theorem V_string : V k W .string v ↔ ∃ s, v = .string s := by rw [V.eq_def]
+@[simp] theorem V_boolean : V k W .boolean v ↔ ∃ b, v = .boolean b := by rw [V.eq_def]
+@[simp] theorem V_undefined : V k W .undefined v ↔ v = .undefined := by rw [V.eq_def]
+@[simp] theorem V_null : V k W .null v ↔ v = .null := by rw [V.eq_def]
+@[simp] theorem V_unknown : V k W .unknown v ↔ True := by rw [V.eq_def]
+@[simp] theorem V_var : V k W (.var a) v ↔ False := by rw [V.eq_def]
+
+theorem V_record : V k W (.record ls slots) v ↔ ∃ fs, v = .obj fs ∧ ∀ l σ,
+      Ty.field l ls slots = some (.slot .pre σ) →
+      ∃ ℓ, fs.lookup l = some ℓ ∧ W[ℓ]? = some (.mono σ) := by
+  rw [V.eq_def]
+
+/-- Apart from functions and records, a type's values don't depend on the
+index or the world. -/
+theorem V.base {k k' : Nat} {W W' : World} {τ : Ty} {v : Value}
+    (hfn : ∀ θ τs ρ, τ ≠ .fn θ τs ρ) (hrec : ∀ ls slots, τ ≠ .record ls slots) :
+    V k W τ v ↔ V k' W' τ v := by
+  rw [V.eq_def, V.eq_def]
+  split <;> simp_all
 
 @[simp] theorem VList_nil : VList k W [] [] := by rw [VList]; trivial
 @[simp] theorem VList_cons : VList k W (τ :: τs) (v :: vs) ↔ V k W τ v ∧ VList k W τs vs := by
@@ -153,15 +164,28 @@ theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
 @[simp] theorem VList_nil_cons : ¬ VList k W [] (v :: vs) := by simp [VList]
 @[simp] theorem VList_cons_nil : ¬ VList k W (τ :: τs) [] := by simp [VList]
 
+theorem prefix_getElem? {W W' : World} (hW : W <+: W') {ℓ : Nat} {s : Scheme}
+    (hs : W[ℓ]? = some s) : W'[ℓ]? = some s := by
+  obtain ⟨t, rfl⟩ := hW
+  rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hs).1, hs]
+
 /-- A value good for `k` calls in `W` is good for fewer, in a larger world. -/
-theorem V.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
-    ∀ {τ : Ty} {v : Value}, V k W τ v → V j W' τ v
-  | .fn _ _ _, _, hv => by
+theorem V.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {τ : Ty} {v : Value}
+    (hv : V k W τ v) : V j W' τ v := by
+  by_cases hfn : ∃ θ τs ρ, τ = .fn θ τs ρ
+  · obtain ⟨θ, τs, ρ, rfl⟩ := hfn
     rw [V_fn] at hv ⊢
     intro i hi W'' hW'' h thisv args hh ht ha
     exact hv i (Nat.le_trans hi hjk) W'' (hW.trans hW'') h thisv args hh ht ha
-  | .number, _, hv | .string, _, hv | .boolean, _, hv | .undefined, _, hv | .null, _, hv
-  | .unknown, _, hv | .var _, _, hv => by rw [V] at hv ⊢; exact hv
+  · by_cases hrec : ∃ ls slots, τ = .record ls slots
+    · obtain ⟨ls, slots, rfl⟩ := hrec
+      rw [V_record] at hv ⊢
+      obtain ⟨fs, rfl, hf⟩ := hv
+      exact ⟨fs, rfl, fun l σ hl => by
+        obtain ⟨ℓ, h₁, h₂⟩ := hf l σ hl
+        exact ⟨ℓ, h₁, prefix_getElem? hW h₂⟩⟩
+    · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
+        (fun ls slots e => hrec ⟨ls, slots, e⟩)).mp hv
 
 theorem VList.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
     ∀ {τs : List Ty} {vs : List Value}, VList k W τs vs → VList j W' τs vs
@@ -182,18 +206,13 @@ theorem SchemeV.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W')
 
 theorem SchemeV.mono_iff {k : Nat} {τ : Ty} {v : Value} :
     SchemeV k W (.mono τ) v ↔ V k W τ v :=
-  ⟨fun h => by simpa using h [] rfl (by simp [Holds, Scheme.instPreds, Scheme.mono]),
+  ⟨fun h => by simpa using h [] rfl (by simp [HoldsOrVar, Scheme.instPreds, Scheme.mono]),
     fun h τs _ _ => by simpa using h⟩
 
 /-- A scheme with no quantified variables has one instance. -/
 theorem SchemeV.of_arity_zero {k : Nat} {s : Scheme} (ha : s.arity = 0)
     (h : V k W (s.inst []) v) : SchemeV k W s v := fun τs hl _ => by
   rw [ha] at hl; rw [List.eq_nil_of_length_eq_zero hl]; exact h
-
-theorem prefix_getElem? {W W' : World} (hW : W <+: W') {ℓ : Nat} {s : Scheme}
-    (hs : W[ℓ]? = some s) : W'[ℓ]? = some s := by
-  obtain ⟨t, rfl⟩ := hW
-  rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hs).1, hs]
 
 theorem HeapOK.mono {j k : Nat} {W : World} {h : Heap} (hjk : j ≤ k) (hH : HeapOK k W h) :
     HeapOK j W h :=
@@ -384,25 +403,27 @@ theorem UnOp.eval_sound {W' : World} (hop : UnOpTy op τ₁ τ) (hv : V c W' τ�
   | typeof => exact Safe.ok hc hW hH (by simp)
   | neg => simp at hv; obtain ⟨n, rfl⟩ := hv; exact Safe.ok hc hW hH (by simp)
 
-theorem BinOp.eval_sound {W' : World} (hC : Holds C) (hop : BinOpTy C op τ₁ τ₂ τ)
+theorem BinOp.eval_sound {W' : World} (hC : HoldsOrVar C) (hop : BinOpTy C op τ₁ τ₂ τ)
     (hv₁ : V c W' τ₁ v₁) (hv₂ : V c W' τ₂ v₂) (hc : c ≤ k) (hW : W <+: W')
     (hH : HeapOK c W' h) : Safe (op.eval v₁ v₂, c, h) k W τ R := by
   cases hop with
   | plus hp =>
-    cases hp.holds hC with
-    | plusNumber =>
-      simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
-      exact Safe.ok hc hW hH (by simp)
-    | plusString =>
-      simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
-      exact Safe.ok hc hW hH (by simp)
+    rcases hp.holdsOrVar hC with hi | ⟨a, _, he⟩
+    · cases hi with
+      | plusNumber =>
+        simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
+        exact Safe.ok hc hW hH (by simp)
+      | plusString =>
+        simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
+        exact Safe.ok hc hW hH (by simp)
+    · simp only [List.cons.injEq] at he; rw [he.1] at hv₁; simp at hv₁
   | minus =>
     simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
     exact Safe.ok hc hW hH (by simp)
 
 /-- Running a syntactic value gives a value, and takes no clock and no
 cell. -/
-theorem IsValue.run_value (hv : e.IsValue) (ht : HasType C Γ R e τ) (hG : G W Γ env)
+theorem IsValue.run_value (hv : e.IsValue) (ht : HasType L C Γ R e τ) (hG : G W Γ env)
     (hH : HeapOK k W h) : ∃ v, run k env h e = (.ok v, k, h) := by
   cases hv with
   | lit => rename_i l; exact ⟨l.eval, by simp [run]⟩
@@ -413,6 +434,117 @@ theorem IsValue.run_value (hv : e.IsValue) (ht : HasType C Γ R e τ) (hG : G W 
       obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
       obtain ⟨v, hv, _⟩ := hH.2 ℓ _ hs
       exact ⟨v, by simp [run, hℓ, hv]⟩
+
+/-! ## Objects -/
+
+/-- The cell the object `ls.zip locs` has for a field its record type
+`Ty.field l ls τs` has. -/
+theorem field_lookup {l : String} {σ : Ty} : ∀ {ls : List String} {τs : List Ty} {locs : List Nat},
+    locs.length = τs.length → Ty.field l ls τs = some σ →
+    ∃ ℓ, (ls.zip locs).lookup l = some ℓ ∧ (ℓ, σ) ∈ locs.zip τs
+  | [], _, _, _, h => by simp [Ty.field] at h
+  | _ :: _, [], _, _, h => by simp [Ty.field] at h
+  | _ :: _, _ :: _, [], hlen, _ => by simp at hlen
+  | l' :: ls, τ :: τs, ℓ :: locs, hlen, h => by
+    simp only [Ty.field] at h
+    simp only [List.zip_cons_cons, List.lookup_cons]
+    by_cases e : l' = l
+    · subst e; simp only [ite_true, Option.some.injEq] at h; subst h
+      exact ⟨ℓ, by simp, by simp⟩
+    · simp only [e, ite_false] at h
+      have hne : (l == l') = false := by simpa using Ne.symm e
+      obtain ⟨ℓ', h₁, h₂⟩ := field_lookup (locs := locs) (by simpa using hlen) h
+      exact ⟨ℓ', by simp [hne, h₁], List.mem_cons_of_mem _ h₂⟩
+
+theorem mem_zip_range' {ℓ : Nat} {σ : Ty} : ∀ {base : Nat} {τs : List Ty},
+    (ℓ, σ) ∈ (List.range' base τs.length).zip τs → ∃ i, ℓ = base + i ∧ τs[i]? = some σ
+  | _, [], h => by simp at h
+  | base, τ :: τs, h => by
+    simp only [List.length_cons, List.range'_succ, List.zip_cons_cons, List.mem_cons,
+      Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl⟩ | h
+    · exact ⟨0, by simp, by simp⟩
+    · obtain ⟨i, rfl, hi⟩ := mem_zip_range' h
+      exact ⟨i + 1, by omega, by simpa using hi⟩
+
+/-- A field an object literal's type has present is the last of its
+occurrences in the literal. -/
+theorem objSlots_field {l : String} {σ : Ty} {ls : List String} {τs : List Ty} :
+    ∀ {L : List String} {absent : List Ty},
+      Ty.field l L (objSlots L ls τs absent) = some (.slot .pre σ) →
+      Ty.field l ls.reverse τs.reverse = some σ
+  | [], _, h => by simp [Ty.field] at h
+  | _ :: _, [], h => by simp [objSlots, Ty.field] at h
+  | l' :: L, a :: absent, h => by
+    simp only [objSlots, List.zip_cons_cons, List.map_cons, Ty.field] at h
+    by_cases e : l' = l
+    · subst e
+      simp only [ite_true, Option.some.injEq] at h
+      revert h
+      cases Ty.field l' ls.reverse τs.reverse <;> simp
+    · simp only [e, ite_false] at h
+      exact objSlots_field (L := L) (absent := absent) h
+
+/-- The value of an object literal, whose fields are new cells of their
+types, has the literal's record type. -/
+theorem objAt_sound {k : Nat} {W : World} {L ls : List String} {τs absent : List Ty}
+    (hlen : τs.length = ls.length) :
+    V k (W ++ τs.map .mono) (.record L (objSlots L ls τs absent)) (objAt ls W.length τs.length) := by
+  rw [V_record]
+  refine ⟨_, rfl, fun l σ hl => ?_⟩
+  have hf := objSlots_field hl
+  have hzip : (ls.zip (List.range' W.length τs.length)).reverse =
+      ls.reverse.zip (List.range' W.length τs.length).reverse := by
+    simp only [List.zip_eq_zipWith]
+    exact List.reverse_zipWith (by simp [hlen])
+  obtain ⟨ℓ, h₁, h₂⟩ := field_lookup (locs := (List.range' W.length τs.length).reverse)
+    (by simp) hf
+  refine ⟨ℓ, by rw [hzip]; exact h₁, ?_⟩
+  have h₂' : (ℓ, σ) ∈ (List.range' W.length τs.length).zip τs := by
+    have : (List.range' W.length τs.length).reverse.zip τs.reverse =
+        ((List.range' W.length τs.length).zip τs).reverse := by
+      simp only [List.zip_eq_zipWith]
+      exact (List.reverse_zipWith (by simp)).symm
+    rw [this, List.mem_reverse] at h₂
+    exact h₂
+  obtain ⟨i, rfl, hi⟩ := mem_zip_range' h₂'
+  rw [List.getElem?_append_right (by omega)]
+  simp [hi]
+
+/-- Reading a field: an instance of `HasProp` says the object has the cell,
+and a type variable has no values. -/
+theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c : Nat}
+    {W : World} {h : Heap} {R : Option Ty}
+    (hp : Entails C ⟨.hasProp l, [τ, σ]⟩) (hC : HoldsOrVar C) (hv : V c W τ v)
+    (hH : HeapOK c W h) : Safe (v.getProp h l, c, h) c W σ R := by
+  rcases hp.holdsOrVar hC with hi | ⟨a, _, he⟩
+  · cases hi with
+    | hasProp hf =>
+      rw [V_record] at hv
+      obtain ⟨fs, rfl, hfs⟩ := hv
+      obtain ⟨ℓ, h₁, h₂⟩ := hfs l σ hf
+      obtain ⟨v', hv', hsv⟩ := hH.2 ℓ _ h₂
+      simp only [Value.getProp, h₁, hv']
+      exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (SchemeV.mono_iff.mp hsv)
+  · simp only [List.cons.injEq] at he; rw [he.1] at hv; simp at hv
+
+/-- Writing a field: the cell has the field's type. -/
+theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} {c : Nat}
+    {W : World} {h : Heap} {R : Option Ty}
+    (hp : Entails C ⟨.hasProp l, [τ, σ]⟩) (hC : HoldsOrVar C) (hvo : V c W τ vo)
+    (hvv : V c W σ vv) (hH : HeapOK c W h) :
+    Safe ((vo.setProp h l vv).1, c, (vo.setProp h l vv).2) c W σ R := by
+  rcases hp.holdsOrVar hC with hi | ⟨a, _, he⟩
+  · cases hi with
+    | hasProp hf =>
+      rw [V_record] at hvo
+      obtain ⟨fs, rfl, hfs⟩ := hvo
+      obtain ⟨ℓ, h₁, h₂⟩ := hfs l σ hf
+      have hlt : ℓ < h.length := by rw [hH.1]; exact (List.getElem?_eq_some_iff.mp h₂).1
+      simp only [Value.setProp, h₁, hlt, ite_true]
+      exact Safe.ok (Nat.le_refl c) (List.prefix_refl W)
+        (hH.set h₂ (SchemeV.mono_iff.mpr hvv)) hvv
+  · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
 
 /-! ## Arguments -/
 
@@ -444,15 +576,16 @@ theorem Safe.bindArgs {p : RanArgs} {K : List Value → Nat → Heap → Ran}
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr ⟨v, rfl, hv⟩)⟩⟩
 
 /-- What the fundamental lemma says of one expression. -/
-def RunSound (e : Expr) : Prop :=
-  ∀ {k C Γ R W env h τ}, HasType C Γ R e τ → Holds C → G W Γ env → HeapOK k W h →
+def RunSound (L : List String) (e : Expr) : Prop :=
+  ∀ {k C Γ R W env h τ}, HasType L C Γ R e τ → HoldsOrVar C → G W Γ env → HeapOK k W h →
     Safe (run k env h e) k W τ R
 
 /-- Well-typed arguments, each safe by the fundamental lemma, run safely. -/
-theorem runArgs_sound {C : List Pred} {Γ : Ctx} {R : Option Ty} (hC : Holds C) :
+theorem runArgs_sound {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
+    (hC : HoldsOrVar C) :
     ∀ (args : List Expr) (τs : List Ty) {k : Nat} {W : World} {env : Env} {h : Heap},
-      (∀ a ∈ args, RunSound a) →
-      args.length = τs.length → (∀ p ∈ args.zip τs, HasType C Γ R p.1 p.2) → G W Γ env →
+      (∀ a ∈ args, RunSound L a) →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → G W Γ env →
       HeapOK k W h → SafeArgs (runArgs k env h args) k W τs R
   | [], [], k, W, env, h, _, _, _, _, hH => by
     simp only [runArgs, SafeArgs]; exact ⟨Nat.le_refl k, W, List.prefix_refl W, hH, by simp⟩
@@ -516,7 +649,7 @@ theorem G.call {W : World} {Γ : Ctx} {env : Env} {h : Heap} {θ ρ : Ty} {τs :
   rw [hlen, List.getElem?_append_right (by omega)]
   simp
 
-theorem run_sound (e : Expr) : RunSound e := by
+theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
   induction e using Expr.ind with
   | lit l =>
     intro k C Γ R W env h τ ht hC hG hH
@@ -531,7 +664,7 @@ theorem run_sound (e : Expr) : RunSound e := by
       obtain ⟨v, hv, hsv⟩ := hH.2 ℓ _ hs
       simp only [run, hℓ, hv]
       exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH
-        (hsv _ hlen (fun c h => (hc c h).holds hC))
+        (hsv _ hlen (fun c h => (hc c h).holdsOrVar hC))
   | func n body ih =>
     intro k C Γ R W env h τ ht hC hG hH
     cases ht with
@@ -598,16 +731,16 @@ theorem run_sound (e : Expr) : RunSound e := by
   | let_ mb e₁ e₂ ih₁ ih₂ =>
     intro k C Γ R W env h τ ht hC hG hH
     cases ht with
-    | let_ s L hgen hval _ h₂ =>
+    | let_ s F hgen hval _ h₂ =>
       -- Type `e₁` at each instance of `s`: open `s` at variables above
       -- everything in sight, then substitute the instance's types for them.
-      let m := maxPlusOne (L ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Pred.ftv ++
+      let m := maxPlusOne (F ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Pred.ftv ++
         (R.map Ty.ftv).getD [])
-      have hm : ∀ a, a ∈ L ∨ a ∈ ctxFtv Γ ∨ a ∈ s.ftv ∨ a ∈ C.flatMap Pred.ftv ∨
+      have hm : ∀ a, a ∈ F ∨ a ∈ ctxFtv Γ ∨ a ∈ s.ftv ∨ a ∈ C.flatMap Pred.ftv ∨
           a ∈ (R.map Ty.ftv).getD [] → a < m :=
         fun a ha => lt_maxPlusOne a (by rcases ha with h | h | h | h | h <;> simp [h])
       have hinst : ∀ τs, τs.length = s.arity →
-          HasType (C ++ s.instPreds τs) Γ R e₁ (s.inst τs) := by
+          HasType L (C ++ s.instPreds τs) Γ R e₁ (s.inst τs) := by
         intro τs hlen
         have h := (hgen m (fun a ha => hm a (.inl ha))).subst (Subst.block m τs)
         have hfresh : ∀ a, a < m → (Subst.block m τs).find a = none := fun a ha =>
@@ -627,7 +760,7 @@ theorem run_sound (e : Expr) : RunSound e := by
           Scheme.openPreds_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen,
           ctx_subst_id (fun a ha => hfresh a (hm a (.inr (.inl ha)))),
           Scheme.open_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen] at h
-      have hsafe : ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) →
+      have hsafe : ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) →
           Safe (run k env h e₁) k W (s.inst τs) R := fun τs hlen hp =>
         ih₁ (hinst τs hlen) (hC.append hp) hG hH
       -- What follows the initialiser: its value in a new cell.
@@ -648,7 +781,7 @@ theorem run_sound (e : Expr) : RunSound e := by
       simp only [run]
       rcases hval with ⟨ha, hp⟩ | ⟨hv, _⟩
       · -- One instance: no quantified variables, no constraints.
-        refine Safe.bindC (hsafe [] (by simp [ha]) (by simp [Holds, Scheme.instPreds, hp]))
+        refine Safe.bindC (hsafe [] (by simp [ha]) (by simp [HoldsOrVar, Scheme.instPreds, hp]))
           fun v W₁ _ hW₁ hH₁ hv => ?_
         exact hK v _ _ W₁ (run_clock_le k env h e₁) hW₁ hH₁ (SchemeV.of_arity_zero ha hv)
       · -- A syntactic value: it allocates nothing, so each instance's world
@@ -849,17 +982,48 @@ theorem run_sound (e : Expr) : RunSound e := by
             · exact ⟨by simp only; omega, .inr ⟨W₂, hW₁.trans hW₂, hH₂, outcome_mono hs hc₂ hW₂⟩⟩
           all_goals exact (Safe.retype ⟨hc₂, hq⟩ (by simp)).weaken hc₁ hW₁
 
+  | obj ls es ih =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | obj hτs habs hL hes hargs =>
+      simp only [run]
+      refine Safe.bindArgs (runArgs_sound hC es _ ih (by omega) hargs hG hH)
+        fun vs W₁ _ hW₁ hH₁ hvs => ?_
+      have hlen := hvs.length
+      have hb : (runArgs k env h es).2.2.length = W₁.length := hH₁.1
+      rw [hb, hlen]
+      exact Safe.ok (Nat.le_refl _) (List.prefix_append W₁ _)
+        (hH₁.allocList (hvs.mono (Nat.le_refl _) (List.prefix_append _ _)))
+        (objAt_sound hτs)
+  | get e l ih =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | get he hp =>
+      simp only [run]
+      exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv => getProp_sound hp hC hv hH₁
+  | set e l v ihe ihv =>
+    intro k C Γ R W env h τ ht hC hG hH
+    cases ht with
+    | set he hp hv =>
+      simp only [run]
+      refine Safe.bindC (ihe he hC hG hH) fun vo W₁ _ hW₁ hH₁ hvo => ?_
+      have hc₁ := run_clock_le k env h e
+      rw [Nat.min_eq_left hc₁]
+      refine Safe.bindC (ihv hv hC (G.mono hW₁ hG) hH₁) fun vv W₂ _ hW₂ hH₂ hvv => ?_
+      exact setProp_sound hp hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvv hH₂
+
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/
-theorem eval_sound (clock : Nat) (ht : HasType C Γ R e τ) (hC : Holds C)
+theorem eval_sound (clock : Nat) (ht : HasType L C Γ R e τ) (hC : HoldsOrVar C)
     (hG : G W Γ env) (hH : HeapOK clock W h) : Safe (run clock env h e) clock W τ R :=
-  run_sound e ht hC hG hH
+  run_sound L e ht hC hG hH
 
-/-- A closed program, well typed with no assumptions and outside any
-function, never gets stuck, whatever the clock. -/
-theorem never_stuck (ht : HasType [] [] none e τ) (clock : Nat) (s : Stuck) :
-    eval clock [] [] e ≠ .stuck s :=
-  Safe.not_stuck (run_sound e ht (W := []) (fun _ h => by cases h) (by simp [G])
+/-- A closed program, well typed outside any function, assuming constraints
+each an instance or on a type variable, never gets stuck, whatever the
+clock. -/
+theorem never_stuck (ht : HasType L C [] none e τ) (hC : HoldsOrVar C) (clock : Nat)
+    (s : Stuck) : eval clock [] [] e ≠ .stuck s :=
+  Safe.not_stuck (run_sound L e ht (W := []) hC (by simp [G])
     ⟨rfl, fun _ _ h => by simp at h⟩)
 
 end Inty

@@ -156,93 +156,91 @@ check that they are in a loop. Still to do:
   the executable interpreter. Iris remains the option for the day the
   store needs invariants richer than a type per location.
 
-### 3. Records and rows
+### 3. Generic types, records and rows
 
-- Object literals, property read and write, and spread.
-- Row types, and the `HasProp` constraint with its improvement rule: the
-  receiver determines the property's type.
-- Methods with `this`.
-- Garrigue's ML structural polymorphism (record constraints in a kinding
-  environment, inference proved sound and principal) fits inty's
-  `a has {name: b}` better than Rémy rows.
+The end goal is all of inty's types, so the representation is chosen for
+the end now, and the phases after this one add type formers without
+touching the generic proofs.
 
-### 4. Containers
+- **One representation for every type former.** `Ty` is a variable or a
+  constructor applied to types (`app c args`): `Number`, functions,
+  records, presences, and later `Int`, arrays, `Map`, `Promise`, tuples,
+  literal types and named types are constructors (`Con`). Substitution,
+  free variables, unification and their lemmas are written once.
+- **Rows are Rémy's flat rows over the program's labels.** A record type
+  has a slot for each label of the program (`L`, a parameter of the typing
+  rules and of inference): a presence (`pre`, `abs`, or a variable) and a
+  type. An open row (`{x: T | r}` in inty) is a record whose other slots
+  are variables; a closed one has them `abs`. Within the program's labels
+  this is equivalent to Rémy's row system with presence, which inty
+  implements with tails (`types::RowType`), and it keeps unification
+  plain Robinson unification, with no type equality up to permutation.
+- **Classes with functional dependencies, once.** `HasProp p τ σ` (a read
+  or write of `o.p` on a receiver of unknown type, inty's `a has {p: b}`)
+  and `Indexable c i e` (`xs[i]`) are both classes some of whose
+  arguments determine the rest: the receiver its field, the container its
+  index and element. Resolution on a known type (when a binding
+  generalises, and at the end) and the closure of the variables the
+  environment fixes (`env_fixed_vars`) are written once for any such
+  class, so each container adds only a constructor and instances. A
+  constraint left on a type variable is harmless, since no value has a
+  type variable's type (`HoldsOrVar`); inty defaults a `HasProp` left so
+  to an open row (`default_has_prop`).
+- **Objects, containers and built-in properties.** Object literals, reads,
+  writes and spread (`{...o, p: e}` copies `o`'s slots); arrays, tuples
+  and `Map` with their `Indexable` instances; the properties of strings and
+  arrays (`s.length`, `xs.length`) as `HasProp` instances. An object or
+  array value is cells of the heap.
 
-- Arrays, tuples, `Map` and typed arrays.
-- The `Indexable` class with its improvement rule: a container determines
-  its index and element types.
+### 4. Numbers and the remaining base types
+
+- Typed arrays, regex, `Promise` (with `await` as the identity, as in
+  `dynamics`).
 - Arrays and records invariant while mutable (#96).
-
-### 5. Numbers
-
 - `Int ≤ Number`, at the top level only; the `Num`, `NumLit` and `Arith`
-  classes; defaulting.
-- Checked `Int` arithmetic (`Stuck::IntRange`) as a fault.
-- `Float` is opaque in Lean, so proofs rely on inty's runtime range checks.
-  Where inty doesn't check (bitwise operators, `Math.floor`), a bit-level
-  binary64 model, tested against Node, proves the facts needed.
+  classes; defaulting; checked `Int` arithmetic (`Stuck::IntRange`) as a
+  fault. `Float` is opaque in Lean, so proofs rely on inty's runtime range
+  checks, and a bit-level binary64 model, tested against Node, where inty
+  doesn't check.
 
-### 6. Literal types and unions
+### 5. Literal types, unions and narrowing
 
-- Literal types and their widening to base types.
-- The join rules of `docs/type-system.md`: literals widen, `null` and
-  `undefined` make a result nullable, a declared union absorbs its arms.
-- `never` for what doesn't complete; operations pushed through each arm of
-  a union; `&&` and `||`.
-- Subsumption only where `src/infer` applies it, at value positions, never
-  as a general conversion rule.
+- Literal types and their widening; the join rules of
+  `docs/type-system.md` (literals widen, `null` and `undefined` make a
+  result nullable, a declared union absorbs its arms); `never`; operations
+  pushed through each arm of a union; `&&` and `||`. Subsumption only where
+  `src/infer` applies it, never as a general conversion rule.
+- Narrowing by `typeof`, `===`, `==`, truthiness and discriminants, on
+  bindings that never change; after an early exit and in loops; `switch`
+  with its exhaustiveness check. The semantic relation handles it as
+  "Revisiting Soundness for Occurrence Typing, Semantically" (arXiv
+  2609.16299) does.
+- Statements apart from expressions (from phase 2).
 
-### 7. Narrowing
+### 6. Recursive types, methods and classes
 
-- `typeof`, `===`, `==`, truthiness and discriminant tests, on bindings
-  that never change (`docs/flow-narrowing-safe.md`).
-- Refinement after an early exit and in loops; `switch` exhaustiveness as
-  a separate check.
-- The semantic relation handles this directly, as "Revisiting Soundness
-  for Occurrence Typing, Semantically" (arXiv 2609.16299) does for Typed
-  Racket.
+- Methods with `this`: an object literal's `this` is its own type, so a
+  literal with a method used as one has a recursive type.
+- Named types (`Named`) with equality up to unfolding (Brandt and
+  Henglein), unification without the occurs check, `V` unfolding a named
+  type (inty's recur through functions and fields, so through calls and
+  cells).
+- Callable rows (`String`, `String.fromCharCode`); classes lowered as inty
+  lowers them (factory functions, `#private` fields, accessors, `extends`
+  as a spread of the base instance).
 
-### 8. Equi-recursive types
-
-- `μ` types, as for builders that `return this`, with type equality up to
-  unfolding (Brandt and Henglein's coinductive axiomatization).
-- Unification without the occurs check, and `HasType.subst` under
-  recursive binders.
-- `V` defined by well-founded recursion on the index and the type, with
-  `V k (μ a. τ)` unfolding to the body. inty's recursive types recur
-  through function types, and a call takes a tick, so a function type's
-  clause can refer to its argument and result at smaller indices.
-
-### 9. The other type formers
-
-- Callable rows: functions as rows with a call signature and statics
-  (`String`, `String.fromCharCode`).
-- Nominal types (`Named`).
-- Classes, lowered as inty lowers them: factory functions, `#private`
-  fields, accessors, `extends` as a spread of the base instance.
-- `Promise`, `async` and `await`, with `await` as the identity, as in
-  `dynamics`; regex as an opaque base type.
-
-### 10. Annotations
+### 7. Annotations, program structure and the standard library
 
 - Checking mode beside inference: an annotation is a typing obligation,
-  which is how declared unions are introduced.
-- Rigid type variables, and the annotation and `.d.js` type syntax.
-
-### 11. Program structure
-
-- Mutual recursion, inferred one strongly connected component at a time
-  (`docs/scc-inference.md`).
-- Modules: module types, each `ns.foo` re-instantiating the export's
-  scheme, re-exports, and module state shared through the heap of phase 2.
-- Checking several files in one run.
-
-### 12. Builtins and the standard library
-
-- Every builtin and standard-library signature as Lean data, generated
-  from inty's Rust sources so the two can't drift.
-- Each native function implemented as `dynamics` implements it, and
-  proved in `V` (as `Math.abs` and `Boolean` are now).
+  which is how declared unions are introduced; rigid type variables; the
+  annotation and `.d.js` type syntax; optional parameters (presence on
+  function parameters, `types::FuncParam`).
+- Mutual recursion by strongly connected components
+  (`docs/scc-inference.md`); modules, each `ns.foo` re-instantiating the
+  export's scheme; several files in one run.
+- Every builtin and standard-library signature as Lean data generated from
+  inty's Rust sources, each native function implemented as `dynamics`
+  implements it and proved in `V`.
 
 ## Frontends
 

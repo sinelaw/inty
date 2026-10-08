@@ -17,8 +17,8 @@ namespace Inty
 mutual
 /-- The number of constructors in a type. -/
 def Ty.size : Ty → Nat
-  | .fn t ps r => 1 + t.size + Ty.sizes ps + r.size
-  | _ => 1
+  | .var _ => 1
+  | .app _ args => 1 + Ty.sizes args
 def Ty.sizes : List Ty → Nat
   | [] => 0
   | τ :: τs => τ.size + Ty.sizes τs
@@ -76,9 +76,10 @@ def unifyEqs (vs : List Nat) (eqs : List (Ty × Ty)) : Option Subst :=
         else none
       | none =>
         match τ₁, τ₂ with
-        | .fn t₁ ps₁ r₁, .fn t₂ ps₂ r₂ =>
-          if ps₁.length = ps₂.length then
-            unifyEqs vs ((t₁, t₂) :: (r₁, r₂) :: ps₁.zip ps₂ ++ eqs)
+        -- The same constructor: its arguments pairwise.
+        | .app c₁ as₁, .app c₂ as₂ =>
+          if c₁ = c₂ ∧ as₁.length = as₂.length then
+            unifyEqs vs (as₁.zip as₂ ++ eqs)
           else none
         | _, _ => none
 termination_by (vs.length, eqsSize eqs)
@@ -87,11 +88,12 @@ decreasing_by
   · exact lex_left (by
       have := List.length_erase_of_mem ‹_ ∈ vs›; have := List.length_pos_of_mem ‹_ ∈ vs›; omega)
   · refine lex_right ?_
-    simp only [eqsSize, eqsSize_append, eqsSize_zip _ _ ‹_›, Ty.size]
+    simp only [eqsSize, eqsSize_append, eqsSize_zip _ _ (‹_ ∧ _›).2, Ty.size]
     omega
 
 /-- A most general unifier of two types, if they unify. -/
 def unify (τ₁ τ₂ : Ty) : Option Subst := unifyEqs (τ₁.ftv ++ τ₂.ftv) [(τ₁, τ₂)]
+
 
 /-! ## Lemmas -/
 
@@ -111,18 +113,16 @@ theorem Ty.size_subst_var_le (ψ : Subst) {x : Nat} :
     ∀ {τ : Ty}, x ∈ τ.ftv → ((Ty.var x).subst ψ).size ≤ (τ.subst ψ).size := by
   intro τ
   induction τ using Ty.ind with
-  | fn t ps r iht ihps ihr =>
+  | var a => intro h; simp at h; subst h; exact Nat.le_refl _
+  | app c args ih =>
     intro h
-    simp only [Ty.ftv, Ty.ftvs_eq, List.mem_append, List.mem_flatMap] at h
-    simp only [Ty.subst_fn, Ty.size]
-    rcases h with (h | ⟨p, hp, h⟩) | h
-    · have := iht h; omega
-    · have := ihps p hp h
-      have := Ty.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
-      omega
-    · have := ihr h; omega
-  | var a => intro h; simp [Ty.ftv] at h; subst h; exact Nat.le_refl _
-  | _ => intro h; simp [Ty.ftv] at h
+    simp only [Ty.ftv_app, List.mem_flatMap] at h
+    simp only [Ty.subst_app, Ty.size, Ty.sizes_eq]
+    obtain ⟨p, hp, h⟩ := h
+    have := ih p hp h
+    have := Ty.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
+    rw [Ty.sizes_eq] at this
+    omega
 
 /-- The occurs check is right: a variable never unifies with a type that
 properly contains it. -/
@@ -130,21 +130,18 @@ theorem Ty.subst_ne_of_occurs (ψ : Subst) {x : Nat} {τ : Ty} (hx : x ∈ τ.ft
     (hne : τ ≠ .var x) : (Ty.var x).subst ψ ≠ τ.subst ψ := by
   intro heq
   cases τ with
-  | fn t ps r =>
-    have hle : ((Ty.var x).subst ψ).size ≤ ((Ty.fn t ps r).subst ψ).size - 1 := by
-      simp only [Ty.ftv, Ty.ftvs_eq, List.mem_append, List.mem_flatMap] at hx
-      simp only [Ty.subst_fn, Ty.size]
-      rcases hx with (h | ⟨p, hp, h⟩) | h
-      · have := Ty.size_subst_var_le ψ h; omega
-      · have := Ty.size_subst_var_le ψ h
-        have := Ty.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
-        omega
-      · have := Ty.size_subst_var_le ψ h; omega
+  | var a => simp at hx; subst hx; exact hne rfl
+  | app c args =>
+    have hle : ((Ty.var x).subst ψ).size ≤ ((Ty.app c args).subst ψ).size - 1 := by
+      simp only [Ty.ftv_app, List.mem_flatMap] at hx
+      simp only [Ty.subst_app, Ty.size]
+      obtain ⟨p, hp, h⟩ := hx
+      have := Ty.size_subst_var_le ψ h
+      have := Ty.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
+      omega
     rw [heq] at hle
-    have := Ty.size_pos ((Ty.fn t ps r).subst ψ)
+    have := Ty.size_pos ((Ty.app c args).subst ψ)
     omega
-  | var a => simp [Ty.ftv] at hx; subst hx; exact hne rfl
-  | _ => simp [Ty.ftv] at hx
 
 /-- A single binding `a ↦ τ`, with `a` not in `τ`, leaves `τ` alone. -/
 theorem Ty.subst_single {a : Nat} {τ : Ty} (h : a ∉ τ.ftv) : τ.subst [(a, τ)] = τ :=
@@ -158,37 +155,28 @@ theorem Ty.subst_single_absorb {ψ : Subst} {x : Nat} {τ : Ty}
     (h : (Ty.var x).subst ψ = τ.subst ψ) (ρ : Ty) :
     (ρ.subst [(x, τ)]).subst ψ = ρ.subst ψ := by
   induction ρ using Ty.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [Ty.subst_fn, List.map_map, iht, ihr, Ty.fn.injEq, true_and, and_true]
-    exact List.map_congr_left ihps
   | var a =>
     by_cases hax : a = x
     · subst hax; simpa [Ty.subst, Subst.find] using h.symm
     · simp [Ty.subst, Subst.find, hax]
-  | _ => rfl
+  | app c args ih =>
+    simp only [Ty.subst_app, List.map_map, Ty.app.injEq, true_and]
+    exact List.map_congr_left ih
 
 /-- The variables of `ρ` with `x ↦ τ` applied. -/
 theorem Ty.ftv_subst_single {x a : Nat} {τ : Ty} {ρ : Ty} (h : a ∈ (ρ.subst [(x, τ)]).ftv) :
     (a ∈ ρ.ftv ∧ a ≠ x) ∨ a ∈ τ.ftv := by
   induction ρ using Ty.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [Ty.subst_fn, Ty.ftv, Ty.ftvs_eq, List.mem_append, List.mem_flatMap,
-      List.mem_map] at h ⊢
-    rcases h with (h | ⟨_, ⟨p, hp, rfl⟩, h⟩) | h
-    · rcases iht h with ⟨h, hne⟩ | h
-      · exact .inl ⟨.inl (.inl h), hne⟩
-      · exact .inr h
-    · rcases ihps p hp h with ⟨h, hne⟩ | h
-      · exact .inl ⟨.inl (.inr ⟨p, hp, h⟩), hne⟩
-      · exact .inr h
-    · rcases ihr h with ⟨h, hne⟩ | h
-      · exact .inl ⟨.inr h, hne⟩
-      · exact .inr h
   | var b =>
     by_cases hbx : b = x
     · subst hbx; simp [Ty.subst, Subst.find] at h; exact .inr h
-    · simp [Ty.subst, Subst.find, hbx, Ty.ftv] at h; subst h; exact .inl ⟨by simp [Ty.ftv], hbx⟩
-  | _ => simp [Ty.subst, Ty.ftv] at h
+    · simp [Ty.subst, Subst.find, hbx] at h; subst h; exact .inl ⟨by simp, hbx⟩
+  | app c args ih =>
+    simp only [Ty.subst_app, Ty.ftv_app, List.mem_flatMap, List.mem_map] at h ⊢
+    obtain ⟨_, ⟨p, hp, rfl⟩, h⟩ := h
+    rcases ih p hp h with ⟨h, hne⟩ | h
+    · exact .inl ⟨⟨p, hp, h⟩, hne⟩
+    · exact .inr h
 
 theorem orient_spec {τ₁ τ₂ τ : Ty} {x : Nat} (h : orient τ₁ τ₂ = some (x, τ)) :
     (τ₁ = .var x ∧ τ₂ = τ) ∨ (τ₂ = .var x ∧ τ₁ = τ) := by
@@ -243,21 +231,20 @@ theorem unifyEqs_sound :
       simpa [Ty.subst_compose] using this
   | case5 vs a b eqs hab x τ ho hocc hx =>
     intro σ h; unfold unifyEqs at h; simp [hab, ho, hocc, hx] at h
-  | case6 vs eqs t₁ ps₁ r₁ t₂ ps₂ r₂ hlen hne ho ih =>
+  | case6 vs eqs c₁ as₁ c₂ as₂ hc hne ho ih =>
     intro σ h e he
-    unfold unifyEqs at h; simp only [hne, ho, hlen, ite_false, ite_true] at h
+    unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_true hc, ite_true] at h
     have ih' := ih h
     rcases List.mem_cons.mp he with rfl | he
-    · simp only [Ty.subst_fn, Ty.fn.injEq]
-      refine ⟨ih' (t₁, t₂) (by simp), map_eq_of_zip hlen (fun p hp => ih' p (by simp [hp])),
-        ih' (r₁, r₂) (by simp)⟩
+    · simp only [Ty.subst_app, Ty.app.injEq]
+      exact ⟨hc.1, map_eq_of_zip hc.2 (fun p hp => ih' p (by simp [hp]))⟩
     · exact ih' e (by simp [he])
-  | case7 vs eqs t₁ ps₁ r₁ t₂ ps₂ r₂ hlen hne ho =>
-    intro σ h; unfold unifyEqs at h; simp [hne, ho, hlen] at h
-  | case8 vs a b eqs hab ho hfn =>
+  | case7 vs eqs c₁ as₁ c₂ as₂ hc hne ho =>
+    intro σ h; unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_false hc] at h; cases h
+  | case8 vs a b eqs hab ho happ =>
     intro σ h
     unfold unifyEqs at h; simp only [hab, ho, ite_false] at h
-    cases h
+    cases a <;> cases b <;> simp_all
 
 theorem unify_sound {τ₁ τ₂ : Ty} {σ : Subst} (h : unify τ₁ τ₂ = some σ) :
     τ₁.subst σ = τ₂.subst σ :=
@@ -325,46 +312,36 @@ theorem unifyEqs_mgu :
     rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
     · exact absurd (hvs _ List.mem_cons_self x (.inl (by simp [Ty.ftv]))) hx
     · exact absurd (hvs _ List.mem_cons_self x (.inr (by simp [Ty.ftv]))) hx
-  | case6 vs eqs t₁ ps₁ r₁ t₂ ps₂ r₂ hlen hne ho ih =>
+  | case6 vs eqs c₁ as₁ c₂ as₂ hc hne ho ih =>
     intro hvs ψ hψ
     have h₀ := hψ _ List.mem_cons_self
-    simp only [Ty.subst_fn, Ty.fn.injEq] at h₀
-    have hfv : ∀ c, c ∈ (Ty.fn t₁ ps₁ r₁).ftv ∨ c ∈ (Ty.fn t₂ ps₂ r₂).ftv → c ∈ vs :=
+    simp only [Ty.subst_app, Ty.app.injEq] at h₀
+    have hfv : ∀ c, c ∈ (Ty.app c₁ as₁).ftv ∨ c ∈ (Ty.app c₂ as₂).ftv → c ∈ vs :=
       hvs _ List.mem_cons_self
-    simp only [Ty.ftv, Ty.ftvs_eq, List.mem_append, List.mem_flatMap] at hfv
+    simp only [Ty.ftv_app, List.mem_flatMap] at hfv
     obtain ⟨σ, h, hσ⟩ := ih (ψ := ψ)
       (fun e he c hc => by
-        simp only [List.mem_cons, List.mem_append] at he
-        rcases he with (rfl | rfl | he) | he
+        rcases List.mem_append.mp he with he | he
         · rcases hc with hc | hc
-          · exact hfv c (.inl (.inl (.inl hc)))
-          · exact hfv c (.inr (.inl (.inl hc)))
-        · rcases hc with hc | hc
-          · exact hfv c (.inl (.inr hc))
-          · exact hfv c (.inr (.inr hc))
-        · rcases hc with hc | hc
-          · exact hfv c (.inl (.inl (.inr ⟨_, List.of_mem_zip he |>.1, hc⟩)))
-          · exact hfv c (.inr (.inl (.inr ⟨_, List.of_mem_zip he |>.2, hc⟩)))
+          · exact hfv c (.inl ⟨_, (List.of_mem_zip he).1, hc⟩)
+          · exact hfv c (.inr ⟨_, (List.of_mem_zip he).2, hc⟩)
         · exact hvs e (by simp [he]) c hc)
       (fun e he => by
-        simp only [List.mem_cons, List.mem_append] at he
-        rcases he with (rfl | rfl | he) | he
-        · exact h₀.1
-        · exact h₀.2.2
-        · exact zip_of_map_eq h₀.2.1 e he
+        rcases List.mem_append.mp he with he | he
+        · exact zip_of_map_eq h₀.2 e he
         · exact hψ e (by simp [he]))
-    exact ⟨σ, by unfold unifyEqs; simpa [hne, ho, hlen] using h, hσ⟩
-  | case7 vs eqs t₁ ps₁ r₁ t₂ ps₂ r₂ hlen hne ho =>
+    exact ⟨σ, by unfold unifyEqs; simp only [hne, ho, ite_false, eq_true hc, ite_true]; exact h, hσ⟩
+  | case7 vs eqs c₁ as₁ c₂ as₂ hc hne ho =>
     intro _ ψ hψ
     have h₀ := hψ _ List.mem_cons_self
-    simp only [Ty.subst_fn, Ty.fn.injEq] at h₀
-    exact absurd (by simpa using congrArg List.length h₀.2.1) hlen
-  | case8 vs a b eqs hab ho hfn =>
+    simp only [Ty.subst_app, Ty.app.injEq] at h₀
+    exact absurd ⟨h₀.1, by simpa using congrArg List.length h₀.2⟩ hc
+  | case8 vs a b eqs hab ho happ =>
     intro _ ψ hψ
     have h₀ := hψ (a, b) (by simp)
     cases a <;> cases b <;> first
-      | exact absurd (hfn _ _ _ _ _ _ rfl rfl) id
-      | simp_all [orient, Ty.subst]
+      | exact absurd (happ _ _ _ _ rfl rfl) id
+      | simp_all [orient]
 
 /-- Unification succeeds whenever the types unify, with a most general
 unifier. -/

@@ -11,8 +11,10 @@ dangling bound variable.
 
 namespace Inty
 
-/-- Monotypes. A later layer adds rows, literal types and unions. -/
-inductive Ty where
+/-- Type constructors. Every type former is one, applied to its argument
+types (`Ty.app`), so substitution, unification and their lemmas are written
+once for all of them. -/
+inductive Con where
   | number
   | string
   | boolean
@@ -23,26 +25,39 @@ inductive Ty where
   testing it, `typeof`, rethrowing it. inty gives it a rigid type variable
   (a skolem). -/
   | unknown
-  /-- A function: the type of `this` in its body, its parameters' types, and
-  its result's. In inty a function value is a row carrying a call signature
-  (`Type::Func` inside a row); this is that signature alone. -/
-  | fn (this : Ty) (params : List Ty) (ret : Ty)
-  /-- A type variable. -/
+  /-- A function, applied to the type of `this` in its body, its result's
+  type, and its parameters' types (`Ty.fn`). In inty a function value is a
+  row carrying a call signature (`Type::Func` inside a row); this is that
+  signature alone. -/
+  | fn
+  /-- A record over the labels `labels`, applied to one slot per label
+  (`Ty.record`). The typing rules use the program's labels (Rémy's flat
+  rows): a record has a slot for every label of the program, saying whether
+  the field is there. -/
+  | record (labels : List String)
+  /-- A record's slot, applied to a presence and the field's type
+  (`types::FieldEntry`). -/
+  | slot
+  /-- The presence of a field that is there, `Presence::Pre`. -/
+  | pre
+  /-- The presence of a field that isn't, `Presence::Abs`. -/
+  | abs
+  deriving DecidableEq, Repr
+
+/-- Monotypes: a type variable, or a constructor applied to types. A type
+variable stands for a type, a presence or a slot alike: the constructors
+keep them apart. -/
+inductive Ty where
   | var (a : Nat)
+  | app (c : Con) (args : List Ty)
   deriving Repr
 
 /-- The body of a type scheme: a monotype that may also mention the scheme's
 quantified variables, `bound i`. -/
 inductive PTy where
-  | number
-  | string
-  | boolean
-  | undefined
-  | null
-  | unknown
-  | fn (this : PTy) (params : List PTy) (ret : PTy)
   | free (a : Nat)
   | bound (i : Nat)
+  | app (c : Con) (args : List PTy)
   deriving Repr
 
 /-! `Ty` and `PTy` nest lists, so Lean derives neither their equality test
@@ -53,28 +68,14 @@ simp lemma rewrites each list function to a `map`. -/
 
 mutual
 def Ty.decEq : (a b : Ty) → Decidable (a = b)
-  | .number, .number | .string, .string | .boolean, .boolean | .undefined, .undefined
-  | .null, .null | .unknown, .unknown => isTrue rfl
-  | .fn a₁ a₂ a₃, .fn b₁ b₂ b₃ =>
-    match Ty.decEq a₁ b₁, Ty.decEqs a₂ b₂, Ty.decEq a₃ b₃ with
-    | isTrue h₁, isTrue h₂, isTrue h₃ => isTrue (by subst h₁ h₂ h₃; rfl)
-    | isFalse h, _, _ | _, isFalse h, _ | _, _, isFalse h =>
-      isFalse (by intro e; cases e; exact h rfl)
   | .var a, .var b => if h : a = b then isTrue (h ▸ rfl) else isFalse (by intro e; cases e; exact h rfl)
-  | .number, .string | .number, .boolean | .number, .undefined | .number, .null
-  | .number, .unknown | .number, .fn .. | .number, .var _ | .string, .number
-  | .string, .boolean | .string, .undefined | .string, .null | .string, .unknown
-  | .string, .fn .. | .string, .var _ | .boolean, .number | .boolean, .string
-  | .boolean, .undefined | .boolean, .null | .boolean, .unknown | .boolean, .fn ..
-  | .boolean, .var _ | .undefined, .number | .undefined, .string | .undefined, .boolean
-  | .undefined, .null | .undefined, .unknown | .undefined, .fn .. | .undefined, .var _
-  | .null, .number | .null, .string | .null, .boolean | .null, .undefined
-  | .null, .unknown | .null, .fn .. | .null, .var _ | .unknown, .number
-  | .unknown, .string | .unknown, .boolean | .unknown, .undefined | .unknown, .null
-  | .unknown, .fn .. | .unknown, .var _ | .fn .., .number | .fn .., .string
-  | .fn .., .boolean | .fn .., .undefined | .fn .., .null | .fn .., .unknown
-  | .fn .., .var _ | .var _, .number | .var _, .string | .var _, .boolean
-  | .var _, .undefined | .var _, .null | .var _, .unknown | .var _, .fn .. => isFalse (by intro e; cases e)
+  | .app c₁ a₁, .app c₂ a₂ =>
+    if hc : c₁ = c₂ then
+      match Ty.decEqs a₁ a₂ with
+      | isTrue ha => isTrue (by subst hc ha; rfl)
+      | isFalse ha => isFalse (by intro e; cases e; exact ha rfl)
+    else isFalse (by intro e; cases e; exact hc rfl)
+  | .var _, .app .. | .app .., .var _ => isFalse (by intro e; cases e)
 def Ty.decEqs : (a b : List Ty) → Decidable (a = b)
   | [], [] => isTrue rfl
   | a :: as, b :: bs =>
@@ -88,33 +89,16 @@ instance : DecidableEq Ty := Ty.decEq
 
 mutual
 def PTy.decEq : (a b : PTy) → Decidable (a = b)
-  | .number, .number | .string, .string | .boolean, .boolean | .undefined, .undefined
-  | .null, .null | .unknown, .unknown => isTrue rfl
-  | .fn a₁ a₂ a₃, .fn b₁ b₂ b₃ =>
-    match PTy.decEq a₁ b₁, PTy.decEqs a₂ b₂, PTy.decEq a₃ b₃ with
-    | isTrue h₁, isTrue h₂, isTrue h₃ => isTrue (by subst h₁ h₂ h₃; rfl)
-    | isFalse h, _, _ | _, isFalse h, _ | _, _, isFalse h =>
-      isFalse (by intro e; cases e; exact h rfl)
   | .free a, .free b | .bound a, .bound b =>
     if h : a = b then isTrue (h ▸ rfl) else isFalse (by intro e; cases e; exact h rfl)
-  | .number, .string | .number, .boolean | .number, .undefined | .number, .null
-  | .number, .unknown | .number, .fn .. | .number, .free _ | .number, .bound _
-  | .string, .number | .string, .boolean | .string, .undefined | .string, .null
-  | .string, .unknown | .string, .fn .. | .string, .free _ | .string, .bound _
-  | .boolean, .number | .boolean, .string | .boolean, .undefined | .boolean, .null
-  | .boolean, .unknown | .boolean, .fn .. | .boolean, .free _ | .boolean, .bound _
-  | .undefined, .number | .undefined, .string | .undefined, .boolean | .undefined, .null
-  | .undefined, .unknown | .undefined, .fn .. | .undefined, .free _ | .undefined, .bound _
-  | .null, .number | .null, .string | .null, .boolean | .null, .undefined
-  | .null, .unknown | .null, .fn .. | .null, .free _ | .null, .bound _
-  | .unknown, .number | .unknown, .string | .unknown, .boolean | .unknown, .undefined
-  | .unknown, .null | .unknown, .fn .. | .unknown, .free _ | .unknown, .bound _
-  | .fn .., .number | .fn .., .string | .fn .., .boolean | .fn .., .undefined
-  | .fn .., .null | .fn .., .unknown | .fn .., .free _ | .fn .., .bound _
-  | .free _, .number | .free _, .string | .free _, .boolean | .free _, .undefined
-  | .free _, .null | .free _, .unknown | .free _, .fn .. | .free _, .bound _
-  | .bound _, .number | .bound _, .string | .bound _, .boolean | .bound _, .undefined
-  | .bound _, .null | .bound _, .unknown | .bound _, .fn .. | .bound _, .free _ => isFalse (by intro e; cases e)
+  | .app c₁ a₁, .app c₂ a₂ =>
+    if hc : c₁ = c₂ then
+      match PTy.decEqs a₁ a₂ with
+      | isTrue ha => isTrue (by subst hc ha; rfl)
+      | isFalse ha => isFalse (by intro e; cases e; exact ha rfl)
+    else isFalse (by intro e; cases e; exact hc rfl)
+  | .free _, .bound _ | .free _, .app .. | .bound _, .free _ | .bound _, .app ..
+  | .app .., .free _ | .app .., .bound _ => isFalse (by intro e; cases e)
 def PTy.decEqs : (a b : List PTy) → Decidable (a = b)
   | [], [] => isTrue rfl
   | a :: as, b :: bs =>
@@ -126,56 +110,62 @@ end
 
 instance : DecidableEq PTy := PTy.decEq
 
-/-- Induction on `Ty`, with a hypothesis for each parameter type. -/
-theorem Ty.ind {motive : Ty → Prop} (number : motive .number) (string : motive .string)
-    (boolean : motive .boolean) (undefined : motive .undefined) (null : motive .null)
-    (unknown : motive .unknown)
-    (fn : ∀ t ps r, motive t → (∀ p ∈ ps, motive p) → motive r → motive (.fn t ps r))
-    (var : ∀ a, motive (.var a)) : ∀ τ, motive τ
-  | .number => number
-  | .string => string
-  | .boolean => boolean
-  | .undefined => undefined
-  | .null => null
-  | .unknown => unknown
-  | .fn t ps r =>
-    fn t ps r (Ty.ind number string boolean undefined null unknown fn var t)
-      (fun p _ => Ty.ind number string boolean undefined null unknown fn var p)
-      (Ty.ind number string boolean undefined null unknown fn var r)
+/-! Names for the types of each constructor, usable as patterns. -/
+
+@[match_pattern] abbrev Ty.number : Ty := .app .number []
+@[match_pattern] abbrev Ty.string : Ty := .app .string []
+@[match_pattern] abbrev Ty.boolean : Ty := .app .boolean []
+@[match_pattern] abbrev Ty.undefined : Ty := .app .undefined []
+@[match_pattern] abbrev Ty.null : Ty := .app .null []
+@[match_pattern] abbrev Ty.unknown : Ty := .app .unknown []
+/-- `θ, (τs) => ρ`: `this` of type `θ`, parameters `τs`, result `ρ`. -/
+@[match_pattern] abbrev Ty.fn (θ : Ty) (τs : List Ty) (ρ : Ty) : Ty := .app .fn (θ :: ρ :: τs)
+@[match_pattern] abbrev Ty.record (ls : List String) (slots : List Ty) : Ty :=
+  .app (.record ls) slots
+@[match_pattern] abbrev Ty.slot (p τ : Ty) : Ty := .app .slot [p, τ]
+@[match_pattern] abbrev Ty.pre : Ty := .app .pre []
+@[match_pattern] abbrev Ty.abs : Ty := .app .abs []
+
+@[match_pattern] abbrev PTy.number : PTy := .app .number []
+@[match_pattern] abbrev PTy.string : PTy := .app .string []
+@[match_pattern] abbrev PTy.boolean : PTy := .app .boolean []
+@[match_pattern] abbrev PTy.undefined : PTy := .app .undefined []
+@[match_pattern] abbrev PTy.null : PTy := .app .null []
+@[match_pattern] abbrev PTy.unknown : PTy := .app .unknown []
+@[match_pattern] abbrev PTy.fn (θ : PTy) (τs : List PTy) (ρ : PTy) : PTy :=
+  .app .fn (θ :: ρ :: τs)
+
+/-- Induction on `Ty`, with a hypothesis for each argument type. -/
+theorem Ty.ind {motive : Ty → Prop} (var : ∀ a, motive (.var a))
+    (app : ∀ c args, (∀ p ∈ args, motive p) → motive (.app c args)) : ∀ τ, motive τ
   | .var a => var a
+  | .app c args => app c args (fun p _ => Ty.ind var app p)
 termination_by τ => sizeOf τ
 decreasing_by
   all_goals simp_wf
-  all_goals first | omega | (have := List.sizeOf_lt_of_mem ‹_›; omega)
+  all_goals (have := List.sizeOf_lt_of_mem ‹_›; omega)
 
-/-- Induction on `PTy`, with a hypothesis for each parameter type. -/
-theorem PTy.ind {motive : PTy → Prop} (number : motive .number) (string : motive .string)
-    (boolean : motive .boolean) (undefined : motive .undefined) (null : motive .null)
-    (unknown : motive .unknown)
-    (fn : ∀ t ps r, motive t → (∀ p ∈ ps, motive p) → motive r → motive (.fn t ps r))
-    (free : ∀ a, motive (.free a)) (bound : ∀ i, motive (.bound i)) : ∀ p, motive p
-  | .number => number
-  | .string => string
-  | .boolean => boolean
-  | .undefined => undefined
-  | .null => null
-  | .unknown => unknown
-  | .fn t ps r =>
-    fn t ps r (PTy.ind number string boolean undefined null unknown fn free bound t)
-      (fun p _ => PTy.ind number string boolean undefined null unknown fn free bound p)
-      (PTy.ind number string boolean undefined null unknown fn free bound r)
+/-- Induction on `PTy`, with a hypothesis for each argument type. -/
+theorem PTy.ind {motive : PTy → Prop} (free : ∀ a, motive (.free a))
+    (bound : ∀ i, motive (.bound i))
+    (app : ∀ c args, (∀ p ∈ args, motive p) → motive (.app c args)) : ∀ p, motive p
   | .free a => free a
   | .bound i => bound i
+  | .app c args => app c args (fun p _ => PTy.ind free bound app p)
 termination_by p => sizeOf p
 decreasing_by
   all_goals simp_wf
-  all_goals first | omega | (have := List.sizeOf_lt_of_mem ‹_›; omega)
+  all_goals (have := List.sizeOf_lt_of_mem ‹_›; omega)
 
 /-- Type classes, as `classes::ClassName`. Their instances are in
 `Inty.Classes`. -/
 inductive Cls where
   /-- `Plus a`: the types `+` is defined on. -/
   | plus
+  /-- `HasProp l a b` (`a has {l: b}` in inty's syntax): reading `.l` from
+  a value of type `a` gives a `b`. It is what a property read on a value
+  whose type isn't known yet records. -/
+  | hasProp (l : String)
   deriving DecidableEq, Repr
 
 /-- A class constraint: a class applied to types, such as `Plus a`. -/
@@ -206,14 +196,8 @@ abbrev Ctx := List Scheme
 mutual
 /-- A monotype as a scheme body. -/
 def Ty.toPTy : Ty → PTy
-  | .number => .number
-  | .string => .string
-  | .boolean => .boolean
-  | .undefined => .undefined
-  | .null => .null
-  | .unknown => .unknown
-  | .fn t ps r => .fn t.toPTy (Ty.toPTys ps) r.toPTy
   | .var a => .free a
+  | .app c args => .app c (Ty.toPTys args)
 def Ty.toPTys : List Ty → List PTy
   | [] => []
   | τ :: τs => τ.toPTy :: Ty.toPTys τs
@@ -222,19 +206,16 @@ end
 @[simp] theorem Ty.toPTys_eq (τs : List Ty) : Ty.toPTys τs = τs.map Ty.toPTy := by
   induction τs <;> simp_all [Ty.toPTys]
 
+@[simp] theorem Ty.toPTy_app (c : Con) (args : List Ty) :
+    (Ty.app c args).toPTy = .app c (args.map Ty.toPTy) := by simp [Ty.toPTy]
+
 mutual
 /-- Instantiate a scheme body: `bound i` becomes `τs[i]`. A well-formed scheme
 only has `bound i` with `i < arity`; out of range gives `undefined`. -/
 def PTy.inst (τs : List Ty) : PTy → Ty
-  | .number => .number
-  | .string => .string
-  | .boolean => .boolean
-  | .undefined => .undefined
-  | .null => .null
-  | .unknown => .unknown
-  | .fn t ps r => .fn (t.inst τs) (PTy.insts τs ps) (r.inst τs)
   | .free a => .var a
   | .bound i => τs.getD i .undefined
+  | .app c args => .app c (PTy.insts τs args)
 def PTy.insts (τs : List Ty) : List PTy → List Ty
   | [] => []
   | p :: ps => p.inst τs :: PTy.insts τs ps
@@ -243,6 +224,9 @@ end
 @[simp] theorem PTy.insts_eq (τs : List Ty) (ps : List PTy) :
     PTy.insts τs ps = ps.map (PTy.inst τs) := by
   induction ps <;> simp_all [PTy.insts]
+
+@[simp] theorem PTy.inst_app (τs : List Ty) (c : Con) (args : List PTy) :
+    (PTy.app c args).inst τs = .app c (args.map (·.inst τs)) := by simp [PTy.inst]
 
 def PPred.inst (τs : List Ty) (p : PPred) : Pred := ⟨p.cls, p.args.map (·.inst τs)⟩
 
@@ -268,9 +252,8 @@ def Scheme.openPreds (s : Scheme) (m : Nat) : List Pred := s.instPreds (varBlock
 
 mutual
 def Ty.ftv : Ty → List Nat
-  | .fn t ps r => t.ftv ++ Ty.ftvs ps ++ r.ftv
   | .var a => [a]
-  | _ => []
+  | .app _ args => Ty.ftvs args
 def Ty.ftvs : List Ty → List Nat
   | [] => []
   | τ :: τs => τ.ftv ++ Ty.ftvs τs
@@ -279,11 +262,15 @@ end
 @[simp] theorem Ty.ftvs_eq (τs : List Ty) : Ty.ftvs τs = τs.flatMap Ty.ftv := by
   induction τs <;> simp_all [Ty.ftvs]
 
+@[simp] theorem Ty.ftv_var (a : Nat) : (Ty.var a).ftv = [a] := rfl
+@[simp] theorem Ty.ftv_app (c : Con) (args : List Ty) :
+    (Ty.app c args).ftv = args.flatMap Ty.ftv := by simp [Ty.ftv]
+
 mutual
 def PTy.ftv : PTy → List Nat
-  | .fn t ps r => t.ftv ++ PTy.ftvs ps ++ r.ftv
   | .free a => [a]
-  | _ => []
+  | .bound _ => []
+  | .app _ args => PTy.ftvs args
 def PTy.ftvs : List PTy → List Nat
   | [] => []
   | p :: ps => p.ftv ++ PTy.ftvs ps
@@ -291,6 +278,9 @@ end
 
 @[simp] theorem PTy.ftvs_eq (ps : List PTy) : PTy.ftvs ps = ps.flatMap PTy.ftv := by
   induction ps <;> simp_all [PTy.ftvs]
+
+@[simp] theorem PTy.ftv_app (c : Con) (args : List PTy) :
+    (PTy.app c args).ftv = args.flatMap PTy.ftv := by simp [PTy.ftv]
 
 def Pred.ftv (p : Pred) : List Nat := p.args.flatMap Ty.ftv
 
@@ -311,9 +301,8 @@ def Subst.find : Subst → Nat → Option Ty
 
 mutual
 def Ty.subst (σ : Subst) : Ty → Ty
-  | .fn t ps r => .fn (t.subst σ) (Ty.substs σ ps) (r.subst σ)
   | .var a => (σ.find a).getD (.var a)
-  | τ => τ
+  | .app c args => .app c (Ty.substs σ args)
 def Ty.substs (σ : Subst) : List Ty → List Ty
   | [] => []
   | τ :: τs => τ.subst σ :: Ty.substs σ τs
@@ -323,22 +312,19 @@ end
     Ty.substs σ τs = τs.map (Ty.subst σ) := by
   induction τs <;> simp_all [Ty.substs]
 
-@[simp] theorem Ty.subst_number (σ : Subst) : Ty.number.subst σ = .number := rfl
-@[simp] theorem Ty.subst_string (σ : Subst) : Ty.string.subst σ = .string := rfl
-@[simp] theorem Ty.subst_boolean (σ : Subst) : Ty.boolean.subst σ = .boolean := rfl
-@[simp] theorem Ty.subst_undefined (σ : Subst) : Ty.undefined.subst σ = .undefined := rfl
-@[simp] theorem Ty.subst_null (σ : Subst) : Ty.null.subst σ = .null := rfl
-@[simp] theorem Ty.subst_unknown (σ : Subst) : Ty.unknown.subst σ = .unknown := rfl
-
-@[simp] theorem Ty.subst_fn (σ : Subst) (t : Ty) (ps : List Ty) (r : Ty) :
-    (Ty.fn t ps r).subst σ = .fn (t.subst σ) (ps.map (·.subst σ)) (r.subst σ) := by
+@[simp] theorem Ty.subst_app (σ : Subst) (c : Con) (args : List Ty) :
+    (Ty.app c args).subst σ = .app c (args.map (·.subst σ)) := by
   simp [Ty.subst]
+
+theorem Ty.subst_fn (σ : Subst) (t : Ty) (ps : List Ty) (r : Ty) :
+    (Ty.fn t ps r).subst σ = .fn (t.subst σ) (ps.map (·.subst σ)) (r.subst σ) := by
+  simp
 
 mutual
 def PTy.subst (σ : Subst) : PTy → PTy
-  | .fn t ps r => .fn (t.subst σ) (PTy.substs σ ps) (r.subst σ)
   | .free a => ((σ.find a).getD (.var a)).toPTy
-  | p => p
+  | .bound i => .bound i
+  | .app c args => .app c (PTy.substs σ args)
 def PTy.substs (σ : Subst) : List PTy → List PTy
   | [] => []
   | p :: ps => p.subst σ :: PTy.substs σ ps
@@ -347,6 +333,10 @@ end
 @[simp] theorem PTy.substs_eq (σ : Subst) (ps : List PTy) :
     PTy.substs σ ps = ps.map (PTy.subst σ) := by
   induction ps <;> simp_all [PTy.substs]
+
+@[simp] theorem PTy.subst_app (σ : Subst) (c : Con) (args : List PTy) :
+    (PTy.app c args).subst σ = .app c (args.map (·.subst σ)) := by
+  simp [PTy.subst]
 
 def Pred.subst (σ : Subst) (p : Pred) : Pred := ⟨p.cls, p.args.map (·.subst σ)⟩
 
@@ -359,12 +349,11 @@ def Scheme.subst (σ : Subst) (s : Scheme) : Scheme :=
 
 @[simp] theorem Ty.toPTy_inst (τ : Ty) (τs : List Ty) : τ.toPTy.inst τs = τ := by
   induction τ using Ty.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [Ty.toPTy, PTy.inst, Ty.toPTys_eq, PTy.insts_eq, List.map_map, iht, ihr]
-    congr 1
-    conv => rhs; rw [← List.map_id ps]
-    exact List.map_congr_left ihps
-  | _ => rfl
+  | var a => rfl
+  | app c args ih =>
+    simp only [Ty.toPTy_app, PTy.inst_app, List.map_map, Ty.app.injEq, true_and]
+    conv => rhs; rw [← List.map_id args]
+    exact List.map_congr_left ih
 
 @[simp] theorem Scheme.mono_inst (τ : Ty) (τs : List Ty) :
     (Scheme.mono τ).inst τs = τ := by
@@ -373,12 +362,10 @@ def Scheme.subst (σ : Subst) (s : Scheme) : Scheme :=
 @[simp] theorem Ty.toPTy_subst (σ : Subst) (τ : Ty) :
     τ.toPTy.subst σ = (τ.subst σ).toPTy := by
   induction τ using Ty.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [Ty.toPTy, PTy.subst, Ty.subst, Ty.toPTys_eq, PTy.substs_eq, Ty.substs_eq,
-      List.map_map, iht, ihr]
-    congr 1
-    exact List.map_congr_left ihps
-  | _ => rfl
+  | var a => rfl
+  | app c args ih =>
+    simp only [Ty.toPTy_app, PTy.subst_app, Ty.subst_app, List.map_map, PTy.app.injEq, true_and]
+    exact List.map_congr_left ih
 
 @[simp] theorem Scheme.mono_subst (σ : Subst) (τ : Ty) :
     (Scheme.mono τ).subst σ = Scheme.mono (τ.subst σ) := by
@@ -388,16 +375,13 @@ def Scheme.subst (σ : Subst) (s : Scheme) : Scheme :=
 theorem PTy.inst_subst (σ : Subst) (τs : List Ty) (p : PTy) :
     (p.inst τs).subst σ = (p.subst σ).inst (τs.map (·.subst σ)) := by
   induction p using PTy.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [PTy.inst, PTy.subst, Ty.subst, PTy.insts_eq, PTy.substs_eq, Ty.substs_eq,
-      List.map_map, iht, ihr]
-    congr 1
-    exact List.map_congr_left ihps
   | free a => simp [PTy.inst, PTy.subst]; rfl
   | bound i =>
     simp only [PTy.inst, PTy.subst, List.getD_eq_getElem?_getD, List.getElem?_map]
     cases τs[i]? <;> rfl
-  | _ => rfl
+  | app c args ih =>
+    simp only [PTy.inst_app, PTy.subst_app, Ty.subst_app, List.map_map, Ty.app.injEq, true_and]
+    exact List.map_congr_left ih
 
 theorem Scheme.inst_subst (σ : Subst) (τs : List Ty) (s : Scheme) :
     (s.inst τs).subst σ = (s.subst σ).inst (τs.map (·.subst σ)) :=
@@ -428,26 +412,23 @@ theorem Subst.find_none {σ : Subst} {a : Nat} (h : ∀ p ∈ σ, p.1 ≠ a) :
 theorem Ty.subst_id {σ : Subst} {τ : Ty} (h : ∀ a ∈ τ.ftv, σ.find a = none) :
     τ.subst σ = τ := by
   induction τ using Ty.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [Ty.ftv, Ty.ftvs_eq, List.mem_append, List.mem_flatMap] at h
-    simp only [Ty.subst, Ty.substs_eq, iht (fun a ha => h a (.inl (.inl ha))),
-      ihr (fun a ha => h a (.inr ha)), Ty.fn.injEq, true_and, and_true]
-    conv => rhs; rw [← List.map_id ps]
-    exact List.map_congr_left (fun p hp => ihps p hp (fun a ha => h a (.inl (.inr ⟨p, hp, ha⟩))))
-  | var a => simp [Ty.subst, h a (by simp [Ty.ftv])]
-  | _ => rfl
+  | var a => simp [Ty.subst, h a (by simp)]
+  | app c args ih =>
+    simp only [Ty.ftv_app, List.mem_flatMap] at h
+    simp only [Ty.subst_app, Ty.app.injEq, true_and]
+    conv => rhs; rw [← List.map_id args]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
 
 theorem PTy.subst_id {σ : Subst} {p : PTy} (h : ∀ a ∈ p.ftv, σ.find a = none) :
     p.subst σ = p := by
   induction p using PTy.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [PTy.ftv, PTy.ftvs_eq, List.mem_append, List.mem_flatMap] at h
-    simp only [PTy.subst, PTy.substs_eq, iht (fun a ha => h a (.inl (.inl ha))),
-      ihr (fun a ha => h a (.inr ha)), PTy.fn.injEq, true_and, and_true]
-    conv => rhs; rw [← List.map_id ps]
-    exact List.map_congr_left (fun p hp => ihps p hp (fun a ha => h a (.inl (.inr ⟨p, hp, ha⟩))))
   | free a => simp [PTy.subst, h a (by simp [PTy.ftv]), Ty.toPTy]
-  | _ => rfl
+  | bound i => rfl
+  | app c args ih =>
+    simp only [PTy.ftv_app, List.mem_flatMap] at h
+    simp only [PTy.subst_app, PTy.app.injEq, true_and]
+    conv => rhs; rw [← List.map_id args]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
 
 theorem Pred.subst_id {σ : Subst} {p : Pred} (h : ∀ a ∈ p.ftv, σ.find a = none) :
     p.subst σ = p := by
@@ -540,12 +521,6 @@ theorem PTy.open_block (p : PTy) {m : Nat} {τs : List Ty}
     (hm : ∀ a ∈ p.ftv, a < m) :
     (p.inst (varBlock m τs.length)).subst (Subst.block m τs) = p.inst τs := by
   induction p using PTy.ind with
-  | fn t ps r iht ihps ihr =>
-    simp only [PTy.ftv, PTy.ftvs_eq, List.mem_append, List.mem_flatMap] at hm
-    simp only [PTy.inst, Ty.subst, PTy.insts_eq, Ty.substs_eq, List.map_map,
-      iht (fun a ha => hm a (.inl (.inl ha))), ihr (fun a ha => hm a (.inr ha)),
-      Ty.fn.injEq, true_and, and_true]
-    exact List.map_congr_left (fun p hp => ihps p hp (fun a ha => hm a (.inl (.inr ⟨p, hp, ha⟩))))
   | free a =>
     have ha := hm a (by simp [PTy.ftv])
     have : (Subst.block m τs).find a = none :=
@@ -556,7 +531,10 @@ theorem PTy.open_block (p : PTy) {m : Nat} {τs : List Ty}
     by_cases hi : i < τs.length
     · simp [hi, Ty.subst, Subst.block_find]
     · simp [hi]
-  | _ => rfl
+  | app c args ih =>
+    simp only [PTy.ftv_app, List.mem_flatMap] at hm
+    simp only [PTy.inst_app, Ty.subst_app, List.map_map, Ty.app.injEq, true_and]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => hm a ⟨p, hp, ha⟩))
 
 theorem Scheme.open_block (s : Scheme) {m : Nat} {τs : List Ty}
     (hm : ∀ a ∈ s.ftv, a < m) (hlen : τs.length = s.arity) :

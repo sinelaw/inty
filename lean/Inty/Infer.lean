@@ -13,11 +13,13 @@ solver.
 Unification is in `Inty.Unify`, proved sound and most general. Class
 constraints are not solved as they arise:
 
-- `+` records the constraint `Plus τ` on its operand type `τ`.
-  A `const` that generalises a variable takes the constraints mentioning it
-  into its scheme (inty's `<a> where Plus a => …`), and each use of the
-  `const` instantiates them again. The rest stay pending until the whole
-  program is checked.
+- `+` records the constraint `Plus τ` on its operand type `τ`, and a
+  property read or write `HasProp l τ σ` on its receiver's.
+- Before a `const` or `let` generalises, the constraints on known types are
+  decided (`improveAll`). It then takes the constraints mentioning the
+  variables it quantifies into its scheme (inty's `<a> where Plus a => …`),
+  and each use instantiates them again. The rest stay pending until the
+  whole program is checked.
 -/
 
 namespace Inty
@@ -65,23 +67,123 @@ theorem Ret.subst_congr {σ σ' : Subst} {R : Option Ty}
   | none => rfl
   | some τ => simp only [Ret.subst_some, Option.some.injEq]; exact Ty.subst_congr (by simpa [Ret.ftv] using h)
 
-/-- Whether a scheme's constraint is `Plus` on a quantified variable. -/
-def PPred.isPlusBound : PPred → Bool
-  | ⟨.plus, [.bound _]⟩ => true
+/-- Whether a scheme's constraint is on one of its `k` quantified variables
+(`Scheme.Simple`). -/
+def PPred.isSimple (k : Nat) : PPred → Bool
+  | ⟨.plus, [.bound i]⟩ | ⟨.hasProp _, [.bound i, _]⟩ => decide (i < k)
   | _ => false
+
+/-! ## Constraints whose arguments determine one another
+
+A `HasProp`'s receiver determines its field's type (a functional
+dependency). Such a constraint on a known type is decided, improving the
+types (`Pred.improve`), and one on a type variable waits. -/
+
+/-- What a constraint on a known type comes to: `keep` it (it is on a type
+variable, or its class has no dependency), it `fail`s, or it holds exactly
+when two types are equal (`eq`). -/
+inductive Improve where
+  | keep
+  | fail
+  | eq (τ₁ τ₂ : Ty)
+
+/-- Deciding a constraint on a known type, as inty's `resolve_has_prop`: a
+record's field `l` must be present, at the type the read gives. -/
+def Pred.improve : Pred → Improve
+  | ⟨.hasProp _, [.var _, _]⟩ => .keep
+  | ⟨.hasProp l, [.record ls slots, σ]⟩ =>
+    match Ty.field l ls slots with
+    | some s => .eq s (.slot .pre σ)
+    | none => .fail
+  | ⟨.hasProp _, _⟩ => .fail
+  | ⟨.plus, _⟩ => .keep
+
+/-- The arguments a constraint's determining arguments fix: a `HasProp`'s
+receiver fixes its field's type. -/
+def Pred.fundep : Pred → Option (List Ty × List Ty)
+  | ⟨.hasProp _, [r, σ]⟩ => some ([r], [σ])
+  | _ => none
+
+/-- Decide the first constraint that can be decided: `none` if one fails,
+`some none` if none can be, or the equation it comes to and the others. -/
+def improveOne : List Pred → Option (Option ((Ty × Ty) × List Pred))
+  | [] => some none
+  | p :: ps =>
+    match p.improve with
+    | .fail => none
+    | .eq τ₁ τ₂ => some (some ((τ₁, τ₂), ps))
+    | .keep =>
+      match improveOne ps with
+      | none => none
+      | some none => some none
+      | some (some (e, rest)) => some (some (e, p :: rest))
+
+/-- Decide the constraints on known types, repeatedly (deciding one can make
+another's receiver known), as inty's `simplify_has_props`: the
+substitution the improvements come to, and the constraints left. -/
+def improveAll : Nat → List Pred → Option (Subst × List Pred)
+  | 0, ps => some ([], ps)
+  | k + 1, ps =>
+    match improveOne ps with
+    | none => none
+    | some none => some ([], ps)
+    | some (some ((τ₁, τ₂), rest)) =>
+      match unify τ₁ τ₂ with
+      | none => none
+      | some σ =>
+        match improveAll k (rest.map (·.subst σ)) with
+        | none => none
+        | some (σ', ps') => some (Subst.compose σ' σ, ps')
+
+/-- Whether the variables `fixed` fix a constraint's determining arguments. -/
+def Pred.fires (fixed : List Nat) (p : Pred) : Bool :=
+  match p.fundep with
+  | some (ds, _) => (ds.flatMap Ty.ftv).all (· ∈ fixed)
+  | none => false
+
+/-- The variables a constraint's determining arguments fix. -/
+def Pred.fixes (p : Pred) : List Nat :=
+  match p.fundep with
+  | some (_, rs) => rs.flatMap Ty.ftv
+  | none => []
+
+/-- Close `fixed` under the dependencies of `preds`: a constraint whose
+determining arguments are fixed fixes the rest, and is then set aside. -/
+def fixLoop : Nat → List Pred → List Nat → List Nat
+  | 0, _, fixed => fixed
+  | k + 1, preds, fixed =>
+    if (preds.filter (Pred.fires fixed)).isEmpty then fixed
+    else fixLoop k (preds.filter (fun p => !p.fires fixed))
+      (fixed ++ (preds.filter (Pred.fires fixed)).flatMap Pred.fixes)
+
+/-- The variables the environment fixes, through the constraints'
+dependencies (inty's `env_fixed_vars`). -/
+def fixedVars (preds : List Pred) (env : List Nat) : List Nat :=
+  fixLoop preds.length preds env
+
+/-- The variables a `const` or `let` quantifies: every variable of its type
+and of the constraints that the environment doesn't fix (through the
+constraints' dependencies, inty's `env_fixed_vars`). inty starts from the
+type's variables and adds those of the constraints on them; a constraint
+none of whose variables the type reaches, it leaves pending instead. Such a
+constraint's variables appear in no type, then or later, so it stays on
+type variables either way, where it can't fail: the two accept the same
+programs, and only the schemes they print differ. -/
+def genVars (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds : List Pred) : List Nat :=
+  ((τ₁.ftv ++ preds.flatMap Pred.ftv).filter
+    (· ∉ fixedVars preds (ctxFtv Γ₁ ++ Ret.ftv R₁))).eraseDups
 
 /-- Whether a binding generalises: its initialiser is a syntactic value and
 the rest of its scope never assigns to it. -/
 def Expr.generalises (e₁ e₂ : Expr) : Bool := e₁.isValue && !e₂.writes 0
 
 /-- The scheme a `const` or `let` gives its variable, and the constraints
-left pending. When it generalises (`gen`), it generalises the variables of
-its type that neither the context nor the enclosing function's return type
-mentions, each once, taking along the constraints that mention them. -/
+left pending. When it generalises (`gen`), it quantifies `genVars`, taking
+along the constraints that mention them. -/
 def letScheme (gen : Bool) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds : List Pred) :
     Scheme × List Pred :=
   if gen then
-    let ᾱ := (τ₁.ftv.filter (fun a => a ∉ ctxFtv Γ₁ ++ Ret.ftv R₁)).eraseDups
+    let ᾱ := genVars Γ₁ R₁ τ₁ preds
     (generalize ᾱ τ₁ (preds.filter (fun c => c.ftv.any (· ∈ ᾱ))),
       preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
   else (.mono τ₁, preds)
@@ -95,9 +197,13 @@ structure OutArgs where
   preds : List Pred
   next : Nat
 
+section
+variable (L : List String)
+
 mutual
-/-- Algorithm W. `R` is the enclosing function's return type (`none` at the
-top level) and `n` the first unused type variable. -/
+/-- Algorithm W, with records over the labels `L`. `R` is the enclosing
+function's return type (`none` at the top level) and `n` the first unused
+type variable. -/
 def infer : Ctx → Option Ty → Expr → Nat → Option Out
   | _, _, .lit l, n => some ⟨[], l.ty, [], n⟩
   | Γ, _, .var i, n =>
@@ -133,21 +239,27 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         | some σ₃ =>
           some ⟨Subst.compose σ₃ (Subst.compose o₂.σ o₁.σ), β.subst σ₃,
             (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst σ₃), o₂.next + 1⟩
+  -- The constraints on known types are decided first, as inty's
+  -- `simplify_has_props` does before it generalises.
   | Γ, R, .let_ _ e₁ e₂, n =>
     match infer Γ R e₁ n with
     | none => none
     | some o₁ =>
-      let Γ₁ := Ctx.subst o₁.σ Γ
-      let (s, rest) := letScheme (Expr.generalises e₁ e₂) Γ₁ (Ret.subst o₁.σ R) o₁.τ o₁.preds
-      -- A constraint the scheme would carry on a type already known is
-      -- decided now, as inty's `generalize` does: it can't hold.
-      if s.preds.all PPred.isPlusBound then
-        match infer (s :: Γ₁) (Ret.subst o₁.σ R) e₂ o₁.next with
-        | none => none
-        | some o₂ =>
-          some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, rest.map (·.subst o₂.σ) ++ o₂.preds,
-            o₂.next⟩
-      else none
+      match improveAll o₁.preds.length o₁.preds with
+      | none => none
+      | some (σi, preds₁) =>
+        let σ₁ := Subst.compose σi o₁.σ
+        let Γ₁ := Ctx.subst σ₁ Γ
+        let R₁ := Ret.subst σ₁ R
+        let (s, rest) := letScheme (Expr.generalises e₁ e₂) Γ₁ R₁ (o₁.τ.subst σi) preds₁
+        -- A constraint the scheme would carry on a type already known is
+        -- decided now, as inty's `generalize` does: it can't hold.
+        if s.preds.all (PPred.isSimple s.arity) then
+          match infer (s :: Γ₁) R₁ e₂ o₁.next with
+          | none => none
+          | some o₂ =>
+            some ⟨Subst.compose o₂.σ σ₁, o₂.τ, rest.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+        else none
   -- `x = e`: `x`'s scheme is a monotype, which `e`'s type is unified with.
   | Γ, R, .assign i e, n =>
     match Γ[i]? with
@@ -275,6 +387,32 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
           o₂.next⟩
+  -- An object literal over the labels `L`: its fields present, the other
+  -- labels absent, at fresh types.
+  | Γ, R, .obj ls es, n =>
+    if ls.all (· ∈ L) ∧ es.length = ls.length then
+      match inferArgs Γ R es n with
+      | none => none
+      | some o =>
+        some ⟨o.σ, .record L (objSlots L ls o.τs (varBlock o.next L.length)), o.preds,
+          o.next + L.length⟩
+    else none
+  -- `e.l` on a receiver of any type: `HasProp l τ β`, for a fresh `β`.
+  | Γ, R, .get e l, n =>
+    match infer Γ R e n with
+    | none => none
+    | some o => some ⟨o.σ, .var o.next, o.preds ++ [⟨.hasProp l, [o.τ, .var o.next]⟩], o.next + 1⟩
+  -- `e.l = v`: `HasProp l τ ρ`, `ρ` being `v`'s type.
+  | Γ, R, .set e l v, n =>
+    match infer Γ R e n with
+    | none => none
+    | some o₁ =>
+      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) v o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ,
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩],
+          o₂.next⟩
 
 /-- Infer a list of arguments, left to right, threading the substitution. -/
 def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
@@ -290,22 +428,45 @@ def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
           o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
 end
 
+end
+
 /-- Infer the type of a program in a context with no free type variables,
-such as the builtins', none of whose variables is mutable. It must pass
-the scope checks (`Expr.scoped`): it assigns only to its own `let`s and
-parameters, and has `break` and `continue` only in loops. Every
-constraint left must be satisfiable: an instance, or a constraint on a type
-variable, which inty leaves in place and which the program's type here
-defaults (`defaultSubst`). -/
-def inferIn (Γ : Ctx) (e : Expr) : Option Ty :=
+such as the builtins', none of whose variables is mutable, with records
+over the labels `L`. It must pass the scope checks (`Expr.scoped`): it
+assigns only to its own `let`s and parameters, and has `break` and
+`continue` only in loops. The constraints on known types are decided
+(`improveAll`), and every one left must be settled: an instance, or on a
+type variable (`HoldsOrVar`), which inty leaves in place. -/
+def inferIn (L : List String) (Γ : Ctx) (e : Expr) : Option Ty :=
   if e.scoped (Γ.map fun _ => false) then
-    match infer Γ none e 0 with
+    match infer L Γ none e 0 with
     | none => none
     | some o =>
-      if o.preds.all Pred.satisfiable then some (o.τ.subst (defaultSubst o.preds)) else none
+      match improveAll o.preds.length o.preds with
+      | none => none
+      | some (σi, preds) => if preds.all Pred.settled then some (o.τ.subst σi) else none
   else none
 
-/-- Infer the type of a closed program. -/
-def inferProgram (e : Expr) : Option Ty := inferIn [] e
+mutual
+/-- The property labels a program mentions: the labels its records have
+slots for. -/
+def Expr.labels : Expr → List String
+  | .lit _ | .var _ | .break_ | .continue_ => []
+  | .func _ b | .ret b | .throw_ b | .unop _ b | .assign _ b => b.labels
+  | .app f args => f.labels ++ Expr.labelsList args
+  | .let_ _ a b | .binop _ a b | .seq a b | .while_ a b | .tryCatch a b | .tryFinally a b =>
+    a.labels ++ b.labels
+  | .cond a b c => a.labels ++ b.labels ++ c.labels
+  | .obj ls es => ls ++ Expr.labelsList es
+  | .get e l => l :: e.labels
+  | .set e l v => l :: (e.labels ++ v.labels)
+/-- `labels`, for a list of expressions. -/
+def Expr.labelsList : List Expr → List String
+  | [] => []
+  | e :: es => e.labels ++ Expr.labelsList es
+end
+
+/-- Infer the type of a closed program, with records over its labels. -/
+def inferProgram (e : Expr) : Option Ty := inferIn e.labels.eraseDups [] e
 
 end Inty

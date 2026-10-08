@@ -16,11 +16,24 @@ theorem Scheme.Simple.subst {s : Scheme} (hs : s.Simple) (σ : Subst) : (s.subst
   intro p hp
   simp only [Scheme.subst, List.mem_map] at hp
   obtain ⟨q, hq, rfl⟩ := hp
-  obtain ⟨i, hi, rfl⟩ := hs q hq
-  exact ⟨i, hi, by simp [PPred.subst, PTy.subst]⟩
+  obtain ⟨i, hi, h | ⟨l, τ, h⟩⟩ := hs q hq <;> subst h
+  · exact ⟨i, hi, .inl (by simp [PPred.subst, PTy.subst])⟩
+  · exact ⟨i, hi, .inr ⟨l, τ.subst σ, by simp [PPred.subst, PTy.subst]⟩⟩
 
-theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
-    HasType (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) := by
+theorem objSlots_subst (σ : Subst) (L ls : List String) (τs absent : List Ty) :
+    (objSlots L ls τs absent).map (·.subst σ) =
+      objSlots L ls (τs.map (·.subst σ)) (absent.map (·.subst σ)) := by
+  simp only [objSlots, List.map_map, ← List.map_reverse, Ty.field_subst]
+  rw [List.zip_map_right, List.map_map]
+  apply List.map_congr_left
+  intro p _
+  obtain ⟨l, τa⟩ := p
+  simp only [Function.comp_apply, Prod.map_fst, Prod.map_snd, id]
+  generalize Ty.field l ls.reverse τs.reverse = o
+  cases o <;> simp
+
+theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
+    HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) := by
   induction h with
   | lit hl => cases hl <;> exact .lit (by constructor)
   | var hi hlen hc =>
@@ -38,8 +51,8 @@ theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq
-  | let_ s L _ hv hs _ ih₁ ih₂ =>
-    refine .let_ (s.subst σ) (L ++ σ.map Prod.fst) (fun m hm => ?_) ?_ ?_ (by simpa using ih₂)
+  | let_ s F _ hv hs _ ih₁ ih₂ =>
+    refine .let_ (s.subst σ) (F ++ σ.map Prod.fst) (fun m hm => ?_) ?_ ?_ (by simpa using ih₂)
     · have hσ : ∀ p ∈ σ, p.1 < m := fun p hp => hm p.1 (by simp; exact .inr ⟨_, hp⟩)
       rw [← Scheme.open_subst s hσ, ← Scheme.openPreds_subst s hσ, ← List.map_append]
       exact ih₁ m (fun a ha => hm a (by simp [ha]))
@@ -68,5 +81,13 @@ theorem HasType.subst (σ : Subst) (h : HasType C Γ R e τ) :
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
+  | obj hτs habs hL hes _ ih =>
+    simp only [Ty.subst_app, objSlots_subst]
+    refine .obj (by simpa using hτs) (by simpa using habs) hL hes (fun p hp => ?_)
+    rw [List.zip_map_right] at hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact ih q hq
+  | get _ hp ih => exact .get ih (by simpa [Pred.subst] using hp.subst σ)
+  | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.subst] using hp.subst σ) ihv
 
 end Inty

@@ -31,7 +31,7 @@ theorem run_clock_le_both :
     (∀ c env h e, (run c env h e).2.1 ≤ c) ∧ (∀ c env h es, (runArgs c env h es).2.1 ≤ c) := by
   refine run.mutual_induct (fun c env h e => (run c env h e).2.1 ≤ c)
     (fun c env h es => (runArgs c env h es).2.1 ≤ c)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
   · intros; simp [run]
   · intro _ _ _ _ _ h₁ _ h₂; simp [run, h₁, h₂]
   · intro _ _ _ _ _ h₁ h₂; simp [run, h₁, h₂]
@@ -133,6 +133,14 @@ theorem run_clock_le_both :
       cases r'
       case ok v => exact absurd rfl (hfin v c₂ h₂)
       all_goals simp only; omega
+  · intro clock env heap ls es ih
+    rw [run]; exact bindArgs_le ih fun _ _ => ih
+  · intro clock env heap e l ih; rw [run]; exact bindC_le ih fun _ _ => ih
+  · intro clock env heap e l v ih₁ ih₂
+    rw [run]
+    exact bindC_le ih₁ fun _ _ =>
+      bindC_le (Nat.le_trans (ih₂ _ _) (Nat.min_le_right _ _)) fun _ _ =>
+        Nat.le_trans (ih₂ _ _) (Nat.min_le_right _ _)
   · intros; simp [runArgs]
   · intro clock env heap e es v c₁ h₁ hrun vs c h hargs ih₁ ih₂
     rw [hargs] at ih₂
@@ -197,7 +205,7 @@ theorem run_mono_both :
       run (c + k) env h e = (run c env h e).addClock k)
     (fun c env h es => ∀ k, (runArgs c env h es).1 ≠ .error .timeout →
       runArgs (c + k) env h es = (runArgs c env h es).addClock k)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
   · intros; simp [run, Ran.addClock]
   · intro _ _ _ _ _ h₁ _ h₂; simp [run, h₁, h₂, Ran.addClock]
   · intro _ _ _ _ _ h₁ h₂; simp [run, h₁, h₂, Ran.addClock]
@@ -375,6 +383,19 @@ theorem run_mono_both :
       case ok => exact absurd rfl (hfin _ _ _)
       case timeout => simp at hne
       all_goals (rw [ihf' (by simp)]; rfl)
+  · intro clock env heap ls es ih k h
+    simp only [run] at h ⊢
+    exact bindArgs_mono (ih k) (fun _ _ _ => rfl) h
+  · intro clock env heap e l ih k h
+    simp only [run] at h ⊢
+    exact bindC_mono (ih k) (fun _ _ _ => rfl) h
+  · intro clock env heap e l v ih₁ ih₂ k h
+    simp only [run] at h ⊢
+    refine bindC_mono (ih₁ k) (fun vo _ h => ?_) h
+    have hc := run_clock_le clock env heap e
+    have ih₂' := ih₂ (run clock env heap e).2.1 (run clock env heap e).2.2
+    simp only [Nat.min_eq_left hc, Nat.min_eq_left (Nat.add_le_add_right hc k)] at h ih₂' ⊢
+    exact bindC_mono (ih₂' k) (fun _ _ _ => rfl) h
   · intros; simp [runArgs, RanArgs.addClock]
   · intro clock env heap e es v c₁ h₁ hrun vs c h hargs ih₁ ih₂ k _
     have hc : c₁ ≤ clock := by simpa [hrun] using run_clock_le clock env heap e

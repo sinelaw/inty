@@ -20,8 +20,9 @@ open Inty
 
 /-! ## Headline theorems -/
 
-example : ∀ (clock : Nat) {C : List Pred} {Γ : Ctx} {R : Option Ty} {W : World} {env : Env}
-    {h : Heap} {e : Expr} {τ : Ty}, HasType C Γ R e τ → Holds C → G W Γ env → HeapOK clock W h →
+example : ∀ (clock : Nat) {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
+    {W : World} {env : Env} {h : Heap} {e : Expr} {τ : Ty}, HasType L C Γ R e τ → HoldsOrVar C →
+      G W Γ env → HeapOK clock W h →
       (run clock env h e).2.1 ≤ clock ∧
       ((run clock env h e).1 = .timeout ∨ ∃ W', W <+: W' ∧
         HeapOK (run clock env h e).2.1 W' (run clock env h e).2.2 ∧
@@ -29,19 +30,20 @@ example : ∀ (clock : Nat) {C : List Pred} {Γ : Ctx} {R : Option Ty} {W : Worl
           (run clock env h e).1.Abrupt ∨
           (∃ v, (run clock env h e).1 = .returned v ∧
             ∃ τr, R = some τr ∧ V (run clock env h e).2.1 W' τr v))) :=
-  fun clock _ _ _ _ _ _ _ _ ht hC hG hH => eval_sound clock ht hC hG hH
+  fun clock _ _ _ _ _ _ _ _ _ ht hC hG hH => eval_sound clock ht hC hG hH
 
-example : ∀ {e : Expr} {τ : Ty}, HasType [] [] none e τ →
-    ∀ (clock : Nat) (s : Stuck), eval clock [] [] e ≠ .stuck s :=
+example : ∀ {L : List String} {C : List Pred} {e : Expr} {τ : Ty}, HasType L C [] none e τ →
+    HoldsOrVar C → ∀ (clock : Nat) (s : Stuck), eval clock [] [] e ≠ .stuck s :=
   never_stuck
 
-example : ∀ {e : Expr} {τ : Ty}, HasType [] builtinCtx none e τ →
+example : ∀ {L : List String} {C : List Pred} {e : Expr} {τ : Ty},
+    HasType L C builtinCtx none e τ → HoldsOrVar C →
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   never_stuck_with_builtins
 
-example : ∀ {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty} (σ : Subst),
-    HasType C Γ R e τ →
-      HasType (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) :=
+example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty}
+    (σ : Subst), HasType L C Γ R e τ →
+      HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) :=
   fun σ h => h.subst σ
 
 example : ∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify τ₁ τ₂ = some σ → τ₁.subst σ = τ₂.subst σ :=
@@ -51,38 +53,43 @@ example : ∀ {τ₁ τ₂ : Ty} {ψ : Subst}, τ₁.subst ψ = τ₂.subst ψ �
     ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ :=
   unify_mgu
 
-example : ∀ {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out},
-    infer Γ R e n = some o → ∀ φ C, (∀ c ∈ o.preds, Entails C (c.subst φ)) →
-      HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
+example : ∀ {L : List String} {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out},
+    infer L Γ R e n = some o → ∀ φ C, (∀ c ∈ o.preds, Entails C (c.subst φ)) →
+      HasType L C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
         (o.τ.subst φ) :=
   infer_sound
 
-example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ → HasType [] [] none e τ :=
+example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
+    ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups C [] none e τ :=
   inferProgram_sound
 
 example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
     ∀ (clock : Nat) (s : Stuck), eval clock [] [] e ≠ .stuck s :=
   inferProgram_never_stuck
 
-example : ∀ {e : Expr} {τ : Ty}, inferIn builtinCtx e = some τ →
+example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L builtinCtx e = some τ →
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   inferIn_builtins_never_stuck
 
-example : ∀ (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst} {C : List Pred}
-    {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
-    Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, ∃ a, p = ⟨.plus, [.var a]⟩) →
-    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType C Γ' R' e τ' →
-    ∃ o, infer Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat C o.preds φ :=
+example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst}
+    {C : List Pred} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
+    Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.OnVarShaped) →
+    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType L C Γ' R' e τ' →
+    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat C o.preds φ :=
   infer_complete
 
-example : ∀ {Γ : Ctx} {e : Expr} {τ' : Ty}, ctxFtv Γ = [] →
-    e.scoped (Γ.map fun _ => false) = true → HasType [] Γ none e τ' →
-    ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn Γ e = some τ :=
+example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}, ctxFtv Γ = [] →
+    (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true →
+    HasType L C Γ none e τ' →
+    ∃ o, infer L Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn L Γ e = some τ :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType [] [] none e τ' →
+example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType e.labels.eraseDups [] [] none e τ' →
     ∃ τ, inferProgram e = some τ :=
   inferProgram_complete
+
+example : Pred.OnVarShaped p ↔
+    (∃ a, p = ⟨.plus, [.var a]⟩) ∨ ∃ l a σ, p = ⟨.hasProp l, [.var a, σ]⟩ := Iff.rfl
 
 example : ∀ (c : Nat) (env : Env) (h : Heap) (e : Expr), (run c env h e).2.1 ≤ c :=
   run_clock_le
@@ -107,6 +114,9 @@ example : V k W .undefined v ↔ v = .undefined := V_undefined
 example : V k W .null v ↔ v = .null := V_null
 example : V k W .unknown v ↔ True := V_unknown
 example : V k W (.var a) v ↔ False := V_var
+example : V k W (.record ls slots) v ↔ ∃ fs, v = .obj fs ∧ ∀ l σ,
+    Ty.field l ls slots = some (.slot .pre σ) →
+    ∃ ℓ, fs.lookup l = some ℓ ∧ W[ℓ]? = some (.mono σ) := V_record
 example : Result.Abrupt r ↔ (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued := by
   cases r <;> simp [Result.Abrupt]
 example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
@@ -137,7 +147,7 @@ example : VList k W (τ :: τs) vs ↔ ∃ v vs', vs = v :: vs' ∧ V k W τ v �
       cases e; exact ⟨h₁, h₂⟩⟩
 example : HeapOK k W h ↔ h.length = W.length ∧ ∀ (ℓ : Nat) s, W[ℓ]? = some s →
     ∃ v, h[ℓ]? = some v ∧
-      ∀ τs, τs.length = s.arity → Holds (s.instPreds τs) → V k W (s.inst τs) v := Iff.rfl
+      ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → V k W (s.inst τs) v := Iff.rfl
 example : G W (s :: Γ) (ℓ :: env) ↔ W[ℓ]? = some s ∧ G W Γ env := Iff.rfl
 example : G W [] env ↔ env = [] := by cases env <;> simp [G]
 
@@ -147,8 +157,22 @@ As with `V`, a larger instance table weakens what `eval_sound` says. -/
 
 example : Entails C p ↔ Inst p ∨ p ∈ C := Iff.rfl
 
-example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ :=
-  ⟨fun h => by cases h <;> simp, fun h => by rcases h with rfl | rfl <;> constructor⟩
+example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ ∨
+    ∃ l ls fs σ, Ty.field l ls fs = some (.slot .pre σ) ∧ p = ⟨.hasProp l, [.record ls fs, σ]⟩ :=
+  ⟨fun h => by
+    cases h with
+    | plusNumber => exact .inl rfl
+    | plusString => exact .inr (.inl rfl)
+    | hasProp hf => exact .inr (.inr ⟨_, _, _, _, hf, rfl⟩),
+   fun h => by
+    rcases h with rfl | rfl | ⟨l, ls, fs, σ, hf, rfl⟩
+    · exact .plusNumber
+    · exact .plusString
+    · exact .hasProp hf⟩
+
+/-- A constraint left on a type variable is all `HoldsOrVar` allows beside
+the instances. -/
+example : HoldsOrVar C ↔ ∀ p ∈ C, Inst p ∨ ∃ a rest, p.args = .var a :: rest := Iff.rfl
 
 /-- The builtins' types, which their soundness proofs establish. -/
 example : builtinCtx =
@@ -170,16 +194,16 @@ example : (Expr.let_ false (num 1) (.assign 0 (num 2))).assignsMutable [] = fals
 
 /-- `x = 1` for a variable whose scheme is polymorphic: an assigned variable
 is a monotype. -/
-example : ¬ HasType [] [⟨1, .bound 0, []⟩] none (.assign 0 (num 1)) τ := by
+example : ¬ HasType L [] [⟨1, .bound 0, []⟩] none (.assign 0 (num 1)) τ := by
   intro h
   cases h with | assign hi ha _ _ => simp at hi; subst hi; simp at ha
 
 /-- An unbound variable. -/
-example : ¬ HasType [] [] none (.var 0) τ := by
+example : ¬ HasType L [] [] none (.var 0) τ := by
   intro h; cases h with | var hi _ _ => simp at hi
 
 /-- `1 + "a"`: `+` never mixes a `Number` with a `String`. -/
-example : ¬ HasType [] [] none (.binop .plus (num 1) (str "a")) τ := by
+example : ¬ HasType L [] [] none (.binop .plus (num 1) (str "a")) τ := by
   intro h
   cases h with
   | binop hop h₁ h₂ =>
@@ -187,7 +211,7 @@ example : ¬ HasType [] [] none (.binop .plus (num 1) (str "a")) τ := by
     | plus _ => cases h₁ with | lit hl => cases hl; cases h₂ with | lit hl => cases hl
 
 /-- `true + true`: `Boolean` is not a `Plus` instance, and nothing assumes it. -/
-example : ¬ HasType [] [] none (.binop .plus (.lit (.boolean true)) (.lit (.boolean true))) τ := by
+example : ¬ HasType L [] [] none (.binop .plus (.lit (.boolean true)) (.lit (.boolean true))) τ := by
   intro h
   cases h with
   | binop hop h₁ _ =>
@@ -197,32 +221,55 @@ example : ¬ HasType [] [] none (.binop .plus (.lit (.boolean true)) (.lit (.boo
       | lit hl => cases hl; rcases hc with hc | hc <;> cases hc
 
 /-- `"a" - 1`: `-` is `Number` only. -/
-example : ¬ HasType [] [] none (.binop .minus (str "a") (num 1)) τ := by
+example : ¬ HasType L [] [] none (.binop .minus (str "a") (num 1)) τ := by
   intro h
   cases h with
   | binop hop h₁ _ => cases hop; cases h₁ with | lit hl => cases hl
 
 /-- `-"a"`: unary `-` is `Number` only. -/
-example : ¬ HasType [] [] none (.unop .neg (str "a")) τ := by
+example : ¬ HasType L [] [] none (.unop .neg (str "a")) τ := by
   intro h
   cases h with
   | unop hop h₁ => cases hop; cases h₁ with | lit hl => cases hl
 
+/-- `({x: 1}).y`: an object literal has only its own fields. -/
+example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1]) "y") τ := by
+  intro h
+  cases h with
+  | get he hp =>
+    cases he with
+    | obj hτs _ _ _ _ =>
+      rcases hp with hi | hi
+      · cases hi with
+        | hasProp hf =>
+          have := objSlots_field hf
+          obtain ⟨_, rfl⟩ := List.length_eq_one_iff.mp hτs
+          simp [Ty.field] at this
+      · cases hi
+
+/-- `(1).x`: a number has no fields. -/
+example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
+  intro h
+  cases h with
+  | get he hp =>
+    cases he with
+    | lit hl => cases hl; rcases hp with hi | hi <;> cases hi
+
 /-- `1(2)`: a number is not a function. -/
-example : ¬ HasType [] [] none (.app (num 1) [num 2]) τ := by
+example : ¬ HasType L [] [] none (.app (num 1) [num 2]) τ := by
   intro h
   cases h with
   | app hf _ _ => cases hf with | lit hl => cases hl
 
 /-- `(function f(x) { return x; })(1, 2)`: one argument per parameter. -/
-example : ¬ HasType [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by
+example : ¬ HasType L [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by
   intro h
   cases h with
   | app hf hlen _ => cases hf with | func hn _ => simp at hlen; omega
 
 /-- `(function f() { return -this; })()`: a call outside a receiver makes
 `this` `undefined`, which `-` doesn't take. -/
-example : ¬ HasType [] [] none (.app (.func 0 (.unop .neg (.var 1))) []) τ := by
+example : ¬ HasType L [] [] none (.app (.func 0 (.unop .neg (.var 1))) []) τ := by
   intro h
   cases h with
   | app hf _ _ =>
@@ -236,6 +283,6 @@ example : ¬ HasType [] [] none (.app (.func 0 (.unop .neg (.var 1))) []) τ := 
         cases he with
         | var hi _ _ =>
           simp at hi; subst hi
-          simp [Scheme.mono, Scheme.inst, Ty.toPTy, PTy.inst] at hτ
+          simp [Scheme.mono, Scheme.inst, Ty.toPTy] at hτ
 
 end Inty.Statements

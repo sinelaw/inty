@@ -5,7 +5,7 @@ import Inty.Soundness
 # Soundness of inference
 
 Whatever `infer` returns is a valid typing: `inferProgram e = some τ` implies
-`HasType [] [] none e τ`. With `never_stuck` (`Inty.Soundness`), a program inference
+`HasType L [] [] none e τ`. With `never_stuck` (`Inty.Soundness`), a program inference
 accepts never gets stuck.
 -/
 
@@ -41,55 +41,127 @@ theorem Lit.ty_sound (l : Lit) : LitTy l l.ty := by cases l <;> constructor
 theorem Expr.isValue_sound {e : Expr} (h : e.isValue = true) : e.IsValue := by
   cases e <;> first | constructor | simp [Expr.isValue] at h
 
-theorem PPred.isPlusBound_spec {p : PPred} (h : p.isPlusBound = true) :
-    ∃ i, p = ⟨.plus, [.bound i]⟩ := by
-  obtain ⟨c, args⟩ := p
-  cases c
-  match args, h with
-  | [.bound i], _ => exact ⟨i, rfl⟩
-
-theorem Ty.gen_eq_bound {ᾱ : List Nat} {τ : Ty} {i : Nat} (h : τ.gen ᾱ = .bound i) :
-    i < ᾱ.length := by
-  cases τ <;> simp only [Ty.gen, reduceCtorEq] at h
+theorem PPred.isSimple_spec {k : Nat} {p : PPred} (h : p.isSimple k = true) :
+    ∃ i < k, p = ⟨.plus, [.bound i]⟩ ∨ ∃ l σ, p = ⟨.hasProp l, [.bound i, σ]⟩ := by
+  unfold PPred.isSimple at h
   split at h
-  · cases h; exact findIdx_lt ‹_›
+  · exact ⟨_, of_decide_eq_true h, .inl rfl⟩
+  · exact ⟨_, of_decide_eq_true h, .inr ⟨_, _, rfl⟩⟩
   · cases h
 
-/-- The scheme `letScheme` gives, once checked, carries only `Plus` on its
-quantified variables. -/
-theorem letScheme_simple {gen : Bool} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred}
-    (h : (letScheme gen Γ₁ R₁ τ₁ preds).1.preds.all PPred.isPlusBound = true) :
-    (letScheme gen Γ₁ R₁ τ₁ preds).1.Simple := by
-  intro p hp
-  obtain ⟨i, rfl⟩ := PPred.isPlusBound_spec (List.all_eq_true.mp h p hp)
-  refine ⟨i, ?_, rfl⟩
-  by_cases hv : gen = true
-  · simp only [letScheme, hv, ite_true, generalize, List.mem_map] at hp ⊢
-    obtain ⟨g, _, hg⟩ := hp
-    obtain ⟨c, args⟩ := g
-    simp only [Pred.gen, PPred.mk.injEq] at hg
-    match args, hg with
-    | [τ], hg =>
-      simp only [List.map_cons, List.map_nil, List.cons.injEq, and_true] at hg
-      exact Ty.gen_eq_bound hg.2
-    | [], hg => simp at hg
-    | _ :: _ :: _, hg => simp at hg
-  · simp [letScheme, hv, Scheme.mono] at hp
+/-- A scheme whose constraints pass the check is simple. -/
+theorem Scheme.simple_of_check {s : Scheme} (h : s.preds.all (PPred.isSimple s.arity) = true) :
+    s.Simple := fun p hp => PPred.isSimple_spec (List.all_eq_true.mp h p hp)
+
+/-! ## Improvement -/
+
+/-- A constraint whose decision is an equation is an instance wherever the
+equation holds. -/
+theorem Pred.improve_sound {p : Pred} {a b : Ty} (h : p.improve = .eq a b) {ψ : Subst}
+    (hab : a.subst ψ = b.subst ψ) : Inst (p.subst ψ) := by
+  unfold Pred.improve at h
+  split at h
+  · cases h
+  · split at h
+    · rename_i hs
+      cases h
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+      exact .hasProp (by rw [Ty.field_subst, hs]; simpa using hab)
+    · cases h
+  · cases h
+  · cases h
+
+theorem improveOne_some : ∀ {ps : List Pred} {a b : Ty} {rest : List Pred},
+    improveOne ps = some (some ((a, b), rest)) →
+      ∃ p, p.improve = .eq a b ∧ ∀ q ∈ ps, q = p ∨ q ∈ rest
+  | [], _, _, _, h => by simp [improveOne] at h
+  | p :: ps, a, b, rest, h => by
+    simp only [improveOne] at h
+    split at h
+    · cases h
+    · rename_i τ₁ τ₂ hp
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨⟨rfl, rfl⟩, rfl⟩ := h
+      exact ⟨p, hp, fun q hq => by simpa using hq⟩
+    · split at h
+      · cases h
+      · cases h
+      · rename_i e r hr
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        obtain ⟨p', hp', hq⟩ := improveOne_some hr
+        refine ⟨p', hp', fun q hq' => ?_⟩
+        rcases List.mem_cons.mp hq' with rfl | hq'
+        · exact .inr List.mem_cons_self
+        · exact (hq q hq').imp id (List.mem_cons_of_mem _)
+
+/-- What improvement leaves, satisfied, satisfies what it was given, under
+the improving substitution. -/
+theorem improveAll_sound : ∀ (k : Nat) {ps : List Pred} {σ : Subst} {ps' : List Pred},
+    improveAll k ps = some (σ, ps') → ∀ {C : List Pred} {φ : Subst}, Sat C ps' φ →
+      Sat C ps (Subst.compose φ σ)
+  | 0, ps, σ, ps', h, C, φ, hs => by
+    simp only [improveAll, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    simpa [Sat] using hs
+  | k + 1, ps, σ, ps', h, C, φ, hs => by
+    simp only [improveAll] at h
+    split at h
+    · cases h
+    · simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      simpa [Sat] using hs
+    · rename_i a b rest hone
+      split at h
+      · cases h
+      rename_i σu hu
+      split at h
+      · cases h
+      rename_i σ' ps'' hrec
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨p, hp, hq⟩ := improveOne_some hone
+      have hrest := Sat.map.mp (improveAll_sound k hrec hs)
+      intro q hq'
+      rcases hq q hq' with rfl | hq'
+      · refine .inl (Pred.improve_sound hp ?_)
+        simp only [Ty.subst_compose, unify_sound hu]
+      · have := hrest q hq'
+        simpa [Pred.subst_compose] using this
+
+/-! ## Generalisation -/
+
+/-- Closing under the dependencies keeps what was fixed. -/
+theorem fixLoop_sup {a : Nat} : ∀ (k : Nat) (preds : List Pred) {fixed : List Nat},
+    a ∈ fixed → a ∈ fixLoop k preds fixed
+  | 0, _, _, h => h
+  | k + 1, preds, fixed, h => by
+    simp only [fixLoop]
+    split
+    · exact h
+    · exact fixLoop_sup k _ (List.mem_append_left _ h)
+
+/-- No quantified variable is fixed by the environment. -/
+theorem genVars_not_env {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred} {a : Nat}
+    (ha : a ∈ ctxFtv Γ₁ ++ Ret.ftv R₁) : a ∉ genVars Γ₁ R₁ τ₁ preds := by
+  intro hα
+  simp only [genVars, List.mem_eraseDups, List.mem_filter, decide_eq_true_eq] at hα
+  exact hα.2 (fixLoop_sup _ _ ha)
 
 /-- What `infer_sound` says of one expression. -/
-def InferSound (e : Expr) : Prop :=
-  ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer Γ R e n = some o →
+def InferSound (L : List String) (e : Expr) : Prop :=
+  ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer L Γ R e n = some o →
     ∀ φ C, Sat C o.preds φ →
-      HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e (o.τ.subst φ)
+      HasType L C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e (o.τ.subst φ)
 
 /-- Inferring arguments, each sound, is sound: one type per argument, each
 a valid typing under the inferred substitution and any further one that
 resolves the constraints. -/
-theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound a) →
-    ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : OutArgs}, inferArgs Γ R args n = some o →
+theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound L a) →
+    ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : OutArgs}, inferArgs L Γ R args n = some o →
       ∀ φ C, Sat C o.preds φ → o.τs.length = args.length ∧
         ∀ p ∈ args.zip (o.τs.map (·.subst φ)),
-          HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) p.1 p.2
+          HasType L C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) p.1 p.2
   | [], _, Γ, R, n, o, h, φ, C, _ => by
     simp only [inferArgs, Option.some.injEq] at h; subst h; simp
   | a :: as, ih, Γ, R, n, o, h, φ, C, hsat => by
@@ -115,9 +187,9 @@ theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound a)
 substitution and any further substitution that resolves the class
 constraints, is a valid typing. -/
 theorem infer_sound :
-    ∀ {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer Γ R e n = some o →
+    ∀ {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, infer L Γ R e n = some o →
       ∀ φ C, Sat C o.preds φ →
-        HasType C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
+        HasType L C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
           (o.τ.subst φ) := by
   intro e
   induction e using Expr.ind with
@@ -172,7 +244,7 @@ theorem infer_sound :
     have ha := inferArgs_sound args iha h₂ _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hf ha ⊢
     rw [unify_sound hu] at hf
-    simp only [Ty.subst_fn, Ty.subst_undefined, List.map_map, Function.comp_def] at hf ha
+    simp only [Ty.subst_fn, List.map_map, Function.comp_def] at hf ha
     exact .app hf (by simp [ha.1]) ha.2
   | let_ mb e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o h φ C hsat
@@ -180,17 +252,17 @@ theorem infer_sound :
     split at h
     · cases h
     rename_i o₁ h₁
-    generalize hls : letScheme (Expr.generalises e₁ e₂) (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R)
-      o₁.τ o₁.preds = ls at h
+    split at h
+    · cases h
+    rename_i σi preds₁ himp
+    generalize hls : letScheme (Expr.generalises e₁ e₂) (Ctx.subst (Subst.compose σi o₁.σ) Γ)
+      (Ret.subst (Subst.compose σi o₁.σ) R) (o₁.τ.subst σi) preds₁ = ls at h
     obtain ⟨s, rest⟩ := ls
     split at h
     rotate_left
     · cases h
     rename_i hcheck
-    have hs : s.Simple := by
-      have h' := letScheme_simple (gen := Expr.generalises e₁ e₂) (Γ₁ := Ctx.subst o₁.σ Γ)
-        (R₁ := Ret.subst o₁.σ R) (τ₁ := o₁.τ) (preds := o₁.preds)
-      rw [hls] at h'; exact h' hcheck
+    have hs : s.Simple := Scheme.simple_of_check hcheck
     split at h
     · cases h
     rename_i o₂ h₂
@@ -198,6 +270,13 @@ theorem infer_sound :
     simp only [Sat.map, Sat.append] at hsat
     have he₂ := ih₂ h₂ φ C hsat.2
     simp only [Ctx.subst_cons, Ctx.subst_compose, Ret.subst_compose] at he₂ ⊢
+    -- `e₁`'s typing under a substitution `ψ` satisfying what improvement left.
+    have he₁ : ∀ ψ C', Sat C' preds₁ ψ →
+        HasType L C' (Ctx.subst ψ (Ctx.subst (Subst.compose σi o₁.σ) Γ))
+          (Ret.subst ψ (Ret.subst (Subst.compose σi o₁.σ) R)) e₁ ((o₁.τ.subst σi).subst ψ) :=
+      fun ψ C' hψ => by
+        have := ih₁ h₁ (Subst.compose ψ σi) C' (improveAll_sound _ himp hψ)
+        simpa only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] using this
     simp only [letScheme] at hls
     split at hls
     · -- Generalised: rename the generalised variables to the block at `m`.
@@ -206,24 +285,23 @@ theorem infer_sound :
       simp only [Expr.generalises, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hv
       refine .let_ _ [] (fun m _ => ?_) (.inr ⟨Expr.isValue_sound hv.1, hv.2⟩)
         ((hs.subst _).subst _) he₂
-      let Γ₁ := Ctx.subst o₁.σ Γ
-      let R₁ := Ret.subst o₁.σ R
-      let ᾱ := (o₁.τ.ftv.filter (fun a => a ∉ ctxFtv Γ₁ ++ Ret.ftv R₁)).eraseDups
+      let Γ₁ := Ctx.subst (Subst.compose σi o₁.σ) Γ
+      let R₁ := Ret.subst (Subst.compose σi o₁.σ) R
+      let ᾱ := genVars Γ₁ R₁ (o₁.τ.subst σi) preds₁
       let φ₀ := Subst.compose φ o₂.σ
       let ψ := renameBlock ᾱ m ++ φ₀
-      have hout : ∀ a, a ∈ ctxFtv Γ₁ ++ Ret.ftv R₁ → a ∉ ᾱ := fun a ha hα => by
-        simp only [ᾱ, List.mem_eraseDups, List.mem_filter, decide_eq_true_eq] at hα
-        exact hα.2 ha
+      have hout : ∀ a, a ∈ ctxFtv Γ₁ ++ Ret.ftv R₁ → a ∉ ᾱ := fun _ ha => genVars_not_env ha
       have hΓ : Ctx.subst ψ Γ₁ = Ctx.subst φ₀ Γ₁ := Ctx.subst_congr (fun a ha =>
         renameBlock_append_find m _ (hout a (List.mem_append_left _ ha)))
       have hR : Ret.subst ψ R₁ = Ret.subst φ₀ R₁ := Ret.subst_congr (fun a ha =>
         renameBlock_append_find m _ (hout a (List.mem_append_right _ ha)))
+      rw [← Ctx.subst_compose σi o₁.σ Γ, ← Ret.subst_compose σi o₁.σ R]
       rw [← Scheme.subst_compose, ← Ctx.subst_compose, ← Ret.subst_compose, ← hΓ, ← hR,
         ← generalize_open ᾱ m φ₀, ← generalize_openPreds ᾱ m φ₀]
-      refine ih₁ h₁ ψ _ (fun c hc => ?_)
+      refine he₁ ψ _ (fun c hc => ?_)
       by_cases hg : c.ftv.any (· ∈ ᾱ) = true
       · exact .inr (List.mem_append_right _ (List.mem_map_of_mem (List.mem_filter.mpr ⟨hc, hg⟩)))
-      · have hr : c ∈ o₁.preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)) :=
+      · have hr : c ∈ preds₁.filter (fun c => !c.ftv.any (· ∈ ᾱ)) :=
           List.mem_filter.mpr ⟨hc, by simpa using hg⟩
         have hc' : c.subst ψ = c.subst φ₀ := Pred.subst_congr (fun a ha =>
           renameBlock_append_find m _ (fun hα => hg (List.any_eq_true.mpr ⟨a, ha, by simpa using hα⟩)))
@@ -232,7 +310,7 @@ theorem infer_sound :
     · simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
       refine .let_ _ [] (fun m _ => ?_) (.inl ⟨rfl, by simp [Scheme.mono, Scheme.subst]⟩)
         ((hs.subst _).subst _) he₂
-      simpa using ih₁ h₁ _ C hsat.1
+      simpa using he₁ _ C hsat.1
   | assign i e ih =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
@@ -423,7 +501,7 @@ theorem infer_sound :
     have hb := ihb h₁ _ C hsat.1
     have hh := ihh h₂ _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose, Ctx.subst_cons,
-      Scheme.mono_subst, Ty.subst_unknown] at hb hh ⊢
+      Scheme.mono_subst, Ty.subst_app] at hb hh ⊢
     rw [unify_sound hu] at hb
     exact .tryCatch hb hh
   | tryFinally body fin ihb ihf =>
@@ -442,10 +520,51 @@ theorem infer_sound :
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hb hf ⊢
     exact .tryFinally hb hf
 
+  | obj ls es ih =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    rotate_left
+    · cases h
+    rename_i hcond
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    simp only [Option.some.injEq] at h; subst h
+    have ha := inferArgs_sound es ih h₁ φ C hsat
+    simp only [Ty.subst_app, objSlots_subst]
+    exact .obj (by simp [ha.1, hcond.2]) (by simp [varBlock])
+      (fun l hl => by simpa using List.all_eq_true.mp hcond.1 l hl) hcond.2 ha.2
+  | get e l ih =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.append, Sat.singleton] at hsat
+    exact .get (ih h₁ φ C hsat.1) (by simpa [Pred.subst] using hsat.2)
+  | set e l v ihe ihv =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append, Sat.singleton] at hsat
+    have he := ihe h₁ _ C hsat.1.1
+    have hv := ihv h₂ φ C hsat.1.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he hv ⊢
+    exact .set he (by simpa [Pred.subst, Ty.subst_compose] using hsat.2) hv
+
 /-- A program inference accepts in a context with no free type variables is
-well typed in it. -/
+well typed in it, assuming the constraints left, each of which is an
+instance or on a type variable. -/
 theorem inferIn_sound {Γ : Ctx} {e : Expr} {τ : Ty} (hΓ : ctxFtv Γ = [])
-    (h : inferIn Γ e = some τ) : HasType [] Γ none e τ := by
+    (h : inferIn L Γ e = some τ) : ∃ C, HoldsOrVar C ∧ HasType L C Γ none e τ := by
   simp only [inferIn] at h
   split at h
   rotate_left
@@ -454,23 +573,31 @@ theorem inferIn_sound {Γ : Ctx} {e : Expr} {τ : Ty} (hΓ : ctxFtv Γ = [])
   · cases h
   rename_i o ho
   split at h
+  · cases h
+  rename_i σi preds himp
+  split at h
   · rename_i hall
     simp only [Option.some.injEq] at h; subst h
-    have hsat : Sat [] o.preds (defaultSubst o.preds) := fun c hc =>
-      .inl (defaultSubst_inst hc (List.all_eq_true.mp hall c hc))
+    have hsat : Sat preds o.preds σi := by
+      have := improveAll_sound _ himp (C := preds) (φ := []) (fun c hc => .inr (by simpa using hc))
+      intro c hc
+      simpa [Pred.subst_compose] using this c hc
     have hclosed : ∀ σ : Subst, Ctx.subst σ Γ = Γ := fun σ =>
       ctx_subst_id (fun a ha => by simp [hΓ] at ha)
-    simpa [hclosed] using infer_sound ho _ [] hsat
+    refine ⟨preds, HoldsOrVar.of_settled hall, ?_⟩
+    simpa [hclosed] using infer_sound ho σi preds hsat
   · cases h
 
-/-- A program inference accepts is well typed. -/
+/-- A program inference accepts is well typed, with records over its labels,
+assuming constraints each an instance or on a type variable. -/
 theorem inferProgram_sound {e : Expr} {τ : Ty} (h : inferProgram e = some τ) :
-    HasType [] [] none e τ :=
+    ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups C [] none e τ :=
   inferIn_sound rfl h
 
 /-- A program inference accepts never gets stuck, whatever the clock. -/
 theorem inferProgram_never_stuck {e : Expr} {τ : Ty} (h : inferProgram e = some τ)
-    (clock : Nat) (s : Stuck) : eval clock [] [] e ≠ .stuck s :=
-  never_stuck (inferProgram_sound h) clock s
+    (clock : Nat) (s : Stuck) : eval clock [] [] e ≠ .stuck s := by
+  obtain ⟨C, hC, ht⟩ := inferProgram_sound h
+  exact never_stuck ht hC clock s
 
 end Inty

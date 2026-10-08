@@ -45,6 +45,11 @@ inductive Value where
   | closure (env : List Nat) (arity : Nat) (body : Expr)
   /-- A native function, `dynamics::Value::Builtin`. -/
   | prim (p : Prim)
+  /-- An object: the cell of each property. `dynamics` keeps an object's
+  properties together in one cell (`Cell::Object`); a cell per property
+  behaves the same, since an object has the same properties all its life
+  here: a well-typed program never adds one. -/
+  | obj (fields : List (String × Nat))
   deriving Repr
 
 /-- A runtime environment: the cell of each variable, innermost first. As in
@@ -64,6 +69,11 @@ inductive Stuck where
   leaves missing ones `undefined`; inty's semantics, like its typing,
   requires them. Extra ones are ignored, as in JavaScript. -/
   | arityMismatch
+  /-- Reading or writing a property of something that isn't an object,
+  `Stuck::NotIndexable`. -/
+  | notIndexable
+  /-- A property the object doesn't have, `Stuck::PropertyNotFound`. -/
+  | propertyNotFound
   deriving DecidableEq, Repr
 
 /-- The outcome of running with a given clock. `timeout` (out of clock) is
@@ -89,7 +99,7 @@ def Value.truthy : Value → Bool
   | .string s => !s.isEmpty
   | .boolean b => b
   | .undefined | .null => false
-  | .closure .. | .prim _ => true
+  | .closure .. | .prim _ | .obj _ => true
 
 /-- JavaScript `typeof`, as `dynamics::Value::type_string`. -/
 def Value.typeString : Value → String
@@ -97,7 +107,7 @@ def Value.typeString : Value → String
   | .string _ => "string"
   | .boolean _ => "boolean"
   | .undefined => "undefined"
-  | .null => "object"
+  | .null | .obj _ => "object"
   | .closure .. | .prim _ => "function"
 
 def Lit.eval : Lit → Value
@@ -124,6 +134,31 @@ def Prim.apply : Prim → List Value → Result
   | .abs, [_] => .stuck .typeMismatch
   | .truthy, [v] => .ok (.boolean v.truthy)
   | _, _ => .stuck .arityMismatch
+
+/-- Reading the property `l` of `v`, as `dynamics::step::read_member`. -/
+def Value.getProp (h : Heap) (l : String) : Value → Result
+  | .obj fs =>
+    match fs.lookup l with
+    | some ℓ =>
+      match h[ℓ]? with
+      | some v => .ok v
+      | none => .stuck .propertyNotFound
+    | none => .stuck .propertyNotFound
+  | _ => .stuck .notIndexable
+
+/-- Storing `v` in the property `l` of `o`: the outcome and the heap. -/
+def Value.setProp (o : Value) (h : Heap) (l : String) (v : Value) : Result × Heap :=
+  match o with
+  | .obj fs =>
+    match fs.lookup l with
+    | some ℓ => if ℓ < h.length then (.ok v, h.set ℓ v) else (.stuck .propertyNotFound, h)
+    | none => (.stuck .propertyNotFound, h)
+  | _ => (.stuck .notIndexable, h)
+
+/-- An object whose properties `ls` are in the cells from `base` on. A label
+the literal repeats is the last occurrence's, as in JavaScript, so the
+fields are listed last first. -/
+def objAt (ls : List String) (base n : Nat) : Value := .obj (ls.zip (List.range' base n)).reverse
 
 /-- A call's result: a `return` from the body is the call's value. -/
 def Result.catchReturn : Result → Result
@@ -252,6 +287,17 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
       match run (min c₁ clock) env h₁ fin with
       | (.ok _, c₂, h₂) => (r, c₂, h₂)
       | p => p
+  -- The fields in order, then a cell for each.
+  | .obj ls es =>
+    bindArgs (runArgs clock env heap es) fun vs c₁ h₁ =>
+      (.ok (objAt ls h₁.length vs.length), c₁, h₁ ++ vs)
+  | .get e l => bindC (run clock env heap e) fun v c₁ h₁ => (v.getProp h₁ l, c₁, h₁)
+  -- The object, then the value, as in JavaScript.
+  | .set e l v =>
+    bindC (run clock env heap e) fun vo c₁ h₁ =>
+    bindC (run (min c₁ clock) env h₁ v) fun vv c₂ h₂ =>
+      let p := vo.setProp h₂ l vv
+      (p.1, c₂, p.2)
 termination_by (clock, sizeOf e)
 decreasing_by
   all_goals first
