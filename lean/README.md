@@ -110,7 +110,9 @@ cheapest proofs first and the hardest last.
 6. **Mutable state.** A store threaded through `eval`, `let` cells and
    object fields, and a store typing that only grows.
 7. **Literal types, unions and subsumption**, including inty's join rules
-   ("declared, not guessed", `docs/type-system.md`).
+   ("declared, not guessed", `docs/type-system.md`). Subsumption treats a
+   mutable array or record as invariant: only a value is subsumed into a
+   union, never the element type of a container someone can write to (#96).
 8. **Narrowing** of bindings that never change (`docs/flow-narrowing-safe.md`).
    This is Typed Racket's rule; "Revisiting Soundness for Occurrence
    Typing, Semantically" (arXiv 2609.16299) gives a Lean mechanization of its
