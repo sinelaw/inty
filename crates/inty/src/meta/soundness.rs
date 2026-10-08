@@ -206,6 +206,9 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
     let ty = infer
         .infer_program(&env, &program)
         .map_err(|e| format!("infer error: {}", e))?;
+    infer
+        .resolve_constraints()
+        .map_err(|e| format!("infer error: {}", e))?;
     let ty = infer.apply_subst(&ty);
     // The expressions typed `Int`: their arithmetic is checked.
     let int_ops = infer

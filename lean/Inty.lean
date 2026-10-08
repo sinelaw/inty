@@ -5,8 +5,10 @@ import Inty.Typing
 import Inty.TypeSubst
 import Inty.Semantics
 import Inty.Soundness
+import Inty.Fuel
 import Inty.Infer
 import Inty.InferSound
 import Inty.Examples
 import Inty.Statements
+import Inty.Wire
 import Inty.Axioms

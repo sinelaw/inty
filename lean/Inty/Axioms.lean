@@ -1,4 +1,5 @@
 import Inty.InferSound
+import Inty.Fuel
 
 /-!
 # Axiom audit
@@ -22,3 +23,6 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.inferProgram_never_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.inferProgram_never_stuck
+
+/-- info: 'Inty.eval_mono' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.eval_mono

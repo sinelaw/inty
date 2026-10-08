@@ -1,8 +1,14 @@
 name = "inty"
-defaultTargets = ["Inty"]
+defaultTargets = ["Inty", "inty-model"]
 
 [[lean_lib]]
 name = "Inty"
 # A `sorry` is a warning; treating warnings as errors keeps every proof
 # complete.
 leanOptions = { warningAsError = true }
+
+# Differential testing: answers core programs read from stdin. See
+# Inty/Wire.lean.
+[[lean_exe]]
+name = "inty-model"
+root = "Main"

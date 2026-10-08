@@ -3,10 +3,10 @@ name: Lean
 on:
   push:
     branches: [ "main" ]
-    paths: [ "lean/**", ".github/workflows/lean.yml" ]
+    paths: [ "lean/**", "crates/inty/**", ".github/workflows/lean.yml" ]
   pull_request:
     branches: [ "main" ]
-    paths: [ "lean/**", ".github/workflows/lean.yml" ]
+    paths: [ "lean/**", "crates/inty/**", ".github/workflows/lean.yml" ]
 
 permissions:
   contents: read
@@ -24,6 +24,14 @@ jobs:
         curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
           | sh -s -- -y --default-toolchain none
         echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-    # Checks every proof. Warnings are errors, so a `sorry` fails the build.
+    # Checks every proof (warnings are errors, so a `sorry` fails the
+    # build) and builds `inty-model`.
     - name: Build
       run: lake build
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    # inty against the Lean model on generated programs; see
+    # crates/inty/tests/differential.rs.
+    - name: Differential test
+      working-directory: .
+      run: cargo test -p inty --test differential -- --nocapture

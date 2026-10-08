@@ -135,6 +135,8 @@ This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
    `BinOp.eval_sound`) and `infer_sound`, plus a `ValTy` constructor for any
    new value form.
 6. An example in `Inty/Examples.lean`.
+7. The wire format (`Inty/Wire.lean`) and the differential test's
+   generator and JavaScript printer (`crates/inty/tests/differential.rs`).
 
 Lean's exhaustiveness checks point at every case still missing.
 
@@ -170,20 +172,7 @@ cheapest proofs first and the hardest last.
    [fhm](https://github.com/Arrow7000/fhm) is the Lean 4 template (its
    completeness needs freshness invariants and a rigid-variable set), as is
    CakeML's verified type inference.
-3. **Differential testing**, next. A compiled `lean_exe` (interpreted
-   `#eval` is too slow for large programs) reads a serialised core AST and
-   prints the checker's and interpreter's verdicts; the Rust side lowers the
-   programs `src/meta/soundness.rs` generates and compares acceptance,
-   getting stuck, and the result's type. First prove that more fuel never
-   changes a result, so the Lean verdict doesn't depend on the fuel chosen.
-   Fuel is counted differently (recursion depth here, a global step counter
-   in `dynamics`), so a timeout on either side is not a mismatch. Generate
-   programs adversarially too, not only well-typed ones.
-3. **Differential testing.** A `lean_exe` that reads a serialised core AST
-   and prints the checker's and interpreter's verdicts. The Rust side lowers
-   the programs `src/meta/soundness.rs` generates and compares. Fuel is
-   counted differently (recursion depth here, a global step counter in
-   `dynamics`), so a timeout on either side is not a mismatch.
+3. ~~**Differential testing.**~~ Done; see below.
 4. **Statements and abrupt completion.** `return`, `throw`, `break` and loops
    as extra `Result` forms, as `dynamics` has them.
 5. **Records and row polymorphism.** Record types, the `HasProp`
@@ -223,6 +212,49 @@ cheapest proofs first and the hardest last.
     `HasType.subst` under recursive binders. An unfolding rule is an
     ordinary inductive rule, and Amin and Rompf handle recursive self types
     without step indices.
+
+## Differential testing
+
+`crates/inty/tests/differential.rs` checks inty against the model on
+generated programs of the core calculus, both type-directed and adversarial.
+Each one is written as JavaScript for inty and in a wire format
+(`Inty/Wire.lean`) for `inty-model`, the executable `lake build` makes
+(`Main.lean`), which answers with Lean inference's verdict and the
+interpreter's result. The test fails on:
+
+- a program inty accepts that gets stuck in `dynamics` (and, as a check on
+  the harness, one the model accepts that gets stuck in `eval`, which
+  `inferProgram_never_stuck` rules out);
+- a program on which both interpreters finish but disagree, on the value or
+  on getting stuck (`eval_mono` makes the model's answer independent of its
+  fuel; a timeout on either side is not compared);
+- inty and the model typing a program differently, unless inty's own types
+  show a feature the model doesn't have yet.
+
+```sh
+cd lean && lake build && cd ..
+cargo test -p inty --test differential -- --nocapture
+INTY_DIFF_CASES=20000 INTY_DIFF_SEED=7 cargo test -p inty --test differential
+```
+
+Over 200,000 programs (ten seeds), the interpreters never disagreed, and
+the model never accepted a program inty rejects, except as below. The
+disagreements in typing all fall into features the model lacks:
+
+| Divergence | inty | model | Roadmap |
+|---|---|---|---|
+| Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 7 |
+| Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 7 |
+| Recursive types: `function f(x) { return f; }` | `(a) => μ` | rejects (occurs check) | 10 |
+| `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 7 |
+| A `Plus` constraint nothing resolves | accepts (defaulting) | ambiguous | 2 |
+
+Each row is recognised from evidence, not guessed: a union or `μ` in the
+types inty gave the program's expressions, or inty accepting the program
+once its number literals are made fractional. The harness's first run also
+found that `meta::soundness::check_program` never called
+`resolve_constraints`, so it could accept programs the CLI rejects; it does
+now.
 
 ## Working with AI agents
 

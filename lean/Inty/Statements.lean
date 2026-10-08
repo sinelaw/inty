@@ -1,4 +1,5 @@
 import Inty.InferSound
+import Inty.Fuel
 
 /-!
 # Pinned statements
@@ -47,6 +48,10 @@ example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ → HasType [] [] e
 example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
     ∀ (fuel : Nat) (s : Stuck), eval fuel [] e ≠ .stuck s :=
   inferProgram_never_stuck
+
+example : ∀ (n : Nat) {env : Env} {e : Expr} (k : Nat), eval n env e ≠ .timeout →
+    eval (n + k) env e = eval n env e :=
+  eval_mono
 
 /-! ## Programs the typing rules reject -/
 
