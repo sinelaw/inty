@@ -48,7 +48,7 @@ Paths like `src/infer` are relative to `crates/inty`.
 - `return`, `throw` and statement sequences.
 - An interpreter with a call clock, and soundness by a step-indexed
   logical relation, including native builtins.
-- Algorithm W, proved sound.
+- Algorithm W, proved sound and complete.
 - Differential testing against inty and Node.
 
 ## Phases
@@ -75,32 +75,35 @@ The parts every later feature touches.
 
 ### 1. Completeness of inference
 
-Proved for the core, then kept for every later phase. Done for programs
-without `const` (`Inty/InferComplete.lean`); `const` remains, which needs
-the scheme rule tightened as below. The decisions it needed:
+Done: `infer_complete` (`Inty/InferComplete.lean`), for the whole calculus,
+and to be kept for every later phase. The decisions it needed:
 
-- **Ambiguous constraints.** Decided: a constraint left on a type
-  variable at the end is satisfiable, and inty leaves it in place and
-  accepts the program (`resolve_plus`), so `inferProgram` accepts it too,
-  typing the program at a default instance (`defaultSubst`). Completeness
-  is stated for constrained types: the inferred type, with its pending
-  constraints, has every valid type as a solved instance.
-- **Constraints in a `const`'s scheme.** `HasType` lets a scheme carry a
-  constraint that mentions none of its quantified variables, assumed while
-  typing the initialiser and checked only where the variable is used: so it
-  accepts `const x = function () { return true + true; }` when `x` is
-  unused, which inty, and inference, reject. The rule must require each of a
-  scheme's constraints to mention one of its quantified variables, as
-  inty's generalisation does.
-- **Well-scoped schemes.** A scheme may mention `bound i` past its arity.
-  "More general than" ranges over well-scoped schemes only, by a
-  well-formedness predicate or by construction.
-- **Termination of unification.** Done: a worklist algorithm that
-  terminates by the variables still to eliminate (an explicit list, so no
-  set library is needed) and then the size of the equations, proved sound
-  and most general (`unify_mgu`) in `Inty/Unify.lean`.
-- Freshness invariants and a set of rigid variables, as in
-  [fhm](https://github.com/Arrow7000/fhm) and CakeML's verified inference.
+- **Ambiguous constraints.** A constraint left on a type variable at the
+  end is satisfiable, and inty leaves it in place and accepts the program
+  (`resolve_plus`), so `inferProgram` accepts it too, typing the program at
+  a default instance (`defaultSubst`). Completeness is stated for
+  constrained types: the inferred type, with its pending constraints, has
+  every valid type as a solved instance.
+- **Constraints in a `const`'s scheme.** `HasType` used to let a scheme
+  carry a constraint on a type already known, assumed while typing the
+  initialiser and checked only where the variable is used, so it accepted
+  `const x = function () { return g + g; }` (with `g` a function) when `x`
+  is unused. inty now decides such a constraint when it generalises
+  (`InferState::generalize`), and the rule requires every constraint of a
+  scheme to be `Plus` on one of its quantified variables (`Scheme.Simple`).
+- **Termination of unification.** A worklist algorithm that terminates by
+  the variables still to eliminate (an explicit list, so no set library is
+  needed) and then the size of the equations, proved sound and most
+  general (`unify_mgu`) in `Inty/Unify.lean`.
+- **Freshness.** Inference's inputs mention only variables below its
+  counter (`Below`), and its substitutions stay within it (`Within`), as in
+  Naraschewski and Nipkow's proof of algorithm W. A `const`'s scheme is
+  opened at a block above everything in sight, which the cofinite rule
+  allows; the block is then sent to `Number`, an instance of every scheme
+  constraint, for the constraints left pending.
+- Still to come with the features that need them: rigid variables (phase
+  10), and well-scoped schemes (`bound i` within the arity) once schemes
+  are written by hand, in annotations.
 
 ### 2. State and control
 

@@ -57,14 +57,13 @@ inferProgram e = some τ → HasType [] [] none e τ
 so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
 gets stuck.
 
-`Inty.infer_complete` (in `Inty/InferComplete.lean`): for programs without
-`const` so far, inference finds a type whenever one exists, one of which
-every valid type is an instance (Damas and Milner's completeness; the
-freshness invariants follow Naraschewski and Nipkow's proof of algorithm
-W):
+`Inty.infer_complete` (in `Inty/InferComplete.lean`): inference finds a type
+whenever one exists, one of which every valid type is an instance (Damas
+and Milner's completeness; the freshness invariants follow Naraschewski and
+Nipkow's proof of algorithm W):
 
 ```
-ctxFtv Γ = [] → e.letFree → HasType [] Γ none e τ' →
+ctxFtv Γ = [] → HasType [] Γ none e τ' →
   ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ inferIn Γ e ≠ none
 ```
 
@@ -143,8 +142,8 @@ These choices are meant to hold up as the calculus grows.
   stands in for "the generalised variables aren't free in `Γ`" without
   renaming lemmas (Charguéraud's mini-ML, and fhm, do the same).
 - **Typing is extrinsic and declarative.** `HasType` is a relation on plain
-  syntax, separate from any algorithm. Inference is proved sound against it;
-  completeness is next.
+  syntax, separate from any algorithm. Inference is proved sound and complete
+  against it.
 - **Values are typed semantically**, by a step-indexed logical relation
   (Appel and McAllester, TOPLAS 2001; Ahmed, ESOP 2006) whose index is the
   interpreter's clock, as in CakeML: `V k (τ₁ → τ₂) f` says that calling
@@ -163,7 +162,7 @@ These choices are meant to hold up as the calculus grows.
   further substitution that resolves the pending class constraints. Stated
   that way, a `const`'s generalisation is justified by renaming, and the
   proof never needs inference's fresh variables to be fresh; completeness
-  will. Unification (`Inty/Unify.lean`) terminates by a measure and is
+  does, and states them as invariants (`Below`, `Within`). Unification (`Inty/Unify.lean`) terminates by a measure and is
   proved most general (`unify_mgu`): every unifier factors through the one
   it finds.
 - **Class constraints are assumptions in the judgement.** `HasType C Γ R e τ`

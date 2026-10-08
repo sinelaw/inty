@@ -67,12 +67,18 @@ example : ∀ {e : Expr} {τ : Ty}, inferIn builtinCtx e = some τ →
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv e ≠ .stuck s :=
   inferIn_builtins_never_stuck
 
-example : ∀ {Γ : Ctx} {e : Expr} {τ' : Ty}, ctxFtv Γ = [] → e.letFree = true →
-    HasType [] Γ none e τ' →
+example : ∀ (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst} {C : List Pred}
+    {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
+    Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, ∃ a, p = ⟨.plus, [.var a]⟩) →
+    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType C Γ' R' e τ' →
+    ∃ o, infer Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat C o.preds φ :=
+  infer_complete
+
+example : ∀ {Γ : Ctx} {e : Expr} {τ' : Ty}, ctxFtv Γ = [] → HasType [] Γ none e τ' →
     ∃ o, infer Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn Γ e = some τ :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, e.letFree = true → HasType [] [] none e τ' →
+example : ∀ {e : Expr} {τ' : Ty}, HasType [] [] none e τ' →
     ∃ τ, inferProgram e = some τ :=
   inferProgram_complete
 
