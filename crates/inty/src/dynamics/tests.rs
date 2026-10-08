@@ -344,3 +344,19 @@ fn int_arithmetic_is_checked_only_where_typed_int() {
         other => panic!("expected an Int range fault, got {:?}", other),
     }
 }
+
+/// A `throw` out of a called function is caught, and `finally` runs after a
+/// handler that throws.
+#[test]
+fn try_catches_a_throw_from_a_call() {
+    assert_number(
+        "const f = function () { throw 1; }; let r = 0; try { f(); } catch (e) { r = 2; } r",
+        2.0,
+    );
+    assert_number(
+        "const f = function () { throw 1; }; let r = 0; \
+         try { try { f(); } catch (e) { f(); } finally { r = 3; } } catch (e) {} r",
+        3.0,
+    );
+}
+

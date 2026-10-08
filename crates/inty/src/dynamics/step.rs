@@ -778,7 +778,10 @@ fn apply(
         Value::Builtin(m) => return apply_builtin(state, m, this, args),
         other => return Err(Stuck::NotCallable(other.type_string())),
     };
-    if args.len() != closure.params.len() {
+    // Extra arguments are ignored, as in JavaScript: inty's typing lets a
+    // function literal with fewer parameters stand for a function type
+    // with more (`check_function_literal`). Missing ones are an error.
+    if args.len() < closure.params.len() {
         return Err(Stuck::ArityMismatch {
             expected: closure.params.len(),
             got: args.len(),
@@ -1332,21 +1335,31 @@ pub fn eval_stmt(
             finalizer,
             ..
         } => {
-            let outcome = eval_stmt(state, env, block)?.0;
+            // A `throw` out of a function called in the block reaches here
+            // as `Stuck::UncaughtThrow`: it is the block's throw all the
+            // same, and the handler and `finally` see it.
+            let completed = |r: Result<(StmtOutcome, RuntimeEnv), Stuck>| match r {
+                Ok((outcome, _)) => Ok(outcome),
+                Err(Stuck::UncaughtThrow(v)) => Ok(StmtOutcome::Throw(v)),
+                Err(e) => Err(e),
+            };
+            let outcome = completed(eval_stmt(state, env, block))?;
             let outcome = match outcome {
                 StmtOutcome::Throw(v) => match handler {
                     Some(catch) => {
                         let loc = state.alloc_var(v);
                         let catch_env = env.extend(catch.param.clone(), loc);
-                        eval_stmt(state, &catch_env, &catch.body)?.0
+                        completed(eval_stmt(state, &catch_env, &catch.body))?
                     }
                     None => StmtOutcome::Throw(v),
                 },
                 other => other,
             };
             if let Some(f) = finalizer {
-                let final_outcome = eval_stmt(state, env, f)?.0;
-                if let StmtOutcome::Throw(_) | StmtOutcome::Return(_) = final_outcome {
+                // An abrupt `finally` (`throw`, `return`, `break`,
+                // `continue`) replaces the block's outcome.
+                let final_outcome = completed(eval_stmt(state, env, f))?;
+                if !matches!(final_outcome, StmtOutcome::Normal(_)) {
                     return Ok((final_outcome, env.clone()));
                 }
             }
