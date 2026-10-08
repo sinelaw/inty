@@ -1,4 +1,4 @@
-import Inty.Subst
+import Inty.Unify
 import Inty.Classes
 import Inty.Syntax
 
@@ -10,10 +10,9 @@ finds a type, where `HasType` only says which types are valid. It mirrors the
 structure of `src/infer`, minus its destructive unification and constraint
 solver.
 
-Two simplifications, both safe for soundness:
+Unification is in `Inty.Unify`, proved sound and most general. Class
+constraints are not solved as they arise:
 
-- Unification is bounded by fuel (`unifyFuel`), so it is total without a
-  termination proof. Completeness, the next step, needs that proof.
 - `+` records the constraint `Plus τ` on its operand type `τ`.
   A `const` that generalises a variable takes the constraints mentioning it
   into its scheme (inty's `<a> where Plus a => …`), and each use of the
@@ -22,39 +21,6 @@ Two simplifications, both safe for soundness:
 -/
 
 namespace Inty
-
-mutual
-/-- Robinson unification: a substitution that makes `τ₁` and `τ₂` equal.
-Function types unify when their `this` types, parameter lists (of the same
-length) and result types do. -/
-def unify : Nat → Ty → Ty → Option Subst
-  | 0, _, _ => none
-  | fuel + 1, τ₁, τ₂ =>
-    match τ₁, τ₂ with
-    | .var a, .var b => if a = b then some [] else some [(a, .var b)]
-    | .var a, τ => if a ∈ τ.ftv then none else some [(a, τ)]
-    | τ, .var a => if a ∈ τ.ftv then none else some [(a, τ)]
-    | .fn t₁ ps₁ r₁, .fn t₂ ps₂ r₂ =>
-      match unifyList fuel (t₁ :: r₁ :: ps₁) (t₂ :: r₂ :: ps₂) with
-      | none => none
-      | some σ => some σ
-    | τ₁, τ₂ => if τ₁ = τ₂ then some [] else none
-/-- Unify two lists of types of the same length, pairwise, left to right. -/
-def unifyList : Nat → List Ty → List Ty → Option Subst
-  | _, [], [] => some []
-  | 0, _, _ => none
-  | fuel + 1, τ₁ :: τs₁, τ₂ :: τs₂ =>
-    match unify fuel τ₁ τ₂ with
-    | none => none
-    | some σ₁ =>
-      match unifyList fuel (τs₁.map (·.subst σ₁)) (τs₂.map (·.subst σ₁)) with
-      | none => none
-      | some σ₂ => some (Subst.compose σ₂ σ₁)
-  | _, _, _ => none
-end
-
-/-- How deep unification may recurse. -/
-def unifyFuel : Nat := 1000
 
 /-- The type of a literal, as `LitTy`. -/
 def Lit.ty : Lit → Ty
@@ -139,7 +105,7 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         (n + 2 + k) with
     | none => none
     | some o =>
-      match unify unifyFuel (ρ.subst o.σ) o.τ with
+      match unify (ρ.subst o.σ) o.τ with
       | none => none
       | some σ' =>
         let σ := Subst.compose σ' o.σ
@@ -153,7 +119,7 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | none => none
       | some o₂ =>
         let β := Ty.var o₂.next
-        match unify unifyFuel (o₁.τ.subst o₂.σ) (.fn .undefined o₂.τs β) with
+        match unify (o₁.τ.subst o₂.σ) (.fn .undefined o₂.τs β) with
         | none => none
         | some σ₃ =>
           some ⟨Subst.compose σ₃ (Subst.compose o₂.σ o₁.σ), β.subst σ₃,
@@ -180,7 +146,7 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
             o₂.next with
         | none => none
         | some o₃ =>
-          match unify unifyFuel (o₂.τ.subst o₃.σ) o₃.τ with
+          match unify (o₂.τ.subst o₃.σ) o₃.τ with
           | none => none
           | some σ₄ =>
             some ⟨Subst.compose σ₄ (Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ)),
@@ -196,7 +162,7 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | .not => some ⟨o.σ, .boolean, o.preds, o.next⟩
       | .typeof => some ⟨o.σ, .string, o.preds, o.next⟩
       | .neg =>
-        match unify unifyFuel o.τ .number with
+        match unify o.τ .number with
         | none => none
         | some σ' => some ⟨Subst.compose σ' o.σ, .number, o.preds.map (·.subst σ'), o.next⟩
   | Γ, R, .binop op e₁ e₂, n =>
@@ -210,16 +176,16 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         let preds := o₁.preds.map (·.subst o₂.σ) ++ o₂.preds
         match op with
         | .plus =>
-          match unify unifyFuel (o₁.τ.subst o₂.σ) o₂.τ with
+          match unify (o₁.τ.subst o₂.σ) o₂.τ with
           | none => none
           | some σ₃ =>
             some ⟨Subst.compose σ₃ σ₂₁, o₂.τ.subst σ₃,
               (preds ++ [(⟨.plus, [o₂.τ]⟩ : Pred)]).map (·.subst σ₃), o₂.next⟩
         | .minus =>
-          match unify unifyFuel (o₁.τ.subst o₂.σ) .number with
+          match unify (o₁.τ.subst o₂.σ) .number with
           | none => none
           | some σ₃ =>
-            match unify unifyFuel (o₂.τ.subst σ₃) .number with
+            match unify (o₂.τ.subst σ₃) .number with
             | none => none
             | some σ₄ =>
               some ⟨Subst.compose σ₄ (Subst.compose σ₃ σ₂₁), .number,
@@ -231,7 +197,7 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
     match infer Γ (some τr) e n with
     | none => none
     | some o =>
-      match unify unifyFuel (τr.subst o.σ) o.τ with
+      match unify (τr.subst o.σ) o.τ with
       | none => none
       | some σ' =>
         some ⟨Subst.compose σ' o.σ, .var o.next, o.preds.map (·.subst σ'), o.next + 1⟩

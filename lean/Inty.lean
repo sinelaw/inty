@@ -7,6 +7,7 @@ import Inty.TypeSubst
 import Inty.Semantics
 import Inty.Soundness
 import Inty.Clock
+import Inty.Unify
 import Inty.Infer
 import Inty.InferSound
 import Inty.Builtins

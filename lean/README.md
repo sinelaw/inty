@@ -150,7 +150,9 @@ These choices are meant to hold up as the calculus grows.
   further substitution that resolves the pending class constraints. Stated
   that way, a `const`'s generalisation is justified by renaming, and the
   proof never needs inference's fresh variables to be fresh; completeness
-  will. Unification is bounded by fuel for the same reason.
+  will. Unification (`Inty/Unify.lean`) terminates by a measure and is
+  proved most general (`unify_mgu`): every unifier factors through the one
+  it finds.
 - **Class constraints are assumptions in the judgement.** `HasType C Γ R e τ`
   types `e` assuming the constraints in `C` hold, as in HM(X). A class is a
   `Cls` with its instances in `Inst` (`Inty/Classes.lean`); `Plus` is the

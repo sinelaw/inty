@@ -87,11 +87,10 @@ needs first:
 - **Well-scoped schemes.** A scheme may mention `bound i` past its arity.
   "More general than" ranges over well-scoped schemes only, by a
   well-formedness predicate or by construction.
-- **Termination of unification**, by a measure (number of variables, then
-  size, as in fhm) instead of fuel. Rows (phase 3) allocate fresh
-  variables during unification, which the measure must cover. A definition
-  by well-founded recursion doesn't reduce in the kernel, so `by decide`
-  examples move to `#guard`.
+- **Termination of unification.** Done: a worklist algorithm that
+  terminates by the variables still to eliminate (an explicit list, so no
+  set library is needed) and then the size of the equations, proved sound
+  and most general (`unify_mgu`) in `Inty/Unify.lean`.
 - Freshness invariants and a set of rigid variables, as in
   [fhm](https://github.com/Arrow7000/fhm) and CakeML's verified inference.
 

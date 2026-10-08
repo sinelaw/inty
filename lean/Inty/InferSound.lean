@@ -11,65 +11,6 @@ accepts never gets stuck.
 
 namespace Inty
 
-/-- A single binding `a ↦ τ`, with `a` not in `τ`, unifies `var a` with `τ`. -/
-theorem Ty.subst_single {a : Nat} {τ : Ty} (h : a ∉ τ.ftv) : τ.subst [(a, τ)] = τ :=
-  Ty.subst_id (fun b hb => by
-    have : b ≠ a := fun e => h (e ▸ hb)
-    simp [Subst.find, this])
-
-theorem unify_sound_both : ∀ fuel : Nat,
-    (∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify fuel τ₁ τ₂ = some σ → τ₁.subst σ = τ₂.subst σ) ∧
-    (∀ {τs₁ τs₂ : List Ty} {σ : Subst}, unifyList fuel τs₁ τs₂ = some σ →
-      τs₁.map (·.subst σ) = τs₂.map (·.subst σ))
-  | 0 => ⟨fun h => by simp [unify] at h, fun {τs₁ τs₂ σ} h => by
-      cases τs₁ <;> cases τs₂ <;> simp [unifyList] at h ⊢⟩
-  | fuel + 1 => by
-    have ih := unify_sound_both fuel
-    refine ⟨fun {τ₁ τ₂ σ} h => ?_, fun {τs₁ τs₂ σ} h => ?_⟩
-    · unfold unify at h
-      split at h
-      · split at h <;> cases h
-        · subst_vars; rfl
-        · rename_i hne
-          have : ¬_ = _ := Ne.symm hne
-          simp [Ty.subst, Subst.find, this]
-      · split at h
-        · cases h
-        · cases h; rename_i hocc
-          simp [Ty.subst, Subst.find, Ty.subst_single hocc]
-      · split at h
-        · cases h
-        · cases h; rename_i hocc
-          simp [Ty.subst, Subst.find, Ty.subst_single hocc]
-      · split at h
-        · cases h
-        rename_i σ' h'
-        cases h
-        have e := ih.2 h'
-        simp only [List.map_cons, List.cons.injEq] at e
-        simp [e.1, e.2.1, e.2.2]
-      · split at h
-        · cases h; subst_vars; rfl
-        · cases h
-    · cases τs₁ <;> cases τs₂ <;> simp only [unifyList, reduceCtorEq] at h
-      · cases h; rfl
-      rename_i τ₁ τs₁ τ₂ τs₂
-      split at h
-      · cases h
-      rename_i σ₁ h₁
-      split at h
-      · cases h
-      rename_i σ₂ h₂
-      cases h
-      have e₁ := ih.1 h₁
-      have e₂ := ih.2 h₂
-      simp only [List.map_map, Function.comp_def] at e₂
-      simp [e₁, e₂]
-
-theorem unify_sound {fuel : Nat} {τ₁ τ₂ : Ty} {σ : Subst} (h : unify fuel τ₁ τ₂ = some σ) :
-    τ₁.subst σ = τ₂.subst σ :=
-  (unify_sound_both fuel).1 h
-
 /-- Under `φ`, every constraint in `P` is an instance or assumed in `C`. -/
 def Sat (C : List Pred) (P : List Pred) (φ : Subst) : Prop := ∀ c ∈ P, Entails C (c.subst φ)
 
