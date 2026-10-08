@@ -8,6 +8,9 @@ on:
     branches: [ "main" ]
     paths: [ "lean/**", ".github/workflows/lean.yml" ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,7 +21,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install elan
       run: |
-        curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+        curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
           | sh -s -- -y --default-toolchain none
         echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
     # Checks every proof. Warnings are errors, so a `sorry` fails the build.

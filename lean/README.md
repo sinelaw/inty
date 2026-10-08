@@ -1,7 +1,7 @@
 # Lean formalization of inty's type system
 
 A machine-checked model of inty's type system, in Lean 4 (core library only,
-no Mathlib). This first version is a small core calculus with a complete
+no Mathlib). Paths like `src/dynamics` are relative to `crates/inty`. This first version is a small core calculus with a complete
 type-soundness proof. It is laid out so that each inty feature can be added
 the way it is added to the Rust code: a typing rule, an operator arm and a
 runtime arm, plus one new case in the proof.
@@ -26,8 +26,8 @@ HasType Γ e τ → EnvTy env Γ →
 
 Its corollary `Inty.never_stuck` says a closed well-typed program never
 evaluates to `stuck`. That is the property `src/meta/soundness.rs` samples
-with proptest ("whenever inty accepts a program, `dynamics` must not get
-stuck on it"), here proved for all programs of the calculus.
+with proptest ("Whenever inty accepts a program, the operational semantics
+must not get stuck on it"), here proved for all programs of the calculus.
 `Inty/Axioms.lean` pins the axioms the theorems use to Lean's standard three
 (`propext`, `Classical.choice`, `Quot.sound`).
 
@@ -35,10 +35,10 @@ stuck on it"), here proved for all programs of the calculus.
 
 | Lean | inty |
 |---|---|
-| `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `arrow` | `types::Type` (an `arrow` is the call signature of a callable row) |
+| `Ty`: `number`, `string`, `boolean`, `undefined`, `null`, `arrow` | `types::Type` (an `arrow` is the call signature of a callable row; `number` stands for both `Int` and `Number`) |
 | `Expr`: literals, variables, named one-parameter functions (recursive), application, `const`, `?:`, `!`, `typeof`, unary `-`, `+`, `-` | `ast::Expr` |
 | `HasType` (declarative typing) | what `src/infer` implements |
-| `UnOpTy`, `BinOpTy` (one constructor per typing arm) | the operator catalog, `src/operators` |
+| `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
 | `PlusInst` | the `Plus` instance table, `src/classes` |
 | `Value`, `Stuck`, `eval` (fuel-bounded interpreter) | `src/dynamics` (`Value`, `Stuck`, fuel) |
 | `Value.truthy`, `Value.typeString` | `Value::truthy`, `Value::type_string` |
@@ -67,12 +67,14 @@ These choices are meant to hold up as the calculus grows.
 - **Variables are de Bruijn indices.** The typing context and the runtime
   environment are lists indexed the same way.
 - **Typing is extrinsic and declarative.** `HasType` is a relation on plain
-  syntax, separate from any algorithm. Inference is proved sound (later,
-  complete) against it.
-- **Values are typed semantically** (`ValTy`): a closure has type `τ₁ → τ₂`
-  when its body is well typed in a context its captured environment
-  satisfies. Step-indexed logical relations are the planned route once
-  recursive types arrive.
+  syntax, separate from any algorithm. Inference will be proved sound, then
+  complete, against it.
+- **Values are typed by a value-typing relation** (`ValTy`): a closure has
+  type `τ₁ → τ₂` when its body is well typed in a context its captured
+  environment satisfies. Once recursive types arrive, `ValTy` is planned to
+  become a step-indexed logical relation.
+- **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
+  and `Arith` classes, is a roadmap item.
 
 ## Adding a feature
 
@@ -102,14 +104,17 @@ cheapest proofs first and the hardest last.
    this, including SCC grouping of recursive bindings (`docs/scc-inference.md`).
 3. **Differential testing.** A `lean_exe` that reads a serialised core AST
    and prints the checker's and interpreter's verdicts. The Rust side lowers
-   the programs `src/meta/soundness.rs` generates and compares.
+   the programs `src/meta/soundness.rs` generates and compares. Fuel is
+   counted differently (recursion depth here, a global step counter in
+   `dynamics`), so a timeout on either side is not a mismatch.
 4. **Statements and abrupt completion.** `return`, `throw`, `break` and loops
    as extra `Result` forms, as `dynamics` has them.
 5. **Records and row polymorphism.** Record types with Rémy-style row
    variables, the `HasProp` constraint, and method chains through `this`.
 6. **Mutable state.** A store threaded through `eval`, `let` cells and
    object fields, and a store typing that only grows.
-7. **Literal types, unions and subsumption**, including inty's join rules
+7. **Literal types, `Int`, unions and subsumption**: `Int ≤ Number` with
+   the `Num` and `Arith` classes, and inty's join rules
    ("declared, not guessed", `docs/type-system.md`). Subsumption treats a
    mutable array or record as invariant: only a value is subsumed into a
    union, never the element type of a container someone can write to (#96).

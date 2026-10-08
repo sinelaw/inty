@@ -8,7 +8,7 @@ implements: it says which types an expression may have, not how to find one.
 Inference soundness and completeness against it is a later layer.
 
 The operator rules are split out as `UnOpTy` / `BinOpTy`, one constructor per
-typing arm, mirroring the operator catalog in `src/operators`. Type-class
+operator rule, mirroring the operator catalog in `src/operators`. Type-class
 instances are `PlusInst`, mirroring the instance tables in `src/classes`.
 -/
 
@@ -22,8 +22,9 @@ inductive PlusInst : Ty → Prop where
   | number : PlusInst .number
   | string : PlusInst .string
 
-/-- The type of a literal. Literal types (`42`, `"err"`) come later; for now a
-literal has its base type, as after widening. -/
+/-- The type of a literal: its base type. Literal types (`42`, `"err"`) come
+later, and so does `Int`: inty types an integral literal as `Int` or
+`Number`, and this calculus folds both into `number`. -/
 inductive LitTy : Lit → Ty → Prop where
   | number : LitTy (.number n) .number
   | string : LitTy (.string s) .string
@@ -31,13 +32,13 @@ inductive LitTy : Lit → Ty → Prop where
   | undefined : LitTy .undefined .undefined
   | null : LitTy .null .null
 
-/-- Typing arms of the unary operators: operand type, result type. -/
+/-- Typing rules of the unary operators: operand type, result type. -/
 inductive UnOpTy : UnOp → Ty → Ty → Prop where
   | not : UnOpTy .not τ .boolean
   | typeof : UnOpTy .typeof τ .string
   | neg : UnOpTy .neg .number .number
 
-/-- Typing arms of the binary operators: operand types, result type. Both
+/-- Typing rules of the binary operators: operand types, result type. Both
 operands of `+` have the same type, one instance of `Plus`: inty's `+` never
 mixes a `Number` with a `String`. -/
 inductive BinOpTy : BinOp → Ty → Ty → Ty → Prop where

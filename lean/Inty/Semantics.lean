@@ -5,7 +5,7 @@ import Inty.Syntax
 
 A definitional interpreter with fuel, in the style of Amin and Rompf, "Type
 Soundness Proofs with Definitional Interpreters" (POPL 2017). It is the Lean
-counterpart of `crates/inty/src/dynamics`: closures capture their
+counterpart of `src/dynamics`: closures capture their
 definition-time environment, evaluation is bounded by fuel, and anything that
 goes wrong is an explicit `stuck` result, never a crash.
 
@@ -92,13 +92,17 @@ def eval : Nat → Env → Expr → Result
       | some v => .ok v
       | none => .stuck .undefinedVariable
     | .func body => .ok (.closure env body)
+    -- The callee, then the argument, then the call, as in `dynamics`: a
+    -- callee that isn't a function is found out only at the call.
     | .app f a =>
       match eval fuel env f with
-      | .ok (.closure cenv body) =>
+      | .ok vf =>
         match eval fuel env a with
-        | .ok v => eval fuel (v :: .closure cenv body :: cenv) body
+        | .ok va =>
+          match vf with
+          | .closure cenv body => eval fuel (va :: vf :: cenv) body
+          | _ => .stuck .notCallable
         | r => r
-      | .ok _ => .stuck .notCallable
       | r => r
     | .let_ e₁ e₂ =>
       match eval fuel env e₁ with

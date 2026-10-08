@@ -21,7 +21,7 @@ The production pipeline is `parse → infer → (optionally) decorate`. The dyna
 
 ## Testing
 
-inty has four kinds of tests, plus a Lean formalization (§5). The first three each fix a specific class of bug; the fourth is a meta-layer that asserts the first three agree with each other. Run everything with:
+inty has four kinds of tests. The first three each fix a specific class of bug; the fourth is a meta-layer that asserts the first three agree with each other. A Lean formalization (§5) builds separately. Run the tests with:
 
 ```
 cargo test --lib -- --skip parser::proptests

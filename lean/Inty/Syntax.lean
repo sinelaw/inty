@@ -1,7 +1,7 @@
 /-!
 # Syntax of the core calculus
 
-The core calculus is the fragment of inty's shared AST (`crates/inty/src/ast`)
+The core calculus is the fragment of inty's shared AST (`src/ast`)
 that this formalization covers so far. Each frontend lowers onto that AST, so
 the calculus is language-agnostic in the same way.
 

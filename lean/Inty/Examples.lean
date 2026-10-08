@@ -74,4 +74,10 @@ example : HasType [] (.cond (str "") (num 1) (num 2)) .number :=
   | .ok (.number n) => n == 2
   | _ => false
 
+-- `1(y)` with `y` unbound: the argument is evaluated before the callee is
+-- found not to be a function, as in `dynamics`, so it gets stuck on `y`.
+#guard match eval 10 [] (.app (num 1) (.var 5)) with
+  | .stuck .undefinedVariable => true
+  | _ => false
+
 end Inty.Examples

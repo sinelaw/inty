@@ -6,13 +6,13 @@ import Inty.Semantics
 
 A well-typed program never gets stuck: with any amount of fuel, `eval` either
 runs out of fuel or returns a value of the expected type. This is the theorem
-`src/meta/soundness.rs` tests by sampling ("whenever inty accepts a program,
-`dynamics` must not get stuck on it"), proved for every program of the
-calculus.
+`src/meta/soundness.rs` tests by sampling ("Whenever inty accepts a program,
+the operational semantics must not get stuck on it"), proved for every
+program of the calculus.
 
-The proof is by induction on fuel. Values are typed semantically: a closure
-has type `τ₁ → τ₂` when its body is well typed in a context its captured
-environment satisfies.
+The proof is by induction on fuel. Values are typed by a value-typing
+relation, `ValTy`: a closure has type `τ₁ → τ₂` when its body is well typed
+in a context its captured environment satisfies.
 -/
 
 namespace Inty
@@ -85,10 +85,10 @@ theorem eval_sound (fuel : Nat) :
     | app hf ha =>
       rcases ih hf henv with hr | ⟨vf, hr, hvf⟩
       · exact .inl (by simp [eval, hr])
+      rcases ih ha henv with hr' | ⟨va, hr', hva⟩
+      · exact .inl (by simp [eval, hr, hr'])
       cases hvf with
       | closure hcenv hbody =>
-        rcases ih ha henv with hr' | ⟨va, hr', hva⟩
-        · exact .inl (by simp [eval, hr, hr'])
         have := ih hbody (.cons hva (.cons (.closure hcenv hbody) hcenv))
         simpa [Safe, eval, hr, hr'] using this
     | let_ h₁ h₂ =>
