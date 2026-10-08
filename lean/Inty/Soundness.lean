@@ -1,4 +1,4 @@
-import Inty.Typing
+import Inty.TypeSubst
 import Inty.Semantics
 
 /-!
@@ -25,13 +25,16 @@ inductive ValTy : Value → Ty → Prop where
   | boolean : ValTy (.boolean b) .boolean
   | undefined : ValTy .undefined .undefined
   | null : ValTy .null .null
-  | closure : EnvTy env Γ → HasType (τ₁ :: .arrow τ₁ τ₂ :: Γ) body τ₂ →
+  | closure : EnvTy env Γ →
+      HasType (.mono τ₁ :: .mono (.arrow τ₁ τ₂) :: Γ) body τ₂ →
       ValTy (.closure env body) (.arrow τ₁ τ₂)
 
-/-- `EnvTy env Γ`: each value in `env` has the type `Γ` gives its variable. -/
+/-- `EnvTy env Γ`: each value in `env` has every instance of the scheme `Γ`
+gives its variable. -/
 inductive EnvTy : Env → Ctx → Prop where
   | nil : EnvTy [] []
-  | cons : ValTy v τ → EnvTy env Γ → EnvTy (v :: env) (τ :: Γ)
+  | cons : (∀ τs, τs.length = s.arity → ValTy v (s.inst τs)) → EnvTy env Γ →
+      EnvTy (v :: env) (s :: Γ)
 end
 
 /-- A result is safe at `τ` when it is a value of type `τ`, or ran out of
@@ -42,8 +45,8 @@ def Safe (r : Result) (τ : Ty) : Prop :=
 -- `EnvTy` is mutually inductive, so this recurses on the index instead of
 -- inducting on the environment.
 theorem EnvTy.lookup :
-    ∀ {i : Nat} {env : Env} {Γ : Ctx} {τ}, EnvTy env Γ → Γ[i]? = some τ →
-      ∃ v, env[i]? = some v ∧ ValTy v τ
+    ∀ {i : Nat} {env : Env} {Γ : Ctx} {s}, EnvTy env Γ → Γ[i]? = some s →
+      ∃ v, env[i]? = some v ∧ ∀ τs, τs.length = s.arity → ValTy v (s.inst τs)
   | _, _, _, _, .nil, hi => by simp at hi
   | 0, _, _, _, .cons hv _, hi => by simp at hi; subst hi; exact ⟨_, rfl, hv⟩
   | i + 1, _, _, _, .cons _ h, hi => by simpa using EnvTy.lookup h (by simpa using hi)
@@ -69,6 +72,21 @@ theorem BinOp.eval_sound (hop : BinOpTy op τ₁ τ₂ τ) (hv₁ : ValTy v₁ �
     | string => cases hv₁; cases hv₂; exact ⟨_, rfl, .string⟩
   | minus => cases hv₁; cases hv₂; exact ⟨_, rfl, .number⟩
 
+/-- A result safe at every instance of a scheme is one value with all those
+types, or a timeout. -/
+theorem Safe.forall {r : Result} {s : Scheme}
+    (h : ∀ τs, τs.length = s.arity → Safe r (s.inst τs)) :
+    r = .timeout ∨ ∃ v, r = .ok v ∧ ∀ τs, τs.length = s.arity → ValTy v (s.inst τs) := by
+  cases r with
+  | timeout => exact .inl rfl
+  | stuck _ =>
+    rcases h (List.replicate s.arity .undefined) (by simp) with h | ⟨_, h, _⟩ <;> cases h
+  | ok v =>
+    refine .inr ⟨v, rfl, fun τs hlen => ?_⟩
+    rcases h τs hlen with h | ⟨_, h, hv⟩
+    · cases h
+    · cases h; exact hv
+
 /-- Type soundness. -/
 theorem eval_sound (fuel : Nat) :
     ∀ {Γ env e τ}, HasType Γ e τ → EnvTy env Γ → Safe (eval fuel env e) τ := by
@@ -78,9 +96,9 @@ theorem eval_sound (fuel : Nat) :
     intro Γ env e τ ht henv
     cases ht with
     | lit hl => exact .inr ⟨_, rfl, Lit.eval_sound hl⟩
-    | var hi =>
+    | var hi hlen =>
       obtain ⟨v, hv, hvt⟩ := EnvTy.lookup henv hi
-      exact .inr ⟨v, by simp [eval, hv], hvt⟩
+      exact .inr ⟨v, by simp [eval, hv], hvt _ hlen⟩
     | func hb => exact .inr ⟨_, rfl, .closure henv hb⟩
     | app hf ha =>
       rcases ih hf henv with hr | ⟨vf, hr, hvf⟩
@@ -89,10 +107,24 @@ theorem eval_sound (fuel : Nat) :
       · exact .inl (by simp [eval, hr, hr'])
       cases hvf with
       | closure hcenv hbody =>
-        have := ih hbody (.cons hva (.cons (.closure hcenv hbody) hcenv))
+        have := ih hbody (.cons (fun _ _ => by simpa using hva)
+          (.cons (fun _ _ => by simpa using ValTy.closure hcenv hbody) hcenv))
         simpa [Safe, eval, hr, hr'] using this
-    | let_ h₁ h₂ =>
-      rcases ih h₁ henv with hr | ⟨v, hr, hv⟩
+    | let_ s L hgen _hv h₂ =>
+      rename_i e₁ e₂
+      -- Type `e₁` at each instance of `s`: open `s` at variables above
+      -- everything in sight, then substitute the instance's types for them.
+      let m := maxPlusOne (L ++ ctxFtv Γ ++ s.ftv)
+      have hm : ∀ a, a ∈ L ∨ a ∈ ctxFtv Γ ∨ a ∈ s.ftv → a < m := fun a ha =>
+        lt_maxPlusOne a (by rcases ha with h | h | h <;> simp [h])
+      have hinst : ∀ τs, τs.length = s.arity → HasType Γ e₁ (s.inst τs) := by
+        intro τs hlen
+        have h := (hgen m (fun a ha => hm a (.inl ha))).subst (Subst.block m τs)
+        have hfresh : ∀ a, a < m → (Subst.block m τs).find a = none := fun a ha =>
+          Subst.find_none (fun p hp e => by have := Subst.block_keys p hp; omega)
+        rwa [ctx_subst_id (fun a ha => hfresh a (hm a (.inr (.inl ha)))),
+          Scheme.open_block s (fun a ha => hm a (.inr (.inr ha))) hlen] at h
+      rcases Safe.forall (fun τs hlen => ih (hinst τs hlen) henv) with hr | ⟨v, hr, hv⟩
       · exact .inl (by simp [eval, hr])
       simpa [Safe, eval, hr] using ih h₂ (.cons hv henv)
     | cond hc htt hte =>

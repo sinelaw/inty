@@ -1,3 +1,5 @@
+import Inty.Types
+
 /-!
 # Syntax of the core calculus
 
@@ -7,23 +9,10 @@ the calculus is language-agnostic in the same way.
 
 Variables are de Bruijn indices: `var 0` is the innermost binder. The
 environment of the semantics and the context of the typing judgement are both
-lists indexed the same way, so no substitution is ever needed.
+lists indexed the same way, so terms are never substituted into.
 -/
 
 namespace Inty
-
-/-- Types. A later layer adds type variables and schemes (Hindley–Milner),
-rows, literal types and unions. -/
-inductive Ty where
-  | number
-  | string
-  | boolean
-  | undefined
-  | null
-  /-- A function of one argument. In inty a function value is a row carrying
-  a call signature (`Type::Func` inside a row); this is that signature alone. -/
-  | arrow (dom cod : Ty)
-  deriving DecidableEq, Repr
 
 /-- Literals. Numbers are IEEE doubles, as in JavaScript and in
 `dynamics::Value::Number(f64)`. -/
@@ -62,8 +51,8 @@ inductive Expr where
   so functions can recurse, as JavaScript's named function expressions can. -/
   | func (body : Expr)
   | app (f a : Expr)
-  /-- `const x = e₁; e₂`, with `x` as `var 0` in `e₂`. Monomorphic for now:
-  generalisation arrives with type schemes. -/
+  /-- `const x = e₁; e₂`, with `x` as `var 0` in `e₂`. `x` is generalised
+  when `e₁` is a syntactic value. -/
   | let_ (e₁ e₂ : Expr)
   /-- `c ? t : e`. The test may have any type and is read by truthiness, as
   in `dynamics::Value::truthy`. -/
@@ -71,5 +60,12 @@ inductive Expr where
   | unop (op : UnOp) (e : Expr)
   | binop (op : BinOp) (e₁ e₂ : Expr)
   deriving Repr
+
+/-- Syntactic values, which the value restriction lets a `const` generalise:
+`is_syntactic_value` in `src/infer/features/bindings.rs`. -/
+inductive Expr.IsValue : Expr → Prop where
+  | lit : Expr.IsValue (.lit l)
+  | var : Expr.IsValue (.var i)
+  | func : Expr.IsValue (.func body)
 
 end Inty

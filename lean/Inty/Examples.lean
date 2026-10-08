@@ -23,10 +23,12 @@ def isString (s : String) : Result → Bool
 def double : Expr :=
   .let_ (.func (.binop .plus (.var 0) (.var 0))) (.app (.var 0) (str "ab"))
 
+-- `double` is monomorphic: its body needs one `Plus` instance, and schemes
+-- don't carry class constraints yet.
 example : HasType [] double .string :=
-  .let_ (τ₁ := .arrow .string .string)
-    (.func (.binop (.plus .string) (.var rfl) (.var rfl)))
-    (.app (.var rfl) (.lit .string))
+  .let_mono (τ₁ := .arrow .string .string)
+    (.func (.binop (.plus .string) (.var_mono rfl) (.var_mono rfl)))
+    (.app (.var_mono rfl) (.lit .string))
 
 #guard isString "abab" (eval 10 [] double)
 
@@ -34,7 +36,30 @@ example : HasType [] double .string :=
 also types at `Number`. -/
 example : HasType [] (.func (.binop .plus (.var 0) (.var 0)))
     (.arrow .number .number) :=
-  .func (.binop (.plus .number) (.var rfl) (.var rfl))
+  .func (.binop (.plus .number) (.var_mono rfl) (.var_mono rfl))
+
+/-- Let-polymorphism:
+`const id = function (x) { return x; }; const n = id(1); id("a")` -/
+def polyId : Expr :=
+  .let_ (.func (.var 0))
+    (.let_ (.app (.var 0) (num 1))
+      (.app (.var 1) (str "a")))
+
+/-- `id`'s scheme, `∀ α. α → α`. -/
+def idScheme : Scheme := ⟨1, .arrow (.bound 0) (.bound 0)⟩
+
+-- `id` is used at `Number → Number` and at `String → String`.
+example : HasType [] polyId .string :=
+  .let_ idScheme [] (fun _ _ => .func (.var_mono rfl)) (.inr .func)
+    (.let_mono
+      (.app (.var (s := idScheme) (τs := [.number]) rfl rfl) (.lit .number))
+      (.app (.var (s := idScheme) (τs := [.string]) rfl rfl) (.lit .string)))
+
+#guard isString "a" (eval 10 [] polyId)
+
+/-- The value restriction: `id(id)` is not a syntactic value, so a `const`
+bound to it gets a monomorphic scheme. -/
+example : ¬ (Expr.app (.var 0) (.var 0)).IsValue := nofun
 
 /-- A recursive function:
 `function f(n) { return n ? f(n - 1) : "done"; }; f(3)` -/
@@ -45,7 +70,8 @@ def countdown : Expr :=
 
 example : HasType [] countdown .string :=
   .app
-    (.func (.cond (.var rfl) (.app (.var rfl) (.binop .minus (.var rfl) (.lit .number)))
+    (.func (.cond (.var_mono rfl)
+      (.app (.var_mono rfl) (.binop .minus (.var_mono rfl) (.lit .number)))
       (.lit .string)))
     (.lit .number)
 
