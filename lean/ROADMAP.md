@@ -247,8 +247,31 @@ touching the generic proofs.
 - Typed arrays, regex, `Promise` (with `await` as the identity, as in
   `dynamics`).
 - Arrays and records invariant while mutable (#96).
-- `Int ≤ Number`, at the top level only; the `Num`, `NumLit` and `Arith`
-  classes; defaulting; `Int` indices; checked `Int` arithmetic (`Stuck::IntRange`) as a
+- **inty's numbers are principal (done).** inty defaulted numeric
+  variables where it generalised a binding (an ambiguous literal to
+  `Int`, a parameter-only variable to `Number`, a result-only one to
+  `Int`), and typed `+` by whether an operand was already known to be a
+  number when it met it (`Arith`) or not (`Plus a`, unifying both
+  operands), so `xs.length + y` made `y` an `Int`. Neither is a rule a
+  declarative system can state. Now a scheme keeps its numeric variables
+  and constraints (`inc` is `<a, b, c> where Arith a b c, NumLit b =>
+  (a) => c`); only the end of the program defaults, to `Int`; `+` is one
+  class, `Plus a b c` (numbers as `Arith`, or three strings), decided by
+  improvement whatever the order; and a recursive group's members are
+  generalised over the same variables. Writing it found an unsoundness:
+  a scheme's `Arith` didn't check that its operands are numbers (its
+  `Num`s are tidied away), so `function h(x) { return x * 2; }
+  h("s")` was accepted. Indices stay `Int` (`Indexable`), which is what
+  the Go backend needs for machine-integer indexing; the backend compiles
+  a function once per type it is used at, takes a parameter that only
+  feeds floating-point arithmetic as `float64` (an `Int` argument is a
+  `Number`), and gives a polymorphic literal `const` one variable per
+  type it is used at. On its benchmarks the generated Go
+  has more `int`s and fewer `float64`s, and runs as fast or faster but
+  for `spectral-norm` (7% slower, with identical code but for `int` loop
+  bounds).
+- `Int ≤ Number`, at the top level only; the `Num`, `NumLit`, `Arith`
+  and `Plus` classes; `Int` indices; checked `Int` arithmetic (`Stuck::IntRange`) as a
   fault. `Float` is opaque in Lean, so proofs rely on inty's runtime range
   checks, and a bit-level binary64 model, tested against Node, where inty
   doesn't check.

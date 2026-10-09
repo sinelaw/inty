@@ -151,6 +151,8 @@ fn emit_pass(
         deferred: HashMap::new(),
         pure_funcs: HashMap::new(),
         literal_consts: HashMap::new(),
+        literal_vars: std::collections::BTreeMap::new(),
+        literal_count: 0,
         resolution: inty::ast::resolve::Resolution::of_program(
             &program.statements,
             program.language,
@@ -175,7 +177,8 @@ fn emit_pass(
                 span,
                 ..
             } => {
-                let fid = e.register_func(name, params, body, *span, None)?;
+                let at = span.start + "function ".len();
+                let fid = e.register_func(name, params, body, *span, at, None)?;
                 e.bind_func(name, fid);
             }
             Stmt::Var {
@@ -183,8 +186,16 @@ fn emit_pass(
             } => {
                 for d in declarations {
                     if let Some((params, body, span)) = const_function(*kind, d) {
-                        let fid = e.register_func(&d.name, params, body, span, None)?;
+                        let fid =
+                            e.register_func(&d.name, params, body, span, d.span.start, None)?;
                         e.bind_func(&d.name, fid);
+                        continue;
+                    }
+                    if let Some(init) = e.poly_literal(*kind, d) {
+                        // (An integer literal: a `case` label as an `int`.)
+                        let v = e.expr_as(init, &GoType::Int)?;
+                        e.literal_consts.insert(d.name.clone(), v);
+                        e.bind_literal(&d.name, init.clone(), true);
                         continue;
                     }
                     let t = e.decl_type(d)?;
@@ -217,7 +228,7 @@ fn emit_pass(
                 kind, declarations, ..
             } => {
                 for d in declarations {
-                    if const_function(*kind, d).is_some() {
+                    if const_function(*kind, d).is_some() || e.poly_literal(*kind, d).is_some() {
                         continue;
                     }
                     if let Some(init) = &d.init {
@@ -249,6 +260,9 @@ fn emit_pass(
         "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"slices\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n\t\"unicode\"\n)\n\n",
     );
     out.push_str(&e.tm.render_structs());
+    for (name, (ty, v)) in &e.literal_vars {
+        globals.push_str(&format!("var {} {} = {}\n", name, ty, v));
+    }
     if !globals.is_empty() {
         out.push_str(&globals);
         out.push('\n');
@@ -317,6 +331,11 @@ enum Bound {
     Func(usize),
     /// Something imported from a Node built-in module.
     Node(NodeItem),
+    /// A `const` bound to a number literal whose type stays polymorphic
+    /// (`const zero = 0` is `<a> where Num a => a`): a Go variable per
+    /// type a use needs (an `int` index, a `float64` sum), named `base`
+    /// for `int` and `base_f` for `float64`.
+    Literal { init: Expr, base: String },
 }
 
 /// The parts of Node's built-in modules the backend implements (see
@@ -375,6 +394,14 @@ struct FuncInfo {
     span: Span,
     /// Its quantified type variables — those a specialisation fixes.
     qvars: Vec<TVarName>,
+    /// All its scheme's quantified variables, its type's or not (a
+    /// mutually recursive group's members share theirs): a use with no
+    /// recorded instantiation, a recursive one, inherits the choice for
+    /// them.
+    scheme_vars: Vec<TVarName>,
+    /// Those a specialisation takes as `Number` even where its use passes
+    /// `Int`s (`InferState::float_preferred_vars`).
+    float_vars: HashSet<TVarName>,
     /// The mapping in force where it was declared (an enclosing
     /// function's specialisation); specialisations extend it.
     outer: Rc<Mapping>,
@@ -421,6 +448,11 @@ struct Emitter<'a> {
     /// variables everywhere else: Go folds constant expressions with its
     /// own rules, `1 / zero` being a compile error.)
     literal_consts: HashMap<String, String>,
+    /// The Go variables of polymorphic literal `const`s (`Bound::Literal`)
+    /// at the types their uses need: name → (Go type, value).
+    literal_vars: std::collections::BTreeMap<String, (String, String)>,
+    /// For unique names of local polymorphic literal `const`s.
+    literal_count: usize,
     /// Every function binding seen so far, with its specialisations.
     funcs: Vec<FuncInfo>,
     /// The specialisation mapping in force, innermost last.
@@ -849,6 +881,34 @@ impl<'a> Emitter<'a> {
             .insert(name.to_string(), Bound::Var(t));
     }
 
+    fn bind_literal(&mut self, name: &str, init: Expr, top_level: bool) {
+        let base = if top_level {
+            mangle(name)
+        } else {
+            self.literal_count += 1;
+            format!("{}_{}", mangle(name), self.literal_count)
+        };
+        self.scopes
+            .last_mut()
+            .expect("scope")
+            .insert(name.to_string(), Bound::Literal { init, base });
+    }
+
+    /// A `const` bound to a number literal whose type inty left
+    /// polymorphic, to be inlined at each use (see `Bound::Literal`).
+    fn poly_literal<'d>(&self, kind: VarKind, d: &'d VarDeclarator) -> Option<&'d Expr> {
+        let init = literal_const(kind, d)?;
+        let number = matches!(
+            init,
+            Expr::Lit {
+                value: Literal::Number(_),
+                ..
+            } | Expr::Unary { .. }
+        );
+        let t = self.state.get_decl_type(d.span)?;
+        (number && matches!(self.state.apply_subst(t), inty::types::Type::Var(_))).then_some(init)
+    }
+
     fn bind_func(&mut self, name: &str, fid: usize) {
         self.scopes
             .last_mut()
@@ -939,6 +999,26 @@ impl<'a> Emitter<'a> {
                 format!("Node built-in `{}` used as a value ({:?})", name, item),
                 span,
             )),
+            Some(Bound::Literal { init, base }) => {
+                let t = self.raw_type(span)?;
+                let t = self.tm.map(self.state, &t, span)?;
+                let go_name = match t {
+                    GoType::Int => base,
+                    GoType::Float => format!("{}_f", base),
+                    _ => {
+                        return Err(unsupported(
+                            format!("number `{}` used as a {:?}", name, t),
+                            span,
+                        ))
+                    }
+                };
+                if !self.literal_vars.contains_key(&go_name) {
+                    let v = self.expr_as(&init, &t)?;
+                    let rendered = self.tm.render(&t);
+                    self.literal_vars.insert(go_name.clone(), (rendered, v));
+                }
+                Ok(Some((go_name, t)))
+            }
             Some(Bound::Var(t)) => {
                 // A generalised non-function value (e.g. an object of
                 // polymorphic functions) would need one copy per use type.
@@ -995,8 +1075,18 @@ impl<'a> Emitter<'a> {
         params: &[Param],
         body: &Stmt,
         span: Span,
+        scheme_at: usize,
         block: Option<usize>,
     ) -> Result<usize> {
+        let scheme = self
+            .state
+            .get_decl_scheme(Span::new(scheme_at, scheme_at))
+            .cloned();
+        let scheme_vars = scheme.as_ref().map(|s| s.vars.clone()).unwrap_or_default();
+        let float_vars = scheme
+            .as_ref()
+            .map(|s| self.state.float_preferred_vars(s))
+            .unwrap_or_default();
         let ty = self.raw_type(span)?;
         let mut qvars: Vec<TVarName> = ty
             .free_vars()
@@ -1010,6 +1100,8 @@ impl<'a> Emitter<'a> {
             body: Rc::new(body.clone()),
             span,
             qvars,
+            scheme_vars,
+            float_vars,
             outer: self.mapping(),
             block,
             specs: Vec::new(),
@@ -1040,6 +1132,13 @@ impl<'a> Emitter<'a> {
                 qvars.push(q.clone());
             }
         }
+        if inst.is_empty() {
+            for v in self.funcs[fid].scheme_vars.clone() {
+                if !qvars.contains(&v) {
+                    qvars.push(v);
+                }
+            }
+        }
         // Those an earlier use fixed, too: a recursive use records no
         // instantiation for them, and inherits the current choice (below).
         let outer = self.funcs[fid].outer.clone();
@@ -1059,7 +1158,11 @@ impl<'a> Emitter<'a> {
                 Some((_, t)) => t.clone(),
                 None => Type::Var(v.clone()),
             };
-            concrete.push(canonical(&self.in_context(&t)));
+            let mut c = canonical(&self.in_context(&t));
+            if c == Type::Int && self.funcs[fid].float_vars.contains(v) {
+                c = Type::Number;
+            }
+            concrete.push(c);
         }
         let key = format!("{}", Type::Tuple(concrete.clone()));
         if let Some(spec) = self.funcs[fid].specs.iter().find(|s| s.key == key) {
@@ -1275,7 +1378,8 @@ impl<'a> Emitter<'a> {
                 ..
             } = s
             {
-                let fid = self.register_func(name, params, body, *span, Some(block))?;
+                let at = span.start + "function ".len();
+                let fid = self.register_func(name, params, body, *span, at, Some(block))?;
                 self.bind_func(name, fid);
             }
         }
@@ -1335,9 +1439,14 @@ impl<'a> Emitter<'a> {
                 for (i, d) in declarations.iter().enumerate() {
                     if let Some((params, body, span)) = const_function(*kind, d) {
                         let block = self.block_stack.last().copied();
-                        let fid = self.register_func(&d.name, params, body, span, block)?;
+                        let fid =
+                            self.register_func(&d.name, params, body, span, d.span.start, block)?;
                         self.bind_func(&d.name, fid);
                         self.line(&format!("\u{1}A{}\u{1}", fid));
+                        continue;
+                    }
+                    if let Some(init) = self.poly_literal(*kind, d) {
+                        self.bind_literal(&d.name, init.clone(), false);
                         continue;
                     }
                     let ty = self.decl_type(d)?;

@@ -2077,6 +2077,19 @@ impl InferState {
     }
 
     pub fn generalize(&mut self, env_free: &crate::infer::EnvFree, ty: &Type) -> TypeScheme {
+        self.generalize_seeded(env_free, ty, &[])
+    }
+
+    /// [`Self::generalize`], quantifying the variables `extra` too (where
+    /// the environment doesn't fix them), with the constraints on them: a
+    /// mutually recursive group's members are generalised over the same
+    /// variables (see `infer_function_group`).
+    pub fn generalize_seeded(
+        &mut self,
+        env_free: &crate::infer::EnvFree,
+        ty: &Type,
+        extra: &[TVarName],
+    ) -> TypeScheme {
         self.constraint_removals += 1;
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
@@ -2086,22 +2099,17 @@ impl InferState {
         // scheme that's missing those fields, letting calls with
         // incompatible argument shapes through. See
         // `Subst::flatten` for the full story.
-        // Default the numeric variables local to this binding first (see
-        // `features::numeric`): the scheme is then over what's left.
-        if self
-            .pending_constraints
-            .iter()
-            .any(|c| crate::infer::features::numeric::is_numeric_class(c.pred.class))
-        {
-            let ty = self.main_subst.flatten(ty);
-            let (mut fixed_vars, _) = self.env_fixed_vars(env_free, &ty);
-            fixed_vars.extend(self.pinned_numeric.iter().cloned());
-            if let Err(e) = self.default_numeric(&fixed_vars, Some(&ty), false) {
-                self.push_error(e);
-            }
+        // Decide what improvement decides (a numeric or `Plus` constraint
+        // a type reached). Nothing is defaulted here: a numeric variable
+        // left free stays in the scheme, so the scheme is principal, and
+        // each use picks its own (the end of the program defaults what's
+        // left; see `features::numeric`).
+        if let Err(e) = self.simplify_numeric() {
+            self.push_error(e);
         }
         let ty = self.main_subst.flatten(ty);
-        let ty_vars = ty.free_vars();
+        let mut ty_vars = ty.free_vars();
+        ty_vars.extend(extra.iter().cloned());
         let pvars = ty.free_pvars();
 
         // Sort by TVarName id so the scheme's quantification order is
@@ -2194,18 +2202,14 @@ impl InferState {
                 }
             }
             self.pending_constraints = remaining;
-            // A `Plus` whose type is already known is decided here, not
-            // carried in the scheme to be found out at each use: a binding
-            // whose body adds two functions is an error even if nothing
-            // uses it (lean/ROADMAP.md, phase 1). On a variable it stays,
-            // as `<a> where Plus a`.
+            // A write constraint whose type is already known is decided
+            // here, not carried in the scheme to be found out at each use
+            // (lean/ROADMAP.md, phase 1). On a variable it stays. (A
+            // `Plus` on a known type was decided by `simplify_numeric`.)
             let scheme_preds: Vec<TypePred> = scheme_preds
                 .into_iter()
                 .filter(|pred| {
-                    if !matches!(
-                        pred.class,
-                        ClassName::Plus | ClassName::IndexWrite | ClassName::FieldWrite
-                    ) {
+                    if !matches!(pred.class, ClassName::IndexWrite | ClassName::FieldWrite) {
                         return true;
                     }
                     let ty = self.main_subst.flatten(&pred.types[0]);
@@ -2214,7 +2218,6 @@ impl InferState {
                     }
                     let span = pred.origin.unwrap_or_default();
                     let decided = match pred.class {
-                        ClassName::Plus => self.resolve_plus(&ty, span),
                         ClassName::IndexWrite => self.resolve_index_write(&ty, span),
                         _ => self.resolve_field_write(&ty, span),
                     };
@@ -2370,7 +2373,15 @@ impl InferState {
                             vec![]
                         }
                     }
-                    (ClassName::Plus, _) => vec![],
+                    // the operands → the result
+                    (ClassName::Plus | ClassName::Arith, [a, b, c]) => {
+                        if a.free_vars().is_subset(&vars) && b.free_vars().is_subset(&vars) {
+                            vec![c]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    (ClassName::Num | ClassName::NumLit, _) => vec![],
                     // Unknown shape: conservatively, any fixed variable
                     // fixes the whole predicate.
                     (_, types) => {

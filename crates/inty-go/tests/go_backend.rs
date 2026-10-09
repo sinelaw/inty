@@ -668,3 +668,25 @@ fn a_store_to_an_index_just_accessed_is_plain() {
     assert!(program.contains("[m] = intyH"), "{}", program);
     assert!(!program.contains("intySetGrow"), "{}", program);
 }
+
+#[test]
+fn numbers_compute_in_the_type_their_uses_need() {
+    // Indices are `int`s; a helper computing a float formula from integer
+    // arguments takes `float64`s (an `Int` argument is a `Number`), rather
+    // than checked integer products it would only convert.
+    let src = "function a(i, j) { return 1 / ((i + j) * (i + j + 1) / 2 + i + 1); }\n\
+               function sum(n) { let s = 0; for (let i = 0; i < n; i++) { s += a(i, i + 1); } return s; }\n\
+               const xs = [1, 2, 3];\n\
+               function at(k) { return xs[k]; }\n\
+               console.log(sum(10));\n\
+               console.log(at(1));";
+    let code = inty_go::compile(src).unwrap().code;
+    let program = code.split("// ---- inty-go runtime").next().unwrap();
+    assert!(
+        program.contains("func a(i float64, j float64) float64"),
+        "{}",
+        program
+    );
+    assert!(program.contains("func sum(n int) float64"), "{}", program);
+    assert!(program.contains("func at(k int) int"), "{}", program);
+}

@@ -672,6 +672,13 @@ impl PrettyContext {
             ClassName::Plus => {
                 write!(w, "Plus ")?;
                 self.write_type(w, &pred.types[0], true)?;
+                // `Plus a` for `Plus a a a`.
+                if pred.types.iter().any(|t| t != &pred.types[0]) {
+                    for t in &pred.types[1..] {
+                        write!(w, " ")?;
+                        self.write_type(w, t, true)?;
+                    }
+                }
             }
             ClassName::Num | ClassName::NumLit => {
                 write!(w, "Num ")?;

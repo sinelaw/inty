@@ -22,14 +22,15 @@
 //! `a` and `b` known → `c`; either `Number` → `c = Number`; `c = Int` →
 //! `a = b = Int`; `c = Number` and one side `Int` → the other `Number`.
 //!
-//! Numeric variables nothing else determines are *defaulted* where a
-//! scheme is generalised and at the end of inference (Haskell's
-//! defaulting): a literal's to `Int`, any other to `Number`. That keeps
-//! `function inc(x) { return x + 1; }` at `(Number) => Number` rather
-//! than a scheme over `Arith`. A variable some other constraint determines
-//! — an index (`a[i + 1]`, fixed by the container), a property read, the
-//! environment — is left alone, and so is everything connected to it by
-//! `Arith`: defaulting one would constrain the others.
+//! Nothing is defaulted where a scheme is generalised: a numeric variable
+//! the environment doesn't fix stays in the scheme with its constraints,
+//! so the scheme is principal (`function inc(x) { return x + 1; }` is
+//! `<a, b, c> where Arith a b c, NumLit b => (a) => c`), and each use picks
+//! its own instance. Improvement still decides what it can (a known
+//! operand, a known result). The end of the program defaults what's left,
+//! to `Int` (any choice is valid there, and the Go backend computes an
+//! `Int` in machine integers). An array's index is an `Int` anyway
+//! (`Indexable`), so a loop counter used as one is too.
 
 use std::collections::HashSet;
 
@@ -158,6 +159,12 @@ impl InferState {
         c: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
+        // Each is a number: a scheme's `Arith` stands for its `Num`s too
+        // (`tidy_scheme_preds`), so an instance on a known type that isn't
+        // one fails here.
+        for t in [a, b, c] {
+            self.check_numeric_if_known(t, span)?;
+        }
         let (ka, kb, kc) = (self.num_kind(a), self.num_kind(b), self.num_kind(c));
         use NumKind::*;
         match (ka, kb, kc) {
@@ -189,6 +196,18 @@ impl InferState {
         }
     }
 
+    /// A known type in a numeric slot must be a number; a variable waits.
+    fn check_numeric_if_known(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
+        match self.zonk(ty) {
+            Type::Var(_)
+            | Type::Int
+            | Type::Number
+            | Type::Literal(LitValue::Number(_))
+            | Type::Error => Ok(()),
+            other => Err(self.unification_error(span, &Type::Number, &other)),
+        }
+    }
+
     /// Bind a numeric slot: a literal already there only has to fit.
     fn unify_num(&mut self, span: Span, slot: &Type, ty: Type) -> Result<(), IntyError> {
         match self.zonk(slot) {
@@ -201,10 +220,13 @@ impl InferState {
     /// repeatedly (one can decide another).
     pub(crate) fn simplify_numeric(&mut self) -> Result<(), IntyError> {
         self.constraint_removals += 1;
+        // (`Plus` too: a number or a string reaching one of its variables
+        // decides it.)
+        let improvable = |class: ClassName| is_numeric_class(class) || class == ClassName::Plus;
         if !self
             .pending_constraints
             .iter()
-            .any(|c| is_numeric_class(c.pred.class))
+            .any(|c| improvable(c.pred.class))
         {
             return Ok(());
         }
@@ -212,13 +234,12 @@ impl InferState {
             let before: Vec<TypePred> = self
                 .pending_constraints
                 .iter()
-                .filter(|c| is_numeric_class(c.pred.class))
+                .filter(|c| improvable(c.pred.class))
                 .map(|c| self.apply_subst_pred(&c.pred))
                 .collect();
             let all = std::mem::take(&mut self.pending_constraints);
-            let (numeric, rest): (Vec<_>, Vec<_>) = all
-                .into_iter()
-                .partition(|c| is_numeric_class(c.pred.class));
+            let (numeric, rest): (Vec<_>, Vec<_>) =
+                all.into_iter().partition(|c| improvable(c.pred.class));
             self.pending_constraints = rest;
             for c in numeric {
                 self.resolve_numeric_pred(&c.pred, c.span)?;
@@ -226,7 +247,7 @@ impl InferState {
             let after: Vec<TypePred> = self
                 .pending_constraints
                 .iter()
-                .filter(|c| is_numeric_class(c.pred.class))
+                .filter(|c| improvable(c.pred.class))
                 .map(|c| self.apply_subst_pred(&c.pred))
                 .collect();
             if after == before {
@@ -254,32 +275,28 @@ impl InferState {
                 );
                 self.resolve_arith(&a, &b, &c, span)
             }
+            ClassName::Plus => {
+                let (a, b, c) = (
+                    pred.types[0].clone(),
+                    pred.types[1].clone(),
+                    pred.types[2].clone(),
+                );
+                self.resolve_plus(&a, &b, &c, span)
+            }
             _ => unreachable!("resolve_numeric_pred: not a numeric class"),
         }
     }
 
-    /// Default the numeric variables whose choice is free, and simplify
-    /// the constraints the choice doesn't matter to (see the module docs).
-    ///
-    /// With `ty`, where a scheme for `ty` is about to be generalised
-    /// (`fixed` being what the environment holds): a variable `ty` doesn't
-    /// mention is *ambiguous* and defaults — to `Int` for a literal's, to
-    /// `Number` otherwise, both always valid; a variable only in parameter
-    /// position whose value no result depends on becomes `Number` (a caller
-    /// may still pass an `Int`: `Int ≤ Number` at the argument); one only
-    /// in result position that no constraint determines becomes `Int` (a
-    /// caller may still use it as a `Number`). What's left relates inputs
-    /// to outputs and stays polymorphic: `x => x * 2` is
-    /// `<a> where Num a => (a) => a`.
-    ///
-    /// Without `ty` — the end of the program — every variable defaults
-    /// (operands before results, which then follow). With `force`, even
-    /// those another constraint determines. Returns whether anything was
-    /// defaulted.
+    /// Default the numeric variables left at the end of the program to
+    /// `Int` (see the module docs), operands before results (which then
+    /// follow by improvement), except those in `fixed` (an imported
+    /// module's, which its importers decide) and, unless `force`, those
+    /// another constraint determines (an `Indexable`'s index, a `HasProp`'s
+    /// result, and what `Arith` connects to them), whose turn comes when
+    /// that constraint is resolved. Returns whether anything was defaulted.
     pub(crate) fn default_numeric(
         &mut self,
         fixed: &HashSet<TVarName>,
-        ty: Option<&Type>,
         force: bool,
     ) -> Result<bool, IntyError> {
         self.simplify_numeric()?;
@@ -287,13 +304,6 @@ impl InferState {
         loop {
             // (Recomputed each round: defaulting and improvement merge
             // variables.)
-            let polarity = ty.map(|t| {
-                let t = self.main_subst.flatten(t);
-                let t = self.zonk(&t);
-                let mut out = std::collections::HashMap::new();
-                collect_polarity(&t, POS, &mut out);
-                out
-            });
             let preds: Vec<TypePred> = self
                 .pending_constraints
                 .iter()
@@ -317,15 +327,9 @@ impl InferState {
                     }
                 }
             }
-            let directly_blocked = blocked.clone();
             // Components connected by `Arith`: blocked as a whole.
             let numeric: Vec<&TypePred> =
                 preds.iter().filter(|p| is_numeric_class(p.class)).collect();
-            let ariths: Vec<(Type, Type, Type)> = numeric
-                .iter()
-                .filter(|p| p.class == ClassName::Arith)
-                .map(|p| (p.types[0].clone(), p.types[1].clone(), p.types[2].clone()))
-                .collect();
             let mut changed = true;
             while changed {
                 changed = false;
@@ -339,24 +343,17 @@ impl InferState {
                     }
                 }
             }
-            let results: HashSet<TVarName> =
-                ariths.iter().filter_map(|(_, _, c)| var_of(c)).collect();
-            let literal: HashSet<TVarName> = numeric
+            let results: HashSet<TVarName> = numeric
                 .iter()
-                .filter(|p| p.class == ClassName::NumLit)
-                .filter_map(|p| var_of(&p.types[0]))
+                .filter(|p| p.class == ClassName::Arith)
+                .filter_map(|p| var_of(&p.types[2]))
                 .collect();
-            // A literal operand is the exception: `a ⊔ Int = a`, so its
-            // default constrains nothing else in its component.
-            let free_literal = |v: &TVarName| {
-                literal.contains(v) && !results.contains(v) && !directly_blocked.contains(v)
-            };
             let candidates: Vec<TVarName> = {
                 let mut seen = HashSet::new();
                 let mut vs = Vec::new();
                 for p in &numeric {
                     for v in p.types.iter().filter_map(var_of) {
-                        if (!blocked.contains(&v) || free_literal(&v)) && seen.insert(v.clone()) {
+                        if !blocked.contains(&v) && seen.insert(v.clone()) {
                             vs.push(v);
                         }
                     }
@@ -364,116 +361,117 @@ impl InferState {
                 vs.sort_by_key(|v| v.id());
                 vs
             };
-            let default_for = |v: &TVarName| {
-                if literal.contains(v) {
-                    Type::Int
-                } else {
-                    Type::Number
-                }
-            };
-            let pick: Option<(TVarName, Type)> = match &polarity {
-                None => candidates
-                    .iter()
-                    .find(|v| !results.contains(v))
-                    .or_else(|| candidates.first())
-                    .map(|v| (v.clone(), default_for(v))),
-                Some(polarity) => {
-                    // Variables a result (or anything else `ty` mentions)
-                    // depends on through `Arith`: operand → result edges,
-                    // walked backwards from the mentioned ones.
-                    let mut feeds: HashSet<TVarName> = polarity
-                        .iter()
-                        .filter(|(_, f)| **f & (POS | INV) != 0)
-                        .map(|(v, _)| v.clone())
-                        .collect();
-                    let mut grew = true;
-                    while grew {
-                        grew = false;
-                        for (a, b, c) in &ariths {
-                            if var_of(c).is_some_and(|c| feeds.contains(&c)) {
-                                for v in [a, b].into_iter().filter_map(var_of) {
-                                    grew |= feeds.insert(v);
-                                }
-                            }
-                        }
-                    }
-                    candidates.iter().find_map(|v| {
-                        let flags = polarity.get(v).copied().unwrap_or(0);
-                        if blocked.contains(v) {
-                            // (A free literal: see above.)
-                            (flags == 0).then(|| (v.clone(), Type::Int))
-                        } else if flags == 0 {
-                            // Ambiguous: an operand's choice is free (the
-                            // result it feeds follows); a result's is not.
-                            (!results.contains(v)).then(|| (v.clone(), default_for(v)))
-                        } else if flags == NEG && !feeds.contains(v) {
-                            Some((v.clone(), Type::Number))
-                        } else if flags == POS && !results.contains(v) {
-                            Some((v.clone(), Type::Int))
-                        } else {
-                            None
-                        }
-                    })
-                }
-            };
-            let Some((v, default)) = pick else {
-                if polarity.is_some() && self.drop_unused_ariths(&blocked, polarity.as_ref())? {
-                    continue;
-                }
+            let pick = candidates
+                .iter()
+                .find(|v| !results.contains(v))
+                .or_else(|| candidates.first())
+                .cloned();
+            let Some(v) = pick else {
                 return Ok(defaulted_any);
             };
-            self.unify(Span::default(), &Type::Var(v), &default)?;
+            self.unify(Span::default(), &Type::Var(v), &Type::Int)?;
             defaulted_any = true;
             self.simplify_numeric()?;
         }
     }
+}
 
-    /// Drop `Arith a b c` for a `c` nothing uses — not the type, no other
-    /// constraint: some `c` always exists (`a ⊔ b`), so it only says `a`
-    /// and `b` are numbers, which their own `Num`s already say.
-    fn drop_unused_ariths(
-        &mut self,
-        blocked: &HashSet<TVarName>,
-        polarity: Option<&std::collections::HashMap<TVarName, u8>>,
-    ) -> Result<bool, IntyError> {
-        self.constraint_removals += 1;
-        let preds: Vec<TypePred> = self
-            .pending_constraints
+impl InferState {
+    /// The quantified numeric variables of `scheme` that a specialisation
+    /// may as well take as `Number` whatever its use's instantiation:
+    /// those only in parameter position (an `Int` argument is a `Number`
+    /// too), on which no result and no other kind of constraint (an index,
+    /// a field) depends, through `Arith`. A code generator computes a
+    /// function like `(i, j) => 1 / ((i + j) * (i + j + 1) / 2 + i + 1)`,
+    /// called with integer loop counters, in floating point then, as an
+    /// `Int` instantiation would compute checked integer products only to
+    /// convert them.
+    pub fn float_preferred_vars(&self, scheme: &crate::types::TypeScheme) -> HashSet<TVarName> {
+        let mut polarity = std::collections::HashMap::new();
+        collect_polarity(&scheme.body.ty, POS, &mut polarity);
+        let var_of = |t: &Type| match t {
+            Type::Var(v) => Some(v.clone()),
+            _ => None,
+        };
+        let numeric_pred = |p: &TypePred| is_numeric_class(p.class);
+        // What a result, or another kind of constraint, depends on.
+        let mut feeds: HashSet<TVarName> = polarity
             .iter()
-            .map(|c| self.apply_subst_pred(&c.pred))
+            .filter(|(_, f)| **f & (POS | INV) != 0)
+            .map(|(v, _)| v.clone())
             .collect();
-        let mentioned = |v: &TVarName| polarity.is_some_and(|p| p.contains_key(v));
-        for (i, p) in preds.iter().enumerate() {
-            if p.class != ClassName::Arith {
-                continue;
+        for p in scheme.body.preds.iter().filter(|p| !numeric_pred(p)) {
+            for t in &p.types {
+                feeds.extend(t.free_vars());
             }
-            let Type::Var(c @ TVarName::Flex(_)) = &p.types[2] else {
-                continue;
-            };
-            if blocked.contains(c) || mentioned(c) {
-                continue;
-            }
-            let used_elsewhere = preds.iter().enumerate().any(|(j, q)| {
-                j != i
-                    && !matches!(q.class, ClassName::Num | ClassName::NumLit)
-                    && q.types.iter().any(|t| t.free_vars().contains(c))
-            });
-            if used_elsewhere || p.types[..2].iter().any(|t| t.free_vars().contains(c)) {
-                continue;
-            }
-            let c = c.clone();
-            let span = self.pending_constraints[i].span;
-            self.pending_constraints.remove(i);
-            for t in &p.types[..2] {
-                self.require_num(span, t)?;
-            }
-            self.pending_constraints.retain(|k| {
-                !(matches!(k.pred.class, ClassName::Num | ClassName::NumLit)
-                    && k.pred.types[0] == Type::Var(c.clone()))
-            });
-            return Ok(true);
         }
-        Ok(false)
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for p in scheme
+                .body
+                .preds
+                .iter()
+                .filter(|p| p.class == ClassName::Arith)
+            {
+                if var_of(&p.types[2]).is_some_and(|c| feeds.contains(&c)) {
+                    for v in p.types[..2].iter().filter_map(var_of) {
+                        grew |= feeds.insert(v);
+                    }
+                }
+            }
+        }
+        // Only operands of arithmetic: one only compared (`i < n`, with an
+        // integer `i`) stays an `Int`.
+        let operands: HashSet<TVarName> = scheme
+            .body
+            .preds
+            .iter()
+            .filter(|p| p.class == ClassName::Arith)
+            .flat_map(|p| p.types[..2].iter().filter_map(var_of))
+            .collect();
+        let chosen: HashSet<TVarName> = scheme
+            .vars
+            .iter()
+            .filter(|v| {
+                operands.contains(v)
+                    && polarity.get(*v).copied() == Some(NEG)
+                    && !feeds.contains(*v)
+                    // Not shared with the other members of a recursive
+                    // group, whose bodies may need it an `Int`.
+                    && self
+                        .decl_schemes
+                        .values()
+                        .filter(|s| s.vars.contains(v))
+                        .count()
+                        <= 1
+            })
+            .cloned()
+            .collect();
+        // And what they feed: `a ⊔ b` is a `Number` once `a` is. (None of
+        // it reaches a result: a chosen variable feeds none.)
+        let mut out = chosen;
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for p in scheme
+                .body
+                .preds
+                .iter()
+                .filter(|p| p.class == ClassName::Arith)
+            {
+                if p.types[..2]
+                    .iter()
+                    .filter_map(var_of)
+                    .any(|v| out.contains(&v))
+                {
+                    if let Some(c) = var_of(&p.types[2]) {
+                        grew |= out.insert(c);
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
@@ -555,8 +553,10 @@ pub(crate) fn tidy_scheme_preds(preds: Vec<TypePred>) -> Vec<TypePred> {
         let t = p.types.first();
         let implied = match p.class {
             ClassName::Num => t.is_some_and(|t| in_arith.contains(t) || lit.contains(t)),
-            ClassName::NumLit => t.is_some_and(|t| in_arith.contains(t)),
-            ClassName::Plus => t.is_some_and(|t| numeric.contains(t)),
+            // (Not implied by an `Arith`: it says how the variable
+            // defaults, to `Int`.)
+            ClassName::NumLit => false,
+            ClassName::Plus => p.types.iter().all(|t| numeric.contains(t)),
             _ => false,
         };
         if !implied && !out.contains(&p) {

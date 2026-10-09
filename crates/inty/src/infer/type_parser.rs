@@ -288,10 +288,23 @@ impl<'a> TypeParser<'a> {
                     .is_some_and(|c| c.is_whitespace())
         };
         if keyword("Plus") {
+            // `Plus t`, short for `Plus t t t`, or `Plus a b c`.
             self.pos += 4;
             self.skip_whitespace();
-            let t = self.parse_simple_type()?;
-            self.preds.push(TypePred::plus(t));
+            let a = self.parse_simple_type()?;
+            self.skip_whitespace();
+            let more = self.input[self.pos..]
+                .chars()
+                .next()
+                .is_some_and(|c| !matches!(c, ',' | '=' | ')'));
+            if more {
+                let b = self.parse_simple_type()?;
+                self.skip_whitespace();
+                let c = self.parse_simple_type()?;
+                self.preds.push(TypePred::plus3(a, b, c));
+            } else {
+                self.preds.push(TypePred::plus(a));
+            }
             return Ok(());
         }
         if keyword("Num") {

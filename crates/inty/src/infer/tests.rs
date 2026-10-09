@@ -187,7 +187,7 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
         final_env = new_env;
     }
     // What the end of a program does: default its numeric variables.
-    state.default_numeric(&Default::default(), None, false)?;
+    state.default_numeric(&Default::default(), false)?;
 
     Ok((result_ty, final_env, state))
 }
@@ -420,12 +420,13 @@ fn test_var_used_but_never_assigned() {
     "#;
     let (_, env, state) = infer_program_with_state(source).unwrap();
 
-    // y should be Number (or a type with Plus constraint)
+    // y is a number (`Int`, the end of the program's default), or still a
+    // variable.
     let y_scheme = env.lookup("y").unwrap();
     let y_ty = state.apply_subst(&y_scheme.body.ty);
     assert!(
-        matches!(y_ty, Type::Number | Type::Var(_)),
-        "y should be Number or Plus-constrained"
+        matches!(y_ty, Type::Int | Type::Number | Type::Var(_)),
+        "y should be a number, got {y_ty:?}"
     );
 }
 
@@ -1101,13 +1102,13 @@ fn test_add_function_has_plus_constraint() {
     // The type should be a function
     assert!(ty.is_func(), "add should be a function type");
 
-    // Both parameters should be unified to the same type
+    // The constraint relates the parameters to the result: `Plus a b c`,
+    // the operands' types not unified (`add(1, 0.5)` is a `Number`).
+    assert_eq!(pred.types.len(), 3);
     if let Some((_, params, _)) = ty.as_callable() {
         assert_eq!(params.len(), 2);
-        assert_eq!(
-            params[0], params[1],
-            "Both parameters should have the same type"
-        );
+        assert_eq!(params[0].ty, pred.types[0]);
+        assert_eq!(params[1].ty, pred.types[1]);
     }
 }
 
@@ -3630,7 +3631,7 @@ fn gen_fixed_index_does_not_fix_the_container() {
                const a = get([1]);\n\
                const b = get([\"s\"]);";
     let t = check_program(src, &["get"]).unwrap();
-    assert!(t[0].starts_with("<a, b>"), "{}", t[0]);
+    assert!(t[0].contains("Indexable a"), "{}", t[0]);
 }
 
 #[test]
@@ -3640,7 +3641,7 @@ fn gen_captured_variable_is_not_quantified() {
     let src = "function outer(x) { function inner(y) { return x + y; } return inner; }\n\
                var addThree = outer(3);";
     let t = check_program(src, &["outer", "addThree"]).unwrap();
-    assert_eq!(t[0], "<a> where Plus a => (a) => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a) => (b) => c");
     assert_eq!(t[1], "(Int) => Int");
 }
 
@@ -3669,10 +3670,12 @@ fn gen_hoisted_const_function_stays_immutable() {
 
 #[test]
 fn gen_parameter_shadows_function_name() {
+    // (`1`'s type is a variable of its own, `Int` or `Number`: `a + 1` is
+    // `a ⊔ b`.)
     let t = check_program("const f = (f) => f + 1;\nconst r = f(2);", &["f"]).unwrap();
-    assert_eq!(t[0], "<a> where Num a => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
     let t = check_program("function g(g) { return g + 1; }\nconst r = g(2);", &["g"]).unwrap();
-    assert_eq!(t[0], "<a> where Num a => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
 }
 
 #[test]
@@ -3691,10 +3694,14 @@ fn gen_return_in_both_branches_of_if() {
     // The `if` statement's completion type joined `Lit(0)` with `f`'s
     // return variable, pinning it to the singleton `0`.
     let src = "function f(n) { if (n == 0) return 0; else return f(n - 1); }";
-    assert_eq!(check_program(src, &["f"]).unwrap()[0], "(Number) => Int");
+    let principal = "<a, b, c> where Arith a b a, Num c, Num b => (a) => c";
+    assert_eq!(check_program(src, &["f"]).unwrap()[0], principal);
     let nested = "function f(n) { function g(m) { return f(m - 1); } \
                   if (n == 0) return 0; else return g(n); }";
-    assert_eq!(check_program(nested, &["f"]).unwrap()[0], "(Number) => Int");
+    assert_eq!(
+        check_program(nested, &["f"]).unwrap()[0],
+        "<a, b, c> where Arith a b a, Num b, Num c => (a) => c"
+    );
 }
 
 // ---- Older holes found by the generalisation review ------------------------
@@ -3896,10 +3903,11 @@ fn instantiated_predicate_errors_point_at_the_use() {
     let src = "function twice(x) { return x + x; }\ntwice(true);";
     let program = crate::frontends::javascript::parse_source(src).unwrap();
     let mut state = InferState::new();
-    state
-        .infer_program_with_env(&initial_env(), &program)
-        .unwrap();
-    let err = state.resolve_constraints().unwrap_err();
+    // (Decided at the use, by improvement, or at the end.)
+    let err = match state.infer_program_with_env(&initial_env(), &program) {
+        Err(e) => e,
+        Ok(_) => state.resolve_constraints().unwrap_err(),
+    };
     let span = match err {
         crate::error::IntyError::Type(ref e) => e.span(),
         ref other => panic!("expected a type error, got {:?}", other),
@@ -4775,4 +4783,63 @@ fn test_indexing_a_string_literal() {
         const d = c + "!";
     "#;
     assert!(check_program(source, &[]).is_ok());
+}
+
+// ---- Principal numbers ------------------------------------------------------
+
+#[test]
+fn plus_is_principal_whatever_the_order() {
+    // `xs.length` is an `Int` only once `xs` is known: `+` used to unify
+    // its operands while both were unknown, making `y` an `Int` too.
+    let src = "function len(xs, y) { return xs.length + y; }\n\
+               const a = len([1], 0.5);\n\
+               const b = len(\"ab\", 1);\n\
+               const c = len([1], \"!\") ;";
+    assert!(check_program(src, &[]).is_err(), "Int + String");
+    let ok = "function len(xs, y) { return xs.length + y; }\n\
+              const a = len([1], 0.5);\n\
+              const b = len(\"ab\", 1);";
+    let t = check_program(ok, &["a", "b"]).unwrap();
+    assert_eq!(t, vec!["Number".to_string(), "Int".to_string()]);
+    let add = "function add(x, y) { return x + y; }\n\
+               const n = add(1, 0.5);\n\
+               const s = add(\"a\", \"b\");";
+    let t = check_program(add, &["add", "n", "s"]).unwrap();
+    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a, b) => c");
+    assert_eq!(t[1], "Number");
+    assert_eq!(t[2], "String");
+}
+
+#[test]
+fn a_scheme_keeps_its_numeric_variables() {
+    // Nothing is defaulted where a function is generalised, so each use
+    // picks its own instance.
+    let src = "function half(x) { return x * 0.5; }\n\
+               function k() { return 1; }\n\
+               const xs = [0.5, k()];\n\
+               const i = [10, 20][k()];";
+    let t = check_program(src, &["half", "k", "xs", "i"]).unwrap();
+    assert_eq!(t[0], "<a> where Num a => (a) => Number");
+    assert_eq!(t[1], "<a> where Num a => () => a");
+    assert_eq!(t[2], "Number[]");
+    assert_eq!(t[3], "Int");
+}
+
+#[test]
+fn arith_on_a_string_is_rejected_at_the_use() {
+    // A scheme's `Arith` stands for its operands' `Num`s: an instance on a
+    // string fails (it used to be accepted, and got stuck).
+    let src = "function h(x) { return x * 2; }\nconst r = h(\"s\");";
+    assert!(check_program(src, &[]).is_err());
+}
+
+#[test]
+fn a_recursive_group_shares_its_numeric_variables() {
+    // `f`'s local number is `g`'s parameter: quantified by `g` alone, it was
+    // left in `f`'s body with nothing to decide it.
+    let src = "function f(s) { let x = 0; x = x + 1; return g(s, x); }\n\
+               function g(s, i) { return i > 3 ? s : f(s + \"!\"); }";
+    let t = check_program(src, &["f", "g"]).unwrap();
+    assert!(t[0].starts_with("<a"), "{}", t[0]);
+    assert!(t[1].starts_with("<a"), "{}", t[1]);
 }

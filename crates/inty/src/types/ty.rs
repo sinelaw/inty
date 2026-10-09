@@ -201,7 +201,11 @@ impl FieldEntry {
 /// Type class names for constraint-based polymorphism.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ClassName {
-    /// Plus class: types that support the + operator (Number, Int, String).
+    /// `Plus a b c`: `c` is the type of `a + b` — numbers (`Int` when
+    /// both are `Int`, `Number` when either is, as `Arith`), or strings
+    /// (all three `String`). `a` and `b` determine `c`; a known `String`
+    /// anywhere makes all three `String`, a number anywhere makes it an
+    /// `Arith`. `Plus a` is short for `Plus a a a`.
     Plus,
     /// `Num a`: `a` is `Int` or `Number`.
     Num,
@@ -259,10 +263,16 @@ impl PartialEq for TypePred {
 impl Eq for TypePred {}
 
 impl TypePred {
+    /// `Plus t t t`: `+` on one type.
     pub fn plus(ty: Type) -> Self {
+        Self::plus3(ty.clone(), ty.clone(), ty)
+    }
+
+    /// `Plus left right result`.
+    pub fn plus3(left: Type, right: Type, result: Type) -> Self {
         TypePred {
             class: ClassName::Plus,
-            types: vec![ty],
+            types: vec![left, right, result],
             origin: None,
         }
     }
