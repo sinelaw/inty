@@ -3,7 +3,7 @@
 use crate::ast::{BinOp, Expr, UnaryOp};
 use crate::error::TypeError;
 use crate::span::Span;
-use crate::types::{LitValue, Type, TypePred};
+use crate::types::{LitValue, Type};
 
 use super::super::env::TypeEnv;
 use super::super::state::InferState;
@@ -18,7 +18,14 @@ impl InferState {
         argument: &Expr,
         span: Span,
     ) -> InferResult<Type> {
-        let arg_type = self.infer_expr(env, argument)?;
+        let arg_type = if matches!(
+            op,
+            UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
+        ) {
+            self.infer_store_target(env, argument, span)?
+        } else {
+            self.infer_expr(env, argument)?
+        };
 
         match op {
             // `-3` is the literal `-3` (and `-0` isn't an `Int`: it isn't 0).
@@ -333,23 +340,19 @@ impl InferState {
         }
     }
 
-    /// `left + right` (operands widened): `Arith` when either is a
-    /// number (so `1 + "a"` is rejected, as before), otherwise `Plus` over
-    /// one type — a string concatenation, or not known yet.
+    /// `left + right` (operands widened): `Plus left right result`,
+    /// decided as soon as anything about it is known (a number makes it an
+    /// `Arith`, so `1 + "a"` is rejected; a string makes all three
+    /// `String`), and waiting otherwise. One constraint whatever the order
+    /// the operands' types become known in, so the type is principal.
     pub(in crate::infer) fn infer_add(
         &mut self,
         span: Span,
         left: &Type,
         right: &Type,
     ) -> InferResult<Type> {
-        let (l, r) = (self.zonk(left), self.zonk(right));
-        if self.is_numeric(&l) || self.is_numeric(&r) {
-            return self.arith(span, &l, &r);
-        }
         let result = self.fresh_type_var();
-        self.add_constraint(TypePred::plus(result.clone()), span);
-        self.subsume(span, &l, &result)?;
-        self.subsume(span, &r, &result)?;
+        self.resolve_plus(left, right, &result, span)?;
         Ok(self.zonk(&result))
     }
 }

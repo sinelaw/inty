@@ -227,6 +227,34 @@ impl InferState {
         Ok(())
     }
 
+    /// The type of an assignment's target (`x`, `r.p`, `c[i]`), whose
+    /// receiver must take the store: an object's property (`FieldWrite`),
+    /// an element of a container that isn't a string (`IndexWrite`).
+    pub(in crate::infer) fn infer_store_target(
+        &mut self,
+        env: &TypeEnv,
+        target: &Expr,
+        span: Span,
+    ) -> InferResult<Type> {
+        self.last_index_container = None;
+        self.last_member_receiver = None;
+        let ty = self.infer_expr(env, target)?;
+        match target {
+            Expr::ComputedMember { .. } => {
+                if let Some(container) = self.last_index_container.take() {
+                    self.require_index_write(&container, span)?;
+                }
+            }
+            Expr::Member { .. } => {
+                if let Some(receiver) = self.last_member_receiver.take() {
+                    self.require_field_write(&receiver, span)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(ty)
+    }
+
     /// Infer the type of an assignment.
     pub(in crate::infer) fn infer_assign(
         &mut self,
@@ -247,7 +275,7 @@ impl InferState {
             && matches!(left, Expr::Member { .. } | Expr::Ident { .. })
             && lhs_polytype(self, env, left).is_none()
         {
-            let left_type = self.infer_expr(env, left)?;
+            let left_type = self.infer_store_target(env, left, span)?;
             if crate::infer::features::functions::extract_callable(&self.zonk(&left_type)).is_some()
             {
                 self.check_expr(env, right, &left_type)?;
@@ -309,7 +337,7 @@ impl InferState {
             }
         }
 
-        let left_type = self.infer_expr(env, left)?;
+        let left_type = self.infer_store_target(env, left, span)?;
 
         match op {
             AssignOp::Assign
@@ -509,6 +537,12 @@ impl InferState {
             //    giving them a polytype lets writes silently violate the
             //    polymorphism. Polymorphic record/array storage must be
             //    opted in via an explicit type annotation (case 1).
+            // 3. A `let` or `var` that is written after its initialiser is
+            //    never generalized: an assignment unifies with its one
+            //    type. (Generalizing it would leave each assignment to be
+            //    checked at least as polymorphic as the initialiser, which
+            //    no typing rule can state: the rules could always pick a
+            //    less general type for the binding.)
             if is_declaration || decl.init.as_ref().is_some_and(is_syntactic_value) {
                 self.simplify_has_props()?;
             }
@@ -519,6 +553,8 @@ impl InferState {
                 match &decl.init {
                     Some(init)
                         if is_syntactic_value(init)
+                            && (kind == VarKind::Const
+                                || !self.resolution.written_at(decl.span, &decl.name))
                             && (self.config.generalize_mutable_var_containers
                                 || !is_mutable_container_literal(init)) =>
                     {

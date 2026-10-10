@@ -298,7 +298,8 @@ impl InferState {
                     // structural duck-typing.
                     if let Type::Row(row) = other {
                         if matches!(row.tail, RowTail::Open(_)) {
-                            let assumption = UnfoldAssumption::NamedRow(*id);
+                            let assumption =
+                                UnfoldAssumption::NamedRow(*id, args.clone(), other.clone());
                             if self.unfold_assumptions.contains(&assumption) {
                                 return Ok(());
                             }
@@ -315,7 +316,7 @@ impl InferState {
                     // Equi-recursive type: unroll and unify structurally.
                     // Cycle-guarded so a recursive equi-type doesn't
                     // unroll forever against a row that mentions it.
-                    let assumption = UnfoldAssumption::NamedRow(*id);
+                    let assumption = UnfoldAssumption::NamedRow(*id, args.clone(), other.clone());
                     if self.unfold_assumptions.contains(&assumption) {
                         return Ok(());
                     }

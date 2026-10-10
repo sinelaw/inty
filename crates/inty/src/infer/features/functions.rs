@@ -542,13 +542,21 @@ impl InferState {
 
         // The function's own name first, so a parameter of the same name
         // shadows it (`function f(f) { return f; }` returns the argument).
+        // A named function expression's own name is immutable: assigning
+        // to it is a `TypeError` in strict mode. A declaration's name is
+        // the enclosing scope's, which can be reassigned.
         if let Some(fn_name) = name {
+            let mutability = if self.resolution.constant_at(span, fn_name) {
+                Mutability::Immutable
+            } else {
+                Mutability::Mutable
+            };
             body_env = self.bind(
                 &body_env,
                 span,
                 fn_name,
                 TypeScheme::mono(func_type.clone()),
-                Mutability::Mutable,
+                mutability,
             )?;
         }
 
@@ -1044,56 +1052,83 @@ impl InferState {
         // member took it.
         self.simplify_has_props()?;
         let pending = self.pending_constraints.clone();
-        let mut left_by_all = vec![true; pending.len()];
-        for stmt in group {
-            if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
-                self.pending_constraints = pending.clone();
-                self.constraint_removals += 1;
-                let key = self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
-                let ty = hoisted
-                    .lookup_key(&key)
-                    .expect("function must be in env after pass 1")
-                    .scheme
-                    .ty()
-                    .clone();
-                let ty = self.zonk(&ty);
-                // A factory lowered from a `class` gets its inferred
-                // return row branded nominally, so two structurally
-                // identical classes stay distinct types.
-                let ty = if self.class_brand_names.contains(name) {
-                    let (fixed, _) = self.env_fixed_vars(&base_free, &ty);
-                    self.brand_class_factory(name, &ty, &fixed)
-                } else {
-                    ty
-                };
-                let scheme = self.generalize(&base_free, &ty);
-                // `generalize` keeps the predicates it doesn't take, in
-                // order: mark the ones it took.
-                let mut kept = self.pending_constraints.iter().peekable();
-                for (i, c) in pending.iter().enumerate() {
-                    if kept.peek() == Some(&c) {
-                        kept.next();
+        let outer = hoisted.clone();
+        // The variables every member is generalised over: those any
+        // member's type reaches. A member's body can use one its own type
+        // doesn't mention (`f` passes a local number to `g`, whose
+        // parameter it is): quantified by `g` alone, it would be left in
+        // `f` with nothing to decide it. So a second round generalises
+        // every member over all of them, when the first didn't.
+        let mut group_vars: Vec<TVarName> = Vec::new();
+        for round in 0..2 {
+            hoisted = outer.clone();
+            let mut left_by_all = vec![true; pending.len()];
+            let mut schemes_vars: Vec<Vec<TVarName>> = Vec::new();
+            for stmt in group {
+                if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
+                    self.pending_constraints = pending.clone();
+                    self.constraint_removals += 1;
+                    let key =
+                        self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
+                    let ty = hoisted
+                        .lookup_key(&key)
+                        .expect("function must be in env after pass 1")
+                        .scheme
+                        .ty()
+                        .clone();
+                    let ty = self.zonk(&ty);
+                    // A factory lowered from a `class` gets its inferred
+                    // return row branded nominally, so two structurally
+                    // identical classes stay distinct types.
+                    let ty = if self.class_brand_names.contains(name) {
+                        let (fixed, _) = self.env_fixed_vars(&base_free, &ty);
+                        self.brand_class_factory(name, &ty, &fixed)
                     } else {
-                        left_by_all[i] = false;
+                        ty
+                    };
+                    let scheme = self.generalize_seeded(&base_free, &ty, &group_vars);
+                    schemes_vars.push(scheme.vars.clone());
+                    // `generalize` keeps the predicates it doesn't take, in
+                    // order: mark the ones it took.
+                    let mut kept = self.pending_constraints.iter().peekable();
+                    for (i, c) in pending.iter().enumerate() {
+                        if kept.peek() == Some(&c) {
+                            kept.next();
+                        } else {
+                            left_by_all[i] = false;
+                        }
                     }
+                    self.record_decl_scheme(hoisted_name_span(stmt, name, span), scheme.clone());
+                    let key_span = hoisted_key_span(stmt).expect("a hoisted function");
+                    hoisted = self.rebind(
+                        &hoisted,
+                        key,
+                        key_span,
+                        name,
+                        scheme,
+                        hoisted_mutability(stmt),
+                    )?;
                 }
-                self.record_decl_scheme(hoisted_name_span(stmt, name, span), scheme.clone());
-                let key_span = hoisted_key_span(stmt).expect("a hoisted function");
-                hoisted = self.rebind(
-                    &hoisted,
-                    key,
-                    key_span,
-                    name,
-                    scheme,
-                    hoisted_mutability(stmt),
-                )?;
             }
+            self.pending_constraints = pending
+                .iter()
+                .zip(left_by_all)
+                .filter_map(|(c, left)| left.then_some(c.clone()))
+                .collect();
+            let all: Vec<TVarName> = {
+                let mut all: Vec<TVarName> = schemes_vars.iter().flatten().cloned().collect();
+                all.sort_by_key(|v| v.id());
+                all.dedup();
+                all
+            };
+            let shared = schemes_vars
+                .iter()
+                .all(|vs| all.iter().all(|v| vs.contains(v)));
+            if round == 1 || shared {
+                break;
+            }
+            group_vars = all;
         }
-        self.pending_constraints = pending
-            .into_iter()
-            .zip(left_by_all)
-            .filter_map(|(c, left)| left.then_some(c))
-            .collect();
 
         Ok(hoisted)
     }
@@ -1596,8 +1631,9 @@ fn definitely_returns(stmt: &Stmt) -> bool {
             ..
         } => definitely_returns(consequent) && definitely_returns(alt),
         // `try` completes abnormally only if every path that can reach the
-        // end returns: the body (and, if present, the handler). A
-        // `finally` that returns dominates everything.
+        // end returns: the body, and the handler if there is one (without
+        // one, an exception leaves the `try` abruptly). A `finally` that
+        // returns dominates everything.
         Stmt::Try {
             block,
             handler,
@@ -1610,21 +1646,17 @@ fn definitely_returns(stmt: &Stmt) -> bool {
                 }
             }
             definitely_returns(block)
-                && handler
-                    .as_ref()
-                    .is_some_and(|h| definitely_returns(&h.body))
+                && handler.as_ref().is_none_or(|h| definitely_returns(&h.body))
         }
-        // `while True:` (with no `break`) never falls through. We don't
-        // scan for `break`; treating it as terminating is the common
-        // infinite-loop / loop-until-return idiom.
-        Stmt::While { test, .. } => {
+        // `while True:` never falls through, unless a `break` leaves it.
+        Stmt::While { test, body, .. } => {
             matches!(
                 test,
                 Expr::Lit {
                     value: Literal::Boolean(true),
                     ..
                 }
-            )
+            ) && !super::control::breaks_out(body)
         }
         _ => false,
     }

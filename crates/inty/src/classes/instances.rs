@@ -90,6 +90,8 @@ pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
         // expands unary classes.
         ClassName::Arith => &[],
         ClassName::Indexable => INDEXABLE_INSTANCES,
+        // Any container but a string: no catalog shape says that.
+        ClassName::IndexWrite | ClassName::FieldWrite => &[],
         // Structural: any type with the property is an instance.
         ClassName::HasProp => &[],
     }

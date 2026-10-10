@@ -320,3 +320,89 @@ fn switch_with_fallthrough_blocked_by_break() {
     ";
     assert_number(src, 2.0);
 }
+
+/// Arithmetic at a span the checker typed `Int` is checked; the same
+/// arithmetic elsewhere is plain JavaScript.
+#[test]
+fn int_arithmetic_is_checked_only_where_typed_int() {
+    use std::collections::HashSet;
+    let src = "1073741824 * 1073741824";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let unchecked = crate::dynamics::run_to_end(&program).unwrap();
+    assert!(matches!(unchecked, Value::Number(n) if n == 1152921504606846976.0));
+
+    let crate::ast::Stmt::Expr {
+        expression: expr, ..
+    } = &program.statements[0]
+    else {
+        panic!("expected an expression statement");
+    };
+    let span = expr.span();
+    let int_ops: HashSet<(usize, usize)> = [(span.start, span.end)].into_iter().collect();
+    match crate::dynamics::run_to_end_checked(&program, 100, int_ops) {
+        Err(Stuck::IntRange { op: "*", .. }) => {}
+        other => panic!("expected an Int range fault, got {:?}", other),
+    }
+}
+
+/// A `throw` out of a called function is caught, and `finally` runs after a
+/// handler that throws.
+#[test]
+fn try_catches_a_throw_from_a_call() {
+    assert_number(
+        "const f = function () { throw 1; }; let r = 0; try { f(); } catch (e) { r = 2; } r",
+        2.0,
+    );
+    assert_number(
+        "const f = function () { throw 1; }; let r = 0; \
+         try { try { f(); } catch (e) { f(); } finally { r = 3; } } catch (e) {} r",
+        3.0,
+    );
+}
+
+/// An assignment evaluates its target's object before the value, once, as
+/// JavaScript does; a compound assignment or update reads the target before
+/// the right side.
+#[test]
+fn assignment_evaluates_its_target_once_and_first() {
+    assert_string(
+        "const obj = {x: 1}; let log = \"\"; \
+         const o = function () { log = log + \"o\"; return obj; }; \
+         const v = function () { log = log + \"v\"; return 2; }; \
+         o().x = v(); log",
+        "ov",
+    );
+    assert_number(
+        "const obj = {x: 1}; let n = 0; \
+         const o = function () { n = n + 1; return obj; }; \
+         o().x += 1; o().x++; n * 10 + obj.x",
+        23.0,
+    );
+    assert_number("let x = 1; x += (x = 10); x", 11.0);
+}
+
+/// An element read at an index the array or string hasn't, or a store past
+/// an array's end, is a fault (JavaScript reads `undefined` and makes a
+/// hole); a store just past the end pushes.
+#[test]
+fn indexing_out_of_bounds_is_a_fault() {
+    for source in [
+        "[1, 2][2]",
+        "[1, 2][-1]",
+        "[1, 2][0.5]",
+        "\"ab\"[2]",
+        "const xs = [1]; xs[2] = 3; xs[0]",
+    ] {
+        assert!(
+            matches!(run(source), Err(Stuck::OutOfBounds { .. })),
+            "{source}: {:?}",
+            run(source)
+        );
+    }
+    assert!(matches!(run("[1, 2][1]"), Ok(Value::Number(n)) if n == 2.0));
+    assert!(matches!(run("\"ab\"[1]"), Ok(Value::String(s)) if s == "b"));
+    assert!(matches!(
+        run("const xs = [1]; xs[1] = 3; xs[1] + xs.length"),
+        Ok(Value::Number(n)) if n == 5.0
+    ));
+}

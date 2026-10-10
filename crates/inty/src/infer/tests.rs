@@ -187,7 +187,7 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
         final_env = new_env;
     }
     // What the end of a program does: default its numeric variables.
-    state.default_numeric(&Default::default(), None, false)?;
+    state.default_numeric(&Default::default(), false)?;
 
     Ok((result_ty, final_env, state))
 }
@@ -420,12 +420,13 @@ fn test_var_used_but_never_assigned() {
     "#;
     let (_, env, state) = infer_program_with_state(source).unwrap();
 
-    // y should be Number (or a type with Plus constraint)
+    // y is a number (`Int`, the end of the program's default), or still a
+    // variable.
     let y_scheme = env.lookup("y").unwrap();
     let y_ty = state.apply_subst(&y_scheme.body.ty);
     assert!(
-        matches!(y_ty, Type::Number | Type::Var(_)),
-        "y should be Number or Plus-constrained"
+        matches!(y_ty, Type::Int | Type::Number | Type::Var(_)),
+        "y should be a number, got {y_ty:?}"
     );
 }
 
@@ -569,6 +570,23 @@ fn test_unknown_method_after_chain_is_rejected() {
         result.is_err(),
         "Calling an undefined method on the result of a chained `return this` call must fail"
     );
+}
+
+#[test]
+fn recursive_type_against_function_needs_the_same_goal_to_close_a_cycle() {
+    // `f : (a) => μt. (b) => t`. The annotation says `k(1)` returns a
+    // function returning a Number, but `k(1)(2)` returns `f`. Was
+    // accepted: the unfold of `μt` against the annotation was memoised by
+    // the recursive type's id alone, so the second unfold, against
+    // `(Number) => Number`, "succeeded" by coinduction.
+    let src = "function f(x) { return f; }\n\
+               /** const k: (x: Number) => (y: Number) => Number */\n\
+               const k = f;\n\
+               const n = k(1)(2) - 1;";
+    assert!(check_program(src, &[]).is_err());
+    // The same recursive type against itself is still fine.
+    let ok = "function f(x) { return f; }\nconst k = f;\nconst g = k(1)(2)(3);";
+    assert!(check_program(ok, &[]).is_ok());
 }
 
 #[test]
@@ -888,8 +906,9 @@ fn test_monomorphic_object_property_assignment() {
 // ========================================================================
 // Subsumption checking on reassignment to polymorphic mutable bindings.
 //
-// When a var/let is generalized to a polytype σ at its declaration, every
-// subsequent assignment must produce a value at-least-as-polymorphic as σ.
+// A var/let written after its initialiser is monomorphic, so these concern
+// polymorphic record fields, written through an alias. Every assignment
+// must produce a value at-least-as-polymorphic as the field's polytype.
 // Without this check, assigning a less-polymorphic function to a polymorphic
 // var lets later uses of the var instantiate the original (now-stale)
 // polytype, producing inferred types that disagree with runtime values.
@@ -920,15 +939,11 @@ fn test_polymorphic_var_reassignment_unsound() {
 }
 
 #[test]
-fn test_polymorphic_var_assignment_skolem_escape() {
-    // The RHS of `x = function(y) { return z; }` captures `z` from the
-    // enclosing function. Naively skolemizing x's polytype `<a>(a) => a`
-    // and unifying with `(?γ) => typeof z` would bind z's flex var to
-    // the fresh skolem α — leaking α into the surrounding env. After
-    // that, `leak`'s inferred signature contains a free skolem and
-    // calling `leak(42)` produces a confusing "expected 'a', found
-    // Number" mismatch. The subsumption check must detect the escape
-    // and reject the assignment cleanly.
+fn test_reassigned_var_is_monomorphic() {
+    // A `var` written after its initialiser isn't generalized: `x` has one
+    // type, `(a) => a` at a single `a`, and the assignment unifies with it.
+    // Capturing `z` then just makes `z`'s type that `a` — nothing rigid is
+    // involved, so nothing can escape.
     let source = r#"
         function id(a) { return a; }
         function leak(z) {
@@ -937,13 +952,29 @@ fn test_polymorphic_var_assignment_skolem_escape() {
           return z;
         }
     "#;
-    let result = infer_program_with_state(source);
-    assert!(
-        result.is_err(),
-        "Capturing an outer-scope variable in the RHS of a polymorphic \
-         reassignment must be rejected — otherwise a skolem leaks into the \
-         enclosing function's signature"
-    );
+    assert!(infer_program_with_state(source).is_ok());
+    // The one type serves the initialiser and the assignment; a reassigned
+    // `let` can't be used at two types.
+    let mono = r#"
+        let f = function (x) { return x; };
+        f = function (x) { return x - 1; };
+        const c = f(2);
+    "#;
+    assert!(infer_program_with_state(mono).is_ok());
+    let two_types = r#"
+        let g = function (x) { return x; };
+        g = function (x) { return x; };
+        const a = g(1);
+        const b = g("s");
+    "#;
+    assert!(infer_program_with_state(two_types).is_err());
+    // A `let` never written is generalized, as a `const` is.
+    let poly = r#"
+        let h = function (x) { return x; };
+        const a = h(1);
+        const b = h("s");
+    "#;
+    assert!(infer_program_with_state(poly).is_ok());
 }
 
 #[test]
@@ -1088,13 +1119,13 @@ fn test_add_function_has_plus_constraint() {
     // The type should be a function
     assert!(ty.is_func(), "add should be a function type");
 
-    // Both parameters should be unified to the same type
+    // The constraint relates the parameters to the result: `Plus a b c`,
+    // the operands' types not unified (`add(1, 0.5)` is a `Number`).
+    assert_eq!(pred.types.len(), 3);
     if let Some((_, params, _)) = ty.as_callable() {
         assert_eq!(params.len(), 2);
-        assert_eq!(
-            params[0], params[1],
-            "Both parameters should have the same type"
-        );
+        assert_eq!(params[0].ty, pred.types[0]);
+        assert_eq!(params[1].ty, pred.types[1]);
     }
 }
 
@@ -3617,7 +3648,7 @@ fn gen_fixed_index_does_not_fix_the_container() {
                const a = get([1]);\n\
                const b = get([\"s\"]);";
     let t = check_program(src, &["get"]).unwrap();
-    assert!(t[0].starts_with("<a, b>"), "{}", t[0]);
+    assert!(t[0].contains("Indexable a"), "{}", t[0]);
 }
 
 #[test]
@@ -3627,7 +3658,7 @@ fn gen_captured_variable_is_not_quantified() {
     let src = "function outer(x) { function inner(y) { return x + y; } return inner; }\n\
                var addThree = outer(3);";
     let t = check_program(src, &["outer", "addThree"]).unwrap();
-    assert_eq!(t[0], "<a> where Plus a => (a) => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a) => (b) => c");
     assert_eq!(t[1], "(Int) => Int");
 }
 
@@ -3656,10 +3687,12 @@ fn gen_hoisted_const_function_stays_immutable() {
 
 #[test]
 fn gen_parameter_shadows_function_name() {
+    // (`1`'s type is a variable of its own, `Int` or `Number`: `a + 1` is
+    // `a ⊔ b`.)
     let t = check_program("const f = (f) => f + 1;\nconst r = f(2);", &["f"]).unwrap();
-    assert_eq!(t[0], "<a> where Num a => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
     let t = check_program("function g(g) { return g + 1; }\nconst r = g(2);", &["g"]).unwrap();
-    assert_eq!(t[0], "<a> where Num a => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
 }
 
 #[test]
@@ -3678,10 +3711,14 @@ fn gen_return_in_both_branches_of_if() {
     // The `if` statement's completion type joined `Lit(0)` with `f`'s
     // return variable, pinning it to the singleton `0`.
     let src = "function f(n) { if (n == 0) return 0; else return f(n - 1); }";
-    assert_eq!(check_program(src, &["f"]).unwrap()[0], "(Number) => Int");
+    let principal = "<a, b, c> where Arith a b a, Num c, Num b => (a) => c";
+    assert_eq!(check_program(src, &["f"]).unwrap()[0], principal);
     let nested = "function f(n) { function g(m) { return f(m - 1); } \
                   if (n == 0) return 0; else return g(n); }";
-    assert_eq!(check_program(nested, &["f"]).unwrap()[0], "(Number) => Int");
+    assert_eq!(
+        check_program(nested, &["f"]).unwrap()[0],
+        "<a, b, c> where Arith a b a, Num b, Num c => (a) => c"
+    );
 }
 
 // ---- Older holes found by the generalisation review ------------------------
@@ -3883,10 +3920,11 @@ fn instantiated_predicate_errors_point_at_the_use() {
     let src = "function twice(x) { return x + x; }\ntwice(true);";
     let program = crate::frontends::javascript::parse_source(src).unwrap();
     let mut state = InferState::new();
-    state
-        .infer_program_with_env(&initial_env(), &program)
-        .unwrap();
-    let err = state.resolve_constraints().unwrap_err();
+    // (Decided at the use, by improvement, or at the end.)
+    let err = match state.infer_program_with_env(&initial_env(), &program) {
+        Err(e) => e,
+        Ok(_) => state.resolve_constraints().unwrap_err(),
+    };
     let span = match err {
         crate::error::IntyError::Type(ref e) => e.span(),
         ref other => panic!("expected a type error, got {:?}", other),
@@ -4543,4 +4581,282 @@ fn mutable_containers_are_invariant() {
         const shapes = [{ kind: \"circle\", r: 1 }, { kind: \"sq\", s: 2 }];"
     )
     .is_ok());
+}
+
+/// A `Plus` on a known type is decided when a binding is generalised, not
+/// carried in its scheme to each use: a binding whose body adds two
+/// functions is an error even if nothing uses it. On a variable it stays,
+/// as `<a> where Plus a`.
+#[test]
+fn plus_on_known_type_is_decided_at_generalisation() {
+    let errors = |src: &str| {
+        let program = parse_for_multi_error_test(src);
+        let mut state = InferState::new();
+        let r = state.infer_program_with_env(&initial_env(), &program);
+        let mut errs = state.take_errors();
+        if let Err(e) = r {
+            errs.push(e);
+        }
+        if let Err(e) = state.resolve_constraints() {
+            errs.push(e);
+        }
+        errs
+    };
+    let unused =
+        "const x = function () { const g = function (y) { return y; }; return g + g; }; 1;";
+    let errs = errors(unused);
+    assert!(
+        errs.iter().any(|e| matches!(
+            e.as_type(),
+            Some(TypeError::ConstraintNotSatisfied { class, .. }) if class == "Plus"
+        )),
+        "{errs:?}"
+    );
+    let on_variable = "const d = function (y) { return y + y; }; 1;";
+    assert!(errors(on_variable).is_empty());
+}
+
+/// A named function expression's own name is immutable in its body, as in
+/// strict-mode JavaScript, where assigning to it is a `TypeError`; a function
+/// declaration's name can be reassigned.
+#[test]
+fn function_expression_name_is_immutable() {
+    let expr = "const g = function f() { f = function () { return 2; }; return 1; }; g();";
+    assert!(infer_program_with_state(expr).is_err());
+    let decl = "function f() { f = function () { return 2; }; return 1; } f();";
+    assert!(infer_program_with_state(decl).is_ok());
+}
+
+/// A `catch` binds whatever was thrown, which can be any value: its type is
+/// rigid, so it can't be used at a concrete type.
+#[test]
+fn caught_exception_is_opaque() {
+    let errors = |src: &str| {
+        let program = parse_for_multi_error_test(src);
+        let mut state = InferState::new();
+        let r = state.infer_program_with_env(&initial_env(), &program);
+        let mut errs = state.take_errors();
+        if let Err(e) = r {
+            errs.push(e);
+        }
+        errs
+    };
+    assert!(!errors("let r = 0; try { throw \"s\"; } catch (e) { r = e - 1; }").is_empty());
+    assert!(!errors(
+        "const f = function (x) { return x.length; }; try { throw 3; } catch (e) { f(e); }"
+    )
+    .is_empty());
+    // Passing it on, testing it, and rethrowing it are fine.
+    assert!(errors(
+        "const id = function (x) { return x; }; \
+         try { throw 1; } catch (e) { const t = typeof id(e); if (e) { throw e; } }"
+    )
+    .is_empty());
+}
+
+#[test]
+fn test_try_finally_that_returns_doesnt_fall_through() {
+    // `try { return … } finally { … }` always returns: the function's
+    // result has no implicit `undefined`, so it joins with one that
+    // returns the same type.
+    let source = r#"
+        const f = function () { try { return null; } finally { 1; } };
+        const g = function () { return null; };
+        const h = true ? f : g;
+    "#;
+    assert!(infer_program_with_state(source).is_ok());
+}
+
+#[test]
+fn test_while_true_with_break_falls_through() {
+    // A `while (true)` left by `break` falls off the function's end, so the
+    // function can return `undefined`; using its result as a number is an
+    // error (it was accepted when the result was typed `never`).
+    let source = r#"
+        const f = function () { while (true) { break; } };
+        const a = true ? f() : 1;
+        const r = a - 1;
+    "#;
+    assert!(infer_program_with_state(source).is_err());
+    let forever = r#"
+        const f = function () { while (true) { } };
+        const a = true ? f() : 1;
+        const r = a - 1;
+    "#;
+    assert!(infer_program_with_state(forever).is_ok());
+}
+
+#[test]
+fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
+    // A spread operand of unknown shape may hold any field written before
+    // it, and then wins: the two must agree on its type. (Taking the
+    // operand's tail alone typed `f({a: "s"}).a` as an `Int`.)
+    let rejected = [
+        r#"
+        function f(o) { return {a: 1, ...o}; }
+        const n = f({a: "s"}).a - 1;
+        "#,
+        // Two open operands: the later one's unknown part may hide the
+        // earlier one's fields, so they share it.
+        r#"
+        function g(o1, o2) { return {...o1, ...o2}; }
+        const r = {a: "s", ...g({a: 1}, {})};
+        "#,
+        // A spread's operand is an object, not a function (whose call
+        // signature it used to copy).
+        r#"
+        const f = function () { return 1; };
+        const n = ({...f})();
+        "#,
+        r#"
+        const f = function () { return 1; };
+        const o = {...f};
+        "#,
+        r#"
+        function h(o) { return {...o}; }
+        const f = function () { return 1; };
+        const n = h(f);
+        "#,
+    ];
+    for source in rejected {
+        assert!(infer_program_with_state(source).is_err(), "{source}");
+    }
+    let accepted = r#"
+        function f(o) { return {a: 1, ...o}; }
+        const x = f({b: "s"}).b.length;
+        const y = f({}).a - 1;
+        const z = f({a: 2}).a - 1;
+        function h(o) { return {...o, ...{b: 1}}; }
+        const q = h({a: "s"}).a.length;
+        const p = h({b: "s"}).b - 1;
+        // A closed spread after an open one keeps the open one's fields
+        // (`r.a` was typed `String`).
+        const r = {a: "s", ...h({a: 1})};
+        const n = r.a - 1;
+        const defaults = {a: 1, b: "x"};
+        function opts(o) { return {...defaults, ...o}; }
+        const oo = opts({a: 3}).b.length;
+        function g(o1, o2) { return {...o1, ...o2}; }
+        const w = g({a: 1}, {a: 2}).a - 1;
+    "#;
+    assert!(infer_program_with_state(accepted).is_ok());
+}
+
+#[test]
+fn test_stores_only_into_what_takes_them() {
+    // A string's characters are read-only: a store throws a `TypeError` in
+    // strict code, and `dynamics` gets stuck. Indexing it is fine.
+    for source in [
+        r#"
+        const s = "ab";
+        s[0] = "c";
+        "#,
+        r#"
+        function f(x) { x[0] = "c"; return x; }
+        const t = f("ab");
+        "#,
+        r#"
+        let s = "ab";
+        s[0]++;
+        "#,
+        // Nor a built-in property: a string's, an array's (which `dynamics`
+        // doesn't store), a function's.
+        r#"
+        function f(o) { o.length = 0; return o; }
+        const s = f("ab");
+        "#,
+        r#"
+        const xs = [1, 2];
+        xs.length = 1;
+        "#,
+        r#"
+        const f = function () { return 1; };
+        f.call = 2;
+        "#,
+    ] {
+        assert!(check_program(source, &[]).is_err(), "{source}");
+    }
+    let accepted = r#"
+        const s = "ab";
+        const c = s[0];
+        const xs = [1, 2];
+        xs[0] = 3;
+        xs[1]++;
+        function set0(c, v) { c[0] = v; return c; }
+        const ys = set0([1], 2);
+        const o = {length: 1};
+        o.length = 2;
+        function setA(r, v) { r.a = v; return r; }
+        const p = setA({a: 1}, 2);
+    "#;
+    assert!(check_program(accepted, &[]).is_ok());
+}
+
+#[test]
+fn test_indexing_a_string_literal() {
+    // A string literal's type is a singleton, which indexes as a string.
+    let source = r#"
+        const c = "xyz"[0];
+        const d = c + "!";
+    "#;
+    assert!(check_program(source, &[]).is_ok());
+}
+
+// ---- Principal numbers ------------------------------------------------------
+
+#[test]
+fn plus_is_principal_whatever_the_order() {
+    // `xs.length` is an `Int` only once `xs` is known: `+` used to unify
+    // its operands while both were unknown, making `y` an `Int` too.
+    let src = "function len(xs, y) { return xs.length + y; }\n\
+               const a = len([1], 0.5);\n\
+               const b = len(\"ab\", 1);\n\
+               const c = len([1], \"!\") ;";
+    assert!(check_program(src, &[]).is_err(), "Int + String");
+    let ok = "function len(xs, y) { return xs.length + y; }\n\
+              const a = len([1], 0.5);\n\
+              const b = len(\"ab\", 1);";
+    let t = check_program(ok, &["a", "b"]).unwrap();
+    assert_eq!(t, vec!["Number".to_string(), "Int".to_string()]);
+    let add = "function add(x, y) { return x + y; }\n\
+               const n = add(1, 0.5);\n\
+               const s = add(\"a\", \"b\");";
+    let t = check_program(add, &["add", "n", "s"]).unwrap();
+    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a, b) => c");
+    assert_eq!(t[1], "Number");
+    assert_eq!(t[2], "String");
+}
+
+#[test]
+fn a_scheme_keeps_its_numeric_variables() {
+    // Nothing is defaulted where a function is generalised, so each use
+    // picks its own instance.
+    let src = "function half(x) { return x * 0.5; }\n\
+               function k() { return 1; }\n\
+               const xs = [0.5, k()];\n\
+               const i = [10, 20][k()];";
+    let t = check_program(src, &["half", "k", "xs", "i"]).unwrap();
+    assert_eq!(t[0], "<a> where Num a => (a) => Number");
+    assert_eq!(t[1], "<a> where Num a => () => a");
+    assert_eq!(t[2], "Number[]");
+    assert_eq!(t[3], "Int");
+}
+
+#[test]
+fn arith_on_a_string_is_rejected_at_the_use() {
+    // A scheme's `Arith` stands for its operands' `Num`s: an instance on a
+    // string fails (it used to be accepted, and got stuck).
+    let src = "function h(x) { return x * 2; }\nconst r = h(\"s\");";
+    assert!(check_program(src, &[]).is_err());
+}
+
+#[test]
+fn a_recursive_group_shares_its_numeric_variables() {
+    // `f`'s local number is `g`'s parameter: quantified by `g` alone, it was
+    // left in `f`'s body with nothing to decide it.
+    let src = "function f(s) { let x = 0; x = x + 1; return g(s, x); }\n\
+               function g(s, i) { return i > 3 ? s : f(s + \"!\"); }";
+    let t = check_program(src, &["f", "g"]).unwrap();
+    assert!(t[0].starts_with("<a"), "{}", t[0]);
+    assert!(t[1].starts_with("<a"), "{}", t[1]);
 }

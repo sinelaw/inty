@@ -1,0 +1,37 @@
+name: Lean
+
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ "lean/**", "crates/inty/**", ".github/workflows/lean.yml" ]
+  pull_request:
+    branches: [ "main" ]
+    paths: [ "lean/**", "crates/inty/**", ".github/workflows/lean.yml" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lean
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install elan
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/leanprover/elan/v4.1.2/elan-init.sh \
+          | sh -s -- -y --default-toolchain none
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+    # Checks every proof (warnings are errors, so a `sorry` fails the
+    # build) and builds `inty-model`.
+    - name: Build
+      run: lake build
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    # inty against the Lean model and Node (preinstalled on the runner) on
+    # generated programs; see crates/inty/tests/differential.rs.
+    - name: Differential test
+      working-directory: .
+      run: cargo test -p inty --test differential -- --nocapture

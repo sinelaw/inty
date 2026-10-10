@@ -187,6 +187,14 @@ pub struct InferState {
     /// Pending type class constraints to resolve.
     pub pending_constraints: Vec<PendingConstraint>,
 
+    /// The container of the computed member inferred last
+    /// (`infer_computed_member`), so an assignment to `c[i]` can require
+    /// `c` to take stores (`IndexWrite`).
+    pub(crate) last_index_container: Option<Type>,
+    /// The receiver of the member inferred last (`infer_member`), so an
+    /// assignment to `r.p` can require `r` to take stores (`FieldWrite`).
+    pub(crate) last_member_receiver: Option<Type>,
+
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
     pub decl_types: HashMap<usize, Type>,
@@ -400,15 +408,17 @@ pub struct InferState {
 /// equirecursive types with distinct ids alternate-unrolling forever
 /// without this; with it, re-entering an assumption signals the cycle
 /// has closed and the unification is sound by coinduction.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(in crate::infer) enum UnfoldAssumption {
     /// `Named(id_a) ↔ Named(id_b)` unfold in progress.
     NamedPair(TypeId, TypeId),
-    /// `Named(id) ↔ Row(...)` unfold in progress. The row side has no
-    /// stable identity, so a same-id re-entry is what the cycle check
-    /// looks for — sufficient because every cycle goes through *some*
-    /// brand, and the row direction can't loop without the brand looping.
-    NamedRow(TypeId),
+    /// `Named(id, args) ↔ other` unfold in progress, with both sides as
+    /// they were (zonked) when the unfold began. Only the *same* goal
+    /// recurring closes the cycle: keying by the id alone let
+    /// `μt. Number → t` meet `Number → Number → Number`, succeed on the
+    /// first unfold's assumption one level down, and accept a function
+    /// whose second call returns a function as one returning a number.
+    NamedRow(TypeId, Vec<Type>, Type),
     /// Two open rows' tail variables (smaller id first) are being
     /// unified. A cycle in the substitution — `ρ₁ ↦ {… | ρ₂}` and
     /// `ρ₂ ↦ {… | ρ₁}`, which `zonk` shows as free tails — otherwise
@@ -488,6 +498,8 @@ impl InferState {
             type_id_source: 0,
             type_classes: HashMap::new(),
             pending_constraints: Vec::new(),
+            last_index_container: None,
+            last_member_receiver: None,
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -2067,6 +2079,19 @@ impl InferState {
     }
 
     pub fn generalize(&mut self, env_free: &crate::infer::EnvFree, ty: &Type) -> TypeScheme {
+        self.generalize_seeded(env_free, ty, &[])
+    }
+
+    /// [`Self::generalize`], quantifying the variables `extra` too (where
+    /// the environment doesn't fix them), with the constraints on them: a
+    /// mutually recursive group's members are generalised over the same
+    /// variables (see `infer_function_group`).
+    pub fn generalize_seeded(
+        &mut self,
+        env_free: &crate::infer::EnvFree,
+        ty: &Type,
+        extra: &[TVarName],
+    ) -> TypeScheme {
         self.constraint_removals += 1;
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
@@ -2076,22 +2101,17 @@ impl InferState {
         // scheme that's missing those fields, letting calls with
         // incompatible argument shapes through. See
         // `Subst::flatten` for the full story.
-        // Default the numeric variables local to this binding first (see
-        // `features::numeric`): the scheme is then over what's left.
-        if self
-            .pending_constraints
-            .iter()
-            .any(|c| crate::infer::features::numeric::is_numeric_class(c.pred.class))
-        {
-            let ty = self.main_subst.flatten(ty);
-            let (mut fixed_vars, _) = self.env_fixed_vars(env_free, &ty);
-            fixed_vars.extend(self.pinned_numeric.iter().cloned());
-            if let Err(e) = self.default_numeric(&fixed_vars, Some(&ty), false) {
-                self.push_error(e);
-            }
+        // Decide what improvement decides (a numeric or `Plus` constraint
+        // a type reached). Nothing is defaulted here: a numeric variable
+        // left free stays in the scheme, so the scheme is principal, and
+        // each use picks its own (the end of the program defaults what's
+        // left; see `features::numeric`).
+        if let Err(e) = self.simplify_numeric() {
+            self.push_error(e);
         }
         let ty = self.main_subst.flatten(ty);
-        let ty_vars = ty.free_vars();
+        let mut ty_vars = ty.free_vars();
+        ty_vars.extend(extra.iter().cloned());
         let pvars = ty.free_pvars();
 
         // Sort by TVarName id so the scheme's quantification order is
@@ -2184,6 +2204,31 @@ impl InferState {
                 }
             }
             self.pending_constraints = remaining;
+            // A write constraint whose type is already known is decided
+            // here, not carried in the scheme to be found out at each use
+            // (lean/ROADMAP.md, phase 1). On a variable it stays. (A
+            // `Plus` on a known type was decided by `simplify_numeric`.)
+            let scheme_preds: Vec<TypePred> = scheme_preds
+                .into_iter()
+                .filter(|pred| {
+                    if !matches!(pred.class, ClassName::IndexWrite | ClassName::FieldWrite) {
+                        return true;
+                    }
+                    let ty = self.main_subst.flatten(&pred.types[0]);
+                    if matches!(ty, Type::Var(_)) {
+                        return true;
+                    }
+                    let span = pred.origin.unwrap_or_default();
+                    let decided = match pred.class {
+                        ClassName::IndexWrite => self.resolve_index_write(&ty, span),
+                        _ => self.resolve_field_write(&ty, span),
+                    };
+                    if let Err(e) = decided {
+                        self.push_error(e);
+                    }
+                    false
+                })
+                .collect();
             gen_vars.sort_by_key(|v| v.id());
             gen_pvars.sort_by_key(|p| p.id());
 
@@ -2330,7 +2375,15 @@ impl InferState {
                             vec![]
                         }
                     }
-                    (ClassName::Plus, _) => vec![],
+                    // the operands → the result
+                    (ClassName::Plus | ClassName::Arith, [a, b, c]) => {
+                        if a.free_vars().is_subset(&vars) && b.free_vars().is_subset(&vars) {
+                            vec![c]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    (ClassName::Num | ClassName::NumLit, _) => vec![],
                     // Unknown shape: conservatively, any fixed variable
                     // fixes the whole predicate.
                     (_, types) => {

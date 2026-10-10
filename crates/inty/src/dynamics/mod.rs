@@ -35,6 +35,8 @@ pub use heap::{Cell, Heap, Loc};
 pub use step::{eval_expr, eval_stmt, run_program, State, StmtOutcome, Stuck};
 pub use value::{Closure, Value};
 
+use std::collections::HashSet;
+
 use crate::ast::{Expr, Program};
 
 /// Default fuel for `run_to_end`. Loops decrement fuel each iteration;
@@ -48,7 +50,18 @@ pub fn run_to_end(program: &Program) -> Result<Value, Stuck> {
 }
 
 pub fn run_to_end_with_fuel(program: &Program, fuel: usize) -> Result<Value, Stuck> {
+    run_to_end_checked(program, fuel, HashSet::new())
+}
+
+/// [`run_to_end_with_fuel`], with the arithmetic at `int_ops` (the spans
+/// the checker typed `Int`) checked: see [`Stuck::IntRange`].
+pub fn run_to_end_checked(
+    program: &Program,
+    fuel: usize,
+    int_ops: HashSet<(usize, usize)>,
+) -> Result<Value, Stuck> {
     let mut state = State::new(fuel);
+    state.int_ops = int_ops;
     let env = RuntimeEnv::new();
     run_program(&mut state, &env, program)
 }
@@ -65,6 +78,8 @@ pub fn is_stuck(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Option<Stuc
     match eval_expr(state, env, expr) {
         Ok(_) => None,
         Err(Stuck::FuelExhausted) => None, // not stuck — just out of fuel
+        Err(Stuck::IntRange { .. }) => None, // a checked-arithmetic fault
+        Err(Stuck::OutOfBounds { .. }) => None, // an index fault
         Err(reason) => Some(reason),
     }
 }

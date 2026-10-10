@@ -203,7 +203,7 @@ impl InferState {
             (Ok((_, env)), true) => self.reachable_vars(env),
             _ => Default::default(),
         };
-        if let Err(e) = self.default_numeric(&keep, None, false) {
+        if let Err(e) = self.default_numeric(&keep, false) {
             self.push_error(e);
         }
 

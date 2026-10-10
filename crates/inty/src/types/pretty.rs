@@ -672,6 +672,13 @@ impl PrettyContext {
             ClassName::Plus => {
                 write!(w, "Plus ")?;
                 self.write_type(w, &pred.types[0], true)?;
+                // `Plus a` for `Plus a a a`.
+                if pred.types.iter().any(|t| t != &pred.types[0]) {
+                    for t in &pred.types[1..] {
+                        write!(w, " ")?;
+                        self.write_type(w, t, true)?;
+                    }
+                }
             }
             ClassName::Num | ClassName::NumLit => {
                 write!(w, "Num ")?;
@@ -684,6 +691,14 @@ impl PrettyContext {
                 self.write_type(w, &pred.types[1], true)?;
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
+            }
+            ClassName::IndexWrite => {
+                write!(w, "IndexWrite ")?;
+                self.write_type(w, &pred.types[0], true)?;
+            }
+            ClassName::FieldWrite => {
+                write!(w, "FieldWrite ")?;
+                self.write_type(w, &pred.types[0], true)?;
             }
             ClassName::Indexable => {
                 write!(w, "Indexable ")?;
@@ -842,6 +857,8 @@ impl Display for ClassName {
             ClassName::Num | ClassName::NumLit => write!(f, "Num"),
             ClassName::Arith => write!(f, "Arith"),
             ClassName::Indexable => write!(f, "Indexable"),
+            ClassName::IndexWrite => write!(f, "IndexWrite"),
+            ClassName::FieldWrite => write!(f, "FieldWrite"),
             ClassName::HasProp => write!(f, "HasProp"),
         }
     }

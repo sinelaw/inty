@@ -70,11 +70,13 @@ lastChar(42);        // error: a number has neither
 
 inference doesn't decide what `obj` is when it meets `obj.name` on a value whose type isn't known yet. It records the constraint and resolves it once the type is known: a string's or array's built-in property (each read gets its own copy of a built-in method's type, so `s.slice(i)` and `s.slice(i, j)` can both be called on the same parameter), or an object's field. A constraint still open when the function is generalised becomes part of its type, like `Plus` below; the receiver determines the result, so a constraint on a variable the environment fixes fixes its result too (see `env_fixed_vars`). A receiver nothing ever pins down is read as an object with that field, which is what inty inferred for every property access before `HasProp`.
 
+An object spread (`{a: 1, ...o}`) takes the operand's fields over the ones before it. When the operand's shape is only partly known, it may or may not have `a`, so the result's `a` is the literal's only if `o`'s `a`, when there is one, has the same type: `function f(o) { return {a: 1, ...o}; }` accepts `f({})` and `f({a: 2})` but not `f({a: "s"})`. Likewise two operands of unknown shape (`{...o1, ...o2}`) must agree on the fields neither names. An operand is an object: spreading a function is an error (a spread copies own properties, never a call signature).
+
 ### Operator Overloading (Type Classes)
 
-`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row. Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
+`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned (`xs.length = 0` is an error; `xs = []` replaces the array). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. `Plus a b c` says `c` is the type of `a + b`: two strings concatenate, and two numbers add as `Arith` does (`Int` when both are, `Number` otherwise), so `function add(x, y) { return x + y; }` is `<a, b, c> where Plus a b c => (a, b) => c` and `add(1, 0.5)` is a `Number`. It is decided as soon as any of the three is known, whatever order inference learns them in (`xs.length + y` doesn't make `y` an `Int`). Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
 
-A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a> where Plus a => (a, a) => a */`, and the annotation parser reads the `where` clause back (`Plus t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them.
+A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a, b, c> where Plus a b c => (a, b) => c */`, and the annotation parser reads the `where` clause back (`Plus t`, short for `Plus t t t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them. A `Plus` on a type that is already known is decided when the binding is generalised rather than carried into its scheme, so `const f = function () { return g + g; }` with `g` a function is an error even if `f` is never called.
 
 ### Method Chaining & Builders (Equi-recursive Types)
 
@@ -358,7 +360,7 @@ run the same way.
 
 A binding's type is fixed at declaration. Operators that combine values still need their operands' types to agree. Output below is verbatim from `inty --no-color`.
 
-**No variable type changes.** Assignment unifies with the binding's existing type.
+**No variable type changes.** Assignment unifies with the binding's existing type. A `let` or `var` that is assigned after its initialiser has one type, never a polymorphic one: `let id = function (x) { return x; }` can be called at two types only if it is never reassigned, as a `const` can.
 
 ```javascript
 // ❌ Rejected
@@ -485,6 +487,12 @@ See [jsdoc-at-type.md](jsdoc-at-type.md) for the full rule.
 
 Built-in type names: `Number`, `Int`, `String`, `Boolean`, `Null`, `Undefined`. Unknown identifiers are rejected (typos like `Stirng` are an error, not a fresh variable).
 
+A number's kind is inferred, never guessed while a function is generalised: an integral literal is `Int` or `Number` as its uses need (`Num`), and a function's numeric types stay polymorphic in its scheme (`function inc(x) { return x + 1; }` is `<a, b, c> where Arith a b c, Num b => (a) => c`: `inc(i)` is an `Int` for an `Int` `i`, `inc(0.5)` a `Number`). What nothing decides by the end of the program is an `Int`. Each function's type is so the most general one, and the Go backend, which compiles a function once per type it is used at, computes in machine integers wherever the uses allow: an index is always an `Int`.
+
+An **`Int`** is a safe integer: a number with no fractional part and magnitude at most 2^53, where every integer is exactly a double. `Int + Int`, `-`, `*`, `%` (and `//`, `+=`, `++`, …) are `Int`, as checked arithmetic: a result of magnitude 2^53 or more (where the double may already have rounded), as in `1073741824 * 1073741824`, or a remainder by zero (`5 % 0`, which JavaScript makes `NaN`), is a fault rather than an `Int`. The Go backend stops the program at an out-of-range product or a remainder by zero (it doesn't check sums and differences, which a Go `int` computes exactly where JavaScript would round); JavaScript itself runs on with an inexact or `NaN` value, so code that may leave the range should compute in `Number`, by annotating the operands (`/** const big: Number */`).
+
+Reading an array's or a string's element at an index it hasn't (`xs[xs.length]`, `xs[-1]`), or storing an array's element past its end, is a fault, as `Int` overflow is: an element read has the element type, not `T | Undefined`, so the program stops there rather than run on with an `undefined` (the Go backend panics; JavaScript reads `undefined`, or makes a hole). A store just past the end (`xs[xs.length] = v`) appends.
+
 A **tuple** `[A, B]` is a fixed-length array whose elements have their own types. An array literal where one is expected is one; `t[0]` with a constant index reads that element, and `const [a, b] = t` destructures it. An array literal with elements of different types and no annotation is an error that suggests a tuple (or a record, or an element union).
 
 A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
@@ -591,7 +599,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
 | Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`), `extends` with `super(args)` (see [Class Bodies](#class-bodies-fields-private-fields-accessors)); no `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
-| Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`                                          |
+| Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |
 | Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members |
 | Modules        | ES `import`/`export` with `inty.json` paths/baseUrl — see [Modules](#modules-es-import--export) above     |

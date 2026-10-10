@@ -1,0 +1,397 @@
+# Lean formalization of inty's type system
+
+A machine-checked model of inty's type system, in Lean 4 (core library only,
+no Mathlib). It covers a small core calculus, with let-polymorphism under the
+value restriction, type schemes that carry class constraints (inty's
+`<a> where Plus a => (a, a) => a`), a heap with `let` and assignment,
+loops, `break`, `continue` and `try`, objects with row-polymorphic record
+types and property constraints (`a has {name: b}`), method calls and
+equi-recursive types, a
+complete type-soundness proof, and an executable type-inference algorithm
+proved sound and complete. It is laid out so
+that each inty feature can be added the way it is added to the Rust code: a
+typing rule, an operator arm and a runtime arm, plus one new case in the
+proof. Paths like `src/dynamics` are relative to `crates/inty`.
+
+```sh
+cd lean
+lake build      # checks every proof; a `sorry` fails the build
+```
+
+Install Lean with [elan](https://github.com/leanprover/elan); `lean-toolchain`
+pins the version.
+
+## What is proved
+
+`Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
+`τ`, labels `L` (records have a slot for each), class constraints `C` each
+an instance or on a type variable (`HoldsOrVar`), context `Γ`, world `W` (the scheme of
+each cell of the heap), environment `env` whose variables' cells have the
+schemes `Γ` gives them, heap `h` that `W` describes for `clock` calls,
+enclosing function's return type `R`, and every clock, writing
+`(r, c, h') = run clock env h e` for the result, the clock left and the heap
+after,
+
+```
+HasType L C Γ R e τ → HoldsOrVar C → G W Γ env → HeapOK clock W h →
+  c ≤ clock ∧
+  (r = timeout ∨ ∃ W', W <+: W' ∧ HeapOK c W' h' ∧
+    ((∃ v, r = ok v ∧ V c W' τ v) ∨ r.Abrupt ∨
+     (∃ v, r = returned v ∧ ∃ τr, R = some τr ∧ V c W' τr v)))
+```
+
+where an abrupt completion is a `throw` of any value, a `break` or a
+`continue`.
+
+That is CakeML's shape of theorem (Owens et al., "Functional Big-step
+Semantics", ESOP 2016): for every clock, a value of the right type, an
+exception, or out of time, and never stuck. `V k W τ v` is a step-indexed
+Kripke logical relation: `v` behaves as a `τ` for `k` more calls, in any
+heap that a world extending `W` describes (see the design choices).
+`Inty/Statements.lean` pins each of its clauses.
+
+Its corollary `Inty.never_stuck` says a closed well-typed program never
+evaluates to `stuck`. That is the property `src/meta/soundness.rs` samples
+with proptest ("Whenever inty accepts a program, the operational semantics
+must not get stuck on it"), here proved for all programs of the calculus.
+The key lemma for polymorphism is `Inty.HasType.subst` (in
+`Inty/TypeSubst.lean`): typing is preserved by substituting types for type
+variables. The soundness proof uses it to type a generalised `const` at each
+instance of its scheme.
+
+`Inty.inferProgram_sound` (in `Inty/InferSound.lean`): whatever type inference
+finds is a valid typing,
+
+```
+inferProgram e = some τ → ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups C [] none e τ
+```
+
+The constraints `C` are what inference leaves on type variables (`Plus a`,
+or a property read on a value of unknown type): inty accepts the program
+with them in place, and they can't fail, since no value has a type
+variable's type.
+
+so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
+gets stuck.
+
+`Inty.infer_complete` (in `Inty/InferComplete.lean`): inference finds a type
+whenever one exists, one of which every valid type is an instance (Damas
+and Milner's completeness; the freshness invariants follow Naraschewski and
+Nipkow's proof of algorithm W), for `HasType₀`, the judgement with types
+compared syntactically (no conversion up to unfolding, no method calls),
+which embeds in `HasType` (`HasType₀.hasType`):
+
+```
+ctxFtv Γ = [] → (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) →
+  HasType₀ L C Γ none e τ' →
+  ∃ o, infer L Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn L Γ e = some τ
+```
+
+`scoped` is the pair of scope checks JavaScript makes: a program assigns
+only to its own `let`s and parameters, never to a `const`
+(`assignsMutable`), and has `break` and `continue` only inside a loop
+(`jumpsInLoop`). They are checks beside the typing rules, not among them:
+an assignment to a `const` would be type-safe, and a stray `break` is
+safe too, just not JavaScript.
+
+(`inferIn_complete`, `inferProgram_complete`). It rests on unification
+being most general (`Inty.unify_mgu`) where types unify syntactically;
+where they don't, it tries again up to unfolding, which is sound
+(`unify_sound` gives types equal up to unfolding) but not yet proved
+complete.
+
+`Inty.never_stuck_with_builtins` (in `Inty/Builtins.lean`): the same for a
+program run with native functions in scope, `Math.abs : number → number`
+and `Boolean : ∀ a. a → boolean`. No typing derivation describes them; they
+are in `V` by what they do (`Prim.abs_sound`, `Prim.truthy_sound`). With
+`Inty.inferIn_sound`, a program inference accepts with the builtins never
+gets stuck with them.
+
+`Inty.run_mono` (in `Inty/Clock.lean`): more clock doesn't change a result
+that didn't run out, so the model's verdicts don't depend on its clock.
+
+`Inty/Axioms.lean` pins the axioms these theorems use to Lean's standard ones
+(`propext`, `Classical.choice`, `Quot.sound`).
+
+## The calculus
+
+| Lean | inty |
+|---|---|
+| `Ty`: a type variable, a constructor (`Con`) applied to types (`number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type), `array`), or the `i`-th type of a system of recursive equations (`mu i sys`, right-hand sides `RTy` referring to the system's types as `self j`) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`; a `mu` is a `Type::Named` with its equation in `InferState::named_types`) |
+| `TyEq` (`Inty/Equi.lean`): equality up to unfolding, as the unfolded trees' finite approximations | `unify` on `Named` types (`unroll_named`) |
+| `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals, property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
+| `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
+| `HasType` (declarative typing, Hindley–Milner style, with a conversion rule between equal types); `HasType₀`, its syntactic fragment | what `src/infer` implements |
+| `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
+| `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
+| `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
+| `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`, `Merge`, `Indexable`, `IndexWrite`, `FieldWrite`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop`; `Merge` is a spread's per-field merge (`merge_spread` in `src/infer/features/rows.rs`, which decides it at once) |
+| `improveAll` (deciding constraints on known types), `fixedVars` and `genVars` (what a `let` quantifies) | `simplify_has_props`, `env_fixed_vars`, `InferState::generalize` |
+| `Entails C p` (`p` is an instance up to equal types, or assumed in `C`) | a scheme's constraints in scope while checking its body |
+| `unify` (syntactic, `unify₀`, then up to unfolding, `unifyRec`, which binds a variable occurring under a record or a function to a recursive type), `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, `var_bind`, `create_recursive_type`, the per-feature rules) |
+| `Out.preds` (pending class constraints) | the constraints `src/infer` resolves once types are known |
+| `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock and a heap, every binding a cell, an object a cell of its fields) | `src/dynamics` (`Value`, `Stuck`, fuel, `heap.rs`, `RuntimeEnv`, `Cell::Object`) |
+| `Prim`, `builtinCtx`, `builtinEnv`, `builtinHeap` (native functions, with their types) | `Value::Builtin`, `src/builtins` |
+| `Value.truthy`, `Value.typeString` | `Value::truthy`, `Value::type_string` |
+| `World` (a cell's scheme, or the record type of an object's fields, or an array's element type), `V`, `CellV`, `HeapOK`, `G`, `eval_sound` (semantic typing) | `src/meta/soundness.rs` |
+
+`Inty/Examples.lean` has small programs with their typing derivations; the
+interpreter runs them at build time (`#guard`).
+
+## Design choices
+
+These choices are meant to hold up as the calculus grows.
+
+- **The semantics is a definitional interpreter with a clock** (Amin and
+  Rompf, "Type Soundness Proofs with Definitional Interpreters", POPL 2017;
+  CakeML's functional big-step semantics), not a substitution-based
+  small-step relation. It has the same shape as `src/dynamics`: closures
+  over environments, a bound on the work, and an explicit `stuck`. Terms are
+  never substituted into, so there are no term substitution lemmas. The
+  clock counts calls, and `run` returns what is left of it for the rest of
+  the program; it terminates by well-founded recursion on the clock and the
+  expression. Running out of clock is distinct from getting stuck, so the
+  soundness theorem holds even for diverging programs. As in `dynamics`,
+  every binding is a cell of a heap that `run` threads beside the clock, and
+  a closure captures its variables' cells, so it sees later assignments to
+  them. A call stores its arguments, the function itself and `this` in
+  fresh cells. Amin and Rompf extend the approach to mutable references with
+  a syntactic store typing (§4.1), as this model does.
+- **The interpreter is executable.** `eval` is an ordinary function, so the
+  model can serve as a test oracle against the Rust implementation, as
+  Cedar's Lean model does for Cedar's Rust code (differential random
+  testing).
+- **Every type former is a constructor applied to types** (`Ty.app c
+  args`), so substitution, free variables, unification and their lemmas
+  are written once, and a new type former (arrays, `Map`, literal types)
+  adds a `Con` and its rules, not cases to every proof. `Ty.fn`,
+  `Ty.record` and the rest are pattern-matchable abbreviations.
+- **Rows are Rémy's flat rows over the program's labels.** A record type
+  has a slot for every label of the program (`L`, a parameter of the typing
+  rules and of inference), with a presence and a type. An open row, inty's
+  `{x: T | r}`, is a record whose other slots are variables. Within the
+  program's labels this is equivalent to Rémy's rows with presence, which
+  inty implements with tails, and it keeps unification plain Robinson
+  unification: no type equality up to permutation.
+- **Types and expressions nest lists** (a constructor's arguments, a call's
+  arguments). Lean derives neither
+  equality nor induction for nested inductive types, so `Ty.ind`, `PTy.ind`
+  and `Expr.ind` are induction principles with a hypothesis for each list
+  element, and functions on them recurse through a list by a mutual
+  function on the list, which keeps them structural.
+- **Term variables are de Bruijn indices.** The typing context and the
+  runtime environment are lists indexed the same way.
+- **Type schemes are locally nameless.** A scheme's quantified variables
+  (`PTy.bound i`) are syntax apart from free type variables (`Ty.var a`), so
+  substitution can't capture, and a monotype can't contain a dangling bound
+  variable. The `const` rule quantifies cofinitely: its initialiser must have
+  the scheme opened at every block of variables above some finite set. That
+  stands in for "the generalised variables aren't free in `Γ`" without
+  renaming lemmas (Charguéraud's mini-ML, and fhm, do the same).
+- **Typing is extrinsic and declarative.** `HasType` is a relation on plain
+  syntax, separate from any algorithm. Inference is proved sound and complete
+  against it.
+- **Values are typed semantically**, by a step-indexed Kripke logical
+  relation (Appel and McAllester, TOPLAS 2001; Ahmed, ESOP 2006; Ahmed,
+  Appel and Virga's model of general references) whose index is the
+  interpreter's clock, as in CakeML. A world says what each cell holds (a
+  variable's scheme, an object's record type, an array's element type);
+  cells never change, so worlds only grow (`<+:`). `V k W (τ₁ → τ₂) f`
+  says that calling `f` with any clock `j ≤ k`, in any larger world, on a
+  heap that world describes one tick down and on an argument in `V i τ₁`
+  for every `i < j`, takes a tick and gives back a `V c τ₂` value at the
+  clock `c` left, in a still larger world describing the heap after, or
+  throws, or runs out. A type variable has no values. A recursive type has
+  its unfolding's values. Since worlds map cells to syntactic types, `V` at
+  index `k` needs `V` at arbitrary types only below `k` (the arguments of
+  a call are good only below its clock, since the body runs a tick down,
+  which is what makes unfolding a recursive type terminate), and is
+  defined by well-founded recursion on the index. The
+  index is also what lets a recursive function's body assume the function
+  itself, one call down. Typing values by behaviour rather than by
+  derivation is what admits native functions (`Inty/Builtins.lean`), and
+  recursive types later, which a syntactic value typing can't describe.
+  This needed the clock to count calls and be threaded: with fuel bounding
+  recursion depth, a result computed under `k` steps is good only for
+  fewer, and the indices don't line up. Iris (via iris-lean) was the
+  alternative; see the roadmap's phase 2 for why not, for now.
+- **Inference is proved sound without freshness invariants.** The theorem
+  says the inferred type is valid under the inferred substitution and any
+  further substitution that resolves the pending class constraints. Stated
+  that way, a `const`'s generalisation is justified by renaming, and the
+  proof never needs inference's fresh variables to be fresh; completeness
+  does, and states them as invariants (`Below`, `Within`). Unification (`Inty/Unify.lean`) terminates by a measure and is
+  proved most general (`unify_mgu`): every unifier factors through the one
+  it finds.
+- **Class constraints are assumptions in the judgement.** `HasType L C Γ R e τ`
+  types `e` assuming the constraints in `C`, as in HM(X). A class is a
+  `Cls` with its instances in `Inst` (`Inty/Classes.lean`): `Plus`, and
+  `HasProp l a b`, a property read or write on a value of unknown type,
+  whose receiver determines the field (a functional dependency). A `const`
+  types its initialiser assuming its scheme's constraints, and each use of
+  the variable must establish them. Inference records a pending constraint
+  at each `+` and each property access; before a `const` generalises, it
+  decides the ones on known types (`improveAll`), and it doesn't quantify a
+  field type whose receiver the environment fixes.
+- **A constraint left on a type variable is harmless.** No value has a
+  type variable's type, so code relying on such a constraint never runs:
+  the soundness theorem assumes only `HoldsOrVar C`, and inference accepts
+  a program whose leftover constraints are instances or on type variables,
+  as inty does.
+- **An object is a cell holding its fields**, as in `dynamics`; the world
+  gives the cell a record type (`Cell.obj`), and `V` of a record is a
+  reference to such a cell, of an equal record type, so aliasing and writes
+  need nothing new. The fields are the record's present ones and none of
+  its absent ones, and a slot whose presence is a variable has no
+  contents, as a type variable has no values.
+- **Recursive types are equi-recursive, each carrying its equations.** A
+  `mu i sys` is the type its equation gives, with `self j` read as `mu j
+  sys`; its right-hand sides are a type of their own (`RTy`), so no
+  substitution can capture a `self`. Equality up to unfolding (`TyEq`) is
+  the equality of the unfolded trees, through their finite
+  approximations: an equivalence, closed under substitution and taken
+  apart by constructors without coinduction. inty keeps its recursive
+  types in one table, without parameters, so a factory's type variables
+  freeze; the model's carry their own and stay polymorphic.
+- **A spread merges slot by slot, when the operand's presence is known.**
+  `{...e₁, ...e₂}`'s slot for each label is `Merge p τ s r`: `e₂`'s
+  presence `p` and type `τ` over `e₁`'s slot `s` give `r`, `e₂`'s field if
+  `p` is `pre`, `s` if `abs`. With `p` a variable the constraint waits, so
+  `function f(o) { return {a: 1, ...o}; }` has a principal type, under
+  which `f({a: "s"}).a` is a string. A scheme keeps its `Merge`s as they
+  are (deciding them where a binding generalises would depend on whether
+  `p` is known by then, which no rule closed under substitution can
+  state), and the top level decides them. inty decides each at once,
+  making a field the operand may lack agree with the one it overrides, so
+  it rejects that call; the model is the more precise of the two.
+- **An index out of bounds is a fault.** An array is a cell of its
+  elements; `e[i]` with `i` not a whole number below the length is
+  `Result.fault`, which soundness allows, as `dynamics`' `OutOfBounds`
+  (JavaScript reads `undefined`). A store at the length appends.
+- **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
+  and `Arith` classes, is phase 4 of the roadmap; so is inty's rule that
+  an index is an `Int`, where the model takes any number.
+
+## Adding a feature
+
+This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
+
+1. Syntax: a constructor in `Expr` (and in `Ty` / `Value` if needed).
+2. Typing: a rule in `HasType` (and `HasTypeTop`, its rules but the
+   conversion; and in `HasType₀` if inference is complete for it), or an
+   arm in `UnOpTy` / `BinOpTy`.
+3. Semantics: an arm in `run` (or `UnOp.eval` / `BinOp.eval`, or
+   `Prim.apply` for a native function).
+4. Inference: an arm in `infer`.
+5. Proof: a case in `HasType.subst`, `HasType.top`, `HasType₀.generalize_ctx`, `run_sound`
+   (or `UnOp.eval_sound` / `BinOp.eval_sound`), `run_clock_le`, `run_mono`,
+   `infer_inv`, `infer_sound` and `infer_complete`, and a clause of `V` for a
+   new type former. A native function needs only its
+   `V` proof (`Prim.abs_sound`).
+6. An example in `Inty/Examples.lean`.
+7. The wire format (`Inty/Wire.lean`) and the differential test's
+   generator and JavaScript printer (`crates/inty/tests/differential.rs`).
+
+Lean's exhaustiveness checks point at every case still missing.
+
+## Roadmap
+
+[ROADMAP.md](ROADMAP.md) plans the rest: seven phases to a complete model
+of inty's type system, with the ground rules that keep it faithful to what
+inty implements and documents.
+
+## Differential testing
+
+`crates/inty/tests/differential.rs` checks inty against the model on
+generated programs of the core calculus, both type-directed and adversarial.
+Each one is written as JavaScript for inty and in a wire format
+(`Inty/Wire.lean`) for `inty-model`, the executable `lake build` makes
+(`Main.lean`), which answers with Lean inference's verdict and the
+interpreter's result. The test fails on:
+
+- a program inty accepts that gets stuck in `dynamics` (and, as a check on
+  the harness, one the model accepts that gets stuck in `eval`, which
+  `inferProgram_never_stuck` rules out);
+- a program on which both interpreters finish but disagree, on the value or
+  on getting stuck (`eval_mono` makes the model's answer independent of its
+  clock; a timeout on either side is not compared);
+- inty and the model typing a program differently, unless inty's own types
+  show a feature the model doesn't have yet;
+- a real JavaScript engine (Node, running `tests/differential/engine.js`)
+  disagreeing with either interpreter where that interpreter finishes, or
+  raising a native error (`TypeError`, `ReferenceError`) on a program inty
+  or the model accepts. `never_stuck` is about the model's `eval`; agreement with
+  the engine is the (sampled, not proved) evidence that `eval` is
+  JavaScript on this fragment.
+
+```sh
+cd lean && lake build && cd ..
+cargo test -p inty --test differential -- --nocapture
+INTY_DIFF_CASES=20000 INTY_DIFF_SEED=7 cargo test -p inty --test differential
+```
+
+Over 100,000 programs (five seeds), Node agreed with both interpreters
+wherever they finished and raised no error on a program either accepted.
+Where `dynamics` gets stuck, Node raises a `TypeError` or `ReferenceError`
+in about half the cases and coerces in the rest (`1 - "a"`,
+`typeof unbound`): the gap between inty's stricter semantics and
+JavaScript's. As a control, an engine that runs `-` as `+` fails 152 of
+3000 programs. The engine runs each program in strict mode, which inty
+assumes throughout (`docs/scc-inference.md`): it found that in sloppy mode
+`(function () { return this; })()` is the global object, where inty, its
+dynamics and the model all have `undefined`.
+
+With phase 2 (`let`, assignment, loops, `try`), over 100,000 more programs
+(five seeds) agreed. They found three bugs in inty: a caught exception
+typed with a flexible variable (unsound), a named function expression's
+own name assignable (a `TypeError` in JavaScript), and `dynamics` not
+catching a `throw` out of a called function, and getting stuck on extra
+arguments, which inty's typing lets a function literal ignore.
+
+Over 200,000 programs (ten seeds), the interpreters never disagreed, and
+the model never accepted a program inty rejects, except as below. The
+disagreements in typing all fall into features the model lacks:
+
+| Divergence | inty | model | Roadmap phase |
+|---|---|---|---|
+| Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 5 |
+| A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 5 |
+| Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 5 |
+| `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 4 |
+| An index that is a `Number`: `xs[n - 0.5]` | rejects (an index is an `Int`) | accepts (a fractional index is out of bounds, a fault) | 4 |
+| A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
+| A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 2 (statements apart from expressions) |
+
+With method calls and recursive types, over 40,000 more programs (eight
+seeds), with about 450 accepted method calls per 5,000 programs,
+agreed, with no exception for recursive types. Reading inty's handling of
+them found a soundness bug: unifying a recursive type against a
+structural one memoised the unfolding by the recursive type's id alone,
+so `function f(x) { return f; }` was accepted at
+`(x: Number) => (y: Number) => Number` and `k(1)(2) - 1` computed `NaN`.
+
+Each row is recognised from evidence, not guessed: a union in the
+types inty gave the program's expressions, inty accepting the program
+once its number literals are made fractional, or an error of inty's
+between `Int` and `Number`. The harness's first run also
+found that `meta::soundness::check_program` never called
+`resolve_constraints`, so it could accept programs the CLI rejects; it does
+now.
+
+## Working with AI agents
+
+The evidence so far (System Capless, Typed Racket, fhm) suggests a split:
+agents do the proof engineering well, while the definitions and theorem
+statements need human review. A wrong statement compiles just as well as a
+right one. So review changes to `Types`, `Syntax`, `Typing`, `Semantics`
+and the statements of `eval_sound`, `HasType.subst` and `inferProgram_sound`
+closely, and treat proofs as checked by Lean. `Inty/Statements.lean` restates
+each headline theorem, so a change to one shows up in the diff, and lists
+programs the typing rules must reject.
+[lean-lsp-mcp](https://github.com/project-numina/lean-lsp-mcp) gives an agent
+goal states and diagnostics:
+
+```sh
+claude mcp add lean-lsp uvx lean-lsp-mcp
+```

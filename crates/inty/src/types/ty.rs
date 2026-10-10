@@ -201,7 +201,11 @@ impl FieldEntry {
 /// Type class names for constraint-based polymorphism.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ClassName {
-    /// Plus class: types that support the + operator (Number, Int, String).
+    /// `Plus a b c`: `c` is the type of `a + b` — numbers (`Int` when
+    /// both are `Int`, `Number` when either is, as `Arith`), or strings
+    /// (all three `String`). `a` and `b` determine `c`; a known `String`
+    /// anywhere makes all three `String`, a number anywhere makes it an
+    /// `Arith`. `Plus a` is short for `Plus a a a`.
     Plus,
     /// `Num a`: `a` is `Int` or `Number`.
     Num,
@@ -217,6 +221,15 @@ pub enum ClassName {
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
+    /// `IndexWrite c`: an element of `c` can be stored (`c[i] = v`): an
+    /// array, a typed array, a map or an object, not a string (whose
+    /// characters are read-only: a store throws a `TypeError` in strict
+    /// code).
+    IndexWrite,
+    /// `FieldWrite r`: a property of `r` can be stored (`r.p = v`): an
+    /// object, not an array, a string or a function (whose properties
+    /// are built in).
+    FieldWrite,
     /// Property access on a value whose type isn't known yet:
     /// `HasProp(receiver, "name", result)` says reading `.name` from a
     /// `receiver` gives a `result`. The name is carried as a string
@@ -250,10 +263,16 @@ impl PartialEq for TypePred {
 impl Eq for TypePred {}
 
 impl TypePred {
+    /// `Plus t t t`: `+` on one type.
     pub fn plus(ty: Type) -> Self {
+        Self::plus3(ty.clone(), ty.clone(), ty)
+    }
+
+    /// `Plus left right result`.
+    pub fn plus3(left: Type, right: Type, result: Type) -> Self {
         TypePred {
             class: ClassName::Plus,
-            types: vec![ty],
+            types: vec![left, right, result],
             origin: None,
         }
     }
@@ -286,6 +305,22 @@ impl TypePred {
         TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
+            origin: None,
+        }
+    }
+
+    pub fn field_write(receiver: Type) -> Self {
+        TypePred {
+            class: ClassName::FieldWrite,
+            types: vec![receiver],
+            origin: None,
+        }
+    }
+
+    pub fn index_write(container: Type) -> Self {
+        TypePred {
+            class: ClassName::IndexWrite,
+            types: vec![container],
             origin: None,
         }
     }
