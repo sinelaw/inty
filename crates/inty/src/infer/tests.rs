@@ -573,6 +573,23 @@ fn test_unknown_method_after_chain_is_rejected() {
 }
 
 #[test]
+fn recursive_type_against_function_needs_the_same_goal_to_close_a_cycle() {
+    // `f : (a) => μt. (b) => t`. The annotation says `k(1)` returns a
+    // function returning a Number, but `k(1)(2)` returns `f`. Was
+    // accepted: the unfold of `μt` against the annotation was memoised by
+    // the recursive type's id alone, so the second unfold, against
+    // `(Number) => Number`, "succeeded" by coinduction.
+    let src = "function f(x) { return f; }\n\
+               /** const k: (x: Number) => (y: Number) => Number */\n\
+               const k = f;\n\
+               const n = k(1)(2) - 1;";
+    assert!(check_program(src, &[]).is_err());
+    // The same recursive type against itself is still fine.
+    let ok = "function f(x) { return f; }\nconst k = f;\nconst g = k(1)(2)(3);";
+    assert!(check_program(ok, &[]).is_ok());
+}
+
+#[test]
 fn test_method_call_on_chained_result() {
     // Calling a method on the result of chained method calls
     let source = r#"

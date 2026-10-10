@@ -408,15 +408,17 @@ pub struct InferState {
 /// equirecursive types with distinct ids alternate-unrolling forever
 /// without this; with it, re-entering an assumption signals the cycle
 /// has closed and the unification is sound by coinduction.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(in crate::infer) enum UnfoldAssumption {
     /// `Named(id_a) ↔ Named(id_b)` unfold in progress.
     NamedPair(TypeId, TypeId),
-    /// `Named(id) ↔ Row(...)` unfold in progress. The row side has no
-    /// stable identity, so a same-id re-entry is what the cycle check
-    /// looks for — sufficient because every cycle goes through *some*
-    /// brand, and the row direction can't loop without the brand looping.
-    NamedRow(TypeId),
+    /// `Named(id, args) ↔ other` unfold in progress, with both sides as
+    /// they were (zonked) when the unfold began. Only the *same* goal
+    /// recurring closes the cycle: keying by the id alone let
+    /// `μt. Number → t` meet `Number → Number → Number`, succeed on the
+    /// first unfold's assumption one level down, and accept a function
+    /// whose second call returns a function as one returning a number.
+    NamedRow(TypeId, Vec<Type>, Type),
     /// Two open rows' tail variables (smaller id first) are being
     /// unified. A cycle in the substitution — `ρ₁ ↦ {… | ρ₂}` and
     /// `ρ₂ ↦ {… | ρ₁}`, which `zonk` shows as free tails — otherwise
