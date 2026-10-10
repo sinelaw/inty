@@ -17,6 +17,7 @@ JavaScript and for this model as an s-expression, one program per line:
 (obj (field s:x E) …)   an object literal     (get E s:x)   (set E s:x V)
 (spread A B)   `{...A, ...B}`
 (arr E₀ E₁ …)  `[E₀, E₁, …]`    (index E I)  `E[I]`    (setindex E I V)  `E[I] = V`
+(mcall E s:x A₀ A₁ …)  `E.x(A₀, A₁, …)`
 ```
 
 `inty-model` (`Main.lean`) answers each line with the model's verdicts, as
@@ -140,6 +141,11 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (i, rest) ← parseExpr rest
     let (v, rest) ← parseExpr rest
     some (.setIndex e i v, rest)
+  | "mcall", rest => do
+    let (e, rest) ← parseExpr rest
+    let (l, rest) ← parseLabel rest
+    let (args, rest) ← parseMany rest
+    some (.mcall e l args, rest)
   | _, _ => none
 
 /-- A property label, written `s:` then the label. -/
@@ -187,6 +193,12 @@ def tyWire : Ty → String
   | .array _ => "array"
   -- inty's type for what a `catch` binds is a rigid type variable.
   | .unknown | .var _ => "var"
+  -- A recursive type, by its unfolding.
+  | .mu i sys =>
+    match (Ty.mu i sys).view with
+    | some (.app .fn _) => "fun"
+    | some (.app (.record _) _) => "obj"
+    | _ => "other"
   | _ => "other"
 
 /-- Inference's verdict: `type T`, or `reject`, which includes a constraint
@@ -320,5 +332,15 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100 "(set (arr) s:length (num 0 0))" == "reject;stuck badAssignmentTarget"
 #guard verdict 100 "(let (func 1 (index (var 0) (num 0 0))) (app (var 0) (arr (bool true))))" ==
   "type boolean;value bool true"
+
+-- A method's `this` is its receiver; `c.inc().inc()` types through a
+-- recursive type.
+#guard verdict 100
+  "(let (obj (field s:v (num 0 0)) (field s:inc (func 0 (seq (set (var 1) s:v (plus (get (var 1) s:v) (num 1 0))) (ret (var 1)))))) (get (mcall (mcall (var 0) s:inc) s:inc) s:v))"
+  == s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100
+  "(let (obj (field s:me (func 0 (var 1)))) (mcall (var 0) s:me))" == "type obj;value obj"
+#guard verdict 100 "(mcall (obj (field s:f (num 1 0))) s:f)" == "reject;stuck notCallable"
+#guard verdict 100 "(mcall (obj) s:f)" == "reject;stuck propertyNotFound"
 
 end Inty.Wire

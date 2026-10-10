@@ -56,6 +56,7 @@ Paths like `src/infer` are relative to `crates/inty`.
   reads, writes and spread; arrays, indexing (`Indexable`, `IndexWrite`)
   and `length`, with an index out of bounds a fault (phase 3, in
   progress).
+- Method calls and equi-recursive types (phase 6, in part).
 - Differential testing against inty and Node.
 
 ## Phases
@@ -292,12 +293,26 @@ touching the generic proofs.
 
 ### 6. Recursive types, methods and classes
 
-- Methods with `this`: an object literal's `this` is its own type, so a
-  literal with a method used as one has a recursive type.
-- Named types (`Named`) with equality up to unfolding (Brandt and
-  Henglein), unification without the occurs check, `V` unfolding a named
-  type (inty's recur through functions and fields, so through calls and
-  cells).
+- Done: method calls `e.l(args)`, whose method's `this` is the receiver's
+  type (inty's `method_receiver`), so a method that returns `this`, or
+  reads a property holding a method, makes the receiver's type recursive.
+- Done: equi-recursive types. A type can be the `i`-th type of a system of
+  equations (`Ty.mu i sys`); inty keeps such systems in one table
+  (`Type::Named`), without parameters, where each of the model's carries
+  its own, so a recursive type can be polymorphic. Two types are equal
+  (`TyEq`) when they unfold to the same infinite tree, defined by its
+  finite approximations; typing has a conversion rule; entailment
+  compares types up to `TyEq`; `V` gives a recursive type its unfolding's
+  values (a call clock bounds the recursion, the arguments of a call being
+  good only below it). Unification tries syntactically, then up to
+  unfolding, binding a variable that occurs only under a record or a
+  function to a recursive type, as inty's `create_recursive_type` does.
+  Inference is sound for it, and complete for the syntactic fragment
+  (`HasType₀`); completeness up to unfolding, and a variable occurring
+  inside a nested recursive type (which the model's unifier rejects), are
+  still to come.
+- Methods defined with the shorthand `m() {…}`, whose `this` inty ties to
+  the literal's type at once (`shared_this` in `infer_object`).
 - Callable rows (`String`, `String.fromCharCode`); classes lowered as inty
   lowers them (factory functions, `#private` fields, accessors, `extends`
   as a spread of the base instance).

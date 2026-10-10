@@ -96,6 +96,8 @@ enum Core {
     Index(Box<Core>, Box<Core>),
     /// `e[i] = v`.
     SetIndex(Box<Core>, Box<Core>, Box<Core>),
+    /// `e.l(a₀, …)`: a method call, with `e` as `this`.
+    MCall(Box<Core>, String, Vec<Core>),
 }
 
 use Core::*;
@@ -160,6 +162,10 @@ fn wire(e: &Core) -> String {
         }
         Index(e, i) => format!("(index {} {})", wire(e), wire(i)),
         SetIndex(e, i, v) => format!("(setindex {} {} {})", wire(e), wire(i), wire(v)),
+        MCall(e, l, args) => {
+            let args: Vec<String> = args.iter().map(|a| format!(" {}", wire(a))).collect();
+            format!("(mcall {} s:{}{})", wire(e), l, args.concat())
+        }
     }
 }
 
@@ -217,6 +223,7 @@ fn fractional(e: &Core) -> Core {
         Arr(es) => Arr(es.iter().map(fractional).collect()),
         Index(x, i) => Index(f(x), f(i)),
         SetIndex(x, i, y) => SetIndex(f(x), f(i), f(y)),
+        MCall(x, l, args) => MCall(f(x), l.clone(), args.iter().map(fractional).collect()),
         other => other.clone(),
     }
 }
@@ -320,6 +327,11 @@ impl Js {
             SetIndex(e, i, v) => {
                 format!("(({})[{}] = {})", self.expr(e), self.expr(i), self.expr(v))
             }
+            MCall(e, l, args) => {
+                let obj = self.expr(e);
+                let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
+                format!("({}).{}({})", obj, l, args.join(", "))
+            }
         }
     }
 
@@ -414,6 +426,9 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
                 || refers_from_inner(j, i, inner)
                 || refers_from_inner(y, i, inner)
         }
+        MCall(x, _, args) => {
+            refers_from_inner(x, i, inner) || args.iter().any(|a| refers_from_inner(a, i, inner))
+        }
     }
 }
 
@@ -476,6 +491,9 @@ enum Binding {
     Unknown,
     /// Untyped, and assignable: a `let` or a parameter.
     UnknownMut,
+    /// A method's `this`: an object with these data fields (and methods,
+    /// which aren't tracked).
+    This(Vec<(String, T)>),
 }
 
 struct Gen {
@@ -567,11 +585,26 @@ impl Gen {
             .filter(|&i| match &scope[scope.len() - 1 - i] {
                 Binding::Mono(u) | Binding::Mut(u) => u == t,
                 Binding::PolyId => matches!(t, T::Arrow(ps, r) if ps.len() == 1 && ps[0] == **r),
-                Binding::Unknown | Binding::UnknownMut => false,
+                Binding::Unknown | Binding::UnknownMut | Binding::This(_) => false,
             })
             .collect();
         if !fits.is_empty() && self.rng.chance(if depth == 0 { 80 } else { 30 }) {
             return Var(fits[self.rng.below(fits.len())]);
+        }
+        // A field of this type of a method's `this`.
+        let this_fields: Vec<(usize, String)> = (0..scope.len())
+            .flat_map(|i| match &scope[scope.len() - 1 - i] {
+                Binding::This(fields) => fields
+                    .iter()
+                    .filter(|(_, u)| u == t)
+                    .map(|(l, _)| (i, l.clone()))
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        if !this_fields.is_empty() && self.rng.chance(if depth == 0 { 60 } else { 25 }) {
+            let (i, l) = this_fields[self.rng.below(this_fields.len())].clone();
+            return Get(b(Var(i)), l);
         }
         // An assignment to a `let` or a parameter of this type, whose value
         // is the assignment's.
@@ -625,6 +658,10 @@ impl Gen {
             } else {
                 SetIndex(b(a), b(i), b(self.typed(t, d, scope, false)))
             };
+        }
+        // A method call on an object literal with a method `m`.
+        if depth > 0 && self.rng.chance(8) {
+            return self.method_call(t, d, scope);
         }
         if stmt && depth > 0 && self.rng.chance(25) {
             // `const`: sometimes the polymorphic identity, used at
@@ -742,6 +779,72 @@ impl Gen {
                 _ => self.literal(t).unwrap(),
             },
         }
+    }
+
+    /// A method call of type `t` on an object literal `{a: …, m: function
+    /// (…) { … }}`: the method returns a `t`, reading the object's fields
+    /// through `this`; or it returns `this` (after storing a field), and is
+    /// called twice before a field of type `t` is read. Either makes the
+    /// object's type recursive.
+    fn method_call(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let mut data: Vec<(String, T)> = Vec::new();
+        for l in LABELS {
+            if self.rng.chance(50) {
+                data.push((l.to_string(), self.ty(1)));
+            }
+        }
+        let chain = self.rng.chance(40);
+        if chain && !data.iter().any(|(_, u)| u == t) {
+            let l = self.label();
+            data.retain(|(m, _)| *m != l);
+            data.push((l, t.clone()));
+            data.sort_by(|x, y| x.0.cmp(&y.0));
+        }
+        let mut fields: Vec<(String, Core)> = data
+            .iter()
+            .map(|(l, u)| (l.clone(), self.typed(u, d, scope, false)))
+            .collect();
+        if chain {
+            // `function () { this.l = …; return this; }`: in a function of
+            // no parameters, `this` is variable 1.
+            let (l, u) = data[self.rng.below(data.len())].clone();
+            scope.push(Binding::This(data.clone()));
+            scope.push(Binding::Unknown);
+            let v = self.typed(&u, d.saturating_sub(1), scope, false);
+            scope.truncate(scope.len() - 2);
+            let body = if self.rng.chance(50) {
+                Seq(b(Set(b(Var(1)), l, b(v))), b(Ret(b(Var(1)))))
+            } else {
+                Ret(b(Var(1)))
+            };
+            fields.push(("m".into(), Func(0, b(body))));
+            let (l, _) = data.iter().find(|(_, u)| u == t).unwrap().clone();
+            let calls = 1 + self.rng.below(2);
+            let mut e = Obj(fields);
+            for _ in 0..calls {
+                e = MCall(b(e), "m".into(), Vec::new());
+            }
+            return Get(b(e), l);
+        }
+        let n = self.rng.below(3);
+        let ps: Vec<T> = (0..n).map(|_| self.ty(1)).collect();
+        scope.push(Binding::This(data));
+        scope.push(Binding::Unknown);
+        for p in ps.iter().rev() {
+            scope.push(Binding::Mut(p.clone()));
+        }
+        self.funcs.push(Some(t.clone()));
+        self.loops.push(0);
+        let body = self.typed(t, d, scope, true);
+        self.loops.pop();
+        self.funcs.pop();
+        scope.truncate(scope.len() - n - 2);
+        fields.push(("m".into(), Func(n, b(body))));
+        if fields.len() > 1 && self.rng.chance(50) {
+            fields.reverse();
+        }
+        let args = ps.iter().map(|p| self.typed(p, d, scope, false)).collect();
+        MCall(b(Obj(fields)), "m".into(), args)
     }
 
     /// An array index: mostly a small one, in bounds or just past the end;
@@ -925,10 +1028,36 @@ impl Gen {
             }
             4 if self.rng.chance(40) => {
                 let n = self.rng.below(3);
-                let fields = (0..n)
+                let mut fields: Vec<(String, Core)> = (0..n)
                     .map(|_| (self.label(), self.any(d, scope, false)))
                     .collect();
+                if self.rng.chance(30) {
+                    // A method, which may use `this`.
+                    let k = self.rng.below(2);
+                    scope.push(Binding::Unknown);
+                    scope.push(Binding::Unknown);
+                    for _ in 0..k {
+                        scope.push(Binding::UnknownMut);
+                    }
+                    self.funcs.push(None);
+                    self.loops.push(0);
+                    let body = self.any(d, scope, true);
+                    self.loops.pop();
+                    self.funcs.pop();
+                    scope.truncate(scope.len() - k - 2);
+                    fields.push(("m".into(), Func(k, b(body))));
+                }
                 Obj(fields)
+            }
+            4 if self.rng.chance(30) => {
+                let o = self.any(d, scope, false);
+                let l = if self.rng.chance(70) {
+                    "m".to_string()
+                } else {
+                    self.label()
+                };
+                let n = self.rng.below(2);
+                MCall(b(o), l, (0..n).map(|_| self.any(d, scope, false)).collect())
             }
             4 => Not(b(self.any(d, scope, false))),
             5 if self.rng.chance(40) => {
@@ -1084,7 +1213,14 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
                 errors.push(e.to_string());
             }
             if errors.is_empty() {
-                Typing::Type(core_type(&state.apply_subst(&ty)))
+                // A recursive type, by its unfolding, as the model prints it.
+                let mut ty = state.apply_subst(&ty);
+                if let Type::Named(id, args) = &ty {
+                    if let Some(unrolled) = state.unroll_named(*id, args) {
+                        ty = unrolled;
+                    }
+                }
+                Typing::Type(core_type(&ty))
             } else {
                 Typing::Reject
             }
@@ -1124,9 +1260,6 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     }
     shown.extend(errors);
     for text in &shown {
-        if text.contains('μ') {
-            features.insert("recursive types");
-        }
         if text.contains(" | ") {
             features.insert("unions");
         }
@@ -1318,10 +1451,6 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Reject) if features.contains("fewer parameters") => {
             Some("fewer parameters than the expected function type")
         }
-        // Roadmap phase 6: `function f(x) { return f; }`.
-        (Typing::Type(_), Typing::Reject) if features.contains("recursive types") => {
-            Some("equi-recursive types")
-        }
         // inty types what never returns (a function that only throws)
         // `never`, the empty union, which unifies with nothing else and
         // can't be called, as in TypeScript; the model leaves it a free
@@ -1444,6 +1573,11 @@ fn inty_agrees_with_the_lean_model() {
                 }
             ))
             .or_default() += 1;
+        if wire(&programs[i]).contains("(mcall") && accepted && model_accepted {
+            *counts
+                .entry("both accept, with a method call".into())
+                .or_default() += 1;
+        }
 
         // Soundness.
         if accepted && matches!(run, Run::Stuck(_)) {
@@ -1478,7 +1612,11 @@ fn inty_agrees_with_the_lean_model() {
             // An index out of bounds is a fault in inty and the model, where
             // JavaScript reads `undefined` and goes on, perhaps to an error.
             let faulted = matches!(run, Run::Fault(_)) || matches!(model_run, Run::Fault(_));
-            if let (Run::NativeError(name), false) = (engine_run, faulted) {
+            // Unbounded recursion runs both interpreters out of fuel, where
+            // the engine overflows its stack with a `RangeError`, which a
+            // `catch` can catch, going on to code they never reach.
+            let both_timed_out = run == Run::Timeout && model_run == Run::Timeout;
+            if let (Run::NativeError(name), false) = (engine_run, faulted || both_timed_out) {
                 if accepted {
                     failures.push(report(&format!(
                         "inty accepts a program that raises {name}"
