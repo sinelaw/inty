@@ -80,6 +80,7 @@ theorem CellP.mono {P Q : Ty → Value → Prop} (hPQ : ∀ τ v, P τ v → Q �
   | obj τ =>
     cases τ with
     | var => simp [CellP] at h
+    | mu => simp [CellP] at h
     | app c args =>
       cases c
       case record ls =>

@@ -30,6 +30,23 @@ def Subst.Within (n : Nat) (σ : Subst) : Prop :=
 theorem Ty.Below.mono {n n' : Nat} {τ : Ty} (h : τ.Below n) (hn : n ≤ n') : τ.Below n' :=
   fun a ha => Nat.lt_of_lt_of_le (h a ha) hn
 
+theorem RTy.subst_congr' {σ σ' : Subst} {r : RTy}
+    (h : ∀ a ∈ r.ftv, (Ty.var a).subst σ = (Ty.var a).subst σ') : r.subst σ = r.subst σ' := by
+  induction r using RTy.ind with
+  | free a =>
+    have := h a (by simp [RTy.ftv])
+    simp only [Ty.subst] at this
+    simp [RTy.subst, this]
+  | self j => rfl
+  | app c args ih =>
+    simp only [RTy.ftv_app, List.mem_flatMap] at h
+    simp only [RTy.subst_app, RTy.app.injEq, true_and]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+  | mu i sys ih =>
+    simp only [RTy.ftv_mu, List.mem_flatMap] at h
+    simp only [RTy.subst_mu, RTy.mu.injEq, true_and]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+
 /-- Substitutions that agree on a type's variables, as types. -/
 theorem Ty.subst_congr' {σ σ' : Subst} {τ : Ty}
     (h : ∀ a ∈ τ.ftv, (Ty.var a).subst σ = (Ty.var a).subst σ') : τ.subst σ = τ.subst σ' := by
@@ -39,18 +56,36 @@ theorem Ty.subst_congr' {σ σ' : Subst} {τ : Ty}
     simp only [Ty.ftv_app, List.mem_flatMap] at h
     simp only [Ty.subst_app, Ty.app.injEq, true_and]
     exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+  | mu i sys =>
+    simp only [Ty.ftv_mu, List.mem_flatMap] at h
+    simp only [Ty.subst_mu, Ty.mu.injEq, true_and]
+    exact List.map_congr_left (fun p hp => RTy.subst_congr' (fun a ha => h a ⟨p, hp, ha⟩))
+
+theorem RTy.ftv_subst {σ : Subst} {r : RTy} {a : Nat} (h : a ∈ (r.subst σ).ftv) :
+    ∃ b ∈ r.ftv, a ∈ ((Ty.var b).subst σ).ftv := by
+  induction r using RTy.ind with
+  | free b =>
+    simp only [RTy.subst, Ty.toRTy_ftv] at h
+    exact ⟨b, by simp [RTy.ftv], by simpa [Ty.subst] using h⟩
+  | self j => simp [RTy.subst, RTy.ftv] at h
+  | app c args ih =>
+    simp only [RTy.subst_app, RTy.ftv_app, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨p, hp, rfl⟩, h⟩ := h
+    obtain ⟨b, hb, h⟩ := ih p hp h
+    exact ⟨b, by simp only [RTy.ftv_app, List.mem_flatMap]; exact ⟨p, hp, hb⟩, h⟩
+  | mu i sys ih =>
+    simp only [RTy.subst_mu, RTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨p, hp, rfl⟩, h⟩ := h
+    obtain ⟨b, hb, h⟩ := ih p hp h
+    exact ⟨b, by simp only [RTy.ftv_mu, List.mem_flatMap]; exact ⟨p, hp, hb⟩, h⟩
 
 /-- The variables of a substituted type come from the images of its
 variables. -/
 theorem Ty.ftv_subst {σ : Subst} {τ : Ty} {a : Nat} (h : a ∈ (τ.subst σ).ftv) :
     ∃ b ∈ τ.ftv, a ∈ ((Ty.var b).subst σ).ftv := by
-  induction τ using Ty.ind with
-  | var b => exact ⟨b, by simp, h⟩
-  | app c args ih =>
-    simp only [Ty.subst_app, Ty.ftv_app, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨p, hp, rfl⟩, h⟩ := h
-    obtain ⟨b, hb, h⟩ := ih p hp h
-    exact ⟨b, by simp only [Ty.ftv_app, List.mem_flatMap]; exact ⟨p, hp, hb⟩, h⟩
+  have h' : a ∈ (τ.toRTy.subst σ).ftv := by simpa using h
+  obtain ⟨b, hb, h⟩ := RTy.ftv_subst h'
+  exact ⟨b, by simpa using hb, h⟩
 
 theorem Subst.Within.subst_below {n : Nat} {σ : Subst} (hσ : σ.Within n) {τ : Ty}
     (h : τ.Below n) : (τ.subst σ).Below n := fun a ha => by
@@ -93,9 +128,17 @@ theorem Ty.Below.fn {n : Nat} {t r : Ty} {ps : List Ty} :
   simp only [List.mem_cons, forall_eq_or_imp]
   exact ⟨fun ⟨ht, hr, hps⟩ => ⟨ht, hps, hr⟩, fun ⟨ht, hps, hr⟩ => ⟨ht, hr, hps⟩⟩
 
+/-- A right-hand side's variables are below `n`. -/
+def RTy.Below (n : Nat) (r : RTy) : Prop := ∀ a ∈ r.ftv, a < n
+
+theorem Subst.Within.rsubst_below {n : Nat} {σ : Subst} (hσ : σ.Within n) {r : RTy}
+    (h : r.Below n) : (r.subst σ).Below n := fun a ha => by
+  obtain ⟨b, hb, ha⟩ := RTy.ftv_subst ha
+  exact (hσ b).1 (h b hb) a ha
+
 /-- A unifier of equations between types below `n` stays within `n`. -/
 theorem unifyEqs_within {n : Nat} :
-    ∀ (vs : List Nat) (eqs : List (Ty × Ty)), (∀ e ∈ eqs, e.1.Below n ∧ e.2.Below n) →
+    ∀ (vs : List Nat) (eqs : List (RTy × RTy)), (∀ e ∈ eqs, e.1.Below n ∧ e.2.Below n) →
       ∀ {σ : Subst}, unifyEqs vs eqs = some σ → σ.Within n := by
   intro vs eqs
   induction vs, eqs using unifyEqs.induct with
@@ -104,44 +147,77 @@ theorem unifyEqs_within {n : Nat} :
     intro hb σ h
     unfold unifyEqs at h; simp only [ite_true] at h
     exact ih (fun e he => hb e (by simp [he])) h
-  | case3 vs a b eqs hab x τ ho hocc => intro _ σ h; unfold unifyEqs at h; simp [hab, ho, hocc] at h
-  | case4 vs a b eqs hab x τ ho hocc hx ih =>
+  | case3 vs a b eqs hab x r ho hocc => intro _ σ h; unfold unifyEqs at h; simp [hab, ho, hocc] at h
+  | case4 vs a b eqs hab x r ho hocc hτ =>
+    intro _ σ h; unfold unifyEqs at h; simp [hab, ho, hocc, hτ] at h
+  | case5 vs a b eqs hab x r ho hocc τ hτ hx ih =>
     intro hb σ h
-    unfold unifyEqs at h; simp only [hab, ho, hocc, hx, ite_false, dite_true] at h
+    unfold unifyEqs at h; simp only [hab, ho, hocc, hτ, hx, ite_false, dite_true] at h
     obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
     have h₀ := hb (a, b) (by simp)
+    have hr := RTy.toTy?_spec hτ
+    subst hr
     have hxτ : x < n ∧ τ.Below n := by
       rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-      · exact ⟨h₀.1 x (by simp [Ty.ftv]), h₀.2⟩
-      · exact ⟨h₀.2 x (by simp [Ty.ftv]), h₀.1⟩
+      · exact ⟨h₀.1 x (by simp [RTy.ftv]), fun c hc => h₀.2 c (by simpa using hc)⟩
+      · exact ⟨h₀.2 x (by simp [RTy.ftv]), fun c hc => h₀.1 c (by simpa using hc)⟩
     have hs := Subst.Within.single hxτ.1 hxτ.2
     refine Subst.Within.compose hs (ih (fun e he => ?_) h')
     obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
     have := hb e₀ (by simp [he₀])
-    exact ⟨hs.subst_below this.1, hs.subst_below this.2⟩
-  | case5 vs a b eqs hab x τ ho hocc hx =>
-    intro _ σ h; unfold unifyEqs at h; simp [hab, ho, hocc, hx] at h
-  | case6 vs eqs c₁ as₁ c₂ as₂ hc hne ho ih =>
+    exact ⟨hs.rsubst_below this.1, hs.rsubst_below this.2⟩
+  | case6 vs a b eqs hab x r ho hocc τ hτ hx =>
+    intro _ σ h; unfold unifyEqs at h; simp [hab, ho, hocc, hτ, hx] at h
+  | case7 vs eqs c₁ as₁ c₂ as₂ hc hne ho ih =>
     intro hb σ h
     unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_true hc, ite_true] at h
     have h₀ := hb _ List.mem_cons_self
-    have h₁ := Ty.Below.app.mp h₀.1
-    have h₂ := Ty.Below.app.mp h₀.2
     refine ih (fun e he => ?_) h
     rcases List.mem_append.mp he with he | he
-    · exact ⟨h₁ _ (List.of_mem_zip he).1, h₂ _ (List.of_mem_zip he).2⟩
+    · refine ⟨fun c hc => h₀.1 c ?_, fun c hc => h₀.2 c ?_⟩
+      · simp only [RTy.ftv_app, List.mem_flatMap]; exact ⟨_, (List.of_mem_zip he).1, hc⟩
+      · simp only [RTy.ftv_app, List.mem_flatMap]; exact ⟨_, (List.of_mem_zip he).2, hc⟩
     · exact hb e (by simp [he])
-  | case7 vs eqs c₁ as₁ c₂ as₂ hc hne ho =>
+  | case8 vs eqs c₁ as₁ c₂ as₂ hc hne ho =>
     intro _ σ h; unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_false hc] at h; cases h
-  | case8 vs a b eqs hab ho happ =>
+  | case9 vs eqs i₁ s₁ i₂ s₂ hc hne ho ih =>
+    intro hb σ h
+    unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_true hc, ite_true] at h
+    have h₀ := hb _ List.mem_cons_self
+    refine ih (fun e he => ?_) h
+    rcases List.mem_append.mp he with he | he
+    · refine ⟨fun c hc => h₀.1 c ?_, fun c hc => h₀.2 c ?_⟩
+      · simp only [RTy.ftv_mu, List.mem_flatMap]; exact ⟨_, (List.of_mem_zip he).1, hc⟩
+      · simp only [RTy.ftv_mu, List.mem_flatMap]; exact ⟨_, (List.of_mem_zip he).2, hc⟩
+    · exact hb e (by simp [he])
+  | case10 vs eqs i₁ s₁ i₂ s₂ hc hne ho =>
+    intro _ σ h; unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_false hc] at h; cases h
+  | case11 vs a b eqs hab ho happ hmu =>
     intro _ σ h; unfold unifyEqs at h; simp only [hab, ho, ite_false] at h
     cases a <;> cases b <;> simp_all
 
 theorem unify_within {n : Nat} {τ₁ τ₂ : Ty} {σ : Subst} (h₁ : τ₁.Below n) (h₂ : τ₂.Below n)
     (h : unify τ₁ τ₂ = some σ) : σ.Within n :=
-  unifyEqs_within _ _ (fun e he => by simp only [List.mem_singleton] at he; subst he; exact ⟨h₁, h₂⟩) h
+  unifyEqs_within _ _ (fun e he => by
+    simp only [List.mem_singleton] at he; subst he
+    exact ⟨fun a ha => h₁ a (by simpa using ha), fun a ha => h₂ a (by simpa using ha)⟩) h
 
 /-! ## Free variables through instantiation, substitution, generalisation -/
+
+theorem RTy.toPTy_ftv (r : RTy) : r.toPTy.ftv = r.ftv := by
+  induction r using RTy.ind with
+  | free a => rfl
+  | self j => rfl
+  | app c args ih =>
+    simp only [RTy.toPTy_app, PTy.ftv_app, RTy.ftv_app, List.flatMap_map]
+    simp only [List.flatMap]
+    congr 1
+    exact List.map_congr_left ih
+  | mu i sys ih =>
+    simp only [RTy.toPTy_mu, PTy.ftv_mu, RTy.ftv_mu, List.flatMap_map]
+    simp only [List.flatMap]
+    congr 1
+    exact List.map_congr_left ih
 
 theorem Ty.toPTy_ftv (τ : Ty) : τ.toPTy.ftv = τ.ftv := by
   induction τ using Ty.ind with
@@ -151,6 +227,36 @@ theorem Ty.toPTy_ftv (τ : Ty) : τ.toPTy.ftv = τ.ftv := by
     simp only [List.flatMap]
     congr 1
     exact List.map_congr_left ih
+  | mu i sys =>
+    simp only [Ty.toPTy_mu, PTy.ftv_mu, Ty.ftv_mu, List.flatMap_map]
+    simp only [List.flatMap]
+    congr 1
+    exact List.map_congr_left (fun r _ => RTy.toPTy_ftv r)
+
+theorem PTy.ftv_instR {τs : List Ty} {p : PTy} {a : Nat} (h : a ∈ (p.instR τs).ftv) :
+    a ∈ p.ftv ∨ ∃ τ ∈ τs, a ∈ τ.ftv := by
+  induction p using PTy.ind with
+  | free b => simp [PTy.instR, RTy.ftv] at h; simp [PTy.ftv, h]
+  | bound i =>
+    simp only [PTy.instR, List.getD_eq_getElem?_getD, Ty.toRTy_ftv] at h
+    cases hi : τs[i]? with
+    | none => simp [hi] at h
+    | some τ => simp only [hi, Option.getD_some] at h; exact .inr ⟨τ, List.mem_of_getElem? hi, h⟩
+  | self j => simp [PTy.instR, RTy.ftv] at h
+  | app c args ih =>
+    simp only [PTy.instR_app, RTy.ftv_app, List.mem_flatMap, List.mem_map] at h
+    simp only [PTy.ftv_app, List.mem_flatMap]
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    rcases ih q hq h with h | h
+    · exact .inl ⟨q, hq, h⟩
+    · exact .inr h
+  | mu i sys ih =>
+    simp only [PTy.instR_mu, RTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
+    simp only [PTy.ftv_mu, List.mem_flatMap]
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    rcases ih q hq h with h | h
+    · exact .inl ⟨q, hq, h⟩
+    · exact .inr h
 
 theorem PTy.ftv_inst {τs : List Ty} {p : PTy} {a : Nat} (h : a ∈ (p.inst τs).ftv) :
     a ∈ p.ftv ∨ ∃ τ ∈ τs, a ∈ τ.ftv := by
@@ -161,11 +267,19 @@ theorem PTy.ftv_inst {τs : List Ty} {p : PTy} {a : Nat} (h : a ∈ (p.inst τs)
     cases hi : τs[i]? with
     | none => simp [hi] at h
     | some τ => simp only [hi, Option.getD_some] at h; exact .inr ⟨τ, List.mem_of_getElem? hi, h⟩
+  | self j => simp [PTy.inst] at h
   | app c args ih =>
     simp only [PTy.inst_app, Ty.ftv_app, List.mem_flatMap, List.mem_map] at h
     simp only [PTy.ftv_app, List.mem_flatMap]
     obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
     rcases ih q hq h with h | h
+    · exact .inl ⟨q, hq, h⟩
+    · exact .inr h
+  | mu i sys _ =>
+    simp only [PTy.inst_mu, Ty.ftv_mu, List.mem_flatMap, List.mem_map] at h
+    simp only [PTy.ftv_mu, List.mem_flatMap]
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    rcases PTy.ftv_instR h with h | h
     · exact .inl ⟨q, hq, h⟩
     · exact .inr h
 
@@ -176,11 +290,34 @@ theorem PTy.ftv_subst {σ : Subst} {p : PTy} {a : Nat} (h : a ∈ (p.subst σ).f
     simp only [PTy.subst, Ty.toPTy_ftv] at h
     exact ⟨b, by simp [PTy.ftv], by simpa [Ty.subst] using h⟩
   | bound i => simp [PTy.subst, PTy.ftv] at h
+  | self j => simp [PTy.subst, PTy.ftv] at h
   | app c args ih =>
     simp only [PTy.subst_app, PTy.ftv_app, List.mem_flatMap, List.mem_map] at h
     obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
     obtain ⟨b, hb, h⟩ := ih q hq h
     exact ⟨b, by simp only [PTy.ftv_app, List.mem_flatMap]; exact ⟨q, hq, hb⟩, h⟩
+  | mu i sys ih =>
+    simp only [PTy.subst_mu, PTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    obtain ⟨b, hb, h⟩ := ih q hq h
+    exact ⟨b, by simp only [PTy.ftv_mu, List.mem_flatMap]; exact ⟨q, hq, hb⟩, h⟩
+
+theorem RTy.gen_ftv {ᾱ : List Nat} {r : RTy} {a : Nat} (h : a ∈ (r.gen ᾱ).ftv) : a ∈ r.ftv := by
+  induction r using RTy.ind with
+  | free b =>
+    simp only [RTy.gen] at h
+    split at h <;> simp_all [PTy.ftv, RTy.ftv]
+  | self j => simp [RTy.gen, PTy.ftv] at h
+  | app c args ih =>
+    simp only [RTy.gen_app, PTy.ftv_app, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    simp only [RTy.ftv_app, List.mem_flatMap]
+    exact ⟨q, hq, ih q hq h⟩
+  | mu i sys ih =>
+    simp only [RTy.gen_mu, PTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    simp only [RTy.ftv_mu, List.mem_flatMap]
+    exact ⟨q, hq, ih q hq h⟩
 
 theorem Ty.gen_ftv {ᾱ : List Nat} {τ : Ty} {a : Nat} (h : a ∈ (τ.gen ᾱ).ftv) : a ∈ τ.ftv := by
   induction τ using Ty.ind with
@@ -192,6 +329,11 @@ theorem Ty.gen_ftv {ᾱ : List Nat} {τ : Ty} {a : Nat} (h : a ∈ (τ.gen ᾱ).
     obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
     simp only [Ty.ftv_app, List.mem_flatMap]
     exact ⟨q, hq, ih q hq h⟩
+  | mu i sys =>
+    simp only [Ty.gen_mu, PTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    simp only [Ty.ftv_mu, List.mem_flatMap]
+    exact ⟨q, hq, RTy.gen_ftv h⟩
 
 /-! ## `Below` through the operations of inference -/
 
@@ -1114,9 +1256,14 @@ theorem PTy.subst_congr' {σ σ' : Subst} {p : PTy}
     simp only [Ty.subst] at this
     simp [PTy.subst, this]
   | bound i => rfl
+  | self j => rfl
   | app c args ih =>
     simp only [PTy.ftv_app, List.mem_flatMap] at h
     simp only [PTy.subst_app, PTy.app.injEq, true_and]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+  | mu i sys ih =>
+    simp only [PTy.ftv_mu, List.mem_flatMap] at h
+    simp only [PTy.subst_mu, PTy.mu.injEq, true_and]
     exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
 
 theorem Pred.subst_congr' {σ σ' : Subst} {p : Pred}
@@ -1212,6 +1359,30 @@ theorem Subst.block_find_ge {m : Nat} {τs : List Ty} {a : Nat} (h : m + τs.len
     have := (List.of_mem_zip hp).1
     obtain ⟨i, hi, he⟩ := List.mem_range'.mp this; omega)
 
+theorem PTy.instR_open_block_append {n : Nat} {τs : List Ty} {ψ : Subst} (p : PTy)
+    (hp : ∀ a ∈ p.ftv, a < n) :
+    (p.instR (varBlock n τs.length)).subst (Subst.block n τs ++ ψ) = (p.subst ψ).instR τs := by
+  induction p using PTy.ind with
+  | free a =>
+    have ha := hp a (by simp [PTy.ftv])
+    simp [PTy.instR, PTy.subst, RTy.subst, Subst.find_append, Subst.block_find_none ha]
+  | bound i =>
+    simp only [varBlock, PTy.instR, PTy.subst, Ty.toRTy_subst, List.getD_eq_getElem?_getD,
+      List.getElem?_map]
+    by_cases hi : i < τs.length
+    · simp [hi, Ty.subst, Subst.find_append, Subst.block_find]
+    · simp [hi]
+  | self j => rfl
+  | app c args ih =>
+    simp only [PTy.ftv_app, List.mem_flatMap] at hp
+    simp only [PTy.instR_app, PTy.subst_app, RTy.subst_app, List.map_map, RTy.app.injEq,
+      true_and]
+    exact List.map_congr_left (fun q hq => ih q hq (fun a ha => hp a ⟨q, hq, ha⟩))
+  | mu i sys ih =>
+    simp only [PTy.ftv_mu, List.mem_flatMap] at hp
+    simp only [PTy.instR_mu, PTy.subst_mu, RTy.subst_mu, List.map_map, RTy.mu.injEq, true_and]
+    exact List.map_congr_left (fun q hq => ih q hq (fun a ha => hp a ⟨q, hq, ha⟩))
+
 /-- Opening a scheme at fresh variables, then sending them to `τs` and the
 rest by `ψ`, is instantiating the `ψ`-substituted scheme at `τs`. -/
 theorem PTy.open_block_append {n : Nat} {τs : List Ty} {ψ : Subst} (p : PTy)
@@ -1226,10 +1397,16 @@ theorem PTy.open_block_append {n : Nat} {τs : List Ty} {ψ : Subst} (p : PTy)
     by_cases hi : i < τs.length
     · simp [hi, Ty.subst, Subst.find_append, Subst.block_find]
     · simp [hi]
+  | self j => rfl
   | app c args ih =>
     simp only [PTy.ftv_app, List.mem_flatMap] at hp
     simp only [PTy.inst_app, PTy.subst_app, Ty.subst_app, List.map_map, Ty.app.injEq, true_and]
     exact List.map_congr_left (fun q hq => ih q hq (fun a ha => hp a ⟨q, hq, ha⟩))
+  | mu i sys _ =>
+    simp only [PTy.ftv_mu, List.mem_flatMap] at hp
+    simp only [PTy.inst_mu, PTy.subst_mu, Ty.subst_mu, List.map_map, Ty.mu.injEq, true_and]
+    exact List.map_congr_left (fun q hq =>
+      PTy.instR_open_block_append q (fun a ha => hp a ⟨q, hq, ha⟩))
 
 theorem Scheme.open_block_append {n : Nat} {τs : List Ty} {ψ : Subst} {s : Scheme}
     (hs : ∀ a ∈ s.ftv, a < n) (hlen : τs.length = s.arity) :
@@ -1448,6 +1625,25 @@ theorem zip_find : ∀ (ᾱ : List Nat) (τs : List Ty) (v : Nat), ᾱ.length = 
       cases findIdx ᾱ v <;> simp
   | [], _ :: _, _, h | _ :: _, [], _, h => by simp at h
 
+theorem RTy.gen_subst_instR {ᾱ : List Nat} {τs' : List Ty} (φ : Subst)
+    (h : ᾱ.length = τs'.length) (r : RTy) :
+    ((r.gen ᾱ).subst φ).instR τs' = r.subst (ᾱ.zip τs' ++ φ) := by
+  induction r using RTy.ind with
+  | free v =>
+    simp only [RTy.gen, RTy.subst, Subst.find_append, zip_find ᾱ τs' v h]
+    cases findIdx ᾱ v with
+    | some i => simp [PTy.subst, PTy.instR]
+    | none => simp [PTy.subst]
+  | self j => rfl
+  | app c args ih =>
+    simp only [RTy.gen_app, PTy.subst_app, PTy.instR_app, RTy.subst_app, List.map_map,
+      RTy.app.injEq, true_and]
+    exact List.map_congr_left ih
+  | mu i sys ih =>
+    simp only [RTy.gen_mu, PTy.subst_mu, PTy.instR_mu, RTy.subst_mu, List.map_map,
+      RTy.mu.injEq, true_and]
+    exact List.map_congr_left ih
+
 /-- Instantiating a generalised type at `τs'` is substituting `τs'` for the
 generalised variables. -/
 theorem Ty.gen_subst_inst {ᾱ : List Nat} {τs' : List Ty} (φ : Subst) (h : ᾱ.length = τs'.length)
@@ -1462,6 +1658,10 @@ theorem Ty.gen_subst_inst {ᾱ : List Nat} {τs' : List Ty} (φ : Subst) (h : �
     simp only [Ty.gen_app, PTy.subst_app, PTy.inst_app, Ty.subst_app, List.map_map,
       Ty.app.injEq, true_and]
     exact List.map_congr_left ih
+  | mu i sys =>
+    simp only [Ty.gen_mu, PTy.subst_mu, PTy.inst_mu, Ty.subst_mu, List.map_map,
+      Ty.mu.injEq, true_and]
+    exact List.map_congr_left (fun r _ => RTy.gen_subst_instR φ h r)
 
 theorem generalize_subst_inst {ᾱ : List Nat} {τs' : List Ty} (φ : Subst) (h : ᾱ.length = τs'.length)
     (τ : Ty) (G : List Pred) :
@@ -1480,15 +1680,28 @@ theorem generalize_subst_instPreds {ᾱ : List Nat} {τs' : List Ty} (φ : Subst
 
 /-! ## Variables of substituted contexts -/
 
-theorem Ty.ftv_subst_mem {σ : Subst} {v a : Nat} {τ : Ty} (hv : v ∈ τ.ftv)
-    (ha : a ∈ ((Ty.var v).subst σ).ftv) : a ∈ (τ.subst σ).ftv := by
-  induction τ using Ty.ind with
-  | var b => simp at hv; subst hv; exact ha
+theorem RTy.ftv_subst_mem {σ : Subst} {v a : Nat} {r : RTy} (hv : v ∈ r.ftv)
+    (ha : a ∈ ((Ty.var v).subst σ).ftv) : a ∈ (r.subst σ).ftv := by
+  induction r using RTy.ind with
+  | free b =>
+    simp [RTy.ftv] at hv; subst hv
+    simpa [RTy.subst, Ty.toRTy_ftv, Ty.subst] using ha
+  | self j => simp [RTy.ftv] at hv
   | app c args ih =>
-    simp only [Ty.ftv_app, List.mem_flatMap] at hv
-    simp only [Ty.subst_app, Ty.ftv_app, List.mem_flatMap, List.mem_map]
+    simp only [RTy.ftv_app, List.mem_flatMap] at hv
+    simp only [RTy.subst_app, RTy.ftv_app, List.mem_flatMap, List.mem_map]
     obtain ⟨p, hp, hv⟩ := hv
     exact ⟨_, ⟨p, hp, rfl⟩, ih p hp hv⟩
+  | mu i sys ih =>
+    simp only [RTy.ftv_mu, List.mem_flatMap] at hv
+    simp only [RTy.subst_mu, RTy.ftv_mu, List.mem_flatMap, List.mem_map]
+    obtain ⟨p, hp, hv⟩ := hv
+    exact ⟨_, ⟨p, hp, rfl⟩, ih p hp hv⟩
+
+theorem Ty.ftv_subst_mem {σ : Subst} {v a : Nat} {τ : Ty} (hv : v ∈ τ.ftv)
+    (ha : a ∈ ((Ty.var v).subst σ).ftv) : a ∈ (τ.subst σ).ftv := by
+  have := RTy.ftv_subst_mem (r := τ.toRTy) (by simpa using hv) ha
+  simpa using this
 
 theorem PTy.ftv_subst_mem {σ : Subst} {v a : Nat} {p : PTy} (hv : v ∈ p.ftv)
     (ha : a ∈ ((Ty.var v).subst σ).ftv) : a ∈ (p.subst σ).ftv := by
@@ -1497,9 +1710,15 @@ theorem PTy.ftv_subst_mem {σ : Subst} {v a : Nat} {p : PTy} (hv : v ∈ p.ftv)
     simp [PTy.ftv] at hv; subst hv
     simpa [PTy.subst, Ty.toPTy_ftv, Ty.subst] using ha
   | bound i => simp [PTy.ftv] at hv
+  | self j => simp [PTy.ftv] at hv
   | app c args ih =>
     simp only [PTy.ftv_app, List.mem_flatMap] at hv
     simp only [PTy.subst_app, PTy.ftv_app, List.mem_flatMap, List.mem_map]
+    obtain ⟨q, hq, hv⟩ := hv
+    exact ⟨_, ⟨q, hq, rfl⟩, ih q hq hv⟩
+  | mu i sys ih =>
+    simp only [PTy.ftv_mu, List.mem_flatMap] at hv
+    simp only [PTy.subst_mu, PTy.ftv_mu, List.mem_flatMap, List.mem_map]
     obtain ⟨q, hq, hv⟩ := hv
     exact ⟨_, ⟨q, hq, rfl⟩, ih q hq hv⟩
 
@@ -1566,6 +1785,7 @@ theorem Pred.decide_complete {c : Cls} {t : Ty} {rest : List Ty} {φ : Subst} (h
     ∃ a b, Pred.decide c t rest = .eq a b ∧ a.subst φ = b.subst φ := by
   cases t with
   | var a => exact absurd rfl (ht a)
+  | mu i sys => cases hi <;> simp [Pred.mk.injEq] at hq
   | app con xs =>
   generalize hq : (⟨c, (Ty.app con xs :: rest).map (·.subst φ)⟩ : Pred) = q at hi
   cases hi <;> simp only [Pred.mk.injEq, List.map_cons, Ty.subst_app, Ty.app.injEq,
@@ -1669,6 +1889,15 @@ theorem Entails.var_or_inst {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.As
       · simp only [Pred.subst, Pred.mk.injEq] at e
         obtain ⟨y, rfl⟩ := hv (hm e.1)
         simp [Ty.subst_app] at e
+  | .mu i sys :: rest =>
+    refine .inr ⟨?_, fun a rest e => by cases e⟩
+    rcases h with h | h
+    · exact h
+    · rcases hC _ h with ⟨-, -, a, rest', e⟩ | ⟨q, τ, s, r, e, hv⟩
+      · simp [Pred.subst] at e
+      · simp only [Pred.subst, Pred.mk.injEq] at e
+        obtain ⟨y, rfl⟩ := hv (hm e.1)
+        simp at e
 
 theorem Pred.decide_ne_keep {c : Cls} {t : Ty} {rest : List Ty} : Pred.decide c t rest ≠ .keep := by
   unfold Pred.decide
@@ -1959,6 +2188,29 @@ theorem exists_four_of_map {f : Ty → Ty} {args : List Ty} {a b c d : Ty}
 
 /-- A generalised variable of a type is a quantified variable of its
 generalisation. -/
+theorem RTy.gen_bvs {ᾱ : List Nat} {a i : Nat} (hi : findIdx ᾱ a = some i) :
+    ∀ {r : RTy}, a ∈ r.ftv → i ∈ (r.gen ᾱ).bvs := by
+  intro r
+  induction r using RTy.ind with
+  | free b =>
+    intro h
+    simp only [RTy.ftv, List.mem_singleton] at h
+    subst h
+    simp [RTy.gen, hi, PTy.bvs]
+  | self j => intro h; simp [RTy.ftv] at h
+  | app c args ih =>
+    intro h
+    simp only [RTy.ftv_app, List.mem_flatMap] at h
+    obtain ⟨x, hx, hax⟩ := h
+    simp only [RTy.gen_app, PTy.bvs_app, List.flatMap_map, List.mem_flatMap]
+    exact ⟨x, hx, ih x hx hax⟩
+  | mu j sys ih =>
+    intro h
+    simp only [RTy.ftv_mu, List.mem_flatMap] at h
+    obtain ⟨x, hx, hax⟩ := h
+    simp only [RTy.gen_mu, PTy.bvs_mu, List.flatMap_map, List.mem_flatMap]
+    exact ⟨x, hx, ih x hx hax⟩
+
 theorem Ty.gen_bvs {ᾱ : List Nat} {a i : Nat} (hi : findIdx ᾱ a = some i) :
     ∀ {τ : Ty}, a ∈ τ.ftv → i ∈ (τ.gen ᾱ).bvs := by
   intro τ
@@ -1974,6 +2226,12 @@ theorem Ty.gen_bvs {ᾱ : List Nat} {a i : Nat} (hi : findIdx ᾱ a = some i) :
     obtain ⟨x, hx, hax⟩ := h
     simp only [Ty.gen_app, PTy.bvs_app, List.flatMap_map, List.mem_flatMap]
     exact ⟨x, hx, ih x hx hax⟩
+  | mu j sys =>
+    intro h
+    simp only [Ty.ftv_mu, List.mem_flatMap] at h
+    obtain ⟨x, hx, hax⟩ := h
+    simp only [Ty.gen_mu, PTy.bvs_mu, List.flatMap_map, List.mem_flatMap]
+    exact ⟨x, hx, RTy.gen_bvs hi hax⟩
 
 /-! ### Variables a substitution keeps below a bound -/
 
@@ -2017,6 +2275,26 @@ theorem Pred.fundep_of_args {p : Pred} {d : Ty} {rest : List Ty} (hp : p.cls ≠
   simp only at hp hm h; subst h
   cases cls <;> simp_all [Pred.fundep]
 
+theorem PTy.bvs_openR {m k i : Nat} {q : PTy} (hi : i ∈ q.bvs) (hk : i < k) :
+    m + i ∈ (q.instR (varBlock m k)).ftv := by
+  induction q using PTy.ind with
+  | free a => simp [PTy.bvs] at hi
+  | bound j =>
+    simp only [PTy.bvs, List.mem_singleton] at hi
+    subst hi
+    simp [PTy.instR, varBlock, List.getD_eq_getElem?_getD, hk, Ty.toRTy, RTy.ftv]
+  | self j => simp [PTy.bvs] at hi
+  | app c args ih =>
+    simp only [PTy.bvs_app, List.mem_flatMap] at hi
+    obtain ⟨a, ha, hia⟩ := hi
+    simp only [PTy.instR_app, RTy.ftv_app, List.mem_flatMap, List.mem_map]
+    exact ⟨_, ⟨a, ha, rfl⟩, ih a ha hia⟩
+  | mu j sys ih =>
+    simp only [PTy.bvs_mu, List.mem_flatMap] at hi
+    obtain ⟨a, ha, hia⟩ := hi
+    simp only [PTy.instR_mu, RTy.ftv_mu, List.mem_flatMap, List.mem_map]
+    exact ⟨_, ⟨a, ha, rfl⟩, ih a ha hia⟩
+
 /-- A quantified variable of a scheme body, opened at `m`, is the variable
 `m + i`. -/
 theorem PTy.bvs_open {m k i : Nat} {q : PTy} (hi : i ∈ q.bvs) (hk : i < k) :
@@ -2027,11 +2305,17 @@ theorem PTy.bvs_open {m k i : Nat} {q : PTy} (hi : i ∈ q.bvs) (hk : i < k) :
     simp only [PTy.bvs, List.mem_singleton] at hi
     subst hi
     simp [PTy.inst, varBlock, List.getD_eq_getElem?_getD, hk]
+  | self j => simp [PTy.bvs] at hi
   | app c args ih =>
     simp only [PTy.bvs_app, List.mem_flatMap] at hi
     obtain ⟨a, ha, hia⟩ := hi
     simp only [PTy.inst_app, Ty.ftv_app, List.mem_flatMap, List.mem_map]
     exact ⟨_, ⟨a, ha, rfl⟩, ih a ha hia⟩
+  | mu j sys _ =>
+    simp only [PTy.bvs_mu, List.mem_flatMap] at hi
+    obtain ⟨a, ha, hia⟩ := hi
+    simp only [PTy.inst_mu, Ty.ftv_mu, List.mem_flatMap, List.mem_map]
+    exact ⟨_, ⟨a, ha, rfl⟩, PTy.bvs_openR hia hk⟩
 
 /-- A simple scheme's constraints, opened at `m`, are on a variable of the
 block, or are `Merge`s whose determining arguments mention one. -/

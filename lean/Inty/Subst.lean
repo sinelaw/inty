@@ -38,6 +38,20 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
     obtain ⟨b, τ⟩ := p
     by_cases h : a = b <;> simp [Subst.find, h, ih]
 
+@[simp] theorem RTy.subst_compose (σ₂ σ₁ : Subst) (r : RTy) :
+    r.subst (Subst.compose σ₂ σ₁) = (r.subst σ₁).subst σ₂ := by
+  induction r using RTy.ind with
+  | free a =>
+    simp only [RTy.subst, Ty.toRTy_subst, Subst.find_compose]
+    cases σ₁.find a <;> rfl
+  | self j => rfl
+  | app c args ih =>
+    simp only [RTy.subst_app, List.map_map, RTy.app.injEq, true_and]
+    exact List.map_congr_left ih
+  | mu i sys ih =>
+    simp only [RTy.subst_mu, List.map_map, RTy.mu.injEq, true_and]
+    exact List.map_congr_left ih
+
 @[simp] theorem Ty.subst_compose (σ₂ σ₁ : Subst) (τ : Ty) :
     τ.subst (Subst.compose σ₂ σ₁) = (τ.subst σ₁).subst σ₂ := by
   induction τ using Ty.ind with
@@ -47,6 +61,9 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
   | app c args ih =>
     simp only [Ty.subst_app, List.map_map, Ty.app.injEq, true_and]
     exact List.map_congr_left ih
+  | mu i sys =>
+    simp only [Ty.subst_mu, List.map_map, Ty.mu.injEq, true_and]
+    exact List.map_congr_left (fun r _ => RTy.subst_compose σ₂ σ₁ r)
 
 @[simp] theorem PTy.subst_compose (σ₂ σ₁ : Subst) (p : PTy) :
     p.subst (Subst.compose σ₂ σ₁) = (p.subst σ₁).subst σ₂ := by
@@ -55,8 +72,12 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
     simp only [PTy.subst, Ty.toPTy_subst, Subst.find_compose]
     cases σ₁.find a <;> rfl
   | bound i => rfl
+  | self j => rfl
   | app c args ih =>
     simp only [PTy.subst_app, List.map_map, PTy.app.injEq, true_and]
+    exact List.map_congr_left ih
+  | mu i sys ih =>
+    simp only [PTy.subst_mu, List.map_map, PTy.mu.injEq, true_and]
     exact List.map_congr_left ih
 
 @[simp] theorem Pred.subst_compose (σ₂ σ₁ : Subst) (p : Pred) :
@@ -112,6 +133,20 @@ theorem Ctx.getElem?_subst (σ : Subst) (Γ : List Scheme) (i : Nat) :
 
 /-! ## Substitutions that agree on the free variables -/
 
+theorem RTy.subst_congr {σ σ' : Subst} {r : RTy}
+    (h : ∀ a ∈ r.ftv, σ.find a = σ'.find a) : r.subst σ = r.subst σ' := by
+  induction r using RTy.ind with
+  | free a => simp [RTy.subst, h a (by simp [RTy.ftv])]
+  | self j => rfl
+  | app c args ih =>
+    simp only [RTy.ftv_app, List.mem_flatMap] at h
+    simp only [RTy.subst_app, RTy.app.injEq, true_and]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+  | mu i sys ih =>
+    simp only [RTy.ftv_mu, List.mem_flatMap] at h
+    simp only [RTy.subst_mu, RTy.mu.injEq, true_and]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+
 theorem Ty.subst_congr {σ σ' : Subst} {τ : Ty}
     (h : ∀ a ∈ τ.ftv, σ.find a = σ'.find a) : τ.subst σ = τ.subst σ' := by
   induction τ using Ty.ind with
@@ -120,15 +155,24 @@ theorem Ty.subst_congr {σ σ' : Subst} {τ : Ty}
     simp only [Ty.ftv_app, List.mem_flatMap] at h
     simp only [Ty.subst_app, Ty.app.injEq, true_and]
     exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+  | mu i sys =>
+    simp only [Ty.ftv_mu, List.mem_flatMap] at h
+    simp only [Ty.subst_mu, Ty.mu.injEq, true_and]
+    exact List.map_congr_left (fun p hp => RTy.subst_congr (fun a ha => h a ⟨p, hp, ha⟩))
 
 theorem PTy.subst_congr {σ σ' : Subst} {p : PTy}
     (h : ∀ a ∈ p.ftv, σ.find a = σ'.find a) : p.subst σ = p.subst σ' := by
   induction p using PTy.ind with
   | free a => simp [PTy.subst, h a (by simp [PTy.ftv])]
   | bound i => rfl
+  | self j => rfl
   | app c args ih =>
     simp only [PTy.ftv_app, List.mem_flatMap] at h
     simp only [PTy.subst_app, PTy.app.injEq, true_and]
+    exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
+  | mu i sys ih =>
+    simp only [PTy.ftv_mu, List.mem_flatMap] at h
+    simp only [PTy.subst_mu, PTy.mu.injEq, true_and]
     exact List.map_congr_left (fun p hp => ih p hp (fun a ha => h a ⟨p, hp, ha⟩))
 
 theorem Pred.subst_congr {σ σ' : Subst} {p : Pred}
@@ -183,6 +227,31 @@ theorem findIdx_none : ∀ {l : List Nat} {a : Nat}, a ∉ l → findIdx l a = n
     simp [findIdx, h.1, findIdx_none h.2]
 
 mutual
+/-- An equation's right-hand side with the variables `ᾱ` quantified. -/
+def RTy.gen (ᾱ : List Nat) : RTy → PTy
+  | .free a =>
+    match findIdx ᾱ a with
+    | some i => .bound i
+    | none => .free a
+  | .self j => .self j
+  | .app c args => .app c (RTy.gens ᾱ args)
+  | .mu i sys => .mu i (RTy.gens ᾱ sys)
+def RTy.gens (ᾱ : List Nat) : List RTy → List PTy
+  | [] => []
+  | r :: rs => r.gen ᾱ :: RTy.gens ᾱ rs
+end
+
+@[simp] theorem RTy.gens_eq (ᾱ : List Nat) (rs : List RTy) :
+    RTy.gens ᾱ rs = rs.map (RTy.gen ᾱ) := by
+  induction rs <;> simp_all [RTy.gens]
+
+@[simp] theorem RTy.gen_app (ᾱ : List Nat) (c : Con) (args : List RTy) :
+    (RTy.app c args).gen ᾱ = .app c (args.map (RTy.gen ᾱ)) := by simp [RTy.gen]
+
+@[simp] theorem RTy.gen_mu (ᾱ : List Nat) (i : Nat) (sys : List RTy) :
+    (RTy.mu i sys).gen ᾱ = .mu i (sys.map (RTy.gen ᾱ)) := by simp [RTy.gen]
+
+mutual
 /-- `PTy` with the variables `ᾱ` quantified: `ᾱ[i]` becomes `bound i`. -/
 def Ty.gen (ᾱ : List Nat) : Ty → PTy
   | .var a =>
@@ -190,6 +259,7 @@ def Ty.gen (ᾱ : List Nat) : Ty → PTy
     | some i => .bound i
     | none => .free a
   | .app c args => .app c (Ty.gens ᾱ args)
+  | .mu i sys => .mu i (RTy.gens ᾱ sys)
 def Ty.gens (ᾱ : List Nat) : List Ty → List PTy
   | [] => []
   | τ :: τs => τ.gen ᾱ :: Ty.gens ᾱ τs
@@ -200,6 +270,9 @@ end
 
 @[simp] theorem Ty.gen_app (ᾱ : List Nat) (c : Con) (args : List Ty) :
     (Ty.app c args).gen ᾱ = .app c (args.map (Ty.gen ᾱ)) := by simp [Ty.gen]
+
+@[simp] theorem Ty.gen_mu (ᾱ : List Nat) (i : Nat) (sys : List RTy) :
+    (Ty.mu i sys).gen ᾱ = .mu i (sys.map (RTy.gen ᾱ)) := by simp [Ty.gen]
 
 /-- A constraint with the variables `ᾱ` quantified. -/
 def Pred.gen (ᾱ : List Nat) (p : Pred) : PPred := ⟨p.cls, p.args.map (Ty.gen ᾱ)⟩
@@ -223,6 +296,26 @@ theorem renameBlock_find : ∀ (ᾱ : List Nat) (m a : Nat),
     · rw [renameBlock_find l (m + 1) a]
       cases findIdx l a <;> simp [Nat.add_assoc, Nat.add_comm 1]
 
+theorem RTy.gen_instR (ᾱ : List Nat) (m : Nat) (φ : Subst) (r : RTy) :
+    r.subst (renameBlock ᾱ m ++ φ) = ((r.gen ᾱ).subst φ).instR (varBlock m ᾱ.length) := by
+  induction r using RTy.ind with
+  | free a =>
+    simp only [RTy.subst, RTy.gen, Subst.find_append, renameBlock_find]
+    cases h : findIdx ᾱ a with
+    | some i =>
+      have := findIdx_lt h
+      simp [PTy.subst, PTy.instR, varBlock, List.getD_eq_getElem?_getD, this, Ty.toRTy]
+    | none => simp [PTy.subst]
+  | self j => rfl
+  | app c args ih =>
+    simp only [RTy.subst_app, RTy.gen_app, PTy.subst_app, PTy.instR_app, List.map_map,
+      RTy.app.injEq, true_and]
+    exact List.map_congr_left ih
+  | mu i sys ih =>
+    simp only [RTy.subst_mu, RTy.gen_mu, PTy.subst_mu, PTy.instR_mu, List.map_map,
+      RTy.mu.injEq, true_and]
+    exact List.map_congr_left ih
+
 /-- Renaming the generalised variables to the block at `m` and substituting
 `φ` for the rest is generalising, substituting `φ`, then opening at `m`. -/
 theorem Ty.gen_inst (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) :
@@ -239,6 +332,10 @@ theorem Ty.gen_inst (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) :
     simp only [Ty.subst_app, Ty.gen_app, PTy.subst_app, PTy.inst_app, List.map_map,
       Ty.app.injEq, true_and]
     exact List.map_congr_left ih
+  | mu i sys =>
+    simp only [Ty.subst_mu, Ty.gen_mu, PTy.subst_mu, PTy.inst_mu, List.map_map,
+      Ty.mu.injEq, true_and]
+    exact List.map_congr_left (fun r _ => RTy.gen_instR ᾱ m φ r)
 
 theorem generalize_open (ᾱ : List Nat) (m : Nat) (φ : Subst) (τ : Ty) (G : List Pred) :
     τ.subst (renameBlock ᾱ m ++ φ) = ((generalize ᾱ τ G).subst φ).open m :=
