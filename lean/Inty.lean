@@ -1,5 +1,6 @@
 import Inty.Types
 import Inty.Subst
+import Inty.Equi
 import Inty.Syntax
 import Inty.Classes
 import Inty.Typing

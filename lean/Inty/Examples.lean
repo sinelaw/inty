@@ -26,7 +26,7 @@ def double : Expr :=
 -- One derivation types `double` monomorphically, at `String → String`.
 example : HasType L [] [] none double .string :=
   .let_mono (τ₁ := .fn .undefined [.string] .string)
-    (.func rfl (.binop (.plus (.inl .plusString)) (.var_mono rfl) (.var_mono rfl)))
+    (.func rfl (.binop (.plus (.of_inst .plusString)) (.var_mono rfl) (.var_mono rfl)))
     (.app (.var_mono rfl) rfl (by simp; exact .lit .string))
 
 #guard isString "abab" (eval 10 [] [] double)
@@ -35,7 +35,7 @@ example : HasType L [] [] none double .string :=
 also types at `Number`. -/
 example : HasType L [] [] none (.func 1 (.binop .plus (.var 0) (.var 0)))
     (.fn .undefined [.number] .number) :=
-  .func rfl (.binop (.plus (.inl .plusNumber)) (.var_mono rfl) (.var_mono rfl))
+  .func rfl (.binop (.plus (.of_inst .plusNumber)) (.var_mono rfl) (.var_mono rfl))
 
 /-- Let-polymorphism:
 `const id = function (x) { return x; }; const n = id(1); id("a")` -/
@@ -81,11 +81,11 @@ example : HasType L [] [] none polyDouble .string :=
     (.let_mono
       (.app (.var (s := doubleScheme) (τs := [.undefined, .number]) rfl rfl (fun c hc => by
         simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
-        exact .inl .plusNumber))
+        exact .of_inst .plusNumber))
         rfl (by simp; exact .lit .number))
       (.app (.var (s := doubleScheme) (τs := [.undefined, .string]) rfl rfl (fun c hc => by
         simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
-        exact .inl .plusString))
+        exact .of_inst .plusString))
         rfl (by simp; exact .lit .string)))
 
 #guard isString "aa" (eval 20 [] [] polyDouble)
@@ -117,10 +117,18 @@ def mixedPlus : Expr := .binop .plus (num 1) (str "a")
 
 example : ¬ HasType L [] [] none mixedPlus τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
   | binop hop h₁ h₂ =>
     cases hop with
-    | plus _ => cases h₁ with | lit hl => cases hl; cases h₂ with | lit hl => cases hl
+    | plus _ =>
+      obtain ⟨_, e₁, h₁⟩ := h₁.top
+      obtain ⟨_, e₂, h₂⟩ := h₂.top
+      cases h₁ with
+      | lit hl =>
+        cases hl
+        cases h₂ with
+        | lit hl => cases hl; exact absurd (e₁.trans e₂.symm) (fun h => by cases TyEq.con h)
 
 #guard match eval 10 [] [] mixedPlus with | .stuck .typeMismatch => true | _ => false
 
@@ -285,7 +293,8 @@ example : HasType L [] [] none early .string :=
   | _ => false
 
 /-- `return` outside a function is rejected. -/
-example : ¬ HasType L [] [] none (.ret (num 1)) τ := nofun
+example : ¬ HasType L [] [] none (.ret (num 1)) τ := fun h => by
+  obtain ⟨_, -, h⟩ := h.top; cases h
 
 /-! ## Builtins
 

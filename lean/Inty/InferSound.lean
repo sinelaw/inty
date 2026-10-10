@@ -188,7 +188,7 @@ theorem improveAll_sound {top : Bool} :
       have hrest := Sat.map.mp (improveAll_sound k hrec hs)
       intro q hq'
       rcases hq q hq' with rfl | hq'
-      · refine .inl (Pred.improve_sound hp ?_)
+      · refine .inl (Inst.instEq (Pred.improve_sound hp ?_))
         simp only [Ty.subst_compose, unify_sound hu]
       · have := hrest q hq'
         simpa [Pred.subst_compose] using this

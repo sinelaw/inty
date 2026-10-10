@@ -3,7 +3,7 @@ import Inty.InferSound
 /-!
 # Completeness of inference
 
-Whatever `HasType` accepts, `infer` finds, with a type of which the
+Whatever `HasType₀` accepts, `infer` finds, with a type of which the
 accepted one is an instance (Damas and Milner; Naraschewski and Nipkow's
 Isabelle proof of algorithm W is the model for its freshness invariants).
 
@@ -14,6 +14,31 @@ it to types below it (`Within`).
 -/
 
 namespace Inty
+
+/-! ## Syntactic entailment of a substituted list -/
+
+/-- `Sat`, with `Entails₀`. -/
+def Sat₀ (C : List Pred) (P : List Pred) (φ : Subst) : Prop := ∀ c ∈ P, Entails₀ C (c.subst φ)
+
+@[simp] theorem Sat₀.nil (C : List Pred) (φ : Subst) : Sat₀ C [] φ := by simp [Sat₀]
+
+@[simp] theorem Sat₀.append {C P Q : List Pred} {φ : Subst} :
+    Sat₀ C (P ++ Q) φ ↔ Sat₀ C P φ ∧ Sat₀ C Q φ := by
+  simp only [Sat₀, List.mem_append]
+  exact ⟨fun h => ⟨fun c hc => h c (.inl hc), fun c hc => h c (.inr hc)⟩,
+    fun h c hc => hc.elim (h.1 c) (h.2 c)⟩
+
+@[simp] theorem Sat₀.map {C P : List Pred} {σ φ : Subst} :
+    Sat₀ C (P.map (·.subst σ)) φ ↔ Sat₀ C P (Subst.compose φ σ) := by
+  simp [Sat₀]
+
+@[simp] theorem Sat₀.singleton {C : List Pred} {p : Pred} {φ : Subst} :
+    Sat₀ C [p] φ ↔ Entails₀ C (p.subst φ) := by
+  simp [Sat₀]
+
+theorem Entails₀.weaken {C : List Pred} (D : List Pred) (h : Entails₀ C p) :
+    Entails₀ (C ++ D) p :=
+  h.elim .inl (fun h => .inr (List.mem_append_left _ h))
 
 /-! ## Variables below a bound -/
 
@@ -1342,10 +1367,10 @@ theorem Pred.subst_cons_fresh {k : Nat} {ρ : Ty} {φ : Subst} {p : Pred} (hp : 
     have : a ≠ k := by have := hp a ha; omega
     simp [Subst.find, this])
 
-/-- What `Sat` needs of a substitution is only what it does to the
+/-- What `Sat₀` needs of a substitution is only what it does to the
 constraints. -/
-theorem Sat.congr {C P : List Pred} {φ φ' : Subst} (h : ∀ p ∈ P, p.subst φ = p.subst φ')
-    (hs : Sat C P φ') : Sat C P φ := fun p hp => by rw [h p hp]; exact hs p hp
+theorem Sat₀.congr {C P : List Pred} {φ φ' : Subst} (h : ∀ p ∈ P, p.subst φ = p.subst φ')
+    (hs : Sat₀ C P φ') : Sat₀ C P φ := fun p hp => by rw [h p hp]; exact hs p hp
 
 /-! ## Fresh variables -/
 
@@ -1463,7 +1488,7 @@ instance of `s` is an instance of `s'`, whose constraints follow from
 `s`'s and `C`. -/
 def Generalizes (C : List Pred) (s' s : Scheme) : Prop :=
   ∀ τs, τs.length = s.arity → ∃ τs', τs'.length = s'.arity ∧ s'.inst τs' = s.inst τs ∧
-    ∀ c ∈ s'.instPreds τs', Entails (C ++ s.instPreds τs) c
+    ∀ c ∈ s'.instPreds τs', Entails₀ (C ++ s.instPreds τs) c
 
 theorem getElem?_middle {α : Type} (Δ Γ : List α) (x y : α) (i : Nat) (hi : i ≠ Δ.length) :
     (Δ ++ x :: Γ)[i]? = (Δ ++ y :: Γ)[i]? := by
@@ -1485,11 +1510,11 @@ theorem Expr.writesList_false : ∀ {i : Nat} {args : List Expr}, Expr.writesLis
 /-- Typing survives replacing a scheme in the context by a more general one,
 if the variable is never assigned or the new scheme is a monotype: an
 assignment needs its variable's scheme to be one. -/
-theorem HasType.generalize_ctx {C' : List Pred} {Γ₀ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty}
-    (h : HasType L C' Γ₀ R e τ) :
+theorem HasType₀.generalize_ctx {C' : List Pred} {Γ₀ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty}
+    (h : HasType₀ L C' Γ₀ R e τ) :
     ∀ {C : List Pred} {Δ Γ : Ctx} {s s' : Scheme}, Γ₀ = Δ ++ s :: Γ → (∀ c ∈ C, c ∈ C') →
       Generalizes C s' s → (s'.arity = 0 ∧ s'.preds = []) ∨ e.writes Δ.length = false →
-      HasType L C' (Δ ++ s' :: Γ) R e τ := by
+      HasType₀ L C' (Δ ++ s' :: Γ) R e τ := by
   induction h with
   | lit hl => intros; exact .lit hl
   | @var Γ₀ i s₀ C' R τs hi hlen hc =>
@@ -1857,8 +1882,8 @@ theorem Inst.arity {p : Pred} (h : Inst p) : p.args.length = p.cls.arity := by
   cases h <;> rfl
 
 /-- An entailed constraint has its class's arity. -/
-theorem Entails.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) {p : Pred}
-    (h : Entails C p) : p.args.length = p.cls.arity := by
+theorem Entails₀.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) {p : Pred}
+    (h : Entails₀ C p) : p.args.length = p.cls.arity := by
   rcases h with h | h
   · exact h.arity
   · rcases hC p h with ⟨-, hl, -⟩ | ⟨q, τ, s, r, rfl, -⟩
@@ -1868,8 +1893,8 @@ theorem Entails.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.Assumabl
 /-- An entailed constraint is on a type variable, or, if its first argument
 is a known type, an instance (where a `Merge` assumption may have a known
 presence, `top` is false, and improvement leaves `Merge`s alone). -/
-theorem Entails.var_or_inst {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top)
-    {p : Pred} {φ : Subst} (hm : p.cls = .merge → top = true) (h : Entails C (p.subst φ)) :
+theorem Entails₀.var_or_inst {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top)
+    {p : Pred} {φ : Subst} (hm : p.cls = .merge → top = true) (h : Entails₀ C (p.subst φ)) :
     (∃ a rest, p.args = .var a :: rest) ∨
       (Inst (p.subst φ) ∧ ∀ a rest, p.args ≠ .var a :: rest) := by
   obtain ⟨cls, args⟩ := p
@@ -1946,7 +1971,7 @@ theorem Pred.improve_decides {top : Bool} {p : Pred} {i : Improve} (h : p.improv
 /-- A constraint whose decision is an equation is entailed, by assumptions
 on type variables, only where the equation holds. -/
 theorem Pred.improve_eq {top : Bool} {p : Pred} {a b : Ty} (h : p.improve top = .eq a b)
-    {φ : Subst} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) (he : Entails C (p.subst φ)) :
+    {φ : Subst} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) (he : Entails₀ C (p.subst φ)) :
     a.subst φ = b.subst φ := by
   obtain ⟨hp, hm, h'⟩ := Pred.improve_decides h (by simp)
   clear h
@@ -1965,7 +1990,7 @@ theorem Pred.improve_eq {top : Bool} {p : Pred} {a b : Ty} (h : p.improve top = 
 /-- A constraint improvement rejects is entailed by no assumptions on type
 variables. -/
 theorem Pred.improve_fail {top : Bool} {p : Pred} (h : p.improve top = .fail) {φ : Subst}
-    {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) : ¬ Entails C (p.subst φ) := by
+    {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) : ¬ Entails₀ C (p.subst φ) := by
   intro he
   have hlen := he.arity hC
   obtain ⟨hp, hm, h'⟩ := Pred.improve_decides h (by simp)
@@ -2034,8 +2059,8 @@ theorem improveOne_length {top : Bool} : ∀ {ps : List Pred} {e : Ty × Ty} {re
 assumptions on type variables, with a substitution any satisfying one
 absorbs; what it leaves is still satisfied, and can't be improved further. -/
 theorem improveAll_complete {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) :
-    ∀ (k : Nat) {ps : List Pred} {φ : Subst}, ps.length ≤ k → Sat C ps φ →
-      ∃ σ ps', improveAll top k ps = some (σ, ps') ∧ Absorbs φ σ ∧ Sat C ps' φ ∧
+    ∀ (k : Nat) {ps : List Pred} {φ : Subst}, ps.length ≤ k → Sat₀ C ps φ →
+      ∃ σ ps', improveAll top k ps = some (σ, ps') ∧ Absorbs φ σ ∧ Sat₀ C ps' φ ∧
         (∀ p ∈ ps', p.improve top = .keep) ∧ (∀ p ∈ ps', ∃ q ∈ ps, p = q.subst σ)
   | 0, ps, φ, hk, hs => by
     obtain rfl : ps = [] := List.eq_nil_of_length_eq_zero (by omega)
@@ -2354,8 +2379,8 @@ theorem Scheme.Simple.openPreds_mentions {s : Scheme} (hs : s.Simple) {m : Nat} 
 
 /-- A constraint whose variables are all sent below `m` is entailed by the
 assumptions `C` alone, not by the scheme's opened at `m`. -/
-theorem Entails.drop_block {C : List Pred} {s : Scheme} (hs : s.Simple) {m : Nat} {p : Pred}
-    (h : Entails (C ++ s.openPreds m) p) (hp : ∀ b ∈ p.ftv, b < m) : Entails C p := by
+theorem Entails₀.drop_block {C : List Pred} {s : Scheme} (hs : s.Simple) {m : Nat} {p : Pred}
+    (h : Entails₀ (C ++ s.openPreds m) p) (hp : ∀ b ∈ p.ftv, b < m) : Entails₀ C p := by
   rcases h with h | h
   · exact .inl h
   · rcases List.mem_append.mp h with h | h
@@ -2386,22 +2411,22 @@ theorem Agree.fresh {n k : Nat} {σ φ ψ : Subst} {ρ : Ty} (h : Agree n σ φ 
     (hnk : n ≤ k) : Agree n σ ((k, ρ) :: φ) ψ := fun a ha => by
   rw [Ty.subst_cons_fresh ((hσ a).1 (by omega)), h a ha]
 
-theorem Sat.absorb {C P : List Pred} {φ σ : Subst} (habs : Absorbs φ σ) (h : Sat C P φ) :
-    Sat C (P.map (·.subst σ)) φ := fun p hp => by
+theorem Sat₀.absorb {C P : List Pred} {φ σ : Subst} (habs : Absorbs φ σ) (h : Sat₀ C P φ) :
+    Sat₀ C (P.map (·.subst σ)) φ := fun p hp => by
   obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
   rw [Absorbs.pred habs]; exact h q hq
 
-theorem Sat.fresh {C P : List Pred} {φ : Subst} {k : Nat} {ρ : Ty} (hP : ∀ p ∈ P, p.Below k)
-    (h : Sat C P φ) : Sat C P ((k, ρ) :: φ) := fun p hp => by
+theorem Sat₀.fresh {C P : List Pred} {φ : Subst} {k : Nat} {ρ : Ty} (hP : ∀ p ∈ P, p.Below k)
+    (h : Sat₀ C P φ) : Sat₀ C P ((k, ρ) :: φ) := fun p hp => by
   rw [Pred.subst_cons_fresh (hP p hp)]; exact h p hp
 
-theorem Sat.agree {C P : List Pred} {σ φ ψ : Subst} {n : Nat} (hag : Agree n σ φ ψ)
-    (hP : ∀ p ∈ P, p.Below n) (h : Sat C P ψ) : Sat C (P.map (·.subst σ)) φ := fun p hp => by
+theorem Sat₀.agree {C P : List Pred} {σ φ ψ : Subst} {n : Nat} (hag : Agree n σ φ ψ)
+    (hP : ∀ p ∈ P, p.Below n) (h : Sat₀ C P ψ) : Sat₀ C (P.map (·.subst σ)) φ := fun p hp => by
   obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
   rw [hag.pred (hP q hq)]; exact h q hq
 
-theorem Sat.app {C P Q : List Pred} {φ : Subst} (hP : Sat C P φ) (hQ : Sat C Q φ) :
-    Sat C (P ++ Q) φ := fun p hp => (List.mem_append.mp hp).elim (hP p) (hQ p)
+theorem Sat₀.app {C P Q : List Pred} {φ : Subst} (hP : Sat₀ C P φ) (hQ : Sat₀ C Q φ) :
+    Sat₀ C (P ++ Q) φ := fun p hp => (List.mem_append.mp hp).elim (hP p) (hQ p)
 
 /-- What `infer_complete` says of one expression: if the expression has a
 type in an instance of the context, inference finds one of which it is an
@@ -2411,19 +2436,19 @@ def InferComplete (L : List String) (e : Expr) : Prop :=
   ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst} {C : List Pred} {τ' : Ty} {Γ' : Ctx}
     {R' : Option Ty},
     Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
-    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType L C Γ' R' e τ' →
-    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat C o.preds φ
+    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType₀ L C Γ' R' e τ' →
+    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat₀ C o.preds φ
 
 theorem inferArgs_complete : ∀ (args : List Expr) (τs' : List Ty), (∀ a ∈ args, InferComplete L a) →
     ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst} {C : List Pred}
       {Γ' : Ctx} {R' : Option Ty},
       Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
       Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → args.length = τs'.length →
-      (∀ p ∈ args.zip τs', HasType L C Γ' R' p.1 p.2) →
+      (∀ p ∈ args.zip τs', HasType₀ L C Γ' R' p.1 p.2) →
       ∃ o, inferArgs L Γ R args n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧
-        o.τs.map (·.subst φ) = τs' ∧ Sat C o.preds φ
+        o.τs.map (·.subst φ) = τs' ∧ Sat₀ C o.preds φ
   | [], [], _, Γ, R, n, ψ, C, _, _, _, _, _, _, _, _, _ =>
-    ⟨⟨[], [], [], n⟩, by simp [inferArgs], ψ, fun a _ => by simp, rfl, by simp [Sat]⟩
+    ⟨⟨[], [], [], n⟩, by simp [inferArgs], ψ, fun a _ => by simp, rfl, by simp [Sat₀]⟩
   | [], _ :: _, _, _, _, _, _, _, _, _, _, _, _, _, _, hlen, _ => by simp at hlen
   | _ :: _, [], _, _, _, _, _, _, _, _, _, _, _, _, _, hlen, _ => by simp at hlen
   | a :: as, τ' :: τs', ih, Γ, R, n, ψ, C, Γ', R', hΓ, hR, hC, hΓ', hR', hlen, hargs => by
@@ -2436,7 +2461,7 @@ theorem inferArgs_complete : ∀ (args : List Expr) (τs' : List Ty), (∀ a ∈
       (by simpa using hlen) (fun p hp => hargs p (by simp [hp]))
     refine ⟨_, by simp only [inferArgs, h₁, h₂]; rfl, φ₂, hag₁.trans hσ₁ hn₁ hag₂, ?_, ?_⟩
     · simp only [List.map_cons, hag₂.ty hτb₁, hτ₁, hτs₂]
-    · exact Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂
+    · exact Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂
 
 theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
   intro e
@@ -2534,11 +2559,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           (by omega)) habs
       · show ((Ty.var o₂.next).subst σ₃).subst _ = τ'
         rw [habs]; simp [Ty.subst, Subst.find]
-      · refine Sat.absorb habs (Sat.app ?_ ?_)
-        · refine Sat.fresh (fun p hp => ?_) (Sat.agree hag₂ hp₁ hsat₁)
+      · refine Sat₀.absorb habs (Sat₀.app ?_ ?_)
+        · refine Sat₀.fresh (fun p hp => ?_) (Sat₀.agree hag₂ hp₁ hsat₁)
           obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
-        · exact Sat.fresh hp₂ hsat₂
+        · exact Sat₀.fresh hp₂ hsat₂
   | let_ mb e₁ e₂ ih₁ ih₂ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -2587,9 +2612,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         conv => rhs; rw [← List.map_id C]
         exact List.map_congr_left (fun q hq => Pred.subst_block_below (hmC q hq))
       have hblock : ∀ τs : List Ty, τs.length = s.arity → ∀ p ∈ preds₁,
-          Entails (C ++ s.instPreds τs) ((p.subst φ₁).subst (Subst.block m τs)) := by
+          Entails₀ (C ++ s.instPreds τs) ((p.subst φ₁).subst (Subst.block m τs)) := by
         intro τs hlen p hp
-        have := Entails.subst (Subst.block m τs) (hsat₁' p hp)
+        have := Entails₀.subst (Subst.block m τs) (hsat₁' p hp)
         rwa [List.map_append, hCb, Scheme.openPreds_block s hms hlen] at this
       -- The variables the environment fixes are sent below the block.
       let env := ctxFtv (Ctx.subst (Subst.compose σi o₁.σ) Γ) ++
@@ -2694,7 +2719,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
             ((letScheme (Expr.generalises e₁ e₂) (Ctx.subst (Subst.compose σi o₁.σ) Γ)
               (Ret.subst (Subst.compose σi o₁.σ) R) (o₁.τ.subst σi) preds₁).1.subst φ₁).preds = [])
             ∨ e₂.writes 0 = false) ∧
-          Sat C (letScheme (Expr.generalises e₁ e₂) (Ctx.subst (Subst.compose σi o₁.σ) Γ)
+          Sat₀ C (letScheme (Expr.generalises e₁ e₂) (Ctx.subst (Subst.compose σi o₁.σ) Γ)
             (Ret.subst (Subst.compose σi o₁.σ) R) (o₁.τ.subst σi) preds₁).2 φ₁ := by
         by_cases hv : Expr.generalises e₁ e₂ = true
         · have hw : e₂.writes 0 = false := by
@@ -2895,7 +2920,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         (by simp only [List.nil_append, Ctx.subst_cons, hagS.ctx hΓ]) (hagS.ret hR).symm h₂'
       refine ⟨⟨Subst.compose o₂.σ (Subst.compose σi o₁.σ), o₂.τ, rest.map (·.subst o₂.σ) ++ o₂.preds,
         o₂.next⟩, ?_, φ₂, hagS.trans hσ₁' hn₁ hag₂, hτ₂,
-        Sat.app (Sat.agree hag₂ hls.2 hsatr) hsat₂⟩
+        Sat₀.app (Sat₀.agree hag₂ hls.2 hsatr) hsat₂⟩
       simp only [infer, h₁, himp, hlsq, hall, ↓reduceIte, h₂o]
   | assign i e ih =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
@@ -2916,7 +2941,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           rw [hag₁.ty hsb, hτ₁]
         obtain ⟨σ', hσ', habs⟩ := unify_mgu hu
         refine ⟨_, by simp only [infer, hs, ha', hp', and_self, ↓reduceIte, h₁, hσ']; rfl, φ₁,
-          hag₁.absorb habs, ?_, Sat.absorb habs hsat₁⟩
+          hag₁.absorb habs, ?_, Sat₀.absorb habs hsat₁⟩
         show ((s.inst []).subst (Subst.compose σ' o₁.σ)).subst φ₁ = _
         rw [Ty.subst_compose, habs, hag₁.ty hsb]
   | cond c t e ihc iht ihe =>
@@ -2942,8 +2967,8 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           hag₃).absorb habs
       · show (o₃.τ.subst σ₄).subst φ₃ = τ'
         rw [habs, hτ₃]
-      · refine Sat.absorb habs (Sat.app (Sat.agree hag₃ (fun p hp => ?_)
-          (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)) hsat₃)
+      · refine Sat₀.absorb habs (Sat₀.app (Sat₀.agree hag₃ (fun p hp => ?_)
+          (Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂)) hsat₃)
         rcases List.mem_append.mp hp with hp | hp
         · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
@@ -2965,7 +2990,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         obtain ⟨σ', hσ', habs⟩ := unify_mgu (τ₁ := o₁.τ) (τ₂ := .number) (ψ := φ₁)
           (by rw [hτ₁]; rfl)
         exact ⟨_, by simp only [infer, h₁, hσ']; rfl, φ₁, hag₁.absorb habs, rfl,
-          Sat.absorb habs hsat₁⟩
+          Sat₀.absorb habs hsat₁⟩
   | binop op e₁ e₂ ih₁ ih₂ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -2978,8 +3003,8 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) ht₂
       obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := infer_inv L e₂ hΓ₁ hR₁ h₂
       have hag₁₂ := hag₁.trans hσ₁ hn₁ hag₂
-      have hsat₁₂ : Sat C (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds) φ₂ :=
-        Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂
+      have hsat₁₂ : Sat₀ C (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds) φ₂ :=
+        Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂
       have h₁₂ : (o₁.τ.subst o₂.σ).subst φ₂ = o₁.τ.subst φ₁ := hag₂.ty hτb₁
       cases hop with
       | plus hent =>
@@ -2988,7 +3013,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         refine ⟨_, by simp only [infer, h₁, h₂, hσ₃]; rfl, φ₂, hag₁₂.absorb habs, ?_, ?_⟩
         · show (o₂.τ.subst σ₃).subst φ₂ = _
           rw [habs, hτ₂]
-        · refine Sat.absorb habs (Sat.app hsat₁₂ (fun p hp => ?_))
+        · refine Sat₀.absorb habs (Sat₀.app hsat₁₂ (fun p hp => ?_))
           simp only [List.mem_singleton] at hp; subst hp
           simpa [Pred.subst, hτ₂] using hent
       | minus =>
@@ -2997,7 +3022,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         obtain ⟨σ₄, hσ₄, habs₄⟩ := unify_mgu (τ₁ := o₂.τ.subst σ₃) (τ₂ := .number) (ψ := φ₂)
           (by rw [habs₃, hτ₂]; rfl)
         exact ⟨_, by simp only [infer, h₁, h₂, hσ₃, hσ₄]; rfl, φ₂,
-          (hag₁₂.absorb habs₃).absorb habs₄, rfl, Sat.absorb habs₄ (Sat.absorb habs₃ hsat₁₂)⟩
+          (hag₁₂.absorb habs₃).absorb habs₄, rfl, Sat₀.absorb habs₄ (Sat₀.absorb habs₃ hsat₁₂)⟩
   | ret e ih =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -3014,7 +3039,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         have hσ'w := unify_within (hσ₁.subst_below (hτr.mono hn₁)) hτb₁ hσ'
         refine ⟨_, by simp only [infer, h₁, hσ']; rfl, (o₁.next, τ') :: φ₁,
           (hag₁.absorb habs).fresh (hσ₁.compose hσ'w) hn₁, by simp [Ty.subst, Subst.find],
-          Sat.fresh (fun p hp => ?_) (Sat.absorb habs hsat₁)⟩
+          Sat₀.fresh (fun p hp => ?_) (Sat₀.absorb habs hsat₁)⟩
         obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
         exact hσ'w.pred_below (hp₁ q hq)
   | throw_ e ih =>
@@ -3025,7 +3050,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e hΓ hR h₁
       exact ⟨⟨o₁.σ, .var o₁.next, o₁.preds, o₁.next + 1⟩, by simp only [infer, h₁],
         (o₁.next, τ') :: φ₁, hag₁.fresh hσ₁ hn₁, by simp [Ty.subst, Subst.find],
-        Sat.fresh hp₁ hsat₁⟩
+        Sat₀.fresh hp₁ hsat₁⟩
   | seq e₁ e₂ ih₁ ih₂ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -3038,7 +3063,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) ht₂
       exact ⟨⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩,
         by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂,
-        Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
+        Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
   | while_ c body ihc ihb =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
@@ -3052,21 +3077,21 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) hb
       exact ⟨⟨Subst.compose o₂.σ o₁.σ, .undefined, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, rfl,
-        Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
+        Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂⟩
   | break_ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
     | break_ =>
       exact ⟨⟨[], .var n, [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
         fun a ha => by simp [Ty.subst, Subst.find, Nat.ne_of_lt ha],
-        by simp [Ty.subst, Subst.find], by simp [Sat]⟩
+        by simp [Ty.subst, Subst.find], by simp [Sat₀]⟩
   | continue_ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
     | continue_ =>
       exact ⟨⟨[], .var n, [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
         fun a ha => by simp [Ty.subst, Subst.find, Nat.ne_of_lt ha],
-        by simp [Ty.subst, Subst.find], by simp [Sat]⟩
+        by simp [Ty.subst, Subst.find], by simp [Sat₀]⟩
   | tryCatch body handler ihb ihh =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -3082,7 +3107,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       have hu : (o₁.τ.subst o₂.σ).subst φ₂ = o₂.τ.subst φ₂ := by rw [hag₂.ty hτb₁, hτ₁, hτ₂]
       obtain ⟨σ₃, hσ₃, habs⟩ := unify_mgu hu
       refine ⟨_, by simp only [infer, h₁, h₂, hσ₃]; rfl, φ₂, (hag₁.trans hσ₁ hn₁ hag₂).absorb habs,
-        ?_, Sat.absorb habs (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)⟩
+        ?_, Sat₀.absorb habs (Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂)⟩
       show (o₂.τ.subst σ₃).subst φ₂ = τ'
       rw [habs, hτ₂]
   | tryFinally body fin ihb ihf =>
@@ -3097,7 +3122,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         (by rw [hΓ', hag₁.ctx hΓ]) (by rw [hR', hag₁.ret hR]) hf
       exact ⟨⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂,
-        by rw [hag₂.ty hτb₁, hτ₁], Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
+        by rw [hag₂.ty hτb₁, hτ₁], Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
   | obj ls es ih =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
@@ -3133,7 +3158,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       refine ⟨⟨o₁.σ, .var o₁.next, o₁.preds ++ [⟨.hasProp l, [o₁.τ, .var o₁.next]⟩], o₁.next + 1⟩,
         by simp only [infer, h₁], (o₁.next, τ') :: φ₁, hag₁.fresh hσ₁ hn₁,
         by simp [Ty.subst, Subst.find], ?_⟩
-      refine Sat.app (Sat.fresh hp₁ hsat₁) ?_
+      refine Sat₀.app (Sat₀.fresh hp₁ hsat₁) ?_
       intro c hc
       simp only [List.mem_singleton] at hc; subst hc
       simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_cons_fresh hτb₁, hτ₁]
@@ -3149,7 +3174,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       refine ⟨⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
           [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩, ⟨.fieldWrite, [o₁.τ.subst o₂.σ]⟩], o₂.next⟩,
         by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂, ?_⟩
-      refine Sat.app (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂) ?_
+      refine Sat₀.app (Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂) ?_
       intro c hc
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
       rcases hc with rfl | rfl
@@ -3218,11 +3243,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       · show ((Ty.record L _).subst (Subst.compose σ₄ σ₃)).subst φ₃ = _
         rw [habs]
         simp only [Ty.subst_app, hbrs]
-      · refine Sat.absorb habs (Sat.app (Sat.app ?_ ?_) ?_)
+      · refine Sat₀.absorb habs (Sat₀.app (Sat₀.app ?_ ?_) ?_)
         · intro p hp
           obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
           rw [hpfresh _ (hσ₂.pred_below ((hp₁ q hq).mono hn₂))]
-          exact Sat.agree hag₂ hp₁ hsat₁ _ (List.mem_map_of_mem hq)
+          exact Sat₀.agree hag₂ hp₁ hsat₁ _ (List.mem_map_of_mem hq)
         · intro p hp
           rw [hpfresh _ (hp₂ p hp)]
           exact hsat₂ p hp
@@ -3259,7 +3284,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         Agree.absorb (hag.fresh hσ hn) habs, ?_, ?_⟩
       · show ((Ty.array (.var o.next)).subst σ').subst _ = _
         rw [habs]; simp [Ty.subst, Subst.find]
-      · exact Sat.absorb habs (Sat.fresh hp hsat)
+      · exact Sat₀.absorb habs (Sat₀.fresh hp hsat)
   | index e i ihe ihi =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
@@ -3274,7 +3299,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       refine ⟨_, by simp only [infer, h₁, h₂]; rfl, (o₂.next, τ') :: φ₂,
         (hag₁.trans hσ₁ hn₁ hag₂).fresh ((hσ₁.mono hn₂).compose hσ₂) (by omega),
         by simp [Ty.subst, Subst.find], ?_⟩
-      refine Sat.app (Sat.fresh (fun p hp => ?_) (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)) ?_
+      refine Sat₀.app (Sat₀.fresh (fun p hp => ?_) (Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂)) ?_
       · simp only [List.mem_append, List.mem_map] at hp
         rcases hp with ⟨q, hq, rfl⟩ | hp
         · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
@@ -3313,7 +3338,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
               ⟨.indexWrite, [(o₁.τ.subst o₂.σ).subst o₃.σ]⟩], o₃.next⟩,
         by simp only [infer, h₁, h₂, h₃], φ₃,
         (hag₁.trans hσ₁ hn₁ hag₂).trans ((hσ₁.mono hn₂).compose hσ₂) (by omega) hag₃, hτ₃, ?_⟩
-      refine Sat.app (Sat.app (Sat.agree hag₃ hP (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂))
+      refine Sat₀.app (Sat₀.app (Sat₀.agree hag₃ hP (Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂))
         hsat₃) ?_
       intro c hc
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
@@ -3326,7 +3351,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
 /-- What improvement leaves of entailed constraints is settled: an instance,
 or on a type variable. -/
 theorem Pred.settled_of_keep {C : List Pred} (hC : ∀ c ∈ C, c.OnVarShaped) {p : Pred}
-    {φ : Subst} (hk : p.improve true = .keep) (he : Entails C (p.subst φ)) :
+    {φ : Subst} (hk : p.improve true = .keep) (he : Entails₀ C (p.subst φ)) :
     p.settled = true := by
   have hC' : ∀ c ∈ C, c.AssumableAt true := fun c hc => (hC c hc).assumable true
   simp only [Pred.settled, Bool.or_eq_true]
@@ -3356,7 +3381,7 @@ checks (`Expr.scoped`), inference accepts it, finding a type of which that
 one is an instance. -/
 theorem inferIn_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
     (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
-    (hm : e.scoped (Γ.map fun _ => false) = true) (ht : HasType L C Γ none e τ') :
+    (hm : e.scoped (Γ.map fun _ => false) = true) (ht : HasType₀ L C Γ none e τ') :
     ∃ o, infer L Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn L Γ e = some τ := by
   have hclosed : Ctx.subst [] Γ = Γ := by simp
   obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete L e (n := 0) (ψ := []) (R := none)
@@ -3373,7 +3398,7 @@ theorem inferIn_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C :
 /-- Completeness for closed programs: one that has a type, with records over
 its labels, and passes the scope checks is accepted. -/
 theorem inferProgram_complete {e : Expr} {τ' : Ty} (hm : e.scoped [] = true)
-    (ht : HasType e.labels.eraseDups [] [] none e τ') : ∃ τ, inferProgram e = some τ := by
+    (ht : HasType₀ e.labels.eraseDups [] [] none e τ') : ∃ τ, inferProgram e = some τ := by
   obtain ⟨_, _, _, h⟩ := inferIn_complete (Γ := []) rfl (fun _ h => by cases h) hm ht
   exact h
 

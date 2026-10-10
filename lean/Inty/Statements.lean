@@ -74,17 +74,17 @@ example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L builtinCtx e = s
 example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst}
     {C : List Pred} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
     Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
-    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType L C Γ' R' e τ' →
-    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat C o.preds φ :=
+    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType₀ L C Γ' R' e τ' →
+    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat₀ C o.preds φ :=
   infer_complete
 
 example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}, ctxFtv Γ = [] →
     (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true →
-    HasType L C Γ none e τ' →
+    HasType₀ L C Γ none e τ' →
     ∃ o, infer L Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn L Γ e = some τ :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType e.labels.eraseDups [] [] none e τ' →
+example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType₀ e.labels.eraseDups [] [] none e τ' →
     ∃ τ, inferProgram e = some τ :=
   inferProgram_complete
 
@@ -126,14 +126,16 @@ example : V k W .undefined v ↔ v = .undefined := V_undefined
 example : V k W .null v ↔ v = .null := V_null
 example : V k W .unknown v ↔ True := V_unknown
 example : V k W (.var a) v ↔ False := V_var
-example : V k W (.record ls slots) v ↔ ∃ ℓ, v = .obj ℓ ∧
-    W[ℓ]? = some (.obj (.record ls slots)) := V_record
-example : V k W (.array τ) v ↔ ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.arr τ) := V_array
+example : V k W (.record ls slots) v ↔ ∃ ℓ τc, v = .obj ℓ ∧
+    W[ℓ]? = some (.obj τc) ∧ TyEq (.record ls slots) τc := V_record
+example : V k W (.array τ) v ↔ ∃ ℓ τc, v = .arr ℓ ∧ W[ℓ]? = some (.arr τc) ∧ TyEq τ τc :=
+  V_array
+example : V k W (.mu i sys) v ↔
+    ∃ c args, (Ty.mu i sys).view = some (.app c args) ∧ V k W (.app c args) v := V_mu
 example : CellV k W (.obj (.record ls slots)) v ↔ ∃ fs, v = .fields fs ∧
-    (∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
-      ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
     ∀ l s, Ty.field l ls slots = some s →
-      (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := CellV_obj
+      (∃ σ, TyEq s (.slot .pre σ) ∧ ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∨
+      (∃ σ, TyEq s (.slot .abs σ) ∧ fs.lookup l = none) := CellV_obj
 example : CellV k W (.obj (.var a)) v ↔ False := Iff.rfl
 example : CellV k W (.arr τ) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := CellV_arr
 example : CellV k W (.scheme s) v ↔
@@ -177,7 +179,10 @@ example : G W [] env ↔ env = [] := by cases env <;> simp [G]
 
 As with `V`, a larger instance table weakens what `eval_sound` says. -/
 
-example : Entails C p ↔ Inst p ∨ p ∈ C := Iff.rfl
+example : Entails C p ↔ (∃ q, PredEq p q ∧ Inst q) ∨ p ∈ C := Iff.rfl
+example : PredEq p q ↔ p.cls = q.cls ∧ p.args.length = q.args.length ∧
+    ∀ x ∈ p.args.zip q.args, TyEq x.1 x.2 := Iff.rfl
+example : TyEq s t ↔ ∀ n, s.approx n = t.approx n := Iff.rfl
 
 example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ ∨
     (∃ l ls fs σ, Ty.field l ls fs = some (.slot .pre σ) ∧ p = ⟨.hasProp l, [.record ls fs, σ]⟩) ∨
@@ -220,7 +225,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
 
 /-- A constraint left on a type variable is all `HoldsOrVar` allows beside
 the instances. -/
-example : HoldsOrVar C ↔ ∀ p ∈ C, Inst p ∨ ∃ a rest, p.args = .var a :: rest := Iff.rfl
+example : HoldsOrVar C ↔ ∀ p ∈ C, (∃ q, PredEq p q ∧ Inst q) ∨ ∃ a rest, p.args = .var a :: rest :=
+  Iff.rfl
 
 /-- The builtins' types, which their soundness proofs establish. -/
 example : builtinCtx =
@@ -240,113 +246,181 @@ example : Expr.break_.scoped [] = false := rfl
 check beside the typing rules. -/
 example : (Expr.let_ false (num 1) (.assign 0 (num 2))).assignsMutable [] = false := rfl
 
+/-- Distinct constructors make distinct types. -/
+private theorem ne_con {c c' : Con} {ts ts' : List Ty} (h : c ≠ c') :
+    ¬ TyEq (.app c ts) (.app c' ts') := fun e => h (TyEq.con e)
+
 /-- `x = 1` for a variable whose scheme is polymorphic: an assigned variable
 is a monotype. -/
 example : ¬ HasType L [] [⟨1, .bound 0, []⟩] none (.assign 0 (num 1)) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with | assign hi ha _ _ => simp at hi; subst hi; simp at ha
 
 /-- An unbound variable. -/
 example : ¬ HasType L [] [] none (.var 0) τ := by
-  intro h; cases h with | var hi _ _ => simp at hi
+  intro h; obtain ⟨_, -, h⟩ := h.top; cases h with | var hi _ _ => simp at hi
 
 /-- `1 + "a"`: `+` never mixes a `Number` with a `String`. -/
 example : ¬ HasType L [] [] none (.binop .plus (num 1) (str "a")) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
   | binop hop h₁ h₂ =>
     cases hop with
-    | plus _ => cases h₁ with | lit hl => cases hl; cases h₂ with | lit hl => cases hl
+    | plus _ =>
+      obtain ⟨_, e₁, h₁⟩ := h₁.top
+      obtain ⟨_, e₂, h₂⟩ := h₂.top
+      cases h₁ with
+      | lit hl =>
+        cases hl
+        cases h₂ with
+        | lit hl => cases hl; exact ne_con (by decide) (e₁.trans e₂.symm)
 
 /-- `true + true`: `Boolean` is not a `Plus` instance, and nothing assumes it. -/
 example : ¬ HasType L [] [] none (.binop .plus (.lit (.boolean true)) (.lit (.boolean true))) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
   | binop hop h₁ _ =>
     cases hop with
     | plus hc =>
+      obtain ⟨_, e₁, h₁⟩ := h₁.top
       cases h₁ with
-      | lit hl => cases hl; rcases hc with hc | hc <;> cases hc
+      | lit hl =>
+        cases hl
+        rcases hc with ⟨q, hq, hi⟩ | hc
+        · cases hi
+          case plusNumber => exact ne_con (by decide) (e₁.trans (PredEq.one hq).2)
+          case plusString => exact ne_con (by decide) (e₁.trans (PredEq.one hq).2)
+          all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
+        · cases hc
 
 /-- `"a" - 1`: `-` is `Number` only. -/
 example : ¬ HasType L [] [] none (.binop .minus (str "a") (num 1)) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
-  | binop hop h₁ _ => cases hop; cases h₁ with | lit hl => cases hl
+  | binop hop h₁ _ =>
+    cases hop
+    obtain ⟨_, e₁, h₁⟩ := h₁.top
+    cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
 
 /-- `-"a"`: unary `-` is `Number` only. -/
 example : ¬ HasType L [] [] none (.unop .neg (str "a")) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
-  | unop hop h₁ => cases hop; cases h₁ with | lit hl => cases hl
+  | unop hop h₁ =>
+    cases hop
+    obtain ⟨_, e₁, h₁⟩ := h₁.top
+    cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
 
 /-- `({x: 1}).y`: an object literal has only its own fields. -/
 example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1]) "y") τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
   | get he hp =>
+    obtain ⟨_, e₁, he⟩ := he.top
     cases he with
     | obj hτs _ _ _ _ =>
-      rcases hp with hi | hi
-      · generalize hq : (⟨.hasProp "y", _⟩ : Pred) = q at hi
-        cases hi <;> simp only [Pred.mk.injEq, Cls.hasProp.injEq, List.cons.injEq] at hq
-        case hasProp hf =>
-          obtain ⟨rfl, ⟨-, -⟩, -⟩ := hq
-          have := objSlots_field hf
-          obtain ⟨_, rfl⟩ := List.length_eq_one_iff.mp hτs
-          simp [Ty.field] at this
-        all_goals simp at hq
+      rcases hp with ⟨q, hq, hi⟩ | hi
+      · cases hi
+        case hasProp l ls fs σ' hf =>
+          obtain ⟨hcls, hτ, -⟩ := PredEq.two hq
+          cases hcls
+          obtain ⟨hc, hl, hz⟩ := TyEq.app_iff.mp (e₁.trans hτ)
+          cases hc
+          obtain ⟨s, hs, hss⟩ := Ty.field_tyEq hl.symm (zip_tyEq_symm hz) hf
+          rcases objSlots_field_cases hs with ⟨σ, rfl⟩ | ⟨σ, rfl, -⟩
+          · have := objSlots_field hs
+            obtain ⟨_, rfl⟩ := List.length_eq_one_iff.mp hτs
+            simp [Ty.field] at this
+          · exact absurd (TyEq.slot hss).1 TyEq.pre_abs
+        case lengthArray =>
+          exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+        case lengthString =>
+          exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+        all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · cases hi
 
 /-- `(1).x`: a number has no fields. -/
 example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
   | get he hp =>
+    obtain ⟨_, e₁, he⟩ := he.top
     cases he with
     | lit hl =>
       cases hl
-      rcases hp with hi | hi
-      · generalize hq : (⟨.hasProp "x", _⟩ : Pred) = q at hi
-        cases hi <;> simp at hq
+      rcases hp with ⟨q, hq, hi⟩ | hi
+      · cases hi
+        case hasProp => exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+        case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+        case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+        all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · cases hi
 
 /-- `1(2)`: a number is not a function. -/
 example : ¬ HasType L [] [] none (.app (num 1) [num 2]) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
-  | app hf _ _ => cases hf with | lit hl => cases hl
+  | app hf _ _ =>
+    obtain ⟨_, e₁, hf⟩ := hf.top
+    cases hf with | lit hl => cases hl; exact ne_con (by simp) e₁
 
 /-- `"ab"[0] = "c"`: strings take no stores. -/
 example : ¬ HasType L [] [] none (.setIndex (str "ab") (num 0) (str "c")) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
   | setIndex he _ _ hw _ =>
+    obtain ⟨_, e₁, he⟩ := he.top
     cases he with
-    | lit hl => cases hl; rcases hw with hi | hi <;> cases hi
+    | lit hl =>
+      cases hl
+      rcases hw with ⟨q, hq, hi⟩ | hi
+      · cases hi
+        case writeArray => exact ne_con (by simp) (e₁.trans (PredEq.one hq).2)
+        all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
+      · cases hi
 
 /-- `(function f(x) { return x; })(1, 2)`: one argument per parameter. -/
 example : ¬ HasType L [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
-  | app hf hlen _ => cases hf with | func hn _ => simp at hlen; omega
+  | app hf hlen _ =>
+    obtain ⟨_, e₁, hf⟩ := hf.top
+    cases hf with
+    | func hn _ =>
+      have := (TyEq.app_iff.mp e₁).2.1
+      simp at hlen this; omega
 
 /-- `(function f() { return -this; })()`: a call outside a receiver makes
 `this` `undefined`, which `-` doesn't take. -/
 example : ¬ HasType L [] [] none (.app (.func 0 (.unop .neg (.var 1))) []) τ := by
   intro h
+  obtain ⟨_, -, h⟩ := h.top
   cases h with
   | app hf _ _ =>
+    obtain ⟨_, e₁, hf⟩ := hf.top
     cases hf with
     | func hn hb =>
       rw [List.length_eq_zero_iff] at hn; subst hn
+      have hθ := (TyEq.app_iff.mp e₁).2.2 _ (List.mem_cons_self)
+      obtain ⟨_, e₂, hb⟩ := hb.top
       cases hb with
       | unop hop he =>
         cases hop
-        generalize hτ : Ty.number = τ' at he
+        obtain ⟨_, e₃, he⟩ := he.top
         cases he with
         | var hi _ _ =>
           simp at hi; subst hi
-          simp [Scheme.mono, Scheme.inst, Ty.toPTy] at hτ
+          simp only [Scheme.mono_inst] at e₃
+          exact ne_con (by simp) (hθ.symm.trans e₃)
 
 end Inty.Statements
