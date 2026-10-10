@@ -414,6 +414,28 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
     bindC (run (min c₂ clock) env h₂ v) fun vv c₃ h₃ =>
       let p := vo.setIndex h₃ vi vv
       (p.1, c₃, p.2)
+  -- The receiver, its property, the arguments, then the call, with `this`
+  -- the receiver (as `app`, which this inlines `call` like).
+  | .mcall e l args =>
+    bindC (run clock env heap e) fun vo c₁ h₁ =>
+    match vo.getProp h₁ l with
+    | .ok vf =>
+      bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
+      match vf with
+      | .closure cenv n body =>
+        if n ≤ vs.length then
+          match _h : min c₂ clock with
+          | 0 => (.timeout, 0, h₂)
+          | c + 1 =>
+            let p := run c (callEnv h₂ n cenv) (h₂ ++ vs.take n ++ [vf, vo]) body
+            (p.1.catchReturn, p.2)
+        else (.stuck .arityMismatch, min c₂ clock, h₂)
+      | .prim p =>
+        match min c₂ clock with
+        | 0 => (.timeout, 0, h₂)
+        | c + 1 => (p.apply vs, c, h₂)
+      | _ => (.stuck .notCallable, min c₂ clock, h₂)
+    | r => (r, c₁, h₁)
 termination_by (clock, sizeOf e)
 decreasing_by
   all_goals first
@@ -457,6 +479,28 @@ def call (c : Nat) (h : Heap) (vf thisv : Value) (args : List Value) : Ran :=
     | 0 => (.timeout, 0, h)
     | c + 1 => (p.apply args, c, h)
   | _ => (.stuck .notCallable, c, h)
+
+/-- `run` on a method call, without the termination proof's dependent
+match. -/
+theorem run_mcall (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (l : String)
+    (args : List Expr) :
+    run clock env heap (.mcall e l args) =
+      bindC (run clock env heap e) fun vo c₁ h₁ =>
+      match vo.getProp h₁ l with
+      | .ok vf =>
+        bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
+          call (min c₂ clock) h₂ vf vo vs
+      | r => (r, c₁, h₁) := by
+  rw [run]
+  congr 1; funext vo c₁ h₁
+  split
+  · congr 1; funext vs c₂ h₂
+    generalize min c₂ clock = m
+    rename_i vf _
+    cases vf <;> simp only [call] <;> try rfl
+    split <;> try rfl
+    cases m <;> rfl
+  · rfl
 
 /-- `run` on a call, without the termination proof's dependent match. -/
 theorem run_app (clock : Nat) (env : Env) (heap : Heap) (f : Expr) (args : List Expr) :

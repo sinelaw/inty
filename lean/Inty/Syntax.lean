@@ -103,6 +103,9 @@ inductive Expr where
   | index (e i : Expr)
   /-- `e[i] = v`: storing an element; the value is the assignment's. -/
   | setIndex (e i v : Expr)
+  /-- A method call `e.l(a₀, …)`: the receiver, its property `l`, then the
+  arguments, then the call, with `this` the receiver. -/
+  | mcall (e : Expr) (l : String) (args : List Expr)
   deriving Repr
 
 /-- Syntactic values, which the value restriction lets a `const` generalise:
@@ -133,94 +136,100 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (spread : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.spread e₁ e₂))
     (arr : ∀ es, (∀ a ∈ es, motive a) → motive (.arr es))
     (index : ∀ e i, motive e → motive i → motive (.index e i))
-    (setIndex : ∀ e i v, motive e → motive i → motive v → motive (.setIndex e i v)) :
+    (setIndex : ∀ e i v, motive e → motive i → motive v → motive (.setIndex e i v))
+    (mcall : ∀ e l args, motive e → (∀ a ∈ args, motive a) → motive (.mcall e l args)) :
     ∀ e, motive e
   | .lit l => lit l
   | .var i => var i
   | .func n body => func n body (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex body)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall body)
   | .app f args =>
     app f args (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex f)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall f)
       (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex a)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall a)
   | .let_ m e₁ e₂ =>
     let_ m e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₁)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₂)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₂)
   | .cond c t e =>
     cond c t e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex c)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall c)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex t)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall t)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
   | .assign i e => assign i e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
   | .unop op e => unop op e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
   | .binop op e₁ e₂ =>
     binop op e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₁)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₂)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₂)
   | .ret e => ret e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
   | .throw_ e => throw_ e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
   | .seq e₁ e₂ =>
     seq e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₁)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₂)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₂)
   | .while_ c body =>
     while_ c body
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex c)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall c)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex body)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall body)
   | .break_ => break_
   | .continue_ => continue_
   | .tryCatch body handler =>
     tryCatch body handler
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex body)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall body)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex handler)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall handler)
   | .tryFinally body fin =>
     tryFinally body fin
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex body)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall body)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex fin)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall fin)
   | .obj ls es => obj ls es (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex a)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall a)
   | .get e l => get e l (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
   | .set e l v => set e l v (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex v)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall v)
   | .spread e₁ e₂ => spread e₁ e₂
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₁)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e₂)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e₂)
   | .arr es => arr es (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex a)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall a)
   | .index e i => index e i
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex i)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall i)
   | .setIndex e i v => setIndex e i v
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex e)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex i)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall i)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
-        tryCatch tryFinally obj get set spread arr index setIndex v)
+        tryCatch tryFinally obj get set spread arr index setIndex mcall v)
+  | .mcall e l args => mcall e l args
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall e)
+      (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_
+        break_ continue_ tryCatch tryFinally obj get set spread arr index setIndex mcall a)
 termination_by e => sizeOf e
 decreasing_by
   all_goals simp_wf
@@ -244,6 +253,7 @@ def Expr.writes (i : Nat) : Expr → Bool
   | .setIndex e j v => e.writes i || j.writes i || v.writes i
   | .get e _ => e.writes i
   | .set e _ v => e.writes i || v.writes i
+  | .mcall e _ args => e.writes i || Expr.writesList i args
 /-- `writes`, for a list of arguments. -/
 def Expr.writesList (i : Nat) : List Expr → Bool
   | [] => false
@@ -276,6 +286,7 @@ def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
       v.assignsMutable mutables
   | .get e _ => e.assignsMutable mutables
   | .set e _ v => e.assignsMutable mutables && v.assignsMutable mutables
+  | .mcall e _ args => e.assignsMutable mutables && Expr.assignsMutableList mutables args
 /-- `assignsMutable`, for a list of arguments. -/
 def Expr.assignsMutableList (mutables : List Bool) : List Expr → Bool
   | [] => true
@@ -299,6 +310,7 @@ def Expr.jumpsInLoop (inLoop : Bool) : Expr → Bool
   | .setIndex e i v => e.jumpsInLoop inLoop && i.jumpsInLoop inLoop && v.jumpsInLoop inLoop
   | .get e _ => e.jumpsInLoop inLoop
   | .set e _ v => e.jumpsInLoop inLoop && v.jumpsInLoop inLoop
+  | .mcall e _ args => e.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop args
 /-- `jumpsInLoop`, for a list of arguments. -/
 def Expr.jumpsInLoopList (inLoop : Bool) : List Expr → Bool
   | [] => true

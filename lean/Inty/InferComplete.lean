@@ -221,11 +221,92 @@ theorem unifyEqs_within {n : Nat} :
     intro _ σ h; unfold unifyEqs at h; simp only [hab, ho, ite_false] at h
     cases a <;> cases b <;> simp_all
 
-theorem unify_within {n : Nat} {τ₁ τ₂ : Ty} {σ : Subst} (h₁ : τ₁.Below n) (h₂ : τ₂.Below n)
-    (h : unify τ₁ τ₂ = some σ) : σ.Within n :=
+theorem unify₀_within {n : Nat} {τ₁ τ₂ : Ty} {σ : Subst} (h₁ : τ₁.Below n) (h₂ : τ₂.Below n)
+    (h : unify₀ τ₁ τ₂ = some σ) : σ.Within n :=
   unifyEqs_within _ _ (fun e he => by
     simp only [List.mem_singleton] at he; subst he
     exact ⟨fun a ha => h₁ a (by simpa using ha), fun a ha => h₂ a (by simpa using ha)⟩) h
+
+theorem Ty.Below.view {n : Nat} {τ t : Ty} (h : τ.Below n) (hv : τ.view = some t) : t.Below n :=
+  fun a ha => h a (Ty.view_ftv hv a ha)
+
+/-- A unifier up to unfolding of types below `n` stays within `n`. -/
+theorem unifyRec_within {n : Nat} : ∀ (f : Nat) (eqs : List (Ty × Ty)),
+    (∀ e ∈ eqs, e.1.Below n ∧ e.2.Below n) → ∀ {σ : Subst}, unifyRec f eqs = some σ → σ.Within n := by
+  intro f eqs
+  induction f, eqs using unifyRec.induct with
+  | case1 => intro _ σ h; simp [unifyRec] at h
+  | case2 => intro _ σ h; simp only [unifyRec, Option.some.injEq] at h; subst h; exact .nil n
+  | case3 f t eqs ih =>
+    intro hb σ h
+    unfold unifyRec at h; simp only [ite_true] at h
+    exact ih (fun e he => hb e (by simp [he])) h
+  | case4 f eqs a t hsv hne => intro _ σ h; unfold unifyRec at h; simp [hne, hsv] at h
+  | case5 f eqs a t u hsv hne ih =>
+    intro hb σ h
+    unfold unifyRec at h; simp only [hne, ite_false, hsv] at h
+    obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
+    have h₀ := hb _ List.mem_cons_self
+    have hs := Subst.Within.single (h₀.1 a (by simp)) (fun b hb' => h₀.2 b (solveVar_ftv hsv b hb').1)
+    refine Subst.Within.compose hs (ih (fun e he => ?_) h')
+    obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
+    have := hb e₀ (by simp [he₀])
+    exact ⟨hs.subst_below this.1, hs.subst_below this.2⟩
+  | case6 f eqs s a hs hsv hne =>
+    intro _ σ h; rw [unifyRec_var_right hs hne, hsv] at h; cases h
+  | case7 f eqs s a hs u hsv hne ih =>
+    intro hb σ h
+    rw [unifyRec_var_right hs hne] at h
+    simp only [hsv] at h
+    obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
+    have h₀ := hb _ List.mem_cons_self
+    have hs' := Subst.Within.single (h₀.2 a (by simp)) (fun b hb' => h₀.1 b (solveVar_ftv hsv b hb').1)
+    refine Subst.Within.compose hs' (ih (fun e he => ?_) h')
+    obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
+    have := hb e₀ (by simp [he₀])
+    exact ⟨hs'.subst_below this.1, hs'.subst_below this.2⟩
+  | case8 f eqs c as c' as' hc hne ih =>
+    intro hb σ h
+    unfold unifyRec at h; simp only [hne, ite_false] at h
+    simp only [hc, and_self, ite_true] at h
+    have h₀ := hb _ List.mem_cons_self
+    have h₁ := Ty.Below.app.mp h₀.1
+    have h₂ := Ty.Below.app.mp h₀.2
+    refine ih (fun e he => ?_) h
+    rcases List.mem_append.mp he with he | he
+    · exact ⟨h₁ _ (List.of_mem_zip he).1, h₂ _ (List.of_mem_zip he).2⟩
+    · exact hb e (by simp [he])
+  | case9 f eqs c as c' as' hc hne => intro _ σ h; unfold unifyRec at h; simp [hne, hc] at h
+  | case10 f eqs i sys t ht s' hv hne ih =>
+    intro hb σ h
+    rw [unifyRec_mu_left ht hne] at h
+    simp only [hv] at h
+    have h₀ := hb _ List.mem_cons_self
+    refine ih (fun e he => ?_) h
+    rcases List.mem_cons.mp he with rfl | he
+    · exact ⟨h₀.1.view hv, h₀.2⟩
+    · exact hb e (List.mem_cons_of_mem _ he)
+  | case11 f eqs i sys t ht hv hne =>
+    intro _ σ h; rw [unifyRec_mu_left ht hne, hv] at h; cases h
+  | case12 f eqs s i sys hs hmu s' hv hne ih =>
+    intro hb σ h
+    rw [unifyRec_mu_right hs hmu hne] at h
+    simp only [hv] at h
+    have h₀ := hb _ List.mem_cons_self
+    refine ih (fun e he => ?_) h
+    rcases List.mem_cons.mp he with rfl | he
+    · exact ⟨h₀.1, h₀.2.view hv⟩
+    · exact hb e (List.mem_cons_of_mem _ he)
+  | case13 f eqs s i sys hs hmu hv hne =>
+    intro _ σ h; rw [unifyRec_mu_right hs hmu hne, hv] at h; cases h
+
+theorem unify_within {n : Nat} {τ₁ τ₂ : Ty} {σ : Subst} (h₁ : τ₁.Below n) (h₂ : τ₂.Below n)
+    (h : unify τ₁ τ₂ = some σ) : σ.Within n := by
+  unfold unify at h
+  split at h
+  · cases h; exact unify₀_within h₁ h₂ ‹_›
+  · exact unifyRec_within _ _ (fun e he => by
+      simp only [List.mem_singleton] at he; subst he; exact ⟨h₁, h₂⟩) h
 
 /-! ## Free variables through instantiation, substitution, generalisation -/
 
@@ -508,14 +589,14 @@ theorem Ty.Below.var {n a : Nat} (h : a < n) : (Ty.var a).Below n := by
 /-! ## Improvement stays below the bound -/
 
 /-- A decision's equation mentions only the constraint's variables. -/
-theorem Pred.decide_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
-    (hp : Pred.Below n ⟨c, t :: rest⟩) (h : Pred.decide c t rest = .eq a b) :
+theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
+    (hp : Pred.Below n ⟨c, t :: rest⟩) (h : Pred.decide₀ c t rest = .eq a b) :
     a.Below n ∧ b.Below n := by
   have ht : t.Below n := fun x hx => hp x (by simp [Pred.ftv, hx])
   have hr : ∀ τ ∈ rest, τ.Below n := fun τ hτ x hx =>
     hp x (by simp only [Pred.ftv, List.flatMap_cons, List.mem_append, List.mem_flatMap]; exact .inr ⟨τ, hτ, hx⟩)
   have hnum : Ty.number.Below n := fun x hx => by simp [Ty.ftv] at hx
-  unfold Pred.decide at h
+  unfold Pred.decide₀ at h
   split at h
   all_goals first | (cases h; done) | skip
   · split at h
@@ -554,6 +635,15 @@ theorem Pred.decide_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : T
     · intro x hx; simp [Ty.ftv] at hx
     · exact hr _ (by simp)
   · cases h; exact ⟨hr _ (by simp), hr _ (by simp)⟩
+
+theorem Pred.decide_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
+    (hp : Pred.Below n ⟨c, t :: rest⟩) (h : Pred.decide c t rest = .eq a b) :
+    a.Below n ∧ b.Below n := by
+  refine Pred.decide₀_below (t := t.whnf) (fun x hx => ?_) h
+  simp only [Pred.ftv, List.flatMap_cons, List.mem_append] at hx
+  rcases hx with hx | hx
+  · exact hp x (by simp [Pred.ftv, Ty.whnf_ftv hx])
+  · exact hp x (by simp only [Pred.ftv, List.flatMap_cons, List.mem_append]; exact .inr hx)
 
 theorem Pred.improveArgs_below {n : Nat} {c : Cls} {args : List Ty} {a b : Ty}
     (hp : Pred.Below n ⟨c, args⟩) (h : Pred.improveArgs c args = .eq a b) :
@@ -1270,6 +1360,34 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hp₃ p hp
     · simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl | rfl <;> exact Pred.below_of_args (by simp [hc, hi, hτ₃])
+  | mcall e l args ihe iha =>
+    intro Γ R n o hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv args iha
+      (hσ₁.ctx_below (hΓ.mono hn₁)) (hσ₁.ret_below (hR.mono hn₁)) h₂
+    have hle : o₂.next ≤ o₂.next + 1 := Nat.le_succ _
+    have hτ : (o₁.τ.subst o₂.σ).Below (o₂.next + 1) := (hσ₂.subst_below (hτ₁.mono hn₂)).mono hle
+    refine ⟨by dsimp only; omega, ((hσ₁.mono hn₂).compose hσ₂).mono hle,
+      Ty.Below.var (Nat.lt_succ_self _), ?_⟩
+    intro p hp
+    simp only [List.mem_append, List.mem_map, List.mem_singleton] at hp
+    rcases hp with (⟨q, hq, rfl⟩ | hp) | rfl
+    · exact (hσ₂.pred_below ((hp₁ q hq).mono hn₂)).mono hle
+    · exact (hp₂ p hp).mono hle
+    · refine Pred.below_of_args ?_
+      simp only [List.mem_cons, List.not_mem_nil, or_false]
+      rintro τ (rfl | rfl)
+      · exact hτ
+      · exact Ty.Below.fn.mpr ⟨hτ, fun t ht => (hτs₂ t ht).mono hle,
+          Ty.Below.var (Nat.lt_succ_self _)⟩
 
 /-! ## Agreement of substitutions -/
 
@@ -1823,34 +1941,34 @@ theorem Pred.decide_complete {c : Cls} {t : Ty} {rest : List Ty} {φ : Subst} (h
     | none => rw [hs] at hf; cases hf
     | some s =>
       rw [hs] at hf
-      refine ⟨s, .slot .pre σ, by simp [Pred.decide, hs], ?_⟩
+      refine ⟨s, .slot .pre σ, by simp [Pred.decide, Pred.decide₀, hs], ?_⟩
       simpa using hf
   case mergePre =>
     obtain ⟨rfl, ⟨rfl, rfl⟩, τ, _, rfl, rfl, s, _, rfl, rfl, r, _, rfl, hr, rfl⟩ := hq
-    exact ⟨r, .slot .pre τ, by simp [Pred.decide], by simpa using hr⟩
+    exact ⟨r, .slot .pre τ, by simp [Pred.decide, Pred.decide₀], by simpa using hr⟩
   case mergeAbs =>
     obtain ⟨rfl, ⟨rfl, rfl⟩, τ, _, rfl, rfl, s, _, rfl, rfl, r, _, rfl, hr, rfl⟩ := hq
-    exact ⟨r, s, by simp [Pred.decide], hr⟩
+    exact ⟨r, s, by simp [Pred.decide, Pred.decide₀], hr⟩
   case lengthArray =>
     obtain ⟨rfl, ⟨rfl, x, _, rfl, rfl, rfl⟩, σ, _, rfl, hσ, rfl⟩ := hq
-    exact ⟨σ, .number, by simp [Pred.decide], by simpa using hσ⟩
+    exact ⟨σ, .number, by simp [Pred.decide, Pred.decide₀], by simpa using hσ⟩
   case lengthString =>
     obtain ⟨rfl, ⟨rfl, rfl⟩, σ, _, rfl, hσ, rfl⟩ := hq
-    exact ⟨σ, .number, by simp [Pred.decide], by simpa using hσ⟩
+    exact ⟨σ, .number, by simp [Pred.decide, Pred.decide₀], by simpa using hσ⟩
   case indexArray =>
     obtain ⟨rfl, ⟨rfl, x, _, rfl, rfl, rfl⟩, i, _, rfl, hi, e, _, rfl, he, rfl⟩ := hq
-    exact ⟨.tuple [i, e], .tuple [.number, x], by simp [Pred.decide],
+    exact ⟨.tuple [i, e], .tuple [.number, x], by simp [Pred.decide, Pred.decide₀],
       by simp [Ty.subst_app, hi, he]⟩
   case indexString =>
     obtain ⟨rfl, ⟨rfl, rfl⟩, i, _, rfl, hi, e, _, rfl, he, rfl⟩ := hq
-    exact ⟨.tuple [i, e], .tuple [.number, .string], by simp [Pred.decide],
+    exact ⟨.tuple [i, e], .tuple [.number, .string], by simp [Pred.decide, Pred.decide₀],
       by simp [Ty.subst_app, hi, he]⟩
   case writeArray =>
     obtain ⟨rfl, ⟨rfl, x, _, rfl, rfl, rfl⟩, rfl⟩ := hq
-    exact ⟨.number, .number, by simp [Pred.decide], rfl⟩
+    exact ⟨.number, .number, by simp [Pred.decide, Pred.decide₀], rfl⟩
   case writeRecord =>
     obtain ⟨rfl, ⟨rfl, -⟩, rfl⟩ := hq
-    exact ⟨.number, .number, by simp [Pred.decide], rfl⟩
+    exact ⟨.number, .number, by simp [Pred.decide, Pred.decide₀], rfl⟩
 
 /-- An instance's first argument determines the rest: their variables are
 its own (but for `Merge`, whose result the first three determine). -/
@@ -1925,7 +2043,7 @@ theorem Entails₀.var_or_inst {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c
         simp at e
 
 theorem Pred.decide_ne_keep {c : Cls} {t : Ty} {rest : List Ty} : Pred.decide c t rest ≠ .keep := by
-  unfold Pred.decide
+  unfold Pred.decide Pred.decide₀
   split
   all_goals first | (split <;> simp) | simp
 
@@ -3348,6 +3466,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         exact hpr
       · simp only [Pred.subst, List.map_cons, List.map_nil, hag₃.ty hb₁, hag₂.ty hτb₁, hτ₁]
         exact hw
+  | mcall e l args _ _ =>
+    intro Γ R n ψ C τ' Γ' R' hΓ hR _ _ _ ht
+    cases ht
+
+
 /-- What improvement leaves of entailed constraints is settled: an instance,
 or on a type variable. -/
 theorem Pred.settled_of_keep {C : List Pred} (hC : ∀ c ∈ C, c.OnVarShaped) {p : Pred}

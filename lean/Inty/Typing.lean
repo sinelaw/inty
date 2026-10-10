@@ -173,6 +173,15 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   takes stores (`IndexWrite`, not a string). -/
   | setIndex : HasType L C Γ R e τ → HasType L C Γ R i ι → Entails C ⟨.indexable, [τ, ι, σ]⟩ →
       Entails C ⟨.indexWrite, [τ]⟩ → HasType L C Γ R v σ → HasType L C Γ R (.setIndex e i v) σ
+  /-- `e.l(a₀, …)`: the receiver's property `l` is a function whose `this`
+  is the receiver's type, as inty unifies a method's `this` with its
+  receiver (`method_receiver` in `src/infer/features/functions.rs`); one
+  argument per parameter. A method that returns `this`, or reads a
+  property of it that holds a method, makes the receiver's type
+  recursive. -/
+  | mcall : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, .fn τ τs ρ]⟩ →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) →
+      HasType L C Γ R (.mcall e l args) ρ
   /-- A type may be replaced by an equal one (`TyEq`): a recursive type by
   its unfolding, or the other way round. -/
   | conv : HasType L C Γ R e τ → TyEq τ τ' → HasType L C Γ R e τ'
@@ -232,6 +241,9 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
       HasTypeTop L C Γ R (.index e i) σ
   | setIndex : HasType L C Γ R e τ → HasType L C Γ R i ι → Entails C ⟨.indexable, [τ, ι, σ]⟩ →
       Entails C ⟨.indexWrite, [τ]⟩ → HasType L C Γ R v σ → HasTypeTop L C Γ R (.setIndex e i v) σ
+  | mcall : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, .fn τ τs ρ]⟩ →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) →
+      HasTypeTop L C Γ R (.mcall e l args) ρ
 
 /-- `HasType` with types compared syntactically: no conversion between
 equal recursive types, and constraints entailed syntactically
@@ -406,6 +418,7 @@ theorem HasType.top (h : HasType L C Γ R e τ) : ∃ τ₀, TyEq τ₀ τ ∧ H
   | arr hes => exact ⟨_, .refl _, .arr hes⟩
   | index he hi hp => exact ⟨_, .refl _, .index he hi hp⟩
   | setIndex he hi hp hw hv => exact ⟨_, .refl _, .setIndex he hi hp hw hv⟩
+  | mcall he hp hl ha => exact ⟨_, .refl _, .mcall he hp hl ha⟩
   | conv _ he ih =>
     obtain ⟨τ₀, h₀, ht⟩ := ih
     exact ⟨τ₀, h₀.trans he, ht⟩

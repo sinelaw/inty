@@ -108,6 +108,12 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
   | setIndex _ _ hp hw _ ihe ihi ihv =>
     exact .setIndex ihe ihi (by simpa [Pred.subst] using hp.subst σ)
       (by simpa [Pred.subst] using hw.subst σ) ihv
+  | mcall _ hp hlen _ ihe iha =>
+    refine .mcall ihe (by simpa [Pred.subst] using hp.subst σ) (by simpa using hlen)
+      (fun p hp => ?_)
+    rw [List.zip_map_right] at hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact iha q hq
   | conv _ he ih => exact .conv ih (he.subst σ)
 
 theorem HasType₀.subst (σ : Subst) (h : HasType₀ L C Γ R e τ) :

@@ -323,4 +323,35 @@ def truthiness : Expr :=
 #guard match eval 1 builtinEnv builtinHeap (.app (.var 1) [str "a"]) with
   | .stuck .typeMismatch => true | _ => false
 
+/-! ## Methods and recursive types -/
+
+/-- `function () { this.value = this.value + 1; return this; }`: inside a
+function of no parameters, `var 1` is `this`. -/
+def incBody : Expr :=
+  .seq (.set (.var 1) "value" (.binop .plus (.get (.var 1) "value") (num 1))) (.ret (.var 1))
+
+/-- `const c = {value: 0, inc: function () {…}}`. -/
+def counter : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody]
+
+/-- `c.inc().inc().value`: `inc`'s `this` is the receiver's type, which holds
+`inc`, so it is recursive (`μt. {value: Number, inc: (this: t) => t}`), and
+the chain types as inty's does. -/
+def chained : Expr := .let_ false counter (.get (.mcall (.mcall (.var 0) "inc" []) "inc" []) "value")
+
+#guard inferProgram chained == some .number
+#guard match eval 20 [] [] chained with | .ok (.number n) => n == 2 | _ => false
+
+-- `(0, c.inc)()`: a call outside a receiver gives `inc` an `undefined`
+-- `this`, which has no `value`.
+#guard inferProgram (.let_ false counter (.app (.get (.var 0) "inc") [])) == none
+
+-- A method that doesn't use `this` can be called outside its object.
+#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)]) (.app (.get (.var 0) "m") [])) ==
+  some .number
+
+-- `function f(x) { return f; }; f(1)(2) - 1`: `f` returns itself, a
+-- recursive function type, so `f(1)(2)` is `f`, not a number.
+#guard inferProgram (.let_ false (.func 1 (.var 1))
+  (.binop .minus (.app (.app (.var 0) [num 1]) [num 2]) (num 1))) == none
+
 end Inty.Examples

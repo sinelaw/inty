@@ -1706,6 +1706,37 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       refine Safe.bindC (ihv hv hC (G.mono (hW₁.trans hW₂) hG) hH₂) fun vv W₃ _ hW₃ hH₃ hvv => ?_
       exact setIndex_sound hp hw hC ((hvo.mono (run_clock_le _ _ _ _) hW₂).mono
         (run_clock_le _ _ _ _) hW₃) (hvi.mono (run_clock_le _ _ _ _) hW₃) hvv hH₃
+  | mcall e l args ihe iha =>
+    intro k C Γ R W env h τ ht hC hG hH
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    refine Safe.tyEq ?_ hτ₀
+    cases ht with
+    | mcall he hp hlen hargs =>
+      rw [run_mcall]
+      refine Safe.bindC (ihe he hC hG hH) fun vo W₁ _ hW₁ hH₁ hvo => ?_
+      have hc₁ := run_clock_le k env h e
+      have hg := getProp_sound (R := R) hp hC hvo hH₁
+      generalize hgp : vo.getProp (run k env h e).2.2 l = gp at hg ⊢
+      cases gp
+      case ok vf =>
+        simp only
+        obtain ⟨-, hg | ⟨W₂, hW₂, hH₂, ⟨v, hv, hvf⟩ | habr | ⟨v, hv, -⟩⟩⟩ := hg
+        · cases hg
+        · simp only [Result.ok.injEq] at hv
+          subst hv
+          obtain rfl := hW₂.eq_of_length (by rw [← hH₂.1, hH₁.1])
+          rw [Nat.min_eq_left hc₁]
+          refine Safe.bindArgs (runArgs_sound hC args _ iha hlen hargs (G.mono hW₁ hG) hH₁)
+            fun vs W₃ _ hW₃ hH₃ hvs => ?_
+          have hc₂ := runArgs_clock_le (run k env h e).2.1 env (run k env h e).2.2 args
+          rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
+          exact Lands.safe (V_fn.mp (V.mono hc₂ hW₃ hvf) _ (Nat.le_refl _) W₃ (List.prefix_refl _)
+            _ vo vs hvs.length (fun i hi => hH₃.mono (by omega))
+            (fun i hi => hvo.mono (by omega) hW₃)
+            (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
+        · simp [Result.Abrupt] at habr
+        · cases hv
+      all_goals exact Safe.retype hg (by simp)
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/

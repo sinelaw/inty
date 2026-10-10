@@ -168,6 +168,65 @@ theorem Ty.approx_congr_view {n : Nat} {s t : Ty} (h : s.view = t.view) :
 /-- Unfolding a type's head gives an equal type. -/
 theorem TyEq.whnf (τ : Ty) : TyEq τ.whnf τ := fun _ => Ty.approx_congr_view (Ty.view_whnf τ)
 
+@[simp] theorem Ty.whnf_app (c : Con) (args : List Ty) : (Ty.app c args).whnf = .app c args := rfl
+@[simp] theorem Ty.whnf_var (a : Nat) : (Ty.var a).whnf = .var a := rfl
+
+theorem RTy.open_ftv {env : Nat → Ty} {r : RTy} {a : Nat} (h : a ∈ (r.open env).ftv) :
+    a ∈ r.ftv ∨ ∃ j, a ∈ (env j).ftv := by
+  induction r using RTy.ind with
+  | free b => simp [RTy.open] at h; simp [RTy.ftv, h]
+  | self j => exact .inr ⟨j, by simpa [RTy.open] using h⟩
+  | app c args ih =>
+    simp only [RTy.open_app, Ty.ftv_app, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
+    rcases ih q hq h with h | h
+    · exact .inl (by simp only [RTy.ftv_app, List.mem_flatMap]; exact ⟨q, hq, h⟩)
+    · exact .inr h
+  | mu i sys _ => exact .inl (by simpa [RTy.open] using h)
+
+theorem RTy.head_ftv {env : Nat → Ty} {r : RTy} {t : Ty} {a : Nat} (h : r.head env = some t)
+    (ha : a ∈ t.ftv) : a ∈ r.ftv ∨ ∃ j, a ∈ (env j).ftv := by
+  induction r using RTy.ind generalizing env t with
+  | free b => simp [RTy.head] at h; subst h; simp [RTy.ftv] at ha ⊢; exact .inl ha
+  | self j => simp [RTy.head] at h
+  | app c args _ =>
+    rw [RTy.head] at h; cases h
+    simp only [Ty.ftv_app, List.mem_flatMap, List.mem_map] at ha
+    obtain ⟨_, ⟨q, hq, rfl⟩, ha⟩ := ha
+    rcases RTy.open_ftv ha with h | h
+    · exact .inl (by simp only [RTy.ftv_app, List.mem_flatMap]; exact ⟨q, hq, h⟩)
+    · exact .inr h
+  | mu i sys ih =>
+    rw [RTy.head_mu, Option.bind_eq_some_iff] at h
+    obtain ⟨r, hr, h⟩ := h
+    have hmem := List.mem_of_getElem? hr
+    refine .inl ?_
+    simp only [RTy.ftv_mu, List.mem_flatMap]
+    rcases ih r hmem h ha with h | ⟨j, h⟩
+    · exact ⟨r, hmem, h⟩
+    · simpa [muEnv] using h
+
+/-- Unfolding brings no new variables. -/
+theorem Ty.view_ftv {τ t : Ty} (h : τ.view = some t) : ∀ a ∈ t.ftv, a ∈ τ.ftv := by
+  intro a ha
+  cases τ with
+  | var b => simp [Ty.view] at h; subst h; exact ha
+  | app c args => simp [Ty.view] at h; subst h; exact ha
+  | mu i sys =>
+    simp only [Ty.view, Option.bind_eq_some_iff] at h
+    obtain ⟨r, hr, h⟩ := h
+    have hmem := List.mem_of_getElem? hr
+    simp only [Ty.ftv_mu, List.mem_flatMap]
+    rcases RTy.head_ftv h ha with h | ⟨j, h⟩
+    · exact ⟨r, hmem, h⟩
+    · simpa [muEnv] using h
+
+theorem Ty.whnf_ftv {τ : Ty} {a : Nat} (h : a ∈ τ.whnf.ftv) : a ∈ τ.ftv := by
+  unfold Ty.whnf at h
+  cases hv : τ.view with
+  | none => simpa [hv] using h
+  | some t => simp only [hv, Option.getD_some] at h; exact Ty.view_ftv hv a h
+
 /-! ## Constructors -/
 
 theorem forall₂_of_map_eq {f g : Nat → Ty → Tree} :

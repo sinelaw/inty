@@ -1,4 +1,4 @@
-import Inty.Subst
+import Inty.Equi
 
 /-!
 # Unification
@@ -127,8 +127,8 @@ decreasing_by
     simp only [eqsSize, eqsSize_append, eqsSize_zip _ _ (‹_ ∧ _›).2, RTy.size]
     omega
 
-/-- A most general unifier of two types, if they unify. -/
-def unify (τ₁ τ₂ : Ty) : Option Subst :=
+/-- A most general unifier of two types, if they unify syntactically. -/
+def unify₀ (τ₁ τ₂ : Ty) : Option Subst :=
   unifyEqs (τ₁.ftv ++ τ₂.ftv) [(τ₁.toRTy, τ₂.toRTy)]
 
 /-! ## Lemmas -/
@@ -429,7 +429,7 @@ theorem unifyEqs_sound :
     unfold unifyEqs at h; simp only [hab, ho, ite_false] at h
     cases a <;> cases b <;> simp_all
 
-theorem unify_sound {τ₁ τ₂ : Ty} {σ : Subst} (h : unify τ₁ τ₂ = some σ) :
+theorem unify₀_sound {τ₁ τ₂ : Ty} {σ : Subst} (h : unify₀ τ₁ τ₂ = some σ) :
     τ₁.subst σ = τ₂.subst σ := by
   have := unifyEqs_sound _ _ h (τ₁.toRTy, τ₂.toRTy) (by simp)
   simp only [Ty.toRTy_subst] at this
@@ -569,12 +569,389 @@ theorem unifyEqs_mgu :
 
 /-- Unification succeeds whenever the types unify, with a most general
 unifier. -/
-theorem unify_mgu {τ₁ τ₂ : Ty} {ψ : Subst} (h : τ₁.subst ψ = τ₂.subst ψ) :
-    ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ :=
+theorem unify₀_mgu {τ₁ τ₂ : Ty} {ψ : Subst} (h : τ₁.subst ψ = τ₂.subst ψ) :
+    ∃ σ, unify₀ τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ :=
   unifyEqs_mgu _ _ (fun e he c hc => by
     simp only [List.mem_singleton] at he; subst he
     simp only [List.mem_append, Ty.toRTy_ftv] at hc ⊢; exact hc) (fun e he => by
     simp only [List.mem_singleton] at he; subst he
     simp only [Ty.toRTy_subst, h])
+
+/-! ## Unification up to unfolding
+
+Where syntactic unification fails, `unifyRec` tries again equi-recursively,
+as inty's `unify` does (`src/infer/unify.rs`): a recursive type is unfolded
+against another type, and a variable that occurs in the type it is bound to,
+only under a record or a function, is bound to a recursive type, as inty's
+`var_bind` does when `is_inside_row_type` (`create_recursive_type`). inty
+keeps the recursive type in its global table, without parameters; here it
+is `mu 0 [τ']`, `τ'` being `τ` with the variable's occurrences made
+`self 0`. A fuel bounds the unfolding; the result is sound
+(`unifyRec_sound`), and inference is complete only for what syntactic
+unification decides. -/
+
+mutual
+/-- Whether every occurrence of `a` in `τ` is outside any recursive type. -/
+def Ty.noMuOcc (a : Nat) : Ty → Bool
+  | .var _ => true
+  | .app _ args => Ty.noMuOccs a args
+  | .mu i sys => !decide (a ∈ (Ty.mu i sys).ftv)
+def Ty.noMuOccs (a : Nat) : List Ty → Bool
+  | [] => true
+  | t :: ts => t.noMuOcc a && Ty.noMuOccs a ts
+end
+
+@[simp] theorem Ty.noMuOccs_eq (a : Nat) (ts : List Ty) : Ty.noMuOccs a ts = ts.all (Ty.noMuOcc a) := by
+  induction ts <;> simp_all [Ty.noMuOccs]
+
+mutual
+/-- Whether every occurrence of `a` in `τ` is under a record or a function,
+and outside any recursive type, so that `a = τ` has a recursive solution
+(inty's `is_inside_row_type`). -/
+def Ty.guarded (a : Nat) : Ty → Bool
+  | .var b => b != a
+  | .app c args =>
+    match c with
+    | .fn | .record _ => Ty.noMuOccs a args
+    | _ => Ty.guardeds a args
+  | .mu i sys => !decide (a ∈ (Ty.mu i sys).ftv)
+def Ty.guardeds (a : Nat) : List Ty → Bool
+  | [] => true
+  | t :: ts => t.guarded a && Ty.guardeds a ts
+end
+
+@[simp] theorem Ty.guardeds_eq (a : Nat) (ts : List Ty) : Ty.guardeds a ts = ts.all (Ty.guarded a) := by
+  induction ts <;> simp_all [Ty.guardeds]
+
+mutual
+/-- `τ` as the right-hand side of a one-equation system, `a` being the
+system's type. -/
+def Ty.abstract (a : Nat) : Ty → RTy
+  | .var b => if b = a then .self 0 else .free b
+  | .app c args => .app c (Ty.abstracts a args)
+  | .mu i sys => .mu i sys
+def Ty.abstracts (a : Nat) : List Ty → List RTy
+  | [] => []
+  | t :: ts => t.abstract a :: Ty.abstracts a ts
+end
+
+@[simp] theorem Ty.abstracts_eq (a : Nat) (ts : List Ty) :
+    Ty.abstracts a ts = ts.map (Ty.abstract a) := by
+  induction ts <;> simp_all [Ty.abstracts]
+
+/-- What to bind `a` to, to solve `a = t`: `t` itself if `a` doesn't occur
+in it, the recursive type `mu 0 [t']` if it occurs only guarded. -/
+def solveVar (a : Nat) (t : Ty) : Option Ty :=
+  if a ∈ t.ftv then
+    if t.guarded a then some (.mu 0 [t.abstract a]) else none
+  else some t
+
+/-- Substitute in both sides of each equation between types. -/
+def substTyEqs (σ : Subst) (eqs : List (Ty × Ty)) : List (Ty × Ty) :=
+  eqs.map fun e => (e.1.subst σ, e.2.subst σ)
+
+/-- Unify a list of equations up to unfolding, with `fuel` steps. -/
+def unifyRec : Nat → List (Ty × Ty) → Option Subst
+  | 0, _ => none
+  | _ + 1, [] => some []
+  | f + 1, (s, t) :: eqs =>
+    if s = t then unifyRec f eqs
+    else
+      match s, t with
+      | .var a, t =>
+        match solveVar a t with
+        | none => none
+        | some u => (unifyRec f (substTyEqs [(a, u)] eqs)).map (Subst.compose · [(a, u)])
+      | s, .var a =>
+        match solveVar a s with
+        | none => none
+        | some u => (unifyRec f (substTyEqs [(a, u)] eqs)).map (Subst.compose · [(a, u)])
+      | .app c as, .app c' as' =>
+        if c = c' ∧ as.length = as'.length then unifyRec f (as.zip as' ++ eqs) else none
+      | .mu i sys, t =>
+        match (Ty.mu i sys).view with
+        | some s' => unifyRec f ((s', t) :: eqs)
+        | none => none
+      | s, .mu i sys =>
+        match (Ty.mu i sys).view with
+        | some t' => unifyRec f ((s, t') :: eqs)
+        | none => none
+
+/-- The fuel `unify` gives `unifyRec`. -/
+def unifyFuel (τ₁ τ₂ : Ty) : Nat := 16 * (τ₁.toRTy.size + τ₂.toRTy.size) + 64
+
+/-- Unify two types: syntactically, which is most general, or else up to
+unfolding. -/
+def unify (τ₁ τ₂ : Ty) : Option Subst :=
+  match unify₀ τ₁ τ₂ with
+  | some σ => some σ
+  | none => unifyRec (unifyFuel τ₁ τ₂) [(τ₁, τ₂)]
+
+/-! ### Soundness up to unfolding -/
+
+theorem Ty.noMuOcc_app {a : Nat} {c : Con} {args : List Ty} :
+    (Ty.app c args).noMuOcc a = args.all (Ty.noMuOcc a) := by
+  simp [Ty.noMuOcc]
+
+theorem Ty.guarded_app {a : Nat} {c : Con} {args : List Ty} :
+    (Ty.app c args).guarded a = match c with
+      | .fn | .record _ => args.all (Ty.noMuOcc a)
+      | _ => args.all (Ty.guarded a) := by
+  cases c <;> simp [Ty.guarded]
+
+theorem Ty.abstract_app {a : Nat} {c : Con} {args : List Ty} :
+    (Ty.app c args).abstract a = .app c (args.map (Ty.abstract a)) := by
+  simp [Ty.abstract]
+
+theorem Ty.guarded_noMuOcc {a : Nat} : ∀ {τ : Ty}, τ.guarded a = true → τ.noMuOcc a = true := by
+  intro τ
+  induction τ using Ty.ind with
+  | var b => intro _; simp [Ty.noMuOcc]
+  | mu i sys => intro h; simp only [Ty.guarded] at h; simp only [Ty.noMuOcc]; exact h
+  | app c args ih =>
+    intro h
+    rw [Ty.guarded_app] at h
+    rw [Ty.noMuOcc_app]
+    cases c <;> simp only [List.all_eq_true] at h ⊢ <;>
+      first | exact h | exact fun t ht => ih t ht (h t ht)
+
+/-- `τ`'s right-hand side, its `self 0` read as `M`, is `τ` with `a ↦ M`. -/
+theorem Ty.abstract_open {a : Nat} {M : Ty} {env : Nat → Ty} (henv : env 0 = M) :
+    ∀ {τ : Ty}, τ.noMuOcc a = true → (τ.abstract a).open env = τ.subst [(a, M)] := by
+  intro τ
+  induction τ using Ty.ind with
+  | var b =>
+    intro _
+    simp only [Ty.abstract]
+    by_cases hb : b = a
+    · subst hb; simp [RTy.open, Ty.subst, Subst.find, henv]
+    · simp [RTy.open, Ty.subst, Subst.find, hb]
+  | app c args ih =>
+    intro h
+    rw [Ty.noMuOcc_app, List.all_eq_true] at h
+    rw [Ty.abstract_app, RTy.open_app, Ty.subst_app, List.map_map]
+    simp only [Ty.app.injEq, true_and]
+    exact List.map_congr_left (fun t ht => ih t ht (h t ht))
+  | mu i sys =>
+    intro h
+    simp only [Ty.noMuOcc, Bool.not_eq_true', decide_eq_false_iff_not] at h
+    simp only [Ty.abstract]
+    simp only [RTy.open]
+    exact (Ty.subst_id (fun b hb => by
+      have : b ≠ a := fun e => h (e ▸ hb)
+      simp [Subst.find, this])).symm
+
+/-- The recursive solution of `a = τ` is `τ` with `a` bound to it, up to
+unfolding. -/
+theorem solveVar_mu {a : Nat} {c : Con} {args : List Ty} (h : (Ty.app c args).guarded a = true) :
+    TyEq (.mu 0 [(Ty.app c args).abstract a])
+      ((Ty.app c args).subst [(a, .mu 0 [(Ty.app c args).abstract a])]) := by
+  have hv : (Ty.mu 0 [(Ty.app c args).abstract a]).view =
+      some ((Ty.app c args).subst [(a, .mu 0 [(Ty.app c args).abstract a])]) := by
+    simp only [Ty.view, List.getElem?_cons_zero, Option.bind_some]
+    rw [← Ty.abstract_open (M := Ty.mu 0 [(Ty.app c args).abstract a])
+      (env := muEnv [(Ty.app c args).abstract a]) rfl (Ty.guarded_noMuOcc h)]
+    generalize hr : (Ty.app c args).abstract a = r
+    rw [Ty.abstract_app] at hr
+    subst hr
+    rw [RTy.head]
+    simp [RTy.open_app]
+  have := TyEq.whnf (Ty.mu 0 [(Ty.app c args).abstract a])
+  simp only [Ty.whnf, hv, Option.getD_some] at this
+  exact this.symm
+
+theorem solveVar_sound {a : Nat} {t u : Ty} (h : solveVar a t = some u) :
+    TyEq u (t.subst [(a, u)]) := by
+  unfold solveVar at h
+  split at h
+  · split at h
+    · cases h
+      rename_i hocc hg
+      cases t with
+      | var b =>
+        simp only [Ty.guarded] at hg
+        simp at hocc hg; exact absurd hocc.symm hg
+      | mu i sys => simp only [Ty.guarded] at hg; simp_all
+      | app c args => exact solveVar_mu hg
+    · cases h
+  · cases h
+    rename_i hocc
+    exact TyEq.of_eq (Ty.subst_single hocc).symm
+
+theorem map_tyEq_of_zip : ∀ {ps₁ ps₂ : List Ty} {σ : Subst}, ps₁.length = ps₂.length →
+    (∀ p ∈ ps₁.zip ps₂, TyEq (p.1.subst σ) (p.2.subst σ)) →
+    ∀ x ∈ (ps₁.map (·.subst σ)).zip (ps₂.map (·.subst σ)), TyEq x.1 x.2 := by
+  intro ps₁ ps₂ σ hl h x hx
+  rw [List.zip_map] at hx
+  obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+  exact h y hy
+
+theorem unifyRec_var_right {f a : Nat} {s : Ty} {eqs : List (Ty × Ty)}
+    (hs : ∀ b, s = .var b → False) (hne : ¬ s = .var a) :
+    unifyRec (f + 1) ((s, .var a) :: eqs) =
+      match solveVar a s with
+      | none => none
+      | some u => (unifyRec f (substTyEqs [(a, u)] eqs)).map (Subst.compose · [(a, u)]) := by
+  cases s with
+  | var b => exact absurd rfl (hs b)
+  | app c as => simp only [unifyRec, hne, ite_false]
+  | mu i sys => simp only [unifyRec, hne, ite_false]
+
+theorem unifyRec_mu_left {f i : Nat} {sys : List RTy} {t : Ty} {eqs : List (Ty × Ty)}
+    (ht : ∀ b, t = .var b → False) (hne : ¬ Ty.mu i sys = t) :
+    unifyRec (f + 1) ((.mu i sys, t) :: eqs) =
+      match (Ty.mu i sys).view with
+      | some s' => unifyRec f ((s', t) :: eqs)
+      | none => none := by
+  cases t with
+  | var b => exact absurd rfl (ht b)
+  | app c as => simp only [unifyRec, hne, ite_false]
+  | mu j sys' => simp only [unifyRec, hne, ite_false]
+
+theorem unifyRec_mu_right {f i : Nat} {sys : List RTy} {s : Ty} {eqs : List (Ty × Ty)}
+    (hs : ∀ b, s = .var b → False) (hmu : ∀ j sys', s = .mu j sys' → False)
+    (hne : ¬ s = Ty.mu i sys) :
+    unifyRec (f + 1) ((s, .mu i sys) :: eqs) =
+      match (Ty.mu i sys).view with
+      | some t' => unifyRec f ((s, t') :: eqs)
+      | none => none := by
+  cases s with
+  | var b => exact absurd rfl (hs b)
+  | app c as => simp only [unifyRec, hne, ite_false]
+  | mu j sys' => exact absurd rfl (hmu j sys')
+
+theorem unifyRec_sound : ∀ (f : Nat) (eqs : List (Ty × Ty)) {σ : Subst},
+    unifyRec f eqs = some σ → ∀ e ∈ eqs, TyEq (e.1.subst σ) (e.2.subst σ) := by
+  intro f eqs
+  induction f, eqs using unifyRec.induct with
+  | case1 => intro σ h; simp [unifyRec] at h
+  | case2 => intro σ _ e he; cases he
+  | case3 f t eqs ih =>
+    intro σ h e he
+    unfold unifyRec at h; simp only [ite_true] at h
+    rcases List.mem_cons.mp he with rfl | he
+    · exact TyEq.refl _
+    · exact ih h e he
+  | case4 f eqs a t hsv hne =>
+    intro σ h; unfold unifyRec at h; simp [hne, hsv] at h
+  | case5 f eqs a t u hsv hne ih =>
+    intro σ h e he
+    unfold unifyRec at h; simp only [hne, ite_false, hsv] at h
+    obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
+    have ih' := ih h'
+    rcases List.mem_cons.mp he with rfl | he
+    · simp only [Ty.subst_compose]
+      have := (solveVar_sound hsv).subst σ'
+      simpa [Ty.subst, Subst.find] using this
+    · have := ih' _ (List.mem_map_of_mem
+        (f := fun e => (e.1.subst [(a, u)], e.2.subst [(a, u)])) he)
+      simpa [Ty.subst_compose] using this
+  | case6 f eqs s a hs hsv hne =>
+    intro σ h; rw [unifyRec_var_right hs hne, hsv] at h; cases h
+  | case7 f eqs s a hs u hsv hne ih =>
+    intro σ h e he
+    rw [unifyRec_var_right hs hne] at h
+    simp only [hsv] at h
+    obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
+    have ih' := ih h'
+    rcases List.mem_cons.mp he with rfl | he
+    · simp only [Ty.subst_compose]
+      have := (solveVar_sound hsv).subst σ'
+      simpa [Ty.subst, Subst.find] using this.symm
+    · have := ih' _ (List.mem_map_of_mem
+        (f := fun e => (e.1.subst [(a, u)], e.2.subst [(a, u)])) he)
+      simpa [Ty.subst_compose] using this
+  | case8 f eqs c as c' as' hc hne ih =>
+    intro σ h e he
+    unfold unifyRec at h; simp only [hne, ite_false] at h
+    simp only [hc, and_self, ite_true] at h
+    have ih' := ih h
+    rcases List.mem_cons.mp he with rfl | he
+    · obtain ⟨rfl, hl⟩ := hc
+      simp only [Ty.subst_app]
+      exact TyEq.app (by simpa using hl) (map_tyEq_of_zip hl (fun p hp => ih' p (by simp [hp])))
+    · exact ih' e (by simp [he])
+  | case9 f eqs c as c' as' hc hne =>
+    intro σ h; unfold unifyRec at h; simp [hne, hc] at h
+  | case10 f eqs i sys t ht s' hv hne ih =>
+    intro σ h e he
+    rw [unifyRec_mu_left ht hne] at h
+    simp only [hv] at h
+    have ih' := ih h
+    rcases List.mem_cons.mp he with rfl | he
+    · have hw := TyEq.whnf (Ty.mu i sys)
+      simp only [Ty.whnf, hv, Option.getD_some] at hw
+      exact (hw.subst σ).symm.trans (ih' _ List.mem_cons_self)
+    · exact ih' e (List.mem_cons_of_mem _ he)
+  | case11 f eqs i sys t ht hv hne =>
+    intro σ h; rw [unifyRec_mu_left ht hne, hv] at h; cases h
+  | case12 f eqs s i sys hs hmu s' hv hne ih =>
+    intro σ h e he
+    rw [unifyRec_mu_right hs hmu hne] at h
+    simp only [hv] at h
+    have ih' := ih h
+    rcases List.mem_cons.mp he with rfl | he
+    · have hw := TyEq.whnf (Ty.mu i sys)
+      simp only [Ty.whnf, hv, Option.getD_some] at hw
+      exact (ih' _ List.mem_cons_self).trans (hw.subst σ)
+    · exact ih' e (List.mem_cons_of_mem _ he)
+  | case13 f eqs s i sys hs hmu hv hne =>
+    intro σ h; rw [unifyRec_mu_right hs hmu hne, hv] at h; cases h
+
+theorem Ty.abstract_ftv {a b : Nat} : ∀ {τ : Ty}, τ.noMuOcc a = true →
+    b ∈ (τ.abstract a).ftv → b ∈ τ.ftv ∧ b ≠ a := by
+  intro τ
+  induction τ using Ty.ind with
+  | var c =>
+    intro _ h
+    simp only [Ty.abstract] at h
+    split at h
+    · simp [RTy.ftv] at h
+    · rename_i hc; simp [RTy.ftv] at h; subst h; exact ⟨by simp, hc⟩
+  | app c args ih =>
+    intro hm h
+    rw [Ty.noMuOcc_app, List.all_eq_true] at hm
+    rw [Ty.abstract_app] at h
+    simp only [RTy.ftv_app, List.mem_flatMap, List.mem_map] at h
+    obtain ⟨_, ⟨t, ht, rfl⟩, h⟩ := h
+    obtain ⟨h₁, h₂⟩ := ih t ht (hm t ht) h
+    exact ⟨by simp only [Ty.ftv_app, List.mem_flatMap]; exact ⟨t, ht, h₁⟩, h₂⟩
+  | mu i sys =>
+    intro hm h
+    simp only [Ty.noMuOcc, Bool.not_eq_true', decide_eq_false_iff_not] at hm
+    simp only [Ty.abstract] at h
+    have h' : b ∈ (Ty.mu i sys).ftv := by simpa using h
+    exact ⟨h', fun e => hm (e ▸ h')⟩
+
+/-- A variable's solution mentions only the other variables of the type. -/
+theorem solveVar_ftv {a : Nat} {t u : Ty} (h : solveVar a t = some u) :
+    ∀ b ∈ u.ftv, b ∈ t.ftv ∧ b ≠ a := by
+  intro b hb
+  unfold solveVar at h
+  split at h
+  · split at h
+    · cases h
+      rename_i hg
+      have := Ty.abstract_ftv (Ty.guarded_noMuOcc hg) (b := b) (by simpa using hb)
+      exact this
+    · cases h
+  · cases h
+    rename_i hocc
+    exact ⟨hb, fun e => hocc (e ▸ hb)⟩
+
+/-- What `unify` finds equates the types up to unfolding. -/
+theorem unify_sound {τ₁ τ₂ : Ty} {σ : Subst} (h : unify τ₁ τ₂ = some σ) :
+    TyEq (τ₁.subst σ) (τ₂.subst σ) := by
+  unfold unify at h
+  split at h
+  · cases h; exact TyEq.of_eq (unify₀_sound ‹_›)
+  · exact unifyRec_sound _ _ h (τ₁, τ₂) List.mem_cons_self
+
+/-- Unification succeeds whenever the types unify syntactically, with a
+most general unifier. -/
+theorem unify_mgu {τ₁ τ₂ : Ty} {ψ : Subst} (h : τ₁.subst ψ = τ₂.subst ψ) :
+    ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ := by
+  obtain ⟨σ, h₀, hσ⟩ := unify₀_mgu h
+  exact ⟨σ, by simp [unify, h₀], hσ⟩
 
 end Inty

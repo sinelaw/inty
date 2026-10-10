@@ -95,8 +95,9 @@ present, at the type the read gives; an array's or a string's `length` is
 a number; an array's element has the array's type, a string's character
 is a string; a store into an array or an object holds. A `Merge`'s
 presence decides it: the operand's field if present, the slot written over
-if absent. -/
-def Pred.decide : Cls → Ty → List Ty → Improve
+if absent. The known type is taken as it is; `Pred.decide` unfolds it
+first. -/
+def Pred.decide₀ : Cls → Ty → List Ty → Improve
   | .hasProp l, .record ls slots, [σ] =>
     match Ty.field l ls slots with
     | some s => .eq s (.slot .pre σ)
@@ -111,6 +112,11 @@ def Pred.decide : Cls → Ty → List Ty → Improve
   | .merge, .pre, [τ, _, r] => .eq r (.slot .pre τ)
   | .merge, .abs, [_, s, r] => .eq r s
   | _, _, _ => .fail
+
+/-- `Pred.decide₀` on the known type unfolded (`Ty.whnf`): a property of a
+recursive type is one of its unfolding, as inty's `resolve_has_prop`
+unrolls a `Type::Named` receiver. -/
+def Pred.decide (c : Cls) (t : Ty) (rest : List Ty) : Improve := Pred.decide₀ c t.whnf rest
 
 /-- A constraint of the class `c` on the arguments `args`: on a type
 variable it waits (if it has the class's arity), on a known type it is
@@ -517,6 +523,20 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
             (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst o₃.σ) ++ o₃.preds ++
               [⟨.indexable, [τc, o₂.τ.subst o₃.σ, o₃.τ]⟩, ⟨.indexWrite, [τc]⟩],
             o₃.next⟩
+  -- `e.l(args)`: `HasProp l τ (this: τ, (τs) => β)`, the method's `this`
+  -- being the receiver's type (inty's `method_receiver`), for a fresh `β`.
+  | Γ, R, .mcall e l args, n =>
+    match infer Γ R e n with
+    | none => none
+    | some o₁ =>
+      match inferArgs (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) args o₁.next with
+      | none => none
+      | some o₂ =>
+        let τ := o₁.τ.subst o₂.σ
+        some ⟨Subst.compose o₂.σ o₁.σ, .var o₂.next,
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
+            [⟨.hasProp l, [τ, .fn τ o₂.τs (.var o₂.next)]⟩],
+          o₂.next + 1⟩
 
 /-- Infer a list of arguments, left to right, threading the substitution. -/
 def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
@@ -567,6 +587,7 @@ def Expr.labels : Expr → List String
   | .spread a b | .index a b => a.labels ++ b.labels
   | .arr es => Expr.labelsList es
   | .setIndex a b c => a.labels ++ b.labels ++ c.labels
+  | .mcall e l args => l :: (e.labels ++ Expr.labelsList args)
 /-- `labels`, for a list of expressions. -/
 def Expr.labelsList : List Expr → List String
   | [] => []

@@ -60,71 +60,104 @@ theorem Scheme.simple_of_check {s : Scheme} (h : s.preds.all (PPred.isSimple s.a
 
 /-! ## Improvement -/
 
-/-- A decision on a known first argument that is an equation is an instance
-wherever the equation holds. -/
-theorem Pred.decide_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
-    (h : Pred.decide c t rest = .eq a b) {ψ : Subst} (hab : a.subst ψ = b.subst ψ) :
-    Inst (Pred.subst ψ ⟨c, t :: rest⟩) := by
-  unfold Pred.decide at h
+theorem Pred.decide₀_record_sound {l : String} {ls : List String} {slots : List Ty} {σ s : Ty}
+    (hs : Ty.field l ls slots = some s) {ψ : Subst}
+    (hab : TyEq (s.subst ψ) ((Ty.slot .pre σ).subst ψ)) :
+    InstEq (Pred.subst ψ ⟨.hasProp l, [.record ls slots, σ]⟩) := by
+  have hs' : Ty.field l ls (slots.map (·.subst ψ)) = some (s.subst ψ) := by
+    rw [Ty.field_subst, hs]; rfl
+  obtain ⟨fs', hf', hl, hz⟩ := Ty.field_replace hs' hab
+  refine InstEq.of_predEq (q := ⟨.hasProp l, [.record ls fs', σ.subst ψ]⟩) ?_
+    (Inst.hasProp (by simpa using hf')).instEq
+  simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+  exact PredEq.of_pairs (by simp)
+    (zip_tyEq_cons (TyEq.app (by simpa using hl) hz) (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil))
+
+/-- A decision on a known first argument that is an equation is an instance,
+up to equal types, wherever the equation holds. -/
+theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
+    (h : Pred.decide₀ c t rest = .eq a b) {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) :
+    InstEq (Pred.subst ψ ⟨c, t :: rest⟩) := by
+  unfold Pred.decide₀ at h
   split at h
   all_goals first | (cases h; done) | skip
   · -- A record's field.
     split at h
     · rename_i hs
       cases h
-      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
-      exact .hasProp (by rw [Ty.field_subst, hs]; simpa using hab)
+      exact Pred.decide₀_record_sound hs hab
     · cases h
   · -- An array's `length`.
     split at h
     · rename_i hl
       cases h; subst hl
-      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, hab]
-      exact .lengthArray
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+      exact InstEq.of_predEq (PredEq.of_pairs (by simp)
+        (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil))) Inst.lengthArray.instEq
     · cases h
   · -- A string's `length`.
     split at h
     · rename_i hl
       cases h; subst hl
-      simp only [Pred.subst, List.map_cons, List.map_nil, hab]
-      exact .lengthString
+      refine InstEq.of_predEq ?_ Inst.lengthString.instEq
+      simp only [Pred.subst, List.map_cons, List.map_nil]
+      exact PredEq.of_pairs (by simp)
+        (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil))
     · cases h
   · cases h
-    simp only [Ty.subst_app, List.map_cons, List.map_nil, Ty.app.injEq, List.cons.injEq,
-      true_and, and_true] at hab
-    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, hab.1, hab.2]
-    exact .indexArray
+    rename_i τ i e
+    obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, Ty.substs_eq] at hz ⊢
+    exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+      (zip_tyEq_cons (hz (i.subst ψ, .number) (by simp))
+        (zip_tyEq_cons (hz (e.subst ψ, τ.subst ψ) (by simp)) zip_tyEq_nil))))
+      Inst.indexArray.instEq
   · cases h
-    simp only [Ty.subst_app, List.map_cons, List.map_nil, Ty.app.injEq, List.cons.injEq,
-      true_and, and_true] at hab
-    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, hab.1, hab.2]
-    exact .indexString
+    rename_i i e
+    obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, Ty.substs_eq] at hz ⊢
+    exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+      (zip_tyEq_cons (hz (i.subst ψ, .number) (by simp))
+        (zip_tyEq_cons (hz (e.subst ψ, .string) (by simp)) zip_tyEq_nil))))
+      Inst.indexString.instEq
   · cases h
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
-    exact .writeArray
+    exact Inst.writeArray.instEq
   · cases h
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
-    exact .writeRecord
+    exact Inst.writeRecord.instEq
   · cases h
-    simp only [Pred.subst, List.map_cons, List.map_nil, hab]
-    exact .mergePre
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+      (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil)))))
+      Inst.mergePre.instEq
   · cases h
-    simp only [Pred.subst, List.map_cons, List.map_nil, hab]
-    exact .mergeAbs
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+      (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil)))))
+      Inst.mergeAbs.instEq
+
+theorem Pred.decide_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
+    (h : Pred.decide c t rest = .eq a b) {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) :
+    InstEq (Pred.subst ψ ⟨c, t :: rest⟩) := by
+  refine InstEq.of_predEq ?_ (Pred.decide₀_sound h hab)
+  simp only [Pred.subst, List.map_cons]
+  exact PredEq.of_pairs (by simp)
+    (zip_tyEq_cons (((TyEq.whnf t).subst ψ).symm) (zip_self_tyEq _))
 
 theorem Pred.improveArgs_sound {c : Cls} {args : List Ty} {a b : Ty}
-    (h : Pred.improveArgs c args = .eq a b) {ψ : Subst} (hab : a.subst ψ = b.subst ψ) :
-    Inst (Pred.subst ψ ⟨c, args⟩) := by
+    (h : Pred.improveArgs c args = .eq a b) {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) :
+    InstEq (Pred.subst ψ ⟨c, args⟩) := by
   unfold Pred.improveArgs at h
   split at h
   · split at h <;> cases h
   · exact Pred.decide_sound h hab
   · cases h
 
-/-- A constraint whose decision is an equation is an instance wherever the
-equation holds. -/
+/-- A constraint whose decision is an equation is an instance, up to equal
+types, wherever the equation holds. -/
 theorem Pred.improve_sound {top : Bool} {p : Pred} {a b : Ty} (h : p.improve top = .eq a b)
-    {ψ : Subst} (hab : a.subst ψ = b.subst ψ) : Inst (p.subst ψ) := by
+    {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) : InstEq (p.subst ψ) := by
   obtain ⟨cls, args⟩ := p
   cases cls <;> simp only [Pred.improve] at h
   case merge =>
@@ -188,8 +221,9 @@ theorem improveAll_sound {top : Bool} :
       have hrest := Sat.map.mp (improveAll_sound k hrec hs)
       intro q hq'
       rcases hq q hq' with rfl | hq'
-      · refine .inl (Inst.instEq (Pred.improve_sound hp ?_))
-        simp only [Ty.subst_compose, unify_sound hu]
+      · refine .inl (Pred.improve_sound hp ?_)
+        simp only [Ty.subst_compose]
+        exact ((unify_sound hu).subst σ').subst φ
       · have := hrest q hq'
         simpa [Pred.subst_compose] using this
 
@@ -246,6 +280,22 @@ theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound L 
     rcases hp with rfl | hp
     · exact ha
     · exact has.2 p hp
+
+/-- Pairs with equal second components, when the property they have is
+invariant under that. -/
+theorem zip_conv {P : Expr → Ty → Prop} :
+    ∀ {es : List Expr} {ts us : List Ty}, es.length = ts.length → ts.length = us.length →
+      (∀ p ∈ es.zip ts, P p.1 p.2) → (∀ x ∈ ts.zip us, TyEq x.1 x.2) →
+      (∀ e t u, P e t → TyEq t u → P e u) → ∀ p ∈ es.zip us, P p.1 p.2
+  | [], _, _, _, _, _, _, _, p, hp => by cases hp
+  | _ :: _, [], _, h, _, _, _, _, _, _ => by simp at h
+  | _ :: _, _ :: _, [], _, h, _, _, _, _, _ => by simp at h
+  | e :: es, t :: ts, u :: us, h₁, h₂, hp, hz, hc, p, hm => by
+    simp only [List.zip_cons_cons, List.mem_cons] at hm
+    rcases hm with rfl | hm
+    · exact hc _ _ _ (hp (e, t) (by simp)) (hz (t, u) (by simp))
+    · exact zip_conv (by simpa using h₁) (by simpa using h₂) (fun q hq => hp q (by simp [hq]))
+        (fun q hq => hz q (by simp [hq])) hc p hm
 
 theorem mem_zip_replicate {α β : Type} {a : α} {b : β} :
     ∀ {l : List α}, a ∈ l → (a, b) ∈ l.zip (List.replicate l.length b)
@@ -312,7 +362,7 @@ theorem infer_sound :
     simp only [Ctx.subst, List.map_append, List.map_map, List.map_cons, Function.comp_def,
       Scheme.mono_subst, Ty.subst_fn, Ty.subst_compose, Ret.subst_compose,
       Ret.subst_some] at this ⊢
-    rw [← unify_sound hu] at this
+    replace this := this.conv ((unify_sound hu).subst φ).symm
     exact .func (by simp [varBlock]) (by simpa [Function.comp_def] using this)
   | app f args ihf iha =>
     intro Γ R n o h φ C hsat
@@ -331,7 +381,7 @@ theorem infer_sound :
     have hf := ihf h₁ _ C hsat.1
     have ha := inferArgs_sound args iha h₂ _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hf ha ⊢
-    rw [unify_sound hu] at hf
+    replace hf := hf.conv ((unify_sound hu).subst φ)
     simp only [Ty.subst_fn, List.map_map, Function.comp_def] at hf ha
     exact .app hf (by simp [ha.1]) ha.2
   | let_ mb e₁ e₂ ih₁ ih₂ =>
@@ -419,7 +469,7 @@ theorem infer_sound :
     simp only [Sat.map] at hsat
     have he := ih h₁ _ C hsat
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he ⊢
-    rw [← unify_sound hu] at he
+    replace he := he.conv ((unify_sound hu).subst φ).symm
     simp only [Scheme.inst_nil_subst] at he ⊢
     exact .assign (by simp [Ctx.getElem?_subst, hs]) (by simp [hmono.1])
       (by simp [Scheme.subst, hmono.2]) he
@@ -444,7 +494,7 @@ theorem infer_sound :
     have ht := iht h₂ _ C hsat.1.2
     have he := ihe h₃ _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hc ht he ⊢
-    rw [unify_sound hu] at ht
+    replace ht := ht.conv ((unify_sound hu).subst φ)
     exact .cond hc ht he
   | unop op e ih =>
     intro Γ R n o h φ C hsat
@@ -468,7 +518,7 @@ theorem infer_sound :
       simp only [Sat.map] at hsat
       have he := ih h₁ _ C hsat
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he ⊢
-      rw [unify_sound hu] at he
+      replace he := he.conv ((unify_sound hu).subst φ)
       exact .unop .neg he
   | binop op e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o h φ C hsat
@@ -490,7 +540,7 @@ theorem infer_sound :
       have he₁ := ih₁ h₁ _ C hsat.1.1
       have he₂ := ih₂ h₂ _ C hsat.1.2
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ hsat ⊢
-      rw [unify_sound hu] at he₁
+      replace he₁ := he₁.conv ((unify_sound hu).subst φ)
       exact .binop (.plus (by simpa [Pred.subst] using hsat.2)) he₁ he₂
     | minus =>
       simp only at h
@@ -505,8 +555,8 @@ theorem infer_sound :
       have he₁ := ih₁ h₁ _ C hsat.1
       have he₂ := ih₂ h₂ _ C hsat.2
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
-      rw [unify_sound hu₃] at he₁
-      rw [unify_sound hu₄] at he₂
+      replace he₁ := he₁.conv (((unify_sound hu₃).subst σ₄).subst φ)
+      replace he₂ := he₂.conv ((unify_sound hu₄).subst φ)
       exact .binop .minus (by simpa using he₁) (by simpa using he₂)
   | ret e ih =>
     intro Γ R n o h φ C hsat
@@ -524,7 +574,7 @@ theorem infer_sound :
       simp only [Sat.map] at hsat
       have he := ih h₁ _ C hsat
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_some] at he ⊢
-      rw [← unify_sound hu] at he
+      replace he := he.conv ((unify_sound hu).subst φ).symm
       exact .ret he
   | throw_ e ih =>
     intro Γ R n o h φ C hsat
@@ -590,7 +640,7 @@ theorem infer_sound :
     have hh := ihh h₂ _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose, Ctx.subst_cons,
       Scheme.mono_subst, Ty.subst_app] at hb hh ⊢
-    rw [unify_sound hu] at hb
+    replace hb := hb.conv ((unify_sound hu).subst φ)
     exact .tryCatch hb hh
   | tryFinally body fin ihb ihf =>
     intro Γ R n o h φ C hsat
@@ -668,15 +718,15 @@ theorem infer_sound :
     simp only [Sat.map, Sat.append] at hsat
     have he₁ := ih₁ h₁ _ C hsat.1.1
     have he₂ := ih₂ h₂ _ C hsat.1.2
-    have hτ₁ : Ty.subst ((φ.compose (σ₄.compose σ₃)).compose o₂.σ) o₁.τ =
-        (Ty.record L (varBlock o₂.next L.length)).subst (φ.compose (σ₄.compose σ₃)) := by
-      simp only [Ty.subst_compose]; rw [unify_sound hu₃]
-    have hτ₂ : Ty.subst (φ.compose (σ₄.compose σ₃)) o₂.τ =
-        (Ty.record L (List.zipWith Ty.slot (varBlock (o₂.next + L.length) L.length)
-          (varBlock (o₂.next + 2 * L.length) L.length))).subst (φ.compose (σ₄.compose σ₃)) := by
-      simp only [Ty.subst_compose]; rw [unify_sound hu₄]
-    rw [hτ₁] at he₁
-    rw [hτ₂] at he₂
+    have hτ₁ : TyEq (Ty.subst ((φ.compose (σ₄.compose σ₃)).compose o₂.σ) o₁.τ)
+        ((Ty.record L (varBlock o₂.next L.length)).subst (φ.compose (σ₄.compose σ₃))) := by
+      simp only [Ty.subst_compose]; exact ((unify_sound hu₃).subst σ₄).subst φ
+    have hτ₂ : TyEq (Ty.subst (φ.compose (σ₄.compose σ₃)) o₂.τ)
+        ((Ty.record L (List.zipWith Ty.slot (varBlock (o₂.next + L.length) L.length)
+          (varBlock (o₂.next + 2 * L.length) L.length))).subst (φ.compose (σ₄.compose σ₃))) := by
+      simp only [Ty.subst_compose]; exact (unify_sound hu₄).subst φ
+    replace he₁ := he₁.conv hτ₁
+    replace he₂ := he₂.conv hτ₂
     simp only [Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
     rw [← Ty.subst_compose]
     exact HasType.spread_subst (by simp [varBlock]) (by simp [varBlock]) (by simp [varBlock])
@@ -694,16 +744,24 @@ theorem infer_sound :
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map] at hsat
     have ha := inferArgs_sound es ih h₁ (Subst.compose φ σ') C hsat
-    have hu' := unify_sound hu
-    simp only [Ty.subst_app, Ty.app.injEq, true_and, List.map_replicate] at hu'
-    have hτs : o₁.τs.map (·.subst (Subst.compose φ σ')) =
-        List.replicate es.length (((Ty.var o₁.next).subst σ').subst φ) := by
-      rw [← ha.1]
-      have : o₁.τs.map (·.subst (Subst.compose φ σ')) = (o₁.τs.map (·.subst σ')).map (·.subst φ) := by
-        simp [Function.comp_def]
-      rw [this, hu', List.map_replicate]
-    rw [hτs] at ha
-    have hargs := fun e (he : e ∈ es) => ha.2 _ (mem_zip_replicate he)
+    have hu' := (unify_sound hu).subst φ
+    simp only [Ty.subst_app, List.map_replicate, List.map_map] at hu'
+    obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp hu'
+    have hτs : ∀ p ∈ es.zip (List.replicate es.length (((Ty.var o₁.next).subst σ').subst φ)),
+        HasType L C (Ctx.subst (Subst.compose φ σ') (Ctx.subst o₁.σ Γ))
+          (Ret.subst (Subst.compose φ σ') (Ret.subst o₁.σ R)) p.1 p.2 := by
+      have hl' : (o₁.τs.map (·.subst (Subst.compose φ σ'))).length =
+          (List.replicate es.length (((Ty.var o₁.next).subst σ').subst φ)).length := by
+        simp [ha.1]
+      have hz' : ∀ x ∈ (o₁.τs.map (·.subst (Subst.compose φ σ'))).zip
+          (List.replicate es.length (((Ty.var o₁.next).subst σ').subst φ)), TyEq x.1 x.2 := by
+        have : o₁.τs.map (·.subst (Subst.compose φ σ')) =
+            o₁.τs.map ((fun x => x.subst φ) ∘ fun x => x.subst σ') := by
+          simp [Function.comp_def]
+        rw [this, ← ha.1]
+        simpa using hz
+      exact zip_conv (by simp [ha.1]) hl' ha.2 hz' (fun _ _ _ h e => h.conv e)
+    have hargs := fun e (he : e ∈ es) => hτs _ (mem_zip_replicate he)
     simp only [Ctx.subst_compose, Ret.subst_compose] at hargs
     simp only [Ctx.subst_compose, Ret.subst_compose, Ty.subst_app, List.map_cons, List.map_nil]
     exact .arr hargs
@@ -744,6 +802,21 @@ theorem infer_sound :
       (by simpa [Pred.subst, Ty.subst_compose] using hsat.2 _ List.mem_cons_self)
       (by simpa [Pred.subst, Ty.subst_compose] using
         hsat.2 _ (List.mem_cons_of_mem _ List.mem_cons_self)) hv
+  | mcall e l args ihe iha =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append, Sat.singleton] at hsat
+    have he := ihe h₁ _ C hsat.1.1
+    have ha := inferArgs_sound args iha h₂ φ C hsat.1.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he ha ⊢
+    exact .mcall he (by simpa [Pred.subst, Ty.subst_compose] using hsat.2) (by simp [ha.1]) ha.2
 
 /-- A program inference accepts in a context with no free type variables is
 well typed in it, assuming the constraints left, each of which is an

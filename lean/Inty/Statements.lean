@@ -46,8 +46,11 @@ example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : 
       HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) :=
   fun σ h => h.subst σ
 
-example : ∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify τ₁ τ₂ = some σ → τ₁.subst σ = τ₂.subst σ :=
+example : ∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify τ₁ τ₂ = some σ → TyEq (τ₁.subst σ) (τ₂.subst σ) :=
   unify_sound
+
+example : ∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify₀ τ₁ τ₂ = some σ → τ₁.subst σ = τ₂.subst σ :=
+  unify₀_sound
 
 example : ∀ {τ₁ τ₂ : Ty} {ψ : Subst}, τ₁.subst ψ = τ₂.subst ψ →
     ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ :=
