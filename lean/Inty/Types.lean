@@ -42,15 +42,8 @@ inductive Con where
   | pre
   /-- The presence of a field that isn't, `Presence::Abs`. -/
   | abs
-  /-- What an object's cell holds, applied to the object's record type: no
-  program writes it; the soundness proof's world gives it to the cell of
-  each object. -/
-  | contents
   /-- An array, applied to its element type (`Type::Array`). -/
   | array
-  /-- What an array's cell holds, applied to the element type: like
-  `contents`, only the soundness proof's world mentions it. -/
-  | elems
   /-- A tuple, applied to its components' types. Inference uses it to state
   several equations as one (`unify` on two tuples). -/
   | tuple

@@ -127,20 +127,23 @@ example : V k W .null v ↔ v = .null := V_null
 example : V k W .unknown v ↔ True := V_unknown
 example : V k W (.var a) v ↔ False := V_var
 example : V k W (.record ls slots) v ↔ ∃ ℓ, v = .obj ℓ ∧
-    W[ℓ]? = some (.mono (.app .contents [.record ls slots])) := V_record
-example : V k W (.app .contents [.record ls slots]) v ↔ ∃ fs, v = .fields fs ∧
+    W[ℓ]? = some (.obj (.record ls slots)) := V_record
+example : V k W (.array τ) v ↔ ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.arr τ) := V_array
+example : CellV k W (.obj (.record ls slots)) v ↔ ∃ fs, v = .fields fs ∧
     (∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
       ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
     ∀ l s, Ty.field l ls slots = some s →
-      (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := V_contents
-example : V k W (.array τ) v ↔ ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.mono (.app .elems [τ])) :=
-  V_array
-example : V k W (.app .elems [τ]) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := V_elems
+      (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := CellV_obj
+example : CellV k W (.obj (.var a)) v ↔ False := Iff.rfl
+example : CellV k W (.arr τ) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := CellV_arr
+example : CellV k W (.scheme s) v ↔
+    ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → V k W (s.inst τs) v := Iff.rfl
 example : Result.Abrupt r ↔
     (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued ∨ ∃ f, r = .fault f := by
   cases r <;> simp [Result.Abrupt] <;> exact ⟨.outOfBounds, trivial⟩
 example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
-    (∀ i < j, HeapOK i W' h) → V j W' θ thisv → VList j W' τs args →
+    args.length = τs.length → (∀ i < j, HeapOK i W' h) → (∀ i < j, V i W' θ thisv) →
+    (∀ i < j, VList i W' τs args) →
     (call j h f thisv args).2.1 ≤ j ∧ ((call j h f thisv args).1 = .timeout ∨
       ((call j h f thisv args).2.1 < j ∧ ∃ W'', W' <+: W'' ∧
         HeapOK (call j h f thisv args).2.1 W'' (call j h f thisv args).2.2 ∧
@@ -148,12 +151,12 @@ example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h th
           (call j h f thisv args).1.Abrupt))) := by
   rw [V_fn]
   constructor
-  · intro H j hj W' hW h thisv args hh ht ha
-    obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hh ht ha
+  · intro H j hj W' hW h thisv args hl hh ht ha
+    obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hl hh ht ha
     · exact ⟨hc, .inl H⟩
     · exact ⟨hc, .inr ⟨hlt, W'', hW'', hH hlt, hr.imp (fun ⟨v, e, hv⟩ => ⟨v, e, hv hlt⟩) id⟩⟩
-  · intro H j hj W' hW h thisv args hh ht ha
-    obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hh ht ha
+  · intro H j hj W' hW h thisv args hl hh ht ha
+    obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hl hh ht ha
     · exact ⟨hc, .inl H⟩
     · exact ⟨hc, .inr ⟨hlt, W'', hW'', fun _ => hH,
         hr.imp (fun ⟨v, e, hv⟩ => ⟨v, e, fun _ => hv⟩) id⟩⟩
@@ -165,10 +168,9 @@ example : VList k W (τ :: τs) vs ↔ ∃ v vs', vs = v :: vs' ∧ V k W τ v �
     simp only [VList_cons]
     exact ⟨fun ⟨h₁, h₂⟩ => ⟨v, vs, rfl, h₁, h₂⟩, fun ⟨_, _, e, h₁, h₂⟩ => by
       cases e; exact ⟨h₁, h₂⟩⟩
-example : HeapOK k W h ↔ h.length = W.length ∧ ∀ (ℓ : Nat) s, W[ℓ]? = some s →
-    ∃ v, h[ℓ]? = some v ∧
-      ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → V k W (s.inst τs) v := Iff.rfl
-example : G W (s :: Γ) (ℓ :: env) ↔ W[ℓ]? = some s ∧ G W Γ env := Iff.rfl
+example : HeapOK k W h ↔ h.length = W.length ∧ ∀ (ℓ : Nat) c, W[ℓ]? = some c →
+    ∃ v, h[ℓ]? = some v ∧ CellV k W c v := Iff.rfl
+example : G W (s :: Γ) (ℓ :: env) ↔ W[ℓ]? = some (.scheme s) ∧ G W Γ env := Iff.rfl
 example : G W [] env ↔ env = [] := by cases env <;> simp [G]
 
 /-! ## The class instances

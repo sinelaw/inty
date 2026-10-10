@@ -19,31 +19,33 @@ takes a tick and leaves the heap alone. -/
 theorem Prim.abs_sound (k : Nat) (W : World) (θ : Ty) :
     V k W (.fn θ [.number] .number) (.prim .abs) := by
   rw [V_fn]
-  intro j _ W' _ h _ args hh _ hargs
-  match args, hargs with
-  | [_], hargs =>
-    simp only [VList_cons, V_number, VList_nil, and_true] at hargs
-    obtain ⟨n, rfl⟩ := hargs
-    cases j with
-    | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
-    | succ j =>
+  intro j _ W' _ h _ args _ hh _ hargs
+  cases j with
+  | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
+  | succ j =>
+    have hargs := hargs j (by omega)
+    match args, hargs with
+    | [_], hargs =>
+      simp only [VList_cons, V_number, VList_nil, and_true] at hargs
+      obtain ⟨n, rfl⟩ := hargs
       exact ⟨by simp [call], .inr ⟨by simp [call], W', List.prefix_refl _,
         fun _ => hh j (by omega), .inl ⟨_, rfl, fun _ => by simp⟩⟩⟩
-  | [], hargs | _ :: _ :: _, hargs => simp at hargs
+    | [], hargs | _ :: _ :: _, hargs => simp at hargs
 
 /-- `Boolean : <a>(a) => boolean`: it takes any value. -/
 theorem Prim.truthy_sound (k : Nat) (W : World) (θ τ : Ty) :
     V k W (.fn θ [τ] .boolean) (.prim .truthy) := by
   rw [V_fn]
-  intro j _ W' _ h _ args hh _ hargs
-  match args, hargs with
-  | [_], _ =>
-    cases j with
-    | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
-    | succ j =>
+  intro j _ W' _ h _ args _ hh _ hargs
+  cases j with
+  | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
+  | succ j =>
+    have hargs := hargs j (by omega)
+    match args, hargs with
+    | [_], _ =>
       exact ⟨by simp [call], .inr ⟨by simp [call], W', List.prefix_refl _,
         fun _ => hh j (by omega), .inl ⟨_, rfl, fun _ => by simp⟩⟩⟩
-  | [], hargs | _ :: _ :: _, hargs => simp at hargs
+    | [], hargs | _ :: _ :: _, hargs => simp at hargs
 
 /-- The builtins' types, innermost first: `Boolean` is variable 0 and
 `Math.abs` variable 1 of a program run with them. Called outside a
@@ -57,7 +59,8 @@ def builtinEnv : Env := [0, 1]
 
 /-- The builtins have their types, in the world of their schemes. -/
 theorem builtins_sound (k : Nat) :
-    G builtinCtx builtinCtx builtinEnv ∧ HeapOK k builtinCtx builtinHeap := by
+    G (builtinCtx.map .scheme) builtinCtx builtinEnv ∧
+      HeapOK k (builtinCtx.map .scheme) builtinHeap := by
   refine ⟨by simp [G, builtinCtx, builtinEnv], rfl, fun ℓ s hs => ?_⟩
   match ℓ, hs with
   | 0, hs =>

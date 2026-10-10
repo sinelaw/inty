@@ -36,13 +36,56 @@ relation.
 
 namespace Inty
 
-/-- A world: the scheme of each cell allocated so far. -/
-abbrev World := List Scheme
+/-- What the world says of a cell: a variable's, holding a value of a
+scheme; an object's, holding fields of a record type; an array's, holding
+elements of a type. -/
+inductive Cell where
+  | scheme (s : Scheme)
+  | obj (τ : Ty)
+  | arr (τ : Ty)
+
+/-- A variable's cell, of a monotype. -/
+abbrev Cell.mono (τ : Ty) : Cell := .scheme (.mono τ)
+
+/-- A world: what each cell allocated so far holds. -/
+abbrev World := List Cell
 
 /-- The heap `h` has a cell for each of `W`'s, holding a value that `P`
-relates to its scheme. -/
-def HeapInv (P : Scheme → Value → Prop) (W : World) (h : Heap) : Prop :=
-  h.length = W.length ∧ ∀ (ℓ : Nat) s, W[ℓ]? = some s → ∃ v, h[ℓ]? = some v ∧ P s v
+relates to what `W` says of it. -/
+def HeapInv (P : Cell → Value → Prop) (W : World) (h : Heap) : Prop :=
+  h.length = W.length ∧ ∀ (ℓ : Nat) c, W[ℓ]? = some c → ∃ v, h[ℓ]? = some v ∧ P c v
+
+/-- What a cell holds, given which values `P` gives each type: a variable's
+value has every instance of its scheme whose constraints hold; an object's
+fields are the record's present ones, each of its type, and none of its
+absent ones (a slot whose presence isn't known, a variable, has no
+contents, as a type variable has no values); an array's elements each have
+the element type. -/
+def CellP (P : Ty → Value → Prop) : Cell → Value → Prop
+  | .scheme s, v => ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → P (s.inst τs) v
+  | .obj (.record ls slots), v => ∃ fs, v = .fields fs ∧ (∀ l σ,
+      Ty.field l ls slots = some (.slot .pre σ) → ∃ v', fs.lookup l = some v' ∧ P σ v') ∧
+      ∀ l s, Ty.field l ls slots = some s →
+        (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none
+  | .obj _, _ => False
+  | .arr τ, v => ∃ vs, v = .items vs ∧ ∀ w ∈ vs, P τ w
+
+theorem CellP.mono {P Q : Ty → Value → Prop} (hPQ : ∀ τ v, P τ v → Q τ v) {c : Cell}
+    {v : Value} (h : CellP P c v) : CellP Q c v := by
+  cases c with
+  | scheme s => exact fun τs hl hp => hPQ _ _ (h τs hl hp)
+  | arr τ =>
+    obtain ⟨vs, rfl, hvs⟩ := h
+    exact ⟨vs, rfl, fun w hw => hPQ _ _ (hvs w hw)⟩
+  | obj τ =>
+    cases τ with
+    | var => simp [CellP] at h
+    | app c args =>
+      cases c
+      case record ls =>
+        obtain ⟨fs, rfl, hf, ha⟩ := h
+        exact ⟨fs, rfl, fun l σ hl => (hf l σ hl).imp fun _ h => ⟨h.1, hPQ _ _ h.2⟩, ha⟩
+      all_goals simp [CellP] at h
 
 /-- An abrupt completion that runs on past a call: a `throw` of any value,
 a `break` or `continue`, which a well-scoped program keeps inside its loop
@@ -76,27 +119,17 @@ private theorem lex_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
   · exact .left _ _ h
   · exact .right _ hs
 
-/-- A record's field type is smaller than the contents of an object of the
-record's type. -/
-theorem sizeOf_field_lt {l : String} {ls : List String} {slots : List Ty} {σ : Ty}
-    (h : Ty.field l ls slots = some (.slot .pre σ)) :
-    sizeOf σ < sizeOf (Ty.app .contents [Ty.app (.record ls) slots]) := by
-  have hm := List.sizeOf_lt_of_mem (List.of_mem_zip (Ty.field_mem h)).2
-  simp at hm ⊢
-  omega
-
 mutual
 /-- `V k W τ v`: the value `v` has type `τ` for `k` more calls, in the world
 `W`. A base type has its values, and `unknown` (what a `catch` binds) has
 every value. A type variable has none: a closed program can't make a value
 of a type it knows nothing about. A function type is what
-calling the function does (see the module docs). A record is an object
-whose cell the world describes as holding the record's contents, and the
-contents are the fields present, each of its type, and none of the fields
-absent; a slot whose presence isn't known (a variable) has no contents,
-as a type variable has no values. An array is likewise a cell, of its
-elements, each of the element type. A slot, a presence, or a constructor
-applied to the wrong number of types has no values. -/
+calling the function does (see the module docs); the call's `this` and
+arguments need only be good below the clock it is given, since the body
+runs a tick down. A record is an object whose cell the world says holds
+fields of the record type, and an array one whose cell holds elements of
+its element type (`CellP`). A slot, a presence, or a constructor applied
+to the wrong number of types has no values. -/
 def V (k : Nat) (W : World) : Ty → Value → Prop
   | .number, v => ∃ n, v = .number n
   | .string, v => ∃ s, v = .string s
@@ -104,30 +137,18 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .undefined, v => v = .undefined
   | .null, v => v = .null
   | .unknown, _ => True
-  | .fn θ τs ρ, f => ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
-      (∀ i, i < j → HeapInv (fun s v => ∀ τs', τs'.length = s.arity →
-        HoldsOrVar (s.instPreds τs') → V i W' (s.inst τs') v) W' h) →
-      V j W' θ thisv → VList j W' τs args →
+  | .fn θ τs ρ, f => ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args, args.length = τs.length →
+      (∀ i, i < j → HeapInv (CellP (fun τ v => V i W' τ v)) W' h) →
+      (∀ i, i < j → V i W' θ thisv) → (∀ i, i < j → VList i W' τs args) →
       Lands (call j h f thisv args) j W'
-        (fun c W'' h'' => c < j → HeapInv (fun s v => ∀ τs', τs'.length = s.arity →
-          HoldsOrVar (s.instPreds τs') → V c W'' (s.inst τs') v) W'' h'')
+        (fun c W'' h'' => c < j → HeapInv (CellP (fun τ v => V c W'' τ v)) W'' h'')
         (fun c W'' v => c < j → V c W'' ρ v)
-  | .record ls slots, v => ∃ ℓ, v = .obj ℓ ∧
-      W[ℓ]? = some (.mono (.app .contents [.record ls slots]))
-  | .app .contents [.record ls slots], v => ∃ fs, v = .fields fs ∧ (∀ l σ,
-      (h : Ty.field l ls slots = some (.slot .pre σ)) →
-      ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
-      ∀ l s, Ty.field l ls slots = some s →
-        (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none
-  | .array τ, v => ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.mono (.app .elems [τ]))
-  | .app .elems [τ], v => ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w
+  | .record ls slots, v => ∃ ℓ, v = .obj ℓ ∧ W[ℓ]? = some (.obj (.record ls slots))
+  | .array τ, v => ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.arr τ)
   | _, _ => False
 termination_by τ => (k, sizeOf τ)
 decreasing_by
-  all_goals first
-    | exact .left _ _ (by omega)
-    | exact lex_le (by omega) (by simp; omega)
-    | exact lex_le (Nat.le_refl _) (sizeOf_field_lt ‹_›)
+  all_goals exact .left _ _ (by omega)
 /-- `VList k W τs vs`: one value of each type. -/
 def VList (k : Nat) (W : World) : List Ty → List Value → Prop
   | [], [] => True
@@ -140,17 +161,31 @@ decreasing_by
     | exact lex_le (by omega) (by simp; omega)
 end
 
+/-- What a cell holds, at index `k` in `W`. -/
+abbrev CellV (k : Nat) (W : World) : Cell → Value → Prop := CellP (V k W)
+
 /-- A value has every instance of the scheme whose constraints hold. -/
 def SchemeV (k : Nat) (W : World) (s : Scheme) (v : Value) : Prop :=
   ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → V k W (s.inst τs) v
 
+theorem CellV_scheme : CellV k W (.scheme s) v ↔ SchemeV k W s v := Iff.rfl
+
+theorem CellV_obj : CellV k W (.obj (.record ls slots)) v ↔ ∃ fs, v = .fields fs ∧
+      (∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
+        ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
+      ∀ l s, Ty.field l ls slots = some s →
+        (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := Iff.rfl
+
+theorem CellV_arr : CellV k W (.arr τ) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := Iff.rfl
+
 /-- The heap is described by the world, at index `k`. -/
-def HeapOK (k : Nat) (W : World) (h : Heap) : Prop := HeapInv (SchemeV k W) W h
+def HeapOK (k : Nat) (W : World) (h : Heap) : Prop := HeapInv (CellV k W) W h
 
 /-- The function clause of `V`, in terms of `HeapOK`. -/
 theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
     V k W (.fn θ τs ρ) f ↔ ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
-      (∀ i, i < j → HeapOK i W' h) → V j W' θ thisv → VList j W' τs args →
+      args.length = τs.length → (∀ i, i < j → HeapOK i W' h) →
+      (∀ i, i < j → V i W' θ thisv) → (∀ i, i < j → VList i W' τs args) →
       Lands (call j h f thisv args) j W' (fun c W'' h'' => c < j → HeapOK c W'' h'')
         (fun c W'' v => c < j → V c W'' ρ v) := by
   rw [V]; rfl
@@ -164,29 +199,17 @@ theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
 @[simp] theorem V_var : V k W (.var a) v ↔ False := by rw [V.eq_def]
 
 theorem V_record : V k W (.record ls slots) v ↔ ∃ ℓ, v = .obj ℓ ∧
-      W[ℓ]? = some (.mono (.app .contents [.record ls slots])) := by
+      W[ℓ]? = some (.obj (.record ls slots)) := by
   rw [V.eq_def]
 
-theorem V_contents : V k W (.app .contents [.record ls slots]) v ↔ ∃ fs, v = .fields fs ∧
-      (∀ l σ, Ty.field l ls slots = some (.slot .pre σ) →
-        ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∧
-      ∀ l s, Ty.field l ls slots = some s →
-        (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ fs.lookup l = none := by
+theorem V_array : V k W (.array τ) v ↔ ∃ ℓ, v = .arr ℓ ∧ W[ℓ]? = some (.arr τ) := by
   rw [V.eq_def]
 
-theorem V_array : V k W (.array τ) v ↔ ∃ ℓ, v = .arr ℓ ∧
-      W[ℓ]? = some (.mono (.app .elems [τ])) := by
-  rw [V.eq_def]
-
-theorem V_elems : V k W (.app .elems [τ]) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := by
-  rw [V.eq_def]
-
-/-- Apart from functions, records, arrays and their cells, a type's values
-don't depend on the index or the world. -/
+/-- Apart from functions, records and arrays, a type's values don't depend
+on the index or the world. -/
 theorem V.base {k k' : Nat} {W W' : World} {τ : Ty} {v : Value}
     (hfn : ∀ θ τs ρ, τ ≠ .fn θ τs ρ) (hrec : ∀ ls slots, τ ≠ .record ls slots)
-    (hcon : ∀ ls slots, τ ≠ .app .contents [.record ls slots])
-    (harr : ∀ σ, τ ≠ .array σ) (hel : ∀ σ, τ ≠ .app .elems [σ]) :
+    (harr : ∀ σ, τ ≠ .array σ) :
     V k W τ v ↔ V k' W' τ v := by
   rw [V.eq_def, V.eq_def]
   split <;> simp_all
@@ -197,53 +220,35 @@ theorem V.base {k k' : Nat} {W W' : World} {τ : Ty} {v : Value}
 @[simp] theorem VList_nil_cons : ¬ VList k W [] (v :: vs) := by simp [VList]
 @[simp] theorem VList_cons_nil : ¬ VList k W (τ :: τs) [] := by simp [VList]
 
-theorem prefix_getElem? {W W' : World} (hW : W <+: W') {ℓ : Nat} {s : Scheme}
+theorem prefix_getElem? {α : Type} {W W' : List α} (hW : W <+: W') {ℓ : Nat} {s : α}
     (hs : W[ℓ]? = some s) : W'[ℓ]? = some s := by
   obtain ⟨t, rfl⟩ := hW
   rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hs).1, hs]
 
-/-- `V.mono`, by strong induction on the size of the type. -/
-theorem V.mono_lt {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
-    ∀ (n : Nat) {τ : Ty} {v : Value}, sizeOf τ < n → V k W τ v → V j W' τ v
-  | 0, _, _, hn, _ => absurd hn (Nat.not_lt_zero _)
-  | n + 1, τ, v, hn, hv => by
-    by_cases hfn : ∃ θ τs ρ, τ = .fn θ τs ρ
-    · obtain ⟨θ, τs, ρ, rfl⟩ := hfn
-      rw [V_fn] at hv ⊢
-      intro i hi W'' hW'' h thisv args hh ht ha
-      exact hv i (Nat.le_trans hi hjk) W'' (hW.trans hW'') h thisv args hh ht ha
-    · by_cases hrec : ∃ ls slots, τ = .record ls slots
-      · obtain ⟨ls, slots, rfl⟩ := hrec
-        rw [V_record] at hv ⊢
-        obtain ⟨ℓ, rfl, hℓ⟩ := hv
-        exact ⟨ℓ, rfl, prefix_getElem? hW hℓ⟩
-      · by_cases hcon : ∃ ls slots, τ = .app .contents [.record ls slots]
-        · obtain ⟨ls, slots, rfl⟩ := hcon
-          rw [V_contents] at hv ⊢
-          obtain ⟨fs, rfl, hf, ha⟩ := hv
-          refine ⟨fs, rfl, fun l σ hl => ?_, ha⟩
-          obtain ⟨v', h₁, h₂⟩ := hf l σ hl
-          exact ⟨v', h₁, V.mono_lt hjk hW n (Nat.lt_of_lt_of_le (sizeOf_field_lt hl) (Nat.le_of_lt_succ hn)) h₂⟩
-        · by_cases harr : ∃ σ, τ = .array σ
-          · obtain ⟨σ, rfl⟩ := harr
-            rw [V_array] at hv ⊢
-            obtain ⟨ℓ, rfl, hℓ⟩ := hv
-            exact ⟨ℓ, rfl, prefix_getElem? hW hℓ⟩
-          · by_cases hel : ∃ σ, τ = .app .elems [σ]
-            · obtain ⟨σ, rfl⟩ := hel
-              rw [V_elems] at hv ⊢
-              obtain ⟨vs, rfl, hvs⟩ := hv
-              refine ⟨vs, rfl, fun w hw => V.mono_lt hjk hW n ?_ (hvs w hw)⟩
-              have : sizeOf σ < sizeOf (Ty.app .elems [σ]) := by simp; omega
-              omega
-            · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
-                (fun ls slots e => hrec ⟨ls, slots, e⟩) (fun ls slots e => hcon ⟨ls, slots, e⟩)
-                (fun σ e => harr ⟨σ, e⟩) (fun σ e => hel ⟨σ, e⟩)).mp hv
-
 /-- A value good for `k` calls in `W` is good for fewer, in a larger world. -/
 theorem V.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {τ : Ty} {v : Value}
-    (hv : V k W τ v) : V j W' τ v :=
-  V.mono_lt hjk hW (sizeOf τ + 1) (Nat.lt_succ_self _) hv
+    (hv : V k W τ v) : V j W' τ v := by
+  by_cases hfn : ∃ θ τs ρ, τ = .fn θ τs ρ
+  · obtain ⟨θ, τs, ρ, rfl⟩ := hfn
+    rw [V_fn] at hv ⊢
+    intro i hi W'' hW'' h thisv args hl hh ht ha
+    exact hv i (Nat.le_trans hi hjk) W'' (hW.trans hW'') h thisv args hl hh ht ha
+  · by_cases hrec : ∃ ls slots, τ = .record ls slots
+    · obtain ⟨ls, slots, rfl⟩ := hrec
+      rw [V_record] at hv ⊢
+      obtain ⟨ℓ, rfl, hℓ⟩ := hv
+      exact ⟨ℓ, rfl, prefix_getElem? hW hℓ⟩
+    · by_cases harr : ∃ σ, τ = .array σ
+      · obtain ⟨σ, rfl⟩ := harr
+        rw [V_array] at hv ⊢
+        obtain ⟨ℓ, rfl, hℓ⟩ := hv
+        exact ⟨ℓ, rfl, prefix_getElem? hW hℓ⟩
+      · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
+          (fun ls slots e => hrec ⟨ls, slots, e⟩) (fun σ e => harr ⟨σ, e⟩)).mp hv
+
+theorem CellV.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c : Cell}
+    {v : Value} (h : CellV k W c v) : CellV j W' c v :=
+  CellP.mono (fun _ _ h => V.mono hjk hW h) h
 
 theorem VList.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
     ∀ {τs : List Ty} {vs : List Value}, VList k W τs vs → VList j W' τs vs
@@ -281,7 +286,7 @@ theorem HeapOK.mono {j k : Nat} {W : World} {h : Heap} (hjk : j ≤ k) (hH : Hea
 /-- New cells at the end of the heap, holding values of their schemes. -/
 theorem HeapOK.alloc {k : Nat} {W : World} {h : Heap} {ss : World} {vs : List Value}
     (hH : HeapOK k W h) (hlen : vs.length = ss.length)
-    (hnew : ∀ (i : Nat) s v, ss[i]? = some s → vs[i]? = some v → SchemeV k (W ++ ss) s v) :
+    (hnew : ∀ (i : Nat) s v, ss[i]? = some s → vs[i]? = some v → CellV k (W ++ ss) s v) :
     HeapOK k (W ++ ss) (h ++ vs) := by
   refine ⟨by simp [hH.1, hlen], fun ℓ s hs => ?_⟩
   by_cases hℓ : ℓ < W.length
@@ -297,8 +302,8 @@ theorem HeapOK.alloc {k : Nat} {W : World} {h : Heap} {ss : World} {vs : List Va
     rw [List.getElem?_append_right (by rw [hH.1]; omega), hH.1, hv]
 
 /-- Storing a value of a cell's scheme in it. -/
-theorem HeapOK.set {k : Nat} {W : World} {h : Heap} {ℓ : Nat} {s : Scheme} {v : Value}
-    (hH : HeapOK k W h) (hs : W[ℓ]? = some s) (hv : SchemeV k W s v) :
+theorem HeapOK.set {k : Nat} {W : World} {h : Heap} {ℓ : Nat} {s : Cell} {v : Value}
+    (hH : HeapOK k W h) (hs : W[ℓ]? = some s) (hv : CellV k W s v) :
     HeapOK k W (h.set ℓ v) := by
   refine ⟨by simp [hH.1], fun ℓ' s' hs' => ?_⟩
   by_cases e : ℓ = ℓ'
@@ -314,7 +319,7 @@ theorem HeapOK.set {k : Nat} {W : World} {h : Heap} {ℓ : Nat} {s : Scheme} {v 
 /-- `G W Γ env`: each variable's cell has the scheme `Γ` gives it. -/
 def G (W : World) : Ctx → Env → Prop
   | [], [] => True
-  | s :: Γ, ℓ :: env => W[ℓ]? = some s ∧ G W Γ env
+  | s :: Γ, ℓ :: env => W[ℓ]? = some (.scheme s) ∧ G W Γ env
   | _, _ => False
 
 theorem G.mono {W W' : World} (hW : W <+: W') : ∀ {Γ : Ctx} {env : Env}, G W Γ env → G W' Γ env
@@ -322,14 +327,15 @@ theorem G.mono {W W' : World} (hW : W <+: W') : ∀ {Γ : Ctx} {env : Env}, G W 
   | _ :: _, _ :: _, ⟨hs, hG⟩ => ⟨prefix_getElem? hW hs, G.mono hW hG⟩
 
 theorem G.lookup : ∀ {i : Nat} {Γ : Ctx} {env : Env} {s : Scheme}, G W Γ env →
-    Γ[i]? = some s → ∃ ℓ, env[i]? = some ℓ ∧ W[ℓ]? = some s
+    Γ[i]? = some s → ∃ ℓ, env[i]? = some ℓ ∧ W[ℓ]? = some (.scheme s)
   | _, [], _, _, _, hi => by simp at hi
   | 0, _ :: _, _ :: _, _, ⟨hs, _⟩, hi => by simp at hi; subst hi; exact ⟨_, rfl, hs⟩
   | i + 1, _ :: _, _ :: _, _, ⟨_, hG⟩, hi => by simpa using G.lookup hG (by simpa using hi)
 
 /-- Variables for a block of cells. -/
 theorem G.block {W : World} {Γ : Ctx} {env : Env} :
-    ∀ (ss : List Scheme) (base : Nat), (∀ (i : Nat) (hi : i < ss.length), W[base + i]? = some ss[i]) →
+    ∀ (ss : List Scheme) (base : Nat),
+      (∀ (i : Nat) (hi : i < ss.length), W[base + i]? = some (.scheme ss[i])) →
       G W Γ env → G W (ss ++ Γ) (List.range' base ss.length ++ env)
   | [], _, _, hG => hG
   | s :: ss, base, h, hG => by
@@ -348,8 +354,8 @@ theorem VList.getElem? : ∀ {τs : List Ty} {vs : List Value} {i : Nat} {τ : T
 
 /-- Cells for values of a list of types. -/
 theorem HeapOK.allocList {k : Nat} {W : World} {h : Heap} {τs : List Ty} {vs : List Value}
-    (hH : HeapOK k W h) (hvs : VList k (W ++ τs.map .mono) τs vs) :
-    HeapOK k (W ++ τs.map .mono) (h ++ vs) :=
+    (hH : HeapOK k W h) (hvs : VList k (W ++ τs.map Cell.mono) τs vs) :
+    HeapOK k (W ++ τs.map Cell.mono) (h ++ vs) :=
   hH.alloc (by simp [hvs.length]) (fun i s v hs hv => by
     simp only [List.getElem?_map] at hs
     cases hτ : τs[i]? with
@@ -604,8 +610,8 @@ theorem field_none_lookup {l : String} : ∀ {ls : List String} {τs : List Ty} 
 /-- An object literal's cell holds the contents of its record type. -/
 theorem objFields_sound {k : Nat} {W : World} {L ls : List String} {τs absent : List Ty}
     {vs : List Value} (hlen : τs.length = ls.length) (hvs : VList k W τs vs) :
-    V k W (.app .contents [.record L (objSlots L ls τs absent)]) (objFields ls vs) := by
-  rw [V_contents]
+    CellV k W (.obj (.record L (objSlots L ls τs absent))) (objFields ls vs) := by
+  rw [CellV_obj]
   have hzip : (ls.zip vs).reverse = ls.reverse.zip vs.reverse := by
     simp only [List.zip_eq_zipWith]
     exact List.reverse_zipWith (by simp [hvs.length, hlen])
@@ -630,7 +636,7 @@ theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c :
       rw [V_record] at hv
       obtain ⟨ℓ, rfl, hℓ⟩ := hv
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-      obtain ⟨fs, rfl, hfs, -⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv)
+      obtain ⟨fs, rfl, hfs, -⟩ := CellV_obj.mp hsv
       obtain ⟨v', h₁, h₂⟩ := hfs l σ hf
       simp only [Value.getProp, hcv, h₁]
       exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH h₂
@@ -638,7 +644,7 @@ theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c :
       rw [V_array] at hv
       obtain ⟨ℓ, rfl, hℓ⟩ := hv
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-      obtain ⟨vs, rfl, -⟩ := V_elems.mp (SchemeV.mono_iff.mp hsv)
+      obtain ⟨vs, rfl, -⟩ := CellV_arr.mp hsv
       simp only [Value.getProp, hcv, ite_true]
       exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (by simp)
     | lengthString =>
@@ -665,10 +671,10 @@ theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} 
       rw [V_record] at hvo
       obtain ⟨ℓ, rfl, hℓ⟩ := hvo
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-      obtain ⟨fs, rfl, hfs, habs⟩ := V_contents.mp (SchemeV.mono_iff.mp hsv)
+      obtain ⟨fs, rfl, hfs, habs⟩ := CellV_obj.mp hsv
       simp only [Value.setProp, hcv]
-      refine Safe.ok (Nat.le_refl c) (List.prefix_refl W) (hH.set hℓ (SchemeV.mono_iff.mpr ?_)) hvv
-      rw [V_contents]
+      refine Safe.ok (Nat.le_refl c) (List.prefix_refl W) (hH.set hℓ ?_) hvv
+      rw [CellV_obj]
       refine ⟨_, rfl, fun l' σ' hl' => ?_, fun l' s' hl' => ?_⟩
       rotate_left
       · rcases habs l' s' hl' with h | ⟨σ', rfl, hn⟩
@@ -721,7 +727,7 @@ theorem index_sound {C : List Pred} {τ ι σ : Ty} {vo vi : Value} {c : Nat} {W
       obtain ⟨ℓ, rfl, hℓ⟩ := hvo
       obtain ⟨n, rfl⟩ := V_number.mp hvi
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-      obtain ⟨vs, rfl, hvs⟩ := V_elems.mp (SchemeV.mono_iff.mp hsv)
+      obtain ⟨vs, rfl, hvs⟩ := CellV_arr.mp hsv
       simp only [Value.index, hcv]
       split
       · rename_i v hv
@@ -759,19 +765,19 @@ theorem setIndex_sound {C : List Pred} {τ ι σ : Ty} {vo vi vv : Value} {c : N
       obtain ⟨ℓ, rfl, hℓ⟩ := hvo
       obtain ⟨n, rfl⟩ := V_number.mp hvi
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-      obtain ⟨vs, rfl, hvs⟩ := V_elems.mp (SchemeV.mono_iff.mp hsv)
+      obtain ⟨vs, rfl, hvs⟩ := CellV_arr.mp hsv
       simp only [Value.setIndex, hcv]
       split
       · rename_i k _
         split
         · refine Safe.ok (Nat.le_refl c) (List.prefix_refl W)
-            (hH.set hℓ (SchemeV.mono_iff.mpr (V_elems.mpr ⟨_, rfl, fun w hw => ?_⟩))) hvv
+            (hH.set hℓ (CellV_arr.mpr ⟨_, rfl, fun w hw => ?_⟩)) hvv
           rcases List.mem_or_eq_of_mem_set hw with hw | rfl
           · exact hvs w hw
           · exact hvv
         · split
           · refine Safe.ok (Nat.le_refl c) (List.prefix_refl W)
-              (hH.set hℓ (SchemeV.mono_iff.mpr (V_elems.mpr ⟨_, rfl, fun w hw => ?_⟩))) hvv
+              (hH.set hℓ (CellV_arr.mpr ⟨_, rfl, fun w hw => ?_⟩)) hvv
             rcases List.mem_append.mp hw with hw | hw
             · exact hvs w hw
             · simp only [List.mem_singleton] at hw; subst hw; exact hvv
@@ -833,12 +839,11 @@ theorem lookup_append_some {l : String} {v : Value} {fs₁ fs₂ : List (String 
 contents. -/
 theorem fieldsOf_sound {L : List String} {ss : List Ty} {v : Value} {c : Nat} {W : World}
     {h : Heap} (hv : V c W (.record L ss) v) (hH : HeapOK c W h) :
-    ∃ fs, v.fieldsOf h = some fs ∧ V c W (.app .contents [.record L ss]) (.fields fs) := by
+    ∃ fs, v.fieldsOf h = some fs ∧ CellV c W (.obj (.record L ss)) (.fields fs) := by
   rw [V_record] at hv
   obtain ⟨ℓ, rfl, hℓ⟩ := hv
-  obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
-  have hV := SchemeV.mono_iff.mp hsv
-  obtain ⟨fs, rfl, -⟩ := V_contents.mp hV
+  obtain ⟨cv, hcv, hV⟩ := hH.2 ℓ _ hℓ
+  obtain ⟨fs, rfl, -⟩ := CellV_obj.mp hV
   exact ⟨fs, by simp [Value.fieldsOf, hcv], hV⟩
 
 /-- A spread of two objects' fields: each `Merge` is an instance, since an
@@ -848,11 +853,11 @@ theorem spread_contents_sound {C : List Pred} {L : List String} {ps τs ss rs : 
     {fs₁ fs₂ : List (String × Value)} {c : Nat} {W : World} (hC : HoldsOrVar C)
     (hps : ps.length = L.length) (hτs : τs.length = L.length) (hss : ss.length = L.length)
     (hrs : rs.length = L.length) (hm : ∀ p ∈ mergePreds ps τs ss rs, Entails C p)
-    (hv₁ : V c W (.app .contents [.record L ss]) (.fields fs₁))
-    (hv₂ : V c W (.app .contents [.record L (List.zipWith Ty.slot ps τs)]) (.fields fs₂)) :
-    V c W (.app .contents [.record L rs]) (.fields (fs₂ ++ fs₁)) := by
-  obtain ⟨_, he₁, hpre₁, habs₁⟩ := V_contents.mp hv₁
-  obtain ⟨_, he₂, hpre₂, habs₂⟩ := V_contents.mp hv₂
+    (hv₁ : CellV c W (.obj (.record L ss)) (.fields fs₁))
+    (hv₂ : CellV c W (.obj (.record L (List.zipWith Ty.slot ps τs))) (.fields fs₂)) :
+    CellV c W (.obj (.record L rs)) (.fields (fs₂ ++ fs₁)) := by
+  obtain ⟨_, he₁, hpre₁, habs₁⟩ := CellV_obj.mp hv₁
+  obtain ⟨_, he₂, hpre₂, habs₂⟩ := CellV_obj.mp hv₂
   cases he₁; cases he₂
   -- Each label: the operand has its field (`pre`) or hasn't (`abs`).
   have key : ∀ l r, Ty.field l L rs = some r →
@@ -870,7 +875,7 @@ theorem spread_contents_sound {C : List Pred} {L : List String} {ps τs ss rs : 
     · simp only [List.cons.injEq] at he
       rw [he.1] at hp
       rcases habs₂ l _ hp with ⟨σ, hσ⟩ | ⟨σ, hσ, -⟩ <;> cases hσ
-  rw [V_contents]
+  rw [CellV_obj]
   refine ⟨_, rfl, fun l σ hl => ?_, fun l r hl => ?_⟩
   · rcases key l _ hl with ⟨τ, hτ, v', h₁, h₂⟩ | ⟨hs, hn⟩
     · cases hτ; exact ⟨v', lookup_append_some h₁, h₂⟩
@@ -970,7 +975,7 @@ theorem runArgs_sound {L : List String} {C : List Pred} {Γ : Ctx} {R : Option T
 caller's. -/
 theorem G.call {W : World} {Γ : Ctx} {env : Env} {h : Heap} {θ ρ : Ty} {τs : List Ty}
     (hG : G W Γ env) (hlen : h.length = W.length) :
-    G (W ++ τs.map Scheme.mono ++ [Scheme.mono (.fn θ τs ρ), Scheme.mono θ])
+    G (W ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ])
       (τs.map Scheme.mono ++ Scheme.mono (.fn θ τs ρ) :: Scheme.mono θ :: Γ)
       (callEnv h τs.length env) := by
   have e₁ : τs.map Scheme.mono ++ Scheme.mono (.fn θ τs ρ) :: Scheme.mono θ :: Γ =
@@ -979,10 +984,14 @@ theorem G.call {W : World} {Γ : Ctx} {env : Env} {h : Heap} {θ ρ : Ty} {τs :
       List.range' h.length
         (τs.map Scheme.mono ++ [Scheme.mono (.fn θ τs ρ), Scheme.mono θ]).length ++ env := by
     simp [callEnv]
-  rw [e₁, e₂, List.append_assoc W]
+  have e₃ : W ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ] =
+      W ++ (τs.map Scheme.mono ++ [Scheme.mono (.fn θ τs ρ), Scheme.mono θ]).map Cell.scheme := by
+    simp [Cell.mono, Function.comp_def]
+  rw [e₁, e₂, e₃]
   refine G.block _ _ (fun i hi => ?_) (G.mono (List.prefix_append _ _) hG)
-  rw [hlen, List.getElem?_append_right (by omega)]
-  simp
+  rw [hlen, List.getElem?_append_right (by omega), Nat.add_sub_cancel_left, List.getElem?_map,
+    List.getElem?_eq_getElem hi]
+  rfl
 
 theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
   induction e using Expr.ind with
@@ -1015,27 +1024,27 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         | zero =>
           intro W _
           rw [V_fn]
-          intro i hi W' _ h' thisv args _ _ hargs
+          intro i hi W' _ h' thisv args hl _ _ _
           obtain rfl : i = 0 := by omega
-          simp only [call, hargs.length, Nat.le_refl, ↓reduceIte]
+          simp only [call, hl, Nat.le_refl, ↓reduceIte]
           exact ⟨Nat.le_refl 0, .inl rfl⟩
         | succ j ihj =>
           intro W hGW
           rw [V_fn]
-          intro i hi W' hW' h' thisv args hh hthis hargs
-          simp only [call, hargs.length, Nat.le_refl, ↓reduceIte,
-            List.take_of_length_le (Nat.le_of_eq hargs.length)]
+          intro i hi W' hW' h' thisv args hl hh hthis hargs
+          simp only [call, hl, Nat.le_refl, ↓reduceIte,
+            List.take_of_length_le (Nat.le_of_eq hl)]
           cases i with
           | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
           | succ i =>
             have hH' : HeapOK i W' h' := hh i (by omega)
-            have hW₁ : W' <+: W' ++ τs.map .mono := List.prefix_append _ _
-            have hW₂ : W' <+: W' ++ τs.map .mono ++ [.mono (.fn θ τs ρ), .mono θ] :=
+            have hW₁ : W' <+: W' ++ τs.map Cell.mono := List.prefix_append _ _
+            have hW₂ : W' <+: W' ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ] :=
               hW₁.trans (List.prefix_append _ _)
-            have hcells : HeapOK i (W' ++ τs.map .mono ++ [.mono (.fn θ τs ρ), .mono θ])
+            have hcells : HeapOK i (W' ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ])
                 (h' ++ args ++ [.closure env τs.length body, thisv]) := by
-              refine (hH'.allocList (hargs.mono (j := i) (by omega) hW₁)).alloc (by simp)
-                (fun idx s v hs hv => ?_)
+              refine (hH'.allocList ((hargs i (by omega)).mono (Nat.le_refl i) hW₁)).alloc
+                (by simp) (fun idx s v hs hv => ?_)
               match idx, hs, hv with
               | 0, hs, hv =>
                 simp at hs hv; subst hs hv
@@ -1043,7 +1052,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
                   ((ihj _ (G.mono (hW'.trans hW₂) hGW)).mono (by omega) (List.prefix_refl _))
               | 1, hs, hv =>
                 simp at hs hv; subst hs hv
-                exact SchemeV.mono_iff.mpr (hthis.mono (by omega) hW₂)
+                exact SchemeV.mono_iff.mpr ((hthis i (by omega)).mono (Nat.le_refl i) hW₂)
               | _ + 2, hs, _ => simp at hs
             have hGb := G.call (θ := θ) (ρ := ρ) (τs := τs) (G.mono hW' hGW) hH'.1
             exact (ih hb hC hGb hcells).catchReturn (j := i + 1) (by omega) hW₂
@@ -1062,7 +1071,8 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       have hc₂ := runArgs_clock_le (run k env h f).2.1 env (run k env h f).2.2 args
       rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
       exact Lands.safe (V_fn.mp (V.mono hc₂ hW₂ hvf) _ (Nat.le_refl _) W₂ (List.prefix_refl _)
-        _ .undefined vs (fun i hi => hH₂.mono (by omega)) (by simp) hvs)
+        _ .undefined vs hvs.length (fun i hi => hH₂.mono (by omega)) (by simp)
+        (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
   | let_ mb e₁ e₂ ih₁ ih₂ =>
     intro k C Γ R W env h τ ht hC hG hH
     cases ht with
@@ -1103,14 +1113,14 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           Safe (run (min c₁ k) (h₁.length :: env) (h₁ ++ [v]) e₂) c₁ W₁ τ R := by
         intro v c₁ h₁ W₁ hc hW₁ hH₁ hv
         rw [Nat.min_eq_left hc]
-        have hW₂ : W₁ <+: W₁ ++ [s] := List.prefix_append _ _
-        have hcell : HeapOK c₁ (W₁ ++ [s]) (h₁ ++ [v]) :=
+        have hW₂ : W₁ <+: W₁ ++ [.scheme s] := List.prefix_append _ _
+        have hcell : HeapOK c₁ (W₁ ++ [.scheme s]) (h₁ ++ [v]) :=
           hH₁.alloc (by simp) (fun i s' v' hs hv' => by
             match i, hs, hv' with
             | 0, hs, hv' =>
               simp at hs hv'; subst hs hv'; exact hv.mono (Nat.le_refl _) hW₂
             | _ + 1, hs, _ => simp at hs)
-        have hG₂ : G (W₁ ++ [s]) (s :: Γ) (h₁.length :: env) :=
+        have hG₂ : G (W₁ ++ [.scheme s]) (s :: Γ) (h₁.length :: env) :=
           ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
         exact (ih₂ h₂ hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
       simp only [run]
@@ -1329,14 +1339,13 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       refine Safe.bindArgs (runArgs_sound hC es _ ih (by omega) hargs hG hH)
         fun vs W₁ _ hW₁ hH₁ hvs => ?_
       have hb : (runArgs k env h es).2.2.length = W₁.length := hH₁.1
-      have hW₂ := List.prefix_append W₁
-        [Scheme.mono (.app .contents [.record L (objSlots L ls τs absent)])]
+      have hW₂ := List.prefix_append W₁ [Cell.obj (.record L (objSlots L ls τs absent))]
       refine Safe.ok (Nat.le_refl _) hW₂ ?_ ?_
       · exact hH₁.alloc (by simp) (fun i s' v' hs hv' => by
           match i, hs, hv' with
           | 0, hs, hv' =>
             simp at hs hv'; subst hs hv'
-            exact SchemeV.mono_iff.mpr ((objFields_sound hτs hvs).mono (Nat.le_refl _) hW₂)
+            exact (objFields_sound hτs hvs).mono (Nat.le_refl _) hW₂
           | _ + 1, hs, _ => simp at hs)
       · rw [V_record, hb]
         exact ⟨_, rfl, by simp⟩
@@ -1375,13 +1384,13 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       obtain ⟨r₂, c₂, h₂⟩ := p
       simp only at hf₂ hH₂ hV ⊢
       rw [hf₂]
-      have hW₃ := List.prefix_append W₂ [Scheme.mono (.app .contents [.record L rs])]
+      have hW₃ := List.prefix_append W₂ [Cell.obj (.record L rs)]
       refine Safe.ok (Nat.le_refl _) hW₃ ?_ ?_
       · exact hH₂.alloc (by simp) (fun i s' v' hs hv' => by
           match i, hs, hv' with
           | 0, hs, hv' =>
             simp at hs hv'; subst hs hv'
-            exact SchemeV.mono_iff.mpr (hV.mono (Nat.le_refl _) hW₃)
+            exact hV.mono (Nat.le_refl _) hW₃
           | _ + 1, hs, _ => simp at hs)
       · rw [V_record, hH₂.1]
         exact ⟨_, rfl, by simp⟩
@@ -1398,14 +1407,14 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       refine Safe.bindArgs (runArgs_sound hC es _ ih (by simp) hargs hG hH)
         fun vs W₁ _ hW₁ hH₁ hvs => ?_
       have hb : (runArgs k env h es).2.2.length = W₁.length := hH₁.1
-      have hW₂ := List.prefix_append W₁ [Scheme.mono (.app .elems [σ])]
+      have hW₂ := List.prefix_append W₁ [Cell.arr σ]
       refine Safe.ok (Nat.le_refl _) hW₂ ?_ ?_
       · exact hH₁.alloc (by simp) (fun i s' v' hs hv' => by
           match i, hs, hv' with
           | 0, hs, hv' =>
             simp at hs hv'; subst hs hv'
-            exact SchemeV.mono_iff.mpr (V_elems.mpr ⟨_, rfl, fun w hw =>
-              (VList.replicate hvs w hw).mono (Nat.le_refl _) hW₂⟩)
+            exact CellV_arr.mpr ⟨_, rfl, fun w hw =>
+              (VList.replicate hvs w hw).mono (Nat.le_refl _) hW₂⟩
           | _ + 1, hs, _ => simp at hs)
       · rw [V_array, hb]
         exact ⟨_, rfl, by simp⟩
