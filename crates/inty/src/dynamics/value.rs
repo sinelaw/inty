@@ -48,9 +48,12 @@ pub struct Closure {
     pub params: Vec<String>,
     pub body: Box<Stmt>,
     pub env: RuntimeEnv,
-    /// An arrow function: its `this` is the one in `env`, and `new` on it
-    /// throws a `TypeError`.
+    /// An arrow function: its `this` is the one in `env`.
     pub arrow: bool,
+    /// `new` may call it: a `function`, not an arrow function or a method
+    /// written `m() {…}` (an object literal's or a class's, which an arrow
+    /// field using `this` lowers to), on which `new` throws a `TypeError`.
+    pub constructor: bool,
 }
 
 impl Value {

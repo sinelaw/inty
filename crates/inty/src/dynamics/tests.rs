@@ -424,7 +424,7 @@ fn getters_run_when_read_and_copied_by_a_spread() {
 }
 
 /// An arrow function's `this` is its enclosing function's, and `new` on
-/// one throws.
+/// one throws, as on a method.
 #[test]
 fn arrow_functions_close_over_this_and_are_not_constructors() {
     assert_number(
@@ -435,6 +435,20 @@ fn arrow_functions_close_over_this_and_are_not_constructors() {
         run("const f = () => ({x: 1}); new f();"),
         Err(Stuck::NotConstructor)
     ));
+    // Nor is a method written `m() {…}`, which an arrow field using
+    // `this` lowers to.
+    assert!(matches!(
+        run("const o = { m() { return {x: 1}; } }; new o.m();"),
+        Err(Stuck::NotConstructor)
+    ));
+    assert!(matches!(
+        run("class D { x = 1; f = () => this.x; } new (new D()).f();"),
+        Err(Stuck::NotConstructor)
+    ));
+    assert_number(
+        "const o = { m: function () { this.y = 2; } }; new o.m().y;",
+        2.0,
+    );
 }
 
 #[test]

@@ -31,7 +31,8 @@ use super::value::{Closure, Value};
 pub enum Stuck {
     UndefinedVariable(String),
     NotCallable(&'static str),
-    /// `new` on an arrow function, which throws a `TypeError`.
+    /// `new` on what isn't a constructor (an arrow function, a method),
+    /// which throws a `TypeError`.
     NotConstructor,
     NotIndexable(&'static str),
     PropertyNotFound {
@@ -81,7 +82,7 @@ impl std::fmt::Display for Stuck {
         match self {
             Stuck::UndefinedVariable(n) => write!(f, "undefined variable `{}`", n),
             Stuck::NotCallable(k) => write!(f, "not callable: {}", k),
-            Stuck::NotConstructor => write!(f, "not a constructor: an arrow function"),
+            Stuck::NotConstructor => write!(f, "not a constructor"),
             Stuck::NotIndexable(k) => write!(f, "not indexable: {}", k),
             Stuck::PropertyNotFound { kind, property } => {
                 write!(f, "property `{}` not found on {}", property, kind)
@@ -268,6 +269,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                             body: body.clone(),
                             env: env.clone(),
                             arrow: false,
+                            constructor: false,
                         });
                         props.insert(name, closure);
                     }
@@ -279,6 +281,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                             body: body.clone(),
                             env: env.clone(),
                             arrow: false,
+                            constructor: false,
                         });
                         props.insert(name, getter);
                     }
@@ -337,6 +340,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             body: body.clone(),
             env: env.clone(),
             arrow: *arrow,
+            constructor: !*arrow,
         })),
 
         Expr::Member {
@@ -391,7 +395,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             for a in arguments {
                 args.push(eval_expr(state, env, a)?);
             }
-            if matches!(&callee_val, Value::Closure(c) if c.arrow) {
+            if matches!(&callee_val, Value::Closure(c) if !c.constructor) {
                 return Err(Stuck::NotConstructor);
             }
             // Bind `this` to a fresh empty object, and give back what the
@@ -1316,6 +1320,7 @@ pub fn eval_stmt(
                 body: body.clone(),
                 env: env.clone(),
                 arrow: false,
+                constructor: true,
             });
             let loc = state.alloc_var(closure);
             let new_env = env.extend(name.clone(), loc);
@@ -1611,6 +1616,7 @@ fn eval_block(
                 body: body.clone(),
                 env: block_env.clone(),
                 arrow: false,
+                constructor: true,
             });
             let loc = block_env
                 .lookup(name)

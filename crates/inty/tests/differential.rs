@@ -106,6 +106,26 @@ enum Core {
     SetIndex(Box<Core>, Box<Core>, Box<Core>),
     /// `e.l(a₀, …)`: a method call, with `e` as `this`.
     MCall(Box<Core>, String, Vec<Core>),
+    /// A class of a constructor of `n` parameters, `ctor n (cls …)`: its
+    /// members in order, each a field (`this.l = e;` in the constructor,
+    /// seeing the fields before it, the latest innermost), an arrow field
+    /// (`this.l = (…) => {…};`, a `Func` whose `this` is the instance and
+    /// which never refers to itself), a method or a getter (on the
+    /// prototype, a `Func` that sees no constructor parameter). Only as a
+    /// `const`'s value, printed as a class declaration; the constructor's
+    /// `this` and the class itself are never referred to inside it.
+    Class(usize, Vec<(String, Member, Core)>),
+    /// `new f(a₀, …)`.
+    New(Box<Core>, Vec<Core>),
+}
+
+/// How a class holds a member.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Member {
+    Field,
+    Arrow,
+    Method,
+    Getter,
 }
 
 use Core::*;
@@ -182,6 +202,25 @@ fn wire(e: &Core) -> String {
             let args: Vec<String> = args.iter().map(|a| format!(" {}", wire(a))).collect();
             format!("(mcall {} s:{}{})", wire(e), l, args.concat())
         }
+        Class(n, members) => {
+            let members: Vec<String> = members
+                .iter()
+                .map(|(l, m, e)| {
+                    let kind = match m {
+                        Member::Field => "field",
+                        Member::Arrow => "arrow",
+                        Member::Method => "method",
+                        Member::Getter => "getter",
+                    };
+                    format!(" ({} s:{} {})", kind, l, wire(e))
+                })
+                .collect();
+            format!("(ctor {} (class{}))", n, members.concat())
+        }
+        New(f, args) => {
+            let args: Vec<String> = args.iter().map(|a| format!(" {}", wire(a))).collect();
+            format!("(new {}{})", wire(f), args.concat())
+        }
     }
 }
 
@@ -242,6 +281,14 @@ fn fractional(e: &Core) -> Core {
         Index(x, i) => Index(f(x), f(i)),
         SetIndex(x, i, y) => SetIndex(f(x), f(i), f(y)),
         MCall(x, l, args) => MCall(f(x), l.clone(), args.iter().map(fractional).collect()),
+        Class(n, members) => Class(
+            *n,
+            members
+                .iter()
+                .map(|(l, m, e)| (l.clone(), *m, fractional(e)))
+                .collect(),
+        ),
+        New(x, args) => New(f(x), args.iter().map(fractional).collect()),
         other => other.clone(),
     }
 }
@@ -293,6 +340,9 @@ impl Js {
                 // receiver, as `(0, o.f)(…)` hasn't.
                 let callee = match **f {
                     Get(..) | Index(..) => format!("(0, {})", self.expr(f)),
+                    // A class's field read in a later one's initialiser,
+                    // `this.l`.
+                    Var(i) if self.name(i).contains('.') => format!("(0, {})", self.expr(f)),
                     _ => format!("({})", self.expr(f)),
                 };
                 format!("{}({})", callee, args.join(", "))
@@ -336,7 +386,78 @@ impl Js {
                 let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
                 format!("({}).{}({})", obj, l, args.join(", "))
             }
+            New(f, args) => {
+                let f = self.expr(f);
+                let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
+                format!("(new ({})({}))", f, args.join(", "))
+            }
+            Class(..) => unreachable!("a class only as a `const`'s value: {e:?}"),
         }
+    }
+
+    /// `class C { constructor(x₀, …) { this.l = …; … } m(…) { … } get g() { … } }`.
+    fn class(&mut self, name: &str, n: usize, members: &[(String, Member, Core)]) -> String {
+        let xs: Vec<String> = (0..n).map(|_| self.fresh("x")).collect();
+        // The constructor's `this`, the class, then its parameters, the
+        // first innermost: what each member sees.
+        self.names.push("this".into());
+        self.names.push(name.to_string());
+        for x in xs.iter().rev() {
+            self.names.push(x.clone());
+        }
+        let base = self.names.len();
+        let (mut ctor, mut body) = (Vec::new(), Vec::new());
+        // A field's initialiser sees the fields before it, read off `this`.
+        let mut fields: Vec<String> = Vec::new();
+        for (l, m, e) in members {
+            match (m, e) {
+                (Member::Field, e) => {
+                    self.names.extend(fields.iter().cloned());
+                    let v = self.expr(e);
+                    self.names.truncate(base);
+                    ctor.push(format!("this.{} = {};", l, v));
+                    fields.push(format!("this.{}", l));
+                }
+                (Member::Arrow, Func(k, f)) => {
+                    let v = self.arrow(*k, f);
+                    ctor.push(format!("this.{} = {};", l, v));
+                }
+                (Member::Method, Func(k, f)) => {
+                    body.push(format!("{}{}", l, self.function(*k, f).1));
+                }
+                (Member::Getter, Func(0, f)) => {
+                    body.push(format!("get {}{}", l, self.function(0, f).1));
+                }
+                _ => unreachable!("a class's function member is a function: {e:?}"),
+            }
+        }
+        self.names.truncate(base - n - 2);
+        format!(
+            "class {} {{ constructor({}) {{ {} }} {} }}",
+            name,
+            xs.join(", "),
+            ctor.join(" "),
+            body.join(" ")
+        )
+    }
+
+    /// An arrow function `(x₀, …) => { … }`, whose `this` is the enclosing
+    /// one's, and which never refers to itself.
+    fn arrow(&mut self, n: usize, body: &Core) -> String {
+        let xs: Vec<String> = (0..n).map(|_| self.fresh("x")).collect();
+        let alias = refers_from_inner(body, n + 1, false).then(|| self.fresh("t"));
+        self.names
+            .push(alias.clone().unwrap_or_else(|| "this".into()));
+        self.names.push("unbound".into());
+        for x in xs.iter().rev() {
+            self.names.push(x.clone());
+        }
+        let body = self.stmts(body, "return ");
+        self.names.truncate(self.names.len() - n - 2);
+        let prelude = alias
+            .map(|t| format!("const {t} = this; "))
+            .unwrap_or_default();
+        format!("({}) => {{ {}{} }}", xs.join(", "), prelude, body)
     }
 
     /// A function's name, then its parameters and body, `(x₀, …) { … }`.
@@ -364,6 +485,17 @@ impl Js {
     /// (`return` in a function, an expression statement at the top).
     fn stmts(&mut self, e: &Core, last: &str) -> String {
         match e {
+            Let(false, e1, e2) if matches!(**e1, Class(..)) => {
+                let Class(n, members) = &**e1 else {
+                    unreachable!()
+                };
+                let c = self.fresh("C");
+                let class = self.class(&c, *n, members);
+                self.names.push(c);
+                let rest = self.stmts(e2, last);
+                self.names.pop();
+                format!("{} {}", class, rest)
+            }
             Let(m, e1, e2) => {
                 let v = self.fresh("v");
                 let init = self.expr(e1);
@@ -452,8 +584,20 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
                 || refers_from_inner(j, i, inner)
                 || refers_from_inner(y, i, inner)
         }
-        MCall(x, _, args) => {
+        MCall(x, _, args) | New(x, args) => {
             refers_from_inner(x, i, inner) || args.iter().any(|a| refers_from_inner(a, i, inner))
+        }
+        // The constructor is a function: its parameters, itself and its
+        // `this`, then, for a field, the fields before it.
+        Class(n, members) => {
+            let mut fields = 0;
+            members.iter().any(|(_, m, e)| match m {
+                Member::Field => {
+                    fields += 1;
+                    refers_from_inner(e, i + n + 2 + fields - 1, true)
+                }
+                _ => refers_from_inner(e, i + n + 2, true),
+            })
         }
     }
 }
@@ -520,6 +664,12 @@ enum Binding {
     /// A method's `this`: an object with these data fields (and methods,
     /// which aren't tracked).
     This(Vec<(String, T)>),
+    /// In scope in the model but never referred to: what JavaScript has no
+    /// name for (an arrow function itself, a method's own name), or a
+    /// variable whose JavaScript reading differs (a constructor's
+    /// parameters in a method, its `this`, the class inside itself, and
+    /// the class outside `new`).
+    Hidden,
 }
 
 struct Gen {
@@ -530,9 +680,23 @@ struct Gen {
     /// How many loops enclose the point being generated, in the innermost
     /// function (the first entry is the top level's).
     loops: Vec<usize>,
+    /// Inside a constructor's field initialiser or an arrow field: a
+    /// function there never refers to its own `this` (inty rejects that
+    /// before any typing: the instance isn't complete yet), and holds no
+    /// class.
+    no_this: usize,
 }
 
 impl Gen {
+    /// A function's `this`, as `b` but where it mustn't be referred to.
+    fn this_binding(&self, b: Binding) -> Binding {
+        if self.no_this > 0 {
+            Binding::Hidden
+        } else {
+            b
+        }
+    }
+
     fn base(&mut self) -> T {
         match self.rng.below(5) {
             0 => T::Num,
@@ -611,7 +775,9 @@ impl Gen {
             .filter(|&i| match &scope[scope.len() - 1 - i] {
                 Binding::Mono(u) | Binding::Mut(u) => u == t,
                 Binding::PolyId => matches!(t, T::Arrow(ps, r) if ps.len() == 1 && ps[0] == **r),
-                Binding::Unknown | Binding::UnknownMut | Binding::This(_) => false,
+                Binding::Unknown | Binding::UnknownMut | Binding::This(_) | Binding::Hidden => {
+                    false
+                }
             })
             .collect();
         if !fits.is_empty() && self.rng.chance(if depth == 0 { 80 } else { 30 }) {
@@ -686,8 +852,12 @@ impl Gen {
             };
         }
         // A method call on an object literal with a method `m`.
-        if depth > 0 && self.rng.chance(8) {
+        if depth > 0 && self.no_this == 0 && self.rng.chance(8) {
             return self.method_call(t, d, scope);
+        }
+        // A class, and a member of type `t` of a new instance.
+        if stmt && depth > 0 && self.no_this == 0 && self.rng.chance(8) {
+            return self.class_use(t, d, scope);
         }
         if stmt && depth > 0 && self.rng.chance(25) {
             // `const`: sometimes the polymorphic identity, used at
@@ -755,7 +925,7 @@ impl Gen {
                 T::Arrow(ps, r) => {
                     // `this`, the function itself, then the parameters,
                     // the first innermost.
-                    scope.push(Binding::Mono(T::Undef));
+                    scope.push(self.this_binding(Binding::Mono(T::Undef)));
                     scope.push(Binding::Mono(t.clone()));
                     for p in ps.iter().rev() {
                         scope.push(Binding::Mut(p.clone()));
@@ -894,6 +1064,261 @@ impl Gen {
         MCall(b(Obj(fields)), "m".into(), args)
     }
 
+    /// A function member of a class, of `n` parameters: a method or a
+    /// getter (`arrow` false), which sees `scope` but not the constructor's
+    /// `n_ctor` parameters, the class or the constructor's `this`; or an
+    /// arrow field, which sees the parameters. Neither refers to itself.
+    /// Its `this` is the instance, of the data fields `this_fields` (`None`:
+    /// not referred to), and it returns a `t` (`None`: untyped). The
+    /// function, and its parameters' types.
+    #[allow(clippy::too_many_arguments)]
+    fn class_function(
+        &mut self,
+        n: usize,
+        t: Option<&T>,
+        this_fields: Option<&[(String, T)]>,
+        arrow: bool,
+        n_ctor: usize,
+        d: usize,
+        scope: &mut Vec<Binding>,
+    ) -> (Core, Vec<T>) {
+        let saved = scope.clone();
+        if !arrow {
+            let k = scope.len();
+            for i in 0..n_ctor + 2 {
+                scope[k - 1 - i] = Binding::Hidden;
+            }
+        }
+        scope.push(match (this_fields, t) {
+            (Some(fields), Some(_)) => Binding::This(fields.to_vec()),
+            (Some(_), None) => Binding::Unknown,
+            (None, _) => Binding::Hidden,
+        });
+        scope.push(Binding::Hidden);
+        let ps: Vec<T> = (0..n).map(|_| self.ty(1)).collect();
+        for p in ps.iter().rev() {
+            scope.push(if t.is_some() {
+                Binding::Mut(p.clone())
+            } else {
+                Binding::UnknownMut
+            });
+        }
+        self.funcs.push(t.cloned());
+        self.loops.push(0);
+        self.no_this += usize::from(arrow);
+        let body = match t {
+            Some(t) => self.typed(t, d, scope, true),
+            None => self.any(d, scope, true),
+        };
+        self.no_this -= usize::from(arrow);
+        self.loops.pop();
+        self.funcs.pop();
+        *scope = saved;
+        (Func(n, b(body)), ps)
+    }
+
+    /// A class's members other than its fields: each of a method `m`, a
+    /// getter `g` and an arrow field `f` sometimes, and `want` always,
+    /// returning a `t` (an arrow field to be called outside a receiver not
+    /// referring to `this`). Each member, and the parameter types of the
+    /// one wanted.
+    fn class_functions(
+        &mut self,
+        want: Option<(Member, bool, &T)>,
+        data: Option<&[(String, T)]>,
+        n_ctor: usize,
+        d: usize,
+        scope: &mut Vec<Binding>,
+    ) -> (Vec<(String, Member, Core)>, Vec<T>) {
+        let typed = data.is_some();
+        let mut members = Vec::new();
+        let mut wanted_params = Vec::new();
+        for (l, m) in [
+            ("m", Member::Method),
+            ("g", Member::Getter),
+            ("f", Member::Arrow),
+        ] {
+            let wanted = want.filter(|(k, _, _)| *k == m);
+            if wanted.is_none() && !self.rng.chance(30) {
+                continue;
+            }
+            let n = if m == Member::Getter {
+                0
+            } else {
+                self.rng.below(3)
+            };
+            let other = self.ty(1);
+            let t = match wanted {
+                Some((_, _, t)) => Some(t),
+                None if typed => Some(&other),
+                None => None,
+            };
+            let detached = wanted.is_some_and(|(_, detached, _)| detached);
+            let no_fields: [(String, T); 0] = [];
+            let this_fields = match data {
+                _ if detached => None,
+                Some(fields) => Some(fields),
+                None => Some(&no_fields[..]),
+            };
+            let (f, ps) =
+                self.class_function(n, t, this_fields, m == Member::Arrow, n_ctor, d, scope);
+            if wanted.is_some() {
+                wanted_params = ps;
+            }
+            members.push((l.to_string(), m, f));
+        }
+        (members, wanted_params)
+    }
+
+    /// A class's fields, in order, each initialiser seeing the fields
+    /// before it: of the types `data`, or untyped (`labels`).
+    fn class_fields(
+        &mut self,
+        data: &[(String, Option<T>)],
+        d: usize,
+        scope: &mut Vec<Binding>,
+    ) -> Vec<(String, Member, Core)> {
+        let mut members = Vec::new();
+        self.no_this += 1;
+        for (j, (l, u)) in data.iter().enumerate() {
+            let base = scope.len();
+            let gen = |g: &mut Gen, scope: &mut Vec<Binding>| match u {
+                Some(u) => g.typed(u, d, scope, false),
+                None => g.any(d, scope, false),
+            };
+            for (_, v) in &data[..j] {
+                scope.push(match v {
+                    Some(v) => Binding::Mono(v.clone()),
+                    None => Binding::Unknown,
+                });
+            }
+            let mut e = gen(self, scope);
+            // A field is read off `this`, which a function inside the
+            // initialiser has its own of.
+            if (0..j).any(|k| refers_from_inner(&e, k, false)) {
+                scope.truncate(base);
+                scope.extend((0..j).map(|_| Binding::Hidden));
+                e = gen(self, scope);
+            }
+            scope.truncate(base);
+            members.push((l.clone(), Member::Field, e));
+        }
+        self.no_this -= 1;
+        members
+    }
+
+    /// `class C { … }; <use>`, where the use is of type `t`: a field, a
+    /// method's result, a getter's, or an arrow field's (called on the
+    /// instance, or outside it) of a new instance.
+    fn class_use(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let mut data: Vec<(String, T)> = Vec::new();
+        for l in LABELS {
+            if self.rng.chance(40) {
+                data.push((l.to_string(), self.ty(1)));
+            }
+        }
+        // Sometimes `new` on an arrow field returning a `t`, which gives
+        // the object it returns but throws in JavaScript: an arrow
+        // function isn't a constructor.
+        let probe = matches!(t, T::Obj(_)) && self.rng.chance(30);
+        let kind = if probe { 3 } else { self.rng.below(5) };
+        if kind == 0 && !data.iter().any(|(_, u)| u == t) {
+            let l = self.label();
+            data.retain(|(m, _)| *m != l);
+            data.push((l, t.clone()));
+            data.sort_by(|x, y| x.0.cmp(&y.0));
+        }
+        let n = self.rng.below(3);
+        let ps: Vec<T> = (0..n).map(|_| self.ty(1)).collect();
+        // The constructor's `this` and the class, then its parameters.
+        let mark = scope.len();
+        scope.push(Binding::Hidden);
+        scope.push(Binding::Hidden);
+        for p in ps.iter().rev() {
+            scope.push(Binding::Mono(p.clone()));
+        }
+        let typed_data: Vec<(String, Option<T>)> = data
+            .iter()
+            .map(|(l, u)| (l.clone(), Some(u.clone())))
+            .collect();
+        let mut members = self.class_fields(&typed_data, d, scope);
+        let want = match kind {
+            1 => Some((Member::Method, false, t)),
+            2 => Some((Member::Getter, false, t)),
+            3 => Some((Member::Arrow, false, t)),
+            4 => Some((Member::Arrow, true, t)),
+            _ => None,
+        };
+        let (functions, fps) = self.class_functions(want, Some(&data), n, d, scope);
+        members.extend(functions);
+        scope.truncate(mark);
+        // The class, only under `new`.
+        scope.push(Binding::Hidden);
+        let args: Vec<Core> = ps.iter().map(|p| self.typed(p, d, scope, false)).collect();
+        let instance = New(b(Var(0)), args);
+        let fargs: Vec<Core> = fps.iter().map(|p| self.typed(p, d, scope, false)).collect();
+        let use_ = match kind {
+            0 => {
+                let (l, _) = data.iter().find(|(_, u)| u == t).unwrap().clone();
+                Get(b(instance), l)
+            }
+            1 => MCall(b(instance), "m".into(), fargs),
+            2 => Get(b(instance), "g".into()),
+            3 if probe => New(b(Get(b(instance), "f".into())), fargs),
+            3 => MCall(b(instance), "f".into(), fargs),
+            _ => App(b(Get(b(instance), "f".into())), fargs),
+        };
+        scope.pop();
+        Let(false, b(Class(n, members)), b(use_))
+    }
+
+    /// An untyped class and a use of a new instance: a member read or
+    /// called, `new` on its arrow field (which JavaScript rejects), or the
+    /// arrow field called outside the instance when it doesn't refer to
+    /// `this` (inty doesn't type such a call when it does).
+    fn any_class(&mut self, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let n = self.rng.below(3);
+        let mark = scope.len();
+        scope.push(Binding::Hidden);
+        scope.push(Binding::Hidden);
+        for _ in 0..n {
+            scope.push(Binding::Unknown);
+        }
+        let data: Vec<(String, Option<T>)> = LABELS
+            .iter()
+            .filter(|_| self.rng.chance(40))
+            .map(|l| (l.to_string(), None))
+            .collect();
+        let mut members = self.class_fields(&data, d, scope);
+        let (functions, _) = self.class_functions(None, None, n, d, scope);
+        members.extend(functions);
+        scope.truncate(mark);
+        scope.push(Binding::Hidden);
+        let args: Vec<Core> = (0..n).map(|_| self.any(d, scope, false)).collect();
+        let instance = New(b(Var(0)), args);
+        let k = self.rng.below(2);
+        let fargs: Vec<Core> = (0..k).map(|_| self.any(d, scope, false)).collect();
+        let l = match self.rng.below(5) {
+            0 => "m".to_string(),
+            1 => "g".to_string(),
+            2 | 3 => "f".to_string(),
+            _ => self.label(),
+        };
+        let arrow_this = members.iter().any(|(_, m, f)| match (m, f) {
+            (Member::Arrow, Func(k, body)) => refers_from_inner(body, k + 1, true),
+            _ => false,
+        });
+        let use_ = match self.rng.below(5) {
+            0 => Get(b(instance), l),
+            1 => MCall(b(instance), l, fargs),
+            2 => New(b(Get(b(instance), "f".into())), fargs),
+            3 if !arrow_this => App(b(Get(b(instance), "f".into())), fargs),
+            _ => instance,
+        };
+        scope.pop();
+        Let(false, b(Class(n, members)), b(use_))
+    }
+
     /// An object literal's function field, of `n` parameters: written as a
     /// method `m(…) { … }` half the time, when it doesn't refer to itself
     /// (a method has no name of its own).
@@ -999,8 +1424,11 @@ impl Gen {
     /// Any program: types aren't tracked, so many are ill typed.
     fn any(&mut self, depth: usize, scope: &mut Vec<Binding>, stmt: bool) -> Core {
         if depth == 0 || self.rng.chance(20) {
+            let visible: Vec<usize> = (0..scope.len())
+                .filter(|&i| !matches!(scope[scope.len() - 1 - i], Binding::Hidden))
+                .collect();
             return match self.rng.below(8) {
-                0 if !scope.is_empty() => Var(self.rng.below(scope.len())),
+                0 if !visible.is_empty() => Var(visible[self.rng.below(visible.len())]),
                 // Rarely, an unbound variable.
                 1 if self.rng.chance(10) => Var(scope.len()),
                 2 => self.string(),
@@ -1037,12 +1465,15 @@ impl Gen {
                 _ => {}
             }
         }
+        if stmt && self.no_this == 0 && self.rng.chance(6) {
+            return self.any_class(d, scope);
+        }
         match self.rng.below(if stmt { 11 } else { 10 }) {
             0 => {
                 let n = self.rng.below(3);
                 // `this` and the function's own name can't be assigned;
                 // the parameters can.
-                scope.push(Binding::Unknown);
+                scope.push(self.this_binding(Binding::Unknown));
                 scope.push(Binding::Unknown);
                 for _ in 0..n {
                     scope.push(Binding::UnknownMut);
@@ -1092,7 +1523,7 @@ impl Gen {
                 if self.rng.chance(30) {
                     // A method, which may use `this`.
                     let k = self.rng.below(2);
-                    scope.push(Binding::Unknown);
+                    scope.push(self.this_binding(Binding::Unknown));
                     scope.push(Binding::Unknown);
                     for _ in 0..k {
                         scope.push(Binding::UnknownMut);
@@ -1108,7 +1539,7 @@ impl Gen {
                 }
                 if self.rng.chance(20) {
                     // A getter, which may use `this` (variable 1).
-                    scope.push(Binding::Unknown);
+                    scope.push(self.this_binding(Binding::Unknown));
                     scope.push(Binding::Unknown);
                     self.funcs.push(None);
                     self.loops.push(0);
@@ -1385,7 +1816,9 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         }
         Err(Stuck::NotImplemented(_)) => Run::Unsupported,
         Err(Stuck::UndefinedVariable(_)) => Run::Stuck("undefinedVariable".into()),
-        Err(Stuck::NotCallable(_)) => Run::Stuck("notCallable".into()),
+        // `new` on an arrow function: the model gets stuck calling what
+        // `Value.asCtor` gives for it, which isn't callable.
+        Err(Stuck::NotCallable(_)) | Err(Stuck::NotConstructor) => Run::Stuck("notCallable".into()),
         Err(Stuck::TypeMismatch { .. }) => Run::Stuck("typeMismatch".into()),
         Err(Stuck::ArityMismatch { .. }) => Run::Stuck("arityMismatch".into()),
         Err(Stuck::NotIndexable(_)) => Run::Stuck("notIndexable".into()),
@@ -1587,6 +2020,7 @@ fn inty_agrees_with_the_lean_model() {
         rng: Rng((z ^ (z >> 31)) | 1),
         funcs: Vec::new(),
         loops: vec![0],
+        no_this: 0,
     };
     let programs: Vec<Core> = (0..cases).map(|_| gen.program()).collect();
     let answers = run_model(&model, &programs);
@@ -1660,6 +2094,30 @@ fn inty_agrees_with_the_lean_model() {
         if wire(&programs[i]).contains("(method ") && accepted && model_accepted {
             *counts
                 .entry("both accept, with a method written `m() {…}`".into())
+                .or_default() += 1;
+        }
+        if wire(&programs[i]).contains("(ctor ") {
+            *counts
+                .entry(format!(
+                    "with a class, {}",
+                    match (accepted, model_accepted) {
+                        (true, true) => "both accept",
+                        (false, false) => "both reject",
+                        _ => "they disagree",
+                    }
+                ))
+                .or_default() += 1;
+        }
+        if wire(&programs[i]).contains("(new (get ") {
+            *counts
+                .entry(format!(
+                    "`new` on an arrow field, {}",
+                    if accepted || model_accepted {
+                        "accepted"
+                    } else {
+                        "both reject"
+                    }
+                ))
                 .or_default() += 1;
         }
         if wire(&programs[i]).contains("(getter ") {
