@@ -754,8 +754,41 @@ theorem infer_sound :
     replace hf := hf.conv ((unify_sound hu).subst φ)
     simp only [Ty.subst_fn, List.map_map, Function.comp_def] at hf ha
     exact .app hf (by simp [ha.1]) ha.2
-  | let_ mb e₁ e₂ ih₁ ih₂ =>
+  | let_ mb ann e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o h φ C hsat
+    cases ann with
+    | some a =>
+      simp only [infer] at h
+      split at h
+      rotate_left
+      · cases h
+      rename_i ha
+      obtain ⟨har, hap, haf⟩ := ha
+      split at h
+      · cases h
+      rename_i o₁ h₁
+      split at h
+      · cases h
+      rename_i σ' hu
+      split at h
+      · cases h
+      rename_i o₂ h₂
+      simp only [Option.some.injEq] at h; subst h
+      simp only [Sat.map, Sat.append] at hsat
+      have hcl : ∀ ψ, a.subst ψ = a := fun ψ => Scheme.subst_of_ftv_nil ψ haf
+      have he₁ := ih₁ h₁ _ C hsat.1
+      have he₂ := ih₂ h₂ φ C hsat.2
+      simp only [Ctx.subst_cons, hcl, Ty.subst_compose, Ctx.subst_compose,
+        Ret.subst_compose] at he₁ he₂ ⊢
+      replace he₁ := he₁.conv (((unify_sound hu).subst o₂.σ).subst φ)
+      rw [Scheme.inst_nil_subst, Scheme.inst_nil_subst, Scheme.inst_nil_subst, hcl, hcl, hcl] at he₁
+      refine .let_ a [] (fun m _ => ?_) (.inl ⟨har, hap⟩) (fun p hp => by simp [hap] at hp)
+        (fun b hb => by cases hb; exact ⟨rfl, har, hap, haf⟩) he₂
+      have hop : a.open m = a.inst [] := by simp [Scheme.open, har, varBlock]
+      have hopp : a.openPreds m = [] := by simp [Scheme.openPreds, Scheme.instPreds, hap]
+      rw [hop, hopp, List.append_nil]
+      simpa only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] using he₁
+    | none =>
     simp only [infer] at h
     split at h
     · cases h
@@ -792,7 +825,7 @@ theorem infer_sound :
       simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
       simp only [Expr.generalises, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hv
       refine .let_ _ [] (fun m _ => ?_) (.inr ⟨Expr.isValue_sound hv.1, hv.2⟩)
-        ((hs.subst _).subst _) he₂
+        ((hs.subst _).subst _) (fun _ h => by cases h) he₂
       let Γ₁ := Ctx.subst (Subst.compose σi o₁.σ) Γ
       let R₁ := Ret.subst (Subst.compose σi o₁.σ) R
       let ᾱ := genVars Γ₁ R₁ (o₁.τ.subst σi) preds₁
@@ -821,7 +854,7 @@ theorem infer_sound :
         exact Entails.of_predEq hc'.symm ((hsat.1 c hr).append_right _)
     · simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
       refine .let_ _ [] (fun m _ => ?_) (.inl ⟨rfl, by simp [Scheme.mono, Scheme.subst]⟩)
-        ((hs.subst _).subst _) he₂
+        ((hs.subst _).subst _) (fun _ h => by cases h) he₂
       simpa using he₁ _ C hsat.1
   | assign i e ih =>
     intro Γ R n o h φ C hsat

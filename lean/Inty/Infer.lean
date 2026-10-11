@@ -384,9 +384,26 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         | some σ₃ =>
           some ⟨Subst.compose σ₃ (Subst.compose o₂.σ o₁.σ), β.subst σ₃,
             (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst σ₃), o₂.next + 1⟩
+  -- An annotated binding: the initialiser's type is unified with the
+  -- declared one, a type with no variables, which the variable gets.
+  | Γ, R, .let_ _ (some a) e₁ e₂, n =>
+    if a.arity = 0 ∧ a.preds = [] ∧ a.ftv = [] then
+      match infer Γ R e₁ n with
+      | none => none
+      | some o₁ =>
+        match unify o₁.τ (a.inst []) with
+        | none => none
+        | some σ' =>
+          let σ₁ := Subst.compose σ' o₁.σ
+          match infer (a :: Ctx.subst σ₁ Γ) (Ret.subst σ₁ R) e₂ o₁.next with
+          | none => none
+          | some o₂ =>
+            some ⟨Subst.compose o₂.σ σ₁, o₂.τ,
+              (o₁.preds.map (·.subst σ')).map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+    else none
   -- The constraints on known types are decided first, as inty's
   -- `simplify_has_props` does before it generalises.
-  | Γ, R, .let_ _ e₁ e₂, n =>
+  | Γ, R, .let_ _ none e₁ e₂, n =>
     match infer Γ R e₁ n with
     | none => none
     | some o₁ =>
@@ -761,7 +778,7 @@ def Expr.labels : Expr → List String
   | .lit _ | .var _ | .break_ | .continue_ => []
   | .func _ b | .ret b | .throw_ b | .unop _ b | .assign _ b => b.labels
   | .app f args => f.labels ++ Expr.labelsList args
-  | .let_ _ a b | .binop _ a b | .seq a b | .while_ a b | .tryCatch a b | .tryFinally a b =>
+  | .let_ _ _ a b | .binop _ a b | .seq a b | .while_ a b | .tryCatch a b | .tryFinally a b =>
     a.labels ++ b.labels
   | .cond a b c => a.labels ++ b.labels ++ c.labels
   | .obj ls es _ | .cls ls es _ => ls ++ Expr.labelsList es

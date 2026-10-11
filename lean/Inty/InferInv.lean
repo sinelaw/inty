@@ -886,8 +886,39 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     rcases hq with ⟨q', hq', rfl⟩ | hq
     · exact hσ₂.pred_below ((hp₁ q' hq').mono hn₂)
     · exact hp₂ q hq
-  | let_ _ e₁ e₂ ih₁ ih₂ =>
+  | let_ _ ann e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o hΓ hR h
+    cases ann with
+    | some a =>
+      simp only [infer] at h
+      split at h
+      rotate_left
+      · cases h
+      rename_i ha
+      have haf : ∀ b ∈ a.ftv, b < n := fun b hb => by simp [ha.2.2] at hb
+      split at h
+      · cases h
+      rename_i o₁ h₁
+      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ hΓ hR h₁
+      split at h
+      · cases h
+      rename_i σ' hu
+      split at h
+      · cases h
+      rename_i o₂ h₂
+      simp only [Option.some.injEq] at h; subst h
+      have hσ' := unify_within hτ₁ (Scheme.inst_nil_below fun b hb => Nat.lt_of_lt_of_le (haf b hb) hn₁) hu
+      have hσ₁' := hσ₁.compose hσ'
+      obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂
+        (Ctx.Below.cons (fun b hb => by simp [ha.2.2] at hb) (hσ₁'.ctx_below (hΓ.mono hn₁)))
+        (hσ₁'.ret_below (hR.mono hn₁)) h₂
+      refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁'.mono hn₂).compose hσ₂, hτ₂, ?_⟩
+      intro p hp
+      simp only [List.mem_append, List.mem_map] at hp
+      rcases hp with ⟨q, ⟨q', hq', rfl⟩, rfl⟩ | hp
+      · exact hσ₂.pred_below ((hσ'.pred_below (hp₁ q' hq')).mono hn₂)
+      · exact hp₂ p hp
+    | none =>
     simp only [infer] at h
     split at h
     · cases h

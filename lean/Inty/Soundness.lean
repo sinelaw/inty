@@ -2218,12 +2218,12 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       exact Lands.safe ((V_fn.mp (V.mono hc₂ hW₂ hvf)).2 _ (Nat.le_refl _) W₂ (List.prefix_refl _)
         _ .undefined vs hvs.length (fun i hi => hH₂.mono (by omega)) (by simp)
         (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
-  | let_ mb e₁ e₂ ih₁ ih₂ =>
+  | let_ mb _ e₁ e₂ ih₁ ih₂ =>
     intro k C Γ R W env h τ ht hC hG hH
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
     refine Safe.tyEq ?_ hτ₀
     cases ht with
-    | let_ s F hgen hval _ h₂ =>
+    | let_ s F hgen hval _ _ h₂ =>
       -- Type `e₁` at each instance of `s`: open `s` at variables above
       -- everything in sight, then substitute the instance's types for them.
       let m := maxPlusOne (F ++ ctxFtv Γ ++ s.ftv ++ C.flatMap Pred.ftv ++

@@ -363,7 +363,7 @@ example : Expr.break_.scoped [] = false := rfl
 
 /-- `const x = 1; x = 2`: assigning to a `const` is rejected, by the scope
 check beside the typing rules. -/
-example : (Expr.let_ false (num 1) (.assign 0 (num 2))).assignsMutable [] = false := rfl
+example : (Expr.let_ false none (num 1) (.assign 0 (num 2))).assignsMutable [] = false := rfl
 
 /-- Distinct constructors make distinct types. -/
 private theorem ne_con {c c' : Con} {ts ts' : List Ty} (h : c ≠ c') :

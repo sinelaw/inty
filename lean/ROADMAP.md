@@ -353,9 +353,15 @@ touching the generic proofs.
 ### 7. Annotations, program structure and the standard library
 
 - Checking mode beside inference: an annotation is a typing obligation,
-  which is how declared unions are introduced; rigid type variables; the
+  which is how declared sums are introduced; rigid type variables; the
   annotation and `.d.js` type syntax; optional parameters (presence on
-  function parameters, `types::FuncParam`).
+  function parameters, `types::FuncParam`). Done: a binding annotated
+  with a type without variables (`/** const x: Number */`), whose
+  initialiser's type is unified with it, with soundness and inference
+  sound and complete. Next: polymorphic annotations, whose quantified
+  variables are rigid in the initialiser (an annotated function type
+  without `this:` is one, polymorphic in `this`); then a check mode that
+  pushes an annotation into `?:`, `return` and literals; then sums.
 - Mutual recursion by strongly connected components
   (`docs/scc-inference.md`); modules, each `ns.foo` re-instantiating the
   export's scheme; several files in one run.

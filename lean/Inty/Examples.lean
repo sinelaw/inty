@@ -24,7 +24,7 @@ def isString (s : String) : Result → Bool
 
 /-- `const double = function (x) { return x + x; }; double("ab")` -/
 def double : Expr :=
-  .let_ false (.func 1 (.binop .plus (.var 0) (.var 0))) (.app (.var 0) [str "ab"])
+  .let_ false none (.func 1 (.binop .plus (.var 0) (.var 0))) (.app (.var 0) [str "ab"])
 
 -- One derivation types `double` monomorphically, at `String → String`.
 example : HasType L [] [] none double .string :=
@@ -43,8 +43,8 @@ example : HasType L [] [] none (.func 1 (.binop .plus (.var 0) (.var 0)))
 /-- Let-polymorphism:
 `const id = function (x) { return x; }; const n = id(1); id("a")` -/
 def polyId : Expr :=
-  .let_ false (.func 1 (.var 0))
-    (.let_ false (.app (.var 0) [num 1])
+  .let_ false none (.func 1 (.var 0))
+    (.let_ false none (.app (.var 0) [num 1])
       (.app (.var 1) [str "a"]))
 
 /-- `id`'s scheme, `∀ θ α. this: θ, (α) => α`. -/
@@ -53,7 +53,7 @@ def idScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), []⟩
 -- `id` is used at `Number → Number` and at `String → String`.
 example : HasType L [] [] none polyId .string :=
   .let_ idScheme [] (fun _ _ => .func rfl (.var_mono rfl)) (.inr ⟨.func, rfl⟩)
-    (fun _ h => by simp [idScheme] at h)
+    (fun _ h => by simp [idScheme] at h) (fun _ h => by cases h)
     (.let_mono
       (.app (.var (s := idScheme) (τs := [.undefined, .number]) rfl rfl nofun) rfl
         (by simp; exact .lit .number))
@@ -65,8 +65,8 @@ example : HasType L [] [] none polyId .string :=
 /-- A constrained scheme:
 `const double = function (x) { return x + x; }; const n = double(1); double("a")` -/
 def polyDouble : Expr :=
-  .let_ false (.func 1 (.binop .plus (.var 0) (.var 0)))
-    (.let_ false (.app (.var 0) [num 1])
+  .let_ false none (.func 1 (.binop .plus (.var 0) (.var 0)))
+    (.let_ false none (.app (.var 0) [num 1])
       (.app (.var 1) [str "a"]))
 
 /-- `double`'s scheme, `∀ θ α. Plus α ⇒ this: θ, (α) => α`, inty's
@@ -81,6 +81,7 @@ example : HasType L [] [] none polyDouble .string :=
       (.var_mono rfl)))
     (.inr ⟨.func, rfl⟩) (fun p hp => by
       simp [doubleScheme] at hp; subst hp; exact .inl ⟨by decide, rfl, 1, by decide, [], rfl⟩)
+    (fun _ h => by cases h)
     (.let_mono
       (.app (.var (s := doubleScheme) (τs := [.undefined, .number]) rfl rfl (fun c hc => by
         simp [Scheme.instPreds, doubleScheme, PPred.inst, PTy.inst] at hc; subst hc
@@ -171,12 +172,12 @@ example : HasType L [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 -- A `const` generalises `double` with its `Plus` constraint, so it is used
 -- at both instances; a use at `Boolean` is rejected.
 #guard inferProgram polyDouble == some .string
-#guard inferProgram (.let_ false (.func 1 (.binop .plus (.var 0) (.var 0)))
+#guard inferProgram (.let_ false none (.func 1 (.binop .plus (.var 0) (.var 0)))
   (.app (.var 0) [.lit (.boolean true)])) == none
 -- `const x = function () { const g = function (y) { return y; }; return g + g; }; 1`:
 -- `x`'s scheme would carry `Plus` on a function type, which can't hold, so
 -- it is an error when `x` is generalised, though nothing uses `x`.
-#guard inferProgram (.let_ false (.func 0 (.let_ false (.func 1 (.var 0)) (.binop .plus (.var 0) (.var 0))))
+#guard inferProgram (.let_ false none (.func 0 (.let_ false none (.func 1 (.var 0)) (.binop .plus (.var 0) (.var 0))))
   (num 1)) == none
 -- At the top level, nothing resolves the constraint of an unused `+`. inty
 -- leaves it on its type variable and accepts the program, and so does
@@ -194,7 +195,7 @@ example : HasType L [] [] none (.cond (str "") (num 1) (num 2)) .number :=
 
 /-- `let x = 1; x = x - 1; x` -/
 def countDown : Expr :=
-  .let_ true (num 1) (.seq (.assign 0 (.binop .minus (.var 0) (num 1))) (.var 0))
+  .let_ true none (num 1) (.seq (.assign 0 (.binop .minus (.var 0) (num 1))) (.var 0))
 
 #guard match eval 10 [] [] countDown with | .ok (.number n) => n == 0 | _ => false
 #guard inferProgram countDown == some .number
@@ -202,22 +203,22 @@ def countDown : Expr :=
 /-- A closure sees a later assignment to a variable it captured:
 `let x = 1; const f = function () { return x; }; x = 2; f()` is `2`. -/
 def captured : Expr :=
-  .let_ true (num 1)
-    (.let_ false (.func 0 (.var 2)) (.seq (.assign 1 (num 2)) (.app (.var 0) [])))
+  .let_ true none (num 1)
+    (.let_ false none (.func 0 (.var 2)) (.seq (.assign 1 (num 2)) (.app (.var 0) [])))
 
 #guard match eval 10 [] [] captured with | .ok (.number n) => n == 2 | _ => false
 #guard inferProgram captured == some .number
 
 -- Assigning to a `const` is rejected, though it would be type-safe.
-#guard inferProgram (.let_ false (num 1) (.assign 0 (num 2))) == none
+#guard inferProgram (.let_ false none (num 1) (.assign 0 (num 2))) == none
 -- Assigning a value of another type is rejected.
-#guard inferProgram (.let_ true (num 1) (.assign 0 (str "a"))) == none
+#guard inferProgram (.let_ true none (num 1) (.assign 0 (str "a"))) == none
 
 /-- A `let` that is written has one type: `let id = function (x) { return x; };
 id = id; id(1); id("a")` is rejected, and without the assignment it is
 accepted. -/
 def reassignedId (written : Bool) : Expr :=
-  .let_ true (.func 1 (.var 0))
+  .let_ true none (.func 1 (.var 0))
     (.seq (if written then .assign 0 (.var 0) else .lit .undefined)
       (.seq (.app (.var 0) [num 1]) (.app (.var 0) [str "a"])))
 
@@ -228,7 +229,7 @@ def reassignedId (written : Bool) : Expr :=
 
 /-- `let i = 3; let s = 0; while (i) { s = s + i; i = i - 1; } s` -/
 def sumDown : Expr :=
-  .let_ true (num 3) (.let_ true (num 0)
+  .let_ true none (num 3) (.let_ true none (num 0)
     (.seq (.while_ (.var 1)
       (.seq (.assign 0 (.binop .plus (.var 0) (.var 1)))
         (.assign 1 (.binop .minus (.var 1) (num 1)))))
@@ -239,7 +240,7 @@ def sumDown : Expr :=
 
 /-- `let i = 0; while (true) { i = i + 1; if (i - 3) {} else { break; } } i` -/
 def breakOut : Expr :=
-  .let_ true (num 0)
+  .let_ true none (num 0)
     (.seq (.while_ (.lit (.boolean true))
       (.seq (.assign 0 (.binop .plus (.var 0) (num 1)))
         (.cond (.binop .minus (.var 0) (num 3)) (.lit .undefined) .break_)))
@@ -266,7 +267,7 @@ def caught : Expr := .tryCatch (.throw_ (str "x")) (.unop .typeof (.var 0))
 
 /-- `let x = 1; try { x = 2; } finally { x = 3; } x` -/
 def finallyRuns : Expr :=
-  .let_ true (num 1)
+  .let_ true none (num 1)
     (.seq (.tryFinally (.assign 0 (num 2)) (.assign 0 (num 3))) (.var 0))
 
 #guard match eval 10 [] [] finallyRuns with | .ok (.number n) => n == 3 | _ => false
@@ -339,17 +340,17 @@ def counter : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] [.data, .da
 /-- `c.inc().inc().value`: `inc`'s `this` is the receiver's type, which holds
 `inc`, so it is recursive (`μt. {value: Number, inc: (this: t) => t}`), and
 the chain types as inty's does. -/
-def chained : Expr := .let_ false counter (.get (.mcall (.mcall (.var 0) "inc" []) "inc" []) "value")
+def chained : Expr := .let_ false none counter (.get (.mcall (.mcall (.var 0) "inc" []) "inc" []) "value")
 
 #guard inferProgram chained == some .number
 #guard match eval 20 [] [] chained with | .ok (.number n) => n == 2 | _ => false
 
 -- `(0, c.inc)()`: a call outside a receiver gives `inc` an `undefined`
 -- `this`, which has no `value`.
-#guard inferProgram (.let_ false counter (.app (.get (.var 0) "inc") [])) == none
+#guard inferProgram (.let_ false none counter (.app (.get (.var 0) "inc") [])) == none
 
 -- A method that doesn't use `this` can be called outside its object.
-#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] [.data]) (.app (.get (.var 0) "m") [])) ==
+#guard inferProgram (.let_ false none (.obj ["m"] [.func 0 (num 1)] [.data]) (.app (.get (.var 0) "m") [])) ==
   some .number
 
 /-! A method written `inc() {…}` runs as `inc: function () {…}` does, but
@@ -358,19 +359,19 @@ its `this` is the literal's type, as inty types it (`shared_this`). -/
 /-- `const c = {value: 0, inc() {…}}`. -/
 def counterM : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] [.data, .method]
 
-#guard inferProgram (.let_ false counterM (.get (.mcall (.mcall (.var 0) "inc" []) "inc" []) "value"))
+#guard inferProgram (.let_ false none counterM (.get (.mcall (.mcall (.var 0) "inc" []) "inc" []) "value"))
   == some .number
 
 -- Even a method that doesn't use `this` needs its object as the receiver.
-#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] [.method]) (.app (.get (.var 0) "m") []))
+#guard inferProgram (.let_ false none (.obj ["m"] [.func 0 (num 1)] [.method]) (.app (.get (.var 0) "m") []))
   == none
 
 -- `({v: "s", m: o.m}).m()`, `o` being `{v: 1, m() { return this.v; }}`: the
 -- other object isn't of `o`'s type, so the call is rejected, though it
 -- would run; with `m: function () {…}` it is accepted.
-#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [.data, .method])
+#guard inferProgram (.let_ false none (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [.data, .method])
   (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] [.data, .data]) "m" [])) == none
-#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [.data, .data])
+#guard inferProgram (.let_ false none (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [.data, .data])
   (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] [.data, .data]) "m" [])) == some .string
 
 /-! A getter, `get g() {…}`, runs when its property is read, with the
@@ -381,14 +382,14 @@ def withGetter : Expr :=
   .obj ["v", "twice"] [num 1, .func 0 (.ret (.binop .plus (.get (.var 1) "v") (.get (.var 1) "v")))]
     [.data, .getter]
 
-#guard inferProgram (.let_ false withGetter (.get (.var 0) "twice")) == some .number
-#guard match eval 20 [] [] (.let_ false withGetter (.get (.var 0) "twice")) with
+#guard inferProgram (.let_ false none withGetter (.get (.var 0) "twice")) == some .number
+#guard match eval 20 [] [] (.let_ false none withGetter (.get (.var 0) "twice")) with
   | .ok (.number n) => n == 2 | _ => false
-#guard inferProgram (.let_ false withGetter (.set (.var 0) "twice" (num 3))) == none
-#guard match eval 20 [] [] (.let_ false withGetter (.set (.var 0) "twice" (num 3))) with
+#guard inferProgram (.let_ false none withGetter (.set (.var 0) "twice" (num 3))) == none
+#guard match eval 20 [] [] (.let_ false none withGetter (.set (.var 0) "twice" (num 3))) with
   | .stuck .readOnly => true | _ => false
 -- A spread copies what the getter gives, as a field that holds a value.
-#guard inferProgram (.let_ false withGetter
+#guard inferProgram (.let_ false none withGetter
   (.set (.spread (.obj [] [] []) (.var 0)) "twice" (num 3))) == some .number
 
 /-- `class C { constructor(v) { this.v = v; } get() { return this.v; } }`:
@@ -397,18 +398,18 @@ the prototype. -/
 def classC : Expr :=
   .ctor 1 (.ret (.cls ["v", "get"] [.var 0, .func 0 (.get (.var 1) "v")] [.data, .method]))
 
-#guard inferProgram (.let_ false classC (.mcall (.new_ (.var 0) [num 1]) "get" [])) == some .number
-#guard match eval 20 [] [] (.let_ false classC (.mcall (.new_ (.var 0) [str "a"]) "get" [])) with
+#guard inferProgram (.let_ false none classC (.mcall (.new_ (.var 0) [num 1]) "get" [])) == some .number
+#guard match eval 20 [] [] (.let_ false none classC (.mcall (.new_ (.var 0) [str "a"]) "get" [])) with
   | .ok (.string s) => s == "a" | _ => false
 -- A class is called with `new`.
-#guard inferProgram (.let_ false classC (.mcall (.app (.var 0) [num 1]) "get" [])) == none
+#guard inferProgram (.let_ false none classC (.mcall (.app (.var 0) [num 1]) "get" [])) == none
 -- A spread copies an instance's own fields, not its prototype's methods.
-#guard inferProgram (.let_ false classC
+#guard inferProgram (.let_ false none classC
   (.mcall (.spread (.new_ (.var 0) [num 1]) (.obj ["w"] [num 2] [.data])) "get" [])) == none
-#guard inferProgram (.let_ false classC
+#guard inferProgram (.let_ false none classC
   (.get (.spread (.new_ (.var 0) [num 1]) (.obj ["w"] [num 2] [.data])) "v")) == some .number
 -- A method isn't a field one can store to.
-#guard inferProgram (.let_ false classC
+#guard inferProgram (.let_ false none classC
   (.set (.new_ (.var 0) [num 1]) "get" (.func 0 (num 1)))) == none
 
 /-- `class D { a = 1; b = this.a + 1; f = () => this.b; }`: a field's
@@ -419,21 +420,21 @@ def classD : Expr :=
   .ctor 0 (.ret (.cls ["a", "b", "f"]
     [num 1, .binop .plus (.var 0) (num 1), .func 0 (.ret (.get (.var 1) "b"))] [.data, .data, .arrow]))
 
-#guard inferProgram (.let_ false classD (.app (.get (.new_ (.var 0) []) "f") [])) == some .number
-#guard match eval 20 [] [] (.let_ false classD (.app (.get (.new_ (.var 0) []) "f") [])) with
+#guard inferProgram (.let_ false none classD (.app (.get (.new_ (.var 0) []) "f") [])) == some .number
+#guard match eval 20 [] [] (.let_ false none classD (.app (.get (.new_ (.var 0) []) "f") [])) with
   | .ok (.number n) => n == 2 | _ => false
 -- An arrow function isn't a constructor: `new` on an arrow field throws a
 -- `TypeError` in JavaScript, and is stuck here (`Value.asCtor`). Its `this`
 -- is `NotNew`, so it isn't typed.
-#guard inferProgram (.let_ false classD (.new_ (.get (.new_ (.var 0) []) "f") [])) == none
-#guard match eval 20 [] [] (.let_ false classD (.new_ (.get (.new_ (.var 0) []) "f") [])) with
+#guard inferProgram (.let_ false none classD (.new_ (.get (.new_ (.var 0) []) "f") [])) == none
+#guard match eval 20 [] [] (.let_ false none classD (.new_ (.get (.new_ (.var 0) []) "f") [])) with
   | .stuck _ => true | _ => false
 -- A field's initialiser is an expression, outside the constructor's body:
 -- a `return` in it (which JavaScript has no syntax for) isn't typed.
-#guard inferProgram (.let_ false (.ctor 0 (.cls ["a"] [.ret (num 1)] [.data]))
+#guard inferProgram (.let_ false none (.ctor 0 (.cls ["a"] [.ret (num 1)] [.data]))
   (.get (.new_ (.var 0) []) "a")) == none
 -- Read off its instance, it is called on that instance, or outside one.
-#guard inferProgram (.let_ false classD
+#guard inferProgram (.let_ false none classD
   (.binop .plus (.mcall (.new_ (.var 0) []) "f" []) (.app (.get (.new_ (.var 0) []) "f") [])))
     == some .number
 
@@ -448,27 +449,27 @@ def spreadA : Expr := .get (.spread (.obj [] [] []) (.var 0)) "a"
 -- stored to keeps its place, one added comes last, and a label defined
 -- twice in a literal is where it was first, with its last value.
 -- `{get b() { this.a = 5; … }, a: 1}`: the getter runs first.
-#guard match eval 20 [] [] (.let_ false
+#guard match eval 20 [] [] (.let_ false none
     (.obj ["b", "a"] [storesA 5, num 1] [.getter, .data]) spreadA) with
   | .ok (.number n) => n == 5 | _ => false
 -- `{a: 1, get g() { this.a = 9; … }}; o.a = 2`: `a` is still first.
-#guard match eval 20 [] [] (.let_ false
+#guard match eval 20 [] [] (.let_ false none
     (.obj ["a", "g"] [num 1, storesA 9] [.data, .getter])
     (.seq (.set (.var 0) "a" (num 2)) spreadA)) with
   | .ok (.number n) => n == 2 | _ => false
 -- `{a: 1, get g() { this.a = 9; … }, a: 3}`: `a` is first, `3`.
-#guard match eval 20 [] [] (.let_ false
+#guard match eval 20 [] [] (.let_ false none
     (.obj ["a", "g", "a"] [num 1, storesA 9, num 3] [.data, .getter, .data]) spreadA) with
   | .ok (.number n) => n == 3 | _ => false
 -- `{get g() { this.a = 9; … }}; o.a = 2`: `a` comes after the getter.
-#guard match eval 20 [] [] (.let_ false
+#guard match eval 20 [] [] (.let_ false none
     (.obj ["g"] [storesA 9] [.getter])
     (.seq (.set (.var 0) "a" (num 2)) spreadA)) with
   | .ok (.number n) => n == 9 | _ => false
 
 -- `function f(x) { return f; }; f(1)(2) - 1`: `f` returns itself, a
 -- recursive function type, so `f(1)(2)` is `f`, not a number.
-#guard inferProgram (.let_ false (.func 1 (.var 1))
+#guard inferProgram (.let_ false none (.func 1 (.var 1))
   (.binop .minus (.app (.app (.var 0) [num 1]) [num 2]) (num 1))) == none
 
 end Inty.Examples

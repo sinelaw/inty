@@ -107,6 +107,38 @@ theorem Subst.find_compose (σ₂ σ₁ : Subst) (a : Nat) :
 @[simp] theorem Scheme.subst_nil (s : Scheme) : s.subst [] = s := by
   cases s; simp [Scheme.subst]
 
+/-- A type scheme body with no free variables is left as it is by a
+substitution. -/
+theorem PTy.subst_of_ftv_nil (σ : Subst) : ∀ p : PTy, p.ftv = [] → p.subst σ = p := by
+  intro p
+  induction p using PTy.ind with
+  | free a => simp [PTy.ftv]
+  | bound i => intro _; rfl
+  | self j => intro _; rfl
+  | app c args ih =>
+    intro h
+    simp only [PTy.ftv_app, List.flatMap_eq_nil_iff] at h
+    simp only [PTy.subst_app, PTy.app.injEq, true_and]
+    exact (List.map_congr_left (fun p hp => ih p hp (h p hp))).trans (List.map_id _)
+  | mu i sys ih =>
+    intro h
+    simp only [PTy.ftv_mu, List.flatMap_eq_nil_iff] at h
+    simp only [PTy.subst_mu, PTy.mu.injEq, true_and]
+    exact (List.map_congr_left (fun p hp => ih p hp (h p hp))).trans (List.map_id _)
+
+/-- A closed scheme is left as it is by a substitution. -/
+theorem Scheme.subst_of_ftv_nil {s : Scheme} (σ : Subst) (h : s.ftv = []) : s.subst σ = s := by
+  obtain ⟨k, body, preds⟩ := s
+  simp only [Scheme.ftv, List.append_eq_nil_iff, List.flatMap_eq_nil_iff] at h
+  simp only [Scheme.subst, Scheme.mk.injEq, true_and]
+  refine ⟨PTy.subst_of_ftv_nil σ body h.1, ?_⟩
+  refine (List.map_congr_left (fun p hp => ?_)).trans (List.map_id _)
+  obtain ⟨c, args⟩ := p
+  have hp' := h.2 _ hp
+  simp only [PPred.ftv, List.flatMap_eq_nil_iff] at hp'
+  simp only [PPred.subst, PPred.mk.injEq, true_and, id]
+  exact (List.map_congr_left (fun q hq => PTy.subst_of_ftv_nil σ q (hp' q hq))).trans (List.map_id _)
+
 @[simp] theorem Scheme.subst_arity (σ : Subst) (s : Scheme) :
     (s.subst σ).arity = s.arity := rfl
 

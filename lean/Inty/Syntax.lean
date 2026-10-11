@@ -86,8 +86,10 @@ inductive Expr where
   | app (f : Expr) (args : List Expr)
   /-- `const x = e₁; e₂` (`mutable` false) or `let x = e₁; e₂` (`mutable`
   true), with `x` as `var 0` in `e₂`. `x` is generalised when `e₁` is a
-  syntactic value and `e₂` never assigns to it. -/
-  | let_ (mutable : Bool) (e₁ e₂ : Expr)
+  syntactic value and `e₂` never assigns to it. An annotation
+  (`/** const x: T */`) declares `x`'s scheme, which must have no free
+  type variables: its quantified ones are rigid in `e₁`. -/
+  | let_ (mutable : Bool) (ann : Option Scheme) (e₁ e₂ : Expr)
   /-- `x = e`, for the variable `var i`: `e`'s value, stored in `x`. -/
   | assign (i : Nat) (e : Expr)
   /-- `c ? t : e`. The test may have any type and is read by truthiness, as
@@ -163,7 +165,7 @@ inductive Expr.IsValue : Expr → Prop where
 theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (var : ∀ i, motive (.var i)) (func : ∀ n body, motive body → motive (.func n body))
     (app : ∀ f args, motive f → (∀ a ∈ args, motive a) → motive (.app f args))
-    (let_ : ∀ m e₁ e₂, motive e₁ → motive e₂ → motive (.let_ m e₁ e₂))
+    (let_ : ∀ m a e₁ e₂, motive e₁ → motive e₂ → motive (.let_ m a e₁ e₂))
     (assign : ∀ i e, motive e → motive (.assign i e))
     (cond : ∀ c t e, motive c → motive t → motive e → motive (.cond c t e))
     (unop : ∀ op e, motive e → motive (.unop op e))
@@ -195,8 +197,8 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
         tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ f)
       (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
         tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ a)
-  | .let_ m e₁ e₂ =>
-    let_ m e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+  | .let_ m a e₁ e₂ =>
+    let_ m a e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
         tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
         tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ e₂)
@@ -299,7 +301,7 @@ def Expr.writes (i : Nat) : Expr → Bool
   | .lit _ | .var _ => false
   | .func n body => body.writes (i + n + 2)
   | .app f args => f.writes i || Expr.writesList i args
-  | .let_ _ e₁ e₂ => e₁.writes i || e₂.writes (i + 1)
+  | .let_ _ _ e₁ e₂ => e₁.writes i || e₂.writes (i + 1)
   | .assign j e => j == i || e.writes i
   | .cond c t e => c.writes i || t.writes i || e.writes i
   | .unop _ e | .ret e | .throw_ e => e.writes i
@@ -336,7 +338,7 @@ def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
   | .lit _ | .var _ => true
   | .func n body => body.assignsMutable (List.replicate n true ++ false :: false :: mutables)
   | .app f args => f.assignsMutable mutables && Expr.assignsMutableList mutables args
-  | .let_ m e₁ e₂ => e₁.assignsMutable mutables && e₂.assignsMutable (m :: mutables)
+  | .let_ m _ e₁ e₂ => e₁.assignsMutable mutables && e₂.assignsMutable (m :: mutables)
   | .assign j e => mutables[j]? == some true && e.assignsMutable mutables
   | .cond c t e => c.assignsMutable mutables && t.assignsMutable mutables &&
       e.assignsMutable mutables
@@ -377,7 +379,7 @@ def Expr.jumpsInLoop (inLoop : Bool) : Expr → Bool
   | .lit _ | .var _ => true
   | .func _ body => body.jumpsInLoop false
   | .app f args => f.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop args
-  | .let_ _ e₁ e₂ | .binop _ e₁ e₂ | .seq e₁ e₂ | .tryCatch e₁ e₂ | .tryFinally e₁ e₂
+  | .let_ _ _ e₁ e₂ | .binop _ e₁ e₂ | .seq e₁ e₂ | .tryCatch e₁ e₂ | .tryFinally e₁ e₂
   | .spread e₁ e₂ | .index e₁ e₂ => e₁.jumpsInLoop inLoop && e₂.jumpsInLoop inLoop
   | .assign _ e | .unop _ e | .ret e | .throw_ e => e.jumpsInLoop inLoop
   | .cond c t e => c.jumpsInLoop inLoop && t.jumpsInLoop inLoop && e.jumpsInLoop inLoop

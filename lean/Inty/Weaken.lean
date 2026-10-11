@@ -269,10 +269,10 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
       (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR)
     simp only [Expr.writes, Bool.or_eq_false_iff] at hw
     exact Expr.writesList_false' hw.2 _ (List.of_mem_zip hp).1
-  | let_ s F _ hv hs _ ih₁ ih₂ =>
+  | let_ s F _ hv hs ha _ ih₁ ih₂ =>
     intro Γ' R' hg hR
     refine .let_ s F (fun m hm => ih₁ m hm ((hg.weaken (fun c h => List.mem_append_left _ h)).sub
-      fun i hw => by simp_all [Expr.writes]) hR) hv hs ?_
+      fun i hw => by simp_all [Expr.writes]) hR) hv hs ha ?_
     have := hg.prepend (Δ := [s]) (fun j s' hj => by
         cases j with
         | zero =>

@@ -74,11 +74,11 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
   | "let", rest => do
     let (e₁, rest) ← parseExpr rest
     let (e₂, rest) ← parseExpr rest
-    some (.let_ false e₁ e₂, rest)
+    some (.let_ false none e₁ e₂, rest)
   | "letmut", rest => do
     let (e₁, rest) ← parseExpr rest
     let (e₂, rest) ← parseExpr rest
-    some (.let_ true e₁ e₂, rest)
+    some (.let_ true none e₁ e₂, rest)
   | "assign", i :: rest => do
     let i ← i.toNat?
     let (e, rest) ← parseExpr rest

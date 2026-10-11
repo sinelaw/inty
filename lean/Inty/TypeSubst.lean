@@ -105,13 +105,17 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq
-  | let_ s F _ hv hs _ ih₁ ih₂ =>
-    refine .let_ (s.subst σ) (F ++ σ.map Prod.fst) (fun m hm => ?_) ?_ ?_ (by simpa using ih₂)
+  | let_ s F _ hv hs ha _ ih₁ ih₂ =>
+    refine .let_ (s.subst σ) (F ++ σ.map Prod.fst) (fun m hm => ?_) ?_ ?_ ?_ (by simpa using ih₂)
     · have hσ : ∀ p ∈ σ, p.1 < m := fun p hp => hm p.1 (by simp; exact .inr ⟨_, hp⟩)
       rw [← Scheme.open_subst s hσ, ← Scheme.openPreds_subst s hσ, ← List.map_append]
       exact ih₁ m (fun a ha => hm a (by simp [ha]))
     · simpa [Scheme.subst] using hv
     · exact hs.subst σ
+    · intro a h
+      obtain ⟨rfl, h'⟩ := ha a h
+      rw [Scheme.subst_of_ftv_nil σ h'.2.2]
+      exact ⟨rfl, h'⟩
   | assign hi ha hp _ ih =>
     rw [Scheme.inst_subst]
     refine .assign (by simp [List.getElem?_map, hi]) (by simpa [Scheme.subst] using ha)

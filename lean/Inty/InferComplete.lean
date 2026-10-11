@@ -2199,11 +2199,49 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
         · exact Sat.fresh hp₂ hsat₂
-  | let_ mb e₁ e₂ ih₁ ih₂ =>
+  | let_ mb ann e₁ e₂ ih₁ ih₂ =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    cases ann with
+    | some a =>
+      cases ht with
+      | let_ s F hgen hval hsimp hann h₂ =>
+        obtain ⟨hs, har, hap, haf⟩ := hann a rfl
+        subst a
+        have hcl : ∀ ψ, s.subst ψ = s := fun ψ => Scheme.subst_of_ftv_nil ψ haf
+        have hop : ∀ m, s.open m = s.inst [] := fun m => by simp [Scheme.open, har, varBlock]
+        have hopp : ∀ m, s.openPreds m = [] := fun m => by
+          simp [Scheme.openPreds, Scheme.instPreds, hap]
+        have h₁ := hgen (maxPlusOne F) (fun a ha => lt_maxPlusOne a ha)
+        rw [hop, hopp, List.append_nil] at h₁
+        obtain ⟨o₁, h₁o, φ₁, hag₁, hτ₁, hsat₁⟩ := ih₁ hΓ hR hC hΓ' hR' h₁
+        obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e₁ hΓ hR h₁o
+        have hsi : ∀ ψ, (s.inst []).subst ψ = s.inst [] := fun ψ => by
+          rw [Scheme.inst_nil_subst, hcl]
+        have hu : TyEq (o₁.τ.subst φ₁) ((s.inst []).subst φ₁) := by rw [hsi]; exact hτ₁
+        obtain ⟨σ', hσ', habs⟩ := unify_mgu hu
+        have hsb : (s.inst []).Below n := Scheme.inst_nil_below fun b hb => by simp [haf] at hb
+        have hσw := unify_within hτb₁ (hsb.mono hn₁) hσ'
+        have hσ₁' := hσ₁.compose hσw
+        have hagS : Agree n (Subst.compose σ' o₁.σ) φ₁ ψ := hag₁.absorb habs
+        obtain ⟨o₂, h₂o, φ₂, hag₂, hτ₂, hsat₂⟩ := ih₂ (Γ := s :: Ctx.subst (Subst.compose σ' o₁.σ) Γ)
+          (R := Ret.subst (Subst.compose σ' o₁.σ) R) (ψ := φ₁)
+          (Ctx.Below.cons (fun b hb => by simp [haf] at hb) (hσ₁'.ctx_below (hΓ.mono hn₁)))
+          (hσ₁'.ret_below (hR.mono hn₁)) hC
+          (by
+            simp only [Ctx.subst_cons, hcl]
+            exact CtxEq.cons (SchemeEq.refl _) (hΓ'.trans (hagS.ctx hΓ).symm))
+          (hR'.trans (hagS.ret hR).symm) h₂
+        refine ⟨⟨Subst.compose o₂.σ (Subst.compose σ' o₁.σ), o₂.τ,
+          (o₁.preds.map (·.subst σ')).map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩, ?_, φ₂,
+          hagS.trans hσ₁' hn₁ hag₂, hτ₂.trans hτ₀, ?_⟩
+        · simp only [infer, har, hap, haf, and_self, ↓reduceIte, h₁o, hσ', h₂o]
+        · refine Sat.app (Sat.agree hag₂ (fun p hp => ?_) (Sat.absorb habs hsat₁)) hsat₂
+          obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+          exact hσw.pred_below (hp₁ q hq)
+    | none =>
     cases ht with
-    | let_ s F hgen hval hsimp h₂ =>
+    | let_ s F hgen hval hsimp _ h₂ =>
       -- Open `s` at a block of variables fresh for everything in sight.
       obtain ⟨m, hmF, hms, hmC, hmψ⟩ : ∃ m, (∀ a ∈ F, a < m) ∧ (∀ a ∈ s.ftv, a < m) ∧
           (∀ p ∈ C, ∀ a ∈ p.ftv, a < m) ∧

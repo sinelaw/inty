@@ -441,7 +441,7 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
       match call (min c₂ clock) (h₂ ++ [.fields []]) vf.asCtor (.obj h₂.length) vs with
       | (.ok v, c₃, h₃) => (.ok (if v.isObject then v else .obj h₂.length), c₃, h₃)
       | p => p
-  | .let_ _ e₁ e₂ =>
+  | .let_ _ _ e₁ e₂ =>
     bindC (run clock env heap e₁) fun v c₁ h₁ =>
       run (min c₁ clock) (h₁.length :: env) (h₁ ++ [v]) e₂
   | .assign i e =>

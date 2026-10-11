@@ -56,7 +56,7 @@ theorem run_clock_le (clock : Nat) (env : Env) (heap : Heap) (e : Expr) :
       (.obj (runArgs (min (run clock env heap f).2.1 clock) env (run clock env heap f).2.2
         args).2.2.length) vs) lt_min_le
     split <;> simp_all
-  | .let_ _ e₁ e₂ => by
+  | .let_ _ _ e₁ e₂ => by
     rw [run]
     exact bindC_le (run_clock_le clock env heap e₁) fun v _ =>
       Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
@@ -381,7 +381,7 @@ theorem run_mono (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (k : Nat)
     generalize call c₂ (h₂ ++ [.fields []]) vf.asCtor (.obj h₂.length) vs = q
     obtain ⟨r, c, hq⟩ := q
     cases r <;> rfl
-  | .let_ _ e₁ e₂ => by
+  | .let_ _ _ e₁ e₂ => by
     simp only [run] at hne ⊢
     refine bindC_mono (run_mono clock env heap e₁ k) (fun v _ h => ?_) hne
     have hc := run_clock_le clock env heap e₁

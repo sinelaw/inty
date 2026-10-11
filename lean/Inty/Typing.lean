@@ -62,6 +62,12 @@ def Scheme.Simple (s : Scheme) : Prop :=
     ∃ q k τ t r, p = ⟨.merge, [q, k, τ, t, r]⟩ ∧
       ∃ i < s.arity, ∃ x ∈ [q, k, τ, t], x.TreeBound s.arity i
 
+/-- An annotation `ann` on a binding declares its scheme `s`: so far a
+type with no type variables, `/** const x: Number */`. (A polymorphic
+annotation's quantified variables would be rigid in the initialiser.) -/
+def Annotated (ann : Option Scheme) (s : Scheme) : Prop :=
+  ∀ a, ann = some a → a = s ∧ s.arity = 0 ∧ s.preds = [] ∧ s.ftv = []
+
 /-- How an object literal's field written as `k`, its expression `e` of the
 type `τ`, sits in the literal's record type `T`: its slot. A method and a
 getter are written as functions (`m() {…}`, `get g() {…}`), whose `this` is
@@ -127,12 +133,12 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   `e₂` never assigns to `x`: a `let` that is written has one type, which
   each assignment must have. Otherwise `s` quantifies nothing and has no
   constraints. Its constraints are on its quantified variables
-  (`Scheme.Simple`). -/
+  (`Scheme.Simple`). An annotation fixes `s` (`Annotated`). -/
   | let_ (s : Scheme) (F : List Nat) :
       (∀ m, (∀ a ∈ F, a < m) → HasType L (C ++ s.openPreds m) Γ R e₁ (s.open m)) →
       (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
-      HasType L C (s :: Γ) R e₂ τ₂ →
-      HasType L C Γ R (.let_ mb e₁ e₂) τ₂
+      Annotated ann s → HasType L C (s :: Γ) R e₂ τ₂ →
+      HasType L C Γ R (.let_ mb ann e₁ e₂) τ₂
   /-- `x = e` stores a value of `x`'s type, which is a monotype: a binding
   that is assigned is never generalised. Its value is the assignment's.
   (That `x` is a `let` or a parameter, not a `const`, is checked apart,
@@ -258,8 +264,8 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
   | let_ (s : Scheme) (F : List Nat) :
       (∀ m, (∀ a ∈ F, a < m) → HasType L (C ++ s.openPreds m) Γ R e₁ (s.open m)) →
       (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
-      HasType L C (s :: Γ) R e₂ τ₂ →
-      HasTypeTop L C Γ R (.let_ mb e₁ e₂) τ₂
+      Annotated ann s → HasType L C (s :: Γ) R e₂ τ₂ →
+      HasTypeTop L C Γ R (.let_ mb ann e₁ e₂) τ₂
   | assign : Γ[i]? = some s → s.arity = 0 → s.preds = [] → HasType L C Γ R e (s.inst []) →
       HasTypeTop L C Γ R (.assign i e) (s.inst [])
   | cond : HasType L C Γ R c τc → HasType L C Γ R t τ → HasType L C Γ R e τ →
@@ -324,7 +330,7 @@ theorem HasType.top (h : HasType L C Γ R e τ) : ∃ τ₀, TyEq τ₀ τ ∧ H
   | var hi hl hc => exact ⟨_, .refl _, .var hi hl hc⟩
   | func hl hb => exact ⟨_, .refl _, .func hl hb⟩
   | app hf hl ha => exact ⟨_, .refl _, .app hf hl ha⟩
-  | let_ s F h₁ hv hs h₂ => exact ⟨_, .refl _, .let_ s F h₁ hv hs h₂⟩
+  | let_ s F h₁ hv hs ha h₂ => exact ⟨_, .refl _, .let_ s F h₁ hv hs ha h₂⟩
   | assign hi ha hp he => exact ⟨_, .refl _, .assign hi ha hp he⟩
   | cond hc ht he => exact ⟨_, .refl _, .cond hc ht he⟩
   | unop hop he => exact ⟨_, .refl _, .unop hop he⟩
@@ -361,10 +367,10 @@ theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :
 
 /-- A monomorphic `const`. -/
 theorem HasType.let_mono (h₁ : HasType L C Γ R e₁ τ₁)
-    (h₂ : HasType L C (.mono τ₁ :: Γ) R e₂ τ₂) : HasType L C Γ R (.let_ mb e₁ e₂) τ₂ :=
+    (h₂ : HasType L C (.mono τ₁ :: Γ) R e₂ τ₂) : HasType L C Γ R (.let_ mb none e₁ e₂) τ₂ :=
   .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPreds,
     Scheme.instPreds, Scheme.mono, Scheme.inst] using h₁) (.inl ⟨rfl, rfl⟩)
-    (fun _ h => by simp [Scheme.mono] at h) h₂
+    (fun _ h => by simp [Scheme.mono] at h) (fun _ h => by cases h) h₂
 
 end Inty
 
