@@ -1,6 +1,6 @@
 // Unions are declared, not guessed: branches that disagree on type
-// are an error unless an annotation says they form a union. (A branch
-// that is `null` or `undefined` makes the result nullable without one.)
+// are an error unless an annotation says they form a union. A branch
+// that is `null` or `undefined` is no different: `T | Null` is said too.
 
 /** function tag(Boolean) => Number | String */
 function tag(c) { return c ? 42 : "err"; }
@@ -19,8 +19,11 @@ function pick(b) {
 var pt = pick(true);
 var x  = pt.x;                      // both arms expose `x: Number`
 
-// Nullable without an annotation:
+// Nullable: `T | Null` holds a `T` or `null`, and `??` or a test for
+// null gets the `T` back out.
+/** function find<a>(xs: a[], v: a) => a | Null */
 function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }
 var hit = find([1, 2], 2);          // Number | Null
+var n = hit ?? 0;                   // Number
 
 // Try this — remove an annotation above to see the branches rejected.

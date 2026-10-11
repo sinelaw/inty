@@ -31,6 +31,7 @@ console.log(holder.data[0] + holder.data[1]);
 console.log(Float64Array.from([0.25, 2]).length);
 
 // Identity and null, like any object.
+/** const maybe: Int32Array | Null */
 const maybe = h.length > 10 ? h : null;
 console.log(maybe === null);
 console.log(h === h);

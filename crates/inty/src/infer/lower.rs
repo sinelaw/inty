@@ -307,6 +307,7 @@ impl InferState {
             Type::Array(t) => {
                 Type::Array(Box::new(self.annotation_this(span, t, &Type::Undefined)?))
             }
+            Type::Maybe(z, t) => Type::Maybe(*z, Box::new(self.annotation_this(span, t, this)?)),
             Type::Map(t) => Type::Map(Box::new(self.annotation_this(span, t, &Type::Undefined)?)),
             Type::Promise(t) => {
                 Type::Promise(Box::new(self.annotation_this(span, t, &Type::Undefined)?))
@@ -398,6 +399,7 @@ fn declared_this(ty: &Type, given: bool, this: &Type) -> Type {
             Type::Row(out)
         }
         Type::Array(t) => Type::Array(Box::new(declared_this(t, given, &u))),
+        Type::Maybe(z, t) => Type::Maybe(*z, Box::new(declared_this(t, given, this))),
         Type::Map(t) => Type::Map(Box::new(declared_this(t, given, &u))),
         Type::Promise(t) => Type::Promise(Box::new(declared_this(t, given, &u))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| declared_this(t, given, &u)).collect()),

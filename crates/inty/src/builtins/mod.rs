@@ -751,8 +751,13 @@ impl InferState {
                     let pred = &self.pending_constraints[i].pred;
                     // (An `Indexable` on a known container too: its element
                     // must be known before numeric defaulting picks one.)
-                    matches!(pred.class, ClassName::HasProp | ClassName::Indexable)
-                        && !self.is_deferred(pred)
+                    matches!(
+                        pred.class,
+                        ClassName::HasProp
+                            | ClassName::Indexable
+                            | ClassName::Inject
+                            | ClassName::Strip
+                    ) && !self.is_deferred(pred)
                 })
                 .collect();
             if ready.is_empty() {
@@ -786,13 +791,16 @@ impl InferState {
     }
 
     /// A constraint that must wait for its first type (an `Indexable`'s
-    /// container, a `HasProp`'s receiver) to be known.
-    fn is_deferred(&self, pred: &TypePred) -> bool {
-        matches!(pred.class, ClassName::Indexable | ClassName::HasProp)
-            && matches!(
-                pred.types.first().map(|c| self.apply_subst(c)),
-                Some(Type::Var(TVarName::Flex(_)))
-            )
+    /// container, a `HasProp`'s receiver, the type an `Inject` or a
+    /// `Strip` relates to a sum) to be known.
+    pub(crate) fn is_deferred(&self, pred: &TypePred) -> bool {
+        matches!(
+            pred.class,
+            ClassName::Indexable | ClassName::HasProp | ClassName::Inject | ClassName::Strip
+        ) && matches!(
+            pred.types.first().map(|c| self.apply_subst(c)),
+            Some(Type::Var(TVarName::Flex(_)))
+        )
     }
 
     /// Resolve `HasProp(receiver, name, result)` for a known receiver:
@@ -903,7 +911,10 @@ impl InferState {
                     // Subsumption matters where the parameter is a union or
                     // a `Number` (an `Int` argument fits); elsewhere it is
                     // unification, done directly (no snapshot).
-                    if matches!(self.zonk(&p.ty), Type::Union(_) | Type::Number) {
+                    if matches!(
+                        self.zonk(&p.ty),
+                        Type::Union(_) | Type::Maybe(..) | Type::Number
+                    ) {
                         self.subsume(span, &a.ty, &p.ty)?;
                     } else {
                         self.unify(span, &a.ty, &p.ty)?;
@@ -1041,6 +1052,44 @@ impl InferState {
                 let this = pred.method_this().cloned();
                 self.resolve_has_prop(&recv, name, &result, this.as_ref(), span)
             }
+            // A known type: subsume it into the sum, which poses the
+            // constraint again if the type is still a variable.
+            ClassName::Inject => self.subsume(span, &pred.types[0], &pred.types[1]),
+            ClassName::Strip => self.resolve_strip(&pred.types[0], &pred.types[1], span),
+        }
+    }
+
+    /// Resolve `Strip τ σ`: a sum's value is its `σ`; nothing alone holds
+    /// no value to strip down to (an error, as in the model, which has
+    /// no instance for it); any other type is its own `σ`. Waits while
+    /// `τ` is a variable.
+    pub(crate) fn resolve_strip(
+        &mut self,
+        ty: &Type,
+        sigma: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.flatten_type(ty) {
+            // A number is never nothing.
+            t @ Type::Var(TVarName::Flex(_)) if self.is_numeric(&t) => self.unify(span, sigma, ty),
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::strip(ty.clone(), sigma.clone()), span);
+                Ok(())
+            }
+            Type::Maybe(_, inner) => self.unify(span, sigma, &inner),
+            Type::Named(id, args) if !self.is_nominal_type(id) => {
+                match self.unroll_named(id, &args) {
+                    Some(unrolled) => self.resolve_strip(&unrolled, sigma, span),
+                    None => self.unify(span, sigma, ty),
+                }
+            }
+            t @ (Type::Null | Type::Undefined) => Err(TypeError::ConstraintNotSatisfied {
+                class: "Strip (a value that is always nothing)".to_string(),
+                ty: t.to_string(),
+                span,
+            }
+            .into()),
+            _ => self.unify(span, sigma, ty),
         }
     }
 

@@ -319,7 +319,7 @@ impl InferState {
                 for p in &preds {
                     let determined: &[Type] = match p.class {
                         ClassName::HasProp => p.types.get(2..).unwrap_or(&[]),
-                        ClassName::Indexable => &p.types[1..],
+                        ClassName::Indexable | ClassName::Strip => &p.types[1..],
                         _ => &[],
                     };
                     for t in determined {
@@ -521,6 +521,7 @@ fn collect_polarity(ty: &Type, pol: u8, out: &mut std::collections::HashMap<TVar
                 collect_polarity(m, pol, out);
             }
         }
+        Type::Maybe(_, inner) => collect_polarity(inner, pol, out),
         other => {
             for v in other.free_vars() {
                 *out.entry(v).or_insert(0) |= INV;

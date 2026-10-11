@@ -156,6 +156,8 @@ impl TypeMapper {
                     other => self.map_depth(state, other, span, d)?,
                 }
             }
+            // A sum as the union of its arms: a nullable Go type.
+            Type::Maybe(..) => self.map_depth(state, &Type::Union(ty.arms()), span, d)?,
             Type::Union(members) => {
                 let non_null: Vec<&Type> = members
                     .iter()
@@ -427,6 +429,7 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
             ret: Box::new(resolve_depth(state, ret, d)),
         },
         Type::Array(e) => Type::Array(Box::new(resolve_depth(state, e, d))),
+        Type::Maybe(z, e) => Type::Maybe(*z, Box::new(resolve_depth(state, e, d))),
         Type::Map(e) => Type::Map(Box::new(resolve_depth(state, e, d))),
         Type::Promise(e) => Type::Promise(Box::new(resolve_depth(state, e, d))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| resolve_depth(state, t, d)).collect()),
@@ -507,6 +510,7 @@ pub fn apply_mapping(ty: &Type, m: &Mapping) -> Type {
             ret: Box::new(apply_mapping(ret, m)),
         },
         Type::Array(e) => Type::Array(Box::new(apply_mapping(e, m))),
+        Type::Maybe(z, e) => Type::Maybe(*z, Box::new(apply_mapping(e, m))),
         Type::Map(e) => Type::Map(Box::new(apply_mapping(e, m))),
         Type::Promise(e) => Type::Promise(Box::new(apply_mapping(e, m))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| apply_mapping(t, m)).collect()),
@@ -561,6 +565,7 @@ fn widen(ty: &Type) -> Type {
             ret: Box::new(widen(ret)),
         },
         Type::Array(e) => Type::Array(Box::new(widen(e))),
+        Type::Maybe(z, e) => Type::Maybe(*z, Box::new(widen(e))),
         Type::Map(e) => Type::Map(Box::new(widen(e))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(widen).collect()),
         Type::Named(id, args) => Type::Named(*id, args.iter().map(widen).collect()),

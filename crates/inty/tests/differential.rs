@@ -38,7 +38,7 @@ use std::process::{Command, Stdio};
 use inty::builtins::initial_env;
 use inty::dynamics::{run_to_end_with_fuel, Stuck, Value};
 use inty::infer::InferState;
-use inty::types::{LitValue, Type};
+use inty::types::{LitValue, Nothing, Type};
 
 // ---- The core calculus ---------------------------------------------------
 
@@ -1840,6 +1840,8 @@ fn core_type(t: &Type) -> String {
         Type::Row(_) if t.as_callable().is_some() => "fun".into(),
         Type::Row(_) => "obj".into(),
         Type::Array(_) => "array".into(),
+        Type::Maybe(Nothing::Null, _) => "nullable".into(),
+        Type::Maybe(Nothing::Undefined, _) => "optional".into(),
         Type::Var(_) => "var".into(),
         // The empty union: what doesn't complete, such as a `throw`.
         Type::Union(ts) if ts.is_empty() => "never".into(),
@@ -1943,9 +1945,6 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     }
     shown.extend(errors);
     for text in &shown {
-        if text.contains(" | ") {
-            features.insert("unions");
-        }
         if text.contains("never") {
             features.insert("never");
         }
@@ -2123,14 +2122,6 @@ fn env_or(name: &str, default: u64) -> u64 {
 /// feature inty's types show it used.
 fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Option<&'static str> {
     match (inty, model) {
-        // Roadmap phase 5: `c ? 1 : null` is `Number | Null` in inty, and
-        // `c ? undefined : x` is `Undefined | t`, where the model unifies.
-        (Typing::Type(_), Typing::Reject) if features.contains("unions") => {
-            Some("unions (a nullable join)")
-        }
-        (Typing::Type(t), Typing::Type(_)) if t.starts_with("union(") => {
-            Some("unions (a nullable join)")
-        }
         // Roadmap phase 7 (optional parameters): a function literal with
         // fewer parameters than the function type expected of it, which
         // ignores the extra arguments, as JavaScript does.
@@ -2167,12 +2158,6 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // of bounds (a fault).
         (Typing::Reject, Typing::Type(_)) if features.contains("Int index") => {
             Some("Int indices (the model has only number)")
-        }
-        // inty's nullable join (`c ? undefined : x` is `Undefined | t`
-        // even for an unknown `t`) can make an HM-typable program an
-        // infinite type, or fail to unify.
-        (Typing::Reject, Typing::Type(_)) if features.contains("unions") => {
-            Some("unions (inty's nullable join rejects an HM-typable program)")
         }
         _ => None,
     }

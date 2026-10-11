@@ -1413,6 +1413,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         | Type::Literal(_)
         | Type::Error => ty.clone(),
         Type::Array(elem) => Type::array(substitute_alias_body(elem, subst)),
+        Type::Maybe(z, inner) => Type::Maybe(*z, Box::new(substitute_alias_body(inner, subst))),
         Type::Map(value) => Type::Map(Box::new(substitute_alias_body(value, subst))),
         Type::Promise(inner) => Type::promise(substitute_alias_body(inner, subst)),
         Type::Tuple(elems) => Type::Tuple(

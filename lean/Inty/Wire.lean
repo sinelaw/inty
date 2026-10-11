@@ -273,6 +273,8 @@ def tyWire : Ty → String
   | .fn .. => "fun"
   | .record .. => "obj"
   | .array _ => "array"
+  | .nullable _ => "nullable"
+  | .optional _ => "optional"
   -- inty's type for what a `catch` binds is a rigid type variable.
   | .unknown | .var _ => "var"
   -- A recursive type, by its unfolding.

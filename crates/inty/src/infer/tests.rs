@@ -6,7 +6,7 @@ use super::*;
 use crate::builtins::initial_env;
 use crate::frontends::javascript::lexer::{Scanner, Token};
 use crate::frontends::javascript::parser::Parser;
-use crate::types::Type;
+use crate::types::{Nothing, Type};
 
 fn infer_expr_str(source: &str) -> InferResult<Type> {
     let mut scanner = Scanner::new(source);
@@ -1491,14 +1491,7 @@ fn test_phase7_find_returns_optional() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("v").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    match ty {
-        Type::Union(ref m) => {
-            assert_eq!(m.len(), 2);
-            assert!(m.contains(&Type::Int));
-            assert!(m.contains(&Type::Undefined));
-        }
-        other => panic!("expected union, got {}", other),
-    }
+    assert_eq!(ty, Type::Maybe(Nothing::Undefined, Box::new(Type::Int)));
 }
 
 #[test]
@@ -2614,12 +2607,10 @@ fn default_parameter_pins_param_type() {
 }
 
 /// Phase 1.4 regression: destructuring defaults parse without error.
-/// inty has no nullable types so the default itself isn't type-checked,
-/// but the surrounding pattern must continue to work.
 #[test]
 fn destructuring_default_in_function_param() {
     let src = "\
-        function orient({ target, anchor = null, reset = false }) { return target; } \
+        function orient({ target, anchor = 0, reset = false }) { return target; } \
         var x = orient({ target: 1, anchor: 2, reset: true });";
     let result = infer_program_via_program(src);
     assert!(
@@ -4159,10 +4150,16 @@ fn branches_checked_against_an_annotation_form_a_union() {
 }
 
 #[test]
-fn a_null_branch_makes_the_join_nullable() {
-    // Even when the other side isn't known yet: it isn't bound to `Null`.
+fn a_null_branch_needs_the_sum_said() {
+    // As in the model, branches have one type: `null` and a value don't
+    // join into a guessed sum. An annotation says the sum, and each
+    // branch is injected into it.
     let src =
         "function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n\
+               const hit = find([1, 2], 2);";
+    assert!(check_program(src, &["hit"]).is_err());
+    let src = "/** function find<a>(xs: a[], v: a) => a | Null */\n\
+               function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n\
                const hit = find([1, 2], 2);";
     assert_eq!(check_program(src, &["hit"]).unwrap(), ["Int | Null"]);
 }
@@ -4236,7 +4233,7 @@ fn new_array_fill_is_an_array_of_the_value() {
 
 #[test]
 fn null_tests_narrow() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let accepted = [
         "const q = p(1); if (q !== null) { const a = q.x; }",
         "const q = p(1); if (q != null) { const a = q.x; }",
@@ -4262,7 +4259,7 @@ fn null_tests_narrow() {
 
 #[test]
 fn null_narrowing_ends_where_the_value_may_change() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let rejected = [
         "const q = p(1); const a = q.x;",
         "const q = p(1); if (q === null) { const a = q.x; }",
@@ -4286,7 +4283,7 @@ fn null_narrowing_ends_where_the_value_may_change() {
 
 #[test]
 fn narrowing_a_const_keeps_it_const() {
-    let src = "function p(x) { return x > 0 ? { x: x } : null; }\n\
+    let src = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n\
                const q = p(1); if (q !== null) { q = p(2); }";
     assert!(check_program(src, &[]).is_err());
 }
@@ -4296,7 +4293,7 @@ fn narrowing_a_const_keeps_it_const() {
 /// depending on something that shouldn't matter.
 #[test]
 fn narrowing_refines_only_bindings_that_never_change() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let rejected = [
         // An assignment inside the guarded expression.
         "let q = p(1); const a = q !== null ? (q = p(0), q.x) : 0;",
@@ -4344,7 +4341,7 @@ fn narrowing_refines_only_bindings_that_never_change() {
 
 #[test]
 fn narrowing_is_coherent() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let pairs = [
         // Operand order.
         ("const q = p(1); const a = q === null ? 0 : q.x;", "const q = p(1); const a = null === q ? 0 : q.x;"),
@@ -4408,7 +4405,7 @@ fn narrowing_holds_only_for_its_own_binding() {
 
 #[test]
 fn renaming_a_binding_changes_nothing() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n\
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n\
              function a() { const q = p(1); if (q === null) return 0; return q.x; }\n";
     // Another function's binding named `q` (written, captured and written
     // by a closure, shadowing) is not `a`'s `q`: renaming it changes

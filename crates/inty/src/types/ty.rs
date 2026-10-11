@@ -306,6 +306,18 @@ pub enum ClassName {
     /// `{length: …}` objects alike. The receiver determines the result
     /// (a functional dependency, like `Indexable`'s container).
     HasProp,
+    /// `Inject τ T`: a `τ` is accepted where the sum `T` (a
+    /// [`Type::Maybe`]) is expected — `τ` is `T` itself, its nothing,
+    /// or something its value accepts. Posed when `τ` is still a
+    /// variable, and resolved once it is known (the model's waiting
+    /// constraint `Inject`).
+    Inject,
+    /// `Strip τ σ`: `σ` is what a `τ` holds besides nothing — the
+    /// value of a sum `Maybe(_, σ)`, or `τ` itself when it is not a
+    /// sum. Posed by `x ?? d` and `x != null` on an `x` whose type is
+    /// still a variable, and resolved once it is known (the model's
+    /// `Strip`). `τ` determines `σ`.
+    Strip,
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
@@ -410,6 +422,24 @@ impl TypePred {
                 Type::Literal(LitValue::String(name.to_string())),
                 result,
             ],
+            origin: None,
+        }
+    }
+
+    /// `Inject sub sup`: a `sub` is accepted where the sum `sup` is.
+    pub fn inject(sub: Type, sup: Type) -> Self {
+        TypePred {
+            class: ClassName::Inject,
+            types: vec![sub, sup],
+            origin: None,
+        }
+    }
+
+    /// `Strip ty sigma`: `sigma` is what a `ty` holds besides nothing.
+    pub fn strip(ty: Type, sigma: Type) -> Self {
+        TypePred {
+            class: ClassName::Strip,
+            types: vec![ty, sigma],
             origin: None,
         }
     }
@@ -742,9 +772,21 @@ pub enum Type {
     Literal(LitValue),
 
     /// Untagged union type: `T1 | T2 | ...`. Always normalised so that
-    /// members are deduplicated and sorted. A union is only constructed via
-    /// [`Type::union`] which enforces the invariants.
+    /// members are deduplicated and sorted, and none is `Null` or
+    /// `Undefined` (those make a [`Type::Maybe`]). A union is only
+    /// constructed via [`Type::union`] which enforces the invariants.
     Union(Vec<Type>),
+
+    /// A sum of nothing and a value: `Nullable T` (`T | Null`) holds `null`
+    /// or a `T`, `Optional T` (`T | Undefined`) holds `undefined` or a
+    /// `T`. It is tagged: it unifies only with a sum of the same nothing,
+    /// so a `T` or a `null` is one only where it is checked against one
+    /// (an annotation, a parameter's type: `subsume`), and it is taken
+    /// apart by a test for nothing (`x != null`, `x ?? d`), which leaves
+    /// the `T` (`ClassName::Strip`). Branches don't join into one: `c ? x
+    /// : null` is an error unless an annotation says what it is. This is
+    /// the Lean model's `Ty.maybe` (`lean/Inty/Types.lean`).
+    Maybe(Nothing, Box<Type>),
 
     /// ES module namespace: the type of `ns` after `import * as ns from
     /// "./mod.js";`. Carries one type *scheme* per export so member access
@@ -775,6 +817,32 @@ pub enum Type {
     /// any leaked occurrence is obvious in test output and `--annotate`
     /// dumps.
     Error,
+}
+
+/// What a [`Type::Maybe`] holds besides its value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Nothing {
+    Null,
+    Undefined,
+}
+
+impl Nothing {
+    /// The type whose only value is this nothing.
+    pub fn ty(self) -> Type {
+        match self {
+            Nothing::Null => Type::Null,
+            Nothing::Undefined => Type::Undefined,
+        }
+    }
+
+    /// The nothing a type's only value is, if it is `Null` or `Undefined`.
+    pub fn of(ty: &Type) -> Option<Nothing> {
+        match ty {
+            Type::Null => Some(Nothing::Null),
+            Type::Undefined => Some(Nothing::Undefined),
+            _ => None,
+        }
+    }
 }
 
 /// Which typed array a [`Type::TypedArray`] is.
@@ -1074,6 +1142,7 @@ impl Type {
                 })
             }
             Type::Array(elem) => Type::Array(Box::new(elem.widen_fresh_literals_with(f))),
+            Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(elem.widen_fresh_literals_with(f))),
             Type::Map(v) => Type::Map(Box::new(v.widen_fresh_literals_with(f))),
             Type::Promise(inner) => Type::Promise(Box::new(inner.widen_fresh_literals_with(f))),
             Type::Tuple(elems) => Type::Tuple(
@@ -1130,17 +1199,42 @@ impl Type {
     /// - Members are deduplicated and sorted by a stable key.
     /// - A single-element union collapses to that element.
     /// - The empty union stays as `Type::Union(vec![])` (i.e. `never`).
+    /// - `Null` and `Undefined` members make a sum of the rest
+    ///   ([`Type::Maybe`]): `T | Null` is `Nullable T`, and `T | Undefined
+    ///   | Null` is `Nullable (Optional T)`.
     pub fn union(members: impl IntoIterator<Item = Type>) -> Self {
         let mut flat: Vec<Type> = Vec::new();
-        for m in members {
+        let (mut null, mut undefined) = (false, false);
+        let mut pending: Vec<Type> = members.into_iter().collect();
+        while let Some(m) = pending.pop() {
             match m {
-                Type::Union(inner) => {
-                    for t in inner {
-                        flat.push(t);
-                    }
+                Type::Union(inner) => pending.extend(inner),
+                Type::Maybe(z, inner) => {
+                    pending.push(z.ty());
+                    pending.push(*inner);
                 }
+                Type::Null => null = true,
+                Type::Undefined => undefined = true,
                 other => flat.push(other),
             }
+        }
+        if null || undefined {
+            let core = if flat.is_empty() {
+                None
+            } else {
+                Some(Type::union(flat))
+            };
+            let with_undefined = match (core, undefined) {
+                (Some(t), true) => Type::Maybe(Nothing::Undefined, Box::new(t)),
+                (Some(t), false) => t,
+                (None, true) => Type::Undefined,
+                (None, false) => return Type::Null,
+            };
+            return if null {
+                Type::Maybe(Nothing::Null, Box::new(with_undefined))
+            } else {
+                with_undefined
+            };
         }
 
         // Deduplicate by structural equality. Quadratic in number of
@@ -1159,6 +1253,30 @@ impl Type {
         } else {
             Type::Union(seen)
         }
+    }
+
+    /// The alternatives a union or a sum holds: a union's members, a
+    /// sum's nothing and its value's alternatives, or the type itself.
+    /// [`Type::union`] of them is the type again.
+    pub fn arms(&self) -> Vec<Type> {
+        match self {
+            Type::Union(members) => members.clone(),
+            Type::Maybe(z, inner) => {
+                let mut arms = vec![z.ty()];
+                arms.extend(inner.arms());
+                arms
+            }
+            other => vec![other.clone()],
+        }
+    }
+
+    /// A sum as the union of its arms, sorted as a union's members are,
+    /// for printing: `Nullable Number` is `Number | Null`, which reads
+    /// back as the same sum.
+    pub fn as_printed_union(&self) -> Type {
+        let mut arms = self.arms();
+        arms.sort_by_key(union_member_sort_key);
+        Type::Union(arms)
     }
 
     /// True if this type is the empty union (`never`).
@@ -1378,7 +1496,9 @@ impl Type {
                     }
                 }
             }
-            Type::Array(e) | Type::Promise(e) | Type::Map(e) => e.collect_named_ids(ids),
+            Type::Array(e) | Type::Promise(e) | Type::Map(e) | Type::Maybe(_, e) => {
+                e.collect_named_ids(ids)
+            }
             Type::Tuple(ts) | Type::Union(ts) => {
                 for t in ts {
                     t.collect_named_ids(ids);
@@ -1434,7 +1554,7 @@ impl Type {
                     }
                 }
             }
-            Type::Array(elem) | Type::Promise(elem) | Type::Map(elem) => {
+            Type::Array(elem) | Type::Promise(elem) | Type::Map(elem) | Type::Maybe(_, elem) => {
                 elem.collect_free_pvars(pvars);
             }
             Type::Named(_, args) => {
@@ -1520,6 +1640,7 @@ impl Type {
             }
 
             Type::Array(elem) => elem.collect_free_vars(vars),
+            Type::Maybe(_, inner) => inner.collect_free_vars(vars),
             Type::Promise(inner) => inner.collect_free_vars(vars),
             Type::Map(value) => value.collect_free_vars(vars),
 
@@ -1729,6 +1850,9 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
             (10, keys.join(","))
         }
         Type::Array(elem) => (11, union_member_sort_key(elem).1),
+        // A sum is never a union's member (its arms are), but sort it by
+        // its value's key all the same.
+        Type::Maybe(_, inner) => (20, union_member_sort_key(inner).1),
         Type::Map(v) => (12, union_member_sort_key(v).1),
         Type::Promise(v) => (13, union_member_sort_key(v).1),
         Type::Named(id, _) => (14, format!("{}", id)),

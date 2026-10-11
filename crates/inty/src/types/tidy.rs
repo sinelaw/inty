@@ -155,6 +155,7 @@ impl TidyEnv {
 
             Type::Row(row) => Type::Row(self.tidy_row(row)),
             Type::Array(elem) => Type::Array(Box::new(self.tidy_type(elem))),
+            Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(self.tidy_type(elem))),
             Type::Promise(inner) => Type::Promise(Box::new(self.tidy_type(inner))),
             Type::Map(value) => Type::Map(Box::new(self.tidy_type(value))),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.tidy_type(e)).collect()),

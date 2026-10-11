@@ -361,10 +361,7 @@ impl InferState {
 /// `a || b` (`truthy = true`: the truthy values) returns as `a` itself.
 /// `None` when a part of `ty` isn't known yet.
 fn logical_part(ty: &Type, truthy: bool) -> Option<Type> {
-    let members: Vec<Type> = match ty {
-        Type::Union(m) => m.clone(),
-        other => vec![other.clone()],
-    };
+    let members = ty.arms();
     let mut kept = Vec::new();
     for m in members {
         let keep = match &m {

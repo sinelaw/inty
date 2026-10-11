@@ -112,7 +112,8 @@ console.log(q === r);",
         ),
         (
             "a nullable type",
-            "function p(x) { return x > 0 ? { x: x } : null; }
+            "/** function p(x: Number) => {x: Number} | Null */
+function p(x) { return x > 0 ? { x: x } : null; }
 const q = p(1);
 console.log(q === null);",
         ),

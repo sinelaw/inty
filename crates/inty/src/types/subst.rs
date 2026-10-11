@@ -466,6 +466,7 @@ impl Subst {
                 ret: Box::new(self.flatten_type(ret, state)),
             },
             Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, state))),
+            Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(self.flatten_type(elem, state))),
             Type::Promise(inner) => Type::Promise(Box::new(self.flatten_type(inner, state))),
             Type::Map(value) => Type::Map(Box::new(self.flatten_type(value, state))),
             Type::Tuple(elems) => {
@@ -619,6 +620,7 @@ impl Substitutable for Type {
 
             // Array types
             Type::Array(elem) => Type::Array(Box::new(elem.apply_subst(subst))),
+            Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(elem.apply_subst(subst))),
 
             // Promise types
             Type::Promise(inner) => Type::Promise(Box::new(inner.apply_subst(subst))),

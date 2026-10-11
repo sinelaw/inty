@@ -195,7 +195,8 @@ impl PrettyContext {
                 write!(w, " }}")
             }
             Type::Array(elem) => {
-                let needs_parens = prints_as_function(elem) || matches!(**elem, Type::Union(_));
+                let needs_parens =
+                    prints_as_function(elem) || matches!(**elem, Type::Union(_) | Type::Maybe(..));
                 if needs_parens {
                     write!(w, "(")?;
                 }
@@ -231,6 +232,7 @@ impl PrettyContext {
                 self.write_type(w, ty, in_func_arg)
             }
             Type::Literal(lit) => self.write_literal(w, lit),
+            Type::Maybe(..) => self.write_type_ts(w, &ty.as_printed_union(), in_func_arg),
             Type::Union(members) => {
                 if members.is_empty() {
                     return write!(w, "never");
@@ -272,7 +274,8 @@ impl PrettyContext {
 
     /// Write a type to the given writer.
     fn write_type<W: Write>(&mut self, w: &mut W, ty: &Type, in_func_arg: bool) -> fmt::Result {
-        if !self.aliases.is_empty() && matches!(ty, Type::Row(_) | Type::Union(_)) {
+        if !self.aliases.is_empty() && matches!(ty, Type::Row(_) | Type::Union(_) | Type::Maybe(..))
+        {
             let found = self.aliases.iter().find_map(|(name, params, body)| {
                 let mut bound = std::collections::HashMap::new();
                 match_alias(body, ty, params, &mut bound).then(|| {
@@ -380,7 +383,8 @@ impl PrettyContext {
                 // binds unambiguously: a union or function element reads as
                 // `(A | B)[]` / `((A) => B)[]`, not `A | B[]` (which parses
                 // as `A | (B[])`).
-                let needs_parens = prints_as_function(elem) || matches!(**elem, Type::Union(_));
+                let needs_parens =
+                    prints_as_function(elem) || matches!(**elem, Type::Union(_) | Type::Maybe(..));
                 if needs_parens {
                     write!(w, "(")?;
                 }
@@ -442,6 +446,7 @@ impl PrettyContext {
                 write!(w, "module {:?}", m.source)
             }
 
+            Type::Maybe(..) => self.write_type(w, &ty.as_printed_union(), in_func_arg),
             Type::Union(members) => {
                 if members.is_empty() {
                     return write!(w, "never");
@@ -732,6 +737,13 @@ impl PrettyContext {
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
             }
+            ClassName::Inject | ClassName::Strip => {
+                write!(w, "{}", pred.class)?;
+                for t in &pred.types {
+                    write!(w, " ")?;
+                    self.write_type(w, t, true)?;
+                }
+            }
             ClassName::HasProp => match pred.as_has_prop() {
                 Some((recv, name, result)) => self.write_has_props(w, recv, &[(name, result)])?,
                 None => {
@@ -796,7 +808,7 @@ fn collect_hidden_this_vars(ty: &Type, hidden: &mut HashSet<TVarName>) {
             }
             collect_hidden_this_vars(ret, hidden);
         }
-        Type::Array(elem) => collect_hidden_this_vars(elem, hidden),
+        Type::Array(elem) | Type::Maybe(_, elem) => collect_hidden_this_vars(elem, hidden),
         Type::Promise(inner) => collect_hidden_this_vars(inner, hidden),
         Type::Map(value) => collect_hidden_this_vars(value, hidden),
         Type::Tuple(elems) => {
@@ -884,6 +896,8 @@ impl Display for ClassName {
             ClassName::IndexWrite => write!(f, "IndexWrite"),
             ClassName::FieldWrite => write!(f, "FieldWrite"),
             ClassName::HasProp => write!(f, "HasProp"),
+            ClassName::Inject => write!(f, "Inject"),
+            ClassName::Strip => write!(f, "Strip"),
         }
     }
 }
@@ -922,6 +936,7 @@ fn match_alias(
         (Type::Array(a), Type::Array(b)) | (Type::Promise(a), Type::Promise(b)) => {
             match_alias(a, b, params, bound)
         }
+        (Type::Maybe(z1, a), Type::Maybe(z2, b)) => z1 == z2 && match_alias(a, b, params, bound),
         (
             Type::Func {
                 this_type: t1,

@@ -3,11 +3,12 @@
 //!
 //! ## `a ?? b`
 //!
-//! With `a : T | Null | Undefined`, the result is
-//! `(T \ {Null, Undefined}) ∪ typeof b`. The right operand is type-
-//! checked even when the left isn't nullable — its result type is
-//! still unioned in, but if `a` can never be nullish then the union
-//! is just `T`.
+//! As in the model (`unwrap`, `lean/Inty/Typing.lean`): with `a : τ`,
+//! `Strip τ σ` gives what `a` holds besides nothing — the value `σ` of a
+//! sum `σ | Null` or `σ | Undefined`, or `τ` itself when it isn't a sum
+//! — and `σ` and the type of `b` are joined like the branches of a
+//! conditional. A `τ` still unknown poses the `Strip` and waits; an `a`
+//! that is always nothing (`Null`, `Undefined`) is an error.
 //!
 //! ## `a?.b`, `a?.()`, `a?.[k]`
 //!
@@ -33,20 +34,17 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let left_ty = self.infer_expr(env, left)?;
+        let value = self.strip_sum(left.span(), &left_ty)?;
         let right_ty = self.infer_expr(env, right)?;
-        let left_resolved = self.zonk(&left_ty);
+        self.join(span, &value, &right_ty)
+    }
 
-        let (non_nullish, had_nullish) = strip_nullish(&left_resolved);
-        if had_nullish {
-            // Right side is reachable; union it in. If the non-nullish
-            // part is `never` (LHS was purely nullish), `join` collapses
-            // to RHS's type.
-            self.join(span, &non_nullish, &right_ty)
-        } else {
-            // Right side is unreachable. We type-checked it for
-            // well-formedness; the result is just the LHS type.
-            Ok(left_resolved)
-        }
+    /// What a value of type `ty` holds besides nothing: the `σ` of
+    /// `Strip ty σ` (posed, if `ty` is still a variable).
+    pub(in crate::infer) fn strip_sum(&mut self, span: Span, ty: &Type) -> InferResult<Type> {
+        let sigma = self.fresh_type_var();
+        self.resolve_strip(ty, &sigma, span)?;
+        Ok(self.zonk(&sigma))
     }
 
     /// Infer an optional-chain expression.
@@ -158,6 +156,7 @@ impl InferState {
 pub(in crate::infer) fn strip_nullish(ty: &Type) -> (Type, bool) {
     match ty {
         Type::Null | Type::Undefined => (Type::never(), true),
+        Type::Maybe(_, inner) => (strip_nullish(inner).0, true),
         Type::Union(members) => {
             let mut kept = Vec::with_capacity(members.len());
             let mut had = false;
@@ -174,15 +173,8 @@ pub(in crate::infer) fn strip_nullish(ty: &Type) -> (Type, bool) {
     }
 }
 
-/// Union `T` with `Undefined`. Idempotent if `T` already contains
-/// `Undefined`.
+/// `T | Undefined`: `T` as an `Optional` sum, unless it holds
+/// `undefined` already.
 fn join_with_undefined(ty: &Type) -> Type {
-    let mut members = match ty.clone() {
-        Type::Union(ms) => ms,
-        other => vec![other],
-    };
-    if !members.iter().any(|m| matches!(m, Type::Undefined)) {
-        members.push(Type::Undefined);
-    }
-    Type::union(members)
+    Type::union([ty.clone(), Type::Undefined])
 }

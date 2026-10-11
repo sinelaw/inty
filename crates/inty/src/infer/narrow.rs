@@ -233,7 +233,7 @@ pub fn test_facts(test: &Expr, atom: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>
 /// variable that *happens* to be substituted to a union would never
 /// narrow, because the env still holds the bare variable.
 pub fn apply_narrowing(
-    state: &super::state::InferState,
+    state: &mut super::state::InferState,
     env: &TypeEnv,
     path: &Path,
     narrowing: &Narrowing,
@@ -274,15 +274,44 @@ fn root_of(path: &Path) -> &Path {
 /// unsound rather than merely imprecise. (The checker warns about the
 /// dead branch; see [`narrowing_is_dead`].)
 fn narrow_binding(
-    state: &super::state::InferState,
+    state: &mut super::state::InferState,
     env: &TypeEnv,
     path: &Path,
     narrowing: &Narrowing,
 ) -> TypeEnv {
+    if let Some(narrowed) = strip_unknown(state, env, path, narrowing) {
+        return narrowed;
+    }
     match refinement(state, env, path, narrowing) {
         Some((key, _, after)) if !after.is_never() => env.narrow(&key, TypeScheme::mono(after)),
         _ => env.clone(),
     }
+}
+
+/// `x != null` on a binding `x` whose type is still a variable `α`: in
+/// the branch, `x` is what an `α` holds besides nothing, the `σ` of
+/// `Strip α σ` (as in the model's `unwrap`). `None` for anything else.
+fn strip_unknown(
+    state: &mut super::state::InferState,
+    env: &TypeEnv,
+    path: &Path,
+    narrowing: &Narrowing,
+) -> Option<TypeEnv> {
+    let (Narrowing::NotNullish, Path::Ident(name, span)) = (narrowing, path) else {
+        return None;
+    };
+    let key = state.key_of(*span, name);
+    let scheme = env.lookup_key(&key)?.scheme.clone();
+    if !scheme.is_mono() {
+        return None;
+    }
+    let ty = state.apply_subst(scheme.ty());
+    if !matches!(ty, Type::Var(crate::types::TVarName::Flex(_))) || state.is_numeric(&ty) {
+        return None;
+    }
+    let sigma = state.fresh_type_var();
+    state.add_constraint(crate::types::TypePred::strip(ty, sigma.clone()), *span);
+    Some(env.narrow(&key, TypeScheme::mono(sigma)))
 }
 
 /// The binding `path` is rooted at, its type, and its type refined by
@@ -309,7 +338,13 @@ fn refinement(
 
     let original_ty = state.apply_subst(scheme.ty());
     let exposed = expose_named(state, &original_ty);
-    let new_ty = refine_at_path(&exposed, &path_steps(path), narrowing, state.language);
+    // A sum is refined as the union of its arms, which `Type::union`
+    // makes a sum again from what is kept.
+    let arms = match &exposed {
+        Type::Maybe(..) => Type::Union(exposed.arms()),
+        t => t.clone(),
+    };
+    let new_ty = refine_at_path(&arms, &path_steps(path), narrowing, state.language);
     // Nothing ruled out: leave the binding (and a named type) alone.
     (new_ty != exposed).then_some((key, exposed, new_ty))
 }
@@ -320,7 +355,7 @@ fn expose_named(state: &super::state::InferState, ty: &Type) -> Type {
     let unroll = |t: &Type| match t {
         Type::Named(id, args) if !state.is_nominal_type(*id) => match state.unroll_named(*id, args)
         {
-            Some(u @ Type::Union(_)) => u,
+            Some(u @ (Type::Union(_) | Type::Maybe(..))) => u,
             _ => t.clone(),
         },
         _ => t.clone(),
@@ -335,16 +370,20 @@ fn expose_named(state: &super::state::InferState, ty: &Type) -> Type {
         _ => t.clone(),
     };
     match ty {
-        Type::Union(members) => Type::union(
-            members
+        Type::Union(_) | Type::Maybe(..) => Type::union(
+            ty.arms()
                 .iter()
                 .map(|m| match unroll(m) {
-                    u @ Type::Union(_) => u,
+                    u @ (Type::Union(_) | Type::Maybe(..)) => u,
                     other => unroll_member(&other),
                 })
                 .collect::<Vec<_>>(),
         ),
-        _ => unroll(ty),
+        _ => match unroll(ty) {
+            // A named sum: its arms may be named too.
+            u @ Type::Maybe(..) => expose_named(state, &u),
+            u => u,
+        },
     }
 }
 
@@ -507,7 +546,11 @@ fn is_primitive(ty: &Type) -> bool {
 /// named type is a class instance or a recursive type that doesn't
 /// unfold to a union — `expose_named` unfolds those — so it is neither.)
 fn could_be(ty: &Type, unit: &Type) -> bool {
-    ty == unit || matches!(ty, Type::Var(_) | Type::Union(_) | Type::Error)
+    ty == unit
+        || matches!(
+            ty,
+            Type::Var(_) | Type::Union(_) | Type::Maybe(..) | Type::Error
+        )
 }
 
 /// True unless every value of `ty` is falsy. `null`/`nil`, `undefined`
@@ -554,6 +597,7 @@ fn could_be_falsy(ty: &Type, lang: Language) -> bool {
                 | Type::Var(_)
                 | Type::Named(_, _)
                 | Type::Union(_)
+                | Type::Maybe(..)
                 | Type::Error
         ),
         Language::Python => !callable,
@@ -566,7 +610,7 @@ fn brand_could_match(ty: &Type, id: TypeId) -> bool {
     match ty {
         Type::Named(mid, _) => *mid == id,
         // A variable or union member of unknown shape can't be ruled out.
-        Type::Var(_) | Type::Union(_) => true,
+        Type::Var(_) | Type::Union(_) | Type::Maybe(..) => true,
         _ => false,
     }
 }
@@ -598,7 +642,9 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
         (Type::Literal(LitValue::Bool(_)), "boolean") => true,
         // Variables / named / unions are accepted conservatively — we
         // don't yet know what they are, so we can't rule them out.
-        (Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Error, _) => true,
+        (Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Maybe(..) | Type::Error, _) => {
+            true
+        }
         _ => false,
     }
 }
@@ -631,7 +677,7 @@ fn value_compatible_with_literal(ty: &Type, lit: &LitValue) -> bool {
         }
         Type::Boolean => matches!(lit, LitValue::Bool(_)),
         // Unknown/abstract types are compatible — we can't rule them out.
-        Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Error => true,
+        Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Maybe(..) | Type::Error => true,
         // A row, function, etc. cannot equal a primitive literal value.
         _ => false,
     }
@@ -822,9 +868,9 @@ mod tests {
     fn test_narrow_typeof_undefined_drops_undefined_member() {
         let ty = Type::union(vec![Type::String, Type::Undefined]);
         let env = env_with("x", ty);
-        let state = crate::infer::InferState::new();
+        let mut state = crate::infer::InferState::new();
         let narrowed = narrow_binding(
-            &state,
+            &mut state,
             &env,
             &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsNotTypeof("undefined".to_string()),
@@ -837,9 +883,9 @@ mod tests {
     fn test_narrow_typeof_undefined_keeps_undefined_member() {
         let ty = Type::union(vec![Type::String, Type::Undefined]);
         let env = env_with("x", ty);
-        let state = crate::infer::InferState::new();
+        let mut state = crate::infer::InferState::new();
         let narrowed = narrow_binding(
-            &state,
+            &mut state,
             &env,
             &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsTypeof("undefined".to_string()),
@@ -851,9 +897,9 @@ mod tests {
     #[test]
     fn test_narrow_equals_literal_sharpens_string() {
         let env = env_with("s", Type::String);
-        let state = crate::infer::InferState::new();
+        let mut state = crate::infer::InferState::new();
         let narrowed = narrow_binding(
-            &state,
+            &mut state,
             &env,
             &Path::Ident("s".to_string(), Span::new(0, 0)),
             &Narrowing::Is(Type::lit_string("hi")),
@@ -902,8 +948,8 @@ mod tests {
             PropName("kind".into()),
         );
         let narrowing = Narrowing::Is(Type::lit_string("circle"));
-        let state = crate::infer::InferState::new();
-        let narrowed = narrow_binding(&state, &env, &path, &narrowing);
+        let mut state = crate::infer::InferState::new();
+        let narrowed = narrow_binding(&mut state, &env, &path, &narrowing);
         let new_ty = narrowed.lookup("shape").unwrap().ty();
         assert_eq!(*new_ty, circle);
     }
@@ -926,8 +972,8 @@ mod tests {
             PropName("kind".into()),
         );
         let narrowing = Narrowing::IsNot(Type::lit_string("circle"));
-        let state = crate::infer::InferState::new();
-        let narrowed = narrow_binding(&state, &env, &path, &narrowing);
+        let mut state = crate::infer::InferState::new();
+        let narrowed = narrow_binding(&mut state, &env, &path, &narrowing);
         let new_ty = narrowed.lookup("shape").unwrap().ty();
         assert_eq!(*new_ty, square);
     }
@@ -939,10 +985,10 @@ mod tests {
         let dog = Type::Named(1, vec![]);
         let cat = Type::Named(2, vec![]);
         let env = env_with("x", Type::union(vec![dog.clone(), cat.clone()]));
-        let state = crate::infer::InferState::new();
+        let mut state = crate::infer::InferState::new();
 
         let yes = narrow_binding(
-            &state,
+            &mut state,
             &env,
             &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsInstance(1),
@@ -950,7 +996,7 @@ mod tests {
         assert_eq!(*yes.lookup("x").unwrap().ty(), dog);
 
         let no = narrow_binding(
-            &state,
+            &mut state,
             &env,
             &Path::Ident("x".to_string(), Span::new(0, 0)),
             &Narrowing::IsNotInstance(1),
@@ -963,7 +1009,7 @@ mod tests {
         // A value known to be one brand, tested against a different one:
         // the branch is dead, and the binding keeps its type there.
         let env = env_with("x", Type::Named(2, vec![]));
-        let state = crate::infer::InferState::new();
+        let mut state = crate::infer::InferState::new();
         let path = Path::Ident("x".to_string(), Span::new(0, 0));
         assert!(narrowing_is_dead(
             &state,
@@ -971,7 +1017,7 @@ mod tests {
             &path,
             &Narrowing::IsInstance(1)
         ));
-        let narrowed = narrow_binding(&state, &env, &path, &Narrowing::IsInstance(1));
+        let narrowed = narrow_binding(&mut state, &env, &path, &Narrowing::IsInstance(1));
         assert_eq!(*narrowed.lookup("x").unwrap().ty(), Type::Named(2, vec![]));
     }
 
@@ -981,11 +1027,11 @@ mod tests {
         // `"a"` rather than `never`, so an inexact predicate can only cost
         // precision.
         let env = env_with("s", Type::lit_string("a"));
-        let state = crate::infer::InferState::new();
+        let mut state = crate::infer::InferState::new();
         let path = Path::Ident("s".to_string(), Span::new(0, 0));
         let n = Narrowing::IsNot(Type::lit_string("a"));
         assert!(narrowing_is_dead(&state, &env, &path, &n));
-        let narrowed = narrow_binding(&state, &env, &path, &n);
+        let narrowed = narrow_binding(&mut state, &env, &path, &n);
         assert_eq!(*narrowed.lookup("s").unwrap().ty(), Type::lit_string("a"));
     }
 }

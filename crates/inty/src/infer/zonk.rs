@@ -191,6 +191,10 @@ fn zonk_with_visited(
         },
         Type::Row(row) => Type::Row(zonk_row_with_visited(table, subst, row, visited)),
         Type::Array(elem) => Type::Array(Box::new(zonk_with_visited(table, subst, elem, visited))),
+        Type::Maybe(z, inner) => Type::Maybe(
+            *z,
+            Box::new(zonk_with_visited(table, subst, inner, visited)),
+        ),
         Type::Promise(inner) => {
             Type::Promise(Box::new(zonk_with_visited(table, subst, inner, visited)))
         }
@@ -403,6 +407,9 @@ fn zonk_filtered(table: &mut VarTable, subst: &Subst, ty: &Type, quantified: &[T
         },
         Type::Row(row) => Type::Row(zonk_row_filtered(table, subst, row, quantified)),
         Type::Array(elem) => Type::Array(Box::new(zonk_filtered(table, subst, elem, quantified))),
+        Type::Maybe(z, inner) => {
+            Type::Maybe(*z, Box::new(zonk_filtered(table, subst, inner, quantified)))
+        }
         Type::Promise(inner) => {
             Type::Promise(Box::new(zonk_filtered(table, subst, inner, quantified)))
         }

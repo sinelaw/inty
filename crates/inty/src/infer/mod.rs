@@ -1131,6 +1131,23 @@ impl InferState {
                 }
             }
         }
+        // A literal where a sum is expected is its value: the sum's value
+        // type is pushed into it (`{b: null}` where a `{b: B | Null} |
+        // Null` is expected), and the value injected.
+        if let (
+            Type::Maybe(_, inner),
+            Expr::Object { .. } | Expr::Array { .. } | Expr::Function { .. },
+        ) = (&expected, expr)
+        {
+            let ty = self.check_expr(env, expr, inner)?;
+            if let Some(types) = self.expr_types.as_mut() {
+                let span = expr.span();
+                types
+                    .entry((span.start, span.end))
+                    .or_insert_with(|| ty.clone());
+            }
+            return Ok(ty);
+        }
         // A function literal against a known function type takes its
         // parameter and result types from it (see
         // `check_function_literal`).
@@ -1221,15 +1238,11 @@ impl InferState {
             return Ok(ty);
         }
         if let (true, Expr::NullishCoalesce { left, right, span }) = (known, expr) {
-            // `a ?? b`: the non-nullish part of `a`, and `b`, each fit.
+            // `a ?? b`: what `a` holds besides nothing, and `b`, each fit.
             let left_ty = self.infer_expr(env, left)?;
-            let (non_nullish, had_nullish) = features::nullish::strip_nullish(&self.zonk(&left_ty));
-            self.subsume(left.span(), &non_nullish, &expected)?;
-            if had_nullish {
-                self.check_expr(env, right, &expected)?;
-            } else {
-                self.infer_expr(env, right)?;
-            }
+            let value = self.strip_sum(left.span(), &left_ty)?;
+            self.subsume(left.span(), &value, &expected)?;
+            self.check_expr(env, right, &expected)?;
             let ty = self.zonk(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());

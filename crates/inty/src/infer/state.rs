@@ -67,6 +67,7 @@ fn structural_norm(ty: &Type) -> Type {
             },
         }),
         Type::Array(elem) => Type::Array(Box::new(structural_norm(elem))),
+        Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(structural_norm(elem))),
         Type::Promise(inner) => Type::Promise(Box::new(structural_norm(inner))),
         Type::Map(value) => Type::Map(Box::new(structural_norm(value))),
         Type::Tuple(elems) => Type::Tuple(elems.iter().map(structural_norm).collect()),
@@ -670,7 +671,7 @@ impl InferState {
                         None
                     }
                 }),
-            Type::Array(elem) => self.find_origin_in_type(elem),
+            Type::Array(elem) | Type::Maybe(_, elem) => self.find_origin_in_type(elem),
             Type::Promise(inner) => self.find_origin_in_type(inner),
             Type::Map(value) => self.find_origin_in_type(value),
             Type::Tuple(elems) => elems.iter().find_map(|e| self.find_origin_in_type(e)),
@@ -1022,10 +1023,8 @@ impl InferState {
     ///
     /// * literals of one base type widen to it (`1` and `2` join to
     ///   `Number`);
-    /// * a branch that is `null` or `undefined` makes the join nullable
-    ///   (`x ? v : null` is `T | Null`), for any `T`;
-    /// * a value of an (annotated) union joined with one of its arms is
-    ///   that union;
+    /// * a value of an (annotated) union or sum joined with one of its
+    ///   arms is that union or sum;
     /// * a branch that doesn't complete (`never`) contributes nothing.
     ///
     /// Otherwise it's a `BranchMismatch` error. Where an annotation gives
@@ -1045,30 +1044,6 @@ impl InferState {
         if is_never(&t2) {
             return Ok(t1);
         }
-        let nullish = |t: &Type| match t {
-            Type::Null | Type::Undefined => true,
-            Type::Union(m) => m.iter().any(|m| matches!(m, Type::Null | Type::Undefined)),
-            _ => false,
-        };
-        if nullish(&t1) || nullish(&t2) {
-            // Directly, not by first trying to unify: that would bind a
-            // not-yet-known side to `Null`.
-            let mut all = Vec::new();
-            for t in [t1, t2] {
-                match t {
-                    Type::Union(m) => all.extend(m),
-                    // A literal next to `null` widens to its base (`Int`
-                    // for an integral one): no variable inside a union.
-                    other => all.push(other.widen_fresh_literals_with(&mut |lit| match lit {
-                        crate::types::LitValue::Number(n) if crate::types::is_safe_int(*n) => {
-                            Type::Int
-                        }
-                        lit => lit.base_type(),
-                    })),
-                }
-            }
-            return Ok(Self::normalise_union_members(all));
-        }
         // Equal after widening literals (also inside tuples, rows, …) —
         // one attempt: a join's result is widened anyway.
         {
@@ -1083,10 +1058,11 @@ impl InferState {
                 return Ok(lub);
             }
         }
-        // A union value joined with one of its arms.
-        if matches!(t1, Type::Union(_)) || matches!(t2, Type::Union(_)) {
+        // A union or sum value joined with one of its arms.
+        let is_sum = |t: &Type| matches!(t, Type::Union(_) | Type::Maybe(..));
+        if is_sum(&t1) || is_sum(&t2) {
             for (small, big) in [(&t2, &t1), (&t1, &t2)] {
-                if !matches!(big, Type::Union(_)) {
+                if !is_sum(big) {
                     continue;
                 }
                 let snap = self.snapshot_inference();
@@ -1243,6 +1219,18 @@ impl InferState {
             return Ok(());
         }
 
+        // S-Inject, waiting: a variable flowing into a sum may turn out
+        // to be the sum, its nothing or a value — which one isn't known
+        // yet, so `Inject sub sup` waits for it (binding it to the sum
+        // would guess). A number can only be a value.
+        if let (Type::Var(TVarName::Flex(_)), Type::Maybe(_, inner)) = (&sub, &sup) {
+            if self.is_numeric(&sub) {
+                return self.subsume(span, &sub, inner);
+            }
+            self.add_constraint(TypePred::inject(sub.clone(), sup.clone()), span);
+            return Ok(());
+        }
+
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
         let snap = self.snapshot_inference();
@@ -1268,6 +1256,26 @@ impl InferState {
                 }
             }
             _ => {}
+        }
+
+        // S-Inject: a sum takes its nothing, and any value its value
+        // takes (a sum of the other nothing too: `T | Undefined` fits
+        // `T | Undefined | Null`'s value). The sum itself was taken by
+        // unification.
+        if let Type::Maybe(z, inner) = &sup {
+            if sub == z.ty() {
+                return Ok(());
+            }
+            if let Type::Maybe(z2, sub_inner) = &sub {
+                if z2 == z {
+                    return self.subsume(span, sub_inner, inner);
+                }
+            }
+            let snap = self.snapshot_inference();
+            if self.quietly(|s| s.subsume(span, &sub, inner)).is_ok() {
+                return Ok(());
+            }
+            self.restore_snapshot(snap);
         }
 
         // Rule 2a (S-UnionL): a union value subsumes into `sup` iff
@@ -2382,6 +2390,14 @@ impl InferState {
                             vec![]
                         }
                     }
+                    // the type → what it holds besides nothing
+                    (ClassName::Strip, [ty, sigma]) => {
+                        if ty.free_vars().is_subset(&vars) {
+                            vec![sigma]
+                        } else {
+                            vec![]
+                        }
+                    }
                     // the operands → the result
                     (ClassName::Plus | ClassName::Arith, [a, b, c]) => {
                         if a.free_vars().is_subset(&vars) && b.free_vars().is_subset(&vars) {
@@ -2508,6 +2524,7 @@ impl InferState {
             }
 
             Type::Array(elem) => self.occurs_in_impl(var, elem),
+            Type::Maybe(_, inner) => self.occurs_in_impl(var, inner),
             Type::Promise(inner) => self.occurs_in_impl(var, inner),
             Type::Map(value) => self.occurs_in_impl(var, value),
             Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in_impl(var, e)),
@@ -2571,7 +2588,9 @@ impl InferState {
                 in_row
             }
 
-            Type::Array(elem) => self.is_inside_row_type_impl(var, elem, in_row),
+            Type::Array(elem) | Type::Maybe(_, elem) => {
+                self.is_inside_row_type_impl(var, elem, in_row)
+            }
             Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row),
             Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
             Type::Tuple(elems) => elems
@@ -2678,15 +2697,14 @@ mod tests {
     }
 
     #[test]
-    fn test_join_with_null_is_nullable() {
+    fn test_join_with_null_is_an_error() {
+        // No guessed sum (as in the model): `Number | Null` is said.
         let mut state = InferState::new();
         let span = Span::new(0, 0);
-        match state.join(span, &Type::Number, &Type::Null).unwrap() {
-            Type::Union(members) => {
-                assert!(members.contains(&Type::Number) && members.contains(&Type::Null))
-            }
-            other => panic!("expected Number | Null, got {:?}", other),
-        }
+        assert!(state.join(span, &Type::Number, &Type::Null).is_err());
+        let sum = Type::union([Type::Number, Type::Null]);
+        assert_eq!(state.join(span, &sum, &Type::Null).unwrap(), sum);
+        assert_eq!(state.join(span, &Type::Number, &sum).unwrap(), sum);
     }
 
     #[test]

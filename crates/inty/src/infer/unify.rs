@@ -106,6 +106,15 @@ impl InferState {
                 }
             }
 
+            // A sum is tagged: it is a sum of the same nothing, value with
+            // value. A `T` or a `null` is one only where it is checked
+            // against one (`subsume`, the Lean model's `Inject`). A
+            // recursive alias is unrolled below.
+            (Type::Maybe(z1, a), Type::Maybe(z2, b)) if z1 == z2 => self.unify(span, a, b),
+            (Type::Maybe(..), t) | (t, Type::Maybe(..)) if !matches!(t, Type::Named(..)) => {
+                Err(self.unification_error(span, t1, t2))
+            }
+
             // Union ~ Union: if both sides are equal as sets (we already
             // normalise), accept. Otherwise reject — the calling site
             // should use join() if it wants subsumption-style behaviour.
@@ -859,7 +868,7 @@ impl InferState {
             .type_aliases
             .iter()
             .filter(|(_, d)| d.nominal_id.is_none() && d.rec_id.is_none() && !d.open_arity)
-            .filter(|(_, d)| matches!(d.body, Type::Row(_) | Type::Union(_)))
+            .filter(|(_, d)| matches!(d.body, Type::Row(_) | Type::Union(_) | Type::Maybe(..)))
             .map(|(n, d)| (n.clone(), d.params.clone(), d.body.clone()))
             .collect();
         // Deterministic, and the first-declared of equal bodies wins

@@ -94,6 +94,8 @@ pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
         ClassName::IndexWrite | ClassName::FieldWrite => &[],
         // Structural: any type with the property is an instance.
         ClassName::HasProp => &[],
+        // Relations between a type and a sum, not catalogued shapes.
+        ClassName::Inject | ClassName::Strip => &[],
     }
 }
 

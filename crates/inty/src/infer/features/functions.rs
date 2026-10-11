@@ -1059,7 +1059,9 @@ impl InferState {
             | Type::Boolean
             | Type::Undefined
             | Type::Null
-            | Type::Literal(_) => true,
+            | Type::Literal(_)
+            // A sum holds its nothing.
+            | Type::Maybe(..) => true,
             Type::Union(ts) => ts.iter().any(|t| {
                 matches!(
                     t,
