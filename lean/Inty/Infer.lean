@@ -91,14 +91,19 @@ inductive Improve where
 
 /-- What a spread copies of the slot `s` it doesn't write over, as the slot
 `r` (`SlotCopy`): it waits while `s`'s presence, or its kind if present, is
-a type variable. -/
+a type variable. (Each is looked at unfolded.) -/
 def Pred.decideCopy (s r : Ty) : Improve :=
-  match s with
-  | .slot .pre .data _ => .eq r s
-  | .slot .pre .getter τ => .eq r (.slot .pre .data τ)
-  | .slot .pre .proto _ => .eq r .absSlot
-  | .slot .abs _ _ => .eq r s
-  | .var _ | .slot (.var _) _ _ | .slot .pre (.var _) _ => .keep
+  match s.whnf with
+  | .slot p k τ =>
+    match p.whnf, k.whnf with
+    | .pre, .data => .eq r s
+    | .pre, .getter => .eq r (.slot .pre .data τ)
+    | .pre, .proto => .eq r .absSlot
+    | .abs, _ => .eq r s
+    | .var _, _ => .keep
+    | .pre, .var _ => .keep
+    | _, _ => .fail
+  | .var _ => .keep
   | _ => .fail
 
 /-- A `Merge` whose operand's field is present, of the kind `k` and type
@@ -106,7 +111,7 @@ def Pred.decideCopy (s r : Ty) : Improve :=
 one that holds a value; a prototype member isn't. It waits while `k` is a
 type variable. -/
 def Pred.decidePre (k τ s r : Ty) : Improve :=
-  match k with
+  match k.whnf with
   | .data | .getter => .eq r (.slot .pre .data τ)
   | .proto => Pred.decideCopy s r
   | .var _ => .keep
@@ -146,8 +151,9 @@ def Pred.decide (c : Cls) (t : Ty) (rest : List Ty) : Improve := Pred.decide₀ 
 variable it waits (if it has the class's arity), on a known type it is
 decided. -/
 def Pred.improveArgs (c : Cls) : List Ty → Improve
-  | .var _ :: rest => if rest.length + 1 = c.arity then .keep else .fail
-  | t :: rest => Pred.decide c t rest
+  | t :: rest =>
+    if t.whnf.isVar then (if rest.length + 1 = c.arity then .keep else .fail)
+    else Pred.decide c t rest
   | [] => .fail
 
 /-- Deciding a constraint on a known type. A `Plus` waits until the end
@@ -255,17 +261,19 @@ def letScheme (gen : Bool) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds 
       preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
   else (.mono τ₁, preds)
 
-/-- An object literal's fields' slots, from their kinds and types (as
-`FieldSlot`), and the `this` type of each method and getter; `none` if one
-of those isn't a function, or a getter has parameters. -/
-def fieldSlots : List FieldKind → List Ty → Option (List Ty × List Ty)
-  | [], [] => some ([], [])
-  | .data :: ks, τ :: τs => (fieldSlots ks τs).map fun (θs, ss) => (θs, .slot .pre .data τ :: ss)
-  | .method :: ks, .fn θ τs' ρ :: τs =>
-    (fieldSlots ks τs).map fun (θs, ss) => (θ :: θs, .slot .pre .data (.fn θ τs' ρ) :: ss)
-  | .getter :: ks, .fn θ [] σ :: τs =>
-    (fieldSlots ks τs).map fun (θs, ss) => (θ :: θs, .slot .pre .getter σ :: ss)
-  | _, _ => none
+/-- An object literal's fields' slots, from their kinds, expressions and
+types (as `FieldSlot`), and the `this` type of each method and getter;
+`none` if one of those isn't a function expression, or a getter has
+parameters. -/
+def fieldSlots : List FieldKind → List Expr → List Ty → Option (List Ty × List Ty)
+  | [], [], [] => some ([], [])
+  | .data :: ks, _ :: es, τ :: τs =>
+    (fieldSlots ks es τs).map fun (θs, ss) => (θs, .slot .pre .data τ :: ss)
+  | .method :: ks, .func _ _ :: es, .fn θ τs' ρ :: τs =>
+    (fieldSlots ks es τs).map fun (θs, ss) => (θ :: θs, .slot .pre .data (.fn θ τs' ρ) :: ss)
+  | .getter :: ks, .func 0 _ :: es, .fn θ [] σ :: τs =>
+    (fieldSlots ks es τs).map fun (θs, ss) => (θ :: θs, .slot .pre .getter σ :: ss)
+  | _, _, _ => none
 
 /-- A class's members' slots, from their kinds, expressions and types (as
 `MemberSlot`), and the `this` type of each that isn't a field holding a
@@ -506,7 +514,7 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       match inferArgs Γ R es n with
       | none => none
       | some o =>
-        match fieldSlots ks o.τs with
+        match fieldSlots ks es o.τs with
         | none => none
         | some (θs, ss) =>
           let T := Ty.record L (objSlots L ls ss)

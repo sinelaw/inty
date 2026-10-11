@@ -242,14 +242,36 @@ theorem zip_tyEq_cons {x y : Ty} {xs ys : List Ty} (h : TyEq x y)
 
 theorem zip_tyEq_nil : ∀ p ∈ ([] : List Ty).zip [], TyEq p.1 p.2 := by simp
 
-/-- `p` is an instance up to equal types, or assumed in `C`. -/
-def Entails (C : List Pred) (p : Pred) : Prop := InstEq p ∨ p ∈ C
+/-- `p` is an instance up to equal types, or assumed in `C` up to equal
+types. -/
+def Entails (C : List Pred) (p : Pred) : Prop := InstEq p ∨ ∃ q ∈ C, PredEq p q
 
 theorem Entails.subst (σ : Subst) (h : Entails C p) :
     Entails (C.map (·.subst σ)) (p.subst σ) :=
-  h.elim (fun h => .inl (h.subst σ)) (fun h => .inr (List.mem_map_of_mem h))
+  h.elim (fun h => .inl (h.subst σ))
+    (fun ⟨q, hq, hpq⟩ => .inr ⟨q.subst σ, List.mem_map_of_mem hq, hpq.subst σ⟩)
 
 theorem Entails.of_inst (h : Inst p) : Entails C p := .inl h.instEq
+
+theorem Entails.of_mem (h : p ∈ C) : Entails C p := .inr ⟨p, h, PredEq.refl p⟩
+
+/-- Entailment is up to equal types. -/
+theorem Entails.of_predEq {p p' : Pred} (h : PredEq p p') (he : Entails C p) : Entails C p' :=
+  he.elim (fun hi => .inl (InstEq.of_predEq h.symm hi))
+    (fun ⟨q, hq, hpq⟩ => .inr ⟨q, hq, h.symm.trans hpq⟩)
+
+/-- Entailment from more assumptions, each entailed. -/
+theorem Entails.cut {C D : List Pred} {p : Pred} (h : Entails (C ++ D) p)
+    (hD : ∀ d ∈ D, Entails C d) : Entails C p := by
+  rcases h with hi | ⟨q, hq, hpq⟩
+  · exact .inl hi
+  · rcases List.mem_append.mp hq with hq | hq
+    · exact .inr ⟨q, hq, hpq⟩
+    · exact (hD q hq).of_predEq hpq.symm
+
+theorem Entails.weaken {C D : List Pred} {p : Pred} (h : Entails C p) (hCD : ∀ c ∈ C, c ∈ D) :
+    Entails D p :=
+  h.elim .inl (fun ⟨q, hq, hpq⟩ => .inr ⟨q, hCD q hq, hpq⟩)
 
 /-- `p` is an instance, or assumed in `C`: entailment with types compared
 syntactically, the fragment inference is complete for (`HasType₀`). -/
@@ -259,7 +281,7 @@ theorem Entails₀.subst (σ : Subst) (h : Entails₀ C p) :
     Entails₀ (C.map (·.subst σ)) (p.subst σ) :=
   h.elim (fun h => .inl (h.subst σ)) (fun h => .inr (List.mem_map_of_mem h))
 
-theorem Entails₀.entails (h : Entails₀ C p) : Entails C p := h.imp Inst.instEq id
+theorem Entails₀.entails (h : Entails₀ C p) : Entails C p := h.elim Entails.of_inst Entails.of_mem
 
 /-- Decides `SlotCopy s r`. -/
 def slotCopy? : Ty → Ty → Bool
@@ -307,65 +329,141 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · exact .writeArray
   · cases h
 
+theorem List.eq_five_of_length {α : Type} : ∀ {l : List α}, l.length = 5 →
+    ∃ a b c d e, l = [a, b, c, d, e]
+  | [a, b, c, d, e], _ => ⟨a, b, c, d, e, rfl⟩
+  | [], h | [_], h | [_, _], h | [_, _, _], h | [_, _, _, _], h
+  | _ :: _ :: _ :: _ :: _ :: _ :: _, h => by simp at h
+
 /-- A slot whose presence is a type variable, or present and of a kind
-that is one: what is copied of it isn't known. -/
-def Ty.SlotOnVar : Ty → Prop
+that is one: what is copied of it isn't known. (Each is looked at unfolded.) -/
+def Ty.SlotOnVar (s : Ty) : Prop :=
+  match s.whnf with
   | .var _ => True
-  | .slot (.var _) _ _ => True
-  | .slot .pre (.var _) _ => True
+  | .slot p k _ => (∃ a, p.whnf = .var a) ∨ (p.whnf = .pre ∧ ∃ a, k.whnf = .var a)
   | _ => False
 
 /-- Decides `Ty.SlotOnVar`. -/
-def Ty.slotOnVar : Ty → Bool
+def Ty.slotOnVar (s : Ty) : Bool :=
+  match s.whnf with
   | .var _ => true
-  | .slot (.var _) _ _ => true
-  | .slot .pre (.var _) _ => true
+  | .slot p k _ => p.whnf.isVar || (decide (p.whnf = .pre) && k.whnf.isVar)
   | _ => false
+
+theorem Ty.isVar_iff {τ : Ty} : τ.isVar = true ↔ ∃ a, τ = .var a := by
+  cases τ <;> simp [Ty.isVar]
 
 theorem Ty.slotOnVar_sound {s : Ty} (h : s.slotOnVar = true) : s.SlotOnVar := by
   unfold Ty.slotOnVar at h
-  split at h <;> first | trivial | cases h
+  unfold Ty.SlotOnVar
+  generalize s.whnf = w at h ⊢
+  split at h
+  · trivial
+  · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, Ty.isVar_iff] at h
+    exact h
+  · cases h
+
+/-- Equal slots wait alike. -/
+theorem Ty.SlotOnVar.tyEq {s s' : Ty} (h : TyEq s s') (hs : s.SlotOnVar) : s'.SlotOnVar := by
+  unfold Ty.SlotOnVar at hs ⊢
+  generalize hw : s.whnf = w at hs
+  match w, hs with
+  | .var a, _ => rw [TyEq.whnf_var h hw]; trivial
+  | .slot p k τ, hs =>
+    obtain ⟨p', k', τ', hw', hp, hk, -⟩ := TyEq.whnf_slot h hw
+    rw [hw']
+    rcases hs with ⟨a, ha⟩ | ⟨hpre, a, ha⟩
+    · exact .inl ⟨a, TyEq.whnf_var hp ha⟩
+    · exact .inr ⟨TyEq.whnf_const hp hpre, a, TyEq.whnf_var hk ha⟩
 
 /-- A `Merge` whose decision waits on a type variable: the operand's
 field is present, of a kind that is a type variable, or it is a prototype
-member or absent and the slot it is written over waits on one. -/
-def Pred.MergeOnVar : Pred → Prop
-  | ⟨.merge, [.pre, .var _, _, _, _]⟩ => True
-  | ⟨.merge, [.pre, .proto, _, s, _]⟩ => s.SlotOnVar
-  | ⟨.merge, [.abs, _, _, s, _]⟩ => s.SlotOnVar
+member or absent and the slot it is written over waits on one. (Each is
+looked at unfolded.) -/
+def Pred.MergeOnVar (p : Pred) : Prop :=
+  match p with
+  | ⟨.merge, [q, k, _, s, _]⟩ =>
+    (q.whnf = .pre ∧ ∃ a, k.whnf = .var a) ∨
+      (((q.whnf = .pre ∧ k.whnf = .proto) ∨ q.whnf = .abs) ∧ s.SlotOnVar)
   | _ => False
 
 /-- Decides `Pred.MergeOnVar`. -/
-def Pred.mergeOnVar : Pred → Bool
-  | ⟨.merge, [.pre, .var _, _, _, _]⟩ => true
-  | ⟨.merge, [.pre, .proto, _, s, _]⟩ => s.slotOnVar
-  | ⟨.merge, [.abs, _, _, s, _]⟩ => s.slotOnVar
+def Pred.mergeOnVar (p : Pred) : Bool :=
+  match p with
+  | ⟨.merge, [q, k, _, s, _]⟩ =>
+    (decide (q.whnf = .pre) && k.whnf.isVar) ||
+      (((decide (q.whnf = .pre) && decide (k.whnf = .proto)) || decide (q.whnf = .abs)) &&
+        s.slotOnVar)
   | _ => false
 
 theorem Pred.mergeOnVar_sound {p : Pred} (h : p.mergeOnVar = true) : p.MergeOnVar := by
   unfold Pred.mergeOnVar at h
+  unfold Pred.MergeOnVar
   split at h
-  · trivial
-  · exact Ty.slotOnVar_sound h
-  · exact Ty.slotOnVar_sound h
+  · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, Ty.isVar_iff] at h
+    exact h.imp id (fun ⟨h₁, h₂⟩ => ⟨h₁, Ty.slotOnVar_sound h₂⟩)
   · cases h
 
+/-- Equal constraints wait alike. -/
+theorem Pred.MergeOnVar.predEq {p p' : Pred} (h : PredEq p p') (hp : p.MergeOnVar) :
+    p'.MergeOnVar := by
+  obtain ⟨c, args⟩ := p
+  obtain ⟨c', args'⟩ := p'
+  obtain ⟨hc, hl, hz⟩ := h
+  simp only at hc hl hz
+  subst hc
+  unfold Pred.MergeOnVar at hp ⊢
+  split at hp
+  · rename_i q k τ s r heq
+    simp only [Pred.mk.injEq] at heq
+    obtain ⟨rfl, rfl⟩ := heq
+    obtain ⟨q', k', τ', s', r', rfl⟩ := List.eq_five_of_length hl.symm
+    · have hq : TyEq q q' := hz (q, q') (by simp)
+      have hk : TyEq k k' := hz (k, k') (by simp)
+      have hs : TyEq s s' := hz (s, s') (by simp)
+      simp only
+      rcases hp with ⟨hpre, a, ha⟩ | ⟨hqk, hsv⟩
+      · exact .inl ⟨TyEq.whnf_const hq hpre, a, TyEq.whnf_var hk ha⟩
+      · refine .inr ⟨?_, hsv.tyEq hs⟩
+        rcases hqk with ⟨hpre, hpro⟩ | habs
+        · exact .inl ⟨TyEq.whnf_const hq hpre, TyEq.whnf_const hk hpro⟩
+        · exact .inr (TyEq.whnf_const hq habs)
+  · exact hp.elim
+
 /-- The constraint is on a type variable: its first argument (`Plus`'s
-type, `HasProp`'s receiver, `Merge`'s presence) is one, or it is a `Merge`
-waiting on one (`Pred.MergeOnVar`). -/
-def Pred.OnVar (p : Pred) : Prop := (∃ a rest, p.args = .var a :: rest) ∨ p.MergeOnVar
+type, `HasProp`'s receiver, `Merge`'s presence) unfolds to one, or it is a
+`Merge` waiting on one (`Pred.MergeOnVar`). -/
+def Pred.OnVar (p : Pred) : Prop :=
+  (∃ t a rest, p.args = t :: rest ∧ t.whnf = .var a) ∨ p.MergeOnVar
 
 /-- Decides `Pred.OnVar`. -/
 def Pred.onVar (p : Pred) : Bool :=
-  match p.args with
-  | .var _ :: _ => true
-  | _ => p.mergeOnVar
+  (match p.args with
+    | t :: _ => t.whnf.isVar
+    | [] => false) || p.mergeOnVar
 
 theorem Pred.onVar_sound {p : Pred} (h : p.onVar = true) : p.OnVar := by
   unfold Pred.onVar at h
-  split at h
-  · exact .inl ⟨_, _, ‹_›⟩
+  simp only [Bool.or_eq_true] at h
+  rcases h with h | h
+  · split at h
+    · rename_i t rest he
+      obtain ⟨a, ha⟩ := Ty.isVar_iff.mp h
+      exact .inl ⟨t, a, rest, he, ha⟩
+    · cases h
   · exact .inr (Pred.mergeOnVar_sound h)
+
+/-- Equal constraints are on type variables alike. -/
+theorem Pred.OnVar.predEq {p p' : Pred} (h : PredEq p p') (hp : p.OnVar) : p'.OnVar := by
+  rcases hp with ⟨t, a, rest, he, ha⟩ | hm
+  · obtain ⟨-, hl, hz⟩ := h
+    rw [he] at hl hz
+    cases hp' : p'.args with
+    | nil => rw [hp'] at hl; simp at hl
+    | cons t' rest' =>
+      rw [hp'] at hz
+      exact .inl ⟨t', a, rest', hp', TyEq.whnf_var (hz (t, t') (by simp)) ha⟩
+  · exact .inr (hm.predEq h)
 
 /-- Each constraint is an instance (up to equal types) or is on a type
 variable. A constraint on
@@ -381,13 +479,15 @@ theorem HoldsOrVar.append {C D : List Pred} (hC : HoldsOrVar C) (hD : HoldsOrVar
   fun c hc => (List.mem_append.mp hc).elim (hC c) (hD c)
 
 theorem Entails.holdsOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p) :
-    InstEq p ∨ p.OnVar :=
-  h.elim .inl (hC p)
+    InstEq p ∨ p.OnVar := by
+  rcases h with hi | ⟨q, hq, hpq⟩
+  · exact .inl hi
+  · exact (hC q hq).imp (InstEq.of_predEq hpq) (Pred.OnVar.predEq hpq.symm)
 
 /-- A constraint of a class other than `Merge` that holds or is on a type
 variable: an instance, or its first argument is one. -/
 theorem Entails.instOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p)
-    (hc : p.cls ≠ .merge) : InstEq p ∨ ∃ a rest, p.args = .var a :: rest := by
+    (hc : p.cls ≠ .merge) : InstEq p ∨ ∃ t a rest, p.args = t :: rest ∧ t.whnf = .var a := by
   rcases h.holdsOrVar hC with h | h | h
   · exact .inl h
   · exact .inr h
@@ -396,15 +496,27 @@ theorem Entails.instOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p)
     unfold Pred.MergeOnVar at h
     split at h <;> simp_all
 
-/-- Decides whether a constraint left at the top level is fine: an instance,
-or on a type variable. -/
-def Pred.settled (p : Pred) : Bool := p.isInst || p.onVar
+/-- A constraint with its arguments unfolded. -/
+def Pred.whnfArgs (p : Pred) : Pred := ⟨p.cls, p.args.map Ty.whnf⟩
+
+theorem Pred.predEq_whnfArgs (p : Pred) : PredEq p p.whnfArgs := by
+  refine ⟨rfl, by simp [Pred.whnfArgs], fun x hx => ?_⟩
+  simp only [Pred.whnfArgs] at hx
+  rw [List.zip_map_right] at hx
+  obtain ⟨⟨y, z⟩, hyz, rfl⟩ := List.mem_map.mp hx
+  obtain ⟨rfl, -⟩ := mem_zip_self hyz
+  exact (TyEq.whnf y).symm
+
+/-- Decides whether a constraint left at the top level is fine: an instance
+(its arguments unfolded), or on a type variable. -/
+def Pred.settled (p : Pred) : Bool := p.whnfArgs.isInst || p.onVar
 
 theorem HoldsOrVar.of_settled {C : List Pred} (h : C.all Pred.settled = true) : HoldsOrVar C :=
   fun p hp => by
     have := List.all_eq_true.mp h p hp
     simp only [Pred.settled, Bool.or_eq_true] at this
-    exact this.imp (fun h => (Pred.isInst_sound h).instEq) Pred.onVar_sound
+    exact this.imp (fun h => InstEq.of_predEq (Pred.predEq_whnfArgs p)
+      (Pred.isInst_sound h).instEq) Pred.onVar_sound
 
 theorem Subst.find_mem : ∀ {σ : Subst} {a : Nat} {τ : Ty}, σ.find a = some τ → (a, τ) ∈ σ
   | [], _, _, h => by simp [Subst.find] at h

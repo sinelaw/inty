@@ -73,7 +73,7 @@ def doubleScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), [⟨.pl
 -- The body is typed assuming `Plus α`; each use establishes it.
 example : HasType L [] [] none polyDouble .string :=
   .let_ doubleScheme []
-    (fun m _ => .func rfl (.binop (.plus (.inr (by simp [Scheme.openPreds, Scheme.instPreds,
+    (fun m _ => .func rfl (.binop (.plus (.of_mem (by simp [Scheme.openPreds, Scheme.instPreds,
       doubleScheme, varBlock, PPred.inst, PTy.inst, List.range']))) (.var_mono rfl)
       (.var_mono rfl)))
     (.inr ⟨.func, rfl⟩) (fun p hp => by

@@ -81,10 +81,6 @@ def node (ns : List Ty) (i : Nat) : Ty := ns.getD i (.var 0)
 /-- The class of node `i`. -/
 def labOf (lab : List Nat) (i : Nat) : Nat := lab.getD i i
 
-def Ty.isVar : Ty → Bool
-  | .var _ => true
-  | _ => false
-
 def Ty.isApp : Ty → Bool
   | .app _ _ => true
   | _ => false

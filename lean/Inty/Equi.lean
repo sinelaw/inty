@@ -488,6 +488,43 @@ theorem TyEq.array_inj {σ σ' : Ty} (h : TyEq (.array σ) (.array σ')) : TyEq 
   obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp h
   exact hz (σ, σ') (by simp)
 
+/-- A type variable. -/
+def Ty.isVar : Ty → Bool
+  | .var _ => true
+  | _ => false
+
+/-! ## Heads of equal types -/
+
+theorem Ty.whnf_of_view {τ t : Ty} (h : τ.view = some t) : τ.whnf = t := by
+  simp [Ty.whnf, h]
+
+theorem TyEq.whnf_var {s t : Ty} {a : Nat} (h : TyEq s t) (hs : s.whnf = .var a) :
+    t.whnf = .var a := by
+  have hsa : TyEq s (.var a) := hs ▸ (TyEq.whnf s).symm
+  exact Ty.whnf_of_view (TyEq.view_var (h.symm.trans hsa))
+
+theorem TyEq.whnf_app {s t : Ty} {c : Con} {xs : List Ty} (h : TyEq s t) (hs : s.whnf = .app c xs) :
+    ∃ ys, t.whnf = .app c ys ∧ TyEq (.app c xs) (.app c ys) := by
+  have hsa : TyEq s (.app c xs) := hs ▸ (TyEq.whnf s).symm
+  obtain ⟨ys, hv, he⟩ := TyEq.view_app (h.symm.trans hsa)
+  exact ⟨ys, Ty.whnf_of_view hv, he.symm⟩
+
+/-- A constant head is kept by equality. -/
+theorem TyEq.whnf_const {s t : Ty} {c : Con} (h : TyEq s t) (hs : s.whnf = .app c []) :
+    t.whnf = .app c [] := by
+  obtain ⟨ys, ht, he⟩ := TyEq.whnf_app h hs
+  obtain ⟨-, hl, -⟩ := TyEq.app_iff.mp he
+  rw [ht, List.eq_nil_of_length_eq_zero hl.symm]
+
+theorem TyEq.whnf_slot {s t p k τ : Ty} (h : TyEq s t) (hs : s.whnf = .slot p k τ) :
+    ∃ p' k' τ', t.whnf = .slot p' k' τ' ∧ TyEq p p' ∧ TyEq k k' ∧ TyEq τ τ' := by
+  obtain ⟨ys, ht, he⟩ := TyEq.whnf_app h hs
+  obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp he
+  match ys, hl with
+  | [p', k', τ'], _ =>
+    exact ⟨p', k', τ', ht, hz (p, p') (by simp), hz (k, k') (by simp), hz (τ, τ') (by simp)⟩
+
+
 /-! ## Bisimulation
 
 Two types are equal when a relation holding of them is a bisimulation:
