@@ -780,7 +780,7 @@ impl InferState {
         let row = Type::object_open([(name, result.clone())], self.fresh_flex());
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
-            self.unify(c.span, this, recv)?;
+            self.unify_this(c.span, this, recv)?;
         }
         Ok(())
     }
@@ -826,7 +826,7 @@ impl InferState {
                 }
             }
             if let Some(this) = this {
-                self.unify(span, this, &receiver)?;
+                self.unify_this(span, this, &receiver)?;
             }
             return Ok(());
         }
@@ -867,7 +867,7 @@ impl InferState {
             Some(this) => {
                 self.apply_deferred_call(span, result, &found)?;
                 let receiver = self.method_receiver(&receiver);
-                self.unify(span, this, &receiver)?;
+                self.unify_this(span, this, &receiver)?;
             }
             None => self.unify(span, result, &found)?,
         }

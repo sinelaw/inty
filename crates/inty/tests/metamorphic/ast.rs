@@ -445,6 +445,7 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
             params,
             body,
             type_annotation,
+            arrow,
             span,
         } => Expr::Function {
             name: name
@@ -462,6 +463,7 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             type_annotation: type_annotation.clone(),
+            arrow: *arrow,
             span: *span,
         },
         Expr::Member {

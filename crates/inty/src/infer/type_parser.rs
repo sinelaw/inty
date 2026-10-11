@@ -1408,6 +1408,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         | Type::Null
         | Type::Regex
         | Type::NewTarget
+        | Type::ArrowThis
         | Type::TypedArray(_)
         | Type::Literal(_)
         | Type::Error => ty.clone(),

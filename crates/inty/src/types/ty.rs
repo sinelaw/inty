@@ -682,6 +682,11 @@ pub enum Type {
     /// else gives: a class called without `new` is rejected, as
     /// JavaScript throws.
     NewTarget,
+    /// An arrow function's `this`: it has none of its own (the enclosing
+    /// function's is in scope), so a call on any receiver, or on none,
+    /// gives it nothing; and an arrow function isn't a constructor, so
+    /// it never meets `NewTarget` (`new` on one throws a `TypeError`).
+    ArrowThis,
 
     // === Type variable ===
     /// Type variable (flexible or skolem).
@@ -1104,6 +1109,7 @@ impl Type {
             | Type::Null
             | Type::Regex
             | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Named(_, _)
@@ -1392,6 +1398,7 @@ impl Type {
             | Type::Null
             | Type::Regex
             | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Literal(_)
@@ -1473,6 +1480,7 @@ impl Type {
             | Type::Null
             | Type::Regex
             | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Error => {}
 
@@ -1703,6 +1711,7 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Null => (4, String::new()),
         Type::Regex => (5, String::new()),
         Type::NewTarget => (5, "new.target".to_string()),
+        Type::ArrowThis => (5, "arrow.this".to_string()),
         Type::TypedArray(k) => (19, k.name().to_string()),
         Type::Literal(lit) => {
             let (sub, key) = lit.sort_key();

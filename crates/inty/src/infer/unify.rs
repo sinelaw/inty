@@ -32,6 +32,30 @@ impl InferState {
     /// first read to migrate. `zonk` carries a visited-set
     /// (`infernu/Decycle.hs` discipline) so any structural cycle in
     /// the mirror degrades to a free variable rather than a SIGSEGV.
+    /// Unify two functions' `this` types. An arrow function's
+    /// (`ArrowThis`) is no `this` at all: it fits any other, but
+    /// `NewTarget`, since an arrow function isn't a constructor. A
+    /// variable takes it, so that a later `new` through the variable is
+    /// rejected too.
+    pub(crate) fn unify_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
+        let (z1, z2) = (self.zonk(t1), self.zonk(t2));
+        match (&z1, &z2) {
+            (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {
+                Err(TypeError::TypeMismatch {
+                    expected: "a constructor (`new` calls one)".to_string(),
+                    found: "an arrow function, which isn't one".to_string(),
+                    span,
+                }
+                .into())
+            }
+            (Type::ArrowThis, Type::Var(_)) | (Type::Var(_), Type::ArrowThis) => {
+                self.unify(span, &z1, &z2)
+            }
+            (Type::ArrowThis, _) | (_, Type::ArrowThis) => Ok(()),
+            _ => self.unify(span, t1, t2),
+        }
+    }
+
     pub fn unify(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
         // A cycle in the substitution that `zonk` cuts (it shows a bound
         // row tail as free) can make unification re-bind the same tails
@@ -114,6 +138,7 @@ impl InferState {
             (Type::Null, Type::Null) => Ok(()),
             (Type::Regex, Type::Regex) => Ok(()),
             (Type::NewTarget, Type::NewTarget) => Ok(()),
+            (Type::ArrowThis, Type::ArrowThis) => Ok(()),
             (Type::TypedArray(a), Type::TypedArray(b)) if a == b => Ok(()),
 
             // Functions
@@ -137,9 +162,7 @@ impl InferState {
                     (None, Some(_)) | (Some(_), None) => {
                         // One is static - compatible with any this
                     }
-                    (Some(t1), Some(t2)) => {
-                        self.unify(span, t1, t2)?;
-                    }
+                    (Some(t1), Some(t2)) => self.unify_this(span, t1, t2)?,
                 }
 
                 // Unify parameters position-wise. Per-param presence

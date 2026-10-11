@@ -5056,6 +5056,30 @@ fn new_and_class_calls() {
     assert_eq!(t[0], "Int");
 }
 
+/// An arrow function isn't a constructor: `new` on one throws a
+/// `TypeError`. Called, it takes any receiver, its `this` being its
+/// enclosing function's.
+#[test]
+fn arrow_functions_are_not_constructors() {
+    for src in [
+        "const f = () => ({x: 1}); const r = new f();",
+        "class D { f = () => ({x: 1}); } const r = new (new D()).f();",
+        "class D { f = () => { this; return {x: 1}; }; } const r = new (new D()).f();",
+        "function mk(g) { return new g(); } const r = mk(() => ({x: 1}));",
+    ] {
+        assert!(check_program(src, &[]).is_err(), "{src}");
+    }
+    let t = check_program(
+        "class D { f = () => 3; } const d = new D(); const g = d.f;\n\
+         const o = { h: () => 1 };\n\
+         const r = g() + d.f() + o.h();\n\
+         function F() { return {x: 1}; } const s = new F().x;",
+        &["r", "s"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Int", "Int"]);
+}
+
 /// A getter is read, not stored to (a store throws in strict code), and a
 /// class's methods and getters are on its prototype: a store to one is
 /// rejected, and a spread doesn't copy them.

@@ -31,6 +31,8 @@ use super::value::{Closure, Value};
 pub enum Stuck {
     UndefinedVariable(String),
     NotCallable(&'static str),
+    /// `new` on an arrow function, which throws a `TypeError`.
+    NotConstructor,
     NotIndexable(&'static str),
     PropertyNotFound {
         kind: &'static str,
@@ -79,6 +81,7 @@ impl std::fmt::Display for Stuck {
         match self {
             Stuck::UndefinedVariable(n) => write!(f, "undefined variable `{}`", n),
             Stuck::NotCallable(k) => write!(f, "not callable: {}", k),
+            Stuck::NotConstructor => write!(f, "not a constructor: an arrow function"),
             Stuck::NotIndexable(k) => write!(f, "not indexable: {}", k),
             Stuck::PropertyNotFound { kind, property } => {
                 write!(f, "property `{}` not found on {}", property, kind)
@@ -264,6 +267,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                             params: params.iter().map(|p| p.name.clone()).collect(),
                             body: body.clone(),
                             env: env.clone(),
+                            arrow: false,
                         });
                         props.insert(name, closure);
                     }
@@ -274,6 +278,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                             params: Vec::new(),
                             body: body.clone(),
                             env: env.clone(),
+                            arrow: false,
                         });
                         props.insert(name, getter);
                     }
@@ -321,12 +326,17 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         }
 
         Expr::Function {
-            name, params, body, ..
+            name,
+            params,
+            body,
+            arrow,
+            ..
         } => Ok(Value::Closure(Closure {
             name: name.clone(),
             params: params.iter().map(|p| p.name.clone()).collect(),
             body: body.clone(),
             env: env.clone(),
+            arrow: *arrow,
         })),
 
         Expr::Member {
@@ -380,6 +390,9 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             let mut args = Vec::with_capacity(arguments.len());
             for a in arguments {
                 args.push(eval_expr(state, env, a)?);
+            }
+            if matches!(&callee_val, Value::Closure(c) if c.arrow) {
+                return Err(Stuck::NotConstructor);
             }
             // Bind `this` to a fresh empty object, and give back what the
             // constructor returns if that is an object, else `this`.
@@ -910,9 +923,12 @@ fn apply(
         });
     }
     let mut call_env = closure.env.clone();
-    let this_value = this.unwrap_or(Value::Undefined);
-    let this_loc = state.alloc_var(this_value);
-    call_env = call_env.extend("this".to_string(), this_loc);
+    // An arrow function's `this` is the one it closed over.
+    if !closure.arrow {
+        let this_value = this.unwrap_or(Value::Undefined);
+        let this_loc = state.alloc_var(this_value);
+        call_env = call_env.extend("this".to_string(), this_loc);
+    }
     if let Some(name) = &closure.name {
         // Self-reference for named function expressions.
         let self_loc = state.alloc_var(Value::Closure(closure.clone()));
@@ -1299,6 +1315,7 @@ pub fn eval_stmt(
                 params: params.iter().map(|p| p.name.clone()).collect(),
                 body: body.clone(),
                 env: env.clone(),
+                arrow: false,
             });
             let loc = state.alloc_var(closure);
             let new_env = env.extend(name.clone(), loc);
@@ -1593,6 +1610,7 @@ fn eval_block(
                 params: params.iter().map(|p| p.name.clone()).collect(),
                 body: body.clone(),
                 env: block_env.clone(),
+                arrow: false,
             });
             let loc = block_env
                 .lookup(name)

@@ -915,6 +915,7 @@ impl Parser {
                             params,
                             body,
                             type_annotation,
+                            arrow: false,
                             span,
                         },
                         // Class desugaring guarantees a FunctionDecl;
@@ -1624,7 +1625,9 @@ impl Parser {
             }
             // A whole arrow function using `this` is a method of the
             // instance, its own property.
-            if self.is_arrow_function(&value) && crate::ast::free_idents::mentions_this(&value) {
+            if matches!(value, Expr::Function { arrow: true, .. })
+                && crate::ast::free_idents::mentions_this(&value)
+            {
                 if let Some(ann) = field_annotations.get(&field) {
                     return Err(ParseError::Unsupported {
                         feature: format!(
@@ -1719,27 +1722,6 @@ impl Parser {
             return_type_ast: None,
             span,
         })
-    }
-
-    /// Whether `e` is an arrow function (whose `this` is its enclosing
-    /// function's), not a `function` expression: both lower to
-    /// `Expr::Function`, and only a `function` expression's source starts
-    /// with `function` (or `async function`).
-    fn is_arrow_function(&self, e: &Expr) -> bool {
-        let Expr::Function { span, .. } = e else {
-            return false;
-        };
-        // Without the source, not known to be one.
-        let Some(text) = span
-            .start
-            .checked_sub(self.base)
-            .and_then(|start| self.source.get(start..))
-            .filter(|text| !text.is_empty())
-        else {
-            return false;
-        };
-        let text = text.strip_prefix("async").map_or(text, str::trim_start);
-        !text.starts_with("function")
     }
 
     /// Match `this.FIELD = EXPR` exactly and return `(FIELD, EXPR, span)`.
@@ -1849,6 +1831,7 @@ impl Parser {
             params: vec![],
             body,
             type_annotation: None,
+            arrow: false,
             span,
         };
         let iife_call = Expr::Call {
@@ -3768,6 +3751,7 @@ impl Parser {
             params,
             body,
             type_annotation: None,
+            arrow: true,
             span,
         })
     }
@@ -3806,6 +3790,7 @@ impl Parser {
             params,
             body,
             type_annotation,
+            arrow: false,
             span: Span::new(start, self.prev_span().end),
         })
     }

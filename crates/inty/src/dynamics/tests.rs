@@ -423,6 +423,20 @@ fn getters_run_when_read_and_copied_by_a_spread() {
     ));
 }
 
+/// An arrow function's `this` is its enclosing function's, and `new` on
+/// one throws.
+#[test]
+fn arrow_functions_close_over_this_and_are_not_constructors() {
+    assert_number(
+        "const o = { a: 2, m() { const f = () => this.a; return f(); } }; o.m();",
+        2.0,
+    );
+    assert!(matches!(
+        run("const f = () => ({x: 1}); new f();"),
+        Err(Stuck::NotConstructor)
+    ));
+}
+
 #[test]
 fn new_gives_back_an_object_result_else_this() {
     assert_number("function F(n) { return {n: n}; } new F(3).n;", 3.0);

@@ -2482,6 +2482,7 @@ impl InferState {
             | Type::Null
             | Type::Regex
             | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Error => false,
 

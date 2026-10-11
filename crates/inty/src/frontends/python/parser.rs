@@ -1795,6 +1795,7 @@ impl Parser {
             params,
             body,
             type_annotation: None,
+            arrow: false,
             span,
         })
     }

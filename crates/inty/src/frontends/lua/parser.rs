@@ -357,6 +357,7 @@ impl Parser {
             params,
             body,
             type_annotation: None,
+            arrow: false,
             span,
         };
         Ok(Stmt::Expr {
@@ -908,6 +909,7 @@ impl Parser {
                     params,
                     body,
                     type_annotation: None,
+                    arrow: false,
                     span: Span::new(start, self.prev_span().end),
                 })
             }

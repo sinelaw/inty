@@ -583,6 +583,7 @@ impl Substitutable for Type {
             Type::Null => Type::Null,
             Type::Regex => Type::Regex,
             Type::NewTarget => Type::NewTarget,
+            Type::ArrowThis => Type::ArrowThis,
             Type::TypedArray(k) => Type::TypedArray(*k),
 
             // Variable substitution

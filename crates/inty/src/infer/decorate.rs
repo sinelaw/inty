@@ -465,6 +465,7 @@ impl<'a> Decorator<'a> {
                 params,
                 body,
                 type_annotation,
+                arrow,
                 span,
             } => {
                 // For function expressions, we could add type annotations
@@ -475,6 +476,7 @@ impl<'a> Decorator<'a> {
                     params: params.clone(),
                     body: Box::new(decorated_body),
                     type_annotation: type_annotation.clone(),
+                    arrow: *arrow,
                     span: *span,
                 }
             }

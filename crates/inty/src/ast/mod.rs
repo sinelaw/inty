@@ -538,12 +538,15 @@ pub enum Expr {
         span: Source,
     },
 
-    /// Function expression: function(a, b) { ... }
+    /// Function expression: function(a, b) { ... }, or an arrow function
+    /// (`arrow`), which has no `this` of its own and isn't a constructor:
+    /// `new` on one throws a `TypeError`.
     Function {
         name: Option<String>,
         params: Vec<Param>,
         body: Box<Stmt>,
         type_annotation: Option<TypeAnnotation>,
+        arrow: bool,
         span: Source,
     },
 

@@ -1139,6 +1139,7 @@ impl InferState {
             params,
             body,
             type_annotation: None,
+            arrow,
             span,
         } = expr
         {
@@ -1152,6 +1153,7 @@ impl InferState {
                     body,
                     expected_params,
                     expected_ret,
+                    *arrow,
                     *span,
                 )?;
                 if let Some(types) = self.expr_types.as_mut() {
@@ -1366,6 +1368,7 @@ impl InferState {
                 params,
                 body,
                 type_annotation,
+                arrow,
                 span,
             } => self.infer_function(
                 env,
@@ -1374,6 +1377,7 @@ impl InferState {
                 body,
                 type_annotation,
                 None,
+                *arrow,
                 *span,
             ),
 
@@ -1575,6 +1579,7 @@ impl InferState {
                             params,
                             body,
                             type_annotation,
+                            arrow: _,
                             span: f_span,
                         } = value
                         {

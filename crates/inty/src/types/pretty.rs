@@ -140,6 +140,7 @@ impl PrettyContext {
             Type::Null => write!(w, "null"),
             Type::Regex => write!(w, "RegExp"),
             Type::NewTarget => write!(w, "new.target"),
+            Type::ArrowThis => write!(w, "undefined"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
             Type::Var(name) => self.write_var(w, name),
             Type::Func {
@@ -311,6 +312,7 @@ impl PrettyContext {
             Type::Null => write!(w, "Null"),
             Type::Regex => write!(w, "Regex"),
             Type::NewTarget => write!(w, "NewTarget"),
+            Type::ArrowThis => write!(w, "ArrowThis"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
 
             Type::Var(name) => self.write_var(w, name),
@@ -331,7 +333,7 @@ impl PrettyContext {
                 // - Some(concrete_type): show "this: T =>"
                 let show_this = match this_type {
                     None => false,
-                    Some(t) => !matches!(**t, Type::Undefined | Type::Var(_)),
+                    Some(t) => !matches!(**t, Type::Undefined | Type::Var(_) | Type::ArrowThis),
                 };
                 if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
                     // Called only by `new`: a class's constructor.

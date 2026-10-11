@@ -118,6 +118,7 @@ pub(in crate::infer) fn const_function_decl(
             params,
             body,
             type_annotation,
+            arrow: _,
             span,
         }) => Some((
             decl,
@@ -128,6 +129,14 @@ pub(in crate::infer) fn const_function_decl(
         )),
         _ => None,
     }
+}
+
+/// Whether a hoisted function is an arrow function (`const f = () => …`).
+pub(in crate::infer) fn hoisted_is_arrow(stmt: &Stmt) -> bool {
+    matches!(
+        const_function_decl(stmt).map(|(decl, ..)| &decl.init),
+        Some(Some(Expr::Function { arrow: true, .. }))
+    )
 }
 
 /// Where a hoisted function's name is declared, for its binding key: the
@@ -302,9 +311,16 @@ impl InferState {
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
         return_type_ast: Option<&crate::types::TypeAst>,
+        arrow: bool,
         span: Span,
     ) -> InferResult<Type> {
-        let this_type = self.fresh_type_var();
+        // An arrow function has no `this` of its own, and isn't a
+        // constructor.
+        let this_type = if arrow {
+            Type::ArrowThis
+        } else {
+            self.fresh_type_var()
+        };
         self.infer_function_with_this(
             env,
             name,
@@ -363,9 +379,14 @@ impl InferState {
         body: &Stmt,
         expected_params: Vec<crate::types::FuncParam>,
         expected_ret: Type,
+        arrow: bool,
         span: Span,
     ) -> InferResult<Type> {
-        let this_type = self.fresh_type_var();
+        let this_type = if arrow {
+            Type::ArrowThis
+        } else {
+            self.fresh_type_var()
+        };
         // A concise arrow (`(e) => list.push(e)`) where the result is
         // `Undefined` runs for its effect: its value is discarded, like a
         // TypeScript `void` callback's. A block body still returns what
@@ -538,7 +559,12 @@ impl InferState {
             self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 
-        let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
+        // An arrow function's `this` is its enclosing function's.
+        let mut body_env = if matches!(this_type, Type::ArrowThis) {
+            env.clone()
+        } else {
+            env.extend("this".to_string(), TypeScheme::mono(this_type))
+        };
 
         // The function's own name first, so a parameter of the same name
         // shadows it (`function f(f) { return f; }` returns the argument).
@@ -805,14 +831,14 @@ impl InferState {
         }
         if let Some(this) = deferred_this {
             // Bound to the receiver when its `HasProp` resolves.
-            self.unify(span, &this_type, &this)?;
+            self.unify_this(span, &this_type, &this)?;
         } else if let Some(obj_type) = obj_type_for_this {
             let obj_for_this = self.method_receiver(&obj_type);
             let this_type_applied = self.zonk(&this_type);
-            self.unify(span, &this_type_applied, &obj_for_this)?;
+            self.unify_this(span, &this_type_applied, &obj_for_this)?;
         } else {
             let this_type_applied = self.zonk(&this_type);
-            self.unify(span, &this_type_applied, &Type::Undefined)?;
+            self.unify_this(span, &this_type_applied, &Type::Undefined)?;
         }
 
         self.settle_promise_results(promise_mark, span)?;
@@ -1097,6 +1123,7 @@ impl InferState {
                     body,
                     type_annotation,
                     return_type_ast,
+                    hoisted_is_arrow(stmt),
                     span,
                 )?;
                 self.unify(span, &func_var, &func_type)?;
@@ -1383,6 +1410,7 @@ impl InferState {
             body,
             type_annotation,
             return_type_ast,
+            false,
             span,
         )?;
 
