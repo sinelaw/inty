@@ -112,6 +112,7 @@ fn zonk_with_visited(
         Type::Undefined => Type::Undefined,
         Type::Null => Type::Null,
         Type::Regex => Type::Regex,
+        Type::NewTarget => Type::NewTarget,
         Type::TypedArray(k) => Type::TypedArray(*k),
         Type::Error => Type::Error,
         Type::Literal(lit) => Type::Literal(lit.clone()),
@@ -237,19 +238,17 @@ fn zonk_row_with_visited(
         .map(|(k, e)| {
             (
                 k.clone(),
-                FieldEntry {
-                    // Resolve the presence variable through the
-                    // (still HashMap-backed) presence subst.
-                    // `Subst::apply_presence` is a single hop,
-                    // matching `FieldEntry::apply_subst`'s
-                    // behaviour exactly. Presence has its own
-                    // subst domain (Remy '94, two domains for one
-                    // substitution); migrating it to a Union-Find
-                    // table mirroring `var_table` is a separate
-                    // step in the destructive-unification plan.
-                    presence: subst.apply_presence(&e.presence),
-                    ty: zonk_with_visited(table, subst, &e.ty, visited),
-                },
+                // Resolve the presence variables through the (still
+                // HashMap-backed) presence subst. `Subst::apply_presence`
+                // is a single hop, matching `FieldEntry::apply_subst`'s
+                // behaviour exactly. Presence has its own subst domain
+                // (Remy '94, two domains for one substitution); migrating
+                // it to a Union-Find table mirroring `var_table` is a
+                // separate step in the destructive-unification plan.
+                e.map(
+                    &mut |p| subst.apply_presence(p),
+                    zonk_with_visited(table, subst, &e.ty, visited),
+                ),
             )
         })
         .collect();
@@ -378,6 +377,7 @@ fn zonk_filtered(table: &mut VarTable, subst: &Subst, ty: &Type, quantified: &[T
         | Type::Undefined
         | Type::Null
         | Type::Regex
+        | Type::NewTarget
         | Type::TypedArray(_)
         | Type::Error => ty.clone(),
         Type::Literal(lit) => Type::Literal(lit.clone()),
@@ -447,10 +447,7 @@ fn zonk_row_filtered(
         .map(|(k, e)| {
             (
                 k.clone(),
-                FieldEntry {
-                    presence: e.presence.clone(),
-                    ty: zonk_filtered(table, subst, &e.ty, quantified),
-                },
+                e.with_ty(zonk_filtered(table, subst, &e.ty, quantified)),
             )
         })
         .collect();

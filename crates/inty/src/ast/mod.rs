@@ -391,6 +391,10 @@ pub enum PropDef {
     Getter {
         key: PropKey,
         body: Box<Stmt>,
+        /// A class's getter, which is on the class's prototype: the
+        /// instance has no own property for it, so a spread doesn't
+        /// copy it. An object literal's getter is the object's own.
+        proto: bool,
         span: Source,
     },
     /// Setter: set key(param) { ... }
@@ -409,6 +413,11 @@ pub enum PropDef {
         /// shared [`crate::types::TypeAst`] IR. Only the Python frontend
         /// sets this; JS object/class methods leave it `None`.
         return_type_ast: Option<crate::types::TypeAst>,
+        /// A class's method, which is on the class's prototype: the
+        /// instance has no own property for it (a spread doesn't copy
+        /// it) and a store to it is rejected. An object literal's method
+        /// is the object's own data property.
+        proto: bool,
         span: Source,
     },
     /// Spread: `...expr`. Merged into the row of the containing

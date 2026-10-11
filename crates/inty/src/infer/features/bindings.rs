@@ -240,14 +240,24 @@ impl InferState {
         self.last_member_receiver = None;
         let ty = self.infer_expr(env, target)?;
         match target {
-            Expr::ComputedMember { .. } => {
+            Expr::ComputedMember { property, .. } => {
                 if let Some(container) = self.last_index_container.take() {
                     self.require_index_write(&container, span)?;
+                    // A literal key names the property stored to.
+                    if let Expr::Lit {
+                        value: crate::ast::Literal::String(key),
+                        ..
+                    } = property.as_ref()
+                    {
+                        if matches!(self.flatten_type(&container), Type::Row(_)) {
+                            self.require_field_write(&container, key, span)?;
+                        }
+                    }
                 }
             }
-            Expr::Member { .. } => {
+            Expr::Member { property, .. } => {
                 if let Some(receiver) = self.last_member_receiver.take() {
-                    self.require_field_write(&receiver, span)?;
+                    self.require_field_write(&receiver, property, span)?;
                 }
             }
             _ => {}
@@ -684,6 +694,12 @@ impl InferState {
         for pred in preds {
             self.add_constraint(pred, span);
         }
+        // Only `new` calls a class, and its methods are on its prototype:
+        // read-only (a store would make an own property, which a spread
+        // copies) and not copied by a spread.
+        let mut ctor_ty = ctor_ty;
+        super::super::type_parser::set_callable_this(&mut ctor_ty, Type::NewTarget);
+        prototype_methods(&mut ctor_ty);
         let Some((_, own_params, own_ret)) = super::functions::extract_callable(&ctor_ty) else {
             return Err(malformed(
                 "an external class's members must be an object type".to_string(),
@@ -726,7 +742,7 @@ impl InferState {
         }
         instance.tail = own.tail;
         let ctor = Type::Func {
-            this_type: None,
+            this_type: Some(Box::new(Type::NewTarget)),
             params: if params.is_some() {
                 own_params
             } else {
@@ -745,5 +761,30 @@ impl InferState {
             }
             _ => ctor,
         })
+    }
+}
+
+/// Mark the function-typed members of an external class's instances (the
+/// result of its constructor type) as prototype methods.
+fn prototype_methods(ctor: &mut Type) {
+    let call = match ctor {
+        Type::Row(row) => row
+            .props
+            .get_mut(&PropName(crate::types::CALLABLE_KEY.to_string()))
+            .map(|e| &mut e.ty),
+        Type::Func { .. } => Some(ctor),
+        _ => None,
+    };
+    let Some(Type::Func { ret, .. }) = call else {
+        return;
+    };
+    let Type::Row(instance) = ret.as_mut() else {
+        return;
+    };
+    for entry in instance.props.values_mut() {
+        if super::functions::extract_callable(&entry.ty).is_some() {
+            entry.own = crate::types::Presence::Abs;
+            entry.writable = crate::types::Presence::Abs;
+        }
     }
 }

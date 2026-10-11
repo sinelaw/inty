@@ -1078,6 +1078,7 @@ impl Parser {
                             params,
                             body,
                             return_type_ast,
+                            proto: false,
                             span: Span::new(mspan.start, self.prev_span().end),
                         });
                     }

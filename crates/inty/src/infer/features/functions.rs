@@ -795,6 +795,14 @@ impl InferState {
         // `this`-agnostic functions are unaffected) and produces a
         // type error when it's a concrete row, catching detached
         // method calls like `var f = obj.m; f();` at type-check time.
+        if matches!(self.zonk(&this_type), Type::NewTarget) {
+            return Err(crate::error::TypeError::TypeMismatch {
+                expected: "`new` (a class can only be called with `new`)".to_string(),
+                found: "a call without `new`".to_string(),
+                span,
+            }
+            .into());
+        }
         if let Some(this) = deferred_this {
             // Bound to the receiver when its `HasProp` resolves.
             self.unify(span, &this_type, &this)?;
@@ -952,9 +960,16 @@ impl InferState {
     ) -> InferResult<Type> {
         let callee_type = self.infer_expr(env, callee)?;
 
-        // The constructor returns some object type
+        // `new F(…)` calls `F` with a fresh object as `this` and gives
+        // back what the call returns if that is an object, else the fresh
+        // object. inty types the result as what the call returns, so a
+        // constructor returning a primitive is rejected below. `this` is
+        // `NewTarget`, which nothing else gives a function: a function
+        // that writes or reads `this` (a JavaScript constructor function)
+        // isn't accepted here, and a class's factory, whose `this` is
+        // `NewTarget`, can't be called without `new`.
         let result_type = self.fresh_type_var();
-        let this_type = result_type.clone();
+        let this_type = Type::NewTarget;
 
         // Expected constructor shape — an *open* callable row so the
         // constructor value can carry additional static fields beyond
@@ -988,7 +1003,63 @@ impl InferState {
             }
         }
 
+        self.require_constructed_object(&result_type, span)?;
         Ok(self.zonk(&result_type))
+    }
+
+    /// What `new` gives back must be what the constructor returned, so
+    /// that must be an object: a primitive result is replaced by the
+    /// fresh `this` at run time. A result not known yet is constrained
+    /// to an object type.
+    fn require_constructed_object(&mut self, result: &Type, span: Span) -> InferResult<()> {
+        let not_an_object = |shown: String| -> crate::error::IntyError {
+            crate::error::TypeError::TypeMismatch {
+                expected: "a constructor returning an object (`new` gives back the object \
+                           it made in place of a primitive result)"
+                    .to_string(),
+                found: format!("a function returning `{}`", shown),
+                span,
+            }
+            .into()
+        };
+        let result = self.zonk(result);
+        let primitive = match &result {
+            Type::Number
+            | Type::Int
+            | Type::String
+            | Type::Boolean
+            | Type::Undefined
+            | Type::Null
+            | Type::Literal(_) => true,
+            Type::Union(ts) => ts.iter().any(|t| {
+                matches!(
+                    t,
+                    Type::Number
+                        | Type::Int
+                        | Type::String
+                        | Type::Boolean
+                        | Type::Undefined
+                        | Type::Null
+                        | Type::Literal(_)
+                )
+            }),
+            Type::Var(TVarName::Flex(_)) => {
+                let rest = self.fresh_flex();
+                let row = Type::Row(crate::types::RowType::open_entries(
+                    std::collections::BTreeMap::new(),
+                    rest,
+                ));
+                if self.unify(span, &result, &row).is_err() {
+                    return Err(not_an_object(self.show(&result)));
+                }
+                return Ok(());
+            }
+            _ => false,
+        };
+        if primitive {
+            return Err(not_an_object(self.show(&result)));
+        }
+        Ok(())
     }
 
     /// Infer a run of adjacent `function` declarations as a single
@@ -1081,6 +1152,14 @@ impl InferState {
                     // return row branded nominally, so two structurally
                     // identical classes stay distinct types.
                     let ty = if self.class_brand_names.contains(name) {
+                        // A JavaScript class can only be called with `new`,
+                        // which alone gives `this` as `NewTarget`.
+                        if self.language == crate::ast::SourceLanguage::JavaScript {
+                            if let Some((Some(this), _, _)) = extract_callable(&ty) {
+                                self.unify(span, &this, &Type::NewTarget)?;
+                            }
+                        }
+                        let ty = self.zonk(&ty);
                         let (fixed, _) = self.env_fixed_vars(&base_free, &ty);
                         self.brand_class_factory(name, &ty, &fixed)
                     } else {
@@ -1151,7 +1230,7 @@ impl InferState {
         ty: &Type,
         env_free: &std::collections::HashSet<crate::types::TVarName>,
     ) -> Type {
-        use crate::types::{FieldEntry, PropName, RowType, TVarName, TypeDef, CALLABLE_KEY};
+        use crate::types::{PropName, RowType, TVarName, TypeDef, CALLABLE_KEY};
 
         // Navigate to the callable row's `<CALL>` field.
         let Type::Row(row) = ty else {
@@ -1223,13 +1302,7 @@ impl InferState {
         };
 
         let mut new_props = row.props.clone();
-        new_props.insert(
-            call_key,
-            FieldEntry {
-                presence: call_entry.presence.clone(),
-                ty: branded_func,
-            },
-        );
+        new_props.insert(call_key, call_entry.with_ty(branded_func));
         Type::Row(RowType {
             props: new_props,
             tail: row.tail.clone(),

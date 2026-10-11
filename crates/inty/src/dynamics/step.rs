@@ -46,6 +46,8 @@ pub enum Stuck {
         got: usize,
     },
     BadAssignmentTarget,
+    /// A store to a getter, which throws a `TypeError` in strict code.
+    ReadOnly,
     NotImplemented(&'static str),
     /// An uncaught `throw`. The payload is the thrown value.
     UncaughtThrow(Value),
@@ -88,6 +90,7 @@ impl std::fmt::Display for Stuck {
                 write!(f, "arity mismatch: expected {}, got {}", expected, got)
             }
             Stuck::BadAssignmentTarget => write!(f, "bad assignment target"),
+            Stuck::ReadOnly => write!(f, "store to a getter"),
             Stuck::NotImplemented(s) => write!(f, "not implemented in dynamics: {}", s),
             Stuck::UncaughtThrow(v) => write!(f, "uncaught throw: {}", v),
             Stuck::FuelExhausted => write!(f, "fuel exhausted"),
@@ -264,20 +267,40 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                         });
                         props.insert(name, closure);
                     }
-                    PropDef::Getter { .. } | PropDef::Setter { .. } => {
-                        return Err(Stuck::NotImplemented("getters/setters"));
+                    PropDef::Getter { key, body, .. } => {
+                        let name = prop_key_to_name(key);
+                        let getter = Value::Getter(Closure {
+                            name: None,
+                            params: Vec::new(),
+                            body: body.clone(),
+                            env: env.clone(),
+                        });
+                        props.insert(name, getter);
+                    }
+                    PropDef::Setter { .. } => {
+                        return Err(Stuck::NotImplemented("setters"));
                     }
                     PropDef::Spread { argument, .. } => {
                         let v = eval_expr(state, env, argument)?;
-                        match v {
-                            Value::Object(loc) => match state.heap.get(loc) {
+                        match &v {
+                            Value::Object(loc) => match state.heap.get(*loc) {
                                 Some(Cell::Object(other)) => {
                                     // Right-bias: this spread's keys
                                     // overwrite earlier ones; later
                                     // entries in source order will in
-                                    // turn overwrite these.
-                                    for (k, v) in other.clone() {
-                                        props.insert(k, v);
+                                    // turn overwrite these. A getter is
+                                    // run, and its result copied.
+                                    for (k, item) in other.clone() {
+                                        let item = match item {
+                                            Value::Getter(c) => apply(
+                                                state,
+                                                Value::Closure(c),
+                                                Some(v.clone()),
+                                                Vec::new(),
+                                            )?,
+                                            item => item,
+                                        };
+                                        props.insert(k, item);
                                     }
                                 }
                                 _ => {
@@ -310,7 +333,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             object, property, ..
         } => {
             let obj = eval_expr(state, env, object)?;
-            read_member(&state.heap, &obj, property)
+            get_member(state, &obj, property)
         }
 
         Expr::ComputedMember {
@@ -318,7 +341,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         } => {
             let obj = eval_expr(state, env, object)?;
             let idx = eval_expr(state, env, property)?;
-            read_index(&state.heap, &obj, &idx)
+            get_index(state, &obj, &idx)
         }
 
         Expr::Call {
@@ -330,7 +353,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                     object, property, ..
                 } => {
                     let obj = eval_expr(state, env, object)?;
-                    let m = read_member(&state.heap, &obj, property)?;
+                    let m = get_member(state, &obj, property)?;
                     (m, Some(obj))
                 }
                 Expr::ComputedMember {
@@ -338,7 +361,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                 } => {
                     let obj = eval_expr(state, env, object)?;
                     let idx = eval_expr(state, env, property)?;
-                    let m = read_index(&state.heap, &obj, &idx)?;
+                    let m = get_index(state, &obj, &idx)?;
                     (m, Some(obj))
                 }
                 _ => (eval_expr(state, env, callee)?, None),
@@ -358,14 +381,17 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             for a in arguments {
                 args.push(eval_expr(state, env, a)?);
             }
-            // Bind `this` to a fresh empty object; the constructor
-            // populates it. Return that object regardless of what
-            // the constructor returns (the standard JS rule for
-            // "constructor returned a primitive" — we return `this`).
+            // Bind `this` to a fresh empty object, and give back what the
+            // constructor returns if that is an object, else `this`.
             let this_loc = state.heap.alloc(Cell::Object(BTreeMap::new()));
             let this = Value::Object(this_loc);
-            let _ = apply(state, callee_val, Some(this.clone()), args)?;
-            Ok(this)
+            let result = apply(state, callee_val, Some(this.clone()), args)?;
+            Ok(match result {
+                Value::Object(_) | Value::Array(_) | Value::Closure(_) | Value::Promise(_) => {
+                    result
+                }
+                _ => this,
+            })
         }
 
         Expr::NewTarget { .. } => Ok(Value::Undefined),
@@ -624,6 +650,37 @@ fn deref_var(heap: &Heap, loc: Loc) -> Result<Value, Stuck> {
         Some(Cell::Var(v)) => Ok(v.clone()),
         Some(_) => Err(Stuck::NotImplemented("non-Var cell as binding")),
         None => Err(Stuck::NotImplemented("dangling loc")),
+    }
+}
+
+/// Read `obj.property`, running a getter.
+fn get_member(state: &mut State, obj: &Value, property: &str) -> Result<Value, Stuck> {
+    let v = read_member(&state.heap, obj, property)?;
+    run_getter(state, obj, v)
+}
+
+/// Read `obj[index]`, running a getter.
+fn get_index(state: &mut State, obj: &Value, index: &Value) -> Result<Value, Stuck> {
+    let v = read_index(&state.heap, obj, index)?;
+    run_getter(state, obj, v)
+}
+
+fn run_getter(state: &mut State, obj: &Value, v: Value) -> Result<Value, Stuck> {
+    match v {
+        Value::Getter(c) => apply(state, Value::Closure(c), Some(obj.clone()), Vec::new()),
+        v => Ok(v),
+    }
+}
+
+/// Whether `obj`'s property `name` is a getter: a store to it throws.
+fn is_getter(heap: &Heap, obj: &Value, name: &str) -> bool {
+    match obj {
+        Value::Object(loc) => matches!(
+            heap.get(*loc),
+            Some(Cell::Object(props))
+                if matches!(props.get(&PropName(name.to_string())), Some(Value::Getter(_)))
+        ),
+        _ => false,
     }
 }
 
@@ -941,8 +998,8 @@ fn eval_place<'a>(
 fn read_place(state: &mut State, env: &RuntimeEnv, place: &Place) -> Result<Value, Stuck> {
     match place {
         Place::Var(e) => eval_expr(state, env, e),
-        Place::Member(obj, property) => read_member(&state.heap, obj, property),
-        Place::Index(obj, idx) => read_index(&state.heap, obj, idx),
+        Place::Member(obj, property) => get_member(state, obj, property),
+        Place::Index(obj, idx) => get_index(state, obj, idx),
         Place::Invalid => Err(Stuck::BadAssignmentTarget),
     }
 }
@@ -953,6 +1010,16 @@ fn write_place(
     place: &Place,
     value: Value,
 ) -> Result<(), Stuck> {
+    // A store to a getter throws (in strict code), which the checker
+    // rules out.
+    let getter = match place {
+        Place::Member(obj, property) => is_getter(&state.heap, obj, property),
+        Place::Index(obj, Value::String(prop)) => is_getter(&state.heap, obj, prop),
+        _ => false,
+    };
+    if getter {
+        return Err(Stuck::ReadOnly);
+    }
     match place {
         Place::Var(Expr::Ident { name, .. }) => {
             let loc = env

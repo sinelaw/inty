@@ -270,6 +270,7 @@ impl InferState {
                     params,
                     body,
                     return_type_ast,
+                    proto,
                     span: method_span,
                 } => {
                     let prop_name = self.prop_key_to_name(key);
@@ -286,10 +287,22 @@ impl InferState {
                         shared_this.clone(),
                         *method_span,
                     )?;
-                    props.insert(prop_name, FieldEntry::pre(method_type));
+                    // A class's method is on its prototype; an object
+                    // literal's is its own data property.
+                    let entry = if *proto {
+                        FieldEntry::proto(method_type)
+                    } else {
+                        FieldEntry::pre(method_type)
+                    };
+                    props.insert(prop_name, entry);
                 }
 
-                PropDef::Getter { key, body, span } => {
+                PropDef::Getter {
+                    key,
+                    body,
+                    proto,
+                    span,
+                } => {
                     let prop_name = self.prop_key_to_name(key);
                     // Bind `this` in the getter body to the shared
                     // instance row so `this.foo` references see the
@@ -302,31 +315,29 @@ impl InferState {
                     let getter_env =
                         env.extend("this".to_string(), TypeScheme::mono(shared_this.clone()));
                     let ret_type = self.infer_body_return_type(&getter_env, body, true, *span)?;
-                    props.insert(prop_name, FieldEntry::pre(ret_type));
+                    // A getter is read, not stored to: a store throws. A
+                    // class's getter is on its prototype.
+                    let entry = if *proto {
+                        FieldEntry::proto(ret_type)
+                    } else {
+                        FieldEntry::getter(ret_type)
+                    };
+                    props.insert(prop_name, entry);
                 }
 
-                PropDef::Setter {
-                    key,
-                    param,
-                    body,
-                    span,
-                } => {
-                    let prop_name = self.prop_key_to_name(key);
-                    // Setter: param type is fresh, body returns undefined.
-                    // Inferred through a frame (return value discarded) so
-                    // any `return` doesn't leak upward.
-                    let param_type = self.fresh_type_var();
-                    let setter_env = self.bind(
-                        env,
-                        *span,
-                        param,
-                        TypeScheme::mono(param_type),
-                        super::super::env::Mutability::Mutable,
-                    )?;
-                    let _ = self.infer_body_return_type(&setter_env, body, true, *span)?;
-                    // For simplicity, we use the parameter type as the property type
-                    // In a full implementation, we'd track getter/setter separately
-                    props.insert(prop_name, FieldEntry::pre(self.fresh_type_var()));
+                PropDef::Setter { key, span, .. } => {
+                    // A setter's property reads `undefined` (with no
+                    // getter) and a store runs its body, which inty
+                    // doesn't model: rejected.
+                    return Err(crate::error::TypeError::InvalidSyntax {
+                        message: format!(
+                            "a setter (`set {}(…)`) is not supported: inty doesn't model \
+                             accessors that run on a store",
+                            self.prop_key_to_name(key).0
+                        ),
+                        span: *span,
+                    }
+                    .into());
                 }
 
                 PropDef::Spread {
@@ -426,15 +437,33 @@ impl InferState {
             _ => RowTail::Closed,
         };
         for (k, v) in spread.props {
+            // What the spread copies of the operand's property: an own one
+            // (a getter's value too) as a field that holds a value; a
+            // member of a class's prototype, nothing. A property not
+            // known to be on the prototype is taken as an own one.
+            let vp = match self.main_subst.resolve_presence(&v.own) {
+                Presence::Abs => Presence::Abs,
+                own => {
+                    if matches!(own, Presence::Var(_)) {
+                        self.unify_presence(span, &own, &Presence::Pre)?;
+                    }
+                    self.main_subst.resolve_presence(&v.presence)
+                }
+            };
+            let copy = FieldEntry {
+                presence: vp.clone(),
+                ty: v.ty.clone(),
+                writable: Presence::Pre,
+                own: Presence::Pre,
+            };
             let merged = match so_far.props.remove(&k) {
-                None => v,
+                None => copy,
                 Some(e) => {
                     let ep = self.main_subst.resolve_presence(&e.presence);
-                    let vp = self.main_subst.resolve_presence(&v.presence);
                     match (ep, vp) {
-                        (_, Presence::Pre) => v,
+                        (_, Presence::Pre) => copy,
                         (_, Presence::Abs) => e,
-                        (Presence::Abs, _) => v,
+                        (Presence::Abs, _) => copy,
                         (Presence::Pre, _) => {
                             self.unify(span, &e.ty, &v.ty)?;
                             e
@@ -442,7 +471,7 @@ impl InferState {
                         (ep @ Presence::Var(_), vp) => {
                             self.unify_presence(span, &ep, &vp)?;
                             self.unify(span, &e.ty, &v.ty)?;
-                            v
+                            copy
                         }
                     }
                 }
@@ -471,6 +500,8 @@ impl InferState {
             let entry = FieldEntry {
                 presence: Presence::Var(self.fresh_pvar()),
                 ty: self.fresh_type_var(),
+                writable: Presence::Var(self.fresh_pvar()),
+                own: Presence::Var(self.fresh_pvar()),
             };
             extra.insert(k, entry);
         }
@@ -1025,11 +1056,37 @@ impl InferState {
         // shapes unification can unroll): pose the property access as a
         // row constraint and let unification resolve it.
         let row_var = self.fresh_flex();
-        let expected_row = Type::object_open([(property, result_type.clone())], row_var);
+        let entry = self.read_entry(result_type.clone());
+        let expected_row = Type::Row(RowType::open_entries(
+            BTreeMap::from([(PropName(property.to_string()), entry)]),
+            row_var,
+        ));
 
         self.unify(span, obj_type, &expected_row)?;
 
         Ok(self.zonk(&result_type))
+    }
+
+    /// The field a read of a property of type `ty` needs: present, of any
+    /// kind (a field that holds a value, a getter, a class's method).
+    pub(crate) fn read_entry(&mut self, ty: Type) -> FieldEntry {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Var(self.fresh_pvar()),
+            own: Presence::Var(self.fresh_pvar()),
+        }
+    }
+
+    /// The field a store to a property of type `ty` needs: present, and
+    /// one that takes stores (not a getter, nor a class's method).
+    pub(crate) fn write_entry(&mut self, ty: Type) -> FieldEntry {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Pre,
+            own: Presence::Var(self.fresh_pvar()),
+        }
     }
 
     /// Look up a property by following row tail chains.

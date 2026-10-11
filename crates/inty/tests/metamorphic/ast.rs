@@ -589,10 +589,12 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             params,
             body,
             return_type_ast,
+            proto,
             span,
         } => PropDef::Method {
             key: key.clone(),
             return_type_ast: return_type_ast.clone(),
+            proto: *proto,
             params: params
                 .iter()
                 .map(|p| {
@@ -606,9 +608,15 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             body: Box::new(rename_stmt(body, from, to)),
             span: *span,
         },
-        PropDef::Getter { key, body, span } => PropDef::Getter {
+        PropDef::Getter {
+            key,
+            body,
+            proto,
+            span,
+        } => PropDef::Getter {
             key: key.clone(),
             body: Box::new(rename_stmt(body, from, to)),
+            proto: *proto,
             span: *span,
         },
         PropDef::Setter {

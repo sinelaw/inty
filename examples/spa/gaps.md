@@ -242,9 +242,15 @@ extracted property so the parameter is type-checked against the
 declared type. Duplicate field declarations in the same class body
 are rejected.
 
-Not yet covered: `extends`/`super` (would need a prototype chain),
-static methods, getters/setters in class bodies, private fields,
-and constructor statements beyond `this.FIELD = EXPR;`.
+Getters and private fields are covered too. Fields are set in order, so
+an initialiser reads through `this` only a field set before it (an arrow
+function initialiser, run later, may use `this` freely); methods and
+getters are on the prototype, so a spread doesn't copy them and a store
+to one is rejected; and a class is called only with `new`. See
+[type-system.md § Class Bodies](../../docs/type-system.md#class-bodies-fields-private-fields-accessors).
+
+Not covered, by design: `extends`/`super` in a class with a body, static
+methods, setters, and constructor statements beyond `this.FIELD = EXPR;`.
 
 ### 14b. No `async`/`await` *(resolved)*
 
@@ -283,8 +289,7 @@ the types produced.
    rest/spread, patterns in function parameters. All pure parser work.
 4. **Inference polish** (gaps 7, 8, 9) — smaller scope but each one
    removes a footgun.
-5. **Class extras** (gap 14a continued) — `extends`, static methods,
-   getters/setters.
+5. **Class extras** (gap 14a continued) — static methods.
 
 ## Additions beyond the original list
 

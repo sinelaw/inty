@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 
 use super::ty::{
-    FieldEntry, ModuleType, PVarId, PVarName, Presence, QualType, RowTail, RowType, TVarId,
-    TVarName, Type, TypePred, TypeScheme,
+    ModuleType, PVarId, PVarName, Presence, QualType, RowTail, RowType, TVarId, TVarName, Type,
+    TypePred, TypeScheme,
 };
 
 /// Renaming context for one tidy operation.
@@ -100,6 +100,7 @@ impl TidyEnv {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
             | Type::TypedArray(_)
             | Type::Literal(_)
             | Type::Error => ty.clone(),
@@ -180,13 +181,10 @@ impl TidyEnv {
             .props
             .iter()
             .map(|(k, e)| {
-                (
-                    k.clone(),
-                    FieldEntry {
-                        presence: self.rename_presence(&e.presence),
-                        ty: self.tidy_type(&e.ty),
-                    },
-                )
+                (k.clone(), {
+                    let ty = self.tidy_type(&e.ty);
+                    e.map(&mut |p| self.rename_presence(p), ty)
+                })
             })
             .collect();
         let tail = match &row.tail {

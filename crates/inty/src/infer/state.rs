@@ -44,19 +44,18 @@ fn structural_norm(ty: &Type) -> Type {
                 .map(|(k, e)| {
                     (
                         k.clone(),
-                        crate::types::FieldEntry {
-                            // Normalise presence to either Pre/Abs
-                            // or a single canonical Var so the probe
-                            // doesn't fire on differently-named
-                            // presence vars.
-                            presence: match &e.presence {
+                        // Normalise each presence to either Pre/Abs or a
+                        // single canonical Var so the probe doesn't fire
+                        // on differently-named presence vars.
+                        e.map(
+                            &mut |p| match p {
                                 crate::types::Presence::Var(_) => {
                                     crate::types::Presence::Var(crate::types::PVarName::Flex(0))
                                 }
                                 other => other.clone(),
                             },
-                            ty: structural_norm(&e.ty),
-                        },
+                            structural_norm(&e.ty),
+                        ),
                     )
                 })
                 .collect(),
@@ -2224,9 +2223,12 @@ impl InferState {
                         return true;
                     }
                     let span = pred.origin.unwrap_or_default();
-                    let decided = match pred.class {
-                        ClassName::IndexWrite => self.resolve_index_write(&ty, span),
-                        _ => self.resolve_field_write(&ty, span),
+                    let decided = match pred.as_field_write() {
+                        Some((_, name)) => {
+                            let name = name.to_string();
+                            self.resolve_field_write(&ty, &name, span)
+                        }
+                        None => self.resolve_index_write(&ty, span),
                     };
                     if let Err(e) = decided {
                         self.push_error(e);
@@ -2479,6 +2481,7 @@ impl InferState {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
             | Type::TypedArray(_)
             | Type::Error => false,
 

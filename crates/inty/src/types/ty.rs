@@ -158,25 +158,39 @@ impl FuncParam {
     }
 }
 
-/// One entry in a `RowType`'s props map: presence + type.
+/// One entry in a `RowType`'s props map: presence, type, and how the
+/// object holds the property.
 ///
 /// A field written in source has `presence = Pre`. A field declared
 /// optional in an annotation (`x?: T`) is assigned a fresh presence
 /// variable. `Abs` only arises through unification when a closed row
 /// constrains a polymorphic side's missing field.
+///
+/// Two more presences say how the object holds the property, each `Pre`,
+/// `Abs` or a variable unified like a presence: `writable`, whether a
+/// store to it is allowed (`Abs` for a getter, or a class's method), and
+/// `own`, whether it is the object's own property, which a spread copies
+/// (`Abs` for a class's method or getter, on its prototype). A read
+/// leaves both as fresh variables, so it accepts any property; a store
+/// needs `writable`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldEntry {
     pub presence: Presence,
     pub ty: Type,
+    pub writable: Presence,
+    pub own: Presence,
 }
 
 impl FieldEntry {
-    /// Field is definitely present with the given type. The common case
-    /// for object literals and most stub declarations.
+    /// Field is definitely present with the given type, an own property
+    /// that holds a value. The common case for object literals and most
+    /// stub declarations.
     pub fn pre(ty: Type) -> Self {
         FieldEntry {
             presence: Presence::Pre,
             ty,
+            writable: Presence::Pre,
+            own: Presence::Pre,
         }
     }
 
@@ -185,6 +199,8 @@ impl FieldEntry {
         FieldEntry {
             presence: Presence::Var(pvar),
             ty,
+            writable: Presence::Pre,
+            own: Presence::Pre,
         }
     }
 
@@ -194,7 +210,56 @@ impl FieldEntry {
         FieldEntry {
             presence: Presence::Abs,
             ty,
+            writable: Presence::Pre,
+            own: Presence::Pre,
         }
+    }
+
+    /// An own property with only a getter (`get x() {…}`): read, not
+    /// stored to; a spread copies what it gives.
+    pub fn getter(ty: Type) -> Self {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Abs,
+            own: Presence::Pre,
+        }
+    }
+
+    /// A class's method or getter, on its prototype: read, not stored
+    /// to, and not copied by a spread.
+    pub fn proto(ty: Type) -> Self {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Abs,
+            own: Presence::Abs,
+        }
+    }
+
+    /// The same flags, at another type.
+    pub fn with_ty(&self, ty: Type) -> Self {
+        FieldEntry {
+            presence: self.presence.clone(),
+            ty,
+            writable: self.writable.clone(),
+            own: self.own.clone(),
+        }
+    }
+
+    /// Each presence mapped by `f`, the type by `g`.
+    pub fn map(&self, f: &mut dyn FnMut(&Presence) -> Presence, ty: Type) -> Self {
+        FieldEntry {
+            presence: f(&self.presence),
+            ty,
+            writable: f(&self.writable),
+            own: f(&self.own),
+        }
+    }
+
+    /// The presences: whether it is there, then the two flags.
+    pub fn presences(&self) -> [&Presence; 3] {
+        [&self.presence, &self.writable, &self.own]
     }
 }
 
@@ -226,9 +291,10 @@ pub enum ClassName {
     /// characters are read-only: a store throws a `TypeError` in strict
     /// code).
     IndexWrite,
-    /// `FieldWrite r`: a property of `r` can be stored (`r.p = v`): an
-    /// object, not an array, a string or a function (whose properties
-    /// are built in).
+    /// `FieldWrite r "p"`: the property `p` of `r` can be stored (`r.p =
+    /// v`): an object's property that takes stores (not a getter, nor a
+    /// class's method), not an array's, a string's or a function's
+    /// (whose properties are built in).
     FieldWrite,
     /// Property access on a value whose type isn't known yet:
     /// `HasProp(receiver, "name", result)` says reading `.name` from a
@@ -309,11 +375,22 @@ impl TypePred {
         }
     }
 
-    pub fn field_write(receiver: Type) -> Self {
+    /// `FieldWrite r "p"`: the property `p` of an `r` can be stored.
+    pub fn field_write(receiver: Type, name: &str) -> Self {
         TypePred {
             class: ClassName::FieldWrite,
-            types: vec![receiver],
+            types: vec![receiver, Type::Literal(LitValue::String(name.to_string()))],
             origin: None,
+        }
+    }
+
+    /// The receiver and the property of a [`Self::field_write`] predicate.
+    pub fn as_field_write(&self) -> Option<(&Type, &str)> {
+        match (self.class, self.types.as_slice()) {
+            (ClassName::FieldWrite, [recv, Type::Literal(LitValue::String(name))]) => {
+                Some((recv, name.as_str()))
+            }
+            _ => None,
         }
     }
 
@@ -601,6 +678,10 @@ pub enum Type {
     Null,
     /// JavaScript regex type.
     Regex,
+    /// What `new` gives a class's constructor as `this`, which nothing
+    /// else gives: a class called without `new` is rejected, as
+    /// JavaScript throws.
+    NewTarget,
 
     // === Type variable ===
     /// Type variable (flexible or skolem).
@@ -980,15 +1061,7 @@ impl Type {
                 let props = row
                     .props
                     .iter()
-                    .map(|(k, e)| {
-                        (
-                            k.clone(),
-                            FieldEntry {
-                                presence: e.presence.clone(),
-                                ty: e.ty.widen_fresh_literals_with(f),
-                            },
-                        )
-                    })
+                    .map(|(k, e)| (k.clone(), e.with_ty(e.ty.widen_fresh_literals_with(f))))
                     .collect();
                 Type::Row(RowType {
                     props,
@@ -1030,6 +1103,7 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Named(_, _)
@@ -1317,6 +1391,7 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Literal(_)
@@ -1339,8 +1414,10 @@ impl Type {
             }
             Type::Row(row) => {
                 for entry in row.props.values() {
-                    if let Presence::Var(v) = &entry.presence {
-                        pvars.insert(v.clone());
+                    for p in entry.presences() {
+                        if let Presence::Var(v) = p {
+                            pvars.insert(v.clone());
+                        }
                     }
                     entry.ty.collect_free_pvars(pvars);
                 }
@@ -1395,6 +1472,7 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
             | Type::TypedArray(_)
             | Type::Error => {}
 
@@ -1624,6 +1702,7 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Undefined => (3, String::new()),
         Type::Null => (4, String::new()),
         Type::Regex => (5, String::new()),
+        Type::NewTarget => (5, "new.target".to_string()),
         Type::TypedArray(k) => (19, k.name().to_string()),
         Type::Literal(lit) => {
             let (sub, key) = lit.sort_key();

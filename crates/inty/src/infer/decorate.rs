@@ -629,9 +629,15 @@ impl<'a> Decorator<'a> {
                 type_ast: type_ast.clone(),
                 span: *span,
             },
-            PropDef::Getter { key, body, span } => PropDef::Getter {
+            PropDef::Getter {
+                key,
+                body,
+                proto,
+                span,
+            } => PropDef::Getter {
                 key: key.clone(),
                 body: Box::new(self.decorate_stmt(body, env).0),
+                proto: *proto,
                 span: *span,
             },
             PropDef::Setter {
@@ -650,12 +656,14 @@ impl<'a> Decorator<'a> {
                 params,
                 body,
                 return_type_ast,
+                proto,
                 span,
             } => PropDef::Method {
                 key: key.clone(),
                 params: params.clone(),
                 body: Box::new(self.decorate_stmt(body, env).0),
                 return_type_ast: return_type_ast.clone(),
+                proto: *proto,
                 span: *span,
             },
             PropDef::Spread { argument, span } => PropDef::Spread {

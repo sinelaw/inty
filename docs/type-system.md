@@ -264,10 +264,50 @@ unrelated classes that both declare `#x` share the storage key
 under the current pragmatic lowering — collisions are rare in
 practice; per-class suffix is a future option.
 
-`get foo() { … }` accessors lower to a regular field whose value
-is the body's IIFE — `obj.foo` reads its return type. `set foo(v)
-{ … }` is parse-accepted but the field is not declared from the
-setter (initialise via `this.foo = …` in the constructor).
+**Fields are set in order.** JavaScript sets a class's fields one by
+one, the class-body initialisers first and then the constructor's
+`this.f = …` lines, on an instance whose later fields aren't set yet. So
+in an initialiser (or the value of a constructor's `this.f = …`) `this`
+may only be read as `this.f`, of a field set before it, and reads the
+value that field was set to. Reading a later field, calling a method
+(`this.m()`, which may read one), passing `this` on, or a function that
+uses `this` is rejected. The exception is an initialiser that is a whole
+arrow function, `f = () => this.n`: it runs later, on the finished
+instance, and is typed as a method of the instance (its own property).
+The constructor's body is still limited to `this.f = …;` lines.
+
+```javascript
+class P {
+  x = 1;
+  y = this.x + 1;           // ok: x is set before
+  f = () => this.x + this.y; // ok: runs on the finished instance
+  constructor(n) { this.z = this.y + n; }
+}
+class Q { a = this.b; b = 1; }        // rejected: b isn't set yet
+class R { a = this.m(); m() { return 1; } } // rejected: a method call
+```
+
+**Methods and getters are on the prototype.** A class's methods and
+`get foo() { … }` getters aren't the instance's own properties: a spread
+`{...instance}` doesn't copy them, and a store to one is rejected (it
+would make an own property where the type says there is none). The
+instance's fields are its own and may be stored to. A field with the
+same name as a method or getter is rejected. In an object literal, a
+method shorthand is the object's own property, and a getter is its own
+too. A store to any getter is rejected (it throws in strict code); a
+spread copies the getter's value. A function reading a property accepts
+an object with either kind. Setters (`set foo(v) { … }`) are rejected:
+a store would run code inty doesn't model.
+
+**`new`.** Only `new` calls a class (a call without it throws), so
+`C(1)` is rejected. A class's type prints as `new (params) => Instance`,
+and an annotation can declare a constructor so: `/** const C: new
+(Number) => {n: Number} */`. `new F(…)` of any function gives back what
+`F` returns, which must be an object: in JavaScript a primitive result is
+replaced by the new object, so a function returning one can't be called
+with `new`. A function that uses `this` (a pre-class constructor
+function, `function F() { this.n = 1; }`) can't be called with `new`
+either: inty has no type for the object it would fill in.
 
 **No inheritance.** `class Sub extends Base { … }` is rejected. A
 class's methods are checked with its instance as `this`, and the
@@ -290,7 +330,10 @@ class Gain;
 
 It is a constructor taking the parameters (or, without them, its base's)
 whose instances have the members and, with `extends`, every field of the
-base's instances a member doesn't redeclare. Only such a declaration
+base's instances a member doesn't redeclare. A member of function type is
+a method on the prototype (not copied by a spread, not stored to); the
+modifiers `proto` and `readonly` declare another member so, as for a
+getter: `{ proto readonly area: Number }`. Only such a declaration
 extends, and only a class or constructor itself declared without a body:
 no code inty checks runs with another class's instance as `this`.
 
@@ -599,7 +642,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
-| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |
+| Classes        | declarations + `export default class`, instance methods, fields, getters (no setters), private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |

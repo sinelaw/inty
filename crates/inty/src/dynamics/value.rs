@@ -36,6 +36,10 @@ pub enum Value {
     /// to the receiver it's called on. Only a few are modelled; see
     /// `step::BUILTIN_METHODS`.
     Builtin(&'static str),
+    /// An object's getter, as the object stores it: reading the property
+    /// runs it with the object as `this` (see `step::get_member`), so no
+    /// expression evaluates to it.
+    Getter(Closure),
 }
 
 #[derive(Clone, Debug)]
@@ -55,7 +59,7 @@ impl Value {
             Value::Boolean(_) => "boolean",
             Value::Undefined => "undefined",
             Value::Null => "object",
-            Value::Closure(_) | Value::Builtin(_) => "function",
+            Value::Closure(_) | Value::Builtin(_) | Value::Getter(_) => "function",
             Value::Array(_) | Value::Object(_) => "object",
             Value::Promise(_) => "object",
         }
@@ -70,6 +74,7 @@ impl Value {
             Value::Null | Value::Undefined => false,
             Value::Closure(_)
             | Value::Builtin(_)
+            | Value::Getter(_)
             | Value::Array(_)
             | Value::Object(_)
             | Value::Promise(_) => true,
@@ -93,6 +98,7 @@ impl fmt::Display for Value {
             Value::Object(l) => write!(f, "<object @{}>", l.0),
             Value::Promise(v) => write!(f, "<promise {}>", v),
             Value::Builtin(m) => write!(f, "<builtin {}>", m),
+            Value::Getter(_) => write!(f, "<getter>"),
         }
     }
 }

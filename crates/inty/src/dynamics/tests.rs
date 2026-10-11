@@ -406,3 +406,25 @@ fn indexing_out_of_bounds_is_a_fault() {
         Ok(Value::Number(n)) if n == 5.0
     ));
 }
+
+#[test]
+fn getters_run_when_read_and_copied_by_a_spread() {
+    assert_number(
+        "const o = { a: 1, get g() { return this.a + 1; } }; o.g;",
+        2.0,
+    );
+    assert_number(
+        "const o = { a: 1, get g() { return this.a + 1; } }; const c = {...o}; o.a = 5; c.g;",
+        2.0,
+    );
+    assert!(matches!(
+        run("const o = { get g() { return 1; } }; o.g = 2;"),
+        Err(Stuck::ReadOnly)
+    ));
+}
+
+#[test]
+fn new_gives_back_an_object_result_else_this() {
+    assert_number("function F(n) { return {n: n}; } new F(3).n;", 3.0);
+    assert_string("function F() { return 1; } typeof new F();", "object");
+}

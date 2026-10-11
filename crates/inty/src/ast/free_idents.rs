@@ -110,6 +110,14 @@ pub fn free_identifiers_in_expr(expr: &Expr) -> HashSet<String> {
     state.free
 }
 
+/// Whether `this` occurs anywhere in `expr`, inside nested functions too
+/// (an arrow's `this` is its enclosing function's).
+pub fn mentions_this(expr: &Expr) -> bool {
+    let mut state = State::new();
+    state.visit_expr(expr);
+    state.saw_this
+}
+
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
@@ -130,6 +138,8 @@ struct State {
     free: HashSet<String>,
     /// How many references each free name has.
     counts: HashMap<String, usize>,
+    /// Whether a `this` occurs anywhere, nested functions included.
+    saw_this: bool,
 }
 
 impl State {
@@ -138,6 +148,7 @@ impl State {
             scopes: Vec::new(),
             free: HashSet::new(),
             counts: HashMap::new(),
+            saw_this: false,
         }
     }
 
@@ -585,7 +596,8 @@ impl State {
 
     fn visit_expr(&mut self, expr: &Expr) {
         match expr {
-            Expr::Lit { .. } | Expr::This { .. } | Expr::NewTarget { .. } => {}
+            Expr::This { .. } => self.saw_this = true,
+            Expr::Lit { .. } | Expr::NewTarget { .. } => {}
             Expr::Ident { name, .. } => self.record_ref(name),
             Expr::Array { elements, .. } => {
                 for elt in elements.iter().flatten() {

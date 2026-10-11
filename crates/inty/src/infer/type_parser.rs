@@ -331,7 +331,16 @@ impl<'a> TypeParser<'a> {
             self.pos += "FieldWrite".len();
             self.skip_whitespace();
             let t = self.parse_simple_type()?;
-            self.preds.push(TypePred::field_write(t));
+            self.skip_whitespace();
+            let name = match self.parse_simple_type()? {
+                Type::Literal(crate::types::LitValue::String(name)) => name,
+                _ => {
+                    return Err(self.error(
+                        "expected the property's name, a string, after `FieldWrite T`".to_string(),
+                    ))
+                }
+            };
+            self.preds.push(TypePred::field_write(t, &name));
             return Ok(());
         }
         if keyword("IndexWrite") {
@@ -735,6 +744,17 @@ impl<'a> TypeParser<'a> {
                     let target = self.parse_ident()?;
                     return self.resolve_typeof(&target);
                 }
+                // `new (A) => R`: a constructor, which only `new` calls
+                // (its `this` is `NewTarget`).
+                if ident == "new" {
+                    self.skip_whitespace();
+                    if self.peek_char() == Some('(') {
+                        let mut ty = self.parse_func_type()?;
+                        set_callable_this(&mut ty, Type::NewTarget);
+                        return Ok(ty);
+                    }
+                    return Err(self.error("expected `(` after `new` in a constructor type".into()));
+                }
                 self.ident_to_type(&ident)
             }
             Some(c) => Err(self.error(format!("unexpected character '{}'", c))),
@@ -939,15 +959,25 @@ impl<'a> TypeParser<'a> {
                     }
                     continue;
                 }
-                // `readonly` is a TS modifier with no semantic effect
-                // under inty's structural typing — erase if present.
-                if self.input[self.pos..].starts_with("readonly")
-                    && !matches!(
-                        self.input[self.pos + "readonly".len()..].chars().next(),
-                        Some(c) if self.is_ident_cont(Some(c))
-                    )
-                {
-                    self.pos += "readonly".len();
+                // `proto` (a member of a class's prototype, which a spread
+                // doesn't copy) and `readonly` (TypeScript's: no store)
+                // say how the object holds the property.
+                let mut proto = false;
+                let mut readonly = false;
+                loop {
+                    let word = ["proto", "readonly"].into_iter().find(|w| {
+                        self.input[self.pos..].starts_with(w)
+                            && matches!(
+                                self.input[self.pos + w.len()..].chars().next(),
+                                Some(c) if c.is_whitespace()
+                            )
+                    });
+                    match word {
+                        Some("proto") => proto = true,
+                        Some(_) => readonly = true,
+                        None => break,
+                    }
+                    self.pos += word.map_or(0, str::len);
                     self.skip_whitespace();
                 }
                 let name = self.parse_ident()?;
@@ -969,12 +999,18 @@ impl<'a> TypeParser<'a> {
                 // At top level, quantifiers are allowed: { fn: <T>(x: T) => T } is valid.
                 // Inside function params, they're not: (obj: { fn: <T>(x: T) => T }) => X is Rank-2.
                 let ty = self.parse_type()?;
-                let entry = if optional {
+                let mut entry = if optional {
                     let pvar = self.fresh_pvar();
                     crate::types::FieldEntry::optional(pvar, ty)
                 } else {
                     crate::types::FieldEntry::pre(ty)
                 };
+                if proto {
+                    entry.own = crate::types::Presence::Abs;
+                }
+                if readonly {
+                    entry.writable = crate::types::Presence::Abs;
+                }
                 props.push((name, entry));
 
                 self.skip_whitespace();
@@ -1334,6 +1370,20 @@ fn unsupported_ts_alternative(ident: &str) -> Option<&'static str> {
     }
 }
 
+/// Set the `this` of a function type (or a callable row's call).
+pub(crate) fn set_callable_this(ty: &mut Type, this: Type) {
+    match ty {
+        Type::Func { this_type, .. } => *this_type = Some(Box::new(this)),
+        Type::Row(row) => {
+            let key = crate::types::PropName(crate::types::CALLABLE_KEY.to_string());
+            if let Some(entry) = row.props.get_mut(&key) {
+                set_callable_this(&mut entry.ty, this);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Capture-avoiding substitution against an alias body. Walks a
 /// `Type` cloning structure and replaces every flex variable whose
 /// id is a key in `subst` with the corresponding type. Other type
@@ -1357,6 +1407,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         | Type::Undefined
         | Type::Null
         | Type::Regex
+        | Type::NewTarget
         | Type::TypedArray(_)
         | Type::Literal(_)
         | Type::Error => ty.clone(),
@@ -1394,15 +1445,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
             let new_props: std::collections::BTreeMap<_, _> = row
                 .props
                 .iter()
-                .map(|(k, e)| {
-                    (
-                        k.clone(),
-                        crate::types::FieldEntry {
-                            presence: e.presence.clone(),
-                            ty: substitute_alias_body(&e.ty, subst),
-                        },
-                    )
-                })
+                .map(|(k, e)| (k.clone(), e.with_ty(substitute_alias_body(&e.ty, subst))))
                 .collect();
             let new_tail = match &row.tail {
                 RowTail::Closed => RowTail::Closed,

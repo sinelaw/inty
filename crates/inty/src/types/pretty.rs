@@ -139,15 +139,19 @@ impl PrettyContext {
             Type::Undefined => write!(w, "undefined"),
             Type::Null => write!(w, "null"),
             Type::Regex => write!(w, "RegExp"),
+            Type::NewTarget => write!(w, "new.target"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
             Type::Var(name) => self.write_var(w, name),
             Type::Func {
-                this_type: _,
+                this_type,
                 params,
                 ret,
             } => {
                 if in_func_arg {
                     write!(w, "(")?;
+                }
+                if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
+                    write!(w, "new ")?;
                 }
                 write!(w, "(")?;
                 for (i, p) in params.iter().enumerate() {
@@ -306,6 +310,7 @@ impl PrettyContext {
             Type::Undefined => write!(w, "Undefined"),
             Type::Null => write!(w, "Null"),
             Type::Regex => write!(w, "Regex"),
+            Type::NewTarget => write!(w, "NewTarget"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
 
             Type::Var(name) => self.write_var(w, name),
@@ -328,7 +333,10 @@ impl PrettyContext {
                     None => false,
                     Some(t) => !matches!(**t, Type::Undefined | Type::Var(_)),
                 };
-                if show_this {
+                if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
+                    // Called only by `new`: a class's constructor.
+                    write!(w, "new ")?;
+                } else if show_this {
                     write!(w, "this: ")?;
                     self.write_type(w, this_type.as_ref().unwrap(), false)?;
                     write!(w, " => ")?;
@@ -557,6 +565,15 @@ impl PrettyContext {
             }
             first = false;
             let optional_marker = matches!(entry.presence, crate::types::ty::Presence::Var(_));
+            // How the object holds the property, where it isn't an own
+            // property that holds a value: on a class's prototype, or
+            // read-only (a getter, or a class's method).
+            if matches!(entry.own, Presence::Abs) {
+                write!(w, "proto ")?;
+            }
+            if matches!(entry.writable, Presence::Abs) {
+                write!(w, "readonly ")?;
+            }
             // Private-field sentinels render as `#name`, restoring the
             // user-written form. The raw stored key contains control
             // characters that would otherwise look broken in errors.
@@ -698,7 +715,12 @@ impl PrettyContext {
             }
             ClassName::FieldWrite => {
                 write!(w, "FieldWrite ")?;
-                self.write_type(w, &pred.types[0], true)?;
+                for (i, t) in pred.types.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, " ")?;
+                    }
+                    self.write_type(w, t, true)?;
+                }
             }
             ClassName::Indexable => {
                 write!(w, "Indexable ")?;

@@ -58,6 +58,9 @@ enum Core {
     /// own (its body never refers to variable `n`), and inty types its
     /// `this` as the literal itself.
     Method(usize, Box<Core>),
+    /// A getter `get l() { body }`, only as an object literal's field: a
+    /// method of no parameters (`this` is variable 1) run when `l` is read.
+    Getter(Box<Core>),
     /// A call outside any receiver, so `this` is `undefined`.
     App(Box<Core>, Vec<Core>),
     /// `const v = e₁; e₂` (`false`) or `let v = e₁; e₂` (`true`); only in
@@ -121,6 +124,7 @@ fn wire(e: &Core) -> String {
         Null => "(null)".into(),
         Var(i) => format!("(var {})", i),
         Func(n, body) | Method(n, body) => format!("(func {} {})", n, wire(body)),
+        Getter(body) => format!("(func 0 {})", wire(body)),
         App(f, args) => {
             let args: Vec<String> = args.iter().map(wire).collect();
             format!(
@@ -155,10 +159,10 @@ fn wire(e: &Core) -> String {
             let fields: Vec<String> = fields
                 .iter()
                 .map(|(l, e)| {
-                    let kind = if matches!(e, Method(..)) {
-                        "method"
-                    } else {
-                        "field"
+                    let kind = match e {
+                        Method(..) => "method",
+                        Getter(_) => "getter",
+                        _ => "field",
                     };
                     format!(" ({} s:{} {})", kind, l, wire(e))
                 })
@@ -211,6 +215,7 @@ fn fractional(e: &Core) -> Core {
         Num(m, x) => Num(m * 10 + 5, x + 1),
         Func(n, body) => Func(*n, f(body)),
         Method(n, body) => Method(*n, f(body)),
+        Getter(body) => Getter(f(body)),
         App(x, args) => App(f(x), args.iter().map(fractional).collect()),
         Let(m, x, y) => Let(*m, f(x), f(y)),
         Assign(i, x) => Assign(*i, f(x)),
@@ -278,7 +283,9 @@ impl Js {
                 let (f, rest) = self.function(*n, body);
                 format!("(function {}{})", f, rest)
             }
-            Method(..) => unreachable!("a method only as an object literal's field: {e:?}"),
+            Method(..) | Getter(_) => {
+                unreachable!("a method only as an object literal's field: {e:?}")
+            }
             App(f, args) => {
                 let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
                 // A call of a property is a method call in JavaScript,
@@ -307,6 +314,7 @@ impl Js {
                     .map(|(l, e)| match e {
                         // `l(…) { … }`: the function's name is never used.
                         Method(n, body) => format!("{}{}", l, self.function(*n, body).1),
+                        Getter(body) => format!("get {}{}", l, self.function(0, body).1),
                         _ => format!("{}: {}", l, self.expr(e)),
                     })
                     .collect();
@@ -413,6 +421,7 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
     match e {
         Var(j) => inner && *j == i,
         Func(n, body) | Method(n, body) => refers_from_inner(body, i + n + 2, true),
+        Getter(body) => refers_from_inner(body, i + 2, true),
         Let(_, x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
         Assign(j, x) => (inner && *j == i) || refers_from_inner(x, i, inner),
         App(f, args) => {
@@ -821,6 +830,25 @@ impl Gen {
             .iter()
             .map(|(l, u)| (l.clone(), self.typed(u, d, scope, false)))
             .collect();
+        if !chain && self.rng.chance(30) {
+            // A getter `g` returning a `t`, read: `get g() { … }`, in a
+            // function of no parameters, its `this` variable 1.
+            scope.push(Binding::This(data.clone()));
+            scope.push(Binding::Unknown);
+            self.funcs.push(Some(t.clone()));
+            self.loops.push(0);
+            let body = self.typed(t, d, scope, true);
+            self.loops.pop();
+            self.funcs.pop();
+            scope.truncate(scope.len() - 2);
+            if !refers_from_inner(&body, 0, true) {
+                fields.push(("g".into(), Getter(b(body))));
+                if fields.len() > 1 && self.rng.chance(50) {
+                    fields.reverse();
+                }
+                return Get(b(Obj(fields)), "g".into());
+            }
+        }
         if chain {
             // `function () { this.l = …; return this; }`: in a function of
             // no parameters, `this` is variable 1.
@@ -1078,6 +1106,20 @@ impl Gen {
                     let m = self.method(k, body);
                     fields.push(("m".into(), m));
                 }
+                if self.rng.chance(20) {
+                    // A getter, which may use `this` (variable 1).
+                    scope.push(Binding::Unknown);
+                    scope.push(Binding::Unknown);
+                    self.funcs.push(None);
+                    self.loops.push(0);
+                    let body = self.any(d, scope, true);
+                    self.loops.pop();
+                    self.funcs.pop();
+                    scope.truncate(scope.len() - 2);
+                    if !refers_from_inner(&body, 0, true) {
+                        fields.push(("g".into(), Getter(b(body))));
+                    }
+                }
                 Obj(fields)
             }
             4 if self.rng.chance(30) => {
@@ -1093,7 +1135,12 @@ impl Gen {
             4 => Not(b(self.any(d, scope, false))),
             5 if self.rng.chance(40) => {
                 let o = self.any(d, scope, false);
-                let l = self.label();
+                // Sometimes the getter `g` an object literal may have.
+                let l = if self.rng.chance(15) {
+                    "g".to_string()
+                } else {
+                    self.label()
+                };
                 if self.rng.chance(60) {
                     Get(b(o), l)
                 } else {
@@ -1344,6 +1391,7 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Err(Stuck::NotIndexable(_)) => Run::Stuck("notIndexable".into()),
         Err(Stuck::PropertyNotFound { .. }) => Run::Stuck("propertyNotFound".into()),
         Err(Stuck::BadAssignmentTarget) => Run::Stuck("badAssignmentTarget".into()),
+        Err(Stuck::ReadOnly) => Run::Stuck("readOnly".into()),
         Err(other) => Run::Stuck(format!("other {}", other)),
     }
 }
@@ -1612,6 +1660,18 @@ fn inty_agrees_with_the_lean_model() {
         if wire(&programs[i]).contains("(method ") && accepted && model_accepted {
             *counts
                 .entry("both accept, with a method written `m() {…}`".into())
+                .or_default() += 1;
+        }
+        if wire(&programs[i]).contains("(getter ") {
+            *counts
+                .entry(format!(
+                    "with a getter, {}",
+                    match (accepted, model_accepted) {
+                        (true, true) => "both accept",
+                        (false, false) => "both reject",
+                        _ => "they disagree",
+                    }
+                ))
                 .or_default() += 1;
         }
 

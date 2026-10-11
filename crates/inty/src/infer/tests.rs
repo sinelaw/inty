@@ -4965,3 +4965,136 @@ fn external_class_declarations() {
     .is_err());
     assert!(check_program("class C;", &[]).is_err());
 }
+
+/// A class's fields are set one by one, as JavaScript sets them: an
+/// initialiser (or a constructor's `this.f = …`) reads through `this` only a
+/// field set before it. Reading a later field (`undefined` at run time),
+/// calling a method (which may read one) or using `this` otherwise was
+/// accepted and typed as reading the finished instance.
+#[test]
+fn class_initialisers_read_only_fields_set_before() {
+    let t = check_program(
+        "class P {\n\
+           x = 1;\n\
+           y = this.x + 1;\n\
+           f = () => this.x + this.y;\n\
+           constructor(n) { this.z = this.y + n; this.x = 5; }\n\
+           get sum() { return this.x + this.y + this.z; }\n\
+           twice() { return this.f() * 2; }\n\
+         }\n\
+         const p = new P(3);\n\
+         const a = p.sum;\n\
+         const b = p.twice();\n\
+         const c = p.f();",
+        &["a", "b", "c"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Int", "Int", "Int"]);
+    for (src, why) in [
+        ("class A { x = this.y; y = 1; }", "isn't a field set before"),
+        (
+            "class A { x = this.m(); m() { return 1; } }",
+            "calling a method",
+        ),
+        (
+            "class A { constructor() { this.x = this.y; this.y = 1; } }",
+            "isn't a field set before",
+        ),
+        (
+            "class A { x = 1; g = function () { return this.x; }; }",
+            "inside a function",
+        ),
+        (
+            "class A { x = 1; f = () => this.x; g = this.f; }",
+            "arrow-function field",
+        ),
+        ("class A { x = 1; y = this; }", "other than `this.field`"),
+        ("class A { x = 1; y = (this.x = 2); }", "storing to a field"),
+        (
+            "class A { x = 1; x() { return 2; } }",
+            "same name as one of its methods",
+        ),
+        (
+            "class A { constructor() { this.m = 1; } m() { return 2; } }",
+            "same name as one of its methods",
+        ),
+        ("class A { set s(v) {} }", "setter"),
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(err.contains(why), "{src}: {err}");
+    }
+}
+
+/// Only `new` calls a class (a call without it throws), and `new` gives
+/// back the constructor's result only if that is an object: `new F()` of a
+/// function returning a number was typed as that number.
+#[test]
+fn new_and_class_calls() {
+    let err = check_program(
+        "class C { constructor(n) { this.n = n; } } const c = C(1);",
+        &["c"],
+    )
+    .unwrap_err();
+    assert!(err.contains("without `new`"), "{err}");
+    let err = check_program(
+        "/** class Q(n: Number) { n: Number } */ class Q; const q = Q(1);",
+        &["q"],
+    )
+    .unwrap_err();
+    assert!(err.contains("without `new`"), "{err}");
+    assert!(check_program("function F() { return \"s\"; } const f = new F();", &["f"]).is_err());
+    assert!(check_program(
+        "function mk(F) { return new F(); } const v = mk(function () { return 1; });",
+        &["v"]
+    )
+    .is_err());
+    let t = check_program(
+        "function F(n) { return {n: n}; } const f = new F(1).n;",
+        &["f"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+}
+
+/// A getter is read, not stored to (a store throws in strict code), and a
+/// class's methods and getters are on its prototype: a store to one is
+/// rejected, and a spread doesn't copy them.
+#[test]
+fn getters_and_prototype_members() {
+    let t = check_program(
+        "const o = { a: 1, get g() { return this.a + 1; } };\n\
+         const n = o.g;\n\
+         const c = {...o}.g;",
+        &["n", "c"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Int", "Int"]);
+    for src in [
+        "const o = { get g() { return 1; } }; o.g = 2;",
+        "class A { get g() { return 1; } } const a = new A(); a.g = 2;",
+        "class P { m() { return 1; } } const p = new P(); p.m = () => 2;",
+        "class P { x = 1; m() { return this.x; } } const q = {...new P()}; const r = q.m();",
+        "class P { get g() { return 1; } } const r = {...new P()}.g;",
+        "/** class Q(n: Number) { n: Number, m: () => Number } */ class Q;\n\
+         const r = {...new Q(1)}.m();",
+        "function f(o) { o.g = 1; } f({ get g() { return 2; } });",
+    ] {
+        assert!(check_program(src, &[]).is_err(), "{src}");
+    }
+    // Reading code takes either kind of property.
+    let t = check_program(
+        "function get(o) { return o.g; }\n\
+         const a = get({ g: 1 }) + get({ get g() { return 2; } });",
+        &["a"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+    // A class's own fields are copied, and stored to.
+    let t = check_program(
+        "class P { x = 1; m() { return this.x; } } const p = new P(); p.x = 2;\n\
+         const r = {...p}.x + p.m();",
+        &["r"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+}

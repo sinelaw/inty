@@ -490,10 +490,10 @@ impl Subst {
             .map(|(k, e)| {
                 (
                     k.clone(),
-                    FieldEntry {
-                        presence: self.resolve_presence(&e.presence),
-                        ty: self.flatten_type(&e.ty, state),
-                    },
+                    e.map(
+                        &mut |p| self.resolve_presence(p),
+                        self.flatten_type(&e.ty, state),
+                    ),
                 )
             })
             .collect();
@@ -582,6 +582,7 @@ impl Substitutable for Type {
             Type::Undefined => Type::Undefined,
             Type::Null => Type::Null,
             Type::Regex => Type::Regex,
+            Type::NewTarget => Type::NewTarget,
             Type::TypedArray(k) => Type::TypedArray(*k),
 
             // Variable substitution
@@ -714,10 +715,7 @@ impl Substitutable for RowType {
 
 impl Substitutable for FieldEntry {
     fn apply_subst(&self, subst: &Subst) -> Self {
-        FieldEntry {
-            presence: subst.apply_presence(&self.presence),
-            ty: self.ty.apply_subst(subst),
-        }
+        self.map(&mut |p| subst.apply_presence(p), self.ty.apply_subst(subst))
     }
 
     fn free_vars(&self) -> HashSet<TVarName> {

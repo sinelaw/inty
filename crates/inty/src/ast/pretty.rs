@@ -954,7 +954,14 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             ..
         } => {
             if let Some(ann) = type_annotation {
-                writeln!(w, "/** function {}{} */", name, ann.content)?;
+                // `(…) => R`, or a type the name can't run into
+                // (`new (…) => R`, `this: T => (…) => R`).
+                let gap = if ann.content.starts_with(['(', '<']) {
+                    ""
+                } else {
+                    " "
+                };
+                writeln!(w, "/** function {}{}{} */", name, gap, ann.content)?;
                 write!(w, "{}", ind)?;
             }
             write!(w, "function {}(", name)?;

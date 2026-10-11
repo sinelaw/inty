@@ -113,6 +113,7 @@ impl InferState {
             (Type::Undefined, Type::Undefined) => Ok(()),
             (Type::Null, Type::Null) => Ok(()),
             (Type::Regex, Type::Regex) => Ok(()),
+            (Type::NewTarget, Type::NewTarget) => Ok(()),
             (Type::TypedArray(a), Type::TypedArray(b)) if a == b => Ok(()),
 
             // Functions
@@ -432,6 +433,44 @@ impl InferState {
         }
     }
 
+    /// Unify how two rows hold the property `prop`: whether a store to it
+    /// is allowed, and whether it is an own property (which a spread
+    /// copies) rather than a member of a class's prototype.
+    fn unify_field_flags(
+        &mut self,
+        span: Span,
+        prop: &PropName,
+        e1: &crate::types::FieldEntry,
+        e2: &crate::types::FieldEntry,
+    ) -> UnifyResult<()> {
+        if self
+            .unify_presence(span, &e1.writable, &e2.writable)
+            .is_err()
+        {
+            return Err(TypeError::TypeMismatch {
+                expected: format!("a property `{}` that can be assigned", prop.0),
+                found: format!(
+                    "a read-only property `{}` (a getter, or a class's method or getter)",
+                    prop.0
+                ),
+                span,
+            }
+            .into());
+        }
+        if self.unify_presence(span, &e1.own, &e2.own).is_err() {
+            return Err(TypeError::TypeMismatch {
+                expected: format!("an own property `{}`", prop.0),
+                found: format!(
+                    "`{}` on a class's prototype (a method or getter, which a spread doesn't copy)",
+                    prop.0
+                ),
+                span,
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     /// Unify two row types.
     fn unify_rows(&mut self, span: Span, r1: &RowType, r2: &RowType) -> UnifyResult<()> {
         // Collect all property names from both rows
@@ -459,6 +498,7 @@ impl InferState {
                     {
                         return Err(self.field_presence_error(span, prop, r1, r2));
                     }
+                    self.unify_field_flags(span, prop, e1, e2)?;
                     self.unify(span, &e1.ty, &e2.ty)?;
                 }
                 (Some(e1), None) => match &r2.tail {
@@ -1205,10 +1245,7 @@ mod tests {
                 .map(|(k, t)| {
                     (
                         crate::types::PropName((*k).to_string()),
-                        crate::types::FieldEntry {
-                            presence: crate::types::Presence::Pre,
-                            ty: t.clone(),
-                        },
+                        crate::types::FieldEntry::pre(t.clone()),
                     )
                 })
                 .collect();
@@ -1265,10 +1302,7 @@ mod tests {
         let r1 = Type::Row(crate::types::RowType::open_entries(
             std::iter::once((
                 crate::types::PropName("a".to_string()),
-                crate::types::FieldEntry {
-                    presence: crate::types::Presence::Pre,
-                    ty: field_a.clone(),
-                },
+                crate::types::FieldEntry::pre(field_a.clone()),
             ))
             .collect(),
             tail1,
@@ -1276,10 +1310,7 @@ mod tests {
         let r2 = Type::Row(crate::types::RowType::open_entries(
             std::iter::once((
                 crate::types::PropName("a".to_string()),
-                crate::types::FieldEntry {
-                    presence: crate::types::Presence::Pre,
-                    ty: Type::Number,
-                },
+                crate::types::FieldEntry::pre(Type::Number),
             ))
             .collect(),
             tail2,

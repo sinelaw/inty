@@ -930,11 +930,11 @@ impl InferState {
         element: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        use crate::types::{is_callable_key, FieldEntry, PropName, RowTail, RowType};
+        use crate::types::{is_callable_key, PropName, RowTail, RowType};
         if let Some(key) = literal_key {
             let rest = self.fresh_flex();
             let mut props = std::collections::BTreeMap::new();
-            props.insert(PropName(key), FieldEntry::pre(element.clone()));
+            props.insert(PropName(key), self.read_entry(element.clone()));
             let wanted = Type::Row(RowType {
                 props,
                 tail: RowTail::Open(rest),
@@ -1026,7 +1026,13 @@ impl InferState {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
             ClassName::IndexWrite => self.resolve_index_write(&pred.types[0], span),
-            ClassName::FieldWrite => self.resolve_field_write(&pred.types[0], span),
+            ClassName::FieldWrite => {
+                let (recv, name) = pred
+                    .as_field_write()
+                    .expect("FieldWrite predicates are built by TypePred::field_write");
+                let (recv, name) = (recv.clone(), name.to_string());
+                self.resolve_field_write(&recv, &name, span)
+            }
             ClassName::HasProp => {
                 let (recv, name, result) = pred
                     .as_has_prop()
@@ -1124,13 +1130,15 @@ impl InferState {
         }
     }
 
-    /// Resolve `FieldWrite r`: an object's property can be stored, not a
-    /// built-in one of an array, a string or a function (which `dynamics`
-    /// doesn't store, and a string's a strict program can't); a variable
-    /// nothing pinned down holds no value.
+    /// Resolve `FieldWrite r "p"`: an object's property that takes stores
+    /// can be stored (not a getter, nor a class's method), not a built-in
+    /// one of an array, a string or a function (which `dynamics` doesn't
+    /// store, and a string's a strict program can't); a variable nothing
+    /// pinned down holds no value.
     pub(crate) fn resolve_field_write(
         &mut self,
         receiver: &Type,
+        name: &str,
         span: Span,
     ) -> Result<(), IntyError> {
         let receiver = self.apply_subst(receiver);
@@ -1147,22 +1155,36 @@ impl InferState {
             }
             .into());
         }
-        Ok(())
+        if matches!(receiver, Type::Var(_) | Type::Error) {
+            return Ok(());
+        }
+        // The property takes stores: unify the receiver with a row whose
+        // property does.
+        let ty = self.fresh_type_var();
+        let entry = self.write_entry(ty);
+        let rest = self.fresh_flex();
+        let wanted = Type::Row(crate::types::RowType::open_entries(
+            std::collections::BTreeMap::from([(crate::types::PropName(name.to_string()), entry)]),
+            rest,
+        ));
+        self.unify(span, &receiver, &wanted)
     }
 
-    /// The receiver of an assignment's member target must take stores
-    /// (`FieldWrite`): decided now for a known type, posed for a variable.
+    /// The receiver of an assignment's member target must take the store
+    /// to `name` (`FieldWrite`): decided now for a known type, posed for a
+    /// variable.
     pub(crate) fn require_field_write(
         &mut self,
         receiver: &Type,
+        name: &str,
         span: Span,
     ) -> Result<(), IntyError> {
         match self.apply_subst(receiver) {
             Type::Var(TVarName::Flex(_)) => {
-                self.add_constraint(TypePred::field_write(receiver.clone()), span);
+                self.add_constraint(TypePred::field_write(receiver.clone(), name), span);
                 Ok(())
             }
-            _ => self.resolve_field_write(receiver, span),
+            _ => self.resolve_field_write(receiver, name, span),
         }
     }
 

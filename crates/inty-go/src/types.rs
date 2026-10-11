@@ -21,8 +21,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use inty::infer::InferState;
 use inty::span::Span;
 use inty::types::{
-    is_callable_key, FieldEntry, FuncParam, Presence, RowTail, RowType, TVarName, Type, TypeId,
-    TypedArrayKind,
+    is_callable_key, FuncParam, Presence, RowTail, RowType, TVarName, Type, TypeId, TypedArrayKind,
 };
 
 use crate::{unsupported, Result};
@@ -384,13 +383,7 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
         Type::Row(row) => {
             let mut props = BTreeMap::new();
             for (k, f) in &row.props {
-                props.insert(
-                    k.clone(),
-                    FieldEntry {
-                        presence: f.presence.clone(),
-                        ty: resolve_depth(state, &f.ty, d),
-                    },
-                );
+                props.insert(k.clone(), f.with_ty(resolve_depth(state, &f.ty, d)));
             }
             let mut tail = row.tail.clone();
             for _ in 0..256 {
@@ -400,13 +393,7 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
                         for (k, f) in &more.props {
                             if !props.contains_key(k) {
                                 let t = resolve_depth(state, &f.ty, d);
-                                props.insert(
-                                    k.clone(),
-                                    FieldEntry {
-                                        presence: f.presence.clone(),
-                                        ty: t,
-                                    },
-                                );
+                                props.insert(k.clone(), f.with_ty(t));
                             }
                         }
                         tail = more.tail.clone();
@@ -480,15 +467,7 @@ pub fn apply_mapping(ty: &Type, m: &Mapping) -> Type {
             let mut props: BTreeMap<_, _> = row
                 .props
                 .iter()
-                .map(|(k, f)| {
-                    (
-                        k.clone(),
-                        FieldEntry {
-                            presence: f.presence.clone(),
-                            ty: apply_mapping(&f.ty, m),
-                        },
-                    )
-                })
+                .map(|(k, f)| (k.clone(), f.with_ty(apply_mapping(&f.ty, m))))
                 .collect();
             let mut tail = match &row.tail {
                 RowTail::Recursive(id, args) => {
@@ -561,15 +540,7 @@ fn widen(ty: &Type) -> Type {
             props: row
                 .props
                 .iter()
-                .map(|(k, f)| {
-                    (
-                        k.clone(),
-                        FieldEntry {
-                            presence: f.presence.clone(),
-                            ty: widen(&f.ty),
-                        },
-                    )
-                })
+                .map(|(k, f)| (k.clone(), f.with_ty(widen(&f.ty))))
                 .collect(),
             tail: row.tail.clone(),
         }),
