@@ -11,6 +11,9 @@ JavaScript and for this model as an s-expression, one program per line:
 (num M E)   M × 10^-E      (str s:abc)   a string, `s:` then [a-z]*
 (bool true) (undef) (null) (var i)  (func N BODY)  (app F A₀ A₁ …)
 (let E₁ E₂) (letmut E₁ E₂) (assign I E)   `const`, `let` and `x = e`
+(letann T E₁ E₂) (letmutann T E₁ E₂)   annotated `/** const v: T */`, with T
+               number, string, boolean, undefined, null, (arr T) or
+               (fn R A₀ A₁ …), a function called detached
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
@@ -39,6 +42,30 @@ open Inty
 def tokenize (s : String) : List String :=
   let spaced := s.replace "(" " ( " |>.replace ")" " ) "
   spaced.splitOn " " |>.filter (· ≠ "")
+
+/-- Parse an annotation's type from the front of the tokens. -/
+partial def parseTy : List String → Option (Ty × List String)
+  | "number" :: rest => some (.number, rest)
+  | "string" :: rest => some (.string, rest)
+  | "boolean" :: rest => some (.boolean, rest)
+  | "undefined" :: rest => some (.undefined, rest)
+  | "null" :: rest => some (.null, rest)
+  | "(" :: "arr" :: rest => do
+    let (t, rest) ← parseTy rest
+    match rest with
+    | ")" :: rest => some (.array t, rest)
+    | _ => none
+  | "(" :: "fn" :: rest => do
+    let (r, rest) ← parseTy rest
+    let rec params (ts : List String) (acc : List Ty) : Option (List Ty × List String) :=
+      match ts with
+      | ")" :: rest => some (acc.reverse, rest)
+      | _ => do
+        let (t, rest) ← parseTy ts
+        params rest (t :: acc)
+    let (ps, rest) ← params rest []
+    some (.fn .undefined ps r, rest)
+  | _ => none
 
 mutual
 /-- Parse one expression from the front of the tokens. -/
@@ -79,6 +106,16 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (e₁, rest) ← parseExpr rest
     let (e₂, rest) ← parseExpr rest
     some (.let_ true none e₁ e₂, rest)
+  | "letann", rest => do
+    let (t, rest) ← parseTy rest
+    let (e₁, rest) ← parseExpr rest
+    let (e₂, rest) ← parseExpr rest
+    some (.let_ false (some (.mono t)) e₁ e₂, rest)
+  | "letmutann", rest => do
+    let (t, rest) ← parseTy rest
+    let (e₁, rest) ← parseExpr rest
+    let (e₂, rest) ← parseExpr rest
+    some (.let_ true (some (.mono t)) e₁ e₂, rest)
   | "assign", i :: rest => do
     let i ← i.toNat?
     let (e, rest) ← parseExpr rest

@@ -64,8 +64,9 @@ enum Core {
     /// A call outside any receiver, so `this` is `undefined`.
     App(Box<Core>, Vec<Core>),
     /// `const v = e₁; e₂` (`false`) or `let v = e₁; e₂` (`true`); only in
-    /// statement position.
-    Let(bool, Box<Core>, Box<Core>),
+    /// statement position. An annotation `/** const v: T */` declares
+    /// `v`'s type.
+    Let(bool, Option<T>, Box<Core>, Box<Core>),
     /// `x = e`, for a `let` or a parameter.
     Assign(usize, Box<Core>),
     Cond(Box<Core>, Box<Core>, Box<Core>),
@@ -134,6 +135,53 @@ fn b(e: Core) -> Box<Core> {
     Box::new(e)
 }
 
+/// Whether the model takes `t` as an annotation: a type without records,
+/// whose labels are the program's.
+fn annotatable(t: &T) -> bool {
+    match t {
+        T::Num | T::Str | T::Bool | T::Undef | T::Null => true,
+        T::Arrow(ps, r) => ps.iter().all(annotatable) && annotatable(r),
+        T::Arr(t) => annotatable(t),
+        T::Obj(_) => false,
+    }
+}
+
+/// A type in the wire format.
+fn wire_ty(t: &T) -> String {
+    match t {
+        T::Num => "number".to_string(),
+        T::Str => "string".to_string(),
+        T::Bool => "boolean".to_string(),
+        T::Undef => "undefined".to_string(),
+        T::Null => "null".to_string(),
+        T::Arrow(ps, r) => {
+            let mut parts = vec!["fn".to_string(), wire_ty(r)];
+            parts.extend(ps.iter().map(wire_ty));
+            format!("({})", parts.join(" "))
+        }
+        T::Arr(t) => format!("(arr {})", wire_ty(t)),
+        T::Obj(_) => unreachable!("records aren't annotated"),
+    }
+}
+
+/// A type as inty's annotations write it.
+fn js_ty(t: &T) -> String {
+    match t {
+        T::Num => "Number".to_string(),
+        T::Str => "String".to_string(),
+        T::Bool => "Boolean".to_string(),
+        T::Undef => "Undefined".to_string(),
+        T::Null => "Null".to_string(),
+        T::Arrow(ps, r) => format!(
+            "(({}) => {})",
+            ps.iter().map(js_ty).collect::<Vec<_>>().join(", "),
+            js_ty(r)
+        ),
+        T::Arr(t) => format!("{}[]", js_ty(t)),
+        T::Obj(_) => unreachable!("records aren't annotated"),
+    }
+}
+
 /// The model's wire format.
 fn wire(e: &Core) -> String {
     match e {
@@ -154,9 +202,16 @@ fn wire(e: &Core) -> String {
                 args.join(" ")
             )
         }
-        Let(m, e1, e2) => format!(
+        Let(m, None, e1, e2) => format!(
             "({} {} {})",
             if *m { "letmut" } else { "let" },
+            wire(e1),
+            wire(e2)
+        ),
+        Let(m, Some(t), e1, e2) => format!(
+            "({} {} {} {})",
+            if *m { "letmutann" } else { "letann" },
+            wire_ty(t),
             wire(e1),
             wire(e2)
         ),
@@ -228,7 +283,7 @@ fn wire(e: &Core) -> String {
 /// then types the program `Undefined`, whatever the statement.
 fn ends_in_statement(e: &Core) -> bool {
     match e {
-        Let(_, _, rest) | Seq(_, rest) => ends_in_statement(rest),
+        Let(_, _, _, rest) | Seq(_, rest) => ends_in_statement(rest),
         Throw(_) | Ret(_) | While(..) | Break | Continue | TryCatch(..) | TryFinally(..) => true,
         Cond(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
@@ -256,7 +311,7 @@ fn fractional(e: &Core) -> Core {
         Method(n, body) => Method(*n, f(body)),
         Getter(body) => Getter(f(body)),
         App(x, args) => App(f(x), args.iter().map(fractional).collect()),
-        Let(m, x, y) => Let(*m, f(x), f(y)),
+        Let(m, a, x, y) => Let(*m, a.clone(), f(x), f(y)),
         Assign(i, x) => Assign(*i, f(x)),
         Cond(c, t, e) => Cond(f(c), f(t), f(e)),
         Not(x) => Not(f(x)),
@@ -485,7 +540,7 @@ impl Js {
     /// (`return` in a function, an expression statement at the top).
     fn stmts(&mut self, e: &Core, last: &str) -> String {
         match e {
-            Let(false, e1, e2) if matches!(**e1, Class(..)) => {
+            Let(false, None, e1, e2) if matches!(**e1, Class(..)) => {
                 let Class(n, members) = &**e1 else {
                     unreachable!()
                 };
@@ -496,14 +551,18 @@ impl Js {
                 self.names.pop();
                 format!("{} {}", class, rest)
             }
-            Let(m, e1, e2) => {
+            Let(m, a, e1, e2) => {
                 let v = self.fresh("v");
                 let init = self.expr(e1);
                 self.names.push(v.clone());
                 let rest = self.stmts(e2, last);
                 self.names.pop();
                 let keyword = if *m { "let" } else { "const" };
-                format!("{} {} = {}; {}", keyword, v, init, rest)
+                let ann = a
+                    .as_ref()
+                    .map(|t| format!("/** {} {}: {} */ ", keyword, v, js_ty(t)))
+                    .unwrap_or_default();
+                format!("{}{} {} = {}; {}", ann, keyword, v, init, rest)
             }
             Seq(e1, e2) => {
                 let first = self.stmts(e1, "");
@@ -554,7 +613,7 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
         Var(j) => inner && *j == i,
         Func(n, body) | Method(n, body) => refers_from_inner(body, i + n + 2, true),
         Getter(body) => refers_from_inner(body, i + 2, true),
-        Let(_, x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
+        Let(_, _, x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
         Assign(j, x) => (inner && *j == i) || refers_from_inner(x, i, inner),
         App(f, args) => {
             refers_from_inner(f, i, inner) || args.iter().any(|a| refers_from_inner(a, i, inner))
@@ -743,6 +802,16 @@ impl Gen {
         }
     }
 
+    /// A type to annotate with: one `annotatable` takes.
+    fn ann_ty(&mut self, depth: usize) -> T {
+        loop {
+            let t = self.ty(depth);
+            if annotatable(&t) {
+                return t;
+            }
+        }
+    }
+
     fn num(&mut self) -> Core {
         match self.rng.below(10) {
             0 => Num(15, 1),         // 1.5
@@ -866,12 +935,22 @@ impl Gen {
                 scope.push(Binding::PolyId);
                 let rest = self.typed(t, d, scope, true);
                 scope.pop();
-                return Let(false, b(Func(1, b(Var(0)))), b(rest));
+                return Let(false, None, b(Func(1, b(Var(0)))), b(rest));
             }
-            // `const`, or `let`, which may be assigned below.
+            // `const`, or `let`, which may be assigned below; sometimes
+            // annotated, mostly with its type.
             let s = self.ty(1);
             let e1 = self.typed(&s, d, scope, false);
             let mutable = self.rng.chance(50);
+            let ann = if self.rng.chance(30) && annotatable(&s) {
+                Some(if self.rng.chance(80) {
+                    s.clone()
+                } else {
+                    self.ann_ty(1)
+                })
+            } else {
+                None
+            };
             scope.push(if mutable {
                 Binding::Mut(s)
             } else {
@@ -879,7 +958,7 @@ impl Gen {
             });
             let rest = self.typed(t, d, scope, true);
             scope.pop();
-            return Let(mutable, b(e1), b(rest));
+            return Let(mutable, ann, b(e1), b(rest));
         }
         match self.rng.below(6) {
             0 => {
@@ -1269,7 +1348,7 @@ impl Gen {
             _ => App(b(Get(b(instance), "f".into())), fargs),
         };
         scope.pop();
-        Let(false, b(Class(n, members)), b(use_))
+        Let(false, None, b(Class(n, members)), b(use_))
     }
 
     /// An untyped class and a use of a new instance: a member read or
@@ -1316,7 +1395,7 @@ impl Gen {
             _ => instance,
         };
         scope.pop();
-        Let(false, b(Class(n, members)), b(use_))
+        Let(false, None, b(Class(n, members)), b(use_))
     }
 
     /// An object literal's function field, of `n` parameters: written as a
@@ -1416,6 +1495,7 @@ impl Gen {
         let step = Assign(0, b(Minus(b(Var(0)), b(Num(1, 0)))));
         Let(
             true,
+            None,
             b(Num(n, 0)),
             b(While(b(Var(0)), b(Seq(b(step), b(body))))),
         )
@@ -1607,7 +1687,7 @@ impl Gen {
                 });
                 let rest = self.any(d, scope, true);
                 scope.pop();
-                Let(mutable, b(e1), b(rest))
+                Let(mutable, None, b(e1), b(rest))
             }
         }
     }
@@ -2116,6 +2196,18 @@ fn inty_agrees_with_the_lean_model() {
                         "accepted"
                     } else {
                         "both reject"
+                    }
+                ))
+                .or_default() += 1;
+        }
+        if wire(&programs[i]).contains("ann ") {
+            *counts
+                .entry(format!(
+                    "with an annotation, {}",
+                    match (accepted, model_accepted) {
+                        (true, true) => "both accept",
+                        (false, false) => "both reject",
+                        _ => "they disagree",
                     }
                 ))
                 .or_default() += 1;
