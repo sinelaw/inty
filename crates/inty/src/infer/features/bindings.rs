@@ -483,7 +483,7 @@ impl InferState {
             {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
                 let ty = self.class_annotation_type(env, &annotation.content, annotation_span)?;
-                let ty = self.declared_callbacks_detached(annotation_span, &ty)?;
+                let ty = self.declared_callbacks_detached(&ty);
                 Some((ty, annotation_span))
             } else if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
@@ -508,7 +508,7 @@ impl InferState {
                 let ann_ty = if decl.init.is_some() {
                     self.annotation_this(annotation_span, &ann_ty, &Type::Undefined)?
                 } else {
-                    self.declared_callbacks_detached(annotation_span, &ann_ty)?
+                    self.declared_callbacks_detached(&ann_ty)
                 };
                 Some((ann_ty, annotation_span))
             } else {

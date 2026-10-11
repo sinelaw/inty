@@ -925,7 +925,7 @@ impl InferState {
                     SourceLanguage::Lua => None,
                 };
                 if let Some(ty) = method {
-                    return self.declared_callbacks_detached(Span::default(), &ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::String => {
@@ -942,17 +942,17 @@ impl InferState {
                     SourceLanguage::Lua => None,
                 };
                 if let Some(ty) = method {
-                    return self.declared_callbacks_detached(Span::default(), &ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::Promise(inner_ty) => {
                 if let Some(ty) = crate::builtins::promise_method_type(self, inner_ty, property) {
-                    return self.declared_callbacks_detached(Span::default(), &ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::TypedArray(kind) => {
                 if let Some(ty) = crate::builtins::typed_array_member_type(self, *kind, property) {
-                    return self.declared_callbacks_detached(Span::default(), &ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::Regex => {
@@ -963,7 +963,7 @@ impl InferState {
                 // match), letting downstream code that checks
                 // `=== null` fail to narrow.
                 if let Some(ty) = crate::builtins::regex_method_type(self, property) {
-                    return self.declared_callbacks_detached(Span::default(), &ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::Row(row) => {
