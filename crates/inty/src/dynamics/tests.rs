@@ -456,3 +456,27 @@ fn new_gives_back_an_object_result_else_this() {
     assert_number("function F(n) { return {n: n}; } new F(3).n;", 3.0);
     assert_string("function F() { return 1; } typeof new F();", "object");
 }
+
+/// An object's properties are in the order they were made, which a spread
+/// copies them in, reading each (a getter run) when it reaches it: a store
+/// to a property that is there keeps its place, and of two of one label in
+/// a literal, the first's place holds the second's value.
+#[test]
+fn spread_copies_properties_in_the_order_they_were_made() {
+    assert_number(
+        "const o = {get b() { this.a = 5; return 0; }, a: 1}; ({...o}).a;",
+        5.0,
+    );
+    assert_number(
+        "const o = {a: 1, get g() { this.a = 9; return 0; }}; o.a = 2; ({...o}).a;",
+        2.0,
+    );
+    assert_number(
+        "const o = {a: 1, get g() { this.a = 9; return 0; }, a: 3}; ({...o}).a;",
+        3.0,
+    );
+    assert_number(
+        "const o = {get g() { this.a = 9; return 0; }}; o.a = 2; ({...o}).a;",
+        9.0,
+    );
+}

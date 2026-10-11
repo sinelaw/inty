@@ -1207,7 +1207,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     split at h
     · cases h
     rename_i o₁ h₁
-    obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferMembers_inv es ks ih hΓ (by simp) hR h₁
+    obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferMembers_inv es ks ih hΓ (by simp) (R := none) (fun a ha => by simp [Ret.ftv] at ha) h₁
     split at h
     · cases h
     rename_i θs ss n' hms

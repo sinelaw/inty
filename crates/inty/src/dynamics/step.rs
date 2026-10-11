@@ -13,7 +13,7 @@
 //! into a `Block`-like form so non-terminating typed programs raise
 //! `Stuck::FuelExhausted` cleanly.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use crate::ast::{
     AssignOp, BinOp, Expr, ForInLhs, ForInit, Literal, PropDef, PropKey, Stmt, UnaryOp,
@@ -22,7 +22,7 @@ use crate::span::Span;
 use crate::types::PropName;
 
 use super::env::RuntimeEnv;
-use super::heap::{Cell, Heap, Loc};
+use super::heap::{Cell, Heap, Loc, Props};
 use super::value::{Closure, Value};
 
 /// Reasons reduction is stuck. A stuck typed term is a soundness
@@ -251,7 +251,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         }
 
         Expr::Object { properties, .. } => {
-            let mut props: BTreeMap<PropName, Value> = BTreeMap::new();
+            let mut props = Props::new();
             for prop in properties {
                 match prop {
                     PropDef::Property { key, value, .. } => {
@@ -294,11 +294,22 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                             Value::Object(loc) => match state.heap.get(*loc) {
                                 Some(Cell::Object(other)) => {
                                     // Right-bias: this spread's keys
-                                    // overwrite earlier ones; later
-                                    // entries in source order will in
-                                    // turn overwrite these. A getter is
-                                    // run, and its result copied.
-                                    for (k, item) in other.clone() {
+                                    // overwrite earlier ones (in their
+                                    // place); later entries in source
+                                    // order will in turn overwrite these.
+                                    // Each is read when it is reached, as
+                                    // a getter run before it may have
+                                    // stored to it; a getter is run, and
+                                    // its result copied.
+                                    let keys: Vec<PropName> = other.keys().cloned().collect();
+                                    for k in keys {
+                                        let item = match state.heap.get(*loc) {
+                                            Some(Cell::Object(other)) => other.get(&k).cloned(),
+                                            _ => None,
+                                        };
+                                        let Some(item) = item else {
+                                            continue;
+                                        };
                                         let item = match item {
                                             Value::Getter(c) => apply(
                                                 state,
@@ -400,7 +411,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             }
             // Bind `this` to a fresh empty object, and give back what the
             // constructor returns if that is an object, else `this`.
-            let this_loc = state.heap.alloc(Cell::Object(BTreeMap::new()));
+            let this_loc = state.heap.alloc(Cell::Object(Props::new()));
             let this = Value::Object(this_loc);
             let result = apply(state, callee_val, Some(this.clone()), args)?;
             Ok(match result {
@@ -596,14 +607,12 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             source, excluded, ..
         } => {
             // Copy all properties from the source object except those
-            // listed in `excluded`. Preserves field iteration order
-            // by re-using BTreeMap's natural ordering (which is what
-            // the inference rule sees too).
+            // listed in `excluded`, in their order.
             let v = eval_expr(state, env, source)?;
             match v {
                 Value::Object(loc) => match state.heap.get(loc) {
                     Some(Cell::Object(props)) => {
-                        let mut out: BTreeMap<PropName, Value> = BTreeMap::new();
+                        let mut out = Props::new();
                         for (k, v) in props.clone() {
                             if !excluded.iter().any(|e| e == &k.0) {
                                 out.insert(k, v);

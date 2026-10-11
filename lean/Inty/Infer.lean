@@ -547,10 +547,10 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
     else none
   -- A class's instance: its fields' initialisers, each seeing the fields
   -- before it, and its other members, functions whose `this` is the
-  -- instance.
-  | Γ, R, .cls ls es ks, n =>
+  -- instance. None is in the enclosing function: no `return` leaves it.
+  | Γ, _, .cls ls es ks, n =>
     if ls.all (· ∈ L) ∧ ls.Nodup ∧ es.length = ls.length ∧ ks.length = ls.length then
-      match inferMembers Γ [] R es ks n with
+      match inferMembers Γ [] none es ks n with
       | none => none
       | some o =>
         match memberSlots ks es o.τs o.next with

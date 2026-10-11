@@ -2507,12 +2507,13 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
     cases ht with
-    | @cls _ _ _ τs' _ _ _ ss' hes hks hτs hss hnd hL hms hslots =>
+    | @cls _ _ _ τs' _ _ ss' _ hes hks hτs hss hnd hL hms hslots =>
+      have hR₀ : Ret.Below n none := fun a ha => by simp [Ret.ftv] at ha
       obtain ⟨o, h, φ, hag, hτs₂, hsat⟩ := inferMembers_complete es ks τs' ih (Δ := []) (Δ' := [])
-        hΓ (by simp) hR hC hΓ' .nil hR' (by omega) (by omega)
+        (R := none) (R' := none) hΓ (by simp) hR₀ hC hΓ' .nil trivial (by omega) (by omega)
         (fun i e k τ he hk hτ => by rw [← memberCtx_eq]; exact hms i e k τ he hk hτ)
       obtain ⟨hn, hσ, hτsb, hp⟩ := inferMembers_inv es ks (fun a _ => infer_inv L a) hΓ
-        (by simp) hR h
+        (by simp) hR₀ h
       have hc : ls.all (· ∈ L) = true ∧ ls.Nodup ∧ es.length = ls.length ∧
           ks.length = ls.length :=
         ⟨List.all_eq_true.mpr (fun l hl => by simpa using hL l hl), hnd, hes, hks⟩

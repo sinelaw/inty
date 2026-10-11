@@ -245,9 +245,16 @@ def Value.index (h : Heap) : Value → Value → Read
     | _ => .fail (.stuck .notIndexable)
   | _, _ => .fail (.stuck .notIndexable)
 
-/-- Storing `v` in the property `l` of `o`, which it adds if `o` hasn't it
-(over a method, as an own property), as in JavaScript and `dynamics`; a
-property with only a getter takes no store. The outcome and the heap. -/
+/-- The properties `fs` with each `l` holding `v`, as data, in its place. -/
+def replaceField (fs : List (String × MemberKind × Value)) (l : String) (v : Value) :
+    List (String × MemberKind × Value) :=
+  fs.map fun p => if p.1 == l then (l, .data, v) else p
+
+/-- Storing `v` in the property `l` of `o`, as in JavaScript and
+`dynamics`: an own property that holds a value keeps its place (which a
+spread copies in); one `o` hasn't (or a prototype's method) is added as
+its newest own property; a property with only a getter takes no store.
+The outcome and the heap. -/
 def Value.setProp (o : Value) (h : Heap) (l : String) (v : Value) : Result × Heap :=
   match o with
   | .obj ℓ =>
@@ -255,6 +262,7 @@ def Value.setProp (o : Value) (h : Heap) (l : String) (v : Value) : Result × He
     | some (.fields fs) =>
       match fs.lookup l with
       | some (.getter, _) | some (.protoGetter, _) => (.stuck .readOnly, h)
+      | some (.data, _) => (.ok v, h.set ℓ (.fields (replaceField fs l v)))
       | _ => (.ok v, h.set ℓ (.fields ((l, .data, v) :: fs.filter (·.1 != l))))
     | _ => (.stuck .badAssignmentTarget, h)
   | _ => (.stuck .badAssignmentTarget, h)
@@ -283,10 +291,21 @@ def FieldKind.member : FieldKind → MemberKind
   | .data | .method => .data
   | .getter => .getter
 
-/-- An object literal's cell: its fields, the later of two with one label
-first, as in JavaScript. -/
+/-- Labelled items with each label once, at its first occurrence, holding
+its last occurrence's item: an object literal's properties, where a later
+definition of a label replaces an earlier one in its place, as in
+JavaScript. -/
+def mergeLabels {α : Type} : List (String × α) → List (String × α)
+  | [] => []
+  | (l, a) :: xs =>
+    let m := mergeLabels xs
+    (l, (m.lookup l).getD a) :: m.filter (·.1 != l)
+
+/-- An object literal's cell: its fields, newest first (so a spread copies
+them in the order they were made), a label defined twice where it was
+first, with its last value, as in JavaScript. -/
 def objFields (ls : List String) (ks : List FieldKind) (vs : List Value) : Value :=
-  .fields ((ls.zip ((ks.map FieldKind.member).zip vs)).reverse)
+  .fields (mergeLabels (ls.zip ((ks.map FieldKind.member).zip vs))).reverse
 
 /-- A class instance's members, from the values of its fields (`vs`, in
 order), the instance `self` (an arrow field's `this`), and the

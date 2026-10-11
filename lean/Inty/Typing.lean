@@ -182,7 +182,7 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   | cls : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length → ls.Nodup → (∀ l ∈ ls, l ∈ L) →
       (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
-        HasType L C (memberCtx Γ ks τs i k) R e τ) →
+        HasType L C (memberCtx Γ ks τs i k) none e τ) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
         MemberSlot C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
       HasType L C Γ R (.cls ls es ks) (.record L (objSlots L ls ss))
@@ -286,7 +286,7 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
   | cls : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length → ls.Nodup → (∀ l ∈ ls, l ∈ L) →
       (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
-        HasType L C (memberCtx Γ ks τs i k) R e τ) →
+        HasType L C (memberCtx Γ ks τs i k) none e τ) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
         MemberSlot C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
       HasTypeTop L C Γ R (.cls ls es ks) (.record L (objSlots L ls ss))

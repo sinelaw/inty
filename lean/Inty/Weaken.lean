@@ -339,9 +339,9 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
     exact .obj hes hks hτs hss hL (fun p hp => ih p hp (hg.sub fun i hw => by
       simp only [Expr.writes] at hw
       exact Expr.writesList_false' hw _ (List.of_mem_zip hp).1) hR) hfs
-  | @cls ls es ks τs ss C Γ R hes hks hτs hss hnd hL _ hms ih =>
+  | @cls ls es ks τs C Γ ss R hes hks hτs hss hnd hL _ hms ih =>
     intro Γ' R' hg hR
-    refine .cls hes hks hτs hss hnd hL (fun j e k τ he hk hτ => ih j e k τ he hk hτ ?_ hR) hms
+    refine .cls hes hks hτs hss hnd hL (fun j e k τ he hk hτ => ih j e k τ he hk hτ ?_ trivial) hms
     have hw := fun i (hw : (Expr.cls ls es ks).writes i = false) => by
       simp only [Expr.writes] at hw
       exact Expr.writesCls_false hw j e k he hk

@@ -425,10 +425,43 @@ def classD : Expr :=
 #guard inferProgram (.let_ false classD (.new_ (.get (.new_ (.var 0) []) "f") [])) == none
 #guard match eval 20 [] [] (.let_ false classD (.new_ (.get (.new_ (.var 0) []) "f") [])) with
   | .stuck _ => true | _ => false
+-- A field's initialiser is an expression, outside the constructor's body:
+-- a `return` in it (which JavaScript has no syntax for) isn't typed.
+#guard inferProgram (.let_ false (.ctor 0 (.cls ["a"] [.ret (num 1)] [.data]))
+  (.get (.new_ (.var 0) []) "a")) == none
 -- Read off its instance, it is called on that instance, or outside one.
 #guard inferProgram (.let_ false classD
   (.binop .plus (.mcall (.new_ (.var 0) []) "f" []) (.app (.get (.new_ (.var 0) []) "f") [])))
     == some .number
+
+/-- A getter that stores `v` to `this.a` and gives `0`. -/
+def storesA (v : Float) : Expr := .func 0 (.seq (.set (.var 1) "a" (num v)) (num 0))
+
+/-- `{...o}.a`, for `o` the innermost variable. -/
+def spreadA : Expr := .get (.spread (.obj [] [] []) (.var 0)) "a"
+
+-- A spread copies an object's properties in the order they were made,
+-- running a getter when it reaches it, as JavaScript does: a property
+-- stored to keeps its place, one added comes last, and a label defined
+-- twice in a literal is where it was first, with its last value.
+-- `{get b() { this.a = 5; … }, a: 1}`: the getter runs first.
+#guard match eval 20 [] [] (.let_ false
+    (.obj ["b", "a"] [storesA 5, num 1] [.getter, .data]) spreadA) with
+  | .ok (.number n) => n == 5 | _ => false
+-- `{a: 1, get g() { this.a = 9; … }}; o.a = 2`: `a` is still first.
+#guard match eval 20 [] [] (.let_ false
+    (.obj ["a", "g"] [num 1, storesA 9] [.data, .getter])
+    (.seq (.set (.var 0) "a" (num 2)) spreadA)) with
+  | .ok (.number n) => n == 2 | _ => false
+-- `{a: 1, get g() { this.a = 9; … }, a: 3}`: `a` is first, `3`.
+#guard match eval 20 [] [] (.let_ false
+    (.obj ["a", "g", "a"] [num 1, storesA 9, num 3] [.data, .getter, .data]) spreadA) with
+  | .ok (.number n) => n == 3 | _ => false
+-- `{get g() { this.a = 9; … }}; o.a = 2`: `a` comes after the getter.
+#guard match eval 20 [] [] (.let_ false
+    (.obj ["g"] [storesA 9] [.getter])
+    (.seq (.set (.var 0) "a" (num 2)) spreadA)) with
+  | .ok (.number n) => n == 9 | _ => false
 
 -- `function f(x) { return f; }; f(1)(2) - 1`: `f` returns itself, a
 -- recursive function type, so `f(1)(2)` is `f`, not a number.

@@ -929,6 +929,61 @@ theorem zip_drop_snd {α β γ δ : Type} {P : α → β → γ → δ → Prop}
     · exact ⟨e, h (k, e, t, s) (by simp)⟩
     · exact zip_drop_snd (by simpa using hl) (fun y hy => h y (by simp [hy])) x hx
 
+theorem lookup_filter_ne {α : Type} {l l' : String} (e : l' ≠ l) :
+    ∀ fs : List (String × α), (fs.filter (·.1 != l)).lookup l' = fs.lookup l'
+  | [] => rfl
+  | (a, v) :: fs => by
+    by_cases ha : a = l
+    · subst ha
+      have : (l' == a) = false := by simpa using e
+      simp [List.lookup_cons, this, lookup_filter_ne e fs]
+    · simp only [List.filter_cons, bne_iff_ne, ne_eq, ha, not_false_eq_true,
+        ite_true, List.lookup_cons]
+      split <;> simp_all [lookup_filter_ne e fs]
+
+/-- A lookup of the last occurrence of a label, in a merged list. -/
+theorem mergeLabels_lookup {α : Type} (l : String) :
+    ∀ xs : List (String × α), (mergeLabels xs).lookup l = xs.reverse.lookup l
+  | [] => by simp [mergeLabels]
+  | (l', a) :: xs => by
+    have ih := mergeLabels_lookup l xs
+    simp only [mergeLabels, List.reverse_cons, lookup_append, List.lookup_cons, List.lookup_nil]
+    by_cases e : l = l'
+    · subst e
+      simp only [beq_self_eq_true, ih]
+      cases xs.reverse.lookup l <;> rfl
+    · have hne : (l == l') = false := by simpa using e
+      simp only [hne, Option.or_none, lookup_filter_ne e, ih]
+
+/-- A merged list's labels are among the list's. -/
+theorem mergeLabels_keys {α : Type} {l : String} :
+    ∀ {xs : List (String × α)}, l ∈ (mergeLabels xs).map (·.1) → l ∈ xs.map (·.1)
+  | [], h => by simp [mergeLabels] at h
+  | (l', a) :: xs, h => by
+    simp only [mergeLabels, List.map_cons, List.mem_cons] at h ⊢
+    rcases h with h | h
+    · exact .inl h
+    · simp only [List.mem_map, List.mem_filter] at h
+      obtain ⟨x, ⟨hx, -⟩, rfl⟩ := h
+      exact .inr (mergeLabels_keys (List.mem_map_of_mem hx))
+
+/-- A merged list has each label once. -/
+theorem mergeLabels_nodup {α : Type} :
+    ∀ xs : List (String × α), ((mergeLabels xs).map (·.1)).Nodup
+  | [] => by simp [mergeLabels]
+  | (l, a) :: xs => by
+    simp only [mergeLabels, List.map_cons, List.nodup_cons]
+    refine ⟨fun h => ?_, ?_⟩
+    · simp only [List.mem_map, List.mem_filter, bne_iff_ne, ne_eq] at h
+      obtain ⟨x, ⟨-, hx⟩, e⟩ := h
+      exact hx e
+    · exact ((mergeLabels_nodup xs).sublist (List.Sublist.map _ List.filter_sublist))
+
+/-- An object literal's fields, looked up: the last of each label. -/
+theorem mergeLabels_reverse_lookup {α : Type} (l : String) (xs : List (String × α)) :
+    (mergeLabels xs).reverse.lookup l = xs.reverse.lookup l := by
+  rw [lookup_reverse (mergeLabels_nodup xs), mergeLabels_lookup]
+
 /-- An object literal's cell holds the contents of its record type: each
 field the last of its label, as its kind says. -/
 theorem objFields_sound {k : Nat} {W : World} {L ls : List String} {ks : List FieldKind}
@@ -955,14 +1010,15 @@ theorem objFields_sound {k : Nat} {W : World} {L ls : List String} {ks : List Fi
   refine ⟨_, rfl, fun l s hl => ?_, fun l hl => ?_⟩
   rotate_left
   · have hlL := Ty.field_map_none hl
+    rw [mergeLabels_reverse_lookup]
     refine lookup_eq_none (fun x hx e => hlL (hL _ ?_))
     rw [← e]; exact (List.of_mem_zip (List.mem_reverse.mp hx)).1
   have hs := objSlots_field hl (by rw [hss])
   rw [hslots, ← List.map_reverse,
     lookup_map_snd (fun w : FieldKind × Ty × Ty × Value => w.2.2.1)] at hs
-  have hrt : ((ls.zip ((ks.map FieldKind.member).zip vs)).reverse).lookup l =
+  have hrt : ((mergeLabels (ls.zip ((ks.map FieldKind.member).zip vs))).reverse).lookup l =
       (((ls.zip ws).reverse).lookup l).map (fun w => (w.1.member, w.2.2.2)) := by
-    rw [hcell, ← List.map_reverse,
+    rw [mergeLabels_reverse_lookup, hcell, ← List.map_reverse,
       lookup_map_snd (fun w : FieldKind × Ty × Ty × Value => (w.1.member, w.2.2.2))]
   cases hw : ((ls.zip ws).reverse).lookup l with
   | none =>
@@ -1099,17 +1155,33 @@ theorem read_sound {C : List Pred} {l : String} {τ κ σ : Ty} {v : Value} {c :
 theorem TyEq.record_array {ls : List String} {fs : List Ty} {σ : Ty} :
     ¬ TyEq (.record ls fs) (.array σ) := fun h => by cases TyEq.con h
 
-theorem lookup_filter_ne {α : Type} {l l' : String} (e : l' ≠ l) :
-    ∀ fs : List (String × α), (fs.filter (·.1 != l)).lookup l' = fs.lookup l'
+theorem lookup_replaceField_ne {l l' : String} (e : l' ≠ l) (v : Value) :
+    ∀ fs : List (String × MemberKind × Value), (replaceField fs l v).lookup l' = fs.lookup l'
   | [] => rfl
-  | (a, v) :: fs => by
+  | (a, w) :: fs => by
+    have ih := lookup_replaceField_ne e v fs
+    simp only [replaceField] at ih ⊢
     by_cases ha : a = l
     · subst ha
-      have : (l' == a) = false := by simpa using e
-      simp [List.lookup_cons, this, lookup_filter_ne e fs]
-    · simp only [List.filter_cons, bne_iff_ne, ne_eq, ha, not_false_eq_true,
-        ite_true, List.lookup_cons]
-      split <;> simp_all [lookup_filter_ne e fs]
+      have h₁ : (l' == a) = false := by simpa using e
+      simp only [List.map_cons, beq_self_eq_true, ↓reduceIte, List.lookup_cons, h₁]
+      exact ih
+    · have h₁ : (a == l) = false := by simpa using ha
+      simp only [List.map_cons, h₁, Bool.false_eq_true, ↓reduceIte, List.lookup_cons]
+      split <;> simp_all
+
+theorem lookup_replaceField_self {l : String} {v : Value} :
+    ∀ {fs : List (String × MemberKind × Value)}, (fs.lookup l).isSome →
+      (replaceField fs l v).lookup l = some (.data, v)
+  | [], h => by simp at h
+  | (a, w) :: fs, h => by
+    simp only [replaceField, List.map_cons]
+    by_cases ha : a = l
+    · subst ha; simp
+    · have h₁ : (a == l) = false := by simpa using ha
+      have h₂ : (l == a) = false := by simpa using Ne.symm ha
+      simp only [h₁, Bool.false_eq_true, ↓reduceIte, List.lookup_cons, h₂] at h ⊢
+      exact lookup_replaceField_self h
 
 /-- Writing a field that holds a value: the object's contents keep their
 type. -/
@@ -1149,19 +1221,14 @@ theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} 
   refine ⟨_, rfl, fun l'' s'' hl'' => ?_, fun l'' hl'' => ?_⟩
   rotate_left
   · have e : l'' ≠ l := fun e => by rw [e, hs'] at hl''; cases hl''
-    have hne : (l'' == l) = false := by simpa using e
-    simp only [List.lookup_cons, hne]
-    rw [lookup_filter_ne e fsv]; exact hfn l'' hl''
+    rw [lookup_replaceField_ne e]; exact hfn l'' hl''
   by_cases e : l'' = l
   · subst e
     rw [hs'] at hl''
     cases hl''
-    refine .inl ⟨σ'', h₁, vv, by simp, ?_⟩
+    refine .inl ⟨σ'', h₁, vv, lookup_replaceField_self (by simp [h₂]), ?_⟩
     exact V.tyEq _ (hσw.trans (TyEq.slot (hss'.trans h₁)).2.2) hvv
-  · have hne : (l'' == l) = false := by simpa using e
-    have hlk : (((l, MemberKind.data, vv) :: fsv.filter (·.1 != l)).lookup l'') = fsv.lookup l'' := by
-      simp only [List.lookup_cons, hne]; exact lookup_filter_ne e fsv
-    unfold MemberP; rw [hlk]; exact hfs l'' s'' hl''
+  · unfold MemberP; rw [lookup_replaceField_ne e]; exact hfs l'' s'' hl''
 
 /-- A fault is safe: the program stops there. -/
 theorem Safe.fault {f : Fault} {c : Nat} {W : World} {h : Heap} {τ : Ty} {R : Option Ty}
@@ -1671,6 +1738,20 @@ def SafeArgs (p : RanArgs) (k : Nat) (W : World) (τs : List Ty) (R : Option Ty)
     | .ok vs => ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧ VList p.2.1 W' τs vs
     | .error r => r = .timeout ∨ ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧
         (r.Abrupt ∨ (∃ v, r = .returned v ∧ ∃ τr, R = some τr ∧ V p.2.1 W' τr v))
+
+/-- Safe arguments outside any function (no `return` leaves them) are
+safe inside one. -/
+theorem SafeArgs.of_none {p : RanArgs} (h : SafeArgs p k W τs none) : SafeArgs p k W τs R := by
+  obtain ⟨r, c, hp⟩ := p
+  obtain ⟨hc, h⟩ := h
+  refine ⟨hc, ?_⟩
+  cases r with
+  | ok vs => exact h
+  | error r =>
+    rcases h with h | ⟨W', hW, hH, habr | ⟨v, -, τr, hτr, -⟩⟩
+    · exact .inl h
+    · exact .inr ⟨W', hW, hH, .inl habr⟩
+    · cases hτr
 
 /-- Continuing safe arguments with a safe continuation is safe. -/
 theorem Safe.bindArgs {p : RanArgs} {K : List Value → Nat → Heap → Ran}
@@ -2589,7 +2670,8 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         rw [show memberCtx Γ ks τs i kd = Γ by cases kd <;> simp_all [memberCtx]] at this
         exact func_value (ih _ (List.mem_of_getElem? h₂)) this hC hG hH
       refine Safe.bindArgs (runInits_sound hC es ks τs ih (by omega) (by omega)
-        (fun i e τ h₁ h₂ h₃ => hty i e .data τ h₁ h₂ h₃) hG hH) fun vs W₁ _ hW₁ hH₁ hvs => ?_
+        (fun i e τ h₁ h₂ h₃ => hty i e .data τ h₁ h₂ h₃) hG hH).of_none
+        fun vs W₁ _ hW₁ hH₁ hvs => ?_
       have hc₁ := runInits_clock_le k env h es ks
       generalize runInits k env h es ks = p at hc₁ hH₁ hvs ⊢
       obtain ⟨r, c₁, h₁⟩ := p
