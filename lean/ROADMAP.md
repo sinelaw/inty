@@ -369,9 +369,12 @@ touching the generic proofs.
     (`const x = e₁; x != null ? e₃ : e₂`; `e₁ ?? e₂` is
     `unwrap e₁ e₂ x`), whose bound value has the type `Strip τ₁ σ` leaves.
 
-  Next: inty to match (tagged sums, no nullable join, `??` and `!= null`
-  as `unwrap`), with the differential generator producing them;
-  polymorphic annotations, whose quantified variables are rigid in the
+  inty matches: tagged sums (`Type::Maybe`), no nullable join, `??` and
+  `!= null` with `Strip`, subsumption into a sum with `Inject`; the
+  differential generator produces sums and `unwrap`, and finds no
+  disagreement on them outside the other known divergences.
+
+  Next: polymorphic annotations, whose quantified variables are rigid in the
   initialiser (an annotated function type without `this:` is one,
   polymorphic in `this`).
 - Mutual recursion by strongly connected components

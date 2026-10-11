@@ -57,7 +57,7 @@ The model covers perhaps a third of what inty checks, and two kinds of work rema
 
 | Area | Missing | Effort |
 | --- | --- | --- |
-| Unions, literal types, narrowing | Nullable joins, `never`, `typeof` and `===` narrowing, `&&`, `\|\|`, `??`, `?.`, `switch` exhaustiveness | Largest; this doc proposes a different design |
+| Unions, literal types, narrowing | `never`, `typeof` and `===` narrowing, `&&`, `\|\|`, `?.`, `switch` exhaustiveness (sums, `??` and tests for nothing are done) | Largest; this doc proposes a different design |
 | Annotations and program structure | Checking against declared types, rigid type variables, the `.d.js` syntax, optional parameters, mutual recursion, modules | Large; flat rows assume one closed set of labels, which breaks modularity |
 | Numbers | `Int` ≤ `Number`, the `Num` and `Arith` classes, integer indices, checked `Int` arithmetic | Medium to large; Lean's `Float` is opaque |
 | Statements apart from expressions | inty types `if (c) {1} else {"a"}`; the model wants one type | Medium |
@@ -193,7 +193,7 @@ The common idioms keep typing; what inty would newly reject is mixtures with no 
 
 The work runs in the order below; each step ends with the model building, its theorems extended, and the differential test passing with the new syntax.
 
-1. **Nullable types and the waiting join.** Model: `Nullable`, `NonNull`, `Join` with its instances, `null` and `undefined` branches, `??`, `?.`, `=== null` narrowing as case analysis; soundness, inference soundness and completeness. inty: the pending `Join` constraint and `NonNull`. This removes the two largest known divergences, the nullable join and `never`. Effort: medium.
+1. **Nullable types and the waiting join.** *Done, differently:* the model and inty have `Nullable` and `Optional` as two constructors (`Con.maybe z`, a `T | Null` or `T | Undefined` in inty), with no nesting rule and no join: branches have one type, and a sum is said by an annotation and checked against (check mode). Two waiting constraints take the join's place: `Inject T τ` (a `τ` is accepted where the sum `T` is: `T` itself, its nothing, or its value) and `Strip τ σ` (what a `τ` holds besides nothing), used by `??` and by a test for nothing (`unwrap` in the model). Both are sound, and inference with them sound and complete. inty follows: `Type::Maybe`, subsumption as `Inject`, `??` and `!= null` as `Strip`, and the nullable join removed; the differential test has no nullable-join divergence left. *Originally proposed:* Model: `Nullable`, `NonNull`, `Join` with its instances, `null` and `undefined` branches, `??`, `?.`, `=== null` narrowing as case analysis; soundness, inference soundness and completeness. inty: the pending `Join` constraint and `NonNull`. This removes the two largest known divergences, the nullable join and `never`. Effort: medium.
 2. **Statements apart from expressions.** A statement judgement whose only value is what `return` returns, so `if` branches of different types type as inty types them. Effort: medium.
 3. **Variants tagged by a field.** Model: variant rows, construction from tagged literals, `switch` and `if` on the tag, exhaustiveness. inty: tag-field variants in place of discriminated unions. Effort: medium, reusing rows.
 4. **Sums tagged by runtime type and the `Pattern` class.** Needs checking mode for annotations, which comes with phase 7. Effort: medium.
@@ -206,5 +206,6 @@ Steps 1 to 3 with the rigour items give a publishable claim: principal inference
 
 - [ ] Is rejecting `cond && obj` and `x || fallback` with differing types acceptable for inty's users?
 - [ ] Which field marks a variant: always `kind`, any string-literal field compared by a `switch`, or one named in an annotation?
-- [ ] Should `Optional T` (with `undefined`) and `Nullable T` (with `null`) be one constructor or two?
+- [x] Should `Optional T` (with `undefined`) and `Nullable T` (with `null`) be one constructor or two? Two, tagged by their nothing (`Con.maybe z`).
+- [ ] `c ? x : null` now needs its sum declared. Is that acceptable, or should a waiting `Join` come back for it?
 - [ ] Do annotated unions that are neither disjoint by `typeof` nor tagged stay as an escape hatch, unchecked by the model?

@@ -401,13 +401,16 @@ disagreements in typing all fall into features the model lacks:
 
 | Divergence | inty | model | Roadmap phase |
 |---|---|---|---|
-| Nullable join: `c ? 1 : null` | `Number \| Null` | rejects | 5 |
 | A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 5 |
-| Nullable join with an unknown: `c ? undefined : x` | `Undefined \| t`, sometimes an infinite type | unifies | 5 |
 | `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 4 |
 | An index that is a `Number`: `xs[n - 0.5]` | rejects (an index is an `Int`) | accepts (a fractional index is out of bounds, a fault) | 4 |
 | A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
 | A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 2 (statements apart from expressions) |
+
+The nullable join is gone from both: inty now has the model's sums
+(`T | Null` is `Nullable T`, made by an annotation, taken apart by `??`
+or a test for nothing), and on programs with sums the two agree but for
+the divergences above.
 
 With method calls and recursive types, over 40,000 more programs (eight
 seeds), with about 450 accepted method calls per 5,000 programs,

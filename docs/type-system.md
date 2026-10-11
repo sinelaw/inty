@@ -121,7 +121,10 @@ const String;
 
 ### Nullable / Optional Values (Postfix `T?`)
 
-A postfix `?` in a type annotation desugars to `T | Undefined`. Composes with the existing union machinery — narrowing, `?.`, `??` — without introducing a new nominal type.
+`T | Null` and `T | Undefined` are *sums*, as in the Lean model (`lean/Inty/Types.lean`, `Nullable` and `Optional`): a type of their own, holding either nothing or a `T`. However a union mentions `null` or `undefined`, it is the same sum — `T | Null | Undefined` is `Nullable (Optional T)` — and it prints as the union it reads as. A postfix `?` in a type annotation is `T | Undefined`.
+
+- **Putting a value in.** Where a sum is expected (an annotation, a parameter, a declared return), a `T`, the sum's nothing, or the sum itself is accepted. A value whose type isn't known yet waits, as the constraint `Inject τ (T | Null)`, until its type is (binding it to the sum would guess). A sum is never unified with what it holds: a `Number | Null` is not a `Number`, and a `Number` variable doesn't become one.
+- **Getting it out.** `x ?? d` is what `x` holds besides nothing, joined with `d`'s type; `x != null` (and the other tests below) narrows `x` to it in the branch. For an `x` whose type isn't known yet, that is the `σ` of the constraint `Strip τ σ`, which waits for `τ` (a sum gives its value, any other type itself). An `x` that is always nothing (`null ?? d`) is an error.
 
 ```javascript
 /** function getNum(arr: Number[]) => Number? */
@@ -139,7 +142,7 @@ For DOM-style APIs that return `null` (not `undefined`), write the long form `El
 
 ### Unions: declared, not guessed
 
-Branches that must produce one value — the two sides of a conditional, the `return`s of a function, the elements of an array literal, the sides of `??` — must have **one type**, as in Hindley–Milner. inty doesn't guess that disagreeing branches form a union: whether such a guess succeeds could depend on what happens to be known about each side at that point, which makes the verdict depend on statement order.
+Branches that must produce one value — the two sides of a conditional, the `return`s of a function, the elements of an array literal, the sides of `??` — must have **one type**, as in Hindley–Milner and the Lean model. inty doesn't guess that disagreeing branches form a union: whether such a guess succeeds could depend on what happens to be known about each side at that point, which makes the verdict depend on statement order.
 
 ```javascript
 function f(b) { return b ? 42 : "err"; }
@@ -163,14 +166,19 @@ var x = pt.x;    // Number — both arms expose `x: Number`
 The join rules, none of which guesses:
 
 - literals of one base type widen to it (`b ? 1 : 2` is `Number`; also inside tuples and objects);
-- a branch that is `null` or `undefined` makes the result nullable, whatever the other side is — even a type not known yet, which is *not* bound to `Null`:
-
-  ```javascript
-  function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }
-  var hit = find([1, 2], 2);    // Number | Null
-  ```
-- a value of a (declared) union joined with one of its arms is that union;
+- a value of a (declared) union or sum joined with one of its arms is that union or sum;
 - a branch that doesn't complete (`return`, `throw`) contributes nothing, and statements (`if (c) n += 1; else break;`) aren't joined by value at all.
+
+A branch that is `null` or `undefined` is no exception: the sum is said, and each branch is injected into it.
+
+```javascript
+function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }
+// error: Branches have different types
+
+/** function find<a>(xs: a[], v: a) => a | Null */
+function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }
+var hit = find([1, 2], 2);    // Int | Null
+```
 
 A value whose type isn't known yet is unified with the other side, including a parameter whose properties are read (`HasProp`):
 
