@@ -277,6 +277,23 @@ has more. Write a factory that builds the object instead (see
 [examples/spa/gaps.md § "By design"](../examples/spa/gaps.md)).
 `static` members are rejected too.
 
+**External classes.** A class implemented elsewhere is declared without a
+body, by a `class` annotation, as `/** const X: T */ const X;` declares a
+value:
+
+```javascript
+/** class Point(x: Number, y: Number) { x: Number, y: Number, norm: () => Number } */
+class Point;
+/** class Gain extends AudioWorkletProcessor { gain: Number } */
+class Gain;
+```
+
+It is a constructor taking the parameters (or, without them, its base's)
+whose instances have the members and, with `extends`, every field of the
+base's instances a member doesn't redeclare. Only such a declaration
+extends, and only a class or constructor itself declared without a body:
+no code inty checks runs with another class's instance as `this`.
+
 ### Modules (ES `import` / `export`)
 
 inty resolves `import` statements relative to the importing file's
@@ -582,7 +599,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
-| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)); no `extends` or `static` members |
+| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |

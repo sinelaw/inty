@@ -4920,3 +4920,48 @@ fn class_methods_are_checked_against_the_instance() {
     .is_err());
     assert!(check_program("const o = {v: \"s\", m() { return this.v - 1; }};", &["o"]).is_err());
 }
+
+/// An external class, declared without a body by a `/** class … */`
+/// annotation, is a constructor of its members; it may extend a class or
+/// constructor that is itself declared without a body, its instances
+/// having the base's fields too. Nothing else extends.
+#[test]
+fn external_class_declarations() {
+    let t = check_program(
+        "/** const Base: (n: Number) => {n: Number, twice: () => Number} */ const Base;\n\
+         /** class Sub extends Base { label: String } */ class Sub;\n\
+         /** class Pt<T>(x: T) { x: T } */ class Pt;\n\
+         const s = new Sub(1);\n\
+         const a = s.label;\n\
+         const b = s.twice() + s.n;\n\
+         const c = new Pt(\"p\").x;",
+        &["a", "b", "c"],
+    )
+    .unwrap();
+    assert_eq!(t, ["String", "Number", "String"]);
+    // A member redeclares a base field.
+    let t = check_program(
+        "/** const Base: () => {n: Number} */ const Base;\n\
+         /** class Sub extends Base { n: String } */ class Sub;\n\
+         const n = new Sub().n;",
+        &["n"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "String");
+    // The base must be declared without a body.
+    for src in [
+        "class B { constructor() { this.a = 1; } } /** class C extends B { b: String } */ class C;",
+        "function B() { return {a: 1}; } /** class C extends B { b: String } */ class C;",
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(err.contains("declared without a body"), "{err}");
+    }
+    // A class with a body doesn't extend, and a bodiless one needs its
+    // annotation.
+    assert!(check_program(
+        "/** class C { a: Int } */ class C; class D extends C { m() { return 1; } }",
+        &[]
+    )
+    .is_err());
+    assert!(check_program("class C;", &[]).is_err());
+}

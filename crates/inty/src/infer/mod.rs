@@ -169,9 +169,26 @@ impl InferState {
         // top-level symbols — has each binding's own type, not one
         // narrowed by top-level control flow.
         let depth = std::mem::replace(&mut self.stmt_list_depth, 0);
-        let result = self
-            .infer_stmt_list(&env, &program.statements)
-            .map(|(ty, env)| (ty, env.without_narrowings().globalized()));
+        // The ambient bindings (see `ambient`) under the program's own
+        // declaration ids are its own; those it leaves behind become
+        // global, by name, as the bindings do.
+        let outer_ambient = std::mem::take(&mut self.ambient);
+        self.ambient = outer_ambient
+            .iter()
+            .filter(|k| matches!(k, env::Key::Name(_)))
+            .cloned()
+            .collect();
+        let result = self.infer_stmt_list(&env, &program.statements);
+        let mut ambient = outer_ambient;
+        if let Ok((_, env)) = &result {
+            for (name, key) in env.name_keys() {
+                if self.ambient.contains(key) {
+                    ambient.insert(env::Key::Name(name.clone()));
+                }
+            }
+        }
+        self.ambient = ambient;
+        let result = result.map(|(ty, env)| (ty, env.without_narrowings().globalized()));
         self.stmt_list_depth = depth;
         // Every binding read before its declaration must have met it
         // since: one that didn't means a declaration was bound under a

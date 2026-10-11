@@ -460,6 +460,10 @@ pub enum AnnotationKind {
     Inline,
     /// `/** @type {T} */` doc form attached to the next binding.
     JsDoc,
+    /// `/** class Name(params) extends Base { members } */`, the
+    /// declaration of an external class (`class Name;`, without a body):
+    /// `content` is what follows the name.
+    Class,
 }
 
 /// Type annotation from comments: /** name: Type */

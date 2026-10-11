@@ -4,12 +4,11 @@
 //
 // A processor extends `AudioWorkletProcessor` (its `port` talks to the
 // `AudioWorkletNode` on the main thread; every message on it is an `M`)
-// and is registered by name:
+// and is registered by name. inty has no inheritance, so a processor is
+// declared as an external class, without a body:
 //
-//     class Gain extends AudioWorkletProcessor {
-//       constructor() { super(); this.gain = 1; }
-//       process(inputs, outputs, parameters) { …; return true; }
-//     }
+//     /** class Gain extends AudioWorkletProcessor { gain: Number } */
+//     class Gain;
 //     registerProcessor("gain", Gain);
 
 /** const AudioWorkletProcessor: <M>() => {port: MessagePort<M>} */

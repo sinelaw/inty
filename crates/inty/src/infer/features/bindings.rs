@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::ast::{AssignOp, Expr, PropDef, VarDeclarator, VarKind};
+use crate::ast::{AnnotationKind, AssignOp, Expr, PropDef, VarDeclarator, VarKind};
 use crate::error::TypeError;
 use crate::span::Span;
 use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
@@ -466,6 +466,14 @@ impl InferState {
                     self.lower_type_ast_in_env_with_span(type_ast, env, decl.span),
                     decl.span,
                 ))
+            } else if let Some(annotation) = decl
+                .type_annotation
+                .as_ref()
+                .filter(|a| a.kind == AnnotationKind::Class)
+            {
+                let annotation_span = Span::new(annotation.span.start, annotation.span.end);
+                let ty = self.class_annotation_type(env, &annotation.content, annotation_span)?;
+                Some((ty, annotation_span))
             } else if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
                 let (ann_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
@@ -583,8 +591,159 @@ impl InferState {
             // can recover predicates after the scope is gone.
             self.record_decl_scheme(decl.span, scheme.clone());
             new_env = self.bind(&new_env, decl.span, &decl.name, scheme, mutability)?;
+            if is_declaration {
+                if let Some(key) = new_env.key_of_name(&decl.name) {
+                    self.ambient.insert(key.clone());
+                }
+            }
         }
 
         Ok((Type::Undefined, new_env))
+    }
+
+    /// The type of an external class `Name`, declared without a body by
+    /// `/** class Name<T, …>(params) extends Base { members } */`
+    /// (`content` is what follows the name): a constructor taking
+    /// `params` (or the base's, without them) whose instances have
+    /// `members` and, with `extends`, every field of a `Base` instance a
+    /// member doesn't redeclare. The base must itself be declared without
+    /// a value (`const Base;` under an annotation, or another external
+    /// class), so no code inty checks runs on the subclass's instances
+    /// with another class's instance as `this`.
+    fn class_annotation_type(
+        &mut self,
+        env: &TypeEnv,
+        content: &str,
+        span: Span,
+    ) -> InferResult<Type> {
+        let malformed = |message: String| -> crate::error::IntyError {
+            TypeError::TypeAnnotationParse { message, span }.into()
+        };
+        // The members, `{ … }`: the first brace outside brackets.
+        let mut depth = 0i32;
+        let mut members_at = None;
+        for (i, c) in content.char_indices() {
+            match c {
+                '(' | '[' | '<' => depth += 1,
+                ')' | ']' | '>' => depth -= 1,
+                '{' if depth == 0 => {
+                    members_at = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(members_at) = members_at else {
+            return Err(malformed(
+                "an external class declaration needs its members, `{ … }`".to_string(),
+            ));
+        };
+        let (head, members) = (content[..members_at].trim(), content[members_at..].trim());
+        let (head, base) = match head.rsplit_once("extends") {
+            Some((pre, base))
+                if pre.is_empty()
+                    || pre.ends_with(|c: char| c.is_whitespace() || c == ')' || c == '>') =>
+            {
+                let base = base.trim();
+                if base.is_empty()
+                    || !base
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                {
+                    return Err(malformed(format!(
+                        "`extends` takes the name of a declared class or constructor, not `{}`",
+                        base
+                    )));
+                }
+                (pre.trim(), Some(base.to_string()))
+            }
+            _ => (head, None),
+        };
+        let (type_params, params) = match head.find('(') {
+            Some(i) => (head[..i].trim(), Some(head[i..].trim())),
+            None => (head, None),
+        };
+        if !(type_params.is_empty() || type_params.starts_with('<') && type_params.ends_with('>')) {
+            return Err(malformed(format!(
+                "unexpected `{}` in a class declaration",
+                type_params
+            )));
+        }
+        let ctor = format!("{}{} => {}", type_params, params.unwrap_or("()"), members);
+        let (ctor_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
+            &ctor,
+            span,
+            self.next_var_id(),
+            self.next_pvar_id(),
+            &self.type_aliases,
+        )?;
+        self.bump_pvar_id_to(next_pvar);
+        if let Some(&max) = var_map.values().max() {
+            self.bump_var_id_to(max + 1);
+        }
+        for pred in preds {
+            self.add_constraint(pred, span);
+        }
+        let Some((_, own_params, own_ret)) = super::functions::extract_callable(&ctor_ty) else {
+            return Err(malformed(
+                "an external class's members must be an object type".to_string(),
+            ));
+        };
+        let Some(base) = base else {
+            return Ok(ctor_ty);
+        };
+        let declared = env
+            .key_of_name(&base)
+            .is_some_and(|key| self.ambient.contains(key));
+        let scheme = match env.lookup(&base) {
+            Some(scheme) if declared => scheme.clone(),
+            _ => {
+                return Err(TypeError::InvalidSyntax {
+                    message: format!(
+                        "`{}` isn't a class or constructor declared without a body, so a \
+                         class can't extend it",
+                        base
+                    ),
+                    span,
+                }
+                .into())
+            }
+        };
+        let base_ty = self.instantiate(&scheme);
+        let base_ty = self.zonk(&base_ty);
+        let Some((_, base_params, base_ret)) = super::functions::extract_callable(&base_ty) else {
+            return Err(malformed(format!("`{}` isn't a constructor", base)));
+        };
+        let base_ret = self.zonk(&base_ret);
+        let mut instance = self.coerce_to_row(&base_ret, span)?;
+        let Type::Row(own) = self.zonk(&own_ret) else {
+            return Err(malformed(
+                "an external class's members must be an object type".to_string(),
+            ));
+        };
+        for (k, v) in own.props {
+            instance.props.insert(k, v);
+        }
+        instance.tail = own.tail;
+        let ctor = Type::Func {
+            this_type: None,
+            params: if params.is_some() {
+                own_params
+            } else {
+                base_params
+            },
+            ret: Box::new(Type::Row(instance)),
+        };
+        // In the representation the parsed signature has (a callable row).
+        Ok(match ctor_ty {
+            Type::Row(mut row) => {
+                let key = PropName(crate::types::CALLABLE_KEY.to_string());
+                if let Some(entry) = row.props.get_mut(&key) {
+                    entry.ty = ctor;
+                }
+                Type::Row(row)
+            }
+            _ => ctor,
+        })
     }
 }

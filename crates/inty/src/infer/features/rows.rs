@@ -736,7 +736,11 @@ impl InferState {
     /// If the type is already a row, return it unchanged. If it's
     /// a free type variable, unify it with a fresh open row.
     /// Otherwise reject with a span-anchored diagnostic.
-    fn coerce_to_row(&mut self, ty: &Type, span: Span) -> InferResult<RowType> {
+    pub(in crate::infer) fn coerce_to_row(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> InferResult<RowType> {
         let resolved = self.zonk(ty);
         match resolved {
             Type::Row(row) => Ok(row),

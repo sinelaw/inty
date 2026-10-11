@@ -320,6 +320,10 @@ pub struct InferState {
     /// Bindings read before any declaration of them was checked: the
     /// fresh type the read got, which the declaration unifies with, and
     /// where the first read was.
+    /// The bindings that are declarations without a value (`const X;`
+    /// under an annotation, an external `class X;`): the only bases an
+    /// external class may extend.
+    pub(in crate::infer) ambient: std::collections::HashSet<crate::infer::env::Key>,
     pub(in crate::infer) forward_locals:
         HashMap<crate::ast::resolve::BindingId, (Type, String, Span)>,
     /// Bindings some read found only in `local_types`. The environment
@@ -526,6 +530,7 @@ impl InferState {
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
+            ambient: std::collections::HashSet::new(),
             escaped_locals: Default::default(),
             local_decl_spans: HashMap::new(),
             annotation_env: None,

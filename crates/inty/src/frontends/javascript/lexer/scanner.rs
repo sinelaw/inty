@@ -380,6 +380,11 @@ impl<'a> Scanner<'a> {
                                         self.parse_function_annotation(start);
                                         continue;
                                     }
+                                    Some("class") => {
+                                        self.advance_keyword("class");
+                                        self.parse_class_annotation(start);
+                                        continue;
+                                    }
                                     Some("type") => {
                                         self.advance_keyword("type");
                                         self.parse_type_alias(start, false);
@@ -1397,6 +1402,25 @@ impl<'a> Scanner<'a> {
             kind: AnnotationKind::Inline,
         });
 
+        self.consume_comment_end();
+    }
+
+    /// Parse `/** class Name … */`, an external class's declaration: the
+    /// name, then everything up to the comment's end.
+    fn parse_class_annotation(&mut self, start: usize) {
+        self.skip_whitespace();
+        let name = self.read_identifier();
+        if name.is_empty() {
+            self.consume_comment_end();
+            return;
+        }
+        let content = self.read_until_comment_end();
+        self.type_annotations.push(TypeAnnotation {
+            name: name.trim().to_string(),
+            content: strip_doc_decoration(content.trim()).trim().to_string(),
+            span: Span::new(start, self.current_pos + 2),
+            kind: AnnotationKind::Class,
+        });
         self.consume_comment_end();
     }
 

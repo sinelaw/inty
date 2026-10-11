@@ -485,8 +485,9 @@ const c = structuredClone({ a: 1 });
     err(r##"const r = "a1".match(/\d/); const n = r.length;"##);
 }
 
-// 20. The AudioWorklet global scope loads; a processor class would
-// `extends AudioWorkletProcessor`, which is rejected (no inheritance).
+// 20. The AudioWorklet global scope. A processor class would `extends
+// AudioWorkletProcessor`, which only an external class's declaration
+// may: a class with a body can't extend another.
 #[test]
 fn b20_audio_worklet() {
     let e = check_with_lib(
@@ -501,7 +502,13 @@ registerProcessor("gain", Gain);
     assert!(e.contains("class inheritance is not supported"), "{e}");
     check_with_lib(
         inty::stdlib::AUDIO_WORKLET,
-        "const t = currentTime + sampleRate;",
+        r##"/** class Gain extends AudioWorkletProcessor { gain: Number } */
+class Gain;
+const g = new Gain();
+g.port.postMessage({ t: "second", at: currentTime });
+const half = g.gain / 2;
+registerProcessor("gain", Gain);
+"##,
     )
     .unwrap();
 }

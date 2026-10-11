@@ -1073,18 +1073,56 @@ impl Parser {
             Some(n) => n,
             None => self.expect_ident()?,
         };
+        // `class Name;`, without a body: an external class, declared by a
+        // `/** class Name(params) extends Base { members } */` annotation
+        // (see `class_annotation_type`), bound as a declaration is.
+        if self.check(&Token::Semicolon) {
+            let span = Span::new(start, self.current_span().end);
+            self.advance();
+            let annotation = self
+                .try_get_type_annotation(Span::new(start, start), &name)
+                .filter(|a| a.kind == AnnotationKind::Class);
+            let Some(annotation) = annotation else {
+                return Err(ParseError::UnexpectedToken {
+                    found: ";".to_string(),
+                    expected: format!(
+                        "a class body, or a `/** class {} … */` annotation declaring \
+                         an external class",
+                        name
+                    ),
+                    span,
+                }
+                .into());
+            };
+            return Ok(Stmt::Var {
+                kind: VarKind::Const,
+                declarations: vec![VarDeclarator {
+                    name,
+                    init: None,
+                    type_annotation: Some(annotation),
+                    type_ast: None,
+                    kind: VarKind::Const,
+                    span,
+                }],
+                span,
+            });
+        }
+
         // Record the class for nominal branding (see `class_brands`).
         self.class_brands.push(name.clone());
 
-        // Reject `extends Parent` for now; it'd need a real prototype chain
-        // to match runtime semantics and inty has no inheritance.
+        // Reject `extends Parent`: a class's methods are checked with its
+        // instance as `this`, so a base's methods aren't safe on a
+        // subclass's instances. Only an external class's declaration
+        // (`/** class Name extends Base { … } */ class Name;`) extends.
         if self.check(&Token::Extends) {
             let span = self.current_span();
             return Err(ParseError::UnexpectedToken {
                 found: "extends".to_string(),
-                expected: "{ (class inheritance is not supported — see \
-                    examples/spa/gaps.md § 'By design' for the \
-                    factory-function workaround)"
+                expected: "{ (class inheritance is not supported — only an external class \
+                    declared without a body, `/** class Name extends Base { … } */ class \
+                    Name;`, extends another; see examples/spa/gaps.md § 'By design' for \
+                    the factory-function workaround)"
                     .to_string(),
                 span,
             }
