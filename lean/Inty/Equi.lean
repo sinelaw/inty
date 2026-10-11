@@ -447,6 +447,12 @@ theorem PredEq.four {c c' : Cls} {a b d e a' b' d' e' : Ty}
   ⟨h.1, h.2.2 (a, a') (by simp), h.2.2 (b, b') (by simp), h.2.2 (d, d') (by simp),
     h.2.2 (e, e') (by simp)⟩
 
+theorem PredEq.five {c c' : Cls} {a b d e f a' b' d' e' f' : Ty}
+    (h : PredEq ⟨c, [a, b, d, e, f]⟩ ⟨c', [a', b', d', e', f']⟩) :
+    c = c' ∧ TyEq a a' ∧ TyEq b b' ∧ TyEq d d' ∧ TyEq e e' ∧ TyEq f f' :=
+  ⟨h.1, h.2.2 (a, a') (by simp), h.2.2 (b, b') (by simp), h.2.2 (d, d') (by simp),
+    h.2.2 (e, e') (by simp), h.2.2 (f, f') (by simp)⟩
+
 /-- A constraint equal to one with the shape of an instance has that shape
 up to its arguments. -/
 theorem PredEq.args_length {c c' : Cls} {xs ys : List Ty} (h : PredEq ⟨c, xs⟩ ⟨c', ys⟩) :
@@ -457,21 +463,26 @@ theorem PredEq.args_length {c c' : Cls} {xs ys : List Ty} (h : PredEq ⟨c, xs�
 theorem TyEq.con {c c' : Con} {ts ts' : List Ty} (h : TyEq (.app c ts) (.app c' ts')) :
     c = c' := (TyEq.app_iff.mp h).1
 
-theorem TyEq.slot {p σ p' σ' : Ty} (h : TyEq (.slot p σ) (.slot p' σ')) :
-    TyEq p p' ∧ TyEq σ σ' := by
+theorem TyEq.slot {p k σ p' k' σ' : Ty} (h : TyEq (.slot p k σ) (.slot p' k' σ')) :
+    TyEq p p' ∧ TyEq k k' ∧ TyEq σ σ' := by
   obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp h
-  exact ⟨hz (p, p') (by simp), hz (σ, σ') (by simp)⟩
+  exact ⟨hz (p, p') (by simp), hz (k, k') (by simp), hz (σ, σ') (by simp)⟩
 
-theorem TyEq.slot_mk {p σ p' σ' : Ty} (hp : TyEq p p') (hσ : TyEq σ σ') :
-    TyEq (.slot p σ) (.slot p' σ') :=
+theorem TyEq.slot_mk {p k σ p' k' σ' : Ty} (hp : TyEq p p') (hk : TyEq k k') (hσ : TyEq σ σ') :
+    TyEq (.slot p k σ) (.slot p' k' σ') :=
   TyEq.app rfl (fun x hx => by
     simp only [List.zip_cons_cons, List.zip_nil_right, List.mem_cons, List.not_mem_nil,
       or_false] at hx
-    rcases hx with rfl | rfl
+    rcases hx with rfl | rfl | rfl
     · exact hp
+    · exact hk
     · exact hσ)
 
 theorem TyEq.pre_abs : ¬ TyEq .pre .abs := fun h => by cases TyEq.con h
+
+/-- Distinct constants are distinct types. -/
+theorem TyEq.con_ne {c c' : Con} (hc : c ≠ c') : ¬ TyEq (.app c []) (.app c' []) :=
+  fun h => hc (TyEq.con h)
 
 theorem TyEq.array_inj {σ σ' : Ty} (h : TyEq (.array σ) (.array σ')) : TyEq σ σ' := by
   obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp h

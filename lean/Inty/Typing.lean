@@ -68,12 +68,35 @@ def Scheme.Simple (s : Scheme) : Prop :=
       ∃ i < s.arity, ∃ rest, p.args = .bound i :: rest) ∨
     ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < s.arity
 
-/-- The fields of an object literal written as methods (those labelled in
-`ms`) are functions whose `this` is the literal's type `T`, up to
-unfolding: inty infers them with one `this` that it unifies with the
-literal's type (`shared_this` in `infer_object`). -/
-def MethodsThis (ms ls : List String) (τs : List Ty) (T : Ty) : Prop :=
-  ∀ p ∈ ls.zip τs, p.1 ∈ ms → ∃ θ ps ρ, p.2 = .fn θ ps ρ ∧ TyEq θ T
+/-- How an object literal's field written as `k`, its expression of the type
+`τ`, sits in the literal's record type `T`: its slot. A method's and a
+getter's `this` is the literal's type, as inty types it (`shared_this` in
+`infer_object`); a getter's slot is what it gives. -/
+inductive FieldSlot (T : Ty) : FieldKind → Ty → Ty → Prop where
+  | data : FieldSlot T .data τ (.slot .pre .data τ)
+  | method : TyEq θ T → FieldSlot T .method (.fn θ τs ρ) (.slot .pre .data (.fn θ τs ρ))
+  | getter : TyEq θ T → FieldSlot T .getter (.fn θ [] σ) (.slot .pre .getter σ)
+
+/-- How a class's member written as `k`, its expression `e` of the type `τ`,
+sits in the instance's record type `T`: a field holds a value; an arrow
+field, a method and a getter are written as functions, whose `this` is the
+instance; a method and a getter are on the prototype. An arrow field's
+`this` is bound to the instance, so it may be called on anything, outside
+a receiver too. -/
+inductive MemberSlot (T : Ty) : ClassKind → Expr → Ty → Ty → Prop where
+  | data : MemberSlot T .data e τ (.slot .pre .data τ)
+  | arrow : TyEq θ T →
+      MemberSlot T .arrow (.func n b) (.fn θ τs ρ) (.slot .pre .data (.fn θ' τs ρ))
+  | method : TyEq θ T →
+      MemberSlot T .method (.func n b) (.fn θ τs ρ) (.slot .pre .proto (.fn θ τs ρ))
+  | getter : TyEq θ T → MemberSlot T .getter (.func 0 b) (.fn θ [] σ) (.slot .pre .proto σ)
+
+/-- The context a class's member `i`, written as `k`, is checked in: a
+field's initialiser sees the fields before it, the latest first; the
+other members see the class's context. -/
+def memberCtx (Γ : Ctx) (ks : List ClassKind) (τs : List Ty) (i : Nat) : ClassKind → Ctx
+  | .data => (((ks.zip τs).take i).filter (·.1 == .data)).reverse.map (fun p => .mono p.2) ++ Γ
+  | _ => Γ
 
 /-- The typing judgement: with records over the program's labels `L`, under
 the class assumptions `C`, the context `Γ` and the enclosing function's
@@ -148,29 +171,51 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   | tryFinally : HasType L C Γ R body τ → HasType L C Γ R fin τf →
       HasType L C Γ R (.tryFinally body fin) τ
   /-- An object literal has a record type over the program's labels, with
-  its fields present (`objSlots`). A field written as a method is a
-  function whose `this` is the literal's type (`MethodsThis`). -/
-  | obj : τs.length = ls.length → absent.length = L.length → (∀ l ∈ ls, l ∈ L) →
-      es.length = ls.length → (∀ p ∈ es.zip τs, HasType L C Γ R p.1 p.2) →
-      MethodsThis ms ls τs (.record L (objSlots L ls τs absent)) →
-      HasType L C Γ R (.obj ls es ms) (.record L (objSlots L ls τs absent))
+  its fields present (`objSlots`), each slot as its kind says
+  (`FieldSlot`). -/
+  | obj : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
+      ss.length = ls.length → (∀ l ∈ ls, l ∈ L) → (∀ p ∈ es.zip τs, HasType L C Γ R p.1 p.2) →
+      (∀ x ∈ ks.zip (τs.zip ss), FieldSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2) →
+      HasType L C Γ R (.obj ls es ks) (.record L (objSlots L ls ss))
+  /-- A class's instance has a record type over the program's labels, its
+  members present (`objSlots`), each checked in its context (`memberCtx`)
+  and slotted as its kind says (`MemberSlot`). Its labels are distinct. -/
+  | cls : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
+      ss.length = ls.length → ls.Nodup → (∀ l ∈ ls, l ∈ L) →
+      (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
+        HasType L C (memberCtx Γ ks τs i k) R e τ) →
+      (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
+        MemberSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
+      HasType L C Γ R (.cls ls es ks) (.record L (objSlots L ls ss))
+  /-- A constructor is a function whose `this` is what `new` makes, which
+  nothing else gives (`newTarget`). -/
+  | ctor : τs.length = n →
+      HasType L C (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ)
+        (some ρ) body ρ →
+      HasType L C Γ R (.ctor n body) (.fn .newTarget τs ρ)
+  /-- `new f(…)` calls a constructor, one argument per parameter, which
+  gives an object, so that it is the result. -/
+  | new_ : HasType L C Γ R f (.fn .newTarget τs ρ) → args.length = τs.length →
+      (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → TyEq ρ (.record L ss) →
+      HasType L C Γ R (.new_ f args) ρ
   /-- `e.l` reads a field of `e`'s type, `HasProp l τ σ`: a present field of
   a record, or what a scheme's constraint promises. -/
   | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ →
       HasType L C Γ R (.get e l) σ
   /-- `e.l = v` stores a value of the field's type, which is the
-  assignment's, in an object (`FieldWrite`: not an array's or a string's
-  `length`). -/
-  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite, [τ]⟩ →
+  assignment's, in an object's field that holds a value (`FieldWrite`: not
+  a getter or a class's method, nor an array's or a string's `length`). -/
+  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite l, [τ]⟩ →
       HasType L C Γ R v σ → HasType L C Γ R (.set e l v) σ
-  /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p` and
-  type `τ`, merged over `e₁`'s slot `s` gives the result's slot `r`
-  (`Merge p τ s r`): `e₂`'s field if it has one, `e₁`'s if not. -/
-  | spread : ps.length = L.length → τs.length = L.length → ss.length = L.length →
-      rs.length = L.length →
+  /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p`, kind
+  `k` and type `τ`, merged over `e₁`'s slot `s` gives the result's slot
+  `r` (`Merge p k τ s r`): `e₂`'s own field if it has one, `e₁`'s copied
+  if not. -/
+  | spread : ps.length = L.length → ks.length = L.length → τs.length = L.length →
+      ss.length = L.length → rs.length = L.length →
       HasType L C Γ R e₁ (.record L ss) →
-      HasType L C Γ R e₂ (.record L (List.zipWith Ty.slot ps τs)) →
-      (∀ p ∈ mergePreds ps τs ss rs, Entails C p) →
+      HasType L C Γ R e₂ (.record L (slots3 ps ks τs)) →
+      (∀ p ∈ mergePreds ps ks τs ss rs, Entails C p) →
       HasType L C Γ R (.spread e₁ e₂) (.record L rs)
   /-- An array literal's elements have one type, as in Hindley–Milner. -/
   | arr : (∀ e ∈ es, HasType L C Γ R e τ) → HasType L C Γ R (.arr es) (.array τ)
@@ -232,19 +277,33 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
       HasTypeTop L C Γ R (.tryCatch body handler) τ
   | tryFinally : HasType L C Γ R body τ → HasType L C Γ R fin τf →
       HasTypeTop L C Γ R (.tryFinally body fin) τ
-  | obj : τs.length = ls.length → absent.length = L.length → (∀ l ∈ ls, l ∈ L) →
-      es.length = ls.length → (∀ p ∈ es.zip τs, HasType L C Γ R p.1 p.2) →
-      MethodsThis ms ls τs (.record L (objSlots L ls τs absent)) →
-      HasTypeTop L C Γ R (.obj ls es ms) (.record L (objSlots L ls τs absent))
+  | obj : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
+      ss.length = ls.length → (∀ l ∈ ls, l ∈ L) → (∀ p ∈ es.zip τs, HasType L C Γ R p.1 p.2) →
+      (∀ x ∈ ks.zip (τs.zip ss), FieldSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2) →
+      HasTypeTop L C Γ R (.obj ls es ks) (.record L (objSlots L ls ss))
+  | cls : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
+      ss.length = ls.length → ls.Nodup → (∀ l ∈ ls, l ∈ L) →
+      (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
+        HasType L C (memberCtx Γ ks τs i k) R e τ) →
+      (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
+        MemberSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
+      HasTypeTop L C Γ R (.cls ls es ks) (.record L (objSlots L ls ss))
+  | ctor : τs.length = n →
+      HasType L C (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ)
+        (some ρ) body ρ →
+      HasTypeTop L C Γ R (.ctor n body) (.fn .newTarget τs ρ)
+  | new_ : HasType L C Γ R f (.fn .newTarget τs ρ) → args.length = τs.length →
+      (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → TyEq ρ (.record L ss) →
+      HasTypeTop L C Γ R (.new_ f args) ρ
   | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ →
       HasTypeTop L C Γ R (.get e l) σ
-  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite, [τ]⟩ →
+  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite l, [τ]⟩ →
       HasType L C Γ R v σ → HasTypeTop L C Γ R (.set e l v) σ
-  | spread : ps.length = L.length → τs.length = L.length → ss.length = L.length →
-      rs.length = L.length →
+  | spread : ps.length = L.length → ks.length = L.length → τs.length = L.length →
+      ss.length = L.length → rs.length = L.length →
       HasType L C Γ R e₁ (.record L ss) →
-      HasType L C Γ R e₂ (.record L (List.zipWith Ty.slot ps τs)) →
-      (∀ p ∈ mergePreds ps τs ss rs, Entails C p) →
+      HasType L C Γ R e₂ (.record L (slots3 ps ks τs)) →
+      (∀ p ∈ mergePreds ps ks τs ss rs, Entails C p) →
       HasTypeTop L C Γ R (.spread e₁ e₂) (.record L rs)
   | arr : (∀ e ∈ es, HasType L C Γ R e τ) → HasTypeTop L C Γ R (.arr es) (.array τ)
   | index : HasType L C Γ R e τ → HasType L C Γ R i ι → Entails C ⟨.indexable, [τ, ι, σ]⟩ →
@@ -333,12 +392,11 @@ inductive HasType₀ (L : List String) : List Pred → Ctx → Option Ty → Exp
   | tryFinally : HasType₀ L C Γ R body τ → HasType₀ L C Γ R fin τf →
       HasType₀ L C Γ R (.tryFinally body fin) τ
   /-- An object literal has a record type over the program's labels, with
-  its fields present (`objSlots`). None of its fields is written as a
-  method, whose `this` would make its type recursive. -/
-  | obj : τs.length = ls.length → absent.length = L.length → (∀ l ∈ ls, l ∈ L) →
-      es.length = ls.length → (∀ p ∈ es.zip τs, HasType₀ L C Γ R p.1 p.2) →
-      (∀ l ∈ ls, l ∉ ms) →
-      HasType₀ L C Γ R (.obj ls es ms) (.record L (objSlots L ls τs absent))
+  its fields present (`objSlots`). Its fields are all written as values: a
+  method's or a getter's `this` would make its type recursive. -/
+  | obj : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
+      (∀ l ∈ ls, l ∈ L) → (∀ p ∈ es.zip τs, HasType₀ L C Γ R p.1 p.2) → (∀ k ∈ ks, k = .data) →
+      HasType₀ L C Γ R (.obj ls es ks) (.record L (objSlots L ls (τs.map (.slot .pre .data ·))))
   /-- `e.l` reads a field of `e`'s type, `HasProp l τ σ`: a present field of
   a record, or what a scheme's constraint promises. -/
   | get : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, σ]⟩ →
@@ -346,16 +404,16 @@ inductive HasType₀ (L : List String) : List Pred → Ctx → Option Ty → Exp
   /-- `e.l = v` stores a value of the field's type, which is the
   assignment's, in an object (`FieldWrite`: not an array's or a string's
   `length`). -/
-  | set : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, σ]⟩ → Entails₀ C ⟨.fieldWrite, [τ]⟩ →
+  | set : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, σ]⟩ → Entails₀ C ⟨.fieldWrite l, [τ]⟩ →
       HasType₀ L C Γ R v σ → HasType₀ L C Γ R (.set e l v) σ
   /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p` and
   type `τ`, merged over `e₁`'s slot `s` gives the result's slot `r`
   (`Merge p τ s r`): `e₂`'s field if it has one, `e₁`'s if not. -/
-  | spread : ps.length = L.length → τs.length = L.length → ss.length = L.length →
-      rs.length = L.length →
+  | spread : ps.length = L.length → ks.length = L.length → τs.length = L.length →
+      ss.length = L.length → rs.length = L.length →
       HasType₀ L C Γ R e₁ (.record L ss) →
-      HasType₀ L C Γ R e₂ (.record L (List.zipWith Ty.slot ps τs)) →
-      (∀ p ∈ mergePreds ps τs ss rs, Entails₀ C p) →
+      HasType₀ L C Γ R e₂ (.record L (slots3 ps ks τs)) →
+      (∀ p ∈ mergePreds ps ks τs ss rs, Entails₀ C p) →
       HasType₀ L C Γ R (.spread e₁ e₂) (.record L rs)
   /-- An array literal's elements have one type, as in Hindley–Milner. -/
   | arr : (∀ e ∈ es, HasType₀ L C Γ R e τ) → HasType₀ L C Γ R (.arr es) (.array τ)
@@ -372,6 +430,16 @@ theorem BinOpTy₀.binOpTy (h : BinOpTy₀ C op τ₁ τ₂ τ) : BinOpTy C op �
   cases h with
   | plus hp => exact .plus hp.entails
   | minus => exact .minus
+
+theorem mem_zip_zip_map {α β γ : Type} {f : β → γ} : ∀ {ks : List α} {τs : List β} {k : α}
+    {τ : β} {s : γ}, (k, τ, s) ∈ ks.zip (τs.zip (τs.map f)) → s = f τ
+  | [], _, _, _, _, h => by simp at h
+  | _ :: _, [], _, _, _, h => by simp at h
+  | _ :: ks, t :: ts, k, τ, s, h => by
+    simp only [List.map_cons, List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h
+    rcases h with ⟨-, rfl, rfl⟩ | h
+    · rfl
+    · exact mem_zip_zip_map h
 
 /-- The syntactic fragment is part of the full judgement. -/
 theorem HasType₀.hasType (h : HasType₀ L C Γ R e τ) : HasType L C Γ R e τ := by
@@ -393,12 +461,16 @@ theorem HasType₀.hasType (h : HasType₀ L C Γ R e τ) : HasType L C Γ R e �
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb ihh
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
-  | obj hτs habs hL hes _ hms ih =>
-    exact .obj hτs habs hL hes ih (fun p hp hm => absurd hm (hms _ (List.of_mem_zip hp).1))
+  | obj hes hks hτs hL _ hd ih =>
+    refine .obj hes hks hτs (by simpa using hτs) hL ih (fun x hx => ?_)
+    obtain ⟨k, τ, s⟩ := x
+    have hk := hd k (List.of_mem_zip hx).1
+    subst hk
+    rw [mem_zip_zip_map hx]; exact .data
   | get _ hp ih => exact .get ih hp.entails
   | set _ hp hw _ ihe ihv => exact .set ihe hp.entails hw.entails ihv
-  | spread hps hτs hss hrs _ _ hm ih₁ ih₂ =>
-    exact .spread hps hτs hss hrs ih₁ ih₂ (fun p h => (hm p h).entails)
+  | spread hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
+    exact .spread hps hks hτs hss hrs ih₁ ih₂ (fun p h => (hm p h).entails)
   | arr _ ih => exact .arr ih
   | index _ _ hp ihe ihi => exact .index ihe ihi hp.entails
   | setIndex _ _ hp hw _ ihe ihi ihv => exact .setIndex ihe ihi hp.entails hw.entails ihv
@@ -424,10 +496,15 @@ theorem HasType.top (h : HasType L C Γ R e τ) : ∃ τ₀, TyEq τ₀ τ ∧ H
   | continue_ => exact ⟨_, .refl _, .continue_⟩
   | tryCatch hb hh => exact ⟨_, .refl _, .tryCatch hb hh⟩
   | tryFinally hb hf => exact ⟨_, .refl _, .tryFinally hb hf⟩
-  | obj hτs habs hL hes hargs hm => exact ⟨_, .refl _, .obj hτs habs hL hes hargs hm⟩
+  | obj hes hks hτs hss hL hargs hm => exact ⟨_, .refl _, .obj hes hks hτs hss hL hargs hm⟩
+  | cls hes hks hτs hss hnd hL hargs hm =>
+    exact ⟨_, .refl _, .cls hes hks hτs hss hnd hL hargs hm⟩
+  | ctor hl hb => exact ⟨_, .refl _, .ctor hl hb⟩
+  | new_ hf hl ha hρ => exact ⟨_, .refl _, .new_ hf hl ha hρ⟩
   | get he hp => exact ⟨_, .refl _, .get he hp⟩
   | set he hp hw hv => exact ⟨_, .refl _, .set he hp hw hv⟩
-  | spread hps hτs hss hrs h₁ h₂ hm => exact ⟨_, .refl _, .spread hps hτs hss hrs h₁ h₂ hm⟩
+  | spread hps hks hτs hss hrs h₁ h₂ hm =>
+    exact ⟨_, .refl _, .spread hps hks hτs hss hrs h₁ h₂ hm⟩
   | arr hes => exact ⟨_, .refl _, .arr hes⟩
   | index he hi hp => exact ⟨_, .refl _, .index he hi hp⟩
   | setIndex he hi hp hw hv => exact ⟨_, .refl _, .setIndex he hi hp hw hv⟩

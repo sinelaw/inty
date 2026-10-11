@@ -35,13 +35,27 @@ inductive Con where
   rows): a record has a slot for every label of the program, saying whether
   the field is there. -/
   | record (labels : List String)
-  /-- A record's slot, applied to a presence and the field's type
+  /-- A record's slot, applied to a presence, a kind and the field's type
   (`types::FieldEntry`). -/
   | slot
   /-- The presence of a field that is there, `Presence::Pre`. -/
   | pre
   /-- The presence of a field that isn't, `Presence::Abs`. -/
   | abs
+  /-- The kind of a field that holds a value: it can be stored to, and a
+  spread copies it. -/
+  | data
+  /-- The kind of an object's own getter, `get l() {…}`: reading it runs
+  the getter, a spread copies what it gives, and it can't be stored to. -/
+  | getter
+  /-- The kind of a class's method or getter, on its instances' prototype:
+  it can be read (a getter runs), but not stored to, and a spread doesn't
+  copy it. -/
+  | proto
+  /-- The type of `this` in a class's constructor, which only `new` calls
+  (with a new object): a call outside `new` gives `undefined`, which isn't
+  of it. -/
+  | newTarget
   /-- An array, applied to its element type (`Type::Array`). -/
   | array
   /-- A tuple, applied to its components' types. Inference uses it to state
@@ -191,9 +205,16 @@ instance : DecidableEq PTy := PTy.decEq
 @[match_pattern] abbrev Ty.fn (θ : Ty) (τs : List Ty) (ρ : Ty) : Ty := .app .fn (θ :: ρ :: τs)
 @[match_pattern] abbrev Ty.record (ls : List String) (slots : List Ty) : Ty :=
   .app (.record ls) slots
-@[match_pattern] abbrev Ty.slot (p τ : Ty) : Ty := .app .slot [p, τ]
+@[match_pattern] abbrev Ty.slot (p k τ : Ty) : Ty := .app .slot [p, k, τ]
 @[match_pattern] abbrev Ty.pre : Ty := .app .pre []
 @[match_pattern] abbrev Ty.abs : Ty := .app .abs []
+@[match_pattern] abbrev Ty.data : Ty := .app .data []
+@[match_pattern] abbrev Ty.getter : Ty := .app .getter []
+@[match_pattern] abbrev Ty.proto : Ty := .app .proto []
+@[match_pattern] abbrev Ty.newTarget : Ty := .app .newTarget []
+/-- The slot of a field a record hasn't: one slot for every absent field,
+as an absent field has no type in Rémy's rows. -/
+@[match_pattern] abbrev Ty.absSlot : Ty := .slot .abs .data .undefined
 @[match_pattern] abbrev Ty.array (τ : Ty) : Ty := .app .array [τ]
 @[match_pattern] abbrev Ty.tuple (τs : List Ty) : Ty := .app .tuple τs
 
@@ -258,11 +279,12 @@ inductive Cls where
   a value of type `a` gives a `b`. It is what a property read on a value
   whose type isn't known yet records. -/
   | hasProp (l : String)
-  /-- `Merge p τ s r`: a spread operand whose slot for some label has the
-  presence `p` and the type `τ`, written over a slot `s`, gives the slot
-  `r`: the operand's field if it has one, `s` if not. Its decision waits
-  for `p`, so a spread of a row whose fields aren't known yet has a
-  principal type. -/
+  /-- `Merge p k τ s r`: a spread operand whose slot for some label has the
+  presence `p`, the kind `k` and the type `τ`, written over a slot `s`,
+  gives the slot `r`: the operand's own field if it has one (a getter's
+  value, copied as data), `s` copied if not (data, and not a prototype
+  member). Its decision waits for `p` and `k`, so a spread of a row whose
+  fields aren't known yet has a principal type. -/
   | merge
   /-- `Indexable c i e`: indexing a `c` by an `i` gives an `e` (`c[i]`):
   an array by a number, its element; a string by a number, a string. The
@@ -271,17 +293,18 @@ inductive Cls where
   /-- `IndexWrite c`: an element of a `c` can be stored (`c[i] = v`): an
   array's, not a string's. -/
   | indexWrite
-  /-- `FieldWrite r`: a property of an `r` can be stored (`r.p = v`): an
-  object's, not an array's or a string's built-in one. -/
-  | fieldWrite
+  /-- `FieldWrite l r`: the property `l` of an `r` can be stored
+  (`r.l = v`): an object's field that holds a value, not a getter or a
+  class's method, nor an array's or a string's built-in property. -/
+  | fieldWrite (l : String)
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
-  | .plus | .indexWrite | .fieldWrite => 1
+  | .plus | .indexWrite | .fieldWrite _ => 1
   | .hasProp _ => 2
   | .indexable => 3
-  | .merge => 4
+  | .merge => 5
 
 /-- A class constraint: a class applied to types, such as `Plus a`. -/
 structure Pred where

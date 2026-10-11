@@ -87,16 +87,24 @@ theorem Ty.field_replace {l : String} {s s' : Ty} : ∀ {ls : List String} {fs :
       · exact TyEq.refl _
       · exact h₃ x hx
 
-/-- The slots of an object literal's record type over the labels `L`, the
-literal having the fields `ls` of the types `τs`. A field it has is
-present, at the type of its last occurrence (a later one overrides an
-earlier, as in JavaScript); one it doesn't is absent, at any type
-(`absent`), as in Rémy's rows, where an absent field has no type. -/
-def objSlots (L ls : List String) (τs absent : List Ty) : List Ty :=
-  (L.zip absent).map fun p =>
-    match Ty.field p.1 ls.reverse τs.reverse with
-    | some τ => .slot .pre τ
-    | none => .slot .abs p.2
+/-- The slots of an object's record type over the labels `L`, the object
+having the fields `ls` with the slots `ss`. A field it has is that of its
+last occurrence (a later one overrides an earlier, as in JavaScript); one
+it doesn't is absent (`Ty.absSlot`). -/
+def objSlots (L ls : List String) (ss : List Ty) : List Ty :=
+  L.map fun l => (Ty.field l ls.reverse ss.reverse).getD .absSlot
+
+/-- What a spread copies of a slot its operand doesn't write over: a field
+that holds a value, as it is; a getter, as what it gives; a prototype
+member, nothing; an absent field stays absent. -/
+inductive SlotCopy : Ty → Ty → Prop where
+  | data : SlotCopy (.slot .pre .data τ) (.slot .pre .data τ)
+  | getter : SlotCopy (.slot .pre .getter τ) (.slot .pre .data τ)
+  | proto : SlotCopy (.slot .pre .proto τ) .absSlot
+  | abs : SlotCopy (.slot .abs k τ) (.slot .abs k τ)
+
+theorem SlotCopy.subst (σ : Subst) (h : SlotCopy s r) : SlotCopy (s.subst σ) (r.subst σ) := by
+  cases h <;> simp only [Ty.subst_app, List.map_cons, List.map_nil] <;> constructor
 
 /-- The instances, as `classes::instances` (and, for `HasProp`, inty's
 `resolve_has_prop`). -/
@@ -106,13 +114,18 @@ inductive Inst : Pred → Prop where
   /-- `Plus String`. -/
   | plusString : Inst ⟨.plus, [.string]⟩
   /-- `HasProp l {…, l: σ, …} σ`: a record has the fields that are
-  present. -/
-  | hasProp : Ty.field l ls fs = some (.slot .pre σ) → Inst ⟨.hasProp l, [.record ls fs, σ]⟩
-  /-- `Merge pre τ s (pre τ)`: the operand's field wins. -/
-  | mergePre : Inst ⟨.merge, [.pre, τ, s, .slot .pre τ]⟩
-  /-- `Merge abs τ s s`: the operand hasn't the field, so the slot it is
-  written over stays. -/
-  | mergeAbs : Inst ⟨.merge, [.abs, τ, s, s]⟩
+  present, of any kind (a getter's is what it gives). -/
+  | hasProp : Ty.field l ls fs = some (.slot .pre k σ) → Inst ⟨.hasProp l, [.record ls fs, σ]⟩
+  /-- `Merge pre data τ s (pre data τ)`: the operand's field wins. -/
+  | mergeData : Inst ⟨.merge, [.pre, .data, τ, s, .slot .pre .data τ]⟩
+  /-- `Merge pre getter τ s (pre data τ)`: the operand's getter runs, and
+  what it gives is copied, as a field that holds a value. -/
+  | mergeGetter : Inst ⟨.merge, [.pre, .getter, τ, s, .slot .pre .data τ]⟩
+  /-- `Merge abs k τ s r`: the operand hasn't the field, so the slot it is
+  written over is copied (`SlotCopy s r`). -/
+  | mergeAbs : SlotCopy s r → Inst ⟨.merge, [.abs, k, τ, s, r]⟩
+  /-- `Merge pre proto τ s r`: a prototype member isn't copied either. -/
+  | mergeProto : SlotCopy s r → Inst ⟨.merge, [.pre, .proto, τ, s, r]⟩
   /-- An array's and a string's `length` (`builtins::resolve_has_prop`). -/
   | lengthArray : Inst ⟨.hasProp "length", [.array τ, .number]⟩
   | lengthString : Inst ⟨.hasProp "length", [.string, .number]⟩
@@ -122,8 +135,10 @@ inductive Inst : Pred → Prop where
   | indexString : Inst ⟨.indexable, [.string, .number, .string]⟩
   /-- `IndexWrite τ[]` (`resolve_index_write`). -/
   | writeArray : Inst ⟨.indexWrite, [.array τ]⟩
-  /-- `FieldWrite {…}` (`resolve_field_write`). -/
-  | writeRecord : Inst ⟨.fieldWrite, [.record ls slots]⟩
+  /-- `FieldWrite l {…, l: σ, …}`: a field that holds a value
+  (`resolve_field_write`). -/
+  | writeRecord : Ty.field l ls fs = some (.slot .pre .data σ) →
+      Inst ⟨.fieldWrite l, [.record ls fs]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -133,35 +148,57 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | hasProp hf =>
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
     exact .hasProp (by rw [Ty.field_subst, hf]; rfl)
-  | mergePre => exact .mergePre
-  | mergeAbs => exact .mergeAbs
+  | mergeData => exact .mergeData
+  | mergeGetter => exact .mergeGetter
+  | mergeAbs hc => exact .mergeAbs (hc.subst σ)
+  | mergeProto hc => exact .mergeProto (hc.subst σ)
   | lengthArray => exact .lengthArray
   | lengthString => exact .lengthString
   | indexArray => exact .indexArray
   | indexString => exact .indexString
   | writeArray => exact .writeArray
-  | writeRecord => exact .writeRecord
+  | writeRecord hf =>
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+    exact .writeRecord (by rw [Ty.field_subst, hf]; rfl)
 
 /-- The `Merge` constraints of a spread, label by label: the operand's
-presences `ps` and types `τs`, the slots `ss` it is written over, and the
-slots `rs` it gives. -/
-def mergePreds : List Ty → List Ty → List Ty → List Ty → List Pred
-  | p :: ps, τ :: τs, s :: ss, r :: rs => ⟨.merge, [p, τ, s, r]⟩ :: mergePreds ps τs ss rs
-  | _, _, _, _ => []
+presences `ps`, kinds `ks` and types `τs`, the slots `ss` it is written
+over, and the slots `rs` it gives. -/
+def mergePreds : List Ty → List Ty → List Ty → List Ty → List Ty → List Pred
+  | p :: ps, k :: ks, τ :: τs, s :: ss, r :: rs =>
+    ⟨.merge, [p, k, τ, s, r]⟩ :: mergePreds ps ks τs ss rs
+  | _, _, _, _, _ => []
 
-theorem mergePreds_subst (σ : Subst) : ∀ (ps τs ss rs : List Ty),
-    (mergePreds ps τs ss rs).map (·.subst σ) =
-      mergePreds (ps.map (·.subst σ)) (τs.map (·.subst σ)) (ss.map (·.subst σ))
-        (rs.map (·.subst σ))
-  | p :: ps, τ :: τs, s :: ss, r :: rs => by
-    simp only [mergePreds, List.map_cons, ← mergePreds_subst σ ps τs ss rs]; rfl
-  | [], _, _, _ | _ :: _, [], _, _ | _ :: _, _ :: _, [], _ | _ :: _, _ :: _, _ :: _, [] => by
+theorem mergePreds_subst (σ : Subst) : ∀ (ps ks τs ss rs : List Ty),
+    (mergePreds ps ks τs ss rs).map (·.subst σ) =
+      mergePreds (ps.map (·.subst σ)) (ks.map (·.subst σ)) (τs.map (·.subst σ))
+        (ss.map (·.subst σ)) (rs.map (·.subst σ))
+  | p :: ps, k :: ks, τ :: τs, s :: ss, r :: rs => by
+    simp only [mergePreds, List.map_cons, ← mergePreds_subst σ ps ks τs ss rs]; rfl
+  | [], _, _, _, _ | _ :: _, [], _, _, _ | _ :: _, _ :: _, [], _, _
+  | _ :: _, _ :: _, _ :: _, [], _ | _ :: _, _ :: _, _ :: _, _ :: _, [] => by
     simp [mergePreds]
 
-theorem zipWith_slot_subst (σ : Subst) (ps τs : List Ty) :
-    (List.zipWith Ty.slot ps τs).map (·.subst σ) =
-      List.zipWith Ty.slot (ps.map (·.subst σ)) (τs.map (·.subst σ)) := by
-  simp [List.map_zipWith, List.zipWith_map]
+/-- The slots of a record, from a presence, a kind and a type each. -/
+def slots3 : List Ty → List Ty → List Ty → List Ty
+  | p :: ps, k :: ks, τ :: τs => .slot p k τ :: slots3 ps ks τs
+  | _, _, _ => []
+
+theorem slots3_subst (σ : Subst) : ∀ (ps ks τs : List Ty),
+    (slots3 ps ks τs).map (·.subst σ) =
+      slots3 (ps.map (·.subst σ)) (ks.map (·.subst σ)) (τs.map (·.subst σ))
+  | p :: ps, k :: ks, τ :: τs => by
+    simp only [slots3, List.map_cons, Ty.subst_app, List.map_nil, slots3_subst σ ps ks τs]
+  | [], _, _ | _ :: _, [], _ | _ :: _, _ :: _, [] => by simp [slots3]
+
+theorem slots3_length : ∀ (ps ks τs : List Ty), ps.length = ks.length →
+    ks.length = τs.length → (slots3 ps ks τs).length = ps.length
+  | p :: ps, k :: ks, τ :: τs, h₁, h₂ => by
+    simp only [slots3, List.length_cons, slots3_length ps ks τs (by simpa using h₁)
+      (by simpa using h₂)]
+  | [], _, _, _, _ => rfl
+  | _ :: _, [], _, h, _ => by simp at h
+  | _ :: _, _ :: _, [], _, h => by simp at h
 
 /-- `p` is an instance up to equal types: a `HasProp` on a recursive type
 holds of its unfolding. -/
@@ -229,17 +266,56 @@ theorem Entails₀.subst (σ : Subst) (h : Entails₀ C p) :
 
 theorem Entails₀.entails (h : Entails₀ C p) : Entails C p := h.imp Inst.instEq id
 
+/-- Decides `SlotCopy s r`. -/
+def slotCopy? : Ty → Ty → Bool
+  | .slot .pre .data τ, r => decide (r = .slot .pre .data τ)
+  | .slot .pre .getter τ, r => decide (r = .slot .pre .data τ)
+  | .slot .pre .proto _, r => decide (r = .absSlot)
+  | .slot .abs k τ, r => decide (r = .slot .abs k τ)
+  | _, _ => false
+
+theorem slotCopy?_sound {s r : Ty} (h : slotCopy? s r = true) : SlotCopy s r := by
+  unfold slotCopy? at h
+  split at h <;> first | (cases h; done) | skip
+  all_goals (have := of_decide_eq_true h; subst this; constructor)
+
+/-- Whether a slot is present, of some kind, at the type `σ`. -/
+def Ty.preSlot? (σ : Ty) : Option Ty → Bool
+  | some (.slot .pre _ σ') => decide (σ' = σ)
+  | _ => false
+
+theorem Ty.preSlot?_sound {σ : Ty} {o : Option Ty} (h : Ty.preSlot? σ o = true) :
+    ∃ k, o = some (.slot .pre k σ) := by
+  unfold Ty.preSlot? at h
+  split at h
+  · exact ⟨_, by rw [of_decide_eq_true h]⟩
+  · cases h
+
+/-- Whether a slot is a present field that holds a value. -/
+def Ty.dataSlot? : Option Ty → Bool
+  | some (.slot .pre .data _) => true
+  | _ => false
+
+theorem Ty.dataSlot?_sound {o : Option Ty} (h : Ty.dataSlot? o = true) :
+    ∃ σ, o = some (.slot .pre .data σ) := by
+  unfold Ty.dataSlot? at h
+  split at h
+  · exact ⟨_, rfl⟩
+  · cases h
+
 /-- Decides `Inst`. -/
 def Pred.isInst : Pred → Bool
   | ⟨.plus, [.number]⟩ | ⟨.plus, [.string]⟩ => true
-  | ⟨.hasProp l, [.record ls fs, σ]⟩ => decide (Ty.field l ls fs = some (.slot .pre σ))
-  | ⟨.merge, [.pre, τ, _, r]⟩ => decide (r = .slot .pre τ)
-  | ⟨.merge, [.abs, _, s, r]⟩ => decide (r = s)
+  | ⟨.hasProp l, [.record ls fs, σ]⟩ => Ty.preSlot? σ (Ty.field l ls fs)
+  | ⟨.merge, [.pre, .data, τ, _, r]⟩ => decide (r = .slot .pre .data τ)
+  | ⟨.merge, [.pre, .getter, τ, _, r]⟩ => decide (r = .slot .pre .data τ)
+  | ⟨.merge, [.pre, .proto, _, s, r]⟩ => slotCopy? s r
+  | ⟨.merge, [.abs, _, _, s, r]⟩ => slotCopy? s r
   | ⟨.hasProp l, [.array _, .number]⟩ | ⟨.hasProp l, [.string, .number]⟩ => decide (l = "length")
   | ⟨.indexable, [.array τ, .number, e]⟩ => decide (e = τ)
   | ⟨.indexable, [.string, .number, .string]⟩ => true
   | ⟨.indexWrite, [.array _]⟩ => true
-  | ⟨.fieldWrite, [.record _ _]⟩ => true
+  | ⟨.fieldWrite l, [.record ls fs]⟩ => Ty.dataSlot? (Ty.field l ls fs)
   | _ => false
 
 theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
@@ -247,15 +323,17 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   split at h
   · exact .plusNumber
   · exact .plusString
-  · exact .hasProp (of_decide_eq_true h)
-  · rw [of_decide_eq_true h]; exact .mergePre
-  · rw [of_decide_eq_true h]; exact .mergeAbs
+  · obtain ⟨k, hk⟩ := Ty.preSlot?_sound h; exact .hasProp hk
+  · rw [of_decide_eq_true h]; exact .mergeData
+  · rw [of_decide_eq_true h]; exact .mergeGetter
+  · exact .mergeProto (slotCopy?_sound h)
+  · exact .mergeAbs (slotCopy?_sound h)
   · rw [of_decide_eq_true h]; exact .lengthArray
   · rw [of_decide_eq_true h]; exact .lengthString
   · rw [of_decide_eq_true h]; exact .indexArray
   · exact .indexString
   · exact .writeArray
-  · exact .writeRecord
+  · obtain ⟨σ, hσ⟩ := Ty.dataSlot?_sound h; exact .writeRecord hσ
   · cases h
 
 /-- The constraint is on a type variable: its first argument (`Plus`'s

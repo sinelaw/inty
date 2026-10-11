@@ -23,26 +23,64 @@ theorem Scheme.Simple.subst {s : Scheme} (hs : s.Simple) (σ : Subst) : (s.subst
     exact .inr ⟨q'.subst σ, τ.subst σ, t.subst σ, r.subst σ, by simp [PPred.subst],
       by simpa [Scheme.subst] using hb⟩
 
-theorem objSlots_subst (σ : Subst) (L ls : List String) (τs absent : List Ty) :
-    (objSlots L ls τs absent).map (·.subst σ) =
-      objSlots L ls (τs.map (·.subst σ)) (absent.map (·.subst σ)) := by
+theorem objSlots_subst (σ : Subst) (L ls : List String) (ss : List Ty) :
+    (objSlots L ls ss).map (·.subst σ) = objSlots L ls (ss.map (·.subst σ)) := by
   simp only [objSlots, List.map_map, ← List.map_reverse, Ty.field_subst]
-  rw [List.zip_map_right, List.map_map]
   apply List.map_congr_left
-  intro p _
-  obtain ⟨l, τa⟩ := p
-  simp only [Function.comp_apply, Prod.map_fst, Prod.map_snd, id]
-  generalize Ty.field l ls.reverse τs.reverse = o
-  cases o <;> simp
+  intro l _
+  simp only [Function.comp_apply]
+  generalize Ty.field l ls.reverse ss.reverse = o
+  cases o <;> simp [Ty.subst]
 
-/-- Methods keep their `this` under a substitution. -/
-theorem MethodsThis.subst (σ : Subst) {ms ls : List String} {τs : List Ty} {T : Ty}
-    (h : MethodsThis ms ls τs T) : MethodsThis ms ls (τs.map (·.subst σ)) (T.subst σ) := by
-  intro p hp hm
-  rw [List.zip_map_right] at hp
-  obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-  obtain ⟨θ, ps, ρ, hq₂, he⟩ := h q hq hm
-  exact ⟨θ.subst σ, ps.map (·.subst σ), ρ.subst σ, by simp [hq₂], he.subst σ⟩
+theorem FieldSlot.subst (σ : Subst) (h : FieldSlot T k τ s) :
+    FieldSlot (T.subst σ) k (τ.subst σ) (s.subst σ) := by
+  cases h with
+  | data => exact .data
+  | method he => simpa using FieldSlot.method (τs := _) (ρ := _) (he.subst σ)
+  | getter he => simpa using FieldSlot.getter (σ := _) (he.subst σ)
+
+theorem MemberSlot.subst (σ : Subst) (h : MemberSlot T k e τ s) :
+    MemberSlot (T.subst σ) k e (τ.subst σ) (s.subst σ) := by
+  cases h with
+  | data => exact .data
+  | arrow he => simpa using MemberSlot.arrow (τs := _) (ρ := _) (θ' := _) (he.subst σ)
+  | method he => simpa using MemberSlot.method (τs := _) (ρ := _) (he.subst σ)
+  | getter he => simpa using MemberSlot.getter (σ := _) (he.subst σ)
+
+theorem memberCtx_subst (σ : Subst) (Γ : Ctx) (ks : List ClassKind) (τs : List Ty)
+    (i : Nat) (k : ClassKind) :
+    (memberCtx Γ ks τs i k).map (Scheme.subst σ) =
+      memberCtx (Γ.map (Scheme.subst σ)) ks (τs.map (·.subst σ)) i k := by
+  cases k with
+  | data =>
+    simp only [memberCtx, List.map_append]
+    congr 1
+    rw [List.zip_map_right, ← List.map_take]
+    generalize (ks.zip τs).take i = xs
+    induction xs with
+    | nil => rfl
+    | cons p ps ih =>
+      obtain ⟨k, τ⟩ := p
+      cases k <;> simp_all [Scheme.mono, Scheme.subst]
+  | arrow => rfl
+  | method => rfl
+  | getter => rfl
+
+theorem zip4_map {α δ β γ : Type} (f : β → β) (g : γ → γ) : ∀ (ks : List α) (es : List δ)
+    (τs : List β) (ss : List γ), ks.zip (es.zip ((τs.map f).zip (ss.map g))) =
+      (ks.zip (es.zip (τs.zip ss))).map (fun x => (x.1, x.2.1, f x.2.2.1, g x.2.2.2))
+  | [], _, _, _ => rfl
+  | _ :: _, [], _, _ => rfl
+  | _ :: _, _ :: _, [], _ => rfl
+  | _ :: _, _ :: _, _ :: _, [] => rfl
+  | k :: ks, e :: es, t :: ts, s :: ss => by simp [zip4_map f g ks es ts ss]
+
+theorem zip3_map {α β γ : Type} (f : β → β) (g : γ → γ) : ∀ (ks : List α) (τs : List β) (ss : List γ),
+    ks.zip ((τs.map f).zip (ss.map g)) = (ks.zip (τs.zip ss)).map (fun x => (x.1, f x.2.1, g x.2.2))
+  | [], _, _ => rfl
+  | _ :: _, [], _ => rfl
+  | _ :: _, _ :: _, [] => rfl
+  | k :: ks, t :: ts, s :: ss => by simp [zip3_map f g ks ts ss]
 
 theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
     HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) := by
@@ -93,23 +131,47 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
-  | obj hτs habs hL hes _ hm ih =>
-    have hm' := hm.subst σ
-    simp only [Ty.subst_app, objSlots_subst] at hm' ⊢
-    refine .obj (by simpa using hτs) (by simpa using habs) hL hes (fun p hp => ?_) hm'
+  | @obj _ _ _ _ _ _ _ τs hes hks hτs hss hL _ hm ih =>
+    simp only [Ty.subst_app, objSlots_subst]
+    refine .obj (τs := τs.map (·.subst σ)) hes hks (by simpa using hτs) (by simpa using hss) hL (fun p hp => ?_) (fun x hx => ?_)
+    · rw [List.zip_map_right] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      exact ih q hq
+    · rw [zip3_map] at hx
+      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+      have := (hm y hy).subst σ
+      simpa [Ty.subst_app, objSlots_subst] using this
+  | @cls _ _ _ τs _ _ _ _ hes hks hτs hss hnd hL _ hm ih =>
+    simp only [Ty.subst_app, objSlots_subst]
+    refine .cls (τs := τs.map (·.subst σ)) hes hks (by simpa using hτs) (by simpa using hss) hnd hL
+      (fun i e k τ he hk hτ => ?_) (fun x hx => ?_)
+    · rw [List.getElem?_map] at hτ
+      obtain ⟨τ₀, hτ₀, rfl⟩ := Option.map_eq_some_iff.mp hτ
+      have := ih i e k τ₀ he hk hτ₀
+      rw [memberCtx_subst] at this
+      simpa [Ty.subst_app, objSlots_subst] using this
+    · rw [zip4_map] at hx
+      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+      have := (hm y hy).subst σ
+      simpa [Ty.subst_app, objSlots_subst] using this
+  | ctor hlen _ ih =>
+    refine .ctor (by simpa using hlen) ?_
+    simpa [List.map_append, Function.comp_def] using ih
+  | new_ _ hlen _ hρ ihf iha =>
+    refine .new_ (by simpa using ihf) (by simpa using hlen) (fun p hp => ?_) (by simpa using hρ.subst σ)
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-    exact ih q hq
+    exact iha q hq
   | get _ hp ih => exact .get ih (by simpa [Pred.subst] using hp.subst σ)
   | set _ hp hw _ ihe ihv =>
     exact .set ihe (by simpa [Pred.subst] using hp.subst σ) (by simpa [Pred.subst] using hw.subst σ)
       ihv
-  | @spread _ _ _ _ _ _ ps τs _ hps hτs hss hrs _ _ hm ih₁ ih₂ =>
+  | @spread _ _ _ _ _ _ ps ks τs _ hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
     simp only [Ty.subst_app] at ih₁ ih₂ ⊢
-    refine .spread (ps := ps.map (·.subst σ)) (τs := τs.map (·.subst σ))
-      (by simpa using hps) (by simpa using hτs) (by simpa using hss) (by simpa using hrs) ih₁ ?_
-      (fun p hp => ?_)
-    · simpa [List.map_zipWith, List.zipWith_map] using ih₂
+    refine .spread (ps := ps.map (·.subst σ)) (ks := ks.map (·.subst σ)) (τs := τs.map (·.subst σ))
+      (by simpa using hps) (by simpa using hks) (by simpa using hτs) (by simpa using hss)
+      (by simpa using hrs) ih₁ ?_ (fun p hp => ?_)
+    · simpa [slots3_subst] using ih₂
     · rw [← mergePreds_subst] at hp
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact (hm q hq).subst σ
@@ -175,9 +237,12 @@ theorem HasType₀.subst (σ : Subst) (h : HasType₀ L C Γ R e τ) :
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
-  | obj hτs habs hL hes _ hms ih =>
-    simp only [Ty.subst_app, objSlots_subst]
-    refine .obj (by simpa using hτs) (by simpa using habs) hL hes (fun p hp => ?_) hms
+  | @obj ls _ _ _ ks es τs hes hks hτs hL _ hd ih =>
+    have heq : (τs.map (Ty.slot .pre .data ·)).map (·.subst σ) =
+        (τs.map (·.subst σ)).map (Ty.slot .pre .data ·) := by
+      simp [Function.comp_def, Ty.subst_app]
+    simp only [Ty.subst_app, objSlots_subst, heq]
+    refine .obj hes hks (by simpa using hτs) hL (fun p hp => ?_) hd
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact ih q hq
@@ -185,12 +250,12 @@ theorem HasType₀.subst (σ : Subst) (h : HasType₀ L C Γ R e τ) :
   | set _ hp hw _ ihe ihv =>
     exact .set ihe (by simpa [Pred.subst] using hp.subst σ) (by simpa [Pred.subst] using hw.subst σ)
       ihv
-  | @spread _ _ _ _ _ _ ps τs _ hps hτs hss hrs _ _ hm ih₁ ih₂ =>
+  | @spread _ _ _ _ _ _ ps ks τs _ hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
     simp only [Ty.subst_app] at ih₁ ih₂ ⊢
-    refine .spread (ps := ps.map (·.subst σ)) (τs := τs.map (·.subst σ))
-      (by simpa using hps) (by simpa using hτs) (by simpa using hss) (by simpa using hrs) ih₁ ?_
-      (fun p hp => ?_)
-    · simpa [List.map_zipWith, List.zipWith_map] using ih₂
+    refine .spread (ps := ps.map (·.subst σ)) (ks := ks.map (·.subst σ)) (τs := τs.map (·.subst σ))
+      (by simpa using hps) (by simpa using hks) (by simpa using hτs) (by simpa using hss)
+      (by simpa using hrs) ih₁ ?_ (fun p hp => ?_)
+    · simpa [slots3_subst] using ih₂
     · rw [← mergePreds_subst] at hp
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact (hm q hq).subst σ

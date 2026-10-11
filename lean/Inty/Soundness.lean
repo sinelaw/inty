@@ -55,17 +55,42 @@ relates to what `W` says of it. -/
 def HeapInv (P : Cell → Value → Prop) (W : World) (h : Heap) : Prop :=
   h.length = W.length ∧ ∀ (ℓ : Nat) c, W[ℓ]? = some c → ∃ v, h[ℓ]? = some v ∧ P c v
 
+/-- How an object with the properties `fs` holds its field `l`, of the
+slot `s` in the record type `T`, given which values `P` gives each type: a
+field that holds a value, a value of its type; an own getter, a function
+from `T` to its type; a prototype member, a method of its type or such a
+getter; an absent field, no own property. (A slot whose presence or kind
+isn't known, a variable, has no contents, as a type variable has no
+values.) Slots are compared up to equal types. -/
+def MemberP (P : Ty → Value → Prop) (T : Ty) (fs : List (String × MemberKind × Value))
+    (l : String) (s : Ty) : Prop :=
+  (∃ σ, TyEq s (.slot .pre .data σ) ∧ ∃ v, fs.lookup l = some (.data, v) ∧ P σ v) ∨
+  (∃ σ, TyEq s (.slot .pre .getter σ) ∧ ∃ g, fs.lookup l = some (.getter, g) ∧
+    P (.fn T [] σ) g) ∨
+  (∃ σ, TyEq s (.slot .pre .proto σ) ∧
+    ((∃ v, fs.lookup l = some (.method, v) ∧ P σ v) ∨
+     (∃ g, fs.lookup l = some (.protoGetter, g) ∧ P (.fn T [] σ) g))) ∨
+  (∃ k σ, TyEq s (.slot .abs k σ) ∧ fs.lookup l = none)
+
+theorem MemberP.mono {P Q : Ty → Value → Prop} (hPQ : ∀ τ v, P τ v → Q τ v) {T : Ty}
+    {fs : List (String × MemberKind × Value)} {l : String} {s : Ty} (h : MemberP P T fs l s) :
+    MemberP Q T fs l s := by
+  rcases h with ⟨σ, h₁, v, h₂, h₃⟩ | ⟨σ, h₁, g, h₂, h₃⟩ | ⟨σ, h₁, ⟨v, h₂, h₃⟩ | ⟨g, h₂, h₃⟩⟩ |
+    ⟨k, σ, h₁, h₂⟩
+  · exact .inl ⟨σ, h₁, v, h₂, hPQ _ _ h₃⟩
+  · exact .inr (.inl ⟨σ, h₁, g, h₂, hPQ _ _ h₃⟩)
+  · exact .inr (.inr (.inl ⟨σ, h₁, .inl ⟨v, h₂, hPQ _ _ h₃⟩⟩))
+  · exact .inr (.inr (.inl ⟨σ, h₁, .inr ⟨g, h₂, hPQ _ _ h₃⟩⟩))
+  · exact .inr (.inr (.inr ⟨k, σ, h₁, h₂⟩))
+
 /-- What a cell holds, given which values `P` gives each type: a variable's
 value has every instance of its scheme whose constraints hold; an object's
-fields are the record's present ones, each of its type, and none of its
-absent ones (a slot whose presence isn't known, a variable, has no
-contents, as a type variable has no values); an array's elements each have
-the element type. Slots are compared up to equal types. -/
+properties hold its record type's fields (`MemberP`); an array's elements
+each have the element type. -/
 def CellP (P : Ty → Value → Prop) : Cell → Value → Prop
   | .scheme s, v => ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → P (s.inst τs) v
-  | .obj (.record ls slots), v => ∃ fs, v = .fields fs ∧ ∀ l s, Ty.field l ls slots = some s →
-      (∃ σ, TyEq s (.slot .pre σ) ∧ ∃ v', fs.lookup l = some v' ∧ P σ v') ∨
-      (∃ σ, TyEq s (.slot .abs σ) ∧ fs.lookup l = none)
+  | .obj (.record ls slots), v => ∃ fs, v = .fields fs ∧ (∀ l s, Ty.field l ls slots = some s →
+      MemberP P (.record ls slots) fs l s) ∧ ∀ l, Ty.field l ls slots = none → fs.lookup l = none
   | .obj _, _ => False
   | .arr τ, v => ∃ vs, v = .items vs ∧ ∀ w ∈ vs, P τ w
 
@@ -83,11 +108,8 @@ theorem CellP.mono {P Q : Ty → Value → Prop} (hPQ : ∀ τ v, P τ v → Q �
     | app c args =>
       cases c
       case record ls =>
-        obtain ⟨fs, rfl, hf⟩ := h
-        refine ⟨fs, rfl, fun l s hl => ?_⟩
-        rcases hf l s hl with ⟨σ, hσ, v', h₁, h₂⟩ | h
-        · exact .inl ⟨σ, hσ, v', h₁, hPQ _ _ h₂⟩
-        · exact .inr h
+        obtain ⟨fs, rfl, hf, hn⟩ := h
+        exact ⟨fs, rfl, fun l s hl => (hf l s hl).mono hPQ, hn⟩
       all_goals simp [CellP] at h
 
 /-- An abrupt completion that runs on past a call: a `throw` of any value,
@@ -148,6 +170,7 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .undefined, v => v = .undefined
   | .null, v => v = .null
   | .unknown, _ => True
+  | .newTarget, _ => True
   | .fn θ τs ρ, f => ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args, args.length = τs.length →
       (∀ i, i < j → HeapInv (CellP (fun τ v => V i W' τ v)) W' h) →
       (∀ i, i < j → V i W' θ thisv) → (∀ i, i < j → VList i W' τs args) →
@@ -190,9 +213,8 @@ def SchemeV (k : Nat) (W : World) (s : Scheme) (v : Value) : Prop :=
 theorem CellV_scheme : CellV k W (.scheme s) v ↔ SchemeV k W s v := Iff.rfl
 
 theorem CellV_obj : CellV k W (.obj (.record ls slots)) v ↔ ∃ fs, v = .fields fs ∧
-      ∀ l s, Ty.field l ls slots = some s →
-        (∃ σ, TyEq s (.slot .pre σ) ∧ ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∨
-        (∃ σ, TyEq s (.slot .abs σ) ∧ fs.lookup l = none) := Iff.rfl
+      (∀ l s, Ty.field l ls slots = some s → MemberP (V k W) (.record ls slots) fs l s) ∧
+      ∀ l, Ty.field l ls slots = none → fs.lookup l = none := Iff.rfl
 
 theorem CellV_arr : CellV k W (.arr τ) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := Iff.rfl
 
@@ -214,6 +236,7 @@ theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
 @[simp] theorem V_undefined : V k W .undefined v ↔ v = .undefined := by rw [V.eq_def]
 @[simp] theorem V_null : V k W .null v ↔ v = .null := by rw [V.eq_def]
 @[simp] theorem V_unknown : V k W .unknown v ↔ True := by rw [V.eq_def]
+@[simp] theorem V_newTarget : V k W .newTarget v ↔ True := by rw [V.eq_def]
 @[simp] theorem V_var : V k W (.var a) v ↔ False := by rw [V.eq_def]
 
 theorem V_record : V k W (.record ls slots) v ↔ ∃ ℓ τc, v = .obj ℓ ∧
@@ -667,127 +690,271 @@ theorem IsValue.run_value (hv : e.IsValue) (ht : HasType L C Γ R e τ) (hG : G 
 
 /-! ## Objects -/
 
-/-- The value of a field a record type has present, in fields of the
-record's types: the first one, as `lookup` finds. -/
-theorem field_lookup {k : Nat} {W : World} {l : String} {σ : Ty} :
-    ∀ {ls : List String} {τs : List Ty} {vs : List Value},
-    VList k W τs vs → Ty.field l ls τs = some σ →
-    ∃ v, (ls.zip vs).lookup l = some v ∧ V k W σ v
-  | [], _, _, _, h => by simp [Ty.field] at h
-  | _ :: _, [], _, _, h => by simp [Ty.field] at h
-  | _ :: _, _ :: _, [], hvs, _ => by simp at hvs
-  | l' :: ls, τ :: τs, v :: vs, hvs, h => by
-    rw [VList_cons] at hvs
-    simp only [Ty.field] at h
-    simp only [List.zip_cons_cons, List.lookup_cons]
-    by_cases e : l' = l
-    · subst e; simp only [ite_true, Option.some.injEq] at h; subst h
-      exact ⟨v, by simp, hvs.1⟩
-    · simp only [e, ite_false] at h
-      have hne : (l == l') = false := by simpa using Ne.symm e
-      obtain ⟨v', h₁, h₂⟩ := field_lookup hvs.2 h
-      exact ⟨v', by simp [hne, h₁], h₂⟩
-
-theorem VList.append_single {k : Nat} {W : World} {τ : Ty} {v : Value} :
-    ∀ {τs : List Ty} {vs : List Value}, VList k W τs vs → V k W τ v →
-      VList k W (τs ++ [τ]) (vs ++ [v])
-  | [], [], _, hv => by simpa using hv
-  | _ :: _, _ :: _, h, hv => by
-    rw [VList_cons] at h
-    simp only [List.cons_append, VList_cons]
-    exact ⟨h.1, VList.append_single h.2 hv⟩
-  | [], _ :: _, h, _ | _ :: _, [], h, _ => by simp at h
-
-theorem lookup_filter_ne {l l' : String} (e : l' ≠ l) :
-    ∀ fs : List (String × Value), (fs.filter (·.1 != l)).lookup l' = fs.lookup l'
+theorem lookup_map_snd {α β : Type} (g : α → β) (l : String) :
+    ∀ xs : List (String × α), (xs.map (Prod.map id g)).lookup l = (xs.lookup l).map g
   | [] => rfl
-  | (a, v) :: fs => by
-    by_cases ha : a = l
-    · subst ha
-      have : (l' == a) = false := by simpa using e
-      simp [List.lookup_cons, this, lookup_filter_ne e fs]
-    · simp only [List.filter_cons, bne_iff_ne, ne_eq, ha, not_false_eq_true,
-        ite_true, List.lookup_cons]
-      split <;> simp_all [lookup_filter_ne e fs]
+  | (l', a) :: xs => by
+    simp only [List.map_cons, Prod.map, id, List.lookup_cons]
+    split <;> simp_all [lookup_map_snd g l xs]
 
-theorem VList.reverse {k : Nat} {W : World} : ∀ {τs : List Ty} {vs : List Value},
-    VList k W τs vs → VList k W τs.reverse vs.reverse
-  | [], [], _ => by simp
-  | τ :: τs, v :: vs, h => by
-    rw [VList_cons] at h
-    simp only [List.reverse_cons]
-    exact VList.append_single (VList.reverse h.2) h.1
-  | [], _ :: _, h | _ :: _, [], h => by simp at h
+theorem lookup_mem {α : Type} {l : String} {a : α} :
+    ∀ {xs : List (String × α)}, xs.lookup l = some a → (l, a) ∈ xs
+  | [], h => by cases h
+  | (l', a') :: xs, h => by
+    simp only [List.lookup_cons] at h
+    split at h
+    · rename_i e; cases h; simp only [beq_iff_eq] at e; subst e; simp
+    · exact List.mem_cons_of_mem _ (lookup_mem h)
 
-/-- A field an object literal's type has present is the last of its
-occurrences in the literal. -/
-theorem objSlots_field {l : String} {σ : Ty} {ls : List String} {τs : List Ty} :
-    ∀ {L : List String} {absent : List Ty},
-      Ty.field l L (objSlots L ls τs absent) = some (.slot .pre σ) →
-      Ty.field l ls.reverse τs.reverse = some σ
-  | [], _, h => by simp [Ty.field] at h
-  | _ :: _, [], h => by simp [objSlots, Ty.field] at h
-  | l' :: L, a :: absent, h => by
-    simp only [objSlots, List.zip_cons_cons, List.map_cons, Ty.field] at h
+theorem lookup_eq_none {α : Type} {l : String} :
+    ∀ {xs : List (String × α)}, (∀ x ∈ xs, x.1 ≠ l) → xs.lookup l = none
+  | [], _ => rfl
+  | (a, v) :: xs, h => by
+    have ha : (l == a) = false :=
+      beq_eq_false_iff_ne.mpr (fun e => h (a, v) List.mem_cons_self e.symm)
+    simp only [List.lookup_cons, ha]
+    exact lookup_eq_none (fun x hx => h x (List.mem_cons_of_mem _ hx))
+
+theorem lookup_ne_none {α : Type} {l : String} :
+    ∀ {xs : List (String × α)}, l ∈ xs.map (·.1) → xs.lookup l ≠ none
+  | [], h => by simp at h
+  | (a, v) :: xs, h => by
+    cases e : l == a
+    · have hne : l ≠ a := by simpa using e
+      simp only [List.lookup_cons, e]
+      simp only [List.map_cons, List.mem_cons] at h
+      exact lookup_ne_none (h.resolve_left hne)
+    · simp [List.lookup_cons, e]
+
+theorem lookup_append {α : Type} {l : String} :
+    ∀ (xs ys : List (String × α)), (xs ++ ys).lookup l = (xs.lookup l).or (ys.lookup l)
+  | [], ys => by simp
+  | (a, v) :: xs, ys => by
+    cases e : l == a <;> simp [List.lookup_cons, e, lookup_append xs ys]
+
+theorem lookup_reverse {α : Type} {l : String} :
+    ∀ {xs : List (String × α)}, (xs.map (·.1)).Nodup → xs.reverse.lookup l = xs.lookup l
+  | [], _ => rfl
+  | (a, v) :: xs, h => by
+    simp only [List.map_cons, List.nodup_cons] at h
+    rw [List.reverse_cons, lookup_append, lookup_reverse h.2]
+    cases e : l == a
+    · simp [List.lookup_cons, e]
+    · have : l = a := by simpa using e
+      subst this
+      have hn : xs.lookup l = none :=
+        lookup_eq_none (fun x hx hx' => h.1 (List.mem_map.mpr ⟨x, hx, hx'⟩))
+      simp [hn]
+
+theorem lookup_of_mem {α : Type} {l : String} {a : α} :
+    ∀ {xs : List (String × α)}, (xs.map (·.1)).Nodup → (l, a) ∈ xs → xs.lookup l = some a
+  | [], _, h => by cases h
+  | (l', a') :: xs, hn, h => by
+    simp only [List.map_cons, List.nodup_cons] at hn
+    rcases List.mem_cons.mp h with e | h
+    · cases e; simp
+    · have hne : l ≠ l' := fun e => hn.1 (List.mem_map.mpr ⟨_, h, e⟩)
+      have : (l == l') = false := by simpa using hne
+      simp only [List.lookup_cons, this]
+      exact lookup_of_mem hn.2 h
+
+theorem Ty.field_eq_lookup (l : String) :
+    ∀ (ls : List String) (fs : List Ty), Ty.field l ls fs = (ls.zip fs).lookup l
+  | [], _ => rfl
+  | _ :: _, [] => rfl
+  | l' :: ls, f :: fs => by
+    simp only [Ty.field, List.zip_cons_cons, List.lookup_cons, Ty.field_eq_lookup l ls fs]
     by_cases e : l' = l
-    · subst e
-      simp only [ite_true, Option.some.injEq] at h
-      revert h
-      cases Ty.field l' ls.reverse τs.reverse <;> simp
-    · simp only [e, ite_false] at h
-      exact objSlots_field (L := L) (absent := absent) h
+    · subst e; simp
+    · have : (l == l') = false := by simpa using Ne.symm e
+      simp [e, this]
 
-/-- Each slot of an object literal's type is present, at the type of the
-field's last occurrence, or absent, the literal having no such field. -/
-theorem objSlots_field_cases {l : String} {s : Ty} {ls : List String} {τs : List Ty} :
-    ∀ {L : List String} {absent : List Ty},
-      Ty.field l L (objSlots L ls τs absent) = some s →
-      (∃ σ, s = .slot .pre σ) ∨ ∃ σ, s = .slot .abs σ ∧ Ty.field l ls.reverse τs.reverse = none
-  | [], _, h => by simp [Ty.field] at h
-  | _ :: _, [], h => by simp [objSlots, Ty.field] at h
-  | l' :: L, a :: absent, h => by
-    simp only [objSlots, List.zip_cons_cons, List.map_cons, Ty.field] at h
-    by_cases e : l' = l
-    · subst e
-      simp only [ite_true, Option.some.injEq] at h
-      revert h
-      cases hf : Ty.field l' ls.reverse τs.reverse with
-      | none => intro h; exact .inr ⟨a, h.symm, rfl⟩
-      | some σ => intro h; exact .inl ⟨σ, h.symm⟩
-    · simp only [e, ite_false] at h
-      exact objSlots_field_cases (L := L) (absent := absent) h
+theorem zip_reverse {α β : Type} {xs : List α} {ys : List β} (h : xs.length = ys.length) :
+    (xs.zip ys).reverse = xs.reverse.zip ys.reverse := by
+  simp only [List.zip_eq_zipWith]
+  exact List.reverse_zipWith h
 
-/-- A label with no field has no value. -/
-theorem field_none_lookup {l : String} : ∀ {ls : List String} {τs : List Ty} {vs : List Value},
-    vs.length = τs.length → Ty.field l ls τs = none → (ls.zip vs).lookup l = none
-  | [], _, _, _, _ => rfl
-  | _ :: _, [], vs, hl, _ => by
-    rw [List.eq_nil_of_length_eq_zero (l := vs) (by simpa using hl)]; rfl
-  | _ :: _, _ :: _, [], hl, _ => by simp at hl
-  | l' :: ls, τ :: τs, v :: vs, hl, h => by
-    simp only [Ty.field] at h
+theorem field_map_eq {l : String} {f : String → Ty} {s : Ty} :
+    ∀ {L : List String}, Ty.field l L (L.map f) = some s → s = f l
+  | [], h => by simp [Ty.field] at h
+  | l' :: L, h => by
+    simp only [List.map_cons, Ty.field] at h
+    split at h
+    · rename_i e; cases h; subst e; rfl
+    · exact field_map_eq h
+
+theorem Ty.field_map_none {l : String} {f : String → Ty} :
+    ∀ {L : List String}, Ty.field l L (L.map f) = none → l ∉ L
+  | [], _ => by simp
+  | l' :: L, h => by
+    simp only [List.map_cons, Ty.field] at h
     split at h
     · cases h
-    · rename_i e
-      have hne : (l == l') = false := by simpa using Ne.symm e
-      simp only [List.zip_cons_cons, List.lookup_cons, hne]
-      exact field_none_lookup (by simpa using hl) h
+    · rename_i hne
+      simp only [List.mem_cons, not_or]
+      exact ⟨fun e => hne e.symm, Ty.field_map_none h⟩
 
-/-- An object literal's cell holds the contents of its record type. -/
-theorem objFields_sound {k : Nat} {W : World} {L ls : List String} {τs absent : List Ty}
-    {vs : List Value} (hlen : τs.length = ls.length) (hvs : VList k W τs vs) :
-    CellV k W (.obj (.record L (objSlots L ls τs absent))) (objFields ls vs) := by
+theorem Ty.field_none_length {l : String} : ∀ {ls : List String} {fs fs' : List Ty},
+    fs.length = fs'.length → Ty.field l ls fs = none → Ty.field l ls fs' = none
+  | [], _, _, _, _ => rfl
+  | _ :: _, [], [], _, _ => rfl
+  | _ :: _, [], _ :: _, hl, _ => by simp at hl
+  | _ :: _, _ :: _, [], hl, _ => by simp at hl
+  | l' :: ls, f :: fs, f' :: fs', hl, h => by
+    simp only [Ty.field] at h ⊢
+    split
+    · simp_all
+    · simp only [*, ite_false] at h
+      exact Ty.field_none_length (by simpa using hl) h
+
+/-- A slot of an object literal's or a class instance's type: its last
+field's for the label, or absent. -/
+theorem objSlots_field {l : String} {s : Ty} {L ls : List String} {ss : List Ty}
+    (h : Ty.field l L (objSlots L ls ss) = some s) (hlen : ls.length = ss.length) :
+    s = (((ls.zip ss).reverse).lookup l).getD .absSlot := by
+  rw [field_map_eq h, Ty.field_eq_lookup, zip_reverse hlen]
+
+theorem VList.mem_zip {k : Nat} {W : World} : ∀ {τs : List Ty} {vs : List Value} {τ : Ty}
+    {v : Value}, VList k W τs vs → (τ, v) ∈ τs.zip vs → V k W τ v
+  | [], _, _, _, _, h => by simp at h
+  | _ :: _, [], _, _, _, h => by simp at h
+  | τ' :: τs, v' :: vs, τ, v, hvs, h => by
+    rw [VList_cons] at hvs
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl⟩ | h
+    · exact hvs.1
+    · exact VList.mem_zip hvs.2 h
+
+theorem VList.of_mem_zip {k : Nat} {W : World} : ∀ {τs : List Ty} {vs : List Value},
+    τs.length = vs.length → (∀ x ∈ τs.zip vs, V k W x.1 x.2) → VList k W τs vs
+  | [], [], _, _ => by simp
+  | τ :: τs, v :: vs, hl, h => by
+    rw [VList_cons]
+    exact ⟨h (τ, v) (by simp), VList.of_mem_zip (by simpa using hl)
+      (fun x hx => h x (by simp [hx]))⟩
+  | [], _ :: _, hl, _ | _ :: _, [], hl, _ => by simp at hl
+
+theorem zip_zip_mem {α β γ : Type} : ∀ {xs : List α} {ys : List β} {zs : List γ} {x : α} {y : β}
+    {z : γ}, (x, y, z) ∈ xs.zip (ys.zip zs) → (x, y) ∈ xs.zip ys ∧ (y, z) ∈ ys.zip zs ∧
+      (x, z) ∈ xs.zip zs
+  | [], _, _, _, _, _, h => by simp at h
+  | _ :: _, [], _, _, _, _, h => by simp at h
+  | _ :: _, _ :: _, [], _, _, _, h => by simp at h
+  | a :: xs, b :: ys, c :: zs, x, y, z, h => by
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl, rfl⟩ | h
+    · simp
+    · obtain ⟨h₁, h₂, h₃⟩ := zip_zip_mem h
+      exact ⟨List.mem_cons_of_mem _ h₁, List.mem_cons_of_mem _ h₂, List.mem_cons_of_mem _ h₃⟩
+
+theorem zip_member_eq : ∀ (ks : List FieldKind) (τs ss : List Ty) (vs : List Value),
+    ks.length = τs.length → τs.length = ss.length → ss.length = vs.length →
+    (ks.map FieldKind.member).zip vs = (ks.zip (τs.zip (ss.zip vs))).map
+      (fun w => (w.1.member, w.2.2.2))
+  | [], _, _, _, _, _, _ => by simp
+  | k :: ks, τ :: τs, s :: ss, v :: vs, h₁, h₂, h₃ => by
+    simp [zip_member_eq ks τs ss vs (by simpa using h₁) (by simpa using h₂) (by simpa using h₃)]
+  | _ :: _, [], _, _, h₁, _, _ | _ :: _, _ :: _, [], _, _, h₂, _
+  | _ :: _, _ :: _, _ :: _, [], _, _, h₃ => by simp at *
+
+theorem zip_slot_eq : ∀ (ks : List FieldKind) (τs ss : List Ty) (vs : List Value),
+    ks.length = τs.length → τs.length = ss.length → ss.length = vs.length →
+    ss = (ks.zip (τs.zip (ss.zip vs))).map (fun w => w.2.2.1)
+  | [], τs, ss, _, h₁, h₂, _ => by
+    have : ss.length = 0 := by simp at h₁; omega
+    rw [List.eq_nil_of_length_eq_zero this]; rfl
+  | k :: ks, τ :: τs, s :: ss, v :: vs, h₁, h₂, h₃ => by
+    simp [← zip_slot_eq ks τs ss vs (by simpa using h₁) (by simpa using h₂) (by simpa using h₃)]
+  | _ :: _, [], _, _, h₁, _, _ | _ :: _, _ :: _, [], _, _, h₂, _
+  | _ :: _, _ :: _, _ :: _, [], _, _, h₃ => by simp at *
+
+theorem zip4_mem {α β γ δ : Type} : ∀ {as : List α} {bs : List β} {cs : List γ} {ds : List δ}
+    {a : α} {b : β} {c : γ} {d : δ}, (a, b, c, d) ∈ as.zip (bs.zip (cs.zip ds)) →
+      (a, b, c) ∈ as.zip (bs.zip cs) ∧ (b, d) ∈ bs.zip ds
+  | [], _, _, _, _, _, _, _, h => by simp at h
+  | _ :: _, [], _, _, _, _, _, _, h => by simp at h
+  | _ :: _, _ :: _, [], _, _, _, _, _, h => by simp at h
+  | _ :: _, _ :: _, _ :: _, [], _, _, _, _, h => by simp at h
+  | a' :: as, b' :: bs, c' :: cs, d' :: ds, a, b, c, d, h => by
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl, rfl, rfl⟩ | h
+    · simp
+    · obtain ⟨h₁, h₂⟩ := zip4_mem h
+      exact ⟨List.mem_cons_of_mem _ h₁, List.mem_cons_of_mem _ h₂⟩
+
+/-- Functions of equal `this` types are equal. -/
+theorem TyEq.fn_this {θ θ' : Ty} {τs : List Ty} {ρ : Ty} (h : TyEq θ θ') :
+    TyEq (.fn θ τs ρ) (.fn θ' τs ρ) :=
+  TyEq.app rfl (fun x hx => by
+    simp only [List.zip_cons_cons, List.mem_cons] at hx
+    rcases hx with rfl | rfl | hx
+    · exact h
+    · exact TyEq.refl _
+    · obtain ⟨a, b⟩ := x
+      have : a = b := by
+        clear h
+        induction τs with
+        | nil => cases hx
+        | cons t ts ih =>
+          simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at hx
+          rcases hx with ⟨rfl, rfl⟩ | hx
+          · rfl
+          · exact ih hx
+      subst this; exact TyEq.refl _)
+
+/-- An object literal's cell holds the contents of its record type: each
+field the last of its label, as its kind says. -/
+theorem objFields_sound {k : Nat} {W : World} {L ls : List String} {ks : List FieldKind}
+    {τs ss : List Ty} {vs : List Value} (hks : ks.length = ls.length)
+    (hτs : τs.length = ls.length) (hss : ss.length = ls.length) (hL : ∀ l ∈ ls, l ∈ L)
+    (hvs : VList k W τs vs)
+    (hfs : ∀ x ∈ ks.zip (τs.zip ss), FieldSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2) :
+    CellV k W (.obj (.record L (objSlots L ls ss))) (objFields ls ks vs) := by
+  have hvl := hvs.length
+  -- One list of each field's kind, type, slot and value.
+  let ws := ks.zip (τs.zip (ss.zip vs))
+  have hws : ws.length = ls.length := by simp [ws, hks, hτs, hss, hvl]
+  have hw1 : (ks.map FieldKind.member).zip vs = ws.map (fun w => (w.1.member, w.2.2.2)) :=
+    zip_member_eq ks τs ss vs (by omega) (by omega) (by omega)
+  have hw2 : ss = ws.map (fun w => w.2.2.1) :=
+    zip_slot_eq ks τs ss vs (by omega) (by omega) (by omega)
+  have hcell : ls.zip ((ks.map FieldKind.member).zip vs) =
+      (ls.zip ws).map (Prod.map id (fun w => (w.1.member, w.2.2.2))) := by
+    rw [hw1, List.zip_map_right]
+  have hslots : ls.zip ss = (ls.zip ws).map (Prod.map id (fun w => w.2.2.1)) := by
+    conv => lhs; rw [hw2]
+    rw [List.zip_map_right]
   rw [CellV_obj]
-  have hzip : (ls.zip vs).reverse = ls.reverse.zip vs.reverse := by
-    simp only [List.zip_eq_zipWith]
-    exact List.reverse_zipWith (by simp [hvs.length, hlen])
-  refine ⟨_, rfl, fun l s hl => ?_⟩
-  rcases objSlots_field_cases hl with ⟨σ, rfl⟩ | ⟨σ, rfl, hf⟩
-  · obtain ⟨v, h₁, h₂⟩ := field_lookup hvs.reverse (objSlots_field hl)
-    exact .inl ⟨σ, TyEq.refl _, v, by rw [hzip]; exact h₁, h₂⟩
-  · refine .inr ⟨σ, TyEq.refl _, ?_⟩
-    rw [hzip]
-    exact field_none_lookup (by simp [hvs.length]) hf
+  refine ⟨_, rfl, fun l s hl => ?_, fun l hl => ?_⟩
+  rotate_left
+  · have hlL := Ty.field_map_none hl
+    refine lookup_eq_none (fun x hx e => hlL (hL _ ?_))
+    rw [← e]; exact (List.of_mem_zip (List.mem_reverse.mp hx)).1
+  have hs := objSlots_field hl (by rw [hss])
+  rw [hslots, ← List.map_reverse,
+    lookup_map_snd (fun w : FieldKind × Ty × Ty × Value => w.2.2.1)] at hs
+  have hrt : ((ls.zip ((ks.map FieldKind.member).zip vs)).reverse).lookup l =
+      (((ls.zip ws).reverse).lookup l).map (fun w => (w.1.member, w.2.2.2)) := by
+    rw [hcell, ← List.map_reverse,
+      lookup_map_snd (fun w : FieldKind × Ty × Ty × Value => (w.1.member, w.2.2.2))]
+  cases hw : ((ls.zip ws).reverse).lookup l with
+  | none =>
+    rw [hw] at hs hrt; simp only [Option.map_none, Option.getD_none] at hs
+    subst hs
+    exact .inr (.inr (.inr ⟨_, _, TyEq.refl _, hrt⟩))
+  | some w =>
+    rw [hw] at hs hrt; simp only [Option.map_some, Option.getD_some] at hs hrt
+    subst hs
+    obtain ⟨kf, τ, sl, v⟩ := w
+    have hmem : (kf, τ, sl, v) ∈ ws := (List.of_mem_zip (List.mem_reverse.mp (lookup_mem hw))).2
+    obtain ⟨hm₁, hm₂⟩ := zip4_mem hmem
+    have hv := hvs.mem_zip hm₂
+    have hfsl : FieldSlot (.record L (objSlots L ls ss)) kf τ sl := hfs _ hm₁
+    cases hfsl with
+    | data => exact .inl ⟨τ, TyEq.refl _, v, hrt, hv⟩
+    | method he => exact .inl ⟨_, TyEq.refl _, v, hrt, hv⟩
+    | getter he =>
+      exact .inr (.inl ⟨_, TyEq.refl _, v, hrt, V.tyEq _ (TyEq.fn_this he) hv⟩)
 
 /-- The cell of an object of a record type: its world gives it a record
 type over the same labels with pairwise equal slots. -/
@@ -806,26 +973,81 @@ theorem obj_cell {k : Nat} {W : World} {h : Heap} {ls : List String} {fs : List 
     obtain ⟨rfl, hl, hz⟩ := TyEq.app_iff.mp hτc
     exact ⟨ℓ, args, cv, rfl, hℓ, hcv, hsv, hl, hz⟩
 
-/-- Reading a field: an instance of `HasProp` says the object's contents
-have it, and a type variable has no values. -/
-theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c : Nat}
+/-- Functions of equal result types are equal. -/
+theorem TyEq.fn_ret {θ : Ty} {τs : List Ty} {ρ ρ' : Ty} (h : TyEq ρ ρ') :
+    TyEq (.fn θ τs ρ) (.fn θ τs ρ') :=
+  TyEq.app rfl (fun x hx => by
+    simp only [List.zip_cons_cons, List.mem_cons] at hx
+    rcases hx with rfl | rfl | hx
+    · exact TyEq.refl _
+    · exact h
+    · obtain ⟨a, b⟩ := x
+      have : a = b := by
+        clear h
+        induction τs with
+        | nil => cases hx
+        | cons t ts ih =>
+          simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at hx
+          rcases hx with ⟨rfl, rfl⟩ | hx
+          · rfl
+          · exact ih hx
+      subst this; exact TyEq.refl _)
+
+/-- An object, as a value of its cell's type. -/
+theorem V_obj_cell {k : Nat} {W : World} {ℓ : Nat} {ls : List String} {fs : List Ty}
+    (hℓ : W[ℓ]? = some (.obj (.record ls fs))) : V k W (.record ls fs) (.obj ℓ) :=
+  V_record.mpr ⟨ℓ, _, rfl, hℓ, TyEq.refl _⟩
+
+/-- Calling a getter of an object, a function from the object's type, is
+safe. -/
+theorem getter_call_sound {k : Nat} {W : World} {h : Heap} {T σ : Ty} {g vo : Value}
+    {R : Option Ty} (hg : V k W (.fn T [] σ) g) (hvo : V k W T vo) (hH : HeapOK k W h) :
+    Safe (call k h g vo []) k W σ R :=
+  Lands.safe (V_fn.mp hg _ (Nat.le_refl k) W (List.prefix_refl W) h vo [] rfl
+    (fun _ hi => hH.mono (by omega)) (fun _ hi => hvo.mono (by omega) (List.prefix_refl W))
+    (fun _ _ => by simp))
+
+/-- Reading a field that is present, of any kind, from an object of a
+record type: a getter called gives a value of its type. -/
+theorem readSlot_sound {l : String} {ls : List String} {fs : List Ty} {s k σ : Ty} {v : Value}
+    {c : Nat} {W : World} {h : Heap} {R : Option Ty}
+    (hf : Ty.field l ls fs = some s) (hs : TyEq s (.slot .pre k σ))
+    (hv : V c W (.record ls fs) v) (hH : HeapOK c W h) :
+    Safe (getter c h v (v.read h l)) c W σ R := by
+  obtain ⟨ℓ, fs', cv, rfl, hℓ, hcv, hsv, hl, hz⟩ := obj_cell hv hH
+  obtain ⟨s', hs', hss'⟩ := Ty.field_tyEq hl hz hf
+  obtain ⟨fsv, rfl, hfs, -⟩ := CellV_obj.mp hsv
+  have hself := V_obj_cell (k := c) hℓ
+  have hss := hs.symm.trans hss'
+  rcases hfs l s' hs' with ⟨σ'', h₁, v', h₂, h₃⟩ | ⟨σ'', h₁, g, h₂, h₃⟩ |
+      ⟨σ'', h₁, ⟨v', h₂, h₃⟩ | ⟨g, h₂, h₃⟩⟩ | ⟨k', σ'', h₁, -⟩
+  · have hσσ := (TyEq.slot (hss.trans h₁)).2.2
+    simp only [Value.read, hcv, readMember, h₂, Option.getD_some, getter]
+    exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσσ.symm h₃)
+  · have hσσ := (TyEq.slot (hss.trans h₁)).2.2
+    simp only [Value.read, hcv, readMember, h₂, Option.getD_some, getter]
+    exact getter_call_sound (V.tyEq _ (TyEq.fn_ret hσσ.symm) h₃) hself hH
+  · have hσσ := (TyEq.slot (hss.trans h₁)).2.2
+    simp only [Value.read, hcv, readMember, h₂, Option.getD_some, getter]
+    exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσσ.symm h₃)
+  · have hσσ := (TyEq.slot (hss.trans h₁)).2.2
+    simp only [Value.read, hcv, readMember, h₂, Option.getD_some, getter]
+    exact getter_call_sound (V.tyEq _ (TyEq.fn_ret hσσ.symm) h₃) hself hH
+  · exact absurd (TyEq.slot (hss.trans h₁)).1 TyEq.pre_abs
+
+/-- Reading a property: an instance of `HasProp` says the object's contents
+have it, a getter called gives a value of its type, and a type variable has
+no values. -/
+theorem read_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c : Nat}
     {W : World} {h : Heap} {R : Option Ty}
     (hp : Entails C ⟨.hasProp l, [τ, σ]⟩) (hC : HoldsOrVar C) (hv : V c W τ v)
-    (hH : HeapOK c W h) : Safe (v.getProp h l, c, h) c W σ R := by
+    (hH : HeapOK c W h) : Safe (getter c h v (v.read h l)) c W σ R := by
   rcases hp.holdsOrVar hC with ⟨q, hq, hi⟩ | ⟨a, _, he⟩
   · cases hi
-    case hasProp l' ls fs σ' hf =>
+    case hasProp l' ls fs k σ' hf =>
       obtain ⟨hcls, hτ, hσ⟩ := PredEq.two hq
       cases hcls
-      obtain ⟨ℓ, fs', cv, rfl, -, hcv, hsv, hl, hz⟩ := obj_cell (V.tyEq _ hτ hv) hH
-      obtain ⟨s', hs', hss'⟩ := Ty.field_tyEq hl hz hf
-      obtain ⟨fsv, rfl, hfs⟩ := CellV_obj.mp hsv
-      rcases hfs l s' hs' with ⟨σ'', hσ'', v', h₁, h₂⟩ | ⟨σ'', hσ'', -⟩
-      · simp only [Value.getProp, hcv, h₁]
-        have := (TyEq.slot (hss'.trans hσ'')).2
-        exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH
-          (V.tyEq _ (hσ.trans this).symm h₂)
-      · exact absurd (TyEq.slot (hss'.trans hσ'')).1 TyEq.pre_abs
+      exact (readSlot_sound hf (TyEq.refl _) (V.tyEq _ hτ hv) hH).tyEq hσ.symm
     case lengthArray τq =>
       obtain ⟨hcls, hτ, hσ⟩ := PredEq.two hq
       cases hcls
@@ -834,13 +1056,13 @@ theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c :
       obtain ⟨ℓ, τc, rfl, hℓ, -⟩ := hv'
       obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
       obtain ⟨vs, rfl, -⟩ := CellV_arr.mp hsv
-      simp only [Value.getProp, hcv, ite_true]
+      simp only [Value.read, hcv, ite_true, getter]
       exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσ.symm (by simp))
     case lengthString =>
       obtain ⟨hcls, hτ, hσ⟩ := PredEq.two hq
       cases hcls
       obtain ⟨s, rfl⟩ := V_string.mp (V.tyEq _ hτ hv)
-      simp only [Value.getProp, ite_true]
+      simp only [Value.read, ite_true, getter]
       exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσ.symm (by simp))
     all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
   · simp only [List.cons.injEq] at he; rw [he.1] at hv; simp at hv
@@ -849,56 +1071,85 @@ theorem getProp_sound {C : List Pred} {l : String} {τ σ : Ty} {v : Value} {c :
 theorem TyEq.record_array {ls : List String} {fs : List Ty} {σ : Ty} :
     ¬ TyEq (.record ls fs) (.array σ) := fun h => by cases TyEq.con h
 
-/-- Writing a field: the object's contents keep their type. -/
+theorem lookup_filter_ne {α : Type} {l l' : String} (e : l' ≠ l) :
+    ∀ fs : List (String × α), (fs.filter (·.1 != l)).lookup l' = fs.lookup l'
+  | [] => rfl
+  | (a, v) :: fs => by
+    by_cases ha : a = l
+    · subst ha
+      have : (l' == a) = false := by simpa using e
+      simp [List.lookup_cons, this, lookup_filter_ne e fs]
+    · simp only [List.filter_cons, bne_iff_ne, ne_eq, ha, not_false_eq_true,
+        ite_true, List.lookup_cons]
+      split <;> simp_all [lookup_filter_ne e fs]
+
+/-- Writing a field that holds a value: the object's contents keep their
+type. -/
 theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} {c : Nat}
     {W : World} {h : Heap} {R : Option Ty}
-    (hp : Entails C ⟨.hasProp l, [τ, σ]⟩) (hw : Entails C ⟨.fieldWrite, [τ]⟩) (hC : HoldsOrVar C)
-    (hvo : V c W τ vo) (hvv : V c W σ vv) (hH : HeapOK c W h) :
+    (hp : Entails C ⟨.hasProp l, [τ, σ]⟩) (hw : Entails C ⟨.fieldWrite l, [τ]⟩)
+    (hC : HoldsOrVar C) (hvo : V c W τ vo) (hvv : V c W σ vv) (hH : HeapOK c W h) :
     Safe ((vo.setProp h l vv).1, c, (vo.setProp h l vv).2) c W σ R := by
-  -- The receiver is a record (`FieldWrite`).
-  have hrec : ∃ ls fs, TyEq τ (.record ls fs) := by
+  -- The receiver is a record with the field holding a value (`FieldWrite`).
+  obtain ⟨ls, fs, σw, hτr, hfw⟩ : ∃ ls fs σw, TyEq τ (.record ls fs) ∧
+      Ty.field l ls fs = some (.slot .pre .data σw) := by
     rcases hw.holdsOrVar hC with ⟨q, hq, hi⟩ | ⟨a, _, he⟩
     · cases hi
-      case writeRecord ls fs => exact ⟨ls, fs, (PredEq.one hq).2⟩
+      case writeRecord ls fs σw hf =>
+        obtain ⟨hcls, hτ'⟩ := PredEq.one hq
+        cases hcls
+        exact ⟨ls, fs, σw, hτ', hf⟩
       all_goals first
         | (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
         | exact absurd (V.tyEq _ (PredEq.one hq).2 hvo) (by rw [V_array]; simp)
     · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
-  obtain ⟨lsr, fsr, hτr⟩ := hrec
-  rcases hp.holdsOrVar hC with ⟨q, hq, hi⟩ | ⟨a, _, he⟩
-  · cases hi
-    case hasProp l' ls fs σ' hf =>
-      obtain ⟨hcls, hτ, hσ⟩ := PredEq.two hq
-      cases hcls
-      obtain ⟨ℓ, fs', cv, rfl, hℓ, hcv, hsv, hl, hz⟩ := obj_cell (V.tyEq _ hτ hvo) hH
-      obtain ⟨s', hs', hss'⟩ := Ty.field_tyEq hl hz hf
-      obtain ⟨fsv, rfl, hfs⟩ := CellV_obj.mp hsv
-      simp only [Value.setProp, hcv]
-      refine Safe.ok (Nat.le_refl c) (List.prefix_refl W) (hH.set hℓ ?_) hvv
-      rw [CellV_obj]
-      refine ⟨_, rfl, fun l'' s'' hl'' => ?_⟩
-      by_cases e : l'' = l
-      · subst e
-        rw [hs'] at hl''
-        cases hl''
-        refine .inl ⟨σ, ?_, vv, by simp, hvv⟩
-        exact hss'.symm.trans (TyEq.slot_mk (TyEq.refl _) hσ.symm)
-      · have hne : (l'' == l) = false := by simpa using e
-        rcases hfs l'' s'' hl'' with ⟨σ'', h₁, v', h₂, h₃⟩ | ⟨σ'', h₁, h₂⟩
-        · refine .inl ⟨σ'', h₁, v', ?_, h₃⟩
-          simp only [List.lookup_cons, hne]
-          rw [lookup_filter_ne e]
-          exact h₂
-        · refine .inr ⟨σ'', h₁, ?_⟩
-          simp only [List.lookup_cons, hne]
-          rw [lookup_filter_ne e]
-          exact h₂
-    case lengthArray τq =>
-      exact absurd ((hτr.symm.trans (PredEq.two hq).2.1)) TyEq.record_array
-    case lengthString =>
-      exact absurd ((hτr.symm.trans (PredEq.two hq).2.1)) (fun h => by cases TyEq.con h)
-    all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
-  · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
+  -- The field's type is the value's (`HasProp`).
+  have hσw : TyEq σ σw := by
+    rcases hp.holdsOrVar hC with ⟨q, hq, hi⟩ | ⟨a, _, he⟩
+    · cases hi
+      case hasProp l' ls₂ fs₂ k σ₂ hf₂ =>
+        obtain ⟨hcls, hτ₂, hσ⟩ := PredEq.two hq
+        cases hcls
+        obtain ⟨hc, hl, hz⟩ := TyEq.app_iff.mp (hτ₂.symm.trans hτr)
+        cases hc
+        obtain ⟨s, hs, hss⟩ := Ty.field_tyEq hl hz hf₂
+        rw [hfw] at hs; cases hs
+        exact hσ.trans (TyEq.slot hss).2.2
+      case lengthArray => exact absurd (hτr.symm.trans (PredEq.two hq).2.1) TyEq.record_array
+      case lengthString =>
+        exact absurd (hτr.symm.trans (PredEq.two hq).2.1) (fun h => by cases TyEq.con h)
+      all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
+    · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
+  obtain ⟨ℓ, fs', cv, rfl, hℓ, hcv, hsv, hl, hz⟩ := obj_cell (V.tyEq _ hτr hvo) hH
+  obtain ⟨s', hs', hss'⟩ := Ty.field_tyEq hl hz hfw
+  obtain ⟨fsv, rfl, hfs, hfn⟩ := CellV_obj.mp hsv
+  -- The object holds the field as a value.
+  obtain ⟨σ'', h₁, v', h₂, -⟩ : ∃ σ'', TyEq s' (.slot .pre .data σ'') ∧ ∃ v',
+      fsv.lookup l = some (.data, v') ∧ V c W σ'' v' := by
+    rcases hfs l s' hs' with h | ⟨σ'', h₁, -⟩ | ⟨σ'', h₁, -⟩ | ⟨k', σ'', h₁, -⟩
+    · exact h
+    · exact absurd (TyEq.slot (hss'.trans h₁)).2.1 (TyEq.con_ne (by decide))
+    · exact absurd (TyEq.slot (hss'.trans h₁)).2.1 (TyEq.con_ne (by decide))
+    · exact absurd (TyEq.slot (hss'.trans h₁)).1 TyEq.pre_abs
+  simp only [Value.setProp, hcv, h₂]
+  refine Safe.ok (Nat.le_refl c) (List.prefix_refl W) (hH.set hℓ ?_) hvv
+  rw [CellV_obj]
+  refine ⟨_, rfl, fun l'' s'' hl'' => ?_, fun l'' hl'' => ?_⟩
+  rotate_left
+  · have e : l'' ≠ l := fun e => by rw [e, hs'] at hl''; cases hl''
+    have hne : (l'' == l) = false := by simpa using e
+    simp only [List.lookup_cons, hne]
+    rw [lookup_filter_ne e fsv]; exact hfn l'' hl''
+  by_cases e : l'' = l
+  · subst e
+    rw [hs'] at hl''
+    cases hl''
+    refine .inl ⟨σ'', h₁, vv, by simp, ?_⟩
+    exact V.tyEq _ (hσw.trans (TyEq.slot (hss'.trans h₁)).2.2) hvv
+  · have hne : (l'' == l) = false := by simpa using e
+    have hlk : (((l, MemberKind.data, vv) :: fsv.filter (·.1 != l)).lookup l'') = fsv.lookup l'' := by
+      simp only [List.lookup_cons, hne]; exact lookup_filter_ne e fsv
+    unfold MemberP; rw [hlk]; exact hfs l'' s'' hl''
 
 /-- A fault is safe: the program stops there. -/
 theorem Safe.fault {f : Fault} {c : Nat} {W : World} {h : Heap} {τ : Ty} {R : Option Ty}
@@ -921,7 +1172,7 @@ elements of the type, and an index it hasn't is a fault. -/
 theorem index_sound {C : List Pred} {τ ι σ : Ty} {vo vi : Value} {c : Nat} {W : World}
     {h : Heap} {R : Option Ty} (hp : Entails C ⟨.indexable, [τ, ι, σ]⟩) (hC : HoldsOrVar C)
     (hvo : V c W τ vo) (hvi : V c W ι vi) (hH : HeapOK c W h) :
-    Safe (vo.index h vi, c, h) c W σ R := by
+    Safe (getter c h vo (vo.index h vi)) c W σ R := by
   rcases hp.holdsOrVar hC with ⟨q, hq, hi⟩ | ⟨a, _, he⟩
   · cases hi
     case indexArray τq =>
@@ -935,18 +1186,20 @@ theorem index_sound {C : List Pred} {τ ι σ : Ty} {vo vi : Value} {c : Nat} {W
       simp only [Value.index, hcv]
       split
       · rename_i v hv
+        simp only [getter]
         obtain ⟨k, -, hk⟩ := Option.bind_eq_some_iff.mp hv
         exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH
           (V.tyEq _ (hσ.trans hτc).symm (hvs v (List.mem_of_getElem? hk)))
-      · exact Safe.fault hH
+      · simp only [getter]; exact Safe.fault hH
     case indexString =>
       obtain ⟨-, hτ, hι, hσ⟩ := PredEq.three hq
       obtain ⟨s, rfl⟩ := V_string.mp (V.tyEq _ hτ hvo)
       obtain ⟨n, rfl⟩ := V_number.mp (V.tyEq _ hι hvi)
       simp only [Value.index]
       split
-      · exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσ.symm (by simp))
-      · exact Safe.fault hH
+      · simp only [getter]
+        exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσ.symm (by simp))
+      · simp only [getter]; exact Safe.fault hH
     all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
   · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
 
@@ -1000,111 +1253,377 @@ theorem setIndex_sound {C : List Pred} {τ ι σ : Ty} {vo vi vv : Value} {c : N
     all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
   · simp only [List.cons.injEq] at he; rw [he.1] at hvo; simp at hvo
 
+/-! ### Spread -/
+
+theorem lookup_dedup {α : Type} {l : String} :
+    ∀ xs : List (String × α), (dedupLabels xs).lookup l = xs.lookup l
+  | [] => rfl
+  | (a, v) :: xs => by
+    simp only [dedupLabels]
+    cases e : l == a
+    · have hne : l ≠ a := by simpa using e
+      simp only [List.lookup_cons, e]
+      rw [lookup_filter_ne hne, lookup_dedup xs]
+    · simp [List.lookup_cons, e]
+
+theorem dedup_nodup {α : Type} : ∀ xs : List (String × α), ((dedupLabels xs).map (·.1)).Nodup
+  | [] => List.nodup_nil
+  | (a, v) :: xs => by
+    simp only [dedupLabels, List.map_cons, List.nodup_cons]
+    refine ⟨fun hm => ?_, List.Nodup.sublist ((List.filter_sublist ..).map _) (dedup_nodup xs)⟩
+    obtain ⟨x, hx, e⟩ := List.mem_map.mp hm
+    have := (List.mem_filter.mp hx).2
+    simp [e] at this
+
+/-- What a spread copies of an object's property `l`, of the slot `s` in
+its type: a field that holds a value, or a getter, gives a field holding a
+value of its type; a prototype member or an absent field, nothing. -/
+def CopyP (k : Nat) (W : World) (cs : List (String × MemberKind × Value)) (l : String)
+    (s : Ty) : Prop :=
+  (∃ σ, (TyEq s (.slot .pre .data σ) ∨ TyEq s (.slot .pre .getter σ)) ∧
+    ∃ v, cs.lookup l = some (.data, v) ∧ V k W σ v) ∨
+  (((∃ σ, TyEq s (.slot .pre .proto σ)) ∨ ∃ k' σ, TyEq s (.slot .abs k' σ)) ∧ cs.lookup l = none)
+
+theorem CopyP.tyEq {k : Nat} {W : World} {cs : List (String × MemberKind × Value)} {l : String}
+    {s s' : Ty} (h : CopyP k W cs l s) (e : TyEq s s') : CopyP k W cs l s' := by
+  rcases h with ⟨σ, h₁ | h₁, v, h₂, h₃⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, h₂⟩
+  · exact .inl ⟨σ, .inl (e.symm.trans h₁), v, h₂, h₃⟩
+  · exact .inl ⟨σ, .inr (e.symm.trans h₁), v, h₂, h₃⟩
+  · exact .inr ⟨.inl ⟨σ, e.symm.trans h₁⟩, h₂⟩
+  · exact .inr ⟨.inr ⟨k', σ, e.symm.trans h₁⟩, h₂⟩
+
+theorem CopyP.mono {j k : Nat} {W W' : World} {cs : List (String × MemberKind × Value)}
+    {l : String} {s : Ty} (hjk : j ≤ k) (hW : W <+: W') (h : CopyP k W cs l s) :
+    CopyP j W' cs l s := by
+  rcases h with ⟨σ, h₁, v, h₂, h₃⟩ | h
+  · exact .inl ⟨σ, h₁, v, h₂, h₃.mono hjk hW⟩
+  · exact .inr h
+
+/-- A safe outcome of copying an object's properties: the copies, which
+`Q` accepts, or an outcome other than a value that is safe. -/
+def SafeFields (p : RanFields) (k : Nat) (W : World)
+    (Q : Nat → World → List (String × MemberKind × Value) → Prop) : Prop :=
+  p.2.1 ≤ k ∧ match p.1 with
+    | .ok cs => ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧ Q p.2.1 W' cs
+    | .error r => r = .timeout ∨ ∃ W', W <+: W' ∧ HeapOK p.2.1 W' p.2.2 ∧ r.Abrupt
+
+theorem SafeFields.imp {p : RanFields} {k : Nat} {W : World}
+    {Q Q' : Nat → World → List (String × MemberKind × Value) → Prop}
+    (h : SafeFields p k W Q) (hQ : ∀ c W cs, Q c W cs → Q' c W cs) : SafeFields p k W Q' := by
+  obtain ⟨r, c, hp⟩ := p
+  obtain ⟨hc, h⟩ := h
+  cases r with
+  | ok cs => obtain ⟨W', hW, hH, hq⟩ := h; exact ⟨hc, W', hW, hH, hQ _ _ _ hq⟩
+  | error r => exact ⟨hc, h⟩
+
+theorem SafeFields.weaken {p : RanFields} {c k : Nat} {W W' : World}
+    {Q : Nat → World → List (String × MemberKind × Value) → Prop}
+    (h : SafeFields p c W' Q) (hc : c ≤ k) (hW : W <+: W') : SafeFields p k W Q := by
+  obtain ⟨r, c', hp⟩ := p
+  obtain ⟨hc', h⟩ := h
+  refine ⟨Nat.le_trans hc' hc, ?_⟩
+  cases r with
+  | ok cs => obtain ⟨W'', hW', hH, hq⟩ := h; exact ⟨W'', hW.trans hW', hH, hq⟩
+  | error r =>
+    rcases h with h | ⟨W'', hW', hH, ha⟩
+    · exact .inl h
+    · exact .inr ⟨W'', hW.trans hW', hH, ha⟩
+
+theorem SafeFields.of_error {r : Result} {c k : Nat} {h : Heap} {W : World}
+    {Q Q' : Nat → World → List (String × MemberKind × Value) → Prop}
+    (hs : SafeFields (.error r, c, h) k W Q) : SafeFields (.error r, c, h) k W Q' := hs
+
+/-- Continuing safe copies with a safe continuation is safe. -/
+theorem Safe.bindFields {p : RanFields} {k : Nat} {W : World} {τ : Ty} {R : Option Ty}
+    {Q : Nat → World → List (String × MemberKind × Value) → Prop}
+    {K : List (String × MemberKind × Value) → Nat → Heap → Ran} (h : SafeFields p k W Q)
+    (hK : ∀ cs W', p.1 = .ok cs → W <+: W' → HeapOK p.2.1 W' p.2.2 → Q p.2.1 W' cs →
+      Safe (K cs p.2.1 p.2.2) p.2.1 W' τ R) :
+    Safe (Inty.bindFields p K) k W τ R := by
+  obtain ⟨r, c, hp⟩ := p
+  obtain ⟨hc, h⟩ := h
+  cases r with
+  | ok cs =>
+    obtain ⟨W', hW, hH, hq⟩ := h
+    exact (hK cs W' rfl hW hH hq).weaken hc hW
+  | error r =>
+    simp only [Inty.bindFields]
+    rcases h with rfl | ⟨W', hW, hH, habr⟩
+    · exact ⟨hc, .inl rfl⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
+
+/-- What copying the properties `xs` of an object, of the record type
+`record ls ss`, gives: for each label, nothing if `xs` has no own property
+of it, and otherwise a field holding a value of the type of the object's
+field, which holds a value or is a getter. -/
+def CopiedP (ls : List String) (ss : List Ty) (xs : List (String × MemberKind × Value))
+    (c : Nat) (W : World) (cs : List (String × MemberKind × Value)) : Prop :=
+  (cs.map (·.1)).Nodup ∧ ∀ l,
+    (cs.lookup l = none ∧ ∀ x ∈ xs, x.1 = l → x.2.1.isOwn = false) ∨
+    ((∃ x ∈ xs, x.1 = l ∧ x.2.1.isOwn = true) ∧ ∃ s σ v, Ty.field l ls ss = some s ∧
+      (TyEq s (.slot .pre .data σ) ∨ TyEq s (.slot .pre .getter σ)) ∧
+      cs.lookup l = some (.data, v) ∧ V c W σ v)
+
+/-- Copying an object's properties, each read from the heap as it is
+reached: a getter is called with the object as `this`. -/
+theorem copyOwn_sound {ℓ : Nat} {ls : List String} {ss : List Ty} :
+    ∀ {c : Nat} {W : World} {h : Heap} (xs : List (String × MemberKind × Value)),
+    W[ℓ]? = some (.obj (.record ls ss)) → (xs.map (·.1)).Nodup →
+    (∀ x ∈ xs, x.2.1.isOwn = true → ∃ s σ, Ty.field x.1 ls ss = some s ∧
+      (TyEq s (.slot .pre .data σ) ∨ TyEq s (.slot .pre .getter σ))) →
+    HeapOK c W h → SafeFields (copyOwn c h (.obj ℓ) xs) c W (CopiedP ls ss xs)
+  | c, W, h, [], _, _, _, hH => by
+    simp only [copyOwn]
+    exact ⟨Nat.le_refl c, W, List.prefix_refl W, hH, List.nodup_nil,
+      fun l => .inl ⟨rfl, by simp⟩⟩
+  | c, W, h, (l, m, w) :: xs, hℓ, hnd, hxs, hH => by
+    simp only [List.map_cons, List.nodup_cons] at hnd
+    have hxs' : ∀ x ∈ xs, x.2.1.isOwn = true → ∃ s σ, Ty.field x.1 ls ss = some s ∧
+        (TyEq s (.slot .pre .data σ) ∨ TyEq s (.slot .pre .getter σ)) :=
+      fun x hx => hxs x (List.mem_cons_of_mem _ hx)
+    simp only [copyOwn]
+    by_cases hm : m.isOwn = true
+    · simp only [hm, ite_true]
+      obtain ⟨s, σ, hf, hs⟩ := hxs _ List.mem_cons_self hm
+      have hsafe : Safe (getter c h (.obj ℓ) ((Value.obj ℓ).read h l)) c W σ none := by
+        rcases hs with hs | hs
+        · exact readSlot_sound hf hs (V_obj_cell hℓ) hH
+        · exact readSlot_sound hf hs (V_obj_cell hℓ) hH
+      generalize getter c h (.obj ℓ) ((Value.obj ℓ).read h l) = q at hsafe ⊢
+      obtain ⟨r, c₁, h₁⟩ := q
+      obtain ⟨hc₁, hto | ⟨W₁, hW₁, hH₁, ⟨v, hr, hv⟩ | habr | ⟨v, -, τr, hR, -⟩⟩⟩ := hsafe
+      · simp only at hto; subst hto
+        exact ⟨hc₁, .inl rfl⟩
+      · simp only at hr hc₁ hH₁ hv; subst hr
+        simp only [Nat.min_eq_left hc₁]
+        have ih := copyOwn_sound xs (prefix_getElem? hW₁ hℓ) hnd.2 hxs' hH₁
+        generalize copyOwn c₁ h₁ (.obj ℓ) xs = q at ih ⊢
+        obtain ⟨r', c', h'⟩ := q
+        cases r' with
+        | ok cs =>
+          obtain ⟨hc', W', hW', hH', hcnd, hcs⟩ := ih
+          simp only at hc' hH' hcnd hcs ⊢
+          refine ⟨Nat.le_trans hc' hc₁, W', hW₁.trans hW', hH', ?_, fun l' => ?_⟩
+          · simp only [List.map_cons, List.nodup_cons]
+            refine ⟨fun hl => ?_, hcnd⟩
+            rcases hcs l with ⟨hn, -⟩ | ⟨⟨x, hx, hxl, -⟩, -⟩
+            · exact lookup_ne_none hl hn
+            · exact hnd.1 (List.mem_map.mpr ⟨x, hx, hxl⟩)
+          · by_cases e : l' = l
+            · subst e
+              refine .inr ⟨⟨_, List.mem_cons_self, rfl, hm⟩, s, σ, v, hf, hs, by simp, ?_⟩
+              exact hv.mono hc' hW'
+            · have hne : (l' == l) = false := by simpa using e
+              rcases hcs l' with ⟨hn, hown⟩ | ⟨⟨x, hx, hxl, hxo⟩, hrest⟩
+              · refine .inl ⟨by simp only [List.lookup_cons, hne]; exact hn, fun x hx hxl => ?_⟩
+                rcases List.mem_cons.mp hx with rfl | hx
+                · exact absurd hxl.symm e
+                · exact hown x hx hxl
+              · refine .inr ⟨⟨x, List.mem_cons_of_mem _ hx, hxl, hxo⟩, ?_⟩
+                simp only [List.lookup_cons, hne]; exact hrest
+        | error r' =>
+          exact SafeFields.of_error (ih.weaken hc₁ hW₁)
+      · cases r <;> simp only [Result.Abrupt] at habr <;>
+          exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, trivial⟩⟩
+      · cases hR
+    · simp only [hm, Bool.false_eq_true, ite_false]
+      refine (copyOwn_sound xs hℓ hnd.2 hxs' hH).imp fun c' W' cs ⟨hcnd, hcs⟩ => ⟨hcnd, fun l' => ?_⟩
+      rcases hcs l' with ⟨hn, hown⟩ | ⟨⟨x, hx, hxl, hxo⟩, hrest⟩
+      · refine .inl ⟨hn, fun x hx hxl => ?_⟩
+        rcases List.mem_cons.mp hx with rfl | hx
+        · simpa using hm
+        · exact hown x hx hxl
+      · exact .inr ⟨⟨x, List.mem_cons_of_mem _ hx, hxl, hxo⟩, hrest⟩
+
+/-- What a spread copies of an operand of a record type: each field's
+copy (`CopyP`), and nothing of a label the type hasn't. -/
+def OwnP (L : List String) (ss : List Ty) (c : Nat) (W : World)
+    (cs : List (String × MemberKind × Value)) : Prop :=
+  (∀ l s, Ty.field l L ss = some s → CopyP c W cs l s) ∧
+  ∀ l, Ty.field l L ss = none → cs.lookup l = none
+
+theorem OwnP.mono {j k : Nat} {W W' : World} {L : List String} {ss : List Ty}
+    {cs : List (String × MemberKind × Value)} (hjk : j ≤ k) (hW : W <+: W')
+    (h : OwnP L ss k W cs) : OwnP L ss j W' cs :=
+  ⟨fun l s hs => (h.1 l s hs).mono hjk hW, h.2⟩
+
+/-- Copying the own properties of an object of a record type. -/
+theorem own_sound {L : List String} {ss : List Ty} {v : Value} {c : Nat} {W : World} {h : Heap}
+    (hv : V c W (.record L ss) v) (hH : HeapOK c W h) :
+    SafeFields (own c h v) c W (OwnP L ss) := by
+  obtain ⟨ℓ, ss', cv, rfl, hℓ, hcv, hsv, hl, hz⟩ := obj_cell hv hH
+  obtain ⟨fsv, rfl, hfs, hnone⟩ := CellV_obj.mp hsv
+  have hnd := dedup_nodup fsv
+  have hnd' : (((dedupLabels fsv).reverse).map (·.1)).Nodup := by
+    rw [List.map_reverse]; exact List.pairwise_reverse.mpr (hnd.imp fun h e => h e.symm)
+  have hlk : ∀ l, ((dedupLabels fsv).reverse).lookup l = fsv.lookup l := fun l => by
+    rw [lookup_reverse hnd, lookup_dedup]
+  have hmem : ∀ x ∈ (dedupLabels fsv).reverse, fsv.lookup x.1 = some x.2 := fun x hx => by
+    rw [← hlk]; exact lookup_of_mem hnd' hx
+  have hxs : ∀ x ∈ (dedupLabels fsv).reverse, x.2.1.isOwn = true → ∃ s σ,
+      Ty.field x.1 L ss' = some s ∧
+        (TyEq s (.slot .pre .data σ) ∨ TyEq s (.slot .pre .getter σ)) := by
+    intro ⟨l, m, w⟩ hx hm
+    have hlx := hmem _ hx
+    cases hf : Ty.field l L ss' with
+    | none => rw [hnone l hf] at hlx; cases hlx
+    | some s =>
+      rcases hfs l s hf with ⟨σ, h₁, v, h₂, -⟩ | ⟨σ, h₁, v, h₂, -⟩ |
+          ⟨σ, h₁, ⟨v, h₂, -⟩ | ⟨v, h₂, -⟩⟩ | ⟨k', σ, -, h₂⟩
+      · exact ⟨s, σ, rfl, .inl h₁⟩
+      · exact ⟨s, σ, rfl, .inr h₁⟩
+      · rw [h₂] at hlx; cases hlx; cases hm
+      · rw [h₂] at hlx; cases hlx; cases hm
+      · rw [h₂] at hlx; cases hlx
+  have hcp := copyOwn_sound (c := c) _ hℓ hnd' hxs hH
+  simp only [own, hcv]
+  generalize copyOwn c h (.obj ℓ) (dedupLabels fsv).reverse = q at hcp ⊢
+  obtain ⟨r, c', h'⟩ := q
+  cases r with
+  | error r => exact SafeFields.of_error hcp
+  | ok cs =>
+    obtain ⟨hc', W', hW', hH', hcnd, hcs⟩ := hcp
+    simp only at hc' hH' hcnd hcs ⊢
+    refine ⟨hc', W', hW', hH', fun l s hs => ?_, fun l hn => ?_⟩
+    · obtain ⟨s', hs', hss'⟩ := Ty.field_tyEq hl hz hs
+      rcases hcs l with ⟨hn, hown⟩ | ⟨-, s'', σ, v, hs'', h₁, h₂, h₃⟩
+      · have hn' : cs.reverse.lookup l = none := by rw [lookup_reverse hcnd]; exact hn
+        rcases hfs l s' hs' with ⟨σ, h₁, v, h₂, -⟩ | ⟨σ, h₁, g, h₂, -⟩ |
+            ⟨σ, h₁, -⟩ | ⟨k', σ, h₁, -⟩
+        · rw [← hlk] at h₂
+          exact absurd (hown _ (lookup_mem h₂) rfl) (by simp [MemberKind.isOwn])
+        · rw [← hlk] at h₂
+          exact absurd (hown _ (lookup_mem h₂) rfl) (by simp [MemberKind.isOwn])
+        · exact .inr ⟨.inl ⟨σ, hss'.trans h₁⟩, hn'⟩
+        · exact .inr ⟨.inr ⟨k', σ, hss'.trans h₁⟩, hn'⟩
+      · rw [hs'] at hs''; cases hs''
+        refine .inl ⟨σ, ?_, v, by rw [lookup_reverse hcnd]; exact h₂, h₃⟩
+        rcases h₁ with h₁ | h₁
+        · exact .inl (hss'.trans h₁)
+        · exact .inr (hss'.trans h₁)
+    · have hn' := Ty.field_none_length hl hn
+      rw [lookup_reverse hcnd]
+      rcases hcs l with ⟨hn, -⟩ | ⟨-, s'', -, -, hs'', -⟩
+      · exact hn
+      · rw [hn'] at hs''; cases hs''
+
 /-- A slot of a spread's result, with the operand's slot and the slot it is
 written over for the same label, and the `Merge` relating them. -/
-theorem field_merge {l : String} {r : Ty} : ∀ {L : List String} {ps τs ss rs : List Ty},
-    ps.length = L.length → τs.length = L.length → ss.length = L.length →
-    rs.length = L.length → Ty.field l L rs = some r →
-    ∃ p τ s, Ty.field l L (List.zipWith Ty.slot ps τs) = some (.slot p τ) ∧
-      Ty.field l L ss = some s ∧ (⟨.merge, [p, τ, s, r]⟩ : Pred) ∈ mergePreds ps τs ss rs
-  | [], _, _, _, _, _, _, _, _, h => by simp [Ty.field] at h
-  | l' :: L, p :: ps, τ :: τs, s :: ss, r' :: rs, h₁, h₂, h₃, h₄, h => by
-    simp only [List.length_cons, Nat.add_right_cancel_iff] at h₁ h₂ h₃ h₄
-    simp only [List.zipWith_cons_cons, Ty.field, mergePreds] at h ⊢
+theorem field_merge {l : String} {r : Ty} : ∀ {L : List String} {ps ks τs ss rs : List Ty},
+    ps.length = L.length → ks.length = L.length → τs.length = L.length →
+    ss.length = L.length → rs.length = L.length → Ty.field l L rs = some r →
+    ∃ p k τ s, Ty.field l L (slots3 ps ks τs) = some (.slot p k τ) ∧
+      Ty.field l L ss = some s ∧ (⟨.merge, [p, k, τ, s, r]⟩ : Pred) ∈ mergePreds ps ks τs ss rs
+  | [], _, _, _, _, _, _, _, _, _, _, h => by simp [Ty.field] at h
+  | l' :: L, p :: ps, k :: ks, τ :: τs, s :: ss, r' :: rs, h₁, h₂, h₃, h₄, h₅, h => by
+    simp only [List.length_cons, Nat.add_right_cancel_iff] at h₁ h₂ h₃ h₄ h₅
+    simp only [slots3, Ty.field, mergePreds] at h ⊢
     by_cases e : l' = l
     · simp only [e, ite_true, Option.some.injEq] at h ⊢
       subst h
-      exact ⟨p, τ, s, rfl, rfl, List.mem_cons_self⟩
+      exact ⟨p, k, τ, s, rfl, rfl, List.mem_cons_self⟩
     · simp only [e, ite_false] at h ⊢
-      obtain ⟨p', τ', s', hp, hs, hm⟩ := field_merge h₁ h₂ h₃ h₄ h
-      exact ⟨p', τ', s', hp, hs, List.mem_cons_of_mem _ hm⟩
-  | _ :: _, [], _, _, _, h₁, _, _, _, _ | _ :: _, _ :: _, [], _, _, _, h₂, _, _, _
-  | _ :: _, _ :: _, _ :: _, [], _, _, _, h₃, _, _
-  | _ :: _, _ :: _, _ :: _, _ :: _, [], _, _, _, h₄, _ => by simp at *
+      obtain ⟨p', k', τ', s', hp, hs, hm⟩ := field_merge h₁ h₂ h₃ h₄ h₅ h
+      exact ⟨p', k', τ', s', hp, hs, List.mem_cons_of_mem _ hm⟩
+  | _ :: _, [], _, _, _, _, h₁, _, _, _, _, _ | _ :: _, _ :: _, [], _, _, _, _, h₂, _, _, _, _
+  | _ :: _, _ :: _, _ :: _, [], _, _, _, _, h₃, _, _, _
+  | _ :: _, _ :: _, _ :: _, _ :: _, [], _, _, _, _, h₄, _, _
+  | _ :: _, _ :: _, _ :: _, _ :: _, _ :: _, [], _, _, _, _, h₅, _ => by simp at *
 
-theorem lookup_append_none {l : String} {fs₁ fs₂ : List (String × Value)}
-    (h : fs₂.lookup l = none) : (fs₂ ++ fs₁).lookup l = fs₁.lookup l := by
-  induction fs₂ with
-  | nil => rfl
-  | cons a fs₂ ih =>
-    obtain ⟨l', v⟩ := a
-    by_cases e : (l == l') = true
-    · simp [List.lookup_cons, e] at h
-    · simp only [Bool.not_eq_true] at e
-      simp only [List.lookup_cons, e] at h
-      simp only [List.cons_append, List.lookup_cons, e]
-      exact ih h
+/-- A slot the operand doesn't write over: what is copied of it
+(`SlotCopy`) is what was copied of the object written over. -/
+theorem copy_member {k : Nat} {W : World} {T : Ty} {cs : List (String × MemberKind × Value)}
+    {l : String} {s sq rq r : Ty} (h : CopyP k W cs l s) (hs : TyEq s sq) (hc : SlotCopy sq rq)
+    (hr : TyEq r rq) : MemberP (V k W) T cs l r := by
+  have h' := h.tyEq hs
+  cases hc with
+  | data =>
+    rcases h' with ⟨σ, h₁ | h₁, v, h₂, h₃⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, -⟩
+    · exact .inl ⟨σ, hr.trans (TyEq.slot_mk (TyEq.refl _) (TyEq.refl _)
+        (TyEq.slot h₁).2.2), v, h₂, h₃⟩
+    · exact absurd (TyEq.slot h₁).2.1 (TyEq.con_ne (by decide))
+    · exact absurd (TyEq.slot h₁).2.1 (TyEq.con_ne (by decide))
+    · exact absurd (TyEq.slot h₁).1 TyEq.pre_abs
+  | getter =>
+    rcases h' with ⟨σ, h₁ | h₁, v, h₂, h₃⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, -⟩
+    · exact absurd (TyEq.slot h₁).2.1 (TyEq.con_ne (by decide))
+    · exact .inl ⟨σ, hr.trans (TyEq.slot_mk (TyEq.refl _) (TyEq.refl _)
+        (TyEq.slot h₁).2.2), v, h₂, h₃⟩
+    · exact absurd (TyEq.slot h₁).2.1 (TyEq.con_ne (by decide))
+    · exact absurd (TyEq.slot h₁).1 TyEq.pre_abs
+  | proto =>
+    rcases h' with ⟨σ, h₁ | h₁, -⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, h₂⟩
+    · exact absurd (TyEq.slot h₁).2.1 (TyEq.con_ne (by decide))
+    · exact absurd (TyEq.slot h₁).2.1 (TyEq.con_ne (by decide))
+    · exact .inr (.inr (.inr ⟨_, _, hr, h₂⟩))
+    · exact absurd (TyEq.slot h₁).1 TyEq.pre_abs
+  | abs =>
+    rcases h' with ⟨σ, h₁ | h₁, -⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, h₂⟩
+    · exact absurd (TyEq.slot h₁).1.symm TyEq.pre_abs
+    · exact absurd (TyEq.slot h₁).1.symm TyEq.pre_abs
+    · exact absurd (TyEq.slot h₁).1.symm TyEq.pre_abs
+    · exact .inr (.inr (.inr ⟨_, _, hr, h₂⟩))
 
-theorem lookup_append_some {l : String} {v : Value} {fs₁ fs₂ : List (String × Value)}
-    (h : fs₂.lookup l = some v) : (fs₂ ++ fs₁).lookup l = some v := by
-  induction fs₂ with
-  | nil => cases h
-  | cons a fs₂ ih =>
-    obtain ⟨l', v'⟩ := a
-    by_cases e : (l == l') = true
-    · simp only [List.lookup_cons, e] at h
-      simp only [List.cons_append, List.lookup_cons, e]
-      exact h
-    · simp only [Bool.not_eq_true] at e
-      simp only [List.lookup_cons, e] at h
-      simp only [List.cons_append, List.lookup_cons, e]
-      exact ih h
-
-/-- A record's value is an object, whose fields have the contents of a
-record type with pairwise equal slots. -/
-theorem fieldsOf_sound {L : List String} {ss : List Ty} {v : Value} {c : Nat} {W : World}
-    {h : Heap} (hv : V c W (.record L ss) v) (hH : HeapOK c W h) :
-    ∃ fs ss', v.fieldsOf h = some fs ∧ CellV c W (.obj (.record L ss')) (.fields fs) ∧
-      ss.length = ss'.length ∧ ∀ x ∈ ss.zip ss', TyEq x.1 x.2 := by
-  obtain ⟨ℓ, ss', cv, rfl, -, hcv, hV, hl, hz⟩ := obj_cell hv hH
-  obtain ⟨fs, rfl, -⟩ := CellV_obj.mp hV
-  exact ⟨fs, ss', by simp [Value.fieldsOf, hcv], hV, hl, hz⟩
-
-/-- A spread of two objects' fields: each `Merge` is an instance, since an
-object's contents have no slot of unknown presence, so the merged fields
-have the result's type. -/
-theorem spread_contents_sound {C : List Pred} {L : List String} {ps τs ss rs ss₁ qs : List Ty}
-    {fs₁ fs₂ : List (String × Value)} {c : Nat} {W : World} (hC : HoldsOrVar C)
-    (hps : ps.length = L.length) (hτs : τs.length = L.length) (hss : ss.length = L.length)
-    (hrs : rs.length = L.length) (hm : ∀ p ∈ mergePreds ps τs ss rs, Entails C p)
-    (hl₁ : ss.length = ss₁.length) (hz₁ : ∀ x ∈ ss.zip ss₁, TyEq x.1 x.2)
-    (hl₂ : (List.zipWith Ty.slot ps τs).length = qs.length)
-    (hz₂ : ∀ x ∈ (List.zipWith Ty.slot ps τs).zip qs, TyEq x.1 x.2)
-    (hv₁ : CellV c W (.obj (.record L ss₁)) (.fields fs₁))
-    (hv₂ : CellV c W (.obj (.record L qs)) (.fields fs₂)) :
-    CellV c W (.obj (.record L rs)) (.fields (fs₂ ++ fs₁)) := by
-  obtain ⟨_, he₁, hc₁⟩ := CellV_obj.mp hv₁
-  obtain ⟨_, he₂, hc₂⟩ := CellV_obj.mp hv₂
-  cases he₁; cases he₂
+/-- A spread of two objects' copied properties: each `Merge` is an
+instance, since an object's type has no slot of unknown presence or kind,
+so the merged fields have the result's type. -/
+theorem spread_contents_sound {C : List Pred} {L : List String} {ps ks τs ss rs : List Ty}
+    {cs₁ cs₂ : List (String × MemberKind × Value)} {c : Nat} {W : World} (hC : HoldsOrVar C)
+    (hps : ps.length = L.length) (hks : ks.length = L.length) (hτs : τs.length = L.length)
+    (hss : ss.length = L.length) (hrs : rs.length = L.length)
+    (hm : ∀ p ∈ mergePreds ps ks τs ss rs, Entails C p)
+    (h₁ : OwnP L ss c W cs₁) (h₂ : OwnP L (slots3 ps ks τs) c W cs₂) :
+    CellV c W (.obj (.record L rs)) (.fields (cs₂ ++ cs₁)) := by
   rw [CellV_obj]
-  refine ⟨_, rfl, fun l r hr => ?_⟩
-  obtain ⟨p, τ, s, hp, hs, hpm⟩ := field_merge hps hτs hss hrs hr
-  -- The operand's slot in its cell.
-  obtain ⟨q', hq', hpq'⟩ := Ty.field_tyEq hl₂ hz₂ hp
+  refine ⟨_, rfl, fun l r hr => ?_, fun l hn => ?_⟩
+  rotate_left
+  · have hl3 : (slots3 ps ks τs).length = L.length := by
+      rw [slots3_length ps ks τs (by omega) (by omega)]; exact hps
+    rw [lookup_append, h₂.2 l (Ty.field_none_length (by omega) hn),
+      h₁.2 l (Ty.field_none_length (by omega) hn)]
+    rfl
+  obtain ⟨p, k, τ, s, hp, hs, hpm⟩ := field_merge hps hks hτs hss hrs hr
+  have hc₂ := h₂.1 l _ hp
+  have hc₁ := h₁.1 l s hs
   rcases (hm _ hpm).holdsOrVar hC with ⟨q, hq, hi⟩ | ⟨a, _, he⟩
   · cases hi
-    case mergePre τq sq =>
-      obtain ⟨-, hpre, hτ, -, hr'⟩ := PredEq.four hq
-      rcases hc₂ l q' hq' with ⟨σ₂, h₁, v', h₂, h₃⟩ | ⟨σ₂, h₁, -⟩
-      · have hτσ := (TyEq.slot (hpq'.trans h₁)).2
-        refine .inl ⟨σ₂, ?_, v', lookup_append_some h₂, h₃⟩
-        exact hr'.trans (TyEq.slot_mk (TyEq.refl _) (hτ.symm.trans hτσ))
-      · exact absurd (hpre.symm.trans (TyEq.slot (hpq'.trans h₁)).1) TyEq.pre_abs
-    case mergeAbs τq sq =>
-      obtain ⟨-, habs, -, hs', hr'⟩ := PredEq.four hq
-      rcases hc₂ l q' hq' with ⟨σ₂, h₁, -, -, -⟩ | ⟨σ₂, -, hn⟩
-      · exact absurd ((TyEq.slot (hpq'.trans h₁)).1.symm.trans habs) (fun h => TyEq.pre_abs h)
-      · obtain ⟨s₁, hs₁, hss₁⟩ := Ty.field_tyEq hl₁ hz₁ hs
-        have hrs₁ : TyEq r s₁ := (hr'.trans hs'.symm).trans hss₁
-        rcases hc₁ l s₁ hs₁ with ⟨σ₁, h₁, v', h₂, h₃⟩ | ⟨σ₁, h₁, h₂⟩
-        · exact .inl ⟨σ₁, hrs₁.trans h₁, v', by rw [lookup_append_none hn]; exact h₂, h₃⟩
-        · exact .inr ⟨σ₁, hrs₁.trans h₁, by rw [lookup_append_none hn]; exact h₂⟩
+    case mergeData τq sq =>
+      obtain ⟨-, hpre, hk, hτ, -, hr'⟩ := PredEq.five hq
+      rcases hc₂ with ⟨σ, h₁ | h₁, v, h₂, h₃⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, -⟩
+      · refine .inl ⟨σ, ?_, v, by rw [lookup_append, h₂]; rfl, h₃⟩
+        exact hr'.trans (TyEq.slot_mk (TyEq.refl _) (TyEq.refl _)
+          (hτ.symm.trans (TyEq.slot h₁).2.2))
+      · exact absurd (hk.symm.trans (TyEq.slot h₁).2.1) (TyEq.con_ne (by decide))
+      · exact absurd (hk.symm.trans (TyEq.slot h₁).2.1) (TyEq.con_ne (by decide))
+      · exact absurd (hpre.symm.trans (TyEq.slot h₁).1) TyEq.pre_abs
+    case mergeGetter τq sq =>
+      obtain ⟨-, hpre, hk, hτ, -, hr'⟩ := PredEq.five hq
+      rcases hc₂ with ⟨σ, h₁ | h₁, v, h₂, h₃⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, -⟩
+      · exact absurd (hk.symm.trans (TyEq.slot h₁).2.1) (TyEq.con_ne (by decide))
+      · refine .inl ⟨σ, ?_, v, by rw [lookup_append, h₂]; rfl, h₃⟩
+        exact hr'.trans (TyEq.slot_mk (TyEq.refl _) (TyEq.refl _)
+          (hτ.symm.trans (TyEq.slot h₁).2.2))
+      · exact absurd (hk.symm.trans (TyEq.slot h₁).2.1) (TyEq.con_ne (by decide))
+      · exact absurd (hpre.symm.trans (TyEq.slot h₁).1) TyEq.pre_abs
+    case mergeAbs sq rq kq τq hcp =>
+      obtain ⟨-, habs, -, -, hs', hr'⟩ := PredEq.five hq
+      rcases hc₂ with ⟨σ, h₁ | h₁, -⟩ | ⟨-, hn⟩
+      · exact absurd ((TyEq.slot h₁).1.symm.trans habs) TyEq.pre_abs
+      · exact absurd ((TyEq.slot h₁).1.symm.trans habs) TyEq.pre_abs
+      · have := copy_member (T := .record L rs) hc₁ hs' hcp hr'
+        unfold MemberP; rw [lookup_append, hn]; exact this
+    case mergeProto sq rq τq hcp =>
+      obtain ⟨-, hpre, hk, -, hs', hr'⟩ := PredEq.five hq
+      rcases hc₂ with ⟨σ, h₁ | h₁, -⟩ | ⟨-, hn⟩
+      · exact absurd (hk.symm.trans (TyEq.slot h₁).2.1) (TyEq.con_ne (by decide))
+      · exact absurd (hk.symm.trans (TyEq.slot h₁).2.1) (TyEq.con_ne (by decide))
+      · have := copy_member (T := .record L rs) hc₁ hs' hcp hr'
+        unfold MemberP; rw [lookup_append, hn]; exact this
     all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
   · simp only [List.cons.injEq] at he
-    rw [he.1] at hpq'
-    rcases hc₂ l q' hq' with ⟨σ₂, h₁, -⟩ | ⟨σ₂, h₁, -⟩
-    · exact absurd (TyEq.slot (hpq'.trans h₁)).1 TyEq.var_app
-    · exact absurd (TyEq.slot (hpq'.trans h₁)).1 TyEq.var_app
+    rw [he.1] at hc₂
+    rcases hc₂ with ⟨σ, h₁ | h₁, -⟩ | ⟨⟨σ, h₁⟩ | ⟨k', σ, h₁⟩, -⟩ <;>
+      exact absurd (TyEq.slot h₁).1 TyEq.var_app
 
 /-! ## Arguments -/
 
@@ -1213,6 +1732,310 @@ theorem G.call {W : World} {Γ : Ctx} {env : Env} {h : Heap} {θ ρ : Ty} {τs :
     List.getElem?_eq_getElem hi]
   rfl
 
+/-- A closure whose body is well typed is good for any number of calls, in
+any world its environment is typed in, by induction on the number: a call
+with `i + 1` to spare runs the body with `i`, where the closure itself
+(the function's own name) need only be good for `i`. -/
+theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} {τs : List Ty}
+    {body : Expr} {env : Env} (ih : RunSound L body)
+    (hb : HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) body ρ)
+    (hC : HoldsOrVar C) : ∀ j W, G W Γ env → V j W (.fn θ τs ρ) (.closure env τs.length body) := by
+  intro j
+  induction j with
+  | zero =>
+    intro W _
+    rw [V_fn]
+    intro i hi W' _ h' thisv args hl _ _ _
+    obtain rfl : i = 0 := by omega
+    simp only [call, callClosure, hl, Nat.le_refl, ↓reduceIte]
+    exact ⟨Nat.le_refl 0, .inl rfl⟩
+  | succ j ihj =>
+    intro W hGW
+    rw [V_fn]
+    intro i hi W' hW' h' thisv args hl hh hthis hargs
+    cases i with
+    | zero =>
+      simp only [call, callClosure, hl, Nat.le_refl, ↓reduceIte]
+      exact ⟨Nat.le_refl 0, .inl rfl⟩
+    | succ i =>
+      simp only [call, callClosure, hl, Nat.le_refl, ↓reduceIte,
+        List.take_of_length_le (Nat.le_of_eq hl)]
+      have hH' : HeapOK i W' h' := hh i (by omega)
+      have hW₁ : W' <+: W' ++ τs.map Cell.mono := List.prefix_append _ _
+      have hW₂ : W' <+: W' ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ] :=
+        hW₁.trans (List.prefix_append _ _)
+      have hcells : HeapOK i (W' ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ])
+          (h' ++ args ++ [.closure env τs.length body, thisv]) := by
+        refine (hH'.allocList ((hargs i (by omega)).mono (Nat.le_refl i) hW₁)).alloc
+          (by simp) (fun idx s v hs hv => ?_)
+        match idx, hs, hv with
+        | 0, hs, hv =>
+          simp at hs hv; subst hs hv
+          exact SchemeV.mono_iff.mpr
+            ((ihj _ (G.mono (hW'.trans hW₂) hGW)).mono (by omega) (List.prefix_refl _))
+        | 1, hs, hv =>
+          simp at hs hv; subst hs hv
+          exact SchemeV.mono_iff.mpr ((hthis i (by omega)).mono (Nat.le_refl i) hW₂)
+        | _ + 2, hs, _ => simp at hs
+      have hGb := G.call (θ := θ) (ρ := ρ) (τs := τs) (G.mono hW' hGW) hH'.1
+      exact (ih hb hC hGb hcells).catchReturn (j := i + 1) (by omega) hW₂
+
+/-- A function expression's value, of its type. -/
+theorem func_value {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {τ : Ty}
+    {n : Nat} {b : Expr} {k : Nat} {W : World} {env : Env} {h : Heap}
+    (ih : RunSound L (.func n b)) (ht : HasType L C Γ R (.func n b) τ) (hC : HoldsOrVar C)
+    (hG : G W Γ env) (hH : HeapOK k W h) : V k W τ (.closure env n b) := by
+  have hs := ih ht hC hG hH
+  simp only [run] at hs
+  obtain ⟨-, hs | ⟨W', hW', hH', ⟨v, hv, hV⟩ | habr | ⟨v, hv, -⟩⟩⟩ := hs
+  · cases hs
+  · simp only [Result.ok.injEq] at hv; subst hv
+    obtain rfl := hW'.eq_of_length (by rw [← hH'.1, hH.1])
+    exact hV
+  · simp [Result.Abrupt] at habr
+  · cases hv
+
+/-- A closure bound to `self`: calling it calls the closure on `self`,
+whatever it is called on. -/
+theorem V_bound {k : Nat} {W : World} {θ θ' ρ : Ty} {τs : List Ty} {cenv : Env} {n : Nat}
+    {b : Expr} {self : Value} (hf : V k W (.fn θ τs ρ) (.closure cenv n b))
+    (hs : ∀ i, i ≤ k → V i W θ self) : V k W (.fn θ' τs ρ) (.bound (.closure cenv n b) self) := by
+  rw [V_fn] at hf ⊢
+  intro j hj W' hW' h thisv args hl hh _ ha
+  have e : call j h (.bound (.closure cenv n b) self) thisv args =
+      call j h (.closure cenv n b) self args := by simp only [call]
+  rw [e]
+  exact hf j hj W' hW' h self args hl hh
+    (fun i hi => (hs i (by omega)).mono (Nat.le_refl i) hW') ha
+
+/-- The types of a class's fields that hold values, in order. -/
+def dataTys : List ClassKind → List Ty → List Ty
+  | k :: ks, τ :: τs =>
+    match k with
+    | .data => τ :: dataTys ks τs
+    | _ => dataTys ks τs
+  | _, _ => []
+
+theorem memberCtx_zero (Γ : Ctx) (ks : List ClassKind) (τs : List Ty) :
+    memberCtx Γ ks τs 0 .data = Γ := by
+  simp [memberCtx]
+
+theorem memberCtx_data (Γ : Ctx) (ks : List ClassKind) (τ : Ty) (τs : List Ty) (i : Nat) :
+    memberCtx Γ (.data :: ks) (τ :: τs) (i + 1) .data = memberCtx (.mono τ :: Γ) ks τs i .data := by
+  simp [memberCtx]
+
+theorem memberCtx_other (Γ : Ctx) {k : ClassKind} (hk : k ≠ .data) (ks : List ClassKind) (τ : Ty)
+    (τs : List Ty) (i : Nat) :
+    memberCtx Γ (k :: ks) (τ :: τs) (i + 1) .data = memberCtx Γ ks τs i .data := by
+  cases k <;> simp_all [memberCtx]
+
+/-- A class's field initialisers, each typed in its context, run safely:
+each sees the fields before it, in new cells. -/
+theorem runInits_sound {L : List String} {C : List Pred} {R : Option Ty} (hC : HoldsOrVar C) :
+    ∀ (es : List Expr) (ks : List ClassKind) (τs : List Ty) {Γ : Ctx} {k : Nat} {W : World}
+      {env : Env} {h : Heap},
+      (∀ e ∈ es, RunSound L e) → es.length = ks.length → τs.length = ks.length →
+      (∀ i e τ, es[i]? = some e → ks[i]? = some .data → τs[i]? = some τ →
+        HasType L C (memberCtx Γ ks τs i .data) R e τ) →
+      G W Γ env → HeapOK k W h → SafeArgs (runInits k env h es ks) k W (dataTys ks τs) R
+  | [], [], [], Γ, k, W, env, h, _, _, _, _, _, hH => by
+    simp only [runInits, dataTys, SafeArgs]
+    exact ⟨Nat.le_refl k, W, List.prefix_refl W, hH, by simp⟩
+  | [], _ :: _, _, _, _, _, _, _, _, hl, _, _, _, _
+  | _ :: _, [], _, _, _, _, _, _, _, hl, _, _, _, _ => by simp at hl
+  | _ :: _, _ :: _, [], _, _, _, _, _, _, _, hl, _, _, _
+  | [], [], _ :: _, _, _, _, _, _, _, _, hl, _, _, _ => by simp at hl
+  | e :: es, kd :: ks, τ :: τs, Γ, k, W, env, h, ih, hl₁, hl₂, ht, hG, hH => by
+    simp only [List.length_cons, Nat.add_right_cancel_iff] at hl₁ hl₂
+    have ih' : ∀ e ∈ es, RunSound L e := fun e he => ih e (List.mem_cons_of_mem _ he)
+    cases kd
+    case data =>
+      have he := ih e List.mem_cons_self (ht 0 e τ rfl rfl rfl) hC
+        (by rw [memberCtx_zero]; exact hG) hH
+      have hc₁ := run_clock_le k env h e
+      simp only [runInits, dataTys]
+      generalize hp : run k env h e = p at he hc₁
+      obtain ⟨r, c₁, h₁⟩ := p
+      obtain ⟨_, hr⟩ := he
+      simp only at hc₁
+      rcases hr with hr | ⟨W₁, hW₁, hH₁, ⟨v, hr, hv⟩ | habr | ⟨v, hr, hv⟩⟩
+      · simp only at hr; subst hr
+        exact ⟨hc₁, .inl rfl⟩
+      · simp only at hr; subst hr
+        have hW₂ : W₁ <+: W₁ ++ [.mono τ] := List.prefix_append _ _
+        have hcell : HeapOK c₁ (W₁ ++ [.mono τ]) (h₁ ++ [v]) :=
+          hH₁.alloc (by simp) (fun i s' v' hs' hv' => by
+            match i, hs', hv' with
+            | 0, hs', hv' =>
+              simp at hs' hv'; subst hs' hv'; exact SchemeV.mono_iff.mpr (hv.mono (Nat.le_refl _) hW₂)
+            | _ + 1, hs', _ => simp at hs')
+        have hG₂ : G (W₁ ++ [.mono τ]) (.mono τ :: Γ) (h₁.length :: env) :=
+          ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
+        have has := runInits_sound hC es ks τs ih' hl₁ hl₂
+          (fun i e' τ' h₁ h₂ h₃ => by
+            have := ht (i + 1) e' τ' (by simpa using h₁) (by simpa using h₂) (by simpa using h₃)
+            rwa [memberCtx_data] at this) hG₂ hcell
+        have hc₂ := runInits_clock_le c₁ (h₁.length :: env) (h₁ ++ [v]) es ks
+        dsimp only
+        rw [Nat.min_eq_left hc₁]
+        generalize runInits c₁ (h₁.length :: env) (h₁ ++ [v]) es ks = q at has hc₂
+        obtain ⟨r', c₂, h₂⟩ := q
+        obtain ⟨_, hq⟩ := has
+        simp only at hc₂
+        cases r' with
+        | ok vs =>
+          obtain ⟨W₃, hW₃, hH₃, hvs⟩ := hq
+          exact ⟨by simp only; omega, W₃, hW₁.trans (hW₂.trans hW₃), hH₃,
+            (VList_cons).mpr ⟨V.mono hc₂ (hW₂.trans hW₃) hv, hvs⟩⟩
+        | error r' =>
+          rcases hq with hq | ⟨W₃, hW₃, hH₃, hq⟩
+          · exact ⟨by simp only; omega, .inl hq⟩
+          · exact ⟨by simp only; omega, .inr ⟨W₃, hW₁.trans (hW₂.trans hW₃), hH₃, hq⟩⟩
+      · simp only at habr
+        cases r <;> simp only [Result.Abrupt] at habr <;>
+          exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, .inl trivial⟩⟩
+      · simp only at hr; subst hr
+        exact ⟨hc₁, .inr ⟨W₁, hW₁, hH₁, .inr ⟨v, rfl, hv⟩⟩⟩
+    all_goals
+      simp only [runInits, dataTys]
+      exact runInits_sound hC es ks τs ih' hl₁ hl₂
+        (fun i e' τ' h₁ h₂ h₃ => by
+          have := ht (i + 1) e' τ' (by simpa using h₁) (by simpa using h₂) (by simpa using h₃)
+          rwa [memberCtx_other _ (by decide)] at this) hG hH
+
+theorem MemberP.congr {P : Ty → Value → Prop} {T : Ty} {fs fs' : List (String × MemberKind × Value)}
+    {l : String} {s : Ty} (e : fs.lookup l = fs'.lookup l) (h : MemberP P T fs l s) :
+    MemberP P T fs' l s := by
+  unfold MemberP at h ⊢; rw [← e]; exact h
+
+/-- A class's members: each holds what its slot says, the instance's
+type being `T`. -/
+theorem clsMembers_sound {c : Nat} {W : World} {env : Env} {self : Value} {T : Ty}
+    (hself : ∀ i, i ≤ c → V i W T self) :
+    ∀ (ls : List String) (es : List Expr) (ks : List ClassKind) (τs ss : List Ty)
+      (vs : List Value),
+      es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
+      ss.length = ls.length →
+      (∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot T x.1 x.2.1 x.2.2.1 x.2.2.2) →
+      (∀ (i : Nat) (kd : ClassKind) (n : Nat) (b : Expr) (τ : Ty), ks[i]? = some kd →
+        es[i]? = some (Expr.func n b) → τs[i]? = some τ →
+        kd ≠ .data → V c W τ (.closure env n b)) →
+      VList c W (dataTys ks τs) vs →
+      ∃ fs, clsMembers env self ls es ks vs = some fs ∧ fs.map (·.1) = ls ∧
+        ∀ p ∈ fs.zip ss, MemberP (V c W) T [p.1] p.1.1 p.2
+  | [], [], [], [], [], [], _, _, _, _, _, _, _ => ⟨[], by simp [clsMembers], rfl, by simp⟩
+  | [], [], [], [], [], _ :: _, _, _, _, _, _, _, hvs => by simp [dataTys] at hvs
+  | [], _ :: _, _, _, _, _, hl, _, _, _, _, _, _ | [], _, _ :: _, _, _, _, _, hl, _, _, _, _, _
+  | [], _, _, _ :: _, _, _, _, _, hl, _, _, _, _ | [], _, _, _, _ :: _, _, _, _, _, hl, _, _, _ => by
+    simp at hl
+  | _ :: _, [], _, _, _, _, hl, _, _, _, _, _, _ | _ :: _, _, [], _, _, _, _, hl, _, _, _, _, _
+  | _ :: _, _, _, [], _, _, _, _, hl, _, _, _, _ | _ :: _, _, _, _, [], _, _, _, _, hl, _, _, _ => by
+    simp at hl
+  | l :: ls, e :: es, kd :: ks, τ :: τs, s :: ss, vs, h₁, h₂, h₃, h₄, hm, hf, hvs => by
+    simp only [List.length_cons, Nat.add_right_cancel_iff] at h₁ h₂ h₃ h₄
+    have hm' : ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot T x.1 x.2.1 x.2.2.1 x.2.2.2 :=
+      fun x hx => hm x (List.mem_cons_of_mem _ hx)
+    have hf' : ∀ (i : Nat) (kd : ClassKind) (n : Nat) (b : Expr) (τ : Ty), ks[i]? = some kd →
+        es[i]? = some (Expr.func n b) →
+        τs[i]? = some τ → kd ≠ .data → V c W τ (.closure env n b) :=
+      fun i kd n b τ a₁ a₂ a₃ a₄ => hf (i + 1) kd n b τ (by simpa using a₁) (by simpa using a₂)
+        (by simpa using a₃) a₄
+    have hms : MemberSlot T kd e τ s := hm _ List.mem_cons_self
+    cases hms with
+    | data =>
+      cases vs with
+      | nil => simp [dataTys] at hvs
+      | cons v vs =>
+        simp only [dataTys, VList_cons] at hvs
+        obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf'
+          hvs.2
+        refine ⟨(l, .data, v) :: fs, by simp [clsMembers, hfs], by simp [hl], fun p hp' => ?_⟩
+        rcases List.mem_cons.mp hp' with rfl | hp'
+        · exact .inl ⟨τ, TyEq.refl _, v, by simp, hvs.1⟩
+        · exact hp p hp'
+    | @arrow θ n b τs' ρ θ' hθ =>
+      simp only [dataTys] at hvs
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
+      refine ⟨(l, .data, .bound (.closure env n b) self) :: fs, by simp [clsMembers, hfs],
+        by simp [hl], fun p hp' => ?_⟩
+      rcases List.mem_cons.mp hp' with rfl | hp'
+      · have hclo := hf 0 .arrow n b _ rfl rfl rfl (by decide)
+        refine .inl ⟨_, TyEq.refl _, .bound (.closure env n b) self, by simp,
+          V_bound hclo (fun i hi => ?_)⟩
+        exact V.tyEq _ hθ.symm ((hself i hi).mono (Nat.le_refl i) (List.prefix_refl W))
+      · exact hp p hp'
+    | @method θ n b τs' ρ hθ =>
+      simp only [dataTys] at hvs
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
+      refine ⟨(l, .method, .closure env n b) :: fs, by simp [clsMembers, hfs], by simp [hl],
+        fun p hp' => ?_⟩
+      rcases List.mem_cons.mp hp' with rfl | hp'
+      · have hclo := hf 0 .method n b _ rfl rfl rfl (by decide)
+        exact .inr (.inr (.inl ⟨_, TyEq.refl _, .inl ⟨_, by simp, hclo⟩⟩))
+      · exact hp p hp'
+    | @getter θ b σ hθ =>
+      simp only [dataTys] at hvs
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
+      refine ⟨(l, .protoGetter, .closure env 0 b) :: fs, by simp [clsMembers, hfs],
+        by simp [hl], fun p hp' => ?_⟩
+      rcases List.mem_cons.mp hp' with rfl | hp'
+      · have hclo := hf 0 .getter 0 b _ rfl rfl rfl (by decide)
+        exact .inr (.inr (.inl ⟨_, TyEq.refl _, .inr ⟨_, by simp, V.tyEq _ (TyEq.fn_this hθ) hclo⟩⟩))
+      · exact hp p hp'
+
+theorem zip_fst_mem {α β : Type} {l : String} {s : β} :
+    ∀ {fs : List (String × α)} {ls : List String} {ss : List β}, fs.map (·.1) = ls →
+      (l, s) ∈ ls.zip ss → ∃ p, p.1 = l ∧ (p, s) ∈ fs.zip ss
+  | [], [], _, _, h => by simp at h
+  | [], _ :: _, _, hl, _ | _ :: _, [], _, hl, _ => by simp at hl
+  | _ :: _, _ :: _, [], _, h => by simp at h
+  | p :: fs, l' :: ls, s' :: ss, hl, h => by
+    simp only [List.map_cons, List.cons.injEq] at hl
+    rcases List.mem_cons.mp h with e | h
+    · simp only [Prod.mk.injEq] at e
+      obtain ⟨rfl, rfl⟩ := e
+      exact ⟨p, hl.1, List.mem_cons_self⟩
+    · obtain ⟨q, hq, hm⟩ := zip_fst_mem hl.2 h
+      exact ⟨q, hq, List.mem_cons_of_mem _ hm⟩
+
+/-- A class instance's cell holds its members, as its type says. -/
+theorem cls_cell {c : Nat} {W : World} {L ls : List String} {ss : List Ty}
+    {fs : List (String × MemberKind × Value)} (hss : ss.length = ls.length) (hnd : ls.Nodup)
+    (hL : ∀ l ∈ ls, l ∈ L) (hl : fs.map (·.1) = ls)
+    (hp : ∀ p ∈ fs.zip ss, MemberP (V c W) (.record L (objSlots L ls ss)) [p.1] p.1.1 p.2) :
+    CellV c W (.obj (.record L (objSlots L ls ss))) (.fields fs.reverse) := by
+  have hnd' : (fs.map (·.1)).Nodup := by rw [hl]; exact hnd
+  rw [CellV_obj]
+  refine ⟨_, rfl, fun l s hs => ?_, fun l hn => ?_⟩
+  · have hs' := objSlots_field hs (by rw [hss])
+    cases hlk : ((ls.zip ss).reverse).lookup l with
+    | none =>
+      rw [hlk] at hs'; simp only [Option.getD_none] at hs'; subst hs'
+      refine .inr (.inr (.inr ⟨_, _, TyEq.refl _, ?_⟩))
+      rw [lookup_reverse hnd']
+      refine lookup_eq_none (fun x hx e => ?_)
+      have hxl : l ∈ ls := by rw [← hl, ← e]; exact List.mem_map.mpr ⟨x, hx, rfl⟩
+      obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp hxl
+      have : ((ls.zip ss).reverse).lookup ls[i] ≠ none := by
+        refine lookup_ne_none ?_
+        simp only [List.map_reverse, List.mem_reverse]
+        rw [List.map_fst_zip (by omega)]
+        exact List.getElem_mem hi
+      exact this hlk
+    | some s' =>
+      rw [hlk] at hs'; simp only [Option.getD_some] at hs'; subst hs'
+      have hmem := List.mem_reverse.mp (lookup_mem hlk)
+      obtain ⟨p, rfl, hpm⟩ := zip_fst_mem hl hmem
+      refine (hp _ hpm).congr ?_
+      rw [lookup_reverse hnd', lookup_of_mem hnd' (List.of_mem_zip hpm).1]
+      obtain ⟨a, b⟩ := p
+      simp
+  · rw [lookup_reverse hnd']
+    have hlL : l ∉ L := by
+      unfold objSlots at hn; exact Ty.field_map_none hn
+    refine lookup_eq_none (fun x hx e => hlL (hL _ ?_))
+    rw [← hl, ← e]; exact List.mem_map.mpr ⟨x, hx, rfl⟩
+
 theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
   induction e using Expr.ind with
   | lit l =>
@@ -1240,57 +2063,15 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     cases ht with
     | @func _ _ _ ρ _ _ θ τs hlen hb =>
       subst hlen
-      -- The closure is good for `j` calls in any world its environment is
-      -- typed in, by induction on `j`: a call with `i + 1` to spare runs the
-      -- body with `i`, where the closure itself (the function's own name)
-      -- need only be good for `i`.
-      have hclo : ∀ j W, G W Γ env → V j W (.fn θ τs ρ) (.closure env τs.length body) := by
-        intro j
-        induction j with
-        | zero =>
-          intro W _
-          rw [V_fn]
-          intro i hi W' _ h' thisv args hl _ _ _
-          obtain rfl : i = 0 := by omega
-          simp only [call, hl, Nat.le_refl, ↓reduceIte]
-          exact ⟨Nat.le_refl 0, .inl rfl⟩
-        | succ j ihj =>
-          intro W hGW
-          rw [V_fn]
-          intro i hi W' hW' h' thisv args hl hh hthis hargs
-          simp only [call, hl, Nat.le_refl, ↓reduceIte,
-            List.take_of_length_le (Nat.le_of_eq hl)]
-          cases i with
-          | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
-          | succ i =>
-            have hH' : HeapOK i W' h' := hh i (by omega)
-            have hW₁ : W' <+: W' ++ τs.map Cell.mono := List.prefix_append _ _
-            have hW₂ : W' <+: W' ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ] :=
-              hW₁.trans (List.prefix_append _ _)
-            have hcells : HeapOK i (W' ++ τs.map Cell.mono ++ [Cell.mono (.fn θ τs ρ), Cell.mono θ])
-                (h' ++ args ++ [.closure env τs.length body, thisv]) := by
-              refine (hH'.allocList ((hargs i (by omega)).mono (Nat.le_refl i) hW₁)).alloc
-                (by simp) (fun idx s v hs hv => ?_)
-              match idx, hs, hv with
-              | 0, hs, hv =>
-                simp at hs hv; subst hs hv
-                exact SchemeV.mono_iff.mpr
-                  ((ihj _ (G.mono (hW'.trans hW₂) hGW)).mono (by omega) (List.prefix_refl _))
-              | 1, hs, hv =>
-                simp at hs hv; subst hs hv
-                exact SchemeV.mono_iff.mpr ((hthis i (by omega)).mono (Nat.le_refl i) hW₂)
-              | _ + 2, hs, _ => simp at hs
-            have hGb := G.call (θ := θ) (ρ := ρ) (τs := τs) (G.mono hW' hGW) hH'.1
-            exact (ih hb hC hGb hcells).catchReturn (j := i + 1) (by omega) hW₂
       simp only [run]
-      exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (hclo k W hG)
+      exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (closure_sound ih hb hC k W hG)
   | app f args ihf iha =>
     intro k C Γ R W env h τ ht hC hG hH
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
     refine Safe.tyEq ?_ hτ₀
     cases ht with
     | app hf hlen hargs =>
-      rw [run_app]
+      rw [run]
       refine Safe.bindC (ihf hf hC hG hH) fun vf W₁ _ hW₁ hH₁ hvf => ?_
       have hc₁ := run_clock_le k env h f
       rw [Nat.min_eq_left hc₁]
@@ -1586,18 +2367,19 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
     refine Safe.tyEq ?_ hτ₀
     cases ht with
-    | @obj _ _ _ _ _ τs absent _ hτs habs hL hes hargs _ =>
+    | obj hes hks hτs hss hL hargs hfs =>
+      rename_i ss τs
       simp only [run]
-      refine Safe.bindArgs (runArgs_sound hC es _ ih (by omega) hargs hG hH)
+      refine Safe.bindArgs (runArgs_sound hC es τs ih (by omega) hargs hG hH)
         fun vs W₁ _ hW₁ hH₁ hvs => ?_
       have hb : (runArgs k env h es).2.2.length = W₁.length := hH₁.1
-      have hW₂ := List.prefix_append W₁ [Cell.obj (.record L (objSlots L ls τs absent))]
+      have hW₂ := List.prefix_append W₁ [Cell.obj (.record L (objSlots L ls ss))]
       refine Safe.ok (Nat.le_refl _) hW₂ ?_ ?_
       · exact hH₁.alloc (by simp) (fun i s' v' hs hv' => by
           match i, hs, hv' with
           | 0, hs, hv' =>
             simp at hs hv'; subst hs hv'
-            exact (objFields_sound hτs hvs).mono (Nat.le_refl _) hW₂
+            exact (objFields_sound hks hτs hss hL hvs hfs).mono (Nat.le_refl _) hW₂
           | _ + 1, hs, _ => simp at hs)
       · rw [V_record, hb]
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
@@ -1608,7 +2390,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     cases ht with
     | get he hp =>
       simp only [run]
-      exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv => getProp_sound hp hC hv hH₁
+      refine Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv => ?_
+      rw [Nat.min_eq_left (run_clock_le k env h e)]
+      exact read_sound hp hC hv hH₁
   | set e l v ihe ihv =>
     intro k C Γ R W env h τ ht hC hG hH
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
@@ -1626,31 +2410,30 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
     refine Safe.tyEq ?_ hτ₀
     cases ht with
-    | spread hps hτs hss hrs he₁ he₂ hm =>
-      rename_i ss ps τs rs
+    | spread hps hks hτs hss hrs he₁ he₂ hm =>
+      rename_i ss ps ks τs rs
       simp only [run]
       refine Safe.bindC (ih₁ he₁ hC hG hH) fun v₁ W₁ _ hW₁ hH₁ hv₁ => ?_
-      obtain ⟨fs₁, ss₁, hf₁, hV₁, hl₁, hz₁⟩ := fieldsOf_sound hv₁ hH₁
-      simp only [hf₁]
       have hc₁ := run_clock_le k env h e₁
       rw [Nat.min_eq_left hc₁]
-      refine Safe.bindC (ih₂ he₂ hC (G.mono hW₁ hG) hH₁) fun v₂ W₂ _ hW₂ hH₂ hv₂ => ?_
-      obtain ⟨fs₂, qs, hf₂, hV₂, hl₂, hz₂⟩ := fieldsOf_sound hv₂ hH₂
-      have hV := spread_contents_sound hC hps hτs hss hrs hm hl₁ hz₁ hl₂ hz₂
-        (hV₁.mono (run_clock_le _ _ _ _) hW₂) hV₂
-      generalize run (run k env h e₁).2.1 env (run k env h e₁).2.2 e₂ = p at hf₂ hH₂ hV ⊢
-      obtain ⟨r₂, c₂, h₂⟩ := p
-      simp only at hf₂ hH₂ hV ⊢
-      rw [hf₂]
-      have hW₃ := List.prefix_append W₂ [Cell.obj (.record L rs)]
-      refine Safe.ok (Nat.le_refl _) hW₃ ?_ ?_
-      · exact hH₂.alloc (by simp) (fun i s' v' hs hv' => by
+      refine Safe.bindFields (own_sound hv₁ hH₁) fun cs₁ W₂ _ hW₂ hH₂ hcs₁ => ?_
+      have hc₂ := own_clock_le (run k env h e₁).2.1 (run k env h e₁).2.2 v₁
+      rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
+      refine Safe.bindC (ih₂ he₂ hC (G.mono (hW₁.trans hW₂) hG) hH₂)
+        fun v₂ W₃ _ hW₃ hH₃ hv₂ => ?_
+      rw [Nat.min_eq_left (Nat.le_trans (run_clock_le _ _ _ _) (Nat.le_trans hc₂ hc₁))]
+      refine Safe.bindFields (own_sound hv₂ hH₃) fun cs₂ W₄ _ hW₄ hH₄ hcs₂ => ?_
+      have hV := spread_contents_sound hC hps hks hτs hss hrs hm
+        ((hcs₁.mono (run_clock_le _ _ _ _) hW₃).mono (own_clock_le _ _ _) hW₄) hcs₂
+      have hW₅ := List.prefix_append W₄ [Cell.obj (.record L rs)]
+      refine Safe.ok (Nat.le_refl _) hW₅ ?_ ?_
+      · exact hH₄.alloc (by simp) (fun i s' v' hs hv' => by
           match i, hs, hv' with
           | 0, hs, hv' =>
             simp at hs hv'; subst hs hv'
-            exact hV.mono (Nat.le_refl _) hW₃
+            exact hV.mono (Nat.le_refl _) hW₅
           | _ + 1, hs, _ => simp at hs)
-      · rw [V_record, hH₂.1]
+      · rw [V_record, hH₄.1]
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
 
   | arr es ih =>
@@ -1689,6 +2472,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       have hc₁ := run_clock_le k env h e
       rw [Nat.min_eq_left hc₁]
       refine Safe.bindC (ihi hi hC (G.mono hW₁ hG) hH₁) fun vi W₂ _ hW₂ hH₂ hvi => ?_
+      rw [Nat.min_eq_left (Nat.le_trans (run_clock_le _ _ _ _) hc₁)]
       exact index_sound hp hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvi hH₂
   | setIndex e i v ihe ihi ihv =>
     intro k C Γ R W env h τ ht hC hG hH
@@ -1712,31 +2496,117 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     refine Safe.tyEq ?_ hτ₀
     cases ht with
     | mcall he hp hlen hargs =>
-      rw [run_mcall]
+      simp only [run]
       refine Safe.bindC (ihe he hC hG hH) fun vo W₁ _ hW₁ hH₁ hvo => ?_
       have hc₁ := run_clock_le k env h e
-      have hg := getProp_sound (R := R) hp hC hvo hH₁
-      generalize hgp : vo.getProp (run k env h e).2.2 l = gp at hg ⊢
-      cases gp
-      case ok vf =>
-        simp only
-        obtain ⟨-, hg | ⟨W₂, hW₂, hH₂, ⟨v, hv, hvf⟩ | habr | ⟨v, hv, -⟩⟩⟩ := hg
-        · cases hg
-        · simp only [Result.ok.injEq] at hv
-          subst hv
-          obtain rfl := hW₂.eq_of_length (by rw [← hH₂.1, hH₁.1])
-          rw [Nat.min_eq_left hc₁]
-          refine Safe.bindArgs (runArgs_sound hC args _ iha hlen hargs (G.mono hW₁ hG) hH₁)
-            fun vs W₃ _ hW₃ hH₃ hvs => ?_
-          have hc₂ := runArgs_clock_le (run k env h e).2.1 env (run k env h e).2.2 args
-          rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
-          exact Lands.safe (V_fn.mp (V.mono hc₂ hW₃ hvf) _ (Nat.le_refl _) W₃ (List.prefix_refl _)
-            _ vo vs hvs.length (fun i hi => hH₃.mono (by omega))
-            (fun i hi => hvo.mono (by omega) hW₃)
-            (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
-        · simp [Result.Abrupt] at habr
-        · cases hv
-      all_goals exact Safe.retype hg (by simp)
+      rw [Nat.min_eq_left hc₁]
+      refine Safe.bindC (read_sound (R := R) hp hC hvo hH₁) fun vf W₂ _ hW₂ hH₂ hvf => ?_
+      have hc₂ := getter_clock_le (run k env h e).2.1 (run k env h e).2.2 vo
+        (vo.read (run k env h e).2.2 l)
+      rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
+      refine Safe.bindArgs (runArgs_sound hC args _ iha hlen hargs (G.mono (hW₁.trans hW₂) hG) hH₂)
+        fun vs W₃ _ hW₃ hH₃ hvs => ?_
+      have hc₃ := runArgs_clock_le
+        (getter (run k env h e).2.1 (run k env h e).2.2 vo (vo.read (run k env h e).2.2 l)).2.1
+        env (getter (run k env h e).2.1 (run k env h e).2.2 vo (vo.read (run k env h e).2.2 l)).2.2
+        args
+      rw [Nat.min_eq_left (Nat.le_trans hc₃ (Nat.le_trans hc₂ hc₁))]
+      exact Lands.safe (V_fn.mp (V.mono hc₃ hW₃ hvf) _ (Nat.le_refl _) W₃ (List.prefix_refl _)
+        _ vo vs hvs.length (fun i hi => hH₃.mono (by omega))
+        (fun i hi => hvo.mono (by omega) (hW₂.trans hW₃))
+        (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
+  | cls ls es ks ih =>
+    intro k C Γ R W env h τ ht hC hG hH
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    refine Safe.tyEq ?_ hτ₀
+    cases ht with
+    | cls hes hks hτs hss hnd hL hty hms =>
+      rename_i τs ss
+      simp only [run]
+      -- The members that are functions: closures over the class's
+      -- environment.
+      have hfun : ∀ (i : Nat) (kd : ClassKind) (n : Nat) (b : Expr) (τ : Ty), ks[i]? = some kd →
+          es[i]? = some (Expr.func n b) → τs[i]? = some τ → kd ≠ .data →
+            V k W τ (.closure env n b) := by
+        intro i kd n b τ h₁ h₂ h₃ h₄
+        have := hty i _ kd τ h₂ h₁ h₃
+        rw [show memberCtx Γ ks τs i kd = Γ by cases kd <;> simp_all [memberCtx]] at this
+        exact func_value (ih _ (List.mem_of_getElem? h₂)) this hC hG hH
+      refine Safe.bindArgs (runInits_sound hC es ks τs ih (by omega) (by omega)
+        (fun i e τ h₁ h₂ h₃ => hty i e .data τ h₁ h₂ h₃) hG hH) fun vs W₁ _ hW₁ hH₁ hvs => ?_
+      have hc₁ := runInits_clock_le k env h es ks
+      generalize runInits k env h es ks = p at hc₁ hH₁ hvs ⊢
+      obtain ⟨r, c₁, h₁⟩ := p
+      simp only at hc₁ hH₁ hvs ⊢
+      have hW₂ := List.prefix_append W₁ [Cell.obj (.record L (objSlots L ls ss))]
+      have hself : ∀ i, i ≤ c₁ → V i (W₁ ++ [Cell.obj (.record L (objSlots L ls ss))])
+          (.record L (objSlots L ls ss)) (.obj h₁.length) := fun i _ =>
+        V_obj_cell (by rw [hH₁.1]; simp)
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs (by omega) (by omega)
+        (by omega) (by omega) hms
+        (fun i kd n b τ h₁ h₂ h₃ h₄ => (hfun i kd n b τ h₁ h₂ h₃ h₄).mono hc₁ (hW₁.trans hW₂))
+        (hvs.mono (Nat.le_refl _) hW₂)
+      rw [hfs]
+      refine Safe.ok (Nat.le_refl _) hW₂ ?_ ?_
+      · exact hH₁.alloc (by simp) (fun i s' v' hs hv' => by
+          match i, hs, hv' with
+          | 0, hs, hv' =>
+            simp at hs hv'; subst hs hv'
+            exact cls_cell hss hnd hL hl hp
+          | _ + 1, hs, _ => simp at hs)
+      · rw [V_record, hH₁.1]
+        exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
+  | ctor n body ih =>
+    intro k C Γ R W env h τ ht hC hG hH
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    refine Safe.tyEq ?_ hτ₀
+    cases ht with
+    | ctor hlen hb =>
+      subst hlen
+      simp only [run]
+      exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (closure_sound ih hb hC k W hG)
+  | new_ f args ihf iha =>
+    intro k C Γ R W env h τ ht hC hG hH
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    refine Safe.tyEq ?_ hτ₀
+    cases ht with
+    | new_ hf hlen hargs hρ =>
+      simp only [run]
+      refine Safe.bindC (ihf hf hC hG hH) fun vf W₁ _ hW₁ hH₁ hvf => ?_
+      have hc₁ := run_clock_le k env h f
+      rw [Nat.min_eq_left hc₁]
+      refine Safe.bindArgs (runArgs_sound hC args _ iha hlen hargs (G.mono hW₁ hG) hH₁)
+        fun vs W₂ _ hW₂ hH₂ hvs => ?_
+      have hc₂ := runArgs_clock_le (run k env h f).2.1 env (run k env h f).2.2 args
+      rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
+      generalize runArgs (run k env h f).2.1 env (run k env h f).2.2 args = pa at hc₂ hH₂ hvs ⊢
+      obtain ⟨ra, c₂, h₂⟩ := pa
+      simp only at hc₂ hH₂ hvs ⊢
+      -- `this`: a new object, of no fields.
+      have hW₃ := List.prefix_append W₂ [Cell.obj (.record [] [])]
+      have hH₃ : HeapOK c₂ (W₂ ++ [Cell.obj (.record [] [])]) (h₂ ++ [.fields []]) :=
+        hH₂.alloc (by simp) (fun i s' v' hs hv' => by
+          match i, hs, hv' with
+          | 0, hs, hv' =>
+            simp at hs hv'; subst hs hv'
+            exact CellV_obj.mpr ⟨[], rfl, fun l s hs => by simp [Ty.field] at hs, fun l _ => rfl⟩
+          | _ + 1, hs, _ => simp at hs)
+      have hcall := V_fn.mp ((hvf.mono hc₂ hW₂).mono (Nat.le_refl _) hW₃) c₂ (Nat.le_refl _) _
+        (List.prefix_refl _) (h₂ ++ [.fields []]) (.obj h₂.length) vs hvs.length
+        (fun i hi => hH₃.mono (by omega)) (by simp)
+        (fun i hi => hvs.mono (by omega) hW₃)
+      generalize call c₂ (h₂ ++ [.fields []]) vf (.obj h₂.length) vs = pc at hcall ⊢
+      obtain ⟨rc, c₃, h₃⟩ := pc
+      obtain ⟨hc₃, hto | ⟨hlt, W₄, hW₄, hH₄, ⟨v, hv, hV⟩ | habr⟩⟩ := hcall
+      · simp only at hto; subst hto; exact ⟨hc₃, .inl rfl⟩
+      · simp only at hv hlt hH₄ hV hc₃; subst hv
+        have hv' := V.tyEq _ hρ (hV hlt)
+        obtain ⟨ℓ, τc, rfl, -⟩ := V_record.mp hv'
+        simp only [Value.isObject]
+        exact Safe.ok hc₃ (hW₃.trans hW₄) (hH₄ hlt) (hV hlt)
+      · simp only at habr hlt hH₄ hc₃
+        cases rc <;> simp only [Result.Abrupt] at habr <;>
+          exact ⟨hc₃, .inr ⟨W₄, hW₃.trans hW₄, hH₄ hlt, .inr (.inl trivial)⟩⟩
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/
