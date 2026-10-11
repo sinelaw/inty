@@ -1071,6 +1071,182 @@ theorem ctorSubst_ret {n : Nat} {ρ : Ty} {τs : List Ty} {ψ : Subst} :
   simp [ctorSubst, Ty.subst, Subst.find, Subst.find_append,
     Subst.block_find_ge (show n + τs.length ≤ n + τs.length from Nat.le_refl _)]
 
+/-! ### Object literals -/
+
+/-- A function expression's type is a function type with its parameters. -/
+def FnShaped (es : List Expr) (τs : List Ty) : Prop :=
+  ∀ (i k : Nat) (b : Expr) (τ : Ty), es[i]? = some (Expr.func k b) → τs[i]? = some τ →
+    ∃ (θ : Ty) (ps : List Ty) (ρ : Ty), τ = Ty.fn θ ps ρ ∧ ps.length = k
+
+theorem FnShaped.cons {e : Expr} {es : List Expr} {τ : Ty} {τs : List Ty}
+    (h : ∀ k b, e = .func k b → ∃ θ ps ρ, τ = .fn θ ps ρ ∧ ps.length = k)
+    (hs : FnShaped es τs) : FnShaped (e :: es) (τ :: τs) := by
+  intro i k b τ' he hτ
+  cases i with
+  | zero =>
+    simp only [List.getElem?_cons_zero, Option.some.injEq] at he hτ
+    subst hτ; exact h k b he
+  | succ i => exact hs i k b τ' (by simpa using he) (by simpa using hτ)
+
+theorem FnShaped.tail {e : Expr} {es : List Expr} {τ : Ty} {τs : List Ty}
+    (h : FnShaped (e :: es) (τ :: τs)) : FnShaped es τs :=
+  fun i k b τ' he hτ => h (i + 1) k b τ' (by simpa using he) (by simpa using hτ)
+
+theorem FnShaped.head {e : Expr} {es : List Expr} {τ : Ty} {τs : List Ty}
+    (h : FnShaped (e :: es) (τ :: τs)) {k : Nat} {b : Expr} (he : e = .func k b) :
+    ∃ θ ps ρ, τ = .fn θ ps ρ ∧ ps.length = k :=
+  h 0 k b τ (by simp [he]) rfl
+
+theorem FnShaped.subst {es : List Expr} {τs : List Ty} (h : FnShaped es τs) (σ : Subst) :
+    FnShaped es (τs.map (·.subst σ)) := by
+  intro i k b τ he hτ
+  rw [List.getElem?_map] at hτ
+  cases hτ' : τs[i]? with
+  | none => rw [hτ'] at hτ; cases hτ
+  | some τ₀ =>
+    rw [hτ'] at hτ; simp only [Option.map_some, Option.some.injEq] at hτ; subst hτ
+    obtain ⟨θ, ps, ρ, rfl, hl⟩ := h i k b τ₀ he hτ'
+    exact ⟨_, _, _, Ty.subst_fn _ _ _ _, by simpa using hl⟩
+
+theorem infer_func_shape {Γ : Ctx} {R : Option Ty} {k : Nat} {b : Expr} {n : Nat} {o : Out}
+    (h : infer L Γ R (.func k b) n = some o) : ∃ θ ps ρ, o.τ = .fn θ ps ρ ∧ ps.length = k := by
+  simp only [infer] at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  simp only [Option.some.injEq] at h; subst h
+  exact ⟨_, _, _, Ty.subst_fn _ _ _ _, by simp [varBlock]⟩
+
+theorem inferArgs_shape : ∀ {es : List Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : OutArgs},
+    inferArgs L Γ R es n = some o → FnShaped es o.τs
+  | [], _, _, _, o, h => by
+    simp only [inferArgs, Option.some.injEq] at h; subst h
+    intro i k b τ he; simp at he
+  | e :: es, Γ, R, n, o, h => by
+    simp only [inferArgs] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    refine FnShaped.cons (fun k b he => ?_) (inferArgs_shape h₂)
+    subst he
+    obtain ⟨θ, ps, ρ, hτ, hl⟩ := infer_func_shape h₁
+    exact ⟨_, _, _, by rw [hτ, Ty.subst_fn], by simpa using hl⟩
+
+theorem TyEq.fn_inv {θ θ' ρ ρ' : Ty} {ps ps' : List Ty} (h : TyEq (.fn θ ps ρ) (.fn θ' ps' ρ')) :
+    TyEq θ θ' ∧ TyEq ρ ρ' ∧ TyEqs ps ps' := by
+  obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp h
+  have := TyEqs.of_zip hl hz
+  cases this with
+  | cons h₁ hs =>
+    cases hs with
+    | cons h₂ hs => exact ⟨h₁, h₂, hs⟩
+
+/-- An object literal's slots, from types equal under `φ` to a typing's. -/
+theorem fieldSlots_complete {T' : Ty} {φ : Subst} : ∀ {ks : List FieldKind} {es : List Expr}
+    {τs τs' ss' : List Ty}, FnShaped es τs → TyEqs (τs.map (·.subst φ)) τs' →
+    ks.length = es.length → es.length = τs.length → ss'.length = τs'.length →
+    (∀ x ∈ ks.zip (es.zip (τs'.zip ss')), FieldSlot T' x.1 x.2.1 x.2.2.1 x.2.2.2) →
+    ∃ θs ss, fieldSlots ks es τs = some (θs, ss) ∧ TyEqs (ss.map (·.subst φ)) ss' ∧
+      ∀ θ ∈ θs, TyEq (θ.subst φ) T'
+  | [], [], [], [], [], _, _, _, _, _, _ => ⟨[], [], rfl, .nil, by simp⟩
+  | k :: ks, e :: es, τ :: τs, τ' :: τs', s' :: ss', hsh, hτs, hk, he, hs, hf => by
+    cases hτs with
+    | cons hτ hτs =>
+    obtain ⟨θs, ss, h, hss, hθs⟩ := fieldSlots_complete hsh.tail hτs (by simpa using hk)
+      (by simpa using he) (by simpa using hs) (fun x hx => hf x (by simp [hx]))
+    have hf₀ := hf (k, e, τ', s') (by simp)
+    simp only at hf₀
+    cases hf₀ with
+    | data =>
+      refine ⟨θs, .slot .pre .data τ :: ss, by simp [fieldSlots, h], .cons ?_ hss, hθs⟩
+      exact TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) hτ
+    | @method θ' n b τs'' ρ' hθ =>
+      obtain ⟨θ, ps, ρ, rfl, -⟩ := hsh.head rfl
+      refine ⟨θ :: θs, .slot .pre .data (.fn θ ps ρ) :: ss, by simp [fieldSlots, h],
+        .cons (TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) hτ) hss, ?_⟩
+      intro θ₁ hθ₁
+      rcases List.mem_cons.mp hθ₁ with rfl | hθ₁
+      · simp only [Ty.subst_fn] at hτ; exact (TyEq.fn_inv hτ).1.trans hθ
+      · exact hθs θ₁ hθ₁
+    | @getter θ' b σ' hθ =>
+      obtain ⟨θ, ps, ρ, rfl, hl⟩ := hsh.head rfl
+      obtain rfl : ps = [] := List.eq_nil_of_length_eq_zero hl
+      simp only [Ty.subst_fn] at hτ
+      obtain ⟨h₁, h₂, -⟩ := TyEq.fn_inv hτ
+      refine ⟨θ :: θs, .slot .pre .getter ρ :: ss, by simp [fieldSlots, h],
+        .cons (TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) h₂) hss, ?_⟩
+      intro θ₁ hθ₁
+      rcases List.mem_cons.mp hθ₁ with rfl | hθ₁
+      · exact h₁.trans hθ
+      · exact hθs θ₁ hθ₁
+  | [], _ :: _, _, _, _, _, _, hk, _, _, _ | _ :: _, [], _, _, _, _, _, hk, _, _, _ => by
+    simp at hk
+  | _, [], _ :: _, _, _, _, _, _, he, _, _ | _, _ :: _, [], _, _, _, _, _, he, _, _ => by
+    simp at he
+  | _, _, [], _ :: _, _, _, hτs, _, _, _, _ | _, _, _ :: _, [], _, _, hτs, _, _, _, _ => by
+    cases hτs
+  | _, _, _, [], _ :: _, _, _, _, _, hs, _ | _, _, _, _ :: _, [], _, _, _, _, hs, _ => by
+    simp at hs
+
+/-- `this` types equal under `φ` to the literal's type: their unifier. -/
+theorem unifyThis_complete {θs : List Ty} {T : Ty} {φ : Subst}
+    (h : ∀ θ ∈ θs, TyEq (θ.subst φ) (T.subst φ)) :
+    ∃ σ, unifyThis θs T = some σ ∧ Absorbs φ σ := by
+  match θs, h with
+  | [], _ => exact ⟨[], rfl, fun τ => by simp; exact TyEq.refl _⟩
+  | θ :: θs, h =>
+    have h₁ : TyEq ((Ty.tuple (θ :: θs)).subst φ)
+        ((Ty.tuple (List.replicate (θs.length + 1) θ)).subst φ) := by
+      simp only [Ty.subst_app, List.map_replicate]
+      refine TyEq.app_eqs (TyEqs.of_zip (by simp) (fun x hx => ?_))
+      obtain ⟨y, z⟩ := x
+      have hz : z = θ.subst φ := List.eq_of_mem_replicate (List.of_mem_zip hx).2
+      obtain ⟨y₀, hy₀, rfl⟩ := List.mem_map.mp (List.of_mem_zip hx).1
+      subst hz
+      exact (h y₀ hy₀).trans (h θ List.mem_cons_self).symm
+    obtain ⟨σ₁, hu₁, habs₁⟩ := unify_mgu h₁
+    have h₂ : TyEq ((θ.subst σ₁).subst φ) ((T.subst σ₁).subst φ) :=
+      (habs₁ _).trans ((h θ List.mem_cons_self).trans (habs₁ _).symm)
+    obtain ⟨σ₂, hu₂, habs₂⟩ := unify_mgu h₂
+    exact ⟨Subst.compose σ₂ σ₁, by simp [unifyThis, hu₁, hu₂], Absorbs.compose habs₁ habs₂⟩
+
+theorem TyEqs.append : ∀ {xs ys xs' ys' : List Ty}, TyEqs xs ys → TyEqs xs' ys' →
+    TyEqs (xs ++ xs') (ys ++ ys')
+  | [], [], _, _, _, h => h
+  | _ :: _, _ :: _, _, _, .cons h hs, h' => .cons h (hs.append h')
+
+theorem TyEqs.reverse : ∀ {xs ys : List Ty}, TyEqs xs ys → TyEqs xs.reverse ys.reverse
+  | [], [], _ => .nil
+  | _ :: _, _ :: _, .cons h hs => by
+    simp only [List.reverse_cons]
+    exact hs.reverse.append (.cons h .nil)
+
+theorem Ty.field_tyEqs {l : String} : ∀ {ls : List String} {xs ys : List Ty}, TyEqs xs ys →
+    (Ty.field l ls xs = none ∧ Ty.field l ls ys = none) ∨
+      ∃ x y, Ty.field l ls xs = some x ∧ Ty.field l ls ys = some y ∧ TyEq x y
+  | [], _, _, _ => .inl ⟨rfl, rfl⟩
+  | _ :: _, [], [], _ => .inl ⟨rfl, rfl⟩
+  | l' :: ls, x :: xs, y :: ys, .cons h hs => by
+    simp only [Ty.field]
+    split
+    · exact .inr ⟨x, y, rfl, rfl, h⟩
+    · exact Ty.field_tyEqs hs
+
+theorem objSlots_tyEqs {L ls : List String} {xs ys : List Ty} (h : TyEqs xs ys) :
+    TyEqs (objSlots L ls xs) (objSlots L ls ys) := by
+  have hr := h.reverse
+  refine TyEqs.of_zip (by simp [objSlots]) (fun x hx => ?_)
+  simp only [objSlots] at hx
+  obtain ⟨y, hy, rfl⟩ := zip_map_map_mem hx
+  rcases Ty.field_tyEqs (l := y) (ls := ls.reverse) hr with ⟨h₁, h₂⟩ | ⟨a, b, h₁, h₂, hab⟩
+  · rw [h₁, h₂]; exact TyEq.refl _
+  · rw [h₁, h₂]; exact hab
+
 @[simp] theorem Ty.newTarget_subst (σ : Subst) : Ty.newTarget.subst σ = .newTarget := rfl
 
 theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
@@ -1403,7 +1579,25 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂,
         (hag₂.ty hτb₁).trans (hτ₁.trans hτ₀), Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
   | obj ls es ks ih =>
-    sorry
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    cases ht with
+    | @obj _ _ _ _ ss' _ _ τs' hes hks hτs hss hL hargs hfs =>
+      obtain ⟨o, h, φ, hag, hτs₂, hsat⟩ :=
+        inferArgs_complete es _ ih hΓ hR hC hΓ' hR' (by omega) hargs
+      have hc : ls.all (· ∈ L) = true ∧ es.length = ls.length ∧ ks.length = ls.length :=
+        ⟨List.all_eq_true.mpr (fun l hl => by simpa using hL l hl), hes, hks⟩
+      have hlen : o.τs.length = es.length := by
+        have := hτs₂.length; simp only [List.length_map] at this; omega
+      obtain ⟨θs, ss, hf, hss₂, hθs⟩ := fieldSlots_complete (inferArgs_shape h) hτs₂
+        (by omega) hlen.symm (by omega) hfs
+      have hT : TyEq ((Ty.record L (objSlots L ls ss)).subst φ) (.record L (objSlots L ls ss')) := by
+        simp only [Ty.subst_app, objSlots_subst]
+        exact TyEq.app_eqs (objSlots_tyEqs hss₂)
+      obtain ⟨σ', hσ', habs⟩ := unifyThis_complete (θs := θs)
+        (T := Ty.record L (objSlots L ls ss)) (φ := φ) (fun θ hθ => (hθs θ hθ).trans hT.symm)
+      refine ⟨_, by simp only [infer, hc, and_self, ↓reduceIte, h, hf, hσ']; rfl, φ,
+        hag.absorb habs, (habs _).trans (hT.trans hτ₀), Sat.absorb habs hsat⟩
   | cls ls es ks ih =>
     sorry
   | ctor k body ih =>
