@@ -333,12 +333,15 @@ inductive Cls where
   known type but a sum, `Null` or `Undefined`. It waits while `τ` is a type
   variable, so eliminating a sum has a principal type. -/
   | strip
+  /-- `InjectW τ T`: the wide system's injection (`Inty.Soundness`), with
+  the expected type `T` an argument, so that a substitution reaches it. -/
+  | injectW
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
   | .plus | .indexWrite | .notNew | .inject _ => 1
-  | .strip => 2
+  | .strip | .injectW => 2
   | .indexable | .hasProp _ => 3
   | .merge => 5
 

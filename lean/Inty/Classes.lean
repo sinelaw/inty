@@ -603,22 +603,25 @@ a type variable can't fail: no value has a type variable's type (`V` in
 such a constraint in place (`Plus a`), or reads a property access on a
 receiver nothing pinned down as a field of some object
 (`default_has_prop`). -/
-def HoldsOrVar (C : List Pred) : Prop := ∀ p ∈ C, InstEq p ∨ p.OnVar
+def HoldsOrVarS (S : Sys) (C : List Pred) : Prop := ∀ p ∈ C, S.inst p ∨ p.OnVar
 
-theorem HoldsOrVar.append {C D : List Pred} (hC : HoldsOrVar C) (hD : HoldsOrVar D) :
-    HoldsOrVar (C ++ D) :=
+/-- In the narrow system. -/
+abbrev HoldsOrVar (C : List Pred) : Prop := HoldsOrVarS Sys.narrow C
+
+theorem HoldsOrVarS.append {S : Sys} {C D : List Pred} (hC : HoldsOrVarS S C)
+    (hD : HoldsOrVarS S D) : HoldsOrVarS S (C ++ D) :=
   fun c hc => (List.mem_append.mp hc).elim (hC c) (hD c)
 
-theorem EntailsS.holdsOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p) :
-    InstEq p ∨ p.OnVar := by
+theorem EntailsS.holdsOrVar {S : Sys} {C : List Pred} (hC : HoldsOrVarS S C) (h : EntailsS S C p) :
+    S.inst p ∨ p.OnVar := by
   rcases h with hi | ⟨q, hq, hpq⟩
   · exact .inl hi
-  · exact (hC q hq).imp (InstEq.of_predEq hpq) (Pred.OnVar.predEq hpq.symm)
+  · exact (hC q hq).imp (S.inst_eq hpq) (Pred.OnVar.predEq hpq.symm)
 
 /-- A constraint of a class other than `Merge` that holds or is on a type
 variable: an instance, or its first argument is one. -/
-theorem EntailsS.instOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p)
-    (hc : p.cls ≠ .merge) : InstEq p ∨ ∃ t a rest, p.args = t :: rest ∧ t.whnf = .var a := by
+theorem EntailsS.instOrVar {S : Sys} {C : List Pred} (hC : HoldsOrVarS S C) (h : EntailsS S C p)
+    (hc : p.cls ≠ .merge) : S.inst p ∨ ∃ t a rest, p.args = t :: rest ∧ t.whnf = .var a := by
   rcases h.holdsOrVar hC with h | h | h
   · exact .inl h
   · exact .inr h

@@ -22,7 +22,7 @@ open Inty
 
 example : ∀ (clock : Nat) {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
     {W : World} {env : Env} {h : Heap} {e : Expr} {τ : Ty}, HasType L C Γ R rm md e τ → HoldsOrVar C →
-      G W Γ env → HeapOK clock W h →
+      G W (Γ.map Scheme.toW) env → HeapOK clock W h →
       (run clock env h e).2.1 ≤ clock ∧
       ((run clock env h e).1 = .timeout ∨ ∃ W', W <+: W' ∧
         HeapOK (run clock env h e).2.1 W' (run clock env h e).2.2 ∧
@@ -117,7 +117,7 @@ example : Pred.AssumableAt top p ↔
 
 example : Cls.arity c = match c with
     | .plus | .indexWrite | .notNew | .inject _ => 1
-    | .strip => 2
+    | .strip | .injectW => 2
     | .hasProp _ | .indexable => 3
     | .merge => 5 := by
   cases c <;> rfl
@@ -165,7 +165,7 @@ example : MemberP P T fs l s ↔
 example : CellV k W (.obj (.var a)) v ↔ False := Iff.rfl
 example : CellV k W (.arr τ) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := CellV_arr
 example : CellV k W (.scheme s) v ↔
-    ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → V k W (s.inst τs) v := Iff.rfl
+    ∀ τs, τs.length = s.arity → HoldsOrVarW (s.instPreds τs) → V k W (s.inst τs) v := Iff.rfl
 example : Result.Abrupt r ↔
     (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued ∨ ∃ f, r = .fault f := by
   cases r <;> simp [Result.Abrupt] <;> exact ⟨.outOfBounds, trivial⟩

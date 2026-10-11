@@ -1,4 +1,4 @@
-import Inty.TypeSubst
+import Inty.Wide
 import Inty.Clock
 
 /-!
@@ -88,7 +88,7 @@ value has every instance of its scheme whose constraints hold; an object's
 properties hold its record type's fields (`MemberP`); an array's elements
 each have the element type. -/
 def CellP (P : Ty → Value → Prop) : Cell → Value → Prop
-  | .scheme s, v => ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → P (s.inst τs) v
+  | .scheme s, v => ∀ τs, τs.length = s.arity → HoldsOrVarW (s.instPreds τs) → P (s.inst τs) v
   | .obj (.record ls slots), v => ∃ fs, v = .fields fs ∧ (∀ l s, Ty.field l ls slots = some s →
       MemberP P (.record ls slots) fs l s) ∧ ∀ l, Ty.field l ls slots = none → fs.lookup l = none
   | .obj _, _ => False
@@ -237,7 +237,7 @@ abbrev CellV (k : Nat) (W : World) : Cell → Value → Prop := CellP (V k W)
 
 /-- A value has every instance of the scheme whose constraints hold. -/
 def SchemeV (k : Nat) (W : World) (s : Scheme) (v : Value) : Prop :=
-  ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) → V k W (s.inst τs) v
+  ∀ τs, τs.length = s.arity → HoldsOrVarW (s.instPreds τs) → V k W (s.inst τs) v
 
 theorem CellV_scheme : CellV k W (.scheme s) v ↔ SchemeV k W s v := Iff.rfl
 
@@ -666,7 +666,7 @@ theorem SchemeV.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W')
 
 theorem SchemeV.mono_iff {k : Nat} {τ : Ty} {v : Value} :
     SchemeV k W (.mono τ) v ↔ V k W τ v :=
-  ⟨fun h => by simpa using h [] rfl (by simp [HoldsOrVar, Scheme.instPreds, Scheme.mono]),
+  ⟨fun h => by simpa using h [] rfl (by simp [HoldsOrVarS, Scheme.instPreds, Scheme.mono]),
     fun h τs _ _ => by simpa using h⟩
 
 
@@ -881,12 +881,12 @@ theorem UnOp.eval_sound {W' : World} (hop : UnOpTy op τ₁ τ) (hv : V c W' τ�
   | typeof => exact Safe.ok hc hW hH (by simp)
   | neg => simp at hv; obtain ⟨n, rfl⟩ := hv; exact Safe.ok hc hW hH (by simp)
 
-theorem BinOp.eval_sound {W' : World} (hC : HoldsOrVar C) (hop : BinOpTy C op τ₁ τ₂ τ)
+theorem BinOp.eval_sound {W' : World} (hC : HoldsOrVarW C) (hop : BinOpTyS Sys.wide C op τ₁ τ₂ τ)
     (hv₁ : V c W' τ₁ v₁) (hv₂ : V c W' τ₂ v₂) (hc : c ≤ k) (hW : W <+: W')
     (hH : HeapOK c W' h) : Safe (op.eval v₁ v₂, c, h) k W τ R := by
   cases hop with
   | plus hp =>
-    rcases hp.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
+    rcases hp.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
     · cases hi
       case plusNumber =>
         have he := (PredEq.one hq).2
@@ -906,7 +906,7 @@ theorem BinOp.eval_sound {W' : World} (hC : HoldsOrVar C) (hop : BinOpTy C op τ
 
 /-- Running a syntactic value gives a value, and takes no clock and no
 cell. -/
-theorem IsValue.run_value (hv : e.IsValue) (ht : HasType L C Γ R rm md e τ) (hG : G W Γ env)
+theorem IsValue.run_value (hv : e.IsValue) (ht : HasTypeS Sys.wide L C Γ R rm md e τ) (hG : G W Γ env)
     (hH : HeapOK k W h) : ∃ v, run k env h e = (.ok v, k, h) := by
   induction ht
   case lit => exact ⟨_, by simp [run]; rfl⟩
@@ -1345,9 +1345,9 @@ have it, a getter called gives a value of its type, and a type variable has
 no values. -/
 theorem read_sound {C : List Pred} {l : String} {τ κ σ : Ty} {v : Value} {c : Nat}
     {W : World} {h : Heap} {R : Option Ty}
-    (hp : Entails C ⟨.hasProp l, [τ, κ, σ]⟩) (hC : HoldsOrVar C) (hv : V c W τ v)
+    (hp : EntailsS Sys.wide C ⟨.hasProp l, [τ, κ, σ]⟩) (hC : HoldsOrVarW C) (hv : V c W τ v)
     (hH : HeapOK c W h) : Safe (getter c h v (v.read h l)) c W σ R := by
-  rcases hp.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
+  rcases hp.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
   · cases hi
     case hasProp l' ls fs k σ' hf =>
       obtain ⟨hcls, hτ, -, hσ⟩ := PredEq.three hq
@@ -1408,13 +1408,13 @@ theorem lookup_replaceField_self {l : String} {v : Value} :
 type. -/
 theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} {c : Nat}
     {W : World} {h : Heap} {R : Option Ty}
-    (hp : Entails C ⟨.hasProp l, [τ, .data, σ]⟩)
-    (hC : HoldsOrVar C) (hvo : V c W τ vo) (hvv : V c W σ vv) (hH : HeapOK c W h) :
+    (hp : EntailsS Sys.wide C ⟨.hasProp l, [τ, .data, σ]⟩)
+    (hC : HoldsOrVarW C) (hvo : V c W τ vo) (hvv : V c W σ vv) (hH : HeapOK c W h) :
     Safe ((vo.setProp h l vv).1, c, (vo.setProp h l vv).2) c W σ R := by
   -- The receiver is a record whose field holds a value of the stored type.
   obtain ⟨ls, fs, sw, σw, hτr, hfw, hsw, hσw⟩ : ∃ ls fs sw σw, TyEq τ (.record ls fs) ∧
       Ty.field l ls fs = some sw ∧ TyEq sw (.slot .pre .data σw) ∧ TyEq σ σw := by
-    rcases hp.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
+    rcases hp.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
     · cases hi
       case hasProp l' ls fs k σ' hf =>
         obtain ⟨hcls, hτ', hk, hσ⟩ := PredEq.three hq
@@ -1470,10 +1470,10 @@ theorem VList.replicate {k : Nat} {W : World} {τ : Ty} :
 /-- Reading an element: an instance of `Indexable` says the container has
 elements of the type, and an index it hasn't is a fault. -/
 theorem index_sound {C : List Pred} {τ ι σ : Ty} {vo vi : Value} {c : Nat} {W : World}
-    {h : Heap} {R : Option Ty} (hp : Entails C ⟨.indexable, [τ, ι, σ]⟩) (hC : HoldsOrVar C)
+    {h : Heap} {R : Option Ty} (hp : EntailsS Sys.wide C ⟨.indexable, [τ, ι, σ]⟩) (hC : HoldsOrVarW C)
     (hvo : V c W τ vo) (hvi : V c W ι vi) (hH : HeapOK c W h) :
     Safe (getter c h vo (vo.index h vi)) c W σ R := by
-  rcases hp.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
+  rcases hp.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
   · cases hi
     case indexArray τq =>
       obtain ⟨-, hτ, hι, hσ⟩ := PredEq.three hq
@@ -1506,17 +1506,17 @@ theorem index_sound {C : List Pred} {τ ι σ : Ty} {vo vi : Value} {c : Nat} {W
 /-- Storing an element: an array's cell keeps its type, and an index past
 its end is a fault. -/
 theorem setIndex_sound {C : List Pred} {τ ι σ : Ty} {vo vi vv : Value} {c : Nat} {W : World}
-    {h : Heap} {R : Option Ty} (hp : Entails C ⟨.indexable, [τ, ι, σ]⟩)
-    (hw : Entails C ⟨.indexWrite, [τ]⟩) (hC : HoldsOrVar C) (hvo : V c W τ vo)
+    {h : Heap} {R : Option Ty} (hp : EntailsS Sys.wide C ⟨.indexable, [τ, ι, σ]⟩)
+    (hw : EntailsS Sys.wide C ⟨.indexWrite, [τ]⟩) (hC : HoldsOrVarW C) (hvo : V c W τ vo)
     (hvi : V c W ι vi) (hvv : V c W σ vv) (hH : HeapOK c W h) :
     Safe ((vo.setIndex h vi vv).1, c, (vo.setIndex h vi vv).2) c W σ R := by
-  rcases hw.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
+  rcases hw.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
   · cases hi
     case writeArray ε =>
       have hτε := (PredEq.one hq).2
       -- The element type is the array's.
       have hσ : TyEq σ ε ∧ TyEq ι .number := by
-        rcases hp.instOrVar hC (by simp) with ⟨q', hq', hi'⟩ | ⟨_, a, _, he, hw⟩
+        rcases hp.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q', hq', hi'⟩ | ⟨_, a, _, he, hw⟩
         · cases hi'
           case indexArray τq =>
             obtain ⟨-, hτ, hι, hσ⟩ := PredEq.three hq'
@@ -1885,10 +1885,10 @@ theorem copy_member {k : Nat} {W : World} {T : Ty} {cs : List (String × MemberK
 instance, since an object's type has no slot of unknown presence or kind,
 so the merged fields have the result's type. -/
 theorem spread_contents_sound {C : List Pred} {L : List String} {ps ks τs ss rs : List Ty}
-    {cs₁ cs₂ : List (String × MemberKind × Value)} {c : Nat} {W : World} (hC : HoldsOrVar C)
+    {cs₁ cs₂ : List (String × MemberKind × Value)} {c : Nat} {W : World} (hC : HoldsOrVarW C)
     (hps : ps.length = L.length) (hks : ks.length = L.length) (hτs : τs.length = L.length)
     (hss : ss.length = L.length) (hrs : rs.length = L.length)
-    (hm : ∀ p ∈ mergePreds ps ks τs ss rs, Entails C p)
+    (hm : ∀ p ∈ mergePreds ps ks τs ss rs, EntailsS Sys.wide C p)
     (h₁ : OwnP L ss c W cs₁) (h₂ : OwnP L (slots3 ps ks τs) c W cs₂) :
     CellV c W (.obj (.record L rs)) (.fields (cs₂ ++ cs₁)) := by
   rw [CellV_obj]
@@ -1902,7 +1902,7 @@ theorem spread_contents_sound {C : List Pred} {L : List String} {ps ks τs ss rs
   obtain ⟨p, k, τ, s, hp, hs, hpm⟩ := field_merge hps hks hτs hss hrs hr
   have hc₂ := h₂.1 l _ hp
   have hc₁ := h₁.1 l s hs
-  rcases (hm _ hpm).holdsOrVar hC with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩ | hmv
+  rcases (hm _ hpm).holdsOrVarN hC (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩ | hmv
   · cases hi
     case mergeData τq sq =>
       obtain ⟨-, hpre, hk, hτ, -, hr'⟩ := PredEq.five hq
@@ -1995,15 +1995,15 @@ theorem Safe.bindArgs {p : RanArgs} {K : List Value → Nat → Heap → Ran}
 
 /-- What the fundamental lemma says of one expression. -/
 def RunSound (L : List String) (e : Expr) : Prop :=
-  ∀ {k C Γ R rm md W env h τ}, HasType L C Γ R rm md e τ → HoldsOrVar C → G W Γ env →
+  ∀ {k C Γ R rm md W env h τ}, HasTypeS Sys.wide L C Γ R rm md e τ → HoldsOrVarW C → G W Γ env →
     HeapOK k W h → Safe (run k env h e) k W τ R
 
 /-- Well-typed arguments, each safe by the fundamental lemma, run safely. -/
 theorem runArgs_sound {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
-    (hC : HoldsOrVar C) :
+    (hC : HoldsOrVarW C) :
     ∀ (args : List Expr) (τs : List Ty) {k : Nat} {W : World} {env : Env} {h : Heap},
       (∀ a ∈ args, RunSound L a) →
-      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R rm md p.1 p.2) → G W Γ env →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasTypeS Sys.wide L C Γ R rm md p.1 p.2) → G W Γ env →
       HeapOK k W h → SafeArgs (runArgs k env h args) k W τs R
   | [], [], k, W, env, h, _, _, _, _, hH => by
     simp only [runArgs, SafeArgs]; exact ⟨Nat.le_refl k, W, List.prefix_refl W, hH, by simp⟩
@@ -2078,8 +2078,8 @@ with `i + 1` to spare runs the body with `i`, where the closure itself
 theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} {τs : List Ty}
     {body : Expr} {env : Env} (ih : RunSound L body)
     {rm md : Mode}
-    (hb : HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) rm md body ρ)
-    (hC : HoldsOrVar C) : ∀ j W, G W Γ env → V j W (.fn θ τs ρ) (.closure env τs.length body) := by
+    (hb : HasTypeS Sys.wide L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) rm md body ρ)
+    (hC : HoldsOrVarW C) : ∀ j W, G W Γ env → V j W (.fn θ τs ρ) (.closure env τs.length body) := by
   intro j
   induction j with
   | zero =>
@@ -2126,7 +2126,7 @@ theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} 
 theorem func_value {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {τ : Ty}
     {n : Nat} {b : Expr} {k : Nat} {W : World} {env : Env} {h : Heap}
     {rm md : Mode}
-    (ih : RunSound L (.func n b)) (ht : HasType L C Γ R rm md (.func n b) τ) (hC : HoldsOrVar C)
+    (ih : RunSound L (.func n b)) (ht : HasTypeS Sys.wide L C Γ R rm md (.func n b) τ) (hC : HoldsOrVarW C)
     (hG : G W Γ env) (hH : HeapOK k W h) : V k W τ (.closure env n b) := by
   have hs := ih ht hC hG hH
   simp only [run] at hs
@@ -2154,24 +2154,25 @@ theorem V_bound {k : Nat} {W : World} {θ θ' ρ : Ty} {τs : List Ty} {cenv : E
   exact hf.2 j hj W' hW' h self args hl hh
     (fun i hi => (hs i (by omega)).mono (Nat.le_refl i) hW') ha
 
-/-- An entailed `Inject T τ`, under constraints each an instance or on a
+/-- An entailed `InjectW τ T`, under constraints each an instance or on a
 type variable: a value of `τ` is one of `T` (a type variable has none). -/
-theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVar C)
-    (h : Entails C ⟨.inject T, [τ]⟩) {k : Nat} {W : World} {v : Value} (hv : V k W τ v) :
-    V k W T v := by
+theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVarW C)
+    (h : EntailsS Sys.wide C ⟨.injectW, [τ, T]⟩) {k : Nat} {W : World} {v : Value}
+    (hv : V k W τ v) : V k W T v := by
   rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hw⟩
   · obtain ⟨c, args⟩ := q
     match args, hq.2.1 with
-    | [τ'], _ =>
-      obtain ⟨hc, hτ⟩ := PredEq.one hq
+    | [τ', T'], _ =>
+      obtain ⟨hc, hτ, hT⟩ := PredEq.two hq
       subst hc
       have hv' := V.tyEq k hτ hv
       cases hi with
-      | injectSelf _ => exact hv'
-      | @injectNothing _ z σ he _ =>
-        refine V.tyEq k he.symm (V_maybe.mpr (.inl ?_))
+      | narrow hi => cases hi
+      | injectSelf => exact V.tyEq k hT.symm hv'
+      | @injectNothing z σ =>
+        refine V.tyEq k hT.symm (V_maybe.mpr (.inl ?_))
         cases z <;> simpa [Nothing.ty, Nothing.con, Nothing.value] using hv'
-      | injectSome he _ _ _ _ => exact V.tyEq k he.symm (V_maybe.mpr (.inr hv'))
+      | injectSome => exact V.tyEq k hT.symm (V_maybe.mpr (.inr hv'))
   · simp only [List.cons.injEq] at ht
     obtain ⟨rfl, -⟩ := ht
     exact (V_whnf_var hw hv).elim
@@ -2180,7 +2181,7 @@ theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVar C)
 derivation's: an equal type, or an annotation's type the value is
 injected into. -/
 theorem Safe.lift {p : Ran} {k : Nat} {W : World} {τ₀ τ : Ty} {R : Option Ty} {C : List Pred}
-    {md md₀ : Mode} (hC : HoldsOrVar C) (hl : Lift C md md₀ τ₀ τ) (h : Safe p k W τ₀ R) :
+    {md md₀ : Mode} (hC : HoldsOrVarW C) (hl : LiftS Sys.wide C md md₀ τ₀ τ) (h : Safe p k W τ₀ R) :
     Safe p k W τ R := by
   rcases hl with ⟨-, he, -⟩ | ⟨-, -, -, hi⟩
   · exact h.tyEq he
@@ -2192,8 +2193,8 @@ theorem Safe.lift {p : Ran} {k : Nat} {W : World} {τ₀ τ : Ty} {R : Option Ty
 
 /-- An entailed `Strip τ σ`, under constraints each an instance or on a
 type variable: a value of `τ` that isn't nothing is one of `σ`. -/
-theorem EntailsS.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVar C)
-    (h : Entails C ⟨.strip, [τ, σ]⟩) {k : Nat} {W : World} {v : Value} (hv : V k W τ v)
+theorem EntailsS.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVarW C)
+    (h : EntailsS Sys.wide C ⟨.strip, [τ, σ]⟩) {k : Nat} {W : World} {v : Value} (hv : V k W τ v)
     (hn : v.isNothing = false) : V k W σ v := by
   rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hw⟩
   · obtain ⟨c, args⟩ := q
@@ -2203,21 +2204,24 @@ theorem EntailsS.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVar C)
       subst hc
       have hv' := V.tyEq k hτ hv
       cases hi with
-      | @stripSome z _ =>
-        rcases V_maybe.mp hv' with h | h
-        · subst h; cases z <;> simp [Nothing.value, Value.isNothing] at hn
-        · exact V.tyEq k hσ.symm h
-      | stripSelf _ _ _ => exact V.tyEq k hσ.symm hv'
+      | narrow hi =>
+        cases hi with
+        | @stripSome z _ =>
+          rcases V_maybe.mp hv' with h | h
+          · subst h; cases z <;> simp [Nothing.value, Value.isNothing] at hn
+          · exact V.tyEq k hσ.symm h
+        | stripSelf _ _ _ => exact V.tyEq k hσ.symm hv'
+      | stripSelf => exact V.tyEq k hσ.symm hv'
   · simp only [List.cons.injEq] at ht
     obtain ⟨rfl, -⟩ := ht
     exact (V_whnf_var hw hv).elim
 
 /-- An entailed `NotNew θ`, under constraints each an instance or on a type
 variable: `θ` isn't `newTarget`. -/
-theorem EntailsS.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVar C)
-    (h : Entails C ⟨.notNew, [θ]⟩) : ¬ TyEq θ .newTarget := by
+theorem EntailsS.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVarW C)
+    (h : EntailsS Sys.wide C ⟨.notNew, [θ]⟩) : ¬ TyEq θ .newTarget := by
   intro hθ
-  rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hv⟩
+  rcases h.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hv⟩
   · cases hi with
     | notNew hc => exact hc (TyEq.app_iff.mp ((PredEq.one hq).2.symm.trans hθ)).1
     | _ => cases hq.1
@@ -2249,12 +2253,12 @@ theorem memberCtx_other (Γ : Ctx) {k : ClassKind} (hk : k ≠ .data) (ks : List
 /-- A class's field initialisers, each typed in its context, run safely:
 each sees the fields before it, in new cells. -/
 theorem runInits_sound {L : List String} {C : List Pred} {R : Option Ty} {rm md : Mode}
-    (hC : HoldsOrVar C) :
+    (hC : HoldsOrVarW C) :
     ∀ (es : List Expr) (ks : List ClassKind) (τs : List Ty) {Γ : Ctx} {k : Nat} {W : World}
       {env : Env} {h : Heap},
       (∀ e ∈ es, RunSound L e) → es.length = ks.length → τs.length = ks.length →
       (∀ i e τ, es[i]? = some e → ks[i]? = some .data → τs[i]? = some τ →
-        HasType L C (memberCtx Γ ks τs i .data) R rm md e τ) →
+        HasTypeS Sys.wide L C (memberCtx Γ ks τs i .data) R rm md e τ) →
       G W Γ env → HeapOK k W h → SafeArgs (runInits k env h es ks) k W (dataTys ks τs) R
   | [], [], [], Γ, k, W, env, h, _, _, _, _, _, hH => by
     simp only [runInits, dataTys, SafeArgs]
@@ -2329,12 +2333,12 @@ theorem MemberP.congr {P : Ty → Value → Prop} {T : Ty} {fs fs' : List (Strin
 /-- A class's members: each holds what its slot says, the instance's
 type being `T`. -/
 theorem clsMembers_sound {c : Nat} {W : World} {env : Env} {self : Value} {T : Ty}
-    {C : List Pred} (hself : ∀ i, i ≤ c → V i W T self) (hC : HoldsOrVar C) :
+    {C : List Pred} (hself : ∀ i, i ≤ c → V i W T self) (hC : HoldsOrVarW C) :
     ∀ (ls : List String) (es : List Expr) (ks : List ClassKind) (τs ss : List Ty)
       (vs : List Value),
       es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length →
-      (∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot C T x.1 x.2.1 x.2.2.1 x.2.2.2) →
+      (∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlotS Sys.wide C T x.1 x.2.1 x.2.2.1 x.2.2.2) →
       (∀ (i : Nat) (kd : ClassKind) (n : Nat) (b : Expr) (τ : Ty), ks[i]? = some kd →
         es[i]? = some (Expr.func n b) → τs[i]? = some τ →
         kd ≠ .data → V c W τ (.closure env n b)) →
@@ -2351,14 +2355,14 @@ theorem clsMembers_sound {c : Nat} {W : World} {env : Env} {self : Value} {T : T
     simp at hl
   | l :: ls, e :: es, kd :: ks, τ :: τs, s :: ss, vs, h₁, h₂, h₃, h₄, hm, hf, hvs => by
     simp only [List.length_cons, Nat.add_right_cancel_iff] at h₁ h₂ h₃ h₄
-    have hm' : ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot C T x.1 x.2.1 x.2.2.1 x.2.2.2 :=
+    have hm' : ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlotS Sys.wide C T x.1 x.2.1 x.2.2.1 x.2.2.2 :=
       fun x hx => hm x (List.mem_cons_of_mem _ hx)
     have hf' : ∀ (i : Nat) (kd : ClassKind) (n : Nat) (b : Expr) (τ : Ty), ks[i]? = some kd →
         es[i]? = some (Expr.func n b) →
         τs[i]? = some τ → kd ≠ .data → V c W τ (.closure env n b) :=
       fun i kd n b τ a₁ a₂ a₃ a₄ => hf (i + 1) kd n b τ (by simpa using a₁) (by simpa using a₂)
         (by simpa using a₃) a₄
-    have hms : MemberSlot C T kd e τ s := hm _ List.mem_cons_self
+    have hms : MemberSlotS Sys.wide C T kd e τ s := hm _ List.mem_cons_self
     cases hms with
     | data =>
       cases vs with
@@ -2519,9 +2523,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           a ∈ (R.map Ty.ftv).getD [] → a < m :=
         fun a ha => lt_maxPlusOne a (by rcases ha with h | h | h | h | h <;> simp [h])
       have hinst : ∀ τs, τs.length = s.arity →
-          HasType L (C ++ s.instPreds τs) Γ R rm (annMode ann) e₁ (s.inst τs) := by
+          HasTypeS Sys.wide L (C ++ s.instPreds τs) Γ R rm (annMode ann) e₁ (s.inst τs) := by
         intro τs hlen
-        have h := (hgen m (fun a ha => hm a (.inl ha))).subst Sys.narrow_substable (Subst.block m τs)
+        have h := (hgen m (fun a ha => hm a (.inl ha))).subst Sys.wide_substable (Subst.block m τs)
         have hfresh : ∀ a, a < m → (Subst.block m τs).find a = none := fun a ha =>
           Subst.find_none (fun p hp e => by have := Subst.block_keys p hp; omega)
         have hCσ : C.map (·.subst (Subst.block m τs)) = C := by
@@ -2539,7 +2543,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           Scheme.openPreds_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen,
           ctx_subst_id (fun a ha => hfresh a (hm a (.inr (.inl ha)))),
           Scheme.open_block s (fun a ha => hm a (.inr (.inr (.inl ha)))) hlen] at h
-      have hsafe : ∀ τs, τs.length = s.arity → HoldsOrVar (s.instPreds τs) →
+      have hsafe : ∀ τs, τs.length = s.arity → HoldsOrVarW (s.instPreds τs) →
           Safe (run k env h e₁) k W (s.inst τs) R := fun τs hlen hp =>
         ih₁ (hinst τs hlen) (hC.append hp) hG hH
       -- What follows the initialiser: its value in a new cell.
@@ -2560,7 +2564,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       simp only [run]
       rcases hval with ⟨ha, hp⟩ | ⟨hv, _⟩
       · -- One instance: no quantified variables, no constraints.
-        refine Safe.bindC (hsafe [] (by simp [ha]) (by simp [HoldsOrVar, Scheme.instPreds, hp]))
+        refine Safe.bindC (hsafe [] (by simp [ha]) (by simp [HoldsOrVarS, Scheme.instPreds, hp]))
           fun v W₁ _ hW₁ hH₁ hv => ?_
         exact hK v _ _ W₁ (run_clock_le k env h e₁) hW₁ hH₁ (SchemeV.of_arity_zero ha hv)
       · -- A syntactic value: it allocates nothing, so each instance's world
@@ -2893,7 +2897,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     cases ht with
     | @arr _ _ _ _ _ σ hes =>
       simp only [run]
-      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasType L C Γ R _ _ p.1 p.2 :=
+      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasTypeS Sys.wide L C Γ R _ _ p.1 p.2 :=
         fun p hp => by
           obtain ⟨h₁, h₂⟩ := List.of_mem_zip hp
           rw [List.eq_of_mem_replicate h₂]; exact hes _ h₁
@@ -2913,7 +2917,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
     | @arrCheck T _ _ _ _ _ σ hT _ hes =>
       simp only [run]
-      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasType L C Γ R _ _ p.1 p.2 :=
+      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasTypeS Sys.wide L C Γ R _ _ p.1 p.2 :=
         fun p hp => by
           obtain ⟨h₁, h₂⟩ := List.of_mem_zip hp
           rw [List.eq_of_mem_replicate h₂]; exact hes _ h₁
@@ -3086,16 +3090,28 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/
-theorem eval_sound (clock : Nat) (ht : HasType L C Γ R rm md e τ) (hC : HoldsOrVar C)
+theorem eval_soundW (clock : Nat) (ht : HasTypeS Sys.wide L C Γ R rm md e τ) (hC : HoldsOrVarW C)
     (hG : G W Γ env) (hH : HeapOK clock W h) : Safe (run clock env h e) clock W τ R :=
   run_sound L e ht hC hG hH
 
 /-- A closed program, well typed outside any function, assuming constraints
 each an instance or on a type variable, never gets stuck, whatever the
 clock. -/
-theorem never_stuck (ht : HasType L C [] none rm md e τ) (hC : HoldsOrVar C) (clock : Nat)
-    (s : Stuck) : eval clock [] [] e ≠ .stuck s :=
+theorem never_stuckW (ht : HasTypeS Sys.wide L C [] none rm md e τ) (hC : HoldsOrVarW C)
+    (clock : Nat) (s : Stuck) : eval clock [] [] e ≠ .stuck s :=
   Safe.not_stuck (run_sound L e ht (W := []) hC (by simp [G])
     ⟨rfl, fun _ _ h => by simp at h⟩)
+
+/-- Soundness of the narrow system, the one inference implements: its
+derivations are wide ones (`HasTypeS.toWide`), whose schemes carry their
+injections in the wide form (`Scheme.toW`, the identity on a scheme without
+any). -/
+theorem eval_sound (clock : Nat) (ht : HasType L C Γ R rm md e τ) (hC : HoldsOrVar C)
+    (hG : G W (Γ.map Scheme.toW) env) (hH : HeapOK clock W h) : Safe (run clock env h e) clock W τ R :=
+  eval_soundW clock ht.toWide hC.toW hG hH
+
+theorem never_stuck (ht : HasType L C [] none rm md e τ) (hC : HoldsOrVar C) (clock : Nat)
+    (s : Stuck) : eval clock [] [] e ≠ .stuck s :=
+  never_stuckW ht.toWide hC.toW clock s
 
 end Inty
