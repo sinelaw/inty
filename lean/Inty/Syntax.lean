@@ -312,18 +312,18 @@ def Expr.writes (i : Nat) : Expr → Bool
   | .get e _ => e.writes i
   | .set e _ v => e.writes i || v.writes i
   | .mcall e _ args | .new_ e args => e.writes i || Expr.writesList i args
-  | .cls _ es ks => Expr.writesCls i es ks
+  | .cls _ es ks => Expr.writesCls i 0 es ks
   | .ctor n body => body.writes (i + n + 2)
 /-- `writes`, for a list of arguments. -/
 def Expr.writesList (i : Nat) : List Expr → Bool
   | [] => false
   | e :: es => e.writes i || Expr.writesList i es
-/-- `writes`, for a class's members: a field's initialiser sees the fields
-before it. -/
-def Expr.writesCls (i : Nat) : List Expr → List ClassKind → Bool
-  | e :: es, .data :: ks => e.writes i || Expr.writesCls (i + 1) es ks
-  | e :: es, _ :: ks => e.writes i || Expr.writesCls i es ks
-  | _, _ => false
+/-- `writes`, for a class's members: a field's initialiser sees the `d`
+fields before it, the other members only the class's context. -/
+def Expr.writesCls (i : Nat) : Nat → List Expr → List ClassKind → Bool
+  | d, e :: es, .data :: ks => e.writes (i + d) || Expr.writesCls i (d + 1) es ks
+  | d, e :: es, _ :: ks => e.writes i || Expr.writesCls i d es ks
+  | _, _, _ => false
 end
 
 mutual
@@ -354,7 +354,7 @@ def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
   | .set e _ v => e.assignsMutable mutables && v.assignsMutable mutables
   | .mcall e _ args | .new_ e args =>
     e.assignsMutable mutables && Expr.assignsMutableList mutables args
-  | .cls _ es ks => Expr.assignsMutableCls mutables es ks
+  | .cls _ es ks => Expr.assignsMutableCls mutables 0 es ks
   | .ctor n body => body.assignsMutable (List.replicate n true ++ false :: false :: mutables)
 /-- `assignsMutable`, for a list of arguments. -/
 def Expr.assignsMutableList (mutables : List Bool) : List Expr → Bool
@@ -362,11 +362,12 @@ def Expr.assignsMutableList (mutables : List Bool) : List Expr → Bool
   | e :: es => e.assignsMutable mutables && Expr.assignsMutableList mutables es
 /-- `assignsMutable`, for a class's members: the fields an initialiser
 sees aren't assigned. -/
-def Expr.assignsMutableCls (mutables : List Bool) : List Expr → List ClassKind → Bool
-  | e :: es, .data :: ks =>
-    e.assignsMutable mutables && Expr.assignsMutableCls (false :: mutables) es ks
-  | e :: es, _ :: ks => e.assignsMutable mutables && Expr.assignsMutableCls mutables es ks
-  | _, _ => true
+def Expr.assignsMutableCls (mutables : List Bool) : Nat → List Expr → List ClassKind → Bool
+  | d, e :: es, .data :: ks =>
+    e.assignsMutable (List.replicate d false ++ mutables) &&
+      Expr.assignsMutableCls mutables (d + 1) es ks
+  | d, e :: es, _ :: ks => e.assignsMutable mutables && Expr.assignsMutableCls mutables d es ks
+  | _, _, _ => true
 end
 
 mutual
