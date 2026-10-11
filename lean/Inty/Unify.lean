@@ -1,187 +1,22 @@
 import Inty.Equi
 
 /-!
-# Unification
+# Unification up to unfolding, by congruence closure
 
-Robinson unification on a worklist of equations, terminating by the number
-of variables still to eliminate and then the size of the equations. `vs`
-lists the variables that may still be bound; binding one removes it, which
-is what makes the recursion well founded without a set library. The
-results: `unify_sound` (the unifier equates the two types) and `unify_mgu`
-(every other unifier factors through it), which completeness of inference
-rests on.
-
-This is syntactic unification: two recursive types unify only if their
-equations do, equation by equation, so the equations are `RTy`s, which
-take a recursive type's equations apart as well (`self j` against
-`self j`). Equating recursive types by unfolding is `Inty.Equi`'s.
+Two types are unified as the finite graphs their unfoldings are: every type
+has finitely many subterms up to unfolding (`Ty.subs`), so unification is a
+congruence closure on them (Huet's algorithm for rational trees). The
+subterms of both types are the nodes, labelled by class; classes are merged
+for the two types, for each recursive type and its unfolding, and for the
+arguments of two constructor applications already in one class. When no
+merge is left, each class must have one head. The unifier binds each
+variable to its class read as a recursive type: one equation per class, a
+constructor class's equation being its constructor applied to its
+arguments' classes (`unifySubst`). It is most general up to `TyEq`
+(`unify_mgu`), and sound (`unify_sound`).
 -/
 
 namespace Inty
-
-mutual
-/-- The number of constructors in an equation's right-hand side. -/
-def RTy.size : RTy → Nat
-  | .free _ | .self _ => 1
-  | .app _ args => 1 + RTy.sizes args
-  | .mu _ sys => 1 + RTy.sizes sys
-def RTy.sizes : List RTy → Nat
-  | [] => 0
-  | r :: rs => r.size + RTy.sizes rs
-end
-
-theorem RTy.size_pos (r : RTy) : 0 < r.size := by
-  cases r <;> simp [RTy.size] <;> omega
-
-/-- The total size of a list of equations. -/
-def eqsSize : List (RTy × RTy) → Nat
-  | [] => 0
-  | (a, b) :: eqs => a.size + b.size + eqsSize eqs
-
-theorem eqsSize_zip : ∀ (ps₁ ps₂ : List RTy), ps₁.length = ps₂.length →
-    eqsSize (ps₁.zip ps₂) = RTy.sizes ps₁ + RTy.sizes ps₂
-  | [], [], _ => rfl
-  | p₁ :: ps₁, p₂ :: ps₂, h => by
-    simp only [List.zip_cons_cons, eqsSize, RTy.sizes,
-      eqsSize_zip ps₁ ps₂ (by simpa using h)]
-    omega
-
-theorem eqsSize_append (e₁ e₂ : List (RTy × RTy)) :
-    eqsSize (e₁ ++ e₂) = eqsSize e₁ + eqsSize e₂ := by
-  induction e₁ with
-  | nil => simp [eqsSize]
-  | cons e e₁ ih => obtain ⟨a, b⟩ := e; simp only [List.cons_append, eqsSize, ih]; omega
-
-/-- Substitute in both sides of each equation. -/
-def substEqs (σ : Subst) (eqs : List (RTy × RTy)) : List (RTy × RTy) :=
-  eqs.map fun e => (e.1.subst σ, e.2.subst σ)
-
-mutual
-/-- A right-hand side as a type: it has no `self` but inside a `mu` of its
-own. -/
-def RTy.toTy? : RTy → Option Ty
-  | .free a => some (.var a)
-  | .self _ => none
-  | .app c args => (RTy.toTys? args).map (.app c)
-  | .mu i sys => some (.mu i sys)
-def RTy.toTys? : List RTy → Option (List Ty)
-  | [] => some []
-  | r :: rs =>
-    match r.toTy?, RTy.toTys? rs with
-    | some τ, some τs => some (τ :: τs)
-    | _, _ => none
-end
-
-/-- A variable on one side, to be bound to the other side. -/
-def orient : RTy → RTy → Option (Nat × RTy)
-  | .free a, r => some (a, r)
-  | r, .free a => some (a, r)
-  | _, _ => none
-
-private theorem lex_left {a a' b b' : Nat} (h : a' < a) :
-    Prod.Lex (· < ·) (· < ·) (a', b') (a, b) := .left _ _ h
-
-private theorem lex_right {a b b' : Nat} (h : b' < b) :
-    Prod.Lex (· < ·) (· < ·) (a, b') (a, b) := .right _ h
-
-/-- Unify a list of equations, binding only variables in `vs`. -/
-def unifyEqs (vs : List Nat) (eqs : List (RTy × RTy)) : Option Subst :=
-  match eqs with
-  | [] => some []
-  | (r₁, r₂) :: eqs =>
-    if r₁ = r₂ then unifyEqs vs eqs
-    else
-      match orient r₁ r₂ with
-      | some (a, r) =>
-        if a ∈ r.ftv then none
-        else
-          match r.toTy? with
-          | none => none
-          | some τ =>
-            if _h : a ∈ vs then
-              (unifyEqs (vs.erase a) (substEqs [(a, τ)] eqs)).map (Subst.compose · [(a, τ)])
-            else none
-      | none =>
-        match r₁, r₂ with
-        -- The same constructor: its arguments pairwise.
-        | .app c₁ as₁, .app c₂ as₂ =>
-          if c₁ = c₂ ∧ as₁.length = as₂.length then
-            unifyEqs vs (as₁.zip as₂ ++ eqs)
-          else none
-        -- The same type of a system of as many equations: the equations
-        -- pairwise.
-        | .mu i₁ s₁, .mu i₂ s₂ =>
-          if i₁ = i₂ ∧ s₁.length = s₂.length then
-            unifyEqs vs (s₁.zip s₂ ++ eqs)
-          else none
-        | _, _ => none
-termination_by (vs.length, eqsSize eqs)
-decreasing_by
-  · exact lex_right (by simp only [eqsSize]; have := RTy.size_pos r₁; have := RTy.size_pos r₂; omega)
-  · exact lex_left (by
-      have := List.length_erase_of_mem ‹_ ∈ vs›; have := List.length_pos_of_mem ‹_ ∈ vs›; omega)
-  · refine lex_right ?_
-    simp only [eqsSize, eqsSize_append, eqsSize_zip _ _ (‹_ ∧ _›).2, RTy.size]
-    omega
-  · refine lex_right ?_
-    simp only [eqsSize, eqsSize_append, eqsSize_zip _ _ (‹_ ∧ _›).2, RTy.size]
-    omega
-
-/-- A most general unifier of two types, if they unify syntactically. -/
-def unify₀ (τ₁ τ₂ : Ty) : Option Subst :=
-  unifyEqs (τ₁.ftv ++ τ₂.ftv) [(τ₁.toRTy, τ₂.toRTy)]
-
-/-! ## Lemmas -/
-
-theorem RTy.sizes_eq (rs : List RTy) : RTy.sizes rs = (rs.map RTy.size).sum := by
-  induction rs <;> simp_all [RTy.sizes]
-
-theorem RTy.size_le_sizes {p : RTy} {ps : List RTy} (h : p ∈ ps) : p.size ≤ RTy.sizes ps := by
-  induction ps with
-  | nil => cases h
-  | cons q ps ih =>
-    rcases List.mem_cons.mp h with rfl | h
-    · simp [RTy.sizes]
-    · have := ih h; simp [RTy.sizes]; omega
-
-theorem Ty.toRTy_toTy? (τ : Ty) : τ.toRTy.toTy? = some τ := by
-  induction τ using Ty.ind with
-  | var a => rfl
-  | app c args ih =>
-    have : RTy.toTys? (args.map Ty.toRTy) = some args := by
-      induction args with
-      | nil => rfl
-      | cons τ τs ihl =>
-        simp only [List.map_cons, RTy.toTys?, ih τ List.mem_cons_self,
-          ihl (fun p hp => ih p (List.mem_cons_of_mem _ hp))]
-    simp [Ty.toRTy_app, RTy.toTy?, this]
-  | mu i sys => rfl
-
-theorem RTy.toTy?_spec {r : RTy} {τ : Ty} (h : r.toTy? = some τ) : r = τ.toRTy := by
-  induction r using RTy.ind generalizing τ with
-  | free a => simp [RTy.toTy?] at h; subst h; rfl
-  | self j => simp [RTy.toTy?] at h
-  | app c args ih =>
-    simp only [RTy.toTy?, Option.map_eq_some_iff] at h
-    obtain ⟨τs, hτs, rfl⟩ := h
-    simp only [Ty.toRTy_app, RTy.app.injEq, true_and]
-    induction args generalizing τs with
-    | nil => simp [RTy.toTys?] at hτs; subst hτs; rfl
-    | cons r rs ihl =>
-      unfold RTy.toTys? at hτs
-      split at hτs
-      · rename_i τ τs' hr hrs
-        cases hτs
-        simp only [List.map_cons, List.cons.injEq]
-        exact ⟨ih r List.mem_cons_self hr,
-          ihl (fun p hp => ih p (List.mem_cons_of_mem _ hp)) τs' hrs⟩
-      · cases hτs
-  | mu i sys => simp [RTy.toTy?] at h; subst h; rfl
-
-theorem Ty.toRTy_inj {τ₁ τ₂ : Ty} (h : τ₁.toRTy = τ₂.toRTy) : τ₁ = τ₂ := by
-  have := Ty.toRTy_toTy? τ₁
-  rw [h, Ty.toRTy_toTy?] at this
-  exact (Option.some.inj this).symm
 
 @[simp] theorem Ty.toRTy_ftv (τ : Ty) : τ.toRTy.ftv = τ.ftv := by
   induction τ using Ty.ind with
@@ -193,765 +28,1184 @@ theorem Ty.toRTy_inj {τ₁ τ₂ : Ty} (h : τ₁.toRTy = τ₂.toRTy) : τ₁ 
     exact List.map_congr_left ih
   | mu i sys => simp [Ty.toRTy]
 
-/-- A `self` outside any `mu` of its own stays through substitution. -/
-theorem RTy.toTy?_subst_none (ψ : Subst) {r : RTy} (h : r.toTy? = none) :
-    (r.subst ψ).toTy? = none := by
-  induction r using RTy.ind with
-  | free a => simp [RTy.toTy?] at h
-  | self j => rfl
-  | app c args ih =>
-    simp only [RTy.toTy?, Option.map_eq_none_iff] at h
-    simp only [RTy.subst_app, RTy.toTy?, Option.map_eq_none_iff]
-    induction args with
-    | nil => simp [RTy.toTys?] at h
-    | cons r rs ihl =>
-      unfold RTy.toTys? at h
-      simp only [List.map_cons]
-      unfold RTy.toTys?
-      split at h
-      · cases h
-      · rename_i hn
-        split
-        · rename_i τ τs hr hrs
-          cases hr' : r.toTy? with
-          | none => rw [ih r List.mem_cons_self hr'] at hr; cases hr
-          | some τ₀ =>
-            cases hrs' : RTy.toTys? rs with
-            | none =>
-              rw [ihl (fun p hp => ih p (List.mem_cons_of_mem _ hp)) hrs'] at hrs; cases hrs
-            | some τs₀ => exact (hn τ₀ τs₀ hr' hrs').elim
-        · rfl
-  | mu i sys => simp [RTy.toTy?] at h
+/-! ## Subterms -/
 
-/-- A variable's image is no bigger than the image of a right-hand side it
-occurs in. -/
-theorem RTy.size_subst_var_le (ψ : Subst) {x : Nat} :
-    ∀ {r : RTy}, x ∈ r.ftv → ((RTy.free x).subst ψ).size ≤ (r.subst ψ).size := by
-  intro r
-  induction r using RTy.ind with
-  | free a => intro h; simp [RTy.ftv] at h; subst h; exact Nat.le_refl _
-  | self j => intro h; simp [RTy.ftv] at h
-  | app c args ih =>
-    intro h
-    simp only [RTy.ftv_app, List.mem_flatMap] at h
-    simp only [RTy.subst_app, RTy.size, RTy.sizes_eq]
-    obtain ⟨p, hp, h⟩ := h
-    have := ih p hp h
-    have := RTy.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
-    rw [RTy.sizes_eq] at this
-    omega
-  | mu i sys ih =>
-    intro h
-    simp only [RTy.ftv_mu, List.mem_flatMap] at h
-    simp only [RTy.subst_mu, RTy.size, RTy.sizes_eq]
-    obtain ⟨p, hp, h⟩ := h
-    have := ih p hp h
-    have := RTy.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
-    rw [RTy.sizes_eq] at this
-    omega
+mutual
+/-- The subterms of the right-hand side `r` of an equation of `sys`, each
+read as a type (`self j` as `mu j sys`). -/
+def RTy.subsIn (sys : List RTy) : RTy → List Ty
+  | .free a => [.var a]
+  | .self j => [.mu j sys]
+  | .app c rs => .app c (rs.map (RTy.open (muEnv sys))) :: RTy.subsInL sys rs
+  | .mu i sys' =>
+    .mu i sys' :: ((List.range sys'.length).map (Ty.mu · sys') ++ RTy.subsInL sys' sys')
+def RTy.subsInL (sys : List RTy) : List RTy → List Ty
+  | [] => []
+  | r :: rs => RTy.subsIn sys r ++ RTy.subsInL sys rs
+end
 
-/-- The occurs check is right: a variable never unifies with a right-hand
-side that properly contains it. -/
-theorem RTy.subst_ne_of_occurs (ψ : Subst) {x : Nat} {r : RTy} (hx : x ∈ r.ftv)
-    (hne : r ≠ .free x) : (RTy.free x).subst ψ ≠ r.subst ψ := by
-  intro heq
-  cases r with
-  | free a => simp [RTy.ftv] at hx; subst hx; exact hne rfl
-  | self j => simp [RTy.ftv] at hx
-  | app c args =>
-    have hle : ((RTy.free x).subst ψ).size ≤ ((RTy.app c args).subst ψ).size - 1 := by
-      simp only [RTy.ftv_app, List.mem_flatMap] at hx
-      simp only [RTy.subst_app, RTy.size]
-      obtain ⟨p, hp, h⟩ := hx
-      have := RTy.size_subst_var_le ψ h
-      have := RTy.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
-      omega
-    rw [heq] at hle
-    have := RTy.size_pos ((RTy.app c args).subst ψ)
-    omega
+mutual
+/-- A type's subterms, up to unfolding: a recursive type's include its
+system's other types and its equations' subterms. -/
+def Ty.subs : Ty → List Ty
+  | .var a => [.var a]
+  | .app c args => .app c args :: Ty.subsL args
+  | .mu i sys => .mu i sys :: ((List.range sys.length).map (Ty.mu · sys) ++ RTy.subsInL sys sys)
+def Ty.subsL : List Ty → List Ty
+  | [] => []
+  | t :: ts => t.subs ++ Ty.subsL ts
+end
+
+/-- A node's successors in the graph: a constructor's arguments, a recursive
+type's unfolding. -/
+def Ty.kids (τ : Ty) : List Ty :=
+  match τ with
+  | .var _ => []
+  | .app _ args => args
+  | .mu _ _ =>
+    match τ.view with
+    | some v => [v]
+    | none => []
+
+/-! ## The graph -/
+
+/-- The nodes: both types' subterms. -/
+def nodes (τ₁ τ₂ : Ty) : List Ty := (τ₁.subs ++ τ₂.subs).eraseDups
+
+/-- A node's index. -/
+def nodeIdx (ns : List Ty) (x : Ty) : Nat := ns.idxOf x
+
+/-- The node at index `i`. -/
+def node (ns : List Ty) (i : Nat) : Ty := ns.getD i (.var 0)
+
+/-- The class of node `i`. -/
+def labOf (lab : List Nat) (i : Nat) : Nat := lab.getD i i
+
+def Ty.isVar : Ty → Bool
+  | .var _ => true
+  | _ => false
+
+def Ty.isApp : Ty → Bool
+  | .app _ _ => true
+  | _ => false
+
+/-- A constructor application's constructor and number of arguments. -/
+def Ty.headCon : Ty → Option (Con × Nat)
+  | .app c args => some (c, args.length)
+  | _ => none
+
+/-- A type with no head (`Ty.view` is `none`). -/
+def Ty.headless (τ : Ty) : Bool := τ.view.isNone
+
+/-- The first constructor node of class `ℓ`. -/
+def firstApp (ns : List Ty) (lab : List Nat) (ℓ : Nat) : Option Nat :=
+  (List.range ns.length).find? fun f => labOf lab f == ℓ && (node ns f).isApp
+
+/-- The pairs merged first: the two types, and each recursive type with its
+unfolding. -/
+def genPairs (ns : List Ty) (i₁ i₂ : Nat) : List (Nat × Nat) :=
+  (i₁, i₂) :: (List.range ns.length).filterMap fun i =>
+    match node ns i with
+    | .mu j sys =>
+      match (Ty.mu j sys).view with
+      | some v => some (i, nodeIdx ns v)
+      | none => none
+    | _ => none
+
+/-- The pairs congruence merges: each constructor node's arguments with its
+class's first constructor node's, when they have one constructor. -/
+def congPairs (ns : List Ty) (lab : List Nat) : List (Nat × Nat) :=
+  (List.range ns.length).flatMap fun i =>
+    match firstApp ns lab (labOf lab i) with
+    | some f =>
+      if (node ns f).headCon = (node ns i).headCon then
+        ((node ns f).kids.map (nodeIdx ns)).zip ((node ns i).kids.map (nodeIdx ns))
+      else []
+    | none => []
+
+/-- A pair still to merge. -/
+def pending (ns : List Ty) (gens : List (Nat × Nat)) (lab : List Nat) : Option (Nat × Nat) :=
+  (gens ++ congPairs ns lab).find? fun p => labOf lab p.1 != labOf lab p.2
+
+/-- Merge the classes of `p` and `q`. -/
+def merge (lab : List Nat) (p q : Nat) : List Nat :=
+  lab.map fun l => if l = labOf lab q then labOf lab p else l
+
+/-- Merge until nothing is pending, with `fuel` merges. -/
+def closeLoop (ns : List Ty) (gens : List (Nat × Nat)) : Nat → List Nat → Option (List Nat)
+  | 0, _ => none
+  | k + 1, lab =>
+    match pending ns gens lab with
+    | none => some lab
+    | some (p, q) => closeLoop ns gens k (merge lab p q)
+
+/-- Each class has one head: its constructor nodes one constructor, and no
+headless node beside one. -/
+def consistent (ns : List Ty) (lab : List Nat) : Bool :=
+  (List.range ns.length).all fun i =>
+    match firstApp ns lab (labOf lab i) with
+    | some f =>
+      match node ns i with
+      | .app c args => (node ns f).headCon == some (c, args.length)
+      | t => !t.headless
+    | none => true
+
+/-! ## The substitution -/
+
+/-- Whether class `ℓ` has a headless node. -/
+def hasHeadless (ns : List Ty) (lab : List Nat) (ℓ : Nat) : Bool :=
+  (List.range ns.length).any fun i => labOf lab i == ℓ && (node ns i).headless
+
+/-- A class of type variables only (and recursive types unfolding to them). -/
+def varOnly (ns : List Ty) (lab : List Nat) (ℓ : Nat) : Bool :=
+  (firstApp ns lab ℓ).isNone && !hasHeadless ns lab ℓ
+
+/-- The variable a class of variables stands for: its last (the second
+type's, which the first's is bound to). -/
+def classVar (ns : List Ty) (lab : List Nat) (ℓ : Nat) : Nat :=
+  match (List.range ns.length).reverse.find? (fun i => labOf lab i == ℓ && (node ns i).isVar) with
+  | some i =>
+    match node ns i with
+    | .var a => a
+    | _ => 0
+  | none => 0
+
+/-- A reference to a node's class in the system. -/
+def classRef (ns : List Ty) (lab : List Nat) (x : Ty) : RTy :=
+  let ℓ := labOf lab (nodeIdx ns x)
+  if varOnly ns lab ℓ then .free (classVar ns lab ℓ) else .self ℓ
+
+/-- The equation of node `j`'s class: its first constructor node's
+constructor applied to its arguments' classes, or none (a headless class,
+or one never used). -/
+def classEq (ns : List Ty) (lab : List Nat) (j : Nat) : RTy :=
+  match firstApp ns lab (labOf lab j) with
+  | some f =>
+    match node ns f with
+    | .app c args => .app c (args.map (classRef ns lab))
+    | _ => .self j
+  | none => .self j
+
+/-- The system of the classes' equations, one per node. -/
+def classSys (ns : List Ty) (lab : List Nat) : List RTy :=
+  (List.range ns.length).map (classEq ns lab)
+
+/-- The type class `ℓ` stands for. -/
+def classTy (ns : List Ty) (lab : List Nat) (ℓ : Nat) : Ty :=
+  if varOnly ns lab ℓ then .var (classVar ns lab ℓ) else .mu ℓ (classSys ns lab)
+
+/-- A type with its recursive types unfolded, except where one is reached
+again inside itself (`seen`): the unifier's types are recursive only
+where they must be. -/
+def unroll : Nat → List Nat → Ty → Ty
+  | 0, _, τ => τ
+  | k + 1, seen, .mu ℓ sys =>
+    if ℓ ∈ seen then .mu ℓ sys
+    else
+      match (Ty.mu ℓ sys).view with
+      | some (.app c xs) => .app c (xs.map (unroll k (ℓ :: seen)))
+      | some (.var a) => .var a
+      | _ => .mu ℓ sys
+  | k + 1, seen, .app c xs => .app c (xs.map (unroll k seen))
+  | _ + 1, _, .var a => .var a
+
+/-- The type `unifySubst` binds a variable node to: its class's. -/
+def nodeVal (ns : List Ty) (lab : List Nat) (x : Ty) : Ty :=
+  unroll (ns.length + 1) [] (classTy ns lab (labOf lab (nodeIdx ns x)))
+
+/-- Each variable among the nodes bound to its class's type. -/
+def unifySubst (ns : List Ty) (lab : List Nat) : Subst :=
+  ns.filterMap fun x =>
+    match x with
+    | .var a => some (a, nodeVal ns lab (.var a))
+    | _ => none
+
+/-- Unify two types up to unfolding. -/
+def unify (τ₁ τ₂ : Ty) : Option Subst :=
+  let ns := nodes τ₁ τ₂
+  let gens := genPairs ns (nodeIdx ns τ₁) (nodeIdx ns τ₂)
+  match closeLoop ns gens (ns.length + 1) (List.range ns.length) with
+  | none => none
+  | some lab => if consistent ns lab then some (unifySubst ns lab) else none
+
+
+/-! ## The subterms are closed -/
+
+@[simp] theorem RTy.subsInL_eq (sys rs : List RTy) :
+    RTy.subsInL sys rs = rs.flatMap (RTy.subsIn sys) := by
+  induction rs <;> simp_all [RTy.subsInL]
+
+@[simp] theorem Ty.subsL_eq (ts : List Ty) : Ty.subsL ts = ts.flatMap Ty.subs := by
+  induction ts <;> simp_all [Ty.subsL]
+
+theorem Ty.mem_subs_self (τ : Ty) : τ ∈ τ.subs := by
+  cases τ <;> simp [Ty.subs]
+
+theorem RTy.open_mem_subsIn (sys : List RTy) (r : RTy) : r.open (muEnv sys) ∈ r.subsIn sys := by
+  cases r <;> simp [RTy.open, RTy.subsIn, muEnv]
+
+/-- A right-hand side's head, its `self`s read in its system, is among its
+subterms. -/
+theorem RTy.head_mem_subsIn {r : RTy} : ∀ {sys : List RTy} {v : Ty},
+    r.head (muEnv sys) = some v → v ∈ r.subsIn sys := by
+  induction r using RTy.ind with
+  | free a => intro sys v h; simp [RTy.head] at h; subst h; simp [RTy.subsIn]
+  | self j => intro sys v h; simp [RTy.head] at h
+  | app c rs _ => intro sys v h; rw [RTy.head] at h; cases h; simp [RTy.subsIn]
+  | mu i sys' ih =>
+    intro sys v h
+    rw [RTy.head_mu, Option.bind_eq_some_iff] at h
+    obtain ⟨r, hr, h⟩ := h
+    have hm := List.mem_of_getElem? hr
+    simp only [RTy.subsIn, RTy.subsInL_eq, List.mem_cons, List.mem_append, List.mem_map,
+      List.mem_flatMap]
+    exact .inr (.inr ⟨r, hm, ih r hm h⟩)
+
+/-- A recursive type's unfolding is among its system's subterms. -/
+theorem Ty.kids_mu_mem {j : Nat} {sys : List RTy} {U : List Ty}
+    (hU : ∀ x ∈ RTy.subsInL sys sys, x ∈ U) : ∀ y ∈ (Ty.mu j sys).kids, y ∈ U := by
+  intro y hy
+  simp only [Ty.kids] at hy
+  split at hy
+  · rename_i v hv
+    simp only [List.mem_singleton] at hy; subst hy
+    simp only [Ty.view, Option.bind_eq_some_iff] at hv
+    obtain ⟨r, hr, h⟩ := hv
+    exact hU _ (by simpa using ⟨r, List.mem_of_getElem? hr, RTy.head_mem_subsIn h⟩)
+  · cases hy
+
+theorem RTy.subsIn_closed {r : RTy} : ∀ {sys : List RTy} {U : List Ty},
+    (∀ x ∈ RTy.subsInL sys sys, x ∈ U) → (∀ x ∈ r.subsIn sys, x ∈ U) →
+      ∀ x ∈ r.subsIn sys, ∀ y ∈ x.kids, y ∈ U := by
+  induction r using RTy.ind with
+  | free a => intro sys U _ _ x hx y hy; simp [RTy.subsIn] at hx; subst hx; simp [Ty.kids] at hy
+  | self j =>
+    intro sys U hsys _ x hx
+    simp [RTy.subsIn] at hx; subst hx
+    exact Ty.kids_mu_mem hsys
+  | app c rs ih =>
+    intro sys U hsys hsub x hx y hy
+    simp only [RTy.subsIn, RTy.subsInL_eq, List.mem_cons, List.mem_flatMap] at hx
+    rcases hx with rfl | ⟨r, hr, hx⟩
+    · simp only [Ty.kids, List.mem_map] at hy
+      obtain ⟨r, hr, rfl⟩ := hy
+      exact hsub _ (by
+        simp only [RTy.subsIn, RTy.subsInL_eq, List.mem_cons, List.mem_flatMap]
+        exact .inr ⟨r, hr, RTy.open_mem_subsIn sys r⟩)
+    · exact ih r hr hsys (fun x' hx' => hsub x' (by
+        simp only [RTy.subsIn, RTy.subsInL_eq, List.mem_cons, List.mem_flatMap]
+        exact .inr ⟨r, hr, hx'⟩)) x hx y hy
+  | mu i sys' ih =>
+    intro sys U _ hsub x hx y hy
+    have hsys' : ∀ x ∈ RTy.subsInL sys' sys', x ∈ U := fun x' hx' => hsub x' (by
+      simp only [RTy.subsIn, List.mem_cons, List.mem_append]; exact .inr (.inr hx'))
+    simp only [RTy.subsIn, List.mem_cons, List.mem_append, List.mem_map] at hx
+    rcases hx with rfl | ⟨j, -, rfl⟩ | hx
+    · exact Ty.kids_mu_mem hsys' y hy
+    · exact Ty.kids_mu_mem hsys' y hy
+    · simp only [RTy.subsInL_eq, List.mem_flatMap] at hx
+      obtain ⟨r, hr, hx⟩ := hx
+      exact ih r hr hsys' (fun x' hx' => hsys' x' (by simpa using ⟨r, hr, hx'⟩)) x hx y hy
+
+/-- A subterm's successors are subterms. -/
+theorem Ty.subs_closed (τ : Ty) : ∀ x ∈ τ.subs, ∀ y ∈ x.kids, y ∈ τ.subs := by
+  induction τ using Ty.ind with
+  | var a => intro x hx y hy; simp [Ty.subs] at hx; subst hx; simp [Ty.kids] at hy
+  | app c args ih =>
+    intro x hx y hy
+    simp only [Ty.subs, Ty.subsL_eq, List.mem_cons, List.mem_flatMap] at hx ⊢
+    rcases hx with rfl | ⟨t, ht, hx⟩
+    · exact .inr ⟨y, by simpa [Ty.kids] using hy, Ty.mem_subs_self y⟩
+    · exact .inr ⟨t, ht, ih t ht x hx y hy⟩
   | mu i sys =>
-    have hle : ((RTy.free x).subst ψ).size ≤ ((RTy.mu i sys).subst ψ).size - 1 := by
-      simp only [RTy.ftv_mu, List.mem_flatMap] at hx
-      simp only [RTy.subst_mu, RTy.size]
-      obtain ⟨p, hp, h⟩ := hx
-      have := RTy.size_subst_var_le ψ h
-      have := RTy.size_le_sizes (List.mem_map_of_mem (f := fun x => x.subst ψ) hp)
-      omega
-    rw [heq] at hle
-    have := RTy.size_pos ((RTy.mu i sys).subst ψ)
-    omega
+    intro x hx y hy
+    have hsys : ∀ x ∈ RTy.subsInL sys sys, x ∈ (Ty.mu i sys).subs := fun x' hx' => by
+      simp only [Ty.subs, List.mem_cons, List.mem_append]; exact .inr (.inr hx')
+    simp only [Ty.subs, List.mem_cons, List.mem_append, List.mem_map] at hx
+    rcases hx with rfl | ⟨j, -, rfl⟩ | hx
+    · exact Ty.kids_mu_mem hsys y hy
+    · exact Ty.kids_mu_mem hsys y hy
+    · simp only [RTy.subsInL_eq, List.mem_flatMap] at hx
+      obtain ⟨r, hr, hx⟩ := hx
+      exact RTy.subsIn_closed hsys (fun x' hx' => hsys x' (by simpa using ⟨r, hr, hx'⟩)) x hx y hy
 
-/-- A single binding `a ↦ τ`, with `a` not in `τ`, leaves `τ` alone. -/
-theorem Ty.subst_single {a : Nat} {τ : Ty} (h : a ∉ τ.ftv) : τ.subst [(a, τ)] = τ :=
-  Ty.subst_id (fun b hb => by
-    have : b ≠ a := fun e => h (e ▸ hb)
-    simp [Subst.find, this])
+/-! ### Variables of subterms -/
 
-theorem RTy.subst_single {a : Nat} {r : RTy} {τ : Ty} (h : a ∉ r.ftv) : r.subst [(a, τ)] = r :=
-  RTy.subst_id (fun b hb => by
-    have : b ≠ a := fun e => h (e ▸ hb)
-    simp [Subst.find, this])
-
-/-- If `ψ` already sends `x` where `x ↦ τ` does, then `x ↦ τ` before `ψ` is
-just `ψ`. -/
-theorem RTy.subst_single_absorb {ψ : Subst} {x : Nat} {τ : Ty}
-    (h : (Ty.var x).subst ψ = τ.subst ψ) (r : RTy) :
-    (r.subst [(x, τ)]).subst ψ = r.subst ψ := by
+theorem RTy.subsIn_ftv {r : RTy} : ∀ {sys : List RTy} {x : Ty}, x ∈ r.subsIn sys →
+    ∀ a ∈ x.ftv, a ∈ r.ftv ∨ a ∈ sys.flatMap RTy.ftv := by
   induction r using RTy.ind with
-  | free a =>
-    by_cases hax : a = x
-    · subst hax
-      simp only [RTy.subst, Subst.find, ite_true, Option.getD_some, Ty.toRTy_subst]
-      rw [← h]; rfl
-    · simp [RTy.subst, Subst.find, hax, Ty.toRTy]
-  | self j => rfl
+  | free b => intro sys x hx a ha; simp [RTy.subsIn] at hx; subst hx; simp_all [RTy.ftv]
+  | self j =>
+    intro sys x hx a ha; simp [RTy.subsIn] at hx; subst hx; exact .inr (by simpa using ha)
+  | app c rs ih =>
+    intro sys x hx a ha
+    simp only [RTy.subsIn, RTy.subsInL_eq, List.mem_cons, List.mem_flatMap] at hx
+    rcases hx with rfl | ⟨r, hr, hx⟩
+    · rcases RTy.open_ftv (env := muEnv sys) (r := .app c rs) (by simpa using ha) with h | ⟨j, h⟩
+      · exact .inl h
+      · exact .inr (by simpa [muEnv] using h)
+    · rcases ih r hr hx a ha with h | h
+      · exact .inl (by simp only [RTy.ftv_app, List.mem_flatMap]; exact ⟨r, hr, h⟩)
+      · exact .inr h
+  | mu i sys' ih =>
+    intro sys x hx a ha
+    left
+    simp only [RTy.ftv_mu, List.mem_flatMap]
+    simp only [RTy.subsIn, List.mem_cons, List.mem_append, List.mem_map] at hx
+    rcases hx with rfl | ⟨j, -, rfl⟩ | hx
+    · simpa using ha
+    · simpa using ha
+    · simp only [RTy.subsInL_eq, List.mem_flatMap] at hx
+      obtain ⟨r, hr, hx⟩ := hx
+      rcases ih r hr hx a ha with h | h
+      · exact ⟨r, hr, h⟩
+      · simpa using h
+
+/-- A subterm's variables are the type's. -/
+theorem Ty.subs_ftv {τ : Ty} : ∀ {x : Ty}, x ∈ τ.subs → ∀ a ∈ x.ftv, a ∈ τ.ftv := by
+  induction τ using Ty.ind with
+  | var b => intro x hx a ha; simp [Ty.subs] at hx; subst hx; exact ha
   | app c args ih =>
-    simp only [RTy.subst_app, List.map_map, RTy.app.injEq, true_and]
-    exact List.map_congr_left ih
-  | mu i sys ih =>
-    simp only [RTy.subst_mu, List.map_map, RTy.mu.injEq, true_and]
-    exact List.map_congr_left ih
+    intro x hx a ha
+    simp only [Ty.subs, Ty.subsL_eq, List.mem_cons, List.mem_flatMap] at hx
+    rcases hx with rfl | ⟨t, ht, hx⟩
+    · exact ha
+    · simp only [Ty.ftv_app, List.mem_flatMap]; exact ⟨t, ht, ih t ht hx a ha⟩
+  | mu i sys =>
+    intro x hx a ha
+    simp only [Ty.subs, List.mem_cons, List.mem_append, List.mem_map] at hx
+    rcases hx with rfl | ⟨j, -, rfl⟩ | hx
+    · exact ha
+    · simpa using ha
+    · simp only [RTy.subsInL_eq, List.mem_flatMap] at hx
+      obtain ⟨r, hr, hx⟩ := hx
+      simp only [Ty.ftv_mu, List.mem_flatMap]
+      rcases RTy.subsIn_ftv hx a ha with h | h
+      · exact ⟨r, hr, h⟩
+      · simpa using h
 
-theorem Ty.subst_single_absorb {ψ : Subst} {x : Nat} {τ : Ty}
-    (h : (Ty.var x).subst ψ = τ.subst ψ) (ρ : Ty) :
-    (ρ.subst [(x, τ)]).subst ψ = ρ.subst ψ := by
-  apply Ty.toRTy_inj
-  simp only [← Ty.toRTy_subst]
-  exact RTy.subst_single_absorb h ρ.toRTy
+/-! ## Labels -/
 
-/-- The variables of `r` with `x ↦ τ` applied. -/
-theorem RTy.ftv_subst_single {x a : Nat} {τ : Ty} {r : RTy} (h : a ∈ (r.subst [(x, τ)]).ftv) :
-    (a ∈ r.ftv ∧ a ≠ x) ∨ a ∈ τ.ftv := by
-  induction r using RTy.ind with
-  | free b =>
-    by_cases hbx : b = x
-    · subst hbx; simp [RTy.subst, Subst.find] at h; exact .inr h
-    · simp only [RTy.subst, Subst.find, hbx, ite_false, Option.getD_none, Ty.toRTy] at h
-      simp only [RTy.ftv, List.mem_singleton] at h; subst h
-      exact .inl ⟨by simp [RTy.ftv], hbx⟩
-  | self j => simp [RTy.subst, RTy.ftv] at h
-  | app c args ih =>
-    simp only [RTy.subst_app, RTy.ftv_app, List.mem_flatMap, List.mem_map] at h ⊢
-    obtain ⟨_, ⟨p, hp, rfl⟩, h⟩ := h
-    rcases ih p hp h with ⟨h, hne⟩ | h
-    · exact .inl ⟨⟨p, hp, h⟩, hne⟩
-    · exact .inr h
-  | mu i sys ih =>
-    simp only [RTy.subst_mu, RTy.ftv_mu, List.mem_flatMap, List.mem_map] at h ⊢
-    obtain ⟨_, ⟨p, hp, rfl⟩, h⟩ := h
-    rcases ih p hp h with ⟨h, hne⟩ | h
-    · exact .inl ⟨⟨p, hp, h⟩, hne⟩
-    · exact .inr h
+theorem labOf_lt_len {lab : List Nat} {i : Nat} (h : i < lab.length) : labOf lab i = lab[i] := by
+  simp [labOf, List.getD, List.getElem?_eq_getElem h]
 
-theorem orient_spec {r₁ r₂ r : RTy} {x : Nat} (h : orient r₁ r₂ = some (x, r)) :
-    (r₁ = .free x ∧ r₂ = r) ∨ (r₂ = .free x ∧ r₁ = r) := by
-  unfold orient at h
-  split at h <;> simp_all
+theorem labOf_merge {lab : List Nat} {p q i : Nat} (h : i < lab.length) :
+    labOf (merge lab p q) i =
+      if labOf lab i = labOf lab q then labOf lab p else labOf lab i := by
+  have h' : i < (merge lab p q).length := by simpa [merge] using h
+  rw [labOf_lt_len h', labOf_lt_len h]
+  simp [merge]
 
-theorem map_eq_of_zip : ∀ {ps₁ ps₂ : List RTy} {σ : Subst}, ps₁.length = ps₂.length →
-    (∀ p ∈ ps₁.zip ps₂, p.1.subst σ = p.2.subst σ) → ps₁.map (·.subst σ) = ps₂.map (·.subst σ)
-  | [], [], _, _, _ => rfl
-  | p₁ :: ps₁, p₂ :: ps₂, σ, hlen, h => by
-    simp only [List.map_cons, List.cons.injEq]
-    exact ⟨h (p₁, p₂) (by simp), map_eq_of_zip (by simpa using hlen)
-      (fun p hp => h p (by simp [hp]))⟩
+@[simp] theorem merge_length (lab : List Nat) (p q : Nat) : (merge lab p q).length = lab.length := by
+  simp [merge]
 
-theorem zip_of_map_eq : ∀ {ps₁ ps₂ : List RTy} {σ : Subst},
-    ps₁.map (·.subst σ) = ps₂.map (·.subst σ) → ∀ p ∈ ps₁.zip ps₂, p.1.subst σ = p.2.subst σ
-  | [], _, _, _, _, hp => by simp at hp
-  | _ :: _, [], _, _, _, hp => by simp at hp
-  | p₁ :: ps₁, p₂ :: ps₂, σ, h, p, hp => by
-    simp only [List.map_cons, List.cons.injEq] at h
-    simp only [List.zip_cons_cons, List.mem_cons] at hp
-    rcases hp with rfl | hp
-    · exact h.1
-    · exact zip_of_map_eq h.2 p hp
+/-- Labels name a node of their class: each node's label is below `n`, and
+labelled by itself. -/
+def Canon (n : Nat) (lab : List Nat) : Prop :=
+  lab.length = n ∧ ∀ i < n, labOf lab i < n ∧ labOf lab (labOf lab i) = labOf lab i
 
-/-! ## Soundness -/
+theorem Canon.range (n : Nat) : Canon n (List.range n) := by
+  refine ⟨by simp, fun i hi => ?_⟩
+  have : labOf (List.range n) i = i := by simp [labOf, List.getD, hi]
+  rw [this, this]; exact ⟨hi, rfl⟩
 
-theorem unifyEqs_sound :
-    ∀ (vs : List Nat) (eqs : List (RTy × RTy)) {σ : Subst}, unifyEqs vs eqs = some σ →
-      ∀ e ∈ eqs, e.1.subst σ = e.2.subst σ := by
-  intro vs eqs
-  induction vs, eqs using unifyEqs.induct with
-  | case1 => intro σ _ e he; cases he
-  | case2 vs b eqs ih =>
-    intro σ h e he
-    unfold unifyEqs at h; simp only [ite_true] at h
-    rcases List.mem_cons.mp he with rfl | he
+theorem Canon.merge {n : Nat} {lab : List Nat} {p q : Nat} (h : Canon n lab) (hp : p < n)
+    (hq : q < n) : Canon n (merge lab p q) := by
+  obtain ⟨hl, hc⟩ := h
+  refine ⟨by simp [hl], fun i hi => ?_⟩
+  have hi' : i < lab.length := hl ▸ hi
+  rw [labOf_merge hi']
+  obtain ⟨hpl, hpc⟩ := hc p hp
+  obtain ⟨hql, hqc⟩ := hc q hq
+  obtain ⟨hil, hic⟩ := hc i hi
+  split
+  · rename_i hiq
+    refine ⟨hpl, ?_⟩
+    rw [labOf_merge (hl ▸ hpl), hpc]
+    split <;> rfl
+  · rename_i hiq
+    refine ⟨hil, ?_⟩
+    rw [labOf_merge (hl ▸ hil), hic, ite_eq_right_iff.mpr (fun h => absurd h hiq)]
+
+/-- The number of nodes labelled by themselves: one per class. -/
+def roots (n : Nat) (lab : List Nat) : Nat := (List.range n).countP fun i => labOf lab i == i
+
+theorem countP_one_less {P Q : Nat → Bool} : ∀ {l : List Nat} {b : Nat}, l.Nodup → b ∈ l →
+    P b = true → Q b = false → (∀ x ∈ l, x ≠ b → P x = Q x) → l.countP P = l.countP Q + 1
+  | [], _, _, hb, _, _, _ => by cases hb
+  | x :: xs, b, hnd, hb, hP, hQ, hPQ => by
+    simp only [List.nodup_cons] at hnd
+    rw [List.countP_cons, List.countP_cons]
+    rcases List.mem_cons.mp hb with rfl | hb'
+    · have : xs.countP P = xs.countP Q :=
+        List.countP_congr (fun y hy => by
+          rw [hPQ y (List.mem_cons_of_mem _ hy) (fun e => hnd.1 (e ▸ hy))])
+      simp [hP, hQ, this]
+    · have hx : x ≠ b := fun e => hnd.1 (e ▸ hb')
+      rw [countP_one_less hnd.2 hb' hP hQ (fun y hy hyb => hPQ y (List.mem_cons_of_mem _ hy) hyb),
+        hPQ x List.mem_cons_self hx]
+      split <;> omega
+
+theorem roots_merge {n : Nat} {lab : List Nat} {p q : Nat} (h : Canon n lab) (hp : p < n)
+    (hq : q < n) (hne : labOf lab p ≠ labOf lab q) : roots n (merge lab p q) + 1 = roots n lab := by
+  obtain ⟨hl, hc⟩ := h
+  obtain ⟨hql, hqc⟩ := hc q hq
+  obtain ⟨hpl, hpc⟩ := hc p hp
+  unfold roots
+  refine (countP_one_less (b := labOf lab q) List.nodup_range (List.mem_range.mpr hql)
+    (by simp [hqc]) ?_ (fun x hx hxb => ?_)).symm
+  · rw [labOf_merge (hl ▸ hql), hqc]; simp [hne]
+  · have hx' := List.mem_range.mp hx
+    rw [labOf_merge (hl ▸ hx')]
+    split
+    · rename_i h
+      obtain ⟨-, hxc⟩ := hc x hx'
+      have h1 : labOf lab x ≠ x := fun e => hxb (by rw [← e, h])
+      have h2 : labOf lab p ≠ x := fun e => hne (by rw [← h, ← e, hpc])
+      rw [beq_eq_false_iff_ne.mpr h1, beq_eq_false_iff_ne.mpr h2]
     · rfl
-    · exact ih h e he
-  | case3 vs a b eqs hab x r ho hocc =>
-    intro σ h; unfold unifyEqs at h; simp [hab, ho, hocc] at h
-  | case4 vs a b eqs hab x r ho hocc hτ =>
-    intro σ h; unfold unifyEqs at h; simp [hab, ho, hocc, hτ] at h
-  | case5 vs a b eqs hab x r ho hocc τ hτ hx ih =>
-    intro σ h e he
-    unfold unifyEqs at h; simp only [hab, ho, hocc, hτ, hx, ite_false, dite_true] at h
-    obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
-    have ih' := ih h'
-    have hr := RTy.toTy?_spec hτ
-    subst hr
-    have hocc' : x ∉ τ.ftv := by simpa using hocc
-    rcases List.mem_cons.mp he with rfl | he
-    · rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-      · simp only [RTy.subst_compose, RTy.subst_single hocc]
-        simp [RTy.subst, Subst.find]
-      · simp only [RTy.subst_compose, RTy.subst_single hocc]
-        simp [RTy.subst, Subst.find]
-    · have := ih' _ (List.mem_map_of_mem
-        (f := fun e => (e.1.subst [(x, τ)], e.2.subst [(x, τ)])) he)
-      simpa [RTy.subst_compose] using this
-  | case6 vs a b eqs hab x r ho hocc τ hτ hx =>
-    intro σ h; unfold unifyEqs at h; simp [hab, ho, hocc, hτ, hx] at h
-  | case7 vs eqs c₁ as₁ c₂ as₂ hc hne ho ih =>
-    intro σ h e he
-    unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_true hc, ite_true] at h
-    have ih' := ih h
-    rcases List.mem_cons.mp he with rfl | he
-    · simp only [RTy.subst_app, RTy.app.injEq]
-      exact ⟨hc.1, map_eq_of_zip hc.2 (fun p hp => ih' p (by simp [hp]))⟩
-    · exact ih' e (by simp [he])
-  | case8 vs eqs c₁ as₁ c₂ as₂ hc hne ho =>
-    intro σ h; unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_false hc] at h; cases h
-  | case9 vs eqs i₁ s₁ i₂ s₂ hc hne ho ih =>
-    intro σ h e he
-    unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_true hc, ite_true] at h
-    have ih' := ih h
-    rcases List.mem_cons.mp he with rfl | he
-    · simp only [RTy.subst_mu, RTy.mu.injEq]
-      exact ⟨hc.1, map_eq_of_zip hc.2 (fun p hp => ih' p (by simp [hp]))⟩
-    · exact ih' e (by simp [he])
-  | case10 vs eqs i₁ s₁ i₂ s₂ hc hne ho =>
-    intro σ h; unfold unifyEqs at h; simp only [hne, ho, ite_false, eq_false hc] at h; cases h
-  | case11 vs a b eqs hab ho happ hmu =>
-    intro σ h
-    unfold unifyEqs at h; simp only [hab, ho, ite_false] at h
-    cases a <;> cases b <;> simp_all
 
-theorem unify₀_sound {τ₁ τ₂ : Ty} {σ : Subst} (h : unify₀ τ₁ τ₂ = some σ) :
-    τ₁.subst σ = τ₂.subst σ := by
-  have := unifyEqs_sound _ _ h (τ₁.toRTy, τ₂.toRTy) (by simp)
-  simp only [Ty.toRTy_subst] at this
-  exact Ty.toRTy_inj this
+/-! ## Nodes -/
+
+theorem node_mem {ns : List Ty} {i : Nat} (h : i < ns.length) : node ns i ∈ ns := by
+  simp [node, List.getD, List.getElem?_eq_getElem h]
+
+theorem nodeIdx_lt {ns : List Ty} {x : Ty} (h : x ∈ ns) : nodeIdx ns x < ns.length :=
+  List.idxOf_lt_length_iff.mpr h
+
+theorem node_nodeIdx {ns : List Ty} {x : Ty} (h : x ∈ ns) : node ns (nodeIdx ns x) = x := by
+  have hl := nodeIdx_lt h
+  simp only [node, List.getD, List.getElem?_eq_getElem hl, Option.getD_some]
+  exact List.getElem_idxOf hl
+
+theorem firstApp_some {ns : List Ty} {lab : List Nat} {ℓ f : Nat} (h : firstApp ns lab ℓ = some f) :
+    f < ns.length ∧ labOf lab f = ℓ ∧ (node ns f).isApp = true := by
+  have hm := List.mem_of_find?_eq_some h
+  have hp := List.find?_some h
+  simp only [Bool.and_eq_true, beq_iff_eq] at hp
+  exact ⟨List.mem_range.mp hm, hp.1, hp.2⟩
+
+theorem firstApp_none {ns : List Ty} {lab : List Nat} {ℓ : Nat} (h : firstApp ns lab ℓ = none)
+    {f : Nat} (hf : f < ns.length) (hl : labOf lab f = ℓ) : (node ns f).isApp = false := by
+  have := List.find?_eq_none.mp h f (List.mem_range.mpr hf)
+  simpa [hl] using this
+
+/-- A class with a constructor node has a first one. -/
+theorem firstApp_of_app {ns : List Ty} {lab : List Nat} {i : Nat} (hi : i < ns.length)
+    (ha : (node ns i).isApp = true) : ∃ f, firstApp ns lab (labOf lab i) = some f := by
+  cases h : firstApp ns lab (labOf lab i) with
+  | some f => exact ⟨f, rfl⟩
+  | none => rw [firstApp_none h hi rfl] at ha; cases ha
+
+/-- The nodes are closed under successors. -/
+def KidsClosed (ns : List Ty) : Prop := ∀ x ∈ ns, ∀ y ∈ x.kids, y ∈ ns
+
+theorem nodes_closed (τ₁ τ₂ : Ty) : KidsClosed (nodes τ₁ τ₂) := by
+  intro x hx y hy
+  simp only [nodes, List.mem_eraseDups, List.mem_append] at hx ⊢
+  exact hx.imp (fun h => Ty.subs_closed τ₁ x h y hy) (fun h => Ty.subs_closed τ₂ x h y hy)
+
+theorem mem_nodes_left (τ₁ τ₂ : Ty) : τ₁ ∈ nodes τ₁ τ₂ := by
+  simp [nodes, Ty.mem_subs_self]
+
+theorem mem_nodes_right (τ₁ τ₂ : Ty) : τ₂ ∈ nodes τ₁ τ₂ := by
+  simp [nodes, Ty.mem_subs_self]
+
+theorem nodes_ftv {τ₁ τ₂ x : Ty} (hx : x ∈ nodes τ₁ τ₂) : ∀ a ∈ x.ftv, a ∈ τ₁.ftv ∨ a ∈ τ₂.ftv := by
+  intro a ha
+  simp only [nodes, List.mem_eraseDups, List.mem_append] at hx
+  exact hx.imp (fun h => Ty.subs_ftv h a ha) (fun h => Ty.subs_ftv h a ha)
+
+/-! ## The merge loop -/
+
+/-- Pairs of nodes. -/
+def PairsIn (n : Nat) (ps : List (Nat × Nat)) : Prop := ∀ p ∈ ps, p.1 < n ∧ p.2 < n
+
+theorem congPairs_in {ns : List Ty} (hk : KidsClosed ns) (lab : List Nat) :
+    PairsIn ns.length (congPairs ns lab) := by
+  intro pq hpq
+  simp only [congPairs, List.mem_flatMap, List.mem_range] at hpq
+  obtain ⟨i, hi, hpq⟩ := hpq
+  split at hpq
+  · rename_i f hf
+    split at hpq
+    · have hfl := (firstApp_some hf).1
+      have hz := List.of_mem_zip hpq
+      simp only [List.mem_map] at hz
+      obtain ⟨⟨y, hy, hy'⟩, ⟨z, hz, hz'⟩⟩ := hz
+      rw [← hy', ← hz']
+      exact ⟨nodeIdx_lt (hk _ (node_mem hfl) y hy), nodeIdx_lt (hk _ (node_mem hi) z hz)⟩
+    · cases hpq
+  · cases hpq
+
+theorem genPairs_in {ns : List Ty} (hk : KidsClosed ns) {i₁ i₂ : Nat} (h₁ : i₁ < ns.length)
+    (h₂ : i₂ < ns.length) : PairsIn ns.length (genPairs ns i₁ i₂) := by
+  intro pq hpq
+  simp only [genPairs, List.mem_cons, List.mem_filterMap, List.mem_range] at hpq
+  rcases hpq with rfl | ⟨i, hi, hpq⟩
+  · exact ⟨h₁, h₂⟩
+  · split at hpq
+    · rename_i j sys hn
+      split at hpq
+      · rename_i v hv
+        cases hpq
+        refine ⟨hi, nodeIdx_lt (hk _ (node_mem hi) v ?_)⟩
+        rw [hn]; simp [Ty.kids, hv]
+      · cases hpq
+    · cases hpq
+
+theorem pending_some {ns : List Ty} {gens : List (Nat × Nat)} {lab : List Nat} {p q : Nat}
+    (h : pending ns gens lab = some (p, q)) :
+    (p, q) ∈ gens ++ congPairs ns lab ∧ labOf lab p ≠ labOf lab q := by
+  have hm := List.mem_of_find?_eq_some h
+  have hp := List.find?_some h
+  simp only [bne_iff_ne, ne_eq] at hp
+  exact ⟨hm, hp⟩
+
+theorem pending_none {ns : List Ty} {gens : List (Nat × Nat)} {lab : List Nat}
+    (h : pending ns gens lab = none) : ∀ p ∈ gens ++ congPairs ns lab, labOf lab p.1 = labOf lab p.2 := by
+  intro pq hpq
+  have := List.find?_eq_none.mp h pq hpq
+  simpa using this
+
+/-- What the loop gives satisfies any invariant its merges keep, and has
+nothing pending. -/
+theorem closeLoop_inv {ns : List Ty} {gens : List (Nat × Nat)} (Inv : List Nat → Prop)
+    (hinv : ∀ lab p q, Inv lab → pending ns gens lab = some (p, q) → Inv (merge lab p q)) :
+    ∀ k lab lab', Inv lab → closeLoop ns gens k lab = some lab' →
+      Inv lab' ∧ pending ns gens lab' = none
+  | 0, _, _, _, h => by simp [closeLoop] at h
+  | k + 1, lab, lab', hi, h => by
+    unfold closeLoop at h
+    split at h
+    · rename_i hp; cases h; exact ⟨hi, hp⟩
+    · rename_i p q hp
+      exact closeLoop_inv Inv hinv k _ _ (hinv lab p q hi hp) h
+
+/-- With more fuel than classes, the loop finishes. -/
+theorem closeLoop_some {ns : List Ty} {gens : List (Nat × Nat)} (hk : KidsClosed ns)
+    (hg : PairsIn ns.length gens) :
+    ∀ k lab, Canon ns.length lab → roots ns.length lab < k →
+      ∃ lab', closeLoop ns gens k lab = some lab'
+  | 0, _, _, h => by omega
+  | k + 1, lab, hc, hr => by
+    unfold closeLoop
+    split
+    · exact ⟨lab, rfl⟩
+    · rename_i p q hp
+      obtain ⟨hm, hne⟩ := pending_some hp
+      have hpq : p < ns.length ∧ q < ns.length := by
+        rcases List.mem_append.mp hm with h | h
+        · exact hg _ h
+        · exact congPairs_in hk lab _ h
+      have := roots_merge hc hpq.1 hpq.2 hne
+      exact closeLoop_some hk hg k _ (hc.merge hpq.1 hpq.2) (by omega)
+
+theorem roots_le (n : Nat) (lab : List Nat) : roots n lab ≤ n := by
+  unfold roots
+  have := List.countP_le_length (p := fun i => labOf lab i == i) (l := List.range n)
+  simpa using this
+
+/-! ## A unifier respects the classes -/
+
+/-- `ψ` gives the nodes of one class equal types. -/
+def Resp (ψ : Subst) (ns : List Ty) (lab : List Nat) : Prop :=
+  ∀ i j, i < ns.length → j < ns.length → labOf lab i = labOf lab j →
+    TyEq ((node ns i).subst ψ) ((node ns j).subst ψ)
+
+theorem Resp.range (ψ : Subst) (ns : List Ty) : Resp ψ ns (List.range ns.length) := by
+  intro i j hi hj h
+  simp only [labOf, List.getD, List.getElem?_range hi, List.getElem?_range hj,
+    Option.getD_some] at h
+  subst h; exact TyEq.refl _
+
+theorem Resp.merge {ψ : Subst} {ns : List Ty} {lab : List Nat} {p q : Nat} (h : Resp ψ ns lab)
+    (hl : lab.length = ns.length) (hp : p < ns.length) (hq : q < ns.length)
+    (he : TyEq ((node ns p).subst ψ) ((node ns q).subst ψ)) : Resp ψ ns (merge lab p q) := by
+  intro i j hi hj hij
+  rw [labOf_merge (hl ▸ hi), labOf_merge (hl ▸ hj)] at hij
+  split at hij <;> split at hij
+  · rename_i h₁ h₂; exact h i j hi hj (h₁.trans h₂.symm)
+  · rename_i h₁ h₂
+    exact (h i q hi hq h₁).trans (he.symm.trans (h p j hp hj hij))
+  · rename_i h₁ h₂
+    exact (h i p hi hp hij).trans (he.trans (h q j hq hj h₂.symm))
+  · exact h i j hi hj hij
+
+theorem TyEq.of_view_none_app {s : Ty} {c : Con} {xs : List Ty} (hs : s.view = none) :
+    ¬ TyEq s (.app c xs) := by
+  intro h
+  have := h 1
+  rw [Ty.approx_succ, Ty.approx_succ, hs] at this
+  simp [Ty.view] at this
+
+/-- The pairs the loop merges are equated by a unifier of the two types that
+respects the classes. -/
+theorem pending_resp {ψ : Subst} {ns : List Ty} (hk : KidsClosed ns) {i₁ i₂ : Nat}
+    (he : TyEq ((node ns i₁).subst ψ) ((node ns i₂).subst ψ)) {lab : List Nat} (hr : Resp ψ ns lab) :
+    ∀ pq ∈ genPairs ns i₁ i₂ ++ congPairs ns lab,
+      TyEq ((node ns pq.1).subst ψ) ((node ns pq.2).subst ψ) := by
+  intro pq hpq
+  rcases List.mem_append.mp hpq with hpq | hpq
+  · simp only [genPairs, List.mem_cons, List.mem_filterMap, List.mem_range] at hpq
+    rcases hpq with rfl | ⟨i, hi, hpq⟩
+    · exact he
+    · split at hpq
+      · rename_i j sys hn
+        split at hpq
+        · rename_i v hv
+          cases hpq
+          have hvk : v ∈ ns := hk _ (node_mem hi) v (by rw [hn]; simp [Ty.kids, hv])
+          simp only
+          rw [node_nodeIdx hvk, hn]
+          have := TyEq.whnf (Ty.mu j sys)
+          simp only [Ty.whnf, hv, Option.getD_some] at this
+          exact (this.subst ψ).symm
+        · cases hpq
+      · cases hpq
+  · simp only [congPairs, List.mem_flatMap, List.mem_range] at hpq
+    obtain ⟨i, hi, hpq⟩ := hpq
+    split at hpq
+    · rename_i f hf
+      split at hpq
+      · rename_i hc
+        obtain ⟨hfl, hlf, hfa⟩ := firstApp_some hf
+        have hfi := hr f i hfl hi hlf
+        generalize hnf : node ns f = xf at hc hfi hpq hfa
+        generalize hni : node ns i = xi at hc hfi hpq
+        cases xf with
+        | var _ | mu _ _ => simp [Ty.isApp] at hfa
+        | app c xs =>
+          cases xi with
+          | var _ | mu _ _ => simp [Ty.headCon] at hc
+          | app c' ys =>
+            simp only [Ty.subst_app] at hfi
+            obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hfi
+            simp only [Ty.kids] at hpq
+            rw [List.zip_map] at hpq
+            obtain ⟨⟨x, y⟩, hxy, rfl⟩ := List.mem_map.mp hpq
+            have hx : x ∈ xs := (List.of_mem_zip hxy).1
+            have hy : y ∈ ys := (List.of_mem_zip hxy).2
+            have hxn : x ∈ ns := hk _ (hnf ▸ node_mem hfl) x (by simp [Ty.kids, hx])
+            have hyn : y ∈ ns := hk _ (hni ▸ node_mem hi) y (by simp [Ty.kids, hy])
+            simp only [Prod.map]
+            rw [node_nodeIdx hxn, node_nodeIdx hyn]
+            refine hz (x.subst ψ, y.subst ψ) ?_
+            rw [List.zip_map]
+            exact List.mem_map_of_mem hxy
+      · cases hpq
+    · cases hpq
+
+/-- Nodes of one class have one head, under a unifier that respects them. -/
+theorem consistent_of_resp {ψ : Subst} {ns : List Ty} {lab : List Nat} (hr : Resp ψ ns lab) :
+    consistent ns lab = true := by
+  simp only [consistent, List.all_eq_true, List.mem_range]
+  intro i hi
+  split
+  · rename_i f hf
+    obtain ⟨hfl, hlf, hfa⟩ := firstApp_some hf
+    have hfi := hr f i hfl hi hlf
+    generalize hnf : node ns f = xf at hfi hfa
+    cases xf with
+    | var _ | mu _ _ => simp [Ty.isApp] at hfa
+    | app c xs =>
+      generalize hni : node ns i = xi at hfi
+      cases xi with
+      | app c' ys =>
+        simp only [Ty.subst_app] at hfi
+        obtain ⟨hc, hl, -⟩ := TyEq.app_iff.mp hfi
+        simp only [List.length_map] at hl
+        simp [Ty.headCon, hc, hl]
+      | var a => simp [Ty.headless, Ty.view]
+      | mu j sys =>
+        simp only [Ty.headless, Bool.not_eq_true', Option.isNone_eq_false_iff]
+        cases hv : (Ty.mu j sys).view with
+        | some _ => rfl
+        | none =>
+          exfalso
+          refine TyEq.of_view_none_app (s := (Ty.mu j sys).subst ψ) ?_ (hfi.symm)
+          rw [Ty.view_subst, hv]; rfl
+  · rfl
+
+/-! ## The substitution read off the classes -/
+
+/-- Unfolding gives an equal type. -/
+theorem unroll_tyEq : ∀ (k : Nat) (seen : List Nat) (τ : Ty), TyEq (unroll k seen τ) τ
+  | 0, _, τ => TyEq.refl τ
+  | k + 1, seen, .mu ℓ sys => by
+    unfold unroll
+    split
+    · exact TyEq.refl _
+    · have hw := TyEq.whnf (Ty.mu ℓ sys)
+      split
+      · rename_i c xs hv
+        simp only [Ty.whnf, hv, Option.getD_some] at hw
+        refine TyEq.trans (TyEq.app (by simp) (fun p hp => ?_)) hw
+        rw [List.zip_map_left] at hp
+        obtain ⟨⟨x, y⟩, hxy, rfl⟩ := List.mem_map.mp hp
+        obtain ⟨rfl, -⟩ := mem_zip_self hxy
+        exact unroll_tyEq k _ x
+      · rename_i a hv
+        simp only [Ty.whnf, hv, Option.getD_some] at hw
+        exact hw
+      · exact TyEq.refl _
+  | k + 1, seen, .app c xs => by
+    unfold unroll
+    refine TyEq.app (by simp) (fun p hp => ?_)
+    rw [List.zip_map_left] at hp
+    obtain ⟨⟨x, y⟩, hxy, rfl⟩ := List.mem_map.mp hp
+    obtain ⟨rfl, -⟩ := mem_zip_self hxy
+    exact unroll_tyEq k seen x
+  | _ + 1, _, .var a => by unfold unroll; exact TyEq.refl _
+
+theorem find_filterMap_var (V : Ty → Ty) (a : Nat) : ∀ l : List Ty,
+    Subst.find (l.filterMap fun x => match x with
+      | .var b => some (b, V (.var b))
+      | _ => none) a = if Ty.var a ∈ l then some (V (.var a)) else none
+  | [] => by simp [Subst.find]
+  | x :: l => by
+    have ih := find_filterMap_var V a l
+    cases x with
+    | var b =>
+      simp only [List.filterMap_cons, Subst.find, List.mem_cons, Ty.var.injEq]
+      by_cases h : a = b
+      · subst h; simp
+      · simp [h, ih]
+    | app c args => simp [ih]
+    | mu i sys => simp [ih]
+
+theorem unifySubst_find (ns : List Ty) (lab : List Nat) (a : Nat) :
+    (unifySubst ns lab).find a = if Ty.var a ∈ ns then some (nodeVal ns lab (.var a)) else none := by
+  unfold unifySubst
+  exact find_filterMap_var (nodeVal ns lab) a ns
+
+theorem classRef_open (ns : List Ty) (lab : List Nat) (x : Ty) :
+    (classRef ns lab x).open (muEnv (classSys ns lab)) =
+      classTy ns lab (labOf lab (nodeIdx ns x)) := by
+  by_cases h : varOnly ns lab (labOf lab (nodeIdx ns x)) <;>
+    simp [classRef, classTy, h, RTy.open, muEnv]
+
+theorem classSys_get {ns : List Ty} {lab : List Nat} {ℓ : Nat} (h : ℓ < ns.length) :
+    (classSys ns lab)[ℓ]? = some (classEq ns lab ℓ) := by
+  simp [classSys, List.getElem?_map, List.getElem?_range h]
+
+/-- A constructor class's type unfolds to its first constructor node's
+constructor, applied to its arguments' classes' types. -/
+theorem classTy_view_app {ns : List Ty} {lab : List Nat} {ℓ f : Nat} (hℓ : ℓ < ns.length)
+    (hc : labOf lab ℓ = ℓ) (hf : firstApp ns lab ℓ = some f) {c : Con} {ys : List Ty}
+    (hn : node ns f = .app c ys) :
+    classTy ns lab ℓ = .mu ℓ (classSys ns lab) ∧
+    (Ty.mu ℓ (classSys ns lab)).view =
+      some (.app c (ys.map fun y => classTy ns lab (labOf lab (nodeIdx ns y)))) := by
+  refine ⟨by simp [classTy, varOnly, hf], ?_⟩
+  simp only [Ty.view, classSys_get hℓ, Option.bind_some, classEq, hc, hf, hn]
+  rw [RTy.head]
+  simp [classRef_open]
+
+/-- A headless class's type is headless. -/
+theorem classTy_view_none {ns : List Ty} {lab : List Nat} {ℓ : Nat} (hℓ : ℓ < ns.length)
+    (hc : labOf lab ℓ = ℓ) (hf : firstApp ns lab ℓ = none) (hh : hasHeadless ns lab ℓ = true) :
+    classTy ns lab ℓ = .mu ℓ (classSys ns lab) ∧ (Ty.mu ℓ (classSys ns lab)).view = none := by
+  refine ⟨by simp [classTy, varOnly, hh], ?_⟩
+  simp only [Ty.view, classSys_get hℓ, Option.bind_some, classEq, hc, hf]
+  rw [RTy.head]
+
+theorem hasHeadless_of {ns : List Ty} {lab : List Nat} {i : Nat} (hi : i < ns.length)
+    (hh : (node ns i).headless = true) : hasHeadless ns lab (labOf lab i) = true := by
+  simp only [hasHeadless, List.any_eq_true, List.mem_range, Bool.and_eq_true, beq_iff_eq]
+  exact ⟨i, hi, rfl, hh⟩
+
+/-- The closure is stable: nothing is left to merge. -/
+def Stable (ns : List Ty) (gens : List (Nat × Nat)) (lab : List Nat) : Prop :=
+  ∀ p ∈ gens ++ congPairs ns lab, labOf lab p.1 = labOf lab p.2
+
+/-- In a stable closure, a node and its unfolding are in one class. -/
+theorem Stable.mu {ns : List Ty} {i₁ i₂ : Nat} {lab : List Nat} (hs : Stable ns (genPairs ns i₁ i₂) lab)
+    {x v : Ty} (hx : x ∈ ns) (hm : ∃ j sys, x = .mu j sys) (hv : x.view = some v) :
+    labOf lab (nodeIdx ns x) = labOf lab (nodeIdx ns v) := by
+  obtain ⟨j, sys, rfl⟩ := hm
+  refine hs (nodeIdx ns (.mu j sys), nodeIdx ns v) (List.mem_append_left _ ?_)
+  simp only [genPairs, List.mem_cons, List.mem_filterMap, List.mem_range]
+  refine .inr ⟨nodeIdx ns (.mu j sys), nodeIdx_lt hx, ?_⟩
+  rw [node_nodeIdx hx]; simp [hv]
+
+/-- In a stable closure, two constructor nodes of one class have their
+arguments in one class each. -/
+theorem Stable.cong {ns : List Ty} {gens : List (Nat × Nat)} {lab : List Nat}
+    (hs : Stable ns gens lab) {f i : Nat} (hi : i < ns.length)
+    (hf : firstApp ns lab (labOf lab i) = some f) {c : Con} {xs ys : List Ty}
+    (hnf : node ns f = .app c xs) (hni : node ns i = .app c ys) (hl : xs.length = ys.length) :
+    ∀ p ∈ xs.zip ys, labOf lab (nodeIdx ns p.1) = labOf lab (nodeIdx ns p.2) := by
+  intro p hp
+  refine hs (nodeIdx ns p.1, nodeIdx ns p.2) (List.mem_append_right _ ?_)
+  simp only [congPairs, List.mem_flatMap, List.mem_range]
+  refine ⟨i, hi, ?_⟩
+  simp only [hf, hnf, hni, Ty.headCon, hl, ite_true, Ty.kids]
+  rw [List.zip_map]
+  exact List.mem_map_of_mem hp
+
+theorem consistent_at {ns : List Ty} {lab : List Nat} (h : consistent ns lab = true) {i f : Nat}
+    (hi : i < ns.length) (hf : firstApp ns lab (labOf lab i) = some f) :
+    (∀ c args, node ns i = .app c args → (node ns f).headCon = some (c, args.length)) ∧
+    ((node ns i).isApp = false → (node ns i).headless = false) := by
+  simp only [consistent, List.all_eq_true, List.mem_range] at h
+  have := h i hi
+  rw [hf] at this
+  constructor
+  · intro c args hn
+    rw [hn] at this
+    simpa using this
+  · intro hna
+    generalize hn : node ns i = t at this hna
+    cases t with
+    | app _ _ => simp [Ty.isApp] at hna
+    | var a => simp [Ty.headless, Ty.view]
+    | mu j sys => simpa using this
+
+theorem Ty.headCon_some {t : Ty} {c : Con} {k : Nat} (h : t.headCon = some (c, k)) :
+    ∃ ys, t = .app c ys ∧ ys.length = k := by
+  cases t <;> simp [Ty.headCon] at h
+  obtain ⟨rfl, rfl⟩ := h
+  exact ⟨_, rfl, rfl⟩
+
+theorem mem_zip_swap {α β : Type} : ∀ {l₁ : List α} {l₂ : List β} {a : α} {b : β},
+    (a, b) ∈ l₁.zip l₂ → (b, a) ∈ l₂.zip l₁
+  | [], _, _, _, h => by simp at h
+  | _ :: _, [], _, _, h => by simp at h
+  | x :: xs, y :: ys, a, b, h => by
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h ⊢
+    rcases h with ⟨rfl, rfl⟩ | h
+    · exact .inl ⟨rfl, rfl⟩
+    · exact .inr (mem_zip_swap h)
+
+/-- The substitution read off a stable closure with one head per class
+gives each node its class's type. -/
+theorem extract_sound {ns : List Ty} {i₁ i₂ : Nat} {lab : List Nat} (hk : KidsClosed ns)
+    (hc : Canon ns.length lab) (hs : Stable ns (genPairs ns i₁ i₂) lab)
+    (hcons : consistent ns lab = true) :
+    ∀ x ∈ ns, TyEq (x.subst (unifySubst ns lab)) (classTy ns lab (labOf lab (nodeIdx ns x))) := by
+  -- A variable node: what it is bound to.
+  have hvar : ∀ a, Ty.var a ∈ ns → TyEq ((Ty.var a).subst (unifySubst ns lab))
+      (classTy ns lab (labOf lab (nodeIdx ns (.var a)))) := by
+    intro a ha
+    simp only [Ty.subst, unifySubst_find, ha, ite_true, Option.getD_some, nodeVal]
+    exact unroll_tyEq _ _ _
+  let R : Ty → Ty → Prop := fun s t => ∃ x ∈ ns, s = x.subst (unifySubst ns lab) ∧
+    t = classTy ns lab (labOf lab (nodeIdx ns x))
+  -- A constructor node: one head, its arguments related.
+  have happ : ∀ c args, Ty.app c args ∈ ns →
+      Matched R ((Ty.app c args).subst (unifySubst ns lab))
+        (classTy ns lab (labOf lab (nodeIdx ns (.app c args)))) := by
+    intro c args hx
+    have hi := nodeIdx_lt hx
+    have hni := node_nodeIdx hx
+    obtain ⟨f, hf⟩ := firstApp_of_app (lab := lab) hi (by rw [hni]; rfl)
+    have hhc := (consistent_at hcons hi hf).1 c args hni
+    obtain ⟨ys, hnf, hl⟩ := Ty.headCon_some hhc
+    obtain ⟨hℓ, hℓc⟩ := hc.2 _ hi
+    obtain ⟨hT, hv⟩ := classTy_view_app hℓ hℓc hf hnf
+    rw [hT]
+    refine .inr (.inr ⟨c, args.map (·.subst (unifySubst ns lab)), _, by simp [Ty.view], hv,
+      by simp [hl], fun p hp => ?_⟩)
+    rw [List.zip_map] at hp
+    obtain ⟨⟨a, y⟩, hay, rfl⟩ := List.mem_map.mp hp
+    have hlab := Stable.cong hs hi hf hnf hni hl (y, a) (mem_zip_swap hay)
+    have ha : a ∈ ns := hk _ hx a (by simp [Ty.kids, (List.of_mem_zip hay).1])
+    refine ⟨a, ha, rfl, ?_⟩
+    simp only [Prod.map]
+    rw [hlab]
+  refine fun x hx => TyEq.of_bisim R (fun s t hr => ?_) _ _ ⟨x, hx, rfl, rfl⟩
+  obtain ⟨x, hx, rfl, rfl⟩ := hr
+  cases x with
+  | var a => exact .inl (hvar a hx)
+  | app c args => exact .inr ⟨_, _, TyEq.refl _, TyEq.refl _, happ c args hx⟩
+  | mu j sys =>
+    cases hv : (Ty.mu j sys).view with
+    | some v =>
+      have hvn : v ∈ ns := hk _ hx v (by simp [Ty.kids, hv])
+      have hlab := Stable.mu hs hx ⟨j, sys, rfl⟩ hv
+      have hw : TyEq ((Ty.mu j sys).subst (unifySubst ns lab)) (v.subst (unifySubst ns lab)) := by
+        have := TyEq.whnf (Ty.mu j sys)
+        simp only [Ty.whnf, hv, Option.getD_some] at this
+        exact this.symm.subst _
+      rw [hlab]
+      rcases Ty.view_shape hv with ⟨a, rfl⟩ | ⟨c, args, rfl⟩
+      · exact .inl (hw.trans (hvar a hvn))
+      · exact .inr ⟨_, _, hw, TyEq.refl _, happ c args hvn⟩
+    | none =>
+      have hi := nodeIdx_lt hx
+      have hni := node_nodeIdx hx
+      have hhl : (node ns (nodeIdx ns (.mu j sys))).headless = true := by
+        rw [hni]; simp [Ty.headless, hv]
+      have hf : firstApp ns lab (labOf lab (nodeIdx ns (.mu j sys))) = none := by
+        cases hf : firstApp ns lab (labOf lab (nodeIdx ns (.mu j sys))) with
+        | none => rfl
+        | some f =>
+          have := (consistent_at hcons hi hf).2 (by rw [hni]; rfl)
+          rw [hhl] at this; cases this
+      obtain ⟨hℓ, hℓc⟩ := hc.2 _ hi
+      have hh := hasHeadless_of (lab := lab) hi hhl
+      obtain ⟨hT, hvT⟩ := classTy_view_none hℓ hℓc hf hh
+      rw [hT]
+      refine .inr ⟨_, _, TyEq.refl _, TyEq.refl _, .inl ⟨?_, hvT⟩⟩
+      rw [Ty.view_subst, hv]; rfl
 
 /-! ## Most general -/
 
-/-- Every unifier `ψ` of the equations factors through the one found: `ψ`
-after `σ` is `ψ`. So unification succeeds whenever anything unifies the
-equations, given that `vs` has all their variables. -/
-theorem unifyEqs_mgu :
-    ∀ (vs : List Nat) (eqs : List (RTy × RTy)),
-      (∀ e ∈ eqs, ∀ a, a ∈ e.1.ftv ∨ a ∈ e.2.ftv → a ∈ vs) →
-      ∀ {ψ : Subst}, (∀ e ∈ eqs, e.1.subst ψ = e.2.subst ψ) →
-        ∃ σ, unifyEqs vs eqs = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ := by
-  intro vs eqs
-  induction vs, eqs using unifyEqs.induct with
-  | case1 => intro _ ψ _; exact ⟨[], by simp [unifyEqs], by simp⟩
-  | case2 vs b eqs ih =>
-    intro hvs ψ hψ
-    obtain ⟨σ, h, hσ⟩ := ih (fun e he => hvs e (by simp [he])) (fun e he => hψ e (by simp [he]))
-    exact ⟨σ, by unfold unifyEqs; simpa using h, hσ⟩
-  | case3 vs a b eqs hab x r ho hocc =>
-    intro _ ψ hψ
-    have h₀ := hψ (a, b) (by simp)
-    rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-    · exact absurd h₀ (RTy.subst_ne_of_occurs ψ hocc (Ne.symm hab))
-    · exact absurd h₀.symm (RTy.subst_ne_of_occurs ψ hocc hab)
-  | case4 vs a b eqs hab x r ho hocc hτ =>
-    intro _ ψ hψ
-    have h₀ := hψ (a, b) (by simp)
-    have hl : ((RTy.free x).subst ψ).toTy? = some ((Ty.var x).subst ψ) := by
-      simp only [RTy.subst]; exact Ty.toRTy_toTy? _
-    have hr := RTy.toTy?_subst_none ψ hτ
-    rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-    · rw [h₀, hr] at hl; cases hl
-    · rw [← h₀, hr] at hl; cases hl
-  | case5 vs a b eqs hab x r ho hocc τ hτ hx ih =>
-    intro hvs ψ hψ
-    have hr := RTy.toTy?_spec hτ
-    subst hr
-    have hocc' : x ∉ τ.ftv := by simpa using hocc
-    have h₀ : (Ty.var x).subst ψ = τ.subst ψ := by
-      have := hψ (a, b) (by simp)
-      apply Ty.toRTy_inj
-      rw [← Ty.toRTy_subst, ← Ty.toRTy_subst]
-      rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-      · exact this
-      · exact this.symm
-    have hτvs : ∀ c ∈ τ.ftv, c ∈ vs := fun c hc => by
-      rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-      · exact hvs _ List.mem_cons_self c (.inr (by simpa using hc))
-      · exact hvs _ List.mem_cons_self c (.inl (by simpa using hc))
-    have hvs' : ∀ e ∈ substEqs [(x, τ)] eqs, ∀ c, c ∈ e.1.ftv ∨ c ∈ e.2.ftv → c ∈ vs.erase x := by
-      intro e he c hc
-      obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
-      have hmem : ∀ ρ, (ρ = e₀.1 ∨ ρ = e₀.2) → c ∈ (ρ.subst [(x, τ)]).ftv → c ∈ vs.erase x := by
-        intro ρ hρ hc
-        rcases RTy.ftv_subst_single hc with ⟨hc, hne⟩ | hc
-        · refine (List.mem_erase_of_ne hne).mpr (hvs e₀ (by simp [he₀]) c ?_)
-          rcases hρ with rfl | rfl
-          · exact .inl hc
-          · exact .inr hc
-        · exact (List.mem_erase_of_ne (fun e : c = x => hocc' (e ▸ hc))).mpr (hτvs c hc)
-      rcases hc with hc | hc
-      · exact hmem _ (.inl rfl) hc
-      · exact hmem _ (.inr rfl) hc
-    have hψ' : ∀ e ∈ substEqs [(x, τ)] eqs, e.1.subst ψ = e.2.subst ψ := by
-      intro e he
-      obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
-      simp only [RTy.subst_single_absorb h₀]
-      exact hψ e₀ (by simp [he₀])
-    obtain ⟨σ', h', hσ'⟩ := ih hvs' hψ'
-    refine ⟨Subst.compose σ' [(x, τ)], ?_, fun ρ => ?_⟩
-    · unfold unifyEqs; simp [hab, ho, hocc', hτ, hx, h']
-    · rw [Ty.subst_compose, hσ', Ty.subst_single_absorb h₀]
-  | case6 vs a b eqs hab x r ho hocc τ hτ hx =>
-    intro hvs _ _
-    rcases orient_spec ho with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
-    · exact absurd (hvs _ List.mem_cons_self x (.inl (by simp [RTy.ftv]))) hx
-    · exact absurd (hvs _ List.mem_cons_self x (.inr (by simp [RTy.ftv]))) hx
-  | case7 vs eqs c₁ as₁ c₂ as₂ hc hne ho ih =>
-    intro hvs ψ hψ
-    have h₀ := hψ _ List.mem_cons_self
-    simp only [RTy.subst_app, RTy.app.injEq] at h₀
-    have hfv : ∀ c, c ∈ (RTy.app c₁ as₁).ftv ∨ c ∈ (RTy.app c₂ as₂).ftv → c ∈ vs :=
-      hvs _ List.mem_cons_self
-    simp only [RTy.ftv_app, List.mem_flatMap] at hfv
-    obtain ⟨σ, h, hσ⟩ := ih (ψ := ψ)
-      (fun e he c hc => by
-        rcases List.mem_append.mp he with he | he
-        · rcases hc with hc | hc
-          · exact hfv c (.inl ⟨_, (List.of_mem_zip he).1, hc⟩)
-          · exact hfv c (.inr ⟨_, (List.of_mem_zip he).2, hc⟩)
-        · exact hvs e (by simp [he]) c hc)
-      (fun e he => by
-        rcases List.mem_append.mp he with he | he
-        · exact zip_of_map_eq h₀.2 e he
-        · exact hψ e (by simp [he]))
-    exact ⟨σ, by unfold unifyEqs; simp only [hne, ho, ite_false, eq_true hc, ite_true]; exact h, hσ⟩
-  | case8 vs eqs c₁ as₁ c₂ as₂ hc hne ho =>
-    intro _ ψ hψ
-    have h₀ := hψ _ List.mem_cons_self
-    simp only [RTy.subst_app, RTy.app.injEq] at h₀
-    exact absurd ⟨h₀.1, by simpa using congrArg List.length h₀.2⟩ hc
-  | case9 vs eqs i₁ s₁ i₂ s₂ hc hne ho ih =>
-    intro hvs ψ hψ
-    have h₀ := hψ _ List.mem_cons_self
-    simp only [RTy.subst_mu, RTy.mu.injEq] at h₀
-    have hfv : ∀ c, c ∈ (RTy.mu i₁ s₁).ftv ∨ c ∈ (RTy.mu i₂ s₂).ftv → c ∈ vs :=
-      hvs _ List.mem_cons_self
-    simp only [RTy.ftv_mu, List.mem_flatMap] at hfv
-    obtain ⟨σ, h, hσ⟩ := ih (ψ := ψ)
-      (fun e he c hc => by
-        rcases List.mem_append.mp he with he | he
-        · rcases hc with hc | hc
-          · exact hfv c (.inl ⟨_, (List.of_mem_zip he).1, hc⟩)
-          · exact hfv c (.inr ⟨_, (List.of_mem_zip he).2, hc⟩)
-        · exact hvs e (by simp [he]) c hc)
-      (fun e he => by
-        rcases List.mem_append.mp he with he | he
-        · exact zip_of_map_eq h₀.2 e he
-        · exact hψ e (by simp [he]))
-    exact ⟨σ, by unfold unifyEqs; simp only [hne, ho, ite_false, eq_true hc, ite_true]; exact h, hσ⟩
-  | case10 vs eqs i₁ s₁ i₂ s₂ hc hne ho =>
-    intro _ ψ hψ
-    have h₀ := hψ _ List.mem_cons_self
-    simp only [RTy.subst_mu, RTy.mu.injEq] at h₀
-    exact absurd ⟨h₀.1, by simpa using congrArg List.length h₀.2⟩ hc
-  | case11 vs a b eqs hab ho happ hmu =>
-    intro _ ψ hψ
-    have h₀ := hψ (a, b) (by simp)
-    cases a <;> cases b <;> first
-      | exact absurd (happ _ _ _ _ rfl rfl) id
-      | exact absurd (hmu _ _ _ _ rfl rfl) id
-      | simp_all [orient, RTy.subst]
+theorem classVar_spec {ns : List Ty} {lab : List Nat} {ℓ i : Nat} (hi : i < ns.length)
+    (hl : labOf lab i = ℓ) (hv : (node ns i).isVar = true) :
+    ∃ j, j < ns.length ∧ labOf lab j = ℓ ∧ node ns j = .var (classVar ns lab ℓ) := by
+  unfold classVar
+  cases h : (List.range ns.length).reverse.find? (fun i => labOf lab i == ℓ && (node ns i).isVar) with
+  | none =>
+    have := List.find?_eq_none.mp h i (List.mem_reverse.mpr (List.mem_range.mpr hi))
+    simp [hl, hv] at this
+  | some j =>
+    have hm := List.mem_range.mp (List.mem_reverse.mp (List.mem_of_find?_eq_some h))
+    have hp := List.find?_some h
+    simp only [Bool.and_eq_true, beq_iff_eq] at hp
+    refine ⟨j, hm, hp.1, ?_⟩
+    generalize hn : node ns j = t at hp
+    cases t <;> simp_all [Ty.isVar]
 
-/-- Unification succeeds whenever the types unify, with a most general
-unifier. -/
-theorem unify₀_mgu {τ₁ τ₂ : Ty} {ψ : Subst} (h : τ₁.subst ψ = τ₂.subst ψ) :
-    ∃ σ, unify₀ τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ :=
-  unifyEqs_mgu _ _ (fun e he c hc => by
-    simp only [List.mem_singleton] at he; subst he
-    simp only [List.mem_append, Ty.toRTy_ftv] at hc ⊢; exact hc) (fun e he => by
-    simp only [List.mem_singleton] at he; subst he
-    simp only [Ty.toRTy_subst, h])
+/-- A class of variables has a variable node, the one it stands for. -/
+theorem varOnly_var {ns : List Ty} {i₁ i₂ : Nat} {lab : List Nat} (hk : KidsClosed ns)
+    (hs : Stable ns (genPairs ns i₁ i₂) lab) {x : Ty} (hx : x ∈ ns)
+    (hvo : varOnly ns lab (labOf lab (nodeIdx ns x)) = true) :
+    ∃ j, j < ns.length ∧ labOf lab j = labOf lab (nodeIdx ns x) ∧
+      node ns j = .var (classVar ns lab (labOf lab (nodeIdx ns x))) := by
+  simp only [varOnly, Bool.and_eq_true, Option.isNone_iff_eq_none, Bool.not_eq_true'] at hvo
+  obtain ⟨hf, hh⟩ := hvo
+  have hi := nodeIdx_lt hx
+  have hni := node_nodeIdx hx
+  cases x with
+  | var a => exact classVar_spec hi rfl (by rw [hni]; rfl)
+  | app c args =>
+    have := firstApp_none hf hi rfl; rw [hni] at this; cases this
+  | mu j sys =>
+    cases hv : (Ty.mu j sys).view with
+    | none =>
+      have := hasHeadless_of (lab := lab) hi (by rw [hni]; simp [Ty.headless, hv])
+      rw [hh] at this; cases this
+    | some v =>
+      have hvn : v ∈ ns := hk _ hx v (by simp [Ty.kids, hv])
+      have hlab := Stable.mu hs hx ⟨j, sys, rfl⟩ hv
+      rcases Ty.view_shape hv with ⟨a, rfl⟩ | ⟨c, args, rfl⟩
+      · rw [hlab]
+        exact classVar_spec (nodeIdx_lt hvn) rfl (by rw [node_nodeIdx hvn]; rfl)
+      · have := firstApp_none hf (nodeIdx_lt hvn) hlab.symm
+        rw [node_nodeIdx hvn] at this; cases this
 
-/-! ## Unification up to unfolding
+/-- Under a unifier respecting the classes, a node's class's type is the
+node's type. -/
+theorem extract_mgu {ψ : Subst} {ns : List Ty} {i₁ i₂ : Nat} {lab : List Nat} (hk : KidsClosed ns)
+    (hc : Canon ns.length lab) (hs : Stable ns (genPairs ns i₁ i₂) lab) (hr : Resp ψ ns lab) :
+    ∀ x ∈ ns, TyEq ((classTy ns lab (labOf lab (nodeIdx ns x))).subst ψ) (x.subst ψ) := by
+  let R : Ty → Ty → Prop := fun s t => ∃ x ∈ ns,
+    s = (classTy ns lab (labOf lab (nodeIdx ns x))).subst ψ ∧ t = x.subst ψ
+  refine fun x hx => TyEq.of_bisim R (fun s t hR => ?_) _ _ ⟨x, hx, rfl, rfl⟩
+  obtain ⟨x, hx, rfl, rfl⟩ := hR
+  have hi := nodeIdx_lt hx
+  have hni := node_nodeIdx hx
+  obtain ⟨hℓ, hℓc⟩ := hc.2 _ hi
+  cases hf : firstApp ns lab (labOf lab (nodeIdx ns x)) with
+  | some f =>
+    obtain ⟨hfl, hlf, hfa⟩ := firstApp_some hf
+    generalize hnf : node ns f = xf at hfa
+    cases xf with
+    | var _ | mu _ _ => simp [Ty.isApp] at hfa
+    | app c ys =>
+      obtain ⟨hT, hv⟩ := classTy_view_app hℓ hℓc hf hnf
+      have hxf := hr (nodeIdx ns x) f hi hfl hlf.symm
+      rw [hni, hnf] at hxf
+      refine .inr ⟨_, _, TyEq.refl _, hxf, .inr (.inr ⟨c,
+        ys.map (fun y => (classTy ns lab (labOf lab (nodeIdx ns y))).subst ψ), ys.map (·.subst ψ), ?_,
+        by simp [Ty.view],
+        by simp, fun p hp => ?_⟩)⟩
+      · rw [hT, Ty.view_subst, hv]; simp [Ty.view]
+      · rw [List.zip_map] at hp
+        obtain ⟨⟨a, b⟩, hab, rfl⟩ := List.mem_map.mp hp
+        obtain ⟨rfl, ha⟩ := mem_zip_self hab
+        exact ⟨a, hk _ (hnf ▸ node_mem hfl) a (by simp [Ty.kids, ha]), rfl, rfl⟩
+  | none =>
+    cases hh : hasHeadless ns lab (labOf lab (nodeIdx ns x)) with
+    | true =>
+      obtain ⟨hT, hv⟩ := classTy_view_none hℓ hℓc hf hh
+      simp only [hasHeadless, List.any_eq_true, List.mem_range, Bool.and_eq_true, beq_iff_eq] at hh
+      obtain ⟨h, hhl, hlh, hhh⟩ := hh
+      have hxh := hr (nodeIdx ns x) h hi hhl hlh.symm
+      rw [hni] at hxh
+      refine .inr ⟨_, _, TyEq.refl _, hxh, .inl ⟨?_, ?_⟩⟩
+      · rw [hT, Ty.view_subst, hv]; rfl
+      · simp only [Ty.headless, Option.isNone_iff_eq_none] at hhh
+        rw [Ty.view_subst, hhh]; rfl
+    | false =>
+      have hvo : varOnly ns lab (labOf lab (nodeIdx ns x)) = true := by
+        simp [varOnly, hf, hh]
+      obtain ⟨j, hj, hlj, hnj⟩ := varOnly_var hk hs hx hvo
+      have hT : classTy ns lab (labOf lab (nodeIdx ns x)) =
+          .var (classVar ns lab (labOf lab (nodeIdx ns x))) := by simp [classTy, hvo]
+      have hxj := hr j (nodeIdx ns x) hj hi hlj
+      rw [hni, hnj] at hxj
+      left; rw [hT]; exact hxj
 
-Where syntactic unification fails, `unifyRec` tries again equi-recursively,
-as inty's `unify` does (`src/infer/unify.rs`): a recursive type is unfolded
-against another type, and a variable that occurs in the type it is bound to,
-only under a record or a function, is bound to a recursive type, as inty's
-`var_bind` does when `is_inside_row_type` (`create_recursive_type`). inty
-keeps the recursive type in its global table, without parameters; here it
-is `mu 0 [τ']`, `τ'` being `τ` with the variable's occurrences made
-`self 0`. A fuel bounds the unfolding; the result is sound
-(`unifyRec_sound`), and inference is complete only for what syntactic
-unification decides. -/
+/-! ## The unifier -/
 
-mutual
-/-- Whether every occurrence of `a` in `τ` is outside any recursive type. -/
-def Ty.noMuOcc (a : Nat) : Ty → Bool
-  | .var _ => true
-  | .app _ args => Ty.noMuOccs a args
-  | .mu i sys => !decide (a ∈ (Ty.mu i sys).ftv)
-def Ty.noMuOccs (a : Nat) : List Ty → Bool
-  | [] => true
-  | t :: ts => t.noMuOcc a && Ty.noMuOccs a ts
-end
-
-@[simp] theorem Ty.noMuOccs_eq (a : Nat) (ts : List Ty) : Ty.noMuOccs a ts = ts.all (Ty.noMuOcc a) := by
-  induction ts <;> simp_all [Ty.noMuOccs]
-
-mutual
-/-- Whether every occurrence of `a` in `τ` is under a record or a function,
-and outside any recursive type, so that `a = τ` has a recursive solution
-(inty's `is_inside_row_type`). -/
-def Ty.guarded (a : Nat) : Ty → Bool
-  | .var b => b != a
-  | .app c args =>
-    match c with
-    | .fn | .record _ => Ty.noMuOccs a args
-    | _ => Ty.guardeds a args
-  | .mu i sys => !decide (a ∈ (Ty.mu i sys).ftv)
-def Ty.guardeds (a : Nat) : List Ty → Bool
-  | [] => true
-  | t :: ts => t.guarded a && Ty.guardeds a ts
-end
-
-@[simp] theorem Ty.guardeds_eq (a : Nat) (ts : List Ty) : Ty.guardeds a ts = ts.all (Ty.guarded a) := by
-  induction ts <;> simp_all [Ty.guardeds]
-
-mutual
-/-- `τ` as the right-hand side of a one-equation system, `a` being the
-system's type. -/
-def Ty.abstract (a : Nat) : Ty → RTy
-  | .var b => if b = a then .self 0 else .free b
-  | .app c args => .app c (Ty.abstracts a args)
-  | .mu i sys => .mu i sys
-def Ty.abstracts (a : Nat) : List Ty → List RTy
-  | [] => []
-  | t :: ts => t.abstract a :: Ty.abstracts a ts
-end
-
-@[simp] theorem Ty.abstracts_eq (a : Nat) (ts : List Ty) :
-    Ty.abstracts a ts = ts.map (Ty.abstract a) := by
-  induction ts <;> simp_all [Ty.abstracts]
-
-/-- What to bind `a` to, to solve `a = t`: `t` itself if `a` doesn't occur
-in it, the recursive type `mu 0 [t']` if it occurs only guarded. -/
-def solveVar (a : Nat) (t : Ty) : Option Ty :=
-  if a ∈ t.ftv then
-    if t.guarded a then some (.mu 0 [t.abstract a]) else none
-  else some t
-
-/-- Substitute in both sides of each equation between types. -/
-def substTyEqs (σ : Subst) (eqs : List (Ty × Ty)) : List (Ty × Ty) :=
-  eqs.map fun e => (e.1.subst σ, e.2.subst σ)
-
-/-- Unify a list of equations up to unfolding, with `fuel` steps. -/
-def unifyRec : Nat → List (Ty × Ty) → Option Subst
-  | 0, _ => none
-  | _ + 1, [] => some []
-  | f + 1, (s, t) :: eqs =>
-    if s = t then unifyRec f eqs
-    else
-      match s, t with
-      | .var a, t =>
-        match solveVar a t with
-        | none => none
-        | some u => (unifyRec f (substTyEqs [(a, u)] eqs)).map (Subst.compose · [(a, u)])
-      | s, .var a =>
-        match solveVar a s with
-        | none => none
-        | some u => (unifyRec f (substTyEqs [(a, u)] eqs)).map (Subst.compose · [(a, u)])
-      | .app c as, .app c' as' =>
-        if c = c' ∧ as.length = as'.length then unifyRec f (as.zip as' ++ eqs) else none
-      | .mu i sys, t =>
-        match (Ty.mu i sys).view with
-        | some s' => unifyRec f ((s', t) :: eqs)
-        | none => none
-      | s, .mu i sys =>
-        match (Ty.mu i sys).view with
-        | some t' => unifyRec f ((s, t') :: eqs)
-        | none => none
-
-/-- The fuel `unify` gives `unifyRec`. -/
-def unifyFuel (τ₁ τ₂ : Ty) : Nat := 16 * (τ₁.toRTy.size + τ₂.toRTy.size) + 64
-
-/-- Unify two types: syntactically, which is most general, or else up to
-unfolding. -/
-def unify (τ₁ τ₂ : Ty) : Option Subst :=
-  match unify₀ τ₁ τ₂ with
-  | some σ => some σ
-  | none => unifyRec (unifyFuel τ₁ τ₂) [(τ₁, τ₂)]
-
-/-! ### Soundness up to unfolding -/
-
-theorem Ty.noMuOcc_app {a : Nat} {c : Con} {args : List Ty} :
-    (Ty.app c args).noMuOcc a = args.all (Ty.noMuOcc a) := by
-  simp [Ty.noMuOcc]
-
-theorem Ty.guarded_app {a : Nat} {c : Con} {args : List Ty} :
-    (Ty.app c args).guarded a = match c with
-      | .fn | .record _ => args.all (Ty.noMuOcc a)
-      | _ => args.all (Ty.guarded a) := by
-  cases c <;> simp [Ty.guarded]
-
-theorem Ty.abstract_app {a : Nat} {c : Con} {args : List Ty} :
-    (Ty.app c args).abstract a = .app c (args.map (Ty.abstract a)) := by
-  simp [Ty.abstract]
-
-theorem Ty.guarded_noMuOcc {a : Nat} : ∀ {τ : Ty}, τ.guarded a = true → τ.noMuOcc a = true := by
-  intro τ
-  induction τ using Ty.ind with
-  | var b => intro _; simp [Ty.noMuOcc]
-  | mu i sys => intro h; simp only [Ty.guarded] at h; simp only [Ty.noMuOcc]; exact h
-  | app c args ih =>
-    intro h
-    rw [Ty.guarded_app] at h
-    rw [Ty.noMuOcc_app]
-    cases c <;> simp only [List.all_eq_true] at h ⊢ <;>
-      first | exact h | exact fun t ht => ih t ht (h t ht)
-
-/-- `τ`'s right-hand side, its `self 0` read as `M`, is `τ` with `a ↦ M`. -/
-theorem Ty.abstract_open {a : Nat} {M : Ty} {env : Nat → Ty} (henv : env 0 = M) :
-    ∀ {τ : Ty}, τ.noMuOcc a = true → (τ.abstract a).open env = τ.subst [(a, M)] := by
-  intro τ
-  induction τ using Ty.ind with
-  | var b =>
-    intro _
-    simp only [Ty.abstract]
-    by_cases hb : b = a
-    · subst hb; simp [RTy.open, Ty.subst, Subst.find, henv]
-    · simp [RTy.open, Ty.subst, Subst.find, hb]
-  | app c args ih =>
-    intro h
-    rw [Ty.noMuOcc_app, List.all_eq_true] at h
-    rw [Ty.abstract_app, RTy.open_app, Ty.subst_app, List.map_map]
-    simp only [Ty.app.injEq, true_and]
-    exact List.map_congr_left (fun t ht => ih t ht (h t ht))
-  | mu i sys =>
-    intro h
-    simp only [Ty.noMuOcc, Bool.not_eq_true', decide_eq_false_iff_not] at h
-    simp only [Ty.abstract]
-    simp only [RTy.open]
-    exact (Ty.subst_id (fun b hb => by
-      have : b ≠ a := fun e => h (e ▸ hb)
-      simp [Subst.find, this])).symm
-
-/-- The recursive solution of `a = τ` is `τ` with `a` bound to it, up to
-unfolding. -/
-theorem solveVar_mu {a : Nat} {c : Con} {args : List Ty} (h : (Ty.app c args).guarded a = true) :
-    TyEq (.mu 0 [(Ty.app c args).abstract a])
-      ((Ty.app c args).subst [(a, .mu 0 [(Ty.app c args).abstract a])]) := by
-  have hv : (Ty.mu 0 [(Ty.app c args).abstract a]).view =
-      some ((Ty.app c args).subst [(a, .mu 0 [(Ty.app c args).abstract a])]) := by
-    simp only [Ty.view, List.getElem?_cons_zero, Option.bind_some]
-    rw [← Ty.abstract_open (M := Ty.mu 0 [(Ty.app c args).abstract a])
-      (env := muEnv [(Ty.app c args).abstract a]) rfl (Ty.guarded_noMuOcc h)]
-    generalize hr : (Ty.app c args).abstract a = r
-    rw [Ty.abstract_app] at hr
-    subst hr
-    rw [RTy.head]
-    simp [RTy.open_app]
-  have := TyEq.whnf (Ty.mu 0 [(Ty.app c args).abstract a])
-  simp only [Ty.whnf, hv, Option.getD_some] at this
-  exact this.symm
-
-theorem solveVar_sound {a : Nat} {t u : Ty} (h : solveVar a t = some u) :
-    TyEq u (t.subst [(a, u)]) := by
-  unfold solveVar at h
+theorem unify_eq {τ₁ τ₂ : Ty} {σ : Subst} (h : unify τ₁ τ₂ = some σ) :
+    ∃ lab, closeLoop (nodes τ₁ τ₂) (genPairs (nodes τ₁ τ₂) (nodeIdx (nodes τ₁ τ₂) τ₁)
+        (nodeIdx (nodes τ₁ τ₂) τ₂)) ((nodes τ₁ τ₂).length + 1) (List.range (nodes τ₁ τ₂).length) =
+        some lab ∧ consistent (nodes τ₁ τ₂) lab = true ∧ σ = unifySubst (nodes τ₁ τ₂) lab := by
+  unfold unify at h
+  simp only at h
   split at h
-  · split at h
-    · cases h
-      rename_i hocc hg
-      cases t with
-      | var b =>
-        simp only [Ty.guarded] at hg
-        simp at hocc hg; exact absurd hocc.symm hg
-      | mu i sys => simp only [Ty.guarded] at hg; simp_all
-      | app c args => exact solveVar_mu hg
-    · cases h
   · cases h
-    rename_i hocc
-    exact TyEq.of_eq (Ty.subst_single hocc).symm
-
-theorem map_tyEq_of_zip : ∀ {ps₁ ps₂ : List Ty} {σ : Subst}, ps₁.length = ps₂.length →
-    (∀ p ∈ ps₁.zip ps₂, TyEq (p.1.subst σ) (p.2.subst σ)) →
-    ∀ x ∈ (ps₁.map (·.subst σ)).zip (ps₂.map (·.subst σ)), TyEq x.1 x.2 := by
-  intro ps₁ ps₂ σ hl h x hx
-  rw [List.zip_map] at hx
-  obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
-  exact h y hy
-
-theorem unifyRec_var_right {f a : Nat} {s : Ty} {eqs : List (Ty × Ty)}
-    (hs : ∀ b, s = .var b → False) (hne : ¬ s = .var a) :
-    unifyRec (f + 1) ((s, .var a) :: eqs) =
-      match solveVar a s with
-      | none => none
-      | some u => (unifyRec f (substTyEqs [(a, u)] eqs)).map (Subst.compose · [(a, u)]) := by
-  cases s with
-  | var b => exact absurd rfl (hs b)
-  | app c as => simp only [unifyRec, hne, ite_false]
-  | mu i sys => simp only [unifyRec, hne, ite_false]
-
-theorem unifyRec_mu_left {f i : Nat} {sys : List RTy} {t : Ty} {eqs : List (Ty × Ty)}
-    (ht : ∀ b, t = .var b → False) (hne : ¬ Ty.mu i sys = t) :
-    unifyRec (f + 1) ((.mu i sys, t) :: eqs) =
-      match (Ty.mu i sys).view with
-      | some s' => unifyRec f ((s', t) :: eqs)
-      | none => none := by
-  cases t with
-  | var b => exact absurd rfl (ht b)
-  | app c as => simp only [unifyRec, hne, ite_false]
-  | mu j sys' => simp only [unifyRec, hne, ite_false]
-
-theorem unifyRec_mu_right {f i : Nat} {sys : List RTy} {s : Ty} {eqs : List (Ty × Ty)}
-    (hs : ∀ b, s = .var b → False) (hmu : ∀ j sys', s = .mu j sys' → False)
-    (hne : ¬ s = Ty.mu i sys) :
-    unifyRec (f + 1) ((s, .mu i sys) :: eqs) =
-      match (Ty.mu i sys).view with
-      | some t' => unifyRec f ((s, t') :: eqs)
-      | none => none := by
-  cases s with
-  | var b => exact absurd rfl (hs b)
-  | app c as => simp only [unifyRec, hne, ite_false]
-  | mu j sys' => exact absurd rfl (hmu j sys')
-
-theorem unifyRec_sound : ∀ (f : Nat) (eqs : List (Ty × Ty)) {σ : Subst},
-    unifyRec f eqs = some σ → ∀ e ∈ eqs, TyEq (e.1.subst σ) (e.2.subst σ) := by
-  intro f eqs
-  induction f, eqs using unifyRec.induct with
-  | case1 => intro σ h; simp [unifyRec] at h
-  | case2 => intro σ _ e he; cases he
-  | case3 f t eqs ih =>
-    intro σ h e he
-    unfold unifyRec at h; simp only [ite_true] at h
-    rcases List.mem_cons.mp he with rfl | he
-    · exact TyEq.refl _
-    · exact ih h e he
-  | case4 f eqs a t hsv hne =>
-    intro σ h; unfold unifyRec at h; simp [hne, hsv] at h
-  | case5 f eqs a t u hsv hne ih =>
-    intro σ h e he
-    unfold unifyRec at h; simp only [hne, ite_false, hsv] at h
-    obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
-    have ih' := ih h'
-    rcases List.mem_cons.mp he with rfl | he
-    · simp only [Ty.subst_compose]
-      have := (solveVar_sound hsv).subst σ'
-      simpa [Ty.subst, Subst.find] using this
-    · have := ih' _ (List.mem_map_of_mem
-        (f := fun e => (e.1.subst [(a, u)], e.2.subst [(a, u)])) he)
-      simpa [Ty.subst_compose] using this
-  | case6 f eqs s a hs hsv hne =>
-    intro σ h; rw [unifyRec_var_right hs hne, hsv] at h; cases h
-  | case7 f eqs s a hs u hsv hne ih =>
-    intro σ h e he
-    rw [unifyRec_var_right hs hne] at h
-    simp only [hsv] at h
-    obtain ⟨σ', h', rfl⟩ := Option.map_eq_some_iff.mp h
-    have ih' := ih h'
-    rcases List.mem_cons.mp he with rfl | he
-    · simp only [Ty.subst_compose]
-      have := (solveVar_sound hsv).subst σ'
-      simpa [Ty.subst, Subst.find] using this.symm
-    · have := ih' _ (List.mem_map_of_mem
-        (f := fun e => (e.1.subst [(a, u)], e.2.subst [(a, u)])) he)
-      simpa [Ty.subst_compose] using this
-  | case8 f eqs c as c' as' hc hne ih =>
-    intro σ h e he
-    unfold unifyRec at h; simp only [hne, ite_false] at h
-    simp only [hc, and_self, ite_true] at h
-    have ih' := ih h
-    rcases List.mem_cons.mp he with rfl | he
-    · obtain ⟨rfl, hl⟩ := hc
-      simp only [Ty.subst_app]
-      exact TyEq.app (by simpa using hl) (map_tyEq_of_zip hl (fun p hp => ih' p (by simp [hp])))
-    · exact ih' e (by simp [he])
-  | case9 f eqs c as c' as' hc hne =>
-    intro σ h; unfold unifyRec at h; simp [hne, hc] at h
-  | case10 f eqs i sys t ht s' hv hne ih =>
-    intro σ h e he
-    rw [unifyRec_mu_left ht hne] at h
-    simp only [hv] at h
-    have ih' := ih h
-    rcases List.mem_cons.mp he with rfl | he
-    · have hw := TyEq.whnf (Ty.mu i sys)
-      simp only [Ty.whnf, hv, Option.getD_some] at hw
-      exact (hw.subst σ).symm.trans (ih' _ List.mem_cons_self)
-    · exact ih' e (List.mem_cons_of_mem _ he)
-  | case11 f eqs i sys t ht hv hne =>
-    intro σ h; rw [unifyRec_mu_left ht hne, hv] at h; cases h
-  | case12 f eqs s i sys hs hmu s' hv hne ih =>
-    intro σ h e he
-    rw [unifyRec_mu_right hs hmu hne] at h
-    simp only [hv] at h
-    have ih' := ih h
-    rcases List.mem_cons.mp he with rfl | he
-    · have hw := TyEq.whnf (Ty.mu i sys)
-      simp only [Ty.whnf, hv, Option.getD_some] at hw
-      exact (ih' _ List.mem_cons_self).trans (hw.subst σ)
-    · exact ih' e (List.mem_cons_of_mem _ he)
-  | case13 f eqs s i sys hs hmu hv hne =>
-    intro σ h; rw [unifyRec_mu_right hs hmu hne, hv] at h; cases h
-
-theorem Ty.abstract_ftv {a b : Nat} : ∀ {τ : Ty}, τ.noMuOcc a = true →
-    b ∈ (τ.abstract a).ftv → b ∈ τ.ftv ∧ b ≠ a := by
-  intro τ
-  induction τ using Ty.ind with
-  | var c =>
-    intro _ h
-    simp only [Ty.abstract] at h
+  · rename_i lab hl
     split at h
-    · simp [RTy.ftv] at h
-    · rename_i hc; simp [RTy.ftv] at h; subst h; exact ⟨by simp, hc⟩
-  | app c args ih =>
-    intro hm h
-    rw [Ty.noMuOcc_app, List.all_eq_true] at hm
-    rw [Ty.abstract_app] at h
-    simp only [RTy.ftv_app, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨t, ht, rfl⟩, h⟩ := h
-    obtain ⟨h₁, h₂⟩ := ih t ht (hm t ht) h
-    exact ⟨by simp only [Ty.ftv_app, List.mem_flatMap]; exact ⟨t, ht, h₁⟩, h₂⟩
-  | mu i sys =>
-    intro hm h
-    simp only [Ty.noMuOcc, Bool.not_eq_true', decide_eq_false_iff_not] at hm
-    simp only [Ty.abstract] at h
-    have h' : b ∈ (Ty.mu i sys).ftv := by simpa using h
-    exact ⟨h', fun e => hm (e ▸ h')⟩
-
-/-- A variable's solution mentions only the other variables of the type. -/
-theorem solveVar_ftv {a : Nat} {t u : Ty} (h : solveVar a t = some u) :
-    ∀ b ∈ u.ftv, b ∈ t.ftv ∧ b ≠ a := by
-  intro b hb
-  unfold solveVar at h
-  split at h
-  · split at h
+    · cases h; exact ⟨lab, hl, ‹_›, rfl⟩
     · cases h
-      rename_i hg
-      have := Ty.abstract_ftv (Ty.guarded_noMuOcc hg) (b := b) (by simpa using hb)
-      exact this
-    · cases h
-  · cases h
-    rename_i hocc
-    exact ⟨hb, fun e => hocc (e ▸ hb)⟩
 
-/-- What `unify` finds equates the types up to unfolding. -/
+/-- The loop's result, with the invariants it keeps. -/
+theorem closeLoop_canon {τ₁ τ₂ : Ty} {lab : List Nat}
+    (h : closeLoop (nodes τ₁ τ₂) (genPairs (nodes τ₁ τ₂) (nodeIdx (nodes τ₁ τ₂) τ₁)
+        (nodeIdx (nodes τ₁ τ₂) τ₂)) ((nodes τ₁ τ₂).length + 1) (List.range (nodes τ₁ τ₂).length) =
+        some lab) :
+    Canon (nodes τ₁ τ₂).length lab ∧
+      Stable (nodes τ₁ τ₂) (genPairs (nodes τ₁ τ₂) (nodeIdx (nodes τ₁ τ₂) τ₁)
+        (nodeIdx (nodes τ₁ τ₂) τ₂)) lab := by
+  have hk := nodes_closed τ₁ τ₂
+  have hg := genPairs_in hk (nodeIdx_lt (mem_nodes_left τ₁ τ₂)) (nodeIdx_lt (mem_nodes_right τ₁ τ₂))
+  obtain ⟨hc, hp⟩ := closeLoop_inv (Canon (nodes τ₁ τ₂).length) (fun lab p q hc hp => by
+      obtain ⟨hm, -⟩ := pending_some hp
+      have hpq : p < (nodes τ₁ τ₂).length ∧ q < (nodes τ₁ τ₂).length := by
+        rcases List.mem_append.mp hm with h | h
+        · exact hg _ h
+        · exact congPairs_in hk lab _ h
+      exact hc.merge hpq.1 hpq.2) _ _ _ (Canon.range _) h
+  exact ⟨hc, pending_none hp⟩
+
+/-- What `unify` finds equates the two types. -/
 theorem unify_sound {τ₁ τ₂ : Ty} {σ : Subst} (h : unify τ₁ τ₂ = some σ) :
     TyEq (τ₁.subst σ) (τ₂.subst σ) := by
-  unfold unify at h
-  split at h
-  · cases h; exact TyEq.of_eq (unify₀_sound ‹_›)
-  · exact unifyRec_sound _ _ h (τ₁, τ₂) List.mem_cons_self
+  obtain ⟨lab, hl, hcons, rfl⟩ := unify_eq h
+  obtain ⟨hc, hs⟩ := closeLoop_canon hl
+  have hk := nodes_closed τ₁ τ₂
+  have h₁ := extract_sound hk hc hs hcons τ₁ (mem_nodes_left τ₁ τ₂)
+  have h₂ := extract_sound hk hc hs hcons τ₂ (mem_nodes_right τ₁ τ₂)
+  have h₁₂ : labOf lab (nodeIdx (nodes τ₁ τ₂) τ₁) = labOf lab (nodeIdx (nodes τ₁ τ₂) τ₂) :=
+    hs (nodeIdx (nodes τ₁ τ₂) τ₁, nodeIdx (nodes τ₁ τ₂) τ₂) (by simp [genPairs])
+  rw [h₁₂] at h₁
+  exact h₁.trans h₂.symm
 
-/-- Unification succeeds whenever the types unify syntactically, with a
-most general unifier. -/
-theorem unify_mgu {τ₁ τ₂ : Ty} {ψ : Subst} (h : τ₁.subst ψ = τ₂.subst ψ) :
-    ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ := by
-  obtain ⟨σ, h₀, hσ⟩ := unify₀_mgu h
-  exact ⟨σ, by simp [unify, h₀], hσ⟩
+/-- Whenever a substitution equates the two types, `unify` succeeds, and
+the substitution factors through what it finds, up to equality. -/
+theorem unify_mgu {τ₁ τ₂ : Ty} {ψ : Subst} (h : TyEq (τ₁.subst ψ) (τ₂.subst ψ)) :
+    ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, TyEq ((τ.subst σ).subst ψ) (τ.subst ψ) := by
+  have hk := nodes_closed τ₁ τ₂
+  have hm₁ := mem_nodes_left τ₁ τ₂
+  have hm₂ := mem_nodes_right τ₁ τ₂
+  have hg := genPairs_in hk (nodeIdx_lt hm₁) (nodeIdx_lt hm₂)
+  have he : TyEq ((node (nodes τ₁ τ₂) (nodeIdx (nodes τ₁ τ₂) τ₁)).subst ψ)
+      ((node (nodes τ₁ τ₂) (nodeIdx (nodes τ₁ τ₂) τ₂)).subst ψ) := by
+    rw [node_nodeIdx hm₁, node_nodeIdx hm₂]; exact h
+  obtain ⟨lab, hl⟩ := closeLoop_some hk hg _ _ (Canon.range _)
+    (Nat.lt_succ_of_le (roots_le _ _))
+  obtain ⟨⟨hc, hr⟩, hp⟩ := closeLoop_inv (fun lab => Canon (nodes τ₁ τ₂).length lab ∧
+      Resp ψ (nodes τ₁ τ₂) lab) (fun lab p q ⟨hc, hr⟩ hp => by
+      obtain ⟨hm, -⟩ := pending_some hp
+      have hpq : p < (nodes τ₁ τ₂).length ∧ q < (nodes τ₁ τ₂).length := by
+        rcases List.mem_append.mp hm with h | h
+        · exact hg _ h
+        · exact congPairs_in hk lab _ h
+      exact ⟨hc.merge hpq.1 hpq.2, hr.merge hc.1 hpq.1 hpq.2 (pending_resp hk he hr _ hm)⟩)
+    _ _ _ ⟨Canon.range _, Resp.range ψ _⟩ hl
+  have hs := pending_none hp
+  have hcons := consistent_of_resp hr
+  refine ⟨unifySubst (nodes τ₁ τ₂) lab, by simp [unify, hl, hcons], fun τ => ?_⟩
+  rw [← Ty.subst_compose]
+  refine Ty.subst_tyEq_congr (fun a _ => ?_)
+  rw [Ty.subst_compose]
+  by_cases ha : Ty.var a ∈ nodes τ₁ τ₂
+  · have hv : (Ty.var a).subst (unifySubst (nodes τ₁ τ₂) lab) = nodeVal (nodes τ₁ τ₂) lab (.var a) := by
+      simp [Ty.subst, unifySubst_find, ha]
+    rw [hv]
+    exact ((unroll_tyEq _ _ _).subst ψ).trans (extract_mgu hk hc hs hr _ ha)
+  · have hv : (Ty.var a).subst (unifySubst (nodes τ₁ τ₂) lab) = .var a := by
+      simp [Ty.subst, unifySubst_find, ha]
+    rw [hv]; exact TyEq.refl _
+
+/-! ## Variables of the unifier -/
+
+theorem unroll_ftv : ∀ (k : Nat) (seen : List Nat) (τ : Ty), ∀ b ∈ (unroll k seen τ).ftv, b ∈ τ.ftv
+  | 0, _, τ, b, h => h
+  | k + 1, seen, .mu ℓ sys, b, h => by
+    unfold unroll at h
+    split at h
+    · exact h
+    · split at h
+      · rename_i c xs hv
+        simp only [Ty.ftv_app, List.mem_flatMap, List.mem_map] at h
+        obtain ⟨_, ⟨x, hx, rfl⟩, h⟩ := h
+        exact Ty.view_ftv hv b (by
+          simp only [Ty.ftv_app, List.mem_flatMap]; exact ⟨x, hx, unroll_ftv k _ x b h⟩)
+      · rename_i a hv
+        exact Ty.view_ftv hv b h
+      · exact h
+  | k + 1, seen, .app c xs, b, h => by
+    unfold unroll at h
+    simp only [Ty.ftv_app, List.mem_flatMap, List.mem_map] at h ⊢
+    obtain ⟨_, ⟨x, hx, rfl⟩, h⟩ := h
+    exact ⟨x, hx, unroll_ftv k seen x b h⟩
+  | _ + 1, _, .var a, b, h => by unfold unroll at h; exact h
+
+/-- A node's class's type mentions only the nodes' variables. -/
+theorem classTy_ftv {ns : List Ty} {i₁ i₂ : Nat} {lab : List Nat} (hk : KidsClosed ns)
+    (hs : Stable ns (genPairs ns i₁ i₂) lab) {x : Ty} (hx : x ∈ ns) :
+    ∀ b ∈ (classTy ns lab (labOf lab (nodeIdx ns x))).ftv, ∃ y ∈ ns, b ∈ y.ftv := by
+  -- A reference to a node's class mentions a variable node's variable.
+  have href : ∀ y ∈ ns, ∀ b ∈ (classRef ns lab y).ftv, ∃ z ∈ ns, b ∈ z.ftv := by
+    intro y hy b hb
+    simp only [classRef] at hb
+    by_cases hvo : varOnly ns lab (labOf lab (nodeIdx ns y)) = true
+    · simp only [hvo, ↓reduceIte] at hb
+      obtain ⟨j, hj, -, hnj⟩ := varOnly_var hk hs hy hvo
+      refine ⟨node ns j, node_mem hj, ?_⟩
+      rw [hnj]; simpa [RTy.ftv] using hb
+    · simp only [hvo, Bool.false_eq_true, ↓reduceIte] at hb; simp [RTy.ftv] at hb
+  intro b hb
+  unfold classTy at hb
+  split at hb
+  · rename_i hvo
+    obtain ⟨j, hj, -, hnj⟩ := varOnly_var hk hs hx hvo
+    exact ⟨node ns j, node_mem hj, by rw [hnj]; exact hb⟩
+  · simp only [Ty.ftv_mu, classSys, List.mem_flatMap, List.mem_map, List.mem_range] at hb
+    obtain ⟨_, ⟨j, -, rfl⟩, hb⟩ := hb
+    unfold classEq at hb
+    split at hb
+    · rename_i f hf
+      obtain ⟨hfl, -, -⟩ := firstApp_some hf
+      split at hb
+      · rename_i c args hn
+        simp only [RTy.ftv_app, List.mem_flatMap, List.mem_map] at hb
+        obtain ⟨_, ⟨y, hy, rfl⟩, hb⟩ := hb
+        exact href y (hk _ (hn ▸ node_mem hfl) y (by simp [Ty.kids, hy])) b hb
+      · simp [RTy.ftv] at hb
+    · simp [RTy.ftv] at hb
+
+/-- `unify` binds only the two types' variables, to types of their
+variables. -/
+theorem unify_ftv {τ₁ τ₂ : Ty} {σ : Subst} (h : unify τ₁ τ₂ = some σ) {a : Nat} {t : Ty}
+    (ht : σ.find a = some t) :
+    (a ∈ τ₁.ftv ∨ a ∈ τ₂.ftv) ∧ ∀ b ∈ t.ftv, b ∈ τ₁.ftv ∨ b ∈ τ₂.ftv := by
+  obtain ⟨lab, hl, -, rfl⟩ := unify_eq h
+  obtain ⟨-, hs⟩ := closeLoop_canon hl
+  have hk := nodes_closed τ₁ τ₂
+  rw [unifySubst_find] at ht
+  split at ht
+  · rename_i ha
+    cases ht
+    refine ⟨nodes_ftv ha a (by simp), fun b hb => ?_⟩
+    obtain ⟨y, hy, hb⟩ := classTy_ftv hk hs ha b (unroll_ftv _ _ _ b hb)
+    exact nodes_ftv hy b hb
+  · cases ht
 
 end Inty

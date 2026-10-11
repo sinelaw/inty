@@ -488,4 +488,92 @@ theorem TyEq.array_inj {σ σ' : Ty} (h : TyEq (.array σ) (.array σ')) : TyEq 
   obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp h
   exact hz (σ, σ') (by simp)
 
+/-! ## Bisimulation
+
+Two types are equal when a relation holding of them is a bisimulation:
+related types have the same head, their arguments related. Up to equality:
+a related pair may stand for an equal pair of that shape. -/
+
+/-- `s` and `t` have one head, their arguments related by `R`. -/
+def Matched (R : Ty → Ty → Prop) (s t : Ty) : Prop :=
+  (s.view = none ∧ t.view = none) ∨
+  (∃ a, s.view = some (.var a) ∧ t.view = some (.var a)) ∨
+  (∃ c xs ys, s.view = some (.app c xs) ∧ t.view = some (.app c ys) ∧
+    xs.length = ys.length ∧ ∀ p ∈ xs.zip ys, R p.1 p.2)
+
+/-- A pair `R` relates is equal, or equal to a pair with one head whose
+arguments `R` relates. -/
+def BisimStep (R : Ty → Ty → Prop) (s t : Ty) : Prop :=
+  TyEq s t ∨ ∃ s' t', TyEq s s' ∧ TyEq t t' ∧ Matched R s' t'
+
+theorem map_approx_eq_of_zip {n : Nat} : ∀ {xs ys : List Ty}, xs.length = ys.length →
+    (∀ p ∈ xs.zip ys, p.1.approx n = p.2.approx n) → xs.map (Ty.approx n) = ys.map (Ty.approx n)
+  | [], [], _, _ => rfl
+  | x :: xs, y :: ys, hl, h => by
+    simp only [List.map_cons, List.cons.injEq]
+    exact ⟨h (x, y) (by simp), map_approx_eq_of_zip (by simpa using hl)
+      (fun p hp => h p (by simp [hp]))⟩
+
+theorem mem_zip_self {α : Type} : ∀ {l : List α} {y z : α}, (y, z) ∈ l.zip l → y = z ∧ y ∈ l
+  | [], _, _, h => by cases h
+  | w :: ws, y, z, h => by
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h
+    rcases h with ⟨rfl, rfl⟩ | h
+    · exact ⟨rfl, List.mem_cons_self⟩
+    · exact (mem_zip_self h).imp id (List.mem_cons_of_mem _)
+
+/-- Bisimulation up to equality: what a bisimulation relates is equal. -/
+theorem TyEq.of_bisim (R : Ty → Ty → Prop) (h : ∀ s t, R s t → BisimStep R s t) :
+    ∀ s t, R s t → TyEq s t := by
+  suffices ∀ n s t, R s t → s.approx n = t.approx n from fun s t hr n => this n s t hr
+  intro n
+  induction n with
+  | zero => intros; rfl
+  | succ n ih =>
+    intro s t hr
+    rcases h s t hr with he | ⟨s', t', hs, ht, hm⟩
+    · exact he (n + 1)
+    rw [hs (n + 1), ht (n + 1), Ty.approx_succ, Ty.approx_succ]
+    rcases hm with ⟨h₁, h₂⟩ | ⟨a, h₁, h₂⟩ | ⟨c, xs, ys, h₁, h₂, hl, hz⟩
+    · rw [h₁, h₂]
+    · rw [h₁, h₂]
+    · rw [h₁, h₂]
+      simp only [Tree.node.injEq, true_and]
+      exact map_approx_eq_of_zip hl (fun p hp => ih p.1 p.2 (hz p hp))
+
+/-- Substitutions that give equal types for a type's variables give it equal
+types. -/
+theorem Ty.subst_tyEq_congr {σ σ' : Subst} {τ : Ty}
+    (h : ∀ a ∈ τ.ftv, TyEq ((Ty.var a).subst σ) ((Ty.var a).subst σ')) :
+    TyEq (τ.subst σ) (τ.subst σ') := by
+  refine TyEq.of_bisim (fun x y => ∃ t : Ty, (∀ a ∈ t.ftv, a ∈ τ.ftv) ∧ x = t.subst σ ∧
+    y = t.subst σ') (fun x y hr => ?_) _ _ ⟨τ, fun _ h => h, rfl, rfl⟩
+  obtain ⟨t, ht, rfl, rfl⟩ := hr
+  cases hv : t.view with
+  | none =>
+    right
+    refine ⟨t.subst σ, t.subst σ', TyEq.refl _, TyEq.refl _, .inl ⟨?_, ?_⟩⟩ <;>
+      rw [Ty.view_subst, hv] <;> rfl
+  | some v =>
+    rcases Ty.view_shape hv with ⟨a, rfl⟩ | ⟨c, xs, rfl⟩
+    · left
+      have hw : TyEq t (.var a) := by
+        have := TyEq.whnf t; simp only [Ty.whnf, hv, Option.getD_some] at this; exact this.symm
+      exact (hw.subst σ).trans ((h a (ht a (Ty.view_ftv hv a (by simp)))).trans
+        (hw.subst σ').symm)
+    · have hw : TyEq t (.app c xs) := by
+        have := TyEq.whnf t; simp only [Ty.whnf, hv, Option.getD_some] at this; exact this.symm
+      right
+      refine ⟨(Ty.app c xs).subst σ, (Ty.app c xs).subst σ', hw.subst σ, hw.subst σ',
+        .inr (.inr ⟨c, xs.map (·.subst σ), xs.map (·.subst σ'), by simp [Ty.view],
+          by simp [Ty.view], by simp, fun p hp => ?_⟩)⟩
+      rw [List.zip_map] at hp
+      obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hp
+      obtain ⟨y, z⟩ := x
+      obtain ⟨rfl, hy⟩ := mem_zip_self hx
+      refine ⟨y, fun a ha => ht a (Ty.view_ftv hv a ?_), rfl, rfl⟩
+      simp only [Ty.ftv_app, List.mem_flatMap]
+      exact ⟨y, hy, ha⟩
+
+
 end Inty
