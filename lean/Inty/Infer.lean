@@ -382,13 +382,13 @@ def arrTarget : Option Ty → Option (Ty × Ty)
   | none => none
 
 /-- Whether checking `e` against `T` pushes `T` into it: into the branches
-of `?:`, a sequence's last statement, a `let`'s body, a `try`, a function
+of `?:` and `unwrap`, a sequence's last statement, a `let`'s body, a `try`, a function
 literal's body against a function type, an array literal's elements against
 an array type; `return`, `break` and `continue` have any type. Any other
 expression is synthesised, and its type injected into `T`. -/
 def Expr.pushes (T : Ty) : Expr → Bool
   | .cond .. | .seq .. | .let_ .. | .tryCatch .. | .tryFinally .. | .ret _ | .break_
-  | .continue_ => true
+  | .continue_ | .unwrap .. => true
   | .func k _ => (funcTarget (some T) k).isSome
   | .arr _ => (arrTarget (some T)).isSome
   | _ => false
@@ -864,6 +864,29 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
           o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
             [⟨.hasProp l, [τ, .var o₂.next, .fn τ o₂.τs (.var (o₂.next + 1))]⟩],
           o₂.next + 2⟩
+  -- `unwrap e₁ e₂ e₃`: `Strip τ₁ β` for `e₁`'s type `τ₁` and a fresh `β`,
+  -- the type of what `e₃` binds; an expected type is pushed into both
+  -- branches, which have one type.
+  | Γ, R, rm, ex, .unwrap e₁ e₂ e₃, n =>
+    match infer Γ R rm none e₁ n with
+    | none => none
+    | some o₁ =>
+      match (infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm ex e₂ o₁.next).map (checkEx ex e₂) with
+      | none => none
+      | some o₂ =>
+        let β := Ty.var o₂.next
+        match (infer (.mono β :: Ctx.subst o₂.σ (Ctx.subst o₁.σ Γ))
+            (Ret.subst o₂.σ (Ret.subst o₁.σ R)) rm ex e₃ (o₂.next + 1)).map (checkEx ex e₃) with
+        | none => none
+        | some o₃ =>
+          match unify (o₂.τ.subst o₃.σ) o₃.τ with
+          | none => none
+          | some σ₄ =>
+            some ⟨Subst.compose σ₄ (Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ)), o₃.τ.subst σ₄,
+              ((o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
+                [(⟨.strip, [o₁.τ.subst o₂.σ, β]⟩ : Pred)]).map (·.subst o₃.σ) ++ o₃.preds).map
+                (·.subst σ₄),
+              o₃.next⟩
 
 /-- Infer a list of arguments, left to right, threading the substitution,
 each checked against `ex` if it is given. -/
@@ -945,6 +968,7 @@ def Expr.labels : Expr → List String
   | .arr es => Expr.labelsList es
   | .setIndex a b c => a.labels ++ b.labels ++ c.labels
   | .mcall e l args => l :: (e.labels ++ Expr.labelsList args)
+  | .unwrap a b c => a.labels ++ b.labels ++ c.labels
 /-- `labels`, for a list of expressions. -/
 def Expr.labelsList : List Expr → List String
   | [] => []

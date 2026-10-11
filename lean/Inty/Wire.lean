@@ -12,8 +12,10 @@ JavaScript and for this model as an s-expression, one program per line:
 (bool true) (undef) (null) (var i)  (func N BODY)  (app F A₀ A₁ …)
 (let E₁ E₂) (letmut E₁ E₂) (assign I E)   `const`, `let` and `x = e`
 (letann T E₁ E₂) (letmutann T E₁ E₂)   annotated `/** const v: T */`, with T
-               number, string, boolean, undefined, null, (arr T) or
-               (fn R A₀ A₁ …), a function called detached
+               number, string, boolean, undefined, null, (arr T),
+               (nullable T), (optional T) or (fn R A₀ A₁ …), a function
+               called detached
+(unwrap E₁ E₂ E₃)   `const x = E₁; x != null ? E₃ : E₂`, x as var 0 in E₃
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
@@ -54,6 +56,16 @@ partial def parseTy : List String → Option (Ty × List String)
     let (t, rest) ← parseTy rest
     match rest with
     | ")" :: rest => some (.array t, rest)
+    | _ => none
+  | "(" :: "nullable" :: rest => do
+    let (t, rest) ← parseTy rest
+    match rest with
+    | ")" :: rest => some (.nullable t, rest)
+    | _ => none
+  | "(" :: "optional" :: rest => do
+    let (t, rest) ← parseTy rest
+    match rest with
+    | ")" :: rest => some (.optional t, rest)
     | _ => none
   | "(" :: "fn" :: rest => do
     let (r, rest) ← parseTy rest
@@ -152,6 +164,11 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (b, rest) ← parseExpr rest
     let (h, rest) ← parseExpr rest
     some (.tryCatch b h, rest)
+  | "unwrap", rest => do
+    let (a, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr rest
+    let (c, rest) ← parseExpr rest
+    some (.unwrap a b c, rest)
   | "tryfinally", rest => do
     let (b, rest) ← parseExpr rest
     let (f, rest) ← parseExpr rest

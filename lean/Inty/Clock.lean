@@ -101,6 +101,12 @@ theorem run_clock_le (clock : Nat) (env : Env) (heap : Heap) (e : Expr) :
         · rename_i c hc
           exact Nat.le_trans (run_clock_le c env h₂ _) (by omega)
     · simpa using run_clock_le clock env heap test
+  | .unwrap e₁ e₂ e₃ => by
+    rw [run]
+    refine bindC_le (run_clock_le clock env heap e₁) fun v _ => ?_
+    split
+    · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
+    · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
   | .tryCatch body handler => by
     rw [run]
     have hb := run_clock_le clock env heap body
@@ -446,6 +452,14 @@ theorem run_mono (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (k : Nat)
           exact run_mono c env h₂ (.while_ test body) k h
       all_goals (rw [ihb' (by simp)]; rfl)
     · rfl
+  | .unwrap e₁ e₂ e₃ => by
+    simp only [run] at hne ⊢
+    refine bindC_mono (run_mono clock env heap e₁ k) (fun v _ h => ?_) hne
+    have hc := run_clock_le clock env heap e₁
+    simp only [Nat.min_eq_left hc, Nat.min_eq_left (Nat.add_le_add_right hc k)] at h ⊢
+    split at h
+    · rename_i hv; simp only [hv, ite_true]; exact run_mono _ _ _ e₂ k h
+    · rename_i hv; simp only [hv]; exact run_mono _ _ _ e₃ k h
   | .tryCatch body handler => by
     have hb := run_clock_le clock env heap body
     have ihb := run_mono clock env heap body k

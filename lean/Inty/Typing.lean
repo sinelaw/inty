@@ -291,6 +291,12 @@ inductive HasType (L : List String) :
   | mcall : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
       args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
       HasType L C Γ R rm .synth (.mcall e l args) ρ
+  /-- `unwrap e₁ e₂ e₃` eliminates a sum: `e₃` sees what isn't nothing of
+  `e₁`'s value at the type `Strip` leaves of `e₁`'s. Both branches have one
+  type, and an expected type is pushed into each. -/
+  | unwrap : HasType L C Γ R rm .synth e₁ τ₁ → Entails C ⟨.strip, [τ₁, σ]⟩ →
+      HasType L C Γ R rm md e₂ τ → HasType L C (.mono σ :: Γ) R rm md e₃ τ →
+      HasType L C Γ R rm md (.unwrap e₁ e₂ e₃) τ
   /-- A type may be replaced by an equal one (`TyEq`): a recursive type by
   its unfolding, or the other way round. -/
   | conv : HasType L C Γ R rm .synth e τ → TyEq τ τ' → HasType L C Γ R rm .synth e τ'
@@ -392,6 +398,9 @@ inductive HasTypeTop (L : List String) :
   | mcall : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
       args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
       HasTypeTop L C Γ R rm .synth (.mcall e l args) ρ
+  | unwrap : HasType L C Γ R rm .synth e₁ τ₁ → Entails C ⟨.strip, [τ₁, σ]⟩ →
+      HasType L C Γ R rm md e₂ τ → HasType L C (.mono σ :: Γ) R rm md e₃ τ →
+      HasTypeTop L C Γ R rm md (.unwrap e₁ e₂ e₃) τ
 
 /-- How the type a derivation's last rule gives, `τ₀` in the mode `md₀`,
 comes to be the derivation's, `τ` in the mode `md`: by conversions of a
@@ -437,6 +446,7 @@ theorem HasType.top (h : HasType L C Γ R rm md e τ) :
   | while_ hc hb => exact ⟨_, _, .while_ hc hb, .refl⟩
   | break_ => exact ⟨_, _, .break_, .refl⟩
   | continue_ => exact ⟨_, _, .continue_, .refl⟩
+  | unwrap h₁ hs h₂ h₃ => exact ⟨_, _, .unwrap h₁ hs h₂ h₃, .refl⟩
   | tryCatch hb hh => exact ⟨_, _, .tryCatch hb hh, .refl⟩
   | tryFinally hb hf => exact ⟨_, _, .tryFinally hb hf, .refl⟩
   | obj hes hks hτs hss hL hargs hm => exact ⟨_, _, .obj hes hks hτs hss hL hargs hm, .refl⟩

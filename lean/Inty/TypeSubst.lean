@@ -153,6 +153,8 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
   | break_ => exact .break_
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
+  | unwrap _ hs _ _ ih₁ ih₂ ih₃ =>
+    exact .unwrap ih₁ (by simpa [Pred.subst] using hs.subst σ) ih₂ (by simpa using ih₃)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
   | @obj _ _ _ _ _ _ _ _ τs hes hks hτs hss hL _ hm ih =>
     simp only [Ty.subst_app, objSlots_subst]

@@ -629,6 +629,21 @@ theorem infer_pushes {T : Ty} (hT : T.ftv = []) : ∀ {e : Expr} {Γ : Ctx} {R :
     simp only [Option.some.injEq] at h; subst h
     obtain ⟨o₁', h₁', rfl⟩ := Option.map_eq_some_iff.mp h₁
     simp only [checkEx_ty (ihb h₁'), Ty.closed_subst hT]
+  | unwrap e₁ e₂ e₃ _ _ ih₃ =>
+    intro Γ R rm n o h _
+    simp only [infer] at h
+    split at h
+    · cases h
+    split at h
+    · cases h
+    split at h
+    · cases h
+    rename_i o₃ h₃
+    split at h
+    · cases h
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨o₃', h₃', rfl⟩ := Option.map_eq_some_iff.mp h₃
+    simp only [checkEx_ty (ih₃ h₃'), Ty.closed_subst hT]
   | _ => intro _ _ _ _ _ _ hp; simp [Expr.pushes] at hp
 
 /-- Inferring `e` against `ex`, as its caller sees it (`checkEx`): the
@@ -1270,6 +1285,40 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       simp only [InferSound.check_ty h₂ hex T rfl, InferSound.check_ty h₃ hex T rfl,
         Ty.closed_subst hT] at ht he ⊢
       exact .cond hc ht he
+  | unwrap e₁ e₂ e₃ ih₁ ih₂ ih₃ =>
+    intro Γ R rm ex n o h hRo hex φ C hsat
+    rw [exMode_pushes (fun _ => rfl)]
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i o₃ h₃
+    split at h
+    · cases h
+    rename_i σ₄ hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have hc := ih₁ h₁ (by ret_ok) .none _ C hsat.1.1.1
+    have he₂ := InferSound.check ih₂ h₂ (by ret_ok) hex _ C hsat.1.1.2
+    have hs := hsat.1.2 _ (List.mem_singleton_self _)
+    have he₃ := InferSound.check ih₃ h₃ (by ret_ok) hex _ C hsat.2
+    simp only [Pred.subst, List.map_cons, List.map_nil] at hs
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose, Ctx.subst_cons,
+      Scheme.mono_subst] at hc he₂ he₃ hs ⊢
+    match ex, hex with
+    | none, _ =>
+      replace he₂ := he₂.conv ((unify_sound hu).subst φ)
+      exact .unwrap hc hs he₂ he₃
+    | some T, hex =>
+      have hT := hex T rfl
+      simp only [InferSound.check_ty h₂ hex T rfl, InferSound.check_ty h₃ hex T rfl,
+        Ty.closed_subst hT] at he₂ he₃ ⊢
+      exact .unwrap hc hs he₂ he₃
   | unop op e ih =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_synth (fun _ => rfl)]

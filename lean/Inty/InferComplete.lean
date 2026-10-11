@@ -108,6 +108,11 @@ theorem Agree.absorb {n : Nat} {σ σ' φ ψ : Subst} (h : Agree n σ φ ψ) (ha
   rw [Ty.subst_compose]; exact (habs _).trans (h a ha)
 
 /-- Agreement survives binding a variable at or above the bound. -/
+theorem Agree.cons_fresh (k : Nat) (ρ : Ty) (φ : Subst) : Agree k [] ((k, ρ) :: φ) φ :=
+  fun a ha => by
+    simp only [Ty.subst_nil]
+    rw [Ty.subst_cons_fresh (Ty.Below.var ha)]; exact TyEq.refl _
+
 theorem Agree.fresh {n k : Nat} {σ φ ψ : Subst} {ρ : Ty} (h : Agree n σ φ ψ) (hσ : σ.Within k)
     (hnk : n ≤ k) : Agree n σ ((k, ρ) :: φ) ψ := fun a ha => by
   rw [Ty.subst_cons_fresh ((hσ a).1 (by omega))]; exact h a ha
@@ -2376,6 +2381,7 @@ theorem HasType.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
   | continue_ => exact .continue_
   | tryCatch hb hh => exact .tryCatch hb hh
   | tryFinally hb hf => exact .tryFinally hb hf
+  | unwrap h₁ hs h₂ h₃ => exact .unwrap h₁ hs h₂ h₃
   | funcCheck hw hT' hl hb => exact .funcCheck hw hT' hl hb
   | arrCheck hw hT' hes => exact .arrCheck hw hT' hes
   | inj h' _ hi =>
@@ -2391,6 +2397,7 @@ theorem HasType.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
     | continue_ => exact .continue_
     | tryCatch hb hh => exact .tryCatch (.inj hb hT hi') (.inj hh hT hi')
     | tryFinally hb hf => exact .tryFinally (.inj hb hT hi') hf
+    | unwrap h₁ hs h₂ h₃ => exact .unwrap h₁ hs (.inj h₂ hT hi') (.inj h₃ hT hi')
     | @func _ _ _ ρ' _ _ _ θ' τs' hlen hb =>
       simp only [Expr.pushes, Option.isSome_iff_exists] at hp
       obtain ⟨⟨T', θ, τs, ρ⟩, hft⟩ := hp
@@ -2783,6 +2790,82 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
         · exact hp₂ p hp
+  | unwrap e₁ e₂ e₃ ih₁ ih₂ ih₃ =>
+    intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
+    obtain ⟨hmd, hmT⟩ := hm
+    rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
+    obtain ⟨τ₀, hτ₀, hτT, ht⟩ := ht.top_ex hC hex (fun T hT => hmT T hT rfl) (fun _ _ => rfl)
+    generalize hmd' : Ex.mode ex = md' at ht
+    cases ht with
+    | @unwrap _ _ _ _ _ τ₁ σ _ _ _ _ h₁ hs h₂ h₃ =>
+      subst hmd'
+      obtain ⟨o₁, ho₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ih₁ (by ret_ok) (by ret_eq) .none .none hΓ hR hC
+        hΓ' hR' h₁
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e₁ (by ret_ok) .none hΓ hR ho₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      have hc₁ := hΓ'.trans (hag₁.ctx hΓ).symm
+      have hr₁ := hR'.trans (hag₁.ret hR).symm
+      obtain ⟨o₂, ho₂, φ₂, hag₂, hτ₂, hsat₂⟩ := InferComplete.check ih₂ (by ret_ok) (by ret_eq) hex
+        hτT (ψ := φ₁) hΓ₁ hR₁ hC hc₁ hr₁ h₂
+      obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := InferInv.check (infer_inv L e₂) (by ret_ok) hex hΓ₁ hR₁ ho₂
+      have hΓ₂ := hσ₂.ctx_below (hΓ₁.mono hn₂)
+      have hR₂ := hσ₂.ret_below (hR₁.mono hn₂)
+      have hc₂ := hc₁.trans (hag₂.ctx hΓ₁).symm
+      have hr₂ := hr₁.trans (hag₂.ret hR₁).symm
+      have hfr := Agree.cons_fresh o₂.next σ φ₂
+      have hβ : (Ty.var o₂.next).Below (o₂.next + 1) := .var (by omega)
+      have hΓ₃ : Ctx.Below (o₂.next + 1) (.mono (.var o₂.next) :: Ctx.subst o₂.σ (Ctx.subst o₁.σ Γ)) :=
+        Ctx.Below.mono_cons hβ (hΓ₂.mono (by omega))
+      have hR₃ := hR₂.mono (Nat.le_succ o₂.next)
+      obtain ⟨o₃, ho₃, φ₃, hag₃, hτ₃, hsat₃⟩ := InferComplete.check ih₃ (by ret_ok) (by ret_eq) hex
+        hτT (ψ := (o₂.next, σ) :: φ₂) hΓ₃ hR₃ hC
+        (by
+          simp only [Ctx.subst_cons, Scheme.mono_subst]
+          refine CtxEq.cons (by simp [Ty.subst, Subst.find]; exact SchemeEq.refl _) ?_
+          have := hfr.ctx hΓ₂
+          simp only [Ctx.subst_nil] at this
+          exact hc₂.trans this.symm)
+        (by
+          have := hfr.ret hR₂
+          simp only [Ret.subst_nil] at this
+          exact hr₂.trans this.symm) h₃
+      obtain ⟨hn₃, hσ₃, hτb₃, hp₃⟩ := InferInv.check (infer_inv L e₃) (by ret_ok) hex hΓ₃ hR₃ ho₃
+      have hu : TyEq ((o₂.τ.subst o₃.σ).subst φ₃) (o₃.τ.subst φ₃) :=
+        (hag₃.ty (hτb₂.mono (Nat.le_succ _))).trans
+          (by rw [Ty.subst_cons_fresh hτb₂]; exact hτ₂.trans hτ₃.symm)
+      obtain ⟨σ₄, hσ₄, habs⟩ := unify_mgu hu
+      have hσ₁₂ := (hσ₁.mono hn₂).compose hσ₂
+      refine ⟨_, by simp only [infer, ho₁, ho₂, ho₃, hσ₄]; rfl, φ₃, ?_, ?_, ?_⟩
+      · exact (((hag₁.trans hσ₁ hn₁ hag₂).fresh hσ₁₂ (by omega)).trans
+          (hσ₁₂.mono (Nat.le_succ _)) (by omega) hag₃).absorb habs
+      · exact (habs _).trans (hτ₃.trans hτ₀)
+      · -- `Strip`: of `e₁`'s type and the fresh variable, which is `σ`.
+        have hstrip : Sat C [(⟨.strip, [o₁.τ.subst o₂.σ, .var o₂.next]⟩ : Pred)]
+            ((o₂.next, σ) :: φ₂) := by
+          intro c hc
+          simp only [List.mem_singleton] at hc; subst hc
+          simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst, Subst.find, ↓reduceIte,
+            Option.getD_some]
+          rw [Ty.subst_cons_fresh (hσ₂.subst_below (hτb₁.mono hn₂))]
+          refine hs.of_predEq (PredEq.of_pairs (by simp)
+            (zip_tyEq_cons ((hag₂.ty hτb₁).trans hτ₁).symm (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil)))
+        have hb₁ : ∀ p ∈ o₁.preds.map (·.subst o₂.σ), p.Below o₂.next := fun p hp => by
+          obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+          exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        refine Sat.absorb habs (Sat.app (Sat.agree hag₃ (fun p hp => ?_)
+          (Sat.app (Sat.app (Sat.fresh hb₁ (Sat.agree hag₂ hp₁ hsat₁)) (Sat.fresh hp₂ hsat₂))
+            hstrip)) hsat₃)
+        rcases List.mem_append.mp hp with hp | hp
+        · rcases List.mem_append.mp hp with hp | hp
+          · exact (hb₁ p hp).mono (Nat.le_succ _)
+          · exact (hp₂ p hp).mono (Nat.le_succ _)
+        · simp only [List.mem_singleton] at hp; subst hp
+          refine Pred.below_of_args (fun τ hτ => ?_)
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+          rcases hτ with rfl | rfl
+          · exact (hσ₂.subst_below (hτb₁.mono hn₂)).mono (Nat.le_succ _)
+          · exact hβ
   | unop op e ih =>
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm

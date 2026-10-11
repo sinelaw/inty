@@ -472,4 +472,39 @@ def spreadA : Expr := .get (.spread (.obj [] [] []) (.var 0)) "a"
 #guard inferProgram (.let_ false none (.func 1 (.var 1))
   (.binop .minus (.app (.app (.var 0) [num 1]) [num 2]) (num 1))) == none
 
+/-! ## Sums
+
+`Nullable τ` and `Optional τ` are built by an annotation (`Inject`) and
+eliminated by `unwrap` (`Strip`): `x ?? d` is `unwrap x d (var 0)`. -/
+
+/-- `const x: Nullable<number> = e; body`. -/
+def nullableNum (e body : Expr) : Expr := .let_ false (some (.mono (.nullable .number))) e body
+
+-- `const x: Nullable<number> = null; x ?? 0`
+#guard inferProgram (nullableNum (.lit .null) (.unwrap (.var 0) (num 0) (.var 0))) == some .number
+#guard match eval 20 [] [] (nullableNum (.lit .null) (.unwrap (.var 0) (num 0) (.var 0))) with
+  | .ok (.number n) => n == 0 | _ => false
+-- `const x: Nullable<number> = 3; x != null ? x - 1 : 0`: what isn't null is
+-- a number.
+#guard inferProgram (nullableNum (num 3) (.unwrap (.var 0) (num 0) (.binop .minus (.var 0) (num 1))))
+  == some .number
+#guard match eval 20 [] [] (nullableNum (num 3)
+    (.unwrap (.var 0) (num 0) (.binop .minus (.var 0) (num 1)))) with
+  | .ok (.number n) => n == 2 | _ => false
+-- `const x: Nullable<number> = 3; x - 1`: a nullable number isn't a number.
+#guard inferProgram (nullableNum (num 3) (.binop .minus (.var 0) (num 1))) == none
+-- `const x: Nullable<number> = "a"`: a string isn't a nullable number.
+#guard inferProgram (nullableNum (str "a") (num 0)) == none
+-- `const x: Optional<string> = undefined; x ?? "d"`
+#guard inferProgram (.let_ false (some (.mono (.optional .string))) (.lit .undefined)
+  (.unwrap (.var 0) (str "d") (.var 0))) == some .string
+-- `1 ?? 2`: a number has no nothing to replace; `1 ?? "a"` mixes types.
+#guard inferProgram (.unwrap (num 1) (num 2) (.var 0)) == some .number
+#guard inferProgram (.unwrap (num 1) (str "a") (.var 0)) == none
+-- `null ?? 1`: `Null` holds nothing else, so it isn't eliminated.
+#guard inferProgram (.unwrap (.lit .null) (num 1) (.var 0)) == none
+-- `function (x) { return x ?? 0; }`: `Strip α number` waits on the
+-- parameter's type.
+#guard (inferProgram (.func 1 (.unwrap (.var 0) (num 0) (.var 0)))).isSome
+
 end Inty.Examples

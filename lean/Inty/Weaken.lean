@@ -337,6 +337,13 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
         (by simp [Scheme.mono])) (fun i hw => by
           simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
     exact ihh (by simpa using this) hR hRc
+  | @unwrap C Γ R rm e₁ τ₁ σ md e₂ τ e₃ _ hs _ _ ih₁ ih₂ ih₃ =>
+    intro Γ' R' hg hR hRc
+    refine .unwrap (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hs
+      (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) ?_
+    have := hg.prepend (Δ := [.mono σ]) (monos_mono [] [.mono σ] (by simp [Scheme.mono]))
+      (fun i hw => by simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
+    exact ih₃ (by simpa using this) hR hRc
   | tryFinally _ _ ihb ihf =>
     intro Γ' R' hg hR hRc
     exact .tryFinally (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
@@ -463,6 +470,9 @@ theorem HasType.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Optio
     intro ρ' ρ hm hR he hρ; exact .tryCatch (ihb hm hR he hρ) (ihh hm hR he hρ)
   | tryFinally _ _ ihb ihf =>
     intro ρ' ρ hm hR he hρ; exact .tryFinally (ihb hm hR he hρ) (ihf hm hR he hρ)
+  | unwrap _ hs _ _ ih₁ ih₂ ih₃ =>
+    intro ρ' ρ hm hR he hρ
+    exact .unwrap (ih₁ hm hR he hρ) hs (ih₂ hm hR he hρ) (ih₃ hm hR he hρ)
   | obj hes hks hτs hss hL _ hfs ih =>
     intro ρ' ρ hm hR he hρ
     exact .obj hes hks hτs hss hL (fun p hp => ih p hp hm hR he hρ) hfs

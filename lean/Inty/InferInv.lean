@@ -1082,6 +1082,50 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       · exact hσ₃.pred_below ((hσ₂.pred_below ((hp₁ q'' hq'').mono hn₂)).mono hn₃)
       · exact hσ₃.pred_below ((hp₂ q' hq').mono hn₃)
     · exact hp₃ q hq
+  | unwrap e₁ e₂ e₃ ih₁ ih₂ ih₃ =>
+    intro Γ R rm ex n o hRo hex hΓ hR h
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i o₃ h₃
+    split at h
+    · cases h
+    rename_i σ₄ hu
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ (by ret_ok) .none hΓ hR h₁
+    have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+    have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ih₂ (by ret_ok) hex hΓ₁ hR₁ h₂
+    have hβ : (Ty.var o₂.next).Below (o₂.next + 1) := .var (by omega)
+    obtain ⟨hn₃, hσ₃, hτ₃, hp₃⟩ := InferInv.check ih₃ (by ret_ok) hex
+      (Ctx.Below.mono_cons hβ ((hσ₂.ctx_below (hΓ₁.mono hn₂)).mono (by omega)))
+      ((hσ₂.ret_below (hR₁.mono hn₂)).mono (by omega)) h₃
+    have hσ₄ := unify_within (hσ₃.subst_below (hτ₂.mono (by omega))) hτ₃ hu
+    refine ⟨by dsimp only; omega,
+      ((((hσ₁.mono hn₂).compose hσ₂).mono (by omega)).compose hσ₃).compose hσ₄,
+      hσ₄.subst_below hτ₃, ?_⟩
+    intro p hp
+    simp only [List.mem_map, List.mem_append] at hp
+    obtain ⟨q, hq, rfl⟩ := hp
+    refine hσ₄.pred_below ?_
+    rcases hq with ⟨q', hq', rfl⟩ | hq
+    · refine hσ₃.pred_below ?_
+      rcases hq' with (⟨q'', hq'', rfl⟩ | hq') | hq'
+      · exact (hσ₂.pred_below ((hp₁ q'' hq'').mono hn₂)).mono (by omega)
+      · exact (hp₂ q' hq').mono (by omega)
+      · simp only [List.mem_singleton] at hq'; subst hq'
+        refine Pred.below_of_args (fun τ hτ => ?_)
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+        rcases hτ with rfl | rfl
+        · exact (hσ₂.subst_below (hτ₁.mono hn₂)).mono (by omega)
+        · exact hβ.mono (by omega)
+    · exact hp₃ q hq
   | unop op e ih =>
     intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h

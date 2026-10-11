@@ -486,6 +486,11 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
       else (.ok .undefined, c₁, h₁)
   | .break_ => (.broke, clock, heap)
   | .continue_ => (.continued, clock, heap)
+  -- What isn't nothing goes in a new cell.
+  | .unwrap e₁ e₂ e₃ =>
+    bindC (run clock env heap e₁) fun v c₁ h₁ =>
+      if v.isNothing then run (min c₁ clock) env h₁ e₂
+      else run (min c₁ clock) (h₁.length :: env) (h₁ ++ [v]) e₃
   -- The caught value goes in a new cell.
   | .tryCatch body handler =>
     match run clock env heap body with

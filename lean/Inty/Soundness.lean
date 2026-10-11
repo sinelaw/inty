@@ -2744,6 +2744,32 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           rw [Nat.min_eq_left hc₁]
           exact (ihh hh hC hG₂ hcell).weaken hc₁ (hW₁.trans hW₂)
       all_goals exact ⟨hc₁, hs⟩
+  | unwrap e₁ e₂ e₃ ih₁ ih₂ ih₃ =>
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
+    cases ht with
+    | @unwrap _ _ _ _ _ _ σ _ _ _ _ h₁ hs h₂ h₃ =>
+      simp only [run]
+      refine Safe.bindC (ih₁ h₁ hC hG hH) fun v W₁ _ hW₁ hH₁ hv => ?_
+      have hc₁ := run_clock_le k env h e₁
+      rw [Nat.min_eq_left hc₁]
+      split
+      · exact ih₂ h₂ hC (G.mono hW₁ hG) hH₁
+      · -- What isn't nothing, in a new cell of the type `Strip` leaves.
+        rename_i hn
+        have hv' := Entails.strip hC hs hv (by simpa using hn)
+        have hW₂ : W₁ <+: W₁ ++ [.mono σ] := List.prefix_append _ _
+        have hcell : HeapOK (run k env h e₁).2.1 (W₁ ++ [.mono σ]) ((run k env h e₁).2.2 ++ [v]) :=
+          hH₁.alloc (by simp) (fun i s' v' hs' hv'' => by
+            match i, hs', hv'' with
+            | 0, hs', hv'' =>
+              simp at hs' hv''; subst hs' hv''
+              exact SchemeV.mono_iff.mpr (hv'.mono (Nat.le_refl _) hW₂)
+            | _ + 1, hs', _ => simp at hs')
+        have hG₂ : G (W₁ ++ [.mono σ]) (.mono σ :: Γ) ((run k env h e₁).2.2.length :: env) :=
+          ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
+        exact (ih₃ h₃ hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
   | tryFinally body fin ihb ihf =>
     intro k C Γ R rm md W env h τ ht hC hG hH
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top

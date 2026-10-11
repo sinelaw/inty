@@ -355,13 +355,25 @@ touching the generic proofs.
 - Checking mode beside inference: an annotation is a typing obligation,
   which is how declared sums are introduced; rigid type variables; the
   annotation and `.d.js` type syntax; optional parameters (presence on
-  function parameters, `types::FuncParam`). Done: a binding annotated
-  with a type without variables (`/** const x: Number */`), whose
-  initialiser's type is unified with it, with soundness and inference
-  sound and complete. Next: polymorphic annotations, whose quantified
-  variables are rigid in the initialiser (an annotated function type
-  without `this:` is one, polymorphic in `this`); then a check mode that
-  pushes an annotation into `?:`, `return` and literals; then sums.
+  function parameters, `types::FuncParam`). Done, each with soundness
+  and inference sound and complete:
+  - a binding annotated with a type without variables
+    (`/** const x: Number */`);
+  - check mode (`HasType`'s return and expression modes): an annotation
+    is pushed into `?:`, `unwrap`, a sequence's last statement, a `let`'s
+    body, `try`, `return`, function literals against function types and
+    array literals against array types; anywhere else the synthesised type
+    waits to be injected into it (`Inject T τ`);
+  - the sums `Nullable τ` and `Optional τ` (`Con.maybe`), built by an
+    annotation and eliminated by `unwrap e₁ e₂ e₃`
+    (`const x = e₁; x != null ? e₃ : e₂`; `e₁ ?? e₂` is
+    `unwrap e₁ e₂ x`), whose bound value has the type `Strip τ₁ σ` leaves.
+
+  Next: inty to match (tagged sums, no nullable join, `??` and `!= null`
+  as `unwrap`), with the differential generator producing them;
+  polymorphic annotations, whose quantified variables are rigid in the
+  initialiser (an annotated function type without `this:` is one,
+  polymorphic in `this`).
 - Mutual recursion by strongly connected components
   (`docs/scc-inference.md`); modules, each `ns.foo` re-instantiating the
   export's scheme; several files in one run.
