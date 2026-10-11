@@ -21,14 +21,15 @@ theorem Prim.abs_sound (k : Nat) (W : World) (θ : Ty) :
   rw [V_fn]
   intro j _ W' _ h _ args _ hh _ hargs
   cases j with
-  | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
+  | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩
   | succ j =>
+    simp only [call]
     have hargs := hargs j (by omega)
     match args, hargs with
     | [_], hargs =>
       simp only [VList_cons, V_number, VList_nil, and_true] at hargs
       obtain ⟨n, rfl⟩ := hargs
-      exact ⟨by simp [call], .inr ⟨by simp [call], W', List.prefix_refl _,
+      exact ⟨by simp, .inr ⟨by simp, W', List.prefix_refl _,
         fun _ => hh j (by omega), .inl ⟨_, rfl, fun _ => by simp⟩⟩⟩
     | [], hargs | _ :: _ :: _, hargs => simp at hargs
 
@@ -38,12 +39,13 @@ theorem Prim.truthy_sound (k : Nat) (W : World) (θ τ : Ty) :
   rw [V_fn]
   intro j _ W' _ h _ args _ hh _ hargs
   cases j with
-  | zero => exact ⟨Nat.le_refl 0, .inl rfl⟩
+  | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩
   | succ j =>
+    simp only [call]
     have hargs := hargs j (by omega)
     match args, hargs with
     | [_], _ =>
-      exact ⟨by simp [call], .inr ⟨by simp [call], W', List.prefix_refl _,
+      exact ⟨by simp, .inr ⟨by simp, W', List.prefix_refl _,
         fun _ => hh j (by omega), .inl ⟨_, rfl, fun _ => by simp⟩⟩⟩
     | [], hargs | _ :: _ :: _, hargs => simp at hargs
 

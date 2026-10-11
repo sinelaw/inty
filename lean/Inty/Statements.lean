@@ -93,17 +93,17 @@ example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType₀ e.labels.
 
 example : Pred.OnVarShaped p ↔
     (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ a rest, p.args = .var a :: rest) ∨
-      ∃ a τ s r, p = ⟨.merge, [.var a, τ, s, r]⟩ := Iff.rfl
+      ∃ q k τ s r, p = ⟨.merge, [q, k, τ, s, r]⟩ ∧ ((∃ a, q = .var a) ∨ p.MergeOnVar) := Iff.rfl
 
 example : Pred.AssumableAt top p ↔
     (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ a rest, p.args = .var a :: rest) ∨
-      ∃ q τ s r, p = ⟨.merge, [q, τ, s, r]⟩ ∧ (top = true → ∃ a, q = .var a) := Iff.rfl
+      ∃ q k τ s r, p = ⟨.merge, [q, k, τ, s, r]⟩ ∧
+        (top = true → (∃ a, q = .var a) ∨ p.MergeOnVar) := Iff.rfl
 
 example : Cls.arity c = match c with
-    | .plus | .indexWrite | .fieldWrite => 1
-    | .hasProp _ => 2
-    | .indexable => 3
-    | .merge => 4 := by
+    | .plus | .indexWrite => 1
+    | .hasProp _ | .indexable => 3
+    | .merge => 5 := by
   cases c <;> rfl
 
 example : ∀ (c : Nat) (env : Env) (h : Heap) (e : Expr), (run c env h e).2.1 ≤ c :=
@@ -136,9 +136,16 @@ example : V k W (.array τ) v ↔ ∃ ℓ τc, v = .arr ℓ ∧ W[ℓ]? = some (
 example : V k W (.mu i sys) v ↔
     ∃ c args, (Ty.mu i sys).view = some (.app c args) ∧ V k W (.app c args) v := V_mu
 example : CellV k W (.obj (.record ls slots)) v ↔ ∃ fs, v = .fields fs ∧
-    ∀ l s, Ty.field l ls slots = some s →
-      (∃ σ, TyEq s (.slot .pre σ) ∧ ∃ v', fs.lookup l = some v' ∧ V k W σ v') ∨
-      (∃ σ, TyEq s (.slot .abs σ) ∧ fs.lookup l = none) := CellV_obj
+    (∀ l s, Ty.field l ls slots = some s → MemberP (V k W) (.record ls slots) fs l s) ∧
+    ∀ l, Ty.field l ls slots = none → fs.lookup l = none := CellV_obj
+example : MemberP P T fs l s ↔
+    (∃ σ, TyEq s (.slot .pre .data σ) ∧ ∃ v, fs.lookup l = some (.data, v) ∧ P σ v) ∨
+    (∃ σ, TyEq s (.slot .pre .getter σ) ∧ ∃ g, fs.lookup l = some (.getter, g) ∧
+      P (.fn T [] σ) g) ∨
+    (∃ σ, TyEq s (.slot .pre .proto σ) ∧
+      ((∃ v, fs.lookup l = some (.method, v) ∧ P σ v) ∨
+       (∃ g, fs.lookup l = some (.protoGetter, g) ∧ P (.fn T [] σ) g))) ∨
+    (∃ k σ, TyEq s (.slot .abs k σ) ∧ fs.lookup l = none) := Iff.rfl
 example : CellV k W (.obj (.var a)) v ↔ False := Iff.rfl
 example : CellV k W (.arr τ) v ↔ ∃ vs, v = .items vs ∧ ∀ w ∈ vs, V k W τ w := CellV_arr
 example : CellV k W (.scheme s) v ↔
@@ -187,59 +194,130 @@ example : PredEq p q ↔ p.cls = q.cls ∧ p.args.length = q.args.length ∧
     ∀ x ∈ p.args.zip q.args, TyEq x.1 x.2 := Iff.rfl
 example : TyEq s t ↔ ∀ n, s.approx n = t.approx n := Iff.rfl
 
+example : SlotCopy s r ↔ (∃ τ, s = .slot .pre .data τ ∧ r = .slot .pre .data τ) ∨
+    (∃ τ, s = .slot .pre .getter τ ∧ r = .slot .pre .data τ) ∨
+    (∃ τ, s = .slot .pre .proto τ ∧ r = .absSlot) ∨ (∃ k τ, s = .slot .abs k τ ∧ r = s) :=
+  ⟨fun h => by
+    cases h with
+    | data => exact .inl ⟨_, rfl, rfl⟩
+    | getter => exact .inr (.inl ⟨_, rfl, rfl⟩)
+    | proto => exact .inr (.inr (.inl ⟨_, rfl, rfl⟩))
+    | abs => exact .inr (.inr (.inr ⟨_, _, rfl, rfl⟩)),
+   fun h => by
+    rcases h with ⟨τ, rfl, rfl⟩ | ⟨τ, rfl, rfl⟩ | ⟨τ, rfl, rfl⟩ | ⟨k, τ, rfl, rfl⟩
+    · exact .data
+    · exact .getter
+    · exact .proto
+    · exact .abs⟩
+
 example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ ∨
-    (∃ l ls fs σ, Ty.field l ls fs = some (.slot .pre σ) ∧ p = ⟨.hasProp l, [.record ls fs, σ]⟩) ∨
-    (∃ τ s, p = ⟨.merge, [.pre, τ, s, .slot .pre τ]⟩) ∨ (∃ τ s, p = ⟨.merge, [.abs, τ, s, s]⟩) ∨
-    (∃ τ, p = ⟨.hasProp "length", [.array τ, .number]⟩) ∨
-    p = ⟨.hasProp "length", [.string, .number]⟩ ∨
+    (∃ l ls fs k σ, Ty.field l ls fs = some (.slot .pre k σ) ∧
+      p = ⟨.hasProp l, [.record ls fs, k, σ]⟩) ∨
+    (∃ τ s, p = ⟨.merge, [.pre, .data, τ, s, .slot .pre .data τ]⟩) ∨
+    (∃ τ s, p = ⟨.merge, [.pre, .getter, τ, s, .slot .pre .data τ]⟩) ∨
+    (∃ k τ s r, SlotCopy s r ∧ p = ⟨.merge, [.abs, k, τ, s, r]⟩) ∨
+    (∃ τ s r, SlotCopy s r ∧ p = ⟨.merge, [.pre, .proto, τ, s, r]⟩) ∨
+    (∃ τ, p = ⟨.hasProp "length", [.array τ, .getter, .number]⟩) ∨
+    p = ⟨.hasProp "length", [.string, .getter, .number]⟩ ∨
     (∃ τ, p = ⟨.indexable, [.array τ, .number, τ]⟩) ∨
     p = ⟨.indexable, [.string, .number, .string]⟩ ∨
-    (∃ τ, p = ⟨.indexWrite, [.array τ]⟩) ∨
-    ∃ ls slots, p = ⟨.fieldWrite, [.record ls slots]⟩ :=
+    ∃ τ, p = ⟨.indexWrite, [.array τ]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
     | plusString => exact .inr (.inl rfl)
-    | hasProp hf => exact .inr (.inr (.inl ⟨_, _, _, _, hf, rfl⟩))
-    | mergePre => exact .inr (.inr (.inr (.inl ⟨_, _, rfl⟩)))
-    | mergeAbs => exact .inr (.inr (.inr (.inr (.inl ⟨_, _, rfl⟩))))
-    | lengthArray => exact .inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))
-    | lengthString => exact .inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))
-    | indexArray => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))))
-    | indexString => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))))
-    | writeArray =>
+    | hasProp hf => exact .inr (.inr (.inl ⟨_, _, _, _, _, hf, rfl⟩))
+    | mergeData => exact .inr (.inr (.inr (.inl ⟨_, _, rfl⟩)))
+    | mergeGetter => exact .inr (.inr (.inr (.inr (.inl ⟨_, _, rfl⟩))))
+    | mergeAbs hc => exact .inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, _, hc, rfl⟩)))))
+    | mergeProto hc => exact .inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, hc, rfl⟩))))))
+    | lengthArray => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))))
+    | lengthString => exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))))
+    | indexArray =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))))))
-    | writeRecord =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, rfl⟩))))))))),
+    | indexString =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))))))
+    | writeArray =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, rfl⟩)))))))))),
    fun h => by
-    rcases h with rfl | rfl | ⟨l, ls, fs, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, rfl⟩ |
-      rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | ⟨ls, slots, rfl⟩
+    rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
+      ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
-    · exact .mergePre
-    · exact .mergeAbs
+    · exact .mergeData
+    · exact .mergeGetter
+    · exact .mergeAbs hc
+    · exact .mergeProto hc
     · exact .lengthArray
     · exact .lengthString
     · exact .indexArray
     · exact .indexString
-    · exact .writeArray
-    · exact .writeRecord⟩
+    · exact .writeArray⟩
 
-/-- A constraint left on a type variable is all `HoldsOrVar` allows beside
-the instances. -/
-example : HoldsOrVar C ↔ ∀ p ∈ C, (∃ q, PredEq p q ∧ Inst q) ∨ ∃ a rest, p.args = .var a :: rest :=
+/-- A constraint left on a type variable, or a `Merge` waiting on one, is
+all `HoldsOrVar` allows beside the instances. -/
+example : HoldsOrVar C ↔ ∀ p ∈ C, (∃ q, PredEq p q ∧ Inst q) ∨
+    (∃ a rest, p.args = .var a :: rest) ∨ p.MergeOnVar :=
   Iff.rfl
+
+example : Pred.MergeOnVar p ↔ match p with
+    | ⟨.merge, [.pre, .var _, _, _, _]⟩ => True
+    | ⟨.merge, [.pre, .proto, _, s, _]⟩ => s.SlotOnVar
+    | ⟨.merge, [.abs, _, _, s, _]⟩ => s.SlotOnVar
+    | _ => False := Iff.rfl
+
+example : Ty.SlotOnVar s ↔ match s with
+    | .var _ => True
+    | .slot (.var _) _ _ => True
+    | .slot .pre (.var _) _ => True
+    | _ => False := Iff.rfl
 
 /-- The builtins' types, which their soundness proofs establish. -/
 example : builtinCtx =
     [⟨1, .fn .undefined [.bound 0] .boolean, []⟩, .mono (.fn .undefined [.number] .number)] :=
   rfl
 
-/-- A field written as a method is a function whose `this` is the
-literal's type, up to unfolding. -/
-example : MethodsThis ms ls τs T ↔
-    ∀ p ∈ ls.zip τs, p.1 ∈ ms → ∃ θ ps ρ, p.2 = .fn θ ps ρ ∧ TyEq θ T := Iff.rfl
+/-- An object literal's field written as a method is a function whose
+`this` is the literal's type, up to unfolding; a getter's is too, of no
+parameters, and its slot is what it gives. -/
+example : FieldSlot T k τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
+    (k = .method ∧ ∃ θ ps ρ, τ = .fn θ ps ρ ∧ s = .slot .pre .data τ ∧ TyEq θ T) ∨
+    (k = .getter ∧ ∃ θ σ, τ = .fn θ [] σ ∧ s = .slot .pre .getter σ ∧ TyEq θ T) :=
+  ⟨fun h => by
+    cases h with
+    | data => exact .inl ⟨rfl, rfl⟩
+    | method he => exact .inr (.inl ⟨rfl, _, _, _, rfl, rfl, he⟩)
+    | getter he => exact .inr (.inr ⟨rfl, _, _, rfl, rfl, he⟩),
+   fun h => by
+    rcases h with ⟨rfl, rfl⟩ | ⟨rfl, θ, ps, ρ, rfl, rfl, he⟩ | ⟨rfl, θ, σ, rfl, rfl, he⟩
+    · exact .data
+    · exact .method he
+    · exact .getter he⟩
+
+/-- A class's member: a field holds a value; an arrow field is a function
+of the instance's `this`, bound to it, so callable with any; a method and a
+getter are on the prototype, of the instance's `this`. -/
+example : MemberSlot T k e τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
+    (k = .arrow ∧ ∃ n b θ θ' ps ρ, e = .func n b ∧ τ = .fn θ ps ρ ∧
+      s = .slot .pre .data (.fn θ' ps ρ) ∧ TyEq θ T) ∨
+    (k = .method ∧ ∃ n b θ ps ρ, e = .func n b ∧ τ = .fn θ ps ρ ∧
+      s = .slot .pre .proto τ ∧ TyEq θ T) ∨
+    (k = .getter ∧ ∃ b θ σ, e = .func 0 b ∧ τ = .fn θ [] σ ∧ s = .slot .pre .proto σ ∧
+      TyEq θ T) :=
+  ⟨fun h => by
+    cases h with
+    | data => exact .inl ⟨rfl, rfl⟩
+    | arrow he => exact .inr (.inl ⟨rfl, _, _, _, _, _, _, rfl, rfl, rfl, he⟩)
+    | method he => exact .inr (.inr (.inl ⟨rfl, _, _, _, _, _, rfl, rfl, rfl, he⟩))
+    | getter he => exact .inr (.inr (.inr ⟨rfl, _, _, _, rfl, rfl, rfl, he⟩)),
+   fun h => by
+    rcases h with ⟨rfl, rfl⟩ | ⟨rfl, n, b, θ, θ', ps, ρ, rfl, rfl, rfl, he⟩ |
+      ⟨rfl, n, b, θ, ps, ρ, rfl, rfl, rfl, he⟩ | ⟨rfl, b, θ, σ, rfl, rfl, rfl, he⟩
+    · exact .data
+    · exact .arrow he
+    · exact .method he
+    · exact .getter he⟩
 
 /-! ## Programs the typing rules reject -/
 
@@ -325,31 +403,60 @@ example : ¬ HasType L [] [] none (.unop .neg (str "a")) τ := by
     cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
 
 /-- `({x: 1}).y`: an object literal has only its own fields. -/
-example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1] []) "y") τ := by
+example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1] [.data]) "y") τ := by
   intro h
   obtain ⟨_, -, h⟩ := h.top
   cases h with
   | get he hp =>
     obtain ⟨_, e₁, he⟩ := he.top
     cases he with
-    | obj hτs _ _ _ _ _ =>
+    | obj _ _ _ hss _ _ _ =>
       rcases hp with ⟨q, hq, hi⟩ | hi
       · cases hi
-        case hasProp l ls fs σ' hf =>
-          obtain ⟨hcls, hτ, -⟩ := PredEq.two hq
+        case hasProp l ls fs k σ' hf =>
+          obtain ⟨hcls, hτ, -, -⟩ := PredEq.three hq
           cases hcls
           obtain ⟨hc, hl, hz⟩ := TyEq.app_iff.mp (e₁.trans hτ)
           cases hc
-          obtain ⟨s, hs, hss⟩ := Ty.field_tyEq hl.symm (zip_tyEq_symm hz) hf
-          rcases objSlots_field_cases hs with ⟨σ, rfl⟩ | ⟨σ, rfl, -⟩
-          · have := objSlots_field hs
-            obtain ⟨_, rfl⟩ := List.length_eq_one_iff.mp hτs
-            simp [Ty.field] at this
-          · exact absurd (TyEq.slot hss).1 TyEq.pre_abs
+          obtain ⟨s, hs, hss'⟩ := Ty.field_tyEq hl.symm (zip_tyEq_symm hz) hf
+          have := objSlots_field hs (by rw [hss])
+          obtain ⟨_, rfl⟩ := List.length_eq_one_iff.mp hss
+          simp at this; subst this
+          exact absurd (TyEq.slot hss').1 TyEq.pre_abs
         case lengthArray =>
-          exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+          exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         case lengthString =>
-          exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+          exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
+      · cases hi
+
+/-- `({get x() { return 1; }}).x = 2`: a getter takes no store. -/
+example : ¬ HasType L [] [] none
+    (.set (.obj ["x"] [.func 0 (.ret (num 1))] [.getter]) "x" (num 2)) τ := by
+  intro h
+  obtain ⟨_, -, h⟩ := h.top
+  cases h with
+  | set he hp _ =>
+    obtain ⟨_, e₁, he⟩ := he.top
+    cases he with
+    | obj _ hks hτs hss _ _ hfs =>
+      rcases hp with ⟨q, hq, hi⟩ | hi
+      · cases hi
+        case hasProp l ls fs k σ' hf =>
+          obtain ⟨hcls, hτ, hk, -⟩ := PredEq.three hq
+          cases hcls
+          obtain ⟨hc, hl, hz⟩ := TyEq.app_iff.mp (e₁.trans hτ)
+          cases hc
+          obtain ⟨s, hs, hss'⟩ := Ty.field_tyEq hl.symm (zip_tyEq_symm hz) hf
+          have := objSlots_field hs (by rw [hss])
+          obtain ⟨τ₁, rfl⟩ := List.length_eq_one_iff.mp hτs
+          obtain ⟨s₁, rfl⟩ := List.length_eq_one_iff.mp hss
+          simp at this; subst this
+          have hfs₁ := hfs (.getter, τ₁, s) (by simp)
+          cases hfs₁
+          exact ne_con (by decide) (hk.trans (TyEq.slot hss').2.1)
+        case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · cases hi
 
@@ -365,9 +472,9 @@ example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
       cases hl
       rcases hp with ⟨q, hq, hi⟩ | hi
       · cases hi
-        case hasProp => exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
-        case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
-        case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.two hq).2.1)
+        case hasProp => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · cases hi
 

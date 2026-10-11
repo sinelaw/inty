@@ -331,7 +331,7 @@ def incBody : Expr :=
   .seq (.set (.var 1) "value" (.binop .plus (.get (.var 1) "value") (num 1))) (.ret (.var 1))
 
 /-- `const c = {value: 0, inc: function () {…}}`. -/
-def counter : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] []
+def counter : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] [.data, .data]
 
 /-- `c.inc().inc().value`: `inc`'s `this` is the receiver's type, which holds
 `inc`, so it is recursive (`μt. {value: Number, inc: (this: t) => t}`), and
@@ -346,42 +346,79 @@ def chained : Expr := .let_ false counter (.get (.mcall (.mcall (.var 0) "inc" [
 #guard inferProgram (.let_ false counter (.app (.get (.var 0) "inc") [])) == none
 
 -- A method that doesn't use `this` can be called outside its object.
-#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] []) (.app (.get (.var 0) "m") [])) ==
+#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] [.data]) (.app (.get (.var 0) "m") [])) ==
   some .number
 
 /-! A method written `inc() {…}` runs as `inc: function () {…}` does, but
 its `this` is the literal's type, as inty types it (`shared_this`). -/
 
 /-- `const c = {value: 0, inc() {…}}`. -/
-def counterM : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] ["inc"]
+def counterM : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] [.data, .method]
 
 #guard inferProgram (.let_ false counterM (.get (.mcall (.mcall (.var 0) "inc" []) "inc" []) "value"))
   == some .number
 
 -- Even a method that doesn't use `this` needs its object as the receiver.
-#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] ["m"]) (.app (.get (.var 0) "m") []))
+#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] [.method]) (.app (.get (.var 0) "m") []))
   == none
 
 -- `({v: "s", m: o.m}).m()`, `o` being `{v: 1, m() { return this.v; }}`: the
 -- other object isn't of `o`'s type, so the call is rejected, though it
 -- would run; with `m: function () {…}` it is accepted.
-#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] ["m"])
-  (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] []) "m" [])) == none
-#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [])
-  (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] []) "m" [])) == some .string
+#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [.data, .method])
+  (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] [.data, .data]) "m" [])) == none
+#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [.data, .data])
+  (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] [.data, .data]) "m" [])) == some .string
 
-/-- `class C { constructor(v) { this.v = v; } get() { return this.v; } }`,
-which inty lowers to a factory returning the instance, its methods written
-as methods: `function C(v) { return {v: v, get() { return this.v; }}; }`.
-`new C(…)` is a call of it. -/
-def classC : Expr := .func 1 (.obj ["v", "get"] [.var 0, .func 0 (.get (.var 1) "v")] ["get"])
+/-! A getter, `get g() {…}`, runs when its property is read, with the
+object as `this`; a store to it is rejected, and would throw. -/
 
-#guard inferProgram (.let_ false classC (.mcall (.app (.var 0) [num 1]) "get" [])) == some .number
-#guard match eval 20 [] [] (.let_ false classC (.mcall (.app (.var 0) [str "a"]) "get" [])) with
+/-- `{v: 1, get twice() { return this.v + this.v; }}`. -/
+def withGetter : Expr :=
+  .obj ["v", "twice"] [num 1, .func 0 (.ret (.binop .plus (.get (.var 1) "v") (.get (.var 1) "v")))]
+    [.data, .getter]
+
+#guard inferProgram (.let_ false withGetter (.get (.var 0) "twice")) == some .number
+#guard match eval 20 [] [] (.let_ false withGetter (.get (.var 0) "twice")) with
+  | .ok (.number n) => n == 2 | _ => false
+#guard inferProgram (.let_ false withGetter (.set (.var 0) "twice" (num 3))) == none
+#guard match eval 20 [] [] (.let_ false withGetter (.set (.var 0) "twice" (num 3))) with
+  | .stuck .readOnly => true | _ => false
+-- A spread copies what the getter gives, as a field that holds a value.
+#guard inferProgram (.let_ false withGetter
+  (.set (.spread (.obj [] [] []) (.var 0)) "twice" (num 3))) == some .number
+
+/-- `class C { constructor(v) { this.v = v; } get() { return this.v; } }`:
+a constructor returning the instance, a field `v` and a method `get` on
+the prototype. -/
+def classC : Expr :=
+  .ctor 1 (.ret (.cls ["v", "get"] [.var 0, .func 0 (.get (.var 1) "v")] [.data, .method]))
+
+#guard inferProgram (.let_ false classC (.mcall (.new_ (.var 0) [num 1]) "get" [])) == some .number
+#guard match eval 20 [] [] (.let_ false classC (.mcall (.new_ (.var 0) [str "a"]) "get" [])) with
   | .ok (.string s) => s == "a" | _ => false
--- A copy of an instance with another field isn't an instance.
+-- A class is called with `new`.
+#guard inferProgram (.let_ false classC (.mcall (.app (.var 0) [num 1]) "get" [])) == none
+-- A spread copies an instance's own fields, not its prototype's methods.
 #guard inferProgram (.let_ false classC
-  (.mcall (.spread (.app (.var 0) [num 1]) (.obj ["w"] [num 2] [])) "get" [])) == none
+  (.mcall (.spread (.new_ (.var 0) [num 1]) (.obj ["w"] [num 2] [.data])) "get" [])) == none
+#guard inferProgram (.let_ false classC
+  (.get (.spread (.new_ (.var 0) [num 1]) (.obj ["w"] [num 2] [.data])) "v")) == some .number
+-- A method isn't a field one can store to.
+#guard inferProgram (.let_ false classC
+  (.set (.new_ (.var 0) [num 1]) "get" (.func 0 (num 1)))) == none
+
+/-- `class D { a = 1; b = this.a + 1; f = () => this.b; }`: a field's
+initialiser reads the fields before it (as variables, `this.a` being the
+latest), and an arrow field's `this` is the instance, whatever it is
+called on. -/
+def classD : Expr :=
+  .ctor 0 (.ret (.cls ["a", "b", "f"]
+    [num 1, .binop .plus (.var 0) (num 1), .func 0 (.ret (.get (.var 1) "b"))] [.data, .data, .arrow]))
+
+#guard inferProgram (.let_ false classD (.app (.get (.new_ (.var 0) []) "f") [])) == some .number
+#guard match eval 20 [] [] (.let_ false classD (.app (.get (.new_ (.var 0) []) "f") [])) with
+  | .ok (.number n) => n == 2 | _ => false
 
 -- `function f(x) { return f; }; f(1)(2) - 1`: `f` returns itself, a
 -- recursive function type, so `f(1)(2)` is `f`, not a number.

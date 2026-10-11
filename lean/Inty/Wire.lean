@@ -14,8 +14,13 @@ JavaScript and for this model as an s-expression, one program per line:
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
-(obj (field s:x E) (method s:m F) …)   an object literal, a `method` field
-               written `m(…) {…}`, its value F a function   (get E s:x)   (set E s:x V)
+(obj (field s:x E) (method s:m F) (getter s:g F) …)   an object literal, a
+               `method` field written `m(…) {…}` and a `getter` `get g() {…}`,
+               each F a function   (get E s:x)   (set E s:x V)
+(class (field s:x E) (arrow s:f F) (method s:m F) (getter s:g F) …)   a class's
+               instance: fields with initialisers, arrow fields, and
+               methods and getters on the prototype
+(ctor N BODY)  a constructor   (new F A₀ A₁ …)  `new F(A₀, A₁, …)`
 (spread A B)   `{...A, ...B}`
 (arr E₀ E₁ …)  `[E₀, E₁, …]`    (index E I)  `E[I]`    (setindex E I V)  `E[I] = V`
 (mcall E s:x A₀ A₁ …)  `E.x(A₀, A₁, …)`
@@ -116,7 +121,29 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     some (.tryFinally b f, rest)
   | "obj", rest => do
     let (fs, rest) ← parseFields rest
-    some (.obj (fs.map (·.1)) (fs.map (·.2.1)) ((fs.filter (·.2.2)).map (·.1)), rest)
+    let ks ← fs.mapM fun f => match f.2.2 with
+      | "field" => some FieldKind.data
+      | "method" => some .method
+      | "getter" => some .getter
+      | _ => none
+    some (.obj (fs.map (·.1)) (fs.map (·.2.1)) ks, rest)
+  | "class", rest => do
+    let (fs, rest) ← parseFields rest
+    let ks ← fs.mapM fun f => match f.2.2 with
+      | "field" => some ClassKind.data
+      | "arrow" => some .arrow
+      | "method" => some .method
+      | "getter" => some .getter
+      | _ => none
+    some (.cls (fs.map (·.1)) (fs.map (·.2.1)) ks, rest)
+  | "ctor", n :: rest => do
+    let n ← n.toNat?
+    let (b, rest) ← parseExpr rest
+    some (.ctor n b, rest)
+  | "new", rest => do
+    let (f, rest) ← parseExpr rest
+    let (args, rest) ← parseMany rest
+    some (.new_ f args, rest)
   | "get", rest => do
     let (e, rest) ← parseExpr rest
     let (l, rest) ← parseLabel rest
@@ -154,22 +181,17 @@ partial def parseLabel : List String → Option (String × List String)
   | l :: rest => if l.startsWith "s:" then some ((l.drop 2).toString, rest) else none
   | [] => none
 
-/-- An object literal's fields, `(field s:x E)` or `(method s:x F)` each,
-with whether each is a method, up to a closing `)`, which is left in
-place. -/
-partial def parseFields : List String → Option (List (String × Expr × Bool) × List String)
+/-- An object literal's or a class's members, `(KIND s:x E)` each, with
+its kind, up to a closing `)`, which is left in place. -/
+partial def parseFields : List String → Option (List (String × Expr × String) × List String)
   | ")" :: rest => some ([], ")" :: rest)
   | "(" :: kind :: ts => do
-    let isMethod ← match kind with
-      | "field" => some false
-      | "method" => some true
-      | _ => none
     let (l, rest) ← parseLabel ts
     let (e, rest) ← parseExpr rest
     match rest with
     | ")" :: rest => do
       let (fs, rest) ← parseFields rest
-      some ((l, e, isMethod) :: fs, rest)
+      some ((l, e, kind) :: fs, rest)
     | _ => none
   | _ => none
 
@@ -224,7 +246,7 @@ def valueWire : Value → String
   | .boolean b => s!"bool {b}"
   | .undefined => "undef"
   | .null => "null"
-  | .closure .. | .prim _ => "fun"
+  | .closure .. | .prim _ | .bound .. => "fun"
   | .obj _ => "obj"
   | .arr _ => "arr"
   -- An object's and an array's contents are in its cell, never a
@@ -241,6 +263,7 @@ def stuckWire : Stuck → String
   | .propertyNotFound => "propertyNotFound"
   | .badAssignmentTarget => "badAssignmentTarget"
   | .notSpreadable => "notSpreadable"
+  | .readOnly => "readOnly"
 
 /-- The interpreter's verdict: `value V`, `stuck R`, or `timeout`. -/
 def evalVerdict (clock : Nat) (e : Expr) : String :=
