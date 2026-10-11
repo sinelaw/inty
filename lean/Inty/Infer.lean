@@ -13,13 +13,16 @@ solver.
 Unification is in `Inty.Unify`, proved sound and most general. Class
 constraints are not solved as they arise:
 
-- `+` records the constraint `Plus τ` on its operand type `τ`, and a
-  property read or write `HasProp l τ σ` on its receiver's.
+- `+` records the constraint `Plus τ` on its operand type `τ`; a property
+  read or write, `HasProp l τ k σ` on its receiver's; a spread, a `Merge`
+  per label; an index, `Indexable` (and `IndexWrite` for a store); an arrow
+  field, `NotNew` on its `this`.
 - Before a `const` or `let` generalises, the constraints on known types are
-  decided (`improveAll`). It then takes the constraints mentioning the
-  variables it quantifies into its scheme (inty's `<a> where Plus a => …`),
-  and each use instantiates them again. The rest stay pending until the
-  whole program is checked.
+  decided (`improveAll`), but a `Plus`, which waits until the end
+  (`Pred.settled`), and a `Merge`, which only the top level decides. It
+  then takes the constraints mentioning the variables it quantifies into
+  its scheme (inty's `<a> where Plus a => …`), and each use instantiates
+  them again. The rest stay pending until the whole program is checked.
 -/
 
 namespace Inty

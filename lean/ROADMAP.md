@@ -22,7 +22,9 @@ Paths like `src/infer` are relative to `crates/inty`.
    allowed: out of clock, an uncaught `throw`, `Stuck::IntRange`, a
    non-finite `Int`, an out-of-bounds read, and so on. A `fault` outcome
    lists them, each citing where `docs/type-system.md` allows it. So the
-   model can be neither stronger nor weaker than what inty promises.
+   model can be neither stronger nor weaker than what inty promises. (Not
+   yet so: `Fault` has only `outOfBounds`, with `Int` in phase 4, and no
+   fault cites the document.)
 2. **The specification is what inty means, not what Hindley–Milner
    allows.** "Declared, not guessed" unions, defaulting and narrowing are
    rules of `HasType`, not features of the algorithm only. That keeps
@@ -31,7 +33,8 @@ Paths like `src/infer` are relative to `crates/inty`.
 3. **One rule per Rust rule.** Every `HasType` rule, class instance and
    improvement rule names its counterpart in `src/infer/features/*.rs`,
    `src/classes` or `src/operators`. A generated coverage table, checked in
-   CI, lists the inty rules that have no Lean counterpart.
+   CI, lists the inty rules that have no Lean counterpart. (Not yet
+   written: the rules cite their counterparts in their docs only.)
 4. **The model runs on real programs.** inty writes out its lowered AST in
    the wire format, so the differential test runs on inty's own test suite
    and examples, beside the generated programs. Node, and later CPython and
@@ -83,8 +86,11 @@ The parts every later feature touches.
 
 ### 1. Completeness of inference
 
-Done: `infer_complete` (`Inty/InferComplete.lean`), for the whole calculus,
-and to be kept for every later phase. The decisions it needed:
+Done: `inferIn_complete` (`Inty/InferComplete.lean`), for the whole
+calculus, and to be kept for every later phase. It is completeness against
+`HasType`, whose `let` rule writes inty's generalisation as side conditions
+(see the README), for scoped programs, relating types but not the
+constraints left. The decisions it needed:
 
 - **Ambiguous constraints.** A constraint left on a type variable at the
   end can't fail, since no value has a type variable's type, and inty
@@ -100,7 +106,12 @@ and to be kept for every later phase. The decisions it needed:
   `const x = function () { return g + g; }` (with `g` a function) when `x`
   is unused. inty now decides such a constraint when it generalises
   (`InferState::generalize`), and the rule requires every constraint of a
-  scheme to be `Plus` on one of its quantified variables (`Scheme.Simple`).
+  scheme to be on one of its quantified variables (`Scheme.Simple`): its
+  first argument, or for a `Merge` (which a binding keeps as it is, since
+  deciding it there would depend on whether its presence is known yet) a
+  quantified variable in the trees of its determining arguments. So a
+  `Merge` no instance satisfies, in a binding that is never used, is
+  accepted, where the same with `Plus` isn't; a use decides it.
 - **Termination of unification.** A worklist algorithm that terminates by
   the variables still to eliminate (an explicit list, so no set library is
   needed) and then the size of the equations, proved sound and most
@@ -109,8 +120,9 @@ and to be kept for every later phase. The decisions it needed:
   counter (`Below`), and its substitutions stay within it (`Within`), as in
   Naraschewski and Nipkow's proof of algorithm W. A `const`'s scheme is
   opened at a block above everything in sight, which the cofinite rule
-  allows; the block is then sent to `Number`, an instance of every scheme
-  constraint, for the constraints left pending.
+  allows. The initialiser is typed assuming the opened scheme's
+  constraints; a pending one not on the block is entailed without them
+  (`Entails.drop_block`), and the rest are the generalised scheme's.
 - Still to come with the features that need them: rigid variables (phase
   10), and well-scoped schemes (`bound i` within the arity) once schemes
   are written by hand, in annotations.
@@ -198,8 +210,9 @@ touching the generic proofs.
   writes and spread (done: an object is a cell of its fields, so a write
   adds a missing property, as in JavaScript); arrays (done: literals,
   `e[i]` by `Indexable τ ι σ`, `e[i] = v` by `Indexable` and `IndexWrite
-  τ`, which strings lack, and `e.l = v` by `FieldWrite τ`, which only
-  objects have; `s.length` and `xs.length` as `HasProp` instances), then
+  τ`, which strings lack, and `e.l = v` by `HasProp l τ data σ`, a field
+  that holds a value, which only objects have; `s.length` and `xs.length`
+  as `HasProp` instances of kind `getter`), then
   tuples and `Map` with their `Indexable` instances. A class's first
   argument determines the rest, so improvement and its completeness are
   written once over each class's arity (`Pred.decide`,
@@ -330,10 +343,11 @@ touching the generic proofs.
   which has more fields. inty also rejects a method or class-body field
   initialiser that reads a name which is a constructor parameter, which
   the lowering would make it read.
-- Still to come for classes: getters (a field whose value is a body run
-  with the instance as `this` at each read), class-body field initialisers
-  that read `this`, `#private` fields (labels JavaScript can't write), and
-  inty's nominal class types (a brand only rejects more programs).
+- Done: getters, an object literal's and a class's, run with the object
+  as `this` at each read, and arrow fields, whose `this` is the instance
+  and which `new` doesn't call (`NotNew`). Still to come for classes:
+  `#private` fields (labels JavaScript can't write), and inty's nominal
+  class types (a brand only rejects more programs).
 - Callable rows (`String`, `String.fromCharCode`).
 
 ### 7. Annotations, program structure and the standard library

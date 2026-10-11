@@ -4,7 +4,10 @@ import Inty.Builtins
 # Examples
 
 Small programs, each with its typing derivation and its evaluation. The
-`#guard`s run the interpreter at build time.
+`#guard`s run the interpreter at build time. In the JavaScript each is
+written as, a function's `return` is its body's value: a function in the
+calculus gives back the value its body ends with, or the one a `return`
+gives.
 -/
 
 namespace Inty.Examples

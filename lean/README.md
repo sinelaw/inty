@@ -42,11 +42,15 @@ HasType L C Γ R e τ → HoldsOrVar C → G W Γ env → HeapOK clock W h →
 ```
 
 where an abrupt completion is a `throw` of any value, a `break` or a
-`continue`.
+`continue` (one outside any loop is ruled out apart, by the scope check
+below), or a fault: an index out of bounds, where the program stops, as
+`dynamics` does (`Result.fault`). JavaScript reads `undefined` there and
+goes on, perhaps to a `TypeError` further on, so for a program that indexes,
+"never stuck" is the model's guarantee up to its faults, not JavaScript's.
 
 That is CakeML's shape of theorem (Owens et al., "Functional Big-step
 Semantics", ESOP 2016): for every clock, a value of the right type, an
-exception, or out of time, and never stuck. `V k W τ v` is a step-indexed
+exception (here any abrupt completion), or out of time, and never stuck. `V k W τ v` is a step-indexed
 Kripke logical relation: `v` behaves as a `τ` for `k` more calls, in any
 heap that a world extending `W` describes (see the design choices).
 `Inty/Statements.lean` pins each of its clauses.
@@ -75,7 +79,7 @@ variable's type.
 so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
 gets stuck.
 
-`Inty.infer_complete` (in `Inty/InferComplete.lean`): inference finds a type
+`Inty.inferIn_complete` (in `Inty/InferComplete.lean`): inference finds a type
 whenever one exists, one of which every valid type is an instance up to
 equal types (Damas and Milner's completeness; the freshness invariants,
 `Inty/InferInv.lean`, follow Naraschewski and Nipkow's proof of algorithm
@@ -95,7 +99,15 @@ only to its own `let`s and parameters, never to a `const`
 an assignment to a `const` would be type-safe, and a stray `break` is
 safe too, just not JavaScript.
 
-(`inferIn_complete`, `inferProgram_complete`). It rests on unification
+(`inferIn_complete`, `inferProgram_complete`, the latter for closed
+programs with no assumed constraints). It is completeness against `HasType`,
+which is declarative but not free of the algorithm's choices: the `let`
+rule's value restriction, its constraints only on quantified variables
+(`Scheme.Simple`, with a `Merge` on their trees, `PTy.TreeBound`), and
+`Merge` left undecided inside a scheme, are inty's generalisation, written as
+rules; a class's labels are distinct (`ls.Nodup`), though JavaScript allows
+a member defined twice; and the conclusion relates types, not the
+constraints inference leaves. It rests on unification
 being most general up to equal types (`Inty.unify_mgu`): `unify` is a
 congruence closure on the types' finite graphs of subterms (Huet's
 algorithm for rational trees, `Inty/Unify.lean`). A typing's context need
@@ -186,7 +198,12 @@ These choices are meant to hold up as the calculus grows.
   `{x: T | r}`, is a record whose other slots are variables. Within the
   program's labels this is equivalent to Rémy's rows with presence, which
   inty implements with tails, and it keeps unification free of type
-  equality up to permutation.
+  equality up to permutation. The cost is size: every record has a slot
+  per label of the program, so inference slows as a program's labels grow
+  (seconds, interpreted, for a few nested spreads over twenty or thirty
+  labels). That is fine for an oracle on generated programs; running the
+  model on inty's test corpus (ground rule 4 of the roadmap) will want
+  rows with tails, or the labels a program's records can share.
 - **Types and expressions nest lists** (a constructor's arguments, a call's
   arguments). Lean derives neither
   equality nor induction for nested inductive types, so `Ty.ind`, `PTy.ind`
@@ -215,7 +232,8 @@ These choices are meant to hold up as the calculus grows.
   heap that world describes one tick down and on an argument in `V i τ₁`
   for every `i < j`, takes a tick and gives back a `V c τ₂` value at the
   clock `c` left, in a still larger world describing the heap after, or
-  throws, or runs out. A type variable has no values. A recursive type has
+  completes abruptly (a `throw`, a `break` or `continue` that escapes it,
+  a fault), or runs out. A type variable has no values. A recursive type has
   its unfolding's values. Since worlds map cells to syntactic types, `V` at
   index `k` needs `V` at arbitrary types only below `k` (the arguments of
   a call are good only below its clock, since the body runs a tick down,
@@ -239,14 +257,21 @@ These choices are meant to hold up as the calculus grows.
   it finds.
 - **Class constraints are assumptions in the judgement.** `HasType L C Γ R e τ`
   types `e` assuming the constraints in `C`, as in HM(X). A class is a
-  `Cls` with its instances in `Inst` (`Inty/Classes.lean`): `Plus`, and
-  `HasProp l a b`, a property read or write on a value of unknown type,
-  whose receiver determines the field (a functional dependency). A `const`
-  types its initialiser assuming its scheme's constraints, and each use of
-  the variable must establish them. Inference records a pending constraint
-  at each `+` and each property access; before a `const` generalises, it
-  decides the ones on known types (`improveAll`), and it doesn't quantify a
-  field type whose receiver the environment fixes.
+  `Cls` with its instances in `Inst` (`Inty/Classes.lean`): `Plus`;
+  `HasProp l a k b`, a property read on a value of unknown type, whose
+  receiver determines the field (a functional dependency); `Merge`, a
+  spread's slot; `Indexable` and `IndexWrite`, indexing; and `NotNew`, an
+  arrow field's `this`, which `new` doesn't give. A `const` types its
+  initialiser assuming its scheme's constraints, and each use of the
+  variable must establish them. Inference records a pending constraint at
+  each `+`, each property access, spread and index, and each arrow field;
+  before a `const` generalises, it decides the ones on known types
+  (`improveAll`), but a `Plus` (decided at the end) and a `Merge` (decided
+  at the top level), and it doesn't quantify a field type whose receiver
+  the environment fixes. So a binding that is never used can keep a
+  `Merge` no instance satisfies, and be accepted: deciding it at the
+  binding would depend on whether its presence is known by then, which no
+  rule closed under substitution can state; a use decides it.
 - **A constraint left on a type variable is harmless.** No value has a
   type variable's type, so code relying on such a constraint never runs:
   the soundness theorem assumes only `HoldsOrVar C`, and inference accepts
@@ -285,6 +310,15 @@ These choices are meant to hold up as the calculus grows.
 - **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
   and `Arith` classes, is phase 4 of the roadmap; so is inty's rule that
   an index is an `Int`, where the model takes any number.
+- **Where the interpreter isn't JavaScript.** Besides the faults: a
+  string is a sequence of code points, as `dynamics`' are, where
+  JavaScript's are UTF-16 units (`"😀".length` is 1 here, 2 there); `new`
+  runs a method and a class's constructor can be called without `new`,
+  where JavaScript throws a `TypeError` (typing rules out both: a method's
+  `this` is its object, a constructor's `newTarget`); and a `break` in a
+  function called from a loop ends that loop, which the scope check rules
+  out. The differential test keeps to programs where none of these
+  arises.
 
 ## Adding a feature
 
@@ -393,6 +427,20 @@ which were checked with the base's instance as `this` (`{label: 5,
 method read a constructor parameter where JavaScript reads the variable
 outside the class. inty now rejects `extends`, and a method or field
 initialiser that reads a name which is a constructor parameter.
+
+Until then the generator had no classes, constructors or `new`, so nothing
+exercised an arrow field under `new`, which both inty and the model typed
+and ran, where JavaScript throws a `TypeError` (an independent review of
+the model found it). It now writes classes as JavaScript class
+declarations: fields set in the constructor, each seeing those before it;
+arrow fields; methods and getters on the prototype; and a use of a new
+instance, including `new` on an arrow field. The class itself appears only
+under `new`, since both interpreters run a class called without `new`.
+Run against the code before the fix, it reports both accepting a program
+that raises `TypeError`; it also found inty's `dynamics` running `new` on
+an arrow field that uses `this`, which the class lowering turns into a
+method. Over 21,000 programs (seven seeds), about 9% with a class, it
+finds no other disagreement.
 
 Each row is recognised from evidence, not guessed: a union in the
 types inty gave the program's expressions, inty accepting the program

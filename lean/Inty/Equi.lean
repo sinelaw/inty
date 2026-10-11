@@ -14,9 +14,15 @@ by constructors (`TyEq.app_iff`), with no coinduction (Amadio and
 Cardelli, TOPLAS 1993; Brandt and Henglein, Fundamenta Informaticae 1998,
 treat it coinductively).
 
-An equation whose right-hand side is a bare `self` (`t = t`) has no head
-(`Ty.view` is `none`): such a type equals only other such types, and has
-no values.
+An equation whose right-hand side is a bare `self` has no head (`Ty.view`
+is `none`), whatever that `self` refers to: not only `t = t`, but an alias
+`t = u` of another of the system's types, even a contractive one. So
+`mu 0 [self 1, number]` is equal to `mu 0 [self 0]`, not to `number`: a
+headless type equals only other headless types, and has no values. Unfolded
+trees are compared only through heads, so this isn't the equality of the
+trees an alias would unfold to; inference never builds an alias (each
+equation it makes is a constructor's), so it is the model's choice for
+types written by hand, consistently applied.
 -/
 
 namespace Inty
