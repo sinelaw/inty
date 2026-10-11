@@ -2521,7 +2521,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       have hinst : ∀ τs, τs.length = s.arity →
           HasType L (C ++ s.instPreds τs) Γ R rm (annMode ann) e₁ (s.inst τs) := by
         intro τs hlen
-        have h := (hgen m (fun a ha => hm a (.inl ha))).subst (Subst.block m τs)
+        have h := (hgen m (fun a ha => hm a (.inl ha))).subst Sys.narrow_substable (Subst.block m τs)
         have hfresh : ∀ a, a < m → (Subst.block m τs).find a = none := fun a ha =>
           Subst.find_none (fun p hp e => by have := Subst.block_keys p hp; omega)
         have hCσ : C.map (·.subst (Subst.block m τs)) = C := by

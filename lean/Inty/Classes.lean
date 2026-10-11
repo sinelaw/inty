@@ -287,6 +287,10 @@ structure Sys where
   closed : Ty → Prop
   /-- Instances are up to equal types. -/
   inst_eq : ∀ {p q : Pred}, PredEq p q → inst q → inst p
+  /-- The constraint that a value of `τ` is one of `T` (`HasType.inj`). -/
+  injPred : Ty → Ty → Pred
+  /-- It is up to equal types. -/
+  injPred_eq : ∀ {τ τ' T : Ty}, TyEq τ τ' → PredEq (injPred τ T) (injPred τ' T)
 
 /-- `p` holds in the system `S` as an instance, or is assumed in `C`, up to
 equal types. -/
@@ -294,7 +298,22 @@ def EntailsS (S : Sys) (C : List Pred) (p : Pred) : Prop := S.inst p ∨ ∃ q �
 
 /-- The system inference implements: its instances (`Inst`, up to equal
 types), and expected types without type variables. -/
-def Sys.narrow : Sys := ⟨InstEq, fun T => T.ftv = [], fun h hq => InstEq.of_predEq h hq⟩
+def Sys.narrow : Sys :=
+  ⟨InstEq, fun T => T.ftv = [], fun h hq => InstEq.of_predEq h hq, fun τ T => ⟨.inject T, [τ]⟩,
+    fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h zip_tyEq_nil)⟩
+
+/-- A system whose instances, expected types and injections survive
+substitution. -/
+structure Sys.Substable (S : Sys) : Prop where
+  inst : ∀ (σ : Subst) {p : Pred}, S.inst p → S.inst (p.subst σ)
+  closed : ∀ (σ : Subst) {T : Ty}, S.closed T → S.closed (T.subst σ)
+  injPred : ∀ (σ : Subst) (τ : Ty) {T : Ty}, S.closed T →
+    (S.injPred τ T).subst σ = S.injPred (τ.subst σ) (T.subst σ)
+
+theorem EntailsS.substS {S : Sys} (hS : S.Substable) (σ : Subst) {C : List Pred} {p : Pred}
+    (h : EntailsS S C p) : EntailsS S (C.map (·.subst σ)) (p.subst σ) :=
+  h.elim (fun h => .inl (hS.inst σ h))
+    (fun ⟨q, hq, hpq⟩ => .inr ⟨q.subst σ, List.mem_map_of_mem hq, hpq.subst σ⟩)
 
 theorem EntailsS.of_predEq {S : Sys} {C : List Pred} {p p' : Pred} (h : PredEq p p')
     (he : EntailsS S C p) : EntailsS S C p' :=

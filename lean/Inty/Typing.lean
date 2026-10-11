@@ -309,7 +309,7 @@ inductive HasTypeS (S : Sys) (L : List String) :
   /-- Checked against an annotation's type `T`, an expression of the type
   `τ` has `T` if a value of `τ` is one of `T` (`Inject T τ`: `τ` is `T`,
   or `T` is `Nullable τ`, …). `T` has no type variables. -/
-  | inj : HasTypeS S L C Γ R rm .synth e τ → S.closed T → EntailsS S C ⟨.inject T, [τ]⟩ →
+  | inj : HasTypeS S L C Γ R rm .synth e τ → S.closed T → EntailsS S C (S.injPred τ T) →
       HasTypeS S L C Γ R rm .check e T
 
 /-- A `HasType` derivation's last rule, other than a conversion: every
@@ -420,7 +420,7 @@ synthesised type, or checked against an annotation's type `τ`, as it is or
 by an injection (`HasTypeS.inj`). -/
 def LiftS (S : Sys) (C : List Pred) (md md₀ : Mode) (τ₀ τ : Ty) : Prop :=
   (md₀ = md ∧ TyEq τ₀ τ ∧ (md = .check → τ₀ = τ)) ∨
-    (md = .check ∧ md₀ = .synth ∧ S.closed τ ∧ EntailsS S C ⟨.inject τ, [τ₀]⟩)
+    (md = .check ∧ md₀ = .synth ∧ S.closed τ ∧ EntailsS S C (S.injPred τ₀ τ))
 
 /-- Lifting in the narrow system. -/
 abbrev Lift := LiftS Sys.narrow
@@ -442,8 +442,7 @@ theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
     obtain ⟨md₀, τ₀, ht, hl⟩ := ih
     rcases hl with ⟨rfl, h₀, -⟩ | ⟨h, -⟩
     · refine ⟨_, τ₀, ht, .inr ⟨rfl, rfl, hT, ?_⟩⟩
-      refine EntailsS.of_predEq ?_ hi
-      exact PredEq.of_pairs (by simp) (zip_tyEq_cons h₀.symm zip_tyEq_nil)
+      exact EntailsS.of_predEq (S.injPred_eq h₀.symm) hi
     · cases h
   | lit hl => exact ⟨_, _, .lit hl, .refl⟩
   | var hi hl hc => exact ⟨_, _, .var hi hl hc, .refl⟩

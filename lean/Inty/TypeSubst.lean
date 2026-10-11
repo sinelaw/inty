@@ -12,6 +12,78 @@ for them.
 
 namespace Inty
 
+/-! ## Heads through substitution -/
+
+theorem Ty.whnf_cases (t : Ty) :
+    (∃ a, t.whnf = .var a) ∨ (∃ c xs, t.whnf = .app c xs ∧ t.view = some (.app c xs)) ∨
+      t.view = none := by
+  cases hv : t.view with
+  | none => exact .inr (.inr rfl)
+  | some v =>
+    rcases Ty.view_shape hv with ⟨a, rfl⟩ | ⟨c, xs, rfl⟩
+    · exact .inl ⟨a, Ty.whnf_of_view hv⟩
+    · exact .inr (.inl ⟨c, xs, Ty.whnf_of_view hv, rfl⟩)
+
+theorem Ty.whnf_headless {t : Ty} (h : t.view = none) : t.whnf = t := by simp [Ty.whnf, h]
+
+theorem Ty.view_subst_none {t : Ty} (h : t.view = none) (φ : Subst) : (t.subst φ).view = none := by
+  rw [Ty.view_subst, h]; rfl
+
+theorem Ty.view_subst_app {t : Ty} {c : Con} {xs : List Ty} (h : t.view = some (.app c xs))
+    (φ : Subst) : (t.subst φ).view = some (.app c (xs.map (·.subst φ))) := by
+  rw [Ty.view_subst, h]; simp [Ty.view]
+
+/-- A head through substitution: a variable's is its image's, a constructor
+stays. -/
+theorem Ty.whnf_subst_app {t : Ty} {φ : Subst} {c : Con} {ys : List Ty}
+    (h : (t.subst φ).whnf = .app c ys) :
+    (∃ a, t.whnf = .var a) ∨ ∃ xs, t.whnf = .app c xs ∧ ys = xs.map (·.subst φ) := by
+  rcases Ty.whnf_cases t with ⟨a, ha⟩ | ⟨c', xs, hw, hv⟩ | hv
+  · exact .inl ⟨a, ha⟩
+  · rw [Ty.whnf_of_view (Ty.view_subst_app hv φ)] at h
+    simp only [Ty.app.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact .inr ⟨xs, hw, rfl⟩
+  · rw [Ty.whnf_headless (Ty.view_subst_none hv φ)] at h
+    have := Ty.view_subst_none hv φ
+    rw [h] at this; cases this
+
+theorem Ty.whnf_subst_var {t : Ty} {φ : Subst} {a : Nat} (h : (t.subst φ).whnf = .var a) :
+    ∃ b, t.whnf = .var b := by
+  rcases Ty.whnf_cases t with ⟨b, hb⟩ | ⟨c', xs, hw, hv⟩ | hv
+  · exact ⟨b, hb⟩
+  · rw [Ty.whnf_of_view (Ty.view_subst_app hv φ)] at h; cases h
+  · rw [Ty.whnf_headless (Ty.view_subst_none hv φ)] at h
+    have := Ty.view_subst_none hv φ
+    rw [h] at this; cases this
+
+/-- A type whose image is equal to a constructor application unfolds to a
+variable or to that constructor. -/
+theorem Ty.whnf_app_of_tyEq {t : Ty} {φ : Subst} {c : Con} {ys : List Ty}
+    (h : TyEq (t.subst φ) (.app c ys)) :
+    (∃ a, t.whnf = .var a) ∨ ∃ xs, t.whnf = .app c xs ∧ xs.length = ys.length ∧
+      ∀ x ∈ xs.zip ys, TyEq (x.1.subst φ) x.2 := by
+  obtain ⟨zs, hz, he⟩ := TyEq.whnf_app h.symm rfl
+  rcases Ty.whnf_subst_app hz with ⟨a, ha⟩ | ⟨xs, hxs, rfl⟩
+  · exact .inl ⟨a, ha⟩
+  · obtain ⟨-, hl, hzz⟩ := TyEq.app_iff.mp he
+    refine .inr ⟨xs, hxs, by simpa using hl.symm, fun x hx => ?_⟩
+    obtain ⟨u, v⟩ := x
+    have : (v, u.subst φ) ∈ ys.zip (xs.map (·.subst φ)) := by
+      rw [List.zip_map_right]
+      exact List.mem_map.mpr ⟨(v, u), zip_symm_mem hx, rfl⟩
+    exact (hzz _ this).symm
+
+theorem Ty.whnf_con_of_tyEq {t : Ty} {φ : Subst} {c : Con} (h : TyEq (t.subst φ) (.app c [])) :
+    (∃ a, t.whnf = .var a) ∨ t.whnf = .app c [] := by
+  rcases Ty.whnf_app_of_tyEq h with h | ⟨xs, hxs, hl, -⟩
+  · exact .inl h
+  · exact .inr (by rw [hxs, List.eq_nil_of_length_eq_zero hl])
+
+theorem Ty.whnf_var_of_tyEq {t : Ty} {φ : Subst} {a : Nat} (h : TyEq (t.subst φ) (.var a)) :
+    ∃ b, t.whnf = .var b :=
+  Ty.whnf_subst_var (TyEq.whnf_var h.symm rfl)
+
 theorem Scheme.Simple.subst {s : Scheme} (hs : s.Simple) (σ : Subst) : (s.subst σ).Simple := by
   intro p hp
   simp only [Scheme.subst, List.mem_map] at hp
@@ -42,12 +114,13 @@ theorem FieldSlot.subst (σ : Subst) (h : FieldSlot T k e τ s) :
   | method he => simpa using FieldSlot.method (τs := _) (ρ := _) (he.subst σ)
   | getter he => simpa using FieldSlot.getter (σ := _) (he.subst σ)
 
-theorem MemberSlotS.subst (σ : Subst) (h : MemberSlot C T k e τ s) :
-    MemberSlot (C.map (·.subst σ)) (T.subst σ) k e (τ.subst σ) (s.subst σ) := by
+theorem MemberSlotS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : MemberSlotS S C T k e τ s) :
+    MemberSlotS S (C.map (·.subst σ)) (T.subst σ) k e (τ.subst σ) (s.subst σ) := by
   cases h with
   | data => exact .data
   | arrow he hn =>
-    simpa using MemberSlotS.arrow (τs := _) (ρ := _) (he.subst σ) (by simpa [Pred.subst] using hn.subst σ)
+    simpa using MemberSlotS.arrow (τs := _) (ρ := _) (he.subst σ)
+      (by simpa [Pred.subst] using hn.substS hS σ)
   | method he => simpa using MemberSlotS.method (τs := _) (ρ := _) (he.subst σ)
   | getter he => simpa using MemberSlotS.getter (σ := _) (he.subst σ)
 
@@ -86,8 +159,21 @@ theorem zip3_map {α β γ : Type} (f : β → β) (g : γ → γ) : ∀ (ks : L
   | _ :: _, _ :: _, [] => rfl
   | k :: ks, t :: ts, s :: ss => by simp [zip3_map f g ks ts ss]
 
-theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
-    HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) rm md e
+/-- A constructor application's head survives substitution. -/
+theorem Ty.whnf_subst_of_app {T : Ty} {c : Con} {xs : List Ty} (h : T.whnf = .app c xs)
+    (σ : Subst) : (T.subst σ).whnf = .app c (xs.map (·.subst σ)) := by
+  rcases Ty.whnf_cases T with ⟨a, ha⟩ | ⟨c', xs', hw, hv⟩ | hv
+  · rw [ha] at h; cases h
+  · rw [hw] at h
+    simp only [Ty.app.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact Ty.whnf_of_view (Ty.view_subst_app hv σ)
+  · rw [Ty.whnf_headless hv] at h
+    subst h
+    simp [Ty.view] at hv
+
+theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S L C Γ R rm md e τ) :
+    HasTypeS S L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) rm md e
       (τ.subst σ) := by
   induction h with
   | lit hl => cases hl <;> exact .lit (by constructor)
@@ -97,24 +183,13 @@ theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
     intro c hc'
     rw [← Scheme.instPreds_subst] at hc'
     obtain ⟨c₀, hc₀, rfl⟩ := List.mem_map.mp hc'
-    exact (hc c₀ hc₀).subst σ
+    exact (hc c₀ hc₀).substS hS σ
   | func hlen _ ih =>
     refine .func (by simpa using hlen) ?_
     simpa [List.map_append, Function.comp_def] using ih
   | @funcCheck T n C Γ θ τs ρ body R rm hT hT₀ hlen _ ih =>
-    have hf := Ty.ftv_nil_of_whnf hT hT₀
-    simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.append_eq_nil_iff,
-      List.flatMap_eq_nil_iff] at hf
-    obtain ⟨hθ, hρ, hτs⟩ := hf
-    rw [Ty.closed_subst hT₀]
-    refine .funcCheck hT hT₀ hlen ?_
-    have h1 : (τs.map Scheme.mono).map (Scheme.subst σ) = τs.map Scheme.mono := by
-      rw [List.map_map]
-      exact List.map_congr_left fun t ht => by
-        simp only [Function.comp_apply, Scheme.mono_subst, Ty.closed_subst (hτs t ht)]
-    rw [List.map_append, List.map_cons, List.map_cons, h1, Scheme.mono_subst, Scheme.mono_subst,
-      Ty.closed_subst (Ty.ftv_nil_of_whnf hT hT₀), Ty.closed_subst hθ] at ih
-    simpa [Ty.closed_subst hρ] using ih
+    refine .funcCheck (Ty.whnf_subst_of_app hT σ) (hS.closed σ hT₀) (by simpa using hlen) ?_
+    simpa [List.map_append, Function.comp_def] using ih
   | app _ hlen _ ihf iha =>
     refine .app (by simpa using ihf) (by simpa using hlen) (fun p hp => ?_)
     rw [List.zip_map_right] at hp
@@ -144,7 +219,7 @@ theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
     | neg => exact .unop .neg ih
   | binop hop _ _ ih₁ ih₂ =>
     cases hop with
-    | plus hc => exact .binop (.plus (hc.subst σ)) ih₁ ih₂
+    | plus hc => exact .binop (.plus (hc.substS hS σ)) ih₁ ih₂
     | minus => exact .binop .minus ih₁ ih₂
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
@@ -154,7 +229,7 @@ theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
   | unwrap _ hs _ _ ih₁ ih₂ ih₃ =>
-    exact .unwrap ih₁ (by simpa [Pred.subst] using hs.subst σ) ih₂ (by simpa using ih₃)
+    exact .unwrap ih₁ (by simpa [Pred.subst] using hs.substS hS σ) ih₂ (by simpa using ih₃)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
   | @obj _ _ _ _ _ _ _ _ τs hes hks hτs hss hL _ hm ih =>
     simp only [Ty.subst_app, objSlots_subst]
@@ -177,7 +252,7 @@ theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
       simpa [Ty.subst_app, objSlots_subst] using this
     · rw [zip4_map] at hx
       obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
-      have := (hm y hy).subst σ
+      have := (hm y hy).subst hS σ
       simpa [Ty.subst_app, objSlots_subst] using this
   | ctor hlen _ ih =>
     refine .ctor (by simpa using hlen) ?_
@@ -188,8 +263,8 @@ theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq
-  | get _ hp ih => exact .get ih (by simpa [Pred.subst] using hp.subst σ)
-  | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.subst] using hp.subst σ) ihv
+  | get _ hp ih => exact .get ih (by simpa [Pred.subst] using hp.substS hS σ)
+  | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.subst] using hp.substS hS σ) ihv
   | @spread _ _ _ _ _ _ _ ps ks τs _ hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
     simp only [Ty.subst_app] at ih₁ ih₂ ⊢
     refine .spread (ps := ps.map (·.subst σ)) (ks := ks.map (·.subst σ)) (τs := τs.map (·.subst σ))
@@ -198,26 +273,36 @@ theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
     · simpa [slots3_subst] using ih₂
     · rw [← mergePreds_subst] at hp
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-      exact (hm q hq).subst σ
+      exact (hm q hq).substS hS σ
   | arr _ ih => exact .arr ih
   | arrCheck hT hT₀ _ ih =>
-    have hf := Ty.ftv_nil_of_whnf hT hT₀
-    simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.flatMap_nil, List.append_nil] at hf
-    rw [Ty.closed_subst hT₀]
-    exact .arrCheck hT hT₀ (fun e he => by simpa [Ty.closed_subst hf] using ih e he)
-  | index _ _ hp ihe ihi => exact .index ihe ihi (by simpa [Pred.subst] using hp.subst σ)
+    exact .arrCheck (Ty.whnf_subst_of_app hT σ) (hS.closed σ hT₀) (fun e he => by simpa using ih e he)
+  | index _ _ hp ihe ihi => exact .index ihe ihi (by simpa [Pred.subst] using hp.substS hS σ)
   | setIndex _ _ hp hw _ ihe ihi ihv =>
-    exact .setIndex ihe ihi (by simpa [Pred.subst] using hp.subst σ)
-      (by simpa [Pred.subst] using hw.subst σ) ihv
+    exact .setIndex ihe ihi (by simpa [Pred.subst] using hp.substS hS σ)
+      (by simpa [Pred.subst] using hw.substS hS σ) ihv
   | mcall _ hp hlen _ ihe iha =>
-    refine .mcall ihe (by simpa [Pred.subst] using hp.subst σ) (by simpa using hlen)
+    refine .mcall ihe (by simpa [Pred.subst] using hp.substS hS σ) (by simpa using hlen)
       (fun p hp => ?_)
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq
   | conv _ he ih => exact .conv ih (he.subst σ)
   | inj _ hT hi ih =>
-    rw [Ty.subst_id (fun x hx => by rw [hT] at hx; cases hx)]
-    exact .inj ih hT (by simpa [Pred.subst] using hi.subst σ)
+    exact .inj ih (hS.closed σ hT) (by rw [← hS.injPred σ _ hT]; exact hi.substS hS σ)
+
+/-- The narrow system survives substitution. -/
+theorem Sys.narrow_substable : Sys.narrow.Substable where
+  inst σ := fun h => InstEq.subst σ h
+  closed σ := fun {T} hT => by
+    show (T.subst σ).ftv = []
+    rw [Ty.closed_subst hT]; exact hT
+  injPred σ τ := fun {T} hT => by
+    show Pred.subst σ ⟨.inject T, [τ]⟩ = ⟨.inject (T.subst σ), [τ.subst σ]⟩
+    simp [Pred.subst, Ty.closed_subst hT]
+
+theorem HasTypeS.subst' (σ : Subst) (h : HasType L C Γ R rm md e τ) :
+    HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) rm md e
+      (τ.subst σ) := h.subst Sys.narrow_substable σ
 
 end Inty
