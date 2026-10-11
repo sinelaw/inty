@@ -331,7 +331,7 @@ def incBody : Expr :=
   .seq (.set (.var 1) "value" (.binop .plus (.get (.var 1) "value") (num 1))) (.ret (.var 1))
 
 /-- `const c = {value: 0, inc: function () {…}}`. -/
-def counter : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody]
+def counter : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] []
 
 /-- `c.inc().inc().value`: `inc`'s `this` is the receiver's type, which holds
 `inc`, so it is recursive (`μt. {value: Number, inc: (this: t) => t}`), and
@@ -346,8 +346,42 @@ def chained : Expr := .let_ false counter (.get (.mcall (.mcall (.var 0) "inc" [
 #guard inferProgram (.let_ false counter (.app (.get (.var 0) "inc") [])) == none
 
 -- A method that doesn't use `this` can be called outside its object.
-#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)]) (.app (.get (.var 0) "m") [])) ==
+#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] []) (.app (.get (.var 0) "m") [])) ==
   some .number
+
+/-! A method written `inc() {…}` runs as `inc: function () {…}` does, but
+its `this` is the literal's type, as inty types it (`shared_this`). -/
+
+/-- `const c = {value: 0, inc() {…}}`. -/
+def counterM : Expr := .obj ["value", "inc"] [num 0, .func 0 incBody] ["inc"]
+
+#guard inferProgram (.let_ false counterM (.get (.mcall (.mcall (.var 0) "inc" []) "inc" []) "value"))
+  == some .number
+
+-- Even a method that doesn't use `this` needs its object as the receiver.
+#guard inferProgram (.let_ false (.obj ["m"] [.func 0 (num 1)] ["m"]) (.app (.get (.var 0) "m") []))
+  == none
+
+-- `({v: "s", m: o.m}).m()`, `o` being `{v: 1, m() { return this.v; }}`: the
+-- other object isn't of `o`'s type, so the call is rejected, though it
+-- would run; with `m: function () {…}` it is accepted.
+#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] ["m"])
+  (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] []) "m" [])) == none
+#guard inferProgram (.let_ false (.obj ["v", "m"] [num 1, .func 0 (.get (.var 1) "v")] [])
+  (.mcall (.obj ["v", "m"] [str "s", .get (.var 0) "m"] []) "m" [])) == some .string
+
+/-- `class C { constructor(v) { this.v = v; } get() { return this.v; } }`,
+which inty lowers to a factory returning the instance, its methods written
+as methods: `function C(v) { return {v: v, get() { return this.v; }}; }`.
+`new C(…)` is a call of it. -/
+def classC : Expr := .func 1 (.obj ["v", "get"] [.var 0, .func 0 (.get (.var 1) "v")] ["get"])
+
+#guard inferProgram (.let_ false classC (.mcall (.app (.var 0) [num 1]) "get" [])) == some .number
+#guard match eval 20 [] [] (.let_ false classC (.mcall (.app (.var 0) [str "a"]) "get" [])) with
+  | .ok (.string s) => s == "a" | _ => false
+-- A copy of an instance with another field isn't an instance.
+#guard inferProgram (.let_ false classC
+  (.mcall (.spread (.app (.var 0) [num 1]) (.obj ["w"] [num 2] [])) "get" [])) == none
 
 -- `function f(x) { return f; }; f(1)(2) - 1`: `f` returns itself, a
 -- recursive function type, so `f(1)(2)` is `f`, not a number.

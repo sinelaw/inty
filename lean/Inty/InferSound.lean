@@ -281,6 +281,61 @@ theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound L 
     · exact ha
     · exact has.2 p hp
 
+/-- What `methodThis` finds: each method is a function, whose `this` it
+lists. -/
+theorem methodThis_spec {ms : List String} :
+    ∀ {ps : List (String × Ty)} {θs : List Ty}, methodThis ms ps = some θs →
+      ∀ p ∈ ps, p.1 ∈ ms → ∃ θ a b, p.2 = .fn θ a b ∧ θ ∈ θs
+  | [], _, _, p, hp, _ => by cases hp
+  | (l, τ) :: rest, θs, h, p, hp, hpm => by
+    simp only [methodThis] at h
+    split at h
+    · split at h
+      · rename_i θ a b
+        cases hr : methodThis ms rest with
+        | none => simp [hr] at h
+        | some θs' =>
+          simp only [hr, Option.map_some, Option.some.injEq] at h; subst h
+          rcases List.mem_cons.mp hp with rfl | hp
+          · exact ⟨θ, b, a, rfl, List.mem_cons_self⟩
+          · obtain ⟨θ', a', b', h₁, h₂⟩ := methodThis_spec hr p hp hpm
+            exact ⟨θ', a', b', h₁, List.mem_cons_of_mem _ h₂⟩
+      · cases h
+    · rename_i hl
+      rcases List.mem_cons.mp hp with rfl | hp
+      · exact absurd hpm hl
+      · exact methodThis_spec h p hp hpm
+
+/-- Each `this` `methodThis` lists is a method's. -/
+theorem methodThis_mem {ms : List String} :
+    ∀ {ps : List (String × Ty)} {θs : List Ty}, methodThis ms ps = some θs →
+      ∀ θ ∈ θs, ∃ p ∈ ps, ∃ a b, p.2 = .fn θ a b
+  | [], θs, h, θ, hθ => by simp only [methodThis, Option.some.injEq] at h; subst h; cases hθ
+  | (l, τ) :: rest, θs, h, θ, hθ => by
+    simp only [methodThis] at h
+    split at h
+    · split at h
+      · rename_i θ₀ a b
+        cases hr : methodThis ms rest with
+        | none => simp [hr] at h
+        | some θs' =>
+          simp only [hr, Option.map_some, Option.some.injEq] at h; subst h
+          rcases List.mem_cons.mp hθ with rfl | hθ
+          · exact ⟨_, List.mem_cons_self, b, a, rfl⟩
+          · obtain ⟨p, hp, h'⟩ := methodThis_mem hr θ hθ
+            exact ⟨p, List.mem_cons_of_mem _ hp, h'⟩
+      · cases h
+    · obtain ⟨p, hp, h'⟩ := methodThis_mem h θ hθ
+      exact ⟨p, List.mem_cons_of_mem _ hp, h'⟩
+
+/-- With no field written as a method, `methodThis` lists nothing. -/
+theorem methodThis_none {ms : List String} :
+    ∀ {ps : List (String × Ty)}, (∀ p ∈ ps, p.1 ∉ ms) → methodThis ms ps = some []
+  | [], _ => rfl
+  | (l, τ) :: rest, h => by
+    simp only [methodThis, h (l, τ) List.mem_cons_self, ↓reduceIte]
+    exact methodThis_none (fun p hp => h p (List.mem_cons_of_mem _ hp))
+
 /-- Pairs with equal second components, when the property they have is
 invariant under that. -/
 theorem zip_conv {P : Expr → Ty → Prop} :
@@ -658,7 +713,7 @@ theorem infer_sound :
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hb hf ⊢
     exact .tryFinally hb hf
 
-  | obj ls es ih =>
+  | obj ls es ms ih =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
     split at h
@@ -668,11 +723,57 @@ theorem infer_sound :
     split at h
     · cases h
     rename_i o₁ h₁
-    simp only [Option.some.injEq] at h; subst h
-    have ha := inferArgs_sound es ih h₁ φ C hsat
-    simp only [Ty.subst_app, objSlots_subst]
-    exact .obj (by simp [ha.1, hcond.2]) (by simp [varBlock])
-      (fun l hl => by simpa using List.all_eq_true.mp hcond.1 l hl) hcond.2 ha.2
+    have hL : ∀ l ∈ ls, l ∈ L := fun l hl => by simpa using List.all_eq_true.mp hcond.1 l hl
+    split at h
+    · cases h
+    · -- No field is a method.
+      rename_i hm
+      simp only [Option.some.injEq] at h; subst h
+      have ha := inferArgs_sound es ih h₁ φ C hsat
+      simp only [Ty.subst_app, objSlots_subst]
+      refine .obj (by simp [ha.1, hcond.2]) (by simp [varBlock]) hL hcond.2 ha.2 ?_
+      intro p hp hpm
+      rw [List.zip_map_right] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      obtain ⟨θ, _, _, _, hθ⟩ := methodThis_spec hm q hq hpm
+      cases hθ
+    · rename_i θ θs hm
+      split at h
+      · cases h
+      rename_i σ₁ hu₁
+      split at h
+      · cases h
+      rename_i σ₂ hu₂
+      simp only [Option.some.injEq] at h; subst h
+      simp only [Sat.map] at hsat
+      have ha := inferArgs_sound es ih h₁ _ C hsat
+      -- Each method's `this` is `θ`'s, then the literal's type.
+      have h₁' := unify_sound hu₁
+      simp only [Ty.subst_app, List.map_replicate] at h₁'
+      obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp h₁'
+      have hthis : ∀ θ' ∈ θ :: θs, ∀ ψ : Subst,
+          TyEq (θ'.subst (Subst.compose ψ (Subst.compose σ₂ σ₁)))
+            ((Ty.record L (objSlots L ls o₁.τs (varBlock o₁.next L.length))).subst
+              (Subst.compose ψ (Subst.compose σ₂ σ₁))) := by
+        intro θ' hθ' ψ
+        have hz' := hz (θ'.subst σ₁, θ.subst σ₁) (by
+          have := mem_zip_replicate (b := θ.subst σ₁) (List.mem_map_of_mem (f := (·.subst σ₁)) hθ')
+          simpa using this)
+        simp only [Ty.subst_compose]
+        exact ((hz'.subst σ₂).trans (unify_sound hu₂)).subst ψ
+      simp only [Ctx.subst_compose, Ret.subst_compose] at ha ⊢
+      rw [← Ty.subst_compose]
+      simp only [Ty.subst_app, objSlots_subst]
+      refine .obj (by simp [ha.1, hcond.2]) (by simp [varBlock]) hL hcond.2 ha.2 ?_
+      intro p hp hpm
+      rw [List.zip_map_right] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      obtain ⟨θ', a, b, hq₂, hθ'⟩ := methodThis_spec hm q hq hpm
+      have := hthis θ' hθ' φ
+      simp only [Ty.subst_app, objSlots_subst] at this
+      refine ⟨_, a.map (·.subst (Subst.compose φ (Subst.compose σ₂ σ₁))),
+        b.subst (Subst.compose φ (Subst.compose σ₂ σ₁)), ?_, this⟩
+      simp only [Prod.map_snd, hq₂, Ty.subst_fn]
   | get e l ih =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h

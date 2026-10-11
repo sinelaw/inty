@@ -68,6 +68,13 @@ def Scheme.Simple (s : Scheme) : Prop :=
       ∃ i < s.arity, ∃ rest, p.args = .bound i :: rest) ∨
     ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < s.arity
 
+/-- The fields of an object literal written as methods (those labelled in
+`ms`) are functions whose `this` is the literal's type `T`, up to
+unfolding: inty infers them with one `this` that it unifies with the
+literal's type (`shared_this` in `infer_object`). -/
+def MethodsThis (ms ls : List String) (τs : List Ty) (T : Ty) : Prop :=
+  ∀ p ∈ ls.zip τs, p.1 ∈ ms → ∃ θ ps ρ, p.2 = .fn θ ps ρ ∧ TyEq θ T
+
 /-- The typing judgement: with records over the program's labels `L`, under
 the class assumptions `C`, the context `Γ` and the enclosing function's
 return type `R` (`none` at the top level), `e` has type `τ`. -/
@@ -141,10 +148,12 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   | tryFinally : HasType L C Γ R body τ → HasType L C Γ R fin τf →
       HasType L C Γ R (.tryFinally body fin) τ
   /-- An object literal has a record type over the program's labels, with
-  its fields present (`objSlots`). -/
+  its fields present (`objSlots`). A field written as a method is a
+  function whose `this` is the literal's type (`MethodsThis`). -/
   | obj : τs.length = ls.length → absent.length = L.length → (∀ l ∈ ls, l ∈ L) →
       es.length = ls.length → (∀ p ∈ es.zip τs, HasType L C Γ R p.1 p.2) →
-      HasType L C Γ R (.obj ls es) (.record L (objSlots L ls τs absent))
+      MethodsThis ms ls τs (.record L (objSlots L ls τs absent)) →
+      HasType L C Γ R (.obj ls es ms) (.record L (objSlots L ls τs absent))
   /-- `e.l` reads a field of `e`'s type, `HasProp l τ σ`: a present field of
   a record, or what a scheme's constraint promises. -/
   | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ →
@@ -225,7 +234,8 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
       HasTypeTop L C Γ R (.tryFinally body fin) τ
   | obj : τs.length = ls.length → absent.length = L.length → (∀ l ∈ ls, l ∈ L) →
       es.length = ls.length → (∀ p ∈ es.zip τs, HasType L C Γ R p.1 p.2) →
-      HasTypeTop L C Γ R (.obj ls es) (.record L (objSlots L ls τs absent))
+      MethodsThis ms ls τs (.record L (objSlots L ls τs absent)) →
+      HasTypeTop L C Γ R (.obj ls es ms) (.record L (objSlots L ls τs absent))
   | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ →
       HasTypeTop L C Γ R (.get e l) σ
   | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite, [τ]⟩ →
@@ -323,10 +333,12 @@ inductive HasType₀ (L : List String) : List Pred → Ctx → Option Ty → Exp
   | tryFinally : HasType₀ L C Γ R body τ → HasType₀ L C Γ R fin τf →
       HasType₀ L C Γ R (.tryFinally body fin) τ
   /-- An object literal has a record type over the program's labels, with
-  its fields present (`objSlots`). -/
+  its fields present (`objSlots`). None of its fields is written as a
+  method, whose `this` would make its type recursive. -/
   | obj : τs.length = ls.length → absent.length = L.length → (∀ l ∈ ls, l ∈ L) →
       es.length = ls.length → (∀ p ∈ es.zip τs, HasType₀ L C Γ R p.1 p.2) →
-      HasType₀ L C Γ R (.obj ls es) (.record L (objSlots L ls τs absent))
+      (∀ l ∈ ls, l ∉ ms) →
+      HasType₀ L C Γ R (.obj ls es ms) (.record L (objSlots L ls τs absent))
   /-- `e.l` reads a field of `e`'s type, `HasProp l τ σ`: a present field of
   a record, or what a scheme's constraint promises. -/
   | get : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, σ]⟩ →
@@ -381,7 +393,8 @@ theorem HasType₀.hasType (h : HasType₀ L C Γ R e τ) : HasType L C Γ R e �
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb ihh
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
-  | obj hτs habs hL hes _ ih => exact .obj hτs habs hL hes ih
+  | obj hτs habs hL hes _ hms ih =>
+    exact .obj hτs habs hL hes ih (fun p hp hm => absurd hm (hms _ (List.of_mem_zip hp).1))
   | get _ hp ih => exact .get ih hp.entails
   | set _ hp hw _ ihe ihv => exact .set ihe hp.entails hw.entails ihv
   | spread hps hτs hss hrs _ _ hm ih₁ ih₂ =>
@@ -411,7 +424,7 @@ theorem HasType.top (h : HasType L C Γ R e τ) : ∃ τ₀, TyEq τ₀ τ ∧ H
   | continue_ => exact ⟨_, .refl _, .continue_⟩
   | tryCatch hb hh => exact ⟨_, .refl _, .tryCatch hb hh⟩
   | tryFinally hb hf => exact ⟨_, .refl _, .tryFinally hb hf⟩
-  | obj hτs habs hL hes hargs => exact ⟨_, .refl _, .obj hτs habs hL hes hargs⟩
+  | obj hτs habs hL hes hargs hm => exact ⟨_, .refl _, .obj hτs habs hL hes hargs hm⟩
   | get he hp => exact ⟨_, .refl _, .get he hp⟩
   | set he hp hw hv => exact ⟨_, .refl _, .set he hp hw hv⟩
   | spread hps hτs hss hrs h₁ h₂ hm => exact ⟨_, .refl _, .spread hps hτs hss hrs h₁ h₂ hm⟩

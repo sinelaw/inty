@@ -5,8 +5,9 @@ no Mathlib). It covers a small core calculus, with let-polymorphism under the
 value restriction, type schemes that carry class constraints (inty's
 `<a> where Plus a => (a, a) => a`), a heap with `let` and assignment,
 loops, `break`, `continue` and `try`, objects with row-polymorphic record
-types and property constraints (`a has {name: b}`), method calls and
-equi-recursive types, a
+types and property constraints (`a has {name: b}`), method calls, methods
+written `m() {…}` and the classes inty lowers to them, equi-recursive
+types, a
 complete type-soundness proof, and an executable type-inference algorithm
 proved sound and complete. It is laid out so
 that each inty feature can be added the way it is added to the Rust code: a
@@ -78,7 +79,8 @@ gets stuck.
 whenever one exists, one of which every valid type is an instance (Damas
 and Milner's completeness; the freshness invariants follow Naraschewski and
 Nipkow's proof of algorithm W), for `HasType₀`, the judgement with types
-compared syntactically (no conversion up to unfolding, no method calls),
+compared syntactically (no conversion up to unfolding, no method calls, no
+fields written as methods),
 which embeds in `HasType` (`HasType₀.hasType`):
 
 ```
@@ -120,7 +122,8 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 | `Ty`: a type variable, a constructor (`Con`) applied to types (`number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type), `array`), or the `i`-th type of a system of recursive equations (`mu i sys`, right-hand sides `RTy` referring to the system's types as `self j`) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`; a `mu` is a `Type::Named` with its equation in `InferState::named_types`) |
 | `TyEq` (`Inty/Equi.lean`): equality up to unfolding, as the unfolded trees' finite approximations | `unify` on `Named` types (`unroll_named`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals, property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals (a field may be written as a method, `l(…) {…}`, whose `this` is the literal's type: `MethodsThis`), property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
+| A class without `extends`: a factory function returning an object literal whose methods are written as methods, `new C(…)` a call of it (`classC` in `Inty/Examples.lean`) | the class lowering, `parse_class_declaration_named` in `src/frontends/javascript/parser` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style, with a conversion rule between equal types); `HasType₀`, its syntactic fragment | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
@@ -370,6 +373,17 @@ them found a soundness bug: unifying a recursive type against a
 structural one memoised the unfolding by the recursive type's id alone,
 so `function f(x) { return f; }` was accepted at
 `(x: Number) => (y: Number) => Number` and `k(1)(2) - 1` computed `NaN`.
+
+The generator writes an object's function field as a method, `m() {…}`,
+half the time it doesn't refer to itself, with about 280 accepted
+programs with such a method per 5,000. Modelling methods and the classes
+inty lowers to them found two more ways inty accepted programs that
+crash, both in classes: a subclass's instances ran its base's methods,
+which were checked with the base's instance as `this` (`{label: 5,
+...this}.label - 1` in the base read the subclass's string label), and a
+method read a constructor parameter where JavaScript reads the variable
+outside the class. inty now rejects `extends`, and a method or field
+initialiser that reads a name which is a constructor parameter.
 
 Each row is recognised from evidence, not guessed: a union in the
 types inty gave the program's expressions, inty accepting the program

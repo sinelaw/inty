@@ -53,6 +53,11 @@ enum Core {
     /// `function f(x₀, …, xₙ₋₁) { body }`: in `body`, `i < n` is `xᵢ`, `n`
     /// is `f` and `n + 1` is `this`.
     Func(usize, Box<Core>),
+    /// A method `l(x₀, …) { body }`, only as an object literal's field:
+    /// it runs as `l: function (…) { body }` does, but has no name of its
+    /// own (its body never refers to variable `n`), and inty types its
+    /// `this` as the literal itself.
+    Method(usize, Box<Core>),
     /// A call outside any receiver, so `this` is `undefined`.
     App(Box<Core>, Vec<Core>),
     /// `const v = e₁; e₂` (`false`) or `let v = e₁; e₂` (`true`); only in
@@ -115,7 +120,7 @@ fn wire(e: &Core) -> String {
         Undef => "(undef)".into(),
         Null => "(null)".into(),
         Var(i) => format!("(var {})", i),
-        Func(n, body) => format!("(func {} {})", n, wire(body)),
+        Func(n, body) | Method(n, body) => format!("(func {} {})", n, wire(body)),
         App(f, args) => {
             let args: Vec<String> = args.iter().map(wire).collect();
             format!(
@@ -149,7 +154,14 @@ fn wire(e: &Core) -> String {
         Obj(fields) => {
             let fields: Vec<String> = fields
                 .iter()
-                .map(|(l, e)| format!(" (field s:{} {})", l, wire(e)))
+                .map(|(l, e)| {
+                    let kind = if matches!(e, Method(..)) {
+                        "method"
+                    } else {
+                        "field"
+                    };
+                    format!(" ({} s:{} {})", kind, l, wire(e))
+                })
                 .collect();
             format!("(obj{})", fields.concat())
         }
@@ -198,6 +210,7 @@ fn fractional(e: &Core) -> Core {
     match e {
         Num(m, x) => Num(m * 10 + 5, x + 1),
         Func(n, body) => Func(*n, f(body)),
+        Method(n, body) => Method(*n, f(body)),
         App(x, args) => App(f(x), args.iter().map(fractional).collect()),
         Let(m, x, y) => Let(*m, f(x), f(y)),
         Assign(i, x) => Assign(*i, f(x)),
@@ -262,31 +275,10 @@ impl Js {
             Null => "null".into(),
             Var(i) => self.name(*i),
             Func(n, body) => {
-                let f = self.fresh("f");
-                let xs: Vec<String> = (0..*n).map(|_| self.fresh("x")).collect();
-                // `this` is printed as `this` where it is the innermost
-                // function's; a function inside it that refers to it
-                // needs an alias.
-                let alias = refers_from_inner(body, n + 1, false).then(|| self.fresh("t"));
-                self.names
-                    .push(alias.clone().unwrap_or_else(|| "this".into()));
-                self.names.push(f.clone());
-                for x in xs.iter().rev() {
-                    self.names.push(x.clone());
-                }
-                let body = self.stmts(body, "return ");
-                self.names.truncate(self.names.len() - n - 2);
-                let prelude = alias
-                    .map(|t| format!("const {t} = this; "))
-                    .unwrap_or_default();
-                format!(
-                    "(function {}({}) {{ {}{} }})",
-                    f,
-                    xs.join(", "),
-                    prelude,
-                    body
-                )
+                let (f, rest) = self.function(*n, body);
+                format!("(function {}{})", f, rest)
             }
+            Method(..) => unreachable!("a method only as an object literal's field: {e:?}"),
             App(f, args) => {
                 let args: Vec<String> = args.iter().map(|a| self.expr(a)).collect();
                 // A call of a property is a method call in JavaScript,
@@ -312,7 +304,11 @@ impl Js {
             Obj(fields) => {
                 let fields: Vec<String> = fields
                     .iter()
-                    .map(|(l, e)| format!("{}: {}", l, self.expr(e)))
+                    .map(|(l, e)| match e {
+                        // `l(…) { … }`: the function's name is never used.
+                        Method(n, body) => format!("{}{}", l, self.function(*n, body).1),
+                        _ => format!("{}: {}", l, self.expr(e)),
+                    })
                     .collect();
                 format!("({{{}}})", fields.join(", "))
             }
@@ -333,6 +329,27 @@ impl Js {
                 format!("({}).{}({})", obj, l, args.join(", "))
             }
         }
+    }
+
+    /// A function's name, then its parameters and body, `(x₀, …) { … }`.
+    fn function(&mut self, n: usize, body: &Core) -> (String, String) {
+        let f = self.fresh("f");
+        let xs: Vec<String> = (0..n).map(|_| self.fresh("x")).collect();
+        // `this` is printed as `this` where it is the innermost function's;
+        // a function inside it that refers to it needs an alias.
+        let alias = refers_from_inner(body, n + 1, false).then(|| self.fresh("t"));
+        self.names
+            .push(alias.clone().unwrap_or_else(|| "this".into()));
+        self.names.push(f.clone());
+        for x in xs.iter().rev() {
+            self.names.push(x.clone());
+        }
+        let body = self.stmts(body, "return ");
+        self.names.truncate(self.names.len() - n - 2);
+        let prelude = alias
+            .map(|t| format!("const {t} = this; "))
+            .unwrap_or_default();
+        (f, format!("({}) {{ {}{} }}", xs.join(", "), prelude, body))
     }
 
     /// A program or function body: statements, then `last` and the value
@@ -395,7 +412,7 @@ impl Js {
 fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
     match e {
         Var(j) => inner && *j == i,
-        Func(n, body) => refers_from_inner(body, i + n + 2, true),
+        Func(n, body) | Method(n, body) => refers_from_inner(body, i + n + 2, true),
         Let(_, x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
         Assign(j, x) => (inner && *j == i) || refers_from_inner(x, i, inner),
         App(f, args) => {
@@ -817,7 +834,8 @@ impl Gen {
             } else {
                 Ret(b(Var(1)))
             };
-            fields.push(("m".into(), Func(0, b(body))));
+            let m = self.method(0, body);
+            fields.push(("m".into(), m));
             let (l, _) = data.iter().find(|(_, u)| u == t).unwrap().clone();
             let calls = 1 + self.rng.below(2);
             let mut e = Obj(fields);
@@ -839,12 +857,24 @@ impl Gen {
         self.loops.pop();
         self.funcs.pop();
         scope.truncate(scope.len() - n - 2);
-        fields.push(("m".into(), Func(n, b(body))));
+        let m = self.method(n, body);
+        fields.push(("m".into(), m));
         if fields.len() > 1 && self.rng.chance(50) {
             fields.reverse();
         }
         let args = ps.iter().map(|p| self.typed(p, d, scope, false)).collect();
         MCall(b(Obj(fields)), "m".into(), args)
+    }
+
+    /// An object literal's function field, of `n` parameters: written as a
+    /// method `m(…) { … }` half the time, when it doesn't refer to itself
+    /// (a method has no name of its own).
+    fn method(&mut self, n: usize, body: Core) -> Core {
+        if !refers_from_inner(&body, n, true) && self.rng.chance(50) {
+            Method(n, b(body))
+        } else {
+            Func(n, b(body))
+        }
     }
 
     /// An array index: mostly a small one, in bounds or just past the end;
@@ -1045,7 +1075,8 @@ impl Gen {
                     self.loops.pop();
                     self.funcs.pop();
                     scope.truncate(scope.len() - k - 2);
-                    fields.push(("m".into(), Func(k, b(body))));
+                    let m = self.method(k, body);
+                    fields.push(("m".into(), m));
                 }
                 Obj(fields)
             }
@@ -1576,6 +1607,11 @@ fn inty_agrees_with_the_lean_model() {
         if wire(&programs[i]).contains("(mcall") && accepted && model_accepted {
             *counts
                 .entry("both accept, with a method call".into())
+                .or_default() += 1;
+        }
+        if wire(&programs[i]).contains("(method ") && accepted && model_accepted {
+            *counts
+                .entry("both accept, with a method written `m() {…}`".into())
                 .or_default() += 1;
         }
 

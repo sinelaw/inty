@@ -84,8 +84,11 @@ inductive Expr where
   and its own abrupt completion, if any, wins. -/
   | tryFinally (body fin : Expr)
   /-- An object literal `{l₀: e₀, …, lₙ₋₁: eₙ₋₁}`: the fields' values, in
-  order, each in a new cell. -/
-  | obj (labels : List String) (es : List Expr)
+  order, each in a new cell. A field whose label is in `methods` is written
+  as a method, `lᵢ(x₀, …) { body }`, its value a function `eᵢ`: it runs
+  as `lᵢ: function (x₀, …) { body }` does, but inty types its `this` as
+  the literal itself (`PropDef::Method`). -/
+  | obj (labels : List String) (es : List Expr) (methods : List String)
   /-- `e.l`: reading a property. -/
   | get (e : Expr) (l : String)
   /-- `e.l = v`: storing `v`'s value in a property, which must exist; the
@@ -130,7 +133,7 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (break_ : motive .break_) (continue_ : motive .continue_)
     (tryCatch : ∀ body handler, motive body → motive handler → motive (.tryCatch body handler))
     (tryFinally : ∀ body fin, motive body → motive fin → motive (.tryFinally body fin))
-    (obj : ∀ ls es, (∀ a ∈ es, motive a) → motive (.obj ls es))
+    (obj : ∀ ls es ms, (∀ a ∈ es, motive a) → motive (.obj ls es ms))
     (get : ∀ e l, motive e → motive (.get e l))
     (set : ∀ e l v, motive e → motive v → motive (.set e l v))
     (spread : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.spread e₁ e₂))
@@ -198,7 +201,7 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
         tryCatch tryFinally obj get set spread arr index setIndex mcall body)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
         tryCatch tryFinally obj get set spread arr index setIndex mcall fin)
-  | .obj ls es => obj ls es (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+  | .obj ls es ms => obj ls es ms (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
         tryCatch tryFinally obj get set spread arr index setIndex mcall a)
   | .get e l => get e l (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
         tryCatch tryFinally obj get set spread arr index setIndex mcall e)
@@ -249,7 +252,7 @@ def Expr.writes (i : Nat) : Expr → Bool
   | .index e₁ e₂ => e₁.writes i || e₂.writes i
   | .break_ | .continue_ => false
   | .tryCatch body handler => body.writes i || handler.writes (i + 1)
-  | .obj _ es | .arr es => Expr.writesList i es
+  | .obj _ es _ | .arr es => Expr.writesList i es
   | .setIndex e j v => e.writes i || j.writes i || v.writes i
   | .get e _ => e.writes i
   | .set e _ v => e.writes i || v.writes i
@@ -281,7 +284,7 @@ def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
   -- What a `catch` binds can be assigned.
   | .tryCatch body handler =>
     body.assignsMutable mutables && handler.assignsMutable (true :: mutables)
-  | .obj _ es | .arr es => Expr.assignsMutableList mutables es
+  | .obj _ es _ | .arr es => Expr.assignsMutableList mutables es
   | .setIndex e i v => e.assignsMutable mutables && i.assignsMutable mutables &&
       v.assignsMutable mutables
   | .get e _ => e.assignsMutable mutables
@@ -306,7 +309,7 @@ def Expr.jumpsInLoop (inLoop : Bool) : Expr → Bool
   | .cond c t e => c.jumpsInLoop inLoop && t.jumpsInLoop inLoop && e.jumpsInLoop inLoop
   | .while_ c body => c.jumpsInLoop inLoop && body.jumpsInLoop true
   | .break_ | .continue_ => inLoop
-  | .obj _ es | .arr es => Expr.jumpsInLoopList inLoop es
+  | .obj _ es _ | .arr es => Expr.jumpsInLoopList inLoop es
   | .setIndex e i v => e.jumpsInLoop inLoop && i.jumpsInLoop inLoop && v.jumpsInLoop inLoop
   | .get e _ => e.jumpsInLoop inLoop
   | .set e _ v => e.jumpsInLoop inLoop && v.jumpsInLoop inLoop

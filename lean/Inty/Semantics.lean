@@ -378,7 +378,7 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
       | (.ok _, c₂, h₂) => (r, c₂, h₂)
       | p => p
   -- The fields in order, then a cell for each.
-  | .obj ls es =>
+  | .obj ls es _ =>
     bindArgs (runArgs clock env heap es) fun vs c₁ h₁ =>
       (.ok (.obj h₁.length), c₁, h₁ ++ [objFields ls vs])
   | .get e l => bindC (run clock env heap e) fun v c₁ h₁ => (v.getProp h₁ l, c₁, h₁)

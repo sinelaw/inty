@@ -35,6 +35,15 @@ theorem objSlots_subst (σ : Subst) (L ls : List String) (τs absent : List Ty) 
   generalize Ty.field l ls.reverse τs.reverse = o
   cases o <;> simp
 
+/-- Methods keep their `this` under a substitution. -/
+theorem MethodsThis.subst (σ : Subst) {ms ls : List String} {τs : List Ty} {T : Ty}
+    (h : MethodsThis ms ls τs T) : MethodsThis ms ls (τs.map (·.subst σ)) (T.subst σ) := by
+  intro p hp hm
+  rw [List.zip_map_right] at hp
+  obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+  obtain ⟨θ, ps, ρ, hq₂, he⟩ := h q hq hm
+  exact ⟨θ.subst σ, ps.map (·.subst σ), ρ.subst σ, by simp [hq₂], he.subst σ⟩
+
 theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
     HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) := by
   induction h with
@@ -84,9 +93,10 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
-  | obj hτs habs hL hes _ ih =>
-    simp only [Ty.subst_app, objSlots_subst]
-    refine .obj (by simpa using hτs) (by simpa using habs) hL hes (fun p hp => ?_)
+  | obj hτs habs hL hes _ hm ih =>
+    have hm' := hm.subst σ
+    simp only [Ty.subst_app, objSlots_subst] at hm' ⊢
+    refine .obj (by simpa using hτs) (by simpa using habs) hL hes (fun p hp => ?_) hm'
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact ih q hq
@@ -165,9 +175,9 @@ theorem HasType₀.subst (σ : Subst) (h : HasType₀ L C Γ R e τ) :
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
-  | obj hτs habs hL hes _ ih =>
+  | obj hτs habs hL hes _ hms ih =>
     simp only [Ty.subst_app, objSlots_subst]
-    refine .obj (by simpa using hτs) (by simpa using habs) hL hes (fun p hp => ?_)
+    refine .obj (by simpa using hτs) (by simpa using habs) hL hes (fun p hp => ?_) hms
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact ih q hq

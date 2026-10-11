@@ -1581,12 +1581,12 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
             · exact ⟨by simp only; omega, .inr ⟨W₂, hW₁.trans hW₂, hH₂, outcome_mono hs hc₂ hW₂⟩⟩
           all_goals exact (Safe.retype ⟨hc₂, hq⟩ (by simp)).weaken hc₁ hW₁
 
-  | obj ls es ih =>
+  | obj ls es ms ih =>
     intro k C Γ R W env h τ ht hC hG hH
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
     refine Safe.tyEq ?_ hτ₀
     cases ht with
-    | @obj _ _ _ _ _ τs absent hτs habs hL hes hargs =>
+    | @obj _ _ _ _ _ τs absent _ hτs habs hL hes hargs _ =>
       simp only [run]
       refine Safe.bindArgs (runArgs_sound hC es _ ih (by omega) hargs hG hH)
         fun vs W₁ _ hW₁ hH₁ hvs => ?_

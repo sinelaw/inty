@@ -231,6 +231,18 @@ def letScheme (gen : Bool) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds 
       preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
   else (.mono τ₁, preds)
 
+/-- The `this` type of each field written as a method (labelled in `ms`),
+given the fields' labels and types; `none` if one of them isn't a
+function. -/
+def methodThis (ms : List String) : List (String × Ty) → Option (List Ty)
+  | [] => some []
+  | (l, τ) :: rest =>
+    if l ∈ ms then
+      match τ with
+      | .fn θ _ _ => (methodThis ms rest).map (θ :: ·)
+      | _ => none
+    else methodThis ms rest
+
 /-- The result of inferring a list of arguments: a substitution, each
 argument's type under it, the class constraints, and the next unused type
 variable. -/
@@ -432,13 +444,29 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
           o₂.next⟩
   -- An object literal over the labels `L`: its fields present, the other
   -- labels absent, at fresh types.
-  | Γ, R, .obj ls es, n =>
+  -- A field written as a method is a function whose `this` is the
+  -- literal's type: the methods' `this`s are unified with each other, then
+  -- with the literal's type, which makes it recursive (inty's
+  -- `shared_this`, unified with the literal's type in `infer_object`).
+  | Γ, R, .obj ls es ms, n =>
     if ls.all (· ∈ L) ∧ es.length = ls.length then
       match inferArgs Γ R es n with
       | none => none
       | some o =>
-        some ⟨o.σ, .record L (objSlots L ls o.τs (varBlock o.next L.length)), o.preds,
-          o.next + L.length⟩
+        let T := Ty.record L (objSlots L ls o.τs (varBlock o.next L.length))
+        match methodThis ms (ls.zip o.τs) with
+        | none => none
+        | some [] => some ⟨o.σ, T, o.preds, o.next + L.length⟩
+        | some (θ :: θs) =>
+          match unify (.tuple (θ :: θs)) (.tuple (List.replicate (θs.length + 1) θ)) with
+          | none => none
+          | some σ₁ =>
+            match unify (θ.subst σ₁) (T.subst σ₁) with
+            | none => none
+            | some σ₂ =>
+              let σ' := Subst.compose σ₂ σ₁
+              some ⟨Subst.compose σ' o.σ, T.subst σ', o.preds.map (·.subst σ'),
+                o.next + L.length⟩
     else none
   -- `e.l` on a receiver of any type: `HasProp l τ β`, for a fresh `β`.
   | Γ, R, .get e l, n =>
@@ -581,7 +609,7 @@ def Expr.labels : Expr → List String
   | .let_ _ a b | .binop _ a b | .seq a b | .while_ a b | .tryCatch a b | .tryFinally a b =>
     a.labels ++ b.labels
   | .cond a b c => a.labels ++ b.labels ++ c.labels
-  | .obj ls es => ls ++ Expr.labelsList es
+  | .obj ls es _ => ls ++ Expr.labelsList es
   | .get e l => l :: e.labels
   | .set e l v => l :: (e.labels ++ v.labels)
   | .spread a b | .index a b => a.labels ++ b.labels

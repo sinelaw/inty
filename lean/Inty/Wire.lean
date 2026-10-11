@@ -14,7 +14,8 @@ JavaScript and for this model as an s-expression, one program per line:
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
-(obj (field s:x E) …)   an object literal     (get E s:x)   (set E s:x V)
+(obj (field s:x E) (method s:m F) …)   an object literal, a `method` field
+               written `m(…) {…}`, its value F a function   (get E s:x)   (set E s:x V)
 (spread A B)   `{...A, ...B}`
 (arr E₀ E₁ …)  `[E₀, E₁, …]`    (index E I)  `E[I]`    (setindex E I V)  `E[I] = V`
 (mcall E s:x A₀ A₁ …)  `E.x(A₀, A₁, …)`
@@ -115,7 +116,7 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     some (.tryFinally b f, rest)
   | "obj", rest => do
     let (fs, rest) ← parseFields rest
-    some (.obj (fs.map Prod.fst) (fs.map Prod.snd), rest)
+    some (.obj (fs.map (·.1)) (fs.map (·.2.1)) ((fs.filter (·.2.2)).map (·.1)), rest)
   | "get", rest => do
     let (e, rest) ← parseExpr rest
     let (l, rest) ← parseLabel rest
@@ -153,17 +154,22 @@ partial def parseLabel : List String → Option (String × List String)
   | l :: rest => if l.startsWith "s:" then some ((l.drop 2).toString, rest) else none
   | [] => none
 
-/-- An object literal's fields, `(field s:x E)` each, up to a closing `)`,
-which is left in place. -/
-partial def parseFields : List String → Option (List (String × Expr) × List String)
+/-- An object literal's fields, `(field s:x E)` or `(method s:x F)` each,
+with whether each is a method, up to a closing `)`, which is left in
+place. -/
+partial def parseFields : List String → Option (List (String × Expr × Bool) × List String)
   | ")" :: rest => some ([], ")" :: rest)
-  | "(" :: "field" :: ts => do
+  | "(" :: kind :: ts => do
+    let isMethod ← match kind with
+      | "field" => some false
+      | "method" => some true
+      | _ => none
     let (l, rest) ← parseLabel ts
     let (e, rest) ← parseExpr rest
     match rest with
     | ")" :: rest => do
       let (fs, rest) ← parseFields rest
-      some ((l, e) :: fs, rest)
+      some ((l, e, isMethod) :: fs, rest)
     | _ => none
   | _ => none
 

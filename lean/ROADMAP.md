@@ -311,11 +311,27 @@ touching the generic proofs.
   (`HasType₀`); completeness up to unfolding, and a variable occurring
   inside a nested recursive type (which the model's unifier rejects), are
   still to come.
-- Methods defined with the shorthand `m() {…}`, whose `this` inty ties to
-  the literal's type at once (`shared_this` in `infer_object`).
-- Callable rows (`String`, `String.fromCharCode`); classes lowered as inty
-  lowers them (factory functions, `#private` fields, accessors, `extends`
-  as a spread of the base instance).
+- Done: methods written `m() {…}`. In JavaScript a method's `this` is its
+  receiver at each call, as a `function`'s is; inty types it as the
+  literal's own type (`shared_this` in `infer_object`), which is sound but
+  rejects a method borrowed by an object of another type. The model types
+  it as inty does (`MethodsThis`): soundness covers it, inference unifies
+  the methods' `this`s with each other and then with the literal's type,
+  and completeness covers literals without such methods.
+- Done: classes without `extends`. inty lowers a class to a factory taking
+  the constructor's parameters and returning an object literal whose
+  methods are written as methods, and `new C(…)` to a call, which the
+  model expresses as it is (`classC` in `Inty/Examples.lean`). Inheritance
+  is out of scope: inty rejects `extends`, since a base method, checked
+  with the base's instance as `this`, isn't safe on a subclass instance,
+  which has more fields. inty also rejects a method or class-body field
+  initialiser that reads a name which is a constructor parameter, which
+  the lowering would make it read.
+- Still to come for classes: getters (a field whose value is a body run
+  with the instance as `this` at each read), class-body field initialisers
+  that read `this`, `#private` fields (labels JavaScript can't write), and
+  inty's nominal class types (a brand only rejects more programs).
+- Callable rows (`String`, `String.fromCharCode`).
 
 ### 7. Annotations, program structure and the standard library
 

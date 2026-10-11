@@ -236,6 +236,11 @@ example : builtinCtx =
     [⟨1, .fn .undefined [.bound 0] .boolean, []⟩, .mono (.fn .undefined [.number] .number)] :=
   rfl
 
+/-- A field written as a method is a function whose `this` is the
+literal's type, up to unfolding. -/
+example : MethodsThis ms ls τs T ↔
+    ∀ p ∈ ls.zip τs, p.1 ∈ ms → ∃ θ ps ρ, p.2 = .fn θ ps ρ ∧ TyEq θ T := Iff.rfl
+
 /-! ## Programs the typing rules reject -/
 
 private def num (n : Float) : Expr := .lit (.number n)
@@ -320,14 +325,14 @@ example : ¬ HasType L [] [] none (.unop .neg (str "a")) τ := by
     cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
 
 /-- `({x: 1}).y`: an object literal has only its own fields. -/
-example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1]) "y") τ := by
+example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1] []) "y") τ := by
   intro h
   obtain ⟨_, -, h⟩ := h.top
   cases h with
   | get he hp =>
     obtain ⟨_, e₁, he⟩ := he.top
     cases he with
-    | obj hτs _ _ _ _ =>
+    | obj hτs _ _ _ _ _ =>
       rcases hp with ⟨q, hq, hi⟩ | hi
       · cases hi
         case hasProp l ls fs σ' hf =>

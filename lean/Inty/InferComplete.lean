@@ -1180,7 +1180,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
     · exact hp₂ p hp
 
-  | obj ls es ih =>
+  | obj ls es ms ih =>
     intro Γ R n o hΓ hR h
     simp only [infer] at h
     split at h
@@ -1189,12 +1189,38 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     split at h
     · cases h
     rename_i o₁ h₁
-    simp only [Option.some.injEq] at h; subst h
     obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferArgs_inv es ih hΓ hR h₁
     have hle : o₁.next ≤ o₁.next + L.length := Nat.le_add_right _ _
-    refine ⟨Nat.le_trans hn₁ hle, hσ₁.mono hle, ?_, fun p hp => (hp₁ p hp).mono hle⟩
-    exact Ty.Below.app.mpr (objSlots_below (fun τ hτ => (hτs₁ τ hτ).mono hle)
-      (fun τ hτ => varBlock_below τ hτ))
+    have hT : (Ty.record L (objSlots L ls o₁.τs (varBlock o₁.next L.length))).Below
+        (o₁.next + L.length) :=
+      Ty.Below.app.mpr (objSlots_below (fun τ hτ => (hτs₁ τ hτ).mono hle)
+        (fun τ hτ => varBlock_below τ hτ))
+    split at h
+    · cases h
+    · simp only [Option.some.injEq] at h; subst h
+      exact ⟨Nat.le_trans hn₁ hle, hσ₁.mono hle, hT, fun p hp => (hp₁ p hp).mono hle⟩
+    rename_i θ θs hm
+    -- The methods' `this`s are parts of the fields' types.
+    have hθs : ∀ θ' ∈ θ :: θs, θ'.Below (o₁.next + L.length) := fun θ' hθ' => by
+      obtain ⟨p, hp, a, b, hp₂⟩ := methodThis_mem hm θ' hθ'
+      have := hτs₁ p.2 (List.of_mem_zip hp).2
+      rw [hp₂] at this
+      exact (Ty.Below.app.mp this θ' List.mem_cons_self).mono hle
+    split at h
+    · cases h
+    rename_i σ₁ hu₁
+    split at h
+    · cases h
+    rename_i σ₂ hu₂
+    simp only [Option.some.injEq] at h; subst h
+    have hw₁ := unify_within (Ty.Below.app.mpr hθs) (Ty.Below.app.mpr (fun τ hτ => by
+      rw [List.eq_of_mem_replicate hτ]; exact hθs θ List.mem_cons_self)) hu₁
+    have hw₂ := unify_within (hw₁.subst_below (hθs θ List.mem_cons_self)) (hw₁.subst_below hT) hu₂
+    have hw := hw₁.compose hw₂
+    refine ⟨Nat.le_trans hn₁ hle, (hσ₁.mono hle).compose hw, hw.subst_below hT, ?_⟩
+    intro p hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact hw.pred_below ((hp₁ q hq).mono hle)
   | get e l ih =>
     intro Γ R n o hΓ hR h
     simp only [infer] at h
@@ -1724,11 +1750,11 @@ theorem HasType₀.generalize_ctx {C' : List Pred} {Γ₀ : Ctx} {R : Option Ty}
     intro C Δ Γ s s' hΓ hC hgen hw
     have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
     exact .tryFinally (ihb hΓ hC hgen (hw'.imp id (·.1))) (ihf hΓ hC hgen (hw'.imp id (·.2)))
-  | obj hτs habs hL hes _ ih =>
+  | obj hτs habs hL hes _ hms ih =>
     intro C Δ Γ s s' hΓ hC hgen hw
     have hw' := hw.imp id fun h => by simpa [Expr.writes] using h
     exact .obj hτs habs hL hes (fun p hp => ih p hp hΓ hC hgen
-      (hw'.imp id fun h => Expr.writesList_false h _ (List.of_mem_zip hp).1))
+      (hw'.imp id fun h => Expr.writesList_false h _ (List.of_mem_zip hp).1)) hms
   | get _ hp ih =>
     intro C Δ Γ s s' hΓ hC hgen hw
     exact .get (ih hΓ hC hgen (hw.imp id fun h => by simpa [Expr.writes] using h)) hp
@@ -3242,10 +3268,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂,
         by rw [hag₂.ty hτb₁, hτ₁], Sat₀.app (Sat₀.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
-  | obj ls es ih =>
+  | obj ls es ms ih =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
     cases ht with
-    | obj hτs habs hL hes hargs =>
+    | obj hτs habs hL hes hargs hms =>
       obtain ⟨o, h, φ, hag, hτs', hsat⟩ :=
         inferArgs_complete es _ ih hΓ hR hC hΓ' hR' (by omega) hargs
       obtain ⟨hn, hσ, hτsb, hpb⟩ := inferArgs_inv es (fun a _ => infer_inv L a) hΓ hR h
@@ -3256,7 +3282,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           simp [Subst.find_append, Subst.block_find_none (hτ a ha)])
       have hc : ls.all (· ∈ L) = true ∧ es.length = ls.length :=
         ⟨List.all_eq_true.mpr (fun l hl => by simpa using hL l hl), hes⟩
-      refine ⟨_, by simp only [infer, hc, and_self, ↓reduceIte, h]; rfl,
+      have hm : methodThis ms (ls.zip o.τs) = some [] :=
+        methodThis_none (fun p hp => hms _ (List.of_mem_zip hp).1)
+      refine ⟨_, by simp only [infer, hc, and_self, ↓reduceIte, h, hm]; rfl,
         Subst.block o.next absent ++ φ, fun a ha => ?_, ?_,
         fun p hp => ?_⟩
       · rw [hfresh _ ((hσ a).1 (by omega))]; exact hag a ha

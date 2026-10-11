@@ -139,7 +139,7 @@ theorem run_clock_le_both :
       cases r'
       case ok v => exact absurd rfl (hfin v c₂ h₂)
       all_goals simp only; omega
-  · intro clock env heap ls es ih
+  · intro clock env heap ls es _ ih
     rw [run]; exact bindArgs_le ih fun _ _ => ih
   · intro clock env heap e l ih; rw [run]; exact bindC_le ih fun _ _ => ih
   · intro clock env heap e l v ih₁ ih₂
@@ -431,7 +431,7 @@ theorem run_mono_both :
       case ok => exact absurd rfl (hfin _ _ _)
       case timeout => simp at hne
       all_goals (rw [ihf' (by simp)]; rfl)
-  · intro clock env heap ls es ih k h
+  · intro clock env heap ls es _ ih k h
     simp only [run] at h ⊢
     exact bindArgs_mono (ih k) (fun _ _ _ => rfl) h
   · intro clock env heap e l ih k h
