@@ -284,19 +284,24 @@ impl InferState {
             }
             Type::Row(row) => {
                 // The object the members are called on, tied to the row
-                // once it is built, as `infer_object` ties its literal's.
+                // once it is built, as `infer_object` ties its literal's
+                // (if it has a method).
                 let shared = Type::Row(crate::types::RowType::empty_open(self.fresh_flex()));
+                let mut has_method = false;
                 let mut out = row.clone();
                 for (name, entry) in out.props.iter_mut() {
                     let member_this = if name.0 == CALLABLE_KEY {
                         this.clone()
                     } else {
+                        has_method |= is_function(&entry.ty);
                         shared.clone()
                     };
                     entry.ty = self.annotation_this(span, &entry.ty, &member_this)?;
                 }
                 let out = Type::Row(out);
-                self.unify(span, &shared, &out)?;
+                if has_method {
+                    self.unify(span, &shared, &out)?;
+                }
                 out
             }
             Type::Array(t) => {
@@ -324,5 +329,108 @@ impl InferState {
             ),
             _ => ty.clone(),
         })
+    }
+}
+
+impl InferState {
+    /// A declared or built-in function, which has no body to check, keeps
+    /// its own `this` (`unify` matches a missing one with any); but what
+    /// it is given, it uses as `annotation_this` reads a checked
+    /// annotation: a function (a callback) is called detached and a
+    /// member of an object on the object, unless the declaration says
+    /// otherwise. Otherwise `[1, 2].map(o.m)` would pass a method that
+    /// reads `this`.
+    pub(crate) fn declared_callbacks_detached(
+        &mut self,
+        span: Span,
+        ty: &Type,
+    ) -> InferResult<Type> {
+        self.declared_this(span, ty, true, &Type::Undefined)
+    }
+
+    /// `given` (a declaration's own value, or what it gives back) or not
+    /// (what it is given, which it calls with `this` if a function).
+    fn declared_this(
+        &mut self,
+        span: Span,
+        ty: &Type,
+        given: bool,
+        this: &Type,
+    ) -> InferResult<Type> {
+        let u = Type::Undefined;
+        Ok(match ty {
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                let params = params
+                    .iter()
+                    .map(|p| {
+                        let mut p = p.clone();
+                        p.ty = self.declared_this(span, &p.ty, !given, &u)?;
+                        Ok(p)
+                    })
+                    .collect::<InferResult<Vec<_>>>()?;
+                let this_type = if given {
+                    this_type.clone()
+                } else {
+                    Some(this_type.clone().unwrap_or_else(|| Box::new(this.clone())))
+                };
+                Type::Func {
+                    this_type,
+                    params,
+                    ret: Box::new(self.declared_this(span, ret, given, &u)?),
+                }
+            }
+            Type::Row(row) if given => {
+                let mut out = row.clone();
+                for entry in out.props.values_mut() {
+                    entry.ty = self.declared_this(span, &entry.ty, true, &u)?;
+                }
+                Type::Row(out)
+            }
+            // A function it is given may be a callable row, whose call is
+            // called detached. Its other members, like those of any object
+            // it is given, keep their `this`: tying them to the object, as
+            // `annotation_this` does, makes a recursive type of each (the
+            // standard library's events and files), and a built-in seldom
+            // calls a method of what it is given.
+            Type::Row(row) => {
+                let mut out = row.clone();
+                if let Some(entry) = out
+                    .props
+                    .get_mut(&crate::types::PropName(CALLABLE_KEY.to_string()))
+                {
+                    entry.ty = self.declared_this(span, &entry.ty, false, this)?;
+                }
+                Type::Row(out)
+            }
+            Type::Array(t) => Type::Array(Box::new(self.declared_this(span, t, given, &u)?)),
+            Type::Map(t) => Type::Map(Box::new(self.declared_this(span, t, given, &u)?)),
+            Type::Promise(t) => Type::Promise(Box::new(self.declared_this(span, t, given, &u)?)),
+            Type::Tuple(ts) => Type::Tuple(
+                ts.iter()
+                    .map(|t| self.declared_this(span, t, given, &u))
+                    .collect::<InferResult<_>>()?,
+            ),
+            Type::Union(ts) => Type::union(
+                ts.iter()
+                    .map(|t| self.declared_this(span, t, given, this))
+                    .collect::<InferResult<Vec<_>>>()?,
+            ),
+            _ => ty.clone(),
+        })
+    }
+}
+
+/// A function type: a bare one or a callable row.
+fn is_function(ty: &Type) -> bool {
+    match ty {
+        Type::Func { .. } => true,
+        Type::Row(row) => row
+            .props
+            .contains_key(&crate::types::PropName(CALLABLE_KEY.to_string())),
+        _ => false,
     }
 }

@@ -5177,3 +5177,37 @@ fn a_method_in_an_annotated_object_type_has_the_object_as_this() {
                const r = g(1);";
     assert!(check_program(bad, &[]).is_err(), "{}", bad);
 }
+
+#[test]
+fn a_builtin_calls_its_callbacks_detached() {
+    // `map`, `forEach`, … call their callback with `this` undefined, so
+    // a method that reads `this` throws a `TypeError` there.
+    for bad in [
+        "const o = { x: 1, m(n) { return this.x + n; } };\n\
+         const r = [1, 2].map(o.m);",
+        "const o = { x: 1, m: function (n) { return this.x + n; } };\n\
+         [1, 2].forEach(o.m);",
+        "const r = [\"a\"].map(\"b\".concat);",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // A callback that doesn't read `this` is fine, as is calling a
+    // built-in method on its receiver.
+    for (src, name, ty) in [
+        (
+            "const r = [1, 2].map(function (n) { return n + 1; });",
+            "r",
+            "Int[]",
+        ),
+        ("const r = [1, 2].map((n) => n * 2);", "r", "Int[]"),
+        (
+            "const o = { x: 1, m(n) { return this.x + n; } };\n\
+             const r = [1, 2].map((n) => o.m(n));",
+            "r",
+            "Int[]",
+        ),
+        ("const r = \"ab\".slice(1);", "r", "String"),
+    ] {
+        assert_eq!(check_program(src, &[name]).unwrap(), [ty], "{}", src);
+    }
+}
