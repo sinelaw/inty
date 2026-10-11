@@ -1482,6 +1482,334 @@ theorem memberSlots_complete {T' : Ty} : ∀ {ks : List ClassKind} {es : List Ex
   | _, _, _, [], _ :: _, _, _, _, _, _, _, _, hs, _ | _, _, _, _ :: _, [], _, _, _, _, _, _, _, hs, _ => by
     simp at hs
 
+/-! ### Generalisation -/
+
+theorem TyEqs.mem_left : ∀ {xs ys : List Ty}, TyEqs xs ys → ∀ {x : Ty}, x ∈ xs →
+    ∃ y ∈ ys, TyEq x y
+  | _ :: _, y :: _, .cons h hs, x, hx => by
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact ⟨y, List.mem_cons_self, h⟩
+    · obtain ⟨y', hy', h'⟩ := hs.mem_left hx
+      exact ⟨y', List.mem_cons_of_mem _ hy', h'⟩
+
+theorem TyEqs.mem_right {xs ys : List Ty} (h : TyEqs xs ys) {y : Ty} (hy : y ∈ ys) :
+    ∃ x ∈ xs, TyEq x y := by
+  obtain ⟨x, hx, he⟩ := h.symm.mem_left hy
+  exact ⟨x, hx, he.symm⟩
+
+theorem PredEq.args_eqs {p q : Pred} (h : PredEq p q) : TyEqs p.args q.args :=
+  TyEqs.of_zip h.2.1 h.2.2
+
+theorem TyEqs.map_subst {xs : List Ty} {σ σ' : Subst}
+    (h : ∀ x ∈ xs, TyEq (x.subst σ) (x.subst σ')) :
+    TyEqs (xs.map (·.subst σ)) (xs.map (·.subst σ')) := by
+  induction xs with
+  | nil => exact .nil
+  | cons x xs ih =>
+    exact .cons (h x List.mem_cons_self) (ih (fun y hy => h y (List.mem_cons_of_mem _ hy)))
+
+theorem Pred.fundep_mem {p : Pred} {ds rs : List Ty} (h : p.fundep = some (ds, rs)) :
+    (∀ d ∈ ds, d ∈ p.args) ∧ ∀ r ∈ rs, r ∈ p.args := by
+  rcases Pred.fundep_some h with ⟨-, -, d, he, rfl⟩ | ⟨q, k, τ, t, r, rfl, rfl, rfl⟩
+  · exact ⟨fun x hx => by simp at hx; simp [he, hx], fun x hx => by simp [he, hx]⟩
+  · refine ⟨fun x hx => ?_, fun x hx => by simp at hx; simp [hx]⟩
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hx ⊢
+    rcases hx with h | h | h | h <;> simp [h]
+
+theorem Pred.subst_fundep {p : Pred} {ds rs : List Ty} (h : p.fundep = some (ds, rs))
+    (φ : Subst) : (p.subst φ).fundep = some (ds.map (·.subst φ), rs.map (·.subst φ)) := by
+  rcases Pred.fundep_some h with ⟨hp, hm, d, he, rfl⟩ | ⟨q, k, τ, t, r, rfl, rfl, rfl⟩
+  · exact Pred.fundep_of_args (p := p.subst φ) hp hm (by simp [Pred.subst, he])
+  · rfl
+
+theorem Pred.fundep_predEq {p q : Pred} (h : PredEq p q) {ds rs : List Ty}
+    (hf : p.fundep = some (ds, rs)) :
+    ∃ ds' rs', q.fundep = some (ds', rs') ∧ TyEqs ds ds' ∧ TyEqs rs rs' := by
+  have he := h.args_eqs
+  obtain ⟨c, args⟩ := q
+  have hc : p.cls = c := h.1
+  rcases Pred.fundep_some hf with ⟨hp, hm, d, hpa, rfl⟩ | ⟨q₁, k, τ, t, r, rfl, rfl, rfl⟩
+  · rw [hpa] at he
+    cases he with
+    | @cons _ d' _ rs' hd hrs =>
+      refine ⟨[d'], rs', Pred.fundep_of_args (p := ⟨c, d' :: rs'⟩) (hc ▸ hp) (hc ▸ hm) rfl,
+        .cons hd .nil, hrs⟩
+  · simp only at hc; subst hc
+    cases he with
+    | cons h₁ he => cases he with
+      | cons h₂ he => cases he with
+        | cons h₃ he => cases he with
+          | cons h₄ he => cases he with
+            | cons h₅ he => cases he with
+              | nil => exact ⟨_, _, rfl, .cons h₁ (.cons h₂ (.cons h₃ (.cons h₄ .nil))),
+                  .cons h₅ .nil⟩
+
+theorem SlotCopy.tv {s r : Ty} (h : SlotCopy s r) {b : Nat} (hb : r.TV b) : s.TV b := by
+  cases h with
+  | data => exact hb
+  | abs => exact hb
+  | getter =>
+    obtain ⟨x, hx, hxb⟩ := Ty.tv_app.mp hb
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+    rcases hx with rfl | rfl | rfl
+    · exact absurd hxb Ty.tv_con
+    · exact absurd hxb Ty.tv_con
+    · exact Ty.tv_app.mpr ⟨x, by simp, hxb⟩
+  | proto =>
+    obtain ⟨x, hx, hxb⟩ := Ty.tv_app.mp hb
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+    rcases hx with rfl | rfl | rfl <;> exact absurd hxb Ty.tv_con
+
+/-- An instance's determining arguments determine the rest: their tree
+variables are theirs. -/
+theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep = some (ds, rs)) :
+    ∀ r ∈ rs, ∀ b, r.TV b → ∃ d ∈ ds, d.TV b := by
+  intro r hr b hb
+  cases h with
+  | plusNumber | plusString => simp [Pred.fundep] at hf
+  | @hasProp l ls fs k σ hfl =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    refine ⟨_, List.mem_singleton_self _, Ty.tv_app.mpr ⟨_, (List.of_mem_zip (Ty.field_mem hfl)).2,
+      Ty.tv_app.mpr ⟨r, ?_, hb⟩⟩⟩
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hr ⊢
+    rcases hr with rfl | rfl <;> simp
+  | mergeData | mergeGetter =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_singleton] at hr; subst hr
+    obtain ⟨x, hx, hxb⟩ := Ty.tv_app.mp hb
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+    rcases hx with rfl | rfl | rfl
+    · exact absurd hxb Ty.tv_con
+    · exact absurd hxb Ty.tv_con
+    · exact ⟨x, by simp, hxb⟩
+  | mergeAbs hc | mergeProto hc =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_singleton] at hr; subst hr
+    exact ⟨_, by simp, hc.tv hb⟩
+  | lengthArray | lengthString =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with rfl | rfl <;> exact absurd hb Ty.tv_con
+  | @indexArray τ =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with rfl | rfl
+    · exact absurd hb Ty.tv_con
+    · exact ⟨_, List.mem_singleton_self _, Ty.tv_app.mpr ⟨r, by simp, hb⟩⟩
+  | indexString =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with rfl | rfl <;> exact absurd hb Ty.tv_con
+  | writeArray =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp at hr
+
+/-- A constraint equal to one of a simple scheme's, opened at `m`, has a
+determining argument whose tree has a variable of the block. -/
+theorem Scheme.Simple.openPred_tv {s : Scheme} (hs : s.Simple) {m : Nat}
+    (hms : ∀ a ∈ s.ftv, a < m) {p q : Pred} (hq : q ∈ s.openPreds m) (hpq : PredEq p q) :
+    ∃ b, m ≤ b ∧ ((p.cls ≠ .merge ∧ ∃ t rest, p.args = t :: rest ∧ t.TV b) ∨
+      (p.cls = .merge ∧ ∃ x ∈ p.args.take 4, x.TV b)) := by
+  simp only [Scheme.openPreds, Scheme.instPreds, List.mem_map] at hq
+  obtain ⟨q₀, hq₀, rfl⟩ := hq
+  have he := hpq.args_eqs
+  have hc : p.cls = q₀.cls := hpq.1
+  rcases hs q₀ hq₀ with ⟨hcls, -, i, hi, rest, hq'⟩ | ⟨q', k, τ, t, r, hq', i, hi, x, hx, hb⟩
+  · simp only [PPred.inst, hq', List.map_cons] at he
+    obtain ⟨c, args⟩ := p
+    cases he with
+    | @cons t _ _ _ ht _ =>
+      refine ⟨m + i, by omega, .inl ⟨hc ▸ hcls, t, _, rfl, (ht.tv).mpr ?_⟩⟩
+      simp only [PTy.inst, varBlock, List.getD_eq_getElem?_getD, List.getElem?_map,
+        List.getElem?_range', hi, Option.map_some, Option.getD_some, Nat.one_mul]
+      exact Ty.tv_var_self _
+  · subst hq'
+    have hxs : ∀ a ∈ x.ftv, a < m := fun a ha => hms a (List.mem_append_right _
+      (List.mem_flatMap.mpr ⟨_, hq₀, by
+        simp only [PPred.ftv, List.flatMap_cons, List.flatMap_nil, List.mem_append]
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+        rcases hx with rfl | rfl | rfl | rfl <;> simp [ha]⟩))
+    have hb' := (PTy.treeBound_iff hi hxs).mp hb
+    simp only [PPred.inst, List.map_cons, List.map_nil] at he
+    obtain ⟨c, args⟩ := p
+    simp only at hc; subst hc
+    cases he with
+    | cons h₁ he => cases he with
+      | cons h₂ he => cases he with
+        | cons h₃ he => cases he with
+          | cons h₄ he => cases he with
+            | cons h₅ he => cases he with
+              | nil =>
+                refine ⟨m + i, by omega, .inr ⟨rfl, ?_⟩⟩
+                simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+                rcases hx with rfl | rfl | rfl | rfl
+                · exact ⟨_, by simp, h₁.tv.mpr hb'⟩
+                · exact ⟨_, by simp, h₂.tv.mpr hb'⟩
+                · exact ⟨_, by simp, h₃.tv.mpr hb'⟩
+                · exact ⟨_, by simp, h₄.tv.mpr hb'⟩
+
+/-- A constraint whose trees have only variables below `m` is entailed by the
+assumptions alone, not by a simple scheme's opened at `m`. -/
+theorem Entails.drop_block {C : List Pred} {s : Scheme} (hs : s.Simple) {m : Nat}
+    (hms : ∀ a ∈ s.ftv, a < m) {p : Pred} (h : Entails (C ++ s.openPreds m) p)
+    (hp : ∀ x ∈ p.args, ∀ b, x.TV b → b < m) : Entails C p := by
+  rcases h with hi | ⟨q, hq, hpq⟩
+  · exact .inl hi
+  · rcases List.mem_append.mp hq with hq | hq
+    · exact .inr ⟨q, hq, hpq⟩
+    · exfalso
+      obtain ⟨b, hb, h⟩ := hs.openPred_tv hms hq hpq
+      rcases h with ⟨-, t, rest, he, ht⟩ | ⟨-, x, hx, hxb⟩
+      · have := hp t (by simp [he]) b ht; omega
+      · have := hp x (List.mem_of_mem_take hx) b hxb; omega
+
+/-- What determining arguments' trees bound, entailment bounds in the rest. -/
+theorem tv_determined {C : List Pred} {s : Scheme} (hs : s.Simple) {m : Nat}
+    (hmC : ∀ p ∈ C, ∀ a ∈ p.ftv, a < m) (hms : ∀ a ∈ s.ftv, a < m)
+    {p : Pred} {φ : Subst} (he : Entails (C ++ s.openPreds m) (p.subst φ))
+    {ds rs : List Ty} (hf : p.fundep = some (ds, rs))
+    (hds : ∀ d ∈ ds, ∀ b, (d.subst φ).TV b → b < m) :
+    ∀ r ∈ rs, ∀ b, (r.subst φ).TV b → b < m := by
+  intro r hr b hb
+  have hrm : r.subst φ ∈ (p.subst φ).args := by
+    simp only [Pred.subst, List.mem_map]; exact ⟨r, (Pred.fundep_mem hf).2 r hr, rfl⟩
+  rcases he with ⟨q₀, hpq, hi⟩ | ⟨c, hc, hpc⟩
+  · obtain ⟨ds', rs', hf₀, hdd, hrr⟩ := Pred.fundep_predEq hpq (Pred.subst_fundep hf φ)
+    obtain ⟨r', hr', hre⟩ := hrr.mem_left (List.mem_map_of_mem hr)
+    obtain ⟨d', hd', hdb⟩ := Inst.fundep_tv hi hf₀ r' hr' b (hre.tv.mp hb)
+    obtain ⟨d₁, hd₁, hde⟩ := hdd.mem_right hd'
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hd₁
+    exact hds d hd b (hde.tv.mpr hdb)
+  · rcases List.mem_append.mp hc with hc | hc
+    · obtain ⟨y, hy, hye⟩ := hpc.args_eqs.mem_left hrm
+      exact hmC c hc b (List.mem_flatMap.mpr ⟨y, hy, (hye.tv.mp hb).ftv⟩)
+    · exfalso
+      obtain ⟨b', hb', h⟩ := hs.openPred_tv hms hc hpc
+      rcases Pred.fundep_some hf with ⟨-, hm, d, hpa, rfl⟩ | ⟨q, k, τ, t, r₀, rfl, rfl, rfl⟩
+      · rcases h with ⟨-, t', rest, he', ht'⟩ | ⟨hm', -⟩
+        · simp only [Pred.subst, hpa, List.map_cons, List.cons.injEq] at he'
+          obtain ⟨rfl, -⟩ := he'
+          have := hds d (by simp) b' ht'; omega
+        · exact hm hm'
+      · rcases h with ⟨hm', -⟩ | ⟨-, x, hx, hxb⟩
+        · exact hm' rfl
+        · simp only [Pred.subst, List.map_cons, List.map_nil, List.take_succ_cons,
+            List.take_zero, List.mem_cons, List.not_mem_nil, or_false] at hx
+          rcases hx with rfl | rfl | rfl | rfl
+          · have := hds q (by simp) b' hxb; omega
+          · have := hds k (by simp) b' hxb; omega
+          · have := hds τ (by simp) b' hxb; omega
+          · have := hds t (by simp) b' hxb; omega
+
+/-- The variables the environment fixes are sent by `φ` to trees below `m`. -/
+theorem fixed_tv_lt {C : List Pred} {s : Scheme} (hs : s.Simple) {m : Nat}
+    (hmC : ∀ p ∈ C, ∀ a ∈ p.ftv, a < m) (hms : ∀ a ∈ s.ftv, a < m)
+    {preds : List Pred} {φ : Subst} (hsat : Sat (C ++ s.openPreds m) preds φ)
+    {env : List Nat} (henv : ∀ v ∈ env, ∀ b, ((Ty.var v).subst φ).TV b → b < m) :
+    ∀ v ∈ fixedVars preds env, ∀ b, ((Ty.var v).subst φ).TV b → b < m := by
+  refine fixLoop_all (ps₀ := preds) (fun p hp hds v hv => ?_) _ _ _ (fun p hp => hp) henv
+  unfold Pred.fixes at hv
+  cases hd : p.fundep with
+  | none => simp [hd] at hv
+  | some d =>
+    obtain ⟨ds, rs⟩ := d
+    simp only [hd, Option.map_some, Option.getD_some] at hds hv
+    obtain ⟨r, hr, hvr⟩ := List.mem_flatMap.mp hv
+    intro b hb
+    refine tv_determined hs hmC hms (hsat p hp) hd (fun d hd' b hb' => ?_) r hr b
+      (Ty.TV.subst_of (Ty.mem_tv.mp hvr) hb)
+    obtain ⟨a, ha, hab⟩ := Ty.TV.subst_inv hb'
+    exact hds a (List.mem_flatMap.mpr ⟨d, hd', Ty.mem_tv.mpr ha⟩) b hab
+
+/-- A block substitution doesn't change a type whose tree is below it. -/
+theorem Ty.subst_block_tv_lt {t : Ty} {m : Nat} {τs : List Ty} (h : ∀ b, t.TV b → b < m) :
+    TyEq (t.subst (Subst.block m τs)) t := by
+  have := Ty.subst_tyEq_congr_tv (σ := Subst.block m τs) (σ' := []) (τ := t) (fun a ha => by
+    simp only [Ty.subst, Subst.block_find_none (h a ha)]; exact TyEq.refl _)
+  simpa using this
+
+theorem genVars_mem {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred} {v : Nat} :
+    v ∈ genVars Γ₁ R₁ τ₁ preds ↔ v ∈ τ₁.tv ++ preds.flatMap Pred.tv ∧
+      v ∉ fixedVars preds (ctxTv Γ₁ ++ Ret.tv R₁) := by
+  simp [genVars, List.mem_eraseDups, List.mem_filter, or_and_right]
+
+/-- An entailed constraint has its class's arity. -/
+theorem Entails.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) {p : Pred}
+    (h : Entails C p) : p.args.length = p.cls.arity := by
+  rcases h with ⟨q, hpq, hi⟩ | ⟨c, hc, hpc⟩
+  · rw [hpq.2.1, hpq.1]; cases hi <;> rfl
+  · rw [hpc.2.1, hpc.1]
+    rcases hC c hc with ⟨-, hl, -⟩ | ⟨q, k, τ, s, r, rfl, -⟩
+    · exact hl
+    · rfl
+
+theorem Pred.decide₀_keep_merge {c : Cls} {t : Ty} {rest : List Ty}
+    (h : Pred.decide₀ c t rest = .keep) : c = .merge := by
+  unfold Pred.decide₀ at h
+  split at h <;> first | rfl | (split at h <;> cases h) | cases h
+
+/-- What improvement keeps where a binding generalises. -/
+theorem Pred.improve_keep_false {p : Pred} (h : p.improve false = .keep) :
+    p.cls = .plus ∨ p.cls = .merge ∨
+      (p.cls ≠ .plus ∧ p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧
+        ∃ t rest, p.args = t :: rest ∧ ∃ a, t.whnf = .var a) := by
+  obtain ⟨cls, args⟩ := p
+  cases cls
+  case plus => exact .inl rfl
+  case merge => exact .inr (.inl rfl)
+  all_goals
+    simp only [Pred.improve] at h
+    right; right
+    refine ⟨by simp, by simp, ?_⟩
+    match args, h with
+    | t :: rest, h =>
+      rw [Pred.improveArgs_cons] at h
+      split at h
+      · rename_i hv
+        split at h
+        · rename_i hl
+          obtain ⟨a, ha⟩ := Ty.isVar_iff.mp hv
+          exact ⟨by simpa using hl, t, rest, rfl, a, ha⟩
+        · cases h
+      · have := Pred.decide₀_keep_merge h; cases this
+    | [], h => simp [Pred.improveArgs] at h
+
+/-- An entailed constraint other than a `Merge`, by assumptions where a
+binding generalises: its first argument unfolds to a variable, or it is an
+instance. -/
+theorem Entails.first_var_or_inst {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt false)
+    {p : Pred} {φ : Subst} (h : Entails C (p.subst φ)) (hm : p.cls ≠ .merge) {t : Ty}
+    {rest : List Ty} (ht : p.args = t :: rest) :
+    (∃ a, t.whnf = .var a) ∨ ∃ q₀, PredEq (p.subst φ) q₀ ∧ Inst q₀ := by
+  rcases h with ⟨q₀, hpq, hi⟩ | ⟨c, hc, hpc⟩
+  · exact .inr ⟨q₀, hpq, hi⟩
+  · left
+    have he := hpc.args_eqs
+    simp only [Pred.subst, ht, List.map_cons] at he
+    rcases hC c hc with ⟨-, -, a, rest', hca⟩ | ⟨q, k, τ, s, r, rfl, -⟩
+    · rw [hca] at he
+      cases he with
+      | cons h₁ _ => exact Ty.whnf_var_of_tyEq h₁
+    · exact absurd hpc.1 hm
+
+/-- A generalised variable in a tree is a quantified variable in the
+generalisation's tree. -/
+theorem Ty.gen_treeBound {ᾱ : List Nat} {x : Ty} {v i : Nat} (hv : x.TV v)
+    (hi : findIdx ᾱ v = some i) : (x.gen ᾱ).TreeBound ᾱ.length i := by
+  have hN := lt_maxPlusOne (l := (x.gen ᾱ).ftv)
+  rw [PTy.treeBound_iff (findIdx_lt hi) hN]
+  have := Ty.gen_inst ᾱ (maxPlusOne (x.gen ᾱ).ftv) [] x
+  rw [PTy.subst_nil, List.append_nil] at this
+  rw [← this]
+  exact Ty.TV.subst_of hv (by simp [Ty.subst, renameBlock_find, hi, Ty.tv_var_self])
+
 @[simp] theorem Ty.newTarget_subst (σ : Subst) : Ty.newTarget.subst σ = .newTarget := rfl
 
 theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
