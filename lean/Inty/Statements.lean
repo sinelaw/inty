@@ -20,8 +20,8 @@ open Inty
 
 /-! ## Headline theorems -/
 
-example : ∀ (clock : Nat) {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
-    {W : World} {env : Env} {h : Heap} {e : Expr} {τ : Ty}, HasType L C Γ R e τ → HoldsOrVar C →
+example : ∀ (clock : Nat) {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
+    {W : World} {env : Env} {h : Heap} {e : Expr} {τ : Ty}, HasType L C Γ R rm md e τ → HoldsOrVar C →
       G W Γ env → HeapOK clock W h →
       (run clock env h e).2.1 ≤ clock ∧
       ((run clock env h e).1 = .timeout ∨ ∃ W', W <+: W' ∧
@@ -30,20 +30,22 @@ example : ∀ (clock : Nat) {L : List String} {C : List Pred} {Γ : Ctx} {R : Op
           (run clock env h e).1.Abrupt ∨
           (∃ v, (run clock env h e).1 = .returned v ∧
             ∃ τr, R = some τr ∧ V (run clock env h e).2.1 W' τr v))) :=
-  fun clock _ _ _ _ _ _ _ _ _ ht hC hG hH => eval_sound clock ht hC hG hH
+  fun clock _ _ _ _ _ _ _ _ _ _ _ ht hC hG hH => eval_sound clock ht hC hG hH
 
-example : ∀ {L : List String} {C : List Pred} {e : Expr} {τ : Ty}, HasType L C [] none e τ →
-    HoldsOrVar C → ∀ (clock : Nat) (s : Stuck), eval clock [] [] e ≠ .stuck s :=
+example : ∀ {L : List String} {C : List Pred} {rm md : Mode} {e : Expr} {τ : Ty},
+    HasType L C [] none rm md e τ → HoldsOrVar C → ∀ (clock : Nat) (s : Stuck),
+      eval clock [] [] e ≠ .stuck s :=
   never_stuck
 
-example : ∀ {L : List String} {C : List Pred} {e : Expr} {τ : Ty},
-    HasType L C builtinCtx none e τ → HoldsOrVar C →
+example : ∀ {L : List String} {C : List Pred} {rm md : Mode} {e : Expr} {τ : Ty},
+    HasType L C builtinCtx none rm md e τ → HoldsOrVar C →
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   never_stuck_with_builtins
 
-example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr} {τ : Ty}
-    (σ : Subst), HasType L C Γ R e τ →
-      HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) :=
+example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {e : Expr}
+    {τ : Ty} (σ : Subst), HasType L C Γ R rm md e τ →
+      HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) rm md e
+        (τ.subst σ) :=
   fun σ h => h.subst σ
 
 example : ∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify τ₁ τ₂ = some σ → TyEq (τ₁.subst σ) (τ₂.subst σ) :=
@@ -53,14 +55,19 @@ example : ∀ {τ₁ τ₂ : Ty} {ψ : Subst}, TyEq (τ₁.subst ψ) (τ₂.subs
     ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, TyEq ((τ.subst σ).subst ψ) (τ.subst ψ) :=
   unify_mgu
 
-example : ∀ {L : List String} {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out},
-    infer L Γ R e n = some o → ∀ φ C, (∀ c ∈ o.preds, Entails C (c.subst φ)) →
-      HasType L C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) e
+example : ∀ {L : List String} {e : Expr} {Γ : Ctx} {R : Option Ty} {rm : Mode} {ex : Option Ty}
+    {n : Nat} {o : Out}, infer L Γ R rm ex e n = some o →
+    (rm = .check → ∀ τ ∈ R, τ.ftv = []) → (∀ T ∈ ex, T.ftv = []) →
+    ∀ φ C, (∀ c ∈ o.preds, Entails C (c.subst φ)) →
+      HasType L C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) rm (exMode ex e) e
         (o.τ.subst φ) :=
   infer_sound
 
+example : exMode ex e = if ∃ T ∈ ex, e.pushes T then .check else .synth := by
+  cases ex <;> simp [exMode]
+
 example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
-    ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups C [] none e τ :=
+    ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups C [] none .synth .synth e τ :=
   inferProgram_sound
 
 example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
@@ -71,21 +78,24 @@ example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L builtinCtx e = s
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   inferIn_builtins_never_stuck
 
-example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst}
-    {C : List Pred} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
+example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {rm : Mode} {ex : Option Ty}
+    {n : Nat} {ψ : Subst} {C : List Pred} {md : Mode} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
+    (rm = .check → ∀ τ ∈ R, τ.ftv = []) → (rm = .check → R' = R) → (∀ T ∈ ex, T.ftv = []) →
+    md = exMode ex e ∧ (∀ T ∈ ex, e.pushes T → τ' = T) →
     Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
-    CtxEq Γ' (Ctx.subst ψ Γ) → RetEq R' (Ret.subst ψ R) → HasType L C Γ' R' e τ' →
-    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ TyEq (o.τ.subst φ) τ' ∧
+    CtxEq Γ' (Ctx.subst ψ Γ) → RetEq R' (Ret.subst ψ R) → HasType L C Γ' R' rm md e τ' →
+    ∃ o, infer L Γ R rm ex e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ TyEq (o.τ.subst φ) τ' ∧
       Sat C o.preds φ :=
   infer_complete
 
 example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}, ctxFtv Γ = [] →
     (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true →
-    HasType L C Γ none e τ' →
+    HasType L C Γ none .synth .synth e τ' →
     ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType e.labels.eraseDups [] [] none e τ' →
+example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true →
+    HasType e.labels.eraseDups [] [] none .synth .synth e τ' →
     ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferProgram_complete
 
@@ -384,25 +394,25 @@ private theorem ne_con {c c' : Con} {ts ts' : List Ty} (h : c ≠ c') :
 
 /-- `x = 1` for a variable whose scheme is polymorphic: an assigned variable
 is a monotype. -/
-example : ¬ HasType L [] [⟨1, .bound 0, []⟩] none (.assign 0 (num 1)) τ := by
+example : ¬ HasType L [] [⟨1, .bound 0, []⟩] none .synth .synth (.assign 0 (num 1)) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with | assign hi ha _ _ => simp at hi; subst hi; simp at ha
 
 /-- An unbound variable. -/
-example : ¬ HasType L [] [] none (.var 0) τ := by
-  intro h; obtain ⟨_, -, h⟩ := h.top; cases h with | var hi _ _ => simp at hi
+example : ¬ HasType L [] [] none .synth .synth (.var 0) τ := by
+  intro h; obtain ⟨_, -, h⟩ := h.top_synth; cases h with | var hi _ _ => simp at hi
 
 /-- `1 + "a"`: `+` never mixes a `Number` with a `String`. -/
-example : ¬ HasType L [] [] none (.binop .plus (num 1) (str "a")) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.binop .plus (num 1) (str "a")) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | binop hop h₁ h₂ =>
     cases hop with
     | plus _ =>
-      obtain ⟨_, e₁, h₁⟩ := h₁.top
-      obtain ⟨_, e₂, h₂⟩ := h₂.top
+      obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
+      obtain ⟨_, e₂, h₂⟩ := h₂.top_synth
       cases h₁ with
       | lit hl =>
         cases hl
@@ -410,14 +420,14 @@ example : ¬ HasType L [] [] none (.binop .plus (num 1) (str "a")) τ := by
         | lit hl => cases hl; exact ne_con (by decide) (e₁.trans e₂.symm)
 
 /-- `true + true`: `Boolean` is not a `Plus` instance, and nothing assumes it. -/
-example : ¬ HasType L [] [] none (.binop .plus (.lit (.boolean true)) (.lit (.boolean true))) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.binop .plus (.lit (.boolean true)) (.lit (.boolean true))) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | binop hop h₁ _ =>
     cases hop with
     | plus hc =>
-      obtain ⟨_, e₁, h₁⟩ := h₁.top
+      obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
       cases h₁ with
       | lit hl =>
         cases hl
@@ -429,32 +439,32 @@ example : ¬ HasType L [] [] none (.binop .plus (.lit (.boolean true)) (.lit (.b
         · obtain ⟨_, hm, -⟩ := hc; cases hm
 
 /-- `"a" - 1`: `-` is `Number` only. -/
-example : ¬ HasType L [] [] none (.binop .minus (str "a") (num 1)) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.binop .minus (str "a") (num 1)) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | binop hop h₁ _ =>
     cases hop
-    obtain ⟨_, e₁, h₁⟩ := h₁.top
+    obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
     cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
 
 /-- `-"a"`: unary `-` is `Number` only. -/
-example : ¬ HasType L [] [] none (.unop .neg (str "a")) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.unop .neg (str "a")) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | unop hop h₁ =>
     cases hop
-    obtain ⟨_, e₁, h₁⟩ := h₁.top
+    obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
     cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
 
 /-- `({x: 1}).y`: an object literal has only its own fields. -/
-example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1] [.data]) "y") τ := by
+example : ¬ HasType L [] [] none .synth .synth (.get (.obj ["x"] [num 1] [.data]) "y") τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | get he hp =>
-    obtain ⟨_, e₁, he⟩ := he.top
+    obtain ⟨_, e₁, he⟩ := he.top_synth
     cases he with
     | obj _ _ _ hss _ _ _ =>
       rcases hp with ⟨q, hq, hi⟩ | hi
@@ -477,13 +487,13 @@ example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1] [.data]) "y") τ := 
       · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `({get x() { return 1; }}).x = 2`: a getter takes no store. -/
-example : ¬ HasType L [] [] none
+example : ¬ HasType L [] [] none .synth .synth
     (.set (.obj ["x"] [.func 0 (.ret (num 1))] [.getter]) "x" (num 2)) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | set he hp _ =>
-    obtain ⟨_, e₁, he⟩ := he.top
+    obtain ⟨_, e₁, he⟩ := he.top_synth
     cases he with
     | obj _ hks hτs hss _ _ hfs =>
       rcases hp with ⟨q, hq, hi⟩ | hi
@@ -507,12 +517,12 @@ example : ¬ HasType L [] [] none
       · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `(1).x`: a number has no fields. -/
-example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
+example : ¬ HasType L [] [] none .synth .synth (.get (num 1) "x") τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | get he hp =>
-    obtain ⟨_, e₁, he⟩ := he.top
+    obtain ⟨_, e₁, he⟩ := he.top_synth
     cases he with
     | lit hl =>
       cases hl
@@ -525,21 +535,21 @@ example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
       · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `1(2)`: a number is not a function. -/
-example : ¬ HasType L [] [] none (.app (num 1) [num 2]) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.app (num 1) [num 2]) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | app hf _ _ =>
-    obtain ⟨_, e₁, hf⟩ := hf.top
+    obtain ⟨_, e₁, hf⟩ := hf.top_synth
     cases hf with | lit hl => cases hl; exact ne_con (by simp) e₁
 
 /-- `"ab"[0] = "c"`: strings take no stores. -/
-example : ¬ HasType L [] [] none (.setIndex (str "ab") (num 0) (str "c")) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.setIndex (str "ab") (num 0) (str "c")) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | setIndex he _ _ hw _ =>
-    obtain ⟨_, e₁, he⟩ := he.top
+    obtain ⟨_, e₁, he⟩ := he.top_synth
     cases he with
     | lit hl =>
       cases hl
@@ -550,12 +560,12 @@ example : ¬ HasType L [] [] none (.setIndex (str "ab") (num 0) (str "c")) τ :=
       · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `(function f(x) { return x; })(1, 2)`: one argument per parameter. -/
-example : ¬ HasType L [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | app hf hlen _ =>
-    obtain ⟨_, e₁, hf⟩ := hf.top
+    obtain ⟨_, e₁, hf⟩ := hf.top_synth
     cases hf with
     | func hn _ =>
       have := (TyEq.app_iff.mp e₁).2.1
@@ -563,21 +573,21 @@ example : ¬ HasType L [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ :=
 
 /-- `(function f() { return -this; })()`: a call outside a receiver makes
 `this` `undefined`, which `-` doesn't take. -/
-example : ¬ HasType L [] [] none (.app (.func 0 (.unop .neg (.var 1))) []) τ := by
+example : ¬ HasType L [] [] none .synth .synth (.app (.func 0 (.unop .neg (.var 1))) []) τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | app hf _ _ =>
-    obtain ⟨_, e₁, hf⟩ := hf.top
+    obtain ⟨_, e₁, hf⟩ := hf.top_synth
     cases hf with
     | func hn hb =>
       rw [List.length_eq_zero_iff] at hn; subst hn
       have hθ := (TyEq.app_iff.mp e₁).2.2 _ (List.mem_cons_self)
-      obtain ⟨_, e₂, hb⟩ := hb.top
+      obtain ⟨_, e₂, hb⟩ := hb.top_synth
       cases hb with
       | unop hop he =>
         cases hop
-        obtain ⟨_, e₃, he⟩ := he.top
+        obtain ⟨_, e₃, he⟩ := he.top_synth
         cases he with
         | var hi _ _ =>
           simp at hi; subst hi

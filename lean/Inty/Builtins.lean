@@ -83,7 +83,7 @@ theorem builtins_sound (k : Nat) :
 
 /-- A program well typed in the builtins' context never gets stuck in their
 environment, whatever the clock. -/
-theorem never_stuck_with_builtins (h : HasType L C builtinCtx none e τ) (hC : HoldsOrVar C)
+theorem never_stuck_with_builtins (h : HasType L C builtinCtx none rm md e τ) (hC : HoldsOrVar C)
     (clock : Nat) (s : Stuck) : eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   Safe.not_stuck (run_sound L e h hC (builtins_sound clock).1 (builtins_sound clock).2)
 

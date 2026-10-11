@@ -906,17 +906,19 @@ theorem BinOp.eval_sound {W' : World} (hC : HoldsOrVar C) (hop : BinOpTy C op τ
 
 /-- Running a syntactic value gives a value, and takes no clock and no
 cell. -/
-theorem IsValue.run_value (hv : e.IsValue) (ht : HasType L C Γ R e τ) (hG : G W Γ env)
+theorem IsValue.run_value (hv : e.IsValue) (ht : HasType L C Γ R rm md e τ) (hG : G W Γ env)
     (hH : HeapOK k W h) : ∃ v, run k env h e = (.ok v, k, h) := by
   induction ht
   case lit => exact ⟨_, by simp [run]; rfl⟩
   case func => exact ⟨_, by simp [run]; rfl⟩
+  case funcCheck => exact ⟨_, by simp [run]; rfl⟩
   case ctor => exact ⟨_, by simp [run]; rfl⟩
   case var hi _ _ =>
     obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
     obtain ⟨v, hv, _⟩ := hH.2 ℓ _ hs
     exact ⟨v, by simp [run, hℓ, hv]⟩
   case conv ih => exact ih hv hG
+  case inj ih => exact ih hv hG
   all_goals cases hv
 
 /-! ## Objects -/
@@ -1993,15 +1995,15 @@ theorem Safe.bindArgs {p : RanArgs} {K : List Value → Nat → Heap → Ran}
 
 /-- What the fundamental lemma says of one expression. -/
 def RunSound (L : List String) (e : Expr) : Prop :=
-  ∀ {k C Γ R W env h τ}, HasType L C Γ R e τ → HoldsOrVar C → G W Γ env → HeapOK k W h →
-    Safe (run k env h e) k W τ R
+  ∀ {k C Γ R rm md W env h τ}, HasType L C Γ R rm md e τ → HoldsOrVar C → G W Γ env →
+    HeapOK k W h → Safe (run k env h e) k W τ R
 
 /-- Well-typed arguments, each safe by the fundamental lemma, run safely. -/
-theorem runArgs_sound {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
+theorem runArgs_sound {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
     (hC : HoldsOrVar C) :
     ∀ (args : List Expr) (τs : List Ty) {k : Nat} {W : World} {env : Env} {h : Heap},
       (∀ a ∈ args, RunSound L a) →
-      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → G W Γ env →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R rm md p.1 p.2) → G W Γ env →
       HeapOK k W h → SafeArgs (runArgs k env h args) k W τs R
   | [], [], k, W, env, h, _, _, _, _, hH => by
     simp only [runArgs, SafeArgs]; exact ⟨Nat.le_refl k, W, List.prefix_refl W, hH, by simp⟩
@@ -2075,7 +2077,8 @@ with `i + 1` to spare runs the body with `i`, where the closure itself
 (the function's own name) need only be good for `i`. -/
 theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} {τs : List Ty}
     {body : Expr} {env : Env} (ih : RunSound L body)
-    (hb : HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) body ρ)
+    {rm md : Mode}
+    (hb : HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) rm md body ρ)
     (hC : HoldsOrVar C) : ∀ j W, G W Γ env → V j W (.fn θ τs ρ) (.closure env τs.length body) := by
   intro j
   induction j with
@@ -2122,7 +2125,8 @@ theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} 
 /-- A function expression's value, of its type. -/
 theorem func_value {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {τ : Ty}
     {n : Nat} {b : Expr} {k : Nat} {W : World} {env : Env} {h : Heap}
-    (ih : RunSound L (.func n b)) (ht : HasType L C Γ R (.func n b) τ) (hC : HoldsOrVar C)
+    {rm md : Mode}
+    (ih : RunSound L (.func n b)) (ht : HasType L C Γ R rm md (.func n b) τ) (hC : HoldsOrVar C)
     (hG : G W Γ env) (hH : HeapOK k W h) : V k W τ (.closure env n b) := by
   have hs := ih ht hC hG hH
   simp only [run] at hs
@@ -2172,6 +2176,20 @@ theorem Entails.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVar C)
     obtain ⟨rfl, -⟩ := ht
     exact (V_whnf_var hw hv).elim
 
+/-- What a derivation's last rule makes safe at its type is safe at the
+derivation's: an equal type, or an annotation's type the value is
+injected into. -/
+theorem Safe.lift {p : Ran} {k : Nat} {W : World} {τ₀ τ : Ty} {R : Option Ty} {C : List Pred}
+    {md md₀ : Mode} (hC : HoldsOrVar C) (hl : Lift C md md₀ τ₀ τ) (h : Safe p k W τ₀ R) :
+    Safe p k W τ R := by
+  rcases hl with ⟨-, he, -⟩ | ⟨-, -, -, hi⟩
+  · exact h.tyEq he
+  · obtain ⟨hc, h | ⟨W', hW, hH, ⟨v, hv, hV⟩ | habr | hret⟩⟩ := h
+    · exact ⟨hc, .inl h⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inl ⟨v, hv, Entails.inject hC hi hV⟩⟩⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr hret)⟩⟩
+
 /-- An entailed `NotNew θ`, under constraints each an instance or on a type
 variable: `θ` isn't `newTarget`. -/
 theorem Entails.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVar C)
@@ -2208,12 +2226,13 @@ theorem memberCtx_other (Γ : Ctx) {k : ClassKind} (hk : k ≠ .data) (ks : List
 
 /-- A class's field initialisers, each typed in its context, run safely:
 each sees the fields before it, in new cells. -/
-theorem runInits_sound {L : List String} {C : List Pred} {R : Option Ty} (hC : HoldsOrVar C) :
+theorem runInits_sound {L : List String} {C : List Pred} {R : Option Ty} {rm md : Mode}
+    (hC : HoldsOrVar C) :
     ∀ (es : List Expr) (ks : List ClassKind) (τs : List Ty) {Γ : Ctx} {k : Nat} {W : World}
       {env : Env} {h : Heap},
       (∀ e ∈ es, RunSound L e) → es.length = ks.length → τs.length = ks.length →
       (∀ i e τ, es[i]? = some e → ks[i]? = some .data → τs[i]? = some τ →
-        HasType L C (memberCtx Γ ks τs i .data) R e τ) →
+        HasType L C (memberCtx Γ ks τs i .data) R rm md e τ) →
       G W Γ env → HeapOK k W h → SafeArgs (runInits k env h es ks) k W (dataTys ks τs) R
   | [], [], [], Γ, k, W, env, h, _, _, _, _, _, hH => by
     simp only [runInits, dataTys, SafeArgs]
@@ -2416,16 +2435,16 @@ theorem cls_cell {c : Nat} {W : World} {L ls : List String} {ss : List Ty}
 theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
   induction e using Expr.ind with
   | lit l =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | lit hl =>
       simp only [run]; exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (Lit.eval_sound hl)
   | var i =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | var hi hlen hc =>
       obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
@@ -2434,18 +2453,23 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH
         (hsv _ hlen (fun c h => (hc c h).holdsOrVar hC))
   | func n body ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
-    | @func _ _ _ ρ _ _ θ τs hlen hb =>
+    | @func _ _ _ ρ _ _ _ θ τs hlen hb =>
       subst hlen
       simp only [run]
       exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (closure_sound ih hb hC k W hG)
+    | @funcCheck _ _ _ ρ _ _ _ T θ τs hT _ hlen hb =>
+      subst hlen
+      simp only [run]
+      exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH
+        (V_whnf.mpr (hT ▸ closure_sound ih hb hC k W hG))
   | app f args ihf iha =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | app hf hlen hargs =>
       rw [run]
@@ -2459,10 +2483,10 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       exact Lands.safe ((V_fn.mp (V.mono hc₂ hW₂ hvf)).2 _ (Nat.le_refl _) W₂ (List.prefix_refl _)
         _ .undefined vs hvs.length (fun i hi => hH₂.mono (by omega)) (by simp)
         (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
-  | let_ mb _ e₁ e₂ ih₁ ih₂ =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+  | let_ mb ann e₁ e₂ ih₁ ih₂ =>
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | let_ s F hgen hval _ _ h₂ =>
       -- Type `e₁` at each instance of `s`: open `s` at variables above
@@ -2473,7 +2497,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           a ∈ (R.map Ty.ftv).getD [] → a < m :=
         fun a ha => lt_maxPlusOne a (by rcases ha with h | h | h | h | h <;> simp [h])
       have hinst : ∀ τs, τs.length = s.arity →
-          HasType L (C ++ s.instPreds τs) Γ R e₁ (s.inst τs) := by
+          HasType L (C ++ s.instPreds τs) Γ R rm (annMode ann) e₁ (s.inst τs) := by
         intro τs hlen
         have h := (hgen m (fun a ha => hm a (.inl ha))).subst (Subst.block m τs)
         have hfresh : ∀ a, a < m → (Subst.block m τs).find a = none := fun a ha =>
@@ -2533,9 +2557,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         · simp [Result.Abrupt] at hv'
         · simp at hv'
   | assign i e ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | assign hi ha _ he =>
       obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
@@ -2548,9 +2572,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       exact Safe.ok (Nat.le_refl _) (List.prefix_refl _)
         (hH₁.set hs₁ (SchemeV.of_arity_zero ha hv)) hv
   | cond c t e ihc iht ihe =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | cond hc htt hte =>
       simp only [run]
@@ -2561,18 +2585,18 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       · exact iht htt hC (G.mono hW₁ hG) hH₁
       · exact ihe hte hC (G.mono hW₁ hG) hH₁
   | unop op e ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | unop hop he =>
       simp only [run]
       exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv =>
         UnOp.eval_sound hop hv (Nat.le_refl _) (List.prefix_refl W₁) hH₁
   | binop op e₁ e₂ ih₁ ih₂ =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | binop hop h₁ h₂ =>
       simp only [run]
@@ -2583,27 +2607,27 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       exact BinOp.eval_sound hC hop (V.mono (run_clock_le _ env _ e₂) hW₂ hv₁) hv₂
         (Nat.le_refl _) (List.prefix_refl W₂) hH₂
   | ret e ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | ret he =>
       simp only [run]
       exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ hv =>
         ⟨Nat.le_refl _, .inr ⟨W₁, List.prefix_refl W₁, hH₁, .inr (.inr ⟨v, rfl, _, rfl, hv⟩)⟩⟩
   | throw_ e ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | throw_ he =>
       simp only [run]
       exact Safe.bindC (ih he hC hG hH) fun v W₁ _ _ hH₁ _ =>
         ⟨Nat.le_refl _, .inr ⟨W₁, List.prefix_refl W₁, hH₁, .inr (.inl trivial)⟩⟩
   | seq e₁ e₂ ih₁ ih₂ =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | seq h₁ h₂ =>
       simp only [run]
@@ -2613,9 +2637,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       exact ih₂ h₂ hC (G.mono hW₁ hG) hH₁
 
   | while_ c body ihc ihb =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | while_ hc hb =>
       -- By induction on the clock: each iteration takes a tick.
@@ -2660,17 +2684,17 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
             exact ⟨hc₂, .inr ⟨W₂, hW₂, hH₂, .inr (.inr ⟨v', rfl, hret⟩)⟩⟩
         · exact Safe.ok (Nat.le_refl _) (List.prefix_refl _) hH₁ (by simp)
   | break_ =>
-    intro k C Γ R W env h τ _ _ _ hH
+    intro k C Γ R rm md W env h τ _ _ _ hH
     simp only [run]
     exact ⟨Nat.le_refl _, .inr ⟨W, List.prefix_refl W, hH, .inr (.inl trivial)⟩⟩
   | continue_ =>
-    intro k C Γ R W env h τ _ _ _ hH
+    intro k C Γ R rm md W env h τ _ _ _ hH
     simp only [run]
     exact ⟨Nat.le_refl _, .inr ⟨W, List.prefix_refl W, hH, .inr (.inl trivial)⟩⟩
   | tryCatch body handler ihb ihh =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | tryCatch hb hh =>
       have hsb := ihb hb hC hG hH
@@ -2699,9 +2723,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           exact (ihh hh hC hG₂ hcell).weaken hc₁ (hW₁.trans hW₂)
       all_goals exact ⟨hc₁, hs⟩
   | tryFinally body fin ihb ihf =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | tryFinally hb hf =>
       have hsb := ihb hb hC hG hH
@@ -2740,9 +2764,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           all_goals exact (Safe.retype ⟨hc₂, hq⟩ (by simp)).weaken hc₁ hW₁
 
   | obj ls es ms ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | obj hes hks hτs hss hL hargs hfs =>
       rename_i ss τs
@@ -2762,9 +2786,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       · rw [V_record, hb]
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
   | get e l ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | get he hp =>
       simp only [run]
@@ -2772,9 +2796,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       rw [Nat.min_eq_left (run_clock_le k env h e)]
       exact read_sound hp hC hv hH₁
   | set e l v ihe ihv =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | set he hp hv =>
       simp only [run]
@@ -2784,9 +2808,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       refine Safe.bindC (ihv hv hC (G.mono hW₁ hG) hH₁) fun vv W₂ _ hW₂ hH₂ hvv => ?_
       exact setProp_sound hp hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvv hH₂
   | spread e₁ e₂ ih₁ ih₂ =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | spread hps hks hτs hss hrs he₁ he₂ hm =>
       rename_i ss ps ks τs rs
@@ -2815,13 +2839,13 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
 
   | arr es ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
-    | @arr _ _ _ _ σ hes =>
+    | @arr _ _ _ _ _ σ hes =>
       simp only [run]
-      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasType L C Γ R p.1 p.2 :=
+      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasType L C Γ R _ _ p.1 p.2 :=
         fun p hp => by
           obtain ⟨h₁, h₂⟩ := List.of_mem_zip hp
           rw [List.eq_of_mem_replicate h₂]; exact hes _ h₁
@@ -2839,10 +2863,30 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           | _ + 1, hs, _ => simp at hs)
       · rw [V_array, hb]
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
+    | @arrCheck _ _ _ _ _ σ T hT _ hes =>
+      simp only [run]
+      have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasType L C Γ R _ _ p.1 p.2 :=
+        fun p hp => by
+          obtain ⟨h₁, h₂⟩ := List.of_mem_zip hp
+          rw [List.eq_of_mem_replicate h₂]; exact hes _ h₁
+      refine Safe.bindArgs (runArgs_sound hC es _ ih (by simp) hargs hG hH)
+        fun vs W₁ _ hW₁ hH₁ hvs => ?_
+      have hb : (runArgs k env h es).2.2.length = W₁.length := hH₁.1
+      have hW₂ := List.prefix_append W₁ [Cell.arr σ]
+      refine Safe.ok (Nat.le_refl _) hW₂ ?_ ?_
+      · exact hH₁.alloc (by simp) (fun i s' v' hs hv' => by
+          match i, hs, hv' with
+          | 0, hs, hv' =>
+            simp at hs hv'; subst hs hv'
+            exact CellV_arr.mpr ⟨_, rfl, fun w hw =>
+              (VList.replicate hvs w hw).mono (Nat.le_refl _) hW₂⟩
+          | _ + 1, hs, _ => simp at hs)
+      · rw [V_whnf, hT, V_array, hb]
+        exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
   | index e i ihe ihi =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | index he hi hp =>
       simp only [run]
@@ -2853,9 +2897,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       rw [Nat.min_eq_left (Nat.le_trans (run_clock_le _ _ _ _) hc₁)]
       exact index_sound hp hC (hvo.mono (run_clock_le _ _ _ _) hW₂) hvi hH₂
   | setIndex e i v ihe ihi ihv =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | setIndex he hi hp hw hv =>
       simp only [run]
@@ -2869,9 +2913,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       exact setIndex_sound hp hw hC ((hvo.mono (run_clock_le _ _ _ _) hW₂).mono
         (run_clock_le _ _ _ _) hW₃) (hvi.mono (run_clock_le _ _ _ _) hW₃) hvv hH₃
   | mcall e l args ihe iha =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | mcall he hp hlen hargs =>
       simp only [run]
@@ -2894,9 +2938,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         (fun i hi => hvo.mono (by omega) (hW₂.trans hW₃))
         (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
   | cls ls es ks ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | cls hes hks hτs hss hnd hL hty hms =>
       rename_i τs ss
@@ -2936,18 +2980,18 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       · rw [V_record, hH₁.1]
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
   | ctor n body ih =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | ctor hlen hb =>
       subst hlen
       simp only [run]
       exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (closure_sound ih hb hC k W hG)
   | new_ f args ihf iha =>
-    intro k C Γ R W env h τ ht hC hG hH
-    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
-    refine Safe.tyEq ?_ hτ₀
+    intro k C Γ R rm md W env h τ ht hC hG hH
+    obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
+    refine Safe.lift hC hτ₀ ?_
     cases ht with
     | new_ hf hlen hargs hρ _ =>
       simp only [run]
@@ -2994,14 +3038,14 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
 
 /-- Type soundness, for `eval`: a value of the type, a `return` of a value
 of the return type, a `throw`, or out of clock; never stuck. -/
-theorem eval_sound (clock : Nat) (ht : HasType L C Γ R e τ) (hC : HoldsOrVar C)
+theorem eval_sound (clock : Nat) (ht : HasType L C Γ R rm md e τ) (hC : HoldsOrVar C)
     (hG : G W Γ env) (hH : HeapOK clock W h) : Safe (run clock env h e) clock W τ R :=
   run_sound L e ht hC hG hH
 
 /-- A closed program, well typed outside any function, assuming constraints
 each an instance or on a type variable, never gets stuck, whatever the
 clock. -/
-theorem never_stuck (ht : HasType L C [] none e τ) (hC : HoldsOrVar C) (clock : Nat)
+theorem never_stuck (ht : HasType L C [] none rm md e τ) (hC : HoldsOrVar C) (clock : Nat)
     (s : Stuck) : eval clock [] [] e ≠ .stuck s :=
   Safe.not_stuck (run_sound L e ht (W := []) hC (by simp [G])
     ⟨rfl, fun _ _ h => by simp at h⟩)

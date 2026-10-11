@@ -250,29 +250,33 @@ theorem CtxGen.length_some {C : List Pred} {e : Expr} {Γ Γ' : Ctx} (h : CtxGen
 
 /-- Typing survives a more general context and an equal return type. -/
 theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr}
-    {τ : Ty} (h : HasType L C Γ R e τ) :
-    ∀ {Γ' : Ctx} {R' : Option Ty}, CtxGen C e Γ Γ' → RetEq R R' → HasType L C Γ' R' e τ := by
+    {τ : Ty} {rm md : Mode} (h : HasType L C Γ R rm md e τ) :
+    ∀ {Γ' : Ctx} {R' : Option Ty}, CtxGen C e Γ Γ' → RetEq R R' → (rm = .check → R' = R) →
+      HasType L C Γ' R' rm md e τ := by
   induction h with
   | lit hl => intros; exact .lit hl
-  | @var Γ i s C R τs hi hlen hc =>
-    intro Γ' R' hg _
+  | @var Γ i s C R _ τs hi hlen hc =>
+    intro Γ' R' hg _ _
     obtain ⟨s', hs'⟩ := hg.length_some hi
     obtain ⟨hgen, -⟩ := hg.2 i s s' hi hs'
     obtain ⟨τs', hl', he, hc'⟩ := hgen τs hlen
     exact .conv (.var hs' hl' (fun c h => (hc' c h).cut hc)) he
   | func hlen _ ih =>
-    intro Γ' R' hg _
-    exact .func hlen (ih (hg.func hlen) (RetEq.refl _))
+    intro Γ' R' hg _ _
+    exact .func hlen (ih (hg.func hlen) (RetEq.refl _) (fun _ => rfl))
+  | funcCheck hT hT₀ hlen _ ih =>
+    intro Γ' R' hg _ _
+    exact .funcCheck hT hT₀ hlen (ih (hg.func hlen) (RetEq.refl _) (fun _ => rfl))
   | app _ hlen _ ihf iha =>
-    intro Γ' R' hg hR
-    refine .app (ihf (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hlen
-      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR)
+    intro Γ' R' hg hR hRc
+    refine .app (ihf (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hlen
+      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR hRc)
     simp only [Expr.writes, Bool.or_eq_false_iff] at hw
     exact Expr.writesList_false' hw.2 _ (List.of_mem_zip hp).1
   | let_ s F _ hv hs ha _ ih₁ ih₂ =>
-    intro Γ' R' hg hR
+    intro Γ' R' hg hR hRc
     refine .let_ s F (fun m hm => ih₁ m hm ((hg.weaken (fun c h => List.mem_append_left _ h)).sub
-      fun i hw => by simp_all [Expr.writes]) hR) hv hs ha ?_
+      fun i hw => by simp_all [Expr.writes]) hR hRc) hv hs ha ?_
     have := hg.prepend (Δ := [s]) (fun j s' hj => by
         cases j with
         | zero =>
@@ -280,9 +284,9 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
           exact hv.imp id (·.2)
         | succ j => simp at hj) (fun i hw => by
           simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
-    exact ih₂ (by simpa using this) hR
-  | @assign Γ i s C R e hi ha hp _ ih =>
-    intro Γ' R' hg hR
+    exact ih₂ (by simpa using this) hR hRc
+  | @assign Γ i s C R _ e hi ha hp _ ih =>
+    intro Γ' R' hg hR hRc
     obtain ⟨s', hs'⟩ := hg.length_some hi
     obtain ⟨hgen, hm⟩ := hg.2 i s s' hi hs'
     rcases hm with hm | hw
@@ -290,58 +294,61 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
       obtain ⟨τs', hl', he, -⟩ := hgen [] (by simp [ha])
       rw [ha'] at hl'
       obtain rfl := List.eq_nil_of_length_eq_zero hl'
-      exact .conv (.assign hs' ha' hp' (.conv (ih (hg.sub fun j hw => by simp_all [Expr.writes]) hR)
+      exact .conv (.assign hs' ha' hp' (.conv (ih (hg.sub fun j hw => by simp_all [Expr.writes]) hR hRc)
         he.symm)) he
     · simp [Expr.writes] at hw
   | cond _ _ _ ihc iht ihe =>
-    intro Γ' R' hg hR
-    exact .cond (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (iht (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .cond (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (iht (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | unop hop _ ih =>
-    intro Γ' R' hg hR
-    exact .unop hop (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .unop hop (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | binop hop _ _ ih₁ ih₂ =>
-    intro Γ' R' hg hR
-    exact .binop hop (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-  | @ret Γ e τr C τ _ ih =>
-    intro Γ' R' hg hR
-    match R', hR with
-    | some τr', hR => exact .ret (.conv (ih (hg.sub fun i hw => by simp_all [Expr.writes])
-        (R' := some τr') hR) hR)
+    intro Γ' R' hg hR hRc
+    exact .binop hop (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+  | @ret C Γ τr rm e md τ _ ih =>
+    intro Γ' R' hg hR hRc
+    match R', hR, rm with
+    | some τr', hR, .synth => exact .ret (.conv (ih (hg.sub fun i hw => by simp_all [Expr.writes])
+        (R' := some τr') hR nofun) hR)
+    | some τr', _, .check =>
+      obtain rfl : τr' = τr := Option.some.inj (hRc rfl)
+      exact .ret (ih (hg.sub fun i hw => by simp_all [Expr.writes]) (RetEq.refl _) (fun _ => rfl))
   | throw_ _ ih =>
-    intro Γ' R' hg hR
-    exact .throw_ (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .throw_ (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | seq _ _ ih₁ ih₂ =>
-    intro Γ' R' hg hR
-    exact .seq (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .seq (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | while_ _ _ ihc ihb =>
-    intro Γ' R' hg hR
-    exact .while_ (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .while_ (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | break_ => intros; exact .break_
   | continue_ => intros; exact .continue_
   | tryCatch _ _ ihb ihh =>
-    intro Γ' R' hg hR
-    refine .tryCatch (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR) ?_
+    intro Γ' R' hg hR hRc
+    refine .tryCatch (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) ?_
     have := hg.prepend (Δ := [.mono .unknown]) (monos_mono [] [.mono .unknown]
         (by simp [Scheme.mono])) (fun i hw => by
           simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
-    exact ihh (by simpa using this) hR
+    exact ihh (by simpa using this) hR hRc
   | tryFinally _ _ ihb ihf =>
-    intro Γ' R' hg hR
-    exact .tryFinally (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ihf (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .tryFinally (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ihf (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | obj hes hks hτs hss hL _ hfs ih =>
-    intro Γ' R' hg hR
+    intro Γ' R' hg hR hRc
     exact .obj hes hks hτs hss hL (fun p hp => ih p hp (hg.sub fun i hw => by
       simp only [Expr.writes] at hw
-      exact Expr.writesList_false' hw _ (List.of_mem_zip hp).1) hR) hfs
-  | @cls ls es ks τs C Γ ss R hes hks hτs hss hnd hL _ hms ih =>
-    intro Γ' R' hg hR
-    refine .cls hes hks hτs hss hnd hL (fun j e k τ he hk hτ => ih j e k τ he hk hτ ?_ trivial) hms
+      exact Expr.writesList_false' hw _ (List.of_mem_zip hp).1) hR hRc) hfs
+  | @cls ls es ks τs C Γ ss R _ hes hks hτs hss hnd hL _ hms ih =>
+    intro Γ' R' hg hR hRc
+    refine .cls hes hks hτs hss hnd hL (fun j e k τ he hk hτ => ih j e k τ he hk hτ ?_ trivial nofun) hms
     have hw := fun i (hw : (Expr.cls ls es ks).writes i = false) => by
       simp only [Expr.writes] at hw
       exact Expr.writesCls_false hw j e k he hk
@@ -358,47 +365,130 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
     | arrow | method | getter =>
       exact hg.sub (fun i h => (hw i h).2 (by simp))
   | ctor hlen _ ih =>
-    intro Γ' R' hg _
-    exact .ctor hlen (ih (hg.ctor hlen) (RetEq.refl _))
+    intro Γ' R' hg _ _
+    exact .ctor hlen (ih (hg.ctor hlen) (RetEq.refl _) (fun _ => rfl))
   | new_ _ hlen _ hρ hss ihf iha =>
-    intro Γ' R' hg hR
-    refine .new_ (ihf (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hlen
-      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR) hρ hss
+    intro Γ' R' hg hR hRc
+    refine .new_ (ihf (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hlen
+      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR hRc) hρ hss
     simp only [Expr.writes, Bool.or_eq_false_iff] at hw
     exact Expr.writesList_false' hw.2 _ (List.of_mem_zip hp).1
   | get _ hp ih =>
-    intro Γ' R' hg hR
-    exact .get (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hp
+    intro Γ' R' hg hR hRc
+    exact .get (ih (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hp
   | set _ hp _ ihe ihv =>
-    intro Γ' R' hg hR
-    exact .set (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hp
-      (ihv (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .set (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hp
+      (ihv (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | spread hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
-    intro Γ' R' hg hR
-    exact .spread hps hks hτs hss hrs (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hm
+    intro Γ' R' hg hR hRc
+    exact .spread hps hks hτs hss hrs (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ih₂ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hm
   | arr _ ih =>
-    intro Γ' R' hg hR
+    intro Γ' R' hg hR hRc
     exact .arr (fun a ha => ih a ha (hg.sub fun i hw => by
       simp only [Expr.writes] at hw
-      exact Expr.writesList_false' hw a ha) hR)
+      exact Expr.writesList_false' hw a ha) hR hRc)
+  | arrCheck hT hT₀ _ ih =>
+    intro Γ' R' hg hR hRc
+    exact .arrCheck hT hT₀ (fun a ha => ih a ha (hg.sub fun i hw => by
+      simp only [Expr.writes] at hw
+      exact Expr.writesList_false' hw a ha) hR hRc)
   | index _ _ hp ihe ihi =>
-    intro Γ' R' hg hR
-    exact .index (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ihi (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hp
+    intro Γ' R' hg hR hRc
+    exact .index (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ihi (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hp
   | setIndex _ _ hp hw₀ _ ihe ihi ihv =>
-    intro Γ' R' hg hR
-    exact .setIndex (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
-      (ihi (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hp hw₀
-      (ihv (hg.sub fun i hw => by simp_all [Expr.writes]) hR)
+    intro Γ' R' hg hR hRc
+    exact .setIndex (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
+      (ihi (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hp hw₀
+      (ihv (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
   | mcall _ hp hlen _ ihe iha =>
-    intro Γ' R' hg hR
-    refine .mcall (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hp hlen
-      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR)
+    intro Γ' R' hg hR hRc
+    refine .mcall (ihe (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hp hlen
+      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR hRc)
     simp only [Expr.writes, Bool.or_eq_false_iff] at hw
     exact Expr.writesList_false' hw.2 _ (List.of_mem_zip hp).1
   | conv _ he ih =>
-    intro Γ' R' hg hR
-    exact .conv (ih hg hR) he
+    intro Γ' R' hg hR hRc
+    exact .conv (ih hg hR hRc) he
+  | inj _ hT hi ih =>
+    intro Γ' R' hg hR hRc
+    exact .inj (ih hg hR hRc) hT hi
+
+/-- An `Inject` of a type equal to its expected one, which has no type
+variables, is an instance. -/
+theorem Pred.inject_self {T τ : Ty} (hT : T.ftv = []) (h : TyEq τ T) :
+    InstEq ⟨.inject T, [τ]⟩ :=
+  InstEq.of_predEq (q := ⟨.inject T, [T]⟩)
+    (PredEq.of_pairs (by simp) (zip_tyEq_cons h zip_tyEq_nil)) (Inst.injectSelf hT).instEq
+
+/-- A derivation whose `return`s are synthesised at `ρ'` has one whose
+`return`s are checked against an equal type `ρ` with no type variables:
+each returned value is injected into it (`HasType.inj`, `Inst.injectSelf`). -/
+theorem HasType.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr}
+    {τ : Ty} {rm md : Mode} (h : HasType L C Γ R rm md e τ) :
+    ∀ {ρ' ρ : Ty}, rm = .synth → R = some ρ' → TyEq ρ' ρ → ρ.ftv = [] →
+      HasType L C Γ (some ρ) .check md e τ := by
+  induction h with
+  | lit hl => intros; exact .lit hl
+  | var hi hlen hc => intros; exact .var hi hlen hc
+  | func hlen hb _ => intros; exact .func hlen hb
+  | funcCheck hw hT hlen hb _ => intros; exact .funcCheck hw hT hlen hb
+  | app _ hlen _ ihf iha =>
+    intro ρ' ρ hm hR he hρ
+    exact .app (ihf hm hR he hρ) hlen (fun p hp => iha p hp hm hR he hρ)
+  | let_ s F _ hv hs ha _ ih₁ ih₂ =>
+    intro ρ' ρ hm hR he hρ
+    exact .let_ s F (fun m hm' => ih₁ m hm' hm hR he hρ) hv hs ha (ih₂ hm hR he hρ)
+  | assign hi ha hp _ ih => intro ρ' ρ hm hR he hρ; exact .assign hi ha hp (ih hm hR he hρ)
+  | cond _ _ _ ihc iht ihe =>
+    intro ρ' ρ hm hR he hρ
+    exact .cond (ihc hm hR he hρ) (iht hm hR he hρ) (ihe hm hR he hρ)
+  | unop hop _ ih => intro ρ' ρ hm hR he hρ; exact .unop hop (ih hm hR he hρ)
+  | binop hop _ _ ih₁ ih₂ =>
+    intro ρ' ρ hm hR he hρ; exact .binop hop (ih₁ hm hR he hρ) (ih₂ hm hR he hρ)
+  | ret _ ih =>
+    intro ρ' ρ hm hR he hρ
+    subst hm
+    cases hR
+    exact .ret (.inj (ih rfl rfl he hρ) hρ (.inl (Pred.inject_self hρ he)))
+  | throw_ _ ih => intro ρ' ρ hm hR he hρ; exact .throw_ (ih hm hR he hρ)
+  | seq _ _ ih₁ ih₂ => intro ρ' ρ hm hR he hρ; exact .seq (ih₁ hm hR he hρ) (ih₂ hm hR he hρ)
+  | while_ _ _ ihc ihb =>
+    intro ρ' ρ hm hR he hρ; exact .while_ (ihc hm hR he hρ) (ihb hm hR he hρ)
+  | break_ => intros; exact .break_
+  | continue_ => intros; exact .continue_
+  | tryCatch _ _ ihb ihh =>
+    intro ρ' ρ hm hR he hρ; exact .tryCatch (ihb hm hR he hρ) (ihh hm hR he hρ)
+  | tryFinally _ _ ihb ihf =>
+    intro ρ' ρ hm hR he hρ; exact .tryFinally (ihb hm hR he hρ) (ihf hm hR he hρ)
+  | obj hes hks hτs hss hL _ hfs ih =>
+    intro ρ' ρ hm hR he hρ
+    exact .obj hes hks hτs hss hL (fun p hp => ih p hp hm hR he hρ) hfs
+  | cls hes hks hτs hss hnd hL hms hs _ => intros; exact .cls hes hks hτs hss hnd hL hms hs
+  | ctor hlen hb _ => intros; exact .ctor hlen hb
+  | new_ _ hlen _ hρ' hss ihf iha =>
+    intro ρ' ρ hm hR he hρ
+    exact .new_ (ihf hm hR he hρ) hlen (fun p hp => iha p hp hm hR he hρ) hρ' hss
+  | get _ hp ih => intro ρ' ρ hm hR he hρ; exact .get (ih hm hR he hρ) hp
+  | set _ hp _ ihe ihv =>
+    intro ρ' ρ hm hR he hρ; exact .set (ihe hm hR he hρ) hp (ihv hm hR he hρ)
+  | spread hps hks hτs hss hrs _ _ hmg ih₁ ih₂ =>
+    intro ρ' ρ hm hR he hρ
+    exact .spread hps hks hτs hss hrs (ih₁ hm hR he hρ) (ih₂ hm hR he hρ) hmg
+  | arr _ ih => intro ρ' ρ hm hR he hρ; exact .arr (fun a ha => ih a ha hm hR he hρ)
+  | arrCheck hw hT _ ih =>
+    intro ρ' ρ hm hR he hρ; exact .arrCheck hw hT (fun a ha => ih a ha hm hR he hρ)
+  | index _ _ hp ihe ihi =>
+    intro ρ' ρ hm hR he hρ; exact .index (ihe hm hR he hρ) (ihi hm hR he hρ) hp
+  | setIndex _ _ hp hw _ ihe ihi ihv =>
+    intro ρ' ρ hm hR he hρ
+    exact .setIndex (ihe hm hR he hρ) (ihi hm hR he hρ) hp hw (ihv hm hR he hρ)
+  | mcall _ hp hlen _ ihe iha =>
+    intro ρ' ρ hm hR he hρ
+    exact .mcall (ihe hm hR he hρ) hp hlen (fun p hp => iha p hp hm hR he hρ)
+  | conv _ he' ih => intro ρ' ρ hm hR he hρ; exact .conv (ih hm hR he hρ) he'
+  | inj _ hT hi ih => intro ρ' ρ hm hR he hρ; exact .inj (ih hm hR he hρ) hT hi
 
 end Inty

@@ -27,7 +27,7 @@ def double : Expr :=
   .let_ false none (.func 1 (.binop .plus (.var 0) (.var 0))) (.app (.var 0) [str "ab"])
 
 -- One derivation types `double` monomorphically, at `String → String`.
-example : HasType L [] [] none double .string :=
+example : HasType L [] [] none .synth .synth double .string :=
   .let_mono (τ₁ := .fn .undefined [.string] .string)
     (.func rfl (.binop (.plus (.of_inst .plusString)) (.var_mono rfl) (.var_mono rfl)))
     (.app (.var_mono rfl) rfl (by simp; exact .lit .string))
@@ -36,7 +36,7 @@ example : HasType L [] [] none double .string :=
 
 /-- `+` is overloaded, but each use picks one instance: the same function body
 also types at `Number`. -/
-example : HasType L [] [] none (.func 1 (.binop .plus (.var 0) (.var 0)))
+example : HasType L [] [] none .synth .synth (.func 1 (.binop .plus (.var 0) (.var 0)))
     (.fn .undefined [.number] .number) :=
   .func rfl (.binop (.plus (.of_inst .plusNumber)) (.var_mono rfl) (.var_mono rfl))
 
@@ -51,7 +51,7 @@ def polyId : Expr :=
 def idScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), []⟩
 
 -- `id` is used at `Number → Number` and at `String → String`.
-example : HasType L [] [] none polyId .string :=
+example : HasType L [] [] none .synth .synth polyId .string :=
   .let_ idScheme [] (fun _ _ => .func rfl (.var_mono rfl)) (.inr ⟨.func, rfl⟩)
     (fun _ h => by simp [idScheme] at h) (fun _ h => by cases h)
     (.let_mono
@@ -74,7 +74,7 @@ def polyDouble : Expr :=
 def doubleScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), [⟨.plus, [.bound 1]⟩]⟩
 
 -- The body is typed assuming `Plus α`; each use establishes it.
-example : HasType L [] [] none polyDouble .string :=
+example : HasType L [] [] none .synth .synth polyDouble .string :=
   .let_ doubleScheme []
     (fun m _ => .func rfl (.binop (.plus (.of_mem (by simp [Scheme.openPreds, Scheme.instPreds,
       doubleScheme, varBlock, PPred.inst, PTy.inst, List.range']))) (.var_mono rfl)
@@ -105,7 +105,7 @@ def countdown : Expr :=
     (str "done")))
     [num 3]
 
-example : HasType L [] [] none countdown .string :=
+example : HasType L [] [] none .synth .synth countdown .string :=
   .app
     (.func (θ := .undefined) (τs := [.number]) (ρ := .string) rfl (.cond (.var_mono rfl)
       (.app (.var_mono rfl) rfl (by simp; exact .binop .minus (.var_mono rfl) (.lit .number)))
@@ -119,15 +119,15 @@ example : HasType L [] [] none countdown .string :=
 /-- `1 + "a"`: inty rejects it, and the semantics gets stuck on it. -/
 def mixedPlus : Expr := .binop .plus (num 1) (str "a")
 
-example : ¬ HasType L [] [] none mixedPlus τ := by
+example : ¬ HasType L [] [] none .synth .synth mixedPlus τ := by
   intro h
-  obtain ⟨_, -, h⟩ := h.top
+  obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | binop hop h₁ h₂ =>
     cases hop with
     | plus _ =>
-      obtain ⟨_, e₁, h₁⟩ := h₁.top
-      obtain ⟨_, e₂, h₂⟩ := h₂.top
+      obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
+      obtain ⟨_, e₂, h₂⟩ := h₂.top_synth
       cases h₁ with
       | lit hl =>
         cases hl
@@ -138,7 +138,7 @@ example : ¬ HasType L [] [] none mixedPlus τ := by
 
 /-- A test may have any type and is read by truthiness:
 `"" ? 1 : 2` is `2`. -/
-example : HasType L [] [] none (.cond (str "") (num 1) (num 2)) .number :=
+example : HasType L [] [] none .synth .synth (.cond (str "") (num 1) (num 2)) .number :=
   .cond (.lit .string) (.lit .number) (.lit .number)
 
 #guard match eval 10 [] [] (.cond (str "") (num 1) (num 2)) with
@@ -283,7 +283,7 @@ to `1`: an early `return` and a `throw`, each standing for any type. -/
 def early : Expr :=
   .app (.func 1 (.cond (.var 0) (.ret (str "pos")) (.throw_ (.var 0)))) [num 1]
 
-example : HasType L [] [] none early .string :=
+example : HasType L [] [] none .synth .synth early .string :=
   .app (.func (θ := .undefined) (τs := [.number]) (ρ := .string) rfl
       (.cond (.var_mono rfl) (.ret (.lit .string)) (.throw_ (.var_mono rfl))))
     rfl (by simp; exact .lit .number)
@@ -297,8 +297,8 @@ example : HasType L [] [] none early .string :=
   | _ => false
 
 /-- `return` outside a function is rejected. -/
-example : ¬ HasType L [] [] none (.ret (num 1)) τ := fun h => by
-  obtain ⟨_, -, h⟩ := h.top; cases h
+example : ¬ HasType L [] [] none .synth .synth (.ret (num 1)) τ := fun h => by
+  obtain ⟨_, -, h⟩ := h.top_synth; cases h
 
 /-! ## Builtins
 

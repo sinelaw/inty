@@ -554,19 +554,49 @@ theorem mergePreds_below {n : Nat} : ∀ {ps ks τs ss rs : List Ty}, (∀ τ �
 /-- What inference returns, from inputs below `n`, is below its next
 unused variable. -/
 def InferInv (L : List String) (e : Expr) : Prop :=
-  ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out}, Ctx.Below n Γ → Ret.Below n R →
-    infer L Γ R e n = some o →
+  ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {ex : Option Ty} {n : Nat} {o : Out}, RetOk rm R →
+    Ex.Closed ex → Ctx.Below n Γ → Ret.Below n R → infer L Γ R rm ex e n = some o →
     n ≤ o.next ∧ o.σ.Within o.next ∧ o.τ.Below o.next ∧ ∀ p ∈ o.preds, p.Below o.next
 
+theorem Ty.Below.closed {n : Nat} {T : Ty} (h : T.ftv = []) : T.Below n := fun a ha => by
+  rw [h] at ha; cases ha
+
+theorem Ex.Closed.getD_below {ex : Option Ty} {m k : Nat} (hex : Ex.Closed ex) (h : m < k) :
+    (ex.getD (.var m)).Below k := by
+  cases ex with
+  | none => exact Ty.Below.var h
+  | some T => exact Ty.Below.closed (hex T rfl)
+
+/-- Inferring `e` against `ex`, as its caller sees it (`checkEx`). -/
+theorem InferInv.check {e : Expr} (ih : InferInv L e) {Γ : Ctx} {R : Option Ty} {rm : Mode}
+    {ex : Option Ty} {n : Nat} {o : Out} (hRo : RetOk rm R) (hex : Ex.Closed ex)
+    (hΓ : Ctx.Below n Γ) (hR : Ret.Below n R)
+    (h : (infer L Γ R rm ex e n).map (checkEx ex e) = some o) :
+    n ≤ o.next ∧ o.σ.Within o.next ∧ o.τ.Below o.next ∧ ∀ p ∈ o.preds, p.Below o.next := by
+  obtain ⟨o', h', rfl⟩ := Option.map_eq_some_iff.mp h
+  obtain ⟨hn, hσ, hτ, hp⟩ := ih hRo hex hΓ hR h'
+  match ex, hex with
+  | none, _ => exact ⟨hn, hσ, hτ, hp⟩
+  | some T, hex =>
+    have hT : T.Below o'.next := Ty.Below.closed (hex T rfl)
+    simp only [checkEx]
+    split
+    · exact ⟨hn, hσ, hτ, hp⟩
+    · refine ⟨hn, hσ, hT, fun p hp' => ?_⟩
+      simp only [List.mem_append, List.mem_singleton] at hp'
+      rcases hp' with hp' | rfl
+      · exact hp p hp'
+      · exact Pred.below_of_args (by simp [hτ])
+
 theorem inferArgs_inv : ∀ (args : List Expr), (∀ a ∈ args, InferInv L a) →
-    ∀ {Γ : Ctx} {R : Option Ty} {n : Nat} {o : OutArgs}, Ctx.Below n Γ → Ret.Below n R →
-      inferArgs L Γ R args n = some o →
+    ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {ex : Option Ty} {n : Nat} {o : OutArgs}, RetOk rm R →
+      Ex.Closed ex → Ctx.Below n Γ → Ret.Below n R → inferArgs L Γ R rm ex args n = some o →
       n ≤ o.next ∧ o.σ.Within o.next ∧ (∀ τ ∈ o.τs, τ.Below o.next) ∧
         ∀ p ∈ o.preds, p.Below o.next
-  | [], _, Γ, R, n, o, _, _, h => by
+  | [], _, Γ, R, rm, ex, n, o, _, _, _, _, h => by
     simp only [inferArgs, Option.some.injEq] at h; subst h
     exact ⟨Nat.le_refl _, .nil _, by simp, by simp⟩
-  | a :: as, ih, Γ, R, n, o, hΓ, hR, h => by
+  | a :: as, ih, Γ, R, rm, ex, n, o, hRo, hex, hΓ, hR, h => by
     simp only [inferArgs] at h
     split at h
     · cases h
@@ -575,8 +605,8 @@ theorem inferArgs_inv : ∀ (args : List Expr), (∀ a ∈ args, InferInv L a) �
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih a (by simp) hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv as (fun a' ha' => ih a' (by simp [ha']))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := InferInv.check (ih a (by simp)) hRo hex hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv as (fun a' ha' => ih a' (by simp [ha'])) (by ret_ok) hex
       (hσ₁.ctx_below (hΓ.mono hn₁)) (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, ?_, ?_⟩
     · intro τ hτ
@@ -786,7 +816,7 @@ theorem inferMembers_inv : ∀ (es : List Expr) (ks : List ClassKind), (∀ a �
       · cases h
       rename_i o₂ h₂
       simp only [Option.some.injEq] at h; subst h
-      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih a List.mem_cons_self (Ctx.Below.append_mono hΔ hΓ) hR h₁
+      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih a List.mem_cons_self RetOk.synth .none (Ctx.Below.append_mono hΔ hΓ) hR h₁
       obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferMembers_inv as ks ih'
         (hσ₁.ctx_below (hΓ.mono hn₁))
         (fun τ hτ => by
@@ -815,7 +845,7 @@ theorem inferMembers_inv : ∀ (es : List Expr) (ks : List ClassKind), (∀ a �
       · cases h
       rename_i o₂ h₂
       simp only [Option.some.injEq] at h; subst h
-      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih a List.mem_cons_self hΓ hR h₁
+      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih a List.mem_cons_self RetOk.synth .none hΓ hR h₁
       obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferMembers_inv as ks ih'
         (hσ₁.ctx_below (hΓ.mono hn₁))
         (fun τ hτ => by
@@ -838,11 +868,11 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
   intro e
   induction e using Expr.ind with
   | lit l =>
-    intro Γ R n o _ _ h
+    intro Γ R rm ex n o hRo hex _ _ h
     simp only [infer, Option.some.injEq] at h; subst h
     exact ⟨Nat.le_refl _, .nil _, Lit.ty_below l _, by simp⟩
   | var i =>
-    intro Γ R n o hΓ _ h
+    intro Γ R rm ex n o hRo hex hΓ _ h
     simp only [infer] at h
     split at h
     · rename_i s hs
@@ -851,33 +881,52 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
         Scheme.openPreds_below (hΓ.lookup hs)⟩
     · cases h
   | func k body ih =>
-    intro Γ R n o hΓ _ h
+    intro Γ R rm ex n o hRo hex hΓ _ h
     simp only [infer] at h
     split at h
-    · cases h
-    rename_i o₁ h₁
-    split at h
-    · cases h
-    rename_i σ' hu
-    simp only [Option.some.injEq] at h; subst h
-    have hθ : (Ty.var n).Below (n + 2 + k) := .var (by omega)
-    have hτs : ∀ τ ∈ varBlock (n + 1) k, τ.Below (n + 2 + k) := fun τ hτ =>
-      (varBlock_below τ hτ).mono (by omega)
-    have hρ : (Ty.var (n + 1 + k)).Below (n + 2 + k) := .var (by omega)
-    have hfn : (Ty.fn (.var n) (varBlock (n + 1) k) (.var (n + 1 + k))).Below (n + 2 + k) :=
-      Ty.Below.fn.mpr ⟨hθ, hτs, hρ⟩
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih
-      (Ctx.Below.append_mono hτs (Ctx.Below.mono_cons hfn (Ctx.Below.mono_cons hθ
-        (hΓ.mono (by omega)))))
-      (fun a ha => hρ a (by simpa [Ret.ftv] using ha)) h₁
-    have hσ' := unify_within (hσ₁.subst_below (hρ.mono hn₁)) hτ₁ hu
-    refine ⟨by dsimp only; omega, hσ₁.compose hσ', ?_, ?_⟩
-    · rw [Ty.subst_compose]; exact hσ'.subst_below (hσ₁.subst_below (hfn.mono hn₁))
-    · intro p hp
-      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-      exact hσ'.pred_below (hp₁ q hq)
+    · rename_i T θ τs ρ hft
+      obtain rfl := funcTarget_some hft
+      obtain ⟨-, hw, -⟩ := funcTarget_fst hft rfl
+      have hT := hex T rfl
+      have hfn := Ty.ftv_nil_of_whnf hw hT
+      have hf := hfn
+      simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.append_eq_nil_iff,
+        List.flatMap_eq_nil_iff] at hf
+      obtain ⟨hθ, hρ, hτs⟩ := hf
+      split at h
+      · cases h
+      rename_i o₁ h₁
+      simp only [Option.some.injEq] at h; subst h
+      obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check ih (RetOk.check hρ) (Ex.Closed.some hρ)
+        (Ctx.Below.append_mono (fun τ hτ => Ty.Below.closed (hτs τ hτ))
+          (Ctx.Below.mono_cons (Ty.Below.closed hfn) (Ctx.Below.mono_cons (Ty.Below.closed hθ) hΓ)))
+        (fun a ha => by simp [Ret.ftv, hρ] at ha) h₁
+      exact ⟨hn₁, hσ₁, Ty.Below.closed hT, hp₁⟩
+    · split at h
+      · cases h
+      rename_i o₁ h₁
+      split at h
+      · cases h
+      rename_i σ' hu
+      simp only [Option.some.injEq] at h; subst h
+      have hθ : (Ty.var n).Below (n + 2 + k) := .var (by omega)
+      have hτs : ∀ τ ∈ varBlock (n + 1) k, τ.Below (n + 2 + k) := fun τ hτ =>
+        (varBlock_below τ hτ).mono (by omega)
+      have hρ : (Ty.var (n + 1 + k)).Below (n + 2 + k) := .var (by omega)
+      have hfn : (Ty.fn (.var n) (varBlock (n + 1) k) (.var (n + 1 + k))).Below (n + 2 + k) :=
+        Ty.Below.fn.mpr ⟨hθ, hτs, hρ⟩
+      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih RetOk.synth .none
+        (Ctx.Below.append_mono hτs (Ctx.Below.mono_cons hfn (Ctx.Below.mono_cons hθ
+          (hΓ.mono (by omega)))))
+        (fun a ha => hρ a (by simpa [Ret.ftv] using ha)) h₁
+      have hσ' := unify_within (hσ₁.subst_below (hρ.mono hn₁)) hτ₁ hu
+      refine ⟨by dsimp only; omega, hσ₁.compose hσ', ?_, ?_⟩
+      · rw [Ty.subst_compose]; exact hσ'.subst_below (hσ₁.subst_below (hfn.mono hn₁))
+      · intro p hp
+        obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+        exact hσ'.pred_below (hp₁ q hq)
   | app f args ihf iha =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -889,8 +938,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i σ₃ hu
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihf hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv args iha
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihf (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv args iha (by ret_ok) .none
       (hσ₁.ctx_below (hΓ.mono hn₁)) (hσ₁.ret_below (hR.mono hn₁)) h₂
     have hσ₃ := unify_within ((hσ₂.subst_below (hτ₁.mono hn₂)).mono (Nat.le_succ _))
       (Ty.Below.fn.mpr ⟨fun a ha => by simp [Ty.ftv] at ha,
@@ -905,7 +954,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hσ₂.pred_below ((hp₁ q' hq').mono hn₂)
     · exact hp₂ q hq
   | let_ _ ann e₁ e₂ ih₁ ih₂ =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     cases ann with
     | some a =>
       simp only [infer] at h
@@ -913,35 +962,30 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       rotate_left
       · cases h
       rename_i ha
-      have haf : ∀ b ∈ a.ftv, b < n := fun b hb => by simp [ha.2.2] at hb
+      have hT := Scheme.inst_nil_closed ha.2.2
       split at h
       · cases h
       rename_i o₁ h₁
-      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ hΓ hR h₁
-      split at h
-      · cases h
-      rename_i σ' hu
+      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := InferInv.check ih₁ hRo (Ex.Closed.some hT) hΓ hR h₁
       split at h
       · cases h
       rename_i o₂ h₂
       simp only [Option.some.injEq] at h; subst h
-      have hσ' := unify_within hτ₁ (Scheme.inst_nil_below fun b hb => Nat.lt_of_lt_of_le (haf b hb) hn₁) hu
-      have hσ₁' := hσ₁.compose hσ'
-      obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂
-        (Ctx.Below.cons (fun b hb => by simp [ha.2.2] at hb) (hσ₁'.ctx_below (hΓ.mono hn₁)))
-        (hσ₁'.ret_below (hR.mono hn₁)) h₂
-      refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁'.mono hn₂).compose hσ₂, hτ₂, ?_⟩
+      obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ih₂ (by ret_ok) hex
+        (Ctx.Below.cons (fun b hb => by simp [ha.2.2] at hb) (hσ₁.ctx_below (hΓ.mono hn₁)))
+        (hσ₁.ret_below (hR.mono hn₁)) h₂
+      refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hτ₂, ?_⟩
       intro p hp
       simp only [List.mem_append, List.mem_map] at hp
-      rcases hp with ⟨q, ⟨q', hq', rfl⟩, rfl⟩ | hp
-      · exact hσ₂.pred_below ((hσ'.pred_below (hp₁ q' hq')).mono hn₂)
+      rcases hp with ⟨q, hq, rfl⟩ | hp
+      · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
       · exact hp₂ p hp
     | none =>
     simp only [infer] at h
     split at h
     · cases h
     rename_i o₁ h₁
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ (by ret_ok) .none hΓ hR h₁
     split at h
     · cases h
     rename_i σi preds₁ himp
@@ -960,7 +1004,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂ (Ctx.Below.cons hls.1 (hσ₁'.ctx_below (hΓ.mono hn₁)))
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ih₂ (by ret_ok) hex (Ctx.Below.cons hls.1 (hσ₁'.ctx_below (hΓ.mono hn₁)))
       (hσ₁'.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁'.mono hn₂).compose hσ₂, hτ₂, ?_⟩
     intro p hp
@@ -969,7 +1013,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hσ₂.pred_below ((hls.2 q hq).mono hn₂)
     · exact hp₂ p hp
   | assign i e ih =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -984,7 +1028,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i σ' hu
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih (by ret_ok) .none hΓ hR h₁
     have hsb : (s.inst []).Below n := Scheme.inst_nil_below (hΓ.lookup hs)
     have hσ' := unify_within (hσ₁.subst_below (hsb.mono hn₁)) hτ₁ hu
     refine ⟨hn₁, hσ₁.compose hσ', ?_, ?_⟩
@@ -993,7 +1037,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact hσ'.pred_below (hp₁ q hq)
   | cond c t e ihc iht ihe =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1008,10 +1052,10 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i σ₄ hu
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihc hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := iht (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihc (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check iht (by ret_ok) hex (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
-    obtain ⟨hn₃, hσ₃, hτ₃, hp₃⟩ := ihe (hσ₂.ctx_below (hσ₁.ctx_below (hΓ.mono hn₁) |>.mono hn₂))
+    obtain ⟨hn₃, hσ₃, hτ₃, hp₃⟩ := InferInv.check ihe (by ret_ok) hex (hσ₂.ctx_below (hσ₁.ctx_below (hΓ.mono hn₁) |>.mono hn₂))
       (hσ₂.ret_below (hσ₁.ret_below (hR.mono hn₁) |>.mono hn₂)) h₃
     have hσ₄ := unify_within (hσ₃.subst_below (hτ₂.mono hn₃)) hτ₃ hu
     refine ⟨by dsimp only; omega, ((((hσ₁.mono hn₂).compose hσ₂).mono hn₃).compose hσ₃).compose hσ₄,
@@ -1026,12 +1070,12 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       · exact hσ₃.pred_below ((hp₂ q' hq').mono hn₃)
     · exact hp₃ q hq
   | unop op e ih =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
     rename_i o₁ h₁
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih (by ret_ok) .none hΓ hR h₁
     cases op with
     | not =>
       simp only [Option.some.injEq] at h; subst h
@@ -1051,7 +1095,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact hσ'.pred_below (hp₁ q hq)
   | binop op e₁ e₂ ih₁ ih₂ =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1059,8 +1103,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     split at h
     · cases h
     rename_i o₂ h₂
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂ (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂ (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     have hpre : ∀ p ∈ o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, p.Below o₂.next := by
       intro p hp
@@ -1103,10 +1147,10 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       obtain ⟨q', hq', rfl⟩ := List.mem_map.mp hq
       exact hσ₄.pred_below (hσ₃.pred_below (hpre q' hq'))
   | ret e ih =>
-    intro Γ R n o hΓ hR h
-    cases R with
-    | none => simp [infer] at h
-    | some τr =>
+    intro Γ R rm ex n o hRo hex hΓ hR h
+    match R, rm with
+    | none, _ => simp [infer] at h
+    | some τr, .synth =>
       simp only [infer] at h
       split at h
       · cases h
@@ -1115,25 +1159,35 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       · cases h
       rename_i σ' hu
       simp only [Option.some.injEq] at h; subst h
-      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih hΓ hR h₁
+      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih (by ret_ok) .none hΓ hR h₁
       have hτr : τr.Below n := fun a ha => hR a (by simpa [Ret.ftv] using ha)
       have hσ' := unify_within (hσ₁.subst_below (hτr.mono hn₁)) hτ₁ hu
-      refine ⟨by dsimp only; omega, (hσ₁.compose hσ').mono (Nat.le_succ _), .var (by dsimp only; omega), ?_⟩
+      refine ⟨by dsimp only; omega, (hσ₁.compose hσ').mono (Nat.le_succ _),
+        hex.getD_below (by dsimp only; omega), ?_⟩
       intro p hp
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact (hσ'.pred_below (hp₁ q hq)).mono (Nat.le_succ _)
+    | some τr, .check =>
+      simp only [infer] at h
+      split at h
+      · cases h
+      rename_i o₁ h₁
+      simp only [Option.some.injEq] at h; subst h
+      obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check ih hRo (Ex.Closed.some (hRo rfl τr rfl)) hΓ hR h₁
+      refine ⟨by dsimp only; omega, hσ₁.mono (Nat.le_succ _), hex.getD_below (by dsimp only; omega),
+        fun p hp => (hp₁ p hp).mono (Nat.le_succ _)⟩
   | throw_ e ih =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
     rename_i o₁ h₁
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih (by ret_ok) .none hΓ hR h₁
     exact ⟨by dsimp only; omega, hσ₁.mono (Nat.le_succ _), .var (by dsimp only; omega),
       fun p hp => (hp₁ p hp).mono (Nat.le_succ _)⟩
   | seq e₁ e₂ ih₁ ih₂ =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1142,8 +1196,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂ (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ih₂ (by ret_ok) hex (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hτ₂, ?_⟩
     intro p hp
@@ -1153,7 +1207,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hp₂ p hp
 
   | while_ c body ihc ihb =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1162,8 +1216,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, _, hp₁⟩ := ihc hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihb (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, _, hp₁⟩ := ihc (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihb (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, fun a ha => by simp [Ty.ftv] at ha,
       ?_⟩
@@ -1173,11 +1227,11 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
     · exact hp₂ p hp
   | break_ | continue_ =>
-    intro Γ R n o _ _ h
+    intro Γ R rm ex n o hRo hex _ _ h
     simp only [infer, Option.some.injEq] at h; subst h
-    exact ⟨Nat.le_succ _, .nil _, .var (Nat.lt_succ_self _), by simp⟩
+    exact ⟨Nat.le_succ _, .nil _, hex.getD_below (Nat.lt_succ_self _), by simp⟩
   | tryCatch body handler ihb ihh =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1189,9 +1243,9 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i σ₃ hu
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihb hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := InferInv.check ihb (by ret_ok) hex hΓ hR h₁
     have hunk : Ty.unknown.Below o₁.next := fun a ha => by simp [Ty.ftv] at ha
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihh (Ctx.Below.mono_cons hunk (hσ₁.ctx_below (hΓ.mono hn₁)))
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ihh (by ret_ok) hex (Ctx.Below.mono_cons hunk (hσ₁.ctx_below (hΓ.mono hn₁)))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     have hσ₃ := unify_within (hσ₂.subst_below (hτ₁.mono hn₂)) hτ₂ hu
     refine ⟨Nat.le_trans hn₁ hn₂, ((hσ₁.mono hn₂).compose hσ₂).compose hσ₃,
@@ -1204,7 +1258,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hσ₂.pred_below ((hp₁ q' hq').mono hn₂)
     · exact hp₂ q hq
   | tryFinally body fin ihb ihf =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1213,8 +1267,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihb hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihf (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := InferInv.check ihb (by ret_ok) hex hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihf (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hσ₂.subst_below (hτ₁.mono hn₂), ?_⟩
     intro p hp
@@ -1224,7 +1278,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact hp₂ p hp
 
   | obj ls es ks ih =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     rotate_left
@@ -1232,7 +1286,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     split at h
     · cases h
     rename_i o₁ h₁
-    obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferArgs_inv es ih hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferArgs_inv es ih (by ret_ok) .none hΓ hR h₁
     split at h
     · cases h
     rename_i θs ss hfs
@@ -1248,7 +1302,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact hw.pred_below (hp₁ q hq)
   | cls ls es ks ih =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     rotate_left
@@ -1276,7 +1330,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       simp only [List.mem_range'_1] at ha
       exact hw.pred_below (fun x hx => by simp [Pred.ftv, Ty.ftv] at hx; omega)
   | ctor k body ih =>
-    intro Γ R n o hΓ _ h
+    intro Γ R rm ex n o hRo hex hΓ _ h
     simp only [infer] at h
     split at h
     · cases h
@@ -1291,7 +1345,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     have hρ : (Ty.var (n + k)).Below (n + 1 + k) := .var (by omega)
     have hfn : (Ty.fn .newTarget (varBlock n k) (.var (n + k))).Below (n + 1 + k) :=
       Ty.Below.fn.mpr ⟨hθ, hτs, hρ⟩
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih RetOk.synth .none
       (Ctx.Below.append_mono hτs (Ctx.Below.mono_cons hfn (Ctx.Below.mono_cons hθ
         (hΓ.mono (by omega)))))
       (fun a ha => hρ a (by simpa [Ret.ftv] using ha)) h₁
@@ -1302,7 +1356,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact hσ'.pred_below (hp₁ q hq)
   | new_ f args ihf iha =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1314,8 +1368,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i σ₃ hu
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihf hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv args iha
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihf (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv args iha (by ret_ok) .none
       (hσ₁.ctx_below (hΓ.mono hn₁)) (hσ₁.ret_below (hR.mono hn₁)) h₂
     have hle : o₂.next ≤ o₂.next + L.length := Nat.le_add_right _ _
     have hρ : (Ty.record L (varBlock o₂.next L.length)).Below (o₂.next + L.length) :=
@@ -1332,13 +1386,13 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact (hσ₂.pred_below ((hp₁ q' hq').mono hn₂)).mono hle
     · exact (hp₂ q hq').mono hle
   | get e l ih =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
     rename_i o₁ h₁
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih (by ret_ok) .none hΓ hR h₁
     have hle : o₁.next ≤ o₁.next + 2 := by omega
     dsimp only
     refine ⟨Nat.le_trans hn₁ hle, hσ₁.mono hle, Ty.Below.var (by omega), ?_⟩
@@ -1354,7 +1408,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       · omega
       · omega
   | set e l v ihe ihv =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1363,8 +1417,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihv (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihv (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hτ₂, ?_⟩
     intro p hp
@@ -1376,7 +1430,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
       subst hp; exact Pred.below_of_args (by simp [hr, hτ₂, Ty.Below.con])
   | spread e₁ e₂ ih₁ ih₂ =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1391,8 +1445,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i σ₄ hu₄
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂ (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ih₂ (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     have hle : o₂.next ≤ o₂.next + 5 * L.length := by omega
     have hb : ∀ j, j < 5 → ∀ τ ∈ varBlock (o₂.next + j * L.length) L.length,
@@ -1425,28 +1479,40 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · exact (hp₂ q hq').mono hle
     · exact mergePreds_below hb₁ hb₂ hb₃ hb₀ hb₄ q hq'
   | arr es ih =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
-    · cases h
-    rename_i o₁ h₁
-    split at h
-    · cases h
-    rename_i σ' hu
-    simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferArgs_inv es (fun a ha => ih a ha) hΓ hR h₁
-    have hle : o₁.next ≤ o₁.next + 1 := Nat.le_succ _
-    have hα : (Ty.var o₁.next).Below (o₁.next + 1) := Ty.Below.var (Nat.lt_succ_self _)
-    have hσ' := unify_within (Ty.Below.app.mpr (fun τ hτ => (hτs₁ τ hτ).mono hle))
-      (Ty.Below.app.mpr (fun τ hτ => by rw [List.eq_of_mem_replicate hτ]; exact hα)) hu
-    refine ⟨by dsimp only; omega, (hσ₁.mono hle).compose hσ',
-      hσ'.subst_below (Ty.Below.app.mpr (fun τ hτ => by
-        simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ; subst hτ; exact hα)), ?_⟩
-    intro p hp
-    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-    exact hσ'.pred_below ((hp₁ q hq).mono hle)
+    · rename_i T σ hat
+      obtain rfl := arrTarget_some hat
+      obtain ⟨-, hw⟩ := arrTarget_fst hat rfl
+      have hT := hex T rfl
+      have hσ : σ.ftv = [] := by simpa [Ty.ftv] using Ty.ftv_nil_of_whnf hw hT
+      split at h
+      · cases h
+      rename_i o₁ h₁
+      simp only [Option.some.injEq] at h; subst h
+      obtain ⟨hn₁, hσ₁, -, hp₁⟩ := inferArgs_inv es (fun a ha => ih a ha) hRo (Ex.Closed.some hσ) hΓ hR h₁
+      exact ⟨hn₁, hσ₁, Ty.Below.closed hT, hp₁⟩
+    · split at h
+      · cases h
+      rename_i o₁ h₁
+      split at h
+      · cases h
+      rename_i σ' hu
+      simp only [Option.some.injEq] at h; subst h
+      obtain ⟨hn₁, hσ₁, hτs₁, hp₁⟩ := inferArgs_inv es (fun a ha => ih a ha) (by ret_ok) .none hΓ hR h₁
+      have hle : o₁.next ≤ o₁.next + 1 := Nat.le_succ _
+      have hα : (Ty.var o₁.next).Below (o₁.next + 1) := Ty.Below.var (Nat.lt_succ_self _)
+      have hσ' := unify_within (Ty.Below.app.mpr (fun τ hτ => (hτs₁ τ hτ).mono hle))
+        (Ty.Below.app.mpr (fun τ hτ => by rw [List.eq_of_mem_replicate hτ]; exact hα)) hu
+      refine ⟨by dsimp only; omega, (hσ₁.mono hle).compose hσ',
+        hσ'.subst_below (Ty.Below.app.mpr (fun τ hτ => by
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ; subst hτ; exact hα)), ?_⟩
+      intro p hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      exact hσ'.pred_below ((hp₁ q hq).mono hle)
   | index e i ihe ihi =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1455,8 +1521,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihi (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihi (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     have hle : o₂.next ≤ o₂.next + 1 := Nat.le_succ _
     refine ⟨by dsimp only; omega, ((hσ₁.mono hn₂).compose hσ₂).mono hle,
@@ -1473,7 +1539,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       · exact hτ₂.mono hle
       · exact Ty.Below.var (Nat.lt_succ_self _)
   | setIndex e i v ihe ihi ihv =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1485,10 +1551,10 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₃ h₃
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihi (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := ihi (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
-    obtain ⟨hn₃, hσ₃, hτ₃, hp₃⟩ := ihv (hσ₂.ctx_below ((hσ₁.ctx_below (hΓ.mono hn₁)).mono hn₂))
+    obtain ⟨hn₃, hσ₃, hτ₃, hp₃⟩ := ihv (by ret_ok) .none (hσ₂.ctx_below ((hσ₁.ctx_below (hΓ.mono hn₁)).mono hn₂))
       (hσ₂.ret_below ((hσ₁.ret_below (hR.mono hn₁)).mono hn₂)) h₃
     refine ⟨by dsimp only; omega, (((hσ₁.mono hn₂).compose hσ₂).mono hn₃).compose hσ₃, hτ₃, ?_⟩
     have hc := hσ₃.subst_below ((hσ₂.subst_below (hτ₁.mono hn₂)).mono hn₃)
@@ -1502,7 +1568,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
       rcases hp with rfl | rfl <;> exact Pred.below_of_args (by simp [hc, hi, hτ₃])
   | mcall e l args ihe iha =>
-    intro Γ R n o hΓ hR h
+    intro Γ R rm ex n o hRo hex hΓ hR h
     simp only [infer] at h
     split at h
     · cases h
@@ -1511,8 +1577,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv args iha
+    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ihe (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₂, hσ₂, hτs₂, hp₂⟩ := inferArgs_inv args iha (by ret_ok) .none
       (hσ₁.ctx_below (hΓ.mono hn₁)) (hσ₁.ret_below (hR.mono hn₁)) h₂
     have hle : o₂.next ≤ o₂.next + 2 := by omega
     have hτ : (o₁.τ.subst o₂.σ).Below (o₂.next + 2) := (hσ₂.subst_below (hτ₁.mono hn₂)).mono hle

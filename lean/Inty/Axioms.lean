@@ -15,7 +15,7 @@ new axiom changes this output and fails the build.
 /-- info: 'Inty.never_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.never_stuck
 
-/-- info: 'Inty.HasType.subst' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'Inty.HasType.subst' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.HasType.subst
 
 /-- info: 'Inty.inferProgram_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/

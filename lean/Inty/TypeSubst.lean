@@ -86,8 +86,9 @@ theorem zip3_map {α β γ : Type} (f : β → β) (g : γ → γ) : ∀ (ks : L
   | _ :: _, _ :: _, [] => rfl
   | k :: ks, t :: ts, s :: ss => by simp [zip3_map f g ks ts ss]
 
-theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
-    HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) e (τ.subst σ) := by
+theorem HasType.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
+    HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) rm md e
+      (τ.subst σ) := by
   induction h with
   | lit hl => cases hl <;> exact .lit (by constructor)
   | var hi hlen hc =>
@@ -100,6 +101,20 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
   | func hlen _ ih =>
     refine .func (by simpa using hlen) ?_
     simpa [List.map_append, Function.comp_def] using ih
+  | @funcCheck n C Γ ρ body R rm T θ τs hT hT₀ hlen _ ih =>
+    have hf := Ty.ftv_nil_of_whnf hT hT₀
+    simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.append_eq_nil_iff,
+      List.flatMap_eq_nil_iff] at hf
+    obtain ⟨hθ, hρ, hτs⟩ := hf
+    rw [Ty.closed_subst hT₀]
+    refine .funcCheck hT hT₀ hlen ?_
+    have h1 : (τs.map Scheme.mono).map (Scheme.subst σ) = τs.map Scheme.mono := by
+      rw [List.map_map]
+      exact List.map_congr_left fun t ht => by
+        simp only [Function.comp_apply, Scheme.mono_subst, Ty.closed_subst (hτs t ht)]
+    rw [List.map_append, List.map_cons, List.map_cons, h1, Scheme.mono_subst, Scheme.mono_subst,
+      Ty.closed_subst (Ty.ftv_nil_of_whnf hT hT₀), Ty.closed_subst hθ] at ih
+    simpa [Ty.closed_subst hρ] using ih
   | app _ hlen _ ihf iha =>
     refine .app (by simpa using ihf) (by simpa using hlen) (fun p hp => ?_)
     rw [List.zip_map_right] at hp
@@ -139,7 +154,7 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
-  | @obj _ _ _ _ _ _ _ τs hes hks hτs hss hL _ hm ih =>
+  | @obj _ _ _ _ _ _ _ _ τs hes hks hτs hss hL _ hm ih =>
     simp only [Ty.subst_app, objSlots_subst]
     refine .obj (τs := τs.map (·.subst σ)) hes hks (by simpa using hτs) (by simpa using hss) hL (fun p hp => ?_) (fun x hx => ?_)
     · rw [List.zip_map_right] at hp
@@ -149,7 +164,7 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
       obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
       have := (hm y hy).subst σ
       simpa [Ty.subst_app, objSlots_subst] using this
-  | @cls _ _ _ τs _ _ _ _ hes hks hτs hss hnd hL _ hm ih =>
+  | @cls _ _ _ τs _ _ _ _ _ hes hks hτs hss hnd hL _ hm ih =>
     simp only [Ty.subst_app, objSlots_subst]
     refine .cls (τs := τs.map (·.subst σ)) hes hks (by simpa using hτs) (by simpa using hss) hnd hL
       (fun i e k τ he hk hτ => ?_) (fun x hx => ?_)
@@ -173,7 +188,7 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
     exact iha q hq
   | get _ hp ih => exact .get ih (by simpa [Pred.subst] using hp.subst σ)
   | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.subst] using hp.subst σ) ihv
-  | @spread _ _ _ _ _ _ ps ks τs _ hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
+  | @spread _ _ _ _ _ _ _ ps ks τs _ hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
     simp only [Ty.subst_app] at ih₁ ih₂ ⊢
     refine .spread (ps := ps.map (·.subst σ)) (ks := ks.map (·.subst σ)) (τs := τs.map (·.subst σ))
       (by simpa using hps) (by simpa using hks) (by simpa using hτs) (by simpa using hss)
@@ -183,6 +198,11 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       exact (hm q hq).subst σ
   | arr _ ih => exact .arr ih
+  | arrCheck hT hT₀ _ ih =>
+    have hf := Ty.ftv_nil_of_whnf hT hT₀
+    simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.flatMap_nil, List.append_nil] at hf
+    rw [Ty.closed_subst hT₀]
+    exact .arrCheck hT hT₀ (fun e he => by simpa [Ty.closed_subst hf] using ih e he)
   | index _ _ hp ihe ihi => exact .index ihe ihi (by simpa [Pred.subst] using hp.subst σ)
   | setIndex _ _ hp hw _ ihe ihi ihv =>
     exact .setIndex ihe ihi (by simpa [Pred.subst] using hp.subst σ)
@@ -194,5 +214,8 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq
   | conv _ he ih => exact .conv ih (he.subst σ)
+  | inj _ hT hi ih =>
+    rw [Ty.subst_id (fun x hx => by rw [hT] at hx; cases hx)]
+    exact .inj ih hT (by simpa [Pred.subst] using hi.subst σ)
 
 end Inty
