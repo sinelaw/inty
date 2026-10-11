@@ -1,4 +1,4 @@
-import Inty.Wide
+import Inty.Rigid
 import Inty.Clock
 
 /-!
