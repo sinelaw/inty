@@ -273,16 +273,6 @@ theorem Entails.weaken {C D : List Pred} {p : Pred} (h : Entails C p) (hCD : ∀
     Entails D p :=
   h.elim .inl (fun ⟨q, hq, hpq⟩ => .inr ⟨q, hCD q hq, hpq⟩)
 
-/-- `p` is an instance, or assumed in `C`: entailment with types compared
-syntactically, the fragment inference is complete for (`HasType₀`). -/
-def Entails₀ (C : List Pred) (p : Pred) : Prop := Inst p ∨ p ∈ C
-
-theorem Entails₀.subst (σ : Subst) (h : Entails₀ C p) :
-    Entails₀ (C.map (·.subst σ)) (p.subst σ) :=
-  h.elim (fun h => .inl (h.subst σ)) (fun h => .inr (List.mem_map_of_mem h))
-
-theorem Entails₀.entails (h : Entails₀ C p) : Entails C p := h.elim Entails.of_inst Entails.of_mem
-
 /-- Decides `SlotCopy s r`. -/
 def slotCopy? : Ty → Ty → Bool
   | .slot .pre .data τ, r => decide (r = .slot .pre .data τ)

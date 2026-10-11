@@ -181,8 +181,8 @@ touching the generic proofs.
   type. An open row (`{x: T | r}` in inty) is a record whose other slots
   are variables; a closed one has them `abs`. Within the program's labels
   this is equivalent to Rémy's row system with presence, which inty
-  implements with tails (`types::RowType`), and it keeps unification
-  plain Robinson unification, with no type equality up to permutation.
+  implements with tails (`types::RowType`), and it keeps unification free
+  of type equality up to permutation.
 - **Classes with functional dependencies, once.** `HasProp p τ σ` (a read
   or write of `o.p` on a receiver of unknown type, inty's `a has {p: b}`)
   and `Indexable c i e` (`xs[i]`) are both classes some of whose
@@ -307,17 +307,20 @@ touching the generic proofs.
   good only below it). Unification tries syntactically, then up to
   unfolding, binding a variable that occurs only under a record or a
   function to a recursive type, as inty's `create_recursive_type` does.
-  Inference is sound for it, and complete for the syntactic fragment
-  (`HasType₀`); completeness up to unfolding, and a variable occurring
-  inside a nested recursive type (which the model's unifier rejects), are
-  still to come.
+  Unification is a congruence closure on the types' finite graphs of
+  subterms, most general up to `TyEq`; inference is sound and complete for
+  the whole of `HasType`, conversion included. Generalisation is over the
+  variables of the unfolded trees (`Ty.tv`), not the free variables of an
+  equation system some of whose equations the unfolding never reaches, and
+  a simple scheme's `Merge` has a quantified variable in the trees of its
+  determining arguments.
 - Done: methods written `m() {…}`. In JavaScript a method's `this` is its
   receiver at each call, as a `function`'s is; inty types it as the
   literal's own type (`shared_this` in `infer_object`), which is sound but
   rejects a method borrowed by an object of another type. The model types
-  it as inty does (`MethodsThis`): soundness covers it, inference unifies
-  the methods' `this`s with each other and then with the literal's type,
-  and completeness covers literals without such methods.
+  it as inty does: soundness covers it, inference unifies the methods'
+  `this`s with each other and then with the literal's type, and
+  completeness covers methods, getters, method calls and classes.
 - Done: classes without `extends`. inty lowers a class to a factory taking
   the constructor's parameters and returning an object literal whose
   methods are written as methods, and `new C(…)` to a call, which the

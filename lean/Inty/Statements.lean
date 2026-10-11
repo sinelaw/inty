@@ -49,11 +49,8 @@ example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : 
 example : ∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify τ₁ τ₂ = some σ → TyEq (τ₁.subst σ) (τ₂.subst σ) :=
   unify_sound
 
-example : ∀ {τ₁ τ₂ : Ty} {σ : Subst}, unify₀ τ₁ τ₂ = some σ → τ₁.subst σ = τ₂.subst σ :=
-  unify₀_sound
-
-example : ∀ {τ₁ τ₂ : Ty} {ψ : Subst}, τ₁.subst ψ = τ₂.subst ψ →
-    ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, (τ.subst σ).subst ψ = τ.subst ψ :=
+example : ∀ {τ₁ τ₂ : Ty} {ψ : Subst}, TyEq (τ₁.subst ψ) (τ₂.subst ψ) →
+    ∃ σ, unify τ₁ τ₂ = some σ ∧ ∀ τ : Ty, TyEq ((τ.subst σ).subst ψ) (τ.subst ψ) :=
   unify_mgu
 
 example : ∀ {L : List String} {e : Expr} {Γ : Ctx} {R : Option Ty} {n : Nat} {o : Out},
@@ -77,19 +74,27 @@ example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L builtinCtx e = s
 example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {n : Nat} {ψ : Subst}
     {C : List Pred} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
     Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
-    Γ' = Ctx.subst ψ Γ → R' = Ret.subst ψ R → HasType₀ L C Γ' R' e τ' →
-    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ o.τ.subst φ = τ' ∧ Sat₀ C o.preds φ :=
+    CtxEq Γ' (Ctx.subst ψ Γ) → RetEq R' (Ret.subst ψ R) → HasType L C Γ' R' e τ' →
+    ∃ o, infer L Γ R e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ TyEq (o.τ.subst φ) τ' ∧
+      Sat C o.preds φ :=
   infer_complete
 
 example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}, ctxFtv Γ = [] →
     (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true →
-    HasType₀ L C Γ none e τ' →
-    ∃ o, infer L Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn L Γ e = some τ :=
+    HasType L C Γ none e τ' →
+    ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType₀ e.labels.eraseDups [] [] none e τ' →
-    ∃ τ, inferProgram e = some τ :=
+example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → HasType e.labels.eraseDups [] [] none e τ' →
+    ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferProgram_complete
+
+example : Agree n σ φ ψ ↔ ∀ a < n, TyEq (((Ty.var a).subst σ).subst φ) ((Ty.var a).subst ψ) :=
+  Iff.rfl
+
+example : SchemeEq s s' ↔ s.arity = s'.arity ∧ s.preds.length = s'.preds.length ∧
+    ∀ τs, τs.length = s.arity → TyEq (s.inst τs) (s'.inst τs) ∧
+      ∀ x ∈ (s.instPreds τs).zip (s'.instPreds τs), PredEq x.1 x.2 := Iff.rfl
 
 example : Pred.OnVarShaped p ↔
     (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ a rest, p.args = .var a :: rest) ∨
@@ -189,7 +194,7 @@ example : G W [] env ↔ env = [] := by cases env <;> simp [G]
 
 As with `V`, a larger instance table weakens what `eval_sound` says. -/
 
-example : Entails C p ↔ (∃ q, PredEq p q ∧ Inst q) ∨ p ∈ C := Iff.rfl
+example : Entails C p ↔ (∃ q, PredEq p q ∧ Inst q) ∨ ∃ q ∈ C, PredEq p q := Iff.rfl
 example : PredEq p q ↔ p.cls = q.cls ∧ p.args.length = q.args.length ∧
     ∀ x ∈ p.args.zip q.args, TyEq x.1 x.2 := Iff.rfl
 example : TyEq s t ↔ ∀ n, s.approx n = t.approx n := Iff.rfl
@@ -255,42 +260,58 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .indexString
     · exact .writeArray⟩
 
-/-- A constraint left on a type variable, or a `Merge` waiting on one, is
-all `HoldsOrVar` allows beside the instances. -/
+/-- A constraint left on a type variable, or a `Merge` waiting on one (each
+looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/
 example : HoldsOrVar C ↔ ∀ p ∈ C, (∃ q, PredEq p q ∧ Inst q) ∨
-    (∃ a rest, p.args = .var a :: rest) ∨ p.MergeOnVar :=
+    (∃ t a rest, p.args = t :: rest ∧ t.whnf = .var a) ∨ p.MergeOnVar :=
   Iff.rfl
 
 example : Pred.MergeOnVar p ↔ match p with
-    | ⟨.merge, [.pre, .var _, _, _, _]⟩ => True
-    | ⟨.merge, [.pre, .proto, _, s, _]⟩ => s.SlotOnVar
-    | ⟨.merge, [.abs, _, _, s, _]⟩ => s.SlotOnVar
+    | ⟨.merge, [q, k, _, s, _]⟩ =>
+      (q.whnf = .pre ∧ ∃ a, k.whnf = .var a) ∨
+        (((q.whnf = .pre ∧ k.whnf = .proto) ∨ q.whnf = .abs) ∧ s.SlotOnVar)
     | _ => False := Iff.rfl
 
-example : Ty.SlotOnVar s ↔ match s with
+example : Ty.SlotOnVar s ↔ match s.whnf with
     | .var _ => True
-    | .slot (.var _) _ _ => True
-    | .slot .pre (.var _) _ => True
+    | .slot p k _ => (∃ a, p.whnf = .var a) ∨ (p.whnf = .pre ∧ ∃ a, k.whnf = .var a)
     | _ => False := Iff.rfl
+
+/-- A simple scheme's constraint is on one of its variables, or is a `Merge`
+with one of them in the trees of its determining arguments. -/
+example : Scheme.Simple s ↔ ∀ p ∈ s.preds, (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧
+      ∃ i < s.arity, ∃ rest, p.args = .bound i :: rest) ∨
+    ∃ q k τ t r, p = ⟨.merge, [q, k, τ, t, r]⟩ ∧
+      ∃ i < s.arity, ∃ x ∈ [q, k, τ, t], x.TreeBound s.arity i := Iff.rfl
+
+example : PTy.TreeBound k p i ↔
+    (p.inst (varBlock (maxPlusOne p.ftv) k)).TV (maxPlusOne p.ftv + i) := Iff.rfl
+
+example : Ty.TV τ a ↔ ∃ n, (τ.approx n).HasVar a := Iff.rfl
+
+example : ∀ {τ : Ty} {a : Nat}, a ∈ τ.tv ↔ τ.TV a := Ty.mem_tv
 
 /-- The builtins' types, which their soundness proofs establish. -/
 example : builtinCtx =
     [⟨1, .fn .undefined [.bound 0] .boolean, []⟩, .mono (.fn .undefined [.number] .number)] :=
   rfl
 
-/-- An object literal's field written as a method is a function whose
-`this` is the literal's type, up to unfolding; a getter's is too, of no
-parameters, and its slot is what it gives. -/
-example : FieldSlot T k τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
-    (k = .method ∧ ∃ θ ps ρ, τ = .fn θ ps ρ ∧ s = .slot .pre .data τ ∧ TyEq θ T) ∨
-    (k = .getter ∧ ∃ θ σ, τ = .fn θ [] σ ∧ s = .slot .pre .getter σ ∧ TyEq θ T) :=
+/-- An object literal's field written as a method is a function expression
+whose `this` is the literal's type, up to unfolding; a getter's is too, of
+no parameters, and its slot is what it gives. -/
+example : FieldSlot T k e τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
+    (k = .method ∧ ∃ n b θ ps ρ, e = .func n b ∧ τ = .fn θ ps ρ ∧ s = .slot .pre .data τ ∧
+      TyEq θ T) ∨
+    (k = .getter ∧ ∃ b θ σ, e = .func 0 b ∧ τ = .fn θ [] σ ∧ s = .slot .pre .getter σ ∧
+      TyEq θ T) :=
   ⟨fun h => by
     cases h with
     | data => exact .inl ⟨rfl, rfl⟩
-    | method he => exact .inr (.inl ⟨rfl, _, _, _, rfl, rfl, he⟩)
-    | getter he => exact .inr (.inr ⟨rfl, _, _, rfl, rfl, he⟩),
+    | method he => exact .inr (.inl ⟨rfl, _, _, _, _, _, rfl, rfl, rfl, he⟩)
+    | getter he => exact .inr (.inr ⟨rfl, _, _, _, rfl, rfl, rfl, he⟩),
    fun h => by
-    rcases h with ⟨rfl, rfl⟩ | ⟨rfl, θ, ps, ρ, rfl, rfl, he⟩ | ⟨rfl, θ, σ, rfl, rfl, he⟩
+    rcases h with ⟨rfl, rfl⟩ | ⟨rfl, n, b, θ, ps, ρ, rfl, rfl, rfl, he⟩ |
+      ⟨rfl, b, θ, σ, rfl, rfl, rfl, he⟩
     · exact .data
     · exact .method he
     · exact .getter he⟩
@@ -380,7 +401,7 @@ example : ¬ HasType L [] [] none (.binop .plus (.lit (.boolean true)) (.lit (.b
           case plusNumber => exact ne_con (by decide) (e₁.trans (PredEq.one hq).2)
           case plusString => exact ne_con (by decide) (e₁.trans (PredEq.one hq).2)
           all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
-        · cases hc
+        · obtain ⟨_, hm, -⟩ := hc; cases hm
 
 /-- `"a" - 1`: `-` is `Number` only. -/
 example : ¬ HasType L [] [] none (.binop .minus (str "a") (num 1)) τ := by
@@ -428,7 +449,7 @@ example : ¬ HasType L [] [] none (.get (.obj ["x"] [num 1] [.data]) "y") τ := 
         case lengthString =>
           exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
-      · cases hi
+      · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `({get x() { return 1; }}).x = 2`: a getter takes no store. -/
 example : ¬ HasType L [] [] none
@@ -452,13 +473,13 @@ example : ¬ HasType L [] [] none
           obtain ⟨τ₁, rfl⟩ := List.length_eq_one_iff.mp hτs
           obtain ⟨s₁, rfl⟩ := List.length_eq_one_iff.mp hss
           simp at this; subst this
-          have hfs₁ := hfs (.getter, τ₁, s) (by simp)
+          have hfs₁ := hfs (.getter, .func 0 (.ret (num 1)), τ₁, s) (by simp)
           cases hfs₁
           exact ne_con (by decide) (hk.trans (TyEq.slot hss').2.1)
         case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
-      · cases hi
+      · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `(1).x`: a number has no fields. -/
 example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
@@ -476,7 +497,7 @@ example : ¬ HasType L [] [] none (.get (num 1) "x") τ := by
         case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
-      · cases hi
+      · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `1(2)`: a number is not a function. -/
 example : ¬ HasType L [] [] none (.app (num 1) [num 2]) τ := by
@@ -501,7 +522,7 @@ example : ¬ HasType L [] [] none (.setIndex (str "ab") (num 0) (str "c")) τ :=
       · cases hi
         case writeArray => exact ne_con (by simp) (e₁.trans (PredEq.one hq).2)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
-      · cases hi
+      · obtain ⟨_, hm, -⟩ := hi; cases hm
 
 /-- `(function f(x) { return x; })(1, 2)`: one argument per parameter. -/
 example : ¬ HasType L [] [] none (.app (.func 1 (.var 0)) [num 1, num 2]) τ := by

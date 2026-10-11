@@ -9,8 +9,11 @@ import Inty.Semantics
 import Inty.Soundness
 import Inty.Clock
 import Inty.Unify
+import Inty.TreeVars
+import Inty.Weaken
 import Inty.Infer
 import Inty.InferSound
+import Inty.InferInv
 import Inty.InferComplete
 import Inty.Builtins
 import Inty.Examples

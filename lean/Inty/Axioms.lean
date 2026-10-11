@@ -44,3 +44,9 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.infer_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.infer_complete
+
+/-- info: 'Inty.inferProgram_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferProgram_complete
+
+/-- info: 'Inty.HasType.weaken' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.HasType.weaken

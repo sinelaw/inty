@@ -76,17 +76,16 @@ so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
 gets stuck.
 
 `Inty.infer_complete` (in `Inty/InferComplete.lean`): inference finds a type
-whenever one exists, one of which every valid type is an instance (Damas
-and Milner's completeness; the freshness invariants follow Naraschewski and
-Nipkow's proof of algorithm W), for `HasType₀`, the judgement with types
-compared syntactically (no conversion up to unfolding, no method calls, no
-fields written as methods),
-which embeds in `HasType` (`HasType₀.hasType`):
+whenever one exists, one of which every valid type is an instance up to
+equal types (Damas and Milner's completeness; the freshness invariants,
+`Inty/InferInv.lean`, follow Naraschewski and Nipkow's proof of algorithm
+W), for the whole of `HasType`: conversion between equal types, methods
+and getters, method calls, classes and `new`:
 
 ```
 ctxFtv Γ = [] → (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) →
-  HasType₀ L C Γ none e τ' →
-  ∃ o, infer L Γ none e 0 = some o ∧ (∃ φ, o.τ.subst φ = τ') ∧ ∃ τ, inferIn L Γ e = some τ
+  HasType L C Γ none e τ' →
+  ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ'
 ```
 
 `scoped` is the pair of scope checks JavaScript makes: a program assigns
@@ -97,10 +96,21 @@ an assignment to a `const` would be type-safe, and a stray `break` is
 safe too, just not JavaScript.
 
 (`inferIn_complete`, `inferProgram_complete`). It rests on unification
-being most general (`Inty.unify_mgu`) where types unify syntactically;
-where they don't, it tries again up to unfolding, which is sound
-(`unify_sound` gives types equal up to unfolding) but not yet proved
-complete.
+being most general up to equal types (`Inty.unify_mgu`): `unify` is a
+congruence closure on the types' finite graphs of subterms (Huet's
+algorithm for rational trees, `Inty/Unify.lean`). A typing's context need
+only have schemes equal to inference's (`CtxEq`), and a `let`'s typing of
+the rest moves to inference's more general scheme (`HasType.weaken`, in
+`Inty/Weaken.lean`).
+
+A recursive type carries its whole system of equations, and an equation
+its unfolding never reaches may mention variables the type doesn't have,
+so equal types can differ in their free variables. Generalisation is over
+the variables of the unfolded trees (`Ty.tv`, `Inty/TreeVars.lean`), and a
+scheme's `Merge` must have a quantified variable in the trees of its
+determining arguments (`Scheme.Simple`, `PTy.TreeBound`): a variable that
+appears only in an unreached equation fixes nothing and is fixed by
+nothing.
 
 `Inty.never_stuck_with_builtins` (in `Inty/Builtins.lean`): the same for a
 program run with native functions in scope, `Math.abs : number → number`
@@ -122,17 +132,17 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 | `Ty`: a type variable, a constructor (`Con`) applied to types (`number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type), `array`), or the `i`-th type of a system of recursive equations (`mu i sys`, right-hand sides `RTy` referring to the system's types as `self j`) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`; a `mu` is a `Type::Named` with its equation in `InferState::named_types`) |
 | `TyEq` (`Inty/Equi.lean`): equality up to unfolding, as the unfolded trees' finite approximations | `unify` on `Named` types (`unroll_named`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals (a field may be written as a method, `l(…) {…}`, whose `this` is the literal's type: `MethodsThis`), property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
-| A class without `extends`: a factory function returning an object literal whose methods are written as methods, `new C(…)` a call of it (`classC` in `Inty/Examples.lean`) | the class lowering, `parse_class_declaration_named` in `src/frontends/javascript/parser` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals (a field holds a value, or is a method `l(…) {…}` or a getter `get l() {…}` written as a function expression whose `this` is the literal's type: `FieldSlot`), property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
+| A class without `extends` (`cls`: fields with initialisers that see the fields before them, arrow fields, methods and getters on the prototype, `MemberSlot`), its constructor (`ctor`, whose `this` is what `new` makes, `newTarget`) and `new` | the class lowering, `parse_class_declaration_named` in `src/frontends/javascript/parser`, `class_fields.rs` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
-| `HasType` (declarative typing, Hindley–Milner style, with a conversion rule between equal types); `HasType₀`, its syntactic fragment | what `src/infer` implements |
+| `HasType` (declarative typing, Hindley–Milner style, with a conversion rule between equal types) | what `src/infer` implements |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
 | `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
 | `Cls`, `Pred`, `Inst` (`Inty/Classes.lean`): classes (`Plus`, `HasProp`, `Merge`, `Indexable`, `IndexWrite`, `FieldWrite`), constraints, instances | `classes::ClassName`, the instance tables in `src/classes`, `resolve_has_prop`; `Merge` is a spread's per-field merge (`merge_spread` in `src/infer/features/rows.rs`, which decides it at once) |
 | `improveAll` (deciding constraints on known types), `fixedVars` and `genVars` (what a `let` quantifies) | `simplify_has_props`, `env_fixed_vars`, `InferState::generalize` |
 | `Entails C p` (`p` is an instance up to equal types, or assumed in `C`) | a scheme's constraints in scope while checking its body |
-| `unify` (syntactic, `unify₀`, then up to unfolding, `unifyRec`, which binds a variable occurring under a record or a function to a recursive type), `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, `var_bind`, `create_recursive_type`, the per-feature rules) |
+| `unify` (up to unfolding, by congruence closure: a variable occurring under a record or a function is bound to a recursive type), `infer`, `inferProgram` (Algorithm W) | `src/infer` (`unify.rs`, `var_bind`, `create_recursive_type`, the per-feature rules) |
 | `Out.preds` (pending class constraints) | the constraints `src/infer` resolves once types are known |
 | `Value`, `Stuck`, `run` / `eval` (interpreter with a call clock and a heap, every binding a cell, an object a cell of its fields) | `src/dynamics` (`Value`, `Stuck`, fuel, `heap.rs`, `RuntimeEnv`, `Cell::Object`) |
 | `Prim`, `builtinCtx`, `builtinEnv`, `builtinHeap` (native functions, with their types) | `Value::Builtin`, `src/builtins` |
@@ -175,8 +185,8 @@ These choices are meant to hold up as the calculus grows.
   rules and of inference), with a presence and a type. An open row, inty's
   `{x: T | r}`, is a record whose other slots are variables. Within the
   program's labels this is equivalent to Rémy's rows with presence, which
-  inty implements with tails, and it keeps unification plain Robinson
-  unification: no type equality up to permutation.
+  inty implements with tails, and it keeps unification free of type
+  equality up to permutation.
 - **Types and expressions nest lists** (a constructor's arguments, a call's
   arguments). Lean derives neither
   equality nor induction for nested inductive types, so `Ty.ind`, `PTy.ind`
@@ -282,12 +292,11 @@ This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
 
 1. Syntax: a constructor in `Expr` (and in `Ty` / `Value` if needed).
 2. Typing: a rule in `HasType` (and `HasTypeTop`, its rules but the
-   conversion; and in `HasType₀` if inference is complete for it), or an
-   arm in `UnOpTy` / `BinOpTy`.
+   conversion), or an arm in `UnOpTy` / `BinOpTy`.
 3. Semantics: an arm in `run` (or `UnOp.eval` / `BinOp.eval`, or
    `Prim.apply` for a native function).
 4. Inference: an arm in `infer`.
-5. Proof: a case in `HasType.subst`, `HasType.top`, `HasType₀.generalize_ctx`, `run_sound`
+5. Proof: a case in `HasType.subst`, `HasType.top`, `HasType.weaken`, `run_sound`
    (or `UnOp.eval_sound` / `BinOp.eval_sound`), `run_clock_le`, `run_mono`,
    `infer_inv`, `infer_sound` and `infer_complete`, and a clause of `V` for a
    new type former. A native function needs only its
