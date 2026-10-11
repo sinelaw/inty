@@ -117,6 +117,7 @@ example : Pred.AssumableAt top p ↔
 
 example : Cls.arity c = match c with
     | .plus | .indexWrite | .notNew | .inject _ => 1
+    | .strip => 2
     | .hasProp _ | .indexable => 3
     | .merge => 5 := by
   cases c <;> rfl
@@ -245,8 +246,11 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     (∃ c args, c ≠ .newTarget ∧ p = ⟨.notNew, [.app c args]⟩) ∨
     (∃ T, T.ftv = [] ∧ p = ⟨.inject T, [T]⟩) ∨
     (∃ T z σ, TyEq T (.maybe z σ) ∧ T.ftv = [] ∧ p = ⟨.inject T, [z.ty]⟩) ∨
-    ∃ T z c args, TyEq T (.maybe z (.app c args)) ∧ T.ftv = [] ∧ (Ty.app c args).ftv = [] ∧
-      c ≠ .maybe z ∧ ¬ (c = z.con ∧ args = []) ∧ p = ⟨.inject T, [.app c args]⟩ :=
+    (∃ T z c args, TyEq T (.maybe z (.app c args)) ∧ T.ftv = [] ∧ (Ty.app c args).ftv = [] ∧
+      c ≠ .maybe z ∧ ¬ (c = z.con ∧ args = []) ∧ p = ⟨.inject T, [.app c args]⟩) ∨
+    (∃ z σ, p = ⟨.strip, [.maybe z σ, σ]⟩) ∨
+    ∃ c args, (∀ z, c ≠ .maybe z) ∧ c ≠ .null ∧ c ≠ .undefined ∧
+      p = ⟨.strip, [.app c args, .app c args]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
@@ -271,12 +275,16 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     | injectNothing he hT =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, he, hT, rfl⟩))))))))))))))
     | injectSome he hT ha hc hn =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, _, he, hT, ha, hc, hn, rfl⟩)))))))))))))),
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, _, he, hT, ha, hc, hn, rfl⟩)))))))))))))))
+    | stripSome =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, rfl⟩))))))))))))))))
+    | stripSelf hm hn hu =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (⟨_, _, hm, hn, hu, rfl⟩))))))))))))))))),
    fun h => by
     rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
       ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ |
       ⟨c, args, hc, rfl⟩ | ⟨T, hT, rfl⟩ | ⟨T, z, σ, he, hT, rfl⟩ |
-      ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩
+      ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩ | ⟨z, σ, rfl⟩ | ⟨c, args, hm, hn, hu, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
@@ -292,7 +300,9 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .notNew hc
     · exact .injectSelf hT
     · exact .injectNothing he hT
-    · exact .injectSome he hT ha hc hn⟩
+    · exact .injectSome he hT ha hc hn
+    · exact .stripSome
+    · exact .stripSelf hm hn hu⟩
 
 /-- A constraint left on a type variable, or a `Merge` waiting on one (each
 looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/

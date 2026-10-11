@@ -2190,6 +2190,28 @@ theorem Safe.lift {p : Ran} {k : Nat} {W : World} {τ₀ τ : Ty} {R : Option Ty
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr hret)⟩⟩
 
+/-- An entailed `Strip τ σ`, under constraints each an instance or on a
+type variable: a value of `τ` that isn't nothing is one of `σ`. -/
+theorem Entails.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVar C)
+    (h : Entails C ⟨.strip, [τ, σ]⟩) {k : Nat} {W : World} {v : Value} (hv : V k W τ v)
+    (hn : v.isNothing = false) : V k W σ v := by
+  rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hw⟩
+  · obtain ⟨c, args⟩ := q
+    match args, hq.2.1 with
+    | [τ', σ'], _ =>
+      obtain ⟨hc, hτ, hσ⟩ := PredEq.two hq
+      subst hc
+      have hv' := V.tyEq k hτ hv
+      cases hi with
+      | @stripSome z _ =>
+        rcases V_maybe.mp hv' with h | h
+        · subst h; cases z <;> simp [Nothing.value, Value.isNothing] at hn
+        · exact V.tyEq k hσ.symm h
+      | stripSelf _ _ _ => exact V.tyEq k hσ.symm hv'
+  · simp only [List.cons.injEq] at ht
+    obtain ⟨rfl, -⟩ := ht
+    exact (V_whnf_var hw hv).elim
+
 /-- An entailed `NotNew θ`, under constraints each an instance or on a type
 variable: `θ` isn't `newTarget`. -/
 theorem Entails.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVar C)

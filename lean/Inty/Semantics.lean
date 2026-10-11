@@ -152,6 +152,12 @@ def Value.truthy : Value → Bool
   | .undefined | .null => false
   | .closure .. | .prim _ | .bound .. | .obj _ | .fields _ | .arr _ | .items _ => true
 
+/-- Whether a value is nothing, `null` or `undefined`: what `x == null`
+tests. -/
+def Value.isNothing : Value → Bool
+  | .undefined | .null => true
+  | _ => false
+
 /-- JavaScript `typeof`, as `dynamics::Value::type_string`. -/
 def Value.typeString : Value → String
   | .number _ => "number"

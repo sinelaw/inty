@@ -165,6 +165,31 @@ theorem Pred.decideInject_sound {τ T a b : Ty} (h : Pred.decideInject τ T = .e
     · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
   · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
 
+/-- What `Pred.decideStrip`'s equation says. -/
+theorem Pred.decideStrip_sound {t σ a b : Ty} (h : Pred.decideStrip t σ = .eq a b) {ψ : Subst}
+    (hab : TyEq (a.subst ψ) (b.subst ψ)) : InstEq (Pred.subst ψ ⟨.strip, [t, σ]⟩) := by
+  simp only [Pred.subst, List.map_cons, List.map_nil]
+  unfold Pred.decideStrip at h
+  split at h
+  · cases h
+    simp only [Ty.subst_app, List.map_cons, List.map_nil]
+    exact InstEq.of_predEq
+      (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil)))
+      Inst.stripSome.instEq
+  · rename_i c args _
+    split at h
+    · cases h
+    · cases h
+    · cases h
+    · rename_i hm hn hu
+      cases h
+      simp only [Ty.subst_app] at hab ⊢
+      exact InstEq.of_predEq (q := ⟨.strip, [.app c (args.map (·.subst ψ)),
+          .app c (args.map (·.subst ψ))]⟩)
+        (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil)))
+        (Inst.stripSelf (fun z h => hm z h) hn hu).instEq
+  · cases h
+
 theorem Pred.merge_instEq {q q' : Pred} (hq : Inst q') (e : PredEq q q') : InstEq q :=
   InstEq.of_predEq e hq.instEq
 
@@ -263,6 +288,7 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
         (zip_tyEq_cons hs (zip_tyEq_cons hr zip_tyEq_nil))))))
       (Inst.mergeAbs hc).instEq
   · exact Pred.decideInject_sound h hab
+  · exact Pred.decideStrip_sound h hab
 
 theorem Pred.decide_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     (h : Pred.decide c t rest = .eq a b) {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) :

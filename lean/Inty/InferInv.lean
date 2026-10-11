@@ -417,6 +417,19 @@ theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b 
           · cases h; exact ⟨ht, hσ⟩
       · cases h; exact ⟨ht, hTb⟩
     · cases h; exact ⟨ht, hTb⟩
+  · rename_i σ
+    have hσ : σ.Below n := hr σ (by simp)
+    unfold Pred.decideStrip at h
+    split at h
+    · rename_i z σ'
+      cases h
+      exact ⟨hσ, fun x hx => ht x (by simp [Ty.ftv, hx])⟩
+    · split at h
+      · cases h
+      · cases h
+      · cases h
+      · cases h; exact ⟨hσ, ht⟩
+    · cases h
 
 theorem Pred.decide_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     (hp : Pred.Below n ⟨c, t :: rest⟩) (h : Pred.decide c t rest = .eq a b) :

@@ -328,11 +328,17 @@ inductive Cls where
   (`Undefined`) or `σ`. It waits while `τ` is a type variable, so checking
   against an annotation has a principal type. -/
   | inject (T : Ty)
+  /-- `Strip τ σ`: a value of `τ` that is neither `null` nor `undefined` is
+  one of `σ`. `τ` is a sum `Nullable σ` or `Optional σ`; or it is `σ`, any
+  known type but a sum, `Null` or `Undefined`. It waits while `τ` is a type
+  variable, so eliminating a sum has a principal type. -/
+  | strip
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
   | .plus | .indexWrite | .notNew | .inject _ => 1
+  | .strip => 2
   | .indexable | .hasProp _ => 3
   | .merge => 5
 

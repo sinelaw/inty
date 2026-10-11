@@ -139,6 +139,17 @@ def Pred.decideInject (τ T : Ty) : Improve :=
     | _ => .eq τ T
   else .fail
 
+/-- A `Strip τ σ` whose `τ` is known (unfolded): a sum's value type, or `τ`
+itself; `Null` and `Undefined` have no value but nothing. -/
+def Pred.decideStrip (t σ : Ty) : Improve :=
+  match t with
+  | .app (.maybe _) [σ'] => .eq σ σ'
+  | .app c args =>
+    match c with
+    | .maybe _ | .null | .undefined => .fail
+    | _ => .eq σ (.app c args)
+  | _ => .fail
+
 /-- Deciding a constraint whose first argument is known, as inty's
 `resolve_has_prop` and `resolve_indexable`: a record's field `l` must be
 present, of the kind and at the type the read gives; an array's or a
@@ -164,6 +175,7 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
   | .merge, .pre, [k, τ, s, r] => Pred.decidePre k τ s r
   | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
   | .inject T, τ, [] => Pred.decideInject τ T
+  | .strip, t, [σ] => Pred.decideStrip t σ
   | _, _, _ => .fail
 
 /-- `Pred.decide₀` on the known type unfolded (`Ty.whnf`): a property of a

@@ -714,6 +714,14 @@ theorem Pred.decideInject_some {t T : Ty} {z : Nothing} {c₀ : Con} {a₀ : Lis
   simp only [hT, ↓reduceIte, hTw, hc₀, hn, Improve.Holds, Ty.closed_subst hσc]
   exact hW
 
+theorem Pred.decide₀_strip (t σ : Ty) : Pred.decide₀ .strip t [σ] = Pred.decideStrip t σ := by
+  unfold Pred.decide₀; split <;> simp_all
+
+theorem Pred.decideStrip_app {c : Con} {xs : List Ty} {σ : Ty} (hm : ∀ z, c ≠ .maybe z)
+    (hn : c ≠ .null) (hu : c ≠ .undefined) :
+    Pred.decideStrip (.app c xs) σ = .eq σ (.app c xs) := by
+  cases c <;> simp_all [Pred.decideStrip]
+
 /-- Deciding a constraint whose image is equal to an instance: it waits, or
 its equation holds. -/
 theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pred} (hc : c ≠ .plus)
@@ -903,6 +911,37 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       rename_i hnv
       rw [Pred.decide₀_inject]
       exact Pred.decideInject_some hT hTm hc₀ hn₀ ht (by simpa using hnv)
+  | @stripSome z σ₀ =>
+    match args, hl with
+    | [t, s], _ =>
+      obtain ⟨rfl, ht, hs⟩ := PredEq.two hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rw [Pred.decide₀_strip]
+      rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, hxl, hz⟩
+      · simp [ha, Ty.isVar] at hnv
+      match xs, hxl with
+      | [x], _ =>
+        rw [hxs]
+        simp only [Pred.decideStrip, Improve.Holds]
+        exact hs.trans (hz (x, σ₀) (by simp)).symm
+  | @stripSelf c₀ a₀ hm hn hu =>
+    match args, hl with
+    | [t, s], _ =>
+      obtain ⟨rfl, ht, hs⟩ := PredEq.two hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rw [Pred.decide₀_strip]
+      rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, -, -⟩
+      · simp [ha, Ty.isVar] at hnv
+      have hW : TyEq ((Ty.app c₀ xs).subst φ) (.app c₀ a₀) := by
+        rw [← hxs]; exact ((TyEq.whnf t).subst φ).trans ht
+      rw [hxs, Pred.decideStrip_app hm hn hu]
+      exact hs.trans hW.symm
 
 theorem Pred.improve_of_args {top : Bool} {c : Cls} {args : List Ty} {φ : Subst}
     (h : c ≠ .plus → (c = .merge → top = true) → (Pred.improveArgs c args).Holds φ) :
@@ -1763,6 +1802,16 @@ theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep 
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨-, rfl⟩ := hf
     cases hr
+  | stripSome =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_singleton] at hr; subst hr
+    exact ⟨_, List.mem_singleton_self _, Ty.tv_app.mpr ⟨r, by simp, hb⟩⟩
+  | stripSelf _ _ _ =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_singleton] at hr; subst hr
+    exact ⟨_, List.mem_singleton_self _, hb⟩
   | @hasProp l ls fs k σ hfl =>
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨rfl, rfl⟩ := hf
@@ -1960,11 +2009,20 @@ theorem Pred.decideInject_ne_keep {t T : Ty} : Pred.decideInject t T ≠ .keep :
     · cases h
   · cases h
 
+/-- A `Strip` on a known type is decided. -/
+theorem Pred.decideStrip_ne_keep {t σ : Ty} : Pred.decideStrip t σ ≠ .keep := by
+  intro h
+  unfold Pred.decideStrip at h
+  split at h
+  · cases h
+  · split at h <;> cases h
+  · cases h
+
 theorem Pred.decide₀_keep_merge {c : Cls} {t : Ty} {rest : List Ty}
     (h : Pred.decide₀ c t rest = .keep) : c = .merge := by
   unfold Pred.decide₀ at h
   split at h <;> first | rfl | (split at h <;> cases h) | cases h |
-    exact absurd h Pred.decideInject_ne_keep
+    exact absurd h Pred.decideInject_ne_keep | exact absurd h Pred.decideStrip_ne_keep
 
 /-- What improvement keeps where a binding generalises. -/
 theorem Pred.improve_keep_false {p : Pred} (h : p.improve false = .keep) :
@@ -3408,6 +3466,7 @@ theorem Pred.decide₀_merge_keep {t : Ty} {rest : List Ty} (h : Pred.decide₀ 
     | cases h
     | (split at h <;> cases h)
     | exact absurd h Pred.decideInject_ne_keep
+    | exact absurd h Pred.decideStrip_ne_keep
 
 /-- What improvement leaves at the top level of entailed constraints is
 settled: an instance, or on a type variable. -/

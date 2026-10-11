@@ -148,6 +148,12 @@ inductive Inst : Pred → Prop where
   overlap, so the heads decide which one holds. -/
   | injectSome : TyEq T (.maybe z (.app c args)) → T.ftv = [] → (Ty.app c args).ftv = [] →
       c ≠ .maybe z → ¬ (c = z.con ∧ args = []) → Inst ⟨.inject T, [.app c args]⟩
+  /-- `Strip (Nullable σ) σ` and `Strip (Optional σ) σ`. -/
+  | stripSome : Inst ⟨.strip, [.maybe z σ, σ]⟩
+  /-- `Strip τ τ`, for a `τ` whose head is known and is neither a sum nor
+  `Null` or `Undefined` (whose values are all nothing). -/
+  | stripSelf : (∀ z, c ≠ .maybe z) → c ≠ .null → c ≠ .undefined →
+      Inst ⟨.strip, [.app c args, .app c args]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -179,6 +185,12 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
     simp only [Pred.subst, List.map_cons, List.map_nil]
     rw [Ty.subst_id (by simp [ha])]
     exact .injectSome he hT ha hc hn
+  | stripSome =>
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+    exact .stripSome
+  | stripSelf hm hn hu =>
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+    exact .stripSelf hm hn hu
 
 /-- The `Merge` constraints of a spread, label by label: the operand's
 presences `ps`, kinds `ks` and types `τs`, the slots `ss` it is written
@@ -345,6 +357,31 @@ theorem Pred.injectInst_sound {T τ : Ty} (h : Pred.injectInst T τ = true) :
       · cases h
   · cases h
 
+/-- Decides `Inst` for a `Strip`. -/
+def Pred.stripInst (τ σ : Ty) : Bool :=
+  match τ with
+  | .app (.maybe _) [σ'] => decide (σ' = σ)
+  | .app c args =>
+    match c with
+    | .maybe _ | .null | .undefined => false
+    | _ => decide (σ = .app c args)
+  | _ => false
+
+theorem Pred.stripInst_sound {τ σ : Ty} (h : Pred.stripInst τ σ = true) :
+    Inst ⟨.strip, [τ, σ]⟩ := by
+  unfold Pred.stripInst at h
+  split at h
+  · have := of_decide_eq_true h; subst this; exact .stripSome
+  · rename_i c args _
+    split at h
+    · cases h
+    · cases h
+    · cases h
+    · rename_i hm hn hu
+      have := of_decide_eq_true h; subst this
+      exact .stripSelf (fun z h => hm z h) hn hu
+  · cases h
+
 /-- Decides `Inst`. -/
 def Pred.isInst : Pred → Bool
   | ⟨.plus, [.number]⟩ | ⟨.plus, [.string]⟩ => true
@@ -360,6 +397,7 @@ def Pred.isInst : Pred → Bool
   | ⟨.indexWrite, [.array _]⟩ => true
   | ⟨.notNew, [.app c _]⟩ => c != .newTarget
   | ⟨.inject T, [τ]⟩ => Pred.injectInst T τ
+  | ⟨.strip, [τ, σ]⟩ => Pred.stripInst τ σ
   | _ => false
 
 theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
@@ -379,6 +417,7 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · exact .writeArray
   · exact .notNew (by simpa using h)
   · exact Pred.injectInst_sound h
+  · exact Pred.stripInst_sound h
   · cases h
 
 theorem List.eq_five_of_length {α : Type} : ∀ {l : List α}, l.length = 5 →
