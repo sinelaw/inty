@@ -113,9 +113,10 @@ inductive Inst : Pred → Prop where
   | plusNumber : Inst ⟨.plus, [.number]⟩
   /-- `Plus String`. -/
   | plusString : Inst ⟨.plus, [.string]⟩
-  /-- `HasProp l {…, l: σ, …} σ`: a record has the fields that are
-  present, of any kind (a getter's is what it gives). -/
-  | hasProp : Ty.field l ls fs = some (.slot .pre k σ) → Inst ⟨.hasProp l, [.record ls fs, σ]⟩
+  /-- `HasProp l {…, l: σ, …} k σ`: a record has the fields that are
+  present, of their kind (a getter's type is what it gives). -/
+  | hasProp : Ty.field l ls fs = some (.slot .pre k σ) →
+      Inst ⟨.hasProp l, [.record ls fs, k, σ]⟩
   /-- `Merge pre data τ s (pre data τ)`: the operand's field wins. -/
   | mergeData : Inst ⟨.merge, [.pre, .data, τ, s, .slot .pre .data τ]⟩
   /-- `Merge pre getter τ s (pre data τ)`: the operand's getter runs, and
@@ -126,19 +127,16 @@ inductive Inst : Pred → Prop where
   | mergeAbs : SlotCopy s r → Inst ⟨.merge, [.abs, k, τ, s, r]⟩
   /-- `Merge pre proto τ s r`: a prototype member isn't copied either. -/
   | mergeProto : SlotCopy s r → Inst ⟨.merge, [.pre, .proto, τ, s, r]⟩
-  /-- An array's and a string's `length` (`builtins::resolve_has_prop`). -/
-  | lengthArray : Inst ⟨.hasProp "length", [.array τ, .number]⟩
-  | lengthString : Inst ⟨.hasProp "length", [.string, .number]⟩
+  /-- An array's and a string's `length` (`builtins::resolve_has_prop`),
+  which a program reads but doesn't store to, as a getter's. -/
+  | lengthArray : Inst ⟨.hasProp "length", [.array τ, .getter, .number]⟩
+  | lengthString : Inst ⟨.hasProp "length", [.string, .getter, .number]⟩
   /-- `Indexable τ[] Number τ` and `Indexable String Number String`
   (`resolve_indexable`). -/
   | indexArray : Inst ⟨.indexable, [.array τ, .number, τ]⟩
   | indexString : Inst ⟨.indexable, [.string, .number, .string]⟩
   /-- `IndexWrite τ[]` (`resolve_index_write`). -/
   | writeArray : Inst ⟨.indexWrite, [.array τ]⟩
-  /-- `FieldWrite l {…, l: σ, …}`: a field that holds a value
-  (`resolve_field_write`). -/
-  | writeRecord : Ty.field l ls fs = some (.slot .pre .data σ) →
-      Inst ⟨.fieldWrite l, [.record ls fs]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -157,9 +155,6 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | indexArray => exact .indexArray
   | indexString => exact .indexString
   | writeArray => exact .writeArray
-  | writeRecord hf =>
-    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
-    exact .writeRecord (by rw [Ty.field_subst, hf]; rfl)
 
 /-- The `Merge` constraints of a spread, label by label: the operand's
 presences `ps`, kinds `ks` and types `τs`, the slots `ss` it is written
@@ -279,43 +274,20 @@ theorem slotCopy?_sound {s r : Ty} (h : slotCopy? s r = true) : SlotCopy s r := 
   split at h <;> first | (cases h; done) | skip
   all_goals (have := of_decide_eq_true h; subst this; constructor)
 
-/-- Whether a slot is present, of some kind, at the type `σ`. -/
-def Ty.preSlot? (σ : Ty) : Option Ty → Bool
-  | some (.slot .pre _ σ') => decide (σ' = σ)
-  | _ => false
-
-theorem Ty.preSlot?_sound {σ : Ty} {o : Option Ty} (h : Ty.preSlot? σ o = true) :
-    ∃ k, o = some (.slot .pre k σ) := by
-  unfold Ty.preSlot? at h
-  split at h
-  · exact ⟨_, by rw [of_decide_eq_true h]⟩
-  · cases h
-
-/-- Whether a slot is a present field that holds a value. -/
-def Ty.dataSlot? : Option Ty → Bool
-  | some (.slot .pre .data _) => true
-  | _ => false
-
-theorem Ty.dataSlot?_sound {o : Option Ty} (h : Ty.dataSlot? o = true) :
-    ∃ σ, o = some (.slot .pre .data σ) := by
-  unfold Ty.dataSlot? at h
-  split at h
-  · exact ⟨_, rfl⟩
-  · cases h
 
 /-- Decides `Inst`. -/
 def Pred.isInst : Pred → Bool
   | ⟨.plus, [.number]⟩ | ⟨.plus, [.string]⟩ => true
-  | ⟨.hasProp l, [.record ls fs, σ]⟩ => Ty.preSlot? σ (Ty.field l ls fs)
+  | ⟨.hasProp l, [.record ls fs, k, σ]⟩ => decide (Ty.field l ls fs = some (.slot .pre k σ))
   | ⟨.merge, [.pre, .data, τ, _, r]⟩ => decide (r = .slot .pre .data τ)
   | ⟨.merge, [.pre, .getter, τ, _, r]⟩ => decide (r = .slot .pre .data τ)
   | ⟨.merge, [.pre, .proto, _, s, r]⟩ => slotCopy? s r
   | ⟨.merge, [.abs, _, _, s, r]⟩ => slotCopy? s r
-  | ⟨.hasProp l, [.array _, .number]⟩ | ⟨.hasProp l, [.string, .number]⟩ => decide (l = "length")
+  | ⟨.hasProp l, [.array _, .getter, .number]⟩ | ⟨.hasProp l, [.string, .getter, .number]⟩ =>
+    decide (l = "length")
   | ⟨.indexable, [.array τ, .number, e]⟩ => decide (e = τ)
   | ⟨.indexable, [.string, .number, .string]⟩ => true
   | ⟨.indexWrite, [.array _]⟩ => true
-  | ⟨.fieldWrite l, [.record ls fs]⟩ => Ty.dataSlot? (Ty.field l ls fs)
   | _ => false
 
 theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
@@ -323,7 +295,7 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   split at h
   · exact .plusNumber
   · exact .plusString
-  · obtain ⟨k, hk⟩ := Ty.preSlot?_sound h; exact .hasProp hk
+  · exact .hasProp (of_decide_eq_true h)
   · rw [of_decide_eq_true h]; exact .mergeData
   · rw [of_decide_eq_true h]; exact .mergeGetter
   · exact .mergeProto (slotCopy?_sound h)
@@ -333,24 +305,67 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · rw [of_decide_eq_true h]; exact .indexArray
   · exact .indexString
   · exact .writeArray
-  · obtain ⟨σ, hσ⟩ := Ty.dataSlot?_sound h; exact .writeRecord hσ
+  · cases h
+
+/-- A slot whose presence is a type variable, or present and of a kind
+that is one: what is copied of it isn't known. -/
+def Ty.SlotOnVar : Ty → Prop
+  | .var _ => True
+  | .slot (.var _) _ _ => True
+  | .slot .pre (.var _) _ => True
+  | _ => False
+
+/-- Decides `Ty.SlotOnVar`. -/
+def Ty.slotOnVar : Ty → Bool
+  | .var _ => true
+  | .slot (.var _) _ _ => true
+  | .slot .pre (.var _) _ => true
+  | _ => false
+
+theorem Ty.slotOnVar_sound {s : Ty} (h : s.slotOnVar = true) : s.SlotOnVar := by
+  unfold Ty.slotOnVar at h
+  split at h <;> first | trivial | cases h
+
+/-- A `Merge` whose decision waits on a type variable: the operand's
+field is present, of a kind that is a type variable, or it is a prototype
+member or absent and the slot it is written over waits on one. -/
+def Pred.MergeOnVar : Pred → Prop
+  | ⟨.merge, [.pre, .var _, _, _, _]⟩ => True
+  | ⟨.merge, [.pre, .proto, _, s, _]⟩ => s.SlotOnVar
+  | ⟨.merge, [.abs, _, _, s, _]⟩ => s.SlotOnVar
+  | _ => False
+
+/-- Decides `Pred.MergeOnVar`. -/
+def Pred.mergeOnVar : Pred → Bool
+  | ⟨.merge, [.pre, .var _, _, _, _]⟩ => true
+  | ⟨.merge, [.pre, .proto, _, s, _]⟩ => s.slotOnVar
+  | ⟨.merge, [.abs, _, _, s, _]⟩ => s.slotOnVar
+  | _ => false
+
+theorem Pred.mergeOnVar_sound {p : Pred} (h : p.mergeOnVar = true) : p.MergeOnVar := by
+  unfold Pred.mergeOnVar at h
+  split at h
+  · trivial
+  · exact Ty.slotOnVar_sound h
+  · exact Ty.slotOnVar_sound h
   · cases h
 
 /-- The constraint is on a type variable: its first argument (`Plus`'s
-type, `HasProp`'s receiver, `Merge`'s presence) is one. -/
-def Pred.OnVar (p : Pred) : Prop := ∃ a rest, p.args = .var a :: rest
+type, `HasProp`'s receiver, `Merge`'s presence) is one, or it is a `Merge`
+waiting on one (`Pred.MergeOnVar`). -/
+def Pred.OnVar (p : Pred) : Prop := (∃ a rest, p.args = .var a :: rest) ∨ p.MergeOnVar
 
 /-- Decides `Pred.OnVar`. -/
 def Pred.onVar (p : Pred) : Bool :=
   match p.args with
   | .var _ :: _ => true
-  | _ => false
+  | _ => p.mergeOnVar
 
 theorem Pred.onVar_sound {p : Pred} (h : p.onVar = true) : p.OnVar := by
   unfold Pred.onVar at h
   split at h
-  · exact ⟨_, _, ‹_›⟩
-  · cases h
+  · exact .inl ⟨_, _, ‹_›⟩
+  · exact .inr (Pred.mergeOnVar_sound h)
 
 /-- Each constraint is an instance (up to equal types) or is on a type
 variable. A constraint on
@@ -368,6 +383,18 @@ theorem HoldsOrVar.append {C D : List Pred} (hC : HoldsOrVar C) (hD : HoldsOrVar
 theorem Entails.holdsOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p) :
     InstEq p ∨ p.OnVar :=
   h.elim .inl (hC p)
+
+/-- A constraint of a class other than `Merge` that holds or is on a type
+variable: an instance, or its first argument is one. -/
+theorem Entails.instOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p)
+    (hc : p.cls ≠ .merge) : InstEq p ∨ ∃ a rest, p.args = .var a :: rest := by
+  rcases h.holdsOrVar hC with h | h | h
+  · exact .inl h
+  · exact .inr h
+  · obtain ⟨c, args⟩ := p
+    exfalso
+    unfold Pred.MergeOnVar at h
+    split at h <;> simp_all
 
 /-- Decides whether a constraint left at the top level is fine: an instance,
 or on a type variable. -/

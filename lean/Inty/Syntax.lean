@@ -157,6 +157,7 @@ inductive Expr.IsValue : Expr → Prop where
   | lit : Expr.IsValue (.lit l)
   | var : Expr.IsValue (.var i)
   | func : Expr.IsValue (.func n body)
+  | ctor : Expr.IsValue (.ctor n body)
 
 /-- Induction on `Expr`, with a hypothesis for each argument of a call. -/
 theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))

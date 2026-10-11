@@ -34,7 +34,7 @@ def Lit.ty : Lit → Ty
 
 /-- Decides `Expr.IsValue`. -/
 def Expr.isValue : Expr → Bool
-  | .lit _ | .var _ | .func _ _ => true
+  | .lit _ | .var _ | .func _ _ | .ctor _ _ => true
   | _ => false
 
 /-- The result of inferring an expression: a substitution to apply to the
@@ -70,7 +70,7 @@ theorem Ret.subst_congr {σ σ' : Subst} {R : Option Ty}
 /-- Whether a scheme's constraint is on one of its `k` quantified variables
 (`Scheme.Simple`). -/
 def PPred.isSimple (k : Nat) : PPred → Bool
-  | ⟨.merge, [q, τ, t, _]⟩ => (q.bvs ++ τ.bvs ++ t.bvs).any (· < k)
+  | ⟨.merge, [q, κ, τ, t, _]⟩ => (q.bvs ++ κ.bvs ++ τ.bvs ++ t.bvs).any (· < k)
   | ⟨.merge, _⟩ => false
   | ⟨c, .bound i :: rest⟩ => decide (i < k) && decide (rest.length + 1 = c.arity)
   | _ => false
@@ -89,28 +89,52 @@ inductive Improve where
   | fail
   | eq (τ₁ τ₂ : Ty)
 
+/-- What a spread copies of the slot `s` it doesn't write over, as the slot
+`r` (`SlotCopy`): it waits while `s`'s presence, or its kind if present, is
+a type variable. -/
+def Pred.decideCopy (s r : Ty) : Improve :=
+  match s with
+  | .slot .pre .data _ => .eq r s
+  | .slot .pre .getter τ => .eq r (.slot .pre .data τ)
+  | .slot .pre .proto _ => .eq r .absSlot
+  | .slot .abs _ _ => .eq r s
+  | .var _ | .slot (.var _) _ _ | .slot .pre (.var _) _ => .keep
+  | _ => .fail
+
+/-- A `Merge` whose operand's field is present, of the kind `k` and type
+`τ`, over the slot `s`: a field that holds a value or a getter is copied as
+one that holds a value; a prototype member isn't. It waits while `k` is a
+type variable. -/
+def Pred.decidePre (k τ s r : Ty) : Improve :=
+  match k with
+  | .data | .getter => .eq r (.slot .pre .data τ)
+  | .proto => Pred.decideCopy s r
+  | .var _ => .keep
+  | _ => .fail
+
 /-- Deciding a constraint whose first argument is known, as inty's
 `resolve_has_prop` and `resolve_indexable`: a record's field `l` must be
-present, at the type the read gives; an array's or a string's `length` is
-a number; an array's element has the array's type, a string's character
-is a string; a store into an array or an object holds. A `Merge`'s
-presence decides it: the operand's field if present, the slot written over
-if absent. The known type is taken as it is; `Pred.decide` unfolds it
-first. -/
+present, of the kind and at the type the read gives; an array's or a
+string's `length` is a number, which a getter gives; an array's element
+has the array's type, a string's character is a string; a store into an
+array holds. A `Merge`'s presence and kind decide it, and if the operand
+doesn't write over the slot, that slot (`Pred.decideCopy`). The known type
+is taken as it is; `Pred.decide` unfolds it first. -/
 def Pred.decide₀ : Cls → Ty → List Ty → Improve
-  | .hasProp l, .record ls slots, [σ] =>
+  | .hasProp l, .record ls slots, [κ, σ] =>
     match Ty.field l ls slots with
-    | some s => .eq s (.slot .pre σ)
+    | some s => .eq s (.slot .pre κ σ)
     | none => .fail
-  | .hasProp l, .array _, [σ] => if l = "length" then .eq σ .number else .fail
-  | .hasProp l, .string, [σ] => if l = "length" then .eq σ .number else .fail
+  | .hasProp l, .array _, [κ, σ] =>
+    if l = "length" then .eq (.tuple [κ, σ]) (.tuple [.getter, .number]) else .fail
+  | .hasProp l, .string, [κ, σ] =>
+    if l = "length" then .eq (.tuple [κ, σ]) (.tuple [.getter, .number]) else .fail
   | .indexable, .array τ, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, τ])
   | .indexable, .string, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, .string])
   -- (An instance holds: a trivial equation drops it.)
   | .indexWrite, .array _, [] => .eq .number .number
-  | .fieldWrite, .record _ _, [] => .eq .number .number
-  | .merge, .pre, [τ, _, r] => .eq r (.slot .pre τ)
-  | .merge, .abs, [_, s, r] => .eq r s
+  | .merge, .pre, [k, τ, s, r] => Pred.decidePre k τ s r
+  | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
   | _, _, _ => .fail
 
 /-- `Pred.decide₀` on the known type unfolded (`Ty.whnf`): a property of a
@@ -142,7 +166,7 @@ first argument fixes the rest (a `HasProp`'s receiver its field's type, an
 slot and the slot it is written over fix the result. -/
 def Pred.fundep : Pred → Option (List Ty × List Ty)
   | ⟨.plus, _⟩ => none
-  | ⟨.merge, [q, τ, t, r]⟩ => some ([q, τ, t], [r])
+  | ⟨.merge, [q, κ, τ, t, r]⟩ => some ([q, κ, τ, t], [r])
   | ⟨.merge, _⟩ => none
   | ⟨_, c :: rest⟩ => some ([c], rest)
   | ⟨_, []⟩ => none
@@ -231,17 +255,49 @@ def letScheme (gen : Bool) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds 
       preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
   else (.mono τ₁, preds)
 
-/-- The `this` type of each field written as a method (labelled in `ms`),
-given the fields' labels and types; `none` if one of them isn't a
-function. -/
-def methodThis (ms : List String) : List (String × Ty) → Option (List Ty)
+/-- An object literal's fields' slots, from their kinds and types (as
+`FieldSlot`), and the `this` type of each method and getter; `none` if one
+of those isn't a function, or a getter has parameters. -/
+def fieldSlots : List FieldKind → List Ty → Option (List Ty × List Ty)
+  | [], [] => some ([], [])
+  | .data :: ks, τ :: τs => (fieldSlots ks τs).map fun (θs, ss) => (θs, .slot .pre .data τ :: ss)
+  | .method :: ks, .fn θ τs' ρ :: τs =>
+    (fieldSlots ks τs).map fun (θs, ss) => (θ :: θs, .slot .pre .data (.fn θ τs' ρ) :: ss)
+  | .getter :: ks, .fn θ [] σ :: τs =>
+    (fieldSlots ks τs).map fun (θs, ss) => (θ :: θs, .slot .pre .getter σ :: ss)
+  | _, _ => none
+
+/-- A class's members' slots, from their kinds, expressions and types (as
+`MemberSlot`), and the `this` type of each that isn't a field holding a
+value, which must be a function expression (a getter's of no parameters);
+an arrow field's slot has any `this`, a fresh variable from `n`. The
+slots, the `this` types, and the next unused variable. -/
+def memberSlots : List ClassKind → List Expr → List Ty → Nat → Option (List Ty × List Ty × Nat)
+  | [], [], [], n => some ([], [], n)
+  | .data :: ks, _ :: es, τ :: τs, n =>
+    (memberSlots ks es τs n).map fun (θs, ss, n') => (θs, .slot .pre .data τ :: ss, n')
+  | .arrow :: ks, .func _ _ :: es, .fn θ τs' ρ :: τs, n =>
+    (memberSlots ks es τs (n + 1)).map fun (θs, ss, n') =>
+      (θ :: θs, .slot .pre .data (.fn (.var n) τs' ρ) :: ss, n')
+  | .method :: ks, .func _ _ :: es, .fn θ τs' ρ :: τs, n =>
+    (memberSlots ks es τs n).map fun (θs, ss, n') =>
+      (θ :: θs, .slot .pre .proto (.fn θ τs' ρ) :: ss, n')
+  | .getter :: ks, .func 0 _ :: es, .fn θ [] σ :: τs, n =>
+    (memberSlots ks es τs n).map fun (θs, ss, n') => (θ :: θs, .slot .pre .proto σ :: ss, n')
+  | _, _, _, _ => none
+
+/-- Unify each `this` type `θs` with the record type `T`: with each other,
+then with `T`, which makes it recursive (inty's `shared_this`). -/
+def unifyThis (θs : List Ty) (T : Ty) : Option Subst :=
+  match θs with
   | [] => some []
-  | (l, τ) :: rest =>
-    if l ∈ ms then
-      match τ with
-      | .fn θ _ _ => (methodThis ms rest).map (θ :: ·)
-      | _ => none
-    else methodThis ms rest
+  | θ :: θs =>
+    match unify (.tuple (θ :: θs)) (.tuple (List.replicate (θs.length + 1) θ)) with
+    | none => none
+    | some σ₁ =>
+      match unify (θ.subst σ₁) (T.subst σ₁) with
+      | none => none
+      | some σ₂ => some (Subst.compose σ₂ σ₁)
 
 /-- The result of inferring a list of arguments: a substitution, each
 argument's type under it, the class constraints, and the next unused type
@@ -442,38 +498,74 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
           o₂.next⟩
-  -- An object literal over the labels `L`: its fields present, the other
-  -- labels absent, at fresh types.
-  -- A field written as a method is a function whose `this` is the
-  -- literal's type: the methods' `this`s are unified with each other, then
-  -- with the literal's type, which makes it recursive (inty's
-  -- `shared_this`, unified with the literal's type in `infer_object`).
-  | Γ, R, .obj ls es ms, n =>
-    if ls.all (· ∈ L) ∧ es.length = ls.length then
+  -- An object literal over the labels `L`: its fields present, each as
+  -- its kind says, the other labels absent. A method's and a getter's
+  -- `this` is the literal's type (`unifyThis`).
+  | Γ, R, .obj ls es ks, n =>
+    if ls.all (· ∈ L) ∧ es.length = ls.length ∧ ks.length = ls.length then
       match inferArgs Γ R es n with
       | none => none
       | some o =>
-        let T := Ty.record L (objSlots L ls o.τs (varBlock o.next L.length))
-        match methodThis ms (ls.zip o.τs) with
+        match fieldSlots ks o.τs with
         | none => none
-        | some [] => some ⟨o.σ, T, o.preds, o.next + L.length⟩
-        | some (θ :: θs) =>
-          match unify (.tuple (θ :: θs)) (.tuple (List.replicate (θs.length + 1) θ)) with
+        | some (θs, ss) =>
+          let T := Ty.record L (objSlots L ls ss)
+          match unifyThis θs T with
           | none => none
-          | some σ₁ =>
-            match unify (θ.subst σ₁) (T.subst σ₁) with
-            | none => none
-            | some σ₂ =>
-              let σ' := Subst.compose σ₂ σ₁
-              some ⟨Subst.compose σ' o.σ, T.subst σ', o.preds.map (·.subst σ'),
-                o.next + L.length⟩
+          | some σ' => some ⟨Subst.compose σ' o.σ, T.subst σ', o.preds.map (·.subst σ'), o.next⟩
     else none
-  -- `e.l` on a receiver of any type: `HasProp l τ β`, for a fresh `β`.
+  -- A class's instance: its fields' initialisers, each seeing the fields
+  -- before it, and its other members, functions whose `this` is the
+  -- instance.
+  | Γ, R, .cls ls es ks, n =>
+    if ls.all (· ∈ L) ∧ ls.Nodup ∧ es.length = ls.length ∧ ks.length = ls.length then
+      match inferMembers Γ [] R es ks n with
+      | none => none
+      | some o =>
+        match memberSlots ks es o.τs o.next with
+        | none => none
+        | some (θs, ss, n') =>
+          let T := Ty.record L (objSlots L ls ss)
+          match unifyThis θs T with
+          | none => none
+          | some σ' => some ⟨Subst.compose σ' o.σ, T.subst σ', o.preds.map (·.subst σ'), n'⟩
+    else none
+  -- A constructor: a function whose `this` is what `new` makes.
+  | Γ, _, .ctor k body, n =>
+    let τs := varBlock n k
+    let ρ := Ty.var (n + k)
+    match infer (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ) (some ρ)
+        body (n + 1 + k) with
+    | none => none
+    | some o =>
+      match unify (ρ.subst o.σ) o.τ with
+      | none => none
+      | some σ' =>
+        let σ := Subst.compose σ' o.σ
+        some ⟨σ, (Ty.fn .newTarget τs ρ).subst σ, o.preds.map (·.subst σ'), o.next⟩
+  -- `new f(…)`: `f` a constructor, which gives a record, over fresh slots.
+  | Γ, R, .new_ f args, n =>
+    match infer Γ R f n with
+    | none => none
+    | some o₁ =>
+      match inferArgs (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) args o₁.next with
+      | none => none
+      | some o₂ =>
+        let ρ := Ty.record L (varBlock o₂.next L.length)
+        match unify (o₁.τ.subst o₂.σ) (.fn .newTarget o₂.τs ρ) with
+        | none => none
+        | some σ₃ =>
+          some ⟨Subst.compose σ₃ (Subst.compose o₂.σ o₁.σ), ρ.subst σ₃,
+            (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst σ₃), o₂.next + L.length⟩
+  -- `e.l` on a receiver of any type: `HasProp l τ κ β`, for a fresh `κ`
+  -- and `β`.
   | Γ, R, .get e l, n =>
     match infer Γ R e n with
     | none => none
-    | some o => some ⟨o.σ, .var o.next, o.preds ++ [⟨.hasProp l, [o.τ, .var o.next]⟩], o.next + 1⟩
-  -- `e.l = v`: `HasProp l τ ρ`, `ρ` being `v`'s type.
+    | some o =>
+      some ⟨o.σ, .var (o.next + 1),
+        o.preds ++ [⟨.hasProp l, [o.τ, .var o.next, .var (o.next + 1)]⟩], o.next + 2⟩
+  -- `e.l = v`: `HasProp l τ data ρ`, `ρ` being `v`'s type.
   | Γ, R, .set e l v, n =>
     match infer Γ R e n with
     | none => none
@@ -482,13 +574,12 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | none => none
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ,
-          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
-            [⟨.hasProp l, [o₁.τ.subst o₂.σ, o₂.τ]⟩, ⟨.fieldWrite, [o₁.τ.subst o₂.σ]⟩],
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ [⟨.hasProp l, [o₁.τ.subst o₂.σ, .data, o₂.τ]⟩],
           o₂.next⟩
   -- `{...e₁, ...e₂}`: `e₁` a record, `e₂` a record each of whose slots is
-  -- a presence and a type, and a `Merge` for each label, all at fresh
-  -- variables after `e₂`'s: the slots written over, the presences, the
-  -- types, and the result's slots.
+  -- a presence, a kind and a type, and a `Merge` for each label, all at
+  -- fresh variables after `e₂`'s: the slots written over, the presences,
+  -- the kinds, the types, and the result's slots.
   | Γ, R, .spread e₁ e₂, n =>
     match infer Γ R e₁ n with
     | none => none
@@ -499,19 +590,20 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
         let k := L.length
         let ss := varBlock o₂.next k
         let ps := varBlock (o₂.next + k) k
-        let τs := varBlock (o₂.next + 2 * k) k
-        let rs := varBlock (o₂.next + 3 * k) k
+        let ks := varBlock (o₂.next + 2 * k) k
+        let τs := varBlock (o₂.next + 3 * k) k
+        let rs := varBlock (o₂.next + 4 * k) k
         match unify (o₁.τ.subst o₂.σ) (.record L ss) with
         | none => none
         | some σ₃ =>
-          match unify (o₂.τ.subst σ₃) ((Ty.record L (List.zipWith Ty.slot ps τs)).subst σ₃) with
+          match unify (o₂.τ.subst σ₃) ((Ty.record L (slots3 ps ks τs)).subst σ₃) with
           | none => none
           | some σ₄ =>
             let σ₄₃ := Subst.compose σ₄ σ₃
             some ⟨Subst.compose σ₄₃ (Subst.compose o₂.σ o₁.σ), (Ty.record L rs).subst σ₄₃,
-              (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ mergePreds ps τs ss rs).map
+              (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++ mergePreds ps ks τs ss rs).map
                 (·.subst σ₄₃),
-              o₂.next + 4 * k⟩
+              o₂.next + 5 * k⟩
   -- `[e₀, …]`: one type for the elements, a fresh variable.
   | Γ, R, .arr es, n =>
     match inferArgs Γ R es n with
@@ -551,8 +643,9 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
             (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst o₃.σ) ++ o₃.preds ++
               [⟨.indexable, [τc, o₂.τ.subst o₃.σ, o₃.τ]⟩, ⟨.indexWrite, [τc]⟩],
             o₃.next⟩
-  -- `e.l(args)`: `HasProp l τ (this: τ, (τs) => β)`, the method's `this`
-  -- being the receiver's type (inty's `method_receiver`), for a fresh `β`.
+  -- `e.l(args)`: `HasProp l τ κ (this: τ, (τs) => β)`, the method's `this`
+  -- being the receiver's type (inty's `method_receiver`), for a fresh `κ`
+  -- and `β`.
   | Γ, R, .mcall e l args, n =>
     match infer Γ R e n with
     | none => none
@@ -561,10 +654,10 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
       | none => none
       | some o₂ =>
         let τ := o₁.τ.subst o₂.σ
-        some ⟨Subst.compose o₂.σ o₁.σ, .var o₂.next,
+        some ⟨Subst.compose o₂.σ o₁.σ, .var (o₂.next + 1),
           o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
-            [⟨.hasProp l, [τ, .fn τ o₂.τs (.var o₂.next)]⟩],
-          o₂.next + 1⟩
+            [⟨.hasProp l, [τ, .var o₂.next, .fn τ o₂.τs (.var (o₂.next + 1))]⟩],
+          o₂.next + 2⟩
 
 /-- Infer a list of arguments, left to right, threading the substitution. -/
 def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
@@ -578,6 +671,33 @@ def inferArgs : Ctx → Option Ty → List Expr → Nat → Option OutArgs
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ :: o₂.τs,
           o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+
+/-- Infer a class's members, left to right, threading the substitution: a
+field's initialiser sees the types `Δ` of the fields before it, the latest
+first; the other members see `Γ`. -/
+def inferMembers : Ctx → List Ty → Option Ty → List Expr → List ClassKind → Nat → Option OutArgs
+  | _, _, _, [], [], n => some ⟨[], [], [], n⟩
+  | Γ, Δ, R, e :: es, .data :: ks, n =>
+    match infer (Δ.map .mono ++ Γ) R e n with
+    | none => none
+    | some o₁ =>
+      match inferMembers (Ctx.subst o₁.σ Γ) (o₁.τ :: Δ.map (·.subst o₁.σ)) (Ret.subst o₁.σ R) es
+          ks o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ :: o₂.τs,
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+  | Γ, Δ, R, e :: es, _ :: ks, n =>
+    match infer Γ R e n with
+    | none => none
+    | some o₁ =>
+      match inferMembers (Ctx.subst o₁.σ Γ) (Δ.map (·.subst o₁.σ)) (Ret.subst o₁.σ R) es ks
+          o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ :: o₂.τs,
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+  | _, _, _, _, _, _ => none
 end
 
 end
@@ -609,7 +729,9 @@ def Expr.labels : Expr → List String
   | .let_ _ a b | .binop _ a b | .seq a b | .while_ a b | .tryCatch a b | .tryFinally a b =>
     a.labels ++ b.labels
   | .cond a b c => a.labels ++ b.labels ++ c.labels
-  | .obj ls es _ => ls ++ Expr.labelsList es
+  | .obj ls es _ | .cls ls es _ => ls ++ Expr.labelsList es
+  | .ctor _ b => b.labels
+  | .new_ f args => f.labels ++ Expr.labelsList args
   | .get e l => l :: e.labels
   | .set e l v => l :: (e.labels ++ v.labels)
   | .spread a b | .index a b => a.labels ++ b.labels

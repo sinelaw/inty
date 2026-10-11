@@ -43,11 +43,11 @@ theorem Expr.isValue_sound {e : Expr} (h : e.isValue = true) : e.IsValue := by
 
 theorem PPred.isSimple_spec {k : Nat} {p : PPred} (h : p.isSimple k = true) :
     (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ i < k, ∃ rest, p.args = .bound i :: rest) ∨
-      ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < k := by
+      ∃ q κ τ t r, p = ⟨.merge, [q, κ, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ κ.bvs ++ τ.bvs ++ t.bvs, i < k := by
   unfold PPred.isSimple at h
   split at h
   · obtain ⟨i, hi, hik⟩ := List.any_eq_true.mp h
-    exact .inr ⟨_, _, _, _, rfl, i, hi, of_decide_eq_true hik⟩
+    exact .inr ⟨_, _, _, _, _, rfl, i, hi, of_decide_eq_true hik⟩
   · cases h
   · rename_i c i rest _ hc
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
@@ -60,18 +60,37 @@ theorem Scheme.simple_of_check {s : Scheme} (h : s.preds.all (PPred.isSimple s.a
 
 /-! ## Improvement -/
 
-theorem Pred.decide₀_record_sound {l : String} {ls : List String} {slots : List Ty} {σ s : Ty}
+theorem Pred.decide₀_record_sound {l : String} {ls : List String} {slots : List Ty} {κ σ s : Ty}
     (hs : Ty.field l ls slots = some s) {ψ : Subst}
-    (hab : TyEq (s.subst ψ) ((Ty.slot .pre σ).subst ψ)) :
-    InstEq (Pred.subst ψ ⟨.hasProp l, [.record ls slots, σ]⟩) := by
+    (hab : TyEq (s.subst ψ) ((Ty.slot .pre κ σ).subst ψ)) :
+    InstEq (Pred.subst ψ ⟨.hasProp l, [.record ls slots, κ, σ]⟩) := by
   have hs' : Ty.field l ls (slots.map (·.subst ψ)) = some (s.subst ψ) := by
     rw [Ty.field_subst, hs]; rfl
   obtain ⟨fs', hf', hl, hz⟩ := Ty.field_replace hs' hab
-  refine InstEq.of_predEq (q := ⟨.hasProp l, [.record ls fs', σ.subst ψ]⟩) ?_
+  refine InstEq.of_predEq (q := ⟨.hasProp l, [.record ls fs', κ.subst ψ, σ.subst ψ]⟩) ?_
     (Inst.hasProp (by simpa using hf')).instEq
   simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
   exact PredEq.of_pairs (by simp)
-    (zip_tyEq_cons (TyEq.app (by simpa using hl) hz) (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil))
+    (zip_tyEq_cons (TyEq.app (by simpa using hl) hz)
+      (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil)))
+
+/-- What `Pred.decideCopy`'s equation says: the result is what is copied
+of the slot. -/
+theorem Pred.decideCopy_sound {s r a b : Ty} (h : Pred.decideCopy s r = .eq a b) {ψ : Subst}
+    (hab : TyEq (a.subst ψ) (b.subst ψ)) : ∃ r', SlotCopy (s.subst ψ) r' ∧ TyEq (r.subst ψ) r' := by
+  unfold Pred.decideCopy at h
+  split at h <;> (try cases h)
+  · exact ⟨_, by simp only [Ty.subst_app, List.map_cons, List.map_nil]; exact .data, by
+      simpa [Ty.subst_app] using hab⟩
+  · exact ⟨_, by simp only [Ty.subst_app, List.map_cons, List.map_nil]; exact .getter, by
+      simpa [Ty.subst_app] using hab⟩
+  · exact ⟨_, by simp only [Ty.subst_app, List.map_cons, List.map_nil]; exact .proto, by
+      simpa [Ty.subst_app] using hab⟩
+  · exact ⟨_, by simp only [Ty.subst_app, List.map_cons, List.map_nil]; exact .abs, by
+      simpa [Ty.subst_app] using hab⟩
+
+theorem Pred.merge_instEq {q q' : Pred} (hq : Inst q') (e : PredEq q q') : InstEq q :=
+  InstEq.of_predEq e hq.instEq
 
 /-- A decision on a known first argument that is an equation is an instance,
 up to equal types, wherever the equation holds. -/
@@ -91,18 +110,21 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     split at h
     · rename_i hl
       cases h; subst hl
-      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
-      exact InstEq.of_predEq (PredEq.of_pairs (by simp)
-        (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil))) Inst.lengthArray.instEq
+      obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app] at hz ⊢
+      exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+        (zip_tyEq_cons (hz (_, _) (by simp)) (zip_tyEq_cons (hz (_, _) (by simp)) zip_tyEq_nil))))
+        Inst.lengthArray.instEq
     · cases h
   · -- A string's `length`.
     split at h
     · rename_i hl
       cases h; subst hl
-      refine InstEq.of_predEq ?_ Inst.lengthString.instEq
-      simp only [Pred.subst, List.map_cons, List.map_nil]
-      exact PredEq.of_pairs (by simp)
-        (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil))
+      obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app] at hz ⊢
+      exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+        (zip_tyEq_cons (hz (_, _) (by simp)) (zip_tyEq_cons (hz (_, _) (by simp)) zip_tyEq_nil))))
+        Inst.lengthString.instEq
     · cases h
   · cases h
     rename_i τ i e
@@ -123,19 +145,35 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
   · cases h
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
     exact Inst.writeArray.instEq
-  · cases h
+  · -- A `Merge` whose operand's field is present.
+    rename_i k τ s r
+    unfold Pred.decidePre at h
+    split at h
+    · cases h
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+      exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+        (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _)
+          (zip_tyEq_cons (by simpa [Ty.subst_app] using hab) zip_tyEq_nil))))))
+        Inst.mergeData.instEq
+    · cases h
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+      exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+        (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _)
+          (zip_tyEq_cons (by simpa [Ty.subst_app] using hab) zip_tyEq_nil))))))
+        Inst.mergeGetter.instEq
+    · obtain ⟨r', hc, hr⟩ := Pred.decideCopy_sound h hab
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+      exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+        (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _)
+          (zip_tyEq_cons hr zip_tyEq_nil)))))) (Inst.mergeProto hc).instEq
+    · cases h
+    · cases h
+  · -- A `Merge` whose operand's field is absent.
+    obtain ⟨r', hc, hr⟩ := Pred.decideCopy_sound h hab
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
-    exact Inst.writeRecord.instEq
-  · cases h
-    simp only [Pred.subst, List.map_cons, List.map_nil]
     exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
-      (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil)))))
-      Inst.mergePre.instEq
-  · cases h
-    simp only [Pred.subst, List.map_cons, List.map_nil]
-    exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
-      (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hab zip_tyEq_nil)))))
-      Inst.mergeAbs.instEq
+      (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _)
+        (zip_tyEq_cons hr zip_tyEq_nil)))))) (Inst.mergeAbs hc).instEq
 
 theorem Pred.decide_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     (h : Pred.decide c t rest = .eq a b) {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) :
@@ -281,61 +319,6 @@ theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound L 
     · exact ha
     · exact has.2 p hp
 
-/-- What `methodThis` finds: each method is a function, whose `this` it
-lists. -/
-theorem methodThis_spec {ms : List String} :
-    ∀ {ps : List (String × Ty)} {θs : List Ty}, methodThis ms ps = some θs →
-      ∀ p ∈ ps, p.1 ∈ ms → ∃ θ a b, p.2 = .fn θ a b ∧ θ ∈ θs
-  | [], _, _, p, hp, _ => by cases hp
-  | (l, τ) :: rest, θs, h, p, hp, hpm => by
-    simp only [methodThis] at h
-    split at h
-    · split at h
-      · rename_i θ a b
-        cases hr : methodThis ms rest with
-        | none => simp [hr] at h
-        | some θs' =>
-          simp only [hr, Option.map_some, Option.some.injEq] at h; subst h
-          rcases List.mem_cons.mp hp with rfl | hp
-          · exact ⟨θ, b, a, rfl, List.mem_cons_self⟩
-          · obtain ⟨θ', a', b', h₁, h₂⟩ := methodThis_spec hr p hp hpm
-            exact ⟨θ', a', b', h₁, List.mem_cons_of_mem _ h₂⟩
-      · cases h
-    · rename_i hl
-      rcases List.mem_cons.mp hp with rfl | hp
-      · exact absurd hpm hl
-      · exact methodThis_spec h p hp hpm
-
-/-- Each `this` `methodThis` lists is a method's. -/
-theorem methodThis_mem {ms : List String} :
-    ∀ {ps : List (String × Ty)} {θs : List Ty}, methodThis ms ps = some θs →
-      ∀ θ ∈ θs, ∃ p ∈ ps, ∃ a b, p.2 = .fn θ a b
-  | [], θs, h, θ, hθ => by simp only [methodThis, Option.some.injEq] at h; subst h; cases hθ
-  | (l, τ) :: rest, θs, h, θ, hθ => by
-    simp only [methodThis] at h
-    split at h
-    · split at h
-      · rename_i θ₀ a b
-        cases hr : methodThis ms rest with
-        | none => simp [hr] at h
-        | some θs' =>
-          simp only [hr, Option.map_some, Option.some.injEq] at h; subst h
-          rcases List.mem_cons.mp hθ with rfl | hθ
-          · exact ⟨_, List.mem_cons_self, b, a, rfl⟩
-          · obtain ⟨p, hp, h'⟩ := methodThis_mem hr θ hθ
-            exact ⟨p, List.mem_cons_of_mem _ hp, h'⟩
-      · cases h
-    · obtain ⟨p, hp, h'⟩ := methodThis_mem h θ hθ
-      exact ⟨p, List.mem_cons_of_mem _ hp, h'⟩
-
-/-- With no field written as a method, `methodThis` lists nothing. -/
-theorem methodThis_none {ms : List String} :
-    ∀ {ps : List (String × Ty)}, (∀ p ∈ ps, p.1 ∉ ms) → methodThis ms ps = some []
-  | [], _ => rfl
-  | (l, τ) :: rest, h => by
-    simp only [methodThis, h (l, τ) List.mem_cons_self, ↓reduceIte]
-    exact methodThis_none (fun p hp => h p (List.mem_cons_of_mem _ hp))
-
 /-- Pairs with equal second components, when the property they have is
 invariant under that. -/
 theorem zip_conv {P : Expr → Ty → Prop} :
@@ -360,17 +343,275 @@ theorem mem_zip_replicate {α β : Type} {a : α} {b : β} :
     · simp only [List.length_cons, List.replicate_succ, List.zip_cons_cons, List.mem_cons]
       exact .inr (mem_zip_replicate h)
 
+/-- What `fieldSlots` finds: under any substitution that makes each `this`
+it lists the literal's type `T`, each field's slot is as its kind says. -/
+theorem fieldSlots_sound {ks : List FieldKind} {τs θs ss : List Ty}
+    (h : fieldSlots ks τs = some (θs, ss)) :
+    ss.length = ks.length ∧ τs.length = ks.length ∧
+      ∀ (ψ : Subst) (T : Ty), (∀ θ ∈ θs, TyEq (θ.subst ψ) T) →
+        ∀ x ∈ ks.zip (τs.zip ss), FieldSlot T x.1 (x.2.1.subst ψ) (x.2.2.subst ψ) := by
+  induction ks, τs using fieldSlots.induct generalizing θs ss with
+  | case1 =>
+    simp only [fieldSlots, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h; simp
+  | case2 ks τ τs ih =>
+    simp only [fieldSlots] at h
+    cases hr : fieldSlots ks τs with
+    | none => simp [hr] at h
+    | some r =>
+      obtain ⟨θs', ss'⟩ := r
+      simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨h₁, h₂, h₃⟩ := ih hr
+      refine ⟨by simp [h₁], by simp [h₂], fun ψ T hθ x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · simpa [Ty.subst_app] using FieldSlot.data (T := T) (τ := τ.subst ψ)
+      · exact h₃ ψ T hθ x hx
+  | case3 ks θ ρ τs' τs ih =>
+    simp only [fieldSlots] at h
+    cases hr : fieldSlots ks τs with
+    | none => simp [hr] at h
+    | some r =>
+      obtain ⟨θs', ss'⟩ := r
+      simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨h₁, h₂, h₃⟩ := ih hr
+      refine ⟨by simp [h₁], by simp [h₂], fun ψ T hθ x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · simpa [Ty.subst_app, Ty.subst_fn] using
+          FieldSlot.method (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (hθ θ List.mem_cons_self)
+      · exact h₃ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+  | case4 ks θ σ τs ih =>
+    simp only [fieldSlots] at h
+    cases hr : fieldSlots ks τs with
+    | none => simp [hr] at h
+    | some r =>
+      obtain ⟨θs', ss'⟩ := r
+      simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨h₁, h₂, h₃⟩ := ih hr
+      refine ⟨by simp [h₁], by simp [h₂], fun ψ T hθ x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · simpa [Ty.subst_app, Ty.subst_fn] using
+          FieldSlot.getter (σ := σ.subst ψ) (hθ θ List.mem_cons_self)
+      · exact h₃ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+  | case5 t x h1 h2 h3 h4 =>
+    exfalso
+    rw [fieldSlots.eq_def] at h
+    split at h
+    · exact h1 rfl rfl
+    · exact h2 _ _ _ rfl rfl
+    · exact h3 _ _ _ _ _ rfl rfl
+    · exact h4 _ _ _ _ rfl rfl
+    · cases h
+
+/-- What `memberSlots` finds: under any substitution that makes each
+`this` it lists the instance's type `T`, each member's slot is as its kind
+says. -/
+theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty} {n : Nat}
+    {θs ss : List Ty} {n' : Nat} (h : memberSlots ks es τs n = some (θs, ss, n')) :
+    ss.length = ks.length ∧ τs.length = ks.length ∧ es.length = ks.length ∧ n ≤ n' ∧
+      ∀ (ψ : Subst) (T : Ty), (∀ θ ∈ θs, TyEq (θ.subst ψ) T) →
+        ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot T x.1 x.2.1 (x.2.2.1.subst ψ)
+          (x.2.2.2.subst ψ) := by
+  induction ks, es, τs, n using memberSlots.induct generalizing θs ss n' with
+  | case1 n =>
+    simp only [memberSlots, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl⟩ := h; simp
+  | case2 ks e es τ τs n ih =>
+    simp only [memberSlots] at h
+    cases hr : memberSlots ks es τs n with
+    | none => simp [hr] at h
+    | some r =>
+      obtain ⟨θs', ss', n''⟩ := r
+      simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun ψ T hθ x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · simpa [Ty.subst_app] using MemberSlot.data (T := T) (e := e) (τ := τ.subst ψ)
+      · exact h₅ ψ T hθ x hx
+  | case3 ks m b es θ ρ τs' τs n ih =>
+    simp only [memberSlots] at h
+    cases hr : memberSlots ks es τs (n + 1) with
+    | none => simp [hr] at h
+    | some r =>
+      obtain ⟨θs', ss', n''⟩ := r
+      simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], by omega, fun ψ T hθ x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · simpa [Ty.subst_app, Ty.subst_fn] using
+          MemberSlot.arrow (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
+            (θ' := (Ty.var n).subst ψ) (hθ θ List.mem_cons_self)
+      · exact h₅ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+  | case4 ks m b es θ ρ τs' τs n ih =>
+    simp only [memberSlots] at h
+    cases hr : memberSlots ks es τs n with
+    | none => simp [hr] at h
+    | some r =>
+      obtain ⟨θs', ss', n''⟩ := r
+      simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun ψ T hθ x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · simpa [Ty.subst_app, Ty.subst_fn] using
+          MemberSlot.method (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
+            (hθ θ List.mem_cons_self)
+      · exact h₅ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+  | case5 ks b es θ σ τs n ih =>
+    simp only [memberSlots] at h
+    cases hr : memberSlots ks es τs n with
+    | none => simp [hr] at h
+    | some r =>
+      obtain ⟨θs', ss', n''⟩ := r
+      simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl, rfl⟩ := h
+      obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun ψ T hθ x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · simpa [Ty.subst_app, Ty.subst_fn] using
+          MemberSlot.getter (σ := σ.subst ψ) (b := b) (hθ θ List.mem_cons_self)
+      · exact h₅ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+  | case6 t x y m h1 h2 h3 h4 h5 =>
+    exfalso
+    rw [memberSlots.eq_def] at h
+    split at h
+    · exact h1 rfl rfl rfl
+    · exact h2 _ _ _ _ _ rfl rfl rfl
+    · exact h3 _ _ _ _ _ _ _ _ rfl rfl rfl
+    · exact h4 _ _ _ _ _ _ _ _ rfl rfl rfl
+    · exact h5 _ _ _ _ _ _ rfl rfl rfl
+    · cases h
+
+/-- What `unifyThis` gives: each `this` is the record type. -/
+theorem unifyThis_sound {θs : List Ty} {T : Ty} {σ' : Subst} (h : unifyThis θs T = some σ') :
+    ∀ θ ∈ θs, ∀ ψ : Subst, TyEq ((θ.subst σ').subst ψ) ((T.subst σ').subst ψ) := by
+  unfold unifyThis at h
+  split at h
+  · intro θ hθ; cases hθ
+  · rename_i θ₀ θs₀
+    split at h
+    · cases h
+    rename_i σ₁ hu₁
+    split at h
+    · cases h
+    rename_i σ₂ hu₂
+    simp only [Option.some.injEq] at h; subst h
+    have h₁' := unify_sound hu₁
+    simp only [Ty.subst_app, List.map_replicate] at h₁'
+    obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp h₁'
+    intro θ' hθ' ψ
+    have hz' := hz (θ'.subst σ₁, θ₀.subst σ₁) (by
+      have := mem_zip_replicate (b := θ₀.subst σ₁) (List.mem_map_of_mem (f := (·.subst σ₁)) hθ')
+      simpa using this)
+    simp only [Ty.subst_compose]
+    exact ((hz'.subst σ₂).trans (unify_sound hu₂)).subst ψ
+
+theorem memberCtx_succ (Γ : Ctx) (k : ClassKind) (ks : List ClassKind) (τ : Ty) (τs : List Ty)
+    (i : Nat) : memberCtx Γ (k :: ks) (τ :: τs) (i + 1) .data =
+      if k = .data then memberCtx (.mono τ :: Γ) ks τs i .data else memberCtx Γ ks τs i .data := by
+  cases k <;> simp [memberCtx_data, memberCtx_other]
+
+/-- Inferring a class's members, each sound, is sound: one type per member,
+each a valid typing in its context (`memberCtx`, a field's after the types
+`Δ` of the fields before the members). -/
+theorem inferMembers_sound : ∀ (es : List Expr) (ks : List ClassKind), (∀ e ∈ es, InferSound L e) →
+    ∀ {Γ : Ctx} {Δ : List Ty} {R : Option Ty} {n : Nat} {o : OutArgs},
+      inferMembers L Γ Δ R es ks n = some o → ∀ φ C, Sat C o.preds φ →
+        o.τs.length = es.length ∧ es.length = ks.length ∧
+        ∀ i e k τ, es[i]? = some e → ks[i]? = some k → (o.τs.map (·.subst φ))[i]? = some τ →
+          HasType L C (memberCtx (if k = .data then
+              ((Δ.map (·.subst o.σ)).map (·.subst φ)).map Scheme.mono ++
+                Ctx.subst φ (Ctx.subst o.σ Γ)
+            else Ctx.subst φ (Ctx.subst o.σ Γ)) ks (o.τs.map (·.subst φ)) i k)
+            (Ret.subst φ (Ret.subst o.σ R)) e τ
+  | [], [], _, Γ, Δ, R, n, o, h, φ, C, _ => by
+    simp only [inferMembers, Option.some.injEq] at h; subst h; simp
+  | [], _ :: _, _, Γ, Δ, R, n, o, h, _, _, _ | _ :: _, [], _, Γ, Δ, R, n, o, h, _, _, _ => by
+    simp [inferMembers] at h
+  | e :: es, k :: ks, ih, Γ, Δ, R, n, o, h, φ, C, hsat => by
+    have ih' : ∀ e ∈ es, InferSound L e := fun e' he' => ih e' (List.mem_cons_of_mem _ he')
+    cases k
+    case data =>
+      simp only [inferMembers] at h
+      split at h
+      · cases h
+      rename_i o₁ h₁
+      split at h
+      · cases h
+      rename_i o₂ h₂
+      simp only [Option.some.injEq] at h; subst h
+      simp only [Sat.map, Sat.append] at hsat
+      have he := ih e List.mem_cons_self h₁ _ C hsat.1
+      have hr := inferMembers_sound es ks ih' h₂ φ C hsat.2
+      simp only [Ty.subst_compose, Ret.subst_compose, Ctx.subst,
+        List.map_append, List.map_map, Function.comp_def, Scheme.mono_subst, List.map_cons] at he hr ⊢
+      refine ⟨by simp [hr.1], by simp [hr.2.1], fun i e' k τ h₁ h₂ h₃ => ?_⟩
+      cases i with
+      | zero =>
+        simp only [List.getElem?_cons_zero, Option.some.injEq] at h₁ h₂ h₃
+        subst h₁ h₂ h₃
+        simpa [memberCtx_zero] using he
+      | succ i =>
+        simp only [List.getElem?_cons_succ] at h₁ h₂ h₃
+        have := hr.2.2 i e' k τ h₁ h₂ (by simpa using h₃)
+        by_cases hk : k = .data
+        · subst hk
+          simp only [ite_true, memberCtx_succ] at this ⊢
+          simpa [Function.comp_def] using this
+        · simp only [hk, ite_false] at this ⊢
+          cases k <;> simp_all [memberCtx]
+    all_goals
+      simp only [inferMembers] at h
+      split at h
+      · cases h
+      rename_i o₁ h₁
+      split at h
+      · cases h
+      rename_i o₂ h₂
+      simp only [Option.some.injEq] at h; subst h
+      simp only [Sat.map, Sat.append] at hsat
+      have he := ih e List.mem_cons_self h₁ _ C hsat.1
+      have hr := inferMembers_sound es ks ih' h₂ φ C hsat.2
+      simp only [Ty.subst_compose, Ret.subst_compose, Ctx.subst,
+        List.map_map, Function.comp_def, List.map_cons] at he hr ⊢
+      refine ⟨by simp [hr.1], by simp [hr.2.1], fun i e' k τ h₁ h₂ h₃ => ?_⟩
+      cases i with
+      | zero =>
+        simp only [List.getElem?_cons_zero, Option.some.injEq] at h₁ h₂ h₃
+        subst h₁ h₂ h₃
+        simpa [memberCtx] using he
+      | succ i =>
+        simp only [List.getElem?_cons_succ] at h₁ h₂ h₃
+        have := hr.2.2 i e' k τ h₁ h₂ (by simpa using h₃)
+        by_cases hk : k = .data
+        · subst hk
+          simp only [ite_true, memberCtx_succ, reduceCtorEq, ite_false] at this ⊢
+          simpa [Function.comp_def] using this
+        · simp only [hk, ite_false] at this ⊢
+          cases k <;> simp_all [memberCtx]
+
 /-- The spread rule, at the types a substitution gives. -/
 theorem HasType.spread_subst {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
-    {e₁ e₂ : Expr} {ψ : Subst} {ps τs ss rs : List Ty}
-    (hps : ps.length = L.length) (hτs : τs.length = L.length) (hss : ss.length = L.length)
-    (hrs : rs.length = L.length)
+    {e₁ e₂ : Expr} {ψ : Subst} {ps ks τs ss rs : List Ty}
+    (hps : ps.length = L.length) (hks : ks.length = L.length) (hτs : τs.length = L.length)
+    (hss : ss.length = L.length) (hrs : rs.length = L.length)
     (h₁ : HasType L C Γ R e₁ ((Ty.record L ss).subst ψ))
-    (h₂ : HasType L C Γ R e₂ ((Ty.record L (List.zipWith Ty.slot ps τs)).subst ψ))
-    (hm : Sat C (mergePreds ps τs ss rs) ψ) :
+    (h₂ : HasType L C Γ R e₂ ((Ty.record L (slots3 ps ks τs)).subst ψ))
+    (hm : Sat C (mergePreds ps ks τs ss rs) ψ) :
     HasType L C Γ R (.spread e₁ e₂) ((Ty.record L rs).subst ψ) := by
-  simp only [Ty.subst_app, zipWith_slot_subst] at h₁ h₂ ⊢
-  refine .spread (by simpa using hps) (by simpa using hτs) (by simpa using hss)
+  simp only [Ty.subst_app, slots3_subst] at h₁ h₂ ⊢
+  refine .spread (by simpa using hps) (by simpa using hks) (by simpa using hτs) (by simpa using hss)
     (by simpa using hrs) h₁ h₂ (fun p hp => ?_)
   rw [← mergePreds_subst] at hp
   obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
@@ -713,7 +954,7 @@ theorem infer_sound :
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hb hf ⊢
     exact .tryFinally hb hf
 
-  | obj ls es ms ih =>
+  | obj ls es ks ih =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
     split at h
@@ -726,54 +967,104 @@ theorem infer_sound :
     have hL : ∀ l ∈ ls, l ∈ L := fun l hl => by simpa using List.all_eq_true.mp hcond.1 l hl
     split at h
     · cases h
-    · -- No field is a method.
-      rename_i hm
-      simp only [Option.some.injEq] at h; subst h
-      have ha := inferArgs_sound es ih h₁ φ C hsat
-      simp only [Ty.subst_app, objSlots_subst]
-      refine .obj (by simp [ha.1, hcond.2]) (by simp [varBlock]) hL hcond.2 ha.2 ?_
-      intro p hp hpm
-      rw [List.zip_map_right] at hp
-      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-      obtain ⟨θ, _, _, _, hθ⟩ := methodThis_spec hm q hq hpm
-      cases hθ
-    · rename_i θ θs hm
-      split at h
-      · cases h
-      rename_i σ₁ hu₁
-      split at h
-      · cases h
-      rename_i σ₂ hu₂
-      simp only [Option.some.injEq] at h; subst h
-      simp only [Sat.map] at hsat
-      have ha := inferArgs_sound es ih h₁ _ C hsat
-      -- Each method's `this` is `θ`'s, then the literal's type.
-      have h₁' := unify_sound hu₁
-      simp only [Ty.subst_app, List.map_replicate] at h₁'
-      obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp h₁'
-      have hthis : ∀ θ' ∈ θ :: θs, ∀ ψ : Subst,
-          TyEq (θ'.subst (Subst.compose ψ (Subst.compose σ₂ σ₁)))
-            ((Ty.record L (objSlots L ls o₁.τs (varBlock o₁.next L.length))).subst
-              (Subst.compose ψ (Subst.compose σ₂ σ₁))) := by
-        intro θ' hθ' ψ
-        have hz' := hz (θ'.subst σ₁, θ.subst σ₁) (by
-          have := mem_zip_replicate (b := θ.subst σ₁) (List.mem_map_of_mem (f := (·.subst σ₁)) hθ')
-          simpa using this)
-        simp only [Ty.subst_compose]
-        exact ((hz'.subst σ₂).trans (unify_sound hu₂)).subst ψ
-      simp only [Ctx.subst_compose, Ret.subst_compose] at ha ⊢
-      rw [← Ty.subst_compose]
-      simp only [Ty.subst_app, objSlots_subst]
-      refine .obj (by simp [ha.1, hcond.2]) (by simp [varBlock]) hL hcond.2 ha.2 ?_
-      intro p hp hpm
-      rw [List.zip_map_right] at hp
-      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-      obtain ⟨θ', a, b, hq₂, hθ'⟩ := methodThis_spec hm q hq hpm
-      have := hthis θ' hθ' φ
-      simp only [Ty.subst_app, objSlots_subst] at this
-      refine ⟨_, a.map (·.subst (Subst.compose φ (Subst.compose σ₂ σ₁))),
-        b.subst (Subst.compose φ (Subst.compose σ₂ σ₁)), ?_, this⟩
-      simp only [Prod.map_snd, hq₂, Ty.subst_fn]
+    rename_i θs ss hfs
+    split at h
+    · cases h
+    rename_i σ' hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map] at hsat
+    have ha := inferArgs_sound es ih h₁ _ C hsat
+    obtain ⟨hssl, hτl, hslot⟩ := fieldSlots_sound hfs
+    have hthis := unifyThis_sound hu
+    simp only [Ctx.subst_compose, Ret.subst_compose] at ha ⊢
+    rw [← Ty.subst_compose]
+    have hθ : ∀ θ ∈ θs, TyEq (θ.subst (Subst.compose φ σ'))
+        ((Ty.record L (objSlots L ls ss)).subst (Subst.compose φ σ')) := fun θ hθ => by
+      simpa only [Ty.subst_compose] using hthis θ hθ φ
+    have hslot' := hslot _ _ hθ
+    simp only [Ty.subst_app, objSlots_subst] at hslot' ⊢
+    refine .obj (by omega) (by omega) (by simp [ha.1]; omega) (by simp; omega) hL ha.2 ?_
+    rw [zip3_map]
+    intro x hx
+    obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+    exact hslot' y hy
+  | cls ls es ks ih =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    rotate_left
+    · cases h
+    rename_i hcond
+    obtain ⟨hcL, hnd, hesl, hksl⟩ := hcond
+    have hL : ∀ l ∈ ls, l ∈ L := fun l hl => by simpa using List.all_eq_true.mp hcL l hl
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i θs ss n' hms
+    split at h
+    · cases h
+    rename_i σ' hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map] at hsat
+    have hm := inferMembers_sound es ks ih h₁ _ C hsat
+    obtain ⟨hssl, hτl, -, -, hslot⟩ := memberSlots_sound hms
+    have hthis := unifyThis_sound hu
+    simp only [Ctx.subst_compose, Ret.subst_compose] at hm ⊢
+    rw [← Ty.subst_compose]
+    have hθ : ∀ θ ∈ θs, TyEq (θ.subst (Subst.compose φ σ'))
+        ((Ty.record L (objSlots L ls ss)).subst (Subst.compose φ σ')) := fun θ hθ => by
+      simpa only [Ty.subst_compose] using hthis θ hθ φ
+    have hslot' := hslot _ _ hθ
+    simp only [Ty.subst_app, objSlots_subst] at hslot' ⊢
+    refine .cls (τs := o₁.τs.map (·.subst (Subst.compose φ σ'))) hesl hksl (by simp; omega)
+      (by simp; omega) hnd hL (fun i e k τ h₁ h₂ h₃ => ?_) ?_
+    · have := hm.2.2 i e k τ h₁ h₂ h₃
+      by_cases hk : k = .data
+      · subst hk; simpa using this
+      · simpa [hk] using this
+    · rw [zip4_map]
+      intro x hx
+      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+      exact hslot' y hy
+  | ctor k body ih =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i σ' hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map] at hsat
+    have := ih h₁ _ C hsat
+    simp only [Ctx.subst, List.map_append, List.map_map, List.map_cons, Function.comp_def,
+      Scheme.mono_subst, Ty.subst_fn, Ty.subst_compose, Ret.subst_compose,
+      Ret.subst_some] at this ⊢
+    replace this := this.conv ((unify_sound hu).subst φ).symm
+    exact .ctor (by simp [varBlock]) (by simpa [Function.comp_def] using this)
+  | new_ f args ihf iha =>
+    intro Γ R n o h φ C hsat
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i σ₃ hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have hf := ihf h₁ _ C hsat.1
+    have ha := inferArgs_sound args iha h₂ _ C hsat.2
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hf ha ⊢
+    replace hf := hf.conv ((unify_sound hu).subst φ)
+    simp only [Ty.subst_fn, List.map_map, Function.comp_def] at hf ha
+    exact .new_ hf (by simp [ha.1]) ha.2 (TyEq.refl _)
   | get e l ih =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
@@ -797,9 +1088,7 @@ theorem infer_sound :
     have he := ihe h₁ _ C hsat.1.1
     have hv := ihv h₂ φ C hsat.1.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he hv ⊢
-    exact .set he (by simpa [Pred.subst, Ty.subst_compose] using hsat.2 _ List.mem_cons_self)
-      (by simpa [Pred.subst, Ty.subst_compose] using
-        hsat.2 _ (List.mem_cons_of_mem _ List.mem_cons_self)) hv
+    exact .set he (by simpa [Pred.subst, Ty.subst_compose] using hsat.2 _ List.mem_cons_self) hv
   | spread e₁ e₂ ih₁ ih₂ =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h
@@ -823,15 +1112,16 @@ theorem infer_sound :
         ((Ty.record L (varBlock o₂.next L.length)).subst (φ.compose (σ₄.compose σ₃))) := by
       simp only [Ty.subst_compose]; exact ((unify_sound hu₃).subst σ₄).subst φ
     have hτ₂ : TyEq (Ty.subst (φ.compose (σ₄.compose σ₃)) o₂.τ)
-        ((Ty.record L (List.zipWith Ty.slot (varBlock (o₂.next + L.length) L.length)
-          (varBlock (o₂.next + 2 * L.length) L.length))).subst (φ.compose (σ₄.compose σ₃))) := by
+        ((Ty.record L (slots3 (varBlock (o₂.next + L.length) L.length)
+          (varBlock (o₂.next + 2 * L.length) L.length)
+          (varBlock (o₂.next + 3 * L.length) L.length))).subst (φ.compose (σ₄.compose σ₃))) := by
       simp only [Ty.subst_compose]; exact (unify_sound hu₄).subst φ
     replace he₁ := he₁.conv hτ₁
     replace he₂ := he₂.conv hτ₂
     simp only [Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
     rw [← Ty.subst_compose]
     exact HasType.spread_subst (by simp [varBlock]) (by simp [varBlock]) (by simp [varBlock])
-      (by simp [varBlock]) he₁ he₂ hsat.2
+      (by simp [varBlock]) (by simp [varBlock]) he₁ he₂ hsat.2
 
   | arr es ih =>
     intro Γ R n o h φ C hsat

@@ -275,9 +275,11 @@ decreasing_by
 inductive Cls where
   /-- `Plus a`: the types `+` is defined on. -/
   | plus
-  /-- `HasProp l a b` (`a has {l: b}` in inty's syntax): reading `.l` from
-  a value of type `a` gives a `b`. It is what a property read on a value
-  whose type isn't known yet records. -/
+  /-- `HasProp l a k b` (`a has {l: b}` in inty's syntax): reading `.l`
+  from a value of type `a` gives a `b`, from a property of the kind `k`
+  (`data`, `getter` or `proto`). It is what a property read on a value
+  whose type isn't known yet records; a store needs a field that holds a
+  value, `HasProp l a data b`. -/
   | hasProp (l : String)
   /-- `Merge p k τ s r`: a spread operand whose slot for some label has the
   presence `p`, the kind `k` and the type `τ`, written over a slot `s`,
@@ -293,17 +295,12 @@ inductive Cls where
   /-- `IndexWrite c`: an element of a `c` can be stored (`c[i] = v`): an
   array's, not a string's. -/
   | indexWrite
-  /-- `FieldWrite l r`: the property `l` of an `r` can be stored
-  (`r.l = v`): an object's field that holds a value, not a getter or a
-  class's method, nor an array's or a string's built-in property. -/
-  | fieldWrite (l : String)
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
-  | .plus | .indexWrite | .fieldWrite _ => 1
-  | .hasProp _ => 2
-  | .indexable => 3
+  | .plus | .indexWrite => 1
+  | .indexable | .hasProp _ => 3
   | .merge => 5
 
 /-- A class constraint: a class applied to types, such as `Plus a`. -/

@@ -66,7 +66,7 @@ no rule closed under substitution can.) -/
 def Scheme.Simple (s : Scheme) : Prop :=
   ∀ p ∈ s.preds, (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧
       ∃ i < s.arity, ∃ rest, p.args = .bound i :: rest) ∨
-    ∃ q τ t r, p = ⟨.merge, [q, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ τ.bvs ++ t.bvs, i < s.arity
+    ∃ q k τ t r, p = ⟨.merge, [q, k, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ k.bvs ++ τ.bvs ++ t.bvs, i < s.arity
 
 /-- How an object literal's field written as `k`, its expression of the type
 `τ`, sits in the literal's record type `T`: its slot. A method's and a
@@ -198,14 +198,15 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   | new_ : HasType L C Γ R f (.fn .newTarget τs ρ) → args.length = τs.length →
       (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → TyEq ρ (.record L ss) →
       HasType L C Γ R (.new_ f args) ρ
-  /-- `e.l` reads a field of `e`'s type, `HasProp l τ σ`: a present field of
-  a record, or what a scheme's constraint promises. -/
-  | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ →
+  /-- `e.l` reads a property of `e`'s type, of any kind, `HasProp l τ k σ`:
+  a present field of a record, or what a scheme's constraint promises. -/
+  | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, k, σ]⟩ →
       HasType L C Γ R (.get e l) σ
   /-- `e.l = v` stores a value of the field's type, which is the
-  assignment's, in an object's field that holds a value (`FieldWrite`: not
-  a getter or a class's method, nor an array's or a string's `length`). -/
-  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite l, [τ]⟩ →
+  assignment's, in an object's field that holds a value (`HasProp l τ data
+  σ`: not a getter or a class's method, nor an array's or a string's
+  `length`). -/
+  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, .data, σ]⟩ →
       HasType L C Γ R v σ → HasType L C Γ R (.set e l v) σ
   /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p`, kind
   `k` and type `τ`, merged over `e₁`'s slot `s` gives the result's slot
@@ -233,7 +234,7 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
   argument per parameter. A method that returns `this`, or reads a
   property of it that holds a method, makes the receiver's type
   recursive. -/
-  | mcall : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, .fn τ τs ρ]⟩ →
+  | mcall : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
       args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) →
       HasType L C Γ R (.mcall e l args) ρ
   /-- A type may be replaced by an equal one (`TyEq`): a recursive type by
@@ -295,9 +296,9 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
   | new_ : HasType L C Γ R f (.fn .newTarget τs ρ) → args.length = τs.length →
       (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → TyEq ρ (.record L ss) →
       HasTypeTop L C Γ R (.new_ f args) ρ
-  | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ →
+  | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, k, σ]⟩ →
       HasTypeTop L C Γ R (.get e l) σ
-  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, σ]⟩ → Entails C ⟨.fieldWrite l, [τ]⟩ →
+  | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, .data, σ]⟩ →
       HasType L C Γ R v σ → HasTypeTop L C Γ R (.set e l v) σ
   | spread : ps.length = L.length → ks.length = L.length → τs.length = L.length →
       ss.length = L.length → rs.length = L.length →
@@ -310,7 +311,7 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
       HasTypeTop L C Γ R (.index e i) σ
   | setIndex : HasType L C Γ R e τ → HasType L C Γ R i ι → Entails C ⟨.indexable, [τ, ι, σ]⟩ →
       Entails C ⟨.indexWrite, [τ]⟩ → HasType L C Γ R v σ → HasTypeTop L C Γ R (.setIndex e i v) σ
-  | mcall : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, .fn τ τs ρ]⟩ →
+  | mcall : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
       args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) →
       HasTypeTop L C Γ R (.mcall e l args) ρ
 
@@ -397,14 +398,14 @@ inductive HasType₀ (L : List String) : List Pred → Ctx → Option Ty → Exp
   | obj : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       (∀ l ∈ ls, l ∈ L) → (∀ p ∈ es.zip τs, HasType₀ L C Γ R p.1 p.2) → (∀ k ∈ ks, k = .data) →
       HasType₀ L C Γ R (.obj ls es ks) (.record L (objSlots L ls (τs.map (.slot .pre .data ·))))
-  /-- `e.l` reads a field of `e`'s type, `HasProp l τ σ`: a present field of
-  a record, or what a scheme's constraint promises. -/
-  | get : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, σ]⟩ →
+  /-- `e.l` reads a property of `e`'s type, of any kind, `HasProp l τ k σ`:
+  a present field of a record, or what a scheme's constraint promises. -/
+  | get : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, k, σ]⟩ →
       HasType₀ L C Γ R (.get e l) σ
   /-- `e.l = v` stores a value of the field's type, which is the
-  assignment's, in an object (`FieldWrite`: not an array's or a string's
-  `length`). -/
-  | set : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, σ]⟩ → Entails₀ C ⟨.fieldWrite l, [τ]⟩ →
+  assignment's, in an object's field that holds a value (`HasProp l τ data
+  σ`). -/
+  | set : HasType₀ L C Γ R e τ → Entails₀ C ⟨.hasProp l, [τ, .data, σ]⟩ →
       HasType₀ L C Γ R v σ → HasType₀ L C Γ R (.set e l v) σ
   /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p` and
   type `τ`, merged over `e₁`'s slot `s` gives the result's slot `r`
@@ -468,7 +469,7 @@ theorem HasType₀.hasType (h : HasType₀ L C Γ R e τ) : HasType L C Γ R e �
     subst hk
     rw [mem_zip_zip_map hx]; exact .data
   | get _ hp ih => exact .get ih hp.entails
-  | set _ hp hw _ ihe ihv => exact .set ihe hp.entails hw.entails ihv
+  | set _ hp _ ihe ihv => exact .set ihe hp.entails ihv
   | spread hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
     exact .spread hps hks hτs hss hrs ih₁ ih₂ (fun p h => (hm p h).entails)
   | arr _ ih => exact .arr ih
@@ -502,7 +503,7 @@ theorem HasType.top (h : HasType L C Γ R e τ) : ∃ τ₀, TyEq τ₀ τ ∧ H
   | ctor hl hb => exact ⟨_, .refl _, .ctor hl hb⟩
   | new_ hf hl ha hρ => exact ⟨_, .refl _, .new_ hf hl ha hρ⟩
   | get he hp => exact ⟨_, .refl _, .get he hp⟩
-  | set he hp hw hv => exact ⟨_, .refl _, .set he hp hw hv⟩
+  | set he hp hv => exact ⟨_, .refl _, .set he hp hv⟩
   | spread hps hks hτs hss hrs h₁ h₂ hm =>
     exact ⟨_, .refl _, .spread hps hks hτs hss hrs h₁ h₂ hm⟩
   | arr hes => exact ⟨_, .refl _, .arr hes⟩
