@@ -278,26 +278,47 @@ theorem zip_tyEq_cons {x y : Ty} {xs ys : List Ty} (h : TyEq x y)
 
 theorem zip_tyEq_nil : ∀ p ∈ ([] : List Ty).zip [], TyEq p.1 p.2 := by simp
 
+/-- A typing system: which constraints hold as instances, and which
+expected types it checks against. The narrow system (`Sys.narrow`) is the
+one inference implements; the wide one (`Inty.Soundness`) holds of every
+instance of a narrow derivation's rigid type variables. -/
+structure Sys where
+  inst : Pred → Prop
+  closed : Ty → Prop
+  /-- Instances are up to equal types. -/
+  inst_eq : ∀ {p q : Pred}, PredEq p q → inst q → inst p
+
+/-- `p` holds in the system `S` as an instance, or is assumed in `C`, up to
+equal types. -/
+def EntailsS (S : Sys) (C : List Pred) (p : Pred) : Prop := S.inst p ∨ ∃ q ∈ C, PredEq p q
+
+/-- The system inference implements: its instances (`Inst`, up to equal
+types), and expected types without type variables. -/
+def Sys.narrow : Sys := ⟨InstEq, fun T => T.ftv = [], fun h hq => InstEq.of_predEq h hq⟩
+
+theorem EntailsS.of_predEq {S : Sys} {C : List Pred} {p p' : Pred} (h : PredEq p p')
+    (he : EntailsS S C p) : EntailsS S C p' :=
+  he.elim (fun hi => .inl (S.inst_eq h.symm hi))
+    (fun ⟨q, hq, hpq⟩ => .inr ⟨q, hq, h.symm.trans hpq⟩)
+
+theorem EntailsS.of_mem {S : Sys} {C : List Pred} {p : Pred} (h : p ∈ C) : EntailsS S C p :=
+  .inr ⟨p, h, PredEq.refl p⟩
+
 /-- `p` is an instance up to equal types, or assumed in `C` up to equal
 types. -/
-def Entails (C : List Pred) (p : Pred) : Prop := InstEq p ∨ ∃ q ∈ C, PredEq p q
+abbrev Entails (C : List Pred) (p : Pred) : Prop := EntailsS Sys.narrow C p
 
-theorem Entails.subst (σ : Subst) (h : Entails C p) :
+theorem EntailsS.subst (σ : Subst) (h : Entails C p) :
     Entails (C.map (·.subst σ)) (p.subst σ) :=
   h.elim (fun h => .inl (h.subst σ))
     (fun ⟨q, hq, hpq⟩ => .inr ⟨q.subst σ, List.mem_map_of_mem hq, hpq.subst σ⟩)
 
-theorem Entails.of_inst (h : Inst p) : Entails C p := .inl h.instEq
+theorem EntailsS.of_inst (h : Inst p) : Entails C p := .inl h.instEq
 
-theorem Entails.of_mem (h : p ∈ C) : Entails C p := .inr ⟨p, h, PredEq.refl p⟩
 
-/-- Entailment is up to equal types. -/
-theorem Entails.of_predEq {p p' : Pred} (h : PredEq p p') (he : Entails C p) : Entails C p' :=
-  he.elim (fun hi => .inl (InstEq.of_predEq h.symm hi))
-    (fun ⟨q, hq, hpq⟩ => .inr ⟨q, hq, h.symm.trans hpq⟩)
 
 /-- Entailment from more assumptions, each entailed. -/
-theorem Entails.cut {C D : List Pred} {p : Pred} (h : Entails (C ++ D) p)
+theorem EntailsS.cut {C D : List Pred} {p : Pred} (h : Entails (C ++ D) p)
     (hD : ∀ d ∈ D, Entails C d) : Entails C p := by
   rcases h with hi | ⟨q, hq, hpq⟩
   · exact .inl hi
@@ -305,7 +326,7 @@ theorem Entails.cut {C D : List Pred} {p : Pred} (h : Entails (C ++ D) p)
     · exact .inr ⟨q, hq, hpq⟩
     · exact (hD q hq).of_predEq hpq.symm
 
-theorem Entails.weaken {C D : List Pred} {p : Pred} (h : Entails C p) (hCD : ∀ c ∈ C, c ∈ D) :
+theorem EntailsS.weaken {C D : List Pred} {p : Pred} (h : Entails C p) (hCD : ∀ c ∈ C, c ∈ D) :
     Entails D p :=
   h.elim .inl (fun ⟨q, hq, hpq⟩ => .inr ⟨q, hCD q hq, hpq⟩)
 
@@ -569,7 +590,7 @@ theorem HoldsOrVar.append {C D : List Pred} (hC : HoldsOrVar C) (hD : HoldsOrVar
     HoldsOrVar (C ++ D) :=
   fun c hc => (List.mem_append.mp hc).elim (hC c) (hD c)
 
-theorem Entails.holdsOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p) :
+theorem EntailsS.holdsOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p) :
     InstEq p ∨ p.OnVar := by
   rcases h with hi | ⟨q, hq, hpq⟩
   · exact .inl hi
@@ -577,7 +598,7 @@ theorem Entails.holdsOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p)
 
 /-- A constraint of a class other than `Merge` that holds or is on a type
 variable: an instance, or its first argument is one. -/
-theorem Entails.instOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p)
+theorem EntailsS.instOrVar {C : List Pred} (hC : HoldsOrVar C) (h : Entails C p)
     (hc : p.cls ≠ .merge) : InstEq p ∨ ∃ t a rest, p.args = t :: rest ∧ t.whnf = .var a := by
   rcases h.holdsOrVar hC with h | h | h
   · exact .inl h

@@ -13,7 +13,7 @@ substitution (`CtxEq`), and its types need only be equal (`TyEq`): the
 conversion rule may replace any type by an equal one, and the unifier is
 most general up to equal types (`unify_mgu`). A `let`'s scheme found by
 inference is more general than the typing's, and the typing of the rest
-moves to it (`HasType.weaken`).
+moves to it (`HasTypeS.weaken`).
 -/
 
 namespace Inty
@@ -1202,7 +1202,7 @@ def InferComplete (L : List String) (e : Expr) : Prop :=
 
 /-- A check-mode derivation of an expression that doesn't take the expected
 type in injects a synthesised type into it. -/
-theorem HasType.inj_inv {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
+theorem HasTypeS.inj_inv {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
     {e : Expr} {T : Ty} (h : HasType L C Γ R rm .check e T) (hp : e.pushes T = false) :
     ∃ τ₀, HasType L C Γ R rm .synth e τ₀ ∧ Entails C ⟨.inject T, [τ₀]⟩ := by
   cases h with
@@ -1233,7 +1233,7 @@ theorem InferComplete.check {e : Expr} (ih : InferComplete L e) {Γ : Ctx} {R : 
         ⟨by simp [exMode, hp], fun _ hT _ => by cases hT; rfl⟩ hΓ hR hC hΓ' hR' ht
       exact ⟨o, by simp [h, checkEx, hp], φ, hag, hty, hsat⟩
     · have hp' : e.pushes τ' = false := by simpa using hp
-      obtain ⟨τ₀, ht₀, hi⟩ := HasType.inj_inv ht hp'
+      obtain ⟨τ₀, ht₀, hi⟩ := HasTypeS.inj_inv ht hp'
       obtain ⟨o, h, φ, hag, hty, hsat⟩ := ih hRo hRc hex
         ⟨by simp [exMode, hp'], fun _ hT h => by cases hT; exact absurd h hp⟩ hΓ hR hC hΓ' hR' ht₀
       refine ⟨checkEx (some τ') e o, by simp [h], φ, by rw [checkEx_σ]; exact hag, ?_, ?_⟩
@@ -1907,7 +1907,7 @@ theorem Scheme.Simple.openPred_tv {s : Scheme} (hs : s.Simple) {m : Nat}
 
 /-- A constraint whose trees have only variables below `m` is entailed by the
 assumptions alone, not by a simple scheme's opened at `m`. -/
-theorem Entails.drop_block {C : List Pred} {s : Scheme} (hs : s.Simple) {m : Nat}
+theorem EntailsS.drop_block {C : List Pred} {s : Scheme} (hs : s.Simple) {m : Nat}
     (hms : ∀ a ∈ s.ftv, a < m) {p : Pred} (h : Entails (C ++ s.openPreds m) p)
     (hp : ∀ x ∈ p.args, ∀ b, x.TV b → b < m) : Entails C p := by
   rcases h with hi | ⟨q, hq, hpq⟩
@@ -1991,7 +1991,7 @@ theorem genVars_mem {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List 
   simp [genVars, List.mem_eraseDups, List.mem_filter, or_and_right]
 
 /-- An entailed constraint has its class's arity. -/
-theorem Entails.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) {p : Pred}
+theorem EntailsS.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt top) {p : Pred}
     (h : Entails C p) : p.args.length = p.cls.arity := by
   rcases h with ⟨q, hpq, hi⟩ | ⟨c, hc, hpc⟩
   · rw [hpq.2.1, hpq.1]; cases hi <;> rfl
@@ -2058,7 +2058,7 @@ theorem Pred.improve_keep_false {p : Pred} (h : p.improve false = .keep) :
 /-- An entailed constraint other than a `Merge`, by assumptions where a
 binding generalises: its first argument unfolds to a variable, or it is an
 instance. -/
-theorem Entails.first_var_or_inst {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt false)
+theorem EntailsS.first_var_or_inst {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt false)
     {p : Pred} {φ : Subst} (h : Entails C (p.subst φ)) (hm : p.cls ≠ .merge) {t : Ty}
     {rest : List Ty} (ht : p.args = t :: rest) :
     (∃ a, t.whnf = .var a) ∨ ∃ q₀, PredEq (p.subst φ) q₀ ∧ Inst q₀ := by
@@ -2299,7 +2299,7 @@ theorem letScheme_complete {C : List Pred} (hC : ∀ p ∈ C, p.AssumableAt fals
         obtain ⟨g, hgf, rfl⟩ := List.mem_map.mp hg'
         obtain ⟨hg, -⟩ := List.mem_filter.mp hgf
         have hb : Entails (C ++ s.instPreds τs) ((g.subst φ).subst (Subst.block m τs)) := by
-          have := Entails.subst (Subst.block m τs) (hsat g hg)
+          have := EntailsS.subst (Subst.block m τs) (hsat g hg)
           rwa [List.map_append, hCb, Scheme.openPreds_block s hms hlen] at this
         refine hb.of_predEq (PredEq.trans ?_ ((Pred.normHead_predEq g).subst _))
         rw [← Pred.subst_compose]
@@ -2341,7 +2341,7 @@ theorem letScheme_complete {C : List Pred} (hC : ∀ p ∈ C, p.AssumableAt fals
 
 /-- An entailed `Inject T τ`, with `τ` a known type and `T` not a sum, under
 assumptions each on a type variable: `τ` is `T`. -/
-theorem Entails.inject_app {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt false) {T : Ty} {c : Con}
+theorem EntailsS.inject_app {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt false) {T : Ty} {c : Con}
     {xs : List Ty} (h : Entails C ⟨.inject T, [.app c xs]⟩) (hT : ∀ z σ, ¬ TyEq T (.maybe z σ)) :
     TyEq (.app c xs) T := by
   rcases h with ⟨q₀, hpq, hi⟩ | ⟨q, hq, hpq⟩
@@ -2369,7 +2369,7 @@ theorem Ty.not_maybe_of_whnf {T : Ty} {c : Con} {xs : List Ty} (hw : T.whnf = .a
 /-- A check-mode derivation of an expression that takes the expected type in
 ends, but for conversions, with that expression's rule in check mode: an
 injection of its synthesised type is pushed into its parts. -/
-theorem HasType.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
+theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
     {e : Expr} {T : Ty} (hC : ∀ p ∈ C, p.AssumableAt false) (h : HasType L C Γ R rm .check e T)
     (hT : T.ftv = []) (hp : e.pushes T) : HasTypeTop L C Γ R rm .check e T := by
   cases h with
@@ -2406,7 +2406,7 @@ theorem HasType.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
       simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.append_eq_nil_iff] at hfn
       have hρc : ρ.ftv = [] := hfn.2.1
       have heq : TyEq (.fn θ' τs' ρ') (.fn θ τs ρ) :=
-        (Entails.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp))).trans (TyEq.of_whnf hw)
+        (EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp))).trans (TyEq.of_whnf hw)
       obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp heq
       have hθ : TyEq θ' θ := hz (θ', θ) (by simp)
       have hρ : TyEq ρ' ρ := hz (ρ', ρ) (by simp)
@@ -2423,14 +2423,14 @@ theorem HasType.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
       obtain ⟨-, hw⟩ := arrTarget_fst hat rfl
       have hσc : σ.ftv = [] := by simpa [Ty.ftv] using Ty.ftv_nil_of_whnf hw hT
       have heq : TyEq (.array σ') (.array σ) :=
-        (Entails.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp))).trans (TyEq.of_whnf hw)
+        (EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp))).trans (TyEq.of_whnf hw)
       have hσ : TyEq σ' σ := (TyEq.app_iff.mp heq).2.2 (σ', σ) (by simp)
       exact .arrCheck hw hT (fun e he => .inj (hes e he) hσc (.inl (Pred.inject_self hσc hσ)))
     | _ => simp [Expr.pushes] at hp
 
 /-- A derivation in the mode an expected type gives an expression that takes
 it in ends, but for conversions, with that expression's rule. -/
-theorem HasType.top_ex {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
+theorem HasTypeS.top_ex {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
     {ex : Option Ty} {e : Expr} {τ' : Ty} (hC : ∀ p ∈ C, p.AssumableAt false)
     (hex : Ex.Closed ex) (hτ : ∀ T ∈ ex, τ' = T) (hp : ∀ T ∈ ex, e.pushes T)
     (h : HasType L C Γ R rm (Ex.mode ex) e τ') :

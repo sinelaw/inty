@@ -22,7 +22,7 @@ def Generalizes (C : List Pred) (s' s : Scheme) : Prop :=
     ∀ c ∈ s'.instPreds τs', Entails (C ++ s.instPreds τs) c
 
 theorem Generalizes.refl (C : List Pred) (s : Scheme) : Generalizes C s s :=
-  fun τs hl => ⟨τs, hl, TyEq.refl _, fun _ hc => Entails.of_mem (List.mem_append_right _ hc)⟩
+  fun τs hl => ⟨τs, hl, TyEq.refl _, fun _ hc => EntailsS.of_mem (List.mem_append_right _ hc)⟩
 
 theorem Generalizes.weaken {C D : List Pred} {s' s : Scheme} (h : Generalizes C s' s)
     (hCD : ∀ c ∈ C, c ∈ D) : Generalizes D s' s := fun τs hl => by
@@ -168,7 +168,7 @@ theorem SchemeEq.generalizes {s s' : Scheme} (h : SchemeEq s s') (C : List Pred)
   obtain ⟨he, hp⟩ := h.2.2 τs hl
   refine ⟨τs, hl.trans h.1, he.symm, fun c hc => ?_⟩
   obtain ⟨d, hd, hdc⟩ := List.exists_of_zip (by simp [Scheme.instPreds, h.2.1]) hp c hc
-  exact Entails.of_predEq hdc (.of_mem (List.mem_append_right _ hd))
+  exact EntailsS.of_predEq hdc (.of_mem (List.mem_append_right _ hd))
 
 theorem SchemeEq.mono {s s' : Scheme} (h : SchemeEq s s') (hm : s.arity = 0 ∧ s.preds = []) :
     s'.arity = 0 ∧ s'.preds = [] :=
@@ -249,7 +249,7 @@ theorem CtxGen.length_some {C : List Pred} {e : Expr} {Γ Γ' : Ctx} (h : CtxGen
   exact ⟨Γ'[i], List.getElem?_eq_getElem hi⟩
 
 /-- Typing survives a more general context and an equal return type. -/
-theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr}
+theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr}
     {τ : Ty} {rm md : Mode} (h : HasType L C Γ R rm md e τ) :
     ∀ {Γ' : Ctx} {R' : Option Ty}, CtxGen C e Γ Γ' → RetEq R R' → (rm = .check → R' = R) →
       HasType L C Γ' R' rm md e τ := by
@@ -432,8 +432,8 @@ theorem Pred.inject_self {T τ : Ty} (hT : T.ftv = []) (h : TyEq τ T) :
 
 /-- A derivation whose `return`s are synthesised at `ρ'` has one whose
 `return`s are checked against an equal type `ρ` with no type variables:
-each returned value is injected into it (`HasType.inj`, `Inst.injectSelf`). -/
-theorem HasType.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr}
+each returned value is injected into it (`HasTypeS.inj`, `Inst.injectSelf`). -/
+theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {e : Expr}
     {τ : Ty} {rm md : Mode} (h : HasType L C Γ R rm md e τ) :
     ∀ {ρ' ρ : Ty}, rm = .synth → R = some ρ' → TyEq ρ' ρ → ρ.ftv = [] →
       HasType L C Γ (some ρ) .check md e τ := by

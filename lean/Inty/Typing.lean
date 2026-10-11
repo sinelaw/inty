@@ -37,9 +37,12 @@ inductive UnOpTy : UnOp → Ty → Ty → Prop where
 /-- Typing rules of the binary operators under assumptions `C`: operand
 types, result type. Both operands of `+` have the same type, one instance of
 `Plus`: inty's `+` never mixes a `Number` with a `String`. -/
-inductive BinOpTy (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
-  | plus : Entails C ⟨.plus, [τ]⟩ → BinOpTy C .plus τ τ τ
-  | minus : BinOpTy C .minus .number .number .number
+inductive BinOpTyS (S : Sys) (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
+  | plus : EntailsS S C ⟨.plus, [τ]⟩ → BinOpTyS S C .plus τ τ τ
+  | minus : BinOpTyS S C .minus .number .number .number
+
+/-- The operator rules of the narrow system. -/
+abbrev BinOpTy := BinOpTyS Sys.narrow
 
 /-- A scheme's constraints are on its quantified variables: their first
 argument is one, as in `<a> where Plus a => …` or
@@ -87,13 +90,16 @@ instance; a method and a getter are on the prototype. An arrow field's
 a receiver too, but not by `new`, as an arrow function isn't a
 constructor: under the class assumptions `C`, its slot's `this` is
 `NotNew`. -/
-inductive MemberSlot (C : List Pred) (T : Ty) : ClassKind → Expr → Ty → Ty → Prop where
-  | data : MemberSlot C T .data e τ (.slot .pre .data τ)
-  | arrow : TyEq θ T → Entails C ⟨.notNew, [θ']⟩ →
-      MemberSlot C T .arrow (.func n b) (.fn θ τs ρ) (.slot .pre .data (.fn θ' τs ρ))
+inductive MemberSlotS (S : Sys) (C : List Pred) (T : Ty) : ClassKind → Expr → Ty → Ty → Prop where
+  | data : MemberSlotS S C T .data e τ (.slot .pre .data τ)
+  | arrow : TyEq θ T → EntailsS S C ⟨.notNew, [θ']⟩ →
+      MemberSlotS S C T .arrow (.func n b) (.fn θ τs ρ) (.slot .pre .data (.fn θ' τs ρ))
   | method : TyEq θ T →
-      MemberSlot C T .method (.func n b) (.fn θ τs ρ) (.slot .pre .proto (.fn θ τs ρ))
-  | getter : TyEq θ T → MemberSlot C T .getter (.func 0 b) (.fn θ [] σ) (.slot .pre .proto σ)
+      MemberSlotS S C T .method (.func n b) (.fn θ τs ρ) (.slot .pre .proto (.fn θ τs ρ))
+  | getter : TyEq θ T → MemberSlotS S C T .getter (.func 0 b) (.fn θ [] σ) (.slot .pre .proto σ)
+
+/-- Class members' slots in the narrow system. -/
+abbrev MemberSlot := MemberSlotS Sys.narrow
 
 /-- The context a class's member `i`, written as `k`, is checked in: a
 field's initialiser sees the fields before it, the latest first; the
@@ -115,7 +121,7 @@ checked against an expected type (`check`), an annotation's, which is
 pushed into the branches of `?:`, the last statement of a sequence or a
 block, an array literal's elements and a function literal's body and
 `return`s, and where it meets any other expression, takes that
-expression's value into the annotation's sum (`HasType.inj`). -/
+expression's value into the annotation's sum (`HasTypeS.inj`). -/
 inductive Mode where
   | synth
   | check
@@ -132,32 +138,32 @@ return type `R` (`none` at the top level), whose `return`s are typed in the
 mode `rm`, `e` has type `τ` in the mode `md`. A rule's premise for a
 subexpression into which an expected type is pushed has the mode `md`;
 the others synthesise. -/
-inductive HasType (L : List String) :
+inductive HasTypeS (S : Sys) (L : List String) :
     List Pred → Ctx → Option Ty → Mode → Mode → Expr → Ty → Prop where
-  | lit : LitTy l τ → HasType L C Γ R rm .synth (.lit l) τ
+  | lit : LitTy l τ → HasTypeS S L C Γ R rm .synth (.lit l) τ
   /-- A variable has any instance of its scheme whose constraints hold. -/
   | var : Γ[i]? = some s → τs.length = s.arity →
-      (∀ c ∈ s.instPreds τs, Entails C c) →
-      HasType L C Γ R rm .synth (.var i) (s.inst τs)
+      (∀ c ∈ s.instPreds τs, EntailsS S C c) →
+      HasTypeS S L C Γ R rm .synth (.var i) (s.inst τs)
   /-- A function's body sees its parameters, itself and `this`, and returns
   `ρ`, by `return` or as its value. Checked against a function type, its
   body and `return`s are checked against `ρ`. -/
   | func : τs.length = n →
-      HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .synth .synth body ρ →
-      HasType L C Γ R rm .synth (.func n body) (.fn θ τs ρ)
+      HasTypeS S L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .synth .synth body ρ →
+      HasTypeS S L C Γ R rm .synth (.func n body) (.fn θ τs ρ)
   /-- Checked against a function type (an annotation's, without type
   variables), a function's body and `return`s are checked against its
   result type. -/
-  | funcCheck : T.whnf = .fn θ τs ρ → T.ftv = [] → τs.length = n →
-      HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .check .check body ρ →
-      HasType L C Γ R rm .check (.func n body) T
+  | funcCheck : T.whnf = .fn θ τs ρ → S.closed T → τs.length = n →
+      HasTypeS S L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .check .check body ρ →
+      HasTypeS S L C Γ R rm .check (.func n body) T
   /-- A call has one argument per parameter, each of its parameter's type. A
   call outside any receiver binds `this` to `undefined`, so the function's
   `this` type must be `undefined`: inty unifies it with `Undefined`
   (`src/infer/features/functions.rs`), which rejects a detached method. -/
-  | app : HasType L C Γ R rm .synth f (.fn .undefined τs ρ) → args.length = τs.length →
-      (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
-      HasType L C Γ R rm .synth (.app f args) ρ
+  | app : HasTypeS S L C Γ R rm .synth f (.fn .undefined τs ρ) → args.length = τs.length →
+      (∀ p ∈ args.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) →
+      HasTypeS S L C Γ R rm .synth (.app f args) ρ
   /-- `const x = e₁; e₂` or `let x = e₁; e₂` gives `x` a scheme `s`. The
   first premise says `e₁` has every opening of `s` at fresh type variables,
   assuming the opened constraints: `m` ranges over all starting points
@@ -172,251 +178,260 @@ inductive HasType (L : List String) :
   checked against it. -/
   | let_ (s : Scheme) (F : List Nat) :
       (∀ m, (∀ a ∈ F, a < m) →
-        HasType L (C ++ s.openPreds m) Γ R rm (annMode ann) e₁ (s.open m)) →
+        HasTypeS S L (C ++ s.openPreds m) Γ R rm (annMode ann) e₁ (s.open m)) →
       (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
-      Annotated ann s → HasType L C (s :: Γ) R rm md e₂ τ₂ →
-      HasType L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
+      Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ →
+      HasTypeS S L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
   /-- `x = e` stores a value of `x`'s type, which is a monotype: a binding
   that is assigned is never generalised. Its value is the assignment's.
   (That `x` is a `let` or a parameter, not a `const`, is checked apart,
   by `Expr.assignsMutable`.) -/
   | assign : Γ[i]? = some s → s.arity = 0 → s.preds = [] →
-      HasType L C Γ R rm .synth e (s.inst []) →
-      HasType L C Γ R rm .synth (.assign i e) (s.inst [])
+      HasTypeS S L C Γ R rm .synth e (s.inst []) →
+      HasTypeS S L C Γ R rm .synth (.assign i e) (s.inst [])
   /-- Both branches have one type, as in Hindley–Milner: inty doesn't guess
   that disagreeing branches form a union. An expected type is pushed into
   each branch. -/
-  | cond : HasType L C Γ R rm .synth c τc → HasType L C Γ R rm md t τ →
-      HasType L C Γ R rm md e τ → HasType L C Γ R rm md (.cond c t e) τ
-  | unop : UnOpTy op τ₁ τ → HasType L C Γ R rm .synth e τ₁ →
-      HasType L C Γ R rm .synth (.unop op e) τ
-  | binop : BinOpTy C op τ₁ τ₂ τ → HasType L C Γ R rm .synth e₁ τ₁ →
-      HasType L C Γ R rm .synth e₂ τ₂ → HasType L C Γ R rm .synth (.binop op e₁ e₂) τ
+  | cond : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm md t τ →
+      HasTypeS S L C Γ R rm md e τ → HasTypeS S L C Γ R rm md (.cond c t e) τ
+  | unop : UnOpTy op τ₁ τ → HasTypeS S L C Γ R rm .synth e τ₁ →
+      HasTypeS S L C Γ R rm .synth (.unop op e) τ
+  | binop : BinOpTyS S C op τ₁ τ₂ τ → HasTypeS S L C Γ R rm .synth e₁ τ₁ →
+      HasTypeS S L C Γ R rm .synth e₂ τ₂ → HasTypeS S L C Γ R rm .synth (.binop op e₁ e₂) τ
   /-- `return e;` gives the enclosing function's return type, in its mode;
   it doesn't complete, so it may stand for any type. -/
-  | ret : HasType L C Γ (some τr) rm rm e τr → HasType L C Γ (some τr) rm md (.ret e) τ
+  | ret : HasTypeS S L C Γ (some τr) rm rm e τr → HasTypeS S L C Γ (some τr) rm md (.ret e) τ
   /-- `throw e;` throws any value and doesn't complete. -/
-  | throw_ : HasType L C Γ R rm .synth e τe → HasType L C Γ R rm .synth (.throw_ e) τ
-  | seq : HasType L C Γ R rm .synth e₁ τ₁ → HasType L C Γ R rm md e₂ τ →
-      HasType L C Γ R rm md (.seq e₁ e₂) τ
+  | throw_ : HasTypeS S L C Γ R rm .synth e τe → HasTypeS S L C Γ R rm .synth (.throw_ e) τ
+  | seq : HasTypeS S L C Γ R rm .synth e₁ τ₁ → HasTypeS S L C Γ R rm md e₂ τ →
+      HasTypeS S L C Γ R rm md (.seq e₁ e₂) τ
   /-- `while (c) body`: any test, read by truthiness; it completes with
   `undefined` (`infer_stmt_while`). -/
-  | while_ : HasType L C Γ R rm .synth c τc → HasType L C Γ R rm .synth body τb →
-      HasType L C Γ R rm .synth (.while_ c body) .undefined
+  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .synth body τb →
+      HasTypeS S L C Γ R rm .synth (.while_ c body) .undefined
   /-- `break;` and `continue;` don't complete, so they stand for any type.
   (That they are in a loop is checked apart, by `Expr.jumpsInLoop`.) -/
-  | break_ : HasType L C Γ R rm md .break_ τ
-  | continue_ : HasType L C Γ R rm md .continue_ τ
+  | break_ : HasTypeS S L C Γ R rm md .break_ τ
+  | continue_ : HasTypeS S L C Γ R rm md .continue_ τ
   /-- `try { body } catch (e) { handler }`: anything can be thrown, so `e`
   has the opaque type `unknown` (inty's rigid type variable). -/
-  | tryCatch : HasType L C Γ R rm md body τ → HasType L C (.mono .unknown :: Γ) R rm md handler τ →
-      HasType L C Γ R rm md (.tryCatch body handler) τ
+  | tryCatch : HasTypeS S L C Γ R rm md body τ → HasTypeS S L C (.mono .unknown :: Γ) R rm md handler τ →
+      HasTypeS S L C Γ R rm md (.tryCatch body handler) τ
   /-- `try { body } finally { fin }` has `body`'s type; `fin`'s value is
   dropped. -/
-  | tryFinally : HasType L C Γ R rm md body τ → HasType L C Γ R rm .synth fin τf →
-      HasType L C Γ R rm md (.tryFinally body fin) τ
+  | tryFinally : HasTypeS S L C Γ R rm md body τ → HasTypeS S L C Γ R rm .synth fin τf →
+      HasTypeS S L C Γ R rm md (.tryFinally body fin) τ
   /-- An object literal has a record type over the program's labels, with
   its fields present (`objSlots`), each slot as its kind says
   (`FieldSlot`). -/
   | obj : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length → (∀ l ∈ ls, l ∈ L) →
-      (∀ p ∈ es.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
+      (∀ p ∈ es.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
         FieldSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
-      HasType L C Γ R rm .synth (.obj ls es ks) (.record L (objSlots L ls ss))
+      HasTypeS S L C Γ R rm .synth (.obj ls es ks) (.record L (objSlots L ls ss))
   /-- A class's instance has a record type over the program's labels, its
   members present (`objSlots`), each checked in its context (`memberCtx`)
   and slotted as its kind says (`MemberSlot`). Its labels are distinct. -/
   | cls : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length → ls.Nodup → (∀ l ∈ ls, l ∈ L) →
       (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
-        HasType L C (memberCtx Γ ks τs i k) none .synth .synth e τ) →
+        HasTypeS S L C (memberCtx Γ ks τs i k) none .synth .synth e τ) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
-        MemberSlot C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
-      HasType L C Γ R rm .synth (.cls ls es ks) (.record L (objSlots L ls ss))
+        MemberSlotS S C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
+      HasTypeS S L C Γ R rm .synth (.cls ls es ks) (.record L (objSlots L ls ss))
   /-- A constructor is a function whose `this` is what `new` makes, which
   nothing else gives (`newTarget`). -/
   | ctor : τs.length = n →
-      HasType L C (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ)
+      HasTypeS S L C (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ)
         (some ρ) .synth .synth body ρ →
-      HasType L C Γ R rm .synth (.ctor n body) (.fn .newTarget τs ρ)
+      HasTypeS S L C Γ R rm .synth (.ctor n body) (.fn .newTarget τs ρ)
   /-- `new f(…)` calls a constructor, one argument per parameter, which
   gives an object, a record over the program's labels, so that it is the
   result. -/
-  | new_ : HasType L C Γ R rm .synth f (.fn .newTarget τs ρ) → args.length = τs.length →
-      (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) → TyEq ρ (.record L ss) →
-      ss.length = L.length → HasType L C Γ R rm .synth (.new_ f args) ρ
+  | new_ : HasTypeS S L C Γ R rm .synth f (.fn .newTarget τs ρ) → args.length = τs.length →
+      (∀ p ∈ args.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) → TyEq ρ (.record L ss) →
+      ss.length = L.length → HasTypeS S L C Γ R rm .synth (.new_ f args) ρ
   /-- `e.l` reads a property of `e`'s type, of any kind, `HasProp l τ k σ`:
   a present field of a record, or what a scheme's constraint promises. -/
-  | get : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, k, σ]⟩ →
-      HasType L C Γ R rm .synth (.get e l) σ
+  | get : HasTypeS S L C Γ R rm .synth e τ → EntailsS S C ⟨.hasProp l, [τ, k, σ]⟩ →
+      HasTypeS S L C Γ R rm .synth (.get e l) σ
   /-- `e.l = v` stores a value of the field's type, which is the
   assignment's, in an object's field that holds a value (`HasProp l τ data
   σ`: not a getter or a class's method, nor an array's or a string's
   `length`). -/
-  | set : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, .data, σ]⟩ →
-      HasType L C Γ R rm .synth v σ → HasType L C Γ R rm .synth (.set e l v) σ
+  | set : HasTypeS S L C Γ R rm .synth e τ → EntailsS S C ⟨.hasProp l, [τ, .data, σ]⟩ →
+      HasTypeS S L C Γ R rm .synth v σ → HasTypeS S L C Γ R rm .synth (.set e l v) σ
   /-- `{...e₁, ...e₂}`: `e₂`'s slot for each label, with presence `p`, kind
   `k` and type `τ`, merged over `e₁`'s slot `s` gives the result's slot
   `r` (`Merge p k τ s r`): `e₂`'s own field if it has one, `e₁`'s copied
   if not. -/
   | spread : ps.length = L.length → ks.length = L.length → τs.length = L.length →
       ss.length = L.length → rs.length = L.length →
-      HasType L C Γ R rm .synth e₁ (.record L ss) →
-      HasType L C Γ R rm .synth e₂ (.record L (slots3 ps ks τs)) →
-      (∀ p ∈ mergePreds ps ks τs ss rs, Entails C p) →
-      HasType L C Γ R rm .synth (.spread e₁ e₂) (.record L rs)
+      HasTypeS S L C Γ R rm .synth e₁ (.record L ss) →
+      HasTypeS S L C Γ R rm .synth e₂ (.record L (slots3 ps ks τs)) →
+      (∀ p ∈ mergePreds ps ks τs ss rs, EntailsS S C p) →
+      HasTypeS S L C Γ R rm .synth (.spread e₁ e₂) (.record L rs)
   /-- An array literal's elements have one type, as in Hindley–Milner; an
   expected element type is pushed into each. -/
-  | arr : (∀ e ∈ es, HasType L C Γ R rm .synth e τ) → HasType L C Γ R rm .synth (.arr es) (.array τ)
+  | arr : (∀ e ∈ es, HasTypeS S L C Γ R rm .synth e τ) → HasTypeS S L C Γ R rm .synth (.arr es) (.array τ)
   /-- Checked against an array type, each element is checked against its
   element type. -/
-  | arrCheck : T.whnf = .array σ → T.ftv = [] → (∀ e ∈ es, HasType L C Γ R rm .check e σ) →
-      HasType L C Γ R rm .check (.arr es) T
+  | arrCheck : T.whnf = .array σ → S.closed T → (∀ e ∈ es, HasTypeS S L C Γ R rm .check e σ) →
+      HasTypeS S L C Γ R rm .check (.arr es) T
   /-- `e[i]`: `Indexable τ ι σ`, an array's element or a string's
   character, or what a scheme's constraint promises. -/
-  | index : HasType L C Γ R rm .synth e τ → HasType L C Γ R rm .synth i ι →
-      Entails C ⟨.indexable, [τ, ι, σ]⟩ → HasType L C Γ R rm .synth (.index e i) σ
+  | index : HasTypeS S L C Γ R rm .synth e τ → HasTypeS S L C Γ R rm .synth i ι →
+      EntailsS S C ⟨.indexable, [τ, ι, σ]⟩ → HasTypeS S L C Γ R rm .synth (.index e i) σ
   /-- `e[i] = v` stores a value of the element type, in a container that
   takes stores (`IndexWrite`, not a string). -/
-  | setIndex : HasType L C Γ R rm .synth e τ → HasType L C Γ R rm .synth i ι →
-      Entails C ⟨.indexable, [τ, ι, σ]⟩ → Entails C ⟨.indexWrite, [τ]⟩ →
-      HasType L C Γ R rm .synth v σ → HasType L C Γ R rm .synth (.setIndex e i v) σ
+  | setIndex : HasTypeS S L C Γ R rm .synth e τ → HasTypeS S L C Γ R rm .synth i ι →
+      EntailsS S C ⟨.indexable, [τ, ι, σ]⟩ → EntailsS S C ⟨.indexWrite, [τ]⟩ →
+      HasTypeS S L C Γ R rm .synth v σ → HasTypeS S L C Γ R rm .synth (.setIndex e i v) σ
   /-- `e.l(a₀, …)`: the receiver's property `l` is a function whose `this`
   is the receiver's type, as inty unifies a method's `this` with its
   receiver (`method_receiver` in `src/infer/features/functions.rs`); one
   argument per parameter. A method that returns `this`, or reads a
   property of it that holds a method, makes the receiver's type
   recursive. -/
-  | mcall : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
-      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
-      HasType L C Γ R rm .synth (.mcall e l args) ρ
+  | mcall : HasTypeS S L C Γ R rm .synth e τ → EntailsS S C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) →
+      HasTypeS S L C Γ R rm .synth (.mcall e l args) ρ
   /-- `unwrap e₁ e₂ e₃` eliminates a sum: `e₃` sees what isn't nothing of
   `e₁`'s value at the type `Strip` leaves of `e₁`'s. Both branches have one
   type, and an expected type is pushed into each. -/
-  | unwrap : HasType L C Γ R rm .synth e₁ τ₁ → Entails C ⟨.strip, [τ₁, σ]⟩ →
-      HasType L C Γ R rm md e₂ τ → HasType L C (.mono σ :: Γ) R rm md e₃ τ →
-      HasType L C Γ R rm md (.unwrap e₁ e₂ e₃) τ
+  | unwrap : HasTypeS S L C Γ R rm .synth e₁ τ₁ → EntailsS S C ⟨.strip, [τ₁, σ]⟩ →
+      HasTypeS S L C Γ R rm md e₂ τ → HasTypeS S L C (.mono σ :: Γ) R rm md e₃ τ →
+      HasTypeS S L C Γ R rm md (.unwrap e₁ e₂ e₃) τ
   /-- A type may be replaced by an equal one (`TyEq`): a recursive type by
   its unfolding, or the other way round. -/
-  | conv : HasType L C Γ R rm .synth e τ → TyEq τ τ' → HasType L C Γ R rm .synth e τ'
+  | conv : HasTypeS S L C Γ R rm .synth e τ → TyEq τ τ' → HasTypeS S L C Γ R rm .synth e τ'
   /-- Checked against an annotation's type `T`, an expression of the type
   `τ` has `T` if a value of `τ` is one of `T` (`Inject T τ`: `τ` is `T`,
   or `T` is `Nullable τ`, …). `T` has no type variables. -/
-  | inj : HasType L C Γ R rm .synth e τ → T.ftv = [] → Entails C ⟨.inject T, [τ]⟩ →
-      HasType L C Γ R rm .check e T
+  | inj : HasTypeS S L C Γ R rm .synth e τ → S.closed T → EntailsS S C ⟨.inject T, [τ]⟩ →
+      HasTypeS S L C Γ R rm .check e T
 
 /-- A `HasType` derivation's last rule, other than a conversion: every
-derivation is one of these followed by conversions (`HasType.top`), which
+derivation is one of these followed by conversions (`HasTypeS.top`), which
 lets a proof by cases on the last rule ignore conversions. -/
-inductive HasTypeTop (L : List String) :
+inductive HasTypeTopS (S : Sys) (L : List String) :
     List Pred → Ctx → Option Ty → Mode → Mode → Expr → Ty → Prop where
-  | lit : LitTy l τ → HasTypeTop L C Γ R rm .synth (.lit l) τ
+  | lit : LitTy l τ → HasTypeTopS S L C Γ R rm .synth (.lit l) τ
   | var : Γ[i]? = some s → τs.length = s.arity →
-      (∀ c ∈ s.instPreds τs, Entails C c) →
-      HasTypeTop L C Γ R rm .synth (.var i) (s.inst τs)
+      (∀ c ∈ s.instPreds τs, EntailsS S C c) →
+      HasTypeTopS S L C Γ R rm .synth (.var i) (s.inst τs)
   | func : τs.length = n →
-      HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .synth .synth body ρ →
-      HasTypeTop L C Γ R rm .synth (.func n body) (.fn θ τs ρ)
+      HasTypeS S L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .synth .synth body ρ →
+      HasTypeTopS S L C Γ R rm .synth (.func n body) (.fn θ τs ρ)
   /-- Checked against a function type (an annotation's, without type
   variables), a function's body and `return`s are checked against its
   result type. -/
-  | funcCheck : T.whnf = .fn θ τs ρ → T.ftv = [] → τs.length = n →
-      HasType L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .check .check body ρ →
-      HasTypeTop L C Γ R rm .check (.func n body) T
-  | app : HasType L C Γ R rm .synth f (.fn .undefined τs ρ) → args.length = τs.length →
-      (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
-      HasTypeTop L C Γ R rm .synth (.app f args) ρ
+  | funcCheck : T.whnf = .fn θ τs ρ → S.closed T → τs.length = n →
+      HasTypeS S L C (τs.map .mono ++ .mono (.fn θ τs ρ) :: .mono θ :: Γ) (some ρ) .check .check body ρ →
+      HasTypeTopS S L C Γ R rm .check (.func n body) T
+  | app : HasTypeS S L C Γ R rm .synth f (.fn .undefined τs ρ) → args.length = τs.length →
+      (∀ p ∈ args.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) →
+      HasTypeTopS S L C Γ R rm .synth (.app f args) ρ
   | let_ (s : Scheme) (F : List Nat) :
       (∀ m, (∀ a ∈ F, a < m) →
-        HasType L (C ++ s.openPreds m) Γ R rm (annMode ann) e₁ (s.open m)) →
+        HasTypeS S L (C ++ s.openPreds m) Γ R rm (annMode ann) e₁ (s.open m)) →
       (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
-      Annotated ann s → HasType L C (s :: Γ) R rm md e₂ τ₂ →
-      HasTypeTop L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
+      Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ →
+      HasTypeTopS S L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
   | assign : Γ[i]? = some s → s.arity = 0 → s.preds = [] →
-      HasType L C Γ R rm .synth e (s.inst []) →
-      HasTypeTop L C Γ R rm .synth (.assign i e) (s.inst [])
-  | cond : HasType L C Γ R rm .synth c τc → HasType L C Γ R rm md t τ →
-      HasType L C Γ R rm md e τ → HasTypeTop L C Γ R rm md (.cond c t e) τ
-  | unop : UnOpTy op τ₁ τ → HasType L C Γ R rm .synth e τ₁ →
-      HasTypeTop L C Γ R rm .synth (.unop op e) τ
-  | binop : BinOpTy C op τ₁ τ₂ τ → HasType L C Γ R rm .synth e₁ τ₁ →
-      HasType L C Γ R rm .synth e₂ τ₂ → HasTypeTop L C Γ R rm .synth (.binop op e₁ e₂) τ
-  | ret : HasType L C Γ (some τr) rm rm e τr → HasTypeTop L C Γ (some τr) rm md (.ret e) τ
-  | throw_ : HasType L C Γ R rm .synth e τe → HasTypeTop L C Γ R rm .synth (.throw_ e) τ
-  | seq : HasType L C Γ R rm .synth e₁ τ₁ → HasType L C Γ R rm md e₂ τ →
-      HasTypeTop L C Γ R rm md (.seq e₁ e₂) τ
-  | while_ : HasType L C Γ R rm .synth c τc → HasType L C Γ R rm .synth body τb →
-      HasTypeTop L C Γ R rm .synth (.while_ c body) .undefined
-  | break_ : HasTypeTop L C Γ R rm md .break_ τ
-  | continue_ : HasTypeTop L C Γ R rm md .continue_ τ
-  | tryCatch : HasType L C Γ R rm md body τ →
-      HasType L C (.mono .unknown :: Γ) R rm md handler τ →
-      HasTypeTop L C Γ R rm md (.tryCatch body handler) τ
-  | tryFinally : HasType L C Γ R rm md body τ → HasType L C Γ R rm .synth fin τf →
-      HasTypeTop L C Γ R rm md (.tryFinally body fin) τ
+      HasTypeS S L C Γ R rm .synth e (s.inst []) →
+      HasTypeTopS S L C Γ R rm .synth (.assign i e) (s.inst [])
+  | cond : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm md t τ →
+      HasTypeS S L C Γ R rm md e τ → HasTypeTopS S L C Γ R rm md (.cond c t e) τ
+  | unop : UnOpTy op τ₁ τ → HasTypeS S L C Γ R rm .synth e τ₁ →
+      HasTypeTopS S L C Γ R rm .synth (.unop op e) τ
+  | binop : BinOpTyS S C op τ₁ τ₂ τ → HasTypeS S L C Γ R rm .synth e₁ τ₁ →
+      HasTypeS S L C Γ R rm .synth e₂ τ₂ → HasTypeTopS S L C Γ R rm .synth (.binop op e₁ e₂) τ
+  | ret : HasTypeS S L C Γ (some τr) rm rm e τr → HasTypeTopS S L C Γ (some τr) rm md (.ret e) τ
+  | throw_ : HasTypeS S L C Γ R rm .synth e τe → HasTypeTopS S L C Γ R rm .synth (.throw_ e) τ
+  | seq : HasTypeS S L C Γ R rm .synth e₁ τ₁ → HasTypeS S L C Γ R rm md e₂ τ →
+      HasTypeTopS S L C Γ R rm md (.seq e₁ e₂) τ
+  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .synth body τb →
+      HasTypeTopS S L C Γ R rm .synth (.while_ c body) .undefined
+  | break_ : HasTypeTopS S L C Γ R rm md .break_ τ
+  | continue_ : HasTypeTopS S L C Γ R rm md .continue_ τ
+  | tryCatch : HasTypeS S L C Γ R rm md body τ →
+      HasTypeS S L C (.mono .unknown :: Γ) R rm md handler τ →
+      HasTypeTopS S L C Γ R rm md (.tryCatch body handler) τ
+  | tryFinally : HasTypeS S L C Γ R rm md body τ → HasTypeS S L C Γ R rm .synth fin τf →
+      HasTypeTopS S L C Γ R rm md (.tryFinally body fin) τ
   | obj : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length → (∀ l ∈ ls, l ∈ L) →
-      (∀ p ∈ es.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
+      (∀ p ∈ es.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
         FieldSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
-      HasTypeTop L C Γ R rm .synth (.obj ls es ks) (.record L (objSlots L ls ss))
+      HasTypeTopS S L C Γ R rm .synth (.obj ls es ks) (.record L (objSlots L ls ss))
   | cls : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length → ls.Nodup → (∀ l ∈ ls, l ∈ L) →
       (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
-        HasType L C (memberCtx Γ ks τs i k) none .synth .synth e τ) →
+        HasTypeS S L C (memberCtx Γ ks τs i k) none .synth .synth e τ) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
-        MemberSlot C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
-      HasTypeTop L C Γ R rm .synth (.cls ls es ks) (.record L (objSlots L ls ss))
+        MemberSlotS S C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
+      HasTypeTopS S L C Γ R rm .synth (.cls ls es ks) (.record L (objSlots L ls ss))
   | ctor : τs.length = n →
-      HasType L C (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ)
+      HasTypeS S L C (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ)
         (some ρ) .synth .synth body ρ →
-      HasTypeTop L C Γ R rm .synth (.ctor n body) (.fn .newTarget τs ρ)
-  | new_ : HasType L C Γ R rm .synth f (.fn .newTarget τs ρ) → args.length = τs.length →
-      (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) → TyEq ρ (.record L ss) →
-      ss.length = L.length → HasTypeTop L C Γ R rm .synth (.new_ f args) ρ
-  | get : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, k, σ]⟩ →
-      HasTypeTop L C Γ R rm .synth (.get e l) σ
-  | set : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, .data, σ]⟩ →
-      HasType L C Γ R rm .synth v σ → HasTypeTop L C Γ R rm .synth (.set e l v) σ
+      HasTypeTopS S L C Γ R rm .synth (.ctor n body) (.fn .newTarget τs ρ)
+  | new_ : HasTypeS S L C Γ R rm .synth f (.fn .newTarget τs ρ) → args.length = τs.length →
+      (∀ p ∈ args.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) → TyEq ρ (.record L ss) →
+      ss.length = L.length → HasTypeTopS S L C Γ R rm .synth (.new_ f args) ρ
+  | get : HasTypeS S L C Γ R rm .synth e τ → EntailsS S C ⟨.hasProp l, [τ, k, σ]⟩ →
+      HasTypeTopS S L C Γ R rm .synth (.get e l) σ
+  | set : HasTypeS S L C Γ R rm .synth e τ → EntailsS S C ⟨.hasProp l, [τ, .data, σ]⟩ →
+      HasTypeS S L C Γ R rm .synth v σ → HasTypeTopS S L C Γ R rm .synth (.set e l v) σ
   | spread : ps.length = L.length → ks.length = L.length → τs.length = L.length →
       ss.length = L.length → rs.length = L.length →
-      HasType L C Γ R rm .synth e₁ (.record L ss) →
-      HasType L C Γ R rm .synth e₂ (.record L (slots3 ps ks τs)) →
-      (∀ p ∈ mergePreds ps ks τs ss rs, Entails C p) →
-      HasTypeTop L C Γ R rm .synth (.spread e₁ e₂) (.record L rs)
-  | arr : (∀ e ∈ es, HasType L C Γ R rm .synth e τ) → HasTypeTop L C Γ R rm .synth (.arr es) (.array τ)
+      HasTypeS S L C Γ R rm .synth e₁ (.record L ss) →
+      HasTypeS S L C Γ R rm .synth e₂ (.record L (slots3 ps ks τs)) →
+      (∀ p ∈ mergePreds ps ks τs ss rs, EntailsS S C p) →
+      HasTypeTopS S L C Γ R rm .synth (.spread e₁ e₂) (.record L rs)
+  | arr : (∀ e ∈ es, HasTypeS S L C Γ R rm .synth e τ) → HasTypeTopS S L C Γ R rm .synth (.arr es) (.array τ)
   /-- Checked against an array type, each element is checked against its
   element type. -/
-  | arrCheck : T.whnf = .array σ → T.ftv = [] → (∀ e ∈ es, HasType L C Γ R rm .check e σ) →
-      HasTypeTop L C Γ R rm .check (.arr es) T
-  | index : HasType L C Γ R rm .synth e τ → HasType L C Γ R rm .synth i ι →
-      Entails C ⟨.indexable, [τ, ι, σ]⟩ → HasTypeTop L C Γ R rm .synth (.index e i) σ
-  | setIndex : HasType L C Γ R rm .synth e τ → HasType L C Γ R rm .synth i ι →
-      Entails C ⟨.indexable, [τ, ι, σ]⟩ → Entails C ⟨.indexWrite, [τ]⟩ →
-      HasType L C Γ R rm .synth v σ → HasTypeTop L C Γ R rm .synth (.setIndex e i v) σ
-  | mcall : HasType L C Γ R rm .synth e τ → Entails C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
-      args.length = τs.length → (∀ p ∈ args.zip τs, HasType L C Γ R rm .synth p.1 p.2) →
-      HasTypeTop L C Γ R rm .synth (.mcall e l args) ρ
-  | unwrap : HasType L C Γ R rm .synth e₁ τ₁ → Entails C ⟨.strip, [τ₁, σ]⟩ →
-      HasType L C Γ R rm md e₂ τ → HasType L C (.mono σ :: Γ) R rm md e₃ τ →
-      HasTypeTop L C Γ R rm md (.unwrap e₁ e₂ e₃) τ
+  | arrCheck : T.whnf = .array σ → S.closed T → (∀ e ∈ es, HasTypeS S L C Γ R rm .check e σ) →
+      HasTypeTopS S L C Γ R rm .check (.arr es) T
+  | index : HasTypeS S L C Γ R rm .synth e τ → HasTypeS S L C Γ R rm .synth i ι →
+      EntailsS S C ⟨.indexable, [τ, ι, σ]⟩ → HasTypeTopS S L C Γ R rm .synth (.index e i) σ
+  | setIndex : HasTypeS S L C Γ R rm .synth e τ → HasTypeS S L C Γ R rm .synth i ι →
+      EntailsS S C ⟨.indexable, [τ, ι, σ]⟩ → EntailsS S C ⟨.indexWrite, [τ]⟩ →
+      HasTypeS S L C Γ R rm .synth v σ → HasTypeTopS S L C Γ R rm .synth (.setIndex e i v) σ
+  | mcall : HasTypeS S L C Γ R rm .synth e τ → EntailsS S C ⟨.hasProp l, [τ, k, .fn τ τs ρ]⟩ →
+      args.length = τs.length → (∀ p ∈ args.zip τs, HasTypeS S L C Γ R rm .synth p.1 p.2) →
+      HasTypeTopS S L C Γ R rm .synth (.mcall e l args) ρ
+  | unwrap : HasTypeS S L C Γ R rm .synth e₁ τ₁ → EntailsS S C ⟨.strip, [τ₁, σ]⟩ →
+      HasTypeS S L C Γ R rm md e₂ τ → HasTypeS S L C (.mono σ :: Γ) R rm md e₃ τ →
+      HasTypeTopS S L C Γ R rm md (.unwrap e₁ e₂ e₃) τ
+
+/-- The narrow system's typing judgement, the one inference implements. -/
+abbrev HasType := HasTypeS Sys.narrow
+
+/-- The narrow system's last rules. -/
+abbrev HasTypeTop := HasTypeTopS Sys.narrow
 
 /-- How the type a derivation's last rule gives, `τ₀` in the mode `md₀`,
 comes to be the derivation's, `τ` in the mode `md`: by conversions of a
 synthesised type, or checked against an annotation's type `τ`, as it is or
-by an injection (`HasType.inj`). -/
-def Lift (C : List Pred) (md md₀ : Mode) (τ₀ τ : Ty) : Prop :=
+by an injection (`HasTypeS.inj`). -/
+def LiftS (S : Sys) (C : List Pred) (md md₀ : Mode) (τ₀ τ : Ty) : Prop :=
   (md₀ = md ∧ TyEq τ₀ τ ∧ (md = .check → τ₀ = τ)) ∨
-    (md = .check ∧ md₀ = .synth ∧ τ.ftv = [] ∧ Entails C ⟨.inject τ, [τ₀]⟩)
+    (md = .check ∧ md₀ = .synth ∧ S.closed τ ∧ EntailsS S C ⟨.inject τ, [τ₀]⟩)
 
-theorem Lift.refl {C : List Pred} {md : Mode} {τ : Ty} : Lift C md md τ τ :=
+/-- Lifting in the narrow system. -/
+abbrev Lift := LiftS Sys.narrow
+
+theorem LiftS.refl {S : Sys} {C : List Pred} {md : Mode} {τ : Ty} : LiftS S C md md τ τ :=
   .inl ⟨rfl, .refl _, fun _ => rfl⟩
 
 /-- A derivation is its last rule other than a conversion or an injection,
 then conversions (of a synthesised type) and at most one injection. -/
-theorem HasType.top (h : HasType L C Γ R rm md e τ) :
-    ∃ md₀ τ₀, HasTypeTop L C Γ R rm md₀ e τ₀ ∧ Lift C md md₀ τ₀ τ := by
+theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
+    ∃ md₀ τ₀, HasTypeTopS S L C Γ R rm md₀ e τ₀ ∧ LiftS S C md md₀ τ₀ τ := by
   induction h with
   | conv _ he ih =>
     obtain ⟨md₀, τ₀, ht, hl⟩ := ih
@@ -427,7 +442,7 @@ theorem HasType.top (h : HasType L C Γ R rm md e τ) :
     obtain ⟨md₀, τ₀, ht, hl⟩ := ih
     rcases hl with ⟨rfl, h₀, -⟩ | ⟨h, -⟩
     · refine ⟨_, τ₀, ht, .inr ⟨rfl, rfl, hT, ?_⟩⟩
-      refine Entails.of_predEq ?_ hi
+      refine EntailsS.of_predEq ?_ hi
       exact PredEq.of_pairs (by simp) (zip_tyEq_cons h₀.symm zip_tyEq_nil)
     · cases h
   | lit hl => exact ⟨_, _, .lit hl, .refl⟩
@@ -465,21 +480,21 @@ theorem HasType.top (h : HasType L C Γ R rm md e τ) :
   | mcall he hp hl ha => exact ⟨_, _, .mcall he hp hl ha, .refl⟩
 
 /-- A synthesised type's derivation is its last rule, then conversions. -/
-theorem HasType.top_synth (h : HasType L C Γ R rm .synth e τ) :
-    ∃ τ₀, TyEq τ₀ τ ∧ HasTypeTop L C Γ R rm .synth e τ₀ := by
+theorem HasTypeS.top_synth {S : Sys} (h : HasTypeS S L C Γ R rm .synth e τ) :
+    ∃ τ₀, TyEq τ₀ τ ∧ HasTypeTopS S L C Γ R rm .synth e τ₀ := by
   obtain ⟨md₀, τ₀, ht, hl⟩ := h.top
   rcases hl with ⟨rfl, h₀, -⟩ | ⟨h, -⟩
   · exact ⟨τ₀, h₀, ht⟩
   · cases h
 
 /-- A variable whose scheme is a monotype has that type. -/
-theorem HasType.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :
+theorem HasTypeS.var_mono (h : Γ[i]? = some (Scheme.mono τ)) :
     HasType L C Γ R rm .synth (.var i) τ := by
-  simpa using HasType.var (C := C) (R := R) (rm := rm) (τs := []) h rfl
+  simpa using HasTypeS.var (S := Sys.narrow) (C := C) (R := R) (rm := rm) (τs := []) h rfl
     (by simp [Scheme.instPreds, Scheme.mono])
 
 /-- A monomorphic `const`. -/
-theorem HasType.let_mono (h₁ : HasType L C Γ R rm .synth e₁ τ₁)
+theorem HasTypeS.let_mono (h₁ : HasType L C Γ R rm .synth e₁ τ₁)
     (h₂ : HasType L C (.mono τ₁ :: Γ) R rm md e₂ τ₂) :
     HasType L C Γ R rm md (.let_ mb none e₁ e₂) τ₂ :=
   .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPreds,

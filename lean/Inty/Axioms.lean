@@ -15,8 +15,8 @@ new axiom changes this output and fails the build.
 /-- info: 'Inty.never_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.never_stuck
 
-/-- info: 'Inty.HasType.subst' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Inty.HasType.subst
+/-- info: 'Inty.HasTypeS.subst' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.HasTypeS.subst
 
 /-- info: 'Inty.inferProgram_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.inferProgram_sound
@@ -48,5 +48,5 @@ new axiom changes this output and fails the build.
 /-- info: 'Inty.inferProgram_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.inferProgram_complete
 
-/-- info: 'Inty.HasType.weaken' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Inty.HasType.weaken
+/-- info: 'Inty.HasTypeS.weaken' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.HasTypeS.weaken

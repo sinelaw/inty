@@ -2156,7 +2156,7 @@ theorem V_bound {k : Nat} {W : World} {θ θ' ρ : Ty} {τs : List Ty} {cenv : E
 
 /-- An entailed `Inject T τ`, under constraints each an instance or on a
 type variable: a value of `τ` is one of `T` (a type variable has none). -/
-theorem Entails.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVar C)
+theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVar C)
     (h : Entails C ⟨.inject T, [τ]⟩) {k : Nat} {W : World} {v : Value} (hv : V k W τ v) :
     V k W T v := by
   rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hw⟩
@@ -2186,13 +2186,13 @@ theorem Safe.lift {p : Ran} {k : Nat} {W : World} {τ₀ τ : Ty} {R : Option Ty
   · exact h.tyEq he
   · obtain ⟨hc, h | ⟨W', hW, hH, ⟨v, hv, hV⟩ | habr | hret⟩⟩ := h
     · exact ⟨hc, .inl h⟩
-    · exact ⟨hc, .inr ⟨W', hW, hH, .inl ⟨v, hv, Entails.inject hC hi hV⟩⟩⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inl ⟨v, hv, EntailsS.inject hC hi hV⟩⟩⟩
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr hret)⟩⟩
 
 /-- An entailed `Strip τ σ`, under constraints each an instance or on a
 type variable: a value of `τ` that isn't nothing is one of `σ`. -/
-theorem Entails.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVar C)
+theorem EntailsS.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVar C)
     (h : Entails C ⟨.strip, [τ, σ]⟩) {k : Nat} {W : World} {v : Value} (hv : V k W τ v)
     (hn : v.isNothing = false) : V k W σ v := by
   rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hw⟩
@@ -2214,7 +2214,7 @@ theorem Entails.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVar C)
 
 /-- An entailed `NotNew θ`, under constraints each an instance or on a type
 variable: `θ` isn't `newTarget`. -/
-theorem Entails.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVar C)
+theorem EntailsS.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVar C)
     (h : Entails C ⟨.notNew, [θ]⟩) : ¬ TyEq θ .newTarget := by
   intro hθ
   rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hv⟩
@@ -2379,7 +2379,7 @@ theorem clsMembers_sound {c : Nat} {W : World} {env : Env} {self : Value} {T : T
       rcases List.mem_cons.mp hp' with rfl | hp'
       · have hclo := hf 0 .arrow n b _ rfl rfl rfl (by decide)
         refine .inl ⟨_, TyEq.refl _, .bound (.closure env n b) self, by simp,
-          V_bound hclo (fun i hi => ?_) (Entails.notNew hC hn)⟩
+          V_bound hclo (fun i hi => ?_) (EntailsS.notNew hC hn)⟩
         exact V.tyEq _ hθ.symm ((hself i hi).mono (Nat.le_refl i) (List.prefix_refl W))
       · exact hp p hp'
     | @method θ n b τs' ρ hθ =>
@@ -2483,7 +2483,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       subst hlen
       simp only [run]
       exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (closure_sound ih hb hC k W hG)
-    | @funcCheck _ _ _ ρ _ _ _ T θ τs hT _ hlen hb =>
+    | @funcCheck T _ _ _ θ τs ρ _ _ _ hT _ hlen hb =>
       subst hlen
       simp only [run]
       exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH
@@ -2758,7 +2758,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       · exact ih₂ h₂ hC (G.mono hW₁ hG) hH₁
       · -- What isn't nothing, in a new cell of the type `Strip` leaves.
         rename_i hn
-        have hv' := Entails.strip hC hs hv (by simpa using hn)
+        have hv' := EntailsS.strip hC hs hv (by simpa using hn)
         have hW₂ : W₁ <+: W₁ ++ [.mono σ] := List.prefix_append _ _
         have hcell : HeapOK (run k env h e₁).2.1 (W₁ ++ [.mono σ]) ((run k env h e₁).2.2 ++ [v]) :=
           hH₁.alloc (by simp) (fun i s' v' hs' hv'' => by
@@ -2911,7 +2911,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           | _ + 1, hs, _ => simp at hs)
       · rw [V_array, hb]
         exact ⟨_, _, rfl, by simp, TyEq.refl _⟩
-    | @arrCheck _ _ _ _ _ σ T hT _ hes =>
+    | @arrCheck T _ _ _ _ _ σ hT _ hes =>
       simp only [run]
       have hargs : ∀ p ∈ es.zip (List.replicate es.length σ), HasType L C Γ R _ _ p.1 p.2 :=
         fun p hp => by

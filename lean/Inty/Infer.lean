@@ -364,7 +364,7 @@ def unifyThis (θs : List Ty) (T : Ty) : Option Subst :=
 
 /-- A function literal with `k` parameters checked against the expected
 type `T`: `T` with its `this`, parameter and result types, if `T` is a
-function type with `k` parameters (`HasType.funcCheck`). -/
+function type with `k` parameters (`HasTypeS.funcCheck`). -/
 def funcTarget : Option Ty → Nat → Option (Ty × Ty × List Ty × Ty)
   | some T, k =>
     match T.whnf with
@@ -373,7 +373,7 @@ def funcTarget : Option Ty → Nat → Option (Ty × Ty × List Ty × Ty)
   | none, _ => none
 
 /-- An array literal checked against the expected type `T`: `T` with its
-element type, if `T` is an array type (`HasType.arrCheck`). -/
+element type, if `T` is an array type (`HasTypeS.arrCheck`). -/
 def arrTarget : Option Ty → Option (Ty × Ty)
   | some T =>
     match T.whnf with
@@ -406,7 +406,7 @@ def exMode : Option Ty → Expr → Mode
 
 /-- What inferring `e` against the expected type `ex` gives, at its call
 site: unchanged if `e` takes `ex` in; otherwise `e`'s type `τ`, synthesised,
-is injected into `ex`, a waiting constraint `Inject T τ` (`HasType.inj`). -/
+is injected into `ex`, a waiting constraint `Inject T τ` (`HasTypeS.inj`). -/
 def checkEx : Option Ty → Expr → Out → Out
   | some T, e, o => if e.pushes T then o else ⟨o.σ, T, o.preds ++ [⟨.inject T, [o.τ]⟩], o.next⟩
   | none, _, o => o

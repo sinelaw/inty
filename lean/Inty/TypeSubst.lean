@@ -42,14 +42,14 @@ theorem FieldSlot.subst (σ : Subst) (h : FieldSlot T k e τ s) :
   | method he => simpa using FieldSlot.method (τs := _) (ρ := _) (he.subst σ)
   | getter he => simpa using FieldSlot.getter (σ := _) (he.subst σ)
 
-theorem MemberSlot.subst (σ : Subst) (h : MemberSlot C T k e τ s) :
+theorem MemberSlotS.subst (σ : Subst) (h : MemberSlot C T k e τ s) :
     MemberSlot (C.map (·.subst σ)) (T.subst σ) k e (τ.subst σ) (s.subst σ) := by
   cases h with
   | data => exact .data
   | arrow he hn =>
-    simpa using MemberSlot.arrow (τs := _) (ρ := _) (he.subst σ) (by simpa [Pred.subst] using hn.subst σ)
-  | method he => simpa using MemberSlot.method (τs := _) (ρ := _) (he.subst σ)
-  | getter he => simpa using MemberSlot.getter (σ := _) (he.subst σ)
+    simpa using MemberSlotS.arrow (τs := _) (ρ := _) (he.subst σ) (by simpa [Pred.subst] using hn.subst σ)
+  | method he => simpa using MemberSlotS.method (τs := _) (ρ := _) (he.subst σ)
+  | getter he => simpa using MemberSlotS.getter (σ := _) (he.subst σ)
 
 theorem memberCtx_subst (σ : Subst) (Γ : Ctx) (ks : List ClassKind) (τs : List Ty)
     (i : Nat) (k : ClassKind) :
@@ -86,7 +86,7 @@ theorem zip3_map {α β γ : Type} (f : β → β) (g : γ → γ) : ∀ (ks : L
   | _ :: _, _ :: _, [] => rfl
   | k :: ks, t :: ts, s :: ss => by simp [zip3_map f g ks ts ss]
 
-theorem HasType.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
+theorem HasTypeS.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
     HasType L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) rm md e
       (τ.subst σ) := by
   induction h with
@@ -101,7 +101,7 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R rm md e τ) :
   | func hlen _ ih =>
     refine .func (by simpa using hlen) ?_
     simpa [List.map_append, Function.comp_def] using ih
-  | @funcCheck n C Γ ρ body R rm T θ τs hT hT₀ hlen _ ih =>
+  | @funcCheck T n C Γ θ τs ρ body R rm hT hT₀ hlen _ ih =>
     have hf := Ty.ftv_nil_of_whnf hT hT₀
     simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.append_eq_nil_iff,
       List.flatMap_eq_nil_iff] at hf

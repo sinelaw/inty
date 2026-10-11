@@ -31,7 +31,7 @@ def Sat (C : List Pred) (P : List Pred) (φ : Subst) : Prop := ∀ c ∈ P, Enta
     Sat C [p] φ ↔ Entails C (p.subst φ) := by
   simp [Sat]
 
-theorem Entails.append_right {C : List Pred} (D : List Pred) (h : Entails C p) :
+theorem EntailsS.append_right {C : List Pred} (D : List Pred) (h : Entails C p) :
     Entails (C ++ D) p :=
   h.weaken (fun _ h => List.mem_append_left _ h)
 
@@ -853,7 +853,7 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun C ψ T hθ hn x hx => ?_⟩
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
-      · simpa [Ty.subst_app] using MemberSlot.data (T := T) (e := e) (τ := τ.subst ψ)
+      · simpa [Ty.subst_app] using MemberSlotS.data (T := T) (e := e) (τ := τ.subst ψ)
       · exact h₅ C ψ T hθ hn x hx
   | case3 ks m b es θ ρ τs' τs n ih =>
     simp only [memberSlots] at h
@@ -870,7 +870,7 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
       · simpa [Ty.subst_app, Ty.subst_fn] using
-          MemberSlot.arrow (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
+          MemberSlotS.arrow (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
             (θ' := (Ty.var n).subst ψ) (hθ θ List.mem_cons_self) (by simpa [Pred.subst] using hn.1)
       · exact h₅ C ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) hn.2 x hx
   | case4 ks m b es θ ρ τs' τs n ih =>
@@ -886,7 +886,7 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
       · simpa [Ty.subst_app, Ty.subst_fn] using
-          MemberSlot.method (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
+          MemberSlotS.method (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
             (hθ θ List.mem_cons_self)
       · exact h₅ C ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) hn x hx
   | case5 ks b es θ σ τs n ih =>
@@ -902,7 +902,7 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
       · simpa [Ty.subst_app, Ty.subst_fn] using
-          MemberSlot.getter (σ := σ.subst ψ) (b := b) (hθ θ List.mem_cons_self)
+          MemberSlotS.getter (σ := σ.subst ψ) (b := b) (hθ θ List.mem_cons_self)
       · exact h₅ C ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) hn x hx
   | case6 t x y m h1 h2 h3 h4 h5 =>
     exfalso
@@ -1024,7 +1024,7 @@ theorem inferMembers_sound : ∀ (es : List Expr) (ks : List ClassKind), (∀ e 
           cases k <;> simp_all [memberCtx]
 
 /-- The spread rule, at the types a substitution gives. -/
-theorem HasType.spread_subst {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
+theorem HasTypeS.spread_subst {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty}
     {e₁ e₂ : Expr} {ψ : Subst} {ps ks τs ss rs : List Ty}
     (hps : ps.length = L.length) (hks : ks.length = L.length) (hτs : τs.length = L.length)
     (hss : ss.length = L.length) (hrs : rs.length = L.length)
@@ -1049,7 +1049,7 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_synth (fun _ => rfl)]
     simp only [infer, Option.some.injEq] at h; subst h
-    simpa using HasType.lit (C := C) (Γ := Ctx.subst φ Γ) (Lit.ty_sound l)
+    simpa using HasTypeS.lit (C := C) (Γ := Ctx.subst φ Γ) (Lit.ty_sound l)
   | var i =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_synth (fun _ => rfl)]
@@ -1217,14 +1217,14 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       refine (he₁ ψ _ (fun c hc => ?_)).weaken hΓ.ctxGen hR
         ((hRo.subst (Subst.compose σi o₁.σ)).ret_eq _ _)
       by_cases hg : c.tv.any (· ∈ ᾱ) = true
-      · refine Entails.of_predEq ((Pred.normHead_predEq c).subst ψ).symm (Entails.of_mem
+      · refine EntailsS.of_predEq ((Pred.normHead_predEq c).subst ψ).symm (EntailsS.of_mem
           (List.mem_append_right _ (List.mem_map_of_mem (List.mem_map_of_mem
             (List.mem_filter.mpr ⟨hc, hg⟩)))))
       · have hr : c ∈ preds₁.filter (fun c => !c.tv.any (· ∈ ᾱ)) :=
           List.mem_filter.mpr ⟨hc, by simpa using hg⟩
         have hc' : PredEq (c.subst ψ) (c.subst φ₀) := Pred.subst_predEq_congr_tv (fun a ha =>
           hfind a (fun hα => hg (List.any_eq_true.mpr ⟨a, ha, by simpa using hα⟩)))
-        exact Entails.of_predEq hc'.symm ((hsat.1 c hr).append_right _)
+        exact EntailsS.of_predEq hc'.symm ((hsat.1 c hr).append_right _)
     · simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
       refine .let_ _ [] (fun m _ => ?_) (.inl ⟨rfl, by simp [Scheme.mono, Scheme.subst]⟩)
         ((hs.subst _).subst _) (fun _ h => by cases h) he₂
@@ -1683,7 +1683,7 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     replace he₂ := he₂.conv hτ₂
     simp only [Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
     rw [← Ty.subst_compose]
-    exact HasType.spread_subst (by simp [varBlock]) (by simp [varBlock]) (by simp [varBlock])
+    exact HasTypeS.spread_subst (by simp [varBlock]) (by simp [varBlock]) (by simp [varBlock])
       (by simp [varBlock]) (by simp [varBlock]) he₁ he₂ hsat.2
 
   | arr es ih =>
@@ -1821,7 +1821,7 @@ theorem inferIn_sound {Γ : Ctx} {e : Expr} {τ : Ty} (hΓ : ctxFtv Γ = [])
   · rename_i hall
     simp only [Option.some.injEq] at h; subst h
     have hsat : Sat preds o.preds σi := by
-      have := improveAll_sound _ himp (C := preds) (φ := []) (fun c hc => Entails.of_mem (by simpa using hc))
+      have := improveAll_sound _ himp (C := preds) (φ := []) (fun c hc => EntailsS.of_mem (by simpa using hc))
       intro c hc
       simpa [Pred.subst_compose] using this c hc
     have hclosed : ∀ σ : Subst, Ctx.subst σ Γ = Γ := fun σ =>
