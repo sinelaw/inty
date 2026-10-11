@@ -24,7 +24,9 @@
 //!
 //! The model is `lean/.lake/build/bin/inty-model` (`cd lean && lake build`),
 //! or `INTY_LEAN_MODEL`. Without it the test is skipped. `INTY_DIFF_CASES`
-//! sets the number of programs (default 3000), `INTY_DIFF_SEED` the seed.
+//! sets the number of programs (default 3000), `INTY_DIFF_SEED` the seed,
+//! and `INTY_DIFF_SUMS=1` prints each disagreement on a program with a sum
+//! (`T | Null`, `T | Undefined`) or a test for nothing (`!= null`, `??`).
 //! The engine is `node` (or `INTY_NODE`) running `tests/differential/engine.js`;
 //! without it the engine comparison is skipped, except on CI.
 
@@ -118,6 +120,9 @@ enum Core {
     Class(usize, Vec<(String, Member, Core)>),
     /// `new f(a₀, …)`.
     New(Box<Core>, Vec<Core>),
+    /// `const v = e₁; v != null ? e₃ : e₂`, with `v` bound in `e₃`; only
+    /// in statement position. `e₁ ?? e₂` is `Unwrap(e₁, e₂, Var(0))`.
+    Unwrap(Box<Core>, Box<Core>, Box<Core>),
 }
 
 /// How a class holds a member.
@@ -141,7 +146,7 @@ fn annotatable(t: &T) -> bool {
     match t {
         T::Num | T::Str | T::Bool | T::Undef | T::Null => true,
         T::Arrow(ps, r) => ps.iter().all(annotatable) && annotatable(r),
-        T::Arr(t) => annotatable(t),
+        T::Arr(t) | T::Maybe(_, t) => annotatable(t),
         T::Obj(_) => false,
     }
 }
@@ -160,6 +165,8 @@ fn wire_ty(t: &T) -> String {
             format!("({})", parts.join(" "))
         }
         T::Arr(t) => format!("(arr {})", wire_ty(t)),
+        T::Maybe(true, t) => format!("(nullable {})", wire_ty(t)),
+        T::Maybe(false, t) => format!("(optional {})", wire_ty(t)),
         T::Obj(_) => unreachable!("records aren't annotated"),
     }
 }
@@ -178,6 +185,8 @@ fn js_ty(t: &T) -> String {
             js_ty(r)
         ),
         T::Arr(t) => format!("{}[]", js_ty(t)),
+        T::Maybe(true, t) => format!("({} | Null)", js_ty(t)),
+        T::Maybe(false, t) => format!("({} | Undefined)", js_ty(t)),
         T::Obj(_) => unreachable!("records aren't annotated"),
     }
 }
@@ -276,6 +285,7 @@ fn wire(e: &Core) -> String {
             let args: Vec<String> = args.iter().map(|a| format!(" {}", wire(a))).collect();
             format!("(new {}{})", wire(f), args.concat())
         }
+        Unwrap(x, y, z) => format!("(unwrap {} {} {})", wire(x), wire(y), wire(z)),
     }
 }
 
@@ -285,7 +295,7 @@ fn ends_in_statement(e: &Core) -> bool {
     match e {
         Let(_, _, _, rest) | Seq(_, rest) => ends_in_statement(rest),
         Throw(_) | Ret(_) | While(..) | Break | Continue | TryCatch(..) | TryFinally(..) => true,
-        Cond(_, t, f) => is_stmt(t) || is_stmt(f),
+        Cond(_, t, f) | Unwrap(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
     }
 }
@@ -295,7 +305,7 @@ fn ends_in_statement(e: &Core) -> bool {
 fn is_stmt(e: &Core) -> bool {
     match e {
         Ret(_) | Throw(_) | Seq(..) | Let(..) | While(..) | Break | Continue | TryCatch(..)
-        | TryFinally(..) => true,
+        | TryFinally(..) | Unwrap(..) => true,
         Cond(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
     }
@@ -344,6 +354,7 @@ fn fractional(e: &Core) -> Core {
                 .collect(),
         ),
         New(x, args) => New(f(x), args.iter().map(fractional).collect()),
+        Unwrap(x, y, z) => Unwrap(f(x), f(y), f(z)),
         other => other.clone(),
     }
 }
@@ -403,7 +414,7 @@ impl Js {
                 format!("{}({})", callee, args.join(", "))
             }
             Let(..) | Ret(_) | Throw(_) | Seq(..) | While(..) | Break | Continue | TryCatch(..)
-            | TryFinally(..) => {
+            | TryFinally(..) | Unwrap(..) => {
                 unreachable!("statements only in statement position: {e:?}")
             }
             Assign(i, e) => format!("({} = {})", self.name(*i), self.expr(e)),
@@ -594,6 +605,25 @@ impl Js {
                 self.stmts(body, last),
                 self.stmts(fin, "")
             ),
+            // `const v = e₁;`, then a test that `v` holds something, which
+            // inty narrows `v` by in the branch that sees it.
+            Unwrap(e1, e2, e3) => {
+                let v = self.fresh("v");
+                let init = self.expr(e1);
+                if is_stmt(e2) || is_stmt(e3) {
+                    let none = self.stmts(e2, last);
+                    self.names.push(v.clone());
+                    let some = self.stmts(e3, last);
+                    self.names.pop();
+                    format!("const {v} = {init}; if ({v} != null) {{ {some} }} else {{ {none} }}")
+                } else {
+                    let none = self.expr(e2);
+                    self.names.push(v.clone());
+                    let some = self.expr(e3);
+                    self.names.pop();
+                    format!("const {v} = {init}; {last}({v} != null ? {some} : {none});")
+                }
+            }
             Cond(c, t, f) if is_stmt(t) || is_stmt(f) => format!(
                 "if ({}) {{ {} }} else {{ {} }}",
                 self.expr(c),
@@ -632,6 +662,11 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
         | Spread(x, y)
         | Index(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner),
         TryCatch(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
+        Unwrap(x, y, z) => {
+            refers_from_inner(x, i, inner)
+                || refers_from_inner(y, i, inner)
+                || refers_from_inner(z, i + 1, inner)
+        }
         Break | Continue => false,
         Num(..) | Str(_) | Bool(_) | Undef | Null => false,
         Obj(fields) => fields.iter().any(|(_, e)| refers_from_inner(e, i, inner)),
@@ -703,6 +738,9 @@ enum T {
     Obj(Vec<(String, T)>),
     /// An array of these elements.
     Arr(Box<T>),
+    /// A sum: `Nullable<t>` (`true`) or `Optional<t>`, only as an
+    /// annotation's (`ty` never makes one).
+    Maybe(bool, Box<T>),
 }
 
 /// The property labels the generated programs use.
@@ -833,7 +871,7 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
-            T::Arrow(..) | T::Obj(_) | T::Arr(_) => return None,
+            T::Arrow(..) | T::Obj(_) | T::Arr(_) | T::Maybe(..) => return None,
         })
     }
 
@@ -928,6 +966,39 @@ impl Gen {
         if stmt && depth > 0 && self.no_this == 0 && self.rng.chance(8) {
             return self.class_use(t, d, scope);
         }
+        // A sum's binding, or another value that isn't nothing, tested for
+        // nothing: `v != null ? … : …`, or `v ?? …`.
+        if stmt && depth > 0 && self.rng.chance(8) {
+            let sums: Vec<(usize, T)> = (0..scope.len())
+                .filter_map(|i| match &scope[scope.len() - 1 - i] {
+                    Binding::Mono(T::Maybe(_, u)) | Binding::Mut(T::Maybe(_, u)) => {
+                        Some((i, (**u).clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let (e1, inner) = if !sums.is_empty() && self.rng.chance(70) {
+                let (i, u) = sums[self.rng.below(sums.len())].clone();
+                (Var(i), u)
+            } else {
+                let s = loop {
+                    let s = self.ty(1);
+                    if !matches!(s, T::Null | T::Undef) {
+                        break s;
+                    }
+                };
+                (self.typed(&s, d, scope, false), s)
+            };
+            let e2 = self.typed(t, d, scope, true);
+            scope.push(Binding::Mono(inner.clone()));
+            let e3 = if inner == *t && self.rng.chance(40) {
+                Var(0)
+            } else {
+                self.typed(t, d, scope, true)
+            };
+            scope.pop();
+            return Unwrap(b(e1), b(e2), b(e3));
+        }
         if stmt && depth > 0 && self.rng.chance(25) {
             // `const`: sometimes the polymorphic identity, used at
             // several types below.
@@ -940,8 +1011,31 @@ impl Gen {
             // `const`, or `let`, which may be assigned below; sometimes
             // annotated, mostly with its type.
             let s = self.ty(1);
-            let e1 = self.typed(&s, d, scope, false);
             let mutable = self.rng.chance(50);
+            // Sometimes a sum: `/** const v: S | Null */`, holding nothing
+            // or an `S`.
+            if self.rng.chance(20) && annotatable(&s) && !matches!(s, T::Null | T::Undef) {
+                let null = self.rng.chance(50);
+                let e1 = if self.rng.chance(30) {
+                    if null {
+                        Null
+                    } else {
+                        Undef
+                    }
+                } else {
+                    self.typed(&s, d, scope, false)
+                };
+                let m = T::Maybe(null, b2(s));
+                scope.push(if mutable {
+                    Binding::Mut(m.clone())
+                } else {
+                    Binding::Mono(m.clone())
+                });
+                let rest = self.typed(t, d, scope, true);
+                scope.pop();
+                return Let(mutable, Some(m), b(e1), b(rest));
+            }
+            let e1 = self.typed(&s, d, scope, false);
             let ann = if self.rng.chance(30) && annotatable(&s) {
                 Some(if self.rng.chance(80) {
                     s.clone()
@@ -2199,6 +2293,34 @@ fn inty_agrees_with_the_lean_model() {
                     }
                 ))
                 .or_default() += 1;
+        }
+        // `INTY_DIFF_SUMS=1` prints every disagreement on a program with a
+        // sum or a test for nothing, whatever it is put down to.
+        if std::env::var_os("INTY_DIFF_SUMS").is_some()
+            && accepted != model_accepted
+            && ["(unwrap ", "(nullable ", "(optional "]
+                .iter()
+                .any(|f| wire(&programs[i]).contains(f))
+        {
+            eprintln!("{}", report("sum disagreement"));
+        }
+        for (form, what) in [
+            ("(unwrap ", "with a test for nothing (`!= null`, `??`)"),
+            ("(nullable ", "with a `T | Null` annotation"),
+            ("(optional ", "with a `T | Undefined` annotation"),
+        ] {
+            if wire(&programs[i]).contains(form) {
+                *counts
+                    .entry(format!(
+                        "{what}, {}",
+                        match (accepted, model_accepted) {
+                            (true, true) => "both accept",
+                            (false, false) => "both reject",
+                            _ => "they disagree",
+                        }
+                    ))
+                    .or_default() += 1;
+            }
         }
         if wire(&programs[i]).contains("ann ") {
             *counts
