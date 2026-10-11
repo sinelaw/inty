@@ -1,4 +1,5 @@
 import Inty.Typing
+import Inty.TreeVars
 
 /-!
 # A more general context
@@ -42,10 +43,11 @@ theorem RetEq.refl : ∀ R : Option Ty, RetEq R R
   | some τ => TyEq.refl τ
 
 /-- `Γ'` is at least as general as `Γ`, scheme by scheme, under `C`, and a
-variable `e` assigns has a monotype in `Γ'`. -/
+variable `e` assigns has a monotype in `Γ'` if it has one in `Γ`. -/
 def CtxGen (C : List Pred) (e : Expr) (Γ Γ' : Ctx) : Prop :=
   Γ.length = Γ'.length ∧ ∀ i s s', Γ[i]? = some s → Γ'[i]? = some s' →
-    Generalizes C s' s ∧ ((s'.arity = 0 ∧ s'.preds = []) ∨ e.writes i = false)
+    Generalizes C s' s ∧
+      ((s.arity = 0 ∧ s.preds = [] → s'.arity = 0 ∧ s'.preds = []) ∨ e.writes i = false)
 
 theorem CtxGen.weaken {C D : List Pred} {e : Expr} {Γ Γ' : Ctx} (h : CtxGen C e Γ Γ')
     (hCD : ∀ c ∈ C, c ∈ D) : CtxGen D e Γ Γ' :=
@@ -65,7 +67,7 @@ theorem CtxGen.prepend {C : List Pred} {e e' : Expr} {Δ Γ Γ' : Ctx} (h : CtxG
   by_cases hi : i < Δ.length
   · rw [List.getElem?_append_left hi] at hs hs'
     rw [hs] at hs'; cases hs'
-    exact ⟨Generalizes.refl C s, hΔ i s hs⟩
+    exact ⟨Generalizes.refl C s, (hΔ i s hs).imp (fun h _ => h) id⟩
   · rw [List.getElem?_append_right (by omega)] at hs
     rw [List.getElem?_append_right (by omega)] at hs'
     obtain ⟨hg, hm⟩ := h.2 _ s s' hs hs'
@@ -147,6 +149,78 @@ theorem memberCtx_prefix_length : ∀ {ks : List ClassKind} {τs : List Ty}, ks.
       split <;> simp_all
   | [], _ :: _, hl, _ | _ :: _, [], hl, _ => by simp at hl
 
+/-! ## Equal schemes -/
+
+theorem List.exists_of_zip {α β : Type} {R : α → β → Prop} : ∀ {l₁ : List α} {l₂ : List β},
+    l₁.length = l₂.length → (∀ x ∈ l₁.zip l₂, R x.1 x.2) → ∀ b ∈ l₂, ∃ a ∈ l₁, R a b
+  | a :: l₁, b' :: l₂, hl, h, b, hb => by
+    rcases List.mem_cons.mp hb with rfl | hb
+    · exact ⟨a, List.mem_cons_self, h (a, b) (by simp)⟩
+    · obtain ⟨a', ha', hr⟩ := List.exists_of_zip (by simpa using hl)
+        (fun x hx => h x (List.mem_cons_of_mem _ hx)) b hb
+      exact ⟨a', List.mem_cons_of_mem _ ha', hr⟩
+  | [], [], _, _, _, hb => by cases hb
+  | [], _ :: _, hl, _, _, _ | _ :: _, [], hl, _, _, _ => by simp at hl
+
+/-- An equal scheme is as general. -/
+theorem SchemeEq.generalizes {s s' : Scheme} (h : SchemeEq s s') (C : List Pred) :
+    Generalizes C s' s := fun τs hl => by
+  obtain ⟨he, hp⟩ := h.2.2 τs hl
+  refine ⟨τs, hl.trans h.1, he.symm, fun c hc => ?_⟩
+  obtain ⟨d, hd, hdc⟩ := List.exists_of_zip (by simp [Scheme.instPreds, h.2.1]) hp c hc
+  exact Entails.of_predEq hdc (.of_mem (List.mem_append_right _ hd))
+
+theorem SchemeEq.mono {s s' : Scheme} (h : SchemeEq s s') (hm : s.arity = 0 ∧ s.preds = []) :
+    s'.arity = 0 ∧ s'.preds = [] :=
+  ⟨h.1 ▸ hm.1, List.eq_nil_of_length_eq_zero (h.2.1 ▸ by simp [hm.2])⟩
+
+/-- Equal schemes, one by one, make a context as general. -/
+theorem CtxGen.of_schemeEq {C : List Pred} {e : Expr} {Γ Γ' : Ctx} (hl : Γ.length = Γ'.length)
+    (h : ∀ (i : Nat) s s', Γ[i]? = some s → Γ'[i]? = some s' → SchemeEq s s') : CtxGen C e Γ Γ' :=
+  ⟨hl, fun i s s' hs hs' => ⟨(h i s s' hs hs').generalizes C, .inl (h i s s' hs hs').mono⟩⟩
+
+/-- Pointwise equal schemes. -/
+def CtxEq (Γ Γ' : Ctx) : Prop :=
+  Γ.length = Γ'.length ∧ ∀ (i : Nat) s s', Γ[i]? = some s → Γ'[i]? = some s' → SchemeEq s s'
+
+theorem CtxEq.refl (Γ : Ctx) : CtxEq Γ Γ :=
+  ⟨rfl, fun i s s' hs hs' => by rw [hs] at hs'; cases hs'; exact SchemeEq.refl s⟩
+
+theorem CtxEq.symm {Γ Γ' : Ctx} (h : CtxEq Γ Γ') : CtxEq Γ' Γ :=
+  ⟨h.1.symm, fun i s s' hs hs' => (h.2 i s' s hs' hs).symm⟩
+
+theorem CtxEq.trans {Γ Γ' Γ'' : Ctx} (h₁ : CtxEq Γ Γ') (h₂ : CtxEq Γ' Γ'') : CtxEq Γ Γ'' := by
+  refine ⟨h₁.1.trans h₂.1, fun i s s'' hs hs'' => ?_⟩
+  have hi : i < Γ'.length := h₁.1 ▸ (List.getElem?_eq_some_iff.mp hs).1
+  exact (h₁.2 i s _ hs (List.getElem?_eq_getElem hi)).trans
+    (h₂.2 i _ s'' (List.getElem?_eq_getElem hi) hs'')
+
+theorem CtxEq.ctxGen {C : List Pred} {e : Expr} {Γ Γ' : Ctx} (h : CtxEq Γ Γ') : CtxGen C e Γ Γ' :=
+  CtxGen.of_schemeEq h.1 h.2
+
+theorem CtxEq.cons {s s' : Scheme} {Γ Γ' : Ctx} (hs : SchemeEq s s') (h : CtxEq Γ Γ') :
+    CtxEq (s :: Γ) (s' :: Γ') := by
+  refine ⟨by simp [h.1], fun i t t' ht ht' => ?_⟩
+  cases i with
+  | zero => simp only [List.getElem?_cons_zero, Option.some.injEq] at ht ht'; subst ht ht'; exact hs
+  | succ i => exact h.2 i t t' (by simpa using ht) (by simpa using ht')
+
+/-- Substitutions agreeing on a context's tree variables give equal
+contexts. -/
+theorem Ctx.subst_congr_tv {σ σ' : Subst} {Γ : Ctx}
+    (h : ∀ a ∈ ctxTv Γ, TyEq ((Ty.var a).subst σ) ((Ty.var a).subst σ')) :
+    CtxEq (Ctx.subst σ Γ) (Ctx.subst σ' Γ) := by
+  refine ⟨by simp [Ctx.subst], fun i s s' hs hs' => ?_⟩
+  rw [Ctx.getElem?_subst] at hs hs'
+  cases hg : Γ[i]? with
+  | none => rw [hg] at hs; cases hs
+  | some g =>
+    rw [hg] at hs hs'
+    simp only [Option.map_some, Option.some.injEq] at hs hs'
+    subst hs hs'
+    exact Scheme.subst_congr_tv (fun a ha => h a (List.mem_flatMap.mpr
+      ⟨g, List.mem_of_getElem? hg, ha⟩))
+
 /-! ## Weakening -/
 
 /-- The context a function's body is checked in: its parameters, itself and
@@ -211,8 +285,9 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
     intro Γ' R' hg hR
     obtain ⟨s', hs'⟩ := hg.length_some hi
     obtain ⟨hgen, hm⟩ := hg.2 i s s' hi hs'
-    rcases hm with ⟨ha', hp'⟩ | hw
-    · obtain ⟨τs', hl', he, -⟩ := hgen [] (by simp [ha])
+    rcases hm with hm | hw
+    · obtain ⟨ha', hp'⟩ := hm ⟨ha, hp⟩
+      obtain ⟨τs', hl', he, -⟩ := hgen [] (by simp [ha])
       rw [ha'] at hl'
       obtain rfl := List.eq_nil_of_length_eq_zero hl'
       exact .conv (.assign hs' ha' hp' (.conv (ih (hg.sub fun j hw => by simp_all [Expr.writes]) hR)

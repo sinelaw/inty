@@ -1,4 +1,4 @@
-import Inty.Unify
+import Inty.TreeVars
 import Inty.Classes
 import Inty.Syntax
 
@@ -51,6 +51,9 @@ def Ret.subst (σ : Subst) (R : Option Ty) : Option Ty := R.map (·.subst σ)
 
 /-- The free type variables of a return type. -/
 def Ret.ftv (R : Option Ty) : List Nat := (R.map Ty.ftv).getD []
+
+/-- The tree variables of a return type. -/
+def Ret.tv (R : Option Ty) : List Nat := (R.map Ty.tv).getD []
 
 @[simp] theorem Ret.subst_none (σ : Subst) : Ret.subst σ none = none := rfl
 @[simp] theorem Ret.subst_some (σ : Subst) (τ : Ty) :
@@ -208,16 +211,17 @@ def improveAll (top : Bool) : Nat → List Pred → Option (Subst × List Pred)
         | none => none
         | some (σ', ps') => some (Subst.compose σ' σ, ps')
 
-/-- Whether the variables `fixed` fix a constraint's determining arguments. -/
+/-- Whether the variables `fixed` fix a constraint's determining arguments
+(their tree variables, `Ty.tv`). -/
 def Pred.fires (fixed : List Nat) (p : Pred) : Bool :=
   match p.fundep with
-  | some (ds, _) => (ds.flatMap Ty.ftv).all (· ∈ fixed)
+  | some (ds, _) => (ds.flatMap Ty.tv).all (· ∈ fixed)
   | none => false
 
 /-- The variables a constraint's determining arguments fix. -/
 def Pred.fixes (p : Pred) : List Nat :=
   match p.fundep with
-  | some (_, rs) => rs.flatMap Ty.ftv
+  | some (_, rs) => rs.flatMap Ty.tv
   | none => []
 
 /-- Close `fixed` under the dependencies of `preds`: a constraint whose
@@ -241,10 +245,21 @@ type's variables and adds those of the constraints on them; a constraint
 none of whose variables the type reaches, it leaves pending instead. Such a
 constraint's variables appear in no type, then or later, so it stays on
 type variables either way, where it can't fail: the two accept the same
-programs, and only the schemes they print differ. -/
+programs, and only the schemes they print differ.
+
+The variables are the trees' (`Ty.tv`): a variable that a recursive type of
+the environment mentions only in an equation its unfolding never reaches
+isn't one of the environment's, and is quantified. -/
 def genVars (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds : List Pred) : List Nat :=
-  ((τ₁.ftv ++ preds.flatMap Pred.ftv).filter
-    (· ∉ fixedVars preds (ctxFtv Γ₁ ++ Ret.ftv R₁))).eraseDups
+  ((τ₁.tv ++ preds.flatMap Pred.tv).filter
+    (· ∉ fixedVars preds (ctxTv Γ₁ ++ Ret.tv R₁))).eraseDups
+
+/-- A constraint on a type whose head is a variable, as one on the
+variable. -/
+def Pred.normHead (p : Pred) : Pred :=
+  match p.args with
+  | t :: rest => if t.whnf.isVar then ⟨p.cls, t.whnf :: rest⟩ else p
+  | [] => p
 
 /-- Whether a binding generalises: its initialiser is a syntactic value and
 the rest of its scope never assigns to it. -/
@@ -252,13 +267,14 @@ def Expr.generalises (e₁ e₂ : Expr) : Bool := e₁.isValue && !e₂.writes 0
 
 /-- The scheme a `const` or `let` gives its variable, and the constraints
 left pending. When it generalises (`gen`), it quantifies `genVars`, taking
-along the constraints that mention them. -/
+along the constraints that mention them, each on its head's variable
+(`Pred.normHead`). -/
 def letScheme (gen : Bool) (Γ₁ : Ctx) (R₁ : Option Ty) (τ₁ : Ty) (preds : List Pred) :
     Scheme × List Pred :=
   if gen then
     let ᾱ := genVars Γ₁ R₁ τ₁ preds
-    (generalize ᾱ τ₁ (preds.filter (fun c => c.ftv.any (· ∈ ᾱ))),
-      preds.filter (fun c => !c.ftv.any (· ∈ ᾱ)))
+    (generalize ᾱ τ₁ ((preds.filter (fun c => c.tv.any (· ∈ ᾱ))).map Pred.normHead),
+      preds.filter (fun c => !c.tv.any (· ∈ ᾱ)))
   else (.mono τ₁, preds)
 
 /-- An object literal's fields' slots, from their kinds, expressions and

@@ -1,5 +1,6 @@
 import Inty.Infer
 import Inty.Soundness
+import Inty.Weaken
 
 /-!
 # Soundness of inference
@@ -307,10 +308,36 @@ theorem fixLoop_sup {a : Nat} : ∀ (k : Nat) (preds : List Pred) {fixed : List 
 
 /-- No quantified variable is fixed by the environment. -/
 theorem genVars_not_env {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty} {preds : List Pred} {a : Nat}
-    (ha : a ∈ ctxFtv Γ₁ ++ Ret.ftv R₁) : a ∉ genVars Γ₁ R₁ τ₁ preds := by
+    (ha : a ∈ ctxTv Γ₁ ++ Ret.tv R₁) : a ∉ genVars Γ₁ R₁ τ₁ preds := by
   intro hα
   simp only [genVars, List.mem_eraseDups, List.mem_filter, decide_eq_true_eq] at hα
   exact hα.2 (fixLoop_sup _ _ ha)
+
+/-- A constraint on a type whose head is a variable is one on the variable. -/
+theorem Pred.normHead_predEq (p : Pred) : PredEq p p.normHead := by
+  obtain ⟨c, args⟩ := p
+  unfold Pred.normHead
+  match args with
+  | [] => exact PredEq.refl _
+  | t :: rest =>
+    simp only
+    split
+    · refine ⟨rfl, rfl, fun x hx => ?_⟩
+      simp only [List.zip_cons_cons, List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · exact (TyEq.whnf t).symm
+      · obtain ⟨y, z⟩ := x; obtain ⟨rfl, -⟩ := mem_zip_self hx; exact TyEq.refl _
+    · exact PredEq.refl _
+
+/-- Return types equal through substitutions that agree on their tree
+variables. -/
+theorem Ret.subst_congr_tv {σ σ' : Subst} {R : Option Ty}
+    (h : ∀ a ∈ Ret.tv R, TyEq ((Ty.var a).subst σ) ((Ty.var a).subst σ')) :
+    RetEq (Ret.subst σ R) (Ret.subst σ' R) := by
+  cases R with
+  | none => trivial
+  | some τ =>
+    exact Ty.subst_tyEq_congr_tv (fun a ha => h a (by simpa [Ret.tv] using Ty.mem_tv.mpr ha))
 
 /-- What `infer_sound` says of one expression. -/
 def InferSound (L : List String) (e : Expr) : Prop :=
@@ -754,23 +781,27 @@ theorem infer_sound :
       let ᾱ := genVars Γ₁ R₁ (o₁.τ.subst σi) preds₁
       let φ₀ := Subst.compose φ o₂.σ
       let ψ := renameBlock ᾱ m ++ φ₀
-      have hout : ∀ a, a ∈ ctxFtv Γ₁ ++ Ret.ftv R₁ → a ∉ ᾱ := fun _ ha => genVars_not_env ha
-      have hΓ : Ctx.subst ψ Γ₁ = Ctx.subst φ₀ Γ₁ := Ctx.subst_congr (fun a ha =>
-        renameBlock_append_find m _ (hout a (List.mem_append_left _ ha)))
-      have hR : Ret.subst ψ R₁ = Ret.subst φ₀ R₁ := Ret.subst_congr (fun a ha =>
-        renameBlock_append_find m _ (hout a (List.mem_append_right _ ha)))
+      have hout : ∀ a, a ∈ ctxTv Γ₁ ++ Ret.tv R₁ → a ∉ ᾱ := fun _ ha => genVars_not_env ha
+      have hfind : ∀ a, a ∉ ᾱ → TyEq ((Ty.var a).subst ψ) ((Ty.var a).subst φ₀) := fun a ha => by
+        simp only [ψ, Ty.subst, renameBlock_append_find m _ ha]; exact TyEq.refl _
+      -- Renaming changes the context only where its unfolding doesn't reach.
+      have hΓ : CtxEq (Ctx.subst ψ Γ₁) (Ctx.subst φ₀ Γ₁) := Ctx.subst_congr_tv (fun a ha =>
+        hfind a (hout a (List.mem_append_left _ ha)))
+      have hR : RetEq (Ret.subst ψ R₁) (Ret.subst φ₀ R₁) := Ret.subst_congr_tv (fun a ha =>
+        hfind a (hout a (List.mem_append_right _ ha)))
       rw [← Ctx.subst_compose σi o₁.σ Γ, ← Ret.subst_compose σi o₁.σ R]
-      rw [← Scheme.subst_compose, ← Ctx.subst_compose, ← Ret.subst_compose, ← hΓ, ← hR,
+      rw [← Scheme.subst_compose, ← Ctx.subst_compose, ← Ret.subst_compose,
         ← generalize_open ᾱ m φ₀, ← generalize_openPreds ᾱ m φ₀]
-      refine he₁ ψ _ (fun c hc => ?_)
-      by_cases hg : c.ftv.any (· ∈ ᾱ) = true
-      · exact Entails.of_mem (List.mem_append_right _ (List.mem_map_of_mem (List.mem_filter.mpr ⟨hc, hg⟩)))
-      · have hr : c ∈ preds₁.filter (fun c => !c.ftv.any (· ∈ ᾱ)) :=
+      refine (he₁ ψ _ (fun c hc => ?_)).weaken hΓ.ctxGen hR
+      by_cases hg : c.tv.any (· ∈ ᾱ) = true
+      · refine Entails.of_predEq ((Pred.normHead_predEq c).subst ψ).symm (Entails.of_mem
+          (List.mem_append_right _ (List.mem_map_of_mem (List.mem_map_of_mem
+            (List.mem_filter.mpr ⟨hc, hg⟩)))))
+      · have hr : c ∈ preds₁.filter (fun c => !c.tv.any (· ∈ ᾱ)) :=
           List.mem_filter.mpr ⟨hc, by simpa using hg⟩
-        have hc' : c.subst ψ = c.subst φ₀ := Pred.subst_congr (fun a ha =>
-          renameBlock_append_find m _ (fun hα => hg (List.any_eq_true.mpr ⟨a, ha, by simpa using hα⟩)))
-        rw [hc']
-        exact (hsat.1 c hr).append_right _
+        have hc' : PredEq (c.subst ψ) (c.subst φ₀) := Pred.subst_predEq_congr_tv (fun a ha =>
+          hfind a (fun hα => hg (List.any_eq_true.mpr ⟨a, ha, by simpa using hα⟩)))
+        exact Entails.of_predEq hc'.symm ((hsat.1 c hr).append_right _)
     · simp only [Prod.mk.injEq] at hls; obtain ⟨rfl, rfl⟩ := hls
       refine .let_ _ [] (fun m _ => ?_) (.inl ⟨rfl, by simp [Scheme.mono, Scheme.subst]⟩)
         ((hs.subst _).subst _) he₂

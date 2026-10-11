@@ -160,139 +160,6 @@ theorem unify_within {n : Nat} {τ₁ τ₂ : Ty} {σ : Subst} (h₁ : τ₁.Bel
       · have := h₁ a hb; omega
       · have := h₂ a hb; omega
 
-/-! ## Free variables through instantiation, substitution, generalisation -/
-
-theorem RTy.toPTy_ftv (r : RTy) : r.toPTy.ftv = r.ftv := by
-  induction r using RTy.ind with
-  | free a => rfl
-  | self j => rfl
-  | app c args ih =>
-    simp only [RTy.toPTy_app, PTy.ftv_app, RTy.ftv_app, List.flatMap_map]
-    simp only [List.flatMap]
-    congr 1
-    exact List.map_congr_left ih
-  | mu i sys ih =>
-    simp only [RTy.toPTy_mu, PTy.ftv_mu, RTy.ftv_mu, List.flatMap_map]
-    simp only [List.flatMap]
-    congr 1
-    exact List.map_congr_left ih
-
-theorem Ty.toPTy_ftv (τ : Ty) : τ.toPTy.ftv = τ.ftv := by
-  induction τ using Ty.ind with
-  | var a => rfl
-  | app c args ih =>
-    simp only [Ty.toPTy_app, PTy.ftv_app, Ty.ftv_app, List.flatMap_map]
-    simp only [List.flatMap]
-    congr 1
-    exact List.map_congr_left ih
-  | mu i sys =>
-    simp only [Ty.toPTy_mu, PTy.ftv_mu, Ty.ftv_mu, List.flatMap_map]
-    simp only [List.flatMap]
-    congr 1
-    exact List.map_congr_left (fun r _ => RTy.toPTy_ftv r)
-
-theorem PTy.ftv_instR {τs : List Ty} {p : PTy} {a : Nat} (h : a ∈ (p.instR τs).ftv) :
-    a ∈ p.ftv ∨ ∃ τ ∈ τs, a ∈ τ.ftv := by
-  induction p using PTy.ind with
-  | free b => simp [PTy.instR, RTy.ftv] at h; simp [PTy.ftv, h]
-  | bound i =>
-    simp only [PTy.instR, List.getD_eq_getElem?_getD, Ty.toRTy_ftv] at h
-    cases hi : τs[i]? with
-    | none => simp [hi] at h
-    | some τ => simp only [hi, Option.getD_some] at h; exact .inr ⟨τ, List.mem_of_getElem? hi, h⟩
-  | self j => simp [PTy.instR, RTy.ftv] at h
-  | app c args ih =>
-    simp only [PTy.instR_app, RTy.ftv_app, List.mem_flatMap, List.mem_map] at h
-    simp only [PTy.ftv_app, List.mem_flatMap]
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    rcases ih q hq h with h | h
-    · exact .inl ⟨q, hq, h⟩
-    · exact .inr h
-  | mu i sys ih =>
-    simp only [PTy.instR_mu, RTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
-    simp only [PTy.ftv_mu, List.mem_flatMap]
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    rcases ih q hq h with h | h
-    · exact .inl ⟨q, hq, h⟩
-    · exact .inr h
-
-theorem PTy.ftv_inst {τs : List Ty} {p : PTy} {a : Nat} (h : a ∈ (p.inst τs).ftv) :
-    a ∈ p.ftv ∨ ∃ τ ∈ τs, a ∈ τ.ftv := by
-  induction p using PTy.ind with
-  | free b => simp [PTy.inst] at h; simp [PTy.ftv, h]
-  | bound i =>
-    simp only [PTy.inst, List.getD_eq_getElem?_getD] at h
-    cases hi : τs[i]? with
-    | none => simp [hi] at h
-    | some τ => simp only [hi, Option.getD_some] at h; exact .inr ⟨τ, List.mem_of_getElem? hi, h⟩
-  | self j => simp [PTy.inst] at h
-  | app c args ih =>
-    simp only [PTy.inst_app, Ty.ftv_app, List.mem_flatMap, List.mem_map] at h
-    simp only [PTy.ftv_app, List.mem_flatMap]
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    rcases ih q hq h with h | h
-    · exact .inl ⟨q, hq, h⟩
-    · exact .inr h
-  | mu i sys _ =>
-    simp only [PTy.inst_mu, Ty.ftv_mu, List.mem_flatMap, List.mem_map] at h
-    simp only [PTy.ftv_mu, List.mem_flatMap]
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    rcases PTy.ftv_instR h with h | h
-    · exact .inl ⟨q, hq, h⟩
-    · exact .inr h
-
-theorem PTy.ftv_subst {σ : Subst} {p : PTy} {a : Nat} (h : a ∈ (p.subst σ).ftv) :
-    ∃ b ∈ p.ftv, a ∈ ((Ty.var b).subst σ).ftv := by
-  induction p using PTy.ind with
-  | free b =>
-    simp only [PTy.subst, Ty.toPTy_ftv] at h
-    exact ⟨b, by simp [PTy.ftv], by simpa [Ty.subst] using h⟩
-  | bound i => simp [PTy.subst, PTy.ftv] at h
-  | self j => simp [PTy.subst, PTy.ftv] at h
-  | app c args ih =>
-    simp only [PTy.subst_app, PTy.ftv_app, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    obtain ⟨b, hb, h⟩ := ih q hq h
-    exact ⟨b, by simp only [PTy.ftv_app, List.mem_flatMap]; exact ⟨q, hq, hb⟩, h⟩
-  | mu i sys ih =>
-    simp only [PTy.subst_mu, PTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    obtain ⟨b, hb, h⟩ := ih q hq h
-    exact ⟨b, by simp only [PTy.ftv_mu, List.mem_flatMap]; exact ⟨q, hq, hb⟩, h⟩
-
-theorem RTy.gen_ftv {ᾱ : List Nat} {r : RTy} {a : Nat} (h : a ∈ (r.gen ᾱ).ftv) : a ∈ r.ftv := by
-  induction r using RTy.ind with
-  | free b =>
-    simp only [RTy.gen] at h
-    split at h <;> simp_all [PTy.ftv, RTy.ftv]
-  | self j => simp [RTy.gen, PTy.ftv] at h
-  | app c args ih =>
-    simp only [RTy.gen_app, PTy.ftv_app, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    simp only [RTy.ftv_app, List.mem_flatMap]
-    exact ⟨q, hq, ih q hq h⟩
-  | mu i sys ih =>
-    simp only [RTy.gen_mu, PTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    simp only [RTy.ftv_mu, List.mem_flatMap]
-    exact ⟨q, hq, ih q hq h⟩
-
-theorem Ty.gen_ftv {ᾱ : List Nat} {τ : Ty} {a : Nat} (h : a ∈ (τ.gen ᾱ).ftv) : a ∈ τ.ftv := by
-  induction τ using Ty.ind with
-  | var b =>
-    simp only [Ty.gen] at h
-    split at h <;> simp_all [PTy.ftv]
-  | app c args ih =>
-    simp only [Ty.gen_app, PTy.ftv_app, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    simp only [Ty.ftv_app, List.mem_flatMap]
-    exact ⟨q, hq, ih q hq h⟩
-  | mu i sys =>
-    simp only [Ty.gen_mu, PTy.ftv_mu, List.mem_flatMap, List.mem_map] at h
-    obtain ⟨_, ⟨q, hq, rfl⟩, h⟩ := h
-    simp only [Ty.ftv_mu, List.mem_flatMap]
-    exact ⟨q, hq, RTy.gen_ftv h⟩
-
 /-! ## `Below` through the operations of inference -/
 
 theorem Subst.Within.pred_below {n : Nat} {σ : Subst} (hσ : σ.Within n) {p : Pred}
@@ -399,6 +266,18 @@ theorem Scheme.inst_nil_below {n : Nat} {s : Scheme} (hs : ∀ a ∈ s.ftv, a < 
 theorem Scheme.mono_ftv (τ : Ty) : (Scheme.mono τ).ftv = τ.ftv := by
   simp [Scheme.mono, Scheme.ftv, Ty.toPTy_ftv]
 
+theorem Pred.normHead_ftv {p : Pred} {a : Nat} (h : a ∈ p.normHead.ftv) : a ∈ p.ftv := by
+  obtain ⟨c, args⟩ := p
+  unfold Pred.normHead at h
+  match args with
+  | [] => exact h
+  | t :: rest =>
+    simp only at h
+    split at h
+    · simp only [Pred.ftv, List.flatMap_cons, List.mem_append] at h ⊢
+      exact h.imp_left Ty.whnf_ftv
+    · exact h
+
 theorem letScheme_below {n : Nat} {gen : Bool} {Γ₁ : Ctx} {R₁ : Option Ty} {τ₁ : Ty}
     {preds : List Pred} (hτ : τ₁.Below n) (hp : ∀ p ∈ preds, p.Below n) :
     (∀ a ∈ (letScheme gen Γ₁ R₁ τ₁ preds).1.ftv, a < n) ∧
@@ -411,7 +290,9 @@ theorem letScheme_below {n : Nat} {gen : Bool} {Γ₁ : Ctx} {R₁ : Option Ty} 
     · exact hτ a (Ty.gen_ftv ha)
     · simp only [PPred.ftv, Pred.gen, List.flatMap_map, List.mem_flatMap] at ha
       obtain ⟨r, hr, ha⟩ := ha
-      exact hp q (List.mem_filter.mp hq).1 a (List.mem_flatMap.mpr ⟨r, hr, Ty.gen_ftv ha⟩)
+      obtain ⟨q₀, hq₀, rfl⟩ := hq
+      exact hp q₀ (List.mem_filter.mp hq₀).1 a
+        (Pred.normHead_ftv (List.mem_flatMap.mpr ⟨r, hr, Ty.gen_ftv ha⟩))
   · exact ⟨fun a ha => hτ a (by simpa [Scheme.mono_ftv] using ha), hp⟩
 
 theorem Ctx.Below.cons {n : Nat} {s : Scheme} {Γ : Ctx} (hs : ∀ a ∈ s.ftv, a < n)
