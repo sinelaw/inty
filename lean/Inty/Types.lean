@@ -233,6 +233,14 @@ as an absent field has no type in Rémy's rows. -/
 @[match_pattern] abbrev Ty.nullable (τ : Ty) : Ty := .maybe .null τ
 @[match_pattern] abbrev Ty.optional (τ : Ty) : Ty := .maybe .undefined τ
 
+/-- The constructor of the type of the value a sum adds. -/
+def Nothing.con : Nothing → Con
+  | .null => .null
+  | .undefined => .undefined
+
+/-- The type of the value a sum adds: `Null` or `Undefined`. -/
+def Nothing.ty (z : Nothing) : Ty := .app z.con []
+
 @[match_pattern] abbrev PTy.number : PTy := .app .number []
 @[match_pattern] abbrev PTy.string : PTy := .app .string []
 @[match_pattern] abbrev PTy.boolean : PTy := .app .boolean []
@@ -314,11 +322,17 @@ inductive Cls where
   any type but `newTarget`. An arrow field's `this` is one, as `new` on an
   arrow function throws. -/
   | notNew
+  /-- `Inject T τ`: a value of `τ` is one of `T`, an annotation's type
+  (which has no type variables, so a substitution doesn't reach it): `τ`
+  is `T`; or `T` is a sum `Nullable σ` (`Optional σ`) and `τ` is `Null`
+  (`Undefined`) or `σ`. It waits while `τ` is a type variable, so checking
+  against an annotation has a principal type. -/
+  | inject (T : Ty)
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
-  | .plus | .indexWrite | .notNew => 1
+  | .plus | .indexWrite | .notNew | .inject _ => 1
   | .indexable | .hasProp _ => 3
   | .merge => 5
 

@@ -123,6 +123,21 @@ def Pred.decidePre (k τ s r : Ty) : Improve :=
   | .var _ => .keep
   | _ => .fail
 
+/-- An `Inject T τ` whose `τ` is known (unfolded): the heads decide which
+instance it can be. (`T` is an annotation's type, without variables.) -/
+def Pred.decideInject (τ T : Ty) : Improve :=
+  if T.ftv = [] then
+    match T.whnf with
+    | .app (.maybe z) [σ] =>
+      match τ with
+      | .app c args =>
+        if c = .maybe z then .eq τ T
+        else if c = z.con ∧ args = [] then .eq .number .number
+        else .eq τ σ
+      | _ => .eq τ T
+    | _ => .eq τ T
+  else .fail
+
 /-- Deciding a constraint whose first argument is known, as inty's
 `resolve_has_prop` and `resolve_indexable`: a record's field `l` must be
 present, of the kind and at the type the read gives; an array's or a
@@ -147,6 +162,7 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
   | .notNew, .app c _, [] => if c = .newTarget then .fail else .eq .number .number
   | .merge, .pre, [k, τ, s, r] => Pred.decidePre k τ s r
   | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
+  | .inject T, τ, [] => Pred.decideInject τ T
   | _, _, _ => .fail
 
 /-- `Pred.decide₀` on the known type unfolded (`Ty.whnf`): a property of a

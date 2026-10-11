@@ -399,6 +399,24 @@ theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b 
     · cases h
   · rename_i k τ s r
     exact Pred.decideCopy_below (hr s (by simp)) (hr r (by simp)) h
+  · rename_i T
+    unfold Pred.decideInject at h
+    split at h
+    rotate_left
+    · cases h
+    rename_i hT
+    have hTb : T.Below n := fun x hx => by rw [hT] at hx; cases hx
+    split at h
+    · rename_i z σ hw
+      have hσ : σ.Below n := fun x hx => hTb x (Ty.whnf_ftv (by rw [hw]; simp [hx]))
+      split at h
+      · split at h
+        · cases h; exact ⟨ht, hTb⟩
+        · split at h
+          · cases h; exact ⟨hnum, hnum⟩
+          · cases h; exact ⟨ht, hσ⟩
+      · cases h; exact ⟨ht, hTb⟩
+    · cases h; exact ⟨ht, hTb⟩
 
 theorem Pred.decide_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     (hp : Pred.Below n ⟨c, t :: rest⟩) (h : Pred.decide c t rest = .eq a b) :

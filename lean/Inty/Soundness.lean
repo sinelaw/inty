@@ -2150,6 +2150,28 @@ theorem V_bound {k : Nat} {W : World} {θ θ' ρ : Ty} {τs : List Ty} {cenv : E
   exact hf.2 j hj W' hW' h self args hl hh
     (fun i hi => (hs i (by omega)).mono (Nat.le_refl i) hW') ha
 
+/-- An entailed `Inject T τ`, under constraints each an instance or on a
+type variable: a value of `τ` is one of `T` (a type variable has none). -/
+theorem Entails.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVar C)
+    (h : Entails C ⟨.inject T, [τ]⟩) {k : Nat} {W : World} {v : Value} (hv : V k W τ v) :
+    V k W T v := by
+  rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hw⟩
+  · obtain ⟨c, args⟩ := q
+    match args, hq.2.1 with
+    | [τ'], _ =>
+      obtain ⟨hc, hτ⟩ := PredEq.one hq
+      subst hc
+      have hv' := V.tyEq k hτ hv
+      cases hi with
+      | injectSelf _ => exact hv'
+      | @injectNothing _ z σ he _ =>
+        refine V.tyEq k he.symm (V_maybe.mpr (.inl ?_))
+        cases z <;> simpa [Nothing.ty, Nothing.con, Nothing.value] using hv'
+      | injectSome he _ _ _ _ => exact V.tyEq k he.symm (V_maybe.mpr (.inr hv'))
+  · simp only [List.cons.injEq] at ht
+    obtain ⟨rfl, -⟩ := ht
+    exact (V_whnf_var hw hv).elim
+
 /-- An entailed `NotNew θ`, under constraints each an instance or on a type
 variable: `θ` isn't `newTarget`. -/
 theorem Entails.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVar C)

@@ -646,6 +646,82 @@ theorem TyEq.tuple₂ {a b a' b' : Ty} (ha : TyEq a a') (hb : TyEq b b') :
     · exact ha
     · exact hb)
 
+theorem Ty.closed_subst {T : Ty} (h : T.ftv = []) (φ : Subst) : T.subst φ = T :=
+  Ty.subst_id (fun x hx => by rw [h] at hx; cases hx)
+
+theorem TyEq.not_maybe {c : Con} {args : List Ty} {z : Nothing} {σ : Ty} (hc : c ≠ .maybe z) :
+    ¬ TyEq (.app c args) (.maybe z σ) := fun h => hc (TyEq.app_iff.mp h).1
+
+theorem Ty.whnf_of_tyEq_maybe {T σ₀ : Ty} {z : Nothing} (h : TyEq T (.maybe z σ₀)) :
+    ∃ σ, T.whnf = .maybe z σ ∧ TyEq σ σ₀ := by
+  obtain ⟨ys, hys, he⟩ := TyEq.whnf_app (c := .maybe z) (xs := [σ₀]) h.symm rfl
+  obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp he
+  match ys, hl, hz with
+  | [σ], _, hz => exact ⟨σ, hys, (hz (σ₀, σ) (by simp)).symm⟩
+
+theorem Ty.ftv_nil_of_whnf {T t : Ty} (h : T.whnf = t) (hT : T.ftv = []) : t.ftv = [] :=
+  List.eq_nil_iff_forall_not_mem.mpr fun x hx => by
+    have := Ty.whnf_ftv (τ := T) (a := x) (by rw [h]; exact hx)
+    rw [hT] at this; cases this
+
+theorem Pred.decide₀_inject (T t : Ty) : Pred.decide₀ (.inject T) t [] = Pred.decideInject t T := by
+  unfold Pred.decide₀; split <;> simp_all
+
+/-- An `Inject T τ` whose image is `Inject T T`: its decision holds. -/
+theorem Pred.decideInject_self {t T : Ty} {φ : Subst} (hT : T.ftv = [])
+    (ht : TyEq (t.subst φ) T) (hnv : t.whnf.isVar = false) :
+    (Pred.decideInject t.whnf T).Holds φ := by
+  have hW : TyEq (t.whnf.subst φ) T := ((TyEq.whnf t).subst φ).trans ht
+  generalize t.whnf = w at hnv hW
+  have hTφ := Ty.closed_subst hT φ
+  unfold Pred.decideInject
+  simp only [hT, ↓reduceIte]
+  split
+  · rename_i z σ hTw
+    have hTm : TyEq T (.maybe z σ) := TyEq.of_whnf hTw
+    split
+    · rename_i c args
+      split
+      · simp only [Improve.Holds, hTφ]; exact hW
+      · rename_i hc
+        exact absurd (by simpa [Ty.subst_app] using hW.trans hTm) (TyEq.not_maybe hc)
+    · simp only [Improve.Holds, hTφ]; exact hW
+  · simp only [Improve.Holds, hTφ]; exact hW
+
+/-- An `Inject T τ` whose image is `Inject (Nullable σ) Null` (or alike):
+its decision holds. -/
+theorem Pred.decideInject_nothing {t T σ₀ : Ty} {z : Nothing} {φ : Subst} (hT : T.ftv = [])
+    (hTm : TyEq T (.maybe z σ₀)) (ht : TyEq (t.subst φ) z.ty) (hnv : t.whnf.isVar = false) :
+    (Pred.decideInject t.whnf T).Holds φ := by
+  rcases Ty.whnf_con_of_tyEq (c := z.con) ht with ⟨a, ha⟩ | hw
+  · simp [ha, Ty.isVar] at hnv
+  rw [hw]
+  obtain ⟨σ, hTw, -⟩ := Ty.whnf_of_tyEq_maybe hTm
+  have hne : z.con ≠ .maybe z := by cases z <;> simp [Nothing.con]
+  unfold Pred.decideInject
+  simp only [hT, ↓reduceIte, hTw, hne, and_self, Improve.Holds]
+  exact TyEq.refl _
+
+/-- An `Inject T τ` whose image is `Inject (Nullable τ') τ'` (or alike):
+its decision holds. -/
+theorem Pred.decideInject_some {t T : Ty} {z : Nothing} {c₀ : Con} {a₀ : List Ty} {φ : Subst}
+    (hT : T.ftv = []) (hTm : TyEq T (.maybe z (.app c₀ a₀))) (hc₀ : c₀ ≠ .maybe z)
+    (hn₀ : ¬ (c₀ = z.con ∧ a₀ = [])) (ht : TyEq (t.subst φ) (.app c₀ a₀))
+    (hnv : t.whnf.isVar = false) : (Pred.decideInject t.whnf T).Holds φ := by
+  rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, hxl, -⟩
+  · simp [ha, Ty.isVar] at hnv
+  obtain ⟨σ, hTw, hσ⟩ := Ty.whnf_of_tyEq_maybe hTm
+  have hσc : σ.ftv = [] := by
+    have := Ty.ftv_nil_of_whnf hTw hT
+    simpa [Ty.ftv] using this
+  have hW : TyEq (t.whnf.subst φ) σ := ((TyEq.whnf t).subst φ).trans (ht.trans hσ.symm)
+  rw [hxs] at hW ⊢
+  have hn : ¬ (c₀ = z.con ∧ xs = []) := fun ⟨h1, h2⟩ =>
+    hn₀ ⟨h1, List.eq_nil_of_length_eq_zero (by rw [← hxl, h2]; rfl)⟩
+  unfold Pred.decideInject
+  simp only [hT, ↓reduceIte, hTw, hc₀, hn, Improve.Holds, Ty.closed_subst hσc]
+  exact hW
+
 /-- Deciding a constraint whose image is equal to an instance: it waits, or
 its equation holds. -/
 theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pred} (hc : c ≠ .plus)
@@ -805,6 +881,36 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       · simp [ha, Ty.isVar] at hnv
       simp only [hxs, Pred.decide₀, hc₀, ↓reduceIte, Improve.Holds]
       exact TyEq.refl _
+  | @injectSelf T hT =>
+    match args, hl with
+    | [t], _ =>
+      obtain ⟨rfl, ht⟩ := PredEq.one hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rw [Pred.decide₀_inject]
+      exact Pred.decideInject_self hT ht (by simpa using hnv)
+  | @injectNothing T z σ₀ hTm hT =>
+    match args, hl with
+    | [t], _ =>
+      obtain ⟨rfl, ht⟩ := PredEq.one hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rw [Pred.decide₀_inject]
+      exact Pred.decideInject_nothing hT hTm ht (by simpa using hnv)
+  | @injectSome T z c₀ a₀ hTm hT _ hc₀ hn₀ =>
+    match args, hl with
+    | [t], _ =>
+      obtain ⟨rfl, ht⟩ := PredEq.one hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rw [Pred.decide₀_inject]
+      exact Pred.decideInject_some hT hTm hc₀ hn₀ ht (by simpa using hnv)
 
 theorem Pred.improve_of_args {top : Bool} {c : Cls} {args : List Ty} {φ : Subst}
     (h : c ≠ .plus → (c = .merge → top = true) → (Pred.improveArgs c args).Holds φ) :
@@ -1587,6 +1693,10 @@ theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep 
   intro r hr b hb
   cases h with
   | plusNumber | plusString => simp [Pred.fundep] at hf
+  | injectSelf _ | injectNothing _ _ | injectSome _ _ _ _ _ =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨-, rfl⟩ := hf
+    cases hr
   | @hasProp l ls fs k σ hfl =>
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨rfl, rfl⟩ := hf
@@ -1770,10 +1880,25 @@ theorem Entails.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.Assumabl
     · exact hl
     · rfl
 
+/-- An `Inject` on a known type is decided. -/
+theorem Pred.decideInject_ne_keep {t T : Ty} : Pred.decideInject t T ≠ .keep := by
+  intro h
+  unfold Pred.decideInject at h
+  split at h
+  · split at h
+    · split at h
+      · split at h
+        · cases h
+        · split at h <;> cases h
+      · cases h
+    · cases h
+  · cases h
+
 theorem Pred.decide₀_keep_merge {c : Cls} {t : Ty} {rest : List Ty}
     (h : Pred.decide₀ c t rest = .keep) : c = .merge := by
   unfold Pred.decide₀ at h
-  split at h <;> first | rfl | (split at h <;> cases h) | cases h
+  split at h <;> first | rfl | (split at h <;> cases h) | cases h |
+    exact absurd h Pred.decideInject_ne_keep
 
 /-- What improvement keeps where a binding generalises. -/
 theorem Pred.improve_keep_false {p : Pred} (h : p.improve false = .keep) :
@@ -2961,6 +3086,7 @@ theorem Pred.decide₀_merge_keep {t : Ty} {rest : List Ty} (h : Pred.decide₀ 
     | exact ⟨_, _, _, _, rfl, .inr ⟨rfl, h⟩⟩
     | cases h
     | (split at h <;> cases h)
+    | exact absurd h Pred.decideInject_ne_keep
 
 /-- What improvement leaves at the top level of entailed constraints is
 settled: an instance, or on a type variable. -/

@@ -113,6 +113,65 @@ theorem Pred.decideCopy_sound {s r a b : Ty} (h : Pred.decideCopy s r = .eq a b)
   · cases h
   · cases h
 
+/-- An `Inject` of a type equal to its expected one, which has no type
+variables, is an instance. -/
+theorem Pred.inject_self {T τ : Ty} (hT : T.ftv = []) (h : TyEq τ T) :
+    InstEq ⟨.inject T, [τ]⟩ :=
+  InstEq.of_predEq (q := ⟨.inject T, [T]⟩)
+    (PredEq.of_pairs (by simp) (zip_tyEq_cons h zip_tyEq_nil)) (Inst.injectSelf hT).instEq
+
+/-- What `Pred.decideInject`'s equation says. -/
+theorem Pred.decideInject_sound {τ T a b : Ty} (h : Pred.decideInject τ T = .eq a b) {ψ : Subst}
+    (hab : TyEq (a.subst ψ) (b.subst ψ)) : InstEq (Pred.subst ψ ⟨.inject T, [τ]⟩) := by
+  simp only [Pred.subst, List.map_cons, List.map_nil]
+  unfold Pred.decideInject at h
+  split at h
+  rotate_left
+  · cases h
+  rename_i hT
+  have hTψ : T.subst ψ = T := Ty.subst_id (fun x hx => by rw [hT] at hx; cases hx)
+  split at h
+  · rename_i z σ hw
+    have hTm : TyEq T (.maybe z σ) := TyEq.of_whnf hw
+    have hσ : σ.ftv = [] := by
+      have : ∀ x ∈ σ.ftv, x ∈ T.ftv := fun x hx => Ty.whnf_ftv (by rw [hw]; simp [hx])
+      rw [hT] at this
+      exact List.eq_nil_iff_forall_not_mem.mpr fun x hx => by simpa using this x hx
+    have hσψ : σ.subst ψ = σ := Ty.subst_id (fun x hx => by rw [hσ] at hx; cases hx)
+    split at h
+    · rename_i c args
+      split at h
+      · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
+      · split at h
+        · rename_i _ hn
+          cases h
+          obtain ⟨rfl, rfl⟩ := hn
+          have : (Ty.app z.con []).subst ψ = z.ty := by simp [Nothing.ty]
+          rw [this]
+          exact (Inst.injectNothing hTm hT).instEq
+        · rename_i hc hn
+          cases h
+          rw [hσψ] at hab
+          -- `b` is a constructor application of the same head.
+          obtain ⟨ys, hys, hye⟩ := TyEq.whnf_app (xs := args.map (·.subst ψ)) hab (by rw [Ty.subst_app]; rfl)
+          have hl : ys.length = args.length := by
+            have := (TyEq.app_iff.mp hye).2.1; simpa using this.symm
+          have hσw : TyEq b (.app c ys) := TyEq.of_whnf hys
+          have hyf : (Ty.app c ys).ftv = [] := by
+            have : ∀ x ∈ (Ty.app c ys).ftv, x ∈ b.ftv := fun x hx => Ty.whnf_ftv (by rw [hys]; exact hx)
+            rw [hσ] at this
+            exact List.eq_nil_iff_forall_not_mem.mpr fun x hx => by simpa using this x hx
+          have hn' : ¬ (c = z.con ∧ ys = []) := fun ⟨h₁, h₂⟩ =>
+            hn ⟨h₁, List.eq_nil_of_length_eq_zero (by rw [← hl, h₂]; rfl)⟩
+          refine InstEq.of_predEq (q := ⟨.inject T, [.app c ys]⟩)
+            (PredEq.of_pairs (by simp) (zip_tyEq_cons (hab.trans hσw) zip_tyEq_nil))
+            (Inst.injectSome (hTm.trans (TyEq.app (by simp) ?_)) hT hyf hc hn').instEq
+          simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil,
+            or_false, forall_eq]
+          exact hσw
+    · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
+  · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
+
 theorem Pred.merge_instEq {q q' : Pred} (hq : Inst q') (e : PredEq q q') : InstEq q :=
   InstEq.of_predEq e hq.instEq
 
@@ -210,6 +269,7 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
       (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _)
         (zip_tyEq_cons hs (zip_tyEq_cons hr zip_tyEq_nil))))))
       (Inst.mergeAbs hc).instEq
+  · exact Pred.decideInject_sound h hab
 
 theorem Pred.decide_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     (h : Pred.decide c t rest = .eq a b) {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) :

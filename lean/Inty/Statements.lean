@@ -106,7 +106,7 @@ example : Pred.AssumableAt top p ↔
         (top = true → (∃ a, q = .var a) ∨ p.MergeOnVar) := Iff.rfl
 
 example : Cls.arity c = match c with
-    | .plus | .indexWrite | .notNew => 1
+    | .plus | .indexWrite | .notNew | .inject _ => 1
     | .hasProp _ | .indexable => 3
     | .merge => 5 := by
   cases c <;> rfl
@@ -232,7 +232,11 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     (∃ τ, p = ⟨.indexable, [.array τ, .number, τ]⟩) ∨
     p = ⟨.indexable, [.string, .number, .string]⟩ ∨
     (∃ τ, p = ⟨.indexWrite, [.array τ]⟩) ∨
-    ∃ c args, c ≠ .newTarget ∧ p = ⟨.notNew, [.app c args]⟩ :=
+    (∃ c args, c ≠ .newTarget ∧ p = ⟨.notNew, [.app c args]⟩) ∨
+    (∃ T, T.ftv = [] ∧ p = ⟨.inject T, [T]⟩) ∨
+    (∃ T z σ, TyEq T (.maybe z σ) ∧ T.ftv = [] ∧ p = ⟨.inject T, [z.ty]⟩) ∨
+    ∃ T z c args, TyEq T (.maybe z (.app c args)) ∧ T.ftv = [] ∧ (Ty.app c args).ftv = [] ∧
+      c ≠ .maybe z ∧ ¬ (c = z.con ∧ args = []) ∧ p = ⟨.inject T, [.app c args]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
@@ -251,12 +255,18 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     | writeArray =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))))))))
     | notNew hc =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr
-        ⟨_, _, hc, rfl⟩))))))))))),
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, hc, rfl⟩))))))))))))
+    | injectSelf hT =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, hT, rfl⟩)))))))))))))
+    | injectNothing he hT =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, he, hT, rfl⟩))))))))))))))
+    | injectSome he hT ha hc hn =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, _, he, hT, ha, hc, hn, rfl⟩)))))))))))))),
    fun h => by
     rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
       ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ |
-      ⟨c, args, hc, rfl⟩
+      ⟨c, args, hc, rfl⟩ | ⟨T, hT, rfl⟩ | ⟨T, z, σ, he, hT, rfl⟩ |
+      ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
@@ -269,7 +279,10 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .indexArray
     · exact .indexString
     · exact .writeArray
-    · exact .notNew hc⟩
+    · exact .notNew hc
+    · exact .injectSelf hT
+    · exact .injectNothing he hT
+    · exact .injectSome he hT ha hc hn⟩
 
 /-- A constraint left on a type variable, or a `Merge` waiting on one (each
 looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/

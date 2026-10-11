@@ -139,6 +139,15 @@ inductive Inst : Pred → Prop where
   | writeArray : Inst ⟨.indexWrite, [.array τ]⟩
   /-- `NotNew τ`, for every type but `newTarget`. -/
   | notNew : c ≠ .newTarget → Inst ⟨.notNew, [.app c args]⟩
+  /-- `Inject T T`, for a `T` without type variables. -/
+  | injectSelf : T.ftv = [] → Inst ⟨.inject T, [T]⟩
+  /-- `Inject (Nullable σ) Null` and `Inject (Optional σ) Undefined`. -/
+  | injectNothing : TyEq T (.maybe z σ) → T.ftv = [] → Inst ⟨.inject T, [z.ty]⟩
+  /-- `Inject (Nullable τ) τ`, for a `τ` whose head is known and is neither
+  the sum's nor `Null` (and alike for `Optional`): the instances don't
+  overlap, so the heads decide which one holds. -/
+  | injectSome : TyEq T (.maybe z (.app c args)) → T.ftv = [] → (Ty.app c args).ftv = [] →
+      c ≠ .maybe z → ¬ (c = z.con ∧ args = []) → Inst ⟨.inject T, [.app c args]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -158,6 +167,18 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | indexString => exact .indexString
   | writeArray => exact .writeArray
   | notNew hc => exact .notNew hc
+  | injectSelf hT =>
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    rw [Ty.subst_id (by simp [hT])]
+    exact .injectSelf hT
+  | injectNothing he hT =>
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    rw [Ty.subst_id (by simp [Nothing.ty])]
+    exact .injectNothing he hT
+  | injectSome he hT ha hc hn =>
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    rw [Ty.subst_id (by simp [ha])]
+    exact .injectSome he hT ha hc hn
 
 /-- The `Merge` constraints of a spread, label by label: the operand's
 presences `ps`, kinds `ks` and types `τs`, the slots `ss` it is written
@@ -290,6 +311,40 @@ theorem slotCopy?_sound {s r : Ty} (h : slotCopy? s r = true) : SlotCopy s r := 
   all_goals (have := of_decide_eq_true h; subst this; constructor)
 
 
+/-- Decides `Inst` for an `Inject`, on the expected type as it is. -/
+def Pred.injectInst (T τ : Ty) : Bool :=
+  decide (T.ftv = []) &&
+    (decide (τ = T) ||
+      match T with
+      | .app (.maybe z) [σ] =>
+        decide (τ = z.ty) ||
+          (decide (σ = τ) &&
+            match τ with
+            | .app c args => decide (c ≠ .maybe z) && !decide (c = z.con ∧ args = [])
+            | _ => false)
+      | _ => false)
+
+theorem Pred.injectInst_sound {T τ : Ty} (h : Pred.injectInst T τ = true) :
+    Inst ⟨.inject T, [τ]⟩ := by
+  unfold Pred.injectInst at h
+  simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at h
+  obtain ⟨hT, h⟩ := h
+  rcases h with rfl | h
+  · exact .injectSelf hT
+  split at h
+  · rename_i z σ
+    simp only [Bool.or_eq_true, decide_eq_true_eq, Bool.and_eq_true] at h
+    rcases h with rfl | ⟨rfl, h⟩
+    · exact .injectNothing (TyEq.refl _) hT
+    · split at h
+      · rename_i c args
+        simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true',
+          decide_eq_false_iff_not] at h
+        refine .injectSome (TyEq.refl _) hT ?_ h.1 h.2
+        simpa [Ty.ftv] using hT
+      · cases h
+  · cases h
+
 /-- Decides `Inst`. -/
 def Pred.isInst : Pred → Bool
   | ⟨.plus, [.number]⟩ | ⟨.plus, [.string]⟩ => true
@@ -304,6 +359,7 @@ def Pred.isInst : Pred → Bool
   | ⟨.indexable, [.string, .number, .string]⟩ => true
   | ⟨.indexWrite, [.array _]⟩ => true
   | ⟨.notNew, [.app c _]⟩ => c != .newTarget
+  | ⟨.inject T, [τ]⟩ => Pred.injectInst T τ
   | _ => false
 
 theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
@@ -322,6 +378,7 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · exact .indexString
   · exact .writeArray
   · exact .notNew (by simpa using h)
+  · exact Pred.injectInst_sound h
   · cases h
 
 theorem List.eq_five_of_length {α : Type} : ∀ {l : List α}, l.length = 5 →
