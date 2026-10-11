@@ -269,28 +269,13 @@ is the body's IIFE — `obj.foo` reads its return type. `set foo(v)
 { … }` is parse-accepted but the field is not declared from the
 setter (initialise via `this.foo = …` in the constructor).
 
-**Inheritance.** `class Sub extends Base { … }`, where `Base` is a class
-of the program or a constructor a declaration file declares
-(`/** const Base: (…) => {…} */`), gives `Sub`'s instances `Base`'s fields
-and methods. It is lowered as the base instance spread into the object
-the class makes — `{ ...new Base(args), fields…, methods… }`, the
-arguments taken from the constructor's leading `super(args)` — so there is
-no prototype chain at the type level:
-
-```javascript
-class Base { constructor(n) { this.n = n; } twice() { return this.n * 2; } }
-class Sub extends Base {
-  constructor() { super(21); this.label = "x"; }
-  show() { return this.label + String(this.twice()); }   // an inherited method
-}
-```
-
-A base field keeps its type in the subclass (overriding `n` with a
-`String` is an error), which is what lets an inherited method, typed
-against the base instance, run on a subclass instance. `super.method()`
-is rejected (call `this.method()`), and so are `static` members. An
-AudioWorklet processor is the typical use: `class P extends
-AudioWorkletProcessor { … }`, checked with `--lib builtin:audioworklet`.
+**No inheritance.** `class Sub extends Base { … }` is rejected. A
+class's methods are checked with its instance as `this`, and the
+instance's type says which fields it lacks (a spread of `this` relies on
+that), so a base method would not be safe on a subclass instance, which
+has more. Write a factory that builds the object instead (see
+[examples/spa/gaps.md § "By design"](../examples/spa/gaps.md)).
+`static` members are rejected too.
 
 ### Modules (ES `import` / `export`)
 
@@ -597,7 +582,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
-| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`), `extends` with `super(args)` (see [Class Bodies](#class-bodies-fields-private-fields-accessors)); no `static` members |
+| Classes        | declarations + `export default class`, instance methods, fields, getters / setters, private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)); no `extends` or `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |

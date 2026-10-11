@@ -2700,10 +2700,11 @@ fn object_property_shorthand() {
 }
 
 /// Phase 1.2 regression: `export default class extends X { ... }`
-/// parses (it once produced a confusing "expected expression" error, then
-/// an inheritance rejection; `extends` is now lowered).
+/// produces the existing inheritance-rejection error rather than a
+/// confusing "expected expression" parse error.
 #[test]
-fn export_default_class_extends_parses() {
+fn export_default_class_extends_rejects_with_inheritance_error() {
+    use crate::error::IntyError;
     let src = "import { B } from \"./b.js\"; export default class extends B {}";
     let mut scanner = Scanner::new(src);
     let mut tokens = Vec::new();
@@ -2717,13 +2718,17 @@ fn export_default_class_extends_parses() {
     }
     let mut parser =
         Parser::with_source(tokens, scanner.type_annotations().to_vec(), src.to_string());
-    parser.parse_program().expect("class inheritance parses");
-    // `super.member` doesn't: an inherited method is `this.method()`.
-    let err = crate::frontends::javascript::parse(
-        "class A { f() { return 1; } } class B extends A { g() { return super.f(); } }",
-    )
-    .expect_err("super.member is rejected");
-    assert!(format!("{err:?}").contains("super.member"), "{err:?}");
+    let result = parser.parse_program();
+    let err = result.expect_err("must error on extends");
+    let msg = match err {
+        IntyError::Parse(p) => format!("{:?}", p),
+        other => panic!("expected ParseError, got {:?}", other),
+    };
+    assert!(
+        msg.contains("class inheritance is not supported"),
+        "diagnostic should mention inheritance: {}",
+        msg
+    );
 }
 
 /// Two member accesses on the same parameter must both contribute their
@@ -4859,4 +4864,59 @@ fn a_recursive_group_shares_its_numeric_variables() {
     let t = check_program(src, &["f", "g"]).unwrap();
     assert!(t[0].starts_with("<a"), "{}", t[0]);
     assert!(t[1].starts_with("<a"), "{}", t[1]);
+}
+
+/// A class's methods see the variables outside the class, not the
+/// constructor's parameters, but inty lowers a class to a factory taking
+/// those parameters with the methods inside it. A method reading a name
+/// that is also a constructor parameter was typed as reading the
+/// parameter: `m` below was a `() => Int` and `new A(5).m() - 1` was
+/// accepted, though it computes `"outer" - 1`. The class is rejected now.
+#[test]
+fn class_method_reading_a_constructor_parameter_name_is_rejected() {
+    let err = check_program(
+        "const x = \"outer\";\n\
+         class A { constructor(x) { this.v = x; } m() { return x; } }\n\
+         const r = new A(5).m() - 1;",
+        &["r"],
+    )
+    .unwrap_err();
+    assert!(err.contains("also a constructor parameter"), "{err}");
+    // A class-body field initialiser doesn't see them either.
+    let err = check_program(
+        "const x = 1; class A { constructor(x) { this.v = x; } w = x; }",
+        &["A"],
+    )
+    .unwrap_err();
+    assert!(err.contains("also a constructor parameter"), "{err}");
+    // The constructor's own initialisers do.
+    let t = check_program(
+        "class A { constructor(x) { this.v = x; } m() { return this.v; } }\n\
+         const r = new A(5).m() - 1;",
+        &["r"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+}
+
+/// A class's methods, shorthand ones included, are checked with the
+/// instance as `this`, and a call needs a receiver of exactly the
+/// instance's type: a copy by spread with another field isn't one.
+#[test]
+fn class_methods_are_checked_against_the_instance() {
+    let t = check_program(
+        "class C { constructor(v) { this.v = v; } inc() { this.v = this.v + 1; return this; } }\n\
+         const r = new C(1).inc().inc().v;",
+        &["r"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+    assert!(check_program(
+        "class C { constructor() { this.v = 1; } get() { return this.v; } }\n\
+         const c = new C();\n\
+         const r = {...c, w: 2}.get();",
+        &["r"],
+    )
+    .is_err());
+    assert!(check_program("const o = {v: \"s\", m() { return this.v - 1; }};", &["o"]).is_err());
 }

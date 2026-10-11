@@ -626,14 +626,9 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             body: Box::new(rename_stmt(body, from, to)),
             span: *span,
         },
-        PropDef::Spread {
-            argument,
-            span,
-            inherited,
-        } => PropDef::Spread {
+        PropDef::Spread { argument, span } => PropDef::Spread {
             argument: rename_expr(argument, from, to),
             span: *span,
-            inherited: *inherited,
         },
     }
 }

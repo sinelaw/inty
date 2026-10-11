@@ -95,8 +95,7 @@ annotation grammar, are documented separately:
 structurally useful thing they unlock is library-specific instance-shape
 derivation (Stimulus-style `static targets` ↦ `this.fooTarget`), which is
 closer to TypeScript's mapped types than to row polymorphism. Class
-inheritance is supported in a restricted form (`extends` lowers to the base
-instance's fields and methods; no `super.method()`), see
+inheritance (`extends`) is not supported, see
 [docs/type-system.md](docs/type-system.md#class-bodies-fields-private-fields-accessors).
 
 Open: polymorphic record fields (rank-2), and one-event-per-name DOM typing,

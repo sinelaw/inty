@@ -414,16 +414,7 @@ pub enum PropDef {
     /// Spread: `...expr`. Merged into the row of the containing
     /// object literal at typing time with right-biased semantics —
     /// keys later in source order win on collision.
-    ///
-    /// `inherited` marks the base instance a `class … extends Base`
-    /// lowers to (`...new Base(args)`): the literal keeps each of its
-    /// fields' types, and its methods may be called on the subclass's
-    /// instances.
-    Spread {
-        argument: Expr,
-        span: Source,
-        inherited: bool,
-    },
+    Spread { argument: Expr, span: Source },
 }
 
 /// One step of an `OptionalChain`. `optional` is `true` when the
