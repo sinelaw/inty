@@ -139,6 +139,11 @@ inductive Result where
   | continued
   deriving Repr
 
+/-- The value a `Ty.maybe` adds. -/
+def Nothing.value : Nothing → Value
+  | .null => .null
+  | .undefined => .undefined
+
 /-- JavaScript truthiness, as `dynamics::Value::truthy`. -/
 def Value.truthy : Value → Bool
   | .number n => n != 0 && !n.isNaN

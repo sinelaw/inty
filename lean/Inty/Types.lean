@@ -11,6 +11,12 @@ dangling bound variable.
 
 namespace Inty
 
+/-- The value a `Con.maybe` adds to a type: `null` or `undefined`. -/
+inductive Nothing where
+  | null
+  | undefined
+  deriving DecidableEq, Repr
+
 /-- Type constructors. Every type former is one, applied to its argument
 types (`Ty.app`), so substitution, unification and their lemmas are written
 once for all of them. -/
@@ -61,6 +67,12 @@ inductive Con where
   /-- A tuple, applied to its components' types. Inference uses it to state
   several equations as one (`unify` on two tuples). -/
   | tuple
+  /-- `Nullable τ` (`z = null`) or `Optional τ`, written `τ?`
+  (`z = undefined`), applied to `τ`: the value `z`, or a value of `τ`. A
+  sum type, not a union: only `z` itself, an annotation or a library
+  function makes one, and only a test against `z`, `== null` or `??` takes
+  it apart. At run time a value of `τ` is a value of the sum as it is. -/
+  | maybe (z : Nothing)
   deriving DecidableEq, Repr
 
 /-- The right-hand side of one equation of a recursive type: a type that
@@ -217,6 +229,9 @@ as an absent field has no type in Rémy's rows. -/
 @[match_pattern] abbrev Ty.absSlot : Ty := .slot .abs .data .undefined
 @[match_pattern] abbrev Ty.array (τ : Ty) : Ty := .app .array [τ]
 @[match_pattern] abbrev Ty.tuple (τs : List Ty) : Ty := .app .tuple τs
+@[match_pattern] abbrev Ty.maybe (z : Nothing) (τ : Ty) : Ty := .app (.maybe z) [τ]
+@[match_pattern] abbrev Ty.nullable (τ : Ty) : Ty := .maybe .null τ
+@[match_pattern] abbrev Ty.optional (τ : Ty) : Ty := .maybe .undefined τ
 
 @[match_pattern] abbrev PTy.number : PTy := .app .number []
 @[match_pattern] abbrev PTy.string : PTy := .app .string []

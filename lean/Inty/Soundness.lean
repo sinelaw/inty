@@ -145,10 +145,33 @@ private theorem lex_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
   · exact .right _ hs
 
 /-- The measure of `V`'s recursion: a recursive type unfolds, at the same
-index, to a constructor application. -/
-def Ty.isMu : Ty → Nat
-  | .mu _ _ => 1
+index, to a constructor application, and a sum `Ty.maybe` goes, at the
+same index, to the head under its layers, which is neither. -/
+def Ty.rank : Ty → Nat
+  | .mu _ _ => 2
+  | .app (.maybe _) _ => 1
   | _ => 0
+
+/-- The layers of sums `Ty.maybe` on top of a type, unfolding recursive
+types, with fuel `n`: the values the first `n` layers add, and the head
+under them if there are fewer (`μt. Nullable t` has as many layers as one
+likes, each adding `null`). -/
+def Ty.strip : Nat → Ty → List Nothing × Option Ty
+  | 0, _ => ([], none)
+  | n + 1, τ => match τ.whnf with
+    | .app (.maybe z) [σ] => ((z :: (Ty.strip n σ).1), (Ty.strip n σ).2)
+    | t => ([], some t)
+
+theorem Ty.rank_app_lt_mu (c : Con) (args : List Ty) (i : Nat) (sys : List RTy) :
+    (Ty.app c args).rank < (Ty.mu i sys).rank := by
+  cases c <;> simp [Ty.rank]
+
+theorem Ty.rank_lt_maybe {t : Ty} (h : t.rank = 0) (z : Nothing) (τ : Ty) :
+    t.rank < (Ty.maybe z τ).rank := by
+  rw [h]; simp [Ty.rank]
+
+theorem Ty.rank_le (τ : Ty) : τ.rank ≤ 2 := by
+  unfold Ty.rank; split <;> omega
 
 mutual
 /-- `V k W τ v`: the value `v` has type `τ` for `k` more calls, in the world
@@ -185,22 +208,27 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
     match (Ty.mu i sys).view with
     | some (.app c args) => V k W (.app c args) v
     | _ => False
+  | .maybe z τ, v => v = z.value ∨ ∃ n, v ∈ (Ty.strip n τ).1.map Nothing.value ∨
+      match (Ty.strip n τ).2 with
+      | some t => if _ : t.rank = 0 then V k W t v else False
+      | none => False
   | _, _ => False
-termination_by τ => (k, τ.isMu)
+termination_by τ => (k, τ.rank)
 decreasing_by
   all_goals first
     | exact .left _ _ (by omega)
-    | exact .right _ (by simp [Ty.isMu])
+    | exact .right _ (Ty.rank_app_lt_mu _ _ _ _)
+    | exact .right _ (Ty.rank_lt_maybe ‹_› _ _)
 /-- `VList k W τs vs`: one value of each type. -/
 def VList (k : Nat) (W : World) : List Ty → List Value → Prop
   | [], [] => True
   | τ :: τs, v :: vs => V k W τ v ∧ VList k W τs vs
   | _, _ => False
-termination_by τs => (k, 2 + τs.length)
+termination_by τs => (k, 3 + τs.length)
 decreasing_by
   all_goals first
     | exact .left _ _ (by omega)
-    | exact .right _ (by cases τ <;> simp [Ty.isMu] <;> omega)
+    | exact .right _ (by have := Ty.rank_le τ; omega)
     | exact .right _ (by simp)
 end
 
@@ -268,11 +296,12 @@ theorem V_view : V k W τ v ↔ ∃ c args, τ.view = some (.app c args) ∧ V k
       obtain ⟨rfl, rfl⟩ := h; exact hv⟩
   | mu i sys => exact V_mu
 
-/-- Apart from functions, records, arrays and recursive types, a type's
-values don't depend on the index or the world. -/
+/-- Apart from functions, records, arrays, recursive types and sums, a
+type's values don't depend on the index or the world. -/
 theorem V.base {k k' : Nat} {W W' : World} {τ : Ty} {v : Value}
     (hfn : ∀ θ τs ρ, τ ≠ .fn θ τs ρ) (hrec : ∀ ls slots, τ ≠ .record ls slots)
-    (harr : ∀ σ, τ ≠ .array σ) (hmu : ∀ i sys, τ ≠ .mu i sys) :
+    (harr : ∀ σ, τ ≠ .array σ) (hmu : ∀ i sys, τ ≠ .mu i sys)
+    (hmay : ∀ z σ, τ ≠ .maybe z σ) :
     V k W τ v ↔ V k' W' τ v := by
   rw [V.eq_def, V.eq_def]
   split <;> simp_all
@@ -288,9 +317,10 @@ theorem prefix_getElem? {α : Type} {W W' : List α} (hW : W <+: W') {ℓ : Nat}
   obtain ⟨t, rfl⟩ := hW
   rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hs).1, hs]
 
-/-- `V.mono` for a constructor application. -/
-theorem V.mono_app {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c : Con}
-    {args : List Ty} {v : Value} (hv : V k W (.app c args) v) : V j W' (.app c args) v := by
+/-- `V.mono` for a constructor application other than a sum's. -/
+theorem V.mono_app_base {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c : Con}
+    {args : List Ty} {v : Value} (hc : ∀ z, c ≠ .maybe z) (hv : V k W (.app c args) v) :
+    V j W' (.app c args) v := by
   by_cases hfn : ∃ θ τs ρ, Ty.app c args = .fn θ τs ρ
   · obtain ⟨θ, τs, ρ, e⟩ := hfn
     rw [e] at hv ⊢
@@ -312,7 +342,135 @@ theorem V.mono_app {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c
         exact ⟨ℓ, τc, rfl, prefix_getElem? hW hℓ, hτ⟩
       · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
           (fun ls slots e => hrec ⟨ls, slots, e⟩) (fun σ e => harr ⟨σ, e⟩)
-          (fun i sys e => by cases e)).mp hv
+          (fun i sys e => by cases e) (fun z σ e => by cases e; exact hc z rfl)).mp hv
+
+/-! ### Sums -/
+
+/-- What `V` says of a sum's layers, with fuel `n`. -/
+def StripV (k : Nat) (W : World) (τ : Ty) (n : Nat) (v : Value) : Prop :=
+  v ∈ (Ty.strip n τ).1.map Nothing.value ∨
+    ∃ t, (Ty.strip n τ).2 = some t ∧ t.rank = 0 ∧ V k W t v
+
+theorem V_maybe_def : V k W (.maybe z τ) v ↔ v = z.value ∨ ∃ n, StripV k W τ n v := by
+  rw [V.eq_def]
+  simp only [StripV]
+  refine or_congr Iff.rfl (exists_congr fun n => or_congr Iff.rfl ?_)
+  cases (Ty.strip n τ).2 <;> simp
+
+@[simp] theorem Ty.strip_zero (τ : Ty) : Ty.strip 0 τ = ([], none) := rfl
+
+theorem Ty.strip_succ_maybe {τ σ : Ty} {z : Nothing} (h : τ.whnf = .maybe z σ) (n : Nat) :
+    Ty.strip (n + 1) τ = (z :: (Ty.strip n σ).1, (Ty.strip n σ).2) := by
+  rw [Ty.strip, h]
+
+theorem Ty.strip_succ_other {τ : Ty} (h : ∀ z σ, τ.whnf ≠ .maybe z σ) (n : Nat) :
+    Ty.strip (n + 1) τ = ([], some τ.whnf) := by
+  rw [Ty.strip]
+  split
+  · rename_i z σ e; exact absurd e (h z σ)
+  · rfl
+
+/-- A type has the values of its head. -/
+theorem V_whnf : V k W τ v ↔ V k W τ.whnf v := by
+  cases hv : τ.view with
+  | none => simp [Ty.whnf, hv]
+  | some t =>
+    rw [Ty.whnf_of_view hv, V_view (τ := τ)]
+    rcases Ty.view_shape hv with ⟨a, rfl⟩ | ⟨c, args, rfl⟩
+    · simp [hv]
+    · exact ⟨fun ⟨c', a', h, h'⟩ => by rw [hv] at h; cases h; exact h',
+        fun h => ⟨c, args, hv, h⟩⟩
+
+theorem Ty.rank_zero {t : Ty} (h : t.rank = 0) :
+    (∃ a, t = .var a) ∨ ∃ c args, t = .app c args ∧ ∀ z, c ≠ .maybe z := by
+  cases t with
+  | var a => exact .inl ⟨a, rfl⟩
+  | app c args =>
+    refine .inr ⟨c, args, rfl, fun z e => ?_⟩
+    subst e; simp [Ty.rank] at h
+  | mu i sys => simp [Ty.rank] at h
+
+/-- A sum `Nullable σ` or `Optional σ` has its value `z` and the values of
+`σ`. -/
+theorem V_maybe : V k W (.maybe z σ) v ↔ v = z.value ∨ V k W σ v := by
+  rw [V_maybe_def]
+  refine or_congr Iff.rfl ⟨fun ⟨n, h⟩ => ?_, fun h => ?_⟩
+  · cases n with
+    | zero => simp [StripV, Ty.strip_zero] at h
+    | succ n =>
+      rw [V_whnf]
+      by_cases hm : ∃ z' σ', σ.whnf = .maybe z' σ'
+      · obtain ⟨z', σ', hw⟩ := hm
+        rw [hw, V_maybe_def]
+        simp only [StripV, Ty.strip_succ_maybe hw, List.map_cons, List.mem_cons] at h
+        rcases h with (h | h) | h
+        · exact .inl h
+        · exact .inr ⟨n, .inl h⟩
+        · exact .inr ⟨n, .inr h⟩
+      · simp only [StripV, Ty.strip_succ_other (fun z' σ' e => hm ⟨z', σ', e⟩),
+          List.map_nil, List.not_mem_nil, false_or, Option.some.injEq] at h
+        obtain ⟨t, rfl, -, ht⟩ := h
+        exact ht
+  · rw [V_whnf] at h
+    by_cases hm : ∃ z' σ', σ.whnf = .maybe z' σ'
+    · obtain ⟨z', σ', hw⟩ := hm
+      rw [hw, V_maybe_def] at h
+      rcases h with h | ⟨n, h⟩
+      · exact ⟨1, .inl (by simp [Ty.strip_succ_maybe hw, h])⟩
+      · refine ⟨n + 1, ?_⟩
+        simp only [StripV, Ty.strip_succ_maybe hw, List.map_cons, List.mem_cons] at h ⊢
+        rcases h with h | h
+        · exact .inl (.inr h)
+        · exact .inr h
+    · have hs := Ty.strip_succ_other (fun z' σ' e => hm ⟨z', σ', e⟩) 0
+      refine ⟨1, .inr ⟨σ.whnf, by rw [hs], ?_, h⟩⟩
+      cases hw : σ.whnf with
+      | var a => simp [Ty.rank]
+      | mu i sys =>
+        exfalso
+        have hv0 : (Ty.mu i sys).view = none := by
+          rw [← hw, Ty.view_whnf]
+          cases h' : σ.view with
+          | none => rfl
+          | some t =>
+            rcases Ty.view_shape h' with ⟨a, rfl⟩ | ⟨c, a, rfl⟩ <;>
+              simp [Ty.whnf_of_view h'] at hw
+        rw [hw, V_mu] at h
+        obtain ⟨_, _, h', -⟩ := h
+        rw [hv0] at h'; cases h'
+      | app c args =>
+        cases c with
+        | maybe z' =>
+          rw [hw] at h
+          match args, h, hw with
+          | [σ'], _, hw => exact absurd ⟨z', σ', hw⟩ hm
+          | [], h, _ => rw [V.eq_def] at h; simp at h
+          | _ :: _ :: _, h, _ => rw [V.eq_def] at h; simp at h
+        | _ => simp [Ty.rank]
+
+/-- A sum's layers, with fuel, in a larger world and for fewer calls. -/
+theorem StripV.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {τ : Ty} {n : Nat}
+    {v : Value} (h : StripV k W τ n v) : StripV j W' τ n v := by
+  rcases h with h | ⟨t, ht, hr, hv⟩
+  · exact .inl h
+  · refine .inr ⟨t, ht, hr, ?_⟩
+    rcases Ty.rank_zero hr with ⟨a, rfl⟩ | ⟨c, args, rfl, hc⟩
+    · simp at hv
+    · exact V.mono_app_base hjk hW hc hv
+
+/-- `V.mono` for a constructor application. -/
+theorem V.mono_app {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c : Con}
+    {args : List Ty} {v : Value} (hv : V k W (.app c args) v) : V j W' (.app c args) v := by
+  by_cases hm : ∃ z σ, Ty.app c args = .maybe z σ
+  · obtain ⟨z, σ, e⟩ := hm
+    rw [e, V_maybe_def] at hv ⊢
+    exact hv.imp id (fun ⟨n, h⟩ => ⟨n, h.mono hjk hW⟩)
+  · refine V.mono_app_base hjk hW (fun z e => ?_) hv
+    subst e
+    match args with
+    | [σ] => exact hm ⟨z, σ, rfl⟩
+    | [] => rw [V.eq_def] at hv; simp at hv
+    | _ :: _ :: _ => rw [V.eq_def] at hv; simp at hv
 
 /-- A value good for `k` calls in `W` is good for fewer, in a larger world. -/
 theorem V.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {τ : Ty} {v : Value}
@@ -326,15 +484,17 @@ theorem CellV.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c
 
 /-! ## Equal types have the same values -/
 
-/-- A constructor other than a function's, a record's or an array's has
-the same values whatever its arguments, given as many. -/
+/-- A constructor other than a function's, a record's, an array's or a
+sum's has the same values whatever its arguments, given as many. -/
 theorem V.app_congr_base {k : Nat} {W : World} {c : Con} {args args' : List Ty} {v : Value}
     (hl : args.length = args'.length) (hfn : c ≠ .fn) (hrec : ∀ ls, c ≠ .record ls)
-    (harr : c ≠ .array) : V k W (.app c args) v ↔ V k W (.app c args') v := by
+    (harr : c ≠ .array) (hmay : ∀ z, c ≠ .maybe z) :
+    V k W (.app c args) v ↔ V k W (.app c args') v := by
   cases c
   case fn => exact absurd rfl hfn
   case record ls => exact absurd rfl (hrec ls)
   case array => exact absurd rfl harr
+  case maybe z => exact absurd rfl (hmay z)
   all_goals
     rw [V.eq_def, V.eq_def]
     try (cases args <;> cases args' <;> simp_all)
@@ -364,6 +524,35 @@ theorem zip_tyEq_symm {xs ys : List Ty} (h : ∀ x ∈ xs.zip ys, TyEq x.1 x.2) 
     exact ⟨i, by omega, e.2, e.1⟩
   exact (h _ this).symm
 
+/-- `strip` respects equal types: the same layers, and equal heads. -/
+theorem Ty.strip_tyEq : ∀ (n : Nat) {τ τ' : Ty}, TyEq τ τ' →
+    (Ty.strip n τ).1 = (Ty.strip n τ').1 ∧
+    ∀ t, (Ty.strip n τ).2 = some t → ∃ ρ ρ', t = ρ.whnf ∧ (Ty.strip n τ').2 = some ρ'.whnf ∧
+      TyEq ρ ρ'
+  | 0, _, _, _ => by simp
+  | n + 1, τ, τ', h => by
+    by_cases hm : ∃ z σ, τ.whnf = .maybe z σ
+    · obtain ⟨z, σ, hw⟩ := hm
+      obtain ⟨ys, hw', he⟩ := TyEq.whnf_app h hw
+      obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp he
+      match ys, hl, hz, hw' with
+      | [σ'], _, hz, hw' =>
+        have hσ : TyEq σ σ' := hz (σ, σ') (by simp)
+        obtain ⟨h1, h2⟩ := Ty.strip_tyEq n hσ
+        rw [Ty.strip_succ_maybe hw, Ty.strip_succ_maybe hw']
+        exact ⟨by simp [h1], h2⟩
+      | [], hl, _, _ | _ :: _ :: _, hl, _, _ => simp at hl
+    · have hm' : ∀ z σ', τ'.whnf ≠ .maybe z σ' := fun z σ' hw' => by
+        obtain ⟨ys, hw, he⟩ := TyEq.whnf_app h.symm hw'
+        obtain ⟨-, hl, -⟩ := TyEq.app_iff.mp he
+        match ys, hl, hw with
+        | [σ], _, hw => exact hm ⟨z, σ, hw⟩
+        | [], hl, _ | _ :: _ :: _, hl, _ => simp at hl
+      rw [Ty.strip_succ_other (fun z σ e => hm ⟨z, σ, e⟩), Ty.strip_succ_other hm']
+      refine ⟨rfl, fun t ht => ⟨τ, τ', ?_, rfl, h⟩⟩
+      simp only [Option.some.injEq] at ht
+      exact ht.symm
+
 /-- Equal types have the same values: a recursive type and its unfolding
 in particular. -/
 theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
@@ -371,6 +560,58 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
   intro k
   induction k using Nat.strongRecOn with
   | _ k ihk =>
+  -- A constructor application other than a sum's, at this index.
+  have happ : ∀ {W : World} {c : Con} {args args' : List Ty} {v : Value},
+      (∀ z, c ≠ .maybe z) → TyEq (.app c args') (.app c args) → V k W (.app c args) v →
+      V k W (.app c args') v := by
+    intro W c args args' v hc h₂ hv
+    obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp h₂
+    -- `hz` relates `args'` to `args`.
+    by_cases hfn : c = .fn
+    · subst hfn
+      match args, args', hl, hz, hv with
+      | θ :: ρ :: τs, θ' :: ρ' :: τs', hl, hz, hv =>
+        have hθ : TyEq θ' θ := hz (θ', θ) (by simp)
+        have hρ : TyEq ρ ρ' := (hz (ρ', ρ) (by simp)).symm
+        have hτs : ∀ x ∈ τs.zip τs', TyEq x.1 x.2 :=
+          zip_tyEq_symm (fun x hx => hz x (by simp [hx]))
+        have hl' : τs.length = τs'.length := by simp at hl; omega
+        change V k W (.fn θ' τs' ρ') v
+        change V k W (.fn θ τs ρ) v at hv
+        rw [V_fn] at hv ⊢
+        refine ⟨fun h' => hv.1 (hθ.symm.trans h'), ?_⟩
+        intro j hj W' hW h thisv xs hxs hh hthis hargs
+        have H := hv.2 j hj W' hW h thisv xs (by rw [hxs]; exact hl'.symm) hh
+          (fun i hi => ihk i (by omega) hθ (hthis i hi))
+          (fun i hi => VList.tyEq (fun e hv' => ihk i (by omega) e hv') hl'.symm
+            (zip_tyEq_symm hτs) (hargs i hi))
+        obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H
+        · exact ⟨hc, .inl H⟩
+        · refine ⟨hc, .inr ⟨hlt, W'', hW'', hH, ?_⟩⟩
+          rcases hr with ⟨v', e, hv'⟩ | habr
+          · exact .inl ⟨v', e, fun h' => ihk _ (by omega) hρ (hv' h')⟩
+          · exact .inr habr
+      | [], _, _, _, hv | [_], _, _, _, hv => rw [V.eq_def] at hv; simp at hv
+      | _ :: _ :: _, [], hl, _, _ | _ :: _ :: _, [_], hl, _, _ => simp at hl
+    · by_cases hrec : ∃ ls, c = .record ls
+      · obtain ⟨ls, rfl⟩ := hrec
+        change V k W (.record ls args') v
+        change V k W (.record ls args) v at hv
+        rw [V_record] at hv ⊢
+        obtain ⟨ℓ, τc, rfl, hℓ, hτc⟩ := hv
+        exact ⟨ℓ, τc, rfl, hℓ, h₂.trans hτc⟩
+      · by_cases harr : c = .array
+        · subst harr
+          match args, args', hl, hz, hv with
+          | [σ], [σ'], _, hz, hv =>
+            change V k W (.array σ') v
+            change V k W (.array σ) v at hv
+            rw [V_array] at hv ⊢
+            obtain ⟨ℓ, τc, rfl, hℓ, hτc⟩ := hv
+            exact ⟨ℓ, τc, rfl, hℓ, (hz (σ', σ) (by simp)).trans hτc⟩
+          | [], _, _, _, hv | _ :: _ :: _, _, _, _, hv => rw [V.eq_def] at hv; simp at hv
+          | [_], [], hl, _, _ | [_], _ :: _ :: _, hl, _, _ => simp at hl
+        · exact (V.app_congr_base hl.symm hfn (fun ls e => hrec ⟨ls, e⟩) harr hc).mp hv
   intro W τ τ' v he hv
   obtain ⟨c, args, hτ, hv⟩ := V_view.mp hv
   have h₁ : TyEq τ' (.app c args) := by
@@ -379,54 +620,32 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
     exact he.symm.trans this.symm
   obtain ⟨args', hτ', h₂⟩ := TyEq.view_app h₁
   refine V_view.mpr ⟨c, args', hτ', ?_⟩
-  obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp h₂
-  -- `hz` relates `args'` to `args`.
-  by_cases hfn : c = .fn
-  · subst hfn
-    match args, args', hl, hz, hv with
-    | θ :: ρ :: τs, θ' :: ρ' :: τs', hl, hz, hv =>
-      have hθ : TyEq θ' θ := hz (θ', θ) (by simp)
-      have hρ : TyEq ρ ρ' := (hz (ρ', ρ) (by simp)).symm
-      have hτs : ∀ x ∈ τs.zip τs', TyEq x.1 x.2 :=
-        zip_tyEq_symm (fun x hx => hz x (by simp [hx]))
-      have hl' : τs.length = τs'.length := by simp at hl; omega
-      change V k W (.fn θ' τs' ρ') v
-      change V k W (.fn θ τs ρ) v at hv
-      rw [V_fn] at hv ⊢
-      refine ⟨fun h' => hv.1 (hθ.symm.trans h'), ?_⟩
-      intro j hj W' hW h thisv xs hxs hh hthis hargs
-      have H := hv.2 j hj W' hW h thisv xs (by rw [hxs]; exact hl'.symm) hh
-        (fun i hi => ihk i (by omega) hθ (hthis i hi))
-        (fun i hi => VList.tyEq (fun e hv' => ihk i (by omega) e hv') hl'.symm
-          (zip_tyEq_symm hτs) (hargs i hi))
-      obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H
-      · exact ⟨hc, .inl H⟩
-      · refine ⟨hc, .inr ⟨hlt, W'', hW'', hH, ?_⟩⟩
-        rcases hr with ⟨v', e, hv'⟩ | habr
-        · exact .inl ⟨v', e, fun h' => ihk _ (by omega) hρ (hv' h')⟩
-        · exact .inr habr
-    | [], _, _, _, hv | [_], _, _, _, hv => rw [V.eq_def] at hv; simp at hv
-    | _ :: _ :: _, [], hl, _, _ | _ :: _ :: _, [_], hl, _, _ => simp at hl
-  · by_cases hrec : ∃ ls, c = .record ls
-    · obtain ⟨ls, rfl⟩ := hrec
-      change V k W (.record ls args') v
-      change V k W (.record ls args) v at hv
-      rw [V_record] at hv ⊢
-      obtain ⟨ℓ, τc, rfl, hℓ, hτc⟩ := hv
-      exact ⟨ℓ, τc, rfl, hℓ, h₂.trans hτc⟩
-    · by_cases harr : c = .array
-      · subst harr
-        match args, args', hl, hz, hv with
-        | [σ], [σ'], _, hz, hv =>
-          change V k W (.array σ') v
-          change V k W (.array σ) v at hv
-          rw [V_array] at hv ⊢
-          obtain ⟨ℓ, τc, rfl, hℓ, hτc⟩ := hv
-          exact ⟨ℓ, τc, rfl, hℓ, (hz (σ', σ) (by simp)).trans hτc⟩
-        | [], _, _, _, hv | _ :: _ :: _, _, _, _, hv => rw [V.eq_def] at hv; simp at hv
-        | [_], [], hl, _, _ | [_], _ :: _ :: _, hl, _, _ => simp at hl
-      · exact (V.app_congr_base hl.symm hfn (fun ls e => hrec ⟨ls, e⟩) harr).mp hv
-
+  by_cases hm : ∃ z, c = .maybe z
+  · obtain ⟨z, rfl⟩ := hm
+    match args, args', TyEq.app_iff.mp h₂, hv with
+    | [σ], [σ'], ⟨_, _, hz⟩, hv =>
+      have hσ : TyEq σ σ' := (hz (σ', σ) (by simp)).symm
+      change V k W (.maybe z σ) v at hv
+      change V k W (.maybe z σ') v
+      rw [V_maybe_def] at hv ⊢
+      refine hv.imp id (fun ⟨n, h⟩ => ⟨n, ?_⟩)
+      obtain ⟨h1, h2⟩ := Ty.strip_tyEq n hσ
+      rcases h with h | ⟨t, ht, hr, hvt⟩
+      · exact .inl (h1 ▸ h)
+      · obtain ⟨ρ, ρ', rfl, ht', hρ⟩ := h2 _ ht
+        rcases Ty.rank_zero hr with ⟨a, ha⟩ | ⟨c', a', ha, hc'⟩
+        · rw [ha] at hvt; simp at hvt
+        · obtain ⟨ys, hw', he'⟩ := TyEq.whnf_app hρ ha
+          refine .inr ⟨ρ'.whnf, ht', ?_, ?_⟩
+          · rw [hw']
+            cases c' with
+            | maybe z' => exact absurd rfl (hc' z')
+            | _ => simp [Ty.rank]
+          · rw [hw']; rw [ha] at hvt
+            exact happ hc' he'.symm hvt
+    | [], _, _, hv | _ :: _ :: _, _, _, hv => rw [V.eq_def] at hv; simp at hv
+    | [_], [], ⟨_, hl, _⟩, _ | [_], _ :: _ :: _, ⟨_, hl, _⟩, _ => simp at hl
+  · exact happ (fun z e => hm ⟨z, e⟩) h₂ hv
 
 theorem VList.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') :
     ∀ {τs : List Ty} {vs : List Value}, VList k W τs vs → VList j W' τs vs
