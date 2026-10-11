@@ -804,4 +804,56 @@ theorem Scheme.subst_congr_ftv {σ σ' : Subst} {s : Scheme}
     SchemeEq (s.subst σ) (s.subst σ') :=
   Scheme.subst_congr_tv (fun a ha => h a (Scheme.tv_sub_ftv ha))
 
+/-! ## Quantified variables in a scheme's trees -/
+
+/-- The quantified variable `i` (of `k`) is in the tree of `p`: read with
+its quantified variables as variables above its free ones, `p` unfolds to
+a tree with the `i`-th. -/
+def PTy.TreeBound (k : Nat) (p : PTy) (i : Nat) : Prop :=
+  (p.inst (varBlock (maxPlusOne p.ftv) k)).TV (maxPlusOne p.ftv + i)
+
+/-- Decides `PTy.TreeBound`. -/
+def PTy.treeBound (k : Nat) (p : PTy) (i : Nat) : Bool :=
+  decide (maxPlusOne p.ftv + i ∈ (p.inst (varBlock (maxPlusOne p.ftv) k)).tv)
+
+theorem PTy.treeBound_spec {k : Nat} {p : PTy} {i : Nat} :
+    p.treeBound k i = true ↔ p.TreeBound k i := by
+  simp [PTy.treeBound, PTy.TreeBound, Ty.mem_tv]
+
+theorem varBlock_subst_block_var {M N k i : Nat} (hi : i < k) :
+    (Ty.var (M + i)).subst (Subst.block M (varBlock N k)) = .var (N + i) := by
+  simp [Ty.subst, Subst.block_find, varBlock, hi]
+
+/-- Any block above the free variables shows the same. -/
+theorem PTy.treeBound_block {k : Nat} {p : PTy} {i M N : Nat} (hi : i < k)
+    (hM : ∀ a ∈ p.ftv, a < M) (h : (p.inst (varBlock M k)).TV (M + i)) :
+    (p.inst (varBlock N k)).TV (N + i) := by
+  have hlen : (varBlock N k).length = k := by simp [varBlock]
+  have := PTy.open_block p (m := M) (τs := varBlock N k) hM
+  rw [hlen] at this
+  rw [← this]
+  exact Ty.TV.subst_of h (by rw [varBlock_subst_block_var hi]; exact Ty.tv_var_self _)
+
+theorem PTy.treeBound_iff {k : Nat} {p : PTy} {i N : Nat} (hi : i < k)
+    (hN : ∀ a ∈ p.ftv, a < N) : p.TreeBound k i ↔ (p.inst (varBlock N k)).TV (N + i) :=
+  ⟨fun h => PTy.treeBound_block hi lt_maxPlusOne h, fun h => PTy.treeBound_block hi hN h⟩
+
+/-- Substitution keeps a quantified variable in the tree. -/
+theorem PTy.TreeBound.subst {k : Nat} {p : PTy} {i : Nat} (hi : i < k) (h : p.TreeBound k i)
+    (σ : Subst) : (p.subst σ).TreeBound k i := by
+  have hN := lt_maxPlusOne (l := p.ftv ++ (p.subst σ).ftv ++ σ.map Prod.fst)
+  generalize maxPlusOne (p.ftv ++ (p.subst σ).ftv ++ σ.map Prod.fst) = N at hN
+  have hσ : ∀ j, N ≤ j → σ.find j = none := fun j hj => Subst.find_none (fun q hq e => by
+    have := hN q.1 (by simp only [List.mem_append, List.mem_map]; exact .inr ⟨q, hq, rfl⟩)
+    omega)
+  rw [PTy.treeBound_iff hi (fun a ha => hN a (by simp [ha]))] at h
+  rw [PTy.treeBound_iff hi (fun a ha => hN a (by simp [ha]))]
+  have hvb : (varBlock N k).map (·.subst σ) = varBlock N k := by
+    simp only [varBlock, List.map_map]
+    refine List.map_congr_left (fun j hj => ?_)
+    simp only [Function.comp_apply, Ty.subst, hσ j (List.mem_range'.mp hj |>.elim
+      fun x hx => by omega), Option.getD_none]
+  rw [← hvb, ← PTy.inst_subst]
+  exact Ty.TV.subst_of h (by simp [Ty.subst, hσ (N + i) (by omega), Ty.tv_var_self])
+
 end Inty

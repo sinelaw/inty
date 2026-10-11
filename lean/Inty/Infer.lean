@@ -73,7 +73,7 @@ theorem Ret.subst_congr {σ σ' : Subst} {R : Option Ty}
 /-- Whether a scheme's constraint is on one of its `k` quantified variables
 (`Scheme.Simple`). -/
 def PPred.isSimple (k : Nat) : PPred → Bool
-  | ⟨.merge, [q, κ, τ, t, _]⟩ => (q.bvs ++ κ.bvs ++ τ.bvs ++ t.bvs).any (· < k)
+  | ⟨.merge, [q, κ, τ, t, _]⟩ => (List.range k).any fun i => [q, κ, τ, t].any (·.treeBound k i)
   | ⟨.merge, _⟩ => false
   | ⟨c, .bound i :: rest⟩ => decide (i < k) && decide (rest.length + 1 = c.arity)
   | _ => false

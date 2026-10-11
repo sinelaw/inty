@@ -45,11 +45,13 @@ theorem Expr.isValue_sound {e : Expr} (h : e.isValue = true) : e.IsValue := by
 
 theorem PPred.isSimple_spec {k : Nat} {p : PPred} (h : p.isSimple k = true) :
     (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧ ∃ i < k, ∃ rest, p.args = .bound i :: rest) ∨
-      ∃ q κ τ t r, p = ⟨.merge, [q, κ, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ κ.bvs ++ τ.bvs ++ t.bvs, i < k := by
+      ∃ q κ τ t r, p = ⟨.merge, [q, κ, τ, t, r]⟩ ∧
+        ∃ i < k, ∃ x ∈ [q, κ, τ, t], x.TreeBound k i := by
   unfold PPred.isSimple at h
   split at h
   · obtain ⟨i, hi, hik⟩ := List.any_eq_true.mp h
-    exact .inr ⟨_, _, _, _, _, rfl, i, hi, of_decide_eq_true hik⟩
+    obtain ⟨x, hx, hb⟩ := List.any_eq_true.mp hik
+    exact .inr ⟨_, _, _, _, _, rfl, i, List.mem_range.mp hi, x, hx, PTy.treeBound_spec.mp hb⟩
   · cases h
   · rename_i c i rest _ hc
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h

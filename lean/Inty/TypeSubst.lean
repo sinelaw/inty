@@ -20,8 +20,11 @@ theorem Scheme.Simple.subst {s : Scheme} (hs : s.Simple) (σ : Subst) : (s.subst
   · refine .inl ⟨hcls, by simpa [PPred.subst] using hlen, i, hi, rest.map (·.subst σ), ?_⟩
     simp [PPred.subst, h, PTy.subst]
   · subst h
-    exact .inr ⟨q'.subst σ, k.subst σ, τ.subst σ, t.subst σ, r.subst σ, by simp [PPred.subst],
-      by simpa [Scheme.subst] using hb⟩
+    obtain ⟨i, hi, x, hx, hb⟩ := hb
+    refine .inr ⟨q'.subst σ, k.subst σ, τ.subst σ, t.subst σ, r.subst σ, by simp [PPred.subst],
+      i, by simpa [Scheme.subst] using hi, x.subst σ, ?_, by simpa using hb.subst hi σ⟩
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hx ⊢
+    rcases hx with rfl | rfl | rfl | rfl <;> simp
 
 theorem objSlots_subst (σ : Subst) (L ls : List String) (ss : List Ty) :
     (objSlots L ls ss).map (·.subst σ) = objSlots L ls (ss.map (·.subst σ)) := by

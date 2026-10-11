@@ -1,5 +1,6 @@
 import Inty.Syntax
 import Inty.Classes
+import Inty.TreeVars
 
 /-!
 # Declarative typing
@@ -50,14 +51,16 @@ outside the scheme.
 
 A `Merge` is different: its decision waits for the operand's presence,
 which a later substitution may decide, so it stays in the scheme as it is
-whatever its presence, as long as it mentions one of the scheme's
-variables in the arguments that determine its result. (Deciding it when
-the presence is known would make the rule depend on when that is, which
-no rule closed under substitution can.) -/
+whatever its presence, as long as one of the scheme's variables is in the
+trees of the arguments that determine its result (`PTy.TreeBound`: not
+merely in an equation of a recursive type its unfolding never reaches).
+(Deciding it when the presence is known would make the rule depend on when
+that is, which no rule closed under substitution can.) -/
 def Scheme.Simple (s : Scheme) : Prop :=
   ∀ p ∈ s.preds, (p.cls ≠ .merge ∧ p.args.length = p.cls.arity ∧
       ∃ i < s.arity, ∃ rest, p.args = .bound i :: rest) ∨
-    ∃ q k τ t r, p = ⟨.merge, [q, k, τ, t, r]⟩ ∧ ∃ i ∈ q.bvs ++ k.bvs ++ τ.bvs ++ t.bvs, i < s.arity
+    ∃ q k τ t r, p = ⟨.merge, [q, k, τ, t, r]⟩ ∧
+      ∃ i < s.arity, ∃ x ∈ [q, k, τ, t], x.TreeBound s.arity i
 
 /-- How an object literal's field written as `k`, its expression `e` of the
 type `τ`, sits in the literal's record type `T`: its slot. A method and a
