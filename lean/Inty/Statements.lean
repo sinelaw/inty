@@ -106,7 +106,7 @@ example : Pred.AssumableAt top p ↔
         (top = true → (∃ a, q = .var a) ∨ p.MergeOnVar) := Iff.rfl
 
 example : Cls.arity c = match c with
-    | .plus | .indexWrite => 1
+    | .plus | .indexWrite | .notNew => 1
     | .hasProp _ | .indexable => 3
     | .merge => 5 := by
   cases c <;> rfl
@@ -158,7 +158,8 @@ example : CellV k W (.scheme s) v ↔
 example : Result.Abrupt r ↔
     (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued ∨ ∃ f, r = .fault f := by
   cases r <;> simp [Result.Abrupt] <;> exact ⟨.outOfBounds, trivial⟩
-example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
+example : V k W (.fn θ τs ρ) f ↔ (TyEq θ .newTarget → f.isCtor = true) ∧
+    ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
     args.length = τs.length → (∀ i < j, HeapOK i W' h) → (∀ i < j, V i W' θ thisv) →
     (∀ i < j, VList i W' τs args) →
     (call j h f thisv args).2.1 ≤ j ∧ ((call j h f thisv args).1 = .timeout ∨
@@ -168,11 +169,15 @@ example : V k W (.fn θ τs ρ) f ↔ ∀ j ≤ k, ∀ W', W <+: W' → ∀ h th
           (call j h f thisv args).1.Abrupt))) := by
   rw [V_fn]
   constructor
-  · intro H j hj W' hW h thisv args hl hh ht ha
+  · rintro ⟨hn, H⟩
+    refine ⟨hn, ?_⟩
+    intro j hj W' hW h thisv args hl hh ht ha
     obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hl hh ht ha
     · exact ⟨hc, .inl H⟩
     · exact ⟨hc, .inr ⟨hlt, W'', hW'', hH hlt, hr.imp (fun ⟨v, e, hv⟩ => ⟨v, e, hv hlt⟩) id⟩⟩
-  · intro H j hj W' hW h thisv args hl hh ht ha
+  · rintro ⟨hn, H⟩
+    refine ⟨hn, ?_⟩
+    intro j hj W' hW h thisv args hl hh ht ha
     obtain ⟨hc, H | ⟨hlt, W'', hW'', hH, hr⟩⟩ := H j hj W' hW h thisv args hl hh ht ha
     · exact ⟨hc, .inl H⟩
     · exact ⟨hc, .inr ⟨hlt, W'', hW'', fun _ => hH,
@@ -226,7 +231,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     p = ⟨.hasProp "length", [.string, .getter, .number]⟩ ∨
     (∃ τ, p = ⟨.indexable, [.array τ, .number, τ]⟩) ∨
     p = ⟨.indexable, [.string, .number, .string]⟩ ∨
-    ∃ τ, p = ⟨.indexWrite, [.array τ]⟩ :=
+    (∃ τ, p = ⟨.indexWrite, [.array τ]⟩) ∨
+    ∃ c args, c ≠ .newTarget ∧ p = ⟨.notNew, [.app c args]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
@@ -243,10 +249,14 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     | indexString =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl rfl))))))))))
     | writeArray =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, rfl⟩)))))))))),
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, rfl⟩)))))))))))
+    | notNew hc =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr
+        ⟨_, _, hc, rfl⟩))))))))))),
    fun h => by
     rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
-      ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩
+      ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ |
+      ⟨c, args, hc, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
@@ -258,7 +268,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .lengthString
     · exact .indexArray
     · exact .indexString
-    · exact .writeArray⟩
+    · exact .writeArray
+    · exact .notNew hc⟩
 
 /-- A constraint left on a type variable, or a `Merge` waiting on one (each
 looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/
@@ -317,11 +328,12 @@ example : FieldSlot T k e τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
     · exact .getter he⟩
 
 /-- A class's member: a field holds a value; an arrow field is a function
-of the instance's `this`, bound to it, so callable with any; a method and a
-getter are on the prototype, of the instance's `this`. -/
-example : MemberSlot T k e τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
+of the instance's `this`, bound to it, so callable with any, but not by
+`new`; a method and a getter are on the prototype, of the instance's
+`this`. -/
+example : MemberSlot C T k e τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
     (k = .arrow ∧ ∃ n b θ θ' ps ρ, e = .func n b ∧ τ = .fn θ ps ρ ∧
-      s = .slot .pre .data (.fn θ' ps ρ) ∧ TyEq θ T) ∨
+      s = .slot .pre .data (.fn θ' ps ρ) ∧ TyEq θ T ∧ Entails C ⟨.notNew, [θ']⟩) ∨
     (k = .method ∧ ∃ n b θ ps ρ, e = .func n b ∧ τ = .fn θ ps ρ ∧
       s = .slot .pre .proto τ ∧ TyEq θ T) ∨
     (k = .getter ∧ ∃ b θ σ, e = .func 0 b ∧ τ = .fn θ [] σ ∧ s = .slot .pre .proto σ ∧
@@ -329,14 +341,14 @@ example : MemberSlot T k e τ s ↔ (k = .data ∧ s = .slot .pre .data τ) ∨
   ⟨fun h => by
     cases h with
     | data => exact .inl ⟨rfl, rfl⟩
-    | arrow he => exact .inr (.inl ⟨rfl, _, _, _, _, _, _, rfl, rfl, rfl, he⟩)
+    | arrow he hn => exact .inr (.inl ⟨rfl, _, _, _, _, _, _, rfl, rfl, rfl, he, hn⟩)
     | method he => exact .inr (.inr (.inl ⟨rfl, _, _, _, _, _, rfl, rfl, rfl, he⟩))
     | getter he => exact .inr (.inr (.inr ⟨rfl, _, _, _, rfl, rfl, rfl, he⟩)),
    fun h => by
-    rcases h with ⟨rfl, rfl⟩ | ⟨rfl, n, b, θ, θ', ps, ρ, rfl, rfl, rfl, he⟩ |
+    rcases h with ⟨rfl, rfl⟩ | ⟨rfl, n, b, θ, θ', ps, ρ, rfl, rfl, rfl, he, hn⟩ |
       ⟨rfl, n, b, θ, ps, ρ, rfl, rfl, rfl, he⟩ | ⟨rfl, b, θ, σ, rfl, rfl, rfl, he⟩
     · exact .data
-    · exact .arrow he
+    · exact .arrow he hn
     · exact .method he
     · exact .getter he⟩
 

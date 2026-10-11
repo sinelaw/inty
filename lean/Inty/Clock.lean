@@ -52,7 +52,7 @@ theorem run_clock_le (clock : Nat) (env : Env) (heap : Heap) (e : Expr) :
     refine bindArgs_le (Nat.le_trans (runArgs_clock_le _ env _ args) lt_min_le) fun vs _ => ?_
     have := Nat.le_trans (call_clock_le (min (runArgs (min (run clock env heap f).2.1 clock) env
       (run clock env heap f).2.2 args).2.1 clock) ((runArgs (min (run clock env heap f).2.1 clock)
-      env (run clock env heap f).2.2 args).2.2 ++ [.fields []]) vf
+      env (run clock env heap f).2.2 args).2.2 ++ [.fields []]) vf.asCtor
       (.obj (runArgs (min (run clock env heap f).2.1 clock) env (run clock env heap f).2.2
         args).2.2.length) vs) lt_min_le
     split <;> simp_all
@@ -372,13 +372,13 @@ theorem run_mono (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (k : Nat)
       at *
     generalize (runArgs (run clock env heap f).2.1 env (run clock env heap f).2.2 args).2.2 = h₂
       at *
-    have hcall : (call c₂ (h₂ ++ [.fields []]) vf (.obj h₂.length) vs).1 ≠ .timeout := by
+    have hcall : (call c₂ (h₂ ++ [.fields []]) vf.asCtor (.obj h₂.length) vs).1 ≠ .timeout := by
       intro ht; apply h
-      generalize call c₂ (h₂ ++ [.fields []]) vf (.obj h₂.length) vs = q at ht ⊢
+      generalize call c₂ (h₂ ++ [.fields []]) vf.asCtor (.obj h₂.length) vs = q at ht ⊢
       obtain ⟨r, c, hq⟩ := q
       simp only at ht; subst ht; rfl
     rw [call_mono _ _ _ _ _ k hcall]
-    generalize call c₂ (h₂ ++ [.fields []]) vf (.obj h₂.length) vs = q
+    generalize call c₂ (h₂ ++ [.fields []]) vf.asCtor (.obj h₂.length) vs = q
     obtain ⟨r, c, hq⟩ := q
     cases r <;> rfl
   | .let_ _ e₁ e₂ => by

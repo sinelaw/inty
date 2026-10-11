@@ -295,11 +295,15 @@ inductive Cls where
   /-- `IndexWrite c`: an element of a `c` can be stored (`c[i] = v`): an
   array's, not a string's. -/
   | indexWrite
+  /-- `NotNew a`: a function whose `this` is an `a` isn't called by `new`:
+  any type but `newTarget`. An arrow field's `this` is one, as `new` on an
+  arrow function throws. -/
+  | notNew
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
-  | .plus | .indexWrite => 1
+  | .plus | .indexWrite | .notNew => 1
   | .indexable | .hasProp _ => 3
   | .merge => 5
 

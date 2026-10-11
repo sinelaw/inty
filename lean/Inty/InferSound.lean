@@ -169,6 +169,12 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
   · cases h
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
     exact Inst.writeArray.instEq
+  · split at h
+    · cases h
+    · rename_i hc
+      cases h
+      simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+      exact (Inst.notNew hc).instEq
   · -- A `Merge` whose operand's field is present.
     rename_i k τ s r
     unfold Pred.decidePre at h
@@ -467,14 +473,21 @@ theorem fieldSlots_sound {ks : List FieldKind} {es : List Expr} {τs θs ss : Li
     · exact h4 _ _ _ _ _ _ rfl rfl rfl
     · cases h
 
+theorem notNewPreds_succ {n n' : Nat} (h : n < n') :
+    notNewPreds n n' = ⟨.notNew, [.var n]⟩ :: notNewPreds (n + 1) n' := by
+  unfold notNewPreds
+  rw [show n' - n = (n' - (n + 1)) + 1 by omega, List.range'_succ]
+  rfl
+
 /-- What `memberSlots` finds: under any substitution that makes each
 `this` it lists the instance's type `T`, each member's slot is as its kind
 says. -/
 theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty} {n : Nat}
     {θs ss : List Ty} {n' : Nat} (h : memberSlots ks es τs n = some (θs, ss, n')) :
     ss.length = ks.length ∧ τs.length = ks.length ∧ es.length = ks.length ∧ n ≤ n' ∧
-      ∀ (ψ : Subst) (T : Ty), (∀ θ ∈ θs, TyEq (θ.subst ψ) T) →
-        ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot T x.1 x.2.1 (x.2.2.1.subst ψ)
+      ∀ (C : List Pred) (ψ : Subst) (T : Ty), (∀ θ ∈ θs, TyEq (θ.subst ψ) T) →
+        Sat C (notNewPreds n n') ψ →
+        ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot C T x.1 x.2.1 (x.2.2.1.subst ψ)
           (x.2.2.2.subst ψ) := by
   induction ks, es, τs, n using memberSlots.induct generalizing θs ss n' with
   | case1 n =>
@@ -489,11 +502,11 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl, rfl⟩ := h
       obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
-      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun ψ T hθ x hx => ?_⟩
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun C ψ T hθ hn x hx => ?_⟩
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
       · simpa [Ty.subst_app] using MemberSlot.data (T := T) (e := e) (τ := τ.subst ψ)
-      · exact h₅ ψ T hθ x hx
+      · exact h₅ C ψ T hθ hn x hx
   | case3 ks m b es θ ρ τs' τs n ih =>
     simp only [memberSlots] at h
     cases hr : memberSlots ks es τs (n + 1) with
@@ -503,13 +516,15 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl, rfl⟩ := h
       obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
-      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], by omega, fun ψ T hθ x hx => ?_⟩
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], by omega, fun C ψ T hθ hn x hx => ?_⟩
+      rw [notNewPreds_succ (by omega)] at hn
+      simp only [Sat, List.mem_cons, forall_eq_or_imp] at hn
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
       · simpa [Ty.subst_app, Ty.subst_fn] using
           MemberSlot.arrow (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
-            (θ' := (Ty.var n).subst ψ) (hθ θ List.mem_cons_self)
-      · exact h₅ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+            (θ' := (Ty.var n).subst ψ) (hθ θ List.mem_cons_self) (by simpa [Pred.subst] using hn.1)
+      · exact h₅ C ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) hn.2 x hx
   | case4 ks m b es θ ρ τs' τs n ih =>
     simp only [memberSlots] at h
     cases hr : memberSlots ks es τs n with
@@ -519,13 +534,13 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl, rfl⟩ := h
       obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
-      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun ψ T hθ x hx => ?_⟩
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun C ψ T hθ hn x hx => ?_⟩
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
       · simpa [Ty.subst_app, Ty.subst_fn] using
           MemberSlot.method (τs := τs'.map (·.subst ψ)) (ρ := ρ.subst ψ) (n := m) (b := b)
             (hθ θ List.mem_cons_self)
-      · exact h₅ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+      · exact h₅ C ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) hn x hx
   | case5 ks b es θ σ τs n ih =>
     simp only [memberSlots] at h
     cases hr : memberSlots ks es τs n with
@@ -535,12 +550,12 @@ theorem memberSlots_sound {ks : List ClassKind} {es : List Expr} {τs : List Ty}
       simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl, rfl⟩ := h
       obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := ih hr
-      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun ψ T hθ x hx => ?_⟩
+      refine ⟨by simp [h₁], by simp [h₂], by simp [h₃], h₄, fun C ψ T hθ hn x hx => ?_⟩
       simp only [List.zip_cons_cons, List.mem_cons] at hx
       rcases hx with rfl | hx
       · simpa [Ty.subst_app, Ty.subst_fn] using
           MemberSlot.getter (σ := σ.subst ψ) (b := b) (hθ θ List.mem_cons_self)
-      · exact h₅ ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) x hx
+      · exact h₅ C ψ T (fun θ' h' => hθ θ' (List.mem_cons_of_mem _ h')) hn x hx
   | case6 t x y m h1 h2 h3 h4 h5 =>
     exfalso
     rw [memberSlots.eq_def] at h
@@ -1070,7 +1085,8 @@ theorem infer_sound :
     · cases h
     rename_i σ' hu
     simp only [Option.some.injEq] at h; subst h
-    simp only [Sat.map] at hsat
+    simp only [Sat.map, Sat.append] at hsat
+    obtain ⟨hsat, hsatn⟩ := hsat
     have hm := inferMembers_sound es ks ih h₁ _ C hsat
     obtain ⟨hssl, hτl, -, -, hslot⟩ := memberSlots_sound hms
     have hthis := unifyThis_sound hu
@@ -1079,7 +1095,7 @@ theorem infer_sound :
     have hθ : ∀ θ ∈ θs, TyEq (θ.subst (Subst.compose φ σ'))
         ((Ty.record L (objSlots L ls ss)).subst (Subst.compose φ σ')) := fun θ hθ => by
       simpa only [Ty.subst_compose] using hthis θ hθ φ
-    have hslot' := hslot _ _ hθ
+    have hslot' := hslot C _ _ hθ hsatn
     simp only [Ty.subst_app, objSlots_subst] at hslot' ⊢
     refine .cls (τs := o₁.τs.map (·.subst (Subst.compose φ σ'))) hesl hksl (by simp; omega)
       (by simp; omega) hnd hL (fun i e k τ h₁ h₂ h₃ => ?_) ?_

@@ -793,6 +793,18 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       | [x], _ =>
         simp only [hxs, Pred.decide₀, Improve.Holds]
         exact TyEq.refl _
+  | @notNew c₀ xs₀ hc₀ =>
+    match args, hl with
+    | [t], _ =>
+      obtain ⟨rfl, ht⟩ := PredEq.one hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, -, -⟩
+      · simp [ha, Ty.isVar] at hnv
+      simp only [hxs, Pred.decide₀, hc₀, ↓reduceIte, Improve.Holds]
+      exact TyEq.refl _
 
 theorem Pred.improve_of_args {top : Bool} {c : Cls} {args : List Ty} {φ : Subst}
     (h : c ≠ .plus → (c = .merge → top = true) → (Pred.improveArgs c args).Holds φ) :
@@ -1389,16 +1401,17 @@ theorem inferMembers_complete : ∀ (es : List Expr) (ks : List ClassKind) (τs'
 
 /-- A class's member slots, from types equal under `φ` to a typing's: an
 arrow field's `this` is a fresh variable, sent to the typing's. -/
-theorem memberSlots_complete {T' : Ty} : ∀ {ks : List ClassKind} {es : List Expr}
+theorem memberSlots_complete {C : List Pred} {T' : Ty} : ∀ {ks : List ClassKind} {es : List Expr}
     {τs τs' ss' : List Ty} {m : Nat} {φ : Subst}, FnShaped es τs → (∀ τ ∈ τs, τ.Below m) →
     TyEqs (τs.map (·.subst φ)) τs' →
     ks.length = es.length → es.length = τs.length → ss'.length = τs'.length →
-    (∀ x ∈ ks.zip (es.zip (τs'.zip ss')), MemberSlot T' x.1 x.2.1 x.2.2.1 x.2.2.2) →
+    (∀ x ∈ ks.zip (es.zip (τs'.zip ss')), MemberSlot C T' x.1 x.2.1 x.2.2.1 x.2.2.2) →
     ∃ θs ss m' φ', memberSlots ks es τs m = some (θs, ss, m') ∧ m ≤ m' ∧
       (∀ τ : Ty, τ.Below m → τ.subst φ' = τ.subst φ) ∧
-      TyEqs (ss.map (·.subst φ')) ss' ∧ ∀ θ ∈ θs, TyEq (θ.subst φ') T'
+      TyEqs (ss.map (·.subst φ')) ss' ∧ (∀ θ ∈ θs, TyEq (θ.subst φ') T') ∧
+      Sat C (notNewPreds m m') φ'
   | [], [], [], [], [], m, φ, _, _, _, _, _, _, _ =>
-    ⟨[], [], m, φ, rfl, Nat.le_refl _, fun _ _ => rfl, .nil, by simp⟩
+    ⟨[], [], m, φ, rfl, Nat.le_refl _, fun _ _ => rfl, .nil, by simp, by simp [notNewPreds]⟩
   | k :: ks, e :: es, τ :: τs, τ' :: τs', s' :: ss', m, φ, hsh, hb, hτs, hk, he, hs, hf => by
     cases hτs with
     | cons hτ hτs =>
@@ -1406,21 +1419,21 @@ theorem memberSlots_complete {T' : Ty} : ∀ {ks : List ClassKind} {es : List Ex
     have hb₀ := hb τ List.mem_cons_self
     have hbs : ∀ τ ∈ τs, τ.Below m := fun τ hτ => hb τ (List.mem_cons_of_mem _ hτ)
     have hf₀ := hf (k, e, τ', s') (by simp)
-    have hf' : ∀ x ∈ ks.zip (es.zip (τs'.zip ss')), MemberSlot T' x.1 x.2.1 x.2.2.1 x.2.2.2 :=
+    have hf' : ∀ x ∈ ks.zip (es.zip (τs'.zip ss')), MemberSlot C T' x.1 x.2.1 x.2.2.1 x.2.2.2 :=
       fun x hx => hf x (by simp [hx])
     simp only at hf₀
     cases hf₀ with
     | data =>
-      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs⟩ := memberSlots_complete hsh.tail hbs hτs
+      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs, hnn⟩ := memberSlots_complete hsh.tail hbs hτs
         (by simpa using hk) (by simpa using he) (by simpa using hs) hf'
       refine ⟨θs, .slot .pre .data τ :: ss, m', φ', by simp [memberSlots, h], hm, hφ',
-        .cons ?_ hss, hθs⟩
+        .cons ?_ hss, hθs, hnn⟩
       dsimp only
       rw [hφ' _ (Ty.Below.app.mpr (by simp [hb₀, Ty.Below.con]))]
       exact TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) hτ
-    | @arrow θ' n b τs'' ρ' θ'' hθ =>
+    | @arrow θ' θ'' n b τs'' ρ' hθ hn =>
       obtain ⟨θ, ps, ρ, rfl, -⟩ := hsh.head rfl
-      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs⟩ := memberSlots_complete (m := m + 1)
+      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs, hnn⟩ := memberSlots_complete (m := m + 1)
         (φ := (m, θ'') :: φ) hsh.tail (fun τ hτ => (hbs τ hτ).mono (Nat.le_succ _))
         (by rw [List.map_congr_left (fun τ hτ => Ty.subst_cons_fresh (hbs τ hτ))]; exact hτs)
         (by simpa using hk) (by simpa using he) (by simpa using hs) hf'
@@ -1429,8 +1442,10 @@ theorem memberSlots_complete {T' : Ty} : ∀ {ks : List ClassKind} {es : List Ex
         rw [hφ' τ (hτ.mono (Nat.le_succ _)), Ty.subst_cons_fresh hτ]
       simp only [Ty.subst_fn] at hτ
       obtain ⟨h₁, h₂, h₃⟩ := TyEq.fn_inv hτ
+      have hvm : (Ty.var m).subst φ' = θ'' := by
+        rw [hφ' _ (Ty.Below.var (Nat.lt_succ_self m))]; simp [Ty.subst, Subst.find]
       refine ⟨θ :: θs, .slot .pre .data (.fn (.var m) ps ρ) :: ss, m', φ',
-        by simp [memberSlots, h], by omega, hφm, .cons ?_ hss, ?_⟩
+        by simp [memberSlots, h], by omega, hφm, .cons ?_ hss, ?_, ?_⟩
       · simp only [Ty.subst_app, List.map_cons, List.map_nil]
         refine TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) (TyEq.fn_mk ?_ ?_ ?_)
         · rw [hφ' _ (Ty.Below.var (Nat.lt_succ_self m))]
@@ -1441,12 +1456,17 @@ theorem memberSlots_complete {T' : Ty} : ∀ {ks : List ClassKind} {es : List Ex
         rcases List.mem_cons.mp hθ₁ with rfl | hθ₁
         · rw [hφm _ hθb]; exact h₁.trans hθ
         · exact hθs θ₁ hθ₁
+      · rw [notNewPreds_succ (by omega)]
+        intro p hp
+        rcases List.mem_cons.mp hp with rfl | hp
+        · simpa [Pred.subst, hvm] using hn
+        · exact hnn p hp
     | @method θ' n b τs'' ρ' hθ =>
       obtain ⟨θ, ps, ρ, rfl, -⟩ := hsh.head rfl
-      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs⟩ := memberSlots_complete hsh.tail hbs hτs
+      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs, hnn⟩ := memberSlots_complete hsh.tail hbs hτs
         (by simpa using hk) (by simpa using he) (by simpa using hs) hf'
       refine ⟨θ :: θs, .slot .pre .proto (.fn θ ps ρ) :: ss, m', φ', by simp [memberSlots, h], hm,
-        hφ', .cons ?_ hss, ?_⟩
+        hφ', .cons ?_ hss, ?_, hnn⟩
       · dsimp only
         rw [hφ' _ (Ty.Below.app.mpr (by simp [hb₀, Ty.Below.con]))]
         exact TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) hτ
@@ -1459,13 +1479,13 @@ theorem memberSlots_complete {T' : Ty} : ∀ {ks : List ClassKind} {es : List Ex
     | @getter θ' b σ' hθ =>
       obtain ⟨θ, ps, ρ, rfl, hl⟩ := hsh.head rfl
       obtain rfl : ps = [] := List.eq_nil_of_length_eq_zero hl
-      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs⟩ := memberSlots_complete hsh.tail hbs hτs
+      obtain ⟨θs, ss, m', φ', h, hm, hφ', hss, hθs, hnn⟩ := memberSlots_complete hsh.tail hbs hτs
         (by simpa using hk) (by simpa using he) (by simpa using hs) hf'
       obtain ⟨hθb, -, hρb⟩ := Ty.Below.fn.mp hb₀
       simp only [Ty.subst_fn] at hτ
       obtain ⟨h₁, h₂, -⟩ := TyEq.fn_inv hτ
       refine ⟨θ :: θs, .slot .pre .proto ρ :: ss, m', φ', by simp [memberSlots, h], hm,
-        hφ', .cons ?_ hss, ?_⟩
+        hφ', .cons ?_ hss, ?_, hnn⟩
       · dsimp only
         rw [hφ' _ (Ty.Below.app.mpr (by simp [hρb, Ty.Below.con]))]
         exact TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) h₂
@@ -1606,7 +1626,7 @@ theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep 
     obtain ⟨rfl, rfl⟩ := hf
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
     rcases hr with rfl | rfl <;> exact absurd hb Ty.tv_con
-  | writeArray =>
+  | writeArray | notNew _ =>
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨rfl, rfl⟩ := hf
     simp at hr
@@ -2498,7 +2518,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         ⟨List.all_eq_true.mpr (fun l hl => by simpa using hL l hl), hnd, hes, hks⟩
       have hlen : o.τs.length = es.length := by
         have := hτs₂.length; simp only [List.length_map] at this; omega
-      obtain ⟨θs, ss, m', φ', hm, hm', hφ', hss₂, hθs⟩ := memberSlots_complete
+      obtain ⟨θs, ss, m', φ', hm, hm', hφ', hss₂, hθs, hnn⟩ := memberSlots_complete
         (inferMembers_shape h) hτsb hτs₂ (by omega) hlen.symm (by omega) hslots
       have hT : TyEq ((Ty.record L (objSlots L ls ss)).subst φ') (.record L (objSlots L ls ss')) := by
         simp only [Ty.subst_app, objSlots_subst]
@@ -2513,7 +2533,8 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         exact List.map_congr_left (fun τ hτ => hφ' τ (fun a ha => hp _ hp' a
           (List.mem_flatMap.mpr ⟨τ, hτ, ha⟩)))
       refine ⟨_, by simp only [infer, hc, and_self, ↓reduceIte, h, hm, hσ']; rfl, φ',
-        hag'.absorb habs, (habs _).trans (hT.trans hτ₀), Sat.absorb habs (fun p hp' => ?_)⟩
+        hag'.absorb habs, (habs _).trans (hT.trans hτ₀),
+        Sat.absorb habs (Sat.append.mpr ⟨fun p hp' => ?_, hnn⟩)⟩
       rw [hpφ p hp']; exact hsat p hp'
   | ctor k body ih =>
     intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' _ ht

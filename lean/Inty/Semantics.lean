@@ -319,6 +319,19 @@ def Value.isObject : Value → Bool
   | .obj _ | .arr _ | .closure .. | .prim _ | .bound .. => true
   | _ => false
 
+/-- Whether `new` can call a value: a closure, a `function` or a
+constructor. A native function isn't a constructor, and neither is an
+arrow field's closure bound to its instance: `new` on one throws a
+`TypeError` in JavaScript. -/
+def Value.isCtor : Value → Bool
+  | .closure .. => true
+  | _ => false
+
+/-- What `new` calls: the value if it is a constructor, else `undefined`,
+which isn't callable, so that `new` on a function that isn't a
+constructor is stuck as a call of something that isn't a function is. -/
+def Value.asCtor (v : Value) : Value := if v.isCtor then v else .undefined
+
 /-- A call's result: a `return` from the body is the call's value. -/
 def Result.catchReturn : Result → Result
   | .returned v => .ok v
@@ -401,11 +414,12 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
     bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
       call (min c₂ clock) h₂ vf .undefined vs
   -- `new f(…)`: as a call, with a new object as `this`, which is the
-  -- result unless the call gives an object.
+  -- result unless the call gives an object; stuck if `f` isn't a
+  -- constructor (`Value.asCtor`).
   | .new_ f args =>
     bindC (run clock env heap f) fun vf c₁ h₁ =>
     bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
-      match call (min c₂ clock) (h₂ ++ [.fields []]) vf (.obj h₂.length) vs with
+      match call (min c₂ clock) (h₂ ++ [.fields []]) vf.asCtor (.obj h₂.length) vs with
       | (.ok v, c₃, h₃) => (.ok (if v.isObject then v else .obj h₂.length), c₃, h₃)
       | p => p
   | .let_ _ e₁ e₂ =>

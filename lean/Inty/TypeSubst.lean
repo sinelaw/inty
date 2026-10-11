@@ -42,11 +42,12 @@ theorem FieldSlot.subst (σ : Subst) (h : FieldSlot T k e τ s) :
   | method he => simpa using FieldSlot.method (τs := _) (ρ := _) (he.subst σ)
   | getter he => simpa using FieldSlot.getter (σ := _) (he.subst σ)
 
-theorem MemberSlot.subst (σ : Subst) (h : MemberSlot T k e τ s) :
-    MemberSlot (T.subst σ) k e (τ.subst σ) (s.subst σ) := by
+theorem MemberSlot.subst (σ : Subst) (h : MemberSlot C T k e τ s) :
+    MemberSlot (C.map (·.subst σ)) (T.subst σ) k e (τ.subst σ) (s.subst σ) := by
   cases h with
   | data => exact .data
-  | arrow he => simpa using MemberSlot.arrow (τs := _) (ρ := _) (θ' := _) (he.subst σ)
+  | arrow he hn =>
+    simpa using MemberSlot.arrow (τs := _) (ρ := _) (he.subst σ) (by simpa [Pred.subst] using hn.subst σ)
   | method he => simpa using MemberSlot.method (τs := _) (ρ := _) (he.subst σ)
   | getter he => simpa using MemberSlot.getter (σ := _) (he.subst σ)
 

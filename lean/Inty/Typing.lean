@@ -78,14 +78,16 @@ sits in the instance's record type `T`: a field holds a value; an arrow
 field, a method and a getter are written as functions, whose `this` is the
 instance; a method and a getter are on the prototype. An arrow field's
 `this` is bound to the instance, so it may be called on anything, outside
-a receiver too. -/
-inductive MemberSlot (T : Ty) : ClassKind → Expr → Ty → Ty → Prop where
-  | data : MemberSlot T .data e τ (.slot .pre .data τ)
-  | arrow : TyEq θ T →
-      MemberSlot T .arrow (.func n b) (.fn θ τs ρ) (.slot .pre .data (.fn θ' τs ρ))
+a receiver too, but not by `new`, as an arrow function isn't a
+constructor: under the class assumptions `C`, its slot's `this` is
+`NotNew`. -/
+inductive MemberSlot (C : List Pred) (T : Ty) : ClassKind → Expr → Ty → Ty → Prop where
+  | data : MemberSlot C T .data e τ (.slot .pre .data τ)
+  | arrow : TyEq θ T → Entails C ⟨.notNew, [θ']⟩ →
+      MemberSlot C T .arrow (.func n b) (.fn θ τs ρ) (.slot .pre .data (.fn θ' τs ρ))
   | method : TyEq θ T →
-      MemberSlot T .method (.func n b) (.fn θ τs ρ) (.slot .pre .proto (.fn θ τs ρ))
-  | getter : TyEq θ T → MemberSlot T .getter (.func 0 b) (.fn θ [] σ) (.slot .pre .proto σ)
+      MemberSlot C T .method (.func n b) (.fn θ τs ρ) (.slot .pre .proto (.fn θ τs ρ))
+  | getter : TyEq θ T → MemberSlot C T .getter (.func 0 b) (.fn θ [] σ) (.slot .pre .proto σ)
 
 /-- The context a class's member `i`, written as `k`, is checked in: a
 field's initialiser sees the fields before it, the latest first; the
@@ -182,7 +184,7 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
       (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
         HasType L C (memberCtx Γ ks τs i k) R e τ) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
-        MemberSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
+        MemberSlot C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
       HasType L C Γ R (.cls ls es ks) (.record L (objSlots L ls ss))
   /-- A constructor is a function whose `this` is what `new` makes, which
   nothing else gives (`newTarget`). -/
@@ -286,7 +288,7 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
       (∀ i e k τ, es[i]? = some e → ks[i]? = some k → τs[i]? = some τ →
         HasType L C (memberCtx Γ ks τs i k) R e τ) →
       (∀ x ∈ ks.zip (es.zip (τs.zip ss)),
-        MemberSlot (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
+        MemberSlot C (.record L (objSlots L ls ss)) x.1 x.2.1 x.2.2.1 x.2.2.2) →
       HasTypeTop L C Γ R (.cls ls es ks) (.record L (objSlots L ls ss))
   | ctor : τs.length = n →
       HasType L C (τs.map .mono ++ .mono (.fn .newTarget τs ρ) :: .mono .newTarget :: Γ)

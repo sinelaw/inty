@@ -384,6 +384,9 @@ theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b 
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
     rcases hτ with rfl | rfl <;> exact Ty.Below.con
   · cases h; exact ⟨hnum, hnum⟩
+  · split at h
+    · cases h
+    · cases h; exact ⟨hnum, hnum⟩
   · rename_i k τ s r
     unfold Pred.decidePre at h
     split at h
@@ -1218,7 +1221,11 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     refine ⟨Nat.le_trans hn₁ hn', (hσ₁.mono hn').compose hw, hw.subst_below hT, ?_⟩
     intro p hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
-    exact hw.pred_below ((hp₁ q hq).mono hn')
+    rcases List.mem_append.mp hq with hq | hq
+    · exact hw.pred_below ((hp₁ q hq).mono hn')
+    · obtain ⟨a, ha, rfl⟩ := List.mem_map.mp hq
+      simp only [List.mem_range'_1] at ha
+      exact hw.pred_below (fun x hx => by simp [Pred.ftv, Ty.ftv] at hx; omega)
   | ctor k body ih =>
     intro Γ R n o hΓ _ h
     simp only [infer] at h

@@ -14,11 +14,17 @@ native function at a time, each with its proof.
 
 namespace Inty
 
-/-- `Math.abs : (number) => number`, called with any `this`. A native call
+/-- A native function isn't a constructor, so its `this` type isn't
+`newTarget`; called outside a receiver, it is `undefined`. -/
+theorem undefined_ne_newTarget : ¬ TyEq .undefined .newTarget := fun h =>
+  nomatch (TyEq.app_iff.mp h).1
+
+/-- `Math.abs : (number) => number`, called with any `this` but `newTarget`. A native call
 takes a tick and leaves the heap alone. -/
-theorem Prim.abs_sound (k : Nat) (W : World) (θ : Ty) :
+theorem Prim.abs_sound (k : Nat) (W : World) (θ : Ty) (hθ : ¬ TyEq θ .newTarget) :
     V k W (.fn θ [.number] .number) (.prim .abs) := by
   rw [V_fn]
+  refine ⟨fun h => absurd h hθ, ?_⟩
   intro j _ W' _ h _ args _ hh _ hargs
   cases j with
   | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩
@@ -34,9 +40,10 @@ theorem Prim.abs_sound (k : Nat) (W : World) (θ : Ty) :
     | [], hargs | _ :: _ :: _, hargs => simp at hargs
 
 /-- `Boolean : <a>(a) => boolean`: it takes any value. -/
-theorem Prim.truthy_sound (k : Nat) (W : World) (θ τ : Ty) :
+theorem Prim.truthy_sound (k : Nat) (W : World) (θ τ : Ty) (hθ : ¬ TyEq θ .newTarget) :
     V k W (.fn θ [τ] .boolean) (.prim .truthy) := by
   rw [V_fn]
+  refine ⟨fun h => absurd h hθ, ?_⟩
   intro j _ W' _ h _ args _ hh _ hargs
   cases j with
   | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩
@@ -68,10 +75,10 @@ theorem builtins_sound (k : Nat) :
   | 0, hs =>
     simp [builtinCtx] at hs; subst hs
     exact ⟨_, rfl, fun τs _ _ => by
-      simpa [Scheme.inst, PTy.inst] using Prim.truthy_sound k _ _ _⟩
+      simpa [Scheme.inst, PTy.inst] using Prim.truthy_sound k _ _ _ undefined_ne_newTarget⟩
   | 1, hs =>
     simp [builtinCtx] at hs; subst hs
-    exact ⟨_, rfl, SchemeV.mono_iff.mpr (Prim.abs_sound k _ _)⟩
+    exact ⟨_, rfl, SchemeV.mono_iff.mpr (Prim.abs_sound k _ _ undefined_ne_newTarget)⟩
   | _ + 2, hs => simp [builtinCtx] at hs
 
 /-- A program well typed in the builtins' context never gets stuck in their

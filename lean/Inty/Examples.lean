@@ -419,6 +419,16 @@ def classD : Expr :=
 #guard inferProgram (.let_ false classD (.app (.get (.new_ (.var 0) []) "f") [])) == some .number
 #guard match eval 20 [] [] (.let_ false classD (.app (.get (.new_ (.var 0) []) "f") [])) with
   | .ok (.number n) => n == 2 | _ => false
+-- An arrow function isn't a constructor: `new` on an arrow field throws a
+-- `TypeError` in JavaScript, and is stuck here (`Value.asCtor`). Its `this`
+-- is `NotNew`, so it isn't typed.
+#guard inferProgram (.let_ false classD (.new_ (.get (.new_ (.var 0) []) "f") [])) == none
+#guard match eval 20 [] [] (.let_ false classD (.new_ (.get (.new_ (.var 0) []) "f") [])) with
+  | .stuck _ => true | _ => false
+-- Read off its instance, it is called on that instance, or outside one.
+#guard inferProgram (.let_ false classD
+  (.binop .plus (.mcall (.new_ (.var 0) []) "f" []) (.app (.get (.new_ (.var 0) []) "f") [])))
+    == some .number
 
 -- `function f(x) { return f; }; f(1)(2) - 1`: `f` returns itself, a
 -- recursive function type, so `f(1)(2)` is `f`, not a number.

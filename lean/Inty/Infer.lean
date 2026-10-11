@@ -141,6 +141,7 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
   | .indexable, .string, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, .string])
   -- (An instance holds: a trivial equation drops it.)
   | .indexWrite, .array _, [] => .eq .number .number
+  | .notNew, .app c _, [] => if c = .newTarget then .fail else .eq .number .number
   | .merge, .pre, [k, τ, s, r] => Pred.decidePre k τ s r
   | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
   | _, _, _ => .fail
@@ -309,6 +310,12 @@ def memberSlots : List ClassKind → List Expr → List Ty → Nat → Option (L
   | .getter :: ks, .func 0 _ :: es, .fn θ [] σ :: τs, n =>
     (memberSlots ks es τs n).map fun (θs, ss, n') => (θ :: θs, .slot .pre .proto σ :: ss, n')
   | _, _, _, _ => none
+
+/-- `NotNew` on each of the variables from `n` up to `n'`: what
+`memberSlots` gives a class's arrow fields' `this` types, as `new` on an
+arrow function throws. -/
+def notNewPreds (n n' : Nat) : List Pred :=
+  (List.range' n (n' - n)).map fun a => ⟨.notNew, [.var a]⟩
 
 /-- Unify each `this` type `θs` with the record type `T`: with each other,
 then with `T`, which makes it recursive (inty's `shared_this`). -/
@@ -552,7 +559,8 @@ def infer : Ctx → Option Ty → Expr → Nat → Option Out
           let T := Ty.record L (objSlots L ls ss)
           match unifyThis θs T with
           | none => none
-          | some σ' => some ⟨Subst.compose σ' o.σ, T.subst σ', o.preds.map (·.subst σ'), n'⟩
+          | some σ' => some ⟨Subst.compose σ' o.σ, T.subst σ',
+              (o.preds ++ notNewPreds o.next n').map (·.subst σ'), n'⟩
     else none
   -- A constructor: a function whose `this` is what `new` makes.
   | Γ, _, .ctor k body, n =>

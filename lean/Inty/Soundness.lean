@@ -171,7 +171,8 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .null, v => v = .null
   | .unknown, _ => True
   | .newTarget, _ => True
-  | .fn θ τs ρ, f => ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args, args.length = τs.length →
+  | .fn θ τs ρ, f => (TyEq θ .newTarget → f.isCtor = true) ∧
+      ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args, args.length = τs.length →
       (∀ i, i < j → HeapInv (CellP (fun τ v => V i W' τ v)) W' h) →
       (∀ i, i < j → V i W' θ thisv) → (∀ i, i < j → VList i W' τs args) →
       Lands (call j h f thisv args) j W'
@@ -223,7 +224,7 @@ def HeapOK (k : Nat) (W : World) (h : Heap) : Prop := HeapInv (CellV k W) W h
 
 /-- The function clause of `V`, in terms of `HeapOK`. -/
 theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
-    V k W (.fn θ τs ρ) f ↔ ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
+    V k W (.fn θ τs ρ) f ↔ (TyEq θ .newTarget → f.isCtor = true) ∧ ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
       args.length = τs.length → (∀ i, i < j → HeapOK i W' h) →
       (∀ i, i < j → V i W' θ thisv) → (∀ i, i < j → VList i W' τs args) →
       Lands (call j h f thisv args) j W' (fun c W'' h'' => c < j → HeapOK c W'' h'')
@@ -294,8 +295,9 @@ theorem V.mono_app {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c
   · obtain ⟨θ, τs, ρ, e⟩ := hfn
     rw [e] at hv ⊢
     rw [V_fn] at hv ⊢
+    refine ⟨hv.1, ?_⟩
     intro i hi W'' hW'' h thisv args hl hh ht ha
-    exact hv i (Nat.le_trans hi hjk) W'' (hW.trans hW'') h thisv args hl hh ht ha
+    exact hv.2 i (Nat.le_trans hi hjk) W'' (hW.trans hW'') h thisv args hl hh ht ha
   · by_cases hrec : ∃ ls slots, Ty.app c args = .record ls slots
     · obtain ⟨ls, slots, e⟩ := hrec
       rw [e] at hv ⊢
@@ -391,8 +393,9 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
       change V k W (.fn θ' τs' ρ') v
       change V k W (.fn θ τs ρ) v at hv
       rw [V_fn] at hv ⊢
+      refine ⟨fun h' => hv.1 (hθ.symm.trans h'), ?_⟩
       intro j hj W' hW h thisv xs hxs hh hthis hargs
-      have H := hv j hj W' hW h thisv xs (by rw [hxs]; exact hl'.symm) hh
+      have H := hv.2 j hj W' hW h thisv xs (by rw [hxs]; exact hl'.symm) hh
         (fun i hi => ihk i (by omega) hθ (hthis i hi))
         (fun i hi => VList.tyEq (fun e hv' => ihk i (by omega) e hv') hl'.symm
           (zip_tyEq_symm hτs) (hargs i hi))
@@ -1028,7 +1031,7 @@ safe. -/
 theorem getter_call_sound {k : Nat} {W : World} {h : Heap} {T σ : Ty} {g vo : Value}
     {R : Option Ty} (hg : V k W (.fn T [] σ) g) (hvo : V k W T vo) (hH : HeapOK k W h) :
     Safe (call k h g vo []) k W σ R :=
-  Lands.safe (V_fn.mp hg _ (Nat.le_refl k) W (List.prefix_refl W) h vo [] rfl
+  Lands.safe ((V_fn.mp hg).2 _ (Nat.le_refl k) W (List.prefix_refl W) h vo [] rfl
     (fun _ hi => hH.mono (by omega)) (fun _ hi => hvo.mono (by omega) (List.prefix_refl W))
     (fun _ _ => by simp))
 
@@ -1779,6 +1782,7 @@ theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} 
   | zero =>
     intro W _
     rw [V_fn]
+    refine ⟨fun _ => rfl, ?_⟩
     intro i hi W' _ h' thisv args hl _ _ _
     obtain rfl : i = 0 := by omega
     simp only [call, callClosure, hl, Nat.le_refl, ↓reduceIte]
@@ -1786,6 +1790,7 @@ theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} 
   | succ j ihj =>
     intro W hGW
     rw [V_fn]
+    refine ⟨fun _ => rfl, ?_⟩
     intro i hi W' hW' h' thisv args hl hh hthis hargs
     cases i with
     | zero =>
@@ -1830,17 +1835,33 @@ theorem func_value {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} 
   · cases hv
 
 /-- A closure bound to `self`: calling it calls the closure on `self`,
-whatever it is called on. -/
+whatever it is called on. It isn't a constructor, so its `this` type isn't
+`newTarget`. -/
 theorem V_bound {k : Nat} {W : World} {θ θ' ρ : Ty} {τs : List Ty} {cenv : Env} {n : Nat}
     {b : Expr} {self : Value} (hf : V k W (.fn θ τs ρ) (.closure cenv n b))
-    (hs : ∀ i, i ≤ k → V i W θ self) : V k W (.fn θ' τs ρ) (.bound (.closure cenv n b) self) := by
+    (hs : ∀ i, i ≤ k → V i W θ self) (hθ' : ¬ TyEq θ' .newTarget) :
+    V k W (.fn θ' τs ρ) (.bound (.closure cenv n b) self) := by
   rw [V_fn] at hf ⊢
+  refine ⟨fun h' => absurd h' hθ', ?_⟩
   intro j hj W' hW' h thisv args hl hh _ ha
   have e : call j h (.bound (.closure cenv n b) self) thisv args =
       call j h (.closure cenv n b) self args := by simp only [call]
   rw [e]
-  exact hf j hj W' hW' h self args hl hh
+  exact hf.2 j hj W' hW' h self args hl hh
     (fun i hi => (hs i (by omega)).mono (Nat.le_refl i) hW') ha
+
+/-- An entailed `NotNew θ`, under constraints each an instance or on a type
+variable: `θ` isn't `newTarget`. -/
+theorem Entails.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVar C)
+    (h : Entails C ⟨.notNew, [θ]⟩) : ¬ TyEq θ .newTarget := by
+  intro hθ
+  rcases h.instOrVar hC (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hv⟩
+  · cases hi with
+    | notNew hc => exact hc (TyEq.app_iff.mp ((PredEq.one hq).2.symm.trans hθ)).1
+    | _ => cases hq.1
+  · simp only [List.cons.injEq] at ht
+    obtain ⟨rfl, rfl⟩ := ht
+    simpa using TyEq.whnf_var hθ hv
 
 /-- The types of a class's fields that hold values, in order. -/
 def dataTys : List ClassKind → List Ty → List Ty
@@ -1945,12 +1966,12 @@ theorem MemberP.congr {P : Ty → Value → Prop} {T : Ty} {fs fs' : List (Strin
 /-- A class's members: each holds what its slot says, the instance's
 type being `T`. -/
 theorem clsMembers_sound {c : Nat} {W : World} {env : Env} {self : Value} {T : Ty}
-    (hself : ∀ i, i ≤ c → V i W T self) :
+    {C : List Pred} (hself : ∀ i, i ≤ c → V i W T self) (hC : HoldsOrVar C) :
     ∀ (ls : List String) (es : List Expr) (ks : List ClassKind) (τs ss : List Ty)
       (vs : List Value),
       es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length →
-      (∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot T x.1 x.2.1 x.2.2.1 x.2.2.2) →
+      (∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot C T x.1 x.2.1 x.2.2.1 x.2.2.2) →
       (∀ (i : Nat) (kd : ClassKind) (n : Nat) (b : Expr) (τ : Ty), ks[i]? = some kd →
         es[i]? = some (Expr.func n b) → τs[i]? = some τ →
         kd ≠ .data → V c W τ (.closure env n b)) →
@@ -1967,40 +1988,40 @@ theorem clsMembers_sound {c : Nat} {W : World} {env : Env} {self : Value} {T : T
     simp at hl
   | l :: ls, e :: es, kd :: ks, τ :: τs, s :: ss, vs, h₁, h₂, h₃, h₄, hm, hf, hvs => by
     simp only [List.length_cons, Nat.add_right_cancel_iff] at h₁ h₂ h₃ h₄
-    have hm' : ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot T x.1 x.2.1 x.2.2.1 x.2.2.2 :=
+    have hm' : ∀ x ∈ ks.zip (es.zip (τs.zip ss)), MemberSlot C T x.1 x.2.1 x.2.2.1 x.2.2.2 :=
       fun x hx => hm x (List.mem_cons_of_mem _ hx)
     have hf' : ∀ (i : Nat) (kd : ClassKind) (n : Nat) (b : Expr) (τ : Ty), ks[i]? = some kd →
         es[i]? = some (Expr.func n b) →
         τs[i]? = some τ → kd ≠ .data → V c W τ (.closure env n b) :=
       fun i kd n b τ a₁ a₂ a₃ a₄ => hf (i + 1) kd n b τ (by simpa using a₁) (by simpa using a₂)
         (by simpa using a₃) a₄
-    have hms : MemberSlot T kd e τ s := hm _ List.mem_cons_self
+    have hms : MemberSlot C T kd e τ s := hm _ List.mem_cons_self
     cases hms with
     | data =>
       cases vs with
       | nil => simp [dataTys] at hvs
       | cons v vs =>
         simp only [dataTys, VList_cons] at hvs
-        obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf'
+        obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself hC ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf'
           hvs.2
         refine ⟨(l, .data, v) :: fs, by simp [clsMembers, hfs], by simp [hl], fun p hp' => ?_⟩
         rcases List.mem_cons.mp hp' with rfl | hp'
         · exact .inl ⟨τ, TyEq.refl _, v, by simp, hvs.1⟩
         · exact hp p hp'
-    | @arrow θ n b τs' ρ θ' hθ =>
+    | @arrow θ θ' n b τs' ρ hθ hn =>
       simp only [dataTys] at hvs
-      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself hC ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
       refine ⟨(l, .data, .bound (.closure env n b) self) :: fs, by simp [clsMembers, hfs],
         by simp [hl], fun p hp' => ?_⟩
       rcases List.mem_cons.mp hp' with rfl | hp'
       · have hclo := hf 0 .arrow n b _ rfl rfl rfl (by decide)
         refine .inl ⟨_, TyEq.refl _, .bound (.closure env n b) self, by simp,
-          V_bound hclo (fun i hi => ?_)⟩
+          V_bound hclo (fun i hi => ?_) (Entails.notNew hC hn)⟩
         exact V.tyEq _ hθ.symm ((hself i hi).mono (Nat.le_refl i) (List.prefix_refl W))
       · exact hp p hp'
     | @method θ n b τs' ρ hθ =>
       simp only [dataTys] at hvs
-      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself hC ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
       refine ⟨(l, .method, .closure env n b) :: fs, by simp [clsMembers, hfs], by simp [hl],
         fun p hp' => ?_⟩
       rcases List.mem_cons.mp hp' with rfl | hp'
@@ -2009,7 +2030,7 @@ theorem clsMembers_sound {c : Nat} {W : World} {env : Env} {self : Value} {T : T
       · exact hp p hp'
     | @getter θ b σ hθ =>
       simp only [dataTys] at hvs
-      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself hC ls es ks τs ss vs h₁ h₂ h₃ h₄ hm' hf' hvs
       refine ⟨(l, .protoGetter, .closure env 0 b) :: fs, by simp [clsMembers, hfs],
         by simp [hl], fun p hp' => ?_⟩
       rcases List.mem_cons.mp hp' with rfl | hp'
@@ -2113,7 +2134,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         fun vs W₂ _ hW₂ hH₂ hvs => ?_
       have hc₂ := runArgs_clock_le (run k env h f).2.1 env (run k env h f).2.2 args
       rw [Nat.min_eq_left (Nat.le_trans hc₂ hc₁)]
-      exact Lands.safe (V_fn.mp (V.mono hc₂ hW₂ hvf) _ (Nat.le_refl _) W₂ (List.prefix_refl _)
+      exact Lands.safe ((V_fn.mp (V.mono hc₂ hW₂ hvf)).2 _ (Nat.le_refl _) W₂ (List.prefix_refl _)
         _ .undefined vs hvs.length (fun i hi => hH₂.mono (by omega)) (by simp)
         (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
   | let_ mb e₁ e₂ ih₁ ih₂ =>
@@ -2546,7 +2567,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         env (getter (run k env h e).2.1 (run k env h e).2.2 vo (vo.read (run k env h e).2.2 l)).2.2
         args
       rw [Nat.min_eq_left (Nat.le_trans hc₃ (Nat.le_trans hc₂ hc₁))]
-      exact Lands.safe (V_fn.mp (V.mono hc₃ hW₃ hvf) _ (Nat.le_refl _) W₃ (List.prefix_refl _)
+      exact Lands.safe ((V_fn.mp (V.mono hc₃ hW₃ hvf)).2 _ (Nat.le_refl _) W₃ (List.prefix_refl _)
         _ vo vs hvs.length (fun i hi => hH₃.mono (by omega))
         (fun i hi => hvo.mono (by omega) (hW₂.trans hW₃))
         (fun i hi => hvs.mono (by omega) (List.prefix_refl _)))
@@ -2577,7 +2598,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       have hself : ∀ i, i ≤ c₁ → V i (W₁ ++ [Cell.obj (.record L (objSlots L ls ss))])
           (.record L (objSlots L ls ss)) (.obj h₁.length) := fun i _ =>
         V_obj_cell (by rw [hH₁.1]; simp)
-      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself ls es ks τs ss vs (by omega) (by omega)
+      obtain ⟨fs, hfs, hl, hp⟩ := clsMembers_sound hself hC ls es ks τs ss vs (by omega) (by omega)
         (by omega) (by omega) hms
         (fun i kd n b τ h₁ h₂ h₃ h₄ => (hfun i kd n b τ h₁ h₂ h₃ h₄).mono hc₁ (hW₁.trans hW₂))
         (hvs.mono (Nat.le_refl _) hW₂)
@@ -2626,7 +2647,12 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
             simp at hs hv'; subst hs hv'
             exact CellV_obj.mpr ⟨[], rfl, fun l s hs => by simp [Ty.field] at hs, fun l _ => rfl⟩
           | _ + 1, hs, _ => simp at hs)
-      have hcall := V_fn.mp ((hvf.mono hc₂ hW₂).mono (Nat.le_refl _) hW₃) c₂ (Nat.le_refl _) _
+      have hvf' := (hvf.mono hc₂ hW₂).mono (Nat.le_refl _) hW₃
+      -- A constructor: `new` calls it.
+      have hctor : vf.asCtor = vf := by
+        simp [Value.asCtor, (V_fn.mp hvf').1 (TyEq.refl _)]
+      rw [hctor]
+      have hcall := (V_fn.mp hvf').2 c₂ (Nat.le_refl _) _
         (List.prefix_refl _) (h₂ ++ [.fields []]) (.obj h₂.length) vs hvs.length
         (fun i hi => hH₃.mono (by omega)) (by simp)
         (fun i hi => hvs.mono (by omega) hW₃)

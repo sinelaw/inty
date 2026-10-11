@@ -137,6 +137,8 @@ inductive Inst : Pred → Prop where
   | indexString : Inst ⟨.indexable, [.string, .number, .string]⟩
   /-- `IndexWrite τ[]` (`resolve_index_write`). -/
   | writeArray : Inst ⟨.indexWrite, [.array τ]⟩
+  /-- `NotNew τ`, for every type but `newTarget`. -/
+  | notNew : c ≠ .newTarget → Inst ⟨.notNew, [.app c args]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -155,6 +157,7 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | indexArray => exact .indexArray
   | indexString => exact .indexString
   | writeArray => exact .writeArray
+  | notNew hc => exact .notNew hc
 
 /-- The `Merge` constraints of a spread, label by label: the operand's
 presences `ps`, kinds `ks` and types `τs`, the slots `ss` it is written
@@ -300,6 +303,7 @@ def Pred.isInst : Pred → Bool
   | ⟨.indexable, [.array τ, .number, e]⟩ => decide (e = τ)
   | ⟨.indexable, [.string, .number, .string]⟩ => true
   | ⟨.indexWrite, [.array _]⟩ => true
+  | ⟨.notNew, [.app c _]⟩ => c != .newTarget
   | _ => false
 
 theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
@@ -317,6 +321,7 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · rw [of_decide_eq_true h]; exact .indexArray
   · exact .indexString
   · exact .writeArray
+  · exact .notNew (by simpa using h)
   · cases h
 
 theorem List.eq_five_of_length {α : Type} : ∀ {l : List α}, l.length = 5 →
