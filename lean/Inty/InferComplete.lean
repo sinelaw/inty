@@ -1529,14 +1529,212 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       exact hpr.of_predEq (PredEq.of_eqs (.cons (hτ₁.symm.trans (hag₂.ty hτb₁).symm)
         (.cons (by simp; exact TyEq.refl _) (.cons hτ₂.symm .nil))))
   | spread e₁ e₂ ih₁ ih₂ =>
-    sorry
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    cases ht with
+    | spread hps hks hτs hss hrs he₁ he₂ hm =>
+      rename_i ss ps ks τs rs
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ih₁ hΓ hR hC hΓ' hR' he₁
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e₁ hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := ih₂ (ψ := φ₁) hΓ₁ hR₁ hC
+        (hΓ'.trans (hag₁.ctx hΓ).symm) (hR'.trans (hag₁.ret hR).symm) he₂
+      obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := infer_inv L e₂ hΓ₁ hR₁ h₂
+      -- The fresh variables, sent to the slots of the derivation.
+      let φ₃ := Subst.block o₂.next (ss ++ ps ++ ks ++ τs ++ rs) ++ φ₂
+      have hbss : (varBlock o₂.next L.length).map (·.subst φ₃) = ss := by
+        have := varBlock_subst_block_mid o₂.next [] ss (ps ++ ks ++ τs ++ rs) φ₂
+        simp only [List.length_nil, Nat.add_zero, List.nil_append, ← List.append_assoc,
+          hss] at this
+        exact this
+      have hbps : (varBlock (o₂.next + L.length) L.length).map (·.subst φ₃) = ps := by
+        have := varBlock_subst_block_mid o₂.next ss ps (ks ++ τs ++ rs) φ₂
+        simp only [← List.append_assoc, hss, hps] at this
+        exact this
+      have hbks : (varBlock (o₂.next + 2 * L.length) L.length).map (·.subst φ₃) = ks := by
+        have := varBlock_subst_block_mid o₂.next (ss ++ ps) ks (τs ++ rs) φ₂
+        simp only [List.length_append, hss, hps, hks, ← List.append_assoc] at this
+        rw [show L.length + L.length = 2 * L.length by omega] at this
+        exact this
+      have hbτs : (varBlock (o₂.next + 3 * L.length) L.length).map (·.subst φ₃) = τs := by
+        have := varBlock_subst_block_mid o₂.next (ss ++ ps ++ ks) τs rs φ₂
+        simp only [List.length_append, hss, hps, hks, hτs] at this
+        rw [show L.length + L.length + L.length = 3 * L.length by omega] at this
+        exact this
+      have hbrs : (varBlock (o₂.next + 4 * L.length) L.length).map (·.subst φ₃) = rs := by
+        have := varBlock_subst_block_mid o₂.next (ss ++ ps ++ ks ++ τs) rs [] φ₂
+        simp only [List.length_append, hss, hps, hks, hτs, hrs, List.append_nil] at this
+        rw [show L.length + L.length + L.length + L.length = 4 * L.length by omega] at this
+        exact this
+      -- `e₁`'s type is a record over the slots written over.
+      have hu₃ : TyEq ((o₁.τ.subst o₂.σ).subst φ₃)
+          ((Ty.record L (varBlock o₂.next L.length)).subst φ₃) := by
+        rw [Ty.subst_block_fresh (hσ₂.subst_below (hτb₁.mono hn₂))]
+        refine (hag₂.ty hτb₁).trans (hτ₁.trans ?_)
+        simp only [Ty.subst_app, hbss]; exact TyEq.refl _
+      obtain ⟨σ₃, hσ₃, habs₃⟩ := unify_mgu hu₃
+      -- `e₂`'s, over the operand's presences, kinds and types.
+      have hu₄ : TyEq ((o₂.τ.subst σ₃).subst φ₃) (((Ty.record L (slots3
+          (varBlock (o₂.next + L.length) L.length)
+          (varBlock (o₂.next + 2 * L.length) L.length)
+          (varBlock (o₂.next + 3 * L.length) L.length))).subst σ₃).subst φ₃) := by
+        refine (habs₃ _).trans (TyEq.trans ?_ (habs₃ _).symm)
+        rw [Ty.subst_block_fresh hτb₂]
+        refine hτ₂.trans ?_
+        simp only [Ty.subst_app, slots3_subst, hbps, hbks, hbτs]; exact TyEq.refl _
+      obtain ⟨σ₄, hσ₄, habs₄⟩ := unify_mgu hu₄
+      have habs : Absorbs φ₃ (Subst.compose σ₄ σ₃) := Absorbs.compose habs₃ habs₄
+      refine ⟨_, by simp only [infer, h₁, h₂, hσ₃, hσ₄]; rfl, φ₃, ?_, ?_, ?_⟩
+      · exact Agree.absorb ((hag₁.trans hσ₁ hn₁ hag₂).block ((hσ₁.mono hn₂).compose hσ₂)
+          (by omega)) habs
+      · refine (habs _).trans ?_
+        simp only [Ty.subst_app, hbrs]; exact hτ₀
+      · refine Sat.absorb habs (Sat.app (Sat.app ?_ ?_) ?_)
+        · refine Sat.block (fun p hp => ?_) (Sat.agree hag₂ hp₁ hsat₁)
+          obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+          exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        · exact Sat.block hp₂ hsat₂
+        · intro p hp
+          have hmem : p.subst φ₃ ∈ mergePreds ps ks τs ss rs := by
+            rw [← hbps, ← hbks, ← hbτs, ← hbss, ← hbrs, ← mergePreds_subst]
+            exact List.mem_map_of_mem hp
+          exact hm _ hmem
   | arr es ih =>
-    sorry
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    cases ht with
+    | arr hes =>
+      rename_i τe
+      obtain ⟨o, h, φ, hag, hτs, hsat⟩ := inferArgs_complete es (List.replicate es.length τe) ih
+        hΓ hR hC hΓ' hR' (by simp) (fun p hp => by
+          obtain ⟨a, b⟩ := p
+          obtain ⟨ha, hb⟩ : a ∈ es ∧ b = τe := by
+            refine ⟨(List.of_mem_zip hp).1, ?_⟩
+            have := (List.of_mem_zip hp).2
+            exact List.eq_of_mem_replicate this
+          subst hb
+          exact hes a ha)
+      obtain ⟨hn, hσ, hτsb, hp⟩ := inferArgs_inv es (fun a _ => infer_inv L a) hΓ hR h
+      have hlen : o.τs.length = es.length := by simpa using hτs.length
+      have hu : TyEq ((Ty.tuple o.τs).subst ((o.next, τe) :: φ))
+          ((Ty.tuple (List.replicate o.τs.length (.var o.next))).subst ((o.next, τe) :: φ)) := by
+        simp only [Ty.subst_app, List.map_replicate]
+        rw [List.map_congr_left (fun τ hτ => Ty.subst_cons_fresh (hτsb τ hτ)), hlen]
+        refine TyEq.app_eqs (hτs.trans ?_)
+        simp only [Ty.subst, Subst.find, ↓reduceIte, Option.getD_some]
+        exact TyEqs.refl _
+      obtain ⟨σ', hσ', habs⟩ := unify_mgu hu
+      refine ⟨_, by simp only [infer, h, hσ']; rfl, (o.next, τe) :: φ,
+        Agree.absorb (hag.fresh hσ hn) habs, ?_, Sat.absorb habs (Sat.fresh hp hsat)⟩
+      refine (habs _).trans ?_
+      simpa [Ty.subst, Subst.find] using hτ₀
   | index e i ihe ihi =>
-    sorry
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    cases ht with
+    | index he hi hpr =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihe hΓ hR hC hΓ' hR' he
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := ihi (ψ := φ₁) hΓ₁ hR₁ hC
+        (hΓ'.trans (hag₁.ctx hΓ).symm) (hR'.trans (hag₁.ret hR).symm) hi
+      obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := infer_inv L i hΓ₁ hR₁ h₂
+      refine ⟨_, by simp only [infer, h₁, h₂]; rfl, (o₂.next, τ₀) :: φ₂,
+        (hag₁.trans hσ₁ hn₁ hag₂).fresh ((hσ₁.mono hn₂).compose hσ₂) (by omega),
+        by simp [Ty.subst, Subst.find]; exact hτ₀, ?_⟩
+      refine Sat.app (Sat.fresh (fun p hp => ?_) (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)) ?_
+      · simp only [List.mem_append, List.mem_map] at hp
+        rcases hp with ⟨q, hq, rfl⟩ | hp
+        · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        · exact hp₂ p hp
+      · intro c hc
+        simp only [List.mem_singleton] at hc; subst hc
+        simp only [Pred.subst, List.map_cons, List.map_nil,
+          Ty.subst_cons_fresh (hσ₂.subst_below (hτb₁.mono hn₂)), Ty.subst_cons_fresh hτb₂]
+        refine hpr.of_predEq (PredEq.of_eqs (.cons (hτ₁.symm.trans (hag₂.ty hτb₁).symm)
+          (.cons hτ₂.symm (.cons ?_ .nil))))
+        simp [Ty.subst, Subst.find]; exact TyEq.refl _
   | setIndex e i v ihe ihi ihv =>
-    sorry
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    cases ht with
+    | setIndex he hi hpr hw hv =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihe hΓ hR hC hΓ' hR' he
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      have hc₁ := hΓ'.trans (hag₁.ctx hΓ).symm
+      have hr₁ := hR'.trans (hag₁.ret hR).symm
+      obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := ihi (ψ := φ₁) hΓ₁ hR₁ hC hc₁ hr₁ hi
+      obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := infer_inv L i hΓ₁ hR₁ h₂
+      have hΓ₂ := hσ₂.ctx_below (hΓ₁.mono hn₂)
+      have hR₂ := hσ₂.ret_below (hR₁.mono hn₂)
+      obtain ⟨o₃, h₃, φ₃, hag₃, hτ₃, hsat₃⟩ := ihv (ψ := φ₂) hΓ₂ hR₂ hC
+        (hc₁.trans (hag₂.ctx hΓ₁).symm) (hr₁.trans (hag₂.ret hR₁).symm) hv
+      have hb₁ : (o₁.τ.subst o₂.σ).Below o₂.next := hσ₂.subst_below (hτb₁.mono hn₂)
+      have hP : ∀ p ∈ o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, p.Below o₂.next := by
+        intro p hp
+        simp only [List.mem_append, List.mem_map] at hp
+        rcases hp with ⟨q, hq, rfl⟩ | hp
+        · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        · exact hp₂ p hp
+      have he₁ : TyEq (((o₁.τ.subst o₂.σ).subst o₃.σ).subst φ₃) _ :=
+        (hag₃.ty hb₁).trans ((hag₂.ty hτb₁).trans hτ₁)
+      refine ⟨⟨Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ), o₃.τ,
+          (o₁.preds.map (·.subst o₂.σ) ++ o₂.preds).map (·.subst o₃.σ) ++ o₃.preds ++
+            [⟨.indexable, [(o₁.τ.subst o₂.σ).subst o₃.σ, o₂.τ.subst o₃.σ, o₃.τ]⟩,
+              ⟨.indexWrite, [(o₁.τ.subst o₂.σ).subst o₃.σ]⟩], o₃.next⟩,
+        by simp only [infer, h₁, h₂, h₃], φ₃,
+        (hag₁.trans hσ₁ hn₁ hag₂).trans ((hσ₁.mono hn₂).compose hσ₂) (by omega) hag₃,
+        hτ₃.trans hτ₀, ?_⟩
+      refine Sat.app (Sat.app (Sat.agree hag₃ hP (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂))
+        hsat₃) ?_
+      intro c hc
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl
+      · simp only [Pred.subst, List.map_cons, List.map_nil]
+        exact hpr.of_predEq (PredEq.of_eqs (.cons he₁.symm
+          (.cons ((hag₃.ty hτb₂).trans hτ₂).symm (.cons hτ₃.symm .nil))))
+      · simp only [Pred.subst, List.map_cons, List.map_nil]
+        exact hw.of_predEq (PredEq.of_eqs (.cons he₁.symm .nil))
   | mcall e l args ihe iha =>
-    sorry
+    intro Γ R n ψ C τ' Γ' R' hΓ hR hC hΓ' hR' ht
+    obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
+    cases ht with
+    | @mcall _ _ _ _ τe _ κ τs' _ _ he hpr hlen hargs =>
+      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ihe hΓ hR hC hΓ' hR' he
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e hΓ hR h₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      obtain ⟨o₂, h₂, φ₂, hag₂, hτs₂, hsat₂⟩ := inferArgs_complete args _ iha (ψ := φ₁)
+        hΓ₁ hR₁ hC (hΓ'.trans (hag₁.ctx hΓ).symm) (hR'.trans (hag₁.ret hR).symm) hlen hargs
+      obtain ⟨hn₂, hσ₂, hτsb₂, hp₂⟩ := inferArgs_inv args (fun a _ => infer_inv L a) hΓ₁ hR₁ h₂
+      have hb₁ : (o₁.τ.subst o₂.σ).Below o₂.next := hσ₂.subst_below (hτb₁.mono hn₂)
+      let φ := (o₂.next + 1, τ₀) :: (o₂.next, κ) :: φ₂
+      have hfr : ∀ τ : Ty, τ.Below o₂.next → τ.subst φ = τ.subst φ₂ := fun τ hτ => by
+        rw [Ty.subst_cons_fresh (hτ.mono (Nat.le_succ _)), Ty.subst_cons_fresh hτ]
+      have hrecv : TyEq ((o₁.τ.subst o₂.σ).subst φ) τe := by
+        rw [hfr _ hb₁]; exact (hag₂.ty hτb₁).trans hτ₁
+      refine ⟨_, by simp only [infer, h₁, h₂]; rfl, φ, ?_, ?_, ?_⟩
+      · exact ((hag₁.trans hσ₁ hn₁ hag₂).fresh ((hσ₁.mono hn₂).compose hσ₂) (by omega)).fresh
+          (((hσ₁.mono hn₂).compose hσ₂).mono (Nat.le_succ _)) (by omega)
+      · simp [φ, Ty.subst, Subst.find]; exact hτ₀
+      · refine Sat.app (Sat.app ?_ ?_) ?_
+        · refine Sat.fresh (fun p hp => ?_) (Sat.fresh (fun p hp => ?_) (Sat.agree hag₂ hp₁ hsat₁))
+          · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+            exact (hσ₂.pred_below ((hp₁ q hq).mono hn₂)).mono (Nat.le_succ _)
+          · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+            exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        · exact Sat.fresh (fun p hp => (hp₂ p hp).mono (Nat.le_succ _)) (Sat.fresh hp₂ hsat₂)
+        · intro c hc
+          simp only [List.mem_singleton] at hc; subst hc
+          simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_fn]
+          refine hpr.of_predEq (PredEq.of_eqs (.cons hrecv.symm (.cons ?_ (.cons ?_ .nil))))
+          · simp [φ, Ty.subst, Subst.find]; exact TyEq.refl _
+          · refine TyEq.fn_mk hrecv.symm (by simp [φ, Ty.subst, Subst.find]; exact TyEq.refl _) ?_
+            rw [List.map_congr_left (fun τ hτ => hfr τ (hτsb₂ τ hτ))]
+            exact hτs₂.symm
 
 end Inty

@@ -1127,7 +1127,7 @@ theorem infer_sound :
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hf ha ⊢
     replace hf := hf.conv ((unify_sound hu).subst φ)
     simp only [Ty.subst_fn, List.map_map, Function.comp_def] at hf ha
-    exact .new_ hf (by simp [ha.1]) ha.2 (TyEq.refl _)
+    exact .new_ hf (by simp [ha.1]) ha.2 (TyEq.refl _) (by simp [varBlock])
   | get e l ih =>
     intro Γ R n o h φ C hsat
     simp only [infer] at h

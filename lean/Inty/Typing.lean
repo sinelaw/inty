@@ -191,10 +191,11 @@ inductive HasType (L : List String) : List Pred → Ctx → Option Ty → Expr �
         (some ρ) body ρ →
       HasType L C Γ R (.ctor n body) (.fn .newTarget τs ρ)
   /-- `new f(…)` calls a constructor, one argument per parameter, which
-  gives an object, so that it is the result. -/
+  gives an object, a record over the program's labels, so that it is the
+  result. -/
   | new_ : HasType L C Γ R f (.fn .newTarget τs ρ) → args.length = τs.length →
       (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → TyEq ρ (.record L ss) →
-      HasType L C Γ R (.new_ f args) ρ
+      ss.length = L.length → HasType L C Γ R (.new_ f args) ρ
   /-- `e.l` reads a property of `e`'s type, of any kind, `HasProp l τ k σ`:
   a present field of a record, or what a scheme's constraint promises. -/
   | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, k, σ]⟩ →
@@ -293,7 +294,7 @@ inductive HasTypeTop (L : List String) : List Pred → Ctx → Option Ty → Exp
       HasTypeTop L C Γ R (.ctor n body) (.fn .newTarget τs ρ)
   | new_ : HasType L C Γ R f (.fn .newTarget τs ρ) → args.length = τs.length →
       (∀ p ∈ args.zip τs, HasType L C Γ R p.1 p.2) → TyEq ρ (.record L ss) →
-      HasTypeTop L C Γ R (.new_ f args) ρ
+      ss.length = L.length → HasTypeTop L C Γ R (.new_ f args) ρ
   | get : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, k, σ]⟩ →
       HasTypeTop L C Γ R (.get e l) σ
   | set : HasType L C Γ R e τ → Entails C ⟨.hasProp l, [τ, .data, σ]⟩ →
@@ -338,7 +339,7 @@ theorem HasType.top (h : HasType L C Γ R e τ) : ∃ τ₀, TyEq τ₀ τ ∧ H
   | cls hes hks hτs hss hnd hL hargs hm =>
     exact ⟨_, .refl _, .cls hes hks hτs hss hnd hL hargs hm⟩
   | ctor hl hb => exact ⟨_, .refl _, .ctor hl hb⟩
-  | new_ hf hl ha hρ => exact ⟨_, .refl _, .new_ hf hl ha hρ⟩
+  | new_ hf hl ha hρ hss => exact ⟨_, .refl _, .new_ hf hl ha hρ hss⟩
   | get he hp => exact ⟨_, .refl _, .get he hp⟩
   | set he hp hv => exact ⟨_, .refl _, .set he hp hv⟩
   | spread hps hks hτs hss hrs h₁ h₂ hm =>

@@ -160,8 +160,9 @@ theorem HasType.subst (σ : Subst) (h : HasType L C Γ R e τ) :
   | ctor hlen _ ih =>
     refine .ctor (by simpa using hlen) ?_
     simpa [List.map_append, Function.comp_def] using ih
-  | new_ _ hlen _ hρ ihf iha =>
+  | new_ _ hlen _ hρ hss ihf iha =>
     refine .new_ (by simpa using ihf) (by simpa using hlen) (fun p hp => ?_) (by simpa using hρ.subst σ)
+      (by simpa using hss)
     rw [List.zip_map_right] at hp
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq

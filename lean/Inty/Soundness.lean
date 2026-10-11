@@ -2605,7 +2605,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top
     refine Safe.tyEq ?_ hτ₀
     cases ht with
-    | new_ hf hlen hargs hρ =>
+    | new_ hf hlen hargs hρ _ =>
       simp only [run]
       refine Safe.bindC (ihf hf hC hG hH) fun vf W₁ _ hW₁ hH₁ hvf => ?_
       have hc₁ := run_clock_le k env h f

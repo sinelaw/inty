@@ -360,10 +360,10 @@ theorem HasType.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option 
   | ctor hlen _ ih =>
     intro Γ' R' hg _
     exact .ctor hlen (ih (hg.ctor hlen) (RetEq.refl _))
-  | new_ _ hlen _ hρ ihf iha =>
+  | new_ _ hlen _ hρ hss ihf iha =>
     intro Γ' R' hg hR
     refine .new_ (ihf (hg.sub fun i hw => by simp_all [Expr.writes]) hR) hlen
-      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR) hρ
+      (fun p hp => iha p hp (hg.sub fun i hw => ?_) hR) hρ hss
     simp only [Expr.writes, Bool.or_eq_false_iff] at hw
     exact Expr.writesList_false' hw.2 _ (List.of_mem_zip hp).1
   | get _ hp ih =>
