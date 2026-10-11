@@ -502,6 +502,13 @@ impl InferState {
                 for pred in preds {
                     self.add_constraint(pred, annotation_span);
                 }
+                // Checked against an initialiser, a function type says
+                // what `this` it is called with; a declaration keeps its.
+                let ann_ty = if decl.init.is_some() {
+                    self.annotation_this(annotation_span, &ann_ty, &Type::Undefined)?
+                } else {
+                    ann_ty
+                };
                 Some((ann_ty, annotation_span))
             } else {
                 None

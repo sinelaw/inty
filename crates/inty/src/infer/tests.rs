@@ -5122,3 +5122,58 @@ fn getters_and_prototype_members() {
     .unwrap();
     assert_eq!(t[0], "Int");
 }
+
+#[test]
+fn an_annotated_function_type_without_this_is_called_detached() {
+    // A function type written without `this:` is called detached, so a
+    // function that reads `this` doesn't have it: each of these throws a
+    // `TypeError` on `this.x`.
+    for bad in [
+        "/** const f: (Number) => Number */\n\
+         const f = function (n) { return this.x + n; };\n\
+         const r = f(1);",
+        "const o = { x: 1, m(n) { return this.x + n; } };\n\
+         /** const g: (Number) => Number */\n\
+         const g = o.m;\n\
+         const r = g(1);",
+        "/** function call((Number) => Number) => Number */\n\
+         function call(g) { return g(1); }\n\
+         const o = { x: 1, m(n) { return this.x + n; } };\n\
+         const r = call(o.m);",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // A function that doesn't read `this` has it.
+    for (src, name, ty) in [
+        (
+            "/** const f: (Number) => Number */\n\
+             const f = function (n) { return n + 1; };\n\
+             const r = f(1);",
+            "r",
+            "Number",
+        ),
+        (
+            "/** function call((Number) => Number) => Number */\n\
+             function call(g) { return g(1); }\n\
+             const r = call((n) => n * 2);",
+            "r",
+            "Number",
+        ),
+    ] {
+        assert_eq!(check_program(src, &[name]).unwrap(), [ty], "{}", src);
+    }
+}
+
+#[test]
+fn a_method_in_an_annotated_object_type_has_the_object_as_this() {
+    let src = "/** const o: {x: Number, m: (Number) => Number} */\n\
+               const o = { x: 1, m(n) { return this.x + n; } };\n\
+               const r = o.m(1);";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    // Taken off the object, it can't be called detached.
+    let bad = "/** const o: {x: Number, m: (Number) => Number} */\n\
+               const o = { x: 1, m(n) { return this.x + n; } };\n\
+               const g = o.m;\n\
+               const r = g(1);";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}

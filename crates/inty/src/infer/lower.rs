@@ -14,7 +14,7 @@ use crate::span::Span;
 use crate::types::{FuncParam, Type, TypeAst, CALLABLE_KEY};
 
 use super::state::InferState;
-use super::TypeEnv;
+use super::{InferResult, TypeEnv};
 
 impl InferState {
     /// Lower a [`TypeAst`] into a [`Type`], allocating fresh type
@@ -239,5 +239,90 @@ fn class_instance_of(ctor: &Type, args: &[Type]) -> Option<Type> {
         // Unbranded class: the instance row itself is the type.
         row @ Type::Row(_) => Some(row.clone()),
         _ => None,
+    }
+}
+
+impl InferState {
+    /// Give each function type in a checked annotation the `this` it is
+    /// called with, where the annotation doesn't say (`this_type: None`,
+    /// which `unify` matches with any `this`, so a function that reads
+    /// `this` would pass for one that doesn't): a member of an object type
+    /// is called on the object, as an object literal's methods are, and
+    /// any other function is called detached, with `this` `Undefined`.
+    /// `this` is what the annotated type itself is called with, if it is a
+    /// function. Declarations without a body to check (`.d.js`) keep
+    /// theirs.
+    pub(crate) fn annotation_this(
+        &mut self,
+        span: Span,
+        ty: &Type,
+        this: &Type,
+    ) -> InferResult<Type> {
+        Ok(match ty {
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                let this_type = match this_type {
+                    Some(t) => self.annotation_this(span, t, &Type::Undefined)?,
+                    None => this.clone(),
+                };
+                let params = params
+                    .iter()
+                    .map(|p| {
+                        let mut p = p.clone();
+                        p.ty = self.annotation_this(span, &p.ty, &Type::Undefined)?;
+                        Ok(p)
+                    })
+                    .collect::<InferResult<Vec<_>>>()?;
+                Type::Func {
+                    this_type: Some(Box::new(this_type)),
+                    params,
+                    ret: Box::new(self.annotation_this(span, ret, &Type::Undefined)?),
+                }
+            }
+            Type::Row(row) => {
+                // The object the members are called on, tied to the row
+                // once it is built, as `infer_object` ties its literal's.
+                let shared = Type::Row(crate::types::RowType::empty_open(self.fresh_flex()));
+                let mut out = row.clone();
+                for (name, entry) in out.props.iter_mut() {
+                    let member_this = if name.0 == CALLABLE_KEY {
+                        this.clone()
+                    } else {
+                        shared.clone()
+                    };
+                    entry.ty = self.annotation_this(span, &entry.ty, &member_this)?;
+                }
+                let out = Type::Row(out);
+                self.unify(span, &shared, &out)?;
+                out
+            }
+            Type::Array(t) => {
+                Type::Array(Box::new(self.annotation_this(span, t, &Type::Undefined)?))
+            }
+            Type::Map(t) => Type::Map(Box::new(self.annotation_this(span, t, &Type::Undefined)?)),
+            Type::Promise(t) => {
+                Type::Promise(Box::new(self.annotation_this(span, t, &Type::Undefined)?))
+            }
+            Type::Tuple(ts) => Type::Tuple(
+                ts.iter()
+                    .map(|t| self.annotation_this(span, t, &Type::Undefined))
+                    .collect::<InferResult<_>>()?,
+            ),
+            Type::Union(ts) => Type::union(
+                ts.iter()
+                    .map(|t| self.annotation_this(span, t, this))
+                    .collect::<InferResult<Vec<_>>>()?,
+            ),
+            Type::Named(id, args) => Type::Named(
+                *id,
+                args.iter()
+                    .map(|t| self.annotation_this(span, t, &Type::Undefined))
+                    .collect::<InferResult<_>>()?,
+            ),
+            _ => ty.clone(),
+        })
     }
 }

@@ -224,6 +224,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
+                        // A function property is called on the object or
+                        // taken off it: its `this` is left to the value.
+                        let this = self.fresh_type_var();
+                        let annotated_type =
+                            self.annotation_this(ann_span, &annotated_type, &this)?;
                         // TypeScript's JSDoc convention is to allow a
                         // `null` / `undefined` placeholder initialiser
                         // for a `@type`-annotated field — the field is
@@ -685,6 +690,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
+                        // A function property is called on the object or
+                        // taken off it: its `this` is left to the value.
+                        let this = self.fresh_type_var();
+                        let annotated_type =
+                            self.annotation_this(ann_span, &annotated_type, &this)?;
                         let is_placeholder = matches!(
                             value,
                             Expr::Lit {

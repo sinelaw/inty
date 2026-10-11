@@ -554,8 +554,11 @@ impl InferState {
             self.bump_pvar_id_to(next_pvar);
 
             // Function annotation: pins the function's signature to
-            // the declared one. Subsume rather than unify so a body
-            // annotated to return `String` can hold a literal.
+            // the declared one, which is called detached unless it says
+            // otherwise. Subsume rather than unify so a body annotated to
+            // return `String` can hold a literal.
+            let annotated_type =
+                self.annotation_this(annotation_span, &annotated_type, &Type::Undefined)?;
             self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 
