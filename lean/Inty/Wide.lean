@@ -20,10 +20,11 @@ translated (`Pred.toW`).
 
 namespace Inty
 
-/-- The wide system's instances: the narrow ones, and the injections and
-strippings that hold of every value whatever the heads. -/
+/-- The wide system's instances: the narrow ones but its injections, and
+the injections and strippings that hold of every value whatever the
+heads. -/
 inductive InstW : Pred → Prop where
-  | narrow : Inst p → InstW p
+  | narrow : Inst p → (∀ T, p.cls ≠ .inject T) → InstW p
   | injectSelf : InstW ⟨.injectW, [T, T]⟩
   | injectNothing : InstW ⟨.injectW, [z.ty, .maybe z σ]⟩
   | injectSome : InstW ⟨.injectW, [σ, .maybe z σ]⟩
@@ -31,7 +32,7 @@ inductive InstW : Pred → Prop where
 
 theorem InstW.subst (σ : Subst) {p : Pred} (h : InstW p) : InstW (p.subst σ) := by
   cases h with
-  | narrow h => exact .narrow (h.subst σ)
+  | narrow h hc => exact .narrow (h.subst σ) hc
   | injectSelf => exact .injectSelf
   | injectNothing => simpa [Pred.subst, Nothing.ty, Ty.subst_app] using InstW.injectNothing
   | injectSome => simpa [Pred.subst, Ty.subst_app] using InstW.injectSome
@@ -47,10 +48,6 @@ theorem InstEqW.subst (σ : Subst) {p : Pred} (h : InstEqW p) : InstEqW (p.subst
 theorem InstEqW.of_predEq {p q : Pred} (h : PredEq p q) (hq : InstEqW q) : InstEqW p := by
   obtain ⟨r, hqr, hr⟩ := hq
   exact ⟨r, h.trans hqr, hr⟩
-
-theorem InstEq.wide {p : Pred} (h : InstEq p) : InstEqW p := by
-  obtain ⟨q, hpq, hq⟩ := h
-  exact ⟨q, hpq, .narrow hq⟩
 
 /-- The wide system: its instances, any expected type, and injections that
 a substitution reaches. -/
@@ -71,7 +68,7 @@ theorem InstEqW.narrow_of {p : Pred} (h : InstEqW p) (hi : p.cls ≠ .injectW)
     (hs : p.cls ≠ .strip) : InstEq p := by
   obtain ⟨q, hpq, hq⟩ := h
   cases hq with
-  | narrow hq => exact ⟨_, hpq, hq⟩
+  | narrow hq _ => exact ⟨_, hpq, hq⟩
   | injectSelf | injectNothing | injectSome => exact absurd hpq.1 hi
   | stripSelf => exact absurd hpq.1 hs
 
@@ -174,7 +171,7 @@ theorem Inst.toW {p : Pred} (h : Inst p) : InstEqW p.toW := by
     exact ⟨⟨.injectW, [.app c args, .maybe z (.app c args)]⟩,
       PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons he zip_tyEq_nil)),
       .injectSome⟩
-  | _ => exact ⟨_, PredEq.refl _, .narrow (by constructor <;> assumption)⟩
+  | _ => exact ⟨_, PredEq.refl _, .narrow (by constructor <;> assumption) (by simp [Pred.toW])⟩
 
 theorem InstEq.toW {p : Pred} (h : InstEq p) : InstEqW p.toW := by
   obtain ⟨q, hpq, hq⟩ := h

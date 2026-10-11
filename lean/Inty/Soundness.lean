@@ -2167,7 +2167,7 @@ theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVarW C)
       subst hc
       have hv' := V.tyEq k hτ hv
       cases hi with
-      | narrow hi => cases hi
+      | narrow hi _ => cases hi
       | injectSelf => exact V.tyEq k hT.symm hv'
       | @injectNothing z σ =>
         refine V.tyEq k hT.symm (V_maybe.mpr (.inl ?_))
@@ -2204,7 +2204,7 @@ theorem EntailsS.strip {C : List Pred} {τ σ : Ty} (hC : HoldsOrVarW C)
       subst hc
       have hv' := V.tyEq k hτ hv
       cases hi with
-      | narrow hi =>
+      | narrow hi _ =>
         cases hi with
         | @stripSome z _ =>
           rcases V_maybe.mp hv' with h | h
@@ -2223,7 +2223,7 @@ theorem EntailsS.notNew {C : List Pred} {θ : Ty} (hC : HoldsOrVarW C)
   intro hθ
   rcases h.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨t, a, rest, ht, hv⟩
   · cases hi with
-    | notNew hc => exact hc (TyEq.app_iff.mp ((PredEq.one hq).2.symm.trans hθ)).1
+    | notNew hc => exact hc (.inl (TyEq.app_iff.mp ((PredEq.one hq).2.symm.trans hθ)).1)
     | _ => cases hq.1
   · simp only [List.cons.injEq] at ht
     obtain ⟨rfl, rfl⟩ := ht

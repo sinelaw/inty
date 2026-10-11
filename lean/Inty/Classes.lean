@@ -137,8 +137,9 @@ inductive Inst : Pred → Prop where
   | indexString : Inst ⟨.indexable, [.string, .number, .string]⟩
   /-- `IndexWrite τ[]` (`resolve_index_write`). -/
   | writeArray : Inst ⟨.indexWrite, [.array τ]⟩
-  /-- `NotNew τ`, for every type but `newTarget`. -/
-  | notNew : c ≠ .newTarget → Inst ⟨.notNew, [.app c args]⟩
+  /-- `NotNew τ`, for every type but `newTarget`, and but a rigid type
+  variable, which may stand for it. -/
+  | notNew : ¬ (c = .newTarget ∨ c.isRigid) → Inst ⟨.notNew, [.app c args]⟩
   /-- `Inject T T`, for a `T` without type variables. -/
   | injectSelf : T.ftv = [] → Inst ⟨.inject T, [T]⟩
   /-- `Inject (Nullable σ) Null` and `Inject (Optional σ) Undefined`. -/
@@ -435,7 +436,7 @@ def Pred.isInst : Pred → Bool
   | ⟨.indexable, [.array τ, .number, e]⟩ => decide (e = τ)
   | ⟨.indexable, [.string, .number, .string]⟩ => true
   | ⟨.indexWrite, [.array _]⟩ => true
-  | ⟨.notNew, [.app c _]⟩ => c != .newTarget
+  | ⟨.notNew, [.app c _]⟩ => decide ¬ (c = .newTarget ∨ c.isRigid)
   | ⟨.inject T, [τ]⟩ => Pred.injectInst T τ
   | ⟨.strip, [τ, σ]⟩ => Pred.stripInst τ σ
   | _ => false

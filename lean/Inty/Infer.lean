@@ -171,7 +171,7 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
   | .indexable, .string, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, .string])
   -- (An instance holds: a trivial equation drops it.)
   | .indexWrite, .array _, [] => .eq .number .number
-  | .notNew, .app c _, [] => if c = .newTarget then .fail else .eq .number .number
+  | .notNew, .app c _, [] => if c = .newTarget ∨ c.isRigid then .fail else .eq .number .number
   | .merge, .pre, [k, τ, s, r] => Pred.decidePre k τ s r
   | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
   | .inject T, τ, [] => Pred.decideInject τ T

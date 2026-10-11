@@ -73,7 +73,20 @@ inductive Con where
   function makes one, and only a test against `z`, `== null` or `??` takes
   it apart. At run time a value of `τ` is a value of the sum as it is. -/
   | maybe (z : Nothing)
+  /-- A rigid type variable: the `i`-th quantified variable of a
+  polymorphic annotation, inside the initialiser it is checked against
+  (`/** const id: <a>(a) => a */`). It is a constant there, which
+  unification never binds; the annotated binding gets the annotation's
+  scheme, every instance of which the initialiser has. An annotation's
+  rigid variables are named by the size of its initialiser `s`, so a
+  nested annotation, whose initialiser is smaller, has its own. -/
+  | rigid (s i : Nat)
   deriving DecidableEq, Repr
+
+/-- Whether a constructor is a rigid type variable. -/
+def Con.isRigid : Con → Bool
+  | .rigid _ _ => true
+  | _ => false
 
 /-- The right-hand side of one equation of a recursive type: a type that
 may refer to the system's types by position, `self j`. A free variable is

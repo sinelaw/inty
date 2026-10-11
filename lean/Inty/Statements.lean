@@ -243,7 +243,7 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     (∃ τ, p = ⟨.indexable, [.array τ, .number, τ]⟩) ∨
     p = ⟨.indexable, [.string, .number, .string]⟩ ∨
     (∃ τ, p = ⟨.indexWrite, [.array τ]⟩) ∨
-    (∃ c args, c ≠ .newTarget ∧ p = ⟨.notNew, [.app c args]⟩) ∨
+    (∃ c args, ¬ (c = .newTarget ∨ c.isRigid) ∧ p = ⟨.notNew, [.app c args]⟩) ∨
     (∃ T, T.ftv = [] ∧ p = ⟨.inject T, [T]⟩) ∨
     (∃ T z σ, TyEq T (.maybe z σ) ∧ T.ftv = [] ∧ p = ⟨.inject T, [z.ty]⟩) ∨
     (∃ T z c args, TyEq T (.maybe z (.app c args)) ∧ T.ftv = [] ∧ (Ty.app c args).ftv = [] ∧
