@@ -1,5 +1,6 @@
 import Inty.Builtins
 import Inty.InferComplete
+import Inty.Principal
 
 /-!
 # Axiom audit
@@ -50,3 +51,9 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.HasTypeS.weaken' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.HasTypeS.weaken
+
+/-- info: 'Inty.inferInC_principal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferInC_principal
+
+/-- info: 'Inty.inferProgramC_principal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferProgramC_principal

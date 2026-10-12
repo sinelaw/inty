@@ -125,8 +125,7 @@ rule's value restriction, its constraints only on quantified variables
 (`Scheme.Simple`, with a `Merge` on their trees, `PTy.TreeBound`), and
 `Merge` left undecided inside a scheme, are inty's generalisation, written as
 rules; a class's labels are distinct (`ls.Nodup`), though JavaScript allows
-a member defined twice; and the conclusion relates types, not the
-constraints inference leaves. It rests on unification
+a member defined twice. It rests on unification
 being most general up to equal types (`Inty.unify_mgu`): `unify` is a
 congruence closure on the types' finite graphs of subterms (Huet's
 algorithm for rational trees, `Inty/Unify.lean`). A typing's context need
@@ -163,6 +162,18 @@ copied from the algorithm:
   when it runs, which a value's type doesn't predict (the variable keeps
   its type either way). Neither is about the types of values, so each is a
   check of its own, as inty reports them apart from its type errors.
+
+**Principal constrained types** (`Inty/Principal.lean`). Inference's type
+comes with the constraints it leaves (`inferInC`, which is `inferIn`
+keeping them), and the pair `(τ, P)` is principal: under assumptions `C`
+on type variables, a program with only monomorphic annotations has the
+type `τ'` exactly when `τ'` is an instance `τ.subst φ`, up to equal types,
+whose constraints `P.subst φ` the assumptions entail
+(`inferInC_principal`, `inferProgramC_principal`). One direction is
+completeness, now with constraints (`inferInC_complete`); the other is
+soundness (`inferInC_sound`) with substitution and the cut rule
+(`HasTypeS.cutC`: a typing under assumptions `D` holds under any `C`
+entailing each of them).
 
 A recursive type carries its whole system of equations, and an equation
 its unfolding never reaches may mention variables the type doesn't have,
