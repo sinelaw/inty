@@ -38,6 +38,7 @@
 //! `examples/go-backend/README.md`.
 
 mod emit;
+mod exact;
 mod kinds;
 mod loops;
 mod types;

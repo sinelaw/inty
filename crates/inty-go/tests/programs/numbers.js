@@ -33,3 +33,20 @@ const factor = 4;
 let prod = -3;
 prod *= 5;
 console.log(prod * 2 + 3 * prod + prod * factor + prod * -1);
+
+// A division the program has just checked is exact is integer division.
+function halveEvens(xs) {
+  let total = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const x = xs[i];
+    if (x % 2 === 0) {
+      total += x / 2;
+    } else if (!(x % 3)) {
+      total += x / 3;
+    } else {
+      total += x / 4;
+    }
+  }
+  return total;
+}
+console.log(halveEvens([10, -6, 9, -9, 7, 0, 4]));

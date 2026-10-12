@@ -65,6 +65,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         .take()
         .expect("inty-go: expression-type recording must be enabled before inference");
     let instantiations = state.instantiations.take().unwrap_or_default();
+    let exact = Rc::new(crate::exact::exact_divisions(program));
     // The kinds: every number a kind variable, the program's flows
     // recorded, then solved. A function is copied for each pattern of
     // integer and float arguments its calls pass (as a type-directed
@@ -81,6 +82,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
             instantiations.clone(),
             Default::default(),
             Pass::Collect(patterns.clone()),
+            exact.clone(),
         )?;
         let mut tm = collecting.tm;
         tm.kinds.solve();
@@ -143,6 +145,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         instantiations.clone(),
         Default::default(),
         Pass::Emit(collected.clone()),
+        exact.clone(),
     )?;
     let by_value = small_value_structs(&pass.tm);
     if by_value.is_empty() {
@@ -155,6 +158,7 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         instantiations,
         by_value,
         Pass::Emit(collected),
+        exact,
     )?;
     debug_assert_eq!(pass.tm.structs.len(), pass2.tm.structs.len());
     Ok(pass2.code)
@@ -256,6 +260,7 @@ fn emit_pass(
     instantiations: HashMap<(usize, usize), Vec<(TVarName, Type)>>,
     by_value: std::collections::HashSet<usize>,
     pass: Pass,
+    exact: Rc<HashSet<(usize, usize)>>,
 ) -> Result<PassOut> {
     let (collected, patterns) = match pass {
         Pass::Collect(p) => (None, p),
@@ -273,6 +278,7 @@ fn emit_pass(
         collected,
         patterns,
         call_args: Vec::new(),
+        exact,
         realized: HashMap::new(),
         spec_names: HashMap::new(),
         quiet: 0,
@@ -562,6 +568,8 @@ struct Emitter<'a> {
     /// arguments (`true` an integer), as the last collecting round found
     /// them.
     patterns: Rc<HashMap<CallKey, Vec<Option<bool>>>>,
+    /// The divisions known to be exact (`exact`), by span.
+    exact: Rc<HashSet<(usize, usize)>>,
     /// While collecting: each call of a function by name, with its
     /// arguments' types and its parameters'.
     call_args: Vec<(CallKey, Vec<GoType>, Vec<GoType>)>,
@@ -3251,6 +3259,12 @@ impl<'a> Emitter<'a> {
                     self.flow(&lt, &whole);
                     self.flow(&rt, &whole);
                 }
+                // An exact division (`n / 2` where `n % 2 === 0`) is an
+                // integer from integers.
+                BinOp::Div if self.exact.contains(&(span.start, span.end)) => {
+                    self.flow(&lt, &whole);
+                    self.flow(&rt, &whole);
+                }
                 BinOp::Div | BinOp::Pow => self.flow(&GoType::Float, &whole),
                 BinOp::BitAnd
                 | BinOp::BitOr
@@ -3293,6 +3307,9 @@ impl<'a> Emitter<'a> {
             }
             BinOp::Mul if num => format!("({} * {})", wa, wb),
             BinOp::Div if num && const_num(right) == Some(0.0) => format!("({} / intyZero)", fa),
+            // Exact (`exact`): Go's integer division, which truncates,
+            // gives the same.
+            BinOp::Div if num && whole == GoType::Int => format!("({} / {})", wa, wb),
             BinOp::Div if num => format!("({} / {})", fa, fb),
             // Go's `%` truncates like JS's; an integer remainder by zero
             // traps (JS gives NaN, which isn't an integer).
