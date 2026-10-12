@@ -306,10 +306,20 @@ files:
 
 ## Integers
 
-inty types numbers that are always whole as `Int`: indices, `.length`,
-loop counters, bitwise results, `Math.floor`. Go gets an `int` for these
-and a `float64` for everything else. So indexing needs no conversion,
-and integer `+`, `-` and `%` are single instructions.
+inty has one number type, `Number`, as JavaScript has. The Go backend
+finds the numbers that are always whole itself, by an analysis of where
+values flow (`crates/inty-go/src/kinds.rs`): indices, `.length`, loop
+counters, bitwise results, `Math.floor`, and whatever only ever holds
+them. Go gets an `int` for these and a `float64` for everything else. So
+indexing needs no conversion, and integer `+`, `-` and `%` are single
+instructions. A function called with integers at one call and fractions
+at another is compiled twice, once for each.
+
+The analysis can't reject a program: if it can't show a number is
+always whole, the number is a `float64`. It misses what only a test
+proves: in `collatz`, `n / 2` follows a check that `n % 2 === 0`, so the
+quotient is whole, but `/` gives a `float64`, and `n` with it. V8
+guesses an integer there and checks its guess as it runs.
 
 JavaScript numbers are only exact up to 2^53. Multiplication and
 `Math.floor`, `ceil`, `round` and `trunc` can go past that, so they're
@@ -318,7 +328,64 @@ print a different answer from Node. Each check is one comparison. (An
 early version of the check didn't inline, and made `game-of-life` 76%
 slower.)
 
-**Before and after `Int`, Go only.** Same session, 7 processes each:
+**Before and after the analysis, Go only.** Until October 2026 inty had
+an `Int` type of its own, and the backend took its integers from inty's
+types. The analysis that replaced it, against that, on one machine,
+alternating, 21 warm runs each:
+
+| program | `Int` type | analysis | change |
+| --- | ---: | ---: | ---: |
+| array-hof | 42.3 ms | 44.1 ms | +4% (noise) |
+| bytecode-vm | 429 ms | 431 ms | +1% |
+| collatz | 2842 ms | 2880 ms | +1% |
+| dijkstra | 464 ms | 470 ms | +1% |
+| dijkstra-typed | 358 ms | 352 ms | −2% |
+| fib | 232 ms | 231 ms | 0% |
+| fuzzy-search | 630 ms | 322 ms | **−49%** |
+| game-of-life | 590 ms | 587 ms | 0% |
+| log-analytics | 302 ms | 283 ms | −7% |
+| mandelbrot | 1444 ms | 1446 ms | 0% |
+| nbody | 589 ms | 573 ms | −3% |
+| orders | 234 ms | 235 ms | 0% |
+| particles | 42.8 ms | 42.7 ms | 0% |
+| raytracer | 181 ms | 171 ms | −5% |
+| sieve | 189 ms | 187 ms | −1% |
+| spectral-norm | 1051 ms | 1075 ms | +2% (the same Go code) |
+
+Every program prints the same as before. `fuzzy-search` keeps its
+strings' character codes and its score table in `int`s, where inty's
+types had made them `Number`s. Against Node and Bun on the same machine
+(`node bench.mjs --processes 5`, Node 22.22.0, Bun 1.4.2, Go 1.24.7, a
+4-core cloud machine slower than the one in [Results](#results)):
+
+| program | node | bun | inty → go | vs node | vs bun |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| array-hof | 1542 ms | 478 ms | 42.5 ms | 36.29x [31.10–41.78] | 11.25x [10.07–13.37] |
+| bytecode-vm | 1917 ms | 462 ms | 455 ms | 4.22x [3.77–4.79] | 1.02x [0.90–1.24] |
+| collatz | 1747 ms | 3089 ms | 2974 ms | 0.59x [0.55–0.60] | 1.04x [0.94–1.07] |
+| dijkstra | 525 ms | 658 ms | 507 ms | 1.04x [0.96–1.19] | 1.30x [1.13–1.55] |
+| dijkstra-typed | 455 ms | 470 ms | 379 ms | 1.20x [1.03–1.40] | 1.24x [1.11–1.40] |
+| fib | 805 ms | 449 ms | 231 ms | 3.48x [3.08–3.69] | 1.94x [1.72–2.04] |
+| fuzzy-search | 1144 ms | 826 ms | 313 ms | 3.65x [3.39–3.91] | 2.64x [2.34–2.82] |
+| game-of-life | 1627 ms | 1769 ms | 609 ms | 2.67x [2.45–2.87] | 2.91x [2.69–3.11] |
+| log-analytics | 1322 ms | 579 ms | 379 ms | 3.49x [3.25–4.16] | 1.53x [1.34–1.94] |
+| mandelbrot | 1362 ms | 1438 ms | 1447 ms | 0.94x [0.92–0.96] | 0.99x [0.96–1.03] |
+| nbody | 822 ms | 891 ms | 567 ms | 1.45x [1.27–1.56] | 1.57x [1.49–1.71] |
+| orders | 657 ms | 471 ms | 224 ms | 2.93x [2.34–3.19] | 2.10x [1.74–2.47] |
+| particles | 546 ms | 807 ms | 62.0 ms | 8.80x [7.41–13.15] | 13.01x [11.12–19.53] |
+| raytracer | 638 ms | 615 ms | 180 ms | 3.54x [3.10–4.69] | 3.41x [3.16–3.77] |
+| sieve | 1622 ms | 916 ms | 203 ms | 7.99x [7.21–8.55] | 4.51x [4.10–4.92] |
+| spectral-norm | 1080 ms | 1457 ms | 1090 ms | 0.99x [0.96–1.02] | 1.34x [1.32–1.39] |
+
+That is 2.8x faster than Node and 2.2x faster than Bun on average
+(geometric means), and 2.4x to 15.6x less memory than Node. Go beats
+Node on 12 programs, ties on 2 and loses on `mandelbrot` (6%) and
+`collatz`. `collatz` was 1.5x faster than Node in [Results](#results);
+on this machine its Go is 2.8x slower than there, and was as slow with
+the `Int`-typed backend (2842 ms), while Node's is about the same: its
+`n` is a `float64` either way (see above), and here that costs more.
+
+**Before and after integers at all, Go only** (the `Int` type against every number a `float64`, earlier, on the machine of [Results](#results)). Same session, 7 processes each:
 
 | program | `float64` only | with `Int` | change |
 | --- | ---: | ---: | ---: |
@@ -354,6 +421,10 @@ The same change on the real tools (whole processes):
 Memory doesn't change: an `int` takes 8 bytes, like a `float64`.
 
 **Where Go and Node can still differ:**
+- A number the analysis makes an integer that becomes `NaN`, an
+  infinity or one past 2^53 (`Math.floor(x / 0)`) stops the program.
+- An index with a fraction (`xs[1.5]`) stops the program. JavaScript
+  reads `undefined`.
 - An integer result that is `-0` in JavaScript (`Math.ceil(-0.5)`,
   `-0 * 1`) is `0` in Go. It only shows when printed or divided by.
 - An integer `% 0` stops the program. JavaScript gives `NaN`, which
