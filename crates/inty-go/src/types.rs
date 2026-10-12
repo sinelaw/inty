@@ -2,8 +2,8 @@
 //!
 //! | inty                         | Go                                  |
 //! | ---------------------------- | ----------------------------------- |
-//! | `Number`, fractional literals | `float64`                          |
-//! | `Int`, integral literals     | `int` (checked against ±2^53)       |
+//! | `Number`, where it may hold a fraction | `float64`                |
+//! | `Number`, where it holds integers (`kinds`) | `int` (checked against ±2^53) |
 //! | `String`, string literals    | `string`                            |
 //! | `Boolean`, boolean literals  | `bool`                              |
 //! | `T[]`                        | `*[]T` (JS arrays are references)   |
@@ -31,8 +31,11 @@ use crate::{unsupported, Result};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GoType {
     Float,
-    /// An inty `Int`: Go `int` (64 bits).
+    /// A number that is always an integer (see `kinds`): Go `int` (64 bits).
     Int,
+    /// While the kinds are worked out: a number whose kind is the kind
+    /// variable's (see `kinds`). Never in the emitted program.
+    NumVar(u32),
     Str,
     Bool,
     /// JS `undefined` as a value type — only legal as a function
@@ -41,8 +44,8 @@ pub enum GoType {
     /// `*[]T`.
     Array(Box<GoType>),
     /// A typed array: `*[]int32`, `*[]uint8` or `*[]float64`. Its
-    /// elements are read as the kind's inty element type (`Int` or
-    /// `Number`).
+    /// elements are read as integers from the integer kinds and as floats
+    /// from the float kinds.
     Typed(TypedArrayKind),
     /// `*ObjN`, by index into [`TypeMapper::structs`].
     Struct(usize),
@@ -74,6 +77,14 @@ pub struct GoStruct {
 
 #[derive(Default)]
 pub struct TypeMapper {
+    /// Working out the kinds: a number maps to a fresh kind variable
+    /// (`GoType::NumVar`), and every mapping of a record makes a struct of
+    /// its own, merged with others as values flow between them.
+    pub collect: bool,
+    pub kinds: crate::kinds::Kinds,
+    /// Union-find over the structs while collecting: one Go struct per
+    /// class of records values flow between.
+    struct_parent: Vec<usize>,
     pub structs: Vec<GoStruct>,
     by_shape: HashMap<Vec<(String, GoType)>, usize>,
     by_named: HashMap<TypeId, usize>,
@@ -107,11 +118,18 @@ impl TypeMapper {
         }
         let d = depth + 1;
         Ok(match ty {
+            Type::Number if self.collect => GoType::NumVar(self.kinds.fresh()),
             Type::Number => GoType::Float,
+            Type::Literal(inty::types::LitValue::Number(n)) if self.collect => {
+                let v = self.kinds.fresh();
+                self.kinds.raise(v, number_kind(*n));
+                GoType::NumVar(v)
+            }
             Type::String => GoType::Str,
             Type::Boolean => GoType::Bool,
             Type::Undefined => GoType::Unit,
             Type::Literal(lit) => match lit {
+                inty::types::LitValue::Number(n) if is_int(*n) => GoType::Int,
                 inty::types::LitValue::Number(_) => GoType::Float,
                 inty::types::LitValue::String(_) => GoType::Str,
                 inty::types::LitValue::Bool(_) => GoType::Bool,
@@ -292,7 +310,7 @@ impl TypeMapper {
     /// Render a Go type.
     pub fn render(&self, ty: &GoType) -> String {
         match ty {
-            GoType::Float => "float64".into(),
+            GoType::Float | GoType::NumVar(_) => "float64".into(),
             GoType::Int => "int".into(),
             GoType::Str => "string".into(),
             GoType::Bool => "bool".into(),
@@ -571,9 +589,150 @@ fn widen(ty: &Type) -> Type {
     }
 }
 
-/// Whether a number literal is an `Int`.
+/// Whether a number literal is an integer a Go `int` holds exactly.
 pub fn is_int(n: f64) -> bool {
     inty::types::is_safe_int(n)
+}
+
+/// The kind of a number constant.
+pub fn number_kind(n: f64) -> crate::kinds::Kind {
+    if is_int(n) && !(n == 0.0 && n.is_sign_negative()) {
+        crate::kinds::Kind::Int
+    } else {
+        crate::kinds::Kind::Float
+    }
+}
+
+// ---- kinds -----------------------------------------------------------------
+
+impl TypeMapper {
+    fn struct_root(&self, i: usize) -> usize {
+        let mut r = i;
+        while let Some(&p) = self.struct_parent.get(r) {
+            if p == r {
+                break;
+            }
+            r = p;
+        }
+        r
+    }
+
+    fn set_struct_parent(&mut self, i: usize, p: usize) {
+        if self.struct_parent.len() <= i.max(p) {
+            let n = self.struct_parent.len();
+            self.struct_parent.extend(n..=i.max(p));
+        }
+        self.struct_parent[i] = p;
+    }
+
+    /// While collecting: a value of type `from` flows into a place of
+    /// type `to`. A number's kind only grows that way (an `int` is
+    /// converted to a `float`); whatever is inside another value is the
+    /// same place on both sides.
+    pub fn flow(&mut self, from: &GoType, to: &GoType) {
+        if !self.collect {
+            return;
+        }
+        match (from, to) {
+            (GoType::NumVar(a), GoType::NumVar(b)) => self.kinds.edge(*a, *b),
+            (GoType::Int, GoType::NumVar(b)) => self.kinds.raise(*b, crate::kinds::Kind::Int),
+            (GoType::Float, GoType::NumVar(b)) => {
+                self.kinds.raise(*b, crate::kinds::Kind::Float)
+            }
+            // Into a fixed kind: a conversion where it's used.
+            (_, GoType::Int | GoType::Float) => {}
+            _ => self.unify(from, to),
+        }
+    }
+
+    /// While collecting: `a` and `b` are the same place.
+    pub fn unify(&mut self, a: &GoType, b: &GoType) {
+        if !self.collect {
+            return;
+        }
+        match (a, b) {
+            (GoType::NumVar(x), GoType::NumVar(y)) => self.kinds.union(*x, *y),
+            (GoType::NumVar(x), GoType::Int) | (GoType::Int, GoType::NumVar(x)) => {
+                self.kinds.raise(*x, crate::kinds::Kind::Int)
+            }
+            (GoType::NumVar(x), GoType::Float) | (GoType::Float, GoType::NumVar(x)) => {
+                self.kinds.raise(*x, crate::kinds::Kind::Float)
+            }
+            (GoType::Array(x), GoType::Array(y)) => self.unify(&x.clone(), &y.clone()),
+            (GoType::Func(ps, r), GoType::Func(qs, s)) => {
+                let pairs: Vec<(GoType, GoType)> =
+                    ps.iter().cloned().zip(qs.iter().cloned()).collect();
+                for (p, q) in pairs {
+                    self.unify(&p, &q);
+                }
+                self.unify(&r.clone(), &s.clone());
+            }
+            (GoType::Struct(i), GoType::Struct(j)) => {
+                let (ri, rj) = (self.struct_root(*i), self.struct_root(*j));
+                if ri == rj {
+                    return;
+                }
+                self.set_struct_parent(rj, ri);
+                let fi = self.structs[ri].fields.clone();
+                let fj = self.structs[rj].fields.clone();
+                for (n, _, t) in &fi {
+                    if let Some((_, _, u)) = fj.iter().find(|(m, _, _)| m == n) {
+                        self.unify(t, u);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `t`, a type of the collecting mapper `self` (kinds solved), as a
+    /// type of `out`: each kind variable its kind, each class of structs
+    /// one struct of `out` (`cache`: the class's).
+    pub fn realize(
+        &self,
+        out: &mut TypeMapper,
+        cache: &mut HashMap<usize, usize>,
+        t: &GoType,
+    ) -> GoType {
+        match t {
+            GoType::NumVar(v) => {
+                if self.kinds.is_int(*v) {
+                    GoType::Int
+                } else {
+                    GoType::Float
+                }
+            }
+            GoType::Array(e) => GoType::Array(Box::new(self.realize(out, cache, e))),
+            GoType::Func(ps, r) => GoType::Func(
+                ps.iter().map(|p| self.realize(out, cache, p)).collect(),
+                Box::new(self.realize(out, cache, r)),
+            ),
+            GoType::Struct(i) => {
+                let root = self.struct_root(*i);
+                if let Some(&j) = cache.get(&root) {
+                    return GoType::Struct(j);
+                }
+                // Reserved first: the struct may refer to itself.
+                let j = out.structs.len();
+                out.structs.push(GoStruct {
+                    name: format!("Obj{}", j + 1),
+                    fields: Vec::new(),
+                });
+                cache.insert(root, j);
+                if self.needs_pointer.contains(&root) || self.needs_pointer.contains(i) {
+                    out.needs_pointer.insert(j);
+                }
+                let fields: Vec<(String, String, GoType)> = self.structs[root]
+                    .fields
+                    .iter()
+                    .map(|(n, g, ft)| (n.clone(), g.clone(), self.realize(out, cache, ft)))
+                    .collect();
+                out.structs[j].fields = fields;
+                GoType::Struct(j)
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 /// Go field name for a JS property. Keywords get a trailing underscore;
