@@ -15,7 +15,8 @@
 //!   so the kinds there are equal;
 //! * an integral literal, `.length`, `indexOf`, the bitwise operators and
 //!   `Math.floor` and its kind give `int`; `+ - * %` give the larger of
-//!   their operands' kinds; `/`, `**` and fractional literals give `float`.
+//!   their operands' kinds; `/`, `**` and fractional literals give `float`,
+//!   except a division a test has shown to be exact (see `exact.rs`).
 //!
 //! The analysis can't reject a program: `float` everywhere is always a
 //! solution. A value whose kind nothing gives (`NaN`, say) is a `float`,

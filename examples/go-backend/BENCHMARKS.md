@@ -316,10 +316,14 @@ instructions. A function called with integers at one call and fractions
 at another is compiled twice, once for each.
 
 The analysis can't reject a program: if it can't show a number is
-always whole, the number is a `float64`. It misses what only a test
-proves: in `collatz`, `n / 2` follows a check that `n % 2 === 0`, so the
-quotient is whole, but `/` gives a `float64`, and `n` with it. V8
-guesses an integer there and checks its guess as it runs.
+always whole, the number is a `float64`. `/` divides in floating point
+in JavaScript (`7 / 2` is `3.5`), so it gives a `float64`, with one
+exception that a test proves (`crates/inty-go/src/exact.rs`): `n / k`
+inside a branch on `n % k === 0`, with the same positive literal `k`
+and nothing between the test and the division that could change `n`.
+There the quotient is a whole number that a double holds exactly, the
+same as Go's integer division. In `collatz`, `n / 2` follows a check
+that `n % 2 === 0`, so `n` stays an `int`.
 
 JavaScript numbers are only exact up to 2^53. Multiplication and
 `Math.floor`, `ceil`, `round` and `trunc` can go past that, so they're
@@ -352,7 +356,8 @@ alternating, 21 warm runs each:
 | sieve | 189 ms | 187 ms | −1% |
 | spectral-norm | 1051 ms | 1075 ms | +2% (the same Go code) |
 
-Every program prints the same as before. `fuzzy-search` keeps its
+Every program prints the same as before. (Both columns are without
+exact division; with it `collatz` takes 318 ms.) `fuzzy-search` keeps its
 strings' character codes and its score table in `int`s, where inty's
 types had made them `Number`s. Against Node and Bun on the same machine
 (`node bench.mjs --processes 5`, Node 22.22.0, Bun 1.4.2, Go 1.24.7, a
@@ -362,7 +367,7 @@ types had made them `Number`s. Against Node and Bun on the same machine
 | --- | ---: | ---: | ---: | ---: | ---: |
 | array-hof | 1542 ms | 478 ms | 42.5 ms | 36.29x [31.10–41.78] | 11.25x [10.07–13.37] |
 | bytecode-vm | 1917 ms | 462 ms | 455 ms | 4.22x [3.77–4.79] | 1.02x [0.90–1.24] |
-| collatz | 1747 ms | 3089 ms | 2974 ms | 0.59x [0.55–0.60] | 1.04x [0.94–1.07] |
+| collatz | 1791 ms | 2909 ms | 318 ms | 5.64x [5.33–5.96] | 9.16x [8.64–9.68] |
 | dijkstra | 525 ms | 658 ms | 507 ms | 1.04x [0.96–1.19] | 1.30x [1.13–1.55] |
 | dijkstra-typed | 455 ms | 470 ms | 379 ms | 1.20x [1.03–1.40] | 1.24x [1.11–1.40] |
 | fib | 805 ms | 449 ms | 231 ms | 3.48x [3.08–3.69] | 1.94x [1.72–2.04] |
@@ -377,13 +382,12 @@ types had made them `Number`s. Against Node and Bun on the same machine
 | sieve | 1622 ms | 916 ms | 203 ms | 7.99x [7.21–8.55] | 4.51x [4.10–4.92] |
 | spectral-norm | 1080 ms | 1457 ms | 1090 ms | 0.99x [0.96–1.02] | 1.34x [1.32–1.39] |
 
-That is 2.8x faster than Node and 2.2x faster than Bun on average
+That is 3.2x faster than Node and 2.6x faster than Bun on average
 (geometric means), and 2.4x to 15.6x less memory than Node. Go beats
-Node on 12 programs, ties on 2 and loses on `mandelbrot` (6%) and
-`collatz`. `collatz` was 1.5x faster than Node in [Results](#results);
-on this machine its Go is 2.8x slower than there, and was as slow with
-the `Int`-typed backend (2842 ms), while Node's is about the same: its
-`n` is a `float64` either way (see above), and here that costs more.
+Node on 13 programs, ties on 2 and loses on `mandelbrot` (6%).
+`collatz` is measured with exact division (above); without it its `n`
+was a `float64`, and it was 0.59x Node's speed here (2974 ms), as slow
+as with the `Int`-typed backend (2842 ms in the table above).
 
 **Before and after integers at all, Go only** (the `Int` type against every number a `float64`, earlier, on the machine of [Results](#results)). Same session, 7 processes each:
 
