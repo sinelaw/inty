@@ -484,6 +484,8 @@ def tyWire : Ty → String
   | .optional _ => "optional"
   -- inty's type for what a `catch` binds is a rigid type variable.
   | .unknown | .var _ => "var"
+  -- A sum told apart by `typeof`, inty's union of its cases.
+  | .variant .typeOf _ _ => "union"
   -- A recursive type, by its unfolding.
   | .mu i sys =>
     match (Ty.mu i sys).view with

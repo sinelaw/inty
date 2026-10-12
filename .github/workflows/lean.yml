@@ -34,9 +34,15 @@ jobs:
     # generated programs; see crates/inty/tests/differential.rs.
     - name: Differential test
       working-directory: .
+      env:
+        INTY_REQUIRE_MODEL: "1"
       run: cargo test -p inty --test differential -- --nocapture
     # The Lean model on inty's own unit-test programs in its fragment,
-    # written in the wire format by inty; see crates/inty/tests/model_corpus.rs.
+    # written in the wire format by inty, against inty and Node; see
+    # crates/inty/tests/model_corpus.rs. Both tests fail, rather than skip,
+    # without the model.
     - name: Corpus test
       working-directory: .
+      env:
+        INTY_REQUIRE_MODEL: "1"
       run: cargo test -p inty --test model_corpus -- --nocapture
