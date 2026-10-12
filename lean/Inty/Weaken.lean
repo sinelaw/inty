@@ -307,6 +307,18 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
       exact .conv (.assign hs' ha' hp' (.conv (ih (hg.sub fun j hw => by simp_all [Expr.writes]) hR hRc)
         he.symm)) he
     · simp [Expr.writes] at hw
+  | @assignCheck Γ i s T C R _ e hs hi ha hp hT hc _ ih =>
+    intro Γ' R' hg hR hRc
+    obtain ⟨s', hs'⟩ := hg.length_some hi
+    obtain ⟨hgen, hm⟩ := hg.2 i s s' hi hs'
+    rcases hm with hm | hw
+    · obtain ⟨ha', hp'⟩ := hm ⟨ha, hp⟩
+      obtain ⟨τs', hl', he, -⟩ := hgen [] (by simp [ha])
+      rw [ha'] at hl'
+      obtain rfl := List.eq_nil_of_length_eq_zero hl'
+      exact .assignCheck hs hs' ha' hp' (he.trans hT) hc
+        (ih (hg.sub fun j hw => by simp_all [Expr.writes]) hR hRc)
+    · simp [Expr.writes] at hw
   | cond _ _ _ ihc iht ihe =>
     intro Γ' R' hg hR hRc
     exact .cond (ihc (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
@@ -480,6 +492,8 @@ theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
     intro ρ' ρ hm hR he hρ
     exact .letPoly a K h0 hp hf hr (fun k hk => ih₁ k hk hm hR he hρ) hv hw (ih₂ hm hR he hρ)
   | assign hi ha hp _ ih => intro ρ' ρ hm hR he hρ; exact .assign hi ha hp (ih hm hR he hρ)
+  | assignCheck hs hi ha hp hT hc _ ih =>
+    intro ρ' ρ hm hR he hρ; exact .assignCheck hs hi ha hp hT hc (ih hm hR he hρ)
   | cond _ _ _ ihc iht ihe =>
     intro ρ' ρ hm hR he hρ
     exact .cond (ihc hm hR he hρ) (iht hm hR he hρ) (ihe hm hR he hρ)

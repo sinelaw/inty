@@ -37,6 +37,7 @@ structure Sys.Le (S₁ S₂ : Sys) : Prop where
   closed : ∀ {T : Ty}, S₁.closed T → S₂.closed T
   injPred : S₁.injPred = S₂.injPred
   anyScheme : S₁.anyScheme = true → S₂.anyScheme = true
+  assignSub : S₁.assignSub = true → S₂.assignSub = true
 
 theorem EntailsS.mono {S₁ S₂ : Sys} (hle : S₁.Le S₂) {C : List Pred} {p : Pred}
     (h : EntailsS S₁ C p) : EntailsS S₂ C p :=
@@ -70,6 +71,8 @@ theorem HasTypeS.mono {S₁ S₂ : Sys} (hle : S₁.Le S₂) {L : List String} {
   | let_ s F _ hv hs ha _ ih₁ ih₂ => exact .let_ s F ih₁ hv (hs.imp hle.anyScheme id) ha ih₂
   | letPoly a K h0 hp hf hr _ hv hw _ ih₁ ih₂ => exact .letPoly a K h0 hp hf hr ih₁ hv hw ih₂
   | assign hi ha hp _ ih => exact .assign hi ha hp ih
+  | assignCheck hs hi ha hp hT hc _ ih =>
+    exact .assignCheck (hle.assignSub hs) hi ha hp hT (hle.closed hc) ih
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih => exact .unop hop ih
   | binop hop _ _ ih₁ ih₂ => exact .binop (hop.mono hle) ih₁ ih₂
@@ -114,7 +117,7 @@ abbrev HasTypeJ := HasTypeS Sys.jones
 
 theorem Sys.jones_narrowLike : Sys.jones.NarrowLike := ⟨rfl, rfl⟩
 
-theorem Sys.narrow_le_jones : Sys.narrow.Le Sys.jones := ⟨id, id, rfl, fun _ => rfl⟩
+theorem Sys.narrow_le_jones : Sys.narrow.Le Sys.jones := ⟨id, id, rfl, fun _ => rfl, id⟩
 
 /-- Every typing of `HasType` is one with Jones's rule. -/
 theorem HasType.toJones {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}

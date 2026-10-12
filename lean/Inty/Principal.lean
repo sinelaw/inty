@@ -63,6 +63,7 @@ theorem HasTypeS.cutC {S : Sys} {L : List String} {D : List Pred} {Γ : Ctx} {R 
     intro C hD
     exact .letPoly a K h0 hp hf hr (fun k hk => ih₁ k hk hD) hv hw (ih₂ hD)
   | assign hi ha hp _ ih => intro C hD; exact .assign hi ha hp (ih hD)
+  | assignCheck hs hi ha hp hT hc _ ih => intro C hD; exact .assignCheck hs hi ha hp hT hc (ih hD)
   | cond _ _ _ ihc iht ihe => intro C hD; exact .cond (ihc hD) (iht hD) (ihe hD)
   | unop hop _ ih => intro C hD; exact .unop hop (ih hD)
   | binop hop _ _ ih₁ ih₂ => intro C hD; exact .binop (hop.cutC hD) (ih₁ hD) (ih₂ hD)

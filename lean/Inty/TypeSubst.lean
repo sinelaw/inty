@@ -228,6 +228,11 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
     refine .assign (by simp [List.getElem?_map, hi]) (by simpa [Scheme.subst] using ha)
       (by simp [Scheme.subst, hp]) ?_
     simpa [Scheme.inst_subst] using ih
+  | @assignCheck _ i s T _ _ _ _ hs hi ha hp hT hc _ ih =>
+    refine .assignCheck (s := s.subst σ) hs (by simp [List.getElem?_map, hi])
+      (by simpa [Scheme.subst] using ha) (by simp [Scheme.subst, hp]) ?_ (hS.closed σ hc) ih
+    have := hT.subst σ
+    rwa [Scheme.inst_subst] at this
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih =>
     cases hop with

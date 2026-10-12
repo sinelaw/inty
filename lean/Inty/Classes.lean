@@ -399,6 +399,10 @@ structure Sys where
   its quantified variables (`Scheme.Simple`), as inty's generalisation
   gives. -/
   anyScheme : Bool
+  /-- Whether an assignment to a variable whose type has no type variables
+  checks its value against that type (`HasTypeS.assignCheck`), as inty
+  subsumes the value into the variable's type. -/
+  assignSub : Bool
 
 /-- `p` holds in the system `S` as an instance, or is assumed in `C`, up to
 equal types. -/
@@ -408,7 +412,7 @@ def EntailsS (S : Sys) (C : List Pred) (p : Pred) : Prop := S.inst p ∨ ∃ q �
 types), and expected types without type variables. -/
 def Sys.narrow : Sys :=
   ⟨InstEq, fun T => T.ftv = [], fun h hq => InstEq.of_predEq h hq, fun τ T => ⟨.inject T, [τ]⟩,
-    fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h zip_tyEq_nil), false⟩
+    fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h zip_tyEq_nil), false, false⟩
 
 /-- A system whose instances, expected types and injections survive
 substitution. -/

@@ -59,7 +59,7 @@ a substitution reaches. -/
 def Sys.wide : Sys :=
   ⟨InstEqW, fun _ => True, fun h hq => InstEqW.of_predEq h hq, fun τ T => ⟨.injectW, [τ, T]⟩,
     fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil)),
-    true⟩
+    true, true⟩
 
 theorem Sys.wide_substable : Sys.wide.Substable where
   inst σ := fun h => InstEqW.subst σ h
@@ -333,6 +333,10 @@ theorem HasTypeS.toWideOf {S : Sys} (hS : S.NarrowLike) {L : List String} {C : L
     rw [← Scheme.toW_inst]
     exact .assign (by simp [List.getElem?_map, hi]) (by simpa using ha)
       (by simp [Scheme.toW, hp]) (by simpa using ih)
+  | @assignCheck _ i s T _ _ _ _ _ hi ha hp hT _ _ ih =>
+    refine .assignCheck (s := s.toW) rfl (by simp [List.getElem?_map, hi]) (by simpa using ha)
+      (by simp [Scheme.toW, hp]) ?_ trivial ih
+    rw [← Scheme.toW_inst]; exact hT
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih => exact .unop hop ih
   | binop hop _ _ ih₁ ih₂ => exact .binop (hop.narrowOf hS).toW ih₁ ih₂

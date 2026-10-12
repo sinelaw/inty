@@ -3277,6 +3277,7 @@ theorem infer_complete_assign (L : List String) (i : Nat) (e : Expr) (ih : e.Pol
   rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
   obtain ⟨τ₀, hτ₀, ht⟩ := ht.top_synth
   cases ht with
+  | assignCheck hsub => simp [Sys.narrow] at hsub
   | @assign _ _ s' _ _ _ _ hi ha hp he =>
     have hi' : i < (Ctx.subst ψ Γ).length := hΓ'.1 ▸ (List.getElem?_eq_some_iff.mp hi).1
     have hsg := List.getElem?_eq_getElem hi'

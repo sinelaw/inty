@@ -2971,6 +2971,16 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       simp only [hℓ, hlt, ite_true]
       exact Safe.ok (Nat.le_refl _) (List.prefix_refl _)
         (hH₁.set hs₁ (SchemeV.of_arity_zero ha hv)) hv
+    | assignCheck _ hi ha _ hT _ he =>
+      obtain ⟨ℓ, hℓ, hs⟩ := G.lookup hG hi
+      simp only [run]
+      refine Safe.bindC (ih he hC hG hH) fun v W₁ _ hW₁ hH₁ hv => ?_
+      have hs₁ := prefix_getElem? hW₁ hs
+      have hlt : ℓ < (run k env h e).2.2.length := by
+        rw [hH₁.1]; exact (List.getElem?_eq_some_iff.mp hs₁).1
+      simp only [hℓ, hlt, ite_true]
+      exact Safe.ok (Nat.le_refl _) (List.prefix_refl _)
+        (hH₁.set hs₁ (SchemeV.of_arity_zero ha (V.tyEq _ hT.symm hv))) hv
   | cond c t e ihc iht ihe =>
     intro k C Γ R rm md W env h τ ht hC hG hH
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
