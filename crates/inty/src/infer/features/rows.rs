@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use crate::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
 use crate::span::Span;
 use crate::types::{
-    FieldEntry, LitValue, Presence, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme,
+    FieldEntry, LitValue, Presence, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred,
+    TypeScheme,
 };
 
 use super::super::env::TypeEnv;

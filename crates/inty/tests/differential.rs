@@ -184,8 +184,10 @@ fn wire_ty(t: &T) -> String {
                     let mut fields = vec![(l.clone(), format!("(strlit s:{tag})"))];
                     fields.extend(fs.iter().map(|(f, t)| (f.clone(), wire_ty(t))));
                     fields.sort();
-                    let fields: Vec<String> =
-                        fields.iter().map(|(f, t)| format!(" (s:{f} {t})")).collect();
+                    let fields: Vec<String> = fields
+                        .iter()
+                        .map(|(f, t)| format!(" (s:{f} {t})"))
+                        .collect();
                     format!(" (rec{})", fields.concat())
                 })
                 .collect();
@@ -999,12 +1001,9 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
-            T::Arrow(..)
-            | T::Obj(_)
-            | T::Arr(_)
-            | T::Maybe(..)
-            | T::TVar(_)
-            | T::Variant(..) => return None,
+            T::Arrow(..) | T::Obj(_) | T::Arr(_) | T::Maybe(..) | T::TVar(_) | T::Variant(..) => {
+                return None
+            }
         })
     }
 
@@ -1042,7 +1041,10 @@ impl Gen {
         }
         let (tag, fs) = cases[self.rng.below(cases.len())].clone();
         let mut fields = vec![(l.clone(), Str(tag))];
-        fields.extend(fs.iter().map(|(f, u)| (f.clone(), self.typed(u, d, scope, false))));
+        fields.extend(
+            fs.iter()
+                .map(|(f, u)| (f.clone(), self.typed(u, d, scope, false))),
+        );
         if self.rng.chance(50) {
             fields.reverse();
         }
@@ -2221,7 +2223,10 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     if source.contains("...")
         && shown.iter().any(|t| {
             t.split(" | ").skip(1).any(|m| {
-                let v: String = m.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                let v: String = m
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
                 v.len() == 1 && v.chars().all(|c| c.is_ascii_lowercase())
             })
         })
@@ -2470,9 +2475,7 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
 /// annotated one, an alias of one, or the rest of one a test of its tag
 /// took apart), `variant` saying which variables in scope do.
 fn reads_variant_field(e: &Core, variant: &mut Vec<bool>) -> bool {
-    let holds = |variant: &Vec<bool>, x: &Core| {
-        matches!(x, Var(i) if variant.len() > *i && variant[variant.len() - 1 - i])
-    };
+    let holds = |variant: &Vec<bool>, x: &Core| matches!(x, Var(i) if variant.len() > *i && variant[variant.len() - 1 - i]);
     let under = |variant: &mut Vec<bool>, bound: &[bool], x: &Core| {
         variant.extend_from_slice(bound);
         let r = reads_variant_field(x, variant);
@@ -2486,7 +2489,9 @@ fn reads_variant_field(e: &Core, variant: &mut Vec<bool>) -> bool {
             reads_variant_field(x, variant) || under(variant, &[v], y)
         }
         CaseTag(x, _, _, y, z) => {
-            reads_variant_field(x, variant) || under(variant, &[true], y) || under(variant, &[false], z)
+            reads_variant_field(x, variant)
+                || under(variant, &[true], y)
+                || under(variant, &[false], z)
         }
         Func(n, body) | Method(n, body) => under(variant, &vec![false; n + 2], body),
         Getter(body) => under(variant, &[false, false], body),
@@ -2504,10 +2509,14 @@ fn reads_variant_field(e: &Core, variant: &mut Vec<bool>) -> bool {
         Assign(_, x) | Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) | Get(x, _) => {
             reads_variant_field(x, variant)
         }
-        Plus(x, y) | Minus(x, y) | Seq(x, y) | While(x, y) | TryFinally(x, y) | Spread(x, y)
-        | Index(x, y) | Set(x, _, y) => {
-            reads_variant_field(x, variant) || reads_variant_field(y, variant)
-        }
+        Plus(x, y)
+        | Minus(x, y)
+        | Seq(x, y)
+        | While(x, y)
+        | TryFinally(x, y)
+        | Spread(x, y)
+        | Index(x, y)
+        | Set(x, _, y) => reads_variant_field(x, variant) || reads_variant_field(y, variant),
         Cond(x, y, z) | SetIndex(x, y, z) => {
             reads_variant_field(x, variant)
                 || reads_variant_field(y, variant)
@@ -2643,9 +2652,15 @@ fn inty_agrees_with_the_lean_model() {
         // sum or a test for nothing or of a tag, whatever it is put down to.
         if std::env::var_os("INTY_DIFF_SUMS").is_some()
             && accepted != model_accepted
-            && ["(unwrap ", "(nullable ", "(optional ", "(variant ", "(casetag "]
-                .iter()
-                .any(|f| wire(&programs[i]).contains(f))
+            && [
+                "(unwrap ",
+                "(nullable ",
+                "(optional ",
+                "(variant ",
+                "(casetag ",
+            ]
+            .iter()
+            .any(|f| wire(&programs[i]).contains(f))
         {
             eprintln!("{}", report("sum disagreement"));
         }
