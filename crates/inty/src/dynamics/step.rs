@@ -13,7 +13,6 @@
 //! into a `Block`-like form so non-terminating typed programs raise
 //! `Stuck::FuelExhausted` cleanly.
 
-
 use crate::ast::{
     AssignOp, BinOp, Expr, ForInLhs, ForInit, Literal, PropDef, PropKey, Stmt, UnaryOp,
 };

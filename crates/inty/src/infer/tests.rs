@@ -3810,7 +3810,10 @@ fn gen_element_of_later_const_is_not_quantified() {
                const t = s * 2;";
     assert!(check_program(src, &[]).is_err());
     let ok = "function pick(i) { return NAMES[i]; }\nconst NAMES = [\"a\", \"b\"];";
-    assert_eq!(check_program(ok, &["pick"]).unwrap()[0], "(Number) => String");
+    assert_eq!(
+        check_program(ok, &["pick"]).unwrap()[0],
+        "(Number) => String"
+    );
 }
 
 #[test]
@@ -3945,7 +3948,10 @@ fn record_indexing_constrains_the_element() {
     .is_err());
     // A literal key selects the field; a computed key reads any field.
     let src = "const o = {x: \"s\", y: 1};\nconst a = o[\"x\"];\nconst b = o[\"y\"];";
-    assert_eq!(check_program(src, &["a", "b"]).unwrap(), ["String", "Number"]);
+    assert_eq!(
+        check_program(src, &["a", "b"]).unwrap(),
+        ["String", "Number"]
+    );
     let src =
         "const o = {x: \"s\", y: \"t\"};\nfunction get(k) { return o[k]; }\nconst v = get(\"x\");";
     assert_eq!(check_program(src, &["v"]).unwrap(), ["String"]);
@@ -4125,7 +4131,10 @@ fn has_prop_on_a_union_needs_every_arm() {
               /** const b: String | Number[] */\n\
               const b = true ? \"abc\" : [1, 2];\n\
               const n = ln(b);";
-    assert_eq!(check_program(ok, &["s", "n"]).unwrap(), ["String", "Number"]);
+    assert_eq!(
+        check_program(ok, &["s", "n"]).unwrap(),
+        ["String", "Number"]
+    );
 }
 
 #[test]
@@ -4155,7 +4164,10 @@ fn factories_reading_this_fields_stay_generic() {
     let src = "function W(s) { return { src: s, get: function() { return this.src; } }; }\n\
                const a = W(\"a\").get();\n\
                const b = W(5).get();";
-    assert_eq!(check_program(src, &["a", "b"]).unwrap(), ["String", "Number"]);
+    assert_eq!(
+        check_program(src, &["a", "b"]).unwrap(),
+        ["String", "Number"]
+    );
 }
 
 #[test]

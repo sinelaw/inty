@@ -154,12 +154,9 @@ impl InferState {
 
         match op {
             // Arithmetic: numbers in, a number out.
-            BinOp::Sub
-            | BinOp::Mul
-            | BinOp::Mod
-            | BinOp::FloorDiv
-            | BinOp::Div
-            | BinOp::Pow => self.arith(span, &left_type, &right_type),
+            BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::FloorDiv | BinOp::Div | BinOp::Pow => {
+                self.arith(span, &left_type, &right_type)
+            }
 
             // Plus is overloaded (Number or String)
             BinOp::Add => {

@@ -510,12 +510,7 @@ fn could_be_value(ty: &Type, single: &Type) -> bool {
 /// `True == 1` and `0 == False`.
 fn py_bool_int_equal(ty: &Type, single: &Type) -> bool {
     let bool_like = |t: &Type| matches!(t, Type::Boolean | Type::Literal(LitValue::Bool(_)));
-    let number_like = |t: &Type| {
-        matches!(
-            t,
-            Type::Number | Type::Literal(LitValue::Number(_))
-        )
-    };
+    let number_like = |t: &Type| matches!(t, Type::Number | Type::Literal(LitValue::Number(_)));
     match single {
         Type::Literal(LitValue::Number(n)) => bool_like(ty) && (*n == 0.0 || *n == 1.0),
         Type::Literal(LitValue::Bool(_)) => number_like(ty),

@@ -199,7 +199,10 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
             vec![Type::union(vec![s.clone(), Type::Regex])],
             Type::array(Type::array(s.clone())),
         ),
-        "search" => Type::simple_func(vec![Type::union(vec![s.clone(), Type::Regex])], Type::Number),
+        "search" => Type::simple_func(
+            vec![Type::union(vec![s.clone(), Type::Regex])],
+            Type::Number,
+        ),
         "localeCompare" => Type::simple_func(vec![s.clone()], n.clone()),
         "at" => Type::simple_func(
             vec![Type::Number],
@@ -343,7 +346,10 @@ pub fn typed_array_member_type(
         "set" => {
             let p = state.fresh_pvar();
             Type::simple_func_with_params(
-                vec![FuncParam::required(this), FuncParam::optional(p, Type::Number)],
+                vec![
+                    FuncParam::required(this),
+                    FuncParam::optional(p, Type::Number),
+                ],
                 Type::Undefined,
             )
         }
@@ -488,7 +494,9 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
             vec![element_callback(state, elem, b.clone())],
             Type::union(vec![elem.clone(), Type::Undefined]),
         ),
-        "findIndex" => Type::simple_func(vec![element_callback(state, elem, b.clone())], Type::Number),
+        "findIndex" => {
+            Type::simple_func(vec![element_callback(state, elem, b.clone())], Type::Number)
+        }
         "forEach" => Type::simple_func(vec![element_callback(state, elem, u.clone())], u.clone()),
         "filter" => Type::simple_func(vec![element_callback(state, elem, b.clone())], arr.clone()),
         "some" => Type::simple_func(vec![element_callback(state, elem, b.clone())], b.clone()),
