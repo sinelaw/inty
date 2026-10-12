@@ -13,15 +13,16 @@
 //! into a `Block`-like form so non-terminating typed programs raise
 //! `Stuck::FuelExhausted` cleanly.
 
-use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 use crate::ast::{
     AssignOp, BinOp, Expr, ForInLhs, ForInit, Literal, PropDef, PropKey, Stmt, UnaryOp,
 };
+use crate::span::Span;
 use crate::types::PropName;
 
 use super::env::RuntimeEnv;
-use super::heap::{Cell, Heap, Loc};
+use super::heap::{Cell, Heap, Loc, Props};
 use super::value::{Closure, Value};
 
 /// Reasons reduction is stuck. A stuck typed term is a soundness
@@ -30,6 +31,9 @@ use super::value::{Closure, Value};
 pub enum Stuck {
     UndefinedVariable(String),
     NotCallable(&'static str),
+    /// `new` on what isn't a constructor (an arrow function, a method),
+    /// which throws a `TypeError`.
+    NotConstructor,
     NotIndexable(&'static str),
     PropertyNotFound {
         kind: &'static str,
@@ -45,10 +49,32 @@ pub enum Stuck {
         got: usize,
     },
     BadAssignmentTarget,
+    /// A store to a getter, which throws a `TypeError` in strict code.
+    ReadOnly,
     NotImplemented(&'static str),
     /// An uncaught `throw`. The payload is the thrown value.
     UncaughtThrow(Value),
     FuelExhausted,
+    /// `Int` arithmetic (`+ - * % //`, their compound assignments, `++`,
+    /// `--`) whose result is not a safe integer: `|n| ≥ 2^53` (where a
+    /// double may already have rounded), or `NaN` from `% 0`. Arithmetic
+    /// on `Int`s is checked: leaving the range is a fault (the Go backend
+    /// stops at a product or `% 0`), not a soundness violation. Only raised for the
+    /// expressions in [`State::int_ops`].
+    IntRange {
+        op: &'static str,
+        value: f64,
+    },
+    /// Reading an array's or a string's element at an index it hasn't (or
+    /// at one that isn't a non-negative integer), or storing an array's
+    /// past its end. JavaScript reads `undefined` and makes a hole; inty
+    /// types an element read as the element type, so, like `IntRange`,
+    /// this is a fault the program stops at (the Go backend panics), not
+    /// a soundness violation.
+    OutOfBounds {
+        index: f64,
+        len: usize,
+    },
 }
 
 impl std::fmt::Display for Stuck {
@@ -56,6 +82,7 @@ impl std::fmt::Display for Stuck {
         match self {
             Stuck::UndefinedVariable(n) => write!(f, "undefined variable `{}`", n),
             Stuck::NotCallable(k) => write!(f, "not callable: {}", k),
+            Stuck::NotConstructor => write!(f, "not a constructor"),
             Stuck::NotIndexable(k) => write!(f, "not indexable: {}", k),
             Stuck::PropertyNotFound { kind, property } => {
                 write!(f, "property `{}` not found on {}", property, kind)
@@ -67,9 +94,26 @@ impl std::fmt::Display for Stuck {
                 write!(f, "arity mismatch: expected {}, got {}", expected, got)
             }
             Stuck::BadAssignmentTarget => write!(f, "bad assignment target"),
+            Stuck::ReadOnly => write!(f, "store to a getter"),
             Stuck::NotImplemented(s) => write!(f, "not implemented in dynamics: {}", s),
             Stuck::UncaughtThrow(v) => write!(f, "uncaught throw: {}", v),
             Stuck::FuelExhausted => write!(f, "fuel exhausted"),
+            Stuck::IntRange { op, value } => {
+                write!(
+                    f,
+                    "Int {}: {} is not a safe integer",
+                    op,
+                    Value::Number(*value)
+                )
+            }
+            Stuck::OutOfBounds { index, len } => {
+                write!(
+                    f,
+                    "index {} out of bounds (length {})",
+                    Value::Number(*index),
+                    len
+                )
+            }
         }
     }
 }
@@ -79,6 +123,11 @@ impl std::fmt::Display for Stuck {
 pub struct State {
     pub heap: Heap,
     pub fuel: usize,
+    /// The `(start, end)` spans of the expressions the checker typed
+    /// `Int`. Arithmetic at one of these is checked (`Stuck::IntRange`);
+    /// the dynamics has no types of its own, so it's empty unless a
+    /// caller fills it from inference.
+    pub int_ops: HashSet<(usize, usize)>,
 }
 
 impl State {
@@ -86,6 +135,24 @@ impl State {
         State {
             heap: Heap::new(),
             fuel,
+            int_ops: HashSet::new(),
+        }
+    }
+
+    /// `value`, the result of `op` at the expression spanning `span`,
+    /// unless that expression is `Int` arithmetic and `value` is not an
+    /// integer below 2^53 in magnitude (`Number.isSafeInteger`; a result
+    /// of exactly 2^53 may be a rounded 2^53 + 1). `-0` passes: it is an
+    /// integer, and a Go `int` holds it as `0`.
+    fn check_int(&self, span: Span, op: &'static str, value: Value) -> Result<Value, Stuck> {
+        match value {
+            Value::Number(n)
+                if self.int_ops.contains(&(span.start, span.end))
+                    && !(n.fract() == 0.0 && n.abs() < 9007199254740992.0) =>
+            {
+                Err(Stuck::IntRange { op, value: n })
+            }
+            v => Ok(v),
         }
     }
 
@@ -184,7 +251,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         }
 
         Expr::Object { properties, .. } => {
-            let mut props: BTreeMap<PropName, Value> = BTreeMap::new();
+            let mut props = Props::new();
             for prop in properties {
                 match prop {
                     PropDef::Property { key, value, .. } => {
@@ -201,23 +268,58 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                             params: params.iter().map(|p| p.name.clone()).collect(),
                             body: body.clone(),
                             env: env.clone(),
+                            arrow: false,
+                            constructor: false,
                         });
                         props.insert(name, closure);
                     }
-                    PropDef::Getter { .. } | PropDef::Setter { .. } => {
-                        return Err(Stuck::NotImplemented("getters/setters"));
+                    PropDef::Getter { key, body, .. } => {
+                        let name = prop_key_to_name(key);
+                        let getter = Value::Getter(Closure {
+                            name: None,
+                            params: Vec::new(),
+                            body: body.clone(),
+                            env: env.clone(),
+                            arrow: false,
+                            constructor: false,
+                        });
+                        props.insert(name, getter);
+                    }
+                    PropDef::Setter { .. } => {
+                        return Err(Stuck::NotImplemented("setters"));
                     }
                     PropDef::Spread { argument, .. } => {
                         let v = eval_expr(state, env, argument)?;
-                        match v {
-                            Value::Object(loc) => match state.heap.get(loc) {
+                        match &v {
+                            Value::Object(loc) => match state.heap.get(*loc) {
                                 Some(Cell::Object(other)) => {
                                     // Right-bias: this spread's keys
-                                    // overwrite earlier ones; later
-                                    // entries in source order will in
-                                    // turn overwrite these.
-                                    for (k, v) in other.clone() {
-                                        props.insert(k, v);
+                                    // overwrite earlier ones (in their
+                                    // place); later entries in source
+                                    // order will in turn overwrite these.
+                                    // Each is read when it is reached, as
+                                    // a getter run before it may have
+                                    // stored to it; a getter is run, and
+                                    // its result copied.
+                                    let keys: Vec<PropName> = other.keys().cloned().collect();
+                                    for k in keys {
+                                        let item = match state.heap.get(*loc) {
+                                            Some(Cell::Object(other)) => other.get(&k).cloned(),
+                                            _ => None,
+                                        };
+                                        let Some(item) = item else {
+                                            continue;
+                                        };
+                                        let item = match item {
+                                            Value::Getter(c) => apply(
+                                                state,
+                                                Value::Closure(c),
+                                                Some(v.clone()),
+                                                Vec::new(),
+                                            )?,
+                                            item => item,
+                                        };
+                                        props.insert(k, item);
                                     }
                                 }
                                 _ => {
@@ -238,19 +340,25 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         }
 
         Expr::Function {
-            name, params, body, ..
+            name,
+            params,
+            body,
+            arrow,
+            ..
         } => Ok(Value::Closure(Closure {
             name: name.clone(),
             params: params.iter().map(|p| p.name.clone()).collect(),
             body: body.clone(),
             env: env.clone(),
+            arrow: *arrow,
+            constructor: !*arrow,
         })),
 
         Expr::Member {
             object, property, ..
         } => {
             let obj = eval_expr(state, env, object)?;
-            read_member(&state.heap, &obj, property)
+            get_member(state, &obj, property)
         }
 
         Expr::ComputedMember {
@@ -258,7 +366,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         } => {
             let obj = eval_expr(state, env, object)?;
             let idx = eval_expr(state, env, property)?;
-            read_index(&state.heap, &obj, &idx)
+            get_index(state, &obj, &idx)
         }
 
         Expr::Call {
@@ -270,7 +378,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                     object, property, ..
                 } => {
                     let obj = eval_expr(state, env, object)?;
-                    let m = read_member(&state.heap, &obj, property)?;
+                    let m = get_member(state, &obj, property)?;
                     (m, Some(obj))
                 }
                 Expr::ComputedMember {
@@ -278,7 +386,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                 } => {
                     let obj = eval_expr(state, env, object)?;
                     let idx = eval_expr(state, env, property)?;
-                    let m = read_index(&state.heap, &obj, &idx)?;
+                    let m = get_index(state, &obj, &idx)?;
                     (m, Some(obj))
                 }
                 _ => (eval_expr(state, env, callee)?, None),
@@ -298,32 +406,69 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             for a in arguments {
                 args.push(eval_expr(state, env, a)?);
             }
-            // Bind `this` to a fresh empty object; the constructor
-            // populates it. Return that object regardless of what
-            // the constructor returns (the standard JS rule for
-            // "constructor returned a primitive" — we return `this`).
-            let this_loc = state.heap.alloc(Cell::Object(BTreeMap::new()));
+            if matches!(&callee_val, Value::Closure(c) if !c.constructor) {
+                return Err(Stuck::NotConstructor);
+            }
+            // Bind `this` to a fresh empty object, and give back what the
+            // constructor returns if that is an object, else `this`.
+            let this_loc = state.heap.alloc(Cell::Object(Props::new()));
             let this = Value::Object(this_loc);
-            let _ = apply(state, callee_val, Some(this.clone()), args)?;
-            Ok(this)
+            let result = apply(state, callee_val, Some(this.clone()), args)?;
+            Ok(match result {
+                Value::Object(_) | Value::Array(_) | Value::Closure(_) | Value::Promise(_) => {
+                    result
+                }
+                _ => this,
+            })
         }
 
         Expr::NewTarget { .. } => Ok(Value::Undefined),
 
-        Expr::Unary {
-            op,
-            argument,
-            span: _,
-        } => {
+        // `++x`, `o.p--`: the target is evaluated once, read, then written.
+        Expr::Unary { op, argument, span }
+            if matches!(
+                op,
+                UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
+            ) =>
+        {
+            let place = eval_place(state, env, argument)?;
+            let cur = match read_place(state, env, &place)? {
+                Value::Number(n) => n,
+                other => {
+                    return Err(Stuck::TypeMismatch {
+                        op: "++/--",
+                        expected: "number",
+                        got: other.type_string(),
+                    })
+                }
+            };
+            let (delta, name) = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
+                (1.0, "++")
+            } else {
+                (-1.0, "--")
+            };
+            let new_val = state.check_int(*span, name, Value::Number(cur + delta))?;
+            write_place(state, env, &place, new_val.clone())?;
+            if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
+                Ok(new_val)
+            } else {
+                Ok(Value::Number(cur))
+            }
+        }
+
+        Expr::Unary { op, argument, .. } => {
             // `delete` and `typeof` need to inspect the syntactic form
             // before evaluating; both are ok with eager evaluation in
             // this minimal model.
             let v = eval_expr(state, env, argument)?;
-            apply_unary(state, env, *op, argument, v)
+            apply_unary(*op, v)
         }
 
         Expr::Binary {
-            op, left, right, ..
+            op,
+            left,
+            right,
+            span,
         } => {
             // `&&` and `||` short-circuit on the left operand.
             if matches!(op, BinOp::And | BinOp::Or) {
@@ -336,22 +481,34 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             }
             let l = eval_expr(state, env, left)?;
             let r = eval_expr(state, env, right)?;
-            apply_binary(*op, &l, &r)
+            let v = apply_binary(*op, &l, &r)?;
+            match int_op_name(*op) {
+                Some(name) => state.check_int(*span, name, v),
+                None => Ok(v),
+            }
         }
 
         Expr::Assign {
-            op, left, right, ..
+            op,
+            left,
+            right,
+            span,
         } => {
             // Short-circuit assignment (`??=`, `||=`, `&&=`): evaluate
             // LHS first, decide whether to fire, then evaluate RHS
             // only when needed. RHS evaluation must be conditional —
             // `a ??= expensive()` is observable when `expensive` has
             // side effects.
+            // The target's object (and index) are evaluated once, first,
+            // as JavaScript evaluates the reference before the right side;
+            // a compound assignment reads the target before the right side
+            // too.
+            let place = eval_place(state, env, left)?;
             if matches!(
                 op,
                 AssignOp::NullishAssign | AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign
             ) {
-                let cur = eval_expr(state, env, left)?;
+                let cur = read_place(state, env, &place)?;
                 let should_assign = match op {
                     AssignOp::NullishAssign => matches!(cur, Value::Null | Value::Undefined),
                     AssignOp::LogicalAndAssign => cur.truthy(),
@@ -360,22 +517,26 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                 };
                 if should_assign {
                     let rhs = eval_expr(state, env, right)?;
-                    assign_to(state, env, left, rhs.clone())?;
+                    write_place(state, env, &place, rhs.clone())?;
                     return Ok(rhs);
                 }
                 return Ok(cur);
             }
 
-            let rhs = eval_expr(state, env, right)?;
             let new_value = match op {
-                AssignOp::Assign => rhs,
+                AssignOp::Assign => eval_expr(state, env, right)?,
                 _ => {
-                    let cur = eval_expr(state, env, left)?;
+                    let cur = read_place(state, env, &place)?;
+                    let rhs = eval_expr(state, env, right)?;
                     let bin = compound_to_binop(*op);
-                    apply_binary(bin, &cur, &rhs)?
+                    let v = apply_binary(bin, &cur, &rhs)?;
+                    match int_op_name(bin) {
+                        Some(name) => state.check_int(*span, name, v)?,
+                        None => v,
+                    }
                 }
             };
-            assign_to(state, env, left, new_value.clone())?;
+            write_place(state, env, &place, new_value.clone())?;
             Ok(new_value)
         }
 
@@ -446,14 +607,12 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             source, excluded, ..
         } => {
             // Copy all properties from the source object except those
-            // listed in `excluded`. Preserves field iteration order
-            // by re-using BTreeMap's natural ordering (which is what
-            // the inference rule sees too).
+            // listed in `excluded`, in their order.
             let v = eval_expr(state, env, source)?;
             match v {
                 Value::Object(loc) => match state.heap.get(loc) {
                     Some(Cell::Object(props)) => {
-                        let mut out: BTreeMap<PropName, Value> = BTreeMap::new();
+                        let mut out = Props::new();
                         for (k, v) in props.clone() {
                             if !excluded.iter().any(|e| e == &k.0) {
                                 out.insert(k, v);
@@ -517,6 +676,37 @@ fn deref_var(heap: &Heap, loc: Loc) -> Result<Value, Stuck> {
         Some(Cell::Var(v)) => Ok(v.clone()),
         Some(_) => Err(Stuck::NotImplemented("non-Var cell as binding")),
         None => Err(Stuck::NotImplemented("dangling loc")),
+    }
+}
+
+/// Read `obj.property`, running a getter.
+fn get_member(state: &mut State, obj: &Value, property: &str) -> Result<Value, Stuck> {
+    let v = read_member(&state.heap, obj, property)?;
+    run_getter(state, obj, v)
+}
+
+/// Read `obj[index]`, running a getter.
+fn get_index(state: &mut State, obj: &Value, index: &Value) -> Result<Value, Stuck> {
+    let v = read_index(&state.heap, obj, index)?;
+    run_getter(state, obj, v)
+}
+
+fn run_getter(state: &mut State, obj: &Value, v: Value) -> Result<Value, Stuck> {
+    match v {
+        Value::Getter(c) => apply(state, Value::Closure(c), Some(obj.clone()), Vec::new()),
+        v => Ok(v),
+    }
+}
+
+/// Whether `obj`'s property `name` is a getter: a store to it throws.
+fn is_getter(heap: &Heap, obj: &Value, name: &str) -> bool {
+    match obj {
+        Value::Object(loc) => matches!(
+            heap.get(*loc),
+            Some(Cell::Object(props))
+                if matches!(props.get(&PropName(name.to_string())), Some(Value::Getter(_)))
+        ),
+        _ => false,
     }
 }
 
@@ -681,22 +871,32 @@ fn apply_builtin(
     }
 }
 
+/// `n` as an index: a non-negative integer.
+fn array_index(n: f64) -> Option<usize> {
+    let idx = n as usize;
+    (idx as f64 == n).then_some(idx)
+}
+
 fn read_index(heap: &Heap, obj: &Value, index: &Value) -> Result<Value, Stuck> {
     match (obj, index) {
-        (Value::Array(loc), Value::Number(n)) => {
-            let idx = *n as usize;
-            match heap.get(*loc) {
-                Some(Cell::Array(v)) => Ok(v.get(idx).cloned().unwrap_or(Value::Undefined)),
-                _ => Err(Stuck::NotImplemented("array loc not Array cell")),
+        (Value::Array(loc), Value::Number(n)) => match heap.get(*loc) {
+            Some(Cell::Array(v)) => {
+                array_index(*n)
+                    .and_then(|idx| v.get(idx).cloned())
+                    .ok_or(Stuck::OutOfBounds {
+                        index: *n,
+                        len: v.len(),
+                    })
             }
-        }
-        (Value::String(s), Value::Number(n)) => {
-            let idx = *n as usize;
-            Ok(s.chars()
-                .nth(idx)
-                .map(|c| Value::String(c.to_string()))
-                .unwrap_or(Value::Undefined))
-        }
+            _ => Err(Stuck::NotImplemented("array loc not Array cell")),
+        },
+        (Value::String(s), Value::Number(n)) => array_index(*n)
+            .and_then(|idx| s.chars().nth(idx))
+            .map(|c| Value::String(c.to_string()))
+            .ok_or(Stuck::OutOfBounds {
+                index: *n,
+                len: s.chars().count(),
+            }),
         (Value::Object(loc), Value::String(prop)) => match heap.get(*loc) {
             Some(Cell::Object(props)) => Ok(props
                 .get(&PropName(prop.clone()))
@@ -726,16 +926,22 @@ fn apply(
         Value::Builtin(m) => return apply_builtin(state, m, this, args),
         other => return Err(Stuck::NotCallable(other.type_string())),
     };
-    if args.len() != closure.params.len() {
+    // Extra arguments are ignored, as in JavaScript: inty's typing lets a
+    // function literal with fewer parameters stand for a function type
+    // with more (`check_function_literal`). Missing ones are an error.
+    if args.len() < closure.params.len() {
         return Err(Stuck::ArityMismatch {
             expected: closure.params.len(),
             got: args.len(),
         });
     }
     let mut call_env = closure.env.clone();
-    let this_value = this.unwrap_or(Value::Undefined);
-    let this_loc = state.alloc_var(this_value);
-    call_env = call_env.extend("this".to_string(), this_loc);
+    // An arrow function's `this` is the one it closed over.
+    if !closure.arrow {
+        let this_value = this.unwrap_or(Value::Undefined);
+        let this_loc = state.alloc_var(this_value);
+        call_env = call_env.extend("this".to_string(), this_loc);
+    }
     if let Some(name) = &closure.name {
         // Self-reference for named function expressions.
         let self_loc = state.alloc_var(Value::Closure(closure.clone()));
@@ -749,6 +955,19 @@ fn apply(
         (StmtOutcome::Return(v), _) => Ok(v),
         (StmtOutcome::Throw(v), _) => Err(Stuck::UncaughtThrow(v)),
         (_, _) => Ok(Value::Undefined),
+    }
+}
+
+/// The operators that are `Int` arithmetic when the checker types them
+/// `Int` (the `Arith` class): their results are checked.
+fn int_op_name(op: BinOp) -> Option<&'static str> {
+    match op {
+        BinOp::Add => Some("+"),
+        BinOp::Sub => Some("-"),
+        BinOp::Mul => Some("*"),
+        BinOp::Mod => Some("%"),
+        BinOp::FloorDiv => Some("//"),
+        _ => None,
     }
 }
 
@@ -773,14 +992,65 @@ fn compound_to_binop(op: AssignOp) -> BinOp {
     }
 }
 
-fn assign_to(
+/// What an assignment target evaluates to: the storage it names, with its
+/// object and index already evaluated, once, as JavaScript evaluates a
+/// reference before the value stored in it.
+enum Place<'a> {
+    /// A variable; reading or writing it has no effect of its own.
+    Var(&'a Expr),
+    Member(Value, &'a str),
+    Index(Value, Value),
+    Invalid,
+}
+
+fn eval_place<'a>(
     state: &mut State,
     env: &RuntimeEnv,
-    target: &Expr,
+    target: &'a Expr,
+) -> Result<Place<'a>, Stuck> {
+    Ok(match target {
+        Expr::Ident { .. } => Place::Var(target),
+        Expr::Member {
+            object, property, ..
+        } => Place::Member(eval_expr(state, env, object)?, property),
+        Expr::ComputedMember {
+            object, property, ..
+        } => {
+            let obj = eval_expr(state, env, object)?;
+            let idx = eval_expr(state, env, property)?;
+            Place::Index(obj, idx)
+        }
+        _ => Place::Invalid,
+    })
+}
+
+fn read_place(state: &mut State, env: &RuntimeEnv, place: &Place) -> Result<Value, Stuck> {
+    match place {
+        Place::Var(e) => eval_expr(state, env, e),
+        Place::Member(obj, property) => get_member(state, obj, property),
+        Place::Index(obj, idx) => get_index(state, obj, idx),
+        Place::Invalid => Err(Stuck::BadAssignmentTarget),
+    }
+}
+
+fn write_place(
+    state: &mut State,
+    env: &RuntimeEnv,
+    place: &Place,
     value: Value,
 ) -> Result<(), Stuck> {
-    match target {
-        Expr::Ident { name, .. } => {
+    // A store to a getter throws (in strict code), which the checker
+    // rules out.
+    let getter = match place {
+        Place::Member(obj, property) => is_getter(&state.heap, obj, property),
+        Place::Index(obj, Value::String(prop)) => is_getter(&state.heap, obj, prop),
+        _ => false,
+    };
+    if getter {
+        return Err(Stuck::ReadOnly);
+    }
+    match place {
+        Place::Var(Expr::Ident { name, .. }) => {
             let loc = env
                 .lookup(name)
                 .ok_or_else(|| Stuck::UndefinedVariable(name.clone()))?;
@@ -792,65 +1062,64 @@ fn assign_to(
                 _ => Err(Stuck::BadAssignmentTarget),
             }
         }
-        Expr::Member {
-            object, property, ..
-        } => {
-            let obj = eval_expr(state, env, object)?;
-            match obj {
-                Value::Object(loc) => match state.heap.get_mut(loc) {
-                    Some(Cell::Object(props)) => {
-                        props.insert(PropName(property.clone()), value);
-                        Ok(())
-                    }
-                    _ => Err(Stuck::BadAssignmentTarget),
-                },
-                _ => Err(Stuck::BadAssignmentTarget),
-            }
-        }
-        Expr::ComputedMember {
-            object, property, ..
-        } => {
-            let obj = eval_expr(state, env, object)?;
-            let idx = eval_expr(state, env, property)?;
-            match (&obj, &idx) {
-                (Value::Array(loc), Value::Number(n)) => {
-                    let idx = *n as usize;
-                    match state.heap.get_mut(*loc) {
-                        Some(Cell::Array(v)) => {
-                            if idx >= v.len() {
-                                v.resize(idx + 1, Value::Undefined);
-                            }
-                            v[idx] = value;
-                            Ok(())
-                        }
-                        _ => Err(Stuck::BadAssignmentTarget),
-                    }
+        Place::Member(obj, property) => match obj {
+            Value::Object(loc) => match state.heap.get_mut(*loc) {
+                Some(Cell::Object(props)) => {
+                    props.insert(PropName(property.to_string()), value);
+                    Ok(())
                 }
-                (Value::Object(loc), Value::String(prop)) => match state.heap.get_mut(*loc) {
-                    Some(Cell::Object(props)) => {
-                        props.insert(PropName(prop.clone()), value);
+                _ => Err(Stuck::BadAssignmentTarget),
+            },
+            _ => Err(Stuck::BadAssignmentTarget),
+        },
+        Place::Index(obj, idx) => match (obj, idx) {
+            // In bounds, or just past the end (a push); further would make
+            // a hole.
+            (Value::Array(loc), Value::Number(n)) => match state.heap.get_mut(*loc) {
+                Some(Cell::Array(v)) => match array_index(*n) {
+                    Some(idx) if idx < v.len() => {
+                        v[idx] = value;
                         Ok(())
                     }
-                    _ => Err(Stuck::BadAssignmentTarget),
+                    Some(idx) if idx == v.len() => {
+                        v.push(value);
+                        Ok(())
+                    }
+                    _ => Err(Stuck::OutOfBounds {
+                        index: *n,
+                        len: v.len(),
+                    }),
                 },
                 _ => Err(Stuck::BadAssignmentTarget),
-            }
-        }
-        _ => Err(Stuck::BadAssignmentTarget),
+            },
+            (Value::Object(loc), Value::String(prop)) => match state.heap.get_mut(*loc) {
+                Some(Cell::Object(props)) => {
+                    props.insert(PropName(prop.clone()), value);
+                    Ok(())
+                }
+                _ => Err(Stuck::BadAssignmentTarget),
+            },
+            _ => Err(Stuck::BadAssignmentTarget),
+        },
+        Place::Var(_) | Place::Invalid => Err(Stuck::BadAssignmentTarget),
     }
+}
+
+fn assign_to(
+    state: &mut State,
+    env: &RuntimeEnv,
+    target: &Expr,
+    value: Value,
+) -> Result<(), Stuck> {
+    let place = eval_place(state, env, target)?;
+    write_place(state, env, &place, value)
 }
 
 // ---------------------------------------------------------------------
 // Operator semantics.
 // ---------------------------------------------------------------------
 
-fn apply_unary(
-    state: &mut State,
-    _env: &RuntimeEnv,
-    op: UnaryOp,
-    arg_expr: &Expr,
-    v: Value,
-) -> Result<Value, Stuck> {
+fn apply_unary(op: UnaryOp, v: Value) -> Result<Value, Stuck> {
     match op {
         UnaryOp::Neg => match v {
             Value::Number(n) => Ok(Value::Number(-n)),
@@ -885,28 +1154,7 @@ fn apply_unary(
             other => Ok(other),
         },
         UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
-            let cur = match v {
-                Value::Number(n) => n,
-                other => {
-                    return Err(Stuck::TypeMismatch {
-                        op: "++/--",
-                        expected: "number",
-                        got: other.type_string(),
-                    })
-                }
-            };
-            let delta = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
-                1.0
-            } else {
-                -1.0
-            };
-            let new_val = Value::Number(cur + delta);
-            assign_to(state, _env, arg_expr, new_val.clone())?;
-            if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
-                Ok(new_val)
-            } else {
-                Ok(Value::Number(cur))
-            }
+            unreachable!("updates are evaluated through their place")
         }
     }
 }
@@ -950,8 +1198,10 @@ fn apply_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, Stuck> {
         Gt => cmp_op(l, r, ">", |o| o == std::cmp::Ordering::Greater),
         LtEq => cmp_op(l, r, "<=", |o| o != std::cmp::Ordering::Greater),
         GtEq => cmp_op(l, r, ">=", |o| o != std::cmp::Ordering::Less),
-        EqEq | EqEqEq => Ok(Value::Boolean(strict_equal(l, r))),
-        NotEq | NotEqEq => Ok(Value::Boolean(!strict_equal(l, r))),
+        EqEqEq => Ok(Value::Boolean(strict_equal(l, r))),
+        NotEqEq => Ok(Value::Boolean(!strict_equal(l, r))),
+        EqEq => Ok(Value::Boolean(loose_equal(l, r))),
+        NotEq => Ok(Value::Boolean(!loose_equal(l, r))),
         And | Or => unreachable!("short-circuit handled in eval_expr"),
         In | Instanceof => Err(Stuck::NotImplemented("in / instanceof")),
     }
@@ -1021,6 +1271,14 @@ fn strict_equal(l: &Value, r: &Value) -> bool {
     }
 }
 
+/// `==`: as `===`, except that `null` and `undefined` are equal to each
+/// other (`x != null` tests for both). Its coercions between other types
+/// aren't modelled.
+fn loose_equal(l: &Value, r: &Value) -> bool {
+    let nothing = |v: &Value| matches!(v, Value::Null | Value::Undefined);
+    strict_equal(l, r) || (nothing(l) && nothing(r))
+}
+
 fn value_to_string(v: &Value) -> String {
     match v {
         Value::Number(n) => n.to_string(),
@@ -1080,6 +1338,8 @@ pub fn eval_stmt(
                 params: params.iter().map(|p| p.name.clone()).collect(),
                 body: body.clone(),
                 env: env.clone(),
+                arrow: false,
+                constructor: true,
             });
             let loc = state.alloc_var(closure);
             let new_env = env.extend(name.clone(), loc);
@@ -1266,21 +1526,31 @@ pub fn eval_stmt(
             finalizer,
             ..
         } => {
-            let outcome = eval_stmt(state, env, block)?.0;
+            // A `throw` out of a function called in the block reaches here
+            // as `Stuck::UncaughtThrow`: it is the block's throw all the
+            // same, and the handler and `finally` see it.
+            let completed = |r: Result<(StmtOutcome, RuntimeEnv), Stuck>| match r {
+                Ok((outcome, _)) => Ok(outcome),
+                Err(Stuck::UncaughtThrow(v)) => Ok(StmtOutcome::Throw(v)),
+                Err(e) => Err(e),
+            };
+            let outcome = completed(eval_stmt(state, env, block))?;
             let outcome = match outcome {
                 StmtOutcome::Throw(v) => match handler {
                     Some(catch) => {
                         let loc = state.alloc_var(v);
                         let catch_env = env.extend(catch.param.clone(), loc);
-                        eval_stmt(state, &catch_env, &catch.body)?.0
+                        completed(eval_stmt(state, &catch_env, &catch.body))?
                     }
                     None => StmtOutcome::Throw(v),
                 },
                 other => other,
             };
             if let Some(f) = finalizer {
-                let final_outcome = eval_stmt(state, env, f)?.0;
-                if let StmtOutcome::Throw(_) | StmtOutcome::Return(_) = final_outcome {
+                // An abrupt `finally` (`throw`, `return`, `break`,
+                // `continue`) replaces the block's outcome.
+                let final_outcome = completed(eval_stmt(state, env, f))?;
+                if !matches!(final_outcome, StmtOutcome::Normal(_)) {
                     return Ok((final_outcome, env.clone()));
                 }
             }
@@ -1364,6 +1634,8 @@ fn eval_block(
                 params: params.iter().map(|p| p.name.clone()).collect(),
                 body: body.clone(),
                 env: block_env.clone(),
+                arrow: false,
+                constructor: true,
             });
             let loc = block_env
                 .lookup(name)

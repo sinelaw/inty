@@ -1,0 +1,470 @@
+import Inty.Types
+
+/-!
+# Syntax of the core calculus
+
+The core calculus is the fragment of inty's shared AST (`src/ast`)
+that this formalization covers so far. Each frontend lowers onto that AST, so
+the calculus is language-agnostic in the same way.
+
+Variables are de Bruijn indices: `var 0` is the innermost binder. The
+environment of the semantics and the context of the typing judgement are both
+lists indexed the same way, so terms are never substituted into.
+-/
+
+namespace Inty
+
+/-- Literals. Numbers are IEEE doubles, as in JavaScript and in
+`dynamics::Value::Number(f64)`. -/
+inductive Lit where
+  | number (n : Float)
+  | string (s : String)
+  | boolean (b : Bool)
+  | undefined
+  | null
+  deriving Repr
+
+/-- Unary operators, a subset of `ast::UnaryOp`. -/
+inductive UnOp where
+  /-- `!e`: truthiness negation, defined on every type. -/
+  | not
+  /-- `typeof e`: defined on every type. -/
+  | typeof
+  /-- `-e`: `Number` only. -/
+  | neg
+  deriving DecidableEq, Repr
+
+/-- Binary operators, a subset of `ast::BinOp`. -/
+inductive BinOp where
+  /-- `+`: any instance of the `Plus` class (`Number`, `String`). -/
+  | plus
+  /-- `-`: `Number` only. -/
+  | minus
+  /-- `*`: `Number` only. -/
+  | times
+  /-- `/`: `Number` only. -/
+  | div
+  /-- `<`, `<=`, `>`, `>=`: of `Number`s (inty also compares two values of
+  any one type, by JavaScript's coercions, which the model doesn't
+  have). -/
+  | lt | le | gt | ge
+  /-- `===` (`negated = false`) or `!==`: of any two values. -/
+  | strictEq (negated : Bool)
+  deriving DecidableEq, Repr
+
+/-- The operators of `Number`s: `-`, `*`, `/` and the comparisons. -/
+def BinOp.numeric : BinOp → Bool
+  | .minus | .times | .div | .lt | .le | .gt | .ge => true
+  | .plus | .strictEq _ => false
+
+/-- What a numeric operator gives: a comparison a `boolean`, the others a
+`number`. -/
+def BinOp.resTy : BinOp → Ty
+  | .lt | .le | .gt | .ge | .strictEq _ => .boolean
+  | _ => .number
+
+/-- How an object literal's field is written. -/
+inductive FieldKind where
+  /-- `l: e`. -/
+  | data
+  /-- `l(x₀, …) { body }`, its value a function: it runs as `l: function
+  (…) { body }` does, but inty types its `this` as the literal itself
+  (`PropDef::Method`). -/
+  | method
+  /-- `get l() { body }`, its value a function of no parameters: reading
+  `l` calls it, with the object as `this`. -/
+  | getter
+  deriving DecidableEq, Repr
+
+/-- How a class's member is written. -/
+inductive ClassKind where
+  /-- A field, `l = e;` in the class body or `this.l = e;` in the
+  constructor: its initialiser runs when the instance is made, in order,
+  and may read the fields before it. -/
+  | data
+  /-- A field whose initialiser is an arrow function, `l = (…) => body;`,
+  written as a function whose `this` is the arrow's, the instance: the
+  function is bound to it. It may use the instance as it likes, since it
+  runs only once the instance is made. -/
+  | arrow
+  /-- A method, `l(…) { body }`, on the instances' prototype. -/
+  | method
+  /-- A getter, `get l() { body }`, on the instances' prototype. -/
+  | getter
+  deriving DecidableEq, Repr
+
+/-- Expressions. -/
+inductive Expr where
+  | lit (l : Lit)
+  | var (i : Nat)
+  /-- A named function of `arity` parameters,
+  `function f(x₀, …, xₙ₋₁) { body }`. Inside `body`, `var i` is the
+  parameter `xᵢ` for `i < n`, `var n` is the function itself, so functions
+  can recurse, as JavaScript's named function expressions can, and
+  `var (n + 1)` is `this`. -/
+  | func (arity : Nat) (body : Expr)
+  /-- A call `f(a₀, …)`, outside any receiver: `this` is `undefined`. -/
+  | app (f : Expr) (args : List Expr)
+  /-- `const x = e₁; e₂` (`mutable` false) or `let x = e₁; e₂` (`mutable`
+  true), with `x` as `var 0` in `e₂`. `x` is generalised when `e₁` is a
+  syntactic value and `e₂` never assigns to it. An annotation
+  (`/** const x: T */`) declares `x`'s scheme, which must have no free
+  type variables: its quantified ones are rigid in `e₁`. -/
+  | let_ (mutable : Bool) (ann : Option Scheme) (e₁ e₂ : Expr)
+  /-- `x = e`, for the variable `var i`: `e`'s value, stored in `x`. -/
+  | assign (i : Nat) (e : Expr)
+  /-- `c ? t : e`. The test may have any type and is read by truthiness, as
+  in `dynamics::Value::truthy`. -/
+  | cond (c t e : Expr)
+  | unop (op : UnOp) (e : Expr)
+  | binop (op : BinOp) (e₁ e₂ : Expr)
+  /-- `return e;`: leaves the enclosing function with `e`'s value. -/
+  | ret (e : Expr)
+  /-- `throw e;`. -/
+  | throw_ (e : Expr)
+  /-- `e₁; e₂`: `e₁` for its effects, then `e₂`. -/
+  | seq (e₁ e₂ : Expr)
+  /-- `while (c) body`; it completes with `undefined`. -/
+  | while_ (c body : Expr)
+  /-- `break;`, out of the innermost loop. -/
+  | break_
+  /-- `continue;`, to the innermost loop's next test. -/
+  | continue_
+  /-- `try { body } catch (e) { handler }`, with `e` as `var 0` in
+  `handler`. -/
+  | tryCatch (body handler : Expr)
+  /-- `try { body } finally { fin }`: `fin` runs however `body` completes,
+  and its own abrupt completion, if any, wins. -/
+  | tryFinally (body fin : Expr)
+  /-- An object literal `{l₀: e₀, …, lₙ₋₁: eₙ₋₁}`: the fields' values, in
+  order, in a new cell, each written as its kind says. -/
+  | obj (labels : List String) (es : List Expr) (kinds : List FieldKind)
+  /-- `e.l`: reading a property. -/
+  | get (e : Expr) (l : String)
+  /-- `e.l = v`: storing `v`'s value in a property, which must exist; the
+  value is the assignment's. -/
+  | set (e : Expr) (l : String) (v : Expr)
+  /-- `{...e₁, ...e₂}`: a new object with `e₂`'s properties and those of
+  `e₁` that `e₂` hasn't. A literal with spreads and fields lowers to
+  these, a run of fields being an object literal: `{a: 1, ...o}` is
+  `{...{a: 1}, ...o}`. -/
+  | spread (e₁ e₂ : Expr)
+  /-- An array literal `[e₀, …, eₙ₋₁]`: the elements' values, in order, in
+  a new cell. -/
+  | arr (es : List Expr)
+  /-- `e[i]`: reading an element. -/
+  | index (e i : Expr)
+  /-- `e[i] = v`: storing an element; the value is the assignment's. -/
+  | setIndex (e i v : Expr)
+  /-- A method call `e.l(a₀, …)`: the receiver, its property `l`, then the
+  arguments, then the call, with `this` the receiver. -/
+  | mcall (e : Expr) (l : String) (args : List Expr)
+  /-- A class's instance, made by its constructor: the members `labels`,
+  each written as its kind says. A field's initialiser `eᵢ` sees the
+  fields before it, the latest as `var 0`; an arrow field, a method and a
+  getter are functions, the last two on the prototype. inty lowers a class
+  to a factory returning such an object literal
+  (`parse_class_declaration_named`). -/
+  | cls (labels : List String) (es : List Expr) (kinds : List ClassKind)
+  /-- A class's constructor, `function C(x₀, …) { body }` as `func` is but
+  callable only with `new`: its `this` is what `new` makes. -/
+  | ctor (arity : Nat) (body : Expr)
+  /-- `new f(a₀, …)`: a call of `f` with a new object as `this`, giving
+  what `f` returns if it is an object, or that object if not. -/
+  | new_ (f : Expr) (args : List Expr)
+  /-- Eliminating a sum: `e₂` if `e₁`'s value is nothing (`null` or
+  `undefined`), otherwise `e₃` with that value as `var 0`. In JavaScript,
+  `const x = e₁; x != null ? e₃ : e₂`; `e₁ ?? e₂` is `unwrap e₁ e₂ (var 0)`.
+  -/
+  | unwrap (e₁ e₂ e₃ : Expr)
+  /-- Taking apart a variant tagged by its field `l` (`d = .field l`) or a
+  sum told apart by `typeof` (`d = .typeOf`): `e₃` if `e₁`'s value has the
+  tag `t` (its field `l` holds the string `t`, or its `typeof` is `t`),
+  otherwise `e₂`, each with that value as `var 0`. In JavaScript,
+  `const x = e₁; x.l === "t" ? e₃ : e₂` or
+  `const x = e₁; typeof x === "t" ? e₃ : e₂`, whose branches see `x`
+  narrowed. -/
+  | caseTag (e₁ : Expr) (d : Disc) (t : String) (e₂ e₃ : Expr)
+  deriving Repr
+
+/-- Syntactic values, which the value restriction lets a `const` generalise:
+`is_syntactic_value` in `src/infer/features/bindings.rs`. -/
+inductive Expr.IsValue : Expr → Prop where
+  | lit : Expr.IsValue (.lit l)
+  | var : Expr.IsValue (.var i)
+  | func : Expr.IsValue (.func n body)
+  | ctor : Expr.IsValue (.ctor n body)
+
+/-- Induction on `Expr`, with a hypothesis for each argument of a call. -/
+theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
+    (var : ∀ i, motive (.var i)) (func : ∀ n body, motive body → motive (.func n body))
+    (app : ∀ f args, motive f → (∀ a ∈ args, motive a) → motive (.app f args))
+    (let_ : ∀ m a e₁ e₂, motive e₁ → motive e₂ → motive (.let_ m a e₁ e₂))
+    (assign : ∀ i e, motive e → motive (.assign i e))
+    (cond : ∀ c t e, motive c → motive t → motive e → motive (.cond c t e))
+    (unop : ∀ op e, motive e → motive (.unop op e))
+    (binop : ∀ op e₁ e₂, motive e₁ → motive e₂ → motive (.binop op e₁ e₂))
+    (ret : ∀ e, motive e → motive (.ret e)) (throw_ : ∀ e, motive e → motive (.throw_ e))
+    (seq : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.seq e₁ e₂))
+    (while_ : ∀ c body, motive c → motive body → motive (.while_ c body))
+    (break_ : motive .break_) (continue_ : motive .continue_)
+    (tryCatch : ∀ body handler, motive body → motive handler → motive (.tryCatch body handler))
+    (tryFinally : ∀ body fin, motive body → motive fin → motive (.tryFinally body fin))
+    (obj : ∀ ls es ks, (∀ a ∈ es, motive a) → motive (.obj ls es ks))
+    (get : ∀ e l, motive e → motive (.get e l))
+    (set : ∀ e l v, motive e → motive v → motive (.set e l v))
+    (spread : ∀ e₁ e₂, motive e₁ → motive e₂ → motive (.spread e₁ e₂))
+    (arr : ∀ es, (∀ a ∈ es, motive a) → motive (.arr es))
+    (index : ∀ e i, motive e → motive i → motive (.index e i))
+    (setIndex : ∀ e i v, motive e → motive i → motive v → motive (.setIndex e i v))
+    (mcall : ∀ e l args, motive e → (∀ a ∈ args, motive a) → motive (.mcall e l args))
+    (cls : ∀ ls es ks, (∀ a ∈ es, motive a) → motive (.cls ls es ks))
+    (ctor : ∀ n body, motive body → motive (.ctor n body))
+    (new_ : ∀ f args, motive f → (∀ a ∈ args, motive a) → motive (.new_ f args))
+    (unwrap : ∀ e₁ e₂ e₃, motive e₁ → motive e₂ → motive e₃ → motive (.unwrap e₁ e₂ e₃))
+    (caseTag : ∀ e₁ d t e₂ e₃, motive e₁ → motive e₂ → motive e₃ →
+      motive (.caseTag e₁ d t e₂ e₃)) :
+    ∀ e, motive e
+  | .lit l => lit l
+  | .var i => var i
+  | .func n body => func n body (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag body)
+  | .app f args =>
+    app f args (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag f)
+      (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag a)
+  | .let_ m a e₁ e₂ =>
+    let_ m a e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₂)
+  | .cond c t e =>
+    cond c t e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag c)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag t)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+  | .assign i e => assign i e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+  | .unop op e => unop op e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+  | .binop op e₁ e₂ =>
+    binop op e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₂)
+  | .ret e => ret e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+  | .throw_ e => throw_ e (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+  | .seq e₁ e₂ =>
+    seq e₁ e₂ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₂)
+  | .while_ c body =>
+    while_ c body
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag c)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag body)
+  | .break_ => break_
+  | .continue_ => continue_
+  | .tryCatch body handler =>
+    tryCatch body handler
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag body)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag handler)
+  | .tryFinally body fin =>
+    tryFinally body fin
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag body)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag fin)
+  | .obj ls es ks => obj ls es ks (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag a)
+  | .get e l => get e l (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+  | .set e l v => set e l v (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag v)
+  | .spread e₁ e₂ => spread e₁ e₂
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₂)
+  | .arr es => arr es (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag a)
+  | .index e i => index e i
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag i)
+  | .setIndex e i v => setIndex e i v
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag i)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag v)
+  | .mcall e l args => mcall e l args
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e)
+      (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_
+        break_ continue_ tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag a)
+  | .cls ls es ks => cls ls es ks (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag a)
+  | .ctor n body => ctor n body (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag body)
+  | .new_ f args =>
+    new_ f args (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag f)
+      (fun a _ => Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag a)
+  | .unwrap e₁ e₂ e₃ =>
+    unwrap e₁ e₂ e₃ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_
+        break_ continue_ tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_
+        unwrap caseTag e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₂)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₃)
+  | .caseTag e₁ d t e₂ e₃ =>
+    caseTag e₁ d t e₂ e₃ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_
+        break_ continue_ tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_
+        unwrap caseTag e₁)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₂)
+      (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
+        tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₃)
+termination_by e => sizeOf e
+decreasing_by
+  all_goals simp_wf
+  all_goals first | omega | (have := List.sizeOf_lt_of_mem ‹_›; omega)
+
+theorem Expr.sizeOf_pos (e : Expr) : 0 < sizeOf e := by cases e <;> simp <;> omega
+
+mutual
+/-- Whether `e` assigns to the variable `var i` (in a function in it, too). -/
+def Expr.writes (i : Nat) : Expr → Bool
+  | .lit _ | .var _ => false
+  | .func n body => body.writes (i + n + 2)
+  | .app f args => f.writes i || Expr.writesList i args
+  | .let_ _ _ e₁ e₂ => e₁.writes i || e₂.writes (i + 1)
+  | .assign j e => j == i || e.writes i
+  | .cond c t e => c.writes i || t.writes i || e.writes i
+  | .unop _ e | .ret e | .throw_ e => e.writes i
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ | .spread e₁ e₂
+  | .index e₁ e₂ => e₁.writes i || e₂.writes i
+  | .break_ | .continue_ => false
+  | .tryCatch body handler => body.writes i || handler.writes (i + 1)
+  | .obj _ es _ | .arr es => Expr.writesList i es
+  | .setIndex e j v => e.writes i || j.writes i || v.writes i
+  | .get e _ => e.writes i
+  | .set e _ v => e.writes i || v.writes i
+  | .mcall e _ args | .new_ e args => e.writes i || Expr.writesList i args
+  | .cls _ es ks => Expr.writesCls i 0 es ks
+  | .ctor n body => body.writes (i + n + 2)
+  | .unwrap e₁ e₂ e₃ => e₁.writes i || e₂.writes i || e₃.writes (i + 1)
+  | .caseTag e₁ _ _ e₂ e₃ => e₁.writes i || e₂.writes (i + 1) || e₃.writes (i + 1)
+/-- `writes`, for a list of arguments. -/
+def Expr.writesList (i : Nat) : List Expr → Bool
+  | [] => false
+  | e :: es => e.writes i || Expr.writesList i es
+/-- `writes`, for a class's members: a field's initialiser sees the `d`
+fields before it, the other members only the class's context. -/
+def Expr.writesCls (i : Nat) : Nat → List Expr → List ClassKind → Bool
+  | d, e :: es, .data :: ks => e.writes (i + d) || Expr.writesCls i (d + 1) es ks
+  | d, e :: es, _ :: ks => e.writes i || Expr.writesCls i d es ks
+  | _, _, _ => false
+end
+
+mutual
+/-- Whether every assignment is to a variable `mutables` says is mutable: a
+`let` or a parameter, not a `const`, a function's own name (which a named
+function expression binds immutably) or `this`. inty rejects assigning to
+a `const` (`check_assignment_target`). It is a scope check beside the
+typing rules, not one of them: the assignment would be type-safe. -/
+def Expr.assignsMutable (mutables : List Bool) : Expr → Bool
+  | .lit _ | .var _ => true
+  | .func n body => body.assignsMutable (List.replicate n true ++ false :: false :: mutables)
+  | .app f args => f.assignsMutable mutables && Expr.assignsMutableList mutables args
+  | .let_ m _ e₁ e₂ => e₁.assignsMutable mutables && e₂.assignsMutable (m :: mutables)
+  | .assign j e => mutables[j]? == some true && e.assignsMutable mutables
+  | .cond c t e => c.assignsMutable mutables && t.assignsMutable mutables &&
+      e.assignsMutable mutables
+  | .unop _ e | .ret e | .throw_ e => e.assignsMutable mutables
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ | .spread e₁ e₂
+  | .index e₁ e₂ => e₁.assignsMutable mutables && e₂.assignsMutable mutables
+  | .break_ | .continue_ => true
+  -- What a `catch` binds can be assigned.
+  | .tryCatch body handler =>
+    body.assignsMutable mutables && handler.assignsMutable (true :: mutables)
+  | .obj _ es _ | .arr es => Expr.assignsMutableList mutables es
+  | .setIndex e i v => e.assignsMutable mutables && i.assignsMutable mutables &&
+      v.assignsMutable mutables
+  | .get e _ => e.assignsMutable mutables
+  | .set e _ v => e.assignsMutable mutables && v.assignsMutable mutables
+  | .mcall e _ args | .new_ e args =>
+    e.assignsMutable mutables && Expr.assignsMutableList mutables args
+  | .cls _ es ks => Expr.assignsMutableCls mutables 0 es ks
+  | .ctor n body => body.assignsMutable (List.replicate n true ++ false :: false :: mutables)
+  -- What `unwrap` binds is a `const`.
+  | .unwrap e₁ e₂ e₃ => e₁.assignsMutable mutables && e₂.assignsMutable mutables &&
+      e₃.assignsMutable (false :: mutables)
+  -- What `caseTag` binds is a `const`.
+  | .caseTag e₁ _ _ e₂ e₃ => e₁.assignsMutable mutables && e₂.assignsMutable (false :: mutables) &&
+      e₃.assignsMutable (false :: mutables)
+/-- `assignsMutable`, for a list of arguments. -/
+def Expr.assignsMutableList (mutables : List Bool) : List Expr → Bool
+  | [] => true
+  | e :: es => e.assignsMutable mutables && Expr.assignsMutableList mutables es
+/-- `assignsMutable`, for a class's members: the fields an initialiser
+sees aren't assigned. -/
+def Expr.assignsMutableCls (mutables : List Bool) : Nat → List Expr → List ClassKind → Bool
+  | d, e :: es, .data :: ks =>
+    e.assignsMutable (List.replicate d false ++ mutables) &&
+      Expr.assignsMutableCls mutables (d + 1) es ks
+  | d, e :: es, _ :: ks => e.assignsMutable mutables && Expr.assignsMutableCls mutables d es ks
+  | _, _, _ => true
+end
+
+mutual
+/-- Whether every `break` and `continue` is inside a loop (`inLoop`) of the
+same function: JavaScript rejects the program otherwise. -/
+def Expr.jumpsInLoop (inLoop : Bool) : Expr → Bool
+  | .lit _ | .var _ => true
+  | .func _ body => body.jumpsInLoop false
+  | .app f args => f.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop args
+  | .let_ _ _ e₁ e₂ | .binop _ e₁ e₂ | .seq e₁ e₂ | .tryCatch e₁ e₂ | .tryFinally e₁ e₂
+  | .spread e₁ e₂ | .index e₁ e₂ => e₁.jumpsInLoop inLoop && e₂.jumpsInLoop inLoop
+  | .assign _ e | .unop _ e | .ret e | .throw_ e => e.jumpsInLoop inLoop
+  | .cond c t e => c.jumpsInLoop inLoop && t.jumpsInLoop inLoop && e.jumpsInLoop inLoop
+  | .while_ c body => c.jumpsInLoop inLoop && body.jumpsInLoop true
+  | .break_ | .continue_ => inLoop
+  | .obj _ es _ | .arr es => Expr.jumpsInLoopList inLoop es
+  | .setIndex e i v => e.jumpsInLoop inLoop && i.jumpsInLoop inLoop && v.jumpsInLoop inLoop
+  | .get e _ => e.jumpsInLoop inLoop
+  | .set e _ v => e.jumpsInLoop inLoop && v.jumpsInLoop inLoop
+  | .mcall e _ args | .new_ e args => e.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop args
+  -- A class's initialisers are expressions, outside any loop.
+  | .cls _ es _ => Expr.jumpsInLoopList false es
+  | .ctor _ body => body.jumpsInLoop false
+  | .unwrap e₁ e₂ e₃ | .caseTag e₁ _ _ e₂ e₃ =>
+    e₁.jumpsInLoop inLoop && e₂.jumpsInLoop inLoop && e₃.jumpsInLoop inLoop
+/-- `jumpsInLoop`, for a list of arguments. -/
+def Expr.jumpsInLoopList (inLoop : Bool) : List Expr → Bool
+  | [] => true
+  | e :: es => e.jumpsInLoop inLoop && Expr.jumpsInLoopList inLoop es
+end
+
+/-- The checks beside the typing rules, both of scope: assignments only to
+mutable variables, `break` and `continue` only in loops. -/
+def Expr.scoped (mutables : List Bool) (e : Expr) : Bool :=
+  e.assignsMutable mutables && e.jumpsInLoop false
+
+end Inty

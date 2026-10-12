@@ -204,6 +204,7 @@ fn close_call_tails(ty: &Type) -> Type {
             ret: Box::new(f(ret)),
         },
         Type::Array(e) => Type::Array(Box::new(f(e))),
+        Type::Maybe(z, e) => Type::Maybe(*z, Box::new(f(e))),
         Type::Promise(e) => Type::Promise(Box::new(f(e))),
         Type::Map(e) => Type::Map(Box::new(f(e))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(f).collect()),

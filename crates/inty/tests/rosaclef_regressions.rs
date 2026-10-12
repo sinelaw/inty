@@ -395,40 +395,18 @@ fn b12_undefined_callbacks() {
     "#);
 }
 
-// 21. `class … extends Base`: the base instance's fields and methods,
-// from a class of the same program or a constructor a lib declares.
+// 21. `class … extends Base` is rejected: inty has no inheritance. A
+// base method is checked with the base's instance as `this`, whose type
+// says which fields it lacks, so running it on a subclass instance isn't
+// safe (here `{label: 5, ...this}.label` would be the subclass's string).
 #[test]
-fn b21_class_extends() {
-    check_with_lib(
-        "/** type MessagePort = { postMessage: (String) => Undefined } */\n\
-         /** const AudioWorkletProcessor: () => { port: MessagePort } */\n\
-         const AudioWorkletProcessor;",
-        "class Gain extends AudioWorkletProcessor {
-            constructor() { super(); this.gain = 0.5; }
-            process(inputs) { this.port.postMessage(\"hi\"); return this.gain > 0; }
-         }
-         const ok = new Gain().process([]);",
-    )
-    .unwrap();
-    ok("
-        class Base { constructor(n) { this.n = n; } twice() { return this.n * 2; } }
-        class Sub extends Base {
-            constructor() { super(21); this.label = \"x\"; }
-            show() { return this.label + String(this.twice()); }
-        }
-        const s = new Sub();
-        const t = s.show() + String(s.n + 1);
+fn b21_class_extends_rejected() {
+    let e = err("
+        class Base { constructor() { this.n = 1; } m() { return {label: 5, ...this}.label - 1; } }
+        class Sub extends Base { constructor() { super(); this.label = \"x\"; } }
+        const r = new Sub().m();
     ");
-    // A base field keeps its type.
-    err("
-        class Base { constructor(n) { this.n = n; } twice() { return this.n * 2; } }
-        class Bad extends Base { constructor() { super(1); this.n = \"x\"; } }
-    ");
-    // `super(…)` passes the base constructor's arguments.
-    err("
-        class Base { constructor(n) { this.n = n * 2; } }
-        class Bad extends Base { constructor() { super(\"x\"); } }
-    ");
+    assert!(e.contains("class inheritance is not supported"), "{e}");
 }
 
 // 19/20. Typed DOM events and the web platform declarations a real app
@@ -507,26 +485,28 @@ const c = structuredClone({ a: 1 });
     err(r##"const r = "a1".match(/\d/); const n = r.length;"##);
 }
 
-// 20. The AudioWorklet global scope, with `extends AudioWorkletProcessor`.
+// 20. The AudioWorklet global scope. A processor class would `extends
+// AudioWorkletProcessor`, which only an external class's declaration
+// may: a class with a body can't extend another.
 #[test]
 fn b20_audio_worklet() {
-    check_with_lib(
+    let e = check_with_lib(
         inty::stdlib::AUDIO_WORKLET,
         r##"class Gain extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.gain = 1;
-    this.frames = 0;
-  }
-  /** process(inputs, outputs, parameters) */
-  process(inputs, outputs, parameters) {
-    const out = outputs[0];
-    for (const ch of out) for (let i = 0; i < ch.length; i++) ch[i] = ch[i] * this.gain;
-    this.frames = this.frames + 128;
-    if (this.frames > sampleRate) this.port.postMessage({ t: "second", at: currentTime });
-    return true;
-  }
+  process(inputs, outputs, parameters) { return true; }
 }
+registerProcessor("gain", Gain);
+"##,
+    )
+    .unwrap_err();
+    assert!(e.contains("class inheritance is not supported"), "{e}");
+    check_with_lib(
+        inty::stdlib::AUDIO_WORKLET,
+        r##"/** class Gain extends AudioWorkletProcessor { gain: Number } */
+class Gain;
+const g = new Gain();
+g.port.postMessage({ t: "second", at: currentTime });
+const half = g.gain / 2;
 registerProcessor("gain", Gain);
 "##,
     )

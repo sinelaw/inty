@@ -21,7 +21,7 @@ The production pipeline is `parse → infer → (optionally) decorate`. The dyna
 
 ## Testing
 
-inty has four kinds of tests. The first three each fix a specific class of bug; the fourth is a meta-layer that asserts the first three agree with each other. Run everything with:
+inty has four kinds of tests. The first three each fix a specific class of bug; the fourth is a meta-layer that asserts the first three agree with each other. A Lean formalization (§5) builds separately. Run the tests with:
 
 ```
 cargo test --lib -- --skip parser::proptests
@@ -95,6 +95,10 @@ test meta::soundness::tests::generated_boolean_programs_sound ... ok
 Both properties fail immediately on the pre-`ftv(S Γ)` generaliser, and proptest shrinks the failure to `function h0(x) { return h1(x); } const h1 = (x) => x; h0("s") * 2`. Set `PROPTEST_CASES` for a longer soak. In debug builds, `InferState::generalize` also checks that no quantified variable is bound or reachable from the environment (`debug_check_generalisation`).
 
 The generator is deliberately conservative — it emits only the constructions where typing and operational semantics are known to agree. Adding cases here is how soundness coverage grows as new typing features land. A failing case shrinks via proptest to a minimal counterexample.
+
+### 5. Lean formalization (`lean/`)
+
+A Lean 4 model of a core calculus of the type system — declarative Hindley–Milner typing with let-polymorphism and `Plus`-constrained schemes, an interpreter with a call clock mirroring `src/dynamics`, a machine-checked proof by a step-indexed logical relation that well-typed programs never get stuck (also with native builtins in scope), and an executable Algorithm W proved sound against the typing rules. It proves for the core calculus what the soundness proptest samples; see [lean/README.md](lean/README.md) for what it covers and the roadmap to the full system. Build with `cd lean && lake build`, which also builds `inty-model`; `tests/differential.rs` then runs inty, the model and Node on generated programs and compares their typing and evaluation (skipped when the model isn't built).
 
 ### Adding a typing feature
 

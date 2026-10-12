@@ -118,6 +118,7 @@ pub(in crate::infer) fn const_function_decl(
             params,
             body,
             type_annotation,
+            arrow: _,
             span,
         }) => Some((
             decl,
@@ -128,6 +129,14 @@ pub(in crate::infer) fn const_function_decl(
         )),
         _ => None,
     }
+}
+
+/// Whether a hoisted function is an arrow function (`const f = () => …`).
+pub(in crate::infer) fn hoisted_is_arrow(stmt: &Stmt) -> bool {
+    matches!(
+        const_function_decl(stmt).map(|(decl, ..)| &decl.init),
+        Some(Some(Expr::Function { arrow: true, .. }))
+    )
 }
 
 /// Where a hoisted function's name is declared, for its binding key: the
@@ -302,9 +311,16 @@ impl InferState {
         body: &Stmt,
         type_annotation: &Option<TypeAnnotation>,
         return_type_ast: Option<&crate::types::TypeAst>,
+        arrow: bool,
         span: Span,
     ) -> InferResult<Type> {
-        let this_type = self.fresh_type_var();
+        // An arrow function has no `this` of its own, and isn't a
+        // constructor.
+        let this_type = if arrow {
+            Type::ArrowThis
+        } else {
+            self.fresh_type_var()
+        };
         self.infer_function_with_this(
             env,
             name,
@@ -363,9 +379,14 @@ impl InferState {
         body: &Stmt,
         expected_params: Vec<crate::types::FuncParam>,
         expected_ret: Type,
+        arrow: bool,
         span: Span,
     ) -> InferResult<Type> {
-        let this_type = self.fresh_type_var();
+        let this_type = if arrow {
+            Type::ArrowThis
+        } else {
+            self.fresh_type_var()
+        };
         // A concise arrow (`(e) => list.push(e)`) where the result is
         // `Undefined` runs for its effect: its value is discarded, like a
         // TypeScript `void` callback's. A block body still returns what
@@ -533,22 +554,38 @@ impl InferState {
             self.bump_pvar_id_to(next_pvar);
 
             // Function annotation: pins the function's signature to
-            // the declared one. Subsume rather than unify so a body
-            // annotated to return `String` can hold a literal.
+            // the declared one, which is called detached unless it says
+            // otherwise. Subsume rather than unify so a body annotated to
+            // return `String` can hold a literal.
+            let annotated_type =
+                self.annotation_this(annotation_span, &annotated_type, &Type::Undefined)?;
             self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 
-        let mut body_env = env.extend("this".to_string(), TypeScheme::mono(this_type));
+        // An arrow function's `this` is its enclosing function's.
+        let mut body_env = if matches!(this_type, Type::ArrowThis) {
+            env.clone()
+        } else {
+            env.extend("this".to_string(), TypeScheme::mono(this_type))
+        };
 
         // The function's own name first, so a parameter of the same name
         // shadows it (`function f(f) { return f; }` returns the argument).
+        // A named function expression's own name is immutable: assigning
+        // to it is a `TypeError` in strict mode. A declaration's name is
+        // the enclosing scope's, which can be reassigned.
         if let Some(fn_name) = name {
+            let mutability = if self.resolution.constant_at(span, fn_name) {
+                Mutability::Immutable
+            } else {
+                Mutability::Mutable
+            };
             body_env = self.bind(
                 &body_env,
                 span,
                 fn_name,
                 TypeScheme::mono(func_type.clone()),
-                Mutability::Mutable,
+                mutability,
             )?;
         }
 
@@ -787,16 +824,24 @@ impl InferState {
         // `this`-agnostic functions are unaffected) and produces a
         // type error when it's a concrete row, catching detached
         // method calls like `var f = obj.m; f();` at type-check time.
+        if matches!(self.zonk(&this_type), Type::NewTarget) {
+            return Err(crate::error::TypeError::TypeMismatch {
+                expected: "`new` (a class can only be called with `new`)".to_string(),
+                found: "a call without `new`".to_string(),
+                span,
+            }
+            .into());
+        }
         if let Some(this) = deferred_this {
             // Bound to the receiver when its `HasProp` resolves.
-            self.unify(span, &this_type, &this)?;
+            self.unify_this(span, &this_type, &this)?;
         } else if let Some(obj_type) = obj_type_for_this {
             let obj_for_this = self.method_receiver(&obj_type);
             let this_type_applied = self.zonk(&this_type);
-            self.unify(span, &this_type_applied, &obj_for_this)?;
+            self.unify_this(span, &this_type_applied, &obj_for_this)?;
         } else {
             let this_type_applied = self.zonk(&this_type);
-            self.unify(span, &this_type_applied, &Type::Undefined)?;
+            self.unify_this(span, &this_type_applied, &Type::Undefined)?;
         }
 
         self.settle_promise_results(promise_mark, span)?;
@@ -944,9 +989,16 @@ impl InferState {
     ) -> InferResult<Type> {
         let callee_type = self.infer_expr(env, callee)?;
 
-        // The constructor returns some object type
+        // `new F(…)` calls `F` with a fresh object as `this` and gives
+        // back what the call returns if that is an object, else the fresh
+        // object. inty types the result as what the call returns, so a
+        // constructor returning a primitive is rejected below. `this` is
+        // `NewTarget`, which nothing else gives a function: a function
+        // that writes or reads `this` (a JavaScript constructor function)
+        // isn't accepted here, and a class's factory, whose `this` is
+        // `NewTarget`, can't be called without `new`.
         let result_type = self.fresh_type_var();
-        let this_type = result_type.clone();
+        let this_type = Type::NewTarget;
 
         // Expected constructor shape — an *open* callable row so the
         // constructor value can carry additional static fields beyond
@@ -980,7 +1032,65 @@ impl InferState {
             }
         }
 
+        self.require_constructed_object(&result_type, span)?;
         Ok(self.zonk(&result_type))
+    }
+
+    /// What `new` gives back must be what the constructor returned, so
+    /// that must be an object: a primitive result is replaced by the
+    /// fresh `this` at run time. A result not known yet is constrained
+    /// to an object type.
+    fn require_constructed_object(&mut self, result: &Type, span: Span) -> InferResult<()> {
+        let not_an_object = |shown: String| -> crate::error::IntyError {
+            crate::error::TypeError::TypeMismatch {
+                expected: "a constructor returning an object (`new` gives back the object \
+                           it made in place of a primitive result)"
+                    .to_string(),
+                found: format!("a function returning `{}`", shown),
+                span,
+            }
+            .into()
+        };
+        let result = self.zonk(result);
+        let primitive = match &result {
+            Type::Number
+            | Type::Int
+            | Type::String
+            | Type::Boolean
+            | Type::Undefined
+            | Type::Null
+            | Type::Literal(_)
+            // A sum holds its nothing.
+            | Type::Maybe(..) => true,
+            Type::Union(ts) => ts.iter().any(|t| {
+                matches!(
+                    t,
+                    Type::Number
+                        | Type::Int
+                        | Type::String
+                        | Type::Boolean
+                        | Type::Undefined
+                        | Type::Null
+                        | Type::Literal(_)
+                )
+            }),
+            Type::Var(TVarName::Flex(_)) => {
+                let rest = self.fresh_flex();
+                let row = Type::Row(crate::types::RowType::open_entries(
+                    std::collections::BTreeMap::new(),
+                    rest,
+                ));
+                if self.unify(span, &result, &row).is_err() {
+                    return Err(not_an_object(self.show(&result)));
+                }
+                return Ok(());
+            }
+            _ => false,
+        };
+        if primitive {
+            return Err(not_an_object(self.show(&result)));
+        }
+        Ok(())
     }
 
     /// Infer a run of adjacent `function` declarations as a single
@@ -1018,6 +1128,7 @@ impl InferState {
                     body,
                     type_annotation,
                     return_type_ast,
+                    hoisted_is_arrow(stmt),
                     span,
                 )?;
                 self.unify(span, &func_var, &func_type)?;
@@ -1044,56 +1155,91 @@ impl InferState {
         // member took it.
         self.simplify_has_props()?;
         let pending = self.pending_constraints.clone();
-        let mut left_by_all = vec![true; pending.len()];
-        for stmt in group {
-            if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
-                self.pending_constraints = pending.clone();
-                self.constraint_removals += 1;
-                let key = self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
-                let ty = hoisted
-                    .lookup_key(&key)
-                    .expect("function must be in env after pass 1")
-                    .scheme
-                    .ty()
-                    .clone();
-                let ty = self.zonk(&ty);
-                // A factory lowered from a `class` gets its inferred
-                // return row branded nominally, so two structurally
-                // identical classes stay distinct types.
-                let ty = if self.class_brand_names.contains(name) {
-                    let (fixed, _) = self.env_fixed_vars(&base_free, &ty);
-                    self.brand_class_factory(name, &ty, &fixed)
-                } else {
-                    ty
-                };
-                let scheme = self.generalize(&base_free, &ty);
-                // `generalize` keeps the predicates it doesn't take, in
-                // order: mark the ones it took.
-                let mut kept = self.pending_constraints.iter().peekable();
-                for (i, c) in pending.iter().enumerate() {
-                    if kept.peek() == Some(&c) {
-                        kept.next();
+        let outer = hoisted.clone();
+        // The variables every member is generalised over: those any
+        // member's type reaches. A member's body can use one its own type
+        // doesn't mention (`f` passes a local number to `g`, whose
+        // parameter it is): quantified by `g` alone, it would be left in
+        // `f` with nothing to decide it. So a second round generalises
+        // every member over all of them, when the first didn't.
+        let mut group_vars: Vec<TVarName> = Vec::new();
+        for round in 0..2 {
+            hoisted = outer.clone();
+            let mut left_by_all = vec![true; pending.len()];
+            let mut schemes_vars: Vec<Vec<TVarName>> = Vec::new();
+            for stmt in group {
+                if let Some((name, _, _, _, _, span)) = function_decl_parts(stmt) {
+                    self.pending_constraints = pending.clone();
+                    self.constraint_removals += 1;
+                    let key =
+                        self.key_of(hoisted_key_span(stmt).expect("a hoisted function"), name);
+                    let ty = hoisted
+                        .lookup_key(&key)
+                        .expect("function must be in env after pass 1")
+                        .scheme
+                        .ty()
+                        .clone();
+                    let ty = self.zonk(&ty);
+                    // A factory lowered from a `class` gets its inferred
+                    // return row branded nominally, so two structurally
+                    // identical classes stay distinct types.
+                    let ty = if self.class_brand_names.contains(name) {
+                        // A JavaScript class can only be called with `new`,
+                        // which alone gives `this` as `NewTarget`.
+                        if self.language == crate::ast::SourceLanguage::JavaScript {
+                            if let Some((Some(this), _, _)) = extract_callable(&ty) {
+                                self.unify(span, &this, &Type::NewTarget)?;
+                            }
+                        }
+                        let ty = self.zonk(&ty);
+                        let (fixed, _) = self.env_fixed_vars(&base_free, &ty);
+                        self.brand_class_factory(name, &ty, &fixed)
                     } else {
-                        left_by_all[i] = false;
+                        ty
+                    };
+                    let scheme = self.generalize_seeded(&base_free, &ty, &group_vars);
+                    schemes_vars.push(scheme.vars.clone());
+                    // `generalize` keeps the predicates it doesn't take, in
+                    // order: mark the ones it took.
+                    let mut kept = self.pending_constraints.iter().peekable();
+                    for (i, c) in pending.iter().enumerate() {
+                        if kept.peek() == Some(&c) {
+                            kept.next();
+                        } else {
+                            left_by_all[i] = false;
+                        }
                     }
+                    self.record_decl_scheme(hoisted_name_span(stmt, name, span), scheme.clone());
+                    let key_span = hoisted_key_span(stmt).expect("a hoisted function");
+                    hoisted = self.rebind(
+                        &hoisted,
+                        key,
+                        key_span,
+                        name,
+                        scheme,
+                        hoisted_mutability(stmt),
+                    )?;
                 }
-                self.record_decl_scheme(hoisted_name_span(stmt, name, span), scheme.clone());
-                let key_span = hoisted_key_span(stmt).expect("a hoisted function");
-                hoisted = self.rebind(
-                    &hoisted,
-                    key,
-                    key_span,
-                    name,
-                    scheme,
-                    hoisted_mutability(stmt),
-                )?;
             }
+            self.pending_constraints = pending
+                .iter()
+                .zip(left_by_all)
+                .filter_map(|(c, left)| left.then_some(c.clone()))
+                .collect();
+            let all: Vec<TVarName> = {
+                let mut all: Vec<TVarName> = schemes_vars.iter().flatten().cloned().collect();
+                all.sort_by_key(|v| v.id());
+                all.dedup();
+                all
+            };
+            let shared = schemes_vars
+                .iter()
+                .all(|vs| all.iter().all(|v| vs.contains(v)));
+            if round == 1 || shared {
+                break;
+            }
+            group_vars = all;
         }
-        self.pending_constraints = pending
-            .into_iter()
-            .zip(left_by_all)
-            .filter_map(|(c, left)| left.then_some(c))
-            .collect();
 
         Ok(hoisted)
     }
@@ -1116,7 +1262,7 @@ impl InferState {
         ty: &Type,
         env_free: &std::collections::HashSet<crate::types::TVarName>,
     ) -> Type {
-        use crate::types::{FieldEntry, PropName, RowType, TVarName, TypeDef, CALLABLE_KEY};
+        use crate::types::{PropName, RowType, TVarName, TypeDef, CALLABLE_KEY};
 
         // Navigate to the callable row's `<CALL>` field.
         let Type::Row(row) = ty else {
@@ -1188,13 +1334,7 @@ impl InferState {
         };
 
         let mut new_props = row.props.clone();
-        new_props.insert(
-            call_key,
-            FieldEntry {
-                presence: call_entry.presence.clone(),
-                ty: branded_func,
-            },
-        );
+        new_props.insert(call_key, call_entry.with_ty(branded_func));
         Type::Row(RowType {
             props: new_props,
             tail: row.tail.clone(),
@@ -1275,6 +1415,7 @@ impl InferState {
             body,
             type_annotation,
             return_type_ast,
+            false,
             span,
         )?;
 
@@ -1596,8 +1737,9 @@ fn definitely_returns(stmt: &Stmt) -> bool {
             ..
         } => definitely_returns(consequent) && definitely_returns(alt),
         // `try` completes abnormally only if every path that can reach the
-        // end returns: the body (and, if present, the handler). A
-        // `finally` that returns dominates everything.
+        // end returns: the body, and the handler if there is one (without
+        // one, an exception leaves the `try` abruptly). A `finally` that
+        // returns dominates everything.
         Stmt::Try {
             block,
             handler,
@@ -1610,21 +1752,17 @@ fn definitely_returns(stmt: &Stmt) -> bool {
                 }
             }
             definitely_returns(block)
-                && handler
-                    .as_ref()
-                    .is_some_and(|h| definitely_returns(&h.body))
+                && handler.as_ref().is_none_or(|h| definitely_returns(&h.body))
         }
-        // `while True:` (with no `break`) never falls through. We don't
-        // scan for `break`; treating it as terminating is the common
-        // infinite-loop / loop-until-return idiom.
-        Stmt::While { test, .. } => {
+        // `while True:` never falls through, unless a `break` leaves it.
+        Stmt::While { test, body, .. } => {
             matches!(
                 test,
                 Expr::Lit {
                     value: Literal::Boolean(true),
                     ..
                 }
-            )
+            ) && !super::control::breaks_out(body)
         }
         _ => false,
     }

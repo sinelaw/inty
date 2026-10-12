@@ -15,7 +15,7 @@ pub(crate) use features::functions::extract_callable;
 mod lower;
 mod narrow;
 mod state;
-mod type_parser;
+pub(crate) mod type_parser;
 mod unify;
 mod var_table;
 mod zonk;
@@ -169,9 +169,26 @@ impl InferState {
         // top-level symbols — has each binding's own type, not one
         // narrowed by top-level control flow.
         let depth = std::mem::replace(&mut self.stmt_list_depth, 0);
-        let result = self
-            .infer_stmt_list(&env, &program.statements)
-            .map(|(ty, env)| (ty, env.without_narrowings().globalized()));
+        // The ambient bindings (see `ambient`) under the program's own
+        // declaration ids are its own; those it leaves behind become
+        // global, by name, as the bindings do.
+        let outer_ambient = std::mem::take(&mut self.ambient);
+        self.ambient = outer_ambient
+            .iter()
+            .filter(|k| matches!(k, env::Key::Name(_)))
+            .cloned()
+            .collect();
+        let result = self.infer_stmt_list(&env, &program.statements);
+        let mut ambient = outer_ambient;
+        if let Ok((_, env)) = &result {
+            for (name, key) in env.name_keys() {
+                if self.ambient.contains(key) {
+                    ambient.insert(env::Key::Name(name.clone()));
+                }
+            }
+        }
+        self.ambient = ambient;
+        let result = result.map(|(ty, env)| (ty, env.without_narrowings().globalized()));
         self.stmt_list_depth = depth;
         // Every binding read before its declaration must have met it
         // since: one that didn't means a declaration was bound under a
@@ -203,7 +220,7 @@ impl InferState {
             (Ok((_, env)), true) => self.reachable_vars(env),
             _ => Default::default(),
         };
-        if let Err(e) = self.default_numeric(&keep, None, false) {
+        if let Err(e) = self.default_numeric(&keep, false) {
             self.push_error(e);
         }
 
@@ -776,7 +793,15 @@ impl InferState {
             let timed = self
                 .timing_top_level()
                 .then(|| (std::time::Instant::now(), self.timing_nested));
-            let checked = self.infer_stmt(&current_env, stmt);
+            // A statement's value is dropped, but the program's last
+            // one, its completion value.
+            let program_value = self.stmt_list_depth == 1 && i + 1 == stmts.len();
+            let checked = match stmt {
+                Stmt::Expr { expression, .. } if !program_value => self
+                    .infer_discarded(&current_env, expression)
+                    .map(|ty| (ty, current_env.clone())),
+                _ => self.infer_stmt(&current_env, stmt),
+            };
             if let Some((started, nested)) = timed {
                 let time = started
                     .elapsed()
@@ -1114,6 +1139,23 @@ impl InferState {
                 }
             }
         }
+        // A literal where a sum is expected is its value: the sum's value
+        // type is pushed into it (`{b: null}` where a `{b: B | Null} |
+        // Null` is expected), and the value injected.
+        if let (
+            Type::Maybe(_, inner),
+            Expr::Object { .. } | Expr::Array { .. } | Expr::Function { .. },
+        ) = (&expected, expr)
+        {
+            let ty = self.check_expr(env, expr, inner)?;
+            if let Some(types) = self.expr_types.as_mut() {
+                let span = expr.span();
+                types
+                    .entry((span.start, span.end))
+                    .or_insert_with(|| ty.clone());
+            }
+            return Ok(ty);
+        }
         // A function literal against a known function type takes its
         // parameter and result types from it (see
         // `check_function_literal`).
@@ -1122,6 +1164,7 @@ impl InferState {
             params,
             body,
             type_annotation: None,
+            arrow,
             span,
         } = expr
         {
@@ -1135,6 +1178,7 @@ impl InferState {
                     body,
                     expected_params,
                     expected_ret,
+                    *arrow,
                     *span,
                 )?;
                 if let Some(types) = self.expr_types.as_mut() {
@@ -1202,15 +1246,11 @@ impl InferState {
             return Ok(ty);
         }
         if let (true, Expr::NullishCoalesce { left, right, span }) = (known, expr) {
-            // `a ?? b`: the non-nullish part of `a`, and `b`, each fit.
+            // `a ?? b`: what `a` holds besides nothing, and `b`, each fit.
             let left_ty = self.infer_expr(env, left)?;
-            let (non_nullish, had_nullish) = features::nullish::strip_nullish(&self.zonk(&left_ty));
-            self.subsume(left.span(), &non_nullish, &expected)?;
-            if had_nullish {
-                self.check_expr(env, right, &expected)?;
-            } else {
-                self.infer_expr(env, right)?;
-            }
+            let value = self.strip_sum(left.span(), &left_ty)?;
+            self.subsume(left.span(), &value, &expected)?;
+            self.check_expr(env, right, &expected)?;
             let ty = self.zonk(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());
@@ -1349,6 +1389,7 @@ impl InferState {
                 params,
                 body,
                 type_annotation,
+                arrow,
                 span,
             } => self.infer_function(
                 env,
@@ -1357,6 +1398,7 @@ impl InferState {
                 body,
                 type_annotation,
                 None,
+                *arrow,
                 *span,
             ),
 
@@ -1558,6 +1600,7 @@ impl InferState {
                             params,
                             body,
                             type_annotation,
+                            arrow: _,
                             span: f_span,
                         } = value
                         {

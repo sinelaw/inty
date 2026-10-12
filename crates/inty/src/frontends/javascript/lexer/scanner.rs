@@ -28,8 +28,33 @@ pub struct Scanner<'a> {
     last_ident: Option<(String, usize)>,
 }
 
+/// With `INTY_CORPUS_OUT` set, the unit tests append each program they
+/// scan to that file, one per record (separated by a line holding `\x1e`):
+/// the corpus `tests/model_corpus.rs` runs the Lean model on, the programs
+/// in its fragment (`model_wire`). Declaration files are left out.
+#[cfg(test)]
+fn record_corpus(source: &str) {
+    use std::io::Write;
+    let Some(path) = std::env::var_os("INTY_CORPUS_OUT") else {
+        return;
+    };
+    if source.len() > 4000 {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        // One write per record, so parallel tests don't interleave.
+        let _ = f.write_all(format!("{source}\n\x1e\n").as_bytes());
+    }
+}
+
 impl<'a> Scanner<'a> {
     pub fn new(source: &'a str) -> Self {
+        #[cfg(test)]
+        record_corpus(source);
         Self {
             source,
             chars: source.char_indices().peekable(),
@@ -378,6 +403,11 @@ impl<'a> Scanner<'a> {
                                     Some("function") => {
                                         self.advance_keyword("function");
                                         self.parse_function_annotation(start);
+                                        continue;
+                                    }
+                                    Some("class") => {
+                                        self.advance_keyword("class");
+                                        self.parse_class_annotation(start);
                                         continue;
                                     }
                                     Some("type") => {
@@ -1397,6 +1427,25 @@ impl<'a> Scanner<'a> {
             kind: AnnotationKind::Inline,
         });
 
+        self.consume_comment_end();
+    }
+
+    /// Parse `/** class Name … */`, an external class's declaration: the
+    /// name, then everything up to the comment's end.
+    fn parse_class_annotation(&mut self, start: usize) {
+        self.skip_whitespace();
+        let name = self.read_identifier();
+        if name.is_empty() {
+            self.consume_comment_end();
+            return;
+        }
+        let content = self.read_until_comment_end();
+        self.type_annotations.push(TypeAnnotation {
+            name: name.trim().to_string(),
+            content: strip_doc_decoration(content.trim()).trim().to_string(),
+            span: Span::new(start, self.current_pos + 2),
+            kind: AnnotationKind::Class,
+        });
         self.consume_comment_end();
     }
 

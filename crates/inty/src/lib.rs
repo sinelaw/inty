@@ -19,6 +19,7 @@ pub mod error;
 pub mod frontends;
 pub mod infer;
 pub mod meta;
+pub mod model_wire;
 pub mod modules;
 pub mod operators;
 pub mod span;

@@ -158,25 +158,39 @@ impl FuncParam {
     }
 }
 
-/// One entry in a `RowType`'s props map: presence + type.
+/// One entry in a `RowType`'s props map: presence, type, and how the
+/// object holds the property.
 ///
 /// A field written in source has `presence = Pre`. A field declared
 /// optional in an annotation (`x?: T`) is assigned a fresh presence
 /// variable. `Abs` only arises through unification when a closed row
 /// constrains a polymorphic side's missing field.
+///
+/// Two more presences say how the object holds the property, each `Pre`,
+/// `Abs` or a variable unified like a presence: `writable`, whether a
+/// store to it is allowed (`Abs` for a getter, or a class's method), and
+/// `own`, whether it is the object's own property, which a spread copies
+/// (`Abs` for a class's method or getter, on its prototype). A read
+/// leaves both as fresh variables, so it accepts any property; a store
+/// needs `writable`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldEntry {
     pub presence: Presence,
     pub ty: Type,
+    pub writable: Presence,
+    pub own: Presence,
 }
 
 impl FieldEntry {
-    /// Field is definitely present with the given type. The common case
-    /// for object literals and most stub declarations.
+    /// Field is definitely present with the given type, an own property
+    /// that holds a value. The common case for object literals and most
+    /// stub declarations.
     pub fn pre(ty: Type) -> Self {
         FieldEntry {
             presence: Presence::Pre,
             ty,
+            writable: Presence::Pre,
+            own: Presence::Pre,
         }
     }
 
@@ -185,6 +199,8 @@ impl FieldEntry {
         FieldEntry {
             presence: Presence::Var(pvar),
             ty,
+            writable: Presence::Pre,
+            own: Presence::Pre,
         }
     }
 
@@ -194,14 +210,67 @@ impl FieldEntry {
         FieldEntry {
             presence: Presence::Abs,
             ty,
+            writable: Presence::Pre,
+            own: Presence::Pre,
         }
+    }
+
+    /// An own property with only a getter (`get x() {…}`): read, not
+    /// stored to; a spread copies what it gives.
+    pub fn getter(ty: Type) -> Self {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Abs,
+            own: Presence::Pre,
+        }
+    }
+
+    /// A class's method or getter, on its prototype: read, not stored
+    /// to, and not copied by a spread.
+    pub fn proto(ty: Type) -> Self {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Abs,
+            own: Presence::Abs,
+        }
+    }
+
+    /// The same flags, at another type.
+    pub fn with_ty(&self, ty: Type) -> Self {
+        FieldEntry {
+            presence: self.presence.clone(),
+            ty,
+            writable: self.writable.clone(),
+            own: self.own.clone(),
+        }
+    }
+
+    /// Each presence mapped by `f`, the type by `g`.
+    pub fn map(&self, f: &mut dyn FnMut(&Presence) -> Presence, ty: Type) -> Self {
+        FieldEntry {
+            presence: f(&self.presence),
+            ty,
+            writable: f(&self.writable),
+            own: f(&self.own),
+        }
+    }
+
+    /// The presences: whether it is there, then the two flags.
+    pub fn presences(&self) -> [&Presence; 3] {
+        [&self.presence, &self.writable, &self.own]
     }
 }
 
 /// Type class names for constraint-based polymorphism.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ClassName {
-    /// Plus class: types that support the + operator (Number, Int, String).
+    /// `Plus a b c`: `c` is the type of `a + b` — numbers (`Int` when
+    /// both are `Int`, `Number` when either is, as `Arith`), or strings
+    /// (all three `String`). `a` and `b` determine `c`; a known `String`
+    /// anywhere makes all three `String`, a number anywhere makes it an
+    /// `Arith`. `Plus a` is short for `Plus a a a`.
     Plus,
     /// `Num a`: `a` is `Int` or `Number`.
     Num,
@@ -217,6 +286,16 @@ pub enum ClassName {
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
+    /// `IndexWrite c`: an element of `c` can be stored (`c[i] = v`): an
+    /// array, a typed array, a map or an object, not a string (whose
+    /// characters are read-only: a store throws a `TypeError` in strict
+    /// code).
+    IndexWrite,
+    /// `FieldWrite r "p"`: the property `p` of `r` can be stored (`r.p =
+    /// v`): an object's property that takes stores (not a getter, nor a
+    /// class's method), not an array's, a string's or a function's
+    /// (whose properties are built in).
+    FieldWrite,
     /// Property access on a value whose type isn't known yet:
     /// `HasProp(receiver, "name", result)` says reading `.name` from a
     /// `receiver` gives a `result`. The name is carried as a string
@@ -227,6 +306,18 @@ pub enum ClassName {
     /// `{length: …}` objects alike. The receiver determines the result
     /// (a functional dependency, like `Indexable`'s container).
     HasProp,
+    /// `Inject τ T`: a `τ` is accepted where the sum `T` (a
+    /// [`Type::Maybe`]) is expected — `τ` is `T` itself, its nothing,
+    /// or something its value accepts. Posed when `τ` is still a
+    /// variable, and resolved once it is known (the model's waiting
+    /// constraint `Inject`).
+    Inject,
+    /// `Strip τ σ`: `σ` is what a `τ` holds besides nothing — the
+    /// value of a sum `Maybe(_, σ)`, or `τ` itself when it is not a
+    /// sum. Posed by `x ?? d` and `x != null` on an `x` whose type is
+    /// still a variable, and resolved once it is known (the model's
+    /// `Strip`). `τ` determines `σ`.
+    Strip,
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
@@ -250,10 +341,16 @@ impl PartialEq for TypePred {
 impl Eq for TypePred {}
 
 impl TypePred {
+    /// `Plus t t t`: `+` on one type.
     pub fn plus(ty: Type) -> Self {
+        Self::plus3(ty.clone(), ty.clone(), ty)
+    }
+
+    /// `Plus left right result`.
+    pub fn plus3(left: Type, right: Type, result: Type) -> Self {
         TypePred {
             class: ClassName::Plus,
-            types: vec![ty],
+            types: vec![left, right, result],
             origin: None,
         }
     }
@@ -290,6 +387,33 @@ impl TypePred {
         }
     }
 
+    /// `FieldWrite r "p"`: the property `p` of an `r` can be stored.
+    pub fn field_write(receiver: Type, name: &str) -> Self {
+        TypePred {
+            class: ClassName::FieldWrite,
+            types: vec![receiver, Type::Literal(LitValue::String(name.to_string()))],
+            origin: None,
+        }
+    }
+
+    /// The receiver and the property of a [`Self::field_write`] predicate.
+    pub fn as_field_write(&self) -> Option<(&Type, &str)> {
+        match (self.class, self.types.as_slice()) {
+            (ClassName::FieldWrite, [recv, Type::Literal(LitValue::String(name))]) => {
+                Some((recv, name.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn index_write(container: Type) -> Self {
+        TypePred {
+            class: ClassName::IndexWrite,
+            types: vec![container],
+            origin: None,
+        }
+    }
+
     pub fn has_prop(receiver: Type, name: &str, result: Type) -> Self {
         TypePred {
             class: ClassName::HasProp,
@@ -298,6 +422,24 @@ impl TypePred {
                 Type::Literal(LitValue::String(name.to_string())),
                 result,
             ],
+            origin: None,
+        }
+    }
+
+    /// `Inject sub sup`: a `sub` is accepted where the sum `sup` is.
+    pub fn inject(sub: Type, sup: Type) -> Self {
+        TypePred {
+            class: ClassName::Inject,
+            types: vec![sub, sup],
+            origin: None,
+        }
+    }
+
+    /// `Strip ty sigma`: `sigma` is what a `ty` holds besides nothing.
+    pub fn strip(ty: Type, sigma: Type) -> Self {
+        TypePred {
+            class: ClassName::Strip,
+            types: vec![ty, sigma],
             origin: None,
         }
     }
@@ -566,6 +708,15 @@ pub enum Type {
     Null,
     /// JavaScript regex type.
     Regex,
+    /// What `new` gives a class's constructor as `this`, which nothing
+    /// else gives: a class called without `new` is rejected, as
+    /// JavaScript throws.
+    NewTarget,
+    /// An arrow function's `this`: it has none of its own (the enclosing
+    /// function's is in scope), so a call on any receiver, or on none,
+    /// gives it nothing; and an arrow function isn't a constructor, so
+    /// it never meets `NewTarget` (`new` on one throws a `TypeError`).
+    ArrowThis,
 
     // === Type variable ===
     /// Type variable (flexible or skolem).
@@ -621,9 +772,21 @@ pub enum Type {
     Literal(LitValue),
 
     /// Untagged union type: `T1 | T2 | ...`. Always normalised so that
-    /// members are deduplicated and sorted. A union is only constructed via
-    /// [`Type::union`] which enforces the invariants.
+    /// members are deduplicated and sorted, and none is `Null` or
+    /// `Undefined` (those make a [`Type::Maybe`]). A union is only
+    /// constructed via [`Type::union`] which enforces the invariants.
     Union(Vec<Type>),
+
+    /// A sum of nothing and a value: `Nullable T` (`T | Null`) holds `null`
+    /// or a `T`, `Optional T` (`T | Undefined`) holds `undefined` or a
+    /// `T`. It is tagged: it unifies only with a sum of the same nothing,
+    /// so a `T` or a `null` is one only where it is checked against one
+    /// (an annotation, a parameter's type: `subsume`), and it is taken
+    /// apart by a test for nothing (`x != null`, `x ?? d`), which leaves
+    /// the `T` (`ClassName::Strip`). Branches don't join into one: `c ? x
+    /// : null` is an error unless an annotation says what it is. This is
+    /// the Lean model's `Ty.maybe` (`lean/Inty/Types.lean`).
+    Maybe(Nothing, Box<Type>),
 
     /// ES module namespace: the type of `ns` after `import * as ns from
     /// "./mod.js";`. Carries one type *scheme* per export so member access
@@ -654,6 +817,32 @@ pub enum Type {
     /// any leaked occurrence is obvious in test output and `--annotate`
     /// dumps.
     Error,
+}
+
+/// What a [`Type::Maybe`] holds besides its value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Nothing {
+    Null,
+    Undefined,
+}
+
+impl Nothing {
+    /// The type whose only value is this nothing.
+    pub fn ty(self) -> Type {
+        match self {
+            Nothing::Null => Type::Null,
+            Nothing::Undefined => Type::Undefined,
+        }
+    }
+
+    /// The nothing a type's only value is, if it is `Null` or `Undefined`.
+    pub fn of(ty: &Type) -> Option<Nothing> {
+        match ty {
+            Type::Null => Some(Nothing::Null),
+            Type::Undefined => Some(Nothing::Undefined),
+            _ => None,
+        }
+    }
 }
 
 /// Which typed array a [`Type::TypedArray`] is.
@@ -921,15 +1110,18 @@ impl Type {
     ///
     /// * `Lit("circle")` → `String`, `Lit(42)` → `Number`,
     ///   `Lit(true)` → `Boolean`.
-    /// * Recurses through `Row` (each property value), `Array`, `Map`,
-    ///   `Promise`, `Union` (each member, then re-normalises so that
-    ///   `"a" | "b"` widens to `String` rather than the awkward
-    ///   `String | String`).
-    /// * Recurses through `Func` covariantly into the return type and
-    ///   contravariantly into parameters — a parameter typed `"a"`
-    ///   really means "only the literal `"a"` is acceptable", and
-    ///   widening it would change the function's contract, so we
-    ///   leave parameters alone. (TS makes the same call.)
+    /// * Recurses through what holds a value as it is: a sum (`Maybe`),
+    ///   a tuple, and a `Union` of literals (each member, then
+    ///   re-normalises so that `"a" | "b"` widens to `String` rather than
+    ///   the awkward `String | String`). Any other union was declared and
+    ///   is left alone.
+    /// * Stops at what may be shared: a record, an array, a map, a promise
+    ///   and a function are left alone. Their type is the one every alias
+    ///   has, so widening a field of one (`let w = v` with `v: {k: "a"}`)
+    ///   would let a write through the copy (`w.k = "z"`) break the
+    ///   original's. A literal's own parts are widened where it is made
+    ///   (an object literal's fields, an array literal's elements, a
+    ///   function's returns), so a fresh one has nothing left to widen.
     /// * Type variables, named types, and modules are left alone.
     ///   Widening through a substitution is the substitution's job.
     pub fn widen_fresh_literals(&self) -> Self {
@@ -941,50 +1133,28 @@ impl Type {
     pub fn widen_fresh_literals_with(&self, f: &mut dyn FnMut(&LitValue) -> Type) -> Self {
         match self {
             Type::Literal(lit) => f(lit),
-            Type::Row(row) => {
-                let props = row
-                    .props
-                    .iter()
-                    .map(|(k, e)| {
-                        (
-                            k.clone(),
-                            FieldEntry {
-                                presence: e.presence.clone(),
-                                ty: e.ty.widen_fresh_literals_with(f),
-                            },
-                        )
-                    })
-                    .collect();
-                Type::Row(RowType {
-                    props,
-                    tail: row.tail.clone(),
-                })
+            Type::Row(_) | Type::Array(_) | Type::Map(_) | Type::Promise(_) | Type::Func { .. } => {
+                self.clone()
             }
-            Type::Array(elem) => Type::Array(Box::new(elem.widen_fresh_literals_with(f))),
-            Type::Map(v) => Type::Map(Box::new(v.widen_fresh_literals_with(f))),
-            Type::Promise(inner) => Type::Promise(Box::new(inner.widen_fresh_literals_with(f))),
+            Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(elem.widen_fresh_literals_with(f))),
             Type::Tuple(elems) => Type::Tuple(
                 elems
                     .iter()
                     .map(|e| e.widen_fresh_literals_with(f))
                     .collect(),
             ),
-            Type::Union(members) => {
+            // A union of literals (`"a" | "b"`) widens to its base type.
+            // Any other union was declared, and stays as it is: widening a
+            // discriminated union's tags would make its arms
+            // indistinguishable.
+            Type::Union(members) if members.iter().all(|m| matches!(m, Type::Literal(_))) => {
                 let widened: Vec<Type> = members
                     .iter()
                     .map(|m| m.widen_fresh_literals_with(f))
                     .collect();
                 Type::union(widened)
             }
-            Type::Func {
-                this_type,
-                params,
-                ret,
-            } => Type::Func {
-                this_type: this_type.clone(),
-                params: params.clone(),
-                ret: Box::new(ret.widen_fresh_literals_with(f)),
-            },
+            Type::Union(_) => self.clone(),
             // Primitives, vars, named refs, modules, error: nothing
             // to widen. `Error` is opaque — widening through it
             // would generate noise from a binding that already failed.
@@ -995,6 +1165,8 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Named(_, _)
@@ -1015,17 +1187,42 @@ impl Type {
     /// - Members are deduplicated and sorted by a stable key.
     /// - A single-element union collapses to that element.
     /// - The empty union stays as `Type::Union(vec![])` (i.e. `never`).
+    /// - `Null` and `Undefined` members make a sum of the rest
+    ///   ([`Type::Maybe`]): `T | Null` is `Nullable T`, and `T | Undefined
+    ///   | Null` is `Nullable (Optional T)`.
     pub fn union(members: impl IntoIterator<Item = Type>) -> Self {
         let mut flat: Vec<Type> = Vec::new();
-        for m in members {
+        let (mut null, mut undefined) = (false, false);
+        let mut pending: Vec<Type> = members.into_iter().collect();
+        while let Some(m) = pending.pop() {
             match m {
-                Type::Union(inner) => {
-                    for t in inner {
-                        flat.push(t);
-                    }
+                Type::Union(inner) => pending.extend(inner),
+                Type::Maybe(z, inner) => {
+                    pending.push(z.ty());
+                    pending.push(*inner);
                 }
+                Type::Null => null = true,
+                Type::Undefined => undefined = true,
                 other => flat.push(other),
             }
+        }
+        if null || undefined {
+            let core = if flat.is_empty() {
+                None
+            } else {
+                Some(Type::union(flat))
+            };
+            let with_undefined = match (core, undefined) {
+                (Some(t), true) => Type::Maybe(Nothing::Undefined, Box::new(t)),
+                (Some(t), false) => t,
+                (None, true) => Type::Undefined,
+                (None, false) => return Type::Null,
+            };
+            return if null {
+                Type::Maybe(Nothing::Null, Box::new(with_undefined))
+            } else {
+                with_undefined
+            };
         }
 
         // Deduplicate by structural equality. Quadratic in number of
@@ -1044,6 +1241,30 @@ impl Type {
         } else {
             Type::Union(seen)
         }
+    }
+
+    /// The alternatives a union or a sum holds: a union's members, a
+    /// sum's nothing and its value's alternatives, or the type itself.
+    /// [`Type::union`] of them is the type again.
+    pub fn arms(&self) -> Vec<Type> {
+        match self {
+            Type::Union(members) => members.clone(),
+            Type::Maybe(z, inner) => {
+                let mut arms = vec![z.ty()];
+                arms.extend(inner.arms());
+                arms
+            }
+            other => vec![other.clone()],
+        }
+    }
+
+    /// A sum as the union of its arms, sorted as a union's members are,
+    /// for printing: `Nullable Number` is `Number | Null`, which reads
+    /// back as the same sum.
+    pub fn as_printed_union(&self) -> Type {
+        let mut arms = self.arms();
+        arms.sort_by_key(union_member_sort_key);
+        Type::Union(arms)
     }
 
     /// True if this type is the empty union (`never`).
@@ -1090,6 +1311,38 @@ impl Type {
     /// Check if this is a flexible type variable.
     pub fn is_flex_var(&self) -> bool {
         matches!(self, Type::Var(TVarName::Flex(_)))
+    }
+
+    /// The `typeof` of every value of this type, if it has one (a type
+    /// variable, a named type or a union has none).
+    pub fn typeof_tag(&self) -> Option<&'static str> {
+        match self {
+            Type::Number | Type::Int | Type::Literal(LitValue::Number(_)) => Some("number"),
+            Type::String | Type::Literal(LitValue::String(_)) => Some("string"),
+            Type::Boolean | Type::Literal(LitValue::Bool(_)) => Some("boolean"),
+            Type::Undefined => Some("undefined"),
+            _ if self.is_func() => Some("function"),
+            // (An open row's tail might add a call signature.)
+            Type::Row(row) if matches!(row.tail, RowTail::Closed) => Some("object"),
+            Type::Array(_) | Type::Tuple(_) | Type::Null => Some("object"),
+            _ => None,
+        }
+    }
+
+    /// Whether this is a sum told apart by `typeof`: a union whose members
+    /// each have a `typeof`, no two the same (`Number | String`).
+    pub fn is_typeof_sum(&self) -> bool {
+        let Type::Union(members) = self else {
+            return false;
+        };
+        let mut seen = Vec::with_capacity(members.len());
+        for m in members {
+            match m.typeof_tag() {
+                Some(t) if !seen.contains(&t) => seen.push(t),
+                _ => return false,
+            }
+        }
+        members.len() > 1
     }
 
     /// Check if this is a function type.
@@ -1263,7 +1516,9 @@ impl Type {
                     }
                 }
             }
-            Type::Array(e) | Type::Promise(e) | Type::Map(e) => e.collect_named_ids(ids),
+            Type::Array(e) | Type::Promise(e) | Type::Map(e) | Type::Maybe(_, e) => {
+                e.collect_named_ids(ids)
+            }
             Type::Tuple(ts) | Type::Union(ts) => {
                 for t in ts {
                     t.collect_named_ids(ids);
@@ -1282,6 +1537,8 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Literal(_)
@@ -1304,8 +1561,10 @@ impl Type {
             }
             Type::Row(row) => {
                 for entry in row.props.values() {
-                    if let Presence::Var(v) = &entry.presence {
-                        pvars.insert(v.clone());
+                    for p in entry.presences() {
+                        if let Presence::Var(v) = p {
+                            pvars.insert(v.clone());
+                        }
                     }
                     entry.ty.collect_free_pvars(pvars);
                 }
@@ -1315,7 +1574,7 @@ impl Type {
                     }
                 }
             }
-            Type::Array(elem) | Type::Promise(elem) | Type::Map(elem) => {
+            Type::Array(elem) | Type::Promise(elem) | Type::Map(elem) | Type::Maybe(_, elem) => {
                 elem.collect_free_pvars(pvars);
             }
             Type::Named(_, args) => {
@@ -1360,6 +1619,8 @@ impl Type {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Error => {}
 
@@ -1399,6 +1660,7 @@ impl Type {
             }
 
             Type::Array(elem) => elem.collect_free_vars(vars),
+            Type::Maybe(_, inner) => inner.collect_free_vars(vars),
             Type::Promise(inner) => inner.collect_free_vars(vars),
             Type::Map(value) => value.collect_free_vars(vars),
 
@@ -1589,6 +1851,8 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Undefined => (3, String::new()),
         Type::Null => (4, String::new()),
         Type::Regex => (5, String::new()),
+        Type::NewTarget => (5, "new.target".to_string()),
+        Type::ArrowThis => (5, "arrow.this".to_string()),
         Type::TypedArray(k) => (19, k.name().to_string()),
         Type::Literal(lit) => {
             let (sub, key) = lit.sort_key();
@@ -1606,6 +1870,9 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
             (10, keys.join(","))
         }
         Type::Array(elem) => (11, union_member_sort_key(elem).1),
+        // A sum is never a union's member (its arms are), but sort it by
+        // its value's key all the same.
+        Type::Maybe(_, inner) => (20, union_member_sort_key(inner).1),
         Type::Map(v) => (12, union_member_sort_key(v).1),
         Type::Promise(v) => (13, union_member_sort_key(v).1),
         Type::Named(id, _) => (14, format!("{}", id)),

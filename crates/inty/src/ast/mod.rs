@@ -391,6 +391,10 @@ pub enum PropDef {
     Getter {
         key: PropKey,
         body: Box<Stmt>,
+        /// A class's getter, which is on the class's prototype: the
+        /// instance has no own property for it, so a spread doesn't
+        /// copy it. An object literal's getter is the object's own.
+        proto: bool,
         span: Source,
     },
     /// Setter: set key(param) { ... }
@@ -409,21 +413,17 @@ pub enum PropDef {
         /// shared [`crate::types::TypeAst`] IR. Only the Python frontend
         /// sets this; JS object/class methods leave it `None`.
         return_type_ast: Option<crate::types::TypeAst>,
+        /// A class's method, which is on the class's prototype: the
+        /// instance has no own property for it (a spread doesn't copy
+        /// it) and a store to it is rejected. An object literal's method
+        /// is the object's own data property.
+        proto: bool,
         span: Source,
     },
     /// Spread: `...expr`. Merged into the row of the containing
     /// object literal at typing time with right-biased semantics —
     /// keys later in source order win on collision.
-    ///
-    /// `inherited` marks the base instance a `class … extends Base`
-    /// lowers to (`...new Base(args)`): the literal keeps each of its
-    /// fields' types, and its methods may be called on the subclass's
-    /// instances.
-    Spread {
-        argument: Expr,
-        span: Source,
-        inherited: bool,
-    },
+    Spread { argument: Expr, span: Source },
 }
 
 /// One step of an `OptionalChain`. `optional` is `true` when the
@@ -469,6 +469,10 @@ pub enum AnnotationKind {
     Inline,
     /// `/** @type {T} */` doc form attached to the next binding.
     JsDoc,
+    /// `/** class Name(params) extends Base { members } */`, the
+    /// declaration of an external class (`class Name;`, without a body):
+    /// `content` is what follows the name.
+    Class,
 }
 
 /// Type annotation from comments: /** name: Type */
@@ -534,12 +538,15 @@ pub enum Expr {
         span: Source,
     },
 
-    /// Function expression: function(a, b) { ... }
+    /// Function expression: function(a, b) { ... }, or an arrow function
+    /// (`arrow`), which has no `this` of its own and isn't a constructor:
+    /// `new` on one throws a `TypeError`.
     Function {
         name: Option<String>,
         params: Vec<Param>,
         body: Box<Stmt>,
         type_annotation: Option<TypeAnnotation>,
+        arrow: bool,
         span: Source,
     },
 

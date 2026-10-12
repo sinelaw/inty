@@ -1,5 +1,6 @@
 //! Parser module for mquickjs JavaScript source code.
 
+mod class_fields;
 #[cfg(test)]
 mod proptests;
 
@@ -92,10 +93,6 @@ pub struct Parser {
     /// What the token spans were shifted by (see [`parse_at`]): a span's
     /// offset into `source` is `span - base`.
     base: usize,
-    /// Inside the body of a class that `extends` another: `super` parses
-    /// (as the identifier `super`) so the constructor's `super(…)` can be
-    /// lowered.
-    super_allowed: bool,
 }
 
 impl Parser {
@@ -121,7 +118,6 @@ impl Parser {
             class_brands: Vec::new(),
             source,
             base: 0,
-            super_allowed: false,
         }
     }
 
@@ -567,9 +563,7 @@ impl Parser {
                             };
                             entries.push((name, Self::expr_to_pattern(value)?, *sp));
                         }
-                        PropDef::Spread {
-                            argument, span: sp, ..
-                        } => {
+                        PropDef::Spread { argument, span: sp } => {
                             let Expr::Ident { name, .. } = argument else {
                                 return None;
                             };
@@ -921,6 +915,7 @@ impl Parser {
                             params,
                             body,
                             type_annotation,
+                            arrow: false,
                             span,
                         },
                         // Class desugaring guarantees a FunctionDecl;
@@ -1080,39 +1075,61 @@ impl Parser {
             Some(n) => n,
             None => self.expect_ident()?,
         };
+        // `class Name;`, without a body: an external class, declared by a
+        // `/** class Name(params) extends Base { members } */` annotation
+        // (see `class_annotation_type`), bound as a declaration is.
+        if self.check(&Token::Semicolon) {
+            let span = Span::new(start, self.current_span().end);
+            self.advance();
+            let annotation = self
+                .try_get_type_annotation(Span::new(start, start), &name)
+                .filter(|a| a.kind == AnnotationKind::Class);
+            let Some(annotation) = annotation else {
+                return Err(ParseError::UnexpectedToken {
+                    found: ";".to_string(),
+                    expected: format!(
+                        "a class body, or a `/** class {} … */` annotation declaring \
+                         an external class",
+                        name
+                    ),
+                    span,
+                }
+                .into());
+            };
+            return Ok(Stmt::Var {
+                kind: VarKind::Const,
+                declarations: vec![VarDeclarator {
+                    name,
+                    init: None,
+                    type_annotation: Some(annotation),
+                    type_ast: None,
+                    kind: VarKind::Const,
+                    span,
+                }],
+                span,
+            });
+        }
+
         // Record the class for nominal branding (see `class_brands`).
         self.class_brands.push(name.clone());
 
-        // `extends Base` (an identifier naming a class or a constructor):
-        // the instance also has the base instance's fields and methods.
-        // It is lowered as the base instance spread into the returned
-        // object (`{ ...new Base(args), fields…, methods… }`, the
-        // arguments from the constructor's leading `super(args)`), which
-        // types field and method access; there is no prototype chain, so
-        // `super.method()` and overriding with a different type aren't
-        // supported.
-        let base: Option<(String, Span)> = if self.consume_if(&Token::Extends) {
-            match self.current().clone() {
-                Token::Ident(base) => {
-                    let base_span = self.current_span();
-                    self.advance();
-                    Some((base, base_span))
-                }
-                _ => {
-                    let span = self.current_span();
-                    return Err(ParseError::UnexpectedToken {
-                        found: self.current().to_string(),
-                        expected: "the name of the class being extended".to_string(),
-                        span,
-                    }
-                    .into());
-                }
+        // Reject `extends Parent`: a class's methods are checked with its
+        // instance as `this`, so a base's methods aren't safe on a
+        // subclass's instances. Only an external class's declaration
+        // (`/** class Name extends Base { … } */ class Name;`) extends.
+        if self.check(&Token::Extends) {
+            let span = self.current_span();
+            return Err(ParseError::UnexpectedToken {
+                found: "extends".to_string(),
+                expected: "{ (class inheritance is not supported — only an external class \
+                    declared without a body, `/** class Name extends Base { … } */ class \
+                    Name;`, extends another; see examples/spa/gaps.md § 'By design' for \
+                    the factory-function workaround)"
+                    .to_string(),
+                span,
             }
-        } else {
-            None
-        };
-        let outer_super = std::mem::replace(&mut self.super_allowed, base.is_some());
-        let mut super_args: Option<Vec<Expr>> = None;
+            .into());
+        }
 
         self.expect(&Token::LBrace)?;
 
@@ -1122,15 +1139,16 @@ impl Parser {
         self.class_depth += 1;
 
         let mut ctor_params: Vec<Param> = Vec::new();
-        let mut field_props: Vec<PropDef> = Vec::new();
+        // Each field's settings, in the order JavaScript runs them: the
+        // class-body fields' initialisers, then the constructor's
+        // `this.NAME = …` lines. (name, value, span)
+        let mut field_sets: Vec<(String, Expr, Span)> = Vec::new();
         let mut method_props: Vec<PropDef> = Vec::new();
 
-        // Annotations contributed by declaration-only fields whose initial
-        // value comes from a `this.NAME = …` line in the constructor body.
-        // The annotation moves to that constructor-extracted property at
-        // emit time so the constructor parameter's inferred type is
-        // checked against the declared field type.
-        let mut deferred_field_annotations: Vec<(String, TypeAnnotation)> = Vec::new();
+        // The annotations of class-body fields (`x: T`, `/** x: T */ x`),
+        // checked against the value the field ends up with.
+        let mut field_annotations: std::collections::HashMap<String, TypeAnnotation> =
+            std::collections::HashMap::new();
         // Names already declared as class-body fields. Used to catch
         // duplicate declarations like `class Foo { a; a = 1; }`. Note we
         // intentionally allow a class-body declaration AND a `this.a = …`
@@ -1138,6 +1156,10 @@ impl Parser {
         // declaration carries the annotation.
         let mut declared_field_names: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // The names the methods and the class-body field initialisers
+        // read from outside them: see the check on the constructor's
+        // parameters below.
+        let mut outer_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         while !self.check(&Token::RBrace) && !self.is_at_end() {
             // Skip empty separators (class bodies don't require semicolons
@@ -1256,18 +1278,23 @@ impl Parser {
                     method_props.push(PropDef::Getter {
                         key: PropKey::Ident(key_name),
                         body,
+                        proto: true,
                         span: Span::new(member_start, self.prev_span().end),
                     });
                     continue;
                 } else {
-                    // `set foo(v) { body }` — type-check the body but
-                    // the field's type comes from assignment sites.
-                    // For now we punt: the body becomes an unused
-                    // method named `__set_foo` so it gets checked,
-                    // and the field is *not* declared (expected to
-                    // be set via `this.foo = …` in the constructor).
-                    let _ = (params, body); // type-check skipped for now
-                    continue;
+                    // `set foo(v) { body }`: a store to `foo` runs the
+                    // body, which inty doesn't model.
+                    let _ = (params, body);
+                    return Err(ParseError::Unsupported {
+                        feature: format!(
+                            "a setter (`set {}(…)`): inty doesn't model accessors that run on \
+                             a store",
+                            key_name
+                        ),
+                        span: key_span,
+                    }
+                    .into());
                 }
             }
 
@@ -1396,45 +1423,27 @@ impl Parser {
                 let annotation = ts_annotation
                     .or_else(|| self.try_get_type_annotation(self.current_span(), &key_name));
 
+                if let Some(ann) = annotation {
+                    field_annotations.insert(key_name.clone(), ann);
+                }
                 match initializer {
                     Some(init) => {
-                        field_props.push(PropDef::Property {
-                            key: PropKey::Ident(key_name),
-                            value: init,
-                            type_annotation: annotation,
-                            type_ast: None,
-                            span: member_span,
-                        });
+                        outer_names
+                            .extend(crate::ast::free_idents::free_identifiers_in_expr(&init));
+                        field_sets.push((key_name, init, member_span));
                     }
                     None => {
-                        // Declaration-only. Two cases:
-                        //   1. Annotated: stash the annotation; the
-                        //      constructor's `this.NAME = …` extraction
-                        //      will pick it up. If the constructor never
-                        //      sets the field, we emit an `undefined`
-                        //      placeholder with the annotation attached
-                        //      so the type-level row still includes the
-                        //      field at the declared type (annotations
-                        //      are unified with the value's inferred
-                        //      type — `Undefined` against `T` will fail,
-                        //      and the user gets a clear diagnostic).
-                        //   2. Unannotated: emit `name: undefined` —
-                        //      typed at `Undefined` and the constructor
-                        //      can later widen it via assignment if it
-                        //      reaches that field at all.
-                        if let Some(ann) = annotation {
-                            deferred_field_annotations.push((key_name.clone(), ann));
-                        }
-                        field_props.push(PropDef::Property {
-                            key: PropKey::Ident(key_name),
-                            value: Expr::Lit {
+                        // Declaration-only: `undefined` until something
+                        // sets it (its annotation, if any, is then checked
+                        // against what the constructor stores).
+                        field_sets.push((
+                            key_name,
+                            Expr::Lit {
                                 value: Literal::Undefined,
                                 span: member_span,
                             },
-                            type_annotation: None,
-                            type_ast: None,
-                            span: member_span,
-                        });
+                            member_span,
+                        ));
                     }
                 }
                 continue;
@@ -1482,6 +1491,7 @@ impl Parser {
                     PropDef::Getter {
                         key: PropKey::Ident(accessor_name),
                         body: Box::new(body),
+                        proto: true,
                         span: member_span,
                     }
                 };
@@ -1502,59 +1512,13 @@ impl Parser {
                     Stmt::Block { body, .. } => body.clone(),
                     _ => vec![body_stmt.clone()],
                 };
-                for (i, s) in stmts.into_iter().enumerate() {
-                    // `super(args)`, first, in a class that extends another.
-                    if let Stmt::Expr {
-                        expression:
-                            Expr::Call {
-                                callee, arguments, ..
-                            },
-                        ..
-                    } = &s
-                    {
-                        if matches!(callee.as_ref(), Expr::Ident { name, .. } if name == "super") {
-                            if i != 0 || super_args.is_some() {
-                                return Err(ParseError::UnexpectedToken {
-                                    found: "super(…)".to_string(),
-                                    expected: "super(…) as the constructor's first statement"
-                                        .to_string(),
-                                    span: s.span(),
-                                }
-                                .into());
-                            }
-                            super_args = Some(arguments.clone());
-                            continue;
-                        }
-                    }
+                for s in stmts {
                     match s {
                         Stmt::Expr { expression, .. } => {
                             if let Some((field, value, span)) =
                                 Parser::extract_this_assignment(&expression)
                             {
-                                // If a class-body field declaration with
-                                // an annotation already pushed a placeholder
-                                // for `field`, drop it — the constructor's
-                                // assignment supplies the real value, and
-                                // we'll attach the deferred annotation
-                                // below.
-                                field_props.retain(|p| {
-                                    !matches!(
-                                        p,
-                                        PropDef::Property { key: PropKey::Ident(n), .. }
-                                            if n == &field
-                                    )
-                                });
-                                let type_annotation = Self::take_field_annotation_inner(
-                                    &mut deferred_field_annotations,
-                                    &field,
-                                );
-                                field_props.push(PropDef::Property {
-                                    key: PropKey::Ident(field),
-                                    value,
-                                    type_annotation,
-                                    type_ast: None,
-                                    span,
-                                });
+                                field_sets.push((field, value, span));
                             } else {
                                 return Err(ParseError::UnexpectedToken {
                                     found: "complex expression".to_string(),
@@ -1580,6 +1544,7 @@ impl Parser {
                     params,
                     body: Box::new(body_stmt),
                     return_type_ast: None,
+                    proto: true,
                     span: member_span,
                 });
             }
@@ -1588,61 +1553,164 @@ impl Parser {
         }
 
         self.expect(&Token::RBrace)?;
-        self.super_allowed = outer_super;
         // Done parsing this class body — restore the depth.
         self.class_depth = self.class_depth.saturating_sub(1);
         let end = self.prev_span().end;
         let span = Span::new(start, end);
 
-        // Any deferred field annotations not consumed by a constructor
-        // assignment attach to the existing `name: undefined` placeholder
-        // entry in `field_props` (declaration-only field with no setter).
-        for (name, ann) in deferred_field_annotations {
-            for prop in field_props.iter_mut() {
-                if let PropDef::Property {
-                    key: PropKey::Ident(n),
-                    type_annotation,
-                    ..
-                } = prop
-                {
-                    if n == &name && type_annotation.is_none() {
-                        *type_annotation = Some(ann);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Build the object literal: the base instance (for `extends`),
-        // then field properties, then methods.
-        let mut all_props = Vec::new();
-        if let Some((base, base_span)) = base {
-            all_props.push(PropDef::Spread {
-                argument: Expr::New {
-                    callee: Box::new(Expr::Ident {
-                        name: base,
-                        span: base_span,
-                    }),
-                    arguments: super_args.unwrap_or_default(),
-                    span: base_span,
-                },
-                span: base_span,
-                inherited: true,
-            });
-        }
-        all_props.extend(field_props);
-        all_props.extend(method_props);
-        let obj_literal = Expr::Object {
-            properties: all_props,
-            span,
-        };
-
-        // Wrap the object literal in `function Name(ctor_params) { return <obj>; }`.
-        let body_block = Stmt::Block {
-            body: vec![Stmt::Return {
-                argument: Some(obj_literal),
+        // The class lowers to a factory taking the constructor's
+        // parameters, its methods inside it, so a method would see them;
+        // in JavaScript it sees the variables outside the class. Where a
+        // method or a class-body field initialiser reads a name that is
+        // also a constructor parameter, the two would disagree, so the
+        // class is rejected.
+        outer_names.extend(crate::ast::free_idents::free_identifiers_in_expr(
+            &Expr::Object {
+                properties: method_props.clone(),
                 span,
-            }],
+            },
+        ));
+        if let Some(p) = ctor_params.iter().find(|p| outer_names.contains(&p.name)) {
+            return Err(ParseError::Unsupported {
+                feature: format!(
+                    "a method or field initialiser of class `{}` reading `{}`, which is also \
+                     a constructor parameter (in JavaScript it reads the `{}` outside the \
+                     class, not the parameter): rename one of them",
+                    name, p.name, p.name
+                ),
+                span,
+            }
+            .into());
+        }
+
+        // A field and a method or getter of the same name: the instance's
+        // own field would hide the prototype's member.
+        let member_names: std::collections::HashSet<String> = method_props
+            .iter()
+            .filter_map(|p| match p {
+                PropDef::Method {
+                    key: PropKey::Ident(n),
+                    ..
+                }
+                | PropDef::Getter {
+                    key: PropKey::Ident(n),
+                    ..
+                } => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        if let Some((n, _, at)) = field_sets.iter().find(|(n, _, _)| member_names.contains(n)) {
+            return Err(ParseError::Unsupported {
+                feature: format!(
+                    "a field `{}` of class `{}` with the same name as one of its methods or \
+                     getters (the field would hide it)",
+                    n, name
+                ),
+                span: *at,
+            }
+            .into());
+        }
+
+        // Set the fields one by one, as JavaScript does, each value kept
+        // in a local, and build the instance from the last value of each:
+        // `const $field$0 = …; …; return {x: $field$0, …, methods};`.
+        let mut set: std::collections::HashMap<String, class_fields::SetField> =
+            std::collections::HashMap::new();
+        let mut order: Vec<String> = Vec::new();
+        let mut last: std::collections::HashMap<String, PropDef> = std::collections::HashMap::new();
+        let mut body_stmts: Vec<Stmt> = Vec::new();
+        for (field, mut value, at) in field_sets {
+            if !order.contains(&field) {
+                order.push(field.clone());
+            }
+            // A whole arrow function using `this` is a method of the
+            // instance, its own property.
+            if matches!(value, Expr::Function { arrow: true, .. })
+                && crate::ast::free_idents::mentions_this(&value)
+            {
+                if let Some(ann) = field_annotations.get(&field) {
+                    return Err(ParseError::Unsupported {
+                        feature: format!(
+                            "an annotation on the arrow-function field `{}` of class `{}`, \
+                             whose `this` is the instance",
+                            field, name
+                        ),
+                        span: ann.span,
+                    }
+                    .into());
+                }
+                let Expr::Function { params, body, .. } = value else {
+                    unreachable!("an arrow function");
+                };
+                last.insert(
+                    field.clone(),
+                    PropDef::Method {
+                        key: PropKey::Ident(field.clone()),
+                        params,
+                        body,
+                        return_type_ast: None,
+                        proto: false,
+                        span: at,
+                    },
+                );
+                set.insert(field, class_fields::SetField::Arrow);
+                continue;
+            }
+            class_fields::rewrite(&mut value, &set, &name)?;
+            let local = format!("$field${}", self.temp_counter);
+            self.temp_counter += 1;
+            body_stmts.push(Stmt::Var {
+                kind: VarKind::Const,
+                declarations: vec![VarDeclarator {
+                    name: local.clone(),
+                    init: Some(value),
+                    type_annotation: None,
+                    type_ast: None,
+                    kind: VarKind::Const,
+                    span: at,
+                }],
+                span: at,
+            });
+            last.insert(
+                field.clone(),
+                PropDef::Property {
+                    key: PropKey::Ident(field.clone()),
+                    value: Expr::Ident {
+                        name: local.clone(),
+                        span: at,
+                    },
+                    type_annotation: None,
+                    type_ast: None,
+                    span: at,
+                },
+            );
+            set.insert(field, class_fields::SetField::Value(local));
+        }
+
+        // The object literal: fields first, then methods.
+        let mut all_props: Vec<PropDef> = order
+            .iter()
+            .map(|f| {
+                let mut prop = last.remove(f).expect("each field is set");
+                if let PropDef::Property {
+                    type_annotation, ..
+                } = &mut prop
+                {
+                    *type_annotation = field_annotations.remove(f);
+                }
+                prop
+            })
+            .collect();
+        all_props.extend(method_props);
+        body_stmts.push(Stmt::Return {
+            argument: Some(Expr::Object {
+                properties: all_props,
+                span,
+            }),
+            span,
+        });
+        let body_block = Stmt::Block {
+            body: body_stmts,
             span,
         };
 
@@ -1658,14 +1726,6 @@ impl Parser {
 
     /// Match `this.FIELD = EXPR` exactly and return `(FIELD, EXPR, span)`.
     /// Any other expression returns None.
-    fn take_field_annotation_inner(
-        list: &mut Vec<(String, TypeAnnotation)>,
-        name: &str,
-    ) -> Option<TypeAnnotation> {
-        let pos = list.iter().position(|(n, _)| n == name)?;
-        Some(list.remove(pos).1)
-    }
-
     fn extract_this_assignment(expr: &Expr) -> Option<(String, Expr, Span)> {
         if let Expr::Assign {
             op: AssignOp::Assign,
@@ -1771,6 +1831,7 @@ impl Parser {
             params: vec![],
             body,
             type_annotation: None,
+            arrow: false,
             span,
         };
         let iife_call = Expr::Call {
@@ -3107,26 +3168,6 @@ impl Parser {
                 })
             }
 
-            // `super(…)` in the constructor of a class that `extends`
-            // another (see `parse_class_declaration_named`, which lowers
-            // it); any other `super` is rejected there.
-            Token::Super if self.super_allowed => {
-                self.advance();
-                if !self.check(&Token::LParen) {
-                    return Err(ParseError::Unsupported {
-                        feature: "`super.member` (an inherited method is the \
-                            subclass's own: call `this.method()`)"
-                            .to_string(),
-                        span: Span::new(start, self.prev_span().end),
-                    }
-                    .into());
-                }
-                Ok(Expr::Ident {
-                    name: "super".to_string(),
-                    span: Span::new(start, self.prev_span().end),
-                })
-            }
-
             Token::Number(n) => {
                 self.advance();
                 Ok(Expr::Lit {
@@ -3336,7 +3377,6 @@ impl Parser {
             return Ok(PropDef::Spread {
                 argument,
                 span: Span::new(start, self.prev_span().end),
-                inherited: false,
             });
         }
 
@@ -3353,6 +3393,7 @@ impl Parser {
                 return Ok(PropDef::Getter {
                     key,
                     body,
+                    proto: false,
                     span: Span::new(start, self.prev_span().end),
                 });
             }
@@ -3391,6 +3432,7 @@ impl Parser {
                 params,
                 body,
                 return_type_ast: None,
+                proto: false,
                 span: Span::new(start, self.prev_span().end),
             });
         }
@@ -3709,6 +3751,7 @@ impl Parser {
             params,
             body,
             type_annotation: None,
+            arrow: true,
             span,
         })
     }
@@ -3747,6 +3790,7 @@ impl Parser {
             params,
             body,
             type_annotation,
+            arrow: false,
             span: Span::new(start, self.prev_span().end),
         })
     }

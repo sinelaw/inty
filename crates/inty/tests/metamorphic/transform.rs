@@ -294,6 +294,7 @@ fn wrap_in_iife(expr: Expr, s: Span) -> Expr {
         params: vec![],
         body: Box::new(body),
         type_annotation: None,
+        arrow: false,
         span: s,
     };
     Expr::Call {

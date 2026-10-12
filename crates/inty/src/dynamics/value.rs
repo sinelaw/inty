@@ -36,6 +36,10 @@ pub enum Value {
     /// to the receiver it's called on. Only a few are modelled; see
     /// `step::BUILTIN_METHODS`.
     Builtin(&'static str),
+    /// An object's getter, as the object stores it: reading the property
+    /// runs it with the object as `this` (see `step::get_member`), so no
+    /// expression evaluates to it.
+    Getter(Closure),
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +48,12 @@ pub struct Closure {
     pub params: Vec<String>,
     pub body: Box<Stmt>,
     pub env: RuntimeEnv,
+    /// An arrow function: its `this` is the one in `env`.
+    pub arrow: bool,
+    /// `new` may call it: a `function`, not an arrow function or a method
+    /// written `m() {…}` (an object literal's or a class's, which an arrow
+    /// field using `this` lowers to), on which `new` throws a `TypeError`.
+    pub constructor: bool,
 }
 
 impl Value {
@@ -55,7 +65,7 @@ impl Value {
             Value::Boolean(_) => "boolean",
             Value::Undefined => "undefined",
             Value::Null => "object",
-            Value::Closure(_) | Value::Builtin(_) => "function",
+            Value::Closure(_) | Value::Builtin(_) | Value::Getter(_) => "function",
             Value::Array(_) | Value::Object(_) => "object",
             Value::Promise(_) => "object",
         }
@@ -70,6 +80,7 @@ impl Value {
             Value::Null | Value::Undefined => false,
             Value::Closure(_)
             | Value::Builtin(_)
+            | Value::Getter(_)
             | Value::Array(_)
             | Value::Object(_)
             | Value::Promise(_) => true,
@@ -93,6 +104,7 @@ impl fmt::Display for Value {
             Value::Object(l) => write!(f, "<object @{}>", l.0),
             Value::Promise(v) => write!(f, "<promise {}>", v),
             Value::Builtin(m) => write!(f, "<builtin {}>", m),
+            Value::Getter(_) => write!(f, "<getter>"),
         }
     }
 }

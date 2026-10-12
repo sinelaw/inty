@@ -139,15 +139,20 @@ impl PrettyContext {
             Type::Undefined => write!(w, "undefined"),
             Type::Null => write!(w, "null"),
             Type::Regex => write!(w, "RegExp"),
+            Type::NewTarget => write!(w, "new.target"),
+            Type::ArrowThis => write!(w, "undefined"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
             Type::Var(name) => self.write_var(w, name),
             Type::Func {
-                this_type: _,
+                this_type,
                 params,
                 ret,
             } => {
                 if in_func_arg {
                     write!(w, "(")?;
+                }
+                if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
+                    write!(w, "new ")?;
                 }
                 write!(w, "(")?;
                 for (i, p) in params.iter().enumerate() {
@@ -190,7 +195,8 @@ impl PrettyContext {
                 write!(w, " }}")
             }
             Type::Array(elem) => {
-                let needs_parens = prints_as_function(elem) || matches!(**elem, Type::Union(_));
+                let needs_parens =
+                    prints_as_function(elem) || matches!(**elem, Type::Union(_) | Type::Maybe(..));
                 if needs_parens {
                     write!(w, "(")?;
                 }
@@ -226,6 +232,7 @@ impl PrettyContext {
                 self.write_type(w, ty, in_func_arg)
             }
             Type::Literal(lit) => self.write_literal(w, lit),
+            Type::Maybe(..) => self.write_type_ts(w, &ty.as_printed_union(), in_func_arg),
             Type::Union(members) => {
                 if members.is_empty() {
                     return write!(w, "never");
@@ -267,7 +274,8 @@ impl PrettyContext {
 
     /// Write a type to the given writer.
     fn write_type<W: Write>(&mut self, w: &mut W, ty: &Type, in_func_arg: bool) -> fmt::Result {
-        if !self.aliases.is_empty() && matches!(ty, Type::Row(_) | Type::Union(_)) {
+        if !self.aliases.is_empty() && matches!(ty, Type::Row(_) | Type::Union(_) | Type::Maybe(..))
+        {
             let found = self.aliases.iter().find_map(|(name, params, body)| {
                 let mut bound = std::collections::HashMap::new();
                 match_alias(body, ty, params, &mut bound).then(|| {
@@ -306,6 +314,8 @@ impl PrettyContext {
             Type::Undefined => write!(w, "Undefined"),
             Type::Null => write!(w, "Null"),
             Type::Regex => write!(w, "Regex"),
+            Type::NewTarget => write!(w, "NewTarget"),
+            Type::ArrowThis => write!(w, "ArrowThis"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
 
             Type::Var(name) => self.write_var(w, name),
@@ -326,9 +336,12 @@ impl PrettyContext {
                 // - Some(concrete_type): show "this: T =>"
                 let show_this = match this_type {
                     None => false,
-                    Some(t) => !matches!(**t, Type::Undefined | Type::Var(_)),
+                    Some(t) => !matches!(**t, Type::Undefined | Type::Var(_) | Type::ArrowThis),
                 };
-                if show_this {
+                if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
+                    // Called only by `new`: a class's constructor.
+                    write!(w, "new ")?;
+                } else if show_this {
                     write!(w, "this: ")?;
                     self.write_type(w, this_type.as_ref().unwrap(), false)?;
                     write!(w, " => ")?;
@@ -370,7 +383,8 @@ impl PrettyContext {
                 // binds unambiguously: a union or function element reads as
                 // `(A | B)[]` / `((A) => B)[]`, not `A | B[]` (which parses
                 // as `A | (B[])`).
-                let needs_parens = prints_as_function(elem) || matches!(**elem, Type::Union(_));
+                let needs_parens =
+                    prints_as_function(elem) || matches!(**elem, Type::Union(_) | Type::Maybe(..));
                 if needs_parens {
                     write!(w, "(")?;
                 }
@@ -432,6 +446,7 @@ impl PrettyContext {
                 write!(w, "module {:?}", m.source)
             }
 
+            Type::Maybe(..) => self.write_type(w, &ty.as_printed_union(), in_func_arg),
             Type::Union(members) => {
                 if members.is_empty() {
                     return write!(w, "never");
@@ -557,6 +572,15 @@ impl PrettyContext {
             }
             first = false;
             let optional_marker = matches!(entry.presence, crate::types::ty::Presence::Var(_));
+            // How the object holds the property, where it isn't an own
+            // property that holds a value: on a class's prototype, or
+            // read-only (a getter, or a class's method).
+            if matches!(entry.own, Presence::Abs) {
+                write!(w, "proto ")?;
+            }
+            if matches!(entry.writable, Presence::Abs) {
+                write!(w, "readonly ")?;
+            }
             // Private-field sentinels render as `#name`, restoring the
             // user-written form. The raw stored key contains control
             // characters that would otherwise look broken in errors.
@@ -672,6 +696,13 @@ impl PrettyContext {
             ClassName::Plus => {
                 write!(w, "Plus ")?;
                 self.write_type(w, &pred.types[0], true)?;
+                // `Plus a` for `Plus a a a`.
+                if pred.types.iter().any(|t| t != &pred.types[0]) {
+                    for t in &pred.types[1..] {
+                        write!(w, " ")?;
+                        self.write_type(w, t, true)?;
+                    }
+                }
             }
             ClassName::Num | ClassName::NumLit => {
                 write!(w, "Num ")?;
@@ -685,6 +716,19 @@ impl PrettyContext {
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
             }
+            ClassName::IndexWrite => {
+                write!(w, "IndexWrite ")?;
+                self.write_type(w, &pred.types[0], true)?;
+            }
+            ClassName::FieldWrite => {
+                write!(w, "FieldWrite ")?;
+                for (i, t) in pred.types.iter().enumerate() {
+                    if i > 0 {
+                        write!(w, " ")?;
+                    }
+                    self.write_type(w, t, true)?;
+                }
+            }
             ClassName::Indexable => {
                 write!(w, "Indexable ")?;
                 self.write_type(w, &pred.types[0], true)?;
@@ -692,6 +736,13 @@ impl PrettyContext {
                 self.write_type(w, &pred.types[1], true)?;
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
+            }
+            ClassName::Inject | ClassName::Strip => {
+                write!(w, "{}", pred.class)?;
+                for t in &pred.types {
+                    write!(w, " ")?;
+                    self.write_type(w, t, true)?;
+                }
             }
             ClassName::HasProp => match pred.as_has_prop() {
                 Some((recv, name, result)) => self.write_has_props(w, recv, &[(name, result)])?,
@@ -757,7 +808,7 @@ fn collect_hidden_this_vars(ty: &Type, hidden: &mut HashSet<TVarName>) {
             }
             collect_hidden_this_vars(ret, hidden);
         }
-        Type::Array(elem) => collect_hidden_this_vars(elem, hidden),
+        Type::Array(elem) | Type::Maybe(_, elem) => collect_hidden_this_vars(elem, hidden),
         Type::Promise(inner) => collect_hidden_this_vars(inner, hidden),
         Type::Map(value) => collect_hidden_this_vars(value, hidden),
         Type::Tuple(elems) => {
@@ -842,7 +893,11 @@ impl Display for ClassName {
             ClassName::Num | ClassName::NumLit => write!(f, "Num"),
             ClassName::Arith => write!(f, "Arith"),
             ClassName::Indexable => write!(f, "Indexable"),
+            ClassName::IndexWrite => write!(f, "IndexWrite"),
+            ClassName::FieldWrite => write!(f, "FieldWrite"),
             ClassName::HasProp => write!(f, "HasProp"),
+            ClassName::Inject => write!(f, "Inject"),
+            ClassName::Strip => write!(f, "Strip"),
         }
     }
 }
@@ -881,6 +936,7 @@ fn match_alias(
         (Type::Array(a), Type::Array(b)) | (Type::Promise(a), Type::Promise(b)) => {
             match_alias(a, b, params, bound)
         }
+        (Type::Maybe(z1, a), Type::Maybe(z2, b)) => z1 == z2 && match_alias(a, b, params, bound),
         (
             Type::Func {
                 this_type: t1,

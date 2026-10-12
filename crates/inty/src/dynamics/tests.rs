@@ -82,6 +82,11 @@ fn comparison_ops() {
     assert_bool("1 <= 1", true);
     assert_bool("1 >= 2", false);
     assert_bool("1 == 1", true);
+    // `null` and `undefined` are loosely equal: `x != null` tests for both.
+    assert_bool("(void 0) == null", true);
+    assert_bool("(void 0) != null", false);
+    assert_bool("null != (void 0)", false);
+    assert_bool("(void 0) === null", false);
     assert_bool("1 != 2", true);
     assert_bool("1 === 1", true);
     assert_bool("1 !== 2", true);
@@ -319,4 +324,164 @@ fn switch_with_fallthrough_blocked_by_break() {
         r;
     ";
     assert_number(src, 2.0);
+}
+
+/// Arithmetic at a span the checker typed `Int` is checked; the same
+/// arithmetic elsewhere is plain JavaScript.
+#[test]
+fn int_arithmetic_is_checked_only_where_typed_int() {
+    use std::collections::HashSet;
+    let src = "1073741824 * 1073741824";
+    let program = crate::frontends::javascript::parse_source(src).unwrap();
+    let unchecked = crate::dynamics::run_to_end(&program).unwrap();
+    assert!(matches!(unchecked, Value::Number(n) if n == 1152921504606846976.0));
+
+    let crate::ast::Stmt::Expr {
+        expression: expr, ..
+    } = &program.statements[0]
+    else {
+        panic!("expected an expression statement");
+    };
+    let span = expr.span();
+    let int_ops: HashSet<(usize, usize)> = [(span.start, span.end)].into_iter().collect();
+    match crate::dynamics::run_to_end_checked(&program, 100, int_ops) {
+        Err(Stuck::IntRange { op: "*", .. }) => {}
+        other => panic!("expected an Int range fault, got {:?}", other),
+    }
+}
+
+/// A `throw` out of a called function is caught, and `finally` runs after a
+/// handler that throws.
+#[test]
+fn try_catches_a_throw_from_a_call() {
+    assert_number(
+        "const f = function () { throw 1; }; let r = 0; try { f(); } catch (e) { r = 2; } r",
+        2.0,
+    );
+    assert_number(
+        "const f = function () { throw 1; }; let r = 0; \
+         try { try { f(); } catch (e) { f(); } finally { r = 3; } } catch (e) {} r",
+        3.0,
+    );
+}
+
+/// An assignment evaluates its target's object before the value, once, as
+/// JavaScript does; a compound assignment or update reads the target before
+/// the right side.
+#[test]
+fn assignment_evaluates_its_target_once_and_first() {
+    assert_string(
+        "const obj = {x: 1}; let log = \"\"; \
+         const o = function () { log = log + \"o\"; return obj; }; \
+         const v = function () { log = log + \"v\"; return 2; }; \
+         o().x = v(); log",
+        "ov",
+    );
+    assert_number(
+        "const obj = {x: 1}; let n = 0; \
+         const o = function () { n = n + 1; return obj; }; \
+         o().x += 1; o().x++; n * 10 + obj.x",
+        23.0,
+    );
+    assert_number("let x = 1; x += (x = 10); x", 11.0);
+}
+
+/// An element read at an index the array or string hasn't, or a store past
+/// an array's end, is a fault (JavaScript reads `undefined` and makes a
+/// hole); a store just past the end pushes.
+#[test]
+fn indexing_out_of_bounds_is_a_fault() {
+    for source in [
+        "[1, 2][2]",
+        "[1, 2][-1]",
+        "[1, 2][0.5]",
+        "\"ab\"[2]",
+        "const xs = [1]; xs[2] = 3; xs[0]",
+    ] {
+        assert!(
+            matches!(run(source), Err(Stuck::OutOfBounds { .. })),
+            "{source}: {:?}",
+            run(source)
+        );
+    }
+    assert!(matches!(run("[1, 2][1]"), Ok(Value::Number(n)) if n == 2.0));
+    assert!(matches!(run("\"ab\"[1]"), Ok(Value::String(s)) if s == "b"));
+    assert!(matches!(
+        run("const xs = [1]; xs[1] = 3; xs[1] + xs.length"),
+        Ok(Value::Number(n)) if n == 5.0
+    ));
+}
+
+#[test]
+fn getters_run_when_read_and_copied_by_a_spread() {
+    assert_number(
+        "const o = { a: 1, get g() { return this.a + 1; } }; o.g;",
+        2.0,
+    );
+    assert_number(
+        "const o = { a: 1, get g() { return this.a + 1; } }; const c = {...o}; o.a = 5; c.g;",
+        2.0,
+    );
+    assert!(matches!(
+        run("const o = { get g() { return 1; } }; o.g = 2;"),
+        Err(Stuck::ReadOnly)
+    ));
+}
+
+/// An arrow function's `this` is its enclosing function's, and `new` on
+/// one throws, as on a method.
+#[test]
+fn arrow_functions_close_over_this_and_are_not_constructors() {
+    assert_number(
+        "const o = { a: 2, m() { const f = () => this.a; return f(); } }; o.m();",
+        2.0,
+    );
+    assert!(matches!(
+        run("const f = () => ({x: 1}); new f();"),
+        Err(Stuck::NotConstructor)
+    ));
+    // Nor is a method written `m() {…}`, which an arrow field using
+    // `this` lowers to.
+    assert!(matches!(
+        run("const o = { m() { return {x: 1}; } }; new o.m();"),
+        Err(Stuck::NotConstructor)
+    ));
+    assert!(matches!(
+        run("class D { x = 1; f = () => this.x; } new (new D()).f();"),
+        Err(Stuck::NotConstructor)
+    ));
+    assert_number(
+        "const o = { m: function () { this.y = 2; } }; new o.m().y;",
+        2.0,
+    );
+}
+
+#[test]
+fn new_gives_back_an_object_result_else_this() {
+    assert_number("function F(n) { return {n: n}; } new F(3).n;", 3.0);
+    assert_string("function F() { return 1; } typeof new F();", "object");
+}
+
+/// An object's properties are in the order they were made, which a spread
+/// copies them in, reading each (a getter run) when it reaches it: a store
+/// to a property that is there keeps its place, and of two of one label in
+/// a literal, the first's place holds the second's value.
+#[test]
+fn spread_copies_properties_in_the_order_they_were_made() {
+    assert_number(
+        "const o = {get b() { this.a = 5; return 0; }, a: 1}; ({...o}).a;",
+        5.0,
+    );
+    assert_number(
+        "const o = {a: 1, get g() { this.a = 9; return 0; }}; o.a = 2; ({...o}).a;",
+        2.0,
+    );
+    assert_number(
+        "const o = {a: 1, get g() { this.a = 9; return 0; }, a: 3}; ({...o}).a;",
+        3.0,
+    );
+    assert_number(
+        "const o = {get g() { this.a = 9; return 0; }}; o.a = 2; ({...o}).a;",
+        9.0,
+    );
 }

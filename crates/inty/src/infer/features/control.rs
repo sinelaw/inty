@@ -69,7 +69,7 @@ fn apply_facts(
 /// Whether `body` (a loop's) contains a `break` that can leave the loop:
 /// an unlabeled one outside any nested loop or `switch`, or any labeled
 /// one (conservatively). Nested functions are not searched.
-fn breaks_out(body: &Stmt) -> bool {
+pub(in crate::infer) fn breaks_out(body: &Stmt) -> bool {
     fn walk(s: &Stmt, nested: bool) -> bool {
         match s {
             Stmt::Break { label, .. } => label.is_some() || !nested,
@@ -335,6 +335,55 @@ impl InferState {
         // contextually typed.)
         let joined = self.join(span, &cons_type, &alt_type)?;
         Ok(self.widen(span, &joined))
+    }
+
+    /// An expression statement whose value is dropped (any but the
+    /// program's last, its completion value), as the Lean model checks it
+    /// against `unknown` (`HasTypeS.drop`): the branches of a conditional
+    /// or of `??` aren't joined, each is dropped in turn. The type says only
+    /// whether it completes: `never` when no branch does.
+    pub(in crate::infer) fn infer_discarded(
+        &mut self,
+        env: &TypeEnv,
+        expr: &Expr,
+    ) -> InferResult<Type> {
+        let is_never = |t: &Type| matches!(t, Type::Union(m) if m.is_empty());
+        let ty = match expr {
+            Expr::Conditional {
+                test,
+                consequent,
+                alternate,
+                ..
+            } => {
+                let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
+                let cons = self.infer_discarded(&cons_env, consequent)?;
+                let alt = self.infer_discarded(&alt_env, alternate)?;
+                if is_never(&self.zonk(&cons)) && is_never(&self.zonk(&alt)) {
+                    Ok(Type::never())
+                } else {
+                    Ok(Type::Undefined)
+                }
+            }
+            Expr::NullishCoalesce { left, right, .. } => {
+                let left_ty = self.infer_expr(env, left)?;
+                self.strip_sum(left.span(), &left_ty)?;
+                self.infer_discarded(env, right)?;
+                Ok(Type::Undefined)
+            }
+            Expr::Sequence { expressions, .. } => {
+                let mut ty = Type::Undefined;
+                for e in expressions {
+                    ty = self.infer_discarded(env, e)?;
+                }
+                Ok(ty)
+            }
+            _ => return self.infer_expr(env, expr),
+        };
+        if let Some(types) = self.expr_types.as_mut() {
+            let span = expr.span();
+            types.insert((span.start, span.end), Type::Undefined);
+        }
+        ty
     }
 
     /// Infer the type of a sequence expression.
@@ -620,10 +669,13 @@ impl InferState {
         let unsure_env = body_env.with_narrowings_of(env);
 
         if let Some(catch) = handler {
-            // The caught exception object is unmodelled, so its binding is a
-            // fresh (opaque) variable. The handler runs against the
-            // try-body's environment.
-            let param_type = self.fresh_type_var();
+            // Anything can be thrown, from here or from any function
+            // called, so the caught value's type is rigid (a skolem): it
+            // can be passed on, tested and rethrown, but not used at a
+            // concrete type. A flexible variable would let `e - 1` pin it
+            // to `Number` whatever was thrown. The handler runs against
+            // the try-body's environment.
+            let param_type = Type::Var(self.fresh_skolem());
             let catch_env = self.bind(
                 &unsure_env,
                 catch.span,

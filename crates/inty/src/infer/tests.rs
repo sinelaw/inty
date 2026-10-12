@@ -6,7 +6,7 @@ use super::*;
 use crate::builtins::initial_env;
 use crate::frontends::javascript::lexer::{Scanner, Token};
 use crate::frontends::javascript::parser::Parser;
-use crate::types::Type;
+use crate::types::{Nothing, Type};
 
 fn infer_expr_str(source: &str) -> InferResult<Type> {
     let mut scanner = Scanner::new(source);
@@ -187,7 +187,7 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
         final_env = new_env;
     }
     // What the end of a program does: default its numeric variables.
-    state.default_numeric(&Default::default(), None, false)?;
+    state.default_numeric(&Default::default(), false)?;
 
     Ok((result_ty, final_env, state))
 }
@@ -420,12 +420,13 @@ fn test_var_used_but_never_assigned() {
     "#;
     let (_, env, state) = infer_program_with_state(source).unwrap();
 
-    // y should be Number (or a type with Plus constraint)
+    // y is a number (`Int`, the end of the program's default), or still a
+    // variable.
     let y_scheme = env.lookup("y").unwrap();
     let y_ty = state.apply_subst(&y_scheme.body.ty);
     assert!(
-        matches!(y_ty, Type::Number | Type::Var(_)),
-        "y should be Number or Plus-constrained"
+        matches!(y_ty, Type::Int | Type::Number | Type::Var(_)),
+        "y should be a number, got {y_ty:?}"
     );
 }
 
@@ -569,6 +570,23 @@ fn test_unknown_method_after_chain_is_rejected() {
         result.is_err(),
         "Calling an undefined method on the result of a chained `return this` call must fail"
     );
+}
+
+#[test]
+fn recursive_type_against_function_needs_the_same_goal_to_close_a_cycle() {
+    // `f : (a) => μt. (b) => t`. The annotation says `k(1)` returns a
+    // function returning a Number, but `k(1)(2)` returns `f`. Was
+    // accepted: the unfold of `μt` against the annotation was memoised by
+    // the recursive type's id alone, so the second unfold, against
+    // `(Number) => Number`, "succeeded" by coinduction.
+    let src = "function f(x) { return f; }\n\
+               /** const k: (x: Number) => (y: Number) => Number */\n\
+               const k = f;\n\
+               const n = k(1)(2) - 1;";
+    assert!(check_program(src, &[]).is_err());
+    // The same recursive type against itself is still fine.
+    let ok = "function f(x) { return f; }\nconst k = f;\nconst g = k(1)(2)(3);";
+    assert!(check_program(ok, &[]).is_ok());
 }
 
 #[test]
@@ -888,8 +906,9 @@ fn test_monomorphic_object_property_assignment() {
 // ========================================================================
 // Subsumption checking on reassignment to polymorphic mutable bindings.
 //
-// When a var/let is generalized to a polytype σ at its declaration, every
-// subsequent assignment must produce a value at-least-as-polymorphic as σ.
+// A var/let written after its initialiser is monomorphic, so these concern
+// polymorphic record fields, written through an alias. Every assignment
+// must produce a value at-least-as-polymorphic as the field's polytype.
 // Without this check, assigning a less-polymorphic function to a polymorphic
 // var lets later uses of the var instantiate the original (now-stale)
 // polytype, producing inferred types that disagree with runtime values.
@@ -920,15 +939,11 @@ fn test_polymorphic_var_reassignment_unsound() {
 }
 
 #[test]
-fn test_polymorphic_var_assignment_skolem_escape() {
-    // The RHS of `x = function(y) { return z; }` captures `z` from the
-    // enclosing function. Naively skolemizing x's polytype `<a>(a) => a`
-    // and unifying with `(?γ) => typeof z` would bind z's flex var to
-    // the fresh skolem α — leaking α into the surrounding env. After
-    // that, `leak`'s inferred signature contains a free skolem and
-    // calling `leak(42)` produces a confusing "expected 'a', found
-    // Number" mismatch. The subsumption check must detect the escape
-    // and reject the assignment cleanly.
+fn test_reassigned_var_is_monomorphic() {
+    // A `var` written after its initialiser isn't generalized: `x` has one
+    // type, `(a) => a` at a single `a`, and the assignment unifies with it.
+    // Capturing `z` then just makes `z`'s type that `a` — nothing rigid is
+    // involved, so nothing can escape.
     let source = r#"
         function id(a) { return a; }
         function leak(z) {
@@ -937,13 +952,29 @@ fn test_polymorphic_var_assignment_skolem_escape() {
           return z;
         }
     "#;
-    let result = infer_program_with_state(source);
-    assert!(
-        result.is_err(),
-        "Capturing an outer-scope variable in the RHS of a polymorphic \
-         reassignment must be rejected — otherwise a skolem leaks into the \
-         enclosing function's signature"
-    );
+    assert!(infer_program_with_state(source).is_ok());
+    // The one type serves the initialiser and the assignment; a reassigned
+    // `let` can't be used at two types.
+    let mono = r#"
+        let f = function (x) { return x; };
+        f = function (x) { return x - 1; };
+        const c = f(2);
+    "#;
+    assert!(infer_program_with_state(mono).is_ok());
+    let two_types = r#"
+        let g = function (x) { return x; };
+        g = function (x) { return x; };
+        const a = g(1);
+        const b = g("s");
+    "#;
+    assert!(infer_program_with_state(two_types).is_err());
+    // A `let` never written is generalized, as a `const` is.
+    let poly = r#"
+        let h = function (x) { return x; };
+        const a = h(1);
+        const b = h("s");
+    "#;
+    assert!(infer_program_with_state(poly).is_ok());
 }
 
 #[test]
@@ -1088,13 +1119,13 @@ fn test_add_function_has_plus_constraint() {
     // The type should be a function
     assert!(ty.is_func(), "add should be a function type");
 
-    // Both parameters should be unified to the same type
+    // The constraint relates the parameters to the result: `Plus a b c`,
+    // the operands' types not unified (`add(1, 0.5)` is a `Number`).
+    assert_eq!(pred.types.len(), 3);
     if let Some((_, params, _)) = ty.as_callable() {
         assert_eq!(params.len(), 2);
-        assert_eq!(
-            params[0], params[1],
-            "Both parameters should have the same type"
-        );
+        assert_eq!(params[0].ty, pred.types[0]);
+        assert_eq!(params[1].ty, pred.types[1]);
     }
 }
 
@@ -1320,6 +1351,85 @@ fn unsound_string_into_literal_arm_rejected() {
 }
 
 #[test]
+fn variable_waits_to_be_injected_into_a_typeof_sum() {
+    // A value of a type not known yet flowing into a sum told apart by
+    // `typeof` waits for its type (the Lean model's `Inject`), rather than
+    // being bound to the sum: here the method's `this.b`, a `Boolean`.
+    let src = "const o = {b: true, m() { /** const v: Number | Boolean */ const v = this.b; \
+               return v; }}; o.m();";
+    assert!(infer_program_via_program(src).is_ok());
+    // A parameter's: its function's callers pass a case, and only a case.
+    let src = "function f(x) { /** const v: Number | String */ const v = x; return x; } \
+               f(1); f(\"a\");";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "function f(x) { /** const v: Number | String */ const v = x; return x; } \
+               f(true);";
+    assert!(infer_program_via_program(src).is_err());
+}
+
+#[test]
+fn typeof_object_takes_a_record_case_apart() {
+    let src = "/** const v: Number | {a: Number} */ const v = {a: 1}; const x = v; \
+               (typeof x === \"object\" ? x.a : 0);";
+    assert!(infer_program_via_program(src).is_ok());
+    // The other branch keeps the record case: a declaration may type a
+    // function as a record (`Promise`, `Object`), whose `typeof` is
+    // "function".
+    let src = "/** const v: String | {resolve: (Number) => Promise<Number>, \
+               reject: (Number) => Promise<Number>, all: (Promise<Number>[]) => \
+               Promise<Number[]>} */ const v = Promise; const x = v; \
+               (typeof x === \"object\" ? 0 : x.toUpperCase().length);";
+    assert!(infer_program_via_program_with_stdlib(src).is_err());
+    let src = "/** const v: Number | {a: Number} */ const v = {a: 1}; v - 1;";
+    assert!(infer_program_via_program(src).is_err());
+}
+
+#[test]
+fn tagged_literal_takes_the_arm_of_its_tag() {
+    // Arms of one shape: the literal's tag picks its arm, as the Lean
+    // model's `ObjCase.variant` does, rather than synthesis widening the
+    // tag to `String`.
+    let src = "/** const v: {b: \"circle\"} | {b: \"square\"} */ const v = {b: \"circle\"}; \
+               const w = v; (w.b === \"square\" ? 1 : 2);";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "/** const v: {b: \"circle\", c: Number} | {b: \"square\", c: Number} */ \
+               const v = {c: 1, b: \"square\"};";
+    assert!(infer_program_via_program(src).is_ok());
+    // A tag that isn't an arm's is still rejected.
+    let src = "/** const v: {b: \"circle\"} | {b: \"square\"} */ const v = {b: \"line\"};";
+    assert!(infer_program_via_program(src).is_err());
+    // As is a field the tag's arm doesn't have.
+    let src = "/** const v: {b: \"circle\", c: Number} | {b: \"square\", c: Number} */ \
+               const v = {c: \"x\", b: \"square\"};";
+    assert!(infer_program_via_program(src).is_err());
+    // Only a field every arm has a different string literal type in is a
+    // tag, whatever the literal's field order.
+    for lit in ["{k: \"a\", c: \"x\"}", "{c: \"x\", k: \"a\"}"] {
+        let src = format!(
+            "/** const v: {{k: \"a\", c: String}} | {{k: \"b\", c: \"x\"}} */ const v = {lit};"
+        );
+        assert!(infer_program_via_program(&src).is_ok(), "{src}");
+    }
+}
+
+#[test]
+fn alias_keeps_a_declared_records_literal_fields() {
+    // Widening at an unannotated binding stops at a record: the copy is
+    // the same object, so a write through it must keep the original's
+    // literal field types.
+    let src = "/** const v: {k: \"a\"} */ const v = {k: \"a\"}; let w = v; w.k = \"z\";";
+    assert!(infer_program_via_program(src).is_err());
+    let src = "/** const v: {k: \"a\", n: Number} | {k: \"b\", s: String} */ \
+               const v = {k: \"a\", n: 1}; \
+               function f() { if (v.k === \"a\") { let w = v; w.k = \"b\"; } return 0; }";
+    assert!(infer_program_via_program(src).is_err());
+    // A fresh literal's fields and elements still widen.
+    let src = "const o = {k: \"a\"}; o.k = \"z\"; let p = [1]; p[0] = 2.5; \
+               function mk() { return {k: \"a\"}; } let q = mk(); q.k = \"z\";";
+    assert!(infer_program_via_program(src).is_ok());
+}
+
+#[test]
 fn lit_widens_on_var_binding() {
     // `var k = "circle"` widens at the binding site (no annotation
     // ⇒ fresh-literal widening). The annotation is the escape hatch
@@ -1460,14 +1570,7 @@ fn test_phase7_find_returns_optional() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("v").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    match ty {
-        Type::Union(ref m) => {
-            assert_eq!(m.len(), 2);
-            assert!(m.contains(&Type::Int));
-            assert!(m.contains(&Type::Undefined));
-        }
-        other => panic!("expected union, got {}", other),
-    }
+    assert_eq!(ty, Type::Maybe(Nothing::Undefined, Box::new(Type::Int)));
 }
 
 #[test]
@@ -2283,6 +2386,93 @@ fn quantifier_bound_identifier_resolves() {
 }
 
 #[test]
+fn polymorphic_annotation_checks_initializer_rigidly() {
+    // A polymorphic annotation on a binding with an initialiser, as the
+    // Lean model's `letPoly`: the initialiser is checked with the type
+    // variables rigid, and the binding has every instance.
+    let ok = "\
+        /** const id: <a>(a) => a */ \
+        const id = (x) => x; \
+        const n = id(42); \
+        const s = id(\"hi\");";
+    let (_, env, state) = infer_program_with_state(ok).expect("a polymorphic identity checks");
+    assert_eq!(
+        state.apply_subst(&env.lookup("n").unwrap().body.ty),
+        Type::Int
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("s").unwrap().body.ty),
+        Type::String
+    );
+    // An initialiser less polymorphic than the annotation.
+    let too_specific = "\
+        /** const f: <a>(a) => a */ \
+        const f = (x) => 5;";
+    assert!(infer_program_with_state(too_specific).is_err());
+    // A rigid type variable escaping into the context: `z`'s type would
+    // have to be `a`.
+    let escapes = "\
+        const h = (z) => { \
+          /** const f: <a>(a) => a */ \
+          const f = (x) => { const w = [z, x]; return x; }; \
+          return z; \
+        };";
+    assert!(infer_program_with_state(escapes).is_err());
+    // A constraint left on a rigid type variable.
+    let constrained = "\
+        /** const f: <a>(a) => a */ \
+        const f = (x) => x + x;";
+    assert!(infer_program_with_state(constrained).is_err());
+    // The initialiser sees the binding at the annotation's scheme:
+    // polymorphic recursion.
+    let recursive = "\
+        /** const len: <a>(a[]) => Number */ \
+        const len = (xs) => xs.length === 0 ? 0 : 1 + len(xs.slice(1)); \
+        const n = len([\"a\"]) + len([1]);";
+    assert!(infer_program_with_state(recursive).is_ok());
+    // An initialiser that isn't a value has no rule in the model: its
+    // annotation's variables stay flexible, and it isn't generalised.
+    let not_value = "\
+        const mk = () => (x) => x; \
+        /** const g: <a>(a) => a */ \
+        const g = mk(); \
+        const n = g(1);";
+    assert!(infer_program_with_state(not_value).is_ok());
+}
+
+#[test]
+fn statement_values_are_dropped() {
+    // A statement's value is dropped (the Lean model's `HasTypeS.drop`):
+    // the branches of a `?:` or `??` in an expression statement needn't
+    // have one type, but the program's last statement, its completion
+    // value, still has one.
+    let ok = "const c = true; (c ? 1 : \"a\"); 2;";
+    assert!(infer_program_via_program(ok).is_ok());
+    let in_loop = "let c = true; while (c) { c ? 1 : \"a\"; c = false; } 2;";
+    assert!(infer_program_via_program(in_loop).is_ok());
+    let last = "const c = true; (c ? 1 : \"a\");";
+    assert!(infer_program_via_program(last).is_err());
+}
+
+#[test]
+fn reads_of_an_operand_of_plus_stay_on_the_variable() {
+    // A receiver `+` constrains is a number or a string: the end of the
+    // program doesn't default its property reads to an object's fields.
+    let src = "(function (x) { return (x + x).length; });";
+    let (_, _, mut state) = infer_program_via_program(src).unwrap();
+    assert!(state.resolve_constraints().is_ok());
+}
+
+#[test]
+fn spread_of_a_field_stored_back() {
+    // `{...x}` of an open row shares the operand's tail; its call signature
+    // is absent as the operand's is, so storing it back unifies without a
+    // cycle through the tail.
+    let src = "({a: {c: \"\"}, m() { this.a = {...this.a}; return 1; }});";
+    assert!(infer_program_with_state(src).is_ok());
+}
+
+#[test]
 fn alias_is_structural_not_nominal() {
     // `Cancellable<X>` and an inline row of the same shape are
     // interchangeable. Passing the inline form where an alias is
@@ -2583,12 +2773,10 @@ fn default_parameter_pins_param_type() {
 }
 
 /// Phase 1.4 regression: destructuring defaults parse without error.
-/// inty has no nullable types so the default itself isn't type-checked,
-/// but the surrounding pattern must continue to work.
 #[test]
 fn destructuring_default_in_function_param() {
     let src = "\
-        function orient({ target, anchor = null, reset = false }) { return target; } \
+        function orient({ target, anchor = 0, reset = false }) { return target; } \
         var x = orient({ target: 1, anchor: 2, reset: true });";
     let result = infer_program_via_program(src);
     assert!(
@@ -2669,10 +2857,11 @@ fn object_property_shorthand() {
 }
 
 /// Phase 1.2 regression: `export default class extends X { ... }`
-/// parses (it once produced a confusing "expected expression" error, then
-/// an inheritance rejection; `extends` is now lowered).
+/// produces the existing inheritance-rejection error rather than a
+/// confusing "expected expression" parse error.
 #[test]
-fn export_default_class_extends_parses() {
+fn export_default_class_extends_rejects_with_inheritance_error() {
+    use crate::error::IntyError;
     let src = "import { B } from \"./b.js\"; export default class extends B {}";
     let mut scanner = Scanner::new(src);
     let mut tokens = Vec::new();
@@ -2686,13 +2875,17 @@ fn export_default_class_extends_parses() {
     }
     let mut parser =
         Parser::with_source(tokens, scanner.type_annotations().to_vec(), src.to_string());
-    parser.parse_program().expect("class inheritance parses");
-    // `super.member` doesn't: an inherited method is `this.method()`.
-    let err = crate::frontends::javascript::parse(
-        "class A { f() { return 1; } } class B extends A { g() { return super.f(); } }",
-    )
-    .expect_err("super.member is rejected");
-    assert!(format!("{err:?}").contains("super.member"), "{err:?}");
+    let result = parser.parse_program();
+    let err = result.expect_err("must error on extends");
+    let msg = match err {
+        IntyError::Parse(p) => format!("{:?}", p),
+        other => panic!("expected ParseError, got {:?}", other),
+    };
+    assert!(
+        msg.contains("class inheritance is not supported"),
+        "diagnostic should mention inheritance: {}",
+        msg
+    );
 }
 
 /// Two member accesses on the same parameter must both contribute their
@@ -3617,7 +3810,7 @@ fn gen_fixed_index_does_not_fix_the_container() {
                const a = get([1]);\n\
                const b = get([\"s\"]);";
     let t = check_program(src, &["get"]).unwrap();
-    assert!(t[0].starts_with("<a, b>"), "{}", t[0]);
+    assert!(t[0].contains("Indexable a"), "{}", t[0]);
 }
 
 #[test]
@@ -3627,7 +3820,7 @@ fn gen_captured_variable_is_not_quantified() {
     let src = "function outer(x) { function inner(y) { return x + y; } return inner; }\n\
                var addThree = outer(3);";
     let t = check_program(src, &["outer", "addThree"]).unwrap();
-    assert_eq!(t[0], "<a> where Plus a => (a) => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a) => (b) => c");
     assert_eq!(t[1], "(Int) => Int");
 }
 
@@ -3656,10 +3849,12 @@ fn gen_hoisted_const_function_stays_immutable() {
 
 #[test]
 fn gen_parameter_shadows_function_name() {
+    // (`1`'s type is a variable of its own, `Int` or `Number`: `a + 1` is
+    // `a ⊔ b`.)
     let t = check_program("const f = (f) => f + 1;\nconst r = f(2);", &["f"]).unwrap();
-    assert_eq!(t[0], "<a> where Num a => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
     let t = check_program("function g(g) { return g + 1; }\nconst r = g(2);", &["g"]).unwrap();
-    assert_eq!(t[0], "<a> where Num a => (a) => a");
+    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
 }
 
 #[test]
@@ -3678,10 +3873,14 @@ fn gen_return_in_both_branches_of_if() {
     // The `if` statement's completion type joined `Lit(0)` with `f`'s
     // return variable, pinning it to the singleton `0`.
     let src = "function f(n) { if (n == 0) return 0; else return f(n - 1); }";
-    assert_eq!(check_program(src, &["f"]).unwrap()[0], "(Number) => Int");
+    let principal = "<a, b, c> where Arith a b a, Num c, Num b => (a) => c";
+    assert_eq!(check_program(src, &["f"]).unwrap()[0], principal);
     let nested = "function f(n) { function g(m) { return f(m - 1); } \
                   if (n == 0) return 0; else return g(n); }";
-    assert_eq!(check_program(nested, &["f"]).unwrap()[0], "(Number) => Int");
+    assert_eq!(
+        check_program(nested, &["f"]).unwrap()[0],
+        "<a, b, c> where Arith a b a, Num b, Num c => (a) => c"
+    );
 }
 
 // ---- Older holes found by the generalisation review ------------------------
@@ -3883,10 +4082,11 @@ fn instantiated_predicate_errors_point_at_the_use() {
     let src = "function twice(x) { return x + x; }\ntwice(true);";
     let program = crate::frontends::javascript::parse_source(src).unwrap();
     let mut state = InferState::new();
-    state
-        .infer_program_with_env(&initial_env(), &program)
-        .unwrap();
-    let err = state.resolve_constraints().unwrap_err();
+    // (Decided at the use, by improvement, or at the end.)
+    let err = match state.infer_program_with_env(&initial_env(), &program) {
+        Err(e) => e,
+        Ok(_) => state.resolve_constraints().unwrap_err(),
+    };
     let span = match err {
         crate::error::IntyError::Type(ref e) => e.span(),
         ref other => panic!("expected a type error, got {:?}", other),
@@ -4116,10 +4316,16 @@ fn branches_checked_against_an_annotation_form_a_union() {
 }
 
 #[test]
-fn a_null_branch_makes_the_join_nullable() {
-    // Even when the other side isn't known yet: it isn't bound to `Null`.
+fn a_null_branch_needs_the_sum_said() {
+    // As in the model, branches have one type: `null` and a value don't
+    // join into a guessed sum. An annotation says the sum, and each
+    // branch is injected into it.
     let src =
         "function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n\
+               const hit = find([1, 2], 2);";
+    assert!(check_program(src, &["hit"]).is_err());
+    let src = "/** function find<a>(xs: a[], v: a) => a | Null */\n\
+               function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n\
                const hit = find([1, 2], 2);";
     assert_eq!(check_program(src, &["hit"]).unwrap(), ["Int | Null"]);
 }
@@ -4193,7 +4399,7 @@ fn new_array_fill_is_an_array_of_the_value() {
 
 #[test]
 fn null_tests_narrow() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let accepted = [
         "const q = p(1); if (q !== null) { const a = q.x; }",
         "const q = p(1); if (q != null) { const a = q.x; }",
@@ -4219,7 +4425,7 @@ fn null_tests_narrow() {
 
 #[test]
 fn null_narrowing_ends_where_the_value_may_change() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let rejected = [
         "const q = p(1); const a = q.x;",
         "const q = p(1); if (q === null) { const a = q.x; }",
@@ -4243,7 +4449,7 @@ fn null_narrowing_ends_where_the_value_may_change() {
 
 #[test]
 fn narrowing_a_const_keeps_it_const() {
-    let src = "function p(x) { return x > 0 ? { x: x } : null; }\n\
+    let src = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n\
                const q = p(1); if (q !== null) { q = p(2); }";
     assert!(check_program(src, &[]).is_err());
 }
@@ -4253,7 +4459,7 @@ fn narrowing_a_const_keeps_it_const() {
 /// depending on something that shouldn't matter.
 #[test]
 fn narrowing_refines_only_bindings_that_never_change() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let rejected = [
         // An assignment inside the guarded expression.
         "let q = p(1); const a = q !== null ? (q = p(0), q.x) : 0;",
@@ -4301,7 +4507,7 @@ fn narrowing_refines_only_bindings_that_never_change() {
 
 #[test]
 fn narrowing_is_coherent() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n";
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n";
     let pairs = [
         // Operand order.
         ("const q = p(1); const a = q === null ? 0 : q.x;", "const q = p(1); const a = null === q ? 0 : q.x;"),
@@ -4365,7 +4571,7 @@ fn narrowing_holds_only_for_its_own_binding() {
 
 #[test]
 fn renaming_a_binding_changes_nothing() {
-    let p = "function p(x) { return x > 0 ? { x: x } : null; }\n\
+    let p = "/** function p(x: Number) => {x: Number} | Null */ function p(x) { return x > 0 ? { x: x } : null; }\n\
              function a() { const q = p(1); if (q === null) return 0; return q.x; }\n";
     // Another function's binding named `q` (written, captured and written
     // by a closure, shadowing) is not `a`'s `q`: renaming it changes
@@ -4543,4 +4749,628 @@ fn mutable_containers_are_invariant() {
         const shapes = [{ kind: \"circle\", r: 1 }, { kind: \"sq\", s: 2 }];"
     )
     .is_ok());
+}
+
+/// A `Plus` on a known type is decided when a binding is generalised, not
+/// carried in its scheme to each use: a binding whose body adds two
+/// functions is an error even if nothing uses it. On a variable it stays,
+/// as `<a> where Plus a`.
+#[test]
+fn plus_on_known_type_is_decided_at_generalisation() {
+    let errors = |src: &str| {
+        let program = parse_for_multi_error_test(src);
+        let mut state = InferState::new();
+        let r = state.infer_program_with_env(&initial_env(), &program);
+        let mut errs = state.take_errors();
+        if let Err(e) = r {
+            errs.push(e);
+        }
+        if let Err(e) = state.resolve_constraints() {
+            errs.push(e);
+        }
+        errs
+    };
+    let unused =
+        "const x = function () { const g = function (y) { return y; }; return g + g; }; 1;";
+    let errs = errors(unused);
+    assert!(
+        errs.iter().any(|e| matches!(
+            e.as_type(),
+            Some(TypeError::ConstraintNotSatisfied { class, .. }) if class == "Plus"
+        )),
+        "{errs:?}"
+    );
+    let on_variable = "const d = function (y) { return y + y; }; 1;";
+    assert!(errors(on_variable).is_empty());
+}
+
+/// A named function expression's own name is immutable in its body, as in
+/// strict-mode JavaScript, where assigning to it is a `TypeError`; a function
+/// declaration's name can be reassigned.
+#[test]
+fn function_expression_name_is_immutable() {
+    let expr = "const g = function f() { f = function () { return 2; }; return 1; }; g();";
+    assert!(infer_program_with_state(expr).is_err());
+    let decl = "function f() { f = function () { return 2; }; return 1; } f();";
+    assert!(infer_program_with_state(decl).is_ok());
+}
+
+/// A `catch` binds whatever was thrown, which can be any value: its type is
+/// rigid, so it can't be used at a concrete type.
+#[test]
+fn caught_exception_is_opaque() {
+    let errors = |src: &str| {
+        let program = parse_for_multi_error_test(src);
+        let mut state = InferState::new();
+        let r = state.infer_program_with_env(&initial_env(), &program);
+        let mut errs = state.take_errors();
+        if let Err(e) = r {
+            errs.push(e);
+        }
+        errs
+    };
+    assert!(!errors("let r = 0; try { throw \"s\"; } catch (e) { r = e - 1; }").is_empty());
+    assert!(!errors(
+        "const f = function (x) { return x.length; }; try { throw 3; } catch (e) { f(e); }"
+    )
+    .is_empty());
+    // Passing it on, testing it, and rethrowing it are fine.
+    assert!(errors(
+        "const id = function (x) { return x; }; \
+         try { throw 1; } catch (e) { const t = typeof id(e); if (e) { throw e; } }"
+    )
+    .is_empty());
+}
+
+#[test]
+fn test_try_finally_that_returns_doesnt_fall_through() {
+    // `try { return … } finally { … }` always returns: the function's
+    // result has no implicit `undefined`, so it joins with one that
+    // returns the same type.
+    let source = r#"
+        const f = function () { try { return null; } finally { 1; } };
+        const g = function () { return null; };
+        const h = true ? f : g;
+    "#;
+    assert!(infer_program_with_state(source).is_ok());
+}
+
+#[test]
+fn test_while_true_with_break_falls_through() {
+    // A `while (true)` left by `break` falls off the function's end, so the
+    // function can return `undefined`; using its result as a number is an
+    // error (it was accepted when the result was typed `never`).
+    let source = r#"
+        const f = function () { while (true) { break; } };
+        const a = true ? f() : 1;
+        const r = a - 1;
+    "#;
+    assert!(infer_program_with_state(source).is_err());
+    let forever = r#"
+        const f = function () { while (true) { } };
+        const a = true ? f() : 1;
+        const r = a - 1;
+    "#;
+    assert!(infer_program_with_state(forever).is_ok());
+}
+
+#[test]
+fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
+    // A spread operand of unknown shape may hold any field written before
+    // it, and then wins: the two must agree on its type. (Taking the
+    // operand's tail alone typed `f({a: "s"}).a` as an `Int`.)
+    let rejected = [
+        r#"
+        function f(o) { return {a: 1, ...o}; }
+        const n = f({a: "s"}).a - 1;
+        "#,
+        // Two open operands: the later one's unknown part may hide the
+        // earlier one's fields, so they share it.
+        r#"
+        function g(o1, o2) { return {...o1, ...o2}; }
+        const r = {a: "s", ...g({a: 1}, {})};
+        "#,
+        // A spread's operand is an object, not a function (whose call
+        // signature it used to copy).
+        r#"
+        const f = function () { return 1; };
+        const n = ({...f})();
+        "#,
+        r#"
+        const f = function () { return 1; };
+        const o = {...f};
+        "#,
+        r#"
+        function h(o) { return {...o}; }
+        const f = function () { return 1; };
+        const n = h(f);
+        "#,
+    ];
+    for source in rejected {
+        assert!(infer_program_with_state(source).is_err(), "{source}");
+    }
+    let accepted = r#"
+        function f(o) { return {a: 1, ...o}; }
+        const x = f({b: "s"}).b.length;
+        const y = f({}).a - 1;
+        const z = f({a: 2}).a - 1;
+        function h(o) { return {...o, ...{b: 1}}; }
+        const q = h({a: "s"}).a.length;
+        const p = h({b: "s"}).b - 1;
+        // A closed spread after an open one keeps the open one's fields
+        // (`r.a` was typed `String`).
+        const r = {a: "s", ...h({a: 1})};
+        const n = r.a - 1;
+        const defaults = {a: 1, b: "x"};
+        function opts(o) { return {...defaults, ...o}; }
+        const oo = opts({a: 3}).b.length;
+        function g(o1, o2) { return {...o1, ...o2}; }
+        const w = g({a: 1}, {a: 2}).a - 1;
+    "#;
+    assert!(infer_program_with_state(accepted).is_ok());
+}
+
+#[test]
+fn test_stores_only_into_what_takes_them() {
+    // A string's characters are read-only: a store throws a `TypeError` in
+    // strict code, and `dynamics` gets stuck. Indexing it is fine.
+    for source in [
+        r#"
+        const s = "ab";
+        s[0] = "c";
+        "#,
+        r#"
+        function f(x) { x[0] = "c"; return x; }
+        const t = f("ab");
+        "#,
+        r#"
+        let s = "ab";
+        s[0]++;
+        "#,
+        // Nor a built-in property: a string's, an array's (which `dynamics`
+        // doesn't store), a function's.
+        r#"
+        function f(o) { o.length = 0; return o; }
+        const s = f("ab");
+        "#,
+        r#"
+        const xs = [1, 2];
+        xs.length = 1;
+        "#,
+        r#"
+        const f = function () { return 1; };
+        f.call = 2;
+        "#,
+    ] {
+        assert!(check_program(source, &[]).is_err(), "{source}");
+    }
+    let accepted = r#"
+        const s = "ab";
+        const c = s[0];
+        const xs = [1, 2];
+        xs[0] = 3;
+        xs[1]++;
+        function set0(c, v) { c[0] = v; return c; }
+        const ys = set0([1], 2);
+        const o = {length: 1};
+        o.length = 2;
+        function setA(r, v) { r.a = v; return r; }
+        const p = setA({a: 1}, 2);
+    "#;
+    assert!(check_program(accepted, &[]).is_ok());
+}
+
+#[test]
+fn test_indexing_a_string_literal() {
+    // A string literal's type is a singleton, which indexes as a string.
+    let source = r#"
+        const c = "xyz"[0];
+        const d = c + "!";
+    "#;
+    assert!(check_program(source, &[]).is_ok());
+}
+
+// ---- Principal numbers ------------------------------------------------------
+
+#[test]
+fn plus_is_principal_whatever_the_order() {
+    // `xs.length` is an `Int` only once `xs` is known: `+` used to unify
+    // its operands while both were unknown, making `y` an `Int` too.
+    let src = "function len(xs, y) { return xs.length + y; }\n\
+               const a = len([1], 0.5);\n\
+               const b = len(\"ab\", 1);\n\
+               const c = len([1], \"!\") ;";
+    assert!(check_program(src, &[]).is_err(), "Int + String");
+    let ok = "function len(xs, y) { return xs.length + y; }\n\
+              const a = len([1], 0.5);\n\
+              const b = len(\"ab\", 1);";
+    let t = check_program(ok, &["a", "b"]).unwrap();
+    assert_eq!(t, vec!["Number".to_string(), "Int".to_string()]);
+    let add = "function add(x, y) { return x + y; }\n\
+               const n = add(1, 0.5);\n\
+               const s = add(\"a\", \"b\");";
+    let t = check_program(add, &["add", "n", "s"]).unwrap();
+    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a, b) => c");
+    assert_eq!(t[1], "Number");
+    assert_eq!(t[2], "String");
+}
+
+#[test]
+fn a_scheme_keeps_its_numeric_variables() {
+    // Nothing is defaulted where a function is generalised, so each use
+    // picks its own instance.
+    let src = "function half(x) { return x * 0.5; }\n\
+               function k() { return 1; }\n\
+               const xs = [0.5, k()];\n\
+               const i = [10, 20][k()];";
+    let t = check_program(src, &["half", "k", "xs", "i"]).unwrap();
+    assert_eq!(t[0], "<a> where Num a => (a) => Number");
+    assert_eq!(t[1], "<a> where Num a => () => a");
+    assert_eq!(t[2], "Number[]");
+    assert_eq!(t[3], "Int");
+}
+
+#[test]
+fn arith_on_a_string_is_rejected_at_the_use() {
+    // A scheme's `Arith` stands for its operands' `Num`s: an instance on a
+    // string fails (it used to be accepted, and got stuck).
+    let src = "function h(x) { return x * 2; }\nconst r = h(\"s\");";
+    assert!(check_program(src, &[]).is_err());
+}
+
+#[test]
+fn a_recursive_group_shares_its_numeric_variables() {
+    // `f`'s local number is `g`'s parameter: quantified by `g` alone, it was
+    // left in `f`'s body with nothing to decide it.
+    let src = "function f(s) { let x = 0; x = x + 1; return g(s, x); }\n\
+               function g(s, i) { return i > 3 ? s : f(s + \"!\"); }";
+    let t = check_program(src, &["f", "g"]).unwrap();
+    assert!(t[0].starts_with("<a"), "{}", t[0]);
+    assert!(t[1].starts_with("<a"), "{}", t[1]);
+}
+
+/// A class's methods see the variables outside the class, not the
+/// constructor's parameters, but inty lowers a class to a factory taking
+/// those parameters with the methods inside it. A method reading a name
+/// that is also a constructor parameter was typed as reading the
+/// parameter: `m` below was a `() => Int` and `new A(5).m() - 1` was
+/// accepted, though it computes `"outer" - 1`. The class is rejected now.
+#[test]
+fn class_method_reading_a_constructor_parameter_name_is_rejected() {
+    let err = check_program(
+        "const x = \"outer\";\n\
+         class A { constructor(x) { this.v = x; } m() { return x; } }\n\
+         const r = new A(5).m() - 1;",
+        &["r"],
+    )
+    .unwrap_err();
+    assert!(err.contains("also a constructor parameter"), "{err}");
+    // A class-body field initialiser doesn't see them either.
+    let err = check_program(
+        "const x = 1; class A { constructor(x) { this.v = x; } w = x; }",
+        &["A"],
+    )
+    .unwrap_err();
+    assert!(err.contains("also a constructor parameter"), "{err}");
+    // The constructor's own initialisers do.
+    let t = check_program(
+        "class A { constructor(x) { this.v = x; } m() { return this.v; } }\n\
+         const r = new A(5).m() - 1;",
+        &["r"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+}
+
+/// A class's methods, shorthand ones included, are checked with the
+/// instance as `this`, and a call needs a receiver of exactly the
+/// instance's type: a copy by spread with another field isn't one.
+#[test]
+fn class_methods_are_checked_against_the_instance() {
+    let t = check_program(
+        "class C { constructor(v) { this.v = v; } inc() { this.v = this.v + 1; return this; } }\n\
+         const r = new C(1).inc().inc().v;",
+        &["r"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+    assert!(check_program(
+        "class C { constructor() { this.v = 1; } get() { return this.v; } }\n\
+         const c = new C();\n\
+         const r = {...c, w: 2}.get();",
+        &["r"],
+    )
+    .is_err());
+    assert!(check_program("const o = {v: \"s\", m() { return this.v - 1; }};", &["o"]).is_err());
+}
+
+/// An external class, declared without a body by a `/** class … */`
+/// annotation, is a constructor of its members; it may extend a class or
+/// constructor that is itself declared without a body, its instances
+/// having the base's fields too. Nothing else extends.
+#[test]
+fn external_class_declarations() {
+    let t = check_program(
+        "/** const Base: (n: Number) => {n: Number, twice: () => Number} */ const Base;\n\
+         /** class Sub extends Base { label: String } */ class Sub;\n\
+         /** class Pt<T>(x: T) { x: T } */ class Pt;\n\
+         const s = new Sub(1);\n\
+         const a = s.label;\n\
+         const b = s.twice() + s.n;\n\
+         const c = new Pt(\"p\").x;",
+        &["a", "b", "c"],
+    )
+    .unwrap();
+    assert_eq!(t, ["String", "Number", "String"]);
+    // A member redeclares a base field.
+    let t = check_program(
+        "/** const Base: () => {n: Number} */ const Base;\n\
+         /** class Sub extends Base { n: String } */ class Sub;\n\
+         const n = new Sub().n;",
+        &["n"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "String");
+    // The base must be declared without a body.
+    for src in [
+        "class B { constructor() { this.a = 1; } } /** class C extends B { b: String } */ class C;",
+        "function B() { return {a: 1}; } /** class C extends B { b: String } */ class C;",
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(err.contains("declared without a body"), "{err}");
+    }
+    // A class with a body doesn't extend, and a bodiless one needs its
+    // annotation.
+    assert!(check_program(
+        "/** class C { a: Int } */ class C; class D extends C { m() { return 1; } }",
+        &[]
+    )
+    .is_err());
+    assert!(check_program("class C;", &[]).is_err());
+}
+
+/// A class's fields are set one by one, as JavaScript sets them: an
+/// initialiser (or a constructor's `this.f = …`) reads through `this` only a
+/// field set before it. Reading a later field (`undefined` at run time),
+/// calling a method (which may read one) or using `this` otherwise was
+/// accepted and typed as reading the finished instance.
+#[test]
+fn class_initialisers_read_only_fields_set_before() {
+    let t = check_program(
+        "class P {\n\
+           x = 1;\n\
+           y = this.x + 1;\n\
+           f = () => this.x + this.y;\n\
+           constructor(n) { this.z = this.y + n; this.x = 5; }\n\
+           get sum() { return this.x + this.y + this.z; }\n\
+           twice() { return this.f() * 2; }\n\
+         }\n\
+         const p = new P(3);\n\
+         const a = p.sum;\n\
+         const b = p.twice();\n\
+         const c = p.f();",
+        &["a", "b", "c"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Int", "Int", "Int"]);
+    for (src, why) in [
+        ("class A { x = this.y; y = 1; }", "isn't a field set before"),
+        (
+            "class A { x = this.m(); m() { return 1; } }",
+            "calling a method",
+        ),
+        (
+            "class A { constructor() { this.x = this.y; this.y = 1; } }",
+            "isn't a field set before",
+        ),
+        (
+            "class A { x = 1; g = function () { return this.x; }; }",
+            "inside a function",
+        ),
+        (
+            "class A { x = 1; f = () => this.x; g = this.f; }",
+            "arrow-function field",
+        ),
+        ("class A { x = 1; y = this; }", "other than `this.field`"),
+        ("class A { x = 1; y = (this.x = 2); }", "storing to a field"),
+        (
+            "class A { x = 1; x() { return 2; } }",
+            "same name as one of its methods",
+        ),
+        (
+            "class A { constructor() { this.m = 1; } m() { return 2; } }",
+            "same name as one of its methods",
+        ),
+        ("class A { set s(v) {} }", "setter"),
+    ] {
+        let err = check_program(src, &[]).unwrap_err();
+        assert!(err.contains(why), "{src}: {err}");
+    }
+}
+
+/// Only `new` calls a class (a call without it throws), and `new` gives
+/// back the constructor's result only if that is an object: `new F()` of a
+/// function returning a number was typed as that number.
+#[test]
+fn new_and_class_calls() {
+    let err = check_program(
+        "class C { constructor(n) { this.n = n; } } const c = C(1);",
+        &["c"],
+    )
+    .unwrap_err();
+    assert!(err.contains("without `new`"), "{err}");
+    let err = check_program(
+        "/** class Q(n: Number) { n: Number } */ class Q; const q = Q(1);",
+        &["q"],
+    )
+    .unwrap_err();
+    assert!(err.contains("without `new`"), "{err}");
+    assert!(check_program("function F() { return \"s\"; } const f = new F();", &["f"]).is_err());
+    assert!(check_program(
+        "function mk(F) { return new F(); } const v = mk(function () { return 1; });",
+        &["v"]
+    )
+    .is_err());
+    let t = check_program(
+        "function F(n) { return {n: n}; } const f = new F(1).n;",
+        &["f"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+}
+
+/// An arrow function isn't a constructor: `new` on one throws a
+/// `TypeError`. Called, it takes any receiver, its `this` being its
+/// enclosing function's.
+#[test]
+fn arrow_functions_are_not_constructors() {
+    for src in [
+        "const f = () => ({x: 1}); const r = new f();",
+        "class D { f = () => ({x: 1}); } const r = new (new D()).f();",
+        "class D { f = () => { this; return {x: 1}; }; } const r = new (new D()).f();",
+        "function mk(g) { return new g(); } const r = mk(() => ({x: 1}));",
+    ] {
+        assert!(check_program(src, &[]).is_err(), "{src}");
+    }
+    let t = check_program(
+        "class D { f = () => 3; } const d = new D(); const g = d.f;\n\
+         const o = { h: () => 1 };\n\
+         const r = g() + d.f() + o.h();\n\
+         function F() { return {x: 1}; } const s = new F().x;",
+        &["r", "s"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Int", "Int"]);
+}
+
+/// A getter is read, not stored to (a store throws in strict code), and a
+/// class's methods and getters are on its prototype: a store to one is
+/// rejected, and a spread doesn't copy them.
+#[test]
+fn getters_and_prototype_members() {
+    let t = check_program(
+        "const o = { a: 1, get g() { return this.a + 1; } };\n\
+         const n = o.g;\n\
+         const c = {...o}.g;",
+        &["n", "c"],
+    )
+    .unwrap();
+    assert_eq!(t, ["Int", "Int"]);
+    for src in [
+        "const o = { get g() { return 1; } }; o.g = 2;",
+        "class A { get g() { return 1; } } const a = new A(); a.g = 2;",
+        "class P { m() { return 1; } } const p = new P(); p.m = () => 2;",
+        "class P { x = 1; m() { return this.x; } } const q = {...new P()}; const r = q.m();",
+        "class P { get g() { return 1; } } const r = {...new P()}.g;",
+        "/** class Q(n: Number) { n: Number, m: () => Number } */ class Q;\n\
+         const r = {...new Q(1)}.m();",
+        "function f(o) { o.g = 1; } f({ get g() { return 2; } });",
+    ] {
+        assert!(check_program(src, &[]).is_err(), "{src}");
+    }
+    // Reading code takes either kind of property.
+    let t = check_program(
+        "function get(o) { return o.g; }\n\
+         const a = get({ g: 1 }) + get({ get g() { return 2; } });",
+        &["a"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+    // A class's own fields are copied, and stored to.
+    let t = check_program(
+        "class P { x = 1; m() { return this.x; } } const p = new P(); p.x = 2;\n\
+         const r = {...p}.x + p.m();",
+        &["r"],
+    )
+    .unwrap();
+    assert_eq!(t[0], "Int");
+}
+
+#[test]
+fn an_annotated_function_type_without_this_is_called_detached() {
+    // A function type written without `this:` is called detached, so a
+    // function that reads `this` doesn't have it: each of these throws a
+    // `TypeError` on `this.x`.
+    for bad in [
+        "/** const f: (Number) => Number */\n\
+         const f = function (n) { return this.x + n; };\n\
+         const r = f(1);",
+        "const o = { x: 1, m(n) { return this.x + n; } };\n\
+         /** const g: (Number) => Number */\n\
+         const g = o.m;\n\
+         const r = g(1);",
+        "/** function call((Number) => Number) => Number */\n\
+         function call(g) { return g(1); }\n\
+         const o = { x: 1, m(n) { return this.x + n; } };\n\
+         const r = call(o.m);",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // A function that doesn't read `this` has it.
+    for (src, name, ty) in [
+        (
+            "/** const f: (Number) => Number */\n\
+             const f = function (n) { return n + 1; };\n\
+             const r = f(1);",
+            "r",
+            "Number",
+        ),
+        (
+            "/** function call((Number) => Number) => Number */\n\
+             function call(g) { return g(1); }\n\
+             const r = call((n) => n * 2);",
+            "r",
+            "Number",
+        ),
+    ] {
+        assert_eq!(check_program(src, &[name]).unwrap(), [ty], "{}", src);
+    }
+}
+
+#[test]
+fn a_method_in_an_annotated_object_type_has_the_object_as_this() {
+    let src = "/** const o: {x: Number, m: (Number) => Number} */\n\
+               const o = { x: 1, m(n) { return this.x + n; } };\n\
+               const r = o.m(1);";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    // Taken off the object, it can't be called detached.
+    let bad = "/** const o: {x: Number, m: (Number) => Number} */\n\
+               const o = { x: 1, m(n) { return this.x + n; } };\n\
+               const g = o.m;\n\
+               const r = g(1);";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+#[test]
+fn a_builtin_calls_its_callbacks_detached() {
+    // `map`, `forEach`, … call their callback with `this` undefined, so
+    // a method that reads `this` throws a `TypeError` there.
+    for bad in [
+        "const o = { x: 1, m(n) { return this.x + n; } };\n\
+         const r = [1, 2].map(o.m);",
+        "const o = { x: 1, m: function (n) { return this.x + n; } };\n\
+         [1, 2].forEach(o.m);",
+        "const r = [\"a\"].map(\"b\".concat);",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // A callback that doesn't read `this` is fine, as is calling a
+    // built-in method on its receiver.
+    for (src, name, ty) in [
+        (
+            "const r = [1, 2].map(function (n) { return n + 1; });",
+            "r",
+            "Int[]",
+        ),
+        ("const r = [1, 2].map((n) => n * 2);", "r", "Int[]"),
+        (
+            "const o = { x: 1, m(n) { return this.x + n; } };\n\
+             const r = [1, 2].map((n) => o.m(n));",
+            "r",
+            "Int[]",
+        ),
+        ("const r = \"ab\".slice(1);", "r", "String"),
+    ] {
+        assert_eq!(check_program(src, &[name]).unwrap(), [ty], "{}", src);
+    }
 }

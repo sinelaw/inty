@@ -155,6 +155,11 @@ impl TypeEnv {
         self.names.get(name)
     }
 
+    /// Each name and the key it was last bound under.
+    pub fn name_keys(&self) -> impl Iterator<Item = (&String, &Key)> {
+        self.names.iter()
+    }
+
     /// Extend the environment with `binding` under `key`, visible as
     /// `name`. Returns a new environment (immutable extension).
     pub fn extend_key(&self, key: Key, name: &str, binding: Binding) -> Self {

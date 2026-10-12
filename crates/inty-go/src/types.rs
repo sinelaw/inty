@@ -21,8 +21,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use inty::infer::InferState;
 use inty::span::Span;
 use inty::types::{
-    is_callable_key, FieldEntry, FuncParam, Presence, RowTail, RowType, TVarName, Type, TypeId,
-    TypedArrayKind,
+    is_callable_key, FuncParam, Presence, RowTail, RowType, TVarName, Type, TypeId, TypedArrayKind,
 };
 
 use crate::{unsupported, Result};
@@ -157,6 +156,8 @@ impl TypeMapper {
                     other => self.map_depth(state, other, span, d)?,
                 }
             }
+            // A sum as the union of its arms: a nullable Go type.
+            Type::Maybe(..) => self.map_depth(state, &Type::Union(ty.arms()), span, d)?,
             Type::Union(members) => {
                 let non_null: Vec<&Type> = members
                     .iter()
@@ -384,13 +385,7 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
         Type::Row(row) => {
             let mut props = BTreeMap::new();
             for (k, f) in &row.props {
-                props.insert(
-                    k.clone(),
-                    FieldEntry {
-                        presence: f.presence.clone(),
-                        ty: resolve_depth(state, &f.ty, d),
-                    },
-                );
+                props.insert(k.clone(), f.with_ty(resolve_depth(state, &f.ty, d)));
             }
             let mut tail = row.tail.clone();
             for _ in 0..256 {
@@ -400,13 +395,7 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
                         for (k, f) in &more.props {
                             if !props.contains_key(k) {
                                 let t = resolve_depth(state, &f.ty, d);
-                                props.insert(
-                                    k.clone(),
-                                    FieldEntry {
-                                        presence: f.presence.clone(),
-                                        ty: t,
-                                    },
-                                );
+                                props.insert(k.clone(), f.with_ty(t));
                             }
                         }
                         tail = more.tail.clone();
@@ -440,6 +429,7 @@ fn resolve_depth(state: &mut InferState, ty: &Type, depth: usize) -> Type {
             ret: Box::new(resolve_depth(state, ret, d)),
         },
         Type::Array(e) => Type::Array(Box::new(resolve_depth(state, e, d))),
+        Type::Maybe(z, e) => Type::Maybe(*z, Box::new(resolve_depth(state, e, d))),
         Type::Map(e) => Type::Map(Box::new(resolve_depth(state, e, d))),
         Type::Promise(e) => Type::Promise(Box::new(resolve_depth(state, e, d))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| resolve_depth(state, t, d)).collect()),
@@ -480,15 +470,7 @@ pub fn apply_mapping(ty: &Type, m: &Mapping) -> Type {
             let mut props: BTreeMap<_, _> = row
                 .props
                 .iter()
-                .map(|(k, f)| {
-                    (
-                        k.clone(),
-                        FieldEntry {
-                            presence: f.presence.clone(),
-                            ty: apply_mapping(&f.ty, m),
-                        },
-                    )
-                })
+                .map(|(k, f)| (k.clone(), f.with_ty(apply_mapping(&f.ty, m))))
                 .collect();
             let mut tail = match &row.tail {
                 RowTail::Recursive(id, args) => {
@@ -528,6 +510,7 @@ pub fn apply_mapping(ty: &Type, m: &Mapping) -> Type {
             ret: Box::new(apply_mapping(ret, m)),
         },
         Type::Array(e) => Type::Array(Box::new(apply_mapping(e, m))),
+        Type::Maybe(z, e) => Type::Maybe(*z, Box::new(apply_mapping(e, m))),
         Type::Map(e) => Type::Map(Box::new(apply_mapping(e, m))),
         Type::Promise(e) => Type::Promise(Box::new(apply_mapping(e, m))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| apply_mapping(t, m)).collect()),
@@ -561,15 +544,7 @@ fn widen(ty: &Type) -> Type {
             props: row
                 .props
                 .iter()
-                .map(|(k, f)| {
-                    (
-                        k.clone(),
-                        FieldEntry {
-                            presence: f.presence.clone(),
-                            ty: widen(&f.ty),
-                        },
-                    )
-                })
+                .map(|(k, f)| (k.clone(), f.with_ty(widen(&f.ty))))
                 .collect(),
             tail: row.tail.clone(),
         }),
@@ -590,6 +565,7 @@ fn widen(ty: &Type) -> Type {
             ret: Box::new(widen(ret)),
         },
         Type::Array(e) => Type::Array(Box::new(widen(e))),
+        Type::Maybe(z, e) => Type::Maybe(*z, Box::new(widen(e))),
         Type::Map(e) => Type::Map(Box::new(widen(e))),
         Type::Tuple(ts) => Type::Tuple(ts.iter().map(widen).collect()),
         Type::Named(id, args) => Type::Named(*id, args.iter().map(widen).collect()),

@@ -44,19 +44,18 @@ fn structural_norm(ty: &Type) -> Type {
                 .map(|(k, e)| {
                     (
                         k.clone(),
-                        crate::types::FieldEntry {
-                            // Normalise presence to either Pre/Abs
-                            // or a single canonical Var so the probe
-                            // doesn't fire on differently-named
-                            // presence vars.
-                            presence: match &e.presence {
+                        // Normalise each presence to either Pre/Abs or a
+                        // single canonical Var so the probe doesn't fire
+                        // on differently-named presence vars.
+                        e.map(
+                            &mut |p| match p {
                                 crate::types::Presence::Var(_) => {
                                     crate::types::Presence::Var(crate::types::PVarName::Flex(0))
                                 }
                                 other => other.clone(),
                             },
-                            ty: structural_norm(&e.ty),
-                        },
+                            structural_norm(&e.ty),
+                        ),
                     )
                 })
                 .collect(),
@@ -68,6 +67,7 @@ fn structural_norm(ty: &Type) -> Type {
             },
         }),
         Type::Array(elem) => Type::Array(Box::new(structural_norm(elem))),
+        Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(structural_norm(elem))),
         Type::Promise(inner) => Type::Promise(Box::new(structural_norm(inner))),
         Type::Map(value) => Type::Map(Box::new(structural_norm(value))),
         Type::Tuple(elems) => Type::Tuple(elems.iter().map(structural_norm).collect()),
@@ -186,6 +186,14 @@ pub struct InferState {
 
     /// Pending type class constraints to resolve.
     pub pending_constraints: Vec<PendingConstraint>,
+
+    /// The container of the computed member inferred last
+    /// (`infer_computed_member`), so an assignment to `c[i]` can require
+    /// `c` to take stores (`IndexWrite`).
+    pub(crate) last_index_container: Option<Type>,
+    /// The receiver of the member inferred last (`infer_member`), so an
+    /// assignment to `r.p` can require `r` to take stores (`FieldWrite`).
+    pub(crate) last_member_receiver: Option<Type>,
 
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
@@ -312,6 +320,10 @@ pub struct InferState {
     /// Bindings read before any declaration of them was checked: the
     /// fresh type the read got, which the declaration unifies with, and
     /// where the first read was.
+    /// The bindings that are declarations without a value (`const X;`
+    /// under an annotation, an external `class X;`): the only bases an
+    /// external class may extend.
+    pub(in crate::infer) ambient: std::collections::HashSet<crate::infer::env::Key>,
     pub(in crate::infer) forward_locals:
         HashMap<crate::ast::resolve::BindingId, (Type, String, Span)>,
     /// Bindings some read found only in `local_types`. The environment
@@ -400,15 +412,17 @@ pub struct InferState {
 /// equirecursive types with distinct ids alternate-unrolling forever
 /// without this; with it, re-entering an assumption signals the cycle
 /// has closed and the unification is sound by coinduction.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(in crate::infer) enum UnfoldAssumption {
     /// `Named(id_a) ↔ Named(id_b)` unfold in progress.
     NamedPair(TypeId, TypeId),
-    /// `Named(id) ↔ Row(...)` unfold in progress. The row side has no
-    /// stable identity, so a same-id re-entry is what the cycle check
-    /// looks for — sufficient because every cycle goes through *some*
-    /// brand, and the row direction can't loop without the brand looping.
-    NamedRow(TypeId),
+    /// `Named(id, args) ↔ other` unfold in progress, with both sides as
+    /// they were (zonked) when the unfold began. Only the *same* goal
+    /// recurring closes the cycle: keying by the id alone let
+    /// `μt. Number → t` meet `Number → Number → Number`, succeed on the
+    /// first unfold's assumption one level down, and accept a function
+    /// whose second call returns a function as one returning a number.
+    NamedRow(TypeId, Vec<Type>, Type),
     /// Two open rows' tail variables (smaller id first) are being
     /// unified. A cycle in the substitution — `ρ₁ ↦ {… | ρ₂}` and
     /// `ρ₂ ↦ {… | ρ₁}`, which `zonk` shows as free tails — otherwise
@@ -488,6 +502,8 @@ impl InferState {
             type_id_source: 0,
             type_classes: HashMap::new(),
             pending_constraints: Vec::new(),
+            last_index_container: None,
+            last_member_receiver: None,
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -514,6 +530,7 @@ impl InferState {
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
+            ambient: std::collections::HashSet::new(),
             escaped_locals: Default::default(),
             local_decl_spans: HashMap::new(),
             annotation_env: None,
@@ -654,7 +671,7 @@ impl InferState {
                         None
                     }
                 }),
-            Type::Array(elem) => self.find_origin_in_type(elem),
+            Type::Array(elem) | Type::Maybe(_, elem) => self.find_origin_in_type(elem),
             Type::Promise(inner) => self.find_origin_in_type(inner),
             Type::Map(value) => self.find_origin_in_type(value),
             Type::Tuple(elems) => elems.iter().find_map(|e| self.find_origin_in_type(e)),
@@ -1006,10 +1023,8 @@ impl InferState {
     ///
     /// * literals of one base type widen to it (`1` and `2` join to
     ///   `Number`);
-    /// * a branch that is `null` or `undefined` makes the join nullable
-    ///   (`x ? v : null` is `T | Null`), for any `T`;
-    /// * a value of an (annotated) union joined with one of its arms is
-    ///   that union;
+    /// * a value of an (annotated) union or sum joined with one of its
+    ///   arms is that union or sum;
     /// * a branch that doesn't complete (`never`) contributes nothing.
     ///
     /// Otherwise it's a `BranchMismatch` error. Where an annotation gives
@@ -1029,30 +1044,6 @@ impl InferState {
         if is_never(&t2) {
             return Ok(t1);
         }
-        let nullish = |t: &Type| match t {
-            Type::Null | Type::Undefined => true,
-            Type::Union(m) => m.iter().any(|m| matches!(m, Type::Null | Type::Undefined)),
-            _ => false,
-        };
-        if nullish(&t1) || nullish(&t2) {
-            // Directly, not by first trying to unify: that would bind a
-            // not-yet-known side to `Null`.
-            let mut all = Vec::new();
-            for t in [t1, t2] {
-                match t {
-                    Type::Union(m) => all.extend(m),
-                    // A literal next to `null` widens to its base (`Int`
-                    // for an integral one): no variable inside a union.
-                    other => all.push(other.widen_fresh_literals_with(&mut |lit| match lit {
-                        crate::types::LitValue::Number(n) if crate::types::is_safe_int(*n) => {
-                            Type::Int
-                        }
-                        lit => lit.base_type(),
-                    })),
-                }
-            }
-            return Ok(Self::normalise_union_members(all));
-        }
         // Equal after widening literals (also inside tuples, rows, …) —
         // one attempt: a join's result is widened anyway.
         {
@@ -1067,10 +1058,11 @@ impl InferState {
                 return Ok(lub);
             }
         }
-        // A union value joined with one of its arms.
-        if matches!(t1, Type::Union(_)) || matches!(t2, Type::Union(_)) {
+        // A union or sum value joined with one of its arms.
+        let is_sum = |t: &Type| matches!(t, Type::Union(_) | Type::Maybe(..));
+        if is_sum(&t1) || is_sum(&t2) {
             for (small, big) in [(&t2, &t1), (&t1, &t2)] {
-                if !matches!(big, Type::Union(_)) {
+                if !is_sum(big) {
                     continue;
                 }
                 let snap = self.snapshot_inference();
@@ -1227,6 +1219,28 @@ impl InferState {
             return Ok(());
         }
 
+        // S-Inject, waiting: a variable flowing into a sum may turn out
+        // to be the sum, its nothing or a value — which one isn't known
+        // yet, so `Inject sub sup` waits for it (binding it to the sum
+        // would guess). A number can only be a value.
+        if let (Type::Var(TVarName::Flex(_)), Type::Maybe(_, inner)) = (&sub, &sup) {
+            if self.is_numeric(&sub) {
+                return self.subsume(span, &sub, inner);
+            }
+            self.add_constraint(TypePred::inject(sub.clone(), sup.clone()), span);
+            return Ok(());
+        }
+
+        // The same for a sum told apart by `typeof` (`Number | String`):
+        // the variable may be the sum or one of its cases.
+        if matches!(sub, Type::Var(TVarName::Flex(_)))
+            && !self.is_numeric(&sub)
+            && sup.is_typeof_sum()
+        {
+            self.add_constraint(TypePred::inject(sub.clone(), sup.clone()), span);
+            return Ok(());
+        }
+
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
         let snap = self.snapshot_inference();
@@ -1252,6 +1266,26 @@ impl InferState {
                 }
             }
             _ => {}
+        }
+
+        // S-Inject: a sum takes its nothing, and any value its value
+        // takes (a sum of the other nothing too: `T | Undefined` fits
+        // `T | Undefined | Null`'s value). The sum itself was taken by
+        // unification.
+        if let Type::Maybe(z, inner) = &sup {
+            if sub == z.ty() {
+                return Ok(());
+            }
+            if let Type::Maybe(z2, sub_inner) = &sub {
+                if z2 == z {
+                    return self.subsume(span, sub_inner, inner);
+                }
+            }
+            let snap = self.snapshot_inference();
+            if self.quietly(|s| s.subsume(span, &sub, inner)).is_ok() {
+                return Ok(());
+            }
+            self.restore_snapshot(snap);
         }
 
         // Rule 2a (S-UnionL): a union value subsumes into `sup` iff
@@ -2067,6 +2101,19 @@ impl InferState {
     }
 
     pub fn generalize(&mut self, env_free: &crate::infer::EnvFree, ty: &Type) -> TypeScheme {
+        self.generalize_seeded(env_free, ty, &[])
+    }
+
+    /// [`Self::generalize`], quantifying the variables `extra` too (where
+    /// the environment doesn't fix them), with the constraints on them: a
+    /// mutually recursive group's members are generalised over the same
+    /// variables (see `infer_function_group`).
+    pub fn generalize_seeded(
+        &mut self,
+        env_free: &crate::infer::EnvFree,
+        ty: &Type,
+        extra: &[TVarName],
+    ) -> TypeScheme {
         self.constraint_removals += 1;
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
@@ -2076,22 +2123,17 @@ impl InferState {
         // scheme that's missing those fields, letting calls with
         // incompatible argument shapes through. See
         // `Subst::flatten` for the full story.
-        // Default the numeric variables local to this binding first (see
-        // `features::numeric`): the scheme is then over what's left.
-        if self
-            .pending_constraints
-            .iter()
-            .any(|c| crate::infer::features::numeric::is_numeric_class(c.pred.class))
-        {
-            let ty = self.main_subst.flatten(ty);
-            let (mut fixed_vars, _) = self.env_fixed_vars(env_free, &ty);
-            fixed_vars.extend(self.pinned_numeric.iter().cloned());
-            if let Err(e) = self.default_numeric(&fixed_vars, Some(&ty), false) {
-                self.push_error(e);
-            }
+        // Decide what improvement decides (a numeric or `Plus` constraint
+        // a type reached). Nothing is defaulted here: a numeric variable
+        // left free stays in the scheme, so the scheme is principal, and
+        // each use picks its own (the end of the program defaults what's
+        // left; see `features::numeric`).
+        if let Err(e) = self.simplify_numeric() {
+            self.push_error(e);
         }
         let ty = self.main_subst.flatten(ty);
-        let ty_vars = ty.free_vars();
+        let mut ty_vars = ty.free_vars();
+        ty_vars.extend(extra.iter().cloned());
         let pvars = ty.free_pvars();
 
         // Sort by TVarName id so the scheme's quantification order is
@@ -2184,6 +2226,34 @@ impl InferState {
                 }
             }
             self.pending_constraints = remaining;
+            // A write constraint whose type is already known is decided
+            // here, not carried in the scheme to be found out at each use
+            // (lean/ROADMAP.md, phase 1). On a variable it stays. (A
+            // `Plus` on a known type was decided by `simplify_numeric`.)
+            let scheme_preds: Vec<TypePred> = scheme_preds
+                .into_iter()
+                .filter(|pred| {
+                    if !matches!(pred.class, ClassName::IndexWrite | ClassName::FieldWrite) {
+                        return true;
+                    }
+                    let ty = self.main_subst.flatten(&pred.types[0]);
+                    if matches!(ty, Type::Var(_)) {
+                        return true;
+                    }
+                    let span = pred.origin.unwrap_or_default();
+                    let decided = match pred.as_field_write() {
+                        Some((_, name)) => {
+                            let name = name.to_string();
+                            self.resolve_field_write(&ty, &name, span)
+                        }
+                        None => self.resolve_index_write(&ty, span),
+                    };
+                    if let Err(e) = decided {
+                        self.push_error(e);
+                    }
+                    false
+                })
+                .collect();
             gen_vars.sort_by_key(|v| v.id());
             gen_pvars.sort_by_key(|p| p.id());
 
@@ -2330,7 +2400,23 @@ impl InferState {
                             vec![]
                         }
                     }
-                    (ClassName::Plus, _) => vec![],
+                    // the type → what it holds besides nothing
+                    (ClassName::Strip, [ty, sigma]) => {
+                        if ty.free_vars().is_subset(&vars) {
+                            vec![sigma]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    // the operands → the result
+                    (ClassName::Plus | ClassName::Arith, [a, b, c]) => {
+                        if a.free_vars().is_subset(&vars) && b.free_vars().is_subset(&vars) {
+                            vec![c]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    (ClassName::Num | ClassName::NumLit, _) => vec![],
                     // Unknown shape: conservatively, any fixed variable
                     // fixes the whole predicate.
                     (_, types) => {
@@ -2421,6 +2507,8 @@ impl InferState {
             | Type::Undefined
             | Type::Null
             | Type::Regex
+            | Type::NewTarget
+            | Type::ArrowThis
             | Type::TypedArray(_)
             | Type::Error => false,
 
@@ -2446,6 +2534,7 @@ impl InferState {
             }
 
             Type::Array(elem) => self.occurs_in_impl(var, elem),
+            Type::Maybe(_, inner) => self.occurs_in_impl(var, inner),
             Type::Promise(inner) => self.occurs_in_impl(var, inner),
             Type::Map(value) => self.occurs_in_impl(var, value),
             Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in_impl(var, e)),
@@ -2509,7 +2598,9 @@ impl InferState {
                 in_row
             }
 
-            Type::Array(elem) => self.is_inside_row_type_impl(var, elem, in_row),
+            Type::Array(elem) | Type::Maybe(_, elem) => {
+                self.is_inside_row_type_impl(var, elem, in_row)
+            }
             Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row),
             Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
             Type::Tuple(elems) => elems
@@ -2616,15 +2707,14 @@ mod tests {
     }
 
     #[test]
-    fn test_join_with_null_is_nullable() {
+    fn test_join_with_null_is_an_error() {
+        // No guessed sum (as in the model): `Number | Null` is said.
         let mut state = InferState::new();
         let span = Span::new(0, 0);
-        match state.join(span, &Type::Number, &Type::Null).unwrap() {
-            Type::Union(members) => {
-                assert!(members.contains(&Type::Number) && members.contains(&Type::Null))
-            }
-            other => panic!("expected Number | Null, got {:?}", other),
-        }
+        assert!(state.join(span, &Type::Number, &Type::Null).is_err());
+        let sum = Type::union([Type::Number, Type::Null]);
+        assert_eq!(state.join(span, &sum, &Type::Null).unwrap(), sum);
+        assert_eq!(state.join(span, &Type::Number, &sum).unwrap(), sum);
     }
 
     #[test]

@@ -195,6 +195,7 @@ pub fn expr_strategy() -> impl Strategy<Value = Expr> {
                         params: params.into_iter().map(|n| Param::new(n, span())).collect(),
                         body: Box::new(body),
                         type_annotation: None,
+                        arrow: false,
                         span: span(),
                     }
                 }

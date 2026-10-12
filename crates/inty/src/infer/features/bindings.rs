@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::ast::{AssignOp, Expr, PropDef, VarDeclarator, VarKind};
+use crate::ast::{AnnotationKind, AssignOp, Expr, PropDef, VarDeclarator, VarKind};
 use crate::error::TypeError;
 use crate::span::Span;
 use crate::types::{PropName, TVarName, Type, TypePred, TypeScheme};
@@ -227,6 +227,44 @@ impl InferState {
         Ok(())
     }
 
+    /// The type of an assignment's target (`x`, `r.p`, `c[i]`), whose
+    /// receiver must take the store: an object's property (`FieldWrite`),
+    /// an element of a container that isn't a string (`IndexWrite`).
+    pub(in crate::infer) fn infer_store_target(
+        &mut self,
+        env: &TypeEnv,
+        target: &Expr,
+        span: Span,
+    ) -> InferResult<Type> {
+        self.last_index_container = None;
+        self.last_member_receiver = None;
+        let ty = self.infer_expr(env, target)?;
+        match target {
+            Expr::ComputedMember { property, .. } => {
+                if let Some(container) = self.last_index_container.take() {
+                    self.require_index_write(&container, span)?;
+                    // A literal key names the property stored to.
+                    if let Expr::Lit {
+                        value: crate::ast::Literal::String(key),
+                        ..
+                    } = property.as_ref()
+                    {
+                        if matches!(self.flatten_type(&container), Type::Row(_)) {
+                            self.require_field_write(&container, key, span)?;
+                        }
+                    }
+                }
+            }
+            Expr::Member { property, .. } => {
+                if let Some(receiver) = self.last_member_receiver.take() {
+                    self.require_field_write(&receiver, property, span)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(ty)
+    }
+
     /// Infer the type of an assignment.
     pub(in crate::infer) fn infer_assign(
         &mut self,
@@ -247,7 +285,7 @@ impl InferState {
             && matches!(left, Expr::Member { .. } | Expr::Ident { .. })
             && lhs_polytype(self, env, left).is_none()
         {
-            let left_type = self.infer_expr(env, left)?;
+            let left_type = self.infer_store_target(env, left, span)?;
             if crate::infer::features::functions::extract_callable(&self.zonk(&left_type)).is_some()
             {
                 self.check_expr(env, right, &left_type)?;
@@ -309,7 +347,7 @@ impl InferState {
             }
         }
 
-        let left_type = self.infer_expr(env, left)?;
+        let left_type = self.infer_store_target(env, left, span)?;
 
         match op {
             AssignOp::Assign
@@ -423,6 +461,10 @@ impl InferState {
             // Check if this is a declaration (no init, with type annotation)
             let is_declaration =
                 decl.init.is_none() && (decl.type_annotation.is_some() || decl.type_ast.is_some());
+            // Whether the annotation quantifies type variables and says no
+            // constraints on them (`/** const id: <a>(a) => a */`): its
+            // initialiser is checked with them rigid.
+            let mut polymorphic_annotation = false;
 
             // Parse the annotation up-front (if any) so we can use it
             // as the *expected* type when checking the initialiser
@@ -438,6 +480,15 @@ impl InferState {
                     self.lower_type_ast_in_env_with_span(type_ast, env, decl.span),
                     decl.span,
                 ))
+            } else if let Some(annotation) = decl
+                .type_annotation
+                .as_ref()
+                .filter(|a| a.kind == AnnotationKind::Class)
+            {
+                let annotation_span = Span::new(annotation.span.start, annotation.span.end);
+                let ty = self.class_annotation_type(env, &annotation.content, annotation_span)?;
+                let ty = self.declared_callbacks_detached(&ty);
+                Some((ty, annotation_span))
             } else if let Some(annotation) = &decl.type_annotation {
                 let annotation_span = Span::new(annotation.span.start, annotation.span.end);
                 let (ann_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
@@ -451,17 +502,32 @@ impl InferState {
                 if let Some(&max) = var_map.values().max() {
                     self.bump_var_id_to(max + 1);
                 }
+                polymorphic_annotation = !var_map.is_empty() && preds.is_empty();
                 // `<a> where Plus a => …`: the declared scheme's constraints,
                 // taken into it when the binding is generalised.
                 for pred in preds {
                     self.add_constraint(pred, annotation_span);
                 }
+                // Checked against an initialiser, a function type says
+                // what `this` it is called with; a declaration keeps its.
+                let ann_ty = if decl.init.is_some() {
+                    self.annotation_this(annotation_span, &ann_ty, &Type::Undefined)?
+                } else {
+                    self.declared_callbacks_detached(&ann_ty)
+                };
                 Some((ann_ty, annotation_span))
             } else {
                 None
             };
 
+            // A polymorphic annotation's scheme, which the binding gets.
+            let annotated_scheme = match (&decl.init, &annotated_type) {
+                (Some(init), Some((ann_ty, ann_span))) if polymorphic_annotation => self
+                    .check_polymorphic_annotation(&new_env, kind, decl, init, ann_ty, *ann_span)?,
+                _ => None,
+            };
             let var_type = match (&decl.init, &annotated_type) {
+                (Some(_), Some((ann_ty, _))) if annotated_scheme.is_some() => ann_ty.clone(),
                 (Some(init), Some((ann_ty, _))) => {
                     // Bidirectional check: pushes the annotation into
                     // the initialiser so e.g. an object literal's
@@ -509,16 +575,26 @@ impl InferState {
             //    giving them a polytype lets writes silently violate the
             //    polymorphism. Polymorphic record/array storage must be
             //    opted in via an explicit type annotation (case 1).
+            // 3. A `let` or `var` that is written after its initialiser is
+            //    never generalized: an assignment unifies with its one
+            //    type. (Generalizing it would leave each assignment to be
+            //    checked at least as polymorphic as the initialiser, which
+            //    no typing rule can state: the rules could always pick a
+            //    less general type for the binding.)
             if is_declaration || decl.init.as_ref().is_some_and(is_syntactic_value) {
                 self.simplify_has_props()?;
             }
-            let scheme = if is_declaration {
+            let scheme = if let Some(scheme) = annotated_scheme {
+                scheme
+            } else if is_declaration {
                 let env_free = new_env.free();
                 self.generalize(&env_free, &var_type)
             } else {
                 match &decl.init {
                     Some(init)
                         if is_syntactic_value(init)
+                            && (kind == VarKind::Const
+                                || !self.resolution.written_at(decl.span, &decl.name))
                             && (self.config.generalize_mutable_var_containers
                                 || !is_mutable_container_literal(init)) =>
                     {
@@ -547,8 +623,265 @@ impl InferState {
             // can recover predicates after the scope is gone.
             self.record_decl_scheme(decl.span, scheme.clone());
             new_env = self.bind(&new_env, decl.span, &decl.name, scheme, mutability)?;
+            if is_declaration {
+                if let Some(key) = new_env.key_of_name(&decl.name) {
+                    self.ambient.insert(key.clone());
+                }
+            }
         }
 
         Ok((Type::Undefined, new_env))
+    }
+
+    /// A binding annotated with a polymorphic scheme
+    /// (`/** const id: <a>(a) => a */ const id = (x) => x;`), as the Lean
+    /// model's `HasTypeS.letPoly` and its inference (`lean/Inty/Infer.lean`):
+    /// the initialiser, a value, is checked against the annotation with its
+    /// type variables rigid (skolems); the constraints on known types are
+    /// decided, and no skolem may escape into the context or into the
+    /// constraints left. The binding is never assigned (a `const`, or a
+    /// `let` no assignment writes), and gets the annotation's scheme, which
+    /// the initialiser sees for its own name (polymorphic recursion, which
+    /// the model, without recursive bindings, doesn't have).
+    ///
+    /// `None` when the model has no rule for the binding (an initialiser
+    /// that isn't a value, or a binding that is assigned): the caller checks
+    /// it with the annotation's variables flexible, as for one with
+    /// constraints.
+    fn check_polymorphic_annotation(
+        &mut self,
+        env: &TypeEnv,
+        kind: VarKind,
+        decl: &VarDeclarator,
+        init: &Expr,
+        ann_ty: &Type,
+        ann_span: Span,
+    ) -> InferResult<Option<TypeScheme>> {
+        let is_value = matches!(
+            init,
+            Expr::Lit { .. } | Expr::Ident { .. } | Expr::Function { .. }
+        );
+        let written = kind != VarKind::Const && self.resolution.written_at(decl.span, &decl.name);
+        if !is_value || written {
+            return Ok(None);
+        }
+        let env_free = env.free();
+        let scheme = self.generalize(&env_free, ann_ty);
+        let env_free_before = env.free_vars();
+        // Only the type variables are rigid: an optional field's presence
+        // (`{p?: T}`) stays flexible, as it does under a monomorphic
+        // annotation.
+        let (skolems, rigid_ty) = self.skolemize(&TypeScheme {
+            pvars: Vec::new(),
+            ..scheme.clone()
+        });
+        let self_env = env.extend_key(
+            self.key_of(decl.span, &decl.name),
+            &decl.name,
+            super::super::env::Binding::immutable(scheme),
+        );
+        self.check_expr(&self_env, init, &rigid_ty)?;
+        self.simplify_has_props()?;
+        let skolem_set: HashSet<TVarName> = skolems.into_iter().collect();
+        for v in &env_free_before {
+            if !v.is_flex() {
+                continue;
+            }
+            let after = self.zonk(&Type::Var(v.clone()));
+            if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
+                return Err(TypeError::EscapedSkolem { span: ann_span }.into());
+            }
+        }
+        let pending: Vec<Type> = self
+            .pending_constraints
+            .iter()
+            .flat_map(|c| c.pred.types.clone())
+            .collect();
+        for t in pending {
+            let t = self.zonk(&t);
+            if t.free_vars().iter().any(|s| skolem_set.contains(s)) {
+                return Err(TypeError::EscapedSkolem { span: ann_span }.into());
+            }
+        }
+        // Generalised again: a presence the initialiser decided is no
+        // longer quantified.
+        Ok(Some(self.generalize(&env_free, ann_ty)))
+    }
+
+    /// The type of an external class `Name`, declared without a body by
+    /// `/** class Name<T, …>(params) extends Base { members } */`
+    /// (`content` is what follows the name): a constructor taking
+    /// `params` (or the base's, without them) whose instances have
+    /// `members` and, with `extends`, every field of a `Base` instance a
+    /// member doesn't redeclare. The base must itself be declared without
+    /// a value (`const Base;` under an annotation, or another external
+    /// class), so no code inty checks runs on the subclass's instances
+    /// with another class's instance as `this`.
+    fn class_annotation_type(
+        &mut self,
+        env: &TypeEnv,
+        content: &str,
+        span: Span,
+    ) -> InferResult<Type> {
+        let malformed = |message: String| -> crate::error::IntyError {
+            TypeError::TypeAnnotationParse { message, span }.into()
+        };
+        // The members, `{ … }`: the first brace outside brackets.
+        let mut depth = 0i32;
+        let mut members_at = None;
+        for (i, c) in content.char_indices() {
+            match c {
+                '(' | '[' | '<' => depth += 1,
+                ')' | ']' | '>' => depth -= 1,
+                '{' if depth == 0 => {
+                    members_at = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(members_at) = members_at else {
+            return Err(malformed(
+                "an external class declaration needs its members, `{ … }`".to_string(),
+            ));
+        };
+        let (head, members) = (content[..members_at].trim(), content[members_at..].trim());
+        let (head, base) = match head.rsplit_once("extends") {
+            Some((pre, base))
+                if pre.is_empty()
+                    || pre.ends_with(|c: char| c.is_whitespace() || c == ')' || c == '>') =>
+            {
+                let base = base.trim();
+                if base.is_empty()
+                    || !base
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                {
+                    return Err(malformed(format!(
+                        "`extends` takes the name of a declared class or constructor, not `{}`",
+                        base
+                    )));
+                }
+                (pre.trim(), Some(base.to_string()))
+            }
+            _ => (head, None),
+        };
+        let (type_params, params) = match head.find('(') {
+            Some(i) => (head[..i].trim(), Some(head[i..].trim())),
+            None => (head, None),
+        };
+        if !(type_params.is_empty() || type_params.starts_with('<') && type_params.ends_with('>')) {
+            return Err(malformed(format!(
+                "unexpected `{}` in a class declaration",
+                type_params
+            )));
+        }
+        let ctor = format!("{}{} => {}", type_params, params.unwrap_or("()"), members);
+        let (ctor_ty, var_map, next_pvar, preds) = parse_type_annotation_with_preds(
+            &ctor,
+            span,
+            self.next_var_id(),
+            self.next_pvar_id(),
+            &self.type_aliases,
+        )?;
+        self.bump_pvar_id_to(next_pvar);
+        if let Some(&max) = var_map.values().max() {
+            self.bump_var_id_to(max + 1);
+        }
+        for pred in preds {
+            self.add_constraint(pred, span);
+        }
+        // Only `new` calls a class, and its methods are on its prototype:
+        // read-only (a store would make an own property, which a spread
+        // copies) and not copied by a spread.
+        let mut ctor_ty = ctor_ty;
+        super::super::type_parser::set_callable_this(&mut ctor_ty, Type::NewTarget);
+        prototype_methods(&mut ctor_ty);
+        let Some((_, own_params, own_ret)) = super::functions::extract_callable(&ctor_ty) else {
+            return Err(malformed(
+                "an external class's members must be an object type".to_string(),
+            ));
+        };
+        let Some(base) = base else {
+            return Ok(ctor_ty);
+        };
+        let declared = env
+            .key_of_name(&base)
+            .is_some_and(|key| self.ambient.contains(key));
+        let scheme = match env.lookup(&base) {
+            Some(scheme) if declared => scheme.clone(),
+            _ => {
+                return Err(TypeError::InvalidSyntax {
+                    message: format!(
+                        "`{}` isn't a class or constructor declared without a body, so a \
+                         class can't extend it",
+                        base
+                    ),
+                    span,
+                }
+                .into())
+            }
+        };
+        let base_ty = self.instantiate(&scheme);
+        let base_ty = self.zonk(&base_ty);
+        let Some((_, base_params, base_ret)) = super::functions::extract_callable(&base_ty) else {
+            return Err(malformed(format!("`{}` isn't a constructor", base)));
+        };
+        let base_ret = self.zonk(&base_ret);
+        let mut instance = self.coerce_to_row(&base_ret, span)?;
+        let Type::Row(own) = self.zonk(&own_ret) else {
+            return Err(malformed(
+                "an external class's members must be an object type".to_string(),
+            ));
+        };
+        for (k, v) in own.props {
+            instance.props.insert(k, v);
+        }
+        instance.tail = own.tail;
+        let ctor = Type::Func {
+            this_type: Some(Box::new(Type::NewTarget)),
+            params: if params.is_some() {
+                own_params
+            } else {
+                base_params
+            },
+            ret: Box::new(Type::Row(instance)),
+        };
+        // In the representation the parsed signature has (a callable row).
+        Ok(match ctor_ty {
+            Type::Row(mut row) => {
+                let key = PropName(crate::types::CALLABLE_KEY.to_string());
+                if let Some(entry) = row.props.get_mut(&key) {
+                    entry.ty = ctor;
+                }
+                Type::Row(row)
+            }
+            _ => ctor,
+        })
+    }
+}
+
+/// Mark the function-typed members of an external class's instances (the
+/// result of its constructor type) as prototype methods.
+fn prototype_methods(ctor: &mut Type) {
+    let call = match ctor {
+        Type::Row(row) => row
+            .props
+            .get_mut(&PropName(crate::types::CALLABLE_KEY.to_string()))
+            .map(|e| &mut e.ty),
+        Type::Func { .. } => Some(ctor),
+        _ => None,
+    };
+    let Some(Type::Func { ret, .. }) = call else {
+        return;
+    };
+    let Type::Row(instance) = ret.as_mut() else {
+        return;
+    };
+    for entry in instance.props.values_mut() {
+        if super::functions::extract_callable(&entry.ty).is_some() {
+            entry.own = crate::types::Presence::Abs;
+            entry.writable = crate::types::Presence::Abs;
+        }
     }
 }

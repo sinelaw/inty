@@ -97,6 +97,7 @@ impl Binding {
 #[derive(Clone, Debug, Default)]
 pub struct Resolution {
     stable: Vec<bool>,
+    constant: Vec<bool>,
     global: Vec<bool>,
     names: Vec<String>,
     occurrences: HashMap<(usize, usize), Vec<BindingId>>,
@@ -119,10 +120,12 @@ impl Resolution {
             w.stmt(s);
         }
         let stable = w.bindings.iter().map(Binding::stable).collect();
+        let constant = w.bindings.iter().map(|b| b.kind == Kind::Const).collect();
         let global = w.bindings.iter().map(|b| b.kind == Kind::Global).collect();
         let names = w.bindings.into_iter().map(|b| b.name).collect();
         Resolution {
             stable,
+            constant,
             global,
             names,
             occurrences: w.occurrences,
@@ -152,6 +155,21 @@ impl Resolution {
     pub fn stable_at(&self, span: Span, name: &str) -> bool {
         self.binding_at(span, name)
             .is_some_and(|id| self.stable[id as usize])
+    }
+
+    /// Whether the identifier `name` at `span` refers to a binding that can't
+    /// be assigned: a `const`, or a named function expression's own name.
+    pub fn constant_at(&self, span: Span, name: &str) -> bool {
+        self.binding_at(span, name)
+            .is_some_and(|id| self.constant[id as usize])
+    }
+
+    /// Whether the identifier `name` at `span` refers to a binding that may
+    /// be written after its initialiser. Unlike `!stable_at`, an
+    /// identifier the resolution doesn't know is not written.
+    pub fn written_at(&self, span: Span, name: &str) -> bool {
+        self.binding_at(span, name)
+            .is_some_and(|id| !self.stable[id as usize])
     }
 }
 

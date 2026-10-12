@@ -466,6 +466,7 @@ impl Subst {
                 ret: Box::new(self.flatten_type(ret, state)),
             },
             Type::Array(elem) => Type::Array(Box::new(self.flatten_type(elem, state))),
+            Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(self.flatten_type(elem, state))),
             Type::Promise(inner) => Type::Promise(Box::new(self.flatten_type(inner, state))),
             Type::Map(value) => Type::Map(Box::new(self.flatten_type(value, state))),
             Type::Tuple(elems) => {
@@ -490,10 +491,10 @@ impl Subst {
             .map(|(k, e)| {
                 (
                     k.clone(),
-                    FieldEntry {
-                        presence: self.resolve_presence(&e.presence),
-                        ty: self.flatten_type(&e.ty, state),
-                    },
+                    e.map(
+                        &mut |p| self.resolve_presence(p),
+                        self.flatten_type(&e.ty, state),
+                    ),
                 )
             })
             .collect();
@@ -582,6 +583,8 @@ impl Substitutable for Type {
             Type::Undefined => Type::Undefined,
             Type::Null => Type::Null,
             Type::Regex => Type::Regex,
+            Type::NewTarget => Type::NewTarget,
+            Type::ArrowThis => Type::ArrowThis,
             Type::TypedArray(k) => Type::TypedArray(*k),
 
             // Variable substitution
@@ -617,6 +620,7 @@ impl Substitutable for Type {
 
             // Array types
             Type::Array(elem) => Type::Array(Box::new(elem.apply_subst(subst))),
+            Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(elem.apply_subst(subst))),
 
             // Promise types
             Type::Promise(inner) => Type::Promise(Box::new(inner.apply_subst(subst))),
@@ -714,10 +718,7 @@ impl Substitutable for RowType {
 
 impl Substitutable for FieldEntry {
     fn apply_subst(&self, subst: &Subst) -> Self {
-        FieldEntry {
-            presence: subst.apply_presence(&self.presence),
-            ty: self.ty.apply_subst(subst),
-        }
+        self.map(&mut |p| subst.apply_presence(p), self.ty.apply_subst(subst))
     }
 
     fn free_vars(&self) -> HashSet<TVarName> {

@@ -659,7 +659,7 @@ impl InferState {
         // type unconstrained.
         // Numeric variables first: an `Int` index or a `Number` receiver
         // can decide what's left.
-        self.default_numeric(keep, None, false)?;
+        self.default_numeric(keep, false)?;
         let mut constraints = std::mem::take(&mut self.pending_constraints);
         loop {
             let before = constraints.len();
@@ -679,7 +679,7 @@ impl InferState {
             }
             if deferred.len() == before {
                 self.pending_constraints = deferred;
-                let numeric = self.default_numeric(keep, None, false)?;
+                let numeric = self.default_numeric(keep, false)?;
                 deferred = std::mem::take(&mut self.pending_constraints);
                 if numeric {
                     constraints = deferred;
@@ -703,11 +703,28 @@ impl InferState {
                             .map(|(recv, name, _)| (self.zonk(recv), name.to_string()))
                     })
                     .collect();
+                // A receiver that `+` or arithmetic also constrains is a
+                // number or a string, never an object: its reads stay on
+                // the variable, as the Lean model leaves them.
+                let operands: Vec<Type> = deferred
+                    .iter()
+                    .filter(|c| matches!(c.pred.class, ClassName::Plus | ClassName::Arith))
+                    .flat_map(|c| c.pred.types.clone())
+                    .collect();
+                let operands: Vec<Type> = operands.iter().map(|t| self.zonk(t)).collect();
                 let mut defaulted = false;
                 let mut rest = Vec::new();
                 let mut seen: Vec<(Type, String)> = Vec::new();
                 for (c, key) in deferred.into_iter().zip(keys) {
                     match key {
+                        // (Not one an importing module still sees, whose
+                        // uses decide it: left here it would be dropped.)
+                        Some(key)
+                            if operands.contains(&key.0)
+                                && !matches!(&key.0, Type::Var(v) if keep.contains(v)) =>
+                        {
+                            rest.push(c)
+                        }
                         Some(key) => {
                             if !seen.contains(&key) {
                                 seen.push(key);
@@ -723,11 +740,25 @@ impl InferState {
                     // down: no use of it depends on the element type. Its
                     // numeric variables still get their default.
                     self.pending_constraints = rest;
-                    if self.default_numeric(keep, None, true)? {
+                    if self.default_numeric(keep, true)? {
                         constraints = std::mem::take(&mut self.pending_constraints);
                         continue;
                     }
-                    self.pending_constraints.clear();
+                    // An `Inject` or a `Strip` on a variable an importing
+                    // module still sees waits for its uses there (`put(true)`
+                    // deciding what a cell's sum holds); dropped, they would
+                    // let a value of no case through.
+                    let pending = std::mem::take(&mut self.pending_constraints);
+                    self.pending_constraints = pending
+                        .into_iter()
+                        .filter(|c| {
+                            matches!(c.pred.class, ClassName::Inject | ClassName::Strip)
+                                && matches!(
+                                    c.pred.types.first().map(|t| self.zonk(t)),
+                                    Some(Type::Var(v)) if keep.contains(&v)
+                                )
+                        })
+                        .collect();
                     return Ok(());
                 }
                 constraints = rest;
@@ -751,8 +782,13 @@ impl InferState {
                     let pred = &self.pending_constraints[i].pred;
                     // (An `Indexable` on a known container too: its element
                     // must be known before numeric defaulting picks one.)
-                    matches!(pred.class, ClassName::HasProp | ClassName::Indexable)
-                        && !self.is_deferred(pred)
+                    matches!(
+                        pred.class,
+                        ClassName::HasProp
+                            | ClassName::Indexable
+                            | ClassName::Inject
+                            | ClassName::Strip
+                    ) && !self.is_deferred(pred)
                 })
                 .collect();
             if ready.is_empty() {
@@ -780,19 +816,22 @@ impl InferState {
         let row = Type::object_open([(name, result.clone())], self.fresh_flex());
         self.unify(c.span, recv, &row)?;
         if let Some(this) = c.pred.method_this() {
-            self.unify(c.span, this, recv)?;
+            self.unify_this(c.span, this, recv)?;
         }
         Ok(())
     }
 
     /// A constraint that must wait for its first type (an `Indexable`'s
-    /// container, a `HasProp`'s receiver) to be known.
-    fn is_deferred(&self, pred: &TypePred) -> bool {
-        matches!(pred.class, ClassName::Indexable | ClassName::HasProp)
-            && matches!(
-                pred.types.first().map(|c| self.apply_subst(c)),
-                Some(Type::Var(TVarName::Flex(_)))
-            )
+    /// container, a `HasProp`'s receiver, the type an `Inject` or a
+    /// `Strip` relates to a sum) to be known.
+    pub(crate) fn is_deferred(&self, pred: &TypePred) -> bool {
+        matches!(
+            pred.class,
+            ClassName::Indexable | ClassName::HasProp | ClassName::Inject | ClassName::Strip
+        ) && matches!(
+            pred.types.first().map(|c| self.apply_subst(c)),
+            Some(Type::Var(TVarName::Flex(_)))
+        )
     }
 
     /// Resolve `HasProp(receiver, name, result)` for a known receiver:
@@ -826,7 +865,7 @@ impl InferState {
                 }
             }
             if let Some(this) = this {
-                self.unify(span, this, &receiver)?;
+                self.unify_this(span, this, &receiver)?;
             }
             return Ok(());
         }
@@ -867,7 +906,7 @@ impl InferState {
             Some(this) => {
                 self.apply_deferred_call(span, result, &found)?;
                 let receiver = self.method_receiver(&receiver);
-                self.unify(span, this, &receiver)?;
+                self.unify_this(span, this, &receiver)?;
             }
             None => self.unify(span, result, &found)?,
         }
@@ -903,7 +942,10 @@ impl InferState {
                     // Subsumption matters where the parameter is a union or
                     // a `Number` (an `Int` argument fits); elsewhere it is
                     // unification, done directly (no snapshot).
-                    if matches!(self.zonk(&p.ty), Type::Union(_) | Type::Number) {
+                    if matches!(
+                        self.zonk(&p.ty),
+                        Type::Union(_) | Type::Maybe(..) | Type::Number
+                    ) {
                         self.subsume(span, &a.ty, &p.ty)?;
                     } else {
                         self.unify(span, &a.ty, &p.ty)?;
@@ -930,11 +972,11 @@ impl InferState {
         element: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        use crate::types::{is_callable_key, FieldEntry, PropName, RowTail, RowType};
+        use crate::types::{is_callable_key, PropName, RowTail, RowType};
         if let Some(key) = literal_key {
             let rest = self.fresh_flex();
             let mut props = std::collections::BTreeMap::new();
-            props.insert(PropName(key), FieldEntry::pre(element.clone()));
+            props.insert(PropName(key), self.read_entry(element.clone()));
             let wanted = Type::Row(RowType {
                 props,
                 tail: RowTail::Open(rest),
@@ -1005,7 +1047,14 @@ impl InferState {
             return Ok(());
         }
         match pred.class {
-            ClassName::Plus => self.resolve_plus(&pred.types[0], span),
+            ClassName::Plus => {
+                let (a, b, c) = (
+                    pred.types[0].clone(),
+                    pred.types[1].clone(),
+                    pred.types[2].clone(),
+                );
+                self.resolve_plus(&a, &b, &c, span)
+            }
             ClassName::Num | ClassName::NumLit => self.resolve_num(&pred.types[0], span),
             ClassName::Arith => {
                 let (a, b, c) = (
@@ -1018,6 +1067,14 @@ impl InferState {
             ClassName::Indexable => {
                 self.resolve_indexable(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
+            ClassName::IndexWrite => self.resolve_index_write(&pred.types[0], span),
+            ClassName::FieldWrite => {
+                let (recv, name) = pred
+                    .as_field_write()
+                    .expect("FieldWrite predicates are built by TypePred::field_write");
+                let (recv, name) = (recv.clone(), name.to_string());
+                self.resolve_field_write(&recv, &name, span)
+            }
             ClassName::HasProp => {
                 let (recv, name, result) = pred
                     .as_has_prop()
@@ -1026,41 +1083,205 @@ impl InferState {
                 let this = pred.method_this().cloned();
                 self.resolve_has_prop(&recv, name, &result, this.as_ref(), span)
             }
+            // A known type: subsume it into the sum, which poses the
+            // constraint again if the type is still a variable.
+            ClassName::Inject => self.subsume(span, &pred.types[0], &pred.types[1]),
+            ClassName::Strip => self.resolve_strip(&pred.types[0], &pred.types[1], span),
         }
     }
 
-    /// Resolve Plus constraint: type must be Number or String.
-    fn resolve_plus(&mut self, ty: &Type, span: Span) -> Result<(), IntyError> {
-        let ty = self.apply_subst(ty);
-
-        match &ty {
-            Type::Number | Type::Int | Type::String => Ok(()),
-
-            // Error satisfies trivially; the original failure was
-            // already reported.
-            Type::Error => Ok(()),
-
+    /// Resolve `Strip τ σ`: a sum's value is its `σ`; nothing alone holds
+    /// no value to strip down to (an error, as in the model, which has
+    /// no instance for it); any other type is its own `σ`. Waits while
+    /// `τ` is a variable.
+    pub(crate) fn resolve_strip(
+        &mut self,
+        ty: &Type,
+        sigma: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.flatten_type(ty) {
+            // A number is never nothing.
+            t @ Type::Var(TVarName::Flex(_)) if self.is_numeric(&t) => self.unify(span, sigma, ty),
             Type::Var(TVarName::Flex(_)) => {
-                // Keep the constraint - don't default to Number
+                self.add_constraint(TypePred::strip(ty.clone(), sigma.clone()), span);
                 Ok(())
             }
+            Type::Maybe(_, inner) => self.unify(span, sigma, &inner),
+            Type::Named(id, args) if !self.is_nominal_type(id) => {
+                match self.unroll_named(id, &args) {
+                    Some(unrolled) => self.resolve_strip(&unrolled, sigma, span),
+                    None => self.unify(span, sigma, ty),
+                }
+            }
+            t @ (Type::Null | Type::Undefined) => Err(TypeError::ConstraintNotSatisfied {
+                class: "Strip (a value that is always nothing)".to_string(),
+                ty: t.to_string(),
+                span,
+            }
+            .into()),
+            _ => self.unify(span, sigma, ty),
+        }
+    }
 
-            Type::Var(TVarName::Skolem(_)) => {
-                // Skolem variables can't be resolved
+    /// Resolve `Plus a b c` (`c` is the type of `a + b`): a string
+    /// anywhere makes all three `String`; a number anywhere (or a variable
+    /// a `Num` constrains) makes it numeric, `Arith a b c`; any other known
+    /// type has no `+`. Three variables wait. Each step follows from the
+    /// instances alone, so deciding early loses nothing.
+    pub(crate) fn resolve_plus(
+        &mut self,
+        a: &Type,
+        b: &Type,
+        c: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        #[derive(PartialEq)]
+        enum Kind {
+            Str,
+            Num,
+            Var,
+            Error,
+            Other,
+        }
+        let mut kinds = Vec::with_capacity(3);
+        for t in [a, b, c] {
+            let t = self.zonk(t);
+            let kind = match &t {
+                Type::String | Type::Literal(crate::types::LitValue::String(_)) => Kind::Str,
+                Type::Int | Type::Number | Type::Literal(crate::types::LitValue::Number(_)) => {
+                    Kind::Num
+                }
+                Type::Var(TVarName::Flex(_)) if self.is_numeric(&t) => Kind::Num,
+                Type::Var(TVarName::Flex(_)) => Kind::Var,
+                Type::Error => Kind::Error,
+                _ => Kind::Other,
+            };
+            kinds.push((kind, t));
+        }
+        if kinds.iter().any(|(k, _)| *k == Kind::Error) {
+            return Ok(());
+        }
+        if let Some((_, t)) = kinds.iter().find(|(k, _)| *k == Kind::Other) {
+            return Err(TypeError::ConstraintNotSatisfied {
+                class: "Plus".to_string(),
+                ty: t.to_string(),
+                span,
+            }
+            .into());
+        }
+        if kinds.iter().any(|(k, _)| *k == Kind::Str) {
+            for t in [a, b, c] {
+                match self.zonk(t) {
+                    lit @ Type::Literal(_) => self.subsume(span, &lit, &Type::String)?,
+                    _ => self.unify(span, t, &Type::String)?,
+                }
+            }
+            return Ok(());
+        }
+        if kinds.iter().any(|(k, _)| *k == Kind::Num) {
+            self.require_num(span, a)?;
+            self.require_num(span, b)?;
+            self.resolve_num(c, span)?;
+            return self.resolve_arith(a, b, c, span);
+        }
+        self.add_constraint(TypePred::plus3(a.clone(), b.clone(), c.clone()), span);
+        Ok(())
+    }
+
+    /// Resolve `IndexWrite c`: an element of any indexable container can be
+    /// stored but a string's; a variable nothing pinned down holds no
+    /// value, so its stores never run.
+    pub(crate) fn resolve_index_write(
+        &mut self,
+        container: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.apply_subst(container) {
+            Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
                 Err(TypeError::ConstraintNotSatisfied {
-                    class: "Plus".to_string(),
-                    ty: ty.to_string(),
+                    class: "IndexWrite (a string's characters can't be assigned)".to_string(),
+                    ty: "String".to_string(),
                     span,
                 }
                 .into())
             }
+            _ => Ok(()),
+        }
+    }
 
-            _ => Err(TypeError::ConstraintNotSatisfied {
-                class: "Plus".to_string(),
-                ty: ty.to_string(),
+    /// Resolve `FieldWrite r "p"`: an object's property that takes stores
+    /// can be stored (not a getter, nor a class's method), not a built-in
+    /// one of an array, a string or a function (which `dynamics` doesn't
+    /// store, and a string's a strict program can't); a variable nothing
+    /// pinned down holds no value.
+    pub(crate) fn resolve_field_write(
+        &mut self,
+        receiver: &Type,
+        name: &str,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        let receiver = self.apply_subst(receiver);
+        let builtin = match &receiver {
+            Type::Row(row) => row.props.keys().any(|k| k.0 == crate::types::CALLABLE_KEY),
+            Type::Var(_) | Type::Named(..) | Type::Error => false,
+            _ => true,
+        };
+        if builtin {
+            return Err(TypeError::ConstraintNotSatisfied {
+                class: "FieldWrite (only an object's properties can be assigned)".to_string(),
+                ty: self.show(&receiver),
                 span,
             }
-            .into()),
+            .into());
+        }
+        if matches!(receiver, Type::Var(_) | Type::Error) {
+            return Ok(());
+        }
+        // The property takes stores: unify the receiver with a row whose
+        // property does.
+        let ty = self.fresh_type_var();
+        let entry = self.write_entry(ty);
+        let rest = self.fresh_flex();
+        let wanted = Type::Row(crate::types::RowType::open_entries(
+            std::collections::BTreeMap::from([(crate::types::PropName(name.to_string()), entry)]),
+            rest,
+        ));
+        self.unify(span, &receiver, &wanted)
+    }
+
+    /// The receiver of an assignment's member target must take the store
+    /// to `name` (`FieldWrite`): decided now for a known type, posed for a
+    /// variable.
+    pub(crate) fn require_field_write(
+        &mut self,
+        receiver: &Type,
+        name: &str,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.apply_subst(receiver) {
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::field_write(receiver.clone(), name), span);
+                Ok(())
+            }
+            _ => self.resolve_field_write(receiver, name, span),
+        }
+    }
+
+    /// The container of an assignment's computed-member target must take
+    /// stores (`IndexWrite`): decided now for a known type, posed for a
+    /// variable.
+    pub(crate) fn require_index_write(
+        &mut self,
+        container: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        match self.apply_subst(container) {
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::index_write(container.clone()), span);
+                Ok(())
+            }
+            _ => self.resolve_index_write(container, span),
         }
     }
 
@@ -1101,8 +1322,9 @@ impl InferState {
                 Ok(())
             }
 
-            // String indexing: String[Number] = String
-            Type::String => {
+            // String indexing: String[Number] = String (a string literal's
+            // too: `"xyz"[0]`)
+            Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
                 int_index(self)?;
                 self.unify(span, &element, &Type::String)?;
                 Ok(())
@@ -1181,22 +1403,41 @@ mod tests {
     #[test]
     fn test_resolve_plus_number() {
         let mut state = InferState::new();
-        assert!(state.resolve_plus(&Type::Number, Span::new(0, 0)).is_ok());
+        let c = Type::flex(0);
+        assert!(state
+            .resolve_plus(&Type::Number, &Type::Int, &c, Span::new(0, 0))
+            .is_ok());
+        assert_eq!(state.apply_subst(&c), Type::Number);
     }
 
     #[test]
     fn test_resolve_plus_string() {
         let mut state = InferState::new();
-        assert!(state.resolve_plus(&Type::String, Span::new(0, 0)).is_ok());
+        let (a, c) = (Type::flex(0), Type::flex(1));
+        assert!(state
+            .resolve_plus(&a, &Type::String, &c, Span::new(0, 0))
+            .is_ok());
+        assert_eq!(state.apply_subst(&a), Type::String);
+        assert_eq!(state.apply_subst(&c), Type::String);
+    }
+
+    #[test]
+    fn test_resolve_plus_mixed_is_an_error() {
+        let mut state = InferState::new();
+        let c = Type::flex(0);
+        assert!(state
+            .resolve_plus(&Type::Int, &Type::String, &c, Span::new(0, 0))
+            .is_err());
     }
 
     #[test]
     fn test_resolve_plus_variable() {
         let mut state = InferState::new();
-        let var = Type::flex(0);
-        assert!(state.resolve_plus(&var, Span::new(0, 0)).is_ok());
-        // Type variable should be kept (not defaulted) to preserve polymorphism
-        assert_eq!(state.apply_subst(&var), var);
+        let (a, b, c) = (Type::flex(0), Type::flex(1), Type::flex(2));
+        assert!(state.resolve_plus(&a, &b, &c, Span::new(0, 0)).is_ok());
+        // Type variables are kept (not defaulted) to preserve polymorphism
+        assert_eq!(state.apply_subst(&a), a);
+        assert_eq!(state.apply_subst(&c), c);
     }
 
     #[test]

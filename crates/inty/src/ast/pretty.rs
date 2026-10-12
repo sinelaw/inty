@@ -546,6 +546,22 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
                 VarKind::Let => "let",
                 VarKind::Const => "const",
             };
+            // An external class, `/** class Name … */ class Name;`.
+            if let [decl] = declarations.as_slice() {
+                if let Some(ann) = decl
+                    .type_annotation
+                    .as_ref()
+                    .filter(|a| a.kind == AnnotationKind::Class)
+                {
+                    let sep = if ann.content.starts_with(['(', '<']) {
+                        ""
+                    } else {
+                        " "
+                    };
+                    writeln!(w, "/** class {}{}{} */", decl.name, sep, ann.content)?;
+                    return write!(w, "{}class {};", ind, decl.name);
+                }
+            }
             // Output type annotations before the declaration
             for decl in declarations.iter() {
                 if let Some(ann) = &decl.type_annotation {
@@ -938,7 +954,14 @@ fn write_stmt(w: &mut impl Write, stmt: &Stmt, indent: usize) -> fmt::Result {
             ..
         } => {
             if let Some(ann) = type_annotation {
-                writeln!(w, "/** function {}{} */", name, ann.content)?;
+                // `(…) => R`, or a type the name can't run into
+                // (`new (…) => R`, `this: T => (…) => R`).
+                let gap = if ann.content.starts_with(['(', '<']) {
+                    ""
+                } else {
+                    " "
+                };
+                writeln!(w, "/** function {}{}{} */", name, gap, ann.content)?;
                 write!(w, "{}", ind)?;
             }
             write!(w, "function {}(", name)?;

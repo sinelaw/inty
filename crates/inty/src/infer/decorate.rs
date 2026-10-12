@@ -465,6 +465,7 @@ impl<'a> Decorator<'a> {
                 params,
                 body,
                 type_annotation,
+                arrow,
                 span,
             } => {
                 // For function expressions, we could add type annotations
@@ -475,6 +476,7 @@ impl<'a> Decorator<'a> {
                     params: params.clone(),
                     body: Box::new(decorated_body),
                     type_annotation: type_annotation.clone(),
+                    arrow: *arrow,
                     span: *span,
                 }
             }
@@ -629,9 +631,15 @@ impl<'a> Decorator<'a> {
                 type_ast: type_ast.clone(),
                 span: *span,
             },
-            PropDef::Getter { key, body, span } => PropDef::Getter {
+            PropDef::Getter {
+                key,
+                body,
+                proto,
+                span,
+            } => PropDef::Getter {
                 key: key.clone(),
                 body: Box::new(self.decorate_stmt(body, env).0),
+                proto: *proto,
                 span: *span,
             },
             PropDef::Setter {
@@ -650,22 +658,19 @@ impl<'a> Decorator<'a> {
                 params,
                 body,
                 return_type_ast,
+                proto,
                 span,
             } => PropDef::Method {
                 key: key.clone(),
                 params: params.clone(),
                 body: Box::new(self.decorate_stmt(body, env).0),
                 return_type_ast: return_type_ast.clone(),
+                proto: *proto,
                 span: *span,
             },
-            PropDef::Spread {
-                argument,
-                span,
-                inherited,
-            } => PropDef::Spread {
+            PropDef::Spread { argument, span } => PropDef::Spread {
                 argument: self.decorate_expr(argument, env),
                 span: *span,
-                inherited: *inherited,
             },
         }
     }

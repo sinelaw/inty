@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use crate::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
 use crate::span::Span;
 use crate::types::{
-    FieldEntry, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme,
+    FieldEntry, LitValue, Presence, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred,
+    TypeScheme,
 };
 
 use super::super::env::TypeEnv;
@@ -102,10 +103,8 @@ impl InferState {
     ///
     /// Properties are walked in source order. Object spreads
     /// (`...expr`) merge the spread argument's row in right-bias
-    /// fashion: keys later in source order overwrite earlier ones.
-    /// Per spec, the result row's tail is the tail of the last
-    /// spread operand if that tail is a row variable; otherwise the
-    /// row is closed.
+    /// fashion: keys later in source order overwrite earlier ones,
+    /// where the operand has them (see `merge_spread`).
     pub(in crate::infer) fn infer_object(
         &mut self,
         env: &TypeEnv,
@@ -129,8 +128,6 @@ impl InferState {
         // counts; the result is closed but `row_tail` may have been
         // set and then overridden back to Closed.
         let mut had_spread = false;
-        // Fields a `class … extends` got from its base (see `inherited`).
-        let mut inherited_fields: Vec<(PropName, Type)> = Vec::new();
 
         for prop in properties {
             match prop {
@@ -228,6 +225,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
+                        // A function property is called on the object or
+                        // taken off it: its `this` is left to the value.
+                        let this = self.fresh_type_var();
+                        let annotated_type =
+                            self.annotation_this(ann_span, &annotated_type, &this)?;
                         // TypeScript's JSDoc convention is to allow a
                         // `null` / `undefined` placeholder initialiser
                         // for a `@type`-annotated field — the field is
@@ -274,6 +276,7 @@ impl InferState {
                     params,
                     body,
                     return_type_ast,
+                    proto,
                     span: method_span,
                 } => {
                     let prop_name = self.prop_key_to_name(key);
@@ -290,10 +293,22 @@ impl InferState {
                         shared_this.clone(),
                         *method_span,
                     )?;
-                    props.insert(prop_name, FieldEntry::pre(method_type));
+                    // A class's method is on its prototype; an object
+                    // literal's is its own data property.
+                    let entry = if *proto {
+                        FieldEntry::proto(method_type)
+                    } else {
+                        FieldEntry::pre(method_type)
+                    };
+                    props.insert(prop_name, entry);
                 }
 
-                PropDef::Getter { key, body, span } => {
+                PropDef::Getter {
+                    key,
+                    body,
+                    proto,
+                    span,
+                } => {
                     let prop_name = self.prop_key_to_name(key);
                     // Bind `this` in the getter body to the shared
                     // instance row so `this.foo` references see the
@@ -306,68 +321,46 @@ impl InferState {
                     let getter_env =
                         env.extend("this".to_string(), TypeScheme::mono(shared_this.clone()));
                     let ret_type = self.infer_body_return_type(&getter_env, body, true, *span)?;
-                    props.insert(prop_name, FieldEntry::pre(ret_type));
+                    // A getter is read, not stored to: a store throws. A
+                    // class's getter is on its prototype.
+                    let entry = if *proto {
+                        FieldEntry::proto(ret_type)
+                    } else {
+                        FieldEntry::getter(ret_type)
+                    };
+                    props.insert(prop_name, entry);
                 }
 
-                PropDef::Setter {
-                    key,
-                    param,
-                    body,
-                    span,
-                } => {
-                    let prop_name = self.prop_key_to_name(key);
-                    // Setter: param type is fresh, body returns undefined.
-                    // Inferred through a frame (return value discarded) so
-                    // any `return` doesn't leak upward.
-                    let param_type = self.fresh_type_var();
-                    let setter_env = self.bind(
-                        env,
-                        *span,
-                        param,
-                        TypeScheme::mono(param_type),
-                        super::super::env::Mutability::Mutable,
-                    )?;
-                    let _ = self.infer_body_return_type(&setter_env, body, true, *span)?;
-                    // For simplicity, we use the parameter type as the property type
-                    // In a full implementation, we'd track getter/setter separately
-                    props.insert(prop_name, FieldEntry::pre(self.fresh_type_var()));
+                PropDef::Setter { key, span, .. } => {
+                    // A setter's property reads `undefined` (with no
+                    // getter) and a store runs its body, which inty
+                    // doesn't model: rejected.
+                    return Err(crate::error::TypeError::InvalidSyntax {
+                        message: format!(
+                            "a setter (`set {}(…)`) is not supported: inty doesn't model \
+                             accessors that run on a store",
+                            self.prop_key_to_name(key).0
+                        ),
+                        span: *span,
+                    }
+                    .into());
                 }
 
                 PropDef::Spread {
                     argument,
                     span: spread_span,
-                    inherited,
                 } => {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
                     let resolved = self.zonk(&arg_ty);
                     let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
-                    // Right-biased merge: this spread's properties
-                    // overwrite anything earlier — including the
-                    // result of an earlier spread or property.
-                    for (k, v) in spread_row.props {
-                        if *inherited {
-                            // A base class's field keeps its type in the
-                            // subclass, so the base's methods (typed
-                            // against the base instance) may run on a
-                            // subclass instance: their receiver
-                            // constraint is dropped.
-                            inherited_fields.push((k.clone(), v.ty.clone()));
-                            let v = FieldEntry {
-                                presence: v.presence,
-                                ty: without_receiver(&self.zonk(&v.ty)),
-                            };
-                            props.insert(k, v);
-                        } else {
-                            props.insert(k, v);
-                        }
-                    }
-                    // Per spec: "the result row's tail is the tail
-                    // of the last spread operand if it's a row
-                    // variable." A `Closed` tail flips the result
-                    // back to closed; an `Open(α)` tail makes the
-                    // result open at `α` (any later spread overwrites).
-                    row_tail = spread_row.tail;
+                    let so_far = RowType {
+                        props: std::mem::take(&mut props),
+                        tail: row_tail,
+                    };
+                    let merged = self.merge_spread(*spread_span, so_far, spread_row)?;
+                    props = merged.props;
+                    row_tail = merged.tail;
                 }
             }
         }
@@ -381,18 +374,6 @@ impl InferState {
             // soundly closed for the keys we know about.
             _ => RowType::closed_entries(props),
         };
-        // A subclass keeps its base's field types: overriding one with a
-        // value (or method) of another type would break the base's
-        // methods, which run on the subclass's instances.
-        for (k, base_ty) in &inherited_fields {
-            if let Some(entry) = final_row.props.get(k) {
-                let (mine, base) = (
-                    without_receiver(&self.zonk(&entry.ty)),
-                    without_receiver(&self.zonk(base_ty)),
-                );
-                self.unify(span, &base, &mine)?;
-            }
-        }
         let obj_type = Type::Row(final_row);
 
         // Unify the shared 'this' with the complete object type so
@@ -402,6 +383,174 @@ impl InferState {
 
         let _ = had_spread;
         Ok(self.zonk(&obj_type))
+    }
+
+    /// The row of `{...so_far, ...spread}`: the operand's fields win,
+    /// except where it may lack one.
+    ///
+    /// Field by field (`e` before, `v` the operand's): a present `v`
+    /// wins, an absent one leaves `e`; where `v` may be either, `e` and
+    /// `v` must agree on the type, and the result is present if `e` is
+    /// (otherwise their presences must agree too, as a presence can't be
+    /// "either"). An open row's unknown part may hold any label the other
+    /// side names, so it is first extended with those labels, at fresh
+    /// presences and types; two open rows then share their unknown parts.
+    /// (Taking the operand's tail alone, as this used to, was unsound:
+    /// with `function f(o) { return {a: 1, ...o}; }`, `f({a: "s"}).a`
+    /// was an `Int`.) A recursive tail counts as closed, as it does for
+    /// the finished literal.
+    fn merge_spread(
+        &mut self,
+        span: Span,
+        so_far: RowType,
+        spread: RowType,
+    ) -> InferResult<RowType> {
+        // The operand is an object, not a function: a spread copies own
+        // properties, never a call signature (`{...f}` was callable, and
+        // `dynamics` doesn't spread a function), so its call signature,
+        // its unknown part's included, is absent.
+        let callable = PropName(crate::types::CALLABLE_KEY.to_string());
+        let spread = self.row_view(spread);
+        let mut spread = self.extend_row_with(span, spread, std::iter::once(callable.clone()))?;
+        let operand = Type::Row(spread.clone());
+        let call_entry = spread.props.remove(&callable);
+        if let Some(call) = &call_entry {
+            if self
+                .unify_presence(span, &call.presence, &Presence::Abs)
+                .is_err()
+            {
+                return Err(crate::error::TypeError::TypeMismatch {
+                    expected: "an object".to_string(),
+                    found: self.show(&operand),
+                    span,
+                }
+                .into());
+            }
+        }
+        let so_far = self.extend_row_with(span, so_far, spread.props.keys().cloned())?;
+        let spread = self.row_view(spread);
+        let spread = self.extend_row_with(span, spread, so_far.props.keys().cloned())?;
+        let mut so_far = self.row_view(so_far);
+        let tail = match (so_far.tail.clone(), spread.tail.clone()) {
+            (RowTail::Open(a), RowTail::Open(b)) => {
+                self.unify(
+                    span,
+                    &Type::Row(RowType::empty_open(a)),
+                    &Type::Row(RowType::empty_open(b.clone())),
+                )?;
+                RowTail::Open(b)
+            }
+            (RowTail::Open(a), _) | (_, RowTail::Open(a)) => RowTail::Open(a),
+            _ => RowTail::Closed,
+        };
+        for (k, v) in spread.props {
+            // What the spread copies of the operand's property: an own one
+            // (a getter's value too) as a field that holds a value; a
+            // member of a class's prototype, nothing. A property not
+            // known to be on the prototype is taken as an own one.
+            let vp = match self.main_subst.resolve_presence(&v.own) {
+                Presence::Abs => Presence::Abs,
+                own => {
+                    if matches!(own, Presence::Var(_)) {
+                        self.unify_presence(span, &own, &Presence::Pre)?;
+                    }
+                    self.main_subst.resolve_presence(&v.presence)
+                }
+            };
+            let copy = FieldEntry {
+                presence: vp.clone(),
+                ty: v.ty.clone(),
+                writable: Presence::Pre,
+                own: Presence::Pre,
+            };
+            let merged = match so_far.props.remove(&k) {
+                None => copy,
+                Some(e) => {
+                    let ep = self.main_subst.resolve_presence(&e.presence);
+                    match (ep, vp) {
+                        (_, Presence::Pre) => copy,
+                        (_, Presence::Abs) => e,
+                        (Presence::Abs, _) => copy,
+                        (Presence::Pre, _) => {
+                            self.unify(span, &e.ty, &v.ty)?;
+                            e
+                        }
+                        (ep @ Presence::Var(_), vp) => {
+                            self.unify_presence(span, &ep, &vp)?;
+                            self.unify(span, &e.ty, &v.ty)?;
+                            copy
+                        }
+                    }
+                }
+            };
+            so_far.props.insert(k, merged);
+        }
+        // An open result shares a tail with the operand, whose call
+        // signature was just made absent: the result's is absent too, as
+        // the same entry, so that `x = {...x}` unifies the two rows
+        // without a cycle through the tail.
+        if let (RowTail::Open(_), Some(call)) = (&tail, call_entry) {
+            so_far.props.entry(callable).or_insert(FieldEntry {
+                presence: Presence::Abs,
+                ..call
+            });
+        }
+        Ok(RowType {
+            props: so_far.props,
+            tail,
+        })
+    }
+
+    /// `row`, its open tail extended with those of `labels` it doesn't
+    /// name, each at a fresh presence and type.
+    fn extend_row_with(
+        &mut self,
+        span: Span,
+        row: RowType,
+        labels: impl Iterator<Item = PropName>,
+    ) -> InferResult<RowType> {
+        let RowTail::Open(tail) = row.tail.clone() else {
+            return Ok(row);
+        };
+        let mut extra = BTreeMap::new();
+        for k in labels.filter(|k| !row.props.contains_key(k)) {
+            let entry = FieldEntry {
+                presence: Presence::Var(self.fresh_pvar()),
+                ty: self.fresh_type_var(),
+                writable: Presence::Var(self.fresh_pvar()),
+                own: Presence::Var(self.fresh_pvar()),
+            };
+            extra.insert(k, entry);
+        }
+        if extra.is_empty() {
+            return Ok(row);
+        }
+        let rest = self.fresh_flex();
+        self.unify(
+            span,
+            &Type::Row(RowType::empty_open(tail)),
+            &Type::Row(RowType::open_entries(extra, rest)),
+        )?;
+        Ok(self.row_view(row))
+    }
+
+    /// `row` with the fields its bound tail variables hold (zonking
+    /// leaves a bound tail in place).
+    fn row_view(&mut self, row: RowType) -> RowType {
+        let mut row = row;
+        while let RowTail::Open(v) = row.tail.clone() {
+            match self.zonk(&Type::Var(v.clone())) {
+                Type::Row(rest) => {
+                    for (k, e) in rest.props {
+                        row.props.entry(k).or_insert(e);
+                    }
+                    row.tail = rest.tail;
+                }
+                Type::Var(w) if w != v => row.tail = RowTail::Open(w),
+                _ => break,
+            }
+        }
+        row
     }
 
     /// Bidirectional checking for an object literal against an
@@ -441,8 +590,7 @@ impl InferState {
                     PropDef::Spread { .. } => None,
                 })
                 .collect();
-            let mut chosen: Option<Type> = None;
-            let mut count = 0;
+            let mut shaped: Vec<Type> = Vec::new();
             for m in members {
                 let mut m_resolved = self.zonk(m);
                 // A recursive alias arm (`B | Null`) is its unrolling.
@@ -462,22 +610,57 @@ impl InferState {
                             .collect::<std::collections::BTreeSet<_>>()
                             == lit_keys
                     {
-                        count += 1;
-                        if count == 1 {
-                            chosen = Some(m_resolved.clone());
-                        } else {
-                            // Multiple shape-matching arms — defer
-                            // to synthesis, where S-UnionR with the
-                            // exactly-one disambiguator can sort it
-                            // out (or fail loudly).
-                            return Ok(None);
-                        }
+                        shaped.push(m_resolved.clone());
                     }
                 }
             }
-            if let Some(arm) = chosen {
-                return self.try_check_object(env, properties, span, &arm);
+            if shaped.len() == 1 {
+                return self.try_check_object(env, properties, span, &shaped[0]);
             }
+            // Several arms of the literal's shape: a discriminated union,
+            // whose arm is the one whose tag the literal writes, a string
+            // literal in a field where each arm has a string literal type
+            // (the Lean model's `ObjCase.variant`).
+            for prop in properties {
+                let PropDef::Property { key, value, .. } = prop else {
+                    continue;
+                };
+                let Expr::Lit {
+                    value: Literal::String(tag),
+                    ..
+                } = value
+                else {
+                    continue;
+                };
+                let name = self.prop_key_to_name(key);
+                // The arms' types of the field: a tag field only if each
+                // is a string literal, all different.
+                let tags: Vec<Option<String>> = shaped
+                    .iter()
+                    .map(|arm| match arm {
+                        Type::Row(row) => {
+                            row.props.get(&name).and_then(|e| match self.zonk(&e.ty) {
+                                Type::Literal(LitValue::String(s)) => Some(s),
+                                _ => None,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let distinct: std::collections::BTreeSet<&Option<String>> = tags.iter().collect();
+                if tags.iter().any(Option::is_none) || distinct.len() != tags.len() {
+                    continue;
+                }
+                return match tags.iter().position(|t| t.as_deref() == Some(tag.as_str())) {
+                    Some(i) => {
+                        let arm = shaped[i].clone();
+                        self.try_check_object(env, properties, span, &arm)
+                    }
+                    None => Ok(None),
+                };
+            }
+            // Otherwise defer to synthesis, where S-UnionR with the
+            // exactly-one disambiguator can sort it out (or fail loudly).
             return Ok(None);
         }
 
@@ -553,6 +736,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
+                        // A function property is called on the object or
+                        // taken off it: its `this` is left to the value.
+                        let this = self.fresh_type_var();
+                        let annotated_type =
+                            self.annotation_this(ann_span, &annotated_type, &this)?;
                         let is_placeholder = matches!(
                             value,
                             Expr::Lit {
@@ -635,7 +823,11 @@ impl InferState {
     /// If the type is already a row, return it unchanged. If it's
     /// a free type variable, unify it with a fresh open row.
     /// Otherwise reject with a span-anchored diagnostic.
-    fn coerce_to_row(&mut self, ty: &Type, span: Span) -> InferResult<RowType> {
+    pub(in crate::infer) fn coerce_to_row(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> InferResult<RowType> {
         let resolved = self.zonk(ty);
         match resolved {
             Type::Row(row) => Ok(row),
@@ -698,6 +890,8 @@ impl InferState {
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
         let obj_type = self.zonk(&obj_type);
+        // (After the object's own members.)
+        self.last_member_receiver = Some(obj_type.clone());
         self.infer_member_on_type(&obj_type, property, span)
     }
 
@@ -777,7 +971,7 @@ impl InferState {
                     SourceLanguage::Lua => None,
                 };
                 if let Some(ty) = method {
-                    return Ok(ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::String => {
@@ -794,17 +988,17 @@ impl InferState {
                     SourceLanguage::Lua => None,
                 };
                 if let Some(ty) = method {
-                    return Ok(ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::Promise(inner_ty) => {
                 if let Some(ty) = crate::builtins::promise_method_type(self, inner_ty, property) {
-                    return Ok(ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::TypedArray(kind) => {
                 if let Some(ty) = crate::builtins::typed_array_member_type(self, *kind, property) {
-                    return Ok(ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::Regex => {
@@ -815,7 +1009,7 @@ impl InferState {
                 // match), letting downstream code that checks
                 // `=== null` fail to narrow.
                 if let Some(ty) = crate::builtins::regex_method_type(self, property) {
-                    return Ok(ty);
+                    return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
             Type::Row(row) => {
@@ -918,11 +1112,37 @@ impl InferState {
         // shapes unification can unroll): pose the property access as a
         // row constraint and let unification resolve it.
         let row_var = self.fresh_flex();
-        let expected_row = Type::object_open([(property, result_type.clone())], row_var);
+        let entry = self.read_entry(result_type.clone());
+        let expected_row = Type::Row(RowType::open_entries(
+            BTreeMap::from([(PropName(property.to_string()), entry)]),
+            row_var,
+        ));
 
         self.unify(span, obj_type, &expected_row)?;
 
         Ok(self.zonk(&result_type))
+    }
+
+    /// The field a read of a property of type `ty` needs: present, of any
+    /// kind (a field that holds a value, a getter, a class's method).
+    pub(crate) fn read_entry(&mut self, ty: Type) -> FieldEntry {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Var(self.fresh_pvar()),
+            own: Presence::Var(self.fresh_pvar()),
+        }
+    }
+
+    /// The field a store to a property of type `ty` needs: present, and
+    /// one that takes stores (not a getter, nor a class's method).
+    pub(crate) fn write_entry(&mut self, ty: Type) -> FieldEntry {
+        FieldEntry {
+            presence: Presence::Pre,
+            ty,
+            writable: Presence::Pre,
+            own: Presence::Var(self.fresh_pvar()),
+        }
     }
 
     /// Look up a property by following row tail chains.
@@ -978,37 +1198,5 @@ impl InferState {
                 RowTail::Recursive(_, _) => return None,
             }
         }
-    }
-}
-
-/// A method's type without its receiver (`this`) constraint: what an
-/// inherited method is on a subclass instance, which has every field of
-/// the base instance it was typed against, at the same types.
-fn without_receiver(ty: &Type) -> Type {
-    match ty {
-        Type::Row(row) => {
-            let key = PropName(crate::types::CALLABLE_KEY.to_string());
-            match row.props.get(&key) {
-                Some(entry) if row.props.len() == 1 => {
-                    let mut row = row.clone();
-                    if let Type::Func { params, ret, .. } = &entry.ty {
-                        row.props.insert(
-                            key,
-                            FieldEntry {
-                                presence: entry.presence.clone(),
-                                ty: Type::Func {
-                                    this_type: None,
-                                    params: params.clone(),
-                                    ret: ret.clone(),
-                                },
-                            },
-                        );
-                    }
-                    Type::Row(row)
-                }
-                _ => ty.clone(),
-            }
-        }
-        _ => ty.clone(),
     }
 }

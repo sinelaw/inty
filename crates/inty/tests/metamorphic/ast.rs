@@ -445,6 +445,7 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
             params,
             body,
             type_annotation,
+            arrow,
             span,
         } => Expr::Function {
             name: name
@@ -462,6 +463,7 @@ fn rename_expr(expr: &Expr, from: &str, to: &str) -> Expr {
                 .collect(),
             body: Box::new(rename_stmt(body, from, to)),
             type_annotation: type_annotation.clone(),
+            arrow: *arrow,
             span: *span,
         },
         Expr::Member {
@@ -589,10 +591,12 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             params,
             body,
             return_type_ast,
+            proto,
             span,
         } => PropDef::Method {
             key: key.clone(),
             return_type_ast: return_type_ast.clone(),
+            proto: *proto,
             params: params
                 .iter()
                 .map(|p| {
@@ -606,9 +610,15 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             body: Box::new(rename_stmt(body, from, to)),
             span: *span,
         },
-        PropDef::Getter { key, body, span } => PropDef::Getter {
+        PropDef::Getter {
+            key,
+            body,
+            proto,
+            span,
+        } => PropDef::Getter {
             key: key.clone(),
             body: Box::new(rename_stmt(body, from, to)),
+            proto: *proto,
             span: *span,
         },
         PropDef::Setter {
@@ -626,14 +636,9 @@ fn rename_prop(prop: &PropDef, from: &str, to: &str) -> PropDef {
             body: Box::new(rename_stmt(body, from, to)),
             span: *span,
         },
-        PropDef::Spread {
-            argument,
-            span,
-            inherited,
-        } => PropDef::Spread {
+        PropDef::Spread { argument, span } => PropDef::Spread {
             argument: rename_expr(argument, from, to),
             span: *span,
-            inherited: *inherited,
         },
     }
 }
