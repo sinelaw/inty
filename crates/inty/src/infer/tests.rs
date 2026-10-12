@@ -2423,6 +2423,23 @@ fn polymorphic_annotation_checks_initializer_rigidly() {
         /** const f: <a>(a) => a */ \
         const f = (x) => x + x;";
     assert!(infer_program_with_state(constrained).is_err());
+    // A rigid type variable escaping into a constraint left on a type
+    // variable nothing fixes: `o.l` has the type `a`, so `o`'s type has a
+    // field `l: a`. The rules type this (the Lean model's `polyGap`, with
+    // `o: {l: a}` at each rigid name), but inference rejects it, as the
+    // model's does (`polyGap_separates`): keeping the constraint would need
+    // an implication constraint. (`p` puts the field `l` in the program,
+    // which the model's wire format needs to read it.)
+    let gap = "\
+        const p = { l: 1 }; \
+        /** const f: <a>(a) => a */ \
+        const f = (y) => { const g = true ? (o) => o.l : (o) => y; return y; };";
+    assert!(infer_program_with_state(gap).is_err());
+    // Without the field read nothing escapes.
+    let no_gap = "\
+        /** const f: <a>(a) => a */ \
+        const f = (y) => { const g = true ? (o) => y : (o) => y; return y; };";
+    assert!(infer_program_with_state(no_gap).is_ok());
     // The initialiser sees the binding at the annotation's scheme:
     // polymorphic recursion.
     let recursive = "\

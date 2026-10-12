@@ -4099,3 +4099,7 @@ function h3(x) { return x; }
 const r0 = h1(true);
 r0;
 
+const p = { l: 1 }; /** const f: <a>(a) => a */ const f = (y) => { const g = true ? (o) => o.l : (o) => y; return y; };
+
+/** const f: <a>(a) => a */ const f = (y) => { const g = true ? (o) => y : (o) => y; return y; };
+
