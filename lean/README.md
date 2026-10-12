@@ -322,7 +322,7 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 
 | Lean | inty |
 |---|---|
-| `Ty`: a type variable, a constructor (`Con`) applied to types (`number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type), `array`), or the `i`-th type of a system of recursive equations (`mu i sys`, right-hand sides `RTy` referring to the system's types as `self j`) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`; a `mu` is a `Type::Named` with its equation in `InferState::named_types`) |
+| `Ty`: a type variable, a constructor (`Con`) applied to types (`number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type), `array`), or the `i`-th type of a system of recursive equations (`mu i sys`, right-hand sides `RTy` referring to the system's types as `self j`) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` is `Number`; a `mu` is a `Type::Named` with its equation in `InferState::named_types`) |
 | `TyEq` (`Inty/Equi.lean`): equality up to unfolding, as the unfolded trees' finite approximations | `unify` on `Named` types (`unroll_named`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
 | `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `*`, `/`, `<`, `<=`, `>`, `>=` (of numbers), `===`, `!==`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals (a field holds a value, or is a method `l(…) {…}` or a getter `get l() {…}` written as a function expression whose `this` is the literal's type: `FieldSlot`), property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
@@ -492,9 +492,12 @@ These choices are meant to hold up as the calculus grows.
   elements; `e[i]` with `i` not a whole number below the length is
   `Result.fault`, which soundness allows, as `dynamics`' `OutOfBounds`
   (JavaScript reads `undefined`). A store at the length appends.
-- **`Int` is folded into `number`.** inty's `Int ≤ Number`, with the `Num`
-  and `Arith` classes, is phase 4 of the roadmap; so is inty's rule that
-  an index is an `Int`, where the model takes any number.
+- **Numbers are one type, `number`, as in JavaScript.** inty had an `Int`
+  type beside `Number`, with `Int ≤ Number` and classes deciding which an
+  operation gave; it now has one number type too, and its Go backend finds
+  the integers by an analysis of its own, outside the type system
+  (`crates/inty-go/src/kinds.rs`), which can't reject a program. An index
+  is any number; a fractional one is out of bounds, a fault.
 - **Where the interpreter isn't JavaScript.** Besides the faults: a
   string is a sequence of code points, as `dynamics`' are, where
   JavaScript's are UTF-16 units (`"😀".length` is 1 here, 2 there); `new`
@@ -559,9 +562,9 @@ an initialiser, a `let` or a parameter taken apart by a test and
 assigned, a getter or a method beside a spread). Of the programs the unit tests check,
 1242 are in the fragment (some tests generate theirs at random, so the
 corpus keeps each program it once recorded); inty and the model agree on
-accepting each but eight, listed with their reasons in
+accepting each but five, listed with their reasons in
 `tests/model_corpus/known.txt`. Where both accept, the test compares more:
-the types, compared by their heads (760 programs have the same), and the
+the types, compared by their heads (761 programs have the same), and the
 values, where the model's type isn't `undefined`: inty's `dynamics`, the
 model's `eval` and Node give the same on 630. A type or value that
 differs, an accepted program that gets stuck, or one Node raises an error
@@ -569,16 +572,17 @@ on fails the test. Without the model built the test skips; CI sets
 `INTY_REQUIRE_MODEL`, under which it, and the differential test, fail
 instead.
 
-The eight:
+The five:
 
-- an `Int` index, an annotated object type's method using `this` (a
-  member of an object type is called on the object in inty), a record
-  indexed by a string variable, inty's spread over an operand of an
-  unknown type, a `typeof` test for a tag no case has (inty warns that the
-  branch is dead), `never` from a `while (true)` body, and (twice) a
-  property read on an arithmetic result, which inty leaves on the
-  variable its `Arith` class constrains, where the model's numbers are one
-  type.
+- an annotated object type's method using `this` (a member of an object
+  type is called on the object in inty), a record indexed by a string
+  variable, inty's spread over an operand of an unknown type, a `typeof`
+  test for a tag no case has (inty warns that the branch is dead), and
+  `never` from a `while (true)` body.
+
+Three more went when inty's numbers became one type: an index with a
+fraction, and (twice) a property read on an arithmetic result, which
+inty left on the variable its `Arith` class constrained.
 
 Writing the lowering found the model's assignment to an annotated `let`
 unifying the value with the annotation rather than checking it against
@@ -646,8 +650,6 @@ disagreements in typing all fall into features the model lacks:
 | Divergence | inty | model | Roadmap phase |
 |---|---|---|---|
 | A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 5 |
-| `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 4 |
-| An index that is a `Number`: `xs[n - 0.5]` | rejects (an index is an `Int`) | accepts (a fractional index is out of bounds, a fault) | 4 |
 | A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
 | A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 5 (`never`) |
 | A field every arm of a discriminated union has, read without a test of the tag: `v.kind` | accepts (the union of the arms' field types) | rejects (a variant's fields are read once a test takes it apart) | 7 |
@@ -714,9 +716,9 @@ method. Over 21,000 programs (seven seeds), about 9% with a class, it
 finds no other disagreement.
 
 Each row is recognised from evidence, not guessed: a union in the
-types inty gave the program's expressions, inty accepting the program
-once its number literals are made fractional, or an error of inty's
-between `Int` and `Number`. The harness's first run also
+types inty gave the program's expressions, say. (Two rows, `Int` and
+`Number` under a function type and an index that is a `Number`, went
+when inty's numbers became one type.) The harness's first run also
 found that `meta::soundness::check_program` never called
 `resolve_constraints`, so it could accept programs the CLI rejects; it does
 now.

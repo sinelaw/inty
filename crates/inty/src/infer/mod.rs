@@ -839,7 +839,8 @@ impl InferState {
                     // declaration; unifying propagates the real type
                     // to those references via the substitution.
                     // A `const` is only read through the placeholder, so
-                    // its value flows into those uses (`Int ≤ Number`); a
+                    // its value flows into those uses (a literal into its
+                    // base type, a value into a sum); a
                     // `let` / `var` can also be written through one, so the
                     // types must agree.
                     let unify_hoisted =

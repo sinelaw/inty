@@ -726,9 +726,9 @@ impl InferState {
                 let test_type = self.infer_expr(env, test)?;
                 // Symmetric "comparable" check, like `===`: the case
                 // test value is matched against the discriminator at
-                // runtime, so either may subsume the other. Numbers
-                // compare whatever their kind (an `Int` case on a `Number`
-                // discriminant), as with `<`.
+                // runtime, so either may subsume the other. A number
+                // literal case on a `Number` discriminant compares as a
+                // number, as with `<`.
                 if self.is_numeric(&disc_type) || self.is_numeric(&test_type) {
                     self.require_num(span, &disc_type)?;
                     self.require_num(span, &test_type)?;

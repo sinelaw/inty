@@ -945,7 +945,7 @@ impl InferState {
                 (Some(a), Some(p)) => {
                     self.unify_presence(span, &a.presence, &p.presence)?;
                     // Subsumption matters where the parameter is a union or
-                    // a `Number` (an `Int` argument fits); elsewhere it is
+                    // a `Number` (a number literal fits); elsewhere it is
                     // unification, done directly (no snapshot).
                     if matches!(
                         self.zonk(&p.ty),

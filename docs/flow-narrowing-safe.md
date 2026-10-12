@@ -91,7 +91,7 @@ down into branches, never updated by assignments.
    - `typeof`, `isinstance`, truthiness per language, `!`, `&&`, `||`
      and `?:` work as in the current PR.
 
-   Deciding by type fixes #3a: a local `const undefined = 0` is an `Int`,
+   Deciding by type fixes #3a: a local `const undefined = 0` is a `Number`,
    not the unit value.
 3. **Early exit:**
    - After `if (c) S`, where `S` always returns, throws, breaks or
@@ -204,7 +204,7 @@ The same review's other findings are fixed too:
 - **Impossible branches:** a narrowing that leaves no possible type (a
   dead branch) keeps the declared type and only warns. An inexact
   predicate table then costs precision, never soundness.
-- **The tables:** `typeof` of a regex or tuple is `"object"`, an `Int`
+- **The tables:** `typeof` of a regex or tuple is `"object"`, a number
   may equal a non-finite literal, and Python's `True == 1` is allowed
   for.
 - **Destructuring defaults:** they are no longer dropped by the parser.

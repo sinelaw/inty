@@ -527,7 +527,7 @@ fn load_module(
             .push((path.display().to_string(), started.elapsed()));
     }
     // Through the substitution: a binding's type can be a variable the end
-    // of inference decided (`export let n = 0` defaults to `Int`), and
+    // of inference decided, and
     // what reads the environment next (declarations, importers) has no
     // substitution to apply.
     let module_env = module_env.map_schemes(|s| {
@@ -1465,7 +1465,7 @@ mod tests {
              const xs = [\"a\"];\n\
              const x = xs[view.count];",
         );
-        check(dir.path(), "main.js").expect("start is a Number, count an Int");
+        check(dir.path(), "main.js").expect("start and count are Numbers");
     }
 
     fn tempdir() -> TempDir {

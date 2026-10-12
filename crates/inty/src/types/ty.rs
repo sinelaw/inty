@@ -454,7 +454,7 @@ pub enum LitValue {
     Bool(bool),
 }
 
-/// Whether a number is an `Int` value: a *safe* integer — no fractional
+/// Whether a number is a *safe* integer — no fractional
 /// part, `|n| ≤ 2^53` (every integer in that range is a distinct double),
 /// and not `-0` (which prints, and divides, differently from `0`).
 pub fn is_safe_int(n: f64) -> bool {

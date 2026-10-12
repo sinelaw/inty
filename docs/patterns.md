@@ -47,12 +47,12 @@ the way to type anything the stdlib doesn't, and to keep the checked code
 testable without a browser.
 
 **Buffer views** are one such API: `new Float32Array(memory.buffer, ptr,
-len)` would make the constructor's first parameter `Int | ArrayBuffer`,
+len)` would make the constructor's first parameter `Number | ArrayBuffer`,
 which an unannotated argument can't choose between, so the stdlib declares
 only `new Float32Array(n)`. Declare the view in the FFI module:
 
 ```javascript
-/** const f32view: (buffer: ArrayBuffer, byteOffset: Int, length: Int) => Float32Array */
+/** const f32view: (buffer: ArrayBuffer, byteOffset: Number, length: Number) => Float32Array */
 export const f32view;
 ```
 
@@ -76,13 +76,13 @@ that use them, with identity casts in a small module (`x => x` at runtime):
 
 ```javascript
 // globals.d.js
-/** nominal type InsertIx = Int */
-/** nominal type TrackIx = Int */
+/** nominal type InsertIx = Number */
+/** nominal type TrackIx = Number */
 
 // brands.d.js (brands.js: `export const insertIx = (n) => n;` …)
-/** const insertIx: (Int) => InsertIx */
+/** const insertIx: (Number) => InsertIx */
 export const insertIx;
-/** const insertIndex: (InsertIx) => Int */
+/** const insertIndex: (InsertIx) => Number */
 export const insertIndex;
 ```
 
@@ -128,7 +128,7 @@ Build an outgoing message with an object literal of the right shape, or a
 *Still good design; no longer needed for speed or to avoid recursive aliases.*
 
 Rosaclef's UI builds a flat array of nodes with parent indices and talks to
-a backend through `Int` handles (a DOM backend in the browser, a memory
+a backend through integer handles (a DOM backend in the browser, a memory
 backend in Node tests). That keeps the UI testable without a browser.
 Recursive aliases (`type Node = { children: Node[] }`) now work, and inty no
 longer slows down on the DOM's big rows (the cost was copying them, see
@@ -163,24 +163,12 @@ if (t !== undefined) t.write(s);
 
 ## Explicit numeric annotations
 
-*Mostly no longer needed.*
+*No longer needed.*
 
-A field initialised with an integer literal takes its type from its uses
-(`{ volume: 1 }` then `state.volume = 0.5` makes it a `Number`), across
-modules too: an imported module's integer-literal fields are decided by
-its importers' uses. An annotation is still needed where both happen — a
-field used as an index (an `Int`) *and* given fractions — and the error then
-says so, with the annotation to write:
-
-```
-Error: Type mismatch: expected 'Int', found '0.5'
-  Help: 'volume' was inferred Int from its integer initializer and its
-  uses; if it holds fractions, declare it a Number where the object is
-  written: `volume /*: Number */: 0`
-```
-
-A non-literal `Int` (`xs.length`, `Math.round(x)`) now fits a `Number`
-field of a returned or annotated record, and a callback's result.
+inty has one number type, `Number`, as JavaScript has, so a field
+initialised with an integer and later given a fraction is just a
+`Number`. Which numbers are integers is for the Go backend to work out,
+from where values flow; nothing in the program says it.
 
 ## Typed empty-array seeding for late-initialised state
 
