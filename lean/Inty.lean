@@ -20,6 +20,7 @@ import Inty.RigidKeys
 import Inty.InferComplete
 import Inty.Principal
 import Inty.Textbook
+import Inty.NoTimeout
 import Inty.PolyAnn
 import Inty.Builtins
 import Inty.Examples

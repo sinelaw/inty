@@ -3,6 +3,7 @@ import Inty.InferComplete
 import Inty.Principal
 import Inty.Textbook
 import Inty.PolyAnn
+import Inty.NoTimeout
 import Inty.PinCount
 
 /-!
@@ -42,6 +43,12 @@ example : ∀ {L : List String} {C : List Pred} {rm md : Mode} {e : Expr} {τ : 
     HasType L C [] none rm md e τ → HoldsOrVar C → ∀ (clock : Nat) (s : Stuck),
       eval clock [] [] e ≠ .stuck s :=
   never_stuck
+
+/-- The clock counts calls and loop iterations only: a program that makes no
+call, runs no loop and defines no getter never runs out of it, whatever it
+is. -/
+example : ∀ {e : Expr}, e.noClock = true → ∀ (clock : Nat), eval clock [] [] e ≠ .timeout :=
+  eval_noClock
 
 example : ∀ {L : List String} {C : List Pred} {rm md : Mode} {e : Expr} {τ : Ty},
     HasType L C builtinCtx none rm md e τ → HoldsOrVar C →

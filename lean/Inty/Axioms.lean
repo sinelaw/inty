@@ -3,6 +3,7 @@ import Inty.InferComplete
 import Inty.Principal
 import Inty.Textbook
 import Inty.PolyAnn
+import Inty.NoTimeout
 
 /-!
 # Axiom audit
@@ -86,3 +87,6 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.polyId_polyOK' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.polyId_polyOK
+
+/-- info: 'Inty.eval_noClock' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.eval_noClock
