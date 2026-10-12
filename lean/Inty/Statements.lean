@@ -6,6 +6,7 @@ import Inty.PolyAnn
 import Inty.NoTimeout
 import Inty.AssignSub
 import Inty.MergeScheme
+import Inty.LabelWeaken
 import Inty.PinCount
 
 /-!
@@ -230,6 +231,21 @@ example : ∀ {s : Scheme} {F : List Nat} {τ₂ : Ty},
       HasType ["a"] ([] ++ s.openPreds m) [] none .synth .synth spreadFn (s.open m)) →
     HasType ["a"] [] [s] none .synth .synth spreadUses τ₂ → ∃ p ∈ s.preds, p.cls = .merge :=
   spreadMerge_needed
+
+/-- Records are over the program's labels; with fresh labels, every typing
+is one over the new labels, each record over the old ones given an absent
+slot for each new label. -/
+example : ∀ {L L' : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
+    {e : Expr} {τ : Ty}, (∀ l ∈ L', l ∉ L) → HasType L C Γ R rm md e τ →
+    HasType (L ++ L') (C.map (Pred.ext L L')) (Γ.map (Scheme.ext L L')) (R.map (Ty.ext L L'))
+      rm md (e.extAnn L L') (τ.ext L L') :=
+  HasType.extLabels
+
+example : (Ty.record ["a"] [.slot .pre .data .number]).ext ["a"] ["b"] =
+    .record ["a", "b"] [.slot .pre .data .number, .absSlot] := by decide
+
+example : (Ty.record ["c"] [.record ["a"] [.absSlot]]).ext ["a"] ["b"] =
+    .record ["c"] [.record ["a", "b"] [.absSlot, .absSlot]] := by decide
 
 example : spreadMerge = .let_ false none (.func 1 (.spread (.obj [] [] []) (.var 0)))
     (.seq (.app (.var 0) [.obj ["a"] [.lit (.number 1)] [.data]]) (.app (.var 0) [.obj [] [] []])) :=
