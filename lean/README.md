@@ -461,7 +461,7 @@ module, a loop other than `while`, `?.`, `??`) or whose lowering would
 change its meaning (a name used before its declaration, `let x;` without
 an initialiser, a `let` or a parameter taken apart by a test and
 assigned, a getter or a method beside a spread). Of the programs the unit tests check,
-949 are in the fragment (some tests generate theirs at random, so the
+1242 are in the fragment (some tests generate theirs at random, so the
 corpus keeps each program it once recorded); inty and the model agree on
 accepting each but eight, listed with their reasons in
 `tests/model_corpus/known.txt`:
