@@ -595,6 +595,8 @@ theorem InferInv.check {e : Expr} (ih : InferInv L e) {Γ : Ctx} {R : Option Ty}
     simp only [checkEx]
     split
     · exact ⟨hn, hσ, hτ, hp⟩
+    split
+    · exact ⟨hn, hσ, hT, hp⟩
     · refine ⟨hn, hσ, hT, fun p hp' => ?_⟩
       simp only [List.mem_append, List.mem_singleton] at hp'
       rcases hp' with hp' | rfl
@@ -1282,7 +1284,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     · cases h
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
-    obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := ih₁ (by ret_ok) .none hΓ hR h₁
+    obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check ih₁ (by ret_ok) (Ex.Closed.some rfl) hΓ hR h₁
     obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ih₂ (by ret_ok) hex (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hτ₂, ?_⟩
@@ -1303,7 +1305,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
     obtain ⟨hn₁, hσ₁, _, hp₁⟩ := ihc (by ret_ok) .none hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihb (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := InferInv.check ihb (by ret_ok) (Ex.Closed.some rfl)
+      (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, fun a ha => by simp [Ty.ftv] at ha,
       ?_⟩
@@ -1354,7 +1357,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
     obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := InferInv.check ihb (by ret_ok) hex hΓ hR h₁
-    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := ihf (by ret_ok) .none (hσ₁.ctx_below (hΓ.mono hn₁))
+    obtain ⟨hn₂, hσ₂, _, hp₂⟩ := InferInv.check ihf (by ret_ok) (Ex.Closed.some rfl)
+      (hσ₁.ctx_below (hΓ.mono hn₁))
       (hσ₁.ret_below (hR.mono hn₁)) h₂
     refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hσ₂.subst_below (hτ₁.mono hn₂), ?_⟩
     intro p hp

@@ -945,5 +945,6 @@ theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List N
     exact iha q hq
   | conv _ he ih => exact .conv ih (he.rsub ρ)
   | inj _ hT hi ih => exact .inj ih (hS.closed hT) (by rw [← hS.injPred]; exact hi.rsubS hS)
+  | drop _ ih => exact .drop ih
 
 end Inty

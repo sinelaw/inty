@@ -387,6 +387,11 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100
   "(app (func 1 (letpoly 1 (fn (tv 0) (tv 0)) (func 1 (seq (arr (var 3) (var 0)) (var 0))) (var 1))) (num 1 0))" ==
   s!"reject;value num {(1 : Float).toBits}"
+-- A statement's value is dropped: the branches of an `if` whose value
+-- nothing uses needn't have one type.
+#guard verdict 100 "(seq (cond (bool true) (num 1 0) (str s:a)) (num 2 0))" ==
+  s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100 "(cond (bool true) (num 1 0) (str s:a))" == s!"reject;value num {(1 : Float).toBits}"
 #guard verdict 100 "(throw (num 1 0))" == s!"type var;thrown num {(1 : Float).toBits}"
 #guard verdict 100 "(ret (num 1 0))" == "reject;returned num 4607182418800017408"
 #guard verdict 100 "(letmut (num 1 0) (seq (assign 0 (str s:a)) (var 0)))" ==

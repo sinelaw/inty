@@ -432,6 +432,9 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
   | inj _ hT hi ih =>
     intro Γ' R' hg hR hRc
     exact .inj (ih hg hR hRc) hT hi
+  | drop _ ih =>
+    intro Γ' R' hg hR hRc
+    exact .drop (ih hg hR hRc)
 
 /-- An `Inject` of a type equal to its expected one, which has no type
 variables, is an instance. -/
@@ -513,5 +516,6 @@ theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
     exact .mcall (ihe hm hR he hρ) hp hlen (fun p hp => iha p hp hm hR he hρ)
   | conv _ he' ih => intro ρ' ρ hm hR he hρ; exact .conv (ih hm hR he hρ) he'
   | inj _ hT hi ih => intro ρ' ρ hm hR he hρ; exact .inj (ih hm hR he hρ) hT hi
+  | drop _ ih => intro ρ' ρ hm hR he hρ; exact .drop (ih hm hR he hρ)
 
 end Inty

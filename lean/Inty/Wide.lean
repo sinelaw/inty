@@ -323,5 +323,6 @@ theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
   | mcall _ hp hlen _ ihe iha => exact .mcall ihe (by simpa [Pred.toW] using hp.toW) hlen iha
   | conv _ he ih => exact .conv ih he
   | inj _ _ hi ih => exact .inj ih trivial hi.toW
+  | drop _ ih => exact .drop ih
 
 end Inty

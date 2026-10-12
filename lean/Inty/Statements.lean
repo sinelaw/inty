@@ -99,6 +99,13 @@ example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → e.monoAnn = true →
     ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferProgram_complete
 
+/-- A statement's value is dropped: an expression is checked against
+`unknown`, whatever type it synthesises, and `e₁` of `e₁; e₂` is so checked. -/
+example : HasType L C Γ R rm .synth e τ → HasType L C Γ R rm .check e .unknown := .drop
+
+example : HasType L C Γ R rm .check e₁ .unknown → HasType L C Γ R rm md e₂ τ →
+    HasType L C Γ R rm md (.seq e₁ e₂) τ := .seq
+
 /-- Completeness is for programs whose annotations are all monomorphic. -/
 example : (Expr.let_ m ann e₁ e₂).monoAnn =
     ((ann.all fun a => a.arity == 0) && e₁.monoAnn && e₂.monoAnn) := by

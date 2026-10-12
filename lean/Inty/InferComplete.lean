@@ -1154,12 +1154,13 @@ def InferComplete (L : List String) (e : Expr) : Prop :=
       Sat C o.preds φ
 
 /-- A check-mode derivation of an expression that doesn't take the expected
-type in injects a synthesised type into it. -/
+type in injects a synthesised type into it, or drops it (into `unknown`). -/
 theorem HasTypeS.inj_inv {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
     {e : Expr} {T : Ty} (h : HasType L C Γ R rm .check e T) (hp : e.pushes T = false) :
-    ∃ τ₀, HasType L C Γ R rm .synth e τ₀ ∧ Entails C ⟨.inject T, [τ₀]⟩ := by
+    ∃ τ₀, HasType L C Γ R rm .synth e τ₀ ∧ (T = .unknown ∨ Entails C ⟨.inject T, [τ₀]⟩) := by
   cases h with
-  | inj h _ hi => exact ⟨_, h, hi⟩
+  | inj h _ hi => exact ⟨_, h, .inr hi⟩
+  | drop h => exact ⟨_, h, .inl rfl⟩
   | funcCheck hw _ hlen _ => simp [Expr.pushes, funcTarget, hw, hlen] at hp
   | arrCheck hw _ _ => simp [Expr.pushes, arrTarget, hw] at hp
   | _ => simp [Expr.pushes] at hp
@@ -1190,9 +1191,18 @@ theorem InferComplete.check {e : Expr} (ih : InferComplete L e) {Γ : Ctx} {R : 
       obtain ⟨o, h, φ, hag, hty, hsat⟩ := ih hRo hRc hex
         ⟨by simp [exMode, hp'], fun _ hT h => by cases hT; exact absurd h hp⟩ hΓ hR hC hΓ' hR' ht₀
       refine ⟨checkEx (some τ') e o, by simp [h], φ, by rw [checkEx_σ]; exact hag, ?_, ?_⟩
-      · simp only [checkEx, hp', Bool.false_eq_true, ↓reduceIte, Ty.closed_subst hT]
+      · by_cases hu : τ' = .unknown
+        · subst hu
+          simp only [checkEx, hp', Bool.false_eq_true, ↓reduceIte]
+          exact TyEq.refl _
+        simp only [checkEx, hp', hu, Bool.false_eq_true, ↓reduceIte, Ty.closed_subst hT]
         exact TyEq.refl _
-      · simp only [checkEx, hp', Bool.false_eq_true, ↓reduceIte, Sat.append]
+      · by_cases hu : τ' = .unknown
+        · subst hu
+          simp only [checkEx, hp', Bool.false_eq_true, ↓reduceIte]
+          exact hsat
+        replace hi := hi.resolve_left hu
+        simp only [checkEx, hp', hu, Bool.false_eq_true, ↓reduceIte, Sat.append]
         refine ⟨hsat, fun c hc => ?_⟩
         simp only [List.mem_singleton] at hc; subst hc
         exact hi.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons hty.symm zip_tyEq_nil))
@@ -2382,6 +2392,22 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
       have hσ : TyEq σ' σ := (TyEq.app_iff.mp heq).2.2 (σ', σ) (by simp)
       exact .arrCheck hw hT (fun e he => .inj (hes e he) hσc (.inl (Pred.inject_self hσc hσ)))
     | _ => simp [Expr.pushes] at hp
+  | drop h' =>
+    -- Dropped: the synthesised derivation's parts are checked against
+    -- `unknown` in its place.
+    obtain ⟨_, -, ht⟩ := h'.top_synth
+    cases ht with
+    | cond hc ht he' => exact .cond hc (.drop ht) (.drop he')
+    | let_ s F h₁ hv hs ha h₂ => exact .let_ s F h₁ hv hs ha (.drop h₂)
+    | letPoly a K h0 hp' hf hr h₁ hv hw h₂ => exact .letPoly a K h0 hp' hf hr h₁ hv hw (.drop h₂)
+    | ret h => exact .ret h
+    | seq h₁ h₂ => exact .seq h₁ (.drop h₂)
+    | break_ => exact .break_
+    | continue_ => exact .continue_
+    | tryCatch hb hh => exact .tryCatch (.drop hb) (.drop hh)
+    | tryFinally hb hf => exact .tryFinally (.drop hb) hf
+    | unwrap h₁ hs h₂ h₃ => exact .unwrap h₁ hs (.drop h₂) (.drop h₃)
+    | _ => simp [Expr.pushes, funcTarget, arrTarget] at hp
 
 /-- A derivation in the mode an expected type gives an expression that takes
 it in ends, but for conversions, with that expression's rule. -/
@@ -2976,8 +3002,10 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
     cases ht with
     | seq ht₁ ht₂ =>
       subst hmd'
-      obtain ⟨o₁, h₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ih₁ (by ret_ok) (by ret_eq) .none .none hΓ hR hC hΓ' hR' ht₁
-      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e₁ (by ret_ok) .none hΓ hR h₁
+      obtain ⟨o₁, h₁, φ₁, hag₁, -, hsat₁⟩ := InferComplete.check ih₁ (by ret_ok) (by ret_eq)
+        (Ex.Closed.some rfl) (fun _ h => by cases h; rfl) hΓ hR hC hΓ' hR' ht₁
+      obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check (infer_inv L e₁) (by ret_ok) (Ex.Closed.some rfl)
+        hΓ hR h₁
       have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
       have hR₁ := hσ₁.ret_below (hR.mono hn₁)
       obtain ⟨o₂, h₂, φ₂, hag₂, hτ₂, hsat₂⟩ := InferComplete.check ih₂ (by ret_ok) (by ret_eq) hex hτT
@@ -3000,7 +3028,8 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
       obtain ⟨hn₁, hσ₁, _, hp₁⟩ := infer_inv L c (by ret_ok) .none hΓ hR h₁
       have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
       have hR₁ := hσ₁.ret_below (hR.mono hn₁)
-      obtain ⟨o₂, h₂, φ₂, hag₂, _, hsat₂⟩ := ihb (by ret_ok) (by ret_eq) .none .none (ψ := φ₁) hΓ₁ hR₁ hC
+      obtain ⟨o₂, h₂, φ₂, hag₂, _, hsat₂⟩ := InferComplete.check ihb (by ret_ok) (by ret_eq)
+        (Ex.Closed.some rfl) (fun _ h => by cases h; rfl) (ψ := φ₁) hΓ₁ hR₁ hC
         (hΓ'.trans (hag₁.ctx hΓ).symm) (hR'.trans (hag₁.ret hR).symm) hb
       exact ⟨⟨Subst.compose o₂.σ o₁.σ, .undefined, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₀,
@@ -3064,7 +3093,8 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
       obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := InferInv.check (infer_inv L body) hRo hex hΓ hR h₁
       have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
       have hR₁ := hσ₁.ret_below (hR.mono hn₁)
-      obtain ⟨o₂, h₂, φ₂, hag₂, _, hsat₂⟩ := ihf (by ret_ok) (by ret_eq) .none .none (ψ := φ₁) hΓ₁ hR₁ hC
+      obtain ⟨o₂, h₂, φ₂, hag₂, _, hsat₂⟩ := InferComplete.check ihf (by ret_ok) (by ret_eq)
+        (Ex.Closed.some rfl) (fun _ h => by cases h; rfl) (ψ := φ₁) hΓ₁ hR₁ hC
         (hΓ'.trans (hag₁.ctx hΓ).symm) (hR'.trans (hag₁.ret hR).symm) hf
       exact ⟨⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂,

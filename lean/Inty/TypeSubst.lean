@@ -312,6 +312,7 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
   | conv _ he ih => exact .conv ih (he.subst σ)
   | inj _ hT hi ih =>
     exact .inj ih (hS.closed σ hT) (by rw [← hS.injPred σ _ hT]; exact hi.substS hS σ)
+  | drop _ ih => exact .drop ih
 
 /-- The narrow system survives substitution. -/
 theorem Sys.narrow_substable : Sys.narrow.Substable where

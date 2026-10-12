@@ -919,6 +919,7 @@ theorem IsValue.run_value (hv : e.IsValue) (ht : HasTypeS Sys.wide L C Γ R rm m
     exact ⟨v, by simp [run, hℓ, hv]⟩
   case conv ih => exact ih hv hG
   case inj ih => exact ih hv hG
+  case drop ih => exact ih hv hG
   all_goals cases hv
 
 /-! ## Objects -/
@@ -2178,16 +2179,22 @@ theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVarW C)
     exact (V_whnf_var hw hv).elim
 
 /-- What a derivation's last rule makes safe at its type is safe at the
-derivation's: an equal type, or an annotation's type the value is
-injected into. -/
+derivation's: an equal type, an annotation's type the value is injected
+into, or `unknown`. -/
 theorem Safe.lift {p : Ran} {k : Nat} {W : World} {τ₀ τ : Ty} {R : Option Ty} {C : List Pred}
     {md md₀ : Mode} (hC : HoldsOrVarW C) (hl : LiftS Sys.wide C md md₀ τ₀ τ) (h : Safe p k W τ₀ R) :
     Safe p k W τ R := by
-  rcases hl with ⟨-, he, -⟩ | ⟨-, -, -, hi⟩
+  rcases hl with ⟨-, he, -⟩ | ⟨-, -, -, hi⟩ | ⟨-, -, rfl⟩
   · exact h.tyEq he
   · obtain ⟨hc, h | ⟨W', hW, hH, ⟨v, hv, hV⟩ | habr | hret⟩⟩ := h
     · exact ⟨hc, .inl h⟩
     · exact ⟨hc, .inr ⟨W', hW, hH, .inl ⟨v, hv, EntailsS.inject hC hi hV⟩⟩⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr hret)⟩⟩
+  · -- Dropped: every value is an `unknown`.
+    obtain ⟨hc, h | ⟨W', hW, hH, ⟨v, hv, -⟩ | habr | hret⟩⟩ := h
+    · exact ⟨hc, .inl h⟩
+    · exact ⟨hc, .inr ⟨W', hW, hH, .inl ⟨v, hv, by simp⟩⟩⟩
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inl habr)⟩⟩
     · exact ⟨hc, .inr ⟨W', hW, hH, .inr (.inr hret)⟩⟩
 

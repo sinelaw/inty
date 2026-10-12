@@ -406,9 +406,13 @@ def exMode : Option Ty → Expr → Mode
 
 /-- What inferring `e` against the expected type `ex` gives, at its call
 site: unchanged if `e` takes `ex` in; otherwise `e`'s type `τ`, synthesised,
-is injected into `ex`, a waiting constraint `Inject T τ` (`HasTypeS.inj`). -/
+is dropped if `ex` is `unknown` (`HasTypeS.drop`), or else injected into
+`ex`, a waiting constraint `Inject T τ` (`HasTypeS.inj`). -/
 def checkEx : Option Ty → Expr → Out → Out
-  | some T, e, o => if e.pushes T then o else ⟨o.σ, T, o.preds ++ [⟨.inject T, [o.τ]⟩], o.next⟩
+  | some T, e, o =>
+    if e.pushes T then o
+    else if T = .unknown then ⟨o.σ, T, o.preds, o.next⟩
+    else ⟨o.σ, T, o.preds ++ [⟨.inject T, [o.τ]⟩], o.next⟩
   | none, _, o => o
 
 @[simp] theorem checkEx_none (e : Expr) : checkEx none e = id := rfl
@@ -674,8 +678,9 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
     match infer Γ R rm none e n with
     | none => none
     | some o => some ⟨o.σ, .var o.next, o.preds, o.next + 1⟩
+  -- A statement's value is dropped: `e₁` is checked against `unknown`.
   | Γ, R, rm, ex, .seq e₁ e₂, n =>
-    match infer Γ R rm none e₁ n with
+    match (infer Γ R rm (some .unknown) e₁ n).map (checkEx (some .unknown) e₁) with
     | none => none
     | some o₁ =>
       match (infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm ex e₂ o₁.next).map (checkEx ex e₂) with
@@ -686,7 +691,8 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
     match infer Γ R rm none c n with
     | none => none
     | some o₁ =>
-      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm none body o₁.next with
+      match (infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm (some .unknown) body o₁.next).map
+          (checkEx (some .unknown) body) with
       | none => none
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, .undefined, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,
@@ -713,7 +719,8 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
     match (infer Γ R rm ex body n).map (checkEx ex body) with
     | none => none
     | some o₁ =>
-      match infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm none fin o₁.next with
+      match (infer (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm (some .unknown) fin o₁.next).map
+          (checkEx (some .unknown) fin) with
       | none => none
       | some o₂ =>
         some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds,

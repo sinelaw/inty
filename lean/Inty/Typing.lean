@@ -266,11 +266,11 @@ inductive HasTypeS (S : Sys) (L : List String) :
   | ret : HasTypeS S L C Γ (some τr) rm rm e τr → HasTypeS S L C Γ (some τr) rm md (.ret e) τ
   /-- `throw e;` throws any value and doesn't complete. -/
   | throw_ : HasTypeS S L C Γ R rm .synth e τe → HasTypeS S L C Γ R rm .synth (.throw_ e) τ
-  | seq : HasTypeS S L C Γ R rm .synth e₁ τ₁ → HasTypeS S L C Γ R rm md e₂ τ →
+  | seq : HasTypeS S L C Γ R rm .check e₁ .unknown → HasTypeS S L C Γ R rm md e₂ τ →
       HasTypeS S L C Γ R rm md (.seq e₁ e₂) τ
   /-- `while (c) body`: any test, read by truthiness; it completes with
   `undefined` (`infer_stmt_while`). -/
-  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .synth body τb →
+  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .check body .unknown →
       HasTypeS S L C Γ R rm .synth (.while_ c body) .undefined
   /-- `break;` and `continue;` don't complete, so they stand for any type.
   (That they are in a loop is checked apart, by `Expr.jumpsInLoop`.) -/
@@ -282,7 +282,7 @@ inductive HasTypeS (S : Sys) (L : List String) :
       HasTypeS S L C Γ R rm md (.tryCatch body handler) τ
   /-- `try { body } finally { fin }` has `body`'s type; `fin`'s value is
   dropped. -/
-  | tryFinally : HasTypeS S L C Γ R rm md body τ → HasTypeS S L C Γ R rm .synth fin τf →
+  | tryFinally : HasTypeS S L C Γ R rm md body τ → HasTypeS S L C Γ R rm .check fin .unknown →
       HasTypeS S L C Γ R rm md (.tryFinally body fin) τ
   /-- An object literal has a record type over the program's labels, with
   its fields present (`objSlots`), each slot as its kind says
@@ -374,6 +374,12 @@ inductive HasTypeS (S : Sys) (L : List String) :
   or `T` is `Nullable τ`, …). `T` has no type variables. -/
   | inj : HasTypeS S L C Γ R rm .synth e τ → S.closed T → EntailsS S C (S.injPred τ T) →
       HasTypeS S L C Γ R rm .check e T
+  /-- An expression whose value is discarded is checked against `unknown`,
+  the type of every value: a statement's, but a function body's last or a
+  program's (`e₁` of `e₁; e₂`, a loop's body, a `finally` block). Its type
+  is dropped, so the branches of a statement needn't have one type, as
+  inty types `if (c) { 1; } else { "a"; }`. -/
+  | drop : HasTypeS S L C Γ R rm .synth e τ → HasTypeS S L C Γ R rm .check e .unknown
 
 /-- A `HasType` derivation's last rule, other than a conversion: every
 derivation is one of these followed by conversions (`HasTypeS.top`), which
@@ -418,16 +424,16 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
       HasTypeS S L C Γ R rm .synth e₂ τ₂ → HasTypeTopS S L C Γ R rm .synth (.binop op e₁ e₂) τ
   | ret : HasTypeS S L C Γ (some τr) rm rm e τr → HasTypeTopS S L C Γ (some τr) rm md (.ret e) τ
   | throw_ : HasTypeS S L C Γ R rm .synth e τe → HasTypeTopS S L C Γ R rm .synth (.throw_ e) τ
-  | seq : HasTypeS S L C Γ R rm .synth e₁ τ₁ → HasTypeS S L C Γ R rm md e₂ τ →
+  | seq : HasTypeS S L C Γ R rm .check e₁ .unknown → HasTypeS S L C Γ R rm md e₂ τ →
       HasTypeTopS S L C Γ R rm md (.seq e₁ e₂) τ
-  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .synth body τb →
+  | while_ : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm .check body .unknown →
       HasTypeTopS S L C Γ R rm .synth (.while_ c body) .undefined
   | break_ : HasTypeTopS S L C Γ R rm md .break_ τ
   | continue_ : HasTypeTopS S L C Γ R rm md .continue_ τ
   | tryCatch : HasTypeS S L C Γ R rm md body τ →
       HasTypeS S L C (.mono .unknown :: Γ) R rm md handler τ →
       HasTypeTopS S L C Γ R rm md (.tryCatch body handler) τ
-  | tryFinally : HasTypeS S L C Γ R rm md body τ → HasTypeS S L C Γ R rm .synth fin τf →
+  | tryFinally : HasTypeS S L C Γ R rm md body τ → HasTypeS S L C Γ R rm .check fin .unknown →
       HasTypeTopS S L C Γ R rm md (.tryFinally body fin) τ
   | obj : es.length = ls.length → ks.length = ls.length → τs.length = ls.length →
       ss.length = ls.length → (∀ l ∈ ls, l ∈ L) →
@@ -485,10 +491,12 @@ abbrev HasTypeTop := HasTypeTopS Sys.narrow
 /-- How the type a derivation's last rule gives, `τ₀` in the mode `md₀`,
 comes to be the derivation's, `τ` in the mode `md`: by conversions of a
 synthesised type, or checked against an annotation's type `τ`, as it is or
-by an injection (`HasTypeS.inj`). -/
+by an injection (`HasTypeS.inj`), or dropped, checked against `unknown`
+(`HasTypeS.drop`). -/
 def LiftS (S : Sys) (C : List Pred) (md md₀ : Mode) (τ₀ τ : Ty) : Prop :=
   (md₀ = md ∧ TyEq τ₀ τ ∧ (md = .check → τ₀ = τ)) ∨
-    (md = .check ∧ md₀ = .synth ∧ S.closed τ ∧ EntailsS S C (S.injPred τ₀ τ))
+    (md = .check ∧ md₀ = .synth ∧ S.closed τ ∧ EntailsS S C (S.injPred τ₀ τ)) ∨
+    (md = .check ∧ md₀ = .synth ∧ τ = .unknown)
 
 /-- Lifting in the narrow system. -/
 abbrev Lift := LiftS Sys.narrow
@@ -503,14 +511,22 @@ theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
   induction h with
   | conv _ he ih =>
     obtain ⟨md₀, τ₀, ht, hl⟩ := ih
-    rcases hl with ⟨h₁, h₂, -⟩ | ⟨h, -⟩
+    rcases hl with ⟨h₁, h₂, -⟩ | ⟨h, -⟩ | ⟨h, -⟩
     · exact ⟨md₀, τ₀, ht, .inl ⟨h₁, h₂.trans he, fun h => by cases h⟩⟩
+    · cases h
     · cases h
   | inj _ hT hi ih =>
     obtain ⟨md₀, τ₀, ht, hl⟩ := ih
-    rcases hl with ⟨rfl, h₀, -⟩ | ⟨h, -⟩
-    · refine ⟨_, τ₀, ht, .inr ⟨rfl, rfl, hT, ?_⟩⟩
+    rcases hl with ⟨rfl, h₀, -⟩ | ⟨h, -⟩ | ⟨h, -⟩
+    · refine ⟨_, τ₀, ht, .inr (.inl ⟨rfl, rfl, hT, ?_⟩)⟩
       exact EntailsS.of_predEq (S.injPred_eq h₀.symm) hi
+    · cases h
+    · cases h
+  | drop _ ih =>
+    obtain ⟨md₀, τ₀, ht, hl⟩ := ih
+    rcases hl with ⟨rfl, -, -⟩ | ⟨h, -⟩ | ⟨h, -⟩
+    · exact ⟨_, τ₀, ht, .inr (.inr ⟨rfl, rfl, rfl⟩)⟩
+    · cases h
     · cases h
   | lit hl => exact ⟨_, _, .lit hl, .refl⟩
   | var hi hl hc => exact ⟨_, _, .var hi hl hc, .refl⟩
@@ -552,8 +568,9 @@ theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
 theorem HasTypeS.top_synth {S : Sys} (h : HasTypeS S L C Γ R rm .synth e τ) :
     ∃ τ₀, TyEq τ₀ τ ∧ HasTypeTopS S L C Γ R rm .synth e τ₀ := by
   obtain ⟨md₀, τ₀, ht, hl⟩ := h.top
-  rcases hl with ⟨rfl, h₀, -⟩ | ⟨h, -⟩
+  rcases hl with ⟨rfl, h₀, -⟩ | ⟨h, -⟩ | ⟨h, -⟩
   · exact ⟨τ₀, h₀, ht⟩
+  · cases h
   · cases h
 
 /-- A variable whose scheme is a monotype has that type. -/

@@ -501,14 +501,16 @@ theorem arrTarget_some {ex : Option Ty} {T' σ : Ty} (h : arrTarget ex = some (T
 
 theorem checkEx_ty {T : Ty} {e : Expr} {o : Out} (h : e.pushes T → o.τ = T) :
     (checkEx (some T) e o).τ = T := by
-  simp only [checkEx]; split <;> simp_all
+  simp only [checkEx]; split
+  · simp_all
+  · split <;> simp_all
 
 /-- What `checkEx` leaves unchanged but its type. -/
 theorem checkEx_σ (ex : Option Ty) (e : Expr) (o : Out) : (checkEx ex e o).σ = o.σ := by
-  cases ex <;> simp only [checkEx] <;> split <;> rfl
+  cases ex <;> simp only [checkEx] <;> split <;> (try split) <;> rfl
 
 theorem checkEx_next (ex : Option Ty) (e : Expr) (o : Out) : (checkEx ex e o).next = o.next := by
-  cases ex <;> simp only [checkEx] <;> split <;> rfl
+  cases ex <;> simp only [checkEx] <;> split <;> (try split) <;> rfl
 
 /-- An expression that takes in the expected type has it. -/
 theorem infer_pushes {T : Ty} (hT : T.ftv = []) : ∀ {e : Expr} {Γ : Ctx} {R : Option Ty}
@@ -696,7 +698,12 @@ theorem InferSound.check {e : Expr} (ih : InferSound L e) {Γ : Ctx} {R : Option
     by_cases hp : e.pushes T
     · simp only [checkEx, hp, ↓reduceIte] at hsat ⊢
       simpa [exMode, hp] using hs φ C hsat
-    · simp only [checkEx, hp, Bool.false_eq_true, ↓reduceIte, Sat.append] at hsat ⊢
+    · by_cases hu : T = .unknown
+      · -- Dropped.
+        subst hu
+        simp only [checkEx, hp, Bool.false_eq_true, ↓reduceIte] at hsat ⊢
+        exact .drop (by simpa [exMode, hp] using hs φ C hsat)
+      simp only [checkEx, hp, hu, Bool.false_eq_true, ↓reduceIte, Sat.append] at hsat ⊢
       have hi := hsat.2 _ (List.mem_singleton_self _)
       simp only [Pred.subst, List.map_cons, List.map_nil] at hi
       rw [Ty.closed_subst (hex T rfl)]
@@ -1519,7 +1526,9 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     rename_i o₂ h₂
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map, Sat.append] at hsat
-    have he₁ := ih₁ h₁ (by ret_ok) .none _ C hsat.1
+    have hu : Ex.Closed (some Ty.unknown) := Ex.Closed.some rfl
+    have he₁ := InferSound.check ih₁ h₁ (by ret_ok) hu _ C hsat.1
+    rw [InferSound.check_ty h₁ hu _ rfl] at he₁
     have he₂ := InferSound.check ih₂ h₂ (by ret_ok) hex _ C hsat.2
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
     exact .seq he₁ he₂
@@ -1536,7 +1545,9 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map, Sat.append] at hsat
     have hc := ihc h₁ (by ret_ok) .none _ C hsat.1
-    have hb := ihb h₂ (by ret_ok) .none _ C hsat.2
+    have hu : Ex.Closed (some Ty.unknown) := Ex.Closed.some rfl
+    have hb := InferSound.check ihb h₂ (by ret_ok) hu _ C hsat.2
+    rw [InferSound.check_ty h₂ hu _ rfl] at hb
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hc hb ⊢
     exact .while_ hc hb
   | break_ =>
@@ -1590,7 +1601,9 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     simp only [Option.some.injEq] at h; subst h
     simp only [Sat.map, Sat.append] at hsat
     have hb := InferSound.check ihb h₁ (by ret_ok) hex _ C hsat.1
-    have hf := ihf h₂ (by ret_ok) .none _ C hsat.2
+    have hu : Ex.Closed (some Ty.unknown) := Ex.Closed.some rfl
+    have hf := InferSound.check ihf h₂ (by ret_ok) hu _ C hsat.2
+    rw [InferSound.check_ty h₂ hu _ rfl] at hf
     simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at hb hf ⊢
     exact .tryFinally hb hf
 
