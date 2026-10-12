@@ -78,9 +78,21 @@ inductive Con where
   (`/** const id: <a>(a) => a */`). It is a constant there, which
   unification never binds; the annotated binding gets the annotation's
   scheme, every instance of which the initialiser has. An annotation's
-  rigid variables are named by the size of its initialiser `s`, so a
-  nested annotation, whose initialiser is smaller, has its own. -/
+  rigid variables are named by a key `s` apart from every other in sight
+  (`HasTypeS.letPoly` takes any key outside a finite set). -/
   | rigid (s i : Nat)
+  /-- The type of the one string `s`: a variant's tag field
+  (`{kind: "circle", …}`), which only a string literal checked against it
+  has. -/
+  | strLit (s : String)
+  /-- A variant tagged by its field `l`, with the tags `ts`, applied to the
+  types of its cases, the case of the tag `ts[i]` a record whose field `l`
+  holds that tag's string literal type: a discriminated union `{kind:
+  "circle", r: Number} | {kind: "square", w: Number}`. The tags are the
+  constructor's, so that a case is picked by its tag whatever is known of
+  the cases. Only an object literal checked against it makes one, and only
+  a test of the tag (`caseTag`) takes it apart. -/
+  | variant (l : String) (ts : List String)
   deriving DecidableEq, Repr
 
 /-- Whether a constructor is a rigid type variable. -/
@@ -245,6 +257,9 @@ as an absent field has no type in Rémy's rows. -/
 @[match_pattern] abbrev Ty.maybe (z : Nothing) (τ : Ty) : Ty := .app (.maybe z) [τ]
 @[match_pattern] abbrev Ty.nullable (τ : Ty) : Ty := .maybe .null τ
 @[match_pattern] abbrev Ty.optional (τ : Ty) : Ty := .maybe .undefined τ
+@[match_pattern] abbrev Ty.strLit (s : String) : Ty := .app (.strLit s) []
+@[match_pattern] abbrev Ty.variant (l : String) (ts : List String) (cases : List Ty) : Ty :=
+  .app (.variant l ts) cases
 
 /-- The constructor of the type of the value a sum adds. -/
 def Nothing.con : Nothing → Con
@@ -349,13 +364,18 @@ inductive Cls where
   /-- `InjectW τ T`: the wide system's injection (`Inty.Soundness`), with
   the expected type `T` an argument, so that a substitution reaches it. -/
   | injectW
+  /-- `Case_{l,t} τ σ ρ`: `τ` is a variant tagged by its field `l` with a
+  case of the tag `t`, `σ`, and `ρ` the rest of it, the cases of the other
+  tags (`variantRest`). It waits while `τ` is a type variable, so taking a
+  variant apart (`caseTag`) has a principal type. -/
+  | caseTag (l t : String)
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
 def Cls.arity : Cls → Nat
   | .plus | .indexWrite | .notNew | .inject _ => 1
   | .strip | .injectW => 2
-  | .indexable | .hasProp _ => 3
+  | .indexable | .hasProp _ | .caseTag _ _ => 3
   | .merge => 5
 
 /-- A class constraint: a class applied to types, such as `Plus a`. -/

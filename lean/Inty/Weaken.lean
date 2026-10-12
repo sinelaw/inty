@@ -354,6 +354,21 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
     have := hg.prepend (Δ := [.mono σ]) (monos_mono [] [.mono σ] (by simp [Scheme.mono]))
       (fun i hw => by simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
     exact ih₃ (by simpa using this) hR hRc
+  | @caseTag C Γ R rm e₁ τ₁ l t σ ρ md e₂ τ e₃ _ hc _ _ ih₁ ih₂ ih₃ =>
+    intro Γ' R' hg hR hRc
+    refine .caseTag (ih₁ (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc) hc ?_ ?_
+    · have := hg.prepend (Δ := [.mono ρ]) (monos_mono [] [.mono ρ] (by simp [Scheme.mono]))
+        (fun i hw => by simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.1.2)
+      exact ih₂ (by simpa using this) hR hRc
+    · have := hg.prepend (Δ := [.mono σ]) (monos_mono [] [.mono σ] (by simp [Scheme.mono]))
+        (fun i hw => by simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
+      exact ih₃ (by simpa using this) hR hRc
+  | litStr hw => intros; exact .litStr hw
+  | objCheck hc hn hk hl hL hd he _ ih =>
+    intro Γ' R' hg hR hRc
+    exact .objCheck hc hn hk hl hL hd he (fun p hp => ih p hp (hg.sub fun i hw => by
+      simp only [Expr.writes] at hw
+      exact Expr.writesList_false' hw _ (List.of_mem_zip hp).1) hR hRc)
   | tryFinally _ _ ihb ihf =>
     intro Γ' R' hg hR hRc
     exact .tryFinally (ihb (hg.sub fun i hw => by simp_all [Expr.writes]) hR hRc)
@@ -489,6 +504,13 @@ theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
   | unwrap _ hs _ _ ih₁ ih₂ ih₃ =>
     intro ρ' ρ hm hR he hρ
     exact .unwrap (ih₁ hm hR he hρ) hs (ih₂ hm hR he hρ) (ih₃ hm hR he hρ)
+  | caseTag _ hc _ _ ih₁ ih₂ ih₃ =>
+    intro ρ' ρ hm hR he hρ
+    exact .caseTag (ih₁ hm hR he hρ) hc (ih₂ hm hR he hρ) (ih₃ hm hR he hρ)
+  | litStr hw => intros; exact .litStr hw
+  | objCheck hc hn hk hl hL hd he' _ ih =>
+    intro ρ' ρ hm hR he hρ
+    exact .objCheck hc hn hk hl hL hd he' (fun p hp => ih p hp hm hR he hρ)
   | obj hes hks hτs hss hL _ hfs ih =>
     intro ρ' ρ hm hR he hρ
     exact .obj hes hks hτs hss hL (fun p hp => ih p hp hm hR he hρ) hfs

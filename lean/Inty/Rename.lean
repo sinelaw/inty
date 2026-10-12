@@ -181,6 +181,9 @@ theorem Inst.rsub {ρ : RSubst} (hρ : ρ.Renaming) {p : Pred} (h : Inst p) : In
       simpa [Pred.rsub, Cls.rsub, heq] using
         Inst.injectSome he' hT' ha' hc (by simpa using hz)
   | stripSome => simpa [Pred.rsub] using Inst.stripSome
+  | @caseHit ts i t Rs R l hn hi hR =>
+    simpa [Pred.rsub, Cls.rsub, variantRest_rsub, ← eraseIdx_map, Ty.rsub_app, Con.rimgA,
+      Con.rimg] using Inst.caseHit (l := l) (ts := ts) hn hi (by simp [hR])
   | @stripSelf c args h₁ h₂ h₃ =>
     rcases Ty.rsub_app_ren hρ c args with ⟨s, i, s', i', rfl, rfl, heq⟩ | heq
     · simpa [Pred.rsub, heq] using

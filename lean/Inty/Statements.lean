@@ -130,7 +130,7 @@ example : Pred.AssumableAt top p ↔
 example : Cls.arity c = match c with
     | .plus | .indexWrite | .notNew | .inject _ => 1
     | .strip | .injectW => 2
-    | .hasProp _ | .indexable => 3
+    | .hasProp _ | .indexable | .caseTag _ _ => 3
     | .merge => 5 := by
   cases c <;> rfl
 
@@ -261,8 +261,10 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     (∃ T z c args, TyEq T (.maybe z (.app c args)) ∧ T.ftv = [] ∧ (Ty.app c args).ftv = [] ∧
       c ≠ .maybe z ∧ ¬ (c = z.con ∧ args = []) ∧ p = ⟨.inject T, [.app c args]⟩) ∨
     (∃ z σ, p = ⟨.strip, [.maybe z σ, σ]⟩) ∨
-    ∃ c args, (∀ z, c ≠ .maybe z) ∧ c ≠ .null ∧ c ≠ .undefined ∧
-      p = ⟨.strip, [.app c args, .app c args]⟩ :=
+    (∃ c args, (∀ z, c ≠ .maybe z) ∧ c ≠ .null ∧ c ≠ .undefined ∧
+      p = ⟨.strip, [.app c args, .app c args]⟩) ∨
+    ∃ l ts Rs t R, ∃ i : Nat, ts.Nodup ∧ ts[i]? = some t ∧ Rs[i]? = some R ∧
+      p = ⟨.caseTag l t, [.variant l ts Rs, R, variantRest l (ts.eraseIdx i) (Rs.eraseIdx i)]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
@@ -291,12 +293,15 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     | stripSome =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, rfl⟩))))))))))))))))
     | stripSelf hm hn hu =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (⟨_, _, hm, hn, hu, rfl⟩))))))))))))))))),
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, hm, hn, hu, rfl⟩)))))))))))))))))
+    | caseHit hn hi hR =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, _, _, _, hn, hi, hR, rfl⟩))))))))))))))))),
    fun h => by
     rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
       ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ |
       ⟨c, args, hc, rfl⟩ | ⟨T, hT, rfl⟩ | ⟨T, z, σ, he, hT, rfl⟩ |
-      ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩ | ⟨z, σ, rfl⟩ | ⟨c, args, hm, hn, hu, rfl⟩
+      ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩ | ⟨z, σ, rfl⟩ | ⟨c, args, hm, hn, hu, rfl⟩ |
+      ⟨l, ts, Rs, t, R, i, hnd, hi, hR, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
@@ -314,7 +319,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .injectNothing he hT
     · exact .injectSome he hT ha hc hn
     · exact .stripSome
-    · exact .stripSelf hm hn hu⟩
+    · exact .stripSelf hm hn hu
+    · exact .caseHit hnd hi hR⟩
 
 /-- A constraint left on a type variable, or a `Merge` waiting on one (each
 looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/
@@ -615,5 +621,24 @@ example : ¬ HasType L [] [] none .synth .synth (.app (.func 0 (.unop .neg (.var
           simp at hi; subst hi
           simp only [Scheme.mono_inst] at e₃
           exact ne_con (by simp) (hθ.symm.trans e₃)
+
+/-! ## Variants tagged by a field -/
+
+/-- A variant's values: one of its cases, a record with its tag. -/
+example : V k W (.variant l ts Rs) v ↔ ∃ i : Nat, ∃ R t ls slots ℓ τc,
+    Rs[i]? = some R ∧ ts[i]? = some t ∧ R.tagOf l = some t ∧ TyEq R (.record ls slots) ∧
+      v = .obj ℓ ∧ W[ℓ]? = some (.obj τc) ∧ TyEq (.record ls slots) τc := V_variant_def
+
+/-- What an object literal checked against `T` is checked against. -/
+example : ObjCase ls es T P ↔ P = T ∨ ∃ l ts Ps t, ∃ i : Nat, T.whnf = .variant l ts Ps ∧
+    litTag l ls es = some t ∧ firstIdx t ts = some i ∧ Ps[i]? = some P ∧ P.tagOf l = some t :=
+  ⟨fun h => by
+    cases h with
+    | self => exact .inl rfl
+    | variant hw hl hi hP ht => exact .inr ⟨_, _, _, _, _, hw, hl, hi, hP, ht⟩,
+   fun h => by
+    rcases h with rfl | ⟨l, ts, Ps, t, i, hw, hl, hi, hP, ht⟩
+    · exact .self
+    · exact .variant hw hl hi hP ht⟩
 
 end Inty.Statements

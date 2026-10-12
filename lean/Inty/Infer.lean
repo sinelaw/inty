@@ -150,6 +150,18 @@ def Pred.decideStrip (t σ : Ty) : Improve :=
     | _ => .eq σ (.app c args)
   | _ => .fail
 
+/-- A `Case_{l,t}` on a variant tagged by `l'` with the tags `ts` and the
+cases `Ps`: the case of the tag `t` and the rest, if the tags differ. -/
+def Pred.decideCase (l t l' : String) (ts : List String) (Ps : List Ty) (σ ρ : Ty) : Improve :=
+  if l' = l ∧ ts.Nodup then
+    match firstIdx t ts with
+    | some i =>
+      match Ps[i]? with
+      | some P => .eq (.tuple [σ, ρ]) (.tuple [P, variantRest l (ts.eraseIdx i) (Ps.eraseIdx i)])
+      | none => .fail
+    | none => .fail
+  else .fail
+
 /-- Deciding a constraint whose first argument is known, as inty's
 `resolve_has_prop` and `resolve_indexable`: a record's field `l` must be
 present, of the kind and at the type the read gives; an array's or a
@@ -176,6 +188,7 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
   | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
   | .inject T, τ, [] => Pred.decideInject τ T
   | .strip, t, [σ] => Pred.decideStrip t σ
+  | .caseTag l t, .app (.variant l' ts) Ps, [σ, ρ] => Pred.decideCase l t l' ts Ps σ ρ
   | _, _, _ => .fail
 
 /-- `Pred.decide₀` on the known type unfolded (`Ty.whnf`): a property of a
@@ -381,6 +394,24 @@ def arrTarget : Option Ty → Option (Ty × Ty)
     | _ => none
   | none => none
 
+/-- The record an object literal with the labels `ls` and the expressions
+`es` is checked against, if `T` is expected of it: `T` itself, a record, or
+the case of a variant `T` the literal's tag picks. -/
+def objTarget (T : Ty) (ls : List String) (es : List Expr) : Option Ty :=
+  match T.whnf with
+  | .app (.record _) _ => some T
+  | .app (.variant l ts) Ps =>
+    match litTag l ls es with
+    | some t =>
+      match firstIdx t ts with
+      | some i =>
+        match Ps[i]? with
+        | some P => if P.tagOf l = some t then some P else none
+        | none => none
+      | none => none
+    | none => none
+  | _ => none
+
 /-- Whether checking `e` against `T` pushes `T` into it: into the branches
 of `?:` and `unwrap`, a sequence's last statement, a `let`'s body, a `try`, a function
 literal's body against a function type, an array literal's elements against
@@ -388,7 +419,10 @@ an array type; `return`, `break` and `continue` have any type. Any other
 expression is synthesised, and its type injected into `T`. -/
 def Expr.pushes (T : Ty) : Expr → Bool
   | .cond .. | .seq .. | .let_ .. | .tryCatch .. | .tryFinally .. | .ret _ | .break_
-  | .continue_ | .unwrap .. => true
+  | .continue_ | .unwrap .. | .caseTag .. => true
+  | .lit (.string s) => decide (T.whnf = .strLit s)
+  | .obj ls es ks =>
+    (objTarget T ls es).isSome && decide ls.Nodup && decide (ks = ls.map fun _ => .data)
   | .func k _ => (funcTarget (some T) k).isSome
   | .arr _ => (arrTarget (some T)).isSome
   | _ => false
@@ -489,7 +523,9 @@ checked against, if any, which `e` takes in if it can (`Expr.pushes`) and
 otherwise ignores, its caller injecting its type (`checkEx`); `n` is the
 first unused type variable. -/
 def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option Out
-  | _, _, _, _, .lit l, n => some ⟨[], l.ty, [], n⟩
+  -- A string literal checked against its own string type has it.
+  | _, _, _, ex, .lit l, n =>
+    some ⟨[], (ex.filter fun T => (Expr.lit l).pushes T).getD l.ty, [], n⟩
   | Γ, _, _, _, .var i, n =>
     match Γ[i]? with
     | some s => some ⟨[], s.open n, s.openPreds n, n + s.arity⟩
@@ -728,7 +764,24 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
   -- An object literal over the labels `L`: its fields present, each as
   -- its kind says, the other labels absent. A method's and a getter's
   -- `this` is the literal's type (`unifyThis`).
-  | Γ, R, rm, _, .obj ls es ks, n =>
+  -- An object literal checked against a record, or a variant's case:
+  -- each field against its type there, which must make that record.
+  | Γ, R, rm, ex, .obj ls es ks, n =>
+    match ex.filter fun T => (Expr.obj ls es ks).pushes T with
+    | some T =>
+      match objTarget T ls es with
+      | some P =>
+        match P.dataFields ls with
+        | some τs =>
+          if ls.all (· ∈ L) ∧ es.length = ls.length ∧
+              (unify P (.record L (objSlots L ls (τs.map fun τ => .slot .pre .data τ)))).isSome then
+            match inferFields Γ R rm es τs n with
+            | none => none
+            | some o => some ⟨o.σ, T, o.preds, o.next⟩
+          else none
+        | none => none
+      | none => none
+    | none =>
     if ls.all (· ∈ L) ∧ es.length = ls.length ∧ ks.length = ls.length then
       match inferArgs Γ R rm none es n with
       | none => none
@@ -917,6 +970,47 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
                 [(⟨.strip, [o₁.τ.subst o₂.σ, β]⟩ : Pred)]).map (·.subst o₃.σ) ++ o₃.preds).map
                 (·.subst σ₄),
               o₃.next⟩
+  -- A variant taken apart by its tag: `e₂` sees `e₁`'s value as the rest
+  -- (a fresh variable), `e₃` as the case of the tag (another), which
+  -- `Case_{l,t}` relates to `e₁`'s type; an expected type is pushed into
+  -- both branches.
+  | Γ, R, rm, ex, .caseTag e₁ l t e₂ e₃, n =>
+    match infer Γ R rm none e₁ n with
+    | none => none
+    | some o₁ =>
+      let ρv := Ty.var o₁.next
+      match (infer (.mono ρv :: Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm ex e₂ (o₁.next + 1)).map
+          (checkEx ex e₂) with
+      | none => none
+      | some o₂ =>
+        let σv := Ty.var o₂.next
+        match (infer (.mono σv :: Ctx.subst o₂.σ (Ctx.subst o₁.σ Γ))
+            (Ret.subst o₂.σ (Ret.subst o₁.σ R)) rm ex e₃ (o₂.next + 1)).map (checkEx ex e₃) with
+        | none => none
+        | some o₃ =>
+          match unify (o₂.τ.subst o₃.σ) o₃.τ with
+          | none => none
+          | some σ₄ =>
+            some ⟨Subst.compose σ₄ (Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ)), o₃.τ.subst σ₄,
+              ((o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
+                [(⟨.caseTag l t, [o₁.τ.subst o₂.σ, σv, ρv.subst o₂.σ]⟩ : Pred)]).map
+                  (·.subst o₃.σ) ++ o₃.preds).map (·.subst σ₄),
+              o₃.next⟩
+
+/-- Infer an object literal's fields, left to right, threading the
+substitution, each checked against its own type. -/
+def inferFields : Ctx → Option Ty → Mode → List Expr → List Ty → Nat → Option OutArgs
+  | _, _, _, [], [], n => some ⟨[], [], [], n⟩
+  | Γ, R, rm, e :: es, τ :: τs, n =>
+    match (infer Γ R rm (some τ) e n).map (checkEx (some τ) e) with
+    | none => none
+    | some o₁ =>
+      match inferFields (Ctx.subst o₁.σ Γ) (Ret.subst o₁.σ R) rm es τs o₁.next with
+      | none => none
+      | some o₂ =>
+        some ⟨Subst.compose o₂.σ o₁.σ, o₁.τ.subst o₂.σ :: o₂.τs,
+          o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+  | _, _, _, _, _, _ => none
 
 /-- Infer a list of arguments, left to right, threading the substitution,
 each checked against `ex` if it is given. -/
@@ -999,6 +1093,7 @@ def Expr.labels : Expr → List String
   | .setIndex a b c => a.labels ++ b.labels ++ c.labels
   | .mcall e l args => l :: (e.labels ++ Expr.labelsList args)
   | .unwrap a b c => a.labels ++ b.labels ++ c.labels
+  | .caseTag a l _ b c => l :: (a.labels ++ b.labels ++ c.labels)
 /-- `labels`, for a list of expressions. -/
 def Expr.labelsList : List Expr → List String
   | [] => []

@@ -1111,9 +1111,10 @@ impl Type {
     /// * `Lit("circle")` → `String`, `Lit(42)` → `Number`,
     ///   `Lit(true)` → `Boolean`.
     /// * Recurses through `Row` (each property value), `Array`, `Map`,
-    ///   `Promise`, `Union` (each member, then re-normalises so that
-    ///   `"a" | "b"` widens to `String` rather than the awkward
-    ///   `String | String`).
+    ///   `Promise`, and a `Union` of literals (each member, then
+    ///   re-normalises so that `"a" | "b"` widens to `String` rather than
+    ///   the awkward `String | String`). Any other union was declared and
+    ///   is left alone.
     /// * Recurses through `Func` covariantly into the return type and
     ///   contravariantly into parameters — a parameter typed `"a"`
     ///   really means "only the literal `"a"` is acceptable", and
@@ -1151,13 +1152,18 @@ impl Type {
                     .map(|e| e.widen_fresh_literals_with(f))
                     .collect(),
             ),
-            Type::Union(members) => {
+            // A union of literals (`"a" | "b"`) widens to its base type.
+            // Any other union was declared, and stays as it is: widening a
+            // discriminated union's tags would make its arms
+            // indistinguishable.
+            Type::Union(members) if members.iter().all(|m| matches!(m, Type::Literal(_))) => {
                 let widened: Vec<Type> = members
                     .iter()
                     .map(|m| m.widen_fresh_literals_with(f))
                     .collect();
                 Type::union(widened)
             }
+            Type::Union(_) => self.clone(),
             Type::Func {
                 this_type,
                 params,

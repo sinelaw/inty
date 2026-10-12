@@ -655,6 +655,35 @@ theorem Pred.decideStrip_app {c : Con} {xs : List Ty} {σ : Ty} (hm : ∀ z, c �
     Pred.decideStrip (.app c xs) σ = .eq σ (.app c xs) := by
   cases c <;> simp_all [Pred.decideStrip]
 
+theorem firstIdx_of_nodup {t : String} : ∀ {ts : List String} {i : Nat}, ts.Nodup →
+    ts[i]? = some t → firstIdx t ts = some i
+  | [], _, _, h => by simp at h
+  | x :: xs, 0, _, h => by simp at h; subst h; simp [firstIdx]
+  | x :: xs, i + 1, hnd, h => by
+    simp only [List.getElem?_cons_succ] at h
+    have hx : x ≠ t := fun e => (List.nodup_cons.mp hnd).1 (e ▸ List.mem_of_getElem? h)
+    simp [firstIdx, hx, firstIdx_of_nodup (List.nodup_cons.mp hnd).2 h]
+
+theorem zip_eraseIdx_mem {α β : Type} : ∀ (xs : List α) (ys : List β) (i : Nat),
+    xs.length = ys.length → ∀ p ∈ (xs.eraseIdx i).zip (ys.eraseIdx i), p ∈ xs.zip ys
+  | [], _, _, _, p, hp => by simp at hp
+  | _ :: _, [], _, h, _, _ => by simp at h
+  | x :: xs, y :: ys, 0, _, p, hp => by simp only [List.eraseIdx_cons_zero] at hp; simp [hp]
+  | x :: xs, y :: ys, i + 1, h, p, hp => by
+    simp only [List.eraseIdx_cons_succ, List.zip_cons_cons, List.mem_cons] at hp ⊢
+    rcases hp with rfl | hp
+    · exact .inl rfl
+    · exact .inr (zip_eraseIdx_mem xs ys i (by simpa using h) p hp)
+
+theorem variantRest_tyEq {l : String} {ts : List String} : ∀ {xs ys : List Ty},
+    xs.length = ys.length → (∀ p ∈ xs.zip ys, TyEq p.1 p.2) →
+      TyEq (variantRest l ts xs) (variantRest l ts ys)
+  | [], [], _, _ => TyEq.refl _
+  | [x], [y], _, hz => hz (x, y) (by simp)
+  | x :: x' :: xs, y :: y' :: ys, hl, hz => TyEq.app hl hz
+  | [], _ :: _, hl, _ | _ :: _, [], hl, _ => by simp at hl
+  | [_], _ :: _ :: _, hl, _ | _ :: _ :: _, [_], hl, _ => by simp at hl
+
 /-- Deciding a constraint whose image is equal to an instance: it waits, or
 its equation holds. -/
 theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pred} (hc : c ≠ .plus)
@@ -875,6 +904,31 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
         rw [← hxs]; exact ((TyEq.whnf t).subst φ).trans ht
       rw [hxs, Pred.decideStrip_app hm hn hu]
       exact hs.trans hW.symm
+  | @caseHit ts i t₀ Rs R₀ l₀ hnd hi hR =>
+    match args, hl with
+    | [τ, σ, ρ], _ =>
+      obtain ⟨rfl, hτ, hσ, hρ⟩ := PredEq.three hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rcases Ty.whnf_app_of_tyEq hτ with ⟨a, ha⟩ | ⟨xs, hxs, hxl, hz⟩
+      · simp [ha, Ty.isVar] at hnv
+      have hil : i < xs.length := by rw [hxl]; exact (List.getElem?_eq_some_iff.mp hR).1
+      have hx : xs[i]? = some xs[i] := List.getElem?_eq_getElem hil
+      have hxR : TyEq (xs[i].subst φ) R₀ :=
+        hz (xs[i], R₀) (List.mem_iff_getElem?.mpr ⟨i, by simp [List.getElem?_zip_eq_some, hx, hR]⟩)
+      have hrest : TyEq ((variantRest l₀ (ts.eraseIdx i) (xs.eraseIdx i)).subst φ)
+          (variantRest l₀ (ts.eraseIdx i) (Rs.eraseIdx i)) := by
+        rw [variantRest_subst, ← eraseIdx_map]
+        refine variantRest_tyEq (by simp [List.length_eraseIdx, hxl]) (fun p hp => ?_)
+        have := zip_eraseIdx_mem (xs.map (·.subst φ)) Rs i (by simp [hxl]) p hp
+        rw [List.zip_map_left] at this
+        obtain ⟨q, hq, rfl⟩ := List.mem_map.mp this
+        exact hz q hq
+      simp only [hxs, Pred.decide₀, Pred.decideCase, hnd, and_self, ↓reduceIte,
+        firstIdx_of_nodup hnd hi, hx, Improve.Holds, Ty.subst_app, List.map_cons, List.map_nil]
+      exact TyEq.tuple₂ (hσ.trans hxR.symm) (hρ.trans hrest.symm)
 
 theorem Pred.improve_of_args {top : Bool} {c : Cls} {args : List Ty} {φ : Subst}
     (h : c ≠ .plus → (c = .merge → top = true) → (Pred.improveArgs c args).Holds φ) :
@@ -1128,7 +1182,8 @@ def Expr.monoAnn : Expr → Bool
   | .app f args | .mcall f _ args | .new_ f args => f.monoAnn && Expr.monoAnnList args
   | .let_ _ ann e₁ e₂ => (ann.all fun a => a.arity == 0) && e₁.monoAnn && e₂.monoAnn
   | .assign _ e | .unop _ e | .ret e | .throw_ e | .get e _ => e.monoAnn
-  | .cond c t e | .setIndex c t e | .unwrap c t e => c.monoAnn && t.monoAnn && e.monoAnn
+  | .cond c t e | .setIndex c t e | .unwrap c t e | .caseTag c _ _ t e =>
+    c.monoAnn && t.monoAnn && e.monoAnn
   | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ | .spread e₁ e₂
   | .index e₁ e₂ | .tryCatch e₁ e₂ | .set e₁ _ e₂ => e₁.monoAnn && e₂.monoAnn
   | .obj _ es _ | .arr es | .cls _ es _ => Expr.monoAnnList es
@@ -1153,6 +1208,25 @@ def InferComplete (L : List String) (e : Expr) : Prop :=
     ∃ o, infer L Γ R rm ex e n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ TyEq (o.τ.subst φ) τ' ∧
       Sat C o.preds φ
 
+/-- What an object literal is checked against (`ObjCase`) is what inference
+checks it against. -/
+theorem objTarget_complete {ls : List String} {es : List Expr} {T P : Ty} {L : List String}
+    {ss : List Ty} (hc : ObjCase ls es T P) (he : TyEq P (.record L ss)) :
+    objTarget T ls es = some P := by
+  cases hc with
+  | self =>
+    obtain ⟨ys, hys, -⟩ := TyEq.whnf_app he.symm (Ty.whnf_app _ _)
+    unfold objTarget; rw [hys]
+  | variant hw hl hi hP ht => unfold objTarget; simp [hw, hl, hi, hP, ht]
+
+/-- A variant's rest has the tree variables of its cases. -/
+theorem variantRest_tv {l : String} {ts : List String} {Rs : List Ty} {b : Nat}
+    (h : (variantRest l ts Rs).TV b) : ∃ R ∈ Rs, R.TV b := by
+  match Rs, h with
+  | [R], h => exact ⟨R, by simp, h⟩
+  | [], h => exact Ty.tv_app.mp h
+  | _ :: _ :: _, h => exact Ty.tv_app.mp h
+
 /-- A check-mode derivation of an expression that doesn't take the expected
 type in injects a synthesised type into it, or drops it (into `unknown`). -/
 theorem HasTypeS.inj_inv {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode}
@@ -1163,6 +1237,8 @@ theorem HasTypeS.inj_inv {L : List String} {C : List Pred} {Γ : Ctx} {R : Optio
   | drop h => exact ⟨_, h, .inl rfl⟩
   | funcCheck hw _ hlen _ => simp [Expr.pushes, funcTarget, hw, hlen] at hp
   | arrCheck hw _ _ => simp [Expr.pushes, arrTarget, hw] at hp
+  | litStr hw => simp [Expr.pushes, hw] at hp
+  | objCheck hc hnd hk _ _ _ he _ => simp [Expr.pushes, objTarget_complete hc he, hnd, hk] at hp
   | _ => simp [Expr.pushes] at hp
 
 /-- Inferring `e` against `ex`, as its caller sees it (`checkEx`), is
@@ -1234,6 +1310,35 @@ theorem inferArgs_complete : ∀ (args : List Expr) (τs' : List Ty), (∀ a ∈
     · simp only [List.map_cons]
       exact .cons ((hag₂.ty hτb₁).trans hτ₁) hτs₂
     · exact Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂
+
+/-- Inferring an object literal's fields, each against its type with no
+type variables, is complete. -/
+theorem inferFields_complete : ∀ (es : List Expr) (τs : List Ty), (∀ a ∈ es, InferComplete L a) →
+    ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {n : Nat} {ψ : Subst} {C : List Pred}
+      {Γ' : Ctx} {R' : Option Ty},
+      RetOk rm R → (rm = .check → R' = R) → (∀ τ ∈ τs, τ.ftv = []) →
+      Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
+      CtxEq Γ' (Ctx.subst ψ Γ) → RetEq R' (Ret.subst ψ R) → es.length = τs.length →
+      (∀ p ∈ es.zip τs, HasType L C Γ' R' rm .check p.1 p.2) →
+      ∃ o, inferFields L Γ R rm es τs n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧ Sat C o.preds φ
+  | [], [], _, Γ, R, rm, n, ψ, C, _, _, _, _, _, _, _, _, _, _, _, _ =>
+    ⟨⟨[], [], [], n⟩, by simp [inferFields], ψ, Agree.nil n ψ, by simp [Sat]⟩
+  | [], _ :: _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hlen, _ => by simp at hlen
+  | _ :: _, [], _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, hlen, _ => by simp at hlen
+  | a :: as, τ :: τs, ih, Γ, R, rm, n, ψ, C, Γ', R', hRo, hRc, hτs, hΓ, hR, hC, hΓ', hR',
+      hlen, hargs => by
+    have hτ := hτs τ (by simp)
+    obtain ⟨o₁, h₁, φ₁, hag₁, -, hsat₁⟩ := InferComplete.check (ih a (by simp)) hRo hRc
+      (Ex.Closed.some hτ) (fun T hT => by cases hT; rfl) hΓ hR hC hΓ' hR'
+      (by simpa using hargs (a, τ) (by simp))
+    obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check (infer_inv L a) hRo (Ex.Closed.some hτ) hΓ hR h₁
+    obtain ⟨o₂, h₂, φ₂, hag₂, hsat₂⟩ := inferFields_complete as τs
+      (fun a' ha' => ih a' (by simp [ha'])) (ψ := φ₁) (hRo.subst _) (RetOk.eq_subst hRo hRc _)
+      (fun τ' h' => hτs τ' (by simp [h'])) (hσ₁.ctx_below (hΓ.mono hn₁))
+      (hσ₁.ret_below (hR.mono hn₁)) hC (hΓ'.trans (hag₁.ctx hΓ).symm)
+      (hR'.trans (hag₁.ret hR).symm) (by simpa using hlen) (fun p hp => hargs p (by simp [hp]))
+    exact ⟨_, by simp only [inferFields, h₁, h₂]; rfl, φ₂, hag₁.trans hσ₁ hn₁ hag₂,
+      Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
 theorem PredEq.of_eqs {c : Cls} {xs ys : List Ty} (h : TyEqs xs ys) : PredEq ⟨c, xs⟩ ⟨c, ys⟩ :=
   ⟨rfl, h.zip_of.1, h.zip_of.2⟩
@@ -1823,6 +1928,15 @@ theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep 
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨rfl, rfl⟩ := hf
     simp at hr
+  | caseHit _ _ hR =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
+    refine ⟨_, List.mem_singleton_self _, ?_⟩
+    rcases hr with rfl | rfl
+    · exact Ty.tv_app.mpr ⟨r, List.mem_of_getElem? hR, hb⟩
+    · obtain ⟨x, hx, hxb⟩ := variantRest_tv hb
+      exact Ty.tv_app.mpr ⟨x, List.mem_of_mem_eraseIdx hx, hxb⟩
 
 /-- A constraint equal to one of a simple scheme's, opened at `m`, has a
 determining argument whose tree has a variable of the block. -/
@@ -1977,6 +2091,17 @@ theorem Pred.decideInject_ne_keep {t T : Ty} : Pred.decideInject t T ≠ .keep :
     · cases h
   · cases h
 
+/-- A `Case` on a known type is decided. -/
+theorem Pred.decideCase_ne_keep {l t l' : String} {ts : List String} {Ps : List Ty} {σ ρ : Ty} :
+    Pred.decideCase l t l' ts Ps σ ρ ≠ .keep := by
+  intro h
+  unfold Pred.decideCase at h
+  split at h
+  · split at h
+    · split at h <;> cases h
+    · cases h
+  · cases h
+
 /-- A `Strip` on a known type is decided. -/
 theorem Pred.decideStrip_ne_keep {t σ : Ty} : Pred.decideStrip t σ ≠ .keep := by
   intro h
@@ -1990,7 +2115,8 @@ theorem Pred.decide₀_keep_merge {c : Cls} {t : Ty} {rest : List Ty}
     (h : Pred.decide₀ c t rest = .keep) : c = .merge := by
   unfold Pred.decide₀ at h
   split at h <;> first | rfl | (split at h <;> cases h) | cases h |
-    exact absurd h Pred.decideInject_ne_keep | exact absurd h Pred.decideStrip_ne_keep
+    exact absurd h Pred.decideInject_ne_keep | exact absurd h Pred.decideStrip_ne_keep |
+    exact absurd h Pred.decideCase_ne_keep
 
 /-- What improvement keeps where a binding generalises. -/
 theorem Pred.improve_keep_false {p : Pred} (h : p.improve false = .keep) :
@@ -2329,6 +2455,107 @@ theorem Ty.not_maybe_of_whnf {T : Ty} {c : Con} {xs : List Ty} (hw : T.whnf = .a
     (hc : ∀ z, c ≠ .maybe z) : ∀ z σ, ¬ TyEq T (.maybe z σ) := fun z _ he =>
   TyEq.not_maybe (hc z) ((TyEq.of_whnf hw).symm.trans he)
 
+/-! ### An object literal synthesised and injected, checked instead -/
+
+theorem Ty.field_map_some {l : String} {f : String → Ty} :
+    ∀ {L : List String}, l ∈ L → Ty.field l L (L.map f) = some (f l)
+  | [], h => by simp at h
+  | l' :: L, h => by
+    simp only [List.mem_cons] at h
+    simp only [List.map_cons, Ty.field]
+    split
+    · simp_all
+    · rename_i hne; exact Ty.field_map_some (h.resolve_left fun e => hne e.symm)
+
+theorem Ty.field_map_fn {l : String} (f : Ty → Ty) :
+    ∀ (ls : List String) (fs : List Ty), Ty.field l ls (fs.map f) = (Ty.field l ls fs).map f
+  | [], _ => rfl
+  | _ :: _, [] => rfl
+  | l' :: ls, x :: fs => by
+    simp only [List.map_cons, Ty.field]
+    split
+    · rfl
+    · exact Ty.field_map_fn f ls fs
+
+/-- An object's record type has, for a field it has once, its slot. -/
+theorem objSlots_field_some {L ls : List String} {ss : List Ty} {l : String} {s : Ty}
+    (hnd : ls.Nodup) (hL : l ∈ L) (hm : (l, s) ∈ ls.zip ss) (hlen : ls.length = ss.length) :
+    Ty.field l L (objSlots L ls ss) = some s := by
+  have hnd' : ((ls.zip ss).map (·.1)).Nodup := by rw [List.map_fst_zip (by omega)]; exact hnd
+  unfold objSlots
+  rw [Ty.field_map_some hL, Ty.field_eq_lookup, ← zip_reverse hlen, lookup_reverse hnd',
+    lookup_of_mem hnd' hm]
+  rfl
+
+/-- A type equal to a record has, for its field that holds a value, an
+equal field that does. -/
+theorem Ty.dataField_of_tyEq {T : Ty} {L : List String} {slots : List Ty} {l : String} {s τ : Ty}
+    (he : TyEq T (.record L slots)) (hf : Ty.field l L slots = some s)
+    (hs : TyEq s (.slot .pre .data τ)) : ∃ τ', T.dataField l = some τ' ∧ TyEq τ τ' := by
+  obtain ⟨ys, hys, hrec⟩ := TyEq.whnf_app he.symm (Ty.whnf_app _ _)
+  obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp hrec
+  obtain ⟨s', hf', hss⟩ := Ty.field_tyEq hl hz hf
+  obtain ⟨zs, hzs, hslot⟩ := TyEq.whnf_app (hs.symm.trans hss) (Ty.whnf_app _ _)
+  obtain ⟨-, hl', hz'⟩ := TyEq.app_iff.mp hslot
+  match zs, hl', hz', hzs with
+  | [p', k', τ'], _, hz', hzs =>
+    have hp' := TyEq.whnf_con (hz' (.pre, p') (by simp)) (Ty.whnf_app _ _)
+    have hk' := TyEq.whnf_con (hz' (.data, k') (by simp)) (Ty.whnf_app _ _)
+    refine ⟨τ', ?_, hz' (τ, τ') (by simp)⟩
+    simp only [Ty.dataField, hys, hf', hzs, hp', hk', and_self, ↓reduceIte]
+
+theorem Ty.dataFields_build {T : Ty} : ∀ (ls : List String) (τs : List Ty), ls.length = τs.length →
+    (∀ l τ, (l, τ) ∈ ls.zip τs → ∃ τ', T.dataField l = some τ' ∧ TyEq τ τ') →
+    ∃ τs', T.dataFields ls = some τs' ∧ TyEqs τs τs'
+  | [], [], _, _ => ⟨[], rfl, .nil⟩
+  | [], _ :: _, hl, _ | _ :: _, [], hl, _ => by simp at hl
+  | l :: ls, τ :: τs, hl, h => by
+    obtain ⟨τ', h₁, he⟩ := h l τ (by simp)
+    obtain ⟨τs', h₂, hes⟩ := Ty.dataFields_build ls τs (by simpa using hl)
+      (fun l' τ'' hm => h l' τ'' (by simp [hm]))
+    exact ⟨τ' :: τs', by simp [Ty.dataFields, h₁, h₂], .cons he hes⟩
+
+/-- The slots of fields that all hold values. -/
+theorem slots_of_data {T : Ty} : ∀ (ks : List FieldKind) (es : List Expr) (τs ss : List Ty),
+    (∀ k ∈ ks, k = .data) → ks.length = es.length → es.length = τs.length →
+    τs.length = ss.length →
+    (∀ x ∈ ks.zip (es.zip (τs.zip ss)), FieldSlot T x.1 x.2.1 x.2.2.1 x.2.2.2) →
+    ss = τs.map fun τ => .slot .pre .data τ
+  | [], [], [], [], _, _, _, _, _ => rfl
+  | [], [], [], _ :: _, _, _, _, h, _ => by simp at h
+  | [], [], _ :: _, _, _, _, h, _, _ => by simp at h
+  | [], _ :: _, _, _, _, h, _, _, _ => by simp at h
+  | _ :: _, [], _, _, _, h, _, _, _ => by simp at h
+  | _ :: _, _ :: _, [], _, _, _, h, _, _ => by simp at h
+  | _ :: _, _ :: _, _ :: _, [], _, _, _, h, _ => by simp at h
+  | k :: ks, e :: es, τ :: τs, s :: ss, hk, h₁, h₂, h₃, hf => by
+    have hs : FieldSlot T k e τ s := hf (k, e, τ, s) (by simp)
+    rw [hk k (by simp)] at hs
+    cases hs
+    simp only [List.map_cons, List.cons.injEq, true_and]
+    exact slots_of_data ks es τs ss (fun k' h' => hk k' (by simp [h'])) (by simpa using h₁)
+      (by simpa using h₂) (by simpa using h₃) (fun x hx => hf x (by simp [hx]))
+
+theorem zip_trans_mem₃ {α : Type} : ∀ (es : List α) (τs τs' : List Ty), es.length = τs.length →
+    τs.length = τs'.length → ∀ p ∈ es.zip τs', ∃ τ, (p.1, τ) ∈ es.zip τs ∧ (τ, p.2) ∈ τs.zip τs'
+  | [], _, _, _, _, p, hp => by simp at hp
+  | _ :: _, [], _, h, _, _, _ | _ :: _, _ :: _, [], _, h, _, _ => by simp at h
+  | e :: es, τ :: τs, τ' :: τs', h₁, h₂, p, hp => by
+    simp only [List.zip_cons_cons, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨τ, by simp, by simp⟩
+    · obtain ⟨τ'', h₃, h₄⟩ := zip_trans_mem₃ es τs τs' (by simpa using h₁) (by simpa using h₂) p hp
+      exact ⟨τ'', by simp [h₃], by simp [h₄]⟩
+
+theorem objTarget_whnf {T P : Ty} {ls : List String} {es : List Expr}
+    (h : objTarget T ls es = some P) :
+    (∃ L' ys, T.whnf = .app (.record L') ys ∧ P = T) ∨ ∃ l ts Ps, T.whnf = .variant l ts Ps := by
+  unfold objTarget at h
+  split at h
+  · rename_i L' ys hw; cases h; exact .inl ⟨L', ys, hw, rfl⟩
+  · rename_i l ts Ps hw; exact .inr ⟨l, ts, Ps, hw⟩
+  · cases h
+
 /-- A check-mode derivation of an expression that takes the expected type in
 ends, but for conversions, with that expression's rule in check mode: an
 injection of its synthesised type is pushed into its parts. -/
@@ -2348,6 +2575,9 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
   | unwrap h₁ hs h₂ h₃ => exact .unwrap h₁ hs h₂ h₃
   | funcCheck hw hT' hl hb => exact .funcCheck hw hT' hl hb
   | arrCheck hw hT' hes => exact .arrCheck hw hT' hes
+  | litStr hw => exact .litStr hw
+  | objCheck hc hnd hk hl hL hd he hf => exact .objCheck hc hnd hk hl hL hd he hf
+  | caseTag h₁ hs h₂ h₃ => exact .caseTag h₁ hs h₂ h₃
   | inj h' _ hi =>
     obtain ⟨τ₀, he, ht⟩ := h'.top_synth
     have hi' : Entails C ⟨.inject T, [τ₀]⟩ :=
@@ -2363,6 +2593,43 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     | tryCatch hb hh => exact .tryCatch (.inj hb hT hi') (.inj hh hT hi')
     | tryFinally hb hf => exact .tryFinally (.inj hb hT hi') hf
     | unwrap h₁ hs h₂ h₃ => exact .unwrap h₁ hs (.inj h₂ hT hi') (.inj h₃ hT hi')
+    | caseTag h₁ hs h₂ h₃ => exact .caseTag h₁ hs (.inj h₂ hT hi') (.inj h₃ hT hi')
+    | lit hl =>
+      cases hl <;> simp only [Expr.pushes, decide_eq_true_eq, Bool.false_eq_true] at hp
+      have := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hp (by simp))
+      exact absurd (TyEq.con (this.trans (TyEq.of_whnf hp))) (by simp)
+    | obj hes hks hτs hss hL hargs hfs =>
+      rename_i ls ss es ks τs
+      simp only [Expr.pushes, Bool.and_eq_true, decide_eq_true_eq] at hp
+      obtain ⟨⟨hts, hnd⟩, hk⟩ := hp
+      obtain ⟨P, hP⟩ := Option.isSome_iff_exists.mp hts
+      rcases objTarget_whnf hP with ⟨L', ys, hw, -⟩ | ⟨l, ts, Ps, hw⟩
+      · have hRT := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp))
+        have hks' : ∀ k ∈ ks, k = .data := fun k hk' => by
+          rw [hk] at hk'; obtain ⟨_, _, rfl⟩ := List.mem_map.mp hk'; rfl
+        obtain rfl := slots_of_data ks es τs ss hks' (by omega) (by omega) (by omega)
+          (fun x hx => hfs x hx)
+        obtain ⟨τs', hd, hes'⟩ := Ty.dataFields_build (T := T) ls τs (by omega)
+          (fun l τ hm => Ty.dataField_of_tyEq hRT.symm
+            (objSlots_field_some hnd (hL l (List.of_mem_zip hm).1)
+              (by rw [List.zip_map_right]; exact List.mem_map.mpr ⟨(l, τ), hm, rfl⟩)
+              (by simp; omega)) (TyEq.refl _))
+        have hτc := Ty.dataFields_closed hT hd
+        obtain ⟨hl', hz'⟩ := hes'.zip_of
+        have hslots : TyEqs (τs.map fun τ => Ty.slot .pre .data τ)
+            (τs'.map fun τ => Ty.slot .pre .data τ) :=
+          TyEqs.of_zip (by simp [hl']) (fun x hx => by
+            rw [List.zip_map, List.mem_map] at hx
+            obtain ⟨y, hy, rfl⟩ := hx
+            exact TyEq.slot_mk (TyEq.refl _) (TyEq.refl _) (hz' y hy))
+        refine .objCheck .self hnd hk hes hL hd
+          (hRT.symm.trans (TyEq.app (objSlots_tyEqs hslots).zip_of.1
+            (objSlots_tyEqs hslots).zip_of.2)) (fun p hp => ?_)
+        obtain ⟨τ, hm₁, hm₂⟩ := zip_trans_mem₃ es τs τs' (by omega) hl' p hp
+        have hc := hτc p.2 (List.of_mem_zip hp).2
+        exact .inj (hargs (p.1, τ) hm₁) hc (.inl (Pred.inject_self hc (hz' (τ, p.2) hm₂)))
+      · have hRT := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp))
+        exact absurd (TyEq.con (hRT.trans (TyEq.of_whnf hw))) (by simp)
     | @func _ _ _ ρ' _ _ _ θ' τs' hlen hb =>
       simp only [Expr.pushes, Option.isSome_iff_exists] at hp
       obtain ⟨⟨T', θ, τs, ρ⟩, hft⟩ := hp
@@ -2407,7 +2674,9 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     | tryCatch hb hh => exact .tryCatch (.drop hb) (.drop hh)
     | tryFinally hb hf => exact .tryFinally (.drop hb) hf
     | unwrap h₁ hs h₂ h₃ => exact .unwrap h₁ hs (.drop h₂) (.drop h₃)
-    | _ => simp [Expr.pushes, funcTarget, arrTarget] at hp
+    | caseTag h₁ hs h₂ h₃ => exact .caseTag h₁ hs (.drop h₂) (.drop h₃)
+    | lit hl => cases hl <;> simp [Expr.pushes] at hp
+    | _ => simp [Expr.pushes, funcTarget, arrTarget, objTarget] at hp
 
 /-- A derivation in the mode an expected type gives an expression that takes
 it in ends, but for conversions, with that expression's rule. -/
@@ -2440,13 +2709,26 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
   induction e using Expr.ind with
   | lit l =>
     intro _
-    intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR _ _ _ ht
-    obtain ⟨hmd, -⟩ := hm
-    rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
+    intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC _ _ ht
+    obtain ⟨hmd, hmT⟩ := hm
+    by_cases hp : ∃ T, ex = some T ∧ (Expr.lit l).pushes T
+    · -- A string literal checked against its own string type.
+      obtain ⟨T, rfl, hp⟩ := hp
+      have hT := hex T rfl
+      simp only [exMode, hp, ↓reduceIte] at hmd; subst hmd
+      obtain rfl := hmT T rfl hp
+      refine ⟨⟨[], τ', [], n⟩, by simp [infer, Option.filter, hp], ψ, Agree.nil n ψ, ?_,
+        by simp [Sat]⟩
+      rw [Ty.closed_subst hT]; exact TyEq.refl _
+    have hf : (ex.filter fun T => (Expr.lit l).pushes T) = none := by
+      cases ex with
+      | none => rfl
+      | some T => simp only [Option.filter]; split <;> simp_all
+    rw [exMode_of_filter_none hf] at hmd; subst hmd
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top_synth
     cases ht with
     | lit hl =>
-      refine ⟨⟨[], l.ty, [], n⟩, by simp [infer], ψ, Agree.nil n ψ, ?_, by simp [Sat]⟩
+      refine ⟨⟨[], l.ty, [], n⟩, by simp [infer, hf], ψ, Agree.nil n ψ, ?_, by simp [Sat]⟩
       rw [LitTy.eq_ty hl] at hτ₀
       simpa [Lit.ty_subst] using hτ₀
   | var i =>
@@ -2877,6 +3159,125 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
           rcases hτ with rfl | rfl
           · exact (hσ₂.subst_below (hτb₁.mono hn₂)).mono (Nat.le_succ _)
           · exact hβ
+  | caseTag e₁ l t e₂ e₃ ih₁ ih₂ ih₃ =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ih₁ : InferComplete L e₁ := ih₁ hm.1.1
+    replace ih₂ : InferComplete L e₂ := ih₂ hm.1.2
+    replace ih₃ : InferComplete L e₃ := ih₃ hm.2
+    intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
+    obtain ⟨hmd, hmT⟩ := hm
+    rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
+    obtain ⟨τ₀, hτ₀, hτT, ht⟩ := ht.top_ex hC hex (fun T hT => hmT T hT rfl) (fun _ _ => rfl)
+    generalize hmd' : Ex.mode ex = md' at ht
+    cases ht with
+    | @caseTag _ _ _ _ _ τ₁ _ _ σ ρ _ _ _ _ h₁ hs h₂ h₃ =>
+      subst hmd'
+      obtain ⟨o₁, ho₁, φ₁, hag₁, hτ₁, hsat₁⟩ := ih₁ (by ret_ok) (by ret_eq) .none .none hΓ hR hC
+        hΓ' hR' h₁
+      obtain ⟨hn₁, hσ₁, hτb₁, hp₁⟩ := infer_inv L e₁ (by ret_ok) .none hΓ hR ho₁
+      have hΓ₁ := hσ₁.ctx_below (hΓ.mono hn₁)
+      have hR₁ := hσ₁.ret_below (hR.mono hn₁)
+      have hc₁ := hΓ'.trans (hag₁.ctx hΓ).symm
+      have hr₁ := hR'.trans (hag₁.ret hR).symm
+      -- `e₂` sees the rest, a fresh variable which is `ρ`.
+      have hfr₁ := Agree.cons_fresh o₁.next ρ φ₁
+      have hρv : (Ty.var o₁.next).Below (o₁.next + 1) := .var (by omega)
+      have hΓ₂' : Ctx.Below (o₁.next + 1) (.mono (.var o₁.next) :: Ctx.subst o₁.σ Γ) :=
+        Ctx.Below.mono_cons hρv (hΓ₁.mono (by omega))
+      have hR₂' := hR₁.mono (Nat.le_succ o₁.next)
+      have hfc₁ : CtxEq (Ctx.subst ((o₁.next, ρ) :: φ₁) (Ctx.subst o₁.σ Γ))
+          (Ctx.subst φ₁ (Ctx.subst o₁.σ Γ)) := by
+        have := hfr₁.ctx hΓ₁
+        simp only [Ctx.subst_nil] at this
+        exact this
+      have hfr₁' : RetEq (Ret.subst ((o₁.next, ρ) :: φ₁) (Ret.subst o₁.σ R))
+          (Ret.subst φ₁ (Ret.subst o₁.σ R)) := by
+        have := hfr₁.ret hR₁
+        simp only [Ret.subst_nil] at this
+        exact this
+      obtain ⟨o₂, ho₂, φ₂, hag₂, hτ₂, hsat₂⟩ := InferComplete.check ih₂ (by ret_ok) (by ret_eq) hex
+        hτT (ψ := (o₁.next, ρ) :: φ₁) hΓ₂' hR₂' hC
+        (by
+          simp only [Ctx.subst_cons, Scheme.mono_subst]
+          refine CtxEq.cons (by simp [Ty.subst, Subst.find]; exact SchemeEq.refl _) ?_
+          exact hc₁.trans hfc₁.symm)
+        (hr₁.trans hfr₁'.symm) h₂
+      obtain ⟨hn₂, hσ₂, hτb₂, hp₂⟩ := InferInv.check (infer_inv L e₂) (by ret_ok) hex hΓ₂' hR₂' ho₂
+      have hΓ₂ := hσ₂.ctx_below (hΓ₁.mono (by omega))
+      have hR₂ := hσ₂.ret_below (hR₁.mono (by omega))
+      have hc₂ : CtxEq Γ' (Ctx.subst φ₂ (Ctx.subst o₂.σ (Ctx.subst o₁.σ Γ))) :=
+        hc₁.trans ((hag₂.ctx (hΓ₁.mono (Nat.le_succ _))).trans hfc₁).symm
+      have hr₂ : RetEq R' (Ret.subst φ₂ (Ret.subst o₂.σ (Ret.subst o₁.σ R))) :=
+        hr₁.trans ((hag₂.ret (hR₁.mono (Nat.le_succ _))).trans hfr₁').symm
+      -- `e₃` sees the case, another fresh variable which is `σ`.
+      have hfr := Agree.cons_fresh o₂.next σ φ₂
+      have hσv : (Ty.var o₂.next).Below (o₂.next + 1) := .var (by omega)
+      have hΓ₃ : Ctx.Below (o₂.next + 1) (.mono (.var o₂.next) :: Ctx.subst o₂.σ (Ctx.subst o₁.σ Γ)) :=
+        Ctx.Below.mono_cons hσv (hΓ₂.mono (by omega))
+      have hR₃ := hR₂.mono (Nat.le_succ o₂.next)
+      obtain ⟨o₃, ho₃, φ₃, hag₃, hτ₃, hsat₃⟩ := InferComplete.check ih₃ (by ret_ok) (by ret_eq) hex
+        hτT (ψ := (o₂.next, σ) :: φ₂) hΓ₃ hR₃ hC
+        (by
+          simp only [Ctx.subst_cons, Scheme.mono_subst]
+          refine CtxEq.cons (by simp [Ty.subst, Subst.find]; exact SchemeEq.refl _) ?_
+          have := hfr.ctx hΓ₂
+          simp only [Ctx.subst_nil] at this
+          exact hc₂.trans this.symm)
+        (by
+          have := hfr.ret hR₂
+          simp only [Ret.subst_nil] at this
+          exact hr₂.trans this.symm) h₃
+      obtain ⟨hn₃, hσ₃, hτb₃, hp₃⟩ := InferInv.check (infer_inv L e₃) (by ret_ok) hex hΓ₃ hR₃ ho₃
+      have hu : TyEq ((o₂.τ.subst o₃.σ).subst φ₃) (o₃.τ.subst φ₃) :=
+        (hag₃.ty (hτb₂.mono (Nat.le_succ _))).trans
+          (by rw [Ty.subst_cons_fresh hτb₂]; exact hτ₂.trans hτ₃.symm)
+      obtain ⟨σ₄, hσ₄, habs⟩ := unify_mgu hu
+      have hσ₁₂ : (Subst.compose o₂.σ o₁.σ).Within o₂.next :=
+        (hσ₁.mono (by omega)).compose hσ₂
+      refine ⟨_, by simp only [infer, ho₁, ho₂, ho₃, hσ₄]; rfl, φ₃, ?_, ?_, ?_⟩
+      · exact ((((hag₁.fresh hσ₁ hn₁).trans (hσ₁.mono (Nat.le_succ _)) (by omega) hag₂).fresh
+          hσ₁₂ (by omega)).trans (hσ₁₂.mono (Nat.le_succ _)) (by omega) hag₃).absorb habs
+      · exact (habs _).trans (hτ₃.trans hτ₀)
+      · -- `Case`: of `e₁`'s type and the fresh variables, which are `σ` and `ρ`.
+        have he₁ : TyEq τ₁ ((o₁.τ.subst o₂.σ).subst φ₂) := by
+          have := hag₂.ty (hτb₁.mono (Nat.le_succ _))
+          rw [Ty.subst_cons_fresh hτb₁] at this
+          exact (this.trans hτ₁).symm
+        have hρe : TyEq ρ (((Ty.var o₁.next).subst o₂.σ).subst φ₂) := by
+          have := hag₂.ty hρv
+          have h' : (Ty.var o₁.next).subst ((o₁.next, ρ) :: φ₁) = ρ := by simp [Ty.subst, Subst.find]
+          rw [h'] at this
+          exact this.symm
+        have hcase : Sat C [(⟨.caseTag l t, [o₁.τ.subst o₂.σ, .var o₂.next,
+            (Ty.var o₁.next).subst o₂.σ]⟩ : Pred)] ((o₂.next, σ) :: φ₂) := by
+          intro c hc
+          simp only [List.mem_singleton] at hc; subst hc
+          simp only [Pred.subst, List.map_cons, List.map_nil]
+          rw [Ty.subst_cons_fresh (hσ₂.subst_below (hτb₁.mono (by omega))),
+            Ty.subst_cons_fresh (hσ₂.subst_below (hρv.mono hn₂))]
+          have hσe : (Ty.var o₂.next).subst ((o₂.next, σ) :: φ₂) = σ := by
+            simp [Ty.subst, Subst.find]
+          rw [hσe]
+          exact hs.of_predEq (PredEq.of_pairs (by simp)
+            (zip_tyEq_cons he₁ (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hρe zip_tyEq_nil))))
+        have hb₁ : ∀ p ∈ o₁.preds.map (·.subst o₂.σ), p.Below o₂.next := fun p hp => by
+          obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+          exact hσ₂.pred_below ((hp₁ q hq).mono (by omega))
+        refine Sat.absorb habs (Sat.app (Sat.agree hag₃ (fun p hp => ?_)
+          (Sat.app (Sat.app (Sat.fresh hb₁ (Sat.agree hag₂ (fun p hp => (hp₁ p hp).mono
+            (Nat.le_succ _)) (Sat.fresh hp₁ hsat₁))) (Sat.fresh hp₂ hsat₂)) hcase)) hsat₃)
+        rcases List.mem_append.mp hp with hp | hp
+        · rcases List.mem_append.mp hp with hp | hp
+          · exact (hb₁ p hp).mono (Nat.le_succ _)
+          · exact (hp₂ p hp).mono (Nat.le_succ _)
+        · simp only [List.mem_singleton] at hp; subst hp
+          refine Pred.below_of_args (fun τ hτ => ?_)
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+          rcases hτ with rfl | rfl | rfl
+          · exact (hσ₂.subst_below (hτb₁.mono (by omega))).mono (Nat.le_succ _)
+          · exact hσv
+          · exact (hσ₂.subst_below (hρv.mono hn₂)).mono (Nat.le_succ _)
   | unop op e ih =>
     intro hm
     simp only [Expr.monoAnn] at hm
@@ -3104,8 +3505,34 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
     simp only [Expr.monoAnn, Expr.monoAnnList_eq, List.all_eq_true] at hm
     replace ih : ∀ a ∈ es, InferComplete L a := fun a ha => ih a ha (hm a ha)
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
-    obtain ⟨hmd, -⟩ := hm
-    rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
+    obtain ⟨hmd, hmT⟩ := hm
+    by_cases hp : ∃ T, ex = some T ∧ (Expr.obj ls es ks).pushes T
+    · -- Checked against a record or a variant's case.
+      obtain ⟨T, rfl, hp⟩ := hp
+      have hT := hex T rfl
+      simp only [exMode, hp, ↓reduceIte] at hmd; subst hmd
+      obtain rfl := hmT T rfl hp
+      have ht' := ht.check_top hC hT hp
+      cases ht' with
+      | objCheck hc hnd hk hl hL hd he hfs =>
+        rename_i P τs
+        have hP := objTarget_complete hc he
+        have hPc := (objTarget_sound hT hP).2
+        have hτc := Ty.dataFields_closed hPc hd
+        obtain ⟨σu, hσu, -⟩ := unify_mgu (ψ := []) (by simpa using he)
+        obtain ⟨o, h, φ, hag, hsat⟩ := inferFields_complete es τs ih hRo hRc hτc hΓ hR hC hΓ'
+          hR' (by rw [hl, Ty.dataFields_length hd]) hfs
+        have hcond : (ls.all fun x => decide (x ∈ L)) = true ∧ es.length = ls.length ∧
+            (unify P (.record L (objSlots L ls (τs.map fun τ => .slot .pre .data τ)))).isSome =
+              true := ⟨List.all_eq_true.mpr (fun l hl => by simpa using hL l hl), hl, by simp [hσu]⟩
+        refine ⟨⟨o.σ, τ', o.preds, o.next⟩, ?_, φ, hag, ?_, hsat⟩
+        · simp only [infer, Option.filter, hp, ↓reduceIte, hP, hd, hcond, and_self, h]
+        · rw [Ty.closed_subst hT]; exact TyEq.refl _
+    have hfn : (ex.filter fun T => (Expr.obj ls es ks).pushes T) = none := by
+      cases ex with
+      | none => rfl
+      | some T => simp only [Option.filter]; split <;> simp_all
+    rw [exMode_of_filter_none hfn] at hmd; subst hmd
     obtain ⟨τ₀, hτ₀, ht⟩ := ht.top_synth
     cases ht with
     | @obj _ _ _ _ _ ss' _ _ τs' hes hks hτs hss hL hargs hfs =>
@@ -3122,7 +3549,7 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
         exact TyEq.app_eqs (objSlots_tyEqs hss₂)
       obtain ⟨σ', hσ', habs⟩ := unifyThis_complete (θs := θs)
         (T := Ty.record L (objSlots L ls ss)) (φ := φ) (fun θ hθ => (hθs θ hθ).trans hT.symm)
-      refine ⟨_, by simp only [infer, hc, and_self, ↓reduceIte, h, hf, hσ']; rfl, φ,
+      refine ⟨_, by simp only [infer]; rw [hfn]; simp only [hc, and_self, ↓reduceIte, h, hf, hσ']; rfl, φ,
         hag.absorb habs, (habs _).trans (hT.trans hτ₀), Sat.absorb habs hsat⟩
   | cls ls es ks ih =>
     intro hm
@@ -3636,6 +4063,7 @@ theorem Pred.decide₀_merge_keep {t : Ty} {rest : List Ty} (h : Pred.decide₀ 
     | (split at h <;> cases h)
     | exact absurd h Pred.decideInject_ne_keep
     | exact absurd h Pred.decideStrip_ne_keep
+    | exact absurd h Pred.decideCase_ne_keep
 
 /-- What improvement leaves at the top level of entailed constraints is
 settled: an instance, or on a type variable. -/

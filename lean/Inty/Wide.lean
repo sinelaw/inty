@@ -324,5 +324,9 @@ theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
   | conv _ he ih => exact .conv ih he
   | inj _ _ hi ih => exact .inj ih trivial hi.toW
   | drop _ ih => exact .drop ih
+  | litStr hw => exact .litStr hw
+  | objCheck hc hn hk hl hL hd he _ ih => exact .objCheck hc hn hk hl hL hd he ih
+  | caseTag _ hc _ _ ih₁ ih₂ ih₃ =>
+    exact .caseTag ih₁ (by simpa [Pred.toW] using hc.toW) (by simpa using ih₂) (by simpa using ih₃)
 
 end Inty

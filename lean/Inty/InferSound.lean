@@ -191,6 +191,34 @@ theorem Pred.decideStrip_sound {t σ a b : Ty} (h : Pred.decideStrip t σ = .eq 
         (Inst.stripSelf (fun z h => hm z h) hn hu).instEq
   · cases h
 
+/-- What `Pred.decideCase`'s equation says. -/
+theorem Pred.decideCase_sound {l t l' : String} {ts : List String} {Ps : List Ty} {σ ρ a b : Ty}
+    (h : Pred.decideCase l t l' ts Ps σ ρ = .eq a b) {ψ : Subst}
+    (hab : TyEq (a.subst ψ) (b.subst ψ)) :
+    InstEq (Pred.subst ψ ⟨.caseTag l t, [.variant l' ts Ps, σ, ρ]⟩) := by
+  unfold Pred.decideCase at h
+  split at h
+  · rename_i hc
+    obtain ⟨rfl, hnd⟩ := hc
+    split at h
+    · rename_i i hi
+      split at h
+      · rename_i P hP
+        cases h
+        simp only [Ty.subst_app] at hab
+        obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
+        have h₁ : TyEq (σ.subst ψ) (P.subst ψ) := hz (_, _) (by simp)
+        have h₂ : TyEq (ρ.subst ψ) ((variantRest l' (ts.eraseIdx i) (Ps.eraseIdx i)).subst ψ) :=
+          hz (_, _) (by simp)
+        rw [variantRest_subst, ← eraseIdx_map] at h₂
+        simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
+        exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+          (zip_tyEq_cons h₁ (zip_tyEq_cons h₂ zip_tyEq_nil))))
+          (Inst.caseHit hnd (firstIdx_getElem hi) (by simp [hP])).instEq
+      · cases h
+    · cases h
+  · cases h
+
 theorem Pred.merge_instEq {q q' : Pred} (hq : Inst q') (e : PredEq q q') : InstEq q :=
   InstEq.of_predEq e hq.instEq
 
@@ -290,6 +318,7 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
       (Inst.mergeAbs hc).instEq
   · exact Pred.decideInject_sound h hab
   · exact Pred.decideStrip_sound h hab
+  · exact Pred.decideCase_sound h hab
 
 theorem Pred.decide_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     (h : Pred.decide c t rest = .eq a b) {ψ : Subst} (hab : TyEq (a.subst ψ) (b.subst ψ)) :
@@ -513,6 +542,75 @@ theorem checkEx_next (ex : Option Ty) (e : Expr) (o : Out) : (checkEx ex e o).ne
   cases ex <;> simp only [checkEx] <;> split <;> (try split) <;> rfl
 
 /-- An expression that takes in the expected type has it. -/
+theorem Ty.ftv_nil_of_mem_app {c : Con} {args : List Ty} {τ : Ty} (h : (Ty.app c args).ftv = [])
+    (hτ : τ ∈ args) : τ.ftv = [] := by
+  simp only [Ty.ftv_app, List.flatMap_eq_nil_iff] at h; exact h τ hτ
+
+/-- What an object literal is checked against (`objTarget`): an `ObjCase`,
+with no type variables if the expected type has none. -/
+theorem objTarget_sound {T P : Ty} {ls : List String} {es : List Expr} (hT : T.ftv = [])
+    (h : objTarget T ls es = some P) : ObjCase ls es T P ∧ P.ftv = [] := by
+  unfold objTarget at h
+  split at h
+  · cases h; exact ⟨.self, hT⟩
+  · rename_i l ts Ps hw
+    split at h
+    · rename_i t hlt
+      split at h
+      · rename_i i hi
+        split at h
+        · rename_i P' hP
+          split at h
+          · rename_i ht
+            cases h
+            exact ⟨.variant hw hlt hi hP ht,
+              Ty.ftv_nil_of_mem_app (Ty.ftv_nil_of_whnf hw hT) (List.mem_of_getElem? hP)⟩
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
+theorem Ty.dataField_closed {T : Ty} {l : String} {τ : Ty} (hT : T.ftv = [])
+    (h : T.dataField l = some τ) : τ.ftv = [] := by
+  unfold Ty.dataField at h
+  split at h
+  · rename_i ls slots hw
+    split at h
+    · rename_i s hf
+      split at h
+      · rename_i p k τ' hsw
+        split at h
+        · cases h
+          have hs : s.ftv = [] :=
+            Ty.ftv_nil_of_mem_app (Ty.ftv_nil_of_whnf hw hT) (List.of_mem_zip (Ty.field_mem hf)).2
+          exact Ty.ftv_nil_of_mem_app (Ty.ftv_nil_of_whnf hsw hs) (by simp)
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
+theorem Ty.dataFields_closed {T : Ty} (hT : T.ftv = []) : ∀ {ls : List String} {τs : List Ty},
+    T.dataFields ls = some τs → ∀ τ ∈ τs, τ.ftv = []
+  | [], τs, h => by simp only [Ty.dataFields, Option.some.injEq] at h; subst h; simp
+  | l :: ls, τs, h => by
+    simp only [Ty.dataFields] at h
+    split at h
+    · rename_i τ τs' h1 h2
+      simp only [Option.some.injEq] at h; subst h
+      intro x hx
+      simp only [List.mem_cons] at hx
+      rcases hx with rfl | hx
+      · exact Ty.dataField_closed hT h1
+      · exact Ty.dataFields_closed hT h2 x hx
+    · cases h
+
+theorem exMode_of_filter_none {ex : Option Ty} {e : Expr}
+    (h : (ex.filter fun T => e.pushes T) = none) : exMode ex e = .synth := by
+  cases ex with
+  | none => rfl
+  | some T => simp only [Option.filter] at h; simp only [exMode]; split at h <;> simp_all
+
 theorem infer_pushes {T : Ty} (hT : T.ftv = []) : ∀ {e : Expr} {Γ : Ctx} {R : Option Ty}
     {rm : Mode} {n : Nat} {o : Out}, infer L Γ R rm (some T) e n = some o → e.pushes T → o.τ = T := by
   intro e
@@ -670,6 +768,37 @@ theorem infer_pushes {T : Ty} (hT : T.ftv = []) : ∀ {e : Expr} {Γ : Ctx} {R :
     simp only [Option.some.injEq] at h; subst h
     obtain ⟨o₃', h₃', rfl⟩ := Option.map_eq_some_iff.mp h₃
     simp only [checkEx_ty (ih₃ h₃'), Ty.closed_subst hT]
+  | caseTag e₁ l t e₂ e₃ _ _ ih₃ =>
+    intro Γ R rm n o h _
+    simp only [infer] at h
+    split at h
+    · cases h
+    split at h
+    · cases h
+    split at h
+    · cases h
+    rename_i o₃ h₃
+    split at h
+    · cases h
+    simp only [Option.some.injEq] at h; subst h
+    obtain ⟨o₃', h₃', rfl⟩ := Option.map_eq_some_iff.mp h₃
+    simp only [checkEx_ty (ih₃ h₃'), Ty.closed_subst hT]
+  | lit l =>
+    intro Γ R rm n o h hp
+    simp only [infer, Option.some.injEq] at h; subst h
+    simp [Option.filter, hp]
+  | obj ls es ks _ =>
+    intro Γ R rm n o h hp
+    simp only [infer, Option.filter, hp, ↓reduceIte] at h
+    split at h
+    · split at h
+      · split at h
+        · split at h
+          · cases h
+          · simp only [Option.some.injEq] at h; subst h; rfl
+        · cases h
+      · cases h
+    · cases h
   | _ => intro _ _ _ _ _ _ hp; simp [Expr.pushes] at hp
 
 /-- Inferring `e` against `ex`, as its caller sees it (`checkEx`): the
@@ -739,6 +868,39 @@ theorem inferArgs_sound : ∀ (args : List Expr), (∀ a ∈ args, InferSound L 
     rcases hp with rfl | hp
     · exact ha
     · exact has.2 p hp
+
+/-- Inferring an object literal's fields, each sound, each against its type
+with no type variables, is sound: each field checked against its type. -/
+theorem inferFields_sound : ∀ (es : List Expr), (∀ e ∈ es, InferSound L e) →
+    ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {τs : List Ty} {n : Nat} {o : OutArgs},
+      inferFields L Γ R rm es τs n = some o → RetOk rm R → (∀ τ ∈ τs, τ.ftv = []) →
+      ∀ φ C, Sat C o.preds φ → ∀ p ∈ es.zip τs,
+        HasType L C (Ctx.subst φ (Ctx.subst o.σ Γ)) (Ret.subst φ (Ret.subst o.σ R)) rm .check
+          p.1 p.2
+  | [], _, Γ, R, rm, τs, n, o, _, _, _, φ, C, _ => by simp
+  | _ :: _, _, Γ, R, rm, [], n, o, h, _, _, φ, C, _ => by simp [inferFields] at h
+  | e :: es, ih, Γ, R, rm, τ :: τs, n, o, h, hRo, hτs, φ, C, hsat => by
+    simp only [inferFields] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have hτ : τ.ftv = [] := hτs τ (by simp)
+    have he := InferSound.check (ih e (by simp)) h₁ hRo (Ex.Closed.some hτ) _ C hsat.1
+    have hes := inferFields_sound es (fun e' he' => ih e' (by simp [he'])) h₂ (by ret_ok)
+      (fun τ' h' => hτs τ' (by simp [h'])) φ C hsat.2
+    rw [InferSound.check_ty h₁ (Ex.Closed.some hτ) τ rfl] at he
+    simp only [Ctx.subst_compose, Ret.subst_compose, Ty.closed_subst hτ,
+      Ex.mode_some] at he hes ⊢
+    intro p hp
+    simp only [List.zip_cons_cons, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact he
+    · exact hes p hp
 
 /-- Arguments inferred against an expected type each have it. -/
 theorem inferArgs_ty : ∀ (args : List Expr) {Γ : Ctx} {R : Option Ty} {rm : Mode} {T : Ty}
@@ -1078,9 +1240,20 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
   induction e using Expr.ind with
   | lit l =>
     intro Γ R rm ex n o h hRo hex φ C hsat
-    rw [exMode_synth (fun _ => rfl)]
     simp only [infer, Option.some.injEq] at h; subst h
-    simpa using HasTypeS.lit (C := C) (Γ := Ctx.subst φ Γ) (Lit.ty_sound l)
+    by_cases hp : ∃ T, ex = some T ∧ (Expr.lit l).pushes T
+    · -- A string literal checked against its own string type.
+      obtain ⟨T, rfl, hp⟩ := hp
+      have hT := hex T rfl
+      simp only [exMode, hp, ↓reduceIte, Option.filter, Option.getD_some, Ty.closed_subst hT]
+      match l, hp with
+      | .string s, hp => exact .litStr (by simpa [Expr.pushes] using hp)
+    · have hf : (ex.filter fun T => (Expr.lit l).pushes T) = none := by
+        cases ex with
+        | none => rfl
+        | some T => simp only [Option.filter]; split <;> simp_all
+      rw [exMode_of_filter_none hf, hf]
+      simpa using HasTypeS.lit (C := C) (Γ := Ctx.subst φ Γ) (Lit.ty_sound l)
   | var i =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_synth (fun _ => rfl)]
@@ -1411,6 +1584,40 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       simp only [InferSound.check_ty h₂ hex T rfl, InferSound.check_ty h₃ hex T rfl,
         Ty.closed_subst hT] at he₂ he₃ ⊢
       exact .unwrap hc hs he₂ he₃
+  | caseTag e₁ l t e₂ e₃ ih₁ ih₂ ih₃ =>
+    intro Γ R rm ex n o h hRo hex φ C hsat
+    rw [exMode_pushes (fun _ => rfl)]
+    simp only [infer] at h
+    split at h
+    · cases h
+    rename_i o₁ h₁
+    split at h
+    · cases h
+    rename_i o₂ h₂
+    split at h
+    · cases h
+    rename_i o₃ h₃
+    split at h
+    · cases h
+    rename_i σ₄ hu
+    simp only [Option.some.injEq] at h; subst h
+    simp only [Sat.map, Sat.append] at hsat
+    have hc := ih₁ h₁ (by ret_ok) .none _ C hsat.1.1.1
+    have he₂ := InferSound.check ih₂ h₂ (by ret_ok) hex _ C hsat.1.1.2
+    have hs := hsat.1.2 _ (List.mem_singleton_self _)
+    have he₃ := InferSound.check ih₃ h₃ (by ret_ok) hex _ C hsat.2
+    simp only [Pred.subst, List.map_cons, List.map_nil] at hs
+    simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose, Ctx.subst_cons,
+      Scheme.mono_subst] at hc he₂ he₃ hs ⊢
+    match ex, hex with
+    | none, _ =>
+      replace he₂ := he₂.conv ((unify_sound hu).subst φ)
+      exact .caseTag hc hs he₂ he₃
+    | some T, hex =>
+      have hT := hex T rfl
+      simp only [InferSound.check_ty h₂ hex T rfl, InferSound.check_ty h₃ hex T rfl,
+        Ty.closed_subst hT] at he₂ he₃ ⊢
+      exact .caseTag hc hs he₂ he₃
   | unop op e ih =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_synth (fun _ => rfl)]
@@ -1609,8 +1816,46 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
 
   | obj ls es ks ih =>
     intro Γ R rm ex n o h hRo hex φ C hsat
-    rw [exMode_synth (fun _ => rfl)]
     simp only [infer] at h
+    split at h
+    · -- Checked against a record or a variant's case.
+      rename_i T hfT
+      obtain ⟨rfl, hp⟩ := Option.filter_eq_some_iff.mp hfT
+      have hT := hex T rfl
+      simp only [Expr.pushes, Bool.and_eq_true, decide_eq_true_eq] at hp
+      obtain ⟨⟨hts, hnd⟩, hk⟩ := hp
+      rw [show exMode (some T) (Expr.obj ls es ks) = .check by
+        simp [exMode, Expr.pushes, hts, hnd, hk]]
+      split at h
+      · rename_i P hP
+        obtain ⟨hc, hPc⟩ := objTarget_sound hT hP
+        split at h
+        · rename_i τs hd
+          have hτc := Ty.dataFields_closed hPc hd
+          split at h
+          · rename_i hcond
+            obtain ⟨hL', hlen, hu⟩ := hcond
+            have hL : ∀ l ∈ ls, l ∈ L := fun l hl => by simpa using List.all_eq_true.mp hL' l hl
+            obtain ⟨ψ, hψ⟩ := Option.isSome_iff_exists.mp hu
+            have he := unify_sound hψ
+            have hmap : (τs.map fun τ => Ty.slot .pre .data τ).map (·.subst ψ) =
+                τs.map fun τ => Ty.slot .pre .data τ := by
+              rw [List.map_map]
+              exact List.map_congr_left fun τ hτ => by
+                simp [Ty.subst_app, Ty.closed_subst (hτc τ hτ)]
+            rw [Ty.closed_subst hPc, Ty.subst_app, objSlots_subst, hmap] at he
+            split at h
+            · cases h
+            rename_i o₁ h₁
+            simp only [Option.some.injEq] at h; subst h
+            have hfs := inferFields_sound es ih h₁ hRo hτc φ C hsat
+            simp only [Ty.closed_subst hT]
+            exact .objCheck hc hnd hk hlen hL hd he hfs
+          · cases h
+        · cases h
+      · cases h
+    rename_i hfn
+    rw [exMode_of_filter_none hfn]
     split at h
     rotate_left
     · cases h

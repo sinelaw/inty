@@ -531,7 +531,101 @@ theorem PredEq.rsub (ρ : RSubst) {p q : Pred} (h : PredEq p q) : PredEq (p.rsub
 theorem SlotCopy.rsub (ρ : RSubst) (h : SlotCopy s r) : SlotCopy (s.rsub ρ) (r.rsub ρ) := by
   cases h <;> simp <;> constructor
 
+/-- A non-rigid constructor's head survives instantiating rigid type
+variables. -/
+theorem Ty.whnf_rsub_nr {ρ : RSubst} {T : Ty} {c : Con} {xs : List Ty} (h : T.whnf = .app c xs)
+    (hc : c.isRigid = false) : (T.rsub ρ).whnf = .app c (xs.map (·.rsub ρ)) :=
+  Ty.whnf_rsub_of_app h (Con.rimgA_none (Con.rimg_of_not_rigid hc) xs)
+
+theorem Ty.tagOf_rsub (ρ : RSubst) {l : String} {R : Ty} {t : String} (h : R.tagOf l = some t) :
+    (R.rsub ρ).tagOf l = some t := by
+  unfold Ty.tagOf at h ⊢
+  split at h
+  · rename_i ls slots hR
+    rw [Ty.whnf_rsub_nr hR rfl]
+    simp only
+    rw [Ty.field_rsub]
+    split at h
+    · rename_i s hs
+      rw [hs]
+      simp only [Option.map_some]
+      split at h
+      · rename_i p k τ hsw
+        rw [Ty.whnf_rsub_nr hsw rfl]
+        simp only [List.map_cons, List.map_nil]
+        split at h
+        · rename_i hpk
+          obtain ⟨hp, hk⟩ := hpk
+          rw [Ty.whnf_rsub_nr hp rfl, Ty.whnf_rsub_nr hk rfl]
+          simp only [List.map_nil, and_self, ↓reduceIte]
+          split at h
+          · rename_i t' hτ
+            rw [Ty.whnf_rsub_nr hτ rfl]
+            simpa using h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
+theorem variantRest_rsub (ρ : RSubst) (l : String) (ts : List String) (Rs : List Ty) :
+    (variantRest l ts Rs).rsub ρ = variantRest l ts (Rs.map (·.rsub ρ)) := by
+  match Rs with
+  | [] => simp [variantRest, Con.rimgA, Con.rimg]
+  | [_] => rfl
+  | _ :: _ :: _ => simp [variantRest, Con.rimgA]
+
+theorem Ty.dataField_rsub (ρ : RSubst) {T : Ty} {l : String} {τ : Ty} (h : T.dataField l = some τ) :
+    (T.rsub ρ).dataField l = some (τ.rsub ρ) := by
+  unfold Ty.dataField at h ⊢
+  split at h
+  · rename_i ls slots hT
+    rw [Ty.whnf_rsub_nr hT rfl]
+    simp only
+    rw [Ty.field_rsub]
+    split at h
+    · rename_i s hs
+      rw [hs]
+      simp only [Option.map_some]
+      split at h
+      · rename_i p k τ' hsw
+        rw [Ty.whnf_rsub_nr hsw rfl]
+        simp only [List.map_cons, List.map_nil]
+        split at h
+        · rename_i hpk
+          obtain ⟨hp, hk⟩ := hpk
+          rw [Ty.whnf_rsub_nr hp rfl, Ty.whnf_rsub_nr hk rfl]
+          simp only [List.map_nil, and_self, ↓reduceIte]
+          simp only [Option.some.injEq] at h ⊢
+          rw [h]
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
+theorem Ty.dataFields_rsub (ρ : RSubst) {T : Ty} : ∀ {ls : List String} {τs : List Ty},
+    T.dataFields ls = some τs → (T.rsub ρ).dataFields ls = some (τs.map (·.rsub ρ))
+  | [], τs, h => by
+    simp only [Ty.dataFields, Option.some.injEq] at h ⊢
+    subst h; rfl
+  | l :: ls, τs, h => by
+    simp only [Ty.dataFields] at h ⊢
+    split at h
+    · rename_i τ τs' h1 h2
+      simp only [Option.some.injEq] at h
+      subst h
+      rw [Ty.dataField_rsub ρ h1, Ty.dataFields_rsub ρ h2]
+      rfl
+    · cases h
+
 /-- The wide instances survive instantiating rigid type variables. -/
+theorem ObjCase.rsub (ρ : RSubst) {ls : List String} {es : List Expr} {T P : Ty}
+    (h : ObjCase ls es T P) : ObjCase ls es (T.rsub ρ) (P.rsub ρ) := by
+  cases h with
+  | self => exact .self
+  | variant hw hl hi hP ht =>
+    exact .variant (Ty.whnf_rsub_nr hw rfl) hl hi (by simp [hP]) (Ty.tagOf_rsub ρ ht)
+
 theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) := by
   cases h with
   | narrow h hc =>
@@ -563,6 +657,10 @@ theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) :=
     | injectSome _ _ _ _ _ => exact absurd rfl (hc _)
     | stripSome => simpa [Pred.rsub] using InstW.narrow Inst.stripSome (by simp)
     | @stripSelf c args _ _ _ => simpa [Pred.rsub] using InstW.stripSelf (τ := (Ty.app c args).rsub ρ)
+    | @caseHit ts i t Rs R l hn hi hR =>
+      refine InstW.narrow ?_ (by simp [Pred.rsub, Cls.rsub])
+      simpa [Pred.rsub, Cls.rsub, variantRest_rsub, ← eraseIdx_map, Ty.rsub_app, Con.rimgA,
+        Con.rimg] using Inst.caseHit (l := l) (ts := ts) hn hi (by simp [hR])
   | injectSelf => simpa [Pred.rsub] using InstW.injectSelf
   | @injectNothing z σ =>
     have : z.ty.rsub ρ = z.ty := Nothing.ty_rsub ρ z
@@ -946,5 +1044,15 @@ theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List N
   | conv _ he ih => exact .conv ih (he.rsub ρ)
   | inj _ hT hi ih => exact .inj ih (hS.closed hT) (by rw [← hS.injPred]; exact hi.rsubS hS)
   | drop _ ih => exact .drop ih
+  | litStr hw => exact .litStr (Ty.whnf_rsub_nr hw rfl)
+  | objCheck hc hn hk hl hL hd he _ ih =>
+    refine .objCheck (hc.rsub ρ) hn hk hl hL (Ty.dataFields_rsub ρ hd) ?_ (fun p hp => ?_)
+    · simpa [objSlots_rsub, List.map_map, Function.comp_def] using he.rsub ρ
+    · rw [List.zip_map_right] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      exact ih q hq
+  | caseTag _ hc _ _ ih₁ ih₂ ih₃ =>
+    exact .caseTag ih₁ (by simpa [Pred.rsub, Cls.rsub] using hc.rsubS hS)
+      (by simpa [Scheme.mono_rsub] using ih₂) (by simpa [Scheme.mono_rsub] using ih₃)
 
 end Inty

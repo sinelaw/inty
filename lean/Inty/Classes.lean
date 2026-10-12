@@ -1,4 +1,4 @@
-import Inty.Equi
+import Inty.Heads
 
 /-!
 # Type classes
@@ -106,6 +106,91 @@ inductive SlotCopy : Ty → Ty → Prop where
 theorem SlotCopy.subst (σ : Subst) (h : SlotCopy s r) : SlotCopy (s.subst σ) (r.subst σ) := by
   cases h <;> simp only [Ty.subst_app, List.map_cons, List.map_nil] <;> constructor
 
+/-- The tag of a variant's case `R` over its field `l`: the string of the
+type of `R`'s field `l`, present and holding a value (each looked at
+unfolded). -/
+def Ty.tagOf (l : String) (R : Ty) : Option String :=
+  match R.whnf with
+  | .app (.record ls) slots =>
+    match Ty.field l ls slots with
+    | some s =>
+      match s.whnf with
+      | .app .slot [p, k, τ] =>
+        if p.whnf = .pre ∧ k.whnf = .data then
+          match τ.whnf with
+          | .app (.strLit t) [] => some t
+          | _ => none
+        else none
+      | _ => none
+    | none => none
+  | _ => none
+
+/-- The rest of a variant tagged by `l` once a case is taken out, its tags
+`ts` and its cases `Rs` left: the one case left as it is (so that its
+fields can be read), or a variant of them. -/
+def variantRest (l : String) (ts : List String) : List Ty → Ty
+  | [R] => R
+  | Rs => .variant l ts Rs
+
+/-- The first index of `t` in `ts`. -/
+def firstIdx (t : String) : List String → Option Nat
+  | [] => none
+  | x :: xs => if x = t then some 0 else (firstIdx t xs).map (· + 1)
+
+theorem firstIdx_getElem {t : String} : ∀ {ts : List String} {i : Nat},
+    firstIdx t ts = some i → ts[i]? = some t
+  | [], _, h => by simp [firstIdx] at h
+  | x :: xs, i, h => by
+    simp only [firstIdx] at h
+    split at h
+    · cases h; simp_all
+    · obtain ⟨j, hj, rfl⟩ := Option.map_eq_some_iff.mp h
+      simpa using firstIdx_getElem hj
+
+theorem Ty.tagOf_subst {l : String} {R : Ty} {t : String} (h : R.tagOf l = some t) (σ : Subst) :
+    (R.subst σ).tagOf l = some t := by
+  unfold Ty.tagOf at h ⊢
+  split at h
+  · rename_i ls slots hR
+    rw [Ty.whnf_subst_of_app hR σ]
+    simp only
+    rw [Ty.field_subst]
+    split at h
+    · rename_i s hs
+      rw [hs]
+      simp only [Option.map_some]
+      split at h
+      · rename_i p k τ hsw
+        rw [Ty.whnf_subst_of_app hsw σ]
+        simp only [List.map_cons, List.map_nil]
+        split at h
+        · rename_i hpk
+          obtain ⟨hp, hk⟩ := hpk
+          rw [Ty.whnf_subst_of_app hp σ, Ty.whnf_subst_of_app hk σ]
+          simp only [List.map_nil, and_self, ↓reduceIte]
+          split at h
+          · rename_i t' hτ
+            rw [Ty.whnf_subst_of_app hτ σ]
+            simpa using h
+          · cases h
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
+theorem eraseIdx_map {α β : Type} (f : α → β) : ∀ (l : List α) (i : Nat),
+    (l.map f).eraseIdx i = (l.eraseIdx i).map f
+  | [], _ => rfl
+  | _ :: _, 0 => rfl
+  | a :: l, i + 1 => by simp [eraseIdx_map f l i]
+
+theorem variantRest_subst (σ : Subst) (l : String) (ts : List String) (Rs : List Ty) :
+    (variantRest l ts Rs).subst σ = variantRest l ts (Rs.map (·.subst σ)) := by
+  match Rs with
+  | [] => rfl
+  | [_] => rfl
+  | _ :: _ :: _ => simp [variantRest]
+
 /-- The instances, as `classes::instances` (and, for `HasProp`, inty's
 `resolve_has_prop`). -/
 inductive Inst : Pred → Prop where
@@ -155,6 +240,10 @@ inductive Inst : Pred → Prop where
   `Null` or `Undefined` (whose values are all nothing). -/
   | stripSelf : (∀ z, c ≠ .maybe z) → c ≠ .null → c ≠ .undefined →
       Inst ⟨.strip, [.app c args, .app c args]⟩
+  /-- `Case_{l,t} (variant l ts Rs) R ρ`: the variant's tags differ, `R` is
+  the case of the tag `t` and `ρ` the rest. -/
+  | caseHit : ts.Nodup → ts[i]? = some t → Rs[i]? = some R →
+      Inst ⟨.caseTag l t, [.variant l ts Rs, R, variantRest l (ts.eraseIdx i) (Rs.eraseIdx i)]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -192,6 +281,10 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | stripSelf hm hn hu =>
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
     exact .stripSelf hm hn hu
+  | caseHit hn hi hR =>
+    simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, variantRest_subst,
+      ← eraseIdx_map]
+    exact .caseHit hn hi (by simp [hR])
 
 /-- The `Merge` constraints of a spread, label by label: the operand's
 presences `ps`, kinds `ks` and types `τs`, the slots `ss` it is written

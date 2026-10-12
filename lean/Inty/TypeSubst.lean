@@ -12,50 +12,7 @@ for them.
 
 namespace Inty
 
-/-! ## Heads through substitution -/
-
-theorem Ty.whnf_cases (t : Ty) :
-    (∃ a, t.whnf = .var a) ∨ (∃ c xs, t.whnf = .app c xs ∧ t.view = some (.app c xs)) ∨
-      t.view = none := by
-  cases hv : t.view with
-  | none => exact .inr (.inr rfl)
-  | some v =>
-    rcases Ty.view_shape hv with ⟨a, rfl⟩ | ⟨c, xs, rfl⟩
-    · exact .inl ⟨a, Ty.whnf_of_view hv⟩
-    · exact .inr (.inl ⟨c, xs, Ty.whnf_of_view hv, rfl⟩)
-
-theorem Ty.whnf_headless {t : Ty} (h : t.view = none) : t.whnf = t := by simp [Ty.whnf, h]
-
-theorem Ty.view_subst_none {t : Ty} (h : t.view = none) (φ : Subst) : (t.subst φ).view = none := by
-  rw [Ty.view_subst, h]; rfl
-
-theorem Ty.view_subst_app {t : Ty} {c : Con} {xs : List Ty} (h : t.view = some (.app c xs))
-    (φ : Subst) : (t.subst φ).view = some (.app c (xs.map (·.subst φ))) := by
-  rw [Ty.view_subst, h]; simp [Ty.view]
-
-/-- A head through substitution: a variable's is its image's, a constructor
-stays. -/
-theorem Ty.whnf_subst_app {t : Ty} {φ : Subst} {c : Con} {ys : List Ty}
-    (h : (t.subst φ).whnf = .app c ys) :
-    (∃ a, t.whnf = .var a) ∨ ∃ xs, t.whnf = .app c xs ∧ ys = xs.map (·.subst φ) := by
-  rcases Ty.whnf_cases t with ⟨a, ha⟩ | ⟨c', xs, hw, hv⟩ | hv
-  · exact .inl ⟨a, ha⟩
-  · rw [Ty.whnf_of_view (Ty.view_subst_app hv φ)] at h
-    simp only [Ty.app.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    exact .inr ⟨xs, hw, rfl⟩
-  · rw [Ty.whnf_headless (Ty.view_subst_none hv φ)] at h
-    have := Ty.view_subst_none hv φ
-    rw [h] at this; cases this
-
-theorem Ty.whnf_subst_var {t : Ty} {φ : Subst} {a : Nat} (h : (t.subst φ).whnf = .var a) :
-    ∃ b, t.whnf = .var b := by
-  rcases Ty.whnf_cases t with ⟨b, hb⟩ | ⟨c', xs, hw, hv⟩ | hv
-  · exact ⟨b, hb⟩
-  · rw [Ty.whnf_of_view (Ty.view_subst_app hv φ)] at h; cases h
-  · rw [Ty.whnf_headless (Ty.view_subst_none hv φ)] at h
-    have := Ty.view_subst_none hv φ
-    rw [h] at this; cases this
+/-! ## Heads through substitution, up to equal types -/
 
 /-- A type whose image is equal to a constructor application unfolds to a
 variable or to that constructor. -/
@@ -83,6 +40,7 @@ theorem Ty.whnf_con_of_tyEq {t : Ty} {φ : Subst} {c : Con} (h : TyEq (t.subst �
 theorem Ty.whnf_var_of_tyEq {t : Ty} {φ : Subst} {a : Nat} (h : TyEq (t.subst φ) (.var a)) :
     ∃ b, t.whnf = .var b :=
   Ty.whnf_subst_var (TyEq.whnf_var h.symm rfl)
+
 
 theorem Scheme.Simple.subst {s : Scheme} (hs : s.Simple) (σ : Subst) : (s.subst σ).Simple := by
   intro p hp
@@ -176,18 +134,55 @@ theorem Ret.tv_subst_nil {σ : Subst} {R : Option Ty} (h : (R.map Ty.tv).getD []
   | none => rfl
   | some τr => simpa using Ty.tv_subst_nil (σ := σ) (by simpa using h)
 
-/-- A constructor application's head survives substitution. -/
-theorem Ty.whnf_subst_of_app {T : Ty} {c : Con} {xs : List Ty} (h : T.whnf = .app c xs)
-    (σ : Subst) : (T.subst σ).whnf = .app c (xs.map (·.subst σ)) := by
-  rcases Ty.whnf_cases T with ⟨a, ha⟩ | ⟨c', xs', hw, hv⟩ | hv
-  · rw [ha] at h; cases h
-  · rw [hw] at h
-    simp only [Ty.app.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    exact Ty.whnf_of_view (Ty.view_subst_app hv σ)
-  · rw [Ty.whnf_headless hv] at h
-    subst h
-    simp [Ty.view] at hv
+theorem Ty.dataField_subst {T : Ty} {l : String} {τ : Ty} (h : T.dataField l = some τ)
+    (σ : Subst) : (T.subst σ).dataField l = some (τ.subst σ) := by
+  unfold Ty.dataField at h ⊢
+  split at h
+  · rename_i ls slots hT
+    rw [Ty.whnf_subst_of_app hT σ]
+    simp only
+    rw [Ty.field_subst]
+    split at h
+    · rename_i s hs
+      rw [hs]
+      simp only [Option.map_some]
+      split at h
+      · rename_i p k τ' hsw
+        rw [Ty.whnf_subst_of_app hsw σ]
+        simp only [List.map_cons, List.map_nil]
+        split at h
+        · rename_i hpk
+          obtain ⟨hp, hk⟩ := hpk
+          rw [Ty.whnf_subst_of_app hp σ, Ty.whnf_subst_of_app hk σ]
+          simp only [List.map_nil, and_self, ↓reduceIte]
+          simp only [Option.some.injEq] at h ⊢
+          rw [h]
+        · cases h
+      · cases h
+    · cases h
+  · cases h
+
+theorem Ty.dataFields_subst {T : Ty} (σ : Subst) : ∀ {ls : List String} {τs : List Ty},
+    T.dataFields ls = some τs → (T.subst σ).dataFields ls = some (τs.map (·.subst σ))
+  | [], τs, h => by
+    simp only [Ty.dataFields, Option.some.injEq] at h ⊢
+    subst h; rfl
+  | l :: ls, τs, h => by
+    simp only [Ty.dataFields] at h ⊢
+    split at h
+    · rename_i τ τs' h1 h2
+      simp only [Option.some.injEq] at h
+      subst h
+      rw [Ty.dataField_subst h1 σ, Ty.dataFields_subst σ h2]
+      rfl
+    · cases h
+
+theorem ObjCase.subst (σ : Subst) {ls : List String} {es : List Expr} {T P : Ty}
+    (h : ObjCase ls es T P) : ObjCase ls es (T.subst σ) (P.subst σ) := by
+  cases h with
+  | self => exact .self
+  | variant hw hl hi hP ht =>
+    exact .variant (Ty.whnf_subst_of_app hw σ) hl hi (by simp [hP]) (Ty.tagOf_subst ht σ)
 
 theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S L C Γ R rm md e τ) :
     HasTypeS S L (C.map (·.subst σ)) (Γ.map (Scheme.subst σ)) (R.map (·.subst σ)) rm md e
@@ -313,6 +308,16 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
   | inj _ hT hi ih =>
     exact .inj ih (hS.closed σ hT) (by rw [← hS.injPred σ _ hT]; exact hi.substS hS σ)
   | drop _ ih => exact .drop ih
+  | litStr hw => exact .litStr (Ty.whnf_subst_of_app hw σ)
+  | objCheck hc hn hk hl hL hd he _ ih =>
+    refine .objCheck (hc.subst σ) hn hk hl hL (Ty.dataFields_subst σ hd) ?_ (fun p hp => ?_)
+    · simpa [objSlots_subst, List.map_map, Function.comp_def] using he.subst σ
+    · rw [List.zip_map_right] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      exact ih q hq
+  | caseTag _ hc _ _ ih₁ ih₂ ih₃ =>
+    exact .caseTag ih₁ (by simpa [Pred.subst] using hc.substS hS σ) (by simpa using ih₂)
+      (by simpa using ih₃)
 
 /-- The narrow system survives substitution. -/
 theorem Sys.narrow_substable : Sys.narrow.Substable where
