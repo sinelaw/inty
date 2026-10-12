@@ -128,6 +128,11 @@ enum Core {
     /// apart by its tag: `v` bound in both branches, in `e₃` as the case of
     /// the tag `t`, in `e₂` as the rest; only in statement position.
     CaseTag(Box<Core>, String, String, Box<Core>, Box<Core>),
+    /// `const v = e₁; typeof v === "t" ? e₃ : e₂`, a sum told apart by
+    /// `typeof` taken apart by its tag: `v` bound in both branches, in `e₃`
+    /// as the case of the tag `t`, in `e₂` as the rest; only in statement
+    /// position.
+    TypeTest(Box<Core>, String, Box<Core>, Box<Core>),
 }
 
 /// How a class holds a member.
@@ -156,6 +161,7 @@ fn annotatable(t: &T) -> bool {
             .iter()
             .all(|(_, fs)| fs.iter().all(|(_, t)| annotatable(t))),
         // Only the polymorphic identity's annotation has variables.
+        T::Sum(arms) => arms.iter().all(annotatable),
         T::Obj(_) | T::TVar(_) => false,
     }
 }
@@ -193,7 +199,18 @@ fn wire_ty(t: &T) -> String {
                 .collect();
             format!("(variant s:{}{})", l, cases.concat())
         }
-        T::Obj(_) => unreachable!("records aren't annotated"),
+        T::Sum(arms) => {
+            let arms: Vec<String> = arms.iter().map(|t| format!(" {}", wire_ty(t))).collect();
+            format!("(sum{})", arms.concat())
+        }
+        // Only as a sum's case.
+        T::Obj(fs) => {
+            let fields: Vec<String> = fs
+                .iter()
+                .map(|(f, t)| format!(" (s:{f} {})", wire_ty(t)))
+                .collect();
+            format!("(rec{})", fields.concat())
+        }
     }
 }
 
@@ -225,7 +242,17 @@ fn js_ty(t: &T) -> String {
                 .collect();
             format!("({})", cases.join(" | "))
         }
-        T::Obj(_) => unreachable!("records aren't annotated"),
+        T::Sum(arms) => format!(
+            "({})",
+            arms.iter().map(js_ty).collect::<Vec<_>>().join(" | ")
+        ),
+        T::Obj(fs) => format!(
+            "{{{}}}",
+            fs.iter()
+                .map(|(f, t)| format!("{f}: {}", js_ty(t)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -251,6 +278,7 @@ fn tvar_count(t: &T) -> usize {
             .flat_map(|(_, fs)| fs.iter().map(|(_, t)| tvar_count(t)))
             .max()
             .unwrap_or(0),
+        T::Sum(arms) => arms.iter().map(tvar_count).max().unwrap_or(0),
         T::Num | T::Str | T::Bool | T::Undef | T::Null => 0,
     }
 }
@@ -384,6 +412,7 @@ fn wire(e: &Core) -> String {
             wire(y),
             wire(z)
         ),
+        TypeTest(x, t, y, z) => format!("(typetest {} s:{} {} {})", wire(x), t, wire(y), wire(z)),
     }
 }
 
@@ -393,7 +422,9 @@ fn ends_in_statement(e: &Core) -> bool {
     match e {
         Let(_, _, _, rest) | Seq(_, rest) => ends_in_statement(rest),
         Throw(_) | Ret(_) | While(..) | Break | Continue | TryCatch(..) | TryFinally(..) => true,
-        Cond(_, t, f) | Unwrap(_, t, f) | CaseTag(_, _, _, t, f) => is_stmt(t) || is_stmt(f),
+        Cond(_, t, f) | Unwrap(_, t, f) | CaseTag(_, _, _, t, f) | TypeTest(_, _, t, f) => {
+            is_stmt(t) || is_stmt(f)
+        }
         _ => false,
     }
 }
@@ -403,7 +434,7 @@ fn ends_in_statement(e: &Core) -> bool {
 fn is_stmt(e: &Core) -> bool {
     match e {
         Ret(_) | Throw(_) | Seq(..) | Let(..) | While(..) | Break | Continue | TryCatch(..)
-        | TryFinally(..) | Unwrap(..) | CaseTag(..) => true,
+        | TryFinally(..) | Unwrap(..) | CaseTag(..) | TypeTest(..) => true,
         Cond(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
     }
@@ -454,6 +485,7 @@ fn fractional(e: &Core) -> Core {
         New(x, args) => New(f(x), args.iter().map(fractional).collect()),
         Unwrap(x, y, z) => Unwrap(f(x), f(y), f(z)),
         CaseTag(x, l, t, y, z) => CaseTag(f(x), l.clone(), t.clone(), f(y), f(z)),
+        TypeTest(x, t, y, z) => TypeTest(f(x), t.clone(), f(y), f(z)),
         other => other.clone(),
     }
 }
@@ -513,7 +545,7 @@ impl Js {
                 format!("{}({})", callee, args.join(", "))
             }
             Let(..) | Ret(_) | Throw(_) | Seq(..) | While(..) | Break | Continue | TryCatch(..)
-            | TryFinally(..) | Unwrap(..) | CaseTag(..) => {
+            | TryFinally(..) | Unwrap(..) | CaseTag(..) | TypeTest(..) => {
                 unreachable!("statements only in statement position: {e:?}")
             }
             Assign(i, e) => format!("({} = {})", self.name(*i), self.expr(e)),
@@ -742,6 +774,25 @@ impl Js {
                 self.names.pop();
                 out
             }
+            // `const v = e₁;`, then a test of `v`'s `typeof`, which inty
+            // narrows `v` by in each branch.
+            TypeTest(e1, t, e2, e3) => {
+                let v = self.fresh("v");
+                let init = self.expr(e1);
+                self.names.push(v.clone());
+                let test = format!("typeof {v} === \"{t}\"");
+                let out = if is_stmt(e2) || is_stmt(e3) {
+                    let rest = self.stmts(e2, last);
+                    let case = self.stmts(e3, last);
+                    format!("const {v} = {init}; if ({test}) {{ {case} }} else {{ {rest} }}")
+                } else {
+                    let rest = self.expr(e2);
+                    let case = self.expr(e3);
+                    format!("const {v} = {init}; {last}({test} ? {case} : {rest});")
+                };
+                self.names.pop();
+                out
+            }
             Cond(c, t, f) if is_stmt(t) || is_stmt(f) => format!(
                 "if ({}) {{ {} }} else {{ {} }}",
                 self.expr(c),
@@ -785,7 +836,7 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
                 || refers_from_inner(y, i, inner)
                 || refers_from_inner(z, i + 1, inner)
         }
-        CaseTag(x, _, _, y, z) => {
+        CaseTag(x, _, _, y, z) | TypeTest(x, _, y, z) => {
             refers_from_inner(x, i, inner)
                 || refers_from_inner(y, i + 1, inner)
                 || refers_from_inner(z, i + 1, inner)
@@ -871,6 +922,9 @@ enum T {
     /// case's other fields, sorted by label; only as an annotation's
     /// (`ty` never makes one).
     Variant(String, Vec<(String, Vec<(String, T)>)>),
+    /// A sum told apart by `typeof` (`Number | String`): its cases, of
+    /// different `typeof`s; only as an annotation's (`ty` never makes one).
+    Sum(Vec<T>),
 }
 
 /// The property labels the generated programs use.
@@ -1001,9 +1055,13 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
-            T::Arrow(..) | T::Obj(_) | T::Arr(_) | T::Maybe(..) | T::TVar(_) | T::Variant(..) => {
-                return None
-            }
+            T::Arrow(..)
+            | T::Obj(_)
+            | T::Arr(_)
+            | T::Maybe(..)
+            | T::TVar(_)
+            | T::Variant(..)
+            | T::Sum(_) => return None,
         })
     }
 
@@ -1100,10 +1158,103 @@ impl Gen {
         Let(false, Some(v), b(e1), b(rest))
     }
 
+    /// A sum told apart by `typeof`, of two or three of a number, a string,
+    /// a boolean and a function.
+    fn sum_ty(&mut self) -> T {
+        let field = if self.rng.chance(50) { T::Num } else { T::Str };
+        let mut arms = vec![
+            T::Num,
+            T::Str,
+            T::Bool,
+            T::Arrow(vec![T::Num], b2(T::Num)),
+            T::Obj(vec![("a".into(), field)]),
+        ];
+        let n = 2 + self.rng.below(2);
+        while arms.len() > n {
+            let i = self.rng.below(arms.len());
+            arms.remove(i);
+        }
+        T::Sum(arms)
+    }
+
+    /// A value of the sum `t`: a variable of its type, or a value of one of
+    /// its cases, which checking it against `t` injects.
+    fn sum_value(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let T::Sum(arms) = t else { unreachable!() };
+        let fits: Vec<usize> = (0..scope.len())
+            .filter(|&i| matches!(&scope[scope.len() - 1 - i], Binding::Mono(u) if u == t))
+            .collect();
+        if !fits.is_empty() && self.rng.chance(50) {
+            return Var(fits[self.rng.below(fits.len())]);
+        }
+        let arm = arms[self.rng.below(arms.len())].clone();
+        self.typed(&arm, d, scope, false)
+    }
+
+    /// The `typeof` of a sum's case.
+    fn type_tag(t: &T) -> &'static str {
+        match t {
+            T::Num => "number",
+            T::Str => "string",
+            T::Bool => "boolean",
+            T::Arrow(..) => "function",
+            T::Obj(_) => "object",
+            _ => unreachable!("a sum's cases are told apart by typeof"),
+        }
+    }
+
+    /// A program of type `t` with a sum told apart by `typeof`: one
+    /// annotated `const`, or one in scope, taken apart by a test of its
+    /// `typeof`.
+    fn sum_use(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let existing: Vec<(usize, T)> = (0..scope.len())
+            .filter_map(|i| match &scope[scope.len() - 1 - i] {
+                Binding::Mono(v @ T::Sum(_)) => Some((i, v.clone())),
+                _ => None,
+            })
+            .collect();
+        let (x, s, bind) = if !existing.is_empty() && self.rng.chance(60) {
+            let (i, s) = existing[self.rng.below(existing.len())].clone();
+            (Var(i), s, None)
+        } else {
+            let s = self.sum_ty();
+            let e1 = self.sum_value(&s, d, scope);
+            (Var(0), s, Some(e1))
+        };
+        if bind.is_some() {
+            scope.push(Binding::Mono(s.clone()));
+        }
+        let T::Sum(arms) = &s else { unreachable!() };
+        let k = self.rng.below(arms.len());
+        let mut rest = arms.clone();
+        let case = rest.remove(k);
+        scope.push(Binding::Mono(if rest.len() == 1 {
+            rest[0].clone()
+        } else {
+            T::Sum(rest)
+        }));
+        let e2 = self.typed(t, d, scope, true);
+        scope.pop();
+        scope.push(Binding::Mono(case.clone()));
+        let e3 = self.typed(t, d, scope, true);
+        scope.pop();
+        let test = TypeTest(b(x), Self::type_tag(&case).to_string(), b(e2), b(e3));
+        match bind {
+            Some(e1) => {
+                scope.pop();
+                Let(false, Some(s), b(e1), b(test))
+            }
+            None => test,
+        }
+    }
+
     /// A program of type `t`, mostly well typed.
     fn typed(&mut self, t: &T, depth: usize, scope: &mut Vec<Binding>, stmt: bool) -> Core {
         if matches!(t, T::Variant(..)) {
             return self.variant_value(t, depth.saturating_sub(1), scope);
+        }
+        if matches!(t, T::Sum(_)) {
+            return self.sum_value(t, depth.saturating_sub(1), scope);
         }
         // A variable of the right type.
         let fits: Vec<usize> = (0..scope.len())
@@ -1197,6 +1348,10 @@ impl Gen {
         // A variant, taken apart by its tag.
         if stmt && depth > 0 && self.rng.chance(6) {
             return self.variant_use(t, d, scope);
+        }
+        // A sum told apart by `typeof`, taken apart by a test of it.
+        if stmt && depth > 0 && self.rng.chance(6) {
+            return self.sum_use(t, d, scope);
         }
         // A sum's binding, or another value that isn't nothing, tested for
         // nothing: `v != null ? … : …`, or `v ?? …`.
@@ -1297,7 +1452,10 @@ impl Gen {
             scope.pop();
             return Let(mutable, ann, b(e1), b(rest));
         }
-        match self.rng.below(6) {
+        // (At depth 0, the value itself: a conditional or a call there
+        // would spawn more than one subprogram at depth 0 on average, and
+        // the program might never end.)
+        match if depth == 0 { 5 } else { self.rng.below(6) } {
             0 => {
                 let c = self.any(d, scope, false);
                 Cond(
@@ -2461,6 +2619,12 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Reject) if features.contains("variant field") => {
             Some("a variant's field read without a test of its tag")
         }
+        // inty joins a sum (or a variant) with one of its cases to the sum;
+        // the model's branches must agree (sum-types-design: a waiting
+        // `Join` constraint is still to come).
+        (Typing::Type(_), Typing::Reject) if features.contains("sum join") => {
+            Some("a sum joined with one of its cases")
+        }
         // Roadmap phase 4: inty wants an array's or a string's index to be
         // an `Int`; the model takes any number, a fractional one being out
         // of bounds (a fault).
@@ -2473,56 +2637,97 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
 
 /// Whether `e` reads a property of a variable that holds a variant (an
 /// annotated one, an alias of one, or the rest of one a test of its tag
-/// took apart, if two cases or more are left), `variant` giving the
-/// variant each variable in scope holds, if any.
-fn reads_variant_field(e: &Core, variant: &mut Vec<Option<T>>) -> bool {
-    let held = |variant: &Vec<Option<T>>, x: &Core| match x {
-        Var(i) if variant.len() > *i => variant[variant.len() - 1 - i].clone(),
+/// took apart, if two cases or more are left).
+fn reads_variant_field(e: &Core) -> bool {
+    scan_held(e, &mut Vec::new(), &|e, held| match e {
+        Get(x, _) | Set(x, _, _) | MCall(x, _, _) => {
+            matches!(held_by(held, x), Some(T::Variant(..)))
+        }
+        _ => false,
+    })
+}
+
+/// Whether `e` joins a variable that holds a sum (one told apart by
+/// `typeof`, a nullable or optional one, or a variant) with something
+/// else: a branch of a conditional, or an array's element. inty joins a
+/// sum with one of its cases to the sum; the model's branches agree on one
+/// type.
+fn joins_sum(e: &Core) -> bool {
+    let sum = |held: &[Option<T>], x: &Core| held_by(held, x).is_some();
+    scan_held(e, &mut Vec::new(), &|e, held| match e {
+        Cond(_, y, z) => sum(held, y) || sum(held, z),
+        Arr(es) => es.len() > 1 && es.iter().any(|x| sum(held, x)),
+        _ => false,
+    })
+}
+
+/// The sum variable `x` holds, if it's one.
+fn held_by(held: &[Option<T>], x: &Core) -> Option<T> {
+    match x {
+        Var(i) if held.len() > *i => held[held.len() - 1 - i].clone(),
         _ => None,
-    };
-    let holds = |variant: &Vec<Option<T>>, x: &Core| held(variant, x).is_some();
-    let under = |variant: &mut Vec<Option<T>>, bound: &[Option<T>], x: &Core| {
-        variant.extend_from_slice(bound);
-        let r = reads_variant_field(x, variant);
-        variant.truncate(variant.len() - bound.len());
+    }
+}
+
+/// Whether `hit` holds of a subterm of `e`, `held` giving the sum each
+/// variable in scope holds, if any (an annotated one, an
+/// alias of one, or the rest of one a test took apart, if two cases or
+/// more are left).
+fn scan_held(
+    e: &Core,
+    held: &mut Vec<Option<T>>,
+    hit: &dyn Fn(&Core, &[Option<T>]) -> bool,
+) -> bool {
+    if hit(e, held) {
+        return true;
+    }
+    let under = |held: &mut Vec<Option<T>>, bound: &[Option<T>], x: &Core| {
+        held.extend_from_slice(bound);
+        let r = scan_held(x, held, hit);
+        held.truncate(held.len() - bound.len());
         r
     };
     match e {
-        Get(x, _) | Set(x, _, _) | MCall(x, _, _) if holds(variant, x) => true,
         Let(_, ann, x, y) => {
             let v = match ann {
-                Some(t @ T::Variant(..)) => Some(t.clone()),
-                _ => held(variant, x),
+                Some(t @ (T::Variant(..) | T::Sum(_) | T::Maybe(..))) => Some(t.clone()),
+                _ => held_by(held, x),
             };
-            reads_variant_field(x, variant) || under(variant, &[v], y)
+            scan_held(x, held, hit) || under(held, &[v], y)
         }
         CaseTag(x, _, t, y, z) => {
-            let rest = match held(variant, x) {
+            let rest = match held_by(held, x) {
                 Some(T::Variant(l, cases)) => {
                     let rest: Vec<_> = cases.into_iter().filter(|(tag, _)| tag != t).collect();
                     (rest.len() > 1).then_some(T::Variant(l, rest))
                 }
                 _ => None,
             };
-            reads_variant_field(x, variant)
-                || under(variant, &[rest], y)
-                || under(variant, &[None], z)
+            scan_held(x, held, hit) || under(held, &[rest], y) || under(held, &[None], z)
         }
-        Func(n, body) | Method(n, body) => under(variant, &vec![None; n + 2], body),
-        Getter(body) => under(variant, &[None, None], body),
-        TryCatch(x, y) => reads_variant_field(x, variant) || under(variant, &[None], y),
+        TypeTest(x, t, y, z) => {
+            let rest = match held_by(held, x) {
+                Some(T::Sum(arms)) => {
+                    let rest: Vec<_> = arms.into_iter().filter(|a| Gen::type_tag(a) != t).collect();
+                    (rest.len() > 1).then_some(T::Sum(rest))
+                }
+                _ => None,
+            };
+            scan_held(x, held, hit) || under(held, &[rest], y) || under(held, &[None], z)
+        }
+        Func(n, body) | Method(n, body) => under(held, &vec![None; n + 2], body),
+        Getter(body) => under(held, &[None, None], body),
+        TryCatch(x, y) => scan_held(x, held, hit) || under(held, &[None], y),
         Unwrap(x, y, z) => {
-            reads_variant_field(x, variant)
-                || reads_variant_field(y, variant)
-                || under(variant, &[None], z)
+            scan_held(x, held, hit) || scan_held(y, held, hit) || under(held, &[None], z)
         }
         // A class's members see binders of its own; not followed.
         Class(..) => false,
         App(f, args) | New(f, args) | MCall(f, _, args) => {
-            reads_variant_field(f, variant) || args.iter().any(|a| reads_variant_field(a, variant))
+            scan_held(f, held, hit) || args.iter().any(|a| scan_held(a, held, hit))
         }
         Assign(_, x) | Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) | Get(x, _) => {
-            reads_variant_field(x, variant)
+            scan_held(x, held, hit)
         }
         Plus(x, y)
         | Minus(x, y)
@@ -2531,14 +2736,12 @@ fn reads_variant_field(e: &Core, variant: &mut Vec<Option<T>>) -> bool {
         | TryFinally(x, y)
         | Spread(x, y)
         | Index(x, y)
-        | Set(x, _, y) => reads_variant_field(x, variant) || reads_variant_field(y, variant),
+        | Set(x, _, y) => scan_held(x, held, hit) || scan_held(y, held, hit),
         Cond(x, y, z) | SetIndex(x, y, z) => {
-            reads_variant_field(x, variant)
-                || reads_variant_field(y, variant)
-                || reads_variant_field(z, variant)
+            scan_held(x, held, hit) || scan_held(y, held, hit) || scan_held(z, held, hit)
         }
-        Obj(fields) => fields.iter().any(|(_, e)| reads_variant_field(e, variant)),
-        Arr(es) => es.iter().any(|e| reads_variant_field(e, variant)),
+        Obj(fields) => fields.iter().any(|(_, e)| scan_held(e, held, hit)),
+        Arr(es) => es.iter().any(|e| scan_held(e, held, hit)),
         Num(..) | Str(_) | Bool(_) | Undef | Null | Var(_) | Break | Continue => false,
     }
 }
@@ -2583,7 +2786,8 @@ fn inty_agrees_with_the_lean_model() {
         // stack.
         let source = js.clone();
         let fractional_source = javascript(&fractional(core));
-        let reads_variant = reads_variant_field(core, &mut Vec::new());
+        let reads_variant = reads_variant_field(core);
+        let sum_join = joins_sum(core);
         let (typing, mut features, run) =
             inty::worker::run_with_inference_stack("inty-differential", move || {
                 let parse = |src: &str| {
@@ -2605,6 +2809,9 @@ fn inty_agrees_with_the_lean_model() {
             });
         if reads_variant {
             features.insert("variant field");
+        }
+        if sum_join {
+            features.insert("sum join");
         }
         let report = |what: &str| {
             format!(
@@ -2673,6 +2880,8 @@ fn inty_agrees_with_the_lean_model() {
                 "(optional ",
                 "(variant ",
                 "(casetag ",
+                "(sum ",
+                "(typetest ",
             ]
             .iter()
             .any(|f| wire(&programs[i]).contains(f))
@@ -2685,6 +2894,8 @@ fn inty_agrees_with_the_lean_model() {
             ("(optional ", "with a `T | Undefined` annotation"),
             ("(variant ", "with a variant annotation"),
             ("(casetag ", "with a test of a variant's tag"),
+            ("(sum ", "with a sum told apart by typeof"),
+            ("(typetest ", "with a test of typeof"),
         ] {
             if wire(&programs[i]).contains(form) {
                 *counts

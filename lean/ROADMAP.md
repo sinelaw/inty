@@ -438,6 +438,27 @@ touching the generic proofs.
   program reading a field of a variant without a test is put down to that
   gap, for the whole program.
 
+  - sums told apart by `typeof` (`Con.variant .typeOf ts`, sharing the
+    variants' constructor: `Disc` is a tag field `l` or `typeOf`, a case's
+    tag the `typeof` of its head, `Con.typeTag`, no two the same): a value
+    of a case is checked into the sum by `Inject` (`Inst.injectArm`, the
+    case whose tag is the value's head's); `caseTag e₁ .typeOf t e₂ e₃`
+    (`const x = e₁; typeof x === "t" ? e₃ : e₂`) takes one apart by the
+    same `Case` class. A sum's values are its cases', with the case's
+    `typeof` (`V`, a rank between the variants' and the nullable sums'). An
+    assignment to an annotated `let` is read by the wire format's front end
+    as `x = (const t: T = e; t)`, so its value is checked against the
+    annotation. Soundness and inference sound and complete.
+
+  inty matches: a variable of a type not known yet flowing into a sum told
+  apart by `typeof` waits for it (`Inject`, as for the nullable sums,
+  `Type::is_typeof_sum`) rather than being bound to the sum, and
+  `typeof x !== "object"` drops a closed record case. The differential
+  generator annotates sums of numbers, strings, booleans, functions and
+  records, checks values of their cases into them and takes them apart by
+  `typeof`; inty's join of a sum with one of its cases (`c ? v : 1`) is
+  the one divergence, put down to the waiting `Join` still to come.
+
   Next: an annotated function type without `this:` is polymorphic in
   `this`; the model fixes it to `undefined`, as inty does for an
   initialiser.

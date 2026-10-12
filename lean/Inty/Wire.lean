@@ -10,7 +10,8 @@ JavaScript and for this model as an s-expression, one program per line:
 ```
 (num M E)   M × 10^-E      (str s:abc)   a string, `s:` then [a-z]*
 (bool true) (undef) (null) (var i)  (func N BODY)  (app F A₀ A₁ …)
-(let E₁ E₂) (letmut E₁ E₂) (assign I E)   `const`, `let` and `x = e`
+(let E₁ E₂) (letmut E₁ E₂) (assign I E)   `const`, `let` and `x = e` (to an
+               annotated `let`, read as `x = (const t: T = e; t)`)
 (letann T E₁ E₂) (letmutann T E₁ E₂)   annotated `/** const v: T */`, with T
                number, string, boolean, undefined, null, (arr T),
                (nullable T), (optional T) or (fn R A₀ A₁ …), a function
@@ -352,6 +353,56 @@ partial def parseMany (L : Option (List String)) : List String → Option (List 
     some (e :: es, rest)
 end
 
+mutual
+/-- Read an assignment to an annotated `let`, `x = e`, as
+`x = (const t: T = e; t)`, so that `e` is checked against `x`'s
+annotation `T` (inty subsumes `e` into it), and its value taken into `T`'s
+sum if it's one: `anns` gives each variable's annotation, if it's an
+annotated `let`. The two evaluate alike. -/
+partial def annAssigns (anns : List (Option Scheme)) : Expr → Expr
+  | .func n body => .func n (annAssigns (List.replicate n none ++ none :: none :: anns) body)
+  | .ctor n body => .ctor n (annAssigns (List.replicate n none ++ none :: none :: anns) body)
+  | .app f args => .app (annAssigns anns f) (args.map (annAssigns anns))
+  | .let_ m s e₁ e₂ =>
+    .let_ m s (annAssigns anns e₁) (annAssigns ((if m then s else none) :: anns) e₂)
+  | .assign j e =>
+    match anns[j]? with
+    | some (some s) => .assign j (.let_ false (some s) (annAssigns anns e) (.var 0))
+    | _ => .assign j (annAssigns anns e)
+  | .cond c t e => .cond (annAssigns anns c) (annAssigns anns t) (annAssigns anns e)
+  | .unop o e => .unop o (annAssigns anns e)
+  | .ret e => .ret (annAssigns anns e)
+  | .throw_ e => .throw_ (annAssigns anns e)
+  | .binop o a b => .binop o (annAssigns anns a) (annAssigns anns b)
+  | .seq a b => .seq (annAssigns anns a) (annAssigns anns b)
+  | .while_ a b => .while_ (annAssigns anns a) (annAssigns anns b)
+  | .tryFinally a b => .tryFinally (annAssigns anns a) (annAssigns anns b)
+  | .spread a b => .spread (annAssigns anns a) (annAssigns anns b)
+  | .index a b => .index (annAssigns anns a) (annAssigns anns b)
+  | .tryCatch b h => .tryCatch (annAssigns anns b) (annAssigns (none :: anns) h)
+  | .obj ls es ks => .obj ls (es.map (annAssigns anns)) ks
+  | .arr es => .arr (es.map (annAssigns anns))
+  | .setIndex e i v => .setIndex (annAssigns anns e) (annAssigns anns i) (annAssigns anns v)
+  | .get e l => .get (annAssigns anns e) l
+  | .set e l v => .set (annAssigns anns e) l (annAssigns anns v)
+  | .mcall e l args => .mcall (annAssigns anns e) l (args.map (annAssigns anns))
+  | .new_ f args => .new_ (annAssigns anns f) (args.map (annAssigns anns))
+  | .cls ls es ks => .cls ls (annAssignsCls anns 0 es ks) ks
+  | .unwrap a b c => .unwrap (annAssigns anns a) (annAssigns anns b) (annAssigns (none :: anns) c)
+  | .caseTag a d t b c =>
+    .caseTag (annAssigns anns a) d t (annAssigns (none :: anns) b) (annAssigns (none :: anns) c)
+  | e => e
+
+/-- `annAssigns`, for a class's members: an initialiser sees the fields
+before it. -/
+partial def annAssignsCls (anns : List (Option Scheme)) :
+    Nat → List Expr → List ClassKind → List Expr
+  | d, e :: es, .data :: ks =>
+    annAssigns (List.replicate d none ++ anns) e :: annAssignsCls anns (d + 1) es ks
+  | d, e :: es, _ :: ks => annAssigns anns e :: annAssignsCls anns d es ks
+  | _, es, _ => es
+end
+
 /-- The labels of the annotations' records: an `s:` token right after `(`. -/
 def annLabels : List String → List String
   | "(" :: l :: rest => if l.startsWith "s:" then (l.drop 2).toString :: annLabels rest
@@ -368,7 +419,7 @@ def parse (s : String) : Option (List String × Expr) :=
   | some (e₀, []) =>
     let L := (e₀.labels ++ annLabels ts).eraseDups
     match parseExpr (some L) ts with
-    | some (e, []) => some (L, e)
+    | some (e, []) => some (L, annAssigns [] e)
     | _ => none
   | _ => none
 

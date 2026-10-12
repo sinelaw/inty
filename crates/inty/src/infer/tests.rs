@@ -1351,6 +1351,32 @@ fn unsound_string_into_literal_arm_rejected() {
 }
 
 #[test]
+fn variable_waits_to_be_injected_into_a_typeof_sum() {
+    // A value of a type not known yet flowing into a sum told apart by
+    // `typeof` waits for its type (the Lean model's `Inject`), rather than
+    // being bound to the sum: here the method's `this.b`, a `Boolean`.
+    let src = "const o = {b: true, m() { /** const v: Number | Boolean */ const v = this.b; \
+               return v; }}; o.m();";
+    assert!(infer_program_via_program(src).is_ok());
+    // A parameter's: its function's callers pass a case, and only a case.
+    let src = "function f(x) { /** const v: Number | String */ const v = x; return x; } \
+               f(1); f(\"a\");";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "function f(x) { /** const v: Number | String */ const v = x; return x; } \
+               f(true);";
+    assert!(infer_program_via_program(src).is_err());
+}
+
+#[test]
+fn typeof_object_takes_a_record_case_apart() {
+    let src = "/** const v: Number | {a: Number} */ const v = {a: 1}; const x = v; \
+               (typeof x === \"object\" ? x.a : x - 1);";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "/** const v: Number | {a: Number} */ const v = {a: 1}; v - 1;";
+    assert!(infer_program_via_program(src).is_err());
+}
+
+#[test]
 fn tagged_literal_takes_the_arm_of_its_tag() {
     // Arms of one shape: the literal's tag picks its arm, as the Lean
     // model's `ObjCase.variant` does, rather than synthesis widening the

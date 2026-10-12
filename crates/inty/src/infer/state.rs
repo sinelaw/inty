@@ -1231,6 +1231,16 @@ impl InferState {
             return Ok(());
         }
 
+        // The same for a sum told apart by `typeof` (`Number | String`):
+        // the variable may be the sum or one of its cases.
+        if matches!(sub, Type::Var(TVarName::Flex(_)))
+            && !self.is_numeric(&sub)
+            && sup.is_typeof_sum()
+        {
+            self.add_constraint(TypePred::inject(sub.clone(), sup.clone()), span);
+            return Ok(());
+        }
+
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
         let snap = self.snapshot_inference();

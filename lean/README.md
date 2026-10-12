@@ -429,6 +429,7 @@ disagreements in typing all fall into features the model lacks:
 | A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 5 (`never`) |
 | A field every arm of a discriminated union has, read without a test of the tag: `v.kind` | accepts (the union of the arms' field types) | rejects (a variant's fields are read once a test takes it apart) | 7 |
 | A spread over an operand of an unknown type: `{...a, ...xs[0]}` with `xs` an empty array | a field the operand may write gets a union with a type variable | merges slot by slot once the operand is known | 3 (a deferred `Spread`) |
+| A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | the waiting `Join` (`docs/sum-types-design.md`) |
 
 The nullable join is gone from both: inty now has the model's sums
 (`T | Null` is `Nullable T`, made by an annotation, taken apart by `??`
@@ -439,6 +440,15 @@ Number}`), built by tagged literals checked against an annotation and
 taken apart by a test of the tag (`v.kind === "circle" ? … : …`), but for
 the divergences above (a disagreement on a program that reads a variant's
 field without a test is put down to that one, for the whole program).
+And on sums told apart by `typeof` (`Number | String | (Number) =>
+Number | {a: Number}`), introduced by checking against an annotation and
+taken apart by a test of `typeof` (`typeof v === "number" ? … : …`). The
+test found that inty bound a variable of a type not known yet (a method's
+`this.b`) to the sum it flowed into, where the model's `Inject` waits for
+its type, and that `typeof v !== "object"` didn't drop a record case; and
+that the model unified a value assigned to an annotated `let` with the
+annotation, where inty checks it against it (the model's front end now
+reads `x = e` as `x = (const t: T = e; t)` for an annotated `x`).
 
 With method calls and recursive types, over 40,000 more programs (eight
 seeds), with about 450 accepted method calls per 5,000 programs,

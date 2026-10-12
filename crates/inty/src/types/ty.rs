@@ -1313,6 +1313,38 @@ impl Type {
         matches!(self, Type::Var(TVarName::Flex(_)))
     }
 
+    /// The `typeof` of every value of this type, if it has one (a type
+    /// variable, a named type or a union has none).
+    pub fn typeof_tag(&self) -> Option<&'static str> {
+        match self {
+            Type::Number | Type::Int | Type::Literal(LitValue::Number(_)) => Some("number"),
+            Type::String | Type::Literal(LitValue::String(_)) => Some("string"),
+            Type::Boolean | Type::Literal(LitValue::Bool(_)) => Some("boolean"),
+            Type::Undefined => Some("undefined"),
+            _ if self.is_func() => Some("function"),
+            // (An open row's tail might add a call signature.)
+            Type::Row(row) if matches!(row.tail, RowTail::Closed) => Some("object"),
+            Type::Array(_) | Type::Tuple(_) | Type::Null => Some("object"),
+            _ => None,
+        }
+    }
+
+    /// Whether this is a sum told apart by `typeof`: a union whose members
+    /// each have a `typeof`, no two the same (`Number | String`).
+    pub fn is_typeof_sum(&self) -> bool {
+        let Type::Union(members) = self else {
+            return false;
+        };
+        let mut seen = Vec::with_capacity(members.len());
+        for m in members {
+            match m.typeof_tag() {
+                Some(t) if !seen.contains(&t) => seen.push(t),
+                _ => return false,
+            }
+        }
+        members.len() > 1
+    }
+
     /// Check if this is a function type.
     /// True if this type represents a callable function value.
     ///
