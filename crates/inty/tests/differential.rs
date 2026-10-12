@@ -147,7 +147,8 @@ fn annotatable(t: &T) -> bool {
         T::Num | T::Str | T::Bool | T::Undef | T::Null => true,
         T::Arrow(ps, r) => ps.iter().all(annotatable) && annotatable(r),
         T::Arr(t) | T::Maybe(_, t) => annotatable(t),
-        T::Obj(_) => false,
+        // Only the polymorphic identity's annotation has variables.
+        T::Obj(_) | T::TVar(_) => false,
     }
 }
 
@@ -167,6 +168,7 @@ fn wire_ty(t: &T) -> String {
         T::Arr(t) => format!("(arr {})", wire_ty(t)),
         T::Maybe(true, t) => format!("(nullable {})", wire_ty(t)),
         T::Maybe(false, t) => format!("(optional {})", wire_ty(t)),
+        T::TVar(i) => format!("(tv {})", i),
         T::Obj(_) => unreachable!("records aren't annotated"),
     }
 }
@@ -187,7 +189,48 @@ fn js_ty(t: &T) -> String {
         T::Arr(t) => format!("{}[]", js_ty(t)),
         T::Maybe(true, t) => format!("({} | Null)", js_ty(t)),
         T::Maybe(false, t) => format!("({} | Undefined)", js_ty(t)),
+        T::TVar(i) => tvar_name(*i),
         T::Obj(_) => unreachable!("records aren't annotated"),
+    }
+}
+
+/// A polymorphic annotation's quantified variable `i`'s name.
+fn tvar_name(i: usize) -> String {
+    char::from(b'a' + i as u8).to_string()
+}
+
+/// How many variables an annotation quantifies: one past the greatest.
+fn tvar_count(t: &T) -> usize {
+    match t {
+        T::TVar(i) => i + 1,
+        T::Arrow(ps, r) => ps
+            .iter()
+            .map(tvar_count)
+            .chain([tvar_count(r)])
+            .max()
+            .unwrap_or(0),
+        T::Arr(t) | T::Maybe(_, t) => tvar_count(t),
+        T::Obj(fs) => fs.iter().map(|(_, t)| tvar_count(t)).max().unwrap_or(0),
+        T::Num | T::Str | T::Bool | T::Undef | T::Null => 0,
+    }
+}
+
+/// An annotation as inty reads it: a polymorphic one says its
+/// quantified variables, `<a, b>(a) => b`.
+fn js_scheme(t: &T) -> String {
+    match (tvar_count(t), t) {
+        (0, _) => js_ty(t),
+        (n, T::Arrow(ps, r)) => format!(
+            "<{}>({}) => {}",
+            (0..n).map(tvar_name).collect::<Vec<_>>().join(", "),
+            ps.iter().map(js_ty).collect::<Vec<_>>().join(", "),
+            js_ty(r)
+        ),
+        (n, _) => format!(
+            "<{}>{}",
+            (0..n).map(tvar_name).collect::<Vec<_>>().join(", "),
+            js_ty(t)
+        ),
     }
 }
 
@@ -214,6 +257,13 @@ fn wire(e: &Core) -> String {
         Let(m, None, e1, e2) => format!(
             "({} {} {})",
             if *m { "letmut" } else { "let" },
+            wire(e1),
+            wire(e2)
+        ),
+        Let(false, Some(t), e1, e2) if tvar_count(t) > 0 => format!(
+            "(letpoly {} {} {} {})",
+            tvar_count(t),
+            wire_ty(t),
             wire(e1),
             wire(e2)
         ),
@@ -571,7 +621,7 @@ impl Js {
                 let keyword = if *m { "let" } else { "const" };
                 let ann = a
                     .as_ref()
-                    .map(|t| format!("/** {} {}: {} */ ", keyword, v, js_ty(t)))
+                    .map(|t| format!("/** {} {}: {} */ ", keyword, v, js_scheme(t)))
                     .unwrap_or_default();
                 format!("{}{} {} = {}; {}", ann, keyword, v, init, rest)
             }
@@ -741,6 +791,9 @@ enum T {
     /// A sum: `Nullable<t>` (`true`) or `Optional<t>`, only as an
     /// annotation's (`ty` never makes one).
     Maybe(bool, Box<T>),
+    /// A polymorphic annotation's quantified variable `i`, written `a`,
+    /// `b`, … (`ty` never makes one).
+    TVar(usize),
 }
 
 /// The property labels the generated programs use.
@@ -871,7 +924,7 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
-            T::Arrow(..) | T::Obj(_) | T::Arr(_) | T::Maybe(..) => return None,
+            T::Arrow(..) | T::Obj(_) | T::Arr(_) | T::Maybe(..) | T::TVar(_) => return None,
         })
     }
 
@@ -1001,12 +1054,23 @@ impl Gen {
         }
         if stmt && depth > 0 && self.rng.chance(25) {
             // `const`: sometimes the polymorphic identity, used at
-            // several types below.
+            // several types below; sometimes annotated with its type,
+            // `<a>(a) => a`, and then sometimes with an initialiser that
+            // isn't that polymorphic, which the annotation rejects.
             if self.rng.chance(30) {
+                let ann = self
+                    .rng
+                    .chance(50)
+                    .then(|| T::Arrow(vec![T::TVar(0)], b2(T::TVar(0))));
+                let init = if ann.is_some() && self.rng.chance(15) {
+                    Func(1, b(self.num()))
+                } else {
+                    Func(1, b(Var(0)))
+                };
                 scope.push(Binding::PolyId);
                 let rest = self.typed(t, d, scope, true);
                 scope.pop();
-                return Let(false, None, b(Func(1, b(Var(0)))), b(rest));
+                return Let(false, ann, b(init), b(rest));
             }
             // `const`, or `let`, which may be assigned below; sometimes
             // annotated, mostly with its type.
@@ -1943,6 +2007,10 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     {
         features.insert("Int");
     }
+    // inty's unifier gave up on a recursive type (`TypeError::UnifyDepth`).
+    if errors.iter().any(|e| e.contains("Type too complex")) {
+        features.insert("unify depth");
+    }
     shown.extend(errors);
     for text in &shown {
         if text.contains("never") {
@@ -2152,6 +2220,14 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // accepts the program once no literal is an `Int`.
         (Typing::Reject, Typing::Type(_)) if features.contains("Int") => {
             Some("Int and Number (the model has only number)")
+        }
+        // inty's unifier gives up ("Type too complex") on some spreads over
+        // an object whose type is recursive through a method's `this`
+        // (`this.a = {...this.a}` in a method that returns `this`): its
+        // spread shares the operand's open row tail where the model merges
+        // slot by slot (roadmap: a deferred `Spread` constraint).
+        (Typing::Reject, Typing::Type(_)) if features.contains("unify depth") => {
+            Some("inty's unifier gives up on a spread over a recursive type")
         }
         // Roadmap phase 4: inty wants an array's or a string's index to be
         // an `Int`; the model takes any number, a fractional one being out

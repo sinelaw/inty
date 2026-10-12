@@ -2307,6 +2307,70 @@ fn quantifier_bound_identifier_resolves() {
 }
 
 #[test]
+fn polymorphic_annotation_checks_initializer_rigidly() {
+    // A polymorphic annotation on a binding with an initialiser, as the
+    // Lean model's `letPoly`: the initialiser is checked with the type
+    // variables rigid, and the binding has every instance.
+    let ok = "\
+        /** const id: <a>(a) => a */ \
+        const id = (x) => x; \
+        const n = id(42); \
+        const s = id(\"hi\");";
+    let (_, env, state) = infer_program_with_state(ok).expect("a polymorphic identity checks");
+    assert_eq!(
+        state.apply_subst(&env.lookup("n").unwrap().body.ty),
+        Type::Int
+    );
+    assert_eq!(
+        state.apply_subst(&env.lookup("s").unwrap().body.ty),
+        Type::String
+    );
+    // An initialiser less polymorphic than the annotation.
+    let too_specific = "\
+        /** const f: <a>(a) => a */ \
+        const f = (x) => 5;";
+    assert!(infer_program_with_state(too_specific).is_err());
+    // A rigid type variable escaping into the context: `z`'s type would
+    // have to be `a`.
+    let escapes = "\
+        const h = (z) => { \
+          /** const f: <a>(a) => a */ \
+          const f = (x) => { const w = [z, x]; return x; }; \
+          return z; \
+        };";
+    assert!(infer_program_with_state(escapes).is_err());
+    // A constraint left on a rigid type variable.
+    let constrained = "\
+        /** const f: <a>(a) => a */ \
+        const f = (x) => x + x;";
+    assert!(infer_program_with_state(constrained).is_err());
+    // The initialiser sees the binding at the annotation's scheme:
+    // polymorphic recursion.
+    let recursive = "\
+        /** const len: <a>(a[]) => Number */ \
+        const len = (xs) => xs.length === 0 ? 0 : 1 + len(xs.slice(1)); \
+        const n = len([\"a\"]) + len([1]);";
+    assert!(infer_program_with_state(recursive).is_ok());
+    // An initialiser that isn't a value has no rule in the model: its
+    // annotation's variables stay flexible, and it isn't generalised.
+    let not_value = "\
+        const mk = () => (x) => x; \
+        /** const g: <a>(a) => a */ \
+        const g = mk(); \
+        const n = g(1);";
+    assert!(infer_program_with_state(not_value).is_ok());
+}
+
+#[test]
+fn spread_of_a_field_stored_back() {
+    // `{...x}` of an open row shares the operand's tail; its call signature
+    // is absent as the operand's is, so storing it back unifies without a
+    // cycle through the tail.
+    let src = "({a: {c: \"\"}, m() { this.a = {...this.a}; return 1; }});";
+    assert!(infer_program_with_state(src).is_ok());
+}
+
+#[test]
 fn alias_is_structural_not_nominal() {
     // `Cancellable<X>` and an inline row of the same shape are
     // interchangeable. Passing the inline form where an alias is

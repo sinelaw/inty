@@ -412,7 +412,8 @@ impl InferState {
         let spread = self.row_view(spread);
         let mut spread = self.extend_row_with(span, spread, std::iter::once(callable.clone()))?;
         let operand = Type::Row(spread.clone());
-        if let Some(call) = spread.props.remove(&callable) {
+        let call_entry = spread.props.remove(&callable);
+        if let Some(call) = &call_entry {
             if self
                 .unify_presence(span, &call.presence, &Presence::Abs)
                 .is_err()
@@ -482,6 +483,16 @@ impl InferState {
                 }
             };
             so_far.props.insert(k, merged);
+        }
+        // An open result shares a tail with the operand, whose call
+        // signature was just made absent: the result's is absent too, as
+        // the same entry, so that `x = {...x}` unifies the two rows
+        // without a cycle through the tail.
+        if let (RowTail::Open(_), Some(call)) = (&tail, call_entry) {
+            so_far.props.entry(callable).or_insert(FieldEntry {
+                presence: Presence::Abs,
+                ..call
+            });
         }
         Ok(RowType {
             props: so_far.props,

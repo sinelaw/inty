@@ -15,6 +15,8 @@ JavaScript and for this model as an s-expression, one program per line:
                number, string, boolean, undefined, null, (arr T),
                (nullable T), (optional T) or (fn R A₀ A₁ …), a function
                called detached
+(letpoly N T E₁ E₂)   `/** const v: <a, b, …>T */`, a scheme quantifying N
+               variables, written (tv I) in T
 (unwrap E₁ E₂ E₃)   `const x = E₁; x != null ? E₃ : E₂`, x as var 0 in E₃
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
@@ -52,6 +54,7 @@ partial def parseTy : List String → Option (Ty × List String)
   | "boolean" :: rest => some (.boolean, rest)
   | "undefined" :: rest => some (.undefined, rest)
   | "null" :: rest => some (.null, rest)
+  | "(" :: "tv" :: i :: ")" :: rest => do some (.var (← i.toNat?), rest)
   | "(" :: "arr" :: rest => do
     let (t, rest) ← parseTy rest
     match rest with
@@ -78,6 +81,19 @@ partial def parseTy : List String → Option (Ty × List String)
     let (ps, rest) ← params rest []
     some (.fn .undefined ps r, rest)
   | _ => none
+
+mutual
+/-- A polymorphic annotation's type, whose variable `i` (`(tv i)`) is the
+scheme's quantified variable `i`. -/
+def bindVars : Ty → PTy
+  | .var i => .bound i
+  | .app c args => .app c (bindVarsL args)
+  | .mu i sys => .mu i (sys.map RTy.toPTy)
+/-- `bindVars`, for a list of types. -/
+def bindVarsL : List Ty → List PTy
+  | [] => []
+  | t :: ts => bindVars t :: bindVarsL ts
+end
 
 mutual
 /-- Parse one expression from the front of the tokens. -/
@@ -123,6 +139,12 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     let (e₁, rest) ← parseExpr rest
     let (e₂, rest) ← parseExpr rest
     some (.let_ false (some (.mono t)) e₁ e₂, rest)
+  | "letpoly", n :: rest => do
+    let n ← n.toNat?
+    let (t, rest) ← parseTy rest
+    let (e₁, rest) ← parseExpr rest
+    let (e₂, rest) ← parseExpr rest
+    some (.let_ false (some ⟨n, bindVars t, []⟩) e₁ e₂, rest)
   | "letmutann", rest => do
     let (t, rest) ← parseTy rest
     let (e₁, rest) ← parseExpr rest
@@ -355,6 +377,16 @@ def verdict (clock : Nat) (line : String) : String :=
 #guard verdict 100 "(app (func 0 (str s:a)) (num 1 0))" == "reject;value str s:a"
 #guard verdict 100 "(app (num 1 0" == "error unparsable"
 #guard verdict 100 "(app (func 1 (seq (ret (str s:a)) (str s:b))) (null))" == "type string;value str s:a"
+-- A polymorphic annotation: the initialiser is checked with its variables
+-- rigid; one that isn't polymorphic enough, or whose rigid variable would
+-- escape into a parameter's type, is rejected.
+#guard verdict 100 "(letpoly 1 (fn (tv 0) (tv 0)) (func 1 (var 0)) (app (var 0) (str s:)))" ==
+  "type string;value str s:"
+#guard verdict 100 "(letpoly 1 (fn (tv 0) (tv 0)) (func 1 (num 5 0)) (app (var 0) (str s:)))" ==
+  s!"reject;value num {(5 : Float).toBits}"
+#guard verdict 100
+  "(app (func 1 (letpoly 1 (fn (tv 0) (tv 0)) (func 1 (seq (arr (var 3) (var 0)) (var 0))) (var 1))) (num 1 0))" ==
+  s!"reject;value num {(1 : Float).toBits}"
 #guard verdict 100 "(throw (num 1 0))" == s!"type var;thrown num {(1 : Float).toBits}"
 #guard verdict 100 "(ret (num 1 0))" == "reject;returned num 4607182418800017408"
 #guard verdict 100 "(letmut (num 1 0) (seq (assign 0 (str s:a)) (var 0)))" ==

@@ -59,10 +59,22 @@ Its corollary `Inty.never_stuck` says a closed well-typed program never
 evaluates to `stuck`. That is the property `src/meta/soundness.rs` samples
 with proptest ("Whenever inty accepts a program, the operational semantics
 must not get stuck on it"), here proved for all programs of the calculus.
-The key lemma for polymorphism is `Inty.HasType.subst` (in
+The key lemma for polymorphism is `Inty.HasTypeS.subst` (in
 `Inty/TypeSubst.lean`): typing is preserved by substituting types for type
 variables. The soundness proof uses it to type a generalised `const` at each
 instance of its scheme.
+
+A binding annotated with a polymorphic scheme
+(`/** const id: <a>(a) => a */`, `HasTypeS.letPoly`) checks its
+initialiser, a syntactic value, with the quantified variables rigid: fresh
+constants (`Con.rigid`), named apart from everything in sight by cofinite
+quantification, as a `let`'s generalised variables are. Soundness types the
+initialiser at each instance by instantiating the rigid variables
+(`Inty.HasTypeS.rsub`, in `Inty/Rigid.lean`), in the wide system, which
+holds whatever types they are. Inference checks the initialiser at fresh
+rigid variables, decides the constraints on known types, and rejects the
+program if a rigid variable escapes into the context or into the
+constraints left; its soundness swaps the rigid names (`Inty/Rename.lean`).
 
 `Inty.inferProgram_sound` (in `Inty/InferSound.lean`): whatever type inference
 finds is a valid typing,
@@ -88,9 +100,16 @@ and getters, method calls, classes and `new`:
 
 ```
 ctxFtv Γ = [] → (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) →
-  HasType L C Γ none e τ' →
+  e.monoAnn → HasType L C Γ none e τ' →
   ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ'
 ```
+
+`monoAnn` says the program's annotations are monomorphic. With a
+polymorphic one the rule can type a program inference rejects: the
+initialiser may need a constraint on a rigid variable that waits on a type
+variable of the context, which a complete algorithm would keep as an
+implication constraint, as GHC's OutsideIn(X) does; this one reports an
+escape.
 
 `scoped` is the pair of scope checks JavaScript makes: a program assigns
 only to its own `let`s and parameters, never to a `const`
@@ -148,6 +167,7 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 | A class without `extends` (`cls`: fields with initialisers that see the fields before them, arrow fields, methods and getters on the prototype, `MemberSlot`), its constructor (`ctor`, whose `this` is what `new` makes, `newTarget`) and `new`, which calls only a closure (`Value.asCtor`: an arrow field isn't a constructor, its `this` is `NotNew`) | the class lowering, `parse_class_declaration_named` in `src/frontends/javascript/parser`, `class_fields.rs`; an arrow function's `this` is `Type::ArrowThis`, which `unify_this` keeps from `NewTarget` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style, with a conversion rule between equal types) | what `src/infer` implements |
+| `Annotated`, `HasTypeS.letPoly`, `Con.rigid` (an annotation: a type without variables, or a polymorphic scheme whose variables are rigid constants in the initialiser) | `infer_stmt_var`, `check_polymorphic_annotation` in `src/infer/features/bindings.rs` (skolems, `skolemize`, and the escape check) |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
 | `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |

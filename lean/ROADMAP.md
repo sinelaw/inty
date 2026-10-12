@@ -40,7 +40,9 @@ Paths like `src/infer` are relative to `crates/inty`.
    and examples, beside the generated programs. Node, and later CPython and
    Lua, check the semantics.
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
-   inference sound and complete, for everything modelled so far; the axiom
+   inference sound and complete, for everything modelled so far (one
+   exception, stated where it arises: completeness for polymorphic
+   annotations, which needs implication constraints); the axiom
    audit and pinned statements updated; the differential test extended to
    the new syntax.
 
@@ -53,7 +55,8 @@ Paths like `src/infer` are relative to `crates/inty`.
   step-indexed Kripke logical relation, including native builtins.
 - `let` and assignment to a variable; `while`, `break`, `continue`,
   `try`/`catch`, `try`/`finally`.
-- Algorithm W, proved sound and complete.
+- Algorithm W, proved sound and complete (complete for programs whose
+  annotations are monomorphic).
 - Generic types (a constructor applied to types), Rémy's flat rows,
   `HasProp` with improvement and inty's generalisation, object literals,
   reads, writes and spread; arrays, indexing (`Indexable`, `IndexWrite`)
@@ -123,8 +126,8 @@ constraints left. The decisions it needed:
   allows. The initialiser is typed assuming the opened scheme's
   constraints; a pending one not on the block is entailed without them
   (`Entails.drop_block`), and the rest are the generalised scheme's.
-- Still to come with the features that need them: rigid variables (phase
-  10), and well-scoped schemes (`bound i` within the arity) once schemes
+- Rigid variables came with polymorphic annotations (phase 7). Still to
+  come: well-scoped schemes (`bound i` within the arity), now that schemes
   are written by hand, in annotations.
 
 ### 2. State and control
@@ -356,7 +359,8 @@ touching the generic proofs.
   which is how declared sums are introduced; rigid type variables; the
   annotation and `.d.js` type syntax; optional parameters (presence on
   function parameters, `types::FuncParam`). Done, each with soundness
-  and inference sound and complete:
+  and inference sound and complete (but polymorphic annotations: sound,
+  and complete only without them):
   - a binding annotated with a type without variables
     (`/** const x: Number */`);
   - check mode (`HasType`'s return and expression modes): an annotation
@@ -374,9 +378,32 @@ touching the generic proofs.
   differential generator produces sums and `unwrap`, and finds no
   disagreement on them outside the other known divergences.
 
-  Next: polymorphic annotations, whose quantified variables are rigid in the
-  initialiser (an annotated function type without `this:` is one,
-  polymorphic in `this`).
+  - polymorphic annotations (`/** const id: <a>(a) => a */`,
+    `HasTypeS.letPoly`): the initialiser, a syntactic value, is checked with
+    the quantified variables rigid (`Con.rigid`), at any name outside a
+    finite set, and the binding has every instance. Soundness and inference
+    soundness are proved; inference rejects a rigid variable escaping into
+    the context or into the constraints left. Completeness is proved for
+    programs whose annotations are monomorphic (`Expr.monoAnn`): a complete
+    algorithm for polymorphic ones needs implication constraints (a rigid
+    variable's constraint waiting on a variable of the context, as in GHC's
+    OutsideIn(X)). An annotation with constraints (`<a> where Plus a => …`)
+    isn't in the model.
+
+  inty matches: a polymorphic annotation on an initialiser is checked with
+  skolems and an escape check (`check_polymorphic_annotation`), the
+  initialiser seeing its own name at the annotation's scheme (polymorphic
+  recursion; the model has no recursive binding). Outside the model, and
+  still checked with flexible variables: an annotation with constraints, one
+  on an initialiser that isn't a value (`/** const e: <a>a[] */ const e =
+  [];`) or on a binding that is assigned; and an optional field's presence,
+  which stays flexible.
+  The differential generator annotates the polymorphic identity with
+  `<a>(a) => a`, sometimes over an initialiser that isn't that polymorphic.
+
+  Next: an annotated function type without `this:` is polymorphic in
+  `this`; the model fixes it to `undefined`, as inty does for an
+  initialiser.
 - Mutual recursion by strongly connected components
   (`docs/scc-inference.md`); modules, each `ns.foo` re-instantiating the
   export's scheme; several files in one run.

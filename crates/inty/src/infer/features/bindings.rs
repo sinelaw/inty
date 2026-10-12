@@ -461,6 +461,10 @@ impl InferState {
             // Check if this is a declaration (no init, with type annotation)
             let is_declaration =
                 decl.init.is_none() && (decl.type_annotation.is_some() || decl.type_ast.is_some());
+            // Whether the annotation quantifies type variables and says no
+            // constraints on them (`/** const id: <a>(a) => a */`): its
+            // initialiser is checked with them rigid.
+            let mut polymorphic_annotation = false;
 
             // Parse the annotation up-front (if any) so we can use it
             // as the *expected* type when checking the initialiser
@@ -498,6 +502,7 @@ impl InferState {
                 if let Some(&max) = var_map.values().max() {
                     self.bump_var_id_to(max + 1);
                 }
+                polymorphic_annotation = !var_map.is_empty() && preds.is_empty();
                 // `<a> where Plus a => …`: the declared scheme's constraints,
                 // taken into it when the binding is generalised.
                 for pred in preds {
@@ -515,7 +520,14 @@ impl InferState {
                 None
             };
 
+            // A polymorphic annotation's scheme, which the binding gets.
+            let annotated_scheme = match (&decl.init, &annotated_type) {
+                (Some(init), Some((ann_ty, ann_span))) if polymorphic_annotation => self
+                    .check_polymorphic_annotation(&new_env, kind, decl, init, ann_ty, *ann_span)?,
+                _ => None,
+            };
             let var_type = match (&decl.init, &annotated_type) {
+                (Some(_), Some((ann_ty, _))) if annotated_scheme.is_some() => ann_ty.clone(),
                 (Some(init), Some((ann_ty, _))) => {
                     // Bidirectional check: pushes the annotation into
                     // the initialiser so e.g. an object literal's
@@ -572,7 +584,9 @@ impl InferState {
             if is_declaration || decl.init.as_ref().is_some_and(is_syntactic_value) {
                 self.simplify_has_props()?;
             }
-            let scheme = if is_declaration {
+            let scheme = if let Some(scheme) = annotated_scheme {
+                scheme
+            } else if is_declaration {
                 let env_free = new_env.free();
                 self.generalize(&env_free, &var_type)
             } else {
@@ -617,6 +631,81 @@ impl InferState {
         }
 
         Ok((Type::Undefined, new_env))
+    }
+
+    /// A binding annotated with a polymorphic scheme
+    /// (`/** const id: <a>(a) => a */ const id = (x) => x;`), as the Lean
+    /// model's `HasTypeS.letPoly` and its inference (`lean/Inty/Infer.lean`):
+    /// the initialiser, a value, is checked against the annotation with its
+    /// type variables rigid (skolems); the constraints on known types are
+    /// decided, and no skolem may escape into the context or into the
+    /// constraints left. The binding is never assigned (a `const`, or a
+    /// `let` no assignment writes), and gets the annotation's scheme, which
+    /// the initialiser sees for its own name (polymorphic recursion, which
+    /// the model, without recursive bindings, doesn't have).
+    ///
+    /// `None` when the model has no rule for the binding (an initialiser
+    /// that isn't a value, or a binding that is assigned): the caller checks
+    /// it with the annotation's variables flexible, as for one with
+    /// constraints.
+    fn check_polymorphic_annotation(
+        &mut self,
+        env: &TypeEnv,
+        kind: VarKind,
+        decl: &VarDeclarator,
+        init: &Expr,
+        ann_ty: &Type,
+        ann_span: Span,
+    ) -> InferResult<Option<TypeScheme>> {
+        let is_value = matches!(
+            init,
+            Expr::Lit { .. } | Expr::Ident { .. } | Expr::Function { .. }
+        );
+        let written = kind != VarKind::Const && self.resolution.written_at(decl.span, &decl.name);
+        if !is_value || written {
+            return Ok(None);
+        }
+        let env_free = env.free();
+        let scheme = self.generalize(&env_free, ann_ty);
+        let env_free_before = env.free_vars();
+        // Only the type variables are rigid: an optional field's presence
+        // (`{p?: T}`) stays flexible, as it does under a monomorphic
+        // annotation.
+        let (skolems, rigid_ty) = self.skolemize(&TypeScheme {
+            pvars: Vec::new(),
+            ..scheme.clone()
+        });
+        let self_env = env.extend_key(
+            self.key_of(decl.span, &decl.name),
+            &decl.name,
+            super::super::env::Binding::immutable(scheme),
+        );
+        self.check_expr(&self_env, init, &rigid_ty)?;
+        self.simplify_has_props()?;
+        let skolem_set: HashSet<TVarName> = skolems.into_iter().collect();
+        for v in &env_free_before {
+            if !v.is_flex() {
+                continue;
+            }
+            let after = self.zonk(&Type::Var(v.clone()));
+            if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
+                return Err(TypeError::EscapedSkolem { span: ann_span }.into());
+            }
+        }
+        let pending: Vec<Type> = self
+            .pending_constraints
+            .iter()
+            .flat_map(|c| c.pred.types.clone())
+            .collect();
+        for t in pending {
+            let t = self.zonk(&t);
+            if t.free_vars().iter().any(|s| skolem_set.contains(s)) {
+                return Err(TypeError::EscapedSkolem { span: ann_span }.into());
+            }
+        }
+        // Generalised again: a presence the initialiser decided is no
+        // longer quantified.
+        Ok(Some(self.generalize(&env_free, ann_ty)))
     }
 
     /// The type of an external class `Name`, declared without a body by
