@@ -1,9 +1,13 @@
 //! AST → Go source.
 //!
-//! One pass over the checked AST. Every expression's Go type comes from
-//! the type inty recorded for it during inference (keyed by span), so
-//! the emitter never guesses: `a + b` becomes float64 addition or string
-//! concatenation depending on what inty proved about `a` and `b`.
+//! Every expression's Go type comes from the type inty recorded for it
+//! during inference (keyed by span), so the emitter never guesses: `a + b`
+//! becomes float64 addition or string concatenation depending on what
+//! inty proved about `a` and `b`. Whether a number is a Go `int` or a
+//! `float64` comes from the integer analysis (`kinds`): a first pass
+//! emits the program with a kind variable for each number type,
+//! recording how values flow; the passes after emit it with the kinds
+//! solved.
 //!
 //! Layout of the generated file:
 //!
@@ -61,20 +65,140 @@ pub fn emit_program(program: &Program, state: &mut InferState) -> Result<String>
         .take()
         .expect("inty-go: expression-type recording must be enabled before inference");
     let instantiations = state.instantiations.take().unwrap_or_default();
-    let (code, tm) = emit_pass(
+    // The kinds: every number a kind variable, the program's flows
+    // recorded, then solved. A function is copied for each pattern of
+    // integer and float arguments its calls pass (as a type-directed
+    // backend copies it per type), which can change what its callers'
+    // values are: so again, with the copies the last round's calls asked
+    // for, until they ask for no new ones.
+    let mut patterns: Rc<HashMap<CallKey, Vec<Option<bool>>>> = Rc::default();
+    let mut collected = None;
+    for _round in 0..4 {
+        let collecting = emit_pass(
+            program,
+            state,
+            types.clone(),
+            instantiations.clone(),
+            Default::default(),
+            Pass::Collect(patterns.clone()),
+        )?;
+        let mut tm = collecting.tm;
+        tm.kinds.solve();
+        let mut asked: HashMap<CallKey, Vec<Option<bool>>> = HashMap::new();
+        let kind_of = |t: &GoType| match t {
+            GoType::NumVar(v) => Some(tm.kinds.is_int(*v)),
+            GoType::Int => Some(true),
+            GoType::Float => Some(false),
+            _ => None,
+        };
+        for (k, args, params) in collecting.call_args {
+            // The arguments' kinds; once the call has its copy, an integer
+            // only where the copy's parameter is one too (a copy whose
+            // parameter is a float anyway is the float copy).
+            let copied = patterns.contains_key(&k);
+            let p: Vec<Option<bool>> = args
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let a = kind_of(t)?;
+                    let q = if copied {
+                        params.get(i).and_then(kind_of).unwrap_or(false)
+                    } else {
+                        true
+                    };
+                    Some(a && q)
+                })
+                .collect();
+            // A call emitted twice in one specialisation: an integer only
+            // where both are.
+            let merged = match asked.get(&k) {
+                Some(q) => p
+                    .iter()
+                    .zip(q)
+                    .map(|(a, b)| match (a, b) {
+                        (Some(x), Some(y)) => Some(*x && *y),
+                        _ => None,
+                    })
+                    .collect(),
+                None => p,
+            };
+            asked.insert(k, merged);
+        }
+        let done = asked == *patterns;
+        collected = Some(Rc::new(Collected {
+            tm,
+            shapes: collecting.shapes,
+            patterns: patterns.clone(),
+        }));
+        if done {
+            break;
+        }
+        patterns = Rc::new(asked);
+    }
+    let collected = collected.expect("a round");
+    let pass = emit_pass(
         program,
         state,
         types.clone(),
         instantiations.clone(),
         Default::default(),
+        Pass::Emit(collected.clone()),
     )?;
-    let by_value = small_value_structs(&tm);
+    let by_value = small_value_structs(&pass.tm);
     if by_value.is_empty() {
-        return Ok(code);
+        return Ok(pass.code);
     }
-    let (code, tm2) = emit_pass(program, state, types, instantiations, by_value)?;
-    debug_assert_eq!(tm.structs.len(), tm2.structs.len());
-    Ok(code)
+    let pass2 = emit_pass(
+        program,
+        state,
+        types,
+        instantiations,
+        by_value,
+        Pass::Emit(collected),
+    )?;
+    debug_assert_eq!(pass.tm.structs.len(), pass2.tm.structs.len());
+    Ok(pass2.code)
+}
+
+/// What the collecting pass found: its types, with their kind variables
+/// (solved) and structs, for each node of each specialisation.
+struct Collected {
+    tm: TypeMapper,
+    shapes: HashMap<ShapeKey, GoType>,
+    /// The copies of functions its calls used (see `Emitter::patterns`).
+    patterns: Rc<HashMap<CallKey, Vec<Option<bool>>>>,
+}
+
+/// A call of a function: the calling specialisation and the callee's
+/// name's span.
+type CallKey = (Rc<str>, usize, usize);
+
+enum Pass {
+    /// Working out the kinds, with these copies of functions.
+    Collect(Rc<HashMap<CallKey, Vec<Option<bool>>>>),
+    /// Emitting, with the kinds.
+    Emit(Rc<Collected>),
+}
+
+/// A node's type in a specialisation: the specialisation (its mapping,
+/// spelled out), the node's span, and whether it is the node's value
+/// ([`EXPR`]) or a declaration's variable ([`DECL`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ShapeKey {
+    spec: Rc<str>,
+    start: usize,
+    end: usize,
+    role: u8,
+}
+
+const EXPR: u8 = 0;
+const DECL: u8 = 1;
+
+struct PassOut {
+    code: String,
+    tm: TypeMapper,
+    shapes: HashMap<ShapeKey, GoType>,
+    call_args: Vec<(CallKey, Vec<GoType>, Vec<GoType>)>,
 }
 
 /// The largest struct, in machine words, stored as a Go value.
@@ -131,10 +255,27 @@ fn emit_pass(
     types: HashMap<(usize, usize), Type>,
     instantiations: HashMap<(usize, usize), Vec<(TVarName, Type)>>,
     by_value: std::collections::HashSet<usize>,
-) -> Result<(String, TypeMapper)> {
+    pass: Pass,
+) -> Result<PassOut> {
+    let (collected, patterns) = match pass {
+        Pass::Collect(p) => (None, p),
+        Pass::Emit(c) => {
+            let p = c.patterns.clone();
+            (Some(c), p)
+        }
+    };
     let mut tm = TypeMapper::default();
     tm.by_value = by_value;
+    tm.collect = collected.is_none();
     let mut e = Emitter {
+        collect: collected.is_none(),
+        shapes: HashMap::new(),
+        collected,
+        patterns,
+        call_args: Vec::new(),
+        realized: HashMap::new(),
+        spec_names: HashMap::new(),
+        quiet: 0,
         state,
         types,
         instantiations,
@@ -151,8 +292,6 @@ fn emit_pass(
         deferred: HashMap::new(),
         pure_funcs: HashMap::new(),
         literal_consts: HashMap::new(),
-        literal_vars: std::collections::BTreeMap::new(),
-        literal_count: 0,
         resolution: inty::ast::resolve::Resolution::of_program(
             &program.statements,
             program.language,
@@ -191,13 +330,6 @@ fn emit_pass(
                         e.bind_func(&d.name, fid);
                         continue;
                     }
-                    if let Some(init) = e.poly_literal(*kind, d) {
-                        // (An integer literal: a `case` label as an `int`.)
-                        let v = e.expr_as(init, &GoType::Int)?;
-                        e.literal_consts.insert(d.name.clone(), v);
-                        e.bind_literal(&d.name, init.clone(), true);
-                        continue;
-                    }
                     let t = e.decl_type(d)?;
                     globals.push_str(&format!("var {} {}\n", mangle(&d.name), e.tm.render(&t)));
                     if let Some(init) = literal_const(*kind, d) {
@@ -228,7 +360,7 @@ fn emit_pass(
                 kind, declarations, ..
             } => {
                 for d in declarations {
-                    if const_function(*kind, d).is_some() || e.poly_literal(*kind, d).is_some() {
+                    if const_function(*kind, d).is_some() {
                         continue;
                     }
                     if let Some(init) = &d.init {
@@ -260,9 +392,6 @@ fn emit_pass(
         "import (\n\t\"bufio\"\n\t\"math\"\n\t\"math/bits\"\n\t\"math/rand\"\n\t\"os\"\n\t\"slices\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n\t\"unicode\"\n)\n\n",
     );
     out.push_str(&e.tm.render_structs());
-    for (name, (ty, v)) in &e.literal_vars {
-        globals.push_str(&format!("var {} {} = {}\n", name, ty, v));
-    }
     if !globals.is_empty() {
         out.push_str(&globals);
         out.push('\n');
@@ -272,7 +401,12 @@ fn emit_pass(
     out.push_str(&main_body);
     out.push_str("}\n\n");
     out.push_str(RUNTIME);
-    Ok((out, e.tm))
+    Ok(PassOut {
+        code: out,
+        tm: e.tm,
+        shapes: e.shapes,
+        call_args: e.call_args,
+    })
 }
 
 /// The literal initialiser of a top-level `const` bound to a number,
@@ -331,11 +465,6 @@ enum Bound {
     Func(usize),
     /// Something imported from a Node built-in module.
     Node(NodeItem),
-    /// A `const` bound to a number literal whose type stays polymorphic
-    /// (`const zero = 0` is `<a> where Num a => a`): a Go variable per
-    /// type a use needs (an `int` index, a `float64` sum), named `base`
-    /// for `int` and `base_f` for `float64`.
-    Literal { init: Expr, base: String },
 }
 
 /// The parts of Node's built-in modules the backend implements (see
@@ -420,6 +549,28 @@ struct Spec {
 }
 
 struct Emitter<'a> {
+    /// The first pass: working out the kinds (see `kinds`). Its code is
+    /// thrown away.
+    collect: bool,
+    /// Each node's type per specialisation, while collecting.
+    shapes: HashMap<ShapeKey, GoType>,
+    /// After collecting: what it found.
+    collected: Option<Rc<Collected>>,
+    /// The structs of this pass made for the collected ones, by class.
+    realized: HashMap<usize, usize>,
+    /// Which copy of a function each call uses: the kinds of its number
+    /// arguments (`true` an integer), as the last collecting round found
+    /// them.
+    patterns: Rc<HashMap<CallKey, Vec<Option<bool>>>>,
+    /// While collecting: each call of a function by name, with its
+    /// arguments' types and its parameters'.
+    call_args: Vec<(CallKey, Vec<GoType>, Vec<GoType>)>,
+    /// Each specialisation's mapping, spelled out once (the mapping is
+    /// kept, so its address isn't reused).
+    spec_names: HashMap<*const Mapping, (Rc<Mapping>, Rc<str>)>,
+    /// While positive, value flows aren't recorded (a `case` label
+    /// compared with its discriminant isn't stored in it).
+    quiet: usize,
     state: &'a mut InferState,
     types: HashMap<(usize, usize), Type>,
     /// Per-identifier instantiation of polymorphic bindings (see
@@ -445,11 +596,6 @@ struct Emitter<'a> {
     /// variables everywhere else: Go folds constant expressions with its
     /// own rules, `1 / zero` being a compile error.)
     literal_consts: HashMap<String, String>,
-    /// The Go variables of polymorphic literal `const`s (`Bound::Literal`)
-    /// at the types their uses need: name → (Go type, value).
-    literal_vars: std::collections::BTreeMap<String, (String, String)>,
-    /// For unique names of local polymorphic literal `const`s.
-    literal_count: usize,
     /// Every function binding seen so far, with its specialisations.
     funcs: Vec<FuncInfo>,
     /// The specialisation mapping in force, innermost last.
@@ -580,7 +726,7 @@ fn num_lit(n: f64) -> String {
     }
 }
 
-/// `a * k` on Ints for a constant `k`: intyIMul's check, as a bound on
+/// `a * k` on integers for a constant `k`: intyIMul's check, as a bound on
 /// `a` computed here (see intyIMulK).
 fn imul_k(a: &str, k: i64) -> String {
     if k == 0 {
@@ -601,13 +747,46 @@ fn int_lit(n: f64) -> String {
 }
 
 fn is_num(t: &GoType) -> bool {
-    matches!(t, GoType::Int | GoType::Float)
+    matches!(t, GoType::Int | GoType::Float | GoType::NumVar(_))
 }
 
-/// `v`, of Go type `from`, as a value of type `to`: an `Int` flowing into
-/// a `Number` slot (the checker's `Int ≤ Number`) becomes a float64. The
-/// other direction is a double the checker proved integral (a trap past
-/// ±2^53).
+/// A mapping spelled out, its variables in order.
+fn mapping_name(m: &Mapping) -> String {
+    let mut entries: Vec<(u32, String)> =
+        m.iter().map(|(v, t)| (v.id(), format!("{}", t))).collect();
+    entries.sort();
+    format!("{:?}", entries)
+}
+
+/// The kinds of a call's number arguments, as a name: `i` an integer,
+/// `f` a float, `_` not a number.
+fn pattern_name(p: &[Option<bool>]) -> String {
+    p.iter()
+        .map(|k| match k {
+            Some(true) => 'i',
+            Some(false) => 'f',
+            None => '_',
+        })
+        .collect()
+}
+
+/// Whether `object.property(…)` is one of the static built-ins
+/// `Emitter::builtin_static` emits.
+fn is_builtin_static(object: &str, property: &str) -> bool {
+    matches!(
+        (object, property),
+        ("console", "log" | "error" | "warn")
+            | ("Math", _)
+            | ("performance", "now")
+            | ("String", "fromCharCode")
+            | ("Number", "isInteger")
+    )
+}
+
+/// `v`, of Go type `from`, as a value of type `to`: an integer flowing
+/// into a float place (`int ⊑ float`, see `kinds`) becomes a float64. The
+/// other direction is a double known to be integral (a trap past ±2^53),
+/// where a use converts one: a `Math.floor`, a length.
 fn coerce(v: String, from: &GoType, to: &GoType) -> String {
     match (from, to) {
         (GoType::Int, GoType::Float) => {
@@ -626,7 +805,7 @@ fn coerce(v: String, from: &GoType, to: &GoType) -> String {
 }
 
 /// ECMAScript ToInt32 / ToUint32 of a number of Go type `t`: a
-/// conversion for an `Int` (Go's wraps modulo 2^32, as JS does).
+/// conversion for an integer (Go's wraps modulo 2^32, as JS does).
 /// (A constant is converted here: Go rejects `uint32(-1)` and would
 /// fold `int32(1) << 31` as an overflowing constant.)
 fn to_i32(v: String, t: &GoType) -> String {
@@ -878,39 +1057,19 @@ impl<'a> Emitter<'a> {
             .insert(name.to_string(), Bound::Var(t));
     }
 
-    fn bind_literal(&mut self, name: &str, init: Expr, top_level: bool) {
-        let base = if top_level {
-            mangle(name)
-        } else {
-            self.literal_count += 1;
-            format!("{}_{}", mangle(name), self.literal_count)
-        };
-        self.scopes
-            .last_mut()
-            .expect("scope")
-            .insert(name.to_string(), Bound::Literal { init, base });
-    }
-
-    /// A `const` bound to a number literal whose type inty left
-    /// polymorphic, to be inlined at each use (see `Bound::Literal`).
-    fn poly_literal<'d>(&self, kind: VarKind, d: &'d VarDeclarator) -> Option<&'d Expr> {
-        let init = literal_const(kind, d)?;
-        let number = matches!(
-            init,
-            Expr::Lit {
-                value: Literal::Number(_),
-                ..
-            } | Expr::Unary { .. }
-        );
-        let t = self.state.get_decl_type(d.span)?;
-        (number && matches!(self.state.apply_subst(t), inty::types::Type::Var(_))).then_some(init)
-    }
-
     fn bind_func(&mut self, name: &str, fid: usize) {
         self.scopes
             .last_mut()
             .expect("scope")
             .insert(name.to_string(), Bound::Func(fid));
+    }
+
+    /// What the name `e` is bound to, if `e` is a name.
+    fn lookup_name(&self, e: &Expr) -> Option<Bound> {
+        match e {
+            Expr::Ident { name, .. } => self.lookup(name),
+            _ => None,
+        }
     }
 
     fn lookup(&self, name: &str) -> Option<Bound> {
@@ -980,8 +1139,91 @@ impl<'a> Emitter<'a> {
     }
 
     fn fn_type(&mut self, span: Span) -> Result<GoType> {
-        let t = self.raw_type(span)?;
-        self.tm.map(self.state, &t, span)
+        self.go_type_at(span)
+    }
+
+    /// The current specialisation, spelled out (its mapping, and which
+    /// copy it is).
+    fn spec_key(&mut self) -> Rc<str> {
+        let m = self.mapping();
+        let ptr = Rc::as_ptr(&m);
+        if let Some((_, k)) = self.spec_names.get(&ptr) {
+            return k.clone();
+        }
+        let k: Rc<str> = mapping_name(&m).into();
+        self.spec_names.insert(ptr, (m, k.clone()));
+        k
+    }
+
+    /// The type of the node at `span` in the current specialisation, in
+    /// `role`: while collecting, made once by `make` (fresh kind
+    /// variables) and kept; after, the collected one with its kinds.
+    fn shape(
+        &mut self,
+        span: Span,
+        role: u8,
+        make: impl FnOnce(&mut Self) -> Result<GoType>,
+    ) -> Result<GoType> {
+        let key = ShapeKey {
+            spec: self.spec_key(),
+            start: span.start,
+            end: span.end,
+            role,
+        };
+        if self.collect {
+            if let Some(t) = self.shapes.get(&key) {
+                return Ok(t.clone());
+            }
+            let t = make(self)?;
+            self.shapes.insert(key, t.clone());
+            return Ok(t);
+        }
+        if let Some(c) = self.collected.clone() {
+            if let Some(t) = c.shapes.get(&key) {
+                return Ok(c.tm.realize(&mut self.tm, &mut self.realized, t));
+            }
+            if std::env::var_os("INTY_GO_TRACE").is_some() {
+                eprintln!("inty-go: no collected type for {:?}", key);
+            }
+        }
+        make(self)
+    }
+
+    /// While collecting: a value of type `from` flows into a place of
+    /// type `to` (see `kinds`).
+    fn flow(&mut self, from: &GoType, to: &GoType) {
+        if self.collect && self.quiet == 0 {
+            self.tm.flow(from, to);
+        }
+    }
+
+    /// While collecting: a use needs `t` as an integer (see
+    /// `Kinds::demand`).
+    fn demand(&mut self, t: &GoType) {
+        if let (true, GoType::NumVar(v)) = (self.collect, t) {
+            self.tm.kinds.demand(*v);
+        }
+    }
+
+    /// While collecting: `a` and `b` are compared.
+    fn link(&mut self, a: &GoType, b: &GoType) {
+        if let (true, GoType::NumVar(x), GoType::NumVar(y)) = (self.collect, a, b) {
+            self.tm.kinds.link(*x, *y);
+        }
+    }
+
+    /// While collecting: `a` and `b` are one place.
+    fn same(&mut self, a: &GoType, b: &GoType) {
+        if self.collect {
+            self.tm.unify(a, b);
+        }
+    }
+
+    /// `v`, of Go type `from`, as a value of type `to`; while collecting,
+    /// a flow from one to the other.
+    fn coerce(&mut self, v: String, from: &GoType, to: &GoType) -> String {
+        self.flow(from, to);
+        coerce(v, from, to)
     }
 
     /// The Go type of an identifier, and its Go name.
@@ -996,26 +1238,6 @@ impl<'a> Emitter<'a> {
                 format!("Node built-in `{}` used as a value ({:?})", name, item),
                 span,
             )),
-            Some(Bound::Literal { init, base }) => {
-                let t = self.raw_type(span)?;
-                let t = self.tm.map(self.state, &t, span)?;
-                let go_name = match t {
-                    GoType::Int => base,
-                    GoType::Float => format!("{}_f", base),
-                    _ => {
-                        return Err(unsupported(
-                            format!("number `{}` used as a {:?}", name, t),
-                            span,
-                        ))
-                    }
-                };
-                if !self.literal_vars.contains_key(&go_name) {
-                    let v = self.expr_as(&init, &t)?;
-                    let rendered = self.tm.render(&t);
-                    self.literal_vars.insert(go_name.clone(), (rendered, v));
-                }
-                Ok(Some((go_name, t)))
-            }
             Some(Bound::Var(t)) => {
                 // A generalised non-function value (e.g. an object of
                 // polymorphic functions) would need one copy per use type.
@@ -1040,21 +1262,133 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// The Go type of `e`'s value. What reads a place (a variable, a
+    /// field, an element) or passes a value on (a call's result, an
+    /// assignment's) has that place's type; anything else, the type of
+    /// its node.
     fn type_of(&mut self, e: &Expr) -> Result<GoType> {
         if let Expr::Ident { name, span } = e {
             if let Some((_, t)) = self.ident(name, *span)? {
                 return Ok(t);
             }
         }
-        let span = e.span();
-        let t = self.raw_type(span)?;
-        self.tm.map(self.state, &t, span)
+        if let Some(n) = const_num(e) {
+            let t = self.go_type_at(e.span())?;
+            let k = if crate::types::number_kind(n) == crate::kinds::Kind::Int {
+                GoType::Int
+            } else {
+                GoType::Float
+            };
+            self.flow(&k, &t);
+            return Ok(t);
+        }
+        match self.place_type(e)? {
+            Some(t) => {
+                if self.collect {
+                    if let Ok(node) = self.go_type_at(e.span()) {
+                        self.same(&node, &t);
+                    }
+                }
+                Ok(t)
+            }
+            None => self.go_type_at(e.span()),
+        }
+    }
+
+    /// The type of the place (or the passed-on value) `e` reads, if it
+    /// reads one.
+    fn place_type(&mut self, e: &Expr) -> Result<Option<GoType>> {
+        Ok(match e {
+            Expr::Member {
+                object, property, ..
+            } => {
+                if self.node_item(object).is_some() {
+                    return Ok(None);
+                }
+                match self.type_of(object) {
+                    Ok(GoType::Struct(idx)) => self.tm.field(idx, property).map(|f| f.2.clone()),
+                    _ => None,
+                }
+            }
+            Expr::ComputedMember { object, .. } => match self.type_of(object) {
+                Ok(GoType::Array(elem)) => Some(*elem),
+                _ => None,
+            },
+            Expr::Unary {
+                op: UnaryOp::PreInc | UnaryOp::PostInc | UnaryOp::PreDec | UnaryOp::PostDec,
+                argument,
+                ..
+            } => Some(self.type_of(argument)?),
+            Expr::Assign { left, .. } => Some(self.type_of(left)?),
+            Expr::Call {
+                callee, arguments, ..
+            } => self.call_type(callee, arguments)?,
+            _ => None,
+        })
+    }
+
+    /// The type of a call's result, where it is a place's: a function's
+    /// result, an array method's element or array.
+    fn call_type(&mut self, callee: &Expr, args: &[Expr]) -> Result<Option<GoType>> {
+        if self.node_item(callee).is_some() {
+            return Ok(None);
+        }
+        if let Expr::Member {
+            object, property, ..
+        } = callee
+        {
+            if self.node_item(object).is_some() {
+                return Ok(None);
+            }
+            if let Expr::Ident { name, .. } = &**object {
+                if (self.typed_constructor(name).is_some() && property == "from")
+                    || is_builtin_static(name, property)
+                {
+                    return Ok(None);
+                }
+            }
+            return Ok(match self.type_of(object) {
+                Ok(t @ GoType::Array(_)) => {
+                    let GoType::Array(elem) = &t else {
+                        unreachable!()
+                    };
+                    match (property.as_str(), args) {
+                        ("pop", _) => Some((**elem).clone()),
+                        ("fill" | "reverse" | "concat" | "slice" | "splice" | "filter", _) => {
+                            Some(t.clone())
+                        }
+                        ("map", [f]) => match self.type_of(f) {
+                            Ok(GoType::Func(_, r)) => Some(GoType::Array(r)),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                Ok(t @ GoType::Typed(_)) if property == "fill" => Some(t),
+                Ok(GoType::Struct(_)) => match self.type_of(callee) {
+                    Ok(GoType::Func(_, r)) => Some(*r),
+                    _ => None,
+                },
+                _ => None,
+            });
+        }
+        if let Expr::Ident { name, .. } = callee {
+            if matches!(name.as_str(), "String" | "isNaN") && args.len() == 1 {
+                return Ok(None);
+            }
+        }
+        Ok(match self.type_of(callee) {
+            Ok(GoType::Func(_, r)) => Some(*r),
+            _ => None,
+        })
     }
 
     fn decl_type(&mut self, d: &VarDeclarator) -> Result<GoType> {
         if let Some(t) = self.state.get_decl_type(d.span).cloned() {
-            let t = self.in_context(&t);
-            return self.tm.map(self.state, &t, d.span);
+            return self.shape(d.span, DECL, |e| {
+                let t = e.in_context(&t);
+                e.tm.map(e.state, &t, d.span)
+            });
         }
         match &d.init {
             Some(init) => self.type_of(init),
@@ -1152,7 +1486,17 @@ impl<'a> Emitter<'a> {
             };
             concrete.push(canonical(&self.in_context(&t)));
         }
-        let key = format!("{}", Type::Tuple(concrete.clone()));
+        let mut key = format!("{}", Type::Tuple(concrete.clone()));
+        // A call's copy for the kinds of its arguments.
+        let caller = self.spec_key();
+        let pattern = self
+            .patterns
+            .get(&(caller, span.start, span.end))
+            .filter(|p| p.iter().any(Option::is_some))
+            .cloned();
+        if let Some(p) = &pattern {
+            key = format!("{}#{}", key, pattern_name(p));
+        }
         if let Some(spec) = self.funcs[fid].specs.iter().find(|s| s.key == key) {
             return Ok((spec.name.clone(), spec.go_type.clone()));
         }
@@ -1161,10 +1505,31 @@ impl<'a> Emitter<'a> {
             mapping.insert(v.clone(), t);
         }
         let mapping = Rc::new(mapping);
+        if let Some(p) = &pattern {
+            let name: Rc<str> = format!("{}#{}", mapping_name(&mapping), pattern_name(p)).into();
+            self.spec_names
+                .insert(Rc::as_ptr(&mapping), (mapping.clone(), name));
+        }
         self.mappings.push(mapping.clone());
         let go_type = self.fn_type(self.funcs[fid].span);
         self.mappings.pop();
         let go_type = go_type?;
+        if let (true, GoType::Func(ps, _)) = (self.collect, &go_type) {
+            for t in ps {
+                if let GoType::NumVar(v) = t {
+                    self.tm.kinds.param(*v);
+                }
+            }
+        }
+        // The copy's parameters hold at least what its calls pass.
+        if let (Some(p), GoType::Func(ps, _)) = (&pattern, &go_type) {
+            for (t, k) in ps.iter().zip(p) {
+                if let Some(int) = k {
+                    let k = if *int { GoType::Int } else { GoType::Float };
+                    self.flow(&k, t);
+                }
+            }
+        }
         let info = &mut self.funcs[fid];
         let base = mangle(&info.name);
         let name = match info.specs.len() {
@@ -1254,8 +1619,7 @@ impl<'a> Emitter<'a> {
 
     /// Go parameter list and result type for a function at `span`.
     fn signature(&mut self, params: &[Param], span: Span) -> Result<(String, Vec<GoType>, GoType)> {
-        let t = self.raw_type(span)?;
-        let (ps, ret) = match self.tm.map(self.state, &t, span)? {
+        let (ps, ret) = match self.go_type_at(span)? {
             GoType::Func(ps, ret) => (ps, *ret),
             other => {
                 return Err(unsupported(
@@ -1433,10 +1797,6 @@ impl<'a> Emitter<'a> {
                         self.line(&format!("\u{1}A{}\u{1}", fid));
                         continue;
                     }
-                    if let Some(init) = self.poly_literal(*kind, d) {
-                        self.bind_literal(&d.name, init.clone(), false);
-                        continue;
-                    }
                     let ty = self.decl_type(d)?;
                     let name = mangle(&d.name);
                     let rendered = self.tm.render(&ty);
@@ -1446,6 +1806,10 @@ impl<'a> Emitter<'a> {
                         Some(init @ Expr::Function { .. }) => {
                             self.line(&format!("var {} {}", name, rendered));
                             self.bind(&d.name, ty.clone());
+                            if self.collect {
+                                let f = self.go_type_at(init.span())?;
+                                self.same(&f, &ty);
+                            }
                             let v = self.expr(init)?;
                             self.line(&format!("{} = {}", name, v));
                         }
@@ -1602,8 +1966,10 @@ impl<'a> Emitter<'a> {
                         self.bind(name, elem.clone());
                     }
                     ForInLhs::Expr(target) => {
+                        let t = self.type_of(target)?;
                         let place = self.place(target)?;
-                        self.line(&format!("{place} = (*{arr})[{idx}]"));
+                        let v = self.coerce(format!("(*{arr})[{idx}]"), &elem, &t);
+                        self.line(&format!("{place} = {v}"));
                     }
                 }
                 self.block_body(body)?;
@@ -1695,7 +2061,11 @@ impl<'a> Emitter<'a> {
                         None => return Err(unsupported("uninitialised for-loop variable", d.span)),
                     };
                     let v = match &ty {
-                        GoType::Float | GoType::Int | GoType::Str | GoType::Bool => v,
+                        GoType::Float
+                        | GoType::Int
+                        | GoType::NumVar(_)
+                        | GoType::Str
+                        | GoType::Bool => v,
                         _ if v == "nil" => {
                             return Err(unsupported("null-initialised for-loop variable", d.span))
                         }
@@ -1746,9 +2116,11 @@ impl<'a> Emitter<'a> {
 
     fn switch_stmt(&mut self, disc: &Expr, cases: &[SwitchCase], _span: Span) -> Result<()> {
         let mut dt = self.type_of(disc)?;
+        // An integer `switch` is a jump table.
+        self.demand(&dt);
         self.tm.need_pointer(&dt);
         let d = self.expr(disc)?;
-        // An `Int` discriminant with a fractional case compares as doubles.
+        // An integer discriminant with a fractional case compares as doubles.
         let d = if dt == GoType::Int {
             let mut fractional = false;
             for c in cases.iter().filter_map(|c| c.test.as_ref()) {
@@ -1770,11 +2142,15 @@ impl<'a> Emitter<'a> {
         for (i, case) in cases.iter().enumerate() {
             match &case.test {
                 Some(t) => {
+                    // (A label is compared with the discriminant, not
+                    // stored in it.)
+                    self.quiet += 1;
                     let v = match self.literal_const_label(t, &dt) {
-                        Some(lit) if constants.insert(lit.clone()) => lit,
-                        _ => self.expr_as(t, &dt)?,
+                        Some(lit) if constants.insert(lit.clone()) => Ok(lit),
+                        _ => self.expr_as(t, &dt),
                     };
-                    pending.push(v);
+                    self.quiet -= 1;
+                    pending.push(v?);
                 }
                 None if !pending.is_empty() => {
                     return Err(unsupported("`case` falling into `default`", case.span))
@@ -1940,14 +2316,31 @@ impl<'a> Emitter<'a> {
         TypedArrayKind::from_name(name).filter(|_| self.lookup(name).is_none())
     }
 
-    /// `v` converted to a typed array's element type: a store wraps an
-    /// `Int` to 32 or 8 bits, as JavaScript's ToInt32 / ToUint8 do (the
-    /// checker admits only `Int`s there, whose wrapping Go's conversion
-    /// computes exactly).
+    /// `v` converted to a typed array's element type: a store wraps a
+    /// number to 32 or 8 bits, as JavaScript's ToInt32 / ToUint8 do (Go's
+    /// conversion of an integer computes that exactly).
     fn typed_value(&mut self, k: TypedArrayKind, v: &Expr) -> Result<String> {
+        if matches!(k, TypedArrayKind::Int32 | TypedArrayKind::Uint8) {
+            if let Ok(t) = self.type_of(v) {
+                self.demand(&t);
+            }
+        }
+        let int = |e: &mut Self| -> Result<Option<String>> {
+            Ok(if e.type_of(v)? == GoType::Int {
+                Some(e.num_as(v, &GoType::Int)?)
+            } else {
+                None
+            })
+        };
         Ok(match k {
-            TypedArrayKind::Int32 => format!("intyI32({})", self.num_as(v, &GoType::Int)?),
-            TypedArrayKind::Uint8 => format!("intyU8({})", self.num_as(v, &GoType::Int)?),
+            TypedArrayKind::Int32 => match int(self)? {
+                Some(i) => format!("intyI32({})", i),
+                None => format!("intyToInt32({})", self.num_as(v, &GoType::Float)?),
+            },
+            TypedArrayKind::Uint8 => match int(self)? {
+                Some(i) => format!("intyU8({})", i),
+                None => format!("uint8(intyToInt32({}))", self.num_as(v, &GoType::Float)?),
+            },
             TypedArrayKind::Float32 => format!("float32({})", self.num_as(v, &GoType::Float)?),
             TypedArrayKind::Float64 => self.num_as(v, &GoType::Float)?,
         })
@@ -2006,7 +2399,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// The operands of a call's only argument when it is `a / b` with
-    /// both operands `Int`s.
+    /// both operands integers.
     fn int_quotient<'e>(&mut self, args: &'e [Expr]) -> Result<Option<(&'e Expr, &'e Expr)>> {
         let [Expr::Binary {
             op: BinOp::Div,
@@ -2021,7 +2414,7 @@ impl<'a> Emitter<'a> {
         Ok(ints.then_some((&**left, &**right)))
     }
 
-    /// The value of an `Int` operand that is a literal, or a top-level
+    /// The value of an integer operand that is a literal, or a top-level
     /// literal `const` (as in `case` labels), given its Go spelling.
     fn int_const(&mut self, e: &Expr, emitted: &str) -> Option<i64> {
         const_int(emitted).or_else(|| {
@@ -2182,12 +2575,21 @@ impl<'a> Emitter<'a> {
                 | AssignOp::RShiftAssign
                 | AssignOp::URShiftAssign
         );
+        if bitwise || op == AssignOp::ModAssign {
+            self.demand(&lt);
+            if let Ok(t) = self.type_of(right) {
+                self.demand(&t);
+            }
+        }
         let (r, r_t) = if bitwise {
             let t = self.type_of(right)?;
             (self.expr(right)?, t)
         } else {
             (self.expr_as(right, &lt)?, lt.clone())
         };
+        if matches!(op, AssignOp::DivAssign | AssignOp::PowAssign) {
+            self.flow(&GoType::Float, &lt);
+        }
         let direct = |o: &str| Ok(format!("{} {} {}", p, o, r));
         match op {
             AssignOp::Assign => direct("="),
@@ -2221,6 +2623,7 @@ impl<'a> Emitter<'a> {
                 }
                 let (pi, pu) = (to_i32(p.clone(), &lt), to_u32(p.clone(), &lt));
                 let (ri, ru) = (to_i32(r.clone(), &r_t), to_u32(r.clone(), &r_t));
+                self.flow(&GoType::Int, &lt);
                 let bits = |s: String| coerce(s, &GoType::Int, &lt);
                 let v = match op {
                     AssignOp::ModAssign => format!("intyMod({p}, {r})"),
@@ -2276,7 +2679,7 @@ impl<'a> Emitter<'a> {
         self.tm.need_pointer(t);
         Ok(match t {
             GoType::Bool => v,
-            GoType::Float => format!("intyTruthy({})", v),
+            GoType::Float | GoType::NumVar(_) => format!("intyTruthy({})", v),
             GoType::Int => format!("({} != 0)", v),
             GoType::Str => format!("({} != \"\")", v),
             GoType::Array(_) | GoType::Struct(_) | GoType::Func(..) => format!("({} != nil)", v),
@@ -2292,10 +2695,12 @@ impl<'a> Emitter<'a> {
             }
         }
         let t = self.type_of(e)?;
+        self.demand(&t);
         let v = self.expr(e)?;
         Ok(match t {
             GoType::Int => v,
-            _ => format!("int({})", v),
+            // A fraction or a negative number reads nothing: a fault.
+            _ => format!("intyIndex({})", v),
         })
     }
 
@@ -2328,35 +2733,50 @@ impl<'a> Emitter<'a> {
                 }
             }
             _ if is_num(want) => self.num_as(e, want),
-            _ => self.expr(e),
+            _ => {
+                if self.collect {
+                    if let Ok(t) = self.type_of(e) {
+                        self.flow(&t, want);
+                    }
+                }
+                self.expr(e)
+            }
         }
     }
 
-    /// A number-valued `e` as a Go value of type `want` (`Int` or
-    /// `Number`): a constant is spelled in that type, anything else
+    /// A number-valued `e` as a Go value of type `want` (an integer or a
+    /// float): a constant is spelled in that type, anything else
     /// converted.
     fn num_as(&mut self, e: &Expr, want: &GoType) -> Result<String> {
         if let Some(n) = const_num(e) {
-            if *want == GoType::Float || !crate::types::is_int(n) {
+            let k = if crate::types::number_kind(n) == crate::kinds::Kind::Int {
+                GoType::Int
+            } else {
+                GoType::Float
+            };
+            self.flow(&k, want);
+            if *want != GoType::Int || !crate::types::is_int(n) {
                 return Ok(num_lit(n));
             }
             return Ok(int_lit(n));
         }
         let t = self.type_of(e)?;
         let v = self.expr(e)?;
-        Ok(coerce(v, &t, want))
+        Ok(self.coerce(v, &t, want))
     }
 
-    /// The Go type inty recorded for the expression at `span`.
+    /// The Go type of the node at `span`, from the type inty recorded.
     fn go_type_at(&mut self, span: Span) -> Result<GoType> {
-        let t = self.raw_type(span)?;
-        self.tm.map(self.state, &t, span)
+        self.shape(span, EXPR, |e| {
+            let t = e.raw_type(span)?;
+            e.tm.map(e.state, &t, span)
+        })
     }
 
     fn stringify(&mut self, v: String, t: &GoType, span: Span) -> Result<String> {
         Ok(match t {
             GoType::Str => v,
-            GoType::Float => format!("intyNumStr({})", v),
+            GoType::Float | GoType::NumVar(_) => format!("intyNumStr({})", v),
             GoType::Int => format!("strconv.Itoa({})", v),
             GoType::Bool => format!("intyBoolStr({})", v),
             GoType::Array(elem) => {
@@ -2371,7 +2791,7 @@ impl<'a> Emitter<'a> {
     fn str_func(&mut self, t: &GoType, span: Span) -> Result<String> {
         Ok(match t {
             GoType::Str => "func(s string) string { return s }".into(),
-            GoType::Float => "intyNumStr".into(),
+            GoType::Float | GoType::NumVar(_) => "intyNumStr".into(),
             GoType::Int => "strconv.Itoa".into(),
             GoType::Bool => "intyBoolStr".into(),
             _ => return Err(unsupported("join over elements of this type", span)),
@@ -2460,10 +2880,13 @@ impl<'a> Emitter<'a> {
                                 PropKey::Ident(s) | PropKey::String(s) => s.clone(),
                                 PropKey::Number(n) => format!("{}", n),
                             };
-                            let go =
-                                self.tm.field(idx, &k).map(|f| f.1.clone()).ok_or_else(|| {
-                                    unsupported("method missing from its type", *span)
-                                })?;
+                            let (_, go, ft) = self.tm.field(idx, &k).cloned().ok_or_else(|| {
+                                unsupported("method missing from its type", *span)
+                            })?;
+                            if self.collect {
+                                let f = self.go_type_at(*span)?;
+                                self.same(&f, &ft);
+                            }
                             let f = self.func_literal(params, body, *span)?;
                             fields.push(format!("{}: {}", go, f));
                         }
@@ -2510,11 +2933,11 @@ impl<'a> Emitter<'a> {
                     let e = self.element(object, property)?;
                     let want = self.go_type_at(*span)?;
                     Ok(match k {
-                        TypedArrayKind::Float64 => coerce(e, &GoType::Float, &want),
+                        TypedArrayKind::Float64 => self.coerce(e, &GoType::Float, &want),
                         TypedArrayKind::Float32 => {
-                            coerce(format!("float64({})", e), &GoType::Float, &want)
+                            self.coerce(format!("float64({})", e), &GoType::Float, &want)
                         }
-                        _ => coerce(format!("int({})", e), &GoType::Int, &want),
+                        _ => self.coerce(format!("int({})", e), &GoType::Int, &want),
                     })
                 }
                 GoType::Str => {
@@ -2615,7 +3038,11 @@ impl<'a> Emitter<'a> {
             } => match (&**callee, arguments.as_slice()) {
                 (Expr::Ident { name, .. }, [n]) if self.typed_constructor(name).is_some() => {
                     let k = self.typed_constructor(name).expect("checked above");
-                    let n = self.num_as(n, &GoType::Int)?;
+                    let n = if self.type_of(n)? == GoType::Int {
+                        self.num_as(n, &GoType::Int)?
+                    } else {
+                        format!("intyTypedLen({})", self.num_as(n, &GoType::Float)?)
+                    };
                     Ok(format!("intyTypedNew[{}]({})", typed_elem(k), n))
                 }
                 _ => Err(unsupported("`new`", *span)),
@@ -2645,16 +3072,16 @@ impl<'a> Emitter<'a> {
             GoType::Array(_) | GoType::Typed(_) if property == "length" => {
                 if let Some(h) = self.header_of(object) {
                     let want = self.go_type_at(span)?;
-                    return Ok(coerce(format!("len({})", h), &GoType::Int, &want));
+                    return Ok(self.coerce(format!("len({})", h), &GoType::Int, &want));
                 }
                 let a = self.expr(object)?;
                 let want = self.go_type_at(span)?;
-                Ok(coerce(format!("len(*{})", a), &GoType::Int, &want))
+                Ok(self.coerce(format!("len(*{})", a), &GoType::Int, &want))
             }
             GoType::Str if property == "length" => {
                 let s = self.expr(object)?;
                 let want = self.go_type_at(span)?;
-                Ok(coerce(format!("len({})", s), &GoType::Int, &want))
+                Ok(self.coerce(format!("len({})", s), &GoType::Int, &want))
             }
             GoType::Struct(idx) => {
                 let go = self
@@ -2690,16 +3117,17 @@ impl<'a> Emitter<'a> {
                 Ok(format!("(!{})", c))
             }
             UnaryOp::BitNot => {
+                self.demand(&t);
                 let v = self.expr(arg)?;
                 let want = self.go_type_at(span)?;
-                Ok(coerce(
+                Ok(self.coerce(
                     format!("int(^{})", to_i32(v, &t)),
                     &GoType::Int,
                     &want,
                 ))
             }
             UnaryOp::Typeof if matches!(arg, Expr::Ident { .. }) => Ok(go_string_lit(match t {
-                GoType::Float | GoType::Int => "number",
+                GoType::Float | GoType::Int | GoType::NumVar(_) => "number",
                 GoType::Str => "string",
                 GoType::Bool => "boolean",
                 GoType::Func(..) => "function",
@@ -2730,7 +3158,19 @@ impl<'a> Emitter<'a> {
 
     fn binary(&mut self, op: BinOp, left: &Expr, right: &Expr, span: Span) -> Result<String> {
         let lt = self.type_of(left)?;
-        let rt = self.type_of(right)?;
+        let mut rt = self.type_of(right)?;
+        // Objects (or arrays, functions) compared are of one Go type.
+        if self.collect
+            && matches!(
+                op,
+                BinOp::EqEq | BinOp::EqEqEq | BinOp::NotEq | BinOp::NotEqEq
+            )
+            && matches!(lt, GoType::Struct(_) | GoType::Array(_))
+            && std::mem::discriminant(&lt) == std::mem::discriminant(&rt)
+        {
+            self.same(&lt, &rt);
+            rt = lt.clone();
+        }
         let is_nullish = |e: &Expr| {
             matches!(
                 e,
@@ -2758,7 +3198,7 @@ impl<'a> Emitter<'a> {
             }
             // A value whose type has no `null`/`undefined` is never
             // either (a destructuring default's `v === undefined` on an
-            // `Int`). The operand is still evaluated, for its traps.
+            // integer). The operand is still evaluated, for its traps.
             let never = !neg;
             if is_nullish(right) && !lt.is_nullable() {
                 return Ok(format!(
@@ -2778,14 +3218,53 @@ impl<'a> Emitter<'a> {
         let a = self.expr(left)?;
         let b = self.expr(right)?;
         let num = is_num(&lt) && is_num(&rt);
-        // Arithmetic happens in the result's type (an `Int` operand of a
-        // `Number` operation becomes a float64); a comparison in `Int` only
+        // Arithmetic happens in the result's kind (an integer operand of a
+        // float operation becomes a float64); a comparison in integers only
         // when both sides are.
         let whole = if num {
             self.go_type_at(span)?
         } else {
             GoType::Unit
         };
+        // The result's kind: the larger operand's for `+ - * %`, a float
+        // for `/` and `**`, an integer for the bitwise operators.
+        if num {
+            match op {
+                BinOp::Mod
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::LShift
+                | BinOp::RShift
+                | BinOp::URShift => {
+                    self.demand(&lt);
+                    self.demand(&rt);
+                }
+                BinOp::Lt
+                | BinOp::Gt
+                | BinOp::LtEq
+                | BinOp::GtEq
+                | BinOp::EqEq
+                | BinOp::EqEqEq
+                | BinOp::NotEq
+                | BinOp::NotEqEq => self.link(&lt, &rt),
+                _ => {}
+            }
+            match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
+                    self.flow(&lt, &whole);
+                    self.flow(&rt, &whole);
+                }
+                BinOp::Div | BinOp::Pow => self.flow(&GoType::Float, &whole),
+                BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::LShift
+                | BinOp::RShift
+                | BinOp::URShift => self.flow(&GoType::Int, &whole),
+                _ => {}
+            }
+        }
         let both_int = lt == GoType::Int && rt == GoType::Int;
         let cmp_t = if both_int { GoType::Int } else { GoType::Float };
         let (fa, fb) = (
@@ -2819,8 +3298,8 @@ impl<'a> Emitter<'a> {
             BinOp::Mul if num => format!("({} * {})", wa, wb),
             BinOp::Div if num && const_num(right) == Some(0.0) => format!("({} / intyZero)", fa),
             BinOp::Div if num => format!("({} / {})", fa, fb),
-            // Go's `%` truncates like JS's; an Int remainder by zero traps
-            // (JS gives NaN, which isn't an Int).
+            // Go's `%` truncates like JS's; an integer remainder by zero
+            // traps (JS gives NaN, which isn't an integer).
             BinOp::Mod if num && whole == GoType::Int => format!("({} % {})", wa, wb),
             BinOp::Mod if num => format!("intyMod({}, {})", wa, wb),
             BinOp::Pow if num => format!("intyPow({}, {})", fa, fb),
@@ -2898,9 +3377,7 @@ impl<'a> Emitter<'a> {
     /// Emit a call. `stmt` is true in statement position, where a call
     /// returning `undefined` is allowed.
     fn call(&mut self, callee: &Expr, args: &[Expr], span: Span, stmt: bool) -> Result<String> {
-        let result = self
-            .raw_type(span)
-            .and_then(|t| self.tm.map(self.state, &t, span));
+        let result = self.go_type_at(span);
         if !stmt && matches!(result, Ok(GoType::Unit)) {
             return Err(unsupported(
                 "using the result of a call that returns undefined",
@@ -2978,6 +3455,18 @@ impl<'a> Emitter<'a> {
         for (a, p) in args.iter().zip(&params) {
             vs.push(self.expr_as(a, p)?);
         }
+        if self.collect {
+            if let Expr::Ident { span: at, .. } = callee {
+                if matches!(self.lookup_name(callee), Some(Bound::Func(_))) {
+                    let mut ts = Vec::new();
+                    for a in args {
+                        ts.push(self.type_of(a).unwrap_or(GoType::Unit));
+                    }
+                    let k = (self.spec_key(), at.start, at.end);
+                    self.call_args.push((k, ts, params.clone()));
+                }
+            }
+        }
         let f = if matches!(callee, Expr::Ident { .. } | Expr::Member { .. }) {
             f
         } else {
@@ -3054,6 +3543,20 @@ impl<'a> Emitter<'a> {
             }
             Ok(())
         };
+        // A `Math` function's result: an integer from the rounding ones,
+        // `imul` and `clz32`, a float from the others (`abs`, `min` and
+        // `max` are computed in their operands' kind).
+        if object == "Math" {
+            if let Ok(want) = self.go_type_at(span) {
+                match property {
+                    "abs" | "min" | "max" => {}
+                    "floor" | "ceil" | "round" | "trunc" | "imul" | "clz32" => {
+                        self.flow(&GoType::Int, &want)
+                    }
+                    _ => self.flow(&GoType::Float, &want),
+                }
+            }
+        }
         Ok(Some(match (object, property) {
             ("console", "log" | "error" | "warn") => {
                 if !stmt {
@@ -3072,9 +3575,9 @@ impl<'a> Emitter<'a> {
                 }
                 let v = self.expr(a)?;
                 // console.log formats numbers with util.inspect, which
-                // (unlike String(x)) keeps the sign of -0. (An `Int` has
+                // (unlike String(x)) keeps the sign of -0. (An integer has
                 // no -0.)
-                let s = if t == GoType::Float {
+                let s = if matches!(t, GoType::Float | GoType::NumVar(_)) {
                     format!("intyInspectNum({})", v)
                 } else {
                     self.stringify(v, &t, a.span())?
@@ -3085,7 +3588,7 @@ impl<'a> Emitter<'a> {
                     format!("intyLogErr({})", s)
                 }
             }
-            // Polymorphic in `Num`: computed in the result's type.
+            // Computed in the result's kind, their operands'.
             ("Math", f @ ("abs" | "min" | "max")) => {
                 let want = self.go_type_at(span)?;
                 let want = if is_num(&want) { want } else { GoType::Float };
@@ -3100,7 +3603,7 @@ impl<'a> Emitter<'a> {
                     _ => format!("{}({})", f, vals.join(", ")),
                 }
             }
-            // `Math.floor(a / b)` on Ints: integer division, which gives
+            // `Math.floor(a / b)` on integers: integer division, which gives
             // the same result (see intyFloorDiv).
             ("Math", f @ ("floor" | "ceil" | "trunc"))
                 if self.go_type_at(span)? == GoType::Int && self.int_quotient(args)?.is_some() =>
@@ -3115,7 +3618,7 @@ impl<'a> Emitter<'a> {
                 let b = self.expr(b)?;
                 format!("{}({}, {})", go, a, b)
             }
-            // To an `Int`, checked.
+            // To an integer, checked.
             ("Math", f @ ("floor" | "ceil" | "round" | "trunc"))
                 if self.go_type_at(span)? == GoType::Int =>
             {
@@ -3163,7 +3666,13 @@ impl<'a> Emitter<'a> {
                     "clz32" => "intyClz32",
                     _ => return Err(unsupported(format!("Math.{}", f), span)),
                 };
-                format!("{}({})", go, vals.join(", "))
+                let natural = if matches!(f, "imul" | "clz32") {
+                    GoType::Int
+                } else {
+                    GoType::Float
+                };
+                let want = self.go_type_at(span)?;
+                coerce(format!("{}({})", go, vals.join(", ")), &natural, &want)
             }
             ("performance", "now") if args.is_empty() => "intyNow()".into(),
             ("String", "fromCharCode") if args.len() == 1 => {
@@ -3216,15 +3725,50 @@ impl<'a> Emitter<'a> {
             call.push(')');
             return Ok(call);
         }
+        // A callback takes the elements: its parameter is their place
+        // (the reducer's first, the accumulator, is the result's).
+        if self.collect {
+            match (method, args) {
+                ("map" | "filter" | "forEach" | "some" | "every" | "findIndex", [f]) => {
+                    if let Ok(GoType::Func(ps, _)) = self.type_of(f) {
+                        if let Some(p) = ps.first() {
+                            self.same(p, elem);
+                        }
+                    }
+                }
+                ("reduce", [f, _]) => {
+                    if let (Ok(GoType::Func(ps, r)), Ok(acc)) =
+                        (self.type_of(f), self.go_type_at(span))
+                    {
+                        if let [p, q, ..] = ps.as_slice() {
+                            self.same(p, &acc);
+                            self.same(q, elem);
+                        }
+                        self.same(&r, &acc);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // The methods with a number result give an integer.
+        if matches!(method, "push" | "unshift" | "indexOf" | "findIndex") {
+            if let Ok(want) = self.go_type_at(span) {
+                self.flow(&GoType::Int, &want);
+            }
+        }
+        let int = |e: &mut Self, v: String| -> Result<String> {
+            let want = e.go_type_at(span)?;
+            Ok(coerce(v, &GoType::Int, &want))
+        };
         let mut vs = Vec::new();
         for x in args {
             vs.push(self.expr_as(x, elem)?);
         }
         Ok(match (method, n) {
-            ("push", 1) => format!("intyPush({}, {})", a, vs[0]),
+            ("push", 1) => int(self, format!("intyPush({}, {})", a, vs[0]))?,
             ("pop", 0) => format!("intyPop({})", a),
-            ("unshift", 1) => format!("intyUnshift({}, {})", a, vs[0]),
-            ("indexOf", 1) => format!("intyIndexOf({}, {})", a, vs[0]),
+            ("unshift", 1) => int(self, format!("intyUnshift({}, {})", a, vs[0]))?,
+            ("indexOf", 1) => int(self, format!("intyIndexOf({}, {})", a, vs[0]))?,
             ("includes", 1) => format!("intyIncludes({}, {})", a, vs[0]),
             ("fill", 1) => format!("intyFill({}, {})", a, vs[0]),
             ("reverse", 0) => format!("intyReverse({})", a),
@@ -3259,7 +3803,12 @@ impl<'a> Emitter<'a> {
                     "every" => "intyEvery",
                     _ => "intyFindIndex",
                 };
-                format!("{}({}, {})", helper, a, f)
+                let call = format!("{}({}, {})", helper, a, f);
+                if method == "findIndex" {
+                    int(self, call)?
+                } else {
+                    call
+                }
             }
             ("reduce", 2) => {
                 let f = self.expr(&args[0])?;
@@ -3288,10 +3837,15 @@ impl<'a> Emitter<'a> {
     ) -> Result<String> {
         let s = self.expr(object)?;
         // Numeric arguments as doubles (the helpers' JS semantics), except
-        // where every bound is an `Int`: then the `Int` fast paths.
+        // where every bound is an integer: then the integer fast paths.
         let mut types = Vec::new();
         for x in args {
             types.push(self.type_of(x)?);
+        }
+        if matches!(method, "slice" | "substring" | "charCodeAt") {
+            for t in &types {
+                self.demand(t);
+            }
         }
         let all_int = !args.is_empty() && types.iter().all(|t| *t == GoType::Int);
         let mut vs = Vec::new();
@@ -3303,6 +3857,8 @@ impl<'a> Emitter<'a> {
             });
         }
         let want = self.go_type_at(span)?;
+        // (The methods with a number result give an integer.)
+        self.flow(&GoType::Int, &want);
         if all_int && matches!(method, "slice" | "substring" | "charCodeAt") {
             let mut is = Vec::new();
             for x in args {
@@ -3390,7 +3946,12 @@ impl<'a> Emitter<'a> {
         let GoType::Array(elem) = self.go_type_at(span)? else {
             return Ok(None);
         };
-        let n = self.num_as(len, &GoType::Int)?;
+        let n = if self.type_of(len)? == GoType::Int {
+            self.num_as(len, &GoType::Int)?
+        } else {
+            // A length with a fraction: a RangeError in JavaScript.
+            format!("intyIndex({})", self.num_as(len, &GoType::Float)?)
+        };
         let v = self.expr_as(value, &elem)?;
         Ok(Some(format!("intyFilled({}, {})", n, v)))
     }
@@ -3537,6 +4098,43 @@ impl<'a> Emitter<'a> {
         r?;
         let src = self.expr(&p.source)?;
         let result = self.go_type_at(span)?;
+        // Each callback takes what the step before gives (see
+        // `array_method`).
+        if self.collect {
+            if let Ok(GoType::Array(e)) = self.type_of(&p.source) {
+                let mut x = *e;
+                for st in &p.stages {
+                    let (Stage::Map(f) | Stage::Filter(f)) = st;
+                    if let Ok(GoType::Func(ps, r)) = self.type_of(f) {
+                        if let Some(q) = ps.first() {
+                            self.same(q, &x);
+                        }
+                        if let Stage::Map(_) = st {
+                            x = *r;
+                        }
+                    }
+                }
+                match &p.sink {
+                    Sink::Reduce(f, _) => {
+                        if let Ok(GoType::Func(ps, r)) = self.type_of(f) {
+                            if let [a, b, ..] = ps.as_slice() {
+                                self.same(a, &result);
+                                self.same(b, &x);
+                            }
+                            self.same(&r, &result);
+                        }
+                    }
+                    Sink::ForEach(f) | Sink::Some(f) | Sink::Every(f) | Sink::FindIndex(f) => {
+                        if let Ok(GoType::Func(ps, _)) = self.type_of(f) {
+                            if let Some(q) = ps.first() {
+                                self.same(q, &x);
+                            }
+                        }
+                    }
+                    Sink::Collect(_) => self.same(&result, &GoType::Array(Box::new(x))),
+                }
+            }
+        }
         let n = self.fresh("P");
         for (i, f) in fs.iter().enumerate() {
             body.push_str(&format!("{pad}\t{n}f{i} := {f}\n"));
@@ -3581,6 +4179,9 @@ impl<'a> Emitter<'a> {
                     ));
                 }
             }
+        }
+        if let Sink::FindIndex(_) = &p.sink {
+            self.flow(&GoType::Int, &result);
         }
         let (each, after, ret) = match &p.sink {
             Sink::Reduce(..) => (

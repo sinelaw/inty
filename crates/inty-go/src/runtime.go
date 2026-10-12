@@ -306,7 +306,7 @@ func intySetGrow[T any](a *[]T, j int, v T) []T {
 }
 
 // Typed arrays (Int32Array, Uint8Array, Float64Array) are fixed-length
-// slices of the machine type. A store wraps an Int as JavaScript's
+// slices of the machine type. A store wraps an integer as JavaScript's
 // ToInt32 / ToUint8 do, which is Go's conversion; the helpers keep a
 // constant argument from being converted at compile time, where Go
 // rejects an overflow instead of wrapping it.
@@ -430,14 +430,15 @@ func intySet[T any](a *[]T, j int, v T) {
 
 // ---- Numbers ------------------------------------------------------------
 
-// An inty `Int` is a Go int. JS computes on doubles, which hold every
-// integer up to 2^53 exactly; past that the two would silently disagree,
-// so the operations that can get there (multiplication, and a double
-// becoming an Int: Math.floor and friends) stop the program instead.
+// A number the integer analysis (kinds.rs) finds always integral is a Go
+// int. JS computes on doubles, which hold every integer up to 2^53
+// exactly; past that the two would silently disagree, so the operations
+// that can get there (multiplication, and a double becoming an integer:
+// Math.floor and friends) stop the program instead.
 
 const intyMaxSafe = 1 << 53
 
-// intyToInt is a double known to be an integer (or a trap) as an Int.
+// intyToInt is a double known to be an integer (or a trap) as an int.
 // (NaN fails the comparison too.)
 func intyToInt(f float64) int {
 	if !(f < intyMaxSafe && f > -intyMaxSafe) {
@@ -446,7 +447,30 @@ func intyToInt(f float64) int {
 	return int(f)
 }
 
-// intyIMul is `a * b` on Ints. Small enough to inline: the product as a
+// intyIndex is a number used as an index or a length: a fault unless it
+// is a non-negative integer (JavaScript reads nothing at a fractional or
+// negative index, and throws a RangeError for such a length).
+func intyIndex(f float64) int {
+	if !(f >= 0 && f < intyMaxSafe) || f != math.Trunc(f) {
+		panic("inty: index out of bounds: " + intyNumStr(f))
+	}
+	return int(f)
+}
+
+// intyTypedLen is a typed array's length, JavaScript's ToIndex: the
+// number truncated, NaN as 0, a negative one a RangeError.
+func intyTypedLen(f float64) int {
+	if f != f {
+		return 0
+	}
+	f = math.Trunc(f)
+	if !(f >= 0 && f < intyMaxSafe) {
+		panic("inty: invalid typed array length: " + intyNumStr(f))
+	}
+	return int(f)
+}
+
+// intyIMul is `a * b` on integers. Small enough to inline: the product as a
 // double decides (a product it can't represent exactly is at least 2^53
 // in magnitude, so it's caught).
 func intyIMul(a, b int) int {
@@ -469,7 +493,7 @@ func intyIMulK(a, k, lim int) int {
 }
 
 // intyFloorDiv, intyCeilDiv and intyTruncDiv are Math.floor/ceil/trunc
-// of `a / b` on Ints, computed without doubles. They agree with the
+// of `a / b` on integers, computed without doubles. They agree with the
 // double computation whenever |a|, |b| < 2^53 and b != 0: a quotient
 // that isn't an integer is at least 1/|b| from the nearest one, which is
 // more than half the spacing of doubles at |a/b| (at most |a/b| * 2^-53),
@@ -520,7 +544,7 @@ func intyAbsInt(i int) int {
 	return i
 }
 
-// intyStrSliceI is intyStrSlice with Int bounds.
+// intyStrSliceI is intyStrSlice with integer bounds.
 func intyStrSliceI(s string, a, b int) string {
 	n := len(s)
 	if a < 0 {
@@ -539,7 +563,7 @@ func intyStrSliceI(s string, a, b int) string {
 	return s[a:b]
 }
 
-// intyStrSubstringI is intyStrSubstring with Int bounds.
+// intyStrSubstringI is intyStrSubstring with integer bounds.
 func intyStrSubstringI(s string, a, b int) string {
 	a, b = min(max(a, 0), len(s)), min(max(b, 0), len(s))
 	if a > b {

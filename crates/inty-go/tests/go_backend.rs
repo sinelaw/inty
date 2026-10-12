@@ -162,9 +162,10 @@ fn same_go_types_share_a_specialisation() {
 }
 
 #[test]
-fn ints_and_numbers_get_their_own_specialisations() {
-    // `Int` is a Go int, `Number` a float64: an identity used at both is
-    // two functions, and an `Int` flowing into a `Number` is converted.
+fn integer_and_float_calls_get_their_own_copies() {
+    // A number always an integer is a Go int, any other a float64: an
+    // identity called with both is two functions, and an integer flowing
+    // into a float is converted.
     let code = inty_go::compile(
         "function id(x) { return x; }\n\
          const xs = [1, 2, 3];\n\
@@ -552,7 +553,7 @@ fn switch_on_literal_consts_uses_constant_labels() {
     // The consts stay variables elsewhere (Go folds constant expressions
     // its own way), and a repeated label (legal in JS, not as a Go
     // constant) keeps the variable.
-    let src = "const A = 0;\nconst B = 1;\n/** function f(op: Int) => Int */\nfunction f(op) {\n\
+    let src = "const A = 0;\nconst B = 1;\n/** function f(op: Number) => Number */\nfunction f(op) {\n\
                switch (op) { case A: return 10; case B: return 20; case A: return 30; }\n\
                return 0;\n}\nconsole.log(f(1) + A);";
     let code = inty_go::compile(src).unwrap().code;
@@ -656,7 +657,7 @@ fn a_store_to_an_index_just_accessed_is_plain() {
     // A swap reads both elements first, so neither store can grow the
     // array: plain stores, not the growing form.
     let code = inty_go::compile(
-        "/** function swap(Number[], Int, Int) => Undefined */\n\
+        "/** function swap(Number[], Number, Number) => Undefined */\n\
          function swap(h, i, m) {\n\
            let k = 0;\n\
            while (k < 1) { const t = h[m]; h[m] = h[i]; h[i] = t; k++; }\n\
@@ -673,7 +674,7 @@ fn a_store_to_an_index_just_accessed_is_plain() {
 #[test]
 fn numbers_compute_in_the_type_their_uses_need() {
     // Indices are `int`s; a helper computing a float formula from integer
-    // arguments takes `float64`s (an `Int` argument is a `Number`), rather
+    // arguments takes `float64`s (an integer argument is converted), rather
     // than checked integer products it would only convert.
     let src = "function a(i, j) { return 1 / ((i + j) * (i + j + 1) / 2 + i + 1); }\n\
                function sum(n) { let s = 0; for (let i = 0; i < n; i++) { s += a(i, i + 1); } return s; }\n\
@@ -690,4 +691,37 @@ fn numbers_compute_in_the_type_their_uses_need() {
     );
     assert!(program.contains("func sum(n int) float64"), "{}", program);
     assert!(program.contains("func at(k int) int"), "{}", program);
+}
+
+#[test]
+fn integers_are_found_by_where_values_flow() {
+    // inty has one number type; the backend finds the integers. Indices
+    // and the arrays of them are ints; an array that is given a fraction
+    // is of float64s, and so is what is read from it.
+    let src = "const offsets = [];\nconst weights = [];\n\
+               for (let v = 0; v < 10; v++) { offsets.push(v * 2); weights.push(v / 4); }\n\
+               let total = 0;\n\
+               for (let i = 0; i < offsets.length; i++) { total += weights[offsets[i] % 10]; }\n\
+               const mid = Math.floor(offsets.length / 2);\n\
+               console.log(total + offsets[mid]);";
+    let code = inty_go::compile(src).unwrap().code;
+    let program = code.split("// ---- inty-go runtime").next().unwrap();
+    assert!(program.contains("var offsets *[]int"), "{}", program);
+    assert!(program.contains("var weights *[]float64"), "{}", program);
+    assert!(program.contains("var total float64"), "{}", program);
+    assert!(program.contains("var mid int"), "{}", program);
+    assert!(!program.contains("intyIndex"), "{}", program);
+}
+
+#[test]
+fn a_fractional_index_is_a_fault_and_a_typed_store_wraps() {
+    // An index that may hold a fraction is checked (JavaScript reads
+    // nothing there); an integer typed array stores any number wrapped, as
+    // JavaScript's ToInt32 does.
+    let src = "const xs = [1, 2, 3];\nlet k = 0.5;\nk = k * 2;\nconsole.log(xs[k]);\n\
+               const a = new Int32Array(2);\na[0] = 1.5;\nconsole.log(a[0]);";
+    let code = inty_go::compile(src).unwrap().code;
+    let program = code.split("// ---- inty-go runtime").next().unwrap();
+    assert!(program.contains("intyIndex(k)"), "{}", program);
+    assert!(program.contains("intyToInt32(1.5)"), "{}", program);
 }

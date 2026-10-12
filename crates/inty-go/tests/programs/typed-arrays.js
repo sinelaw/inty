@@ -36,3 +36,13 @@ const maybe = h.length > 10 ? h : null;
 console.log(maybe === null);
 console.log(h === h);
 console.log(typeof h);
+
+// Any number can be stored: an integer array wraps it as ToInt32 does.
+const wrapI32 = new Int32Array(3);
+wrapI32[0] = 1.5;
+wrapI32[1] = -2.7;
+wrapI32[2] = 4294967296 + 5;
+const wrapU8 = new Uint8Array(2);
+wrapU8[0] = 300.9;
+wrapU8[1] = -1;
+console.log(wrapI32[0] + wrapI32[1] + wrapI32[2] + wrapU8[0] + wrapU8[1]);
