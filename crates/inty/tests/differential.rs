@@ -2286,9 +2286,12 @@ impl Gen {
             9 if self.rng.chance(50) => {
                 Minus(b(self.any(d, scope, false)), b(self.any(d, scope, false)))
             }
-            // `*` and `/` want numbers in both; `===` takes anything.
+            // `*` and `/` want numbers in both. (No `===` of anything: of
+            // a function with itself, JavaScript says true, the model
+            // false; the typed generator compares values of one type, not
+            // functions.)
             9 => {
-                let o = [Op2::Times, Op2::Div, Op2::Eq, Op2::Ne][self.rng.below(4)];
+                let o = Op2::NUMERIC[self.rng.below(2)];
                 Bin(
                     o,
                     b(self.any(d, scope, false)),

@@ -68,6 +68,9 @@ open Inty
 #pinEqns Inty.Lit.eval
 #pinEqns Inty.UnOp.eval
 #pinEqns Inty.BinOp.eval
+#pinEqns Inty.BinOp.numeric
+#pinEqns Inty.BinOp.resTy
+#pinEqns Inty.Value.strictEq
 -- What the rules' side conditions are made of.
 #pinEqns Inty.Expr.writes
 #pinEqns Inty.Expr.writesList
@@ -88,7 +91,8 @@ open Inty
 #pinCounts Inty.HasTypeS Inty.LitTy Inty.UnOpTy Inty.BinOpTyS Inty.ObjCase Inty.Expr.IsValue ;
   Inty.run Inty.call Inty.callClosure Inty.getter Inty.own Inty.copyOwn Inty.runArgs
   Inty.runInits Inty.bindC Inty.bindArgs Inty.bindFields Inty.callEnv Inty.loopNext Inty.Value.read
-  Inty.Value.typeString Inty.Lit.eval Inty.UnOp.eval Inty.BinOp.eval Inty.Expr.writes
+  Inty.Value.typeString Inty.Lit.eval Inty.UnOp.eval Inty.BinOp.eval Inty.BinOp.numeric
+  Inty.BinOp.resTy Inty.Value.strictEq Inty.Expr.writes
   Inty.Expr.writesList Inty.Expr.writesCls Inty.Expr.assignsMutable Inty.Expr.assignsMutableList
   Inty.Expr.assignsMutableCls Inty.Expr.jumpsInLoop Inty.Expr.jumpsInLoopList Inty.Value.truthy
   Inty.Annotated Inty.annMode Inty.EntailsS Inty.Ty.whnf Inty.Ty.dataFields Inty.Expr.scoped

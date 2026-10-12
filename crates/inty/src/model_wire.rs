@@ -4,8 +4,8 @@
 //!
 //! [`lower_program`] writes a parsed JavaScript program as one wire line,
 //! or says why it can't: the program uses something the model doesn't
-//! have (an operator other than `+` and `-`, a `for` loop, a class, a
-//! builtin, …), or something whose lowering would change its meaning (a
+//! have (`%`, a bitwise operator, a comparison of strings, a `for` loop,
+//! a class, a builtin, …), or something whose lowering would change its meaning (a
 //! name used before its declaration). The lowering is the inverse of the
 //! differential test's printer (`tests/differential.rs`): a statement list
 //! is a sequence whose value is its last statement's, a declaration binds
@@ -783,11 +783,32 @@ impl Cx {
                         BinOp::EqEqEq => "eq",
                         _ => "ne",
                     };
+                    // The model compares numbers only (inty any two values of
+                    // one type).
+                    let literal = |e: &Expr| {
+                        matches!(
+                            e,
+                            Expr::Lit {
+                                value: Literal::String(_) | Literal::Boolean(_),
+                                ..
+                            }
+                        )
+                    };
+                    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq)
+                        && (literal(left) || literal(right))
+                    {
+                        return unsupported("a comparison of strings or booleans");
+                    }
                     Ok(format!(
                         "({form} {} {})",
                         self.expr(left)?,
                         self.expr(right)?
                     ))
+                }
+                // inty types `a && b` of two types as their union, which the
+                // model's `?:` hasn't: only booleans, both sides.
+                BinOp::And | BinOp::Or if !boolean(left) || !boolean(right) => {
+                    unsupported("`&&` or `||` on what isn't a boolean")
                 }
                 // A test on the left (a boolean): `a && b` is `a ? b : false`,
                 // so `b` sees what `a` takes apart.
@@ -1028,6 +1049,35 @@ fn hoist(stmts: Vec<&Stmt>) -> Vec<&Stmt> {
         out.push(stmts[j]);
     }
     out
+}
+
+/// Whether `e` is a boolean whatever its operands: a test, a comparison,
+/// `!`, a boolean literal, or `&&`/`||` of those.
+fn boolean(e: &Expr) -> bool {
+    match e {
+        Expr::Lit {
+            value: Literal::Boolean(_),
+            ..
+        } => true,
+        Expr::Unary {
+            op: UnaryOp::Not, ..
+        } => true,
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
+            BinOp::Lt
+            | BinOp::LtEq
+            | BinOp::Gt
+            | BinOp::GtEq
+            | BinOp::EqEq
+            | BinOp::NotEq
+            | BinOp::EqEqEq
+            | BinOp::NotEqEq => true,
+            BinOp::And | BinOp::Or => boolean(left) && boolean(right),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// The names a statement declares in its block.
@@ -1416,8 +1466,11 @@ mod tests {
             "(let (num 1 0) (cond (eq (typeof (var 0)) (str s:number)) (minus (var 0) (num 1 0)) (num 0 0)))"
         );
         assert_eq!(
-            lower("const a = 1; const b = 2; a && b;").unwrap(),
-            "(let (num 1 0) (let (num 2 0) (let (var 1) (cond (var 0) (var 1) (var 0)))))"
+            lower("const a = 1; const b = 2; a < b && b < a;").unwrap(),
+            "(let (num 1 0) (let (num 2 0) (let (lt (var 1) (var 0)) (cond (var 0) (lt (var 1) (var 2)) (var 0)))))"
         );
+        // inty types `a && b` of a number as a union.
+        assert!(lower("const a = 1; const b = 2; a && b;").is_err());
+        assert!(lower("\"a\" < \"b\";").is_err());
     }
 }

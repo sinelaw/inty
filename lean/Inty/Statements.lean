@@ -1394,6 +1394,63 @@ example : ∀ (x : BinOp) (x_1 x_2 : Value),
                         (∀ (a b : Float), x = BinOp.ge → x_1 = Value.number a → x_2 = Value.number b → False) →
                           BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
   @BinOp.eval.eq_11
+example : BinOp.numeric BinOp.minus = true :=
+  @BinOp.numeric.eq_1
+example : BinOp.numeric BinOp.times = true :=
+  @BinOp.numeric.eq_2
+example : BinOp.numeric BinOp.div = true :=
+  @BinOp.numeric.eq_3
+example : BinOp.numeric BinOp.lt = true :=
+  @BinOp.numeric.eq_4
+example : BinOp.numeric BinOp.le = true :=
+  @BinOp.numeric.eq_5
+example : BinOp.numeric BinOp.gt = true :=
+  @BinOp.numeric.eq_6
+example : BinOp.numeric BinOp.ge = true :=
+  @BinOp.numeric.eq_7
+example : BinOp.numeric BinOp.plus = false :=
+  @BinOp.numeric.eq_8
+example : ∀ (negated : Bool), BinOp.numeric (BinOp.strictEq negated) = false :=
+  @BinOp.numeric.eq_9
+example : BinOp.resTy BinOp.lt = Ty.boolean :=
+  @BinOp.resTy.eq_1
+example : BinOp.resTy BinOp.le = Ty.boolean :=
+  @BinOp.resTy.eq_2
+example : BinOp.resTy BinOp.gt = Ty.boolean :=
+  @BinOp.resTy.eq_3
+example : BinOp.resTy BinOp.ge = Ty.boolean :=
+  @BinOp.resTy.eq_4
+example : ∀ (negated : Bool), BinOp.resTy (BinOp.strictEq negated) = Ty.boolean :=
+  @BinOp.resTy.eq_5
+example : ∀ (x : BinOp),
+      (x = BinOp.lt → False) →
+        (x = BinOp.le → False) →
+          (x = BinOp.gt → False) →
+            (x = BinOp.ge → False) → (∀ (negated : Bool), x = BinOp.strictEq negated → False) → BinOp.resTy x = Ty.number :=
+  @BinOp.resTy.eq_6
+example : ∀ (a b : Float), Value.strictEq (Value.number a) (Value.number b) = (a == b) :=
+  @Value.strictEq.eq_1
+example : ∀ (a b : String), Value.strictEq (Value.string a) (Value.string b) = (a == b) :=
+  @Value.strictEq.eq_2
+example : ∀ (a b : Bool), Value.strictEq (Value.boolean a) (Value.boolean b) = (a == b) :=
+  @Value.strictEq.eq_3
+example : Value.strictEq Value.undefined Value.undefined = true :=
+  @Value.strictEq.eq_4
+example : Value.strictEq Value.null Value.null = true :=
+  @Value.strictEq.eq_5
+example : ∀ (a b : Nat), Value.strictEq (Value.obj a) (Value.obj b) = (a == b) :=
+  @Value.strictEq.eq_6
+example : ∀ (a b : Nat), Value.strictEq (Value.arr a) (Value.arr b) = (a == b) :=
+  @Value.strictEq.eq_7
+example : ∀ (x x_1 : Value),
+      (∀ (a b : Float), x = Value.number a → x_1 = Value.number b → False) →
+        (∀ (a b : String), x = Value.string a → x_1 = Value.string b → False) →
+          (∀ (a b : Bool), x = Value.boolean a → x_1 = Value.boolean b → False) →
+            (x = Value.undefined → x_1 = Value.undefined → False) →
+              (x = Value.null → x_1 = Value.null → False) →
+                (∀ (a b : Nat), x = Value.obj a → x_1 = Value.obj b → False) →
+                  (∀ (a b : Nat), x = Value.arr a → x_1 = Value.arr b → False) → Value.strictEq x x_1 = false :=
+  @Value.strictEq.eq_8
 example : ∀ (i : Nat) (l : Lit), Expr.writes i (Inty.Expr.lit l) = false :=
   @Expr.writes.eq_1
 example : ∀ (i i_1 : Nat), Expr.writes i (Expr.var i_1) = false :=
@@ -1766,6 +1823,9 @@ example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
 #equations Lit.eval 5
 #equations UnOp.eval 4
 #equations BinOp.eval 11
+#equations BinOp.numeric 9
+#equations BinOp.resTy 6
+#equations Value.strictEq 8
 #equations Expr.writes 30
 #equations Expr.writesList 2
 #equations Expr.writesCls 3

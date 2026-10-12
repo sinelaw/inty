@@ -369,7 +369,9 @@ These choices are meant to hold up as the calculus grows.
   `this` is its object, a constructor's `newTarget`); and a `break` in a
   function called from a loop ends that loop, which the scope check rules
   out; and a function has no identity, so `f === f` is false (typing
-  allows it: `===` takes any two values). The differential test keeps to
+  allows it: `===` takes any two values; the differential generator
+compares only values of one type, never functions). The differential
+test keeps to
   programs where none of these arises.
 
 ## Adding a feature
@@ -410,14 +412,16 @@ printer: a statement list is a sequence, a declaration binds the rest of
 its block (function declarations moved up as JavaScript hoists them), a
 function's body ends in what it returns, and a test of a binding for
 nothing, of its `typeof` or of its tag field is `unwrap`, `typetest` or
-`casetag`. A program is left out when it uses what the model lacks (an
-operator other than `+` and `-`, a builtin, a class, a module, a loop
-other than `while`, `?.`, `??`) or whose lowering would change its
-meaning (a name used before its declaration, `let x;` without an
-initialiser, a `let` or a parameter taken apart by a test and assigned, a
-test of `typeof` or of a tag on what no annotation declares a sum, a
-getter or a method beside a spread). Of the programs the unit tests check,
-954 are in the fragment (some tests generate theirs at random, so the
+`casetag` (on a binding an annotation declares a sum or a variant; on
+another, a plain `?:` on `===`); `&&` and `||` of booleans are `?:`. A
+program is left out when it uses what the model lacks (`%`, a bitwise
+operator, a comparison of strings or booleans, `&&` or `||` on what isn't
+a boolean, whose result inty types as a union, a builtin, a class, a
+module, a loop other than `while`, `?.`, `??`) or whose lowering would
+change its meaning (a name used before its declaration, `let x;` without
+an initialiser, a `let` or a parameter taken apart by a test and
+assigned, a getter or a method beside a spread). Of the programs the unit tests check,
+949 are in the fragment (some tests generate theirs at random, so the
 corpus keeps each program it once recorded); inty and the model agree on
 accepting each but eight, listed with their reasons in
 `tests/model_corpus/known.txt`:
