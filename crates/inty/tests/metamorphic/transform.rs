@@ -281,12 +281,28 @@ pub fn t_wrap_expr_statements(p: &Program) -> (Program, Comparison) {
 }
 
 fn wrap_in_iife(expr: Expr, s: Span) -> Expr {
-    // (function () { return <expr>; })()
-    let body = Stmt::Block {
-        body: vec![Stmt::Return {
+    // (function () { return <expr>; })(), or, for a statement whose value
+    // inty discards (`?:`, `??`, a sequence: their branches aren't joined,
+    // see `infer_discarded`), (function () { <expr>; })(): returned, its
+    // value would be joined, and branches of two types (`c ? [] : 1;`, a
+    // fine statement) a type error.
+    let discarded = matches!(
+        expr,
+        Expr::Conditional { .. } | Expr::NullishCoalesce { .. } | Expr::Sequence { .. }
+    );
+    let stmt = if discarded {
+        Stmt::Expr {
+            expression: expr,
+            span: s,
+        }
+    } else {
+        Stmt::Return {
             argument: Some(expr),
             span: s,
-        }],
+        }
+    };
+    let body = Stmt::Block {
+        body: vec![stmt],
         span: s,
     };
     let func = Expr::Function {
