@@ -1,7 +1,7 @@
-Error: Property 'length' not found in type Int
+Error: Property 'length' not found in type Number
    ╭─[ main.js:2:28 ]
    │
  2 │ function count(n) { return n.length; }
    │                            ────┬───  
-   │                                ╰───── Property 'length' not found in type Int
+   │                                ╰───── Property 'length' not found in type Number
 ───╯

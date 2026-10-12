@@ -23,5 +23,5 @@ const sampleRate;
 /** const currentTime: Number */
 const currentTime;
 
-/** const currentFrame: Int */
+/** const currentFrame: Number */
 const currentFrame;

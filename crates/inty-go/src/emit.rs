@@ -399,9 +399,6 @@ struct FuncInfo {
     /// recorded instantiation, a recursive one, inherits the choice for
     /// them.
     scheme_vars: Vec<TVarName>,
-    /// Those a specialisation takes as `Number` even where its use passes
-    /// `Int`s (`InferState::float_preferred_vars`).
-    float_vars: HashSet<TVarName>,
     /// The mapping in force where it was declared (an enclosing
     /// function's specialisation); specialisations extend it.
     outer: Rc<Mapping>,
@@ -1083,10 +1080,6 @@ impl<'a> Emitter<'a> {
             .get_decl_scheme(Span::new(scheme_at, scheme_at))
             .cloned();
         let scheme_vars = scheme.as_ref().map(|s| s.vars.clone()).unwrap_or_default();
-        let float_vars = scheme
-            .as_ref()
-            .map(|s| self.state.float_preferred_vars(s))
-            .unwrap_or_default();
         let ty = self.raw_type(span)?;
         let mut qvars: Vec<TVarName> = ty
             .free_vars()
@@ -1101,7 +1094,6 @@ impl<'a> Emitter<'a> {
             span,
             qvars,
             scheme_vars,
-            float_vars,
             outer: self.mapping(),
             block,
             specs: Vec::new(),
@@ -1158,11 +1150,7 @@ impl<'a> Emitter<'a> {
                 Some((_, t)) => t.clone(),
                 None => Type::Var(v.clone()),
             };
-            let mut c = canonical(&self.in_context(&t));
-            if c == Type::Int && self.funcs[fid].float_vars.contains(v) {
-                c = Type::Number;
-            }
-            concrete.push(c);
+            concrete.push(canonical(&self.in_context(&t)));
         }
         let key = format!("{}", Type::Tuple(concrete.clone()));
         if let Some(spec) = self.funcs[fid].specs.iter().find(|s| s.key == key) {

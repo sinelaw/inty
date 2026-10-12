@@ -465,11 +465,7 @@ fn refine_type(ty: &Type, narrowing: &Narrowing, lang: Language) -> Type {
             // (e.g. a String narrowed by `=== "a"` becomes `Literal("a")`).
             match narrowing {
                 Narrowing::Is(Type::Literal(lit))
-                    if matches!(ty, Type::String | Type::Number | Type::Boolean)
-                        || matches!(
-                            (ty, lit),
-                            (Type::Int, LitValue::Number(n)) if crate::types::is_safe_int(*n)
-                        ) =>
+                    if matches!(ty, Type::String | Type::Number | Type::Boolean) =>
                 {
                     Type::Literal(lit.clone())
                 }
@@ -517,7 +513,7 @@ fn py_bool_int_equal(ty: &Type, single: &Type) -> bool {
     let number_like = |t: &Type| {
         matches!(
             t,
-            Type::Int | Type::Number | Type::Literal(LitValue::Number(_))
+            Type::Number | Type::Literal(LitValue::Number(_))
         )
     };
     match single {
@@ -532,7 +528,6 @@ fn is_primitive(ty: &Type) -> bool {
     matches!(
         ty,
         Type::Number
-            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Null
@@ -624,7 +619,7 @@ fn brand_definitely_matches(ty: &Type, id: TypeId) -> bool {
 /// True if a value of type `ty` *could* have `typeof` equal to `name`.
 fn typeof_matches(ty: &Type, name: &str) -> bool {
     match (ty, name) {
-        (Type::Number | Type::Int, "number") => true,
+        (Type::Number, "number") => true,
         (Type::String, "string") => true,
         (Type::Boolean, "boolean") => true,
         (Type::Undefined, "undefined") => true,
@@ -652,7 +647,7 @@ fn typeof_matches(ty: &Type, name: &str) -> bool {
 /// True if a value of type `ty` *must* have `typeof` equal to `name`.
 fn typeof_definitely_matches(ty: &Type, name: &str) -> bool {
     match (ty, name) {
-        (Type::Number | Type::Int, "number") => true,
+        (Type::Number, "number") => true,
         (Type::String, "string") => true,
         (Type::Boolean, "boolean") => true,
         (Type::Undefined, "undefined") => true,
@@ -674,11 +669,6 @@ fn value_compatible_with_literal(ty: &Type, lit: &LitValue) -> bool {
         Type::Literal(other) => other == lit,
         Type::String => matches!(lit, LitValue::String(_)),
         Type::Number => matches!(lit, LitValue::Number(_)),
-        // An `Int` has no fractional part, but may be past 2^53 or not
-        // finite (`Math.floor(1 / 0)`).
-        Type::Int => {
-            matches!(lit, LitValue::Number(n) if !(n.is_finite() && n.fract() != 0.0))
-        }
         Type::Boolean => matches!(lit, LitValue::Bool(_)),
         // Unknown/abstract types are compatible — we can't rule them out.
         Type::Var(_) | Type::Named(_, _) | Type::Union(_) | Type::Maybe(..) | Type::Error => true,

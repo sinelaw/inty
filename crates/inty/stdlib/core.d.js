@@ -25,7 +25,7 @@
     } */
 const console;
 
-/** const Math: {PI: Number, E: Number, LN2: Number, LN10: Number, LOG2E: Number, LOG10E: Number, SQRT2: Number, abs: <a> where Num a => (a) => a, floor: (Number) => Int, ceil: (Number) => Int, round: (Number) => Int, trunc: (Number) => Int, sign: (Number) => Number, sqrt: (Number) => Number, cbrt: (Number) => Number, pow: (Number, Number) => Number, min: <a, b, c> where Arith a b c => (a, b) => c, max: <d, e, f> where Arith d e f => (d, e) => f, hypot: (Number, Number) => Number, log: (Number) => Number, log2: (Number) => Number, log10: (Number) => Number, exp: (Number) => Number, expm1: (Number) => Number, log1p: (Number) => Number, sin: (Number) => Number, cos: (Number) => Number, tan: (Number) => Number, asin: (Number) => Number, acos: (Number) => Number, atan: (Number) => Number, atan2: (Number, Number) => Number, sinh: (Number) => Number, cosh: (Number) => Number, tanh: (Number) => Number, random: () => Number, imul: (Number, Number) => Int, fround: (Number) => Number, clz32: (Number) => Int} */
+/** const Math: {PI: Number, E: Number, LN2: Number, LN10: Number, LOG2E: Number, LOG10E: Number, SQRT2: Number, abs: (Number) => Number, floor: (Number) => Number, ceil: (Number) => Number, round: (Number) => Number, trunc: (Number) => Number, sign: (Number) => Number, sqrt: (Number) => Number, cbrt: (Number) => Number, pow: (Number, Number) => Number, min: (Number, Number) => Number, max: (Number, Number) => Number, hypot: (Number, Number) => Number, log: (Number) => Number, log2: (Number) => Number, log10: (Number) => Number, exp: (Number) => Number, expm1: (Number) => Number, log1p: (Number) => Number, sin: (Number) => Number, cos: (Number) => Number, tan: (Number) => Number, asin: (Number) => Number, acos: (Number) => Number, atan: (Number) => Number, atan2: (Number, Number) => Number, sinh: (Number) => Number, cosh: (Number) => Number, tanh: (Number) => Number, random: () => Number, imul: (Number, Number) => Number, fround: (Number) => Number, clz32: (Number) => Number} */
 const Math;
 
 // High-resolution monotonic clock (milliseconds), as in browsers and Node.
@@ -65,41 +65,41 @@ const Object;
 // A stored `const h = new Array(n)` has one element type, like any
 // other binding of a call's result (the value restriction).
 /** const Array: <a, b, c, d>{
-        (Int) => {length: Int, fill: (c) => c[]},
+        (Number) => {length: Number, fill: (c) => c[]},
         isArray: (a) => Boolean,
-        from: (a, mapFn?: (d, Int) => b) => b[],
+        from: (a, mapFn?: (d, Number) => b) => b[],
         of: (a) => a[]
     } */
 const Array;
 
 // Raw binary data, as `fetch`, `WebSocket` and WebAssembly memory hand
 // it out; read and write it through a typed-array view.
-/** type ArrayBuffer = {byteLength: Int, slice: (begin: Int, end?: Int) => ArrayBuffer} */
-/** const ArrayBuffer: (Int) => ArrayBuffer */
+/** type ArrayBuffer = {byteLength: Number, slice: (begin: Number, end?: Number) => ArrayBuffer} */
+/** const ArrayBuffer: (Number) => ArrayBuffer */
 const ArrayBuffer;
 
 // Typed arrays: fixed-length arrays of one machine number type. An
-// integer array's elements are `Int`s, and a store must be one (see
-// `TypedArrayKind::element`). A length makes a zeroed array; `from`
-// copies an ordinary array. (A view of an `ArrayBuffer`,
+// integer array stores a number as JavaScript does, wrapping it to its
+// bits (see `TypedArrayKind::element`). A length makes a zeroed array;
+// `from` copies an ordinary array. (A view of an `ArrayBuffer`,
 // `new Float32Array(buffer, offset, length)`, would make the argument
-// `Int | ArrayBuffer`, which an unannotated argument can't pick between;
+// `Number | ArrayBuffer`, which an unannotated argument can't pick between;
 // declare such a view in a typed FFI module — docs/patterns.md.)
-/** const Int32Array: {(Int) => Int32Array, from: (Int[]) => Int32Array} */
+/** const Int32Array: {(Number) => Int32Array, from: (Number[]) => Int32Array} */
 const Int32Array;
-/** const Uint8Array: {(Int) => Uint8Array, from: (Int[]) => Uint8Array} */
+/** const Uint8Array: {(Number) => Uint8Array, from: (Number[]) => Uint8Array} */
 const Uint8Array;
-/** const Float32Array: {(Int) => Float32Array, from: (Number[]) => Float32Array} */
+/** const Float32Array: {(Number) => Float32Array, from: (Number[]) => Float32Array} */
 const Float32Array;
-/** const Float64Array: {(Int) => Float64Array, from: (Number[]) => Float64Array} */
+/** const Float64Array: {(Number) => Float64Array, from: (Number[]) => Float64Array} */
 const Float64Array;
 
 // WebAssembly. A module's exports are whatever the program says they
 // are (`E`): annotate the result of `instantiate` where it is used.
-/** type WebAssemblyMemory = {buffer: ArrayBuffer, grow: (Int) => Int} */
+/** type WebAssemblyMemory = {buffer: ArrayBuffer, grow: (Number) => Number} */
 /** const WebAssembly: <E, I>{
         instantiate: (bytes: ArrayBuffer | Uint8Array, imports?: I) => Promise<{instance: {exports: E}, module: {}}>,
-        Memory: (descriptor: {initial: Int, maximum?: Int}) => WebAssemblyMemory,
+        Memory: (descriptor: {initial: Number, maximum?: Number}) => WebAssemblyMemory,
         validate: (ArrayBuffer | Uint8Array) => Boolean
     } */
 const WebAssembly;
@@ -134,8 +134,8 @@ const String;
         isInteger: (Number) => Boolean,
         isFinite: (Number) => Boolean,
         isNaN: (Number) => Boolean,
-        MAX_SAFE_INTEGER: Int,
-        MIN_SAFE_INTEGER: Int,
+        MAX_SAFE_INTEGER: Number,
+        MIN_SAFE_INTEGER: Number,
         EPSILON: Number,
         MAX_VALUE: Number,
         MIN_VALUE: Number
@@ -258,7 +258,7 @@ const RegExp;
         delete: (K) => Boolean,
         clear: () => Undefined,
         forEach: ((V, K) => Undefined) => Undefined,
-        size: Int
+        size: Number
     } */
 /** type Set<T> = {
         add: (T) => Undefined,
@@ -266,7 +266,7 @@ const RegExp;
         delete: (T) => Boolean,
         clear: () => Undefined,
         forEach: ((T) => Undefined) => Undefined,
-        size: Int
+        size: Number
     } */
 /** const Map: <K, V>() => {
         get: (K) => V,
@@ -275,7 +275,7 @@ const RegExp;
         delete: (K) => Boolean,
         clear: () => Undefined,
         forEach: ((V, K) => Undefined) => Undefined,
-        size: Int
+        size: Number
     } */
 const Map;
 
@@ -285,7 +285,7 @@ const Map;
         delete: (T) => Boolean,
         clear: () => Undefined,
         forEach: ((T) => Undefined) => Undefined,
-        size: Int
+        size: Number
     } */
 const Set;
 
