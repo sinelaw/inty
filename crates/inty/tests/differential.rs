@@ -1593,11 +1593,13 @@ impl Gen {
             }
             1 => Some(Throw(b(self.any(d, scope, false)))),
             2 => {
-                let first = if self.rng.chance(50) {
-                    self.any(d, scope, true)
-                } else {
-                    let s = self.ty(1);
-                    self.typed(&s, d, scope, true)
+                let first = match self.rng.below(5) {
+                    0 | 1 => self.any(d, scope, true),
+                    2 | 3 => {
+                        let s = self.ty(1);
+                        self.typed(&s, d, scope, true)
+                    }
+                    _ => self.dropped(d, scope),
                 };
                 Some(Seq(b(first), b(self.typed(t, d, scope, true))))
             }
@@ -1628,11 +1630,34 @@ impl Gen {
             }
             8 => {
                 let body = self.typed(t, d, scope, true);
-                let s = self.ty(1);
-                let fin = self.typed(&s, d, scope, true);
+                let fin = if self.rng.chance(25) {
+                    self.dropped(d, scope)
+                } else {
+                    let s = self.ty(1);
+                    self.typed(&s, d, scope, true)
+                };
                 Some(TryFinally(b(body), b(fin)))
             }
             _ => None,
+        }
+    }
+
+    /// A statement whose value is dropped (the model checks it against
+    /// `unknown`): an `if` or a `?:`, or a `try`/`catch`, whose branches
+    /// have types of their own.
+    fn dropped(&mut self, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let (s1, s2) = (self.ty(1), self.ty(1));
+        if self.rng.chance(60) {
+            let c = self.any(d, scope, false);
+            let t = self.typed(&s1, d, scope, true);
+            let e = self.typed(&s2, d, scope, true);
+            Cond(b(c), b(t), b(e))
+        } else {
+            let body = self.typed(&s1, d, scope, true);
+            scope.push(Binding::Unknown);
+            let handler = self.typed(&s2, d, scope, true);
+            scope.pop();
+            TryCatch(b(body), b(handler))
         }
     }
 
@@ -1644,6 +1669,8 @@ impl Gen {
         *self.loops.last_mut().unwrap() += 1;
         let body = if any {
             self.any(d, scope, true)
+        } else if self.rng.chance(25) {
+            self.dropped(d, scope)
         } else {
             let s = self.ty(1);
             self.typed(&s, d, scope, true)

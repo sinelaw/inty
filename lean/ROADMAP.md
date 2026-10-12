@@ -141,13 +141,23 @@ check that they are in a loop. Still to do:
 - `switch` comes with phase 7: its cases match by `===`, which compares
   functions by identity, and with the narrowing and exhaustiveness checks
   of a `switch`.
-- **Statements apart from expressions.** The model treats a statement as an
-  expression with a value, as a JavaScript program's completion value is.
-  inty types statements without one: `if (c) { 1; } else { "a"; }` and the
-  same `try`/`catch` are accepted, where the model wants both branches of
-  one type. The differential test generates only the programs both agree
-  on; the model needs a separate statement judgement, whose "value" is
-  only what `return` returns.
+- **Statements apart from expressions.** Done: a statement's value is
+  dropped. The model still treats a statement as an expression with a
+  value, as a JavaScript program's completion value is, but checks an
+  expression whose value nothing uses (the first part of a sequence, a
+  loop's body, a `finally` block) against `unknown`, the type of every
+  value, by a rule that drops the synthesised type (`HasTypeS.drop`).
+  Check mode pushes `unknown` into an `if`'s or a `try`'s branches, so
+  `if (c) { 1; } else { "a"; }` is typed as inty types it. Soundness,
+  inference (`checkEx` drops a type checked against `unknown`) and its
+  completeness are proved. inty matches: an expression statement's value
+  is dropped too (`infer_discarded`), so `c ? 1 : "a";` is a statement
+  whose branches needn't agree, but the program's last statement, if it is
+  an expression statement, still has one type (an approximation of
+  JavaScript's completion value, which a trailing declaration or a final
+  `if` or `try` would pass through; the CLI never uses it). The
+  differential generator makes
+  such statements, in sequences, loop bodies and `finally` blocks.
 
 - **A heap, as `dynamics` has.** Every binding is a cell: a `const`,
   a `let`, a parameter. `run` threads the heap beside the clock, and a
@@ -305,7 +315,6 @@ touching the generic proofs.
   with its exhaustiveness check. The semantic relation handles it as
   "Revisiting Soundness for Occurrence Typing, Semantically" (arXiv
   2609.16299) does.
-- Statements apart from expressions (from phase 2).
 
 ### 6. Recursive types, methods and classes
 

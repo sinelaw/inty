@@ -168,6 +168,7 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style, with a conversion rule between equal types) | what `src/infer` implements |
 | `Annotated`, `HasTypeS.letPoly`, `Con.rigid` (an annotation: a type without variables, or a polymorphic scheme whose variables are rigid constants in the initialiser) | `infer_stmt_var`, `check_polymorphic_annotation` in `src/infer/features/bindings.rs` (skolems, `skolemize`, and the escape check) |
+| `HasTypeS.drop` (a statement's value is dropped: an expression nothing uses the value of is checked against `unknown`) | `infer_discarded` in `src/infer/features/control.rs`; `infer_stmt_if` and `try` don't join their branches |
 | `Expr.IsValue` (the value restriction), `Expr.writes` (a `let` that is assigned isn't generalised) | `is_syntactic_value`, `src/infer/features/bindings.rs`; `Resolution::written_at`, `src/ast/resolve.rs` |
 | `Expr.scoped`: `assignsMutable` (no assignment to a `const`), `jumpsInLoop` (`break` and `continue` only in a loop) | `check_assignment_target`; the parser |
 | `UnOpTy`, `BinOpTy` (one constructor per operator rule) | the operator catalog, `src/operators` |
@@ -425,7 +426,7 @@ disagreements in typing all fall into features the model lacks:
 | `Int` and `Number` under a function type: `(a) => Int` vs `(b) => Number` | rejects (`Int ≤ Number` holds for values only) | accepts | 4 |
 | An index that is a `Number`: `xs[n - 0.5]` | rejects (an index is an `Int`) | accepts (a fractional index is out of bounds, a fault) | 4 |
 | A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
-| A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 2 (statements apart from expressions) |
+| A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 5 (`never`) |
 
 The nullable join is gone from both: inty now has the model's sums
 (`T | Null` is `Nullable T`, made by an annotation, taken apart by `??`

@@ -82,6 +82,11 @@ fn comparison_ops() {
     assert_bool("1 <= 1", true);
     assert_bool("1 >= 2", false);
     assert_bool("1 == 1", true);
+    // `null` and `undefined` are loosely equal: `x != null` tests for both.
+    assert_bool("(void 0) == null", true);
+    assert_bool("(void 0) != null", false);
+    assert_bool("null != (void 0)", false);
+    assert_bool("(void 0) === null", false);
     assert_bool("1 != 2", true);
     assert_bool("1 === 1", true);
     assert_bool("1 !== 2", true);

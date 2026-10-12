@@ -703,11 +703,28 @@ impl InferState {
                             .map(|(recv, name, _)| (self.zonk(recv), name.to_string()))
                     })
                     .collect();
+                // A receiver that `+` or arithmetic also constrains is a
+                // number or a string, never an object: its reads stay on
+                // the variable, as the Lean model leaves them.
+                let operands: Vec<Type> = deferred
+                    .iter()
+                    .filter(|c| matches!(c.pred.class, ClassName::Plus | ClassName::Arith))
+                    .flat_map(|c| c.pred.types.clone())
+                    .collect();
+                let operands: Vec<Type> = operands.iter().map(|t| self.zonk(t)).collect();
                 let mut defaulted = false;
                 let mut rest = Vec::new();
                 let mut seen: Vec<(Type, String)> = Vec::new();
                 for (c, key) in deferred.into_iter().zip(keys) {
                     match key {
+                        // (Not one an importing module still sees, whose
+                        // uses decide it: left here it would be dropped.)
+                        Some(key)
+                            if operands.contains(&key.0)
+                                && !matches!(&key.0, Type::Var(v) if keep.contains(v)) =>
+                        {
+                            rest.push(c)
+                        }
                         Some(key) => {
                             if !seen.contains(&key) {
                                 seen.push(key);

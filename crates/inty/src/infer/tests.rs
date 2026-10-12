@@ -2362,6 +2362,29 @@ fn polymorphic_annotation_checks_initializer_rigidly() {
 }
 
 #[test]
+fn statement_values_are_dropped() {
+    // A statement's value is dropped (the Lean model's `HasTypeS.drop`):
+    // the branches of a `?:` or `??` in an expression statement needn't
+    // have one type, but the program's last statement, its completion
+    // value, still has one.
+    let ok = "const c = true; (c ? 1 : \"a\"); 2;";
+    assert!(infer_program_via_program(ok).is_ok());
+    let in_loop = "let c = true; while (c) { c ? 1 : \"a\"; c = false; } 2;";
+    assert!(infer_program_via_program(in_loop).is_ok());
+    let last = "const c = true; (c ? 1 : \"a\");";
+    assert!(infer_program_via_program(last).is_err());
+}
+
+#[test]
+fn reads_of_an_operand_of_plus_stay_on_the_variable() {
+    // A receiver `+` constrains is a number or a string: the end of the
+    // program doesn't default its property reads to an object's fields.
+    let src = "(function (x) { return (x + x).length; });";
+    let (_, _, mut state) = infer_program_via_program(src).unwrap();
+    assert!(state.resolve_constraints().is_ok());
+}
+
+#[test]
 fn spread_of_a_field_stored_back() {
     // `{...x}` of an open row shares the operand's tail; its call signature
     // is absent as the operand's is, so storing it back unifies without a

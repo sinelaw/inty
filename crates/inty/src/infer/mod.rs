@@ -793,7 +793,15 @@ impl InferState {
             let timed = self
                 .timing_top_level()
                 .then(|| (std::time::Instant::now(), self.timing_nested));
-            let checked = self.infer_stmt(&current_env, stmt);
+            // A statement's value is dropped, but the program's last
+            // one, its completion value.
+            let program_value = self.stmt_list_depth == 1 && i + 1 == stmts.len();
+            let checked = match stmt {
+                Stmt::Expr { expression, .. } if !program_value => self
+                    .infer_discarded(&current_env, expression)
+                    .map(|ty| (ty, current_env.clone())),
+                _ => self.infer_stmt(&current_env, stmt),
+            };
             if let Some((started, nested)) = timed {
                 let time = started
                     .elapsed()

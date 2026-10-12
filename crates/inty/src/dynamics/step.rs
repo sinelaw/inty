@@ -1198,8 +1198,10 @@ fn apply_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, Stuck> {
         Gt => cmp_op(l, r, ">", |o| o == std::cmp::Ordering::Greater),
         LtEq => cmp_op(l, r, "<=", |o| o != std::cmp::Ordering::Greater),
         GtEq => cmp_op(l, r, ">=", |o| o != std::cmp::Ordering::Less),
-        EqEq | EqEqEq => Ok(Value::Boolean(strict_equal(l, r))),
-        NotEq | NotEqEq => Ok(Value::Boolean(!strict_equal(l, r))),
+        EqEqEq => Ok(Value::Boolean(strict_equal(l, r))),
+        NotEqEq => Ok(Value::Boolean(!strict_equal(l, r))),
+        EqEq => Ok(Value::Boolean(loose_equal(l, r))),
+        NotEq => Ok(Value::Boolean(!loose_equal(l, r))),
         And | Or => unreachable!("short-circuit handled in eval_expr"),
         In | Instanceof => Err(Stuck::NotImplemented("in / instanceof")),
     }
@@ -1267,6 +1269,14 @@ fn strict_equal(l: &Value, r: &Value) -> bool {
         (Value::Object(a), Value::Object(b)) => a == b,
         _ => false,
     }
+}
+
+/// `==`: as `===`, except that `null` and `undefined` are equal to each
+/// other (`x != null` tests for both). Its coercions between other types
+/// aren't modelled.
+fn loose_equal(l: &Value, r: &Value) -> bool {
+    let nothing = |v: &Value| matches!(v, Value::Null | Value::Undefined);
+    strict_equal(l, r) || (nothing(l) && nothing(r))
 }
 
 fn value_to_string(v: &Value) -> String {
