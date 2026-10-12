@@ -42,12 +42,14 @@ Paths like `src/infer` are relative to `crates/inty`.
    and examples, beside the generated programs. Node, and later CPython and
    Lua, check the semantics. (Done for typing on the unit tests' programs
    in the model's fragment, 1242 of them: `inty::model_wire`,
-   `tests/model_corpus.rs`. Not yet: the examples, which use what the
-   model lacks, and running the corpus in Node.)
+   `tests/model_corpus.rs`, which also compares their types and runs them
+   in `dynamics`, the model and Node. Not yet: the examples, which use what
+   the model lacks, and classes, which the corpus sees lowered.)
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
    inference sound and complete, for everything modelled so far (one
    exception, stated where it arises: completeness for polymorphic
-   annotations, which needs implication constraints); the axiom
+   annotations holds where no rigid variable escapes, `Expr.PolyOK`, and
+   beyond that needs implication constraints); the axiom
    audit and pinned statements updated; the differential test extended to
    the new syntax.
 
@@ -391,7 +393,7 @@ touching the generic proofs.
   annotation and `.d.js` type syntax; optional parameters (presence on
   function parameters, `types::FuncParam`). Done, each with soundness
   and inference sound and complete (but polymorphic annotations: sound,
-  and complete only without them):
+  and complete where no rigid variable escapes):
   - a binding annotated with a type without variables
     (`/** const x: Number */`);
   - check mode (`HasType`'s return and expression modes): an annotation

@@ -2,8 +2,9 @@
 
 A machine-checked model of inty's type system, in Lean 4 (core library only,
 no Mathlib). It covers a small core calculus, with let-polymorphism under the
-value restriction, type schemes that carry class constraints (inty's
-`<a> where Plus a => (a, a) => a`), a heap with `let` and assignment,
+value restriction, type schemes that carry class constraints (the ones
+inference generalises, with what inty prints as `<a> where Plus a => (a, a)
+=> a`; an annotation's scheme carries none, `HasTypeS.letPoly`), a heap with `let` and assignment,
 loops, `break`, `continue` and `try`, objects with row-polymorphic record
 types and property constraints (`a has {name: b}`), method calls, methods
 written `m() {…}` and the classes inty lowers to them, equi-recursive
@@ -24,6 +25,31 @@ pins the version.
 
 ## What is proved
 
+| Claim | Theorem | File |
+|---|---|---|
+| A typed program's result is good for its type, at every clock | `eval_sound` | `Soundness.lean` |
+| A closed typed program never gets stuck | `never_stuck` | `Soundness.lean` |
+| ... with native builtins in scope | `never_stuck_with_builtins` | `Builtins.lean` |
+| A program making no call and running no loop never runs out of clock | `eval_noClock` | `NoTimeout.lean` |
+| More clock doesn't change a finished result | `run_mono` | `Clock.lean` |
+| Typing is closed under type substitution | `HasTypeS.subst` | `TypeSubst.lean` |
+| ... under instantiating rigid variables | `HasTypeS.rsub` | `Rigid.lean` |
+| ... under adding labels the program doesn't use | `HasType.extLabels` | `LabelWeaken.lean` |
+| Unification is most general up to equal types | `unify_mgu` | `Unify.lean` |
+| What inference finds is a typing | `inferProgram_sound`, `inferIn_sound` | `InferSound.lean` |
+| A program inference accepts never gets stuck | `inferProgram_never_stuck` | `InferSound.lean` |
+| Inference finds a most general type whenever there is one | `inferIn_complete`, `inferProgram_complete` | `InferComplete.lean` |
+| ... with polymorphic annotations, where no rigid variable escapes | `infer_complete_polyOK`, `inferProgram_complete_polyOK` | `InferComplete.lean` |
+| Inference's type with its constraints is principal | `inferInC_principal`, `inferProgramC_principal`, `inferProgramC_principal_polyOK` | `Principal.lean` |
+| Where a rigid variable escapes, inference is incomplete | `polyGap_separates` | `PolyAnn.lean` |
+| Jones's `let` rule is sound and types strictly more | `jones_eval_sound`, `jones_separates` | `Textbook.lean` |
+| inty's assignment rule is sound and types strictly more | `inty_eval_sound`, `assignSub_separates` | `AssignSub.lean` |
+| A scheme needs its `Merge` | `spreadMerge_needed` | `MergeScheme.lean` |
+| Each checking rule types what synthesis and injection can't | `litStr_needed`, `arrCheck_needed`, `funcCheck_needed` | `Modes.lean` |
+
+`Inty/Statements.lean` restates each of them in full, and `Inty/Axioms.lean`
+checks they use only Lean's standard axioms.
+
 `Inty.eval_sound` (in `Inty/Soundness.lean`): for every expression `e`, type
 `τ`, labels `L` (records have a slot for each), class constraints `C` each
 an instance or on a type variable (`HoldsOrVar`), context `Γ`, world `W` (the scheme of
@@ -34,7 +60,8 @@ enclosing function's return type `R`, and every clock, writing
 after,
 
 ```
-HasType L C Γ R e τ → HoldsOrVar C → G W Γ env → HeapOK clock W h →
+HasType L C Γ R rm md e τ → HoldsOrVar C → G W (Γ.map Scheme.toW) env →
+  HeapOK clock W h →
   c ≤ clock ∧
   (r = timeout ∨ ∃ W', W <+: W' ∧ HeapOK c W' h' ∧
     ((∃ v, r = ok v ∧ V c W' τ v) ∨ r.Abrupt ∨
@@ -47,6 +74,26 @@ below), or a fault: an index out of bounds, where the program stops, as
 `dynamics` does (`Result.fault`). JavaScript reads `undefined` there and
 goes on, perhaps to a `TypeError` further on, so for a program that indexes,
 "never stuck" is the model's guarantee up to its faults, not JavaScript's.
+Soundness is relative to the model's interpreter: that `eval` is
+JavaScript on this fragment is the differential test's evidence (below),
+not a theorem. `rm` and `md` are the modes of the enclosing function's
+`return` and of the expression (`synth` or `check`); `Scheme.toW` reads a
+context's schemes in the wide system, `Sys.wide`, which soundness is proved
+for and which every typing of `HasType` is one of (`HasTypeS.toWideOf`).
+
+`HoldsOrVar C` asks each assumed constraint to be an instance or to be on a
+type variable. A type variable is read as the type with no values, not
+parametrically: `V k W (.var a) v` is false. So a constraint on a variable
+is vacuous at run time, and soundness says nothing about the parametricity
+of polymorphic code (no free theorems); it needs none, since each use of a
+polymorphic binding is typed at an instance (`HasTypeS.subst`).
+
+A timeout is allowed at every clock, so the theorem could be met by an
+interpreter that always times out. It isn't: the clock counts calls and
+loop iterations, and a program that makes no call, runs no loop and has no
+getter never runs out of it, whatever the clock (`eval_noClock`); for the
+rest, `run_mono` and the examples run at build time (`#guard`) show the
+results.
 
 That is CakeML's shape of theorem (Owens et al., "Functional Big-step
 Semantics", ESOP 2016): for every clock, a value of the right type, an
@@ -86,10 +133,15 @@ inferProgram e = some τ → ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups 
 The constraints `C` are what inference leaves on type variables (`Plus a`,
 or a property read on a value of unknown type): inty accepts the program
 with them in place, and they can't fail, since no value has a type
-variable's type.
+variable's type. So, by `Inty.inferProgram_never_stuck`, a program
+inference accepts never gets stuck.
 
-so, by `Inty.inferProgram_never_stuck`, a program inference accepts never
-gets stuck.
+Soundness produces a typing under some `C`, while completeness below
+starts from a typing under constraints on type variables only, `C = []`
+for a closed program. The principal-type theorem joins the two: the `C`
+soundness produces is the constraints inference leaves, `P`, and every
+typing under any assumptions is an instance of `(τ, P)`
+(`inferProgramC_principal`).
 
 `Inty.inferIn_complete` (in `Inty/InferComplete.lean`): inference finds a type
 whenever one exists, one of which every valid type is an instance up to
@@ -104,21 +156,36 @@ ctxFtv Γ = [] → (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => fa
   ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ'
 ```
 
+Inference has fuel in two places, and neither costs completeness: it
+improves constraints at most `preds.length` times, and each improvement
+removes a constraint, so the fuel never runs out first (`improveAll_complete`
+holds for any fuel at least the length); likewise `fixLoop`, whose every
+round sets a constraint aside.
+
 `monoAnn` says the program's annotations are monomorphic. With
 polymorphic ones (`Inty/PolyAnn.lean`), inference has one more way to
-reject a program than the rules: a rigid variable escaping. Where none
-escapes, in whatever context an annotation's initialiser is checked at
-fresh rigid variables (neither the instance of a type variable of the
-context nor a constraint left after improvement mentions them:
-`RigidStays`, `Expr.PolyOK`), it finds every typing
+reject a program than the rules: a rigid variable escaping. `RigidStays`
+says none does: in every context where an annotation's initialiser is
+checked and typable as the rules allow, inference's check at fresh rigid
+variables leaves them out of the context's instance, out of the enclosing
+return type and out of the constraints left after improvement, which is
+exactly the test inference makes. `Expr.PolyOK` asks it of every
+annotation in the program. Under it inference finds every typing
 (`infer_complete_polyOK`, `inferProgram_complete_polyOK`), and its
 constrained type is principal (`inferProgramC_principal_polyOK`): the typing
 checks the initialiser at any rigid names outside a finite set, and renamed
-(`HasTypeS.rsub` with a swap), it is a typing at inference's. Every program
-with only monomorphic annotations is `PolyOK`, and so is
+(`HasTypeS.rsub` with a swap), it is a typing at inference's. Escaping
+into the context is the case the proof handles itself: a typing's context
+has no rigid variables, so no unfolded tree of the context's instance can
+have one (`Ty.TreeRk`, `Inty/RigidKeys.lean`); only an equation of a
+recursive type its unfolding never reaches could, which the check counts
+and the rules don't see. Every program with only monomorphic annotations is
+`PolyOK` (`Expr.polyOK_of_monoAnn`), and so is
 `/** const id: <a>(a) => a */ const id = (y) => y; id(1)` (`polyId_polyOK`).
-Where a rigid variable does escape, inference is incomplete
-(`polyGap_separates`): in
+`PolyOK` is a semantic condition, decided here per program, not a syntactic
+class: inference accepts `polyApp`, an annotated function applied to
+itself, but its `PolyOK` is not proved. Where a rigid variable does escape,
+inference is incomplete (`polyGap_separates`): in
 
 ```
 /** const f: <a>(a) => a */
@@ -131,6 +198,13 @@ type `{l: a}` at each rigid name; inference would have to keep the
 constraint on the rigid variable waiting on a type variable, an implication
 constraint, as GHC's OutsideIn(X) does, and rejects it instead.
 
+One more divergence of the model from inty: inty checks a polymorphic
+initialiser with the binding itself in scope at its scheme
+(`check_polymorphic_annotation`), so an annotated function can call itself
+at another instance (polymorphic recursion); the model's `letPoly` checks
+it in the enclosing context, where a named function sees itself only at the
+rigid instance.
+
 `scoped` is the pair of scope checks JavaScript makes: a program assigns
 only to its own `let`s and parameters, never to a `const`
 (`assignsMutable`), and has `break` and `continue` only inside a loop
@@ -138,14 +212,31 @@ only to its own `let`s and parameters, never to a `const`
 an assignment to a `const` would be type-safe, and a stray `break` is
 safe too, just not JavaScript.
 
-(`inferIn_complete`, `inferProgram_complete`, the latter for closed
-programs with no assumed constraints). It is completeness against `HasType`,
-which is declarative but not free of the algorithm's choices: the `let`
-rule's value restriction, its constraints only on quantified variables
-(`Scheme.Simple`, with a `Merge` on their trees, `PTy.TreeBound`), and
-`Merge` left undecided inside a scheme, are inty's generalisation, written as
-rules; a class's labels are distinct (`ls.Nodup`), though JavaScript allows
-a member defined twice. It rests on unification
+Completeness is relative to a specification designed with the algorithm:
+`HasType` is declarative, but some of its rules are inty's choices, each
+narrower than a textbook rule, and each is checked by a theorem relating it
+to the wider one or showing it can't be dropped:
+
+- **A `let`'s scheme has constraints only on its quantified variables**
+  (`Scheme.Simple`). Jones's rule allows any; `Inty/Textbook.lean` proves
+  it sound and strictly wider (`jones_separates`), below.
+- **A scheme keeps its `Merge`s undecided** (`PTy.TreeBound`).
+  `spreadMerge_needed` (`Inty/MergeScheme.lean`): a function spreading its
+  parameter, used at two field lists, has typings only at schemes carrying a
+  `Merge`.
+- **Checking mode has rules of its own** for literal forms; each types
+  something synthesis followed by injection can't (`Inty/Modes.lean`).
+- **An assignment's value has the variable's type exactly.** inty's rule,
+  which checks it against the type, is `Sys.inty`, sound and strictly wider
+  (`assignSub_separates`, `Inty/AssignSub.lean`); the wire format's front
+  end rewrites the one case where they differ, an annotated `let`.
+- **Annotations are closed** (`Annotated`: no type variables), **an object
+  literal checked against a record has only data fields** (`objCheck`), and
+  **a class's labels are distinct** (`ls.Nodup`, though JavaScript allows a
+  member defined twice). These are restrictions inty has too, or that the
+  wire format's front end avoids; no theorem relates them to wider rules.
+
+Completeness rests on unification
 being most general up to equal types (`Inty.unify_mgu`): `unify` is a
 congruence closure on the types' finite graphs of subterms (Huet's
 algorithm for rational trees, `Inty/Unify.lean`). A typing's context need
@@ -179,7 +270,8 @@ copied from the algorithm:
   are quantified (`PTy.TreeBound`): a spread over a parameter's object
   has no field list until a call gives one, so deciding it at the `let`
   would guess, and the most general scheme keeps it, as Haskell keeps a
-  class constraint on a quantified variable. inty decides a spread at
+  class constraint on a quantified variable. Without it some programs have
+  no typing: `spreadMerge_needed`. inty decides a spread at
   once (`merge_spread`), which is less general: the known divergence of
   a spread over an operand of an unknown type. One consequence, as in
   Haskell without the monomorphism restriction: a binding never used can
@@ -289,12 +381,14 @@ These choices are meant to hold up as the calculus grows.
   `{x: T | r}`, is a record whose other slots are variables. Within the
   program's labels this is equivalent to Rémy's rows with presence, which
   inty implements with tails, and it keeps unification free of type
-  equality up to permutation. The cost is size: every record has a slot
+  equality up to permutation. A typing over the program's labels is one
+  over any more labels (`HasType.extLabels`, `Inty/LabelWeaken.lean`), so
+  the choice of `L` doesn't change what is typable. The cost is size: every record has a slot
   per label of the program, so inference slows as a program's labels grow
   (seconds, interpreted, for a few nested spreads over twenty or thirty
-  labels). That is fine for an oracle on generated programs; running the
-  model on inty's test corpus (ground rule 4 of the roadmap) will want
-  rows with tails, or the labels a program's records can share.
+  labels). That is fine for an oracle on generated programs and on inty's
+  test corpus; larger programs will want rows with tails, or the labels a
+  program's records can share.
 - **Types and expressions nest lists** (a constructor's arguments, a call's
   arguments). Lean derives neither
   equality nor induction for nested inductive types, so `Ty.ind`, `PTy.ind`
@@ -456,7 +550,9 @@ nothing, of its `typeof` or of its tag field is `unwrap`, `typetest` or
 another, a plain `?:` on `===`); `&&` and `||` of booleans are `?:`. A
 program is left out when it uses what the model lacks (`%`, a bitwise
 operator, a comparison of strings or booleans, `&&` or `||` on what isn't
-a boolean, whose result inty types as a union, a builtin, a class, a
+a boolean, whose result inty types as a union, a builtin, a class (inty's
+parser lowers it to a factory function, which the corpus would then check
+as one; the differential test generates real class declarations), a
 module, a loop other than `while`, `?.`, `??`) or whose lowering would
 change its meaning (a name used before its declaration, `let x;` without
 an initialiser, a `let` or a parameter taken apart by a test and
@@ -464,7 +560,16 @@ assigned, a getter or a method beside a spread). Of the programs the unit tests 
 1242 are in the fragment (some tests generate theirs at random, so the
 corpus keeps each program it once recorded); inty and the model agree on
 accepting each but eight, listed with their reasons in
-`tests/model_corpus/known.txt`:
+`tests/model_corpus/known.txt`. Where both accept, the test compares more:
+the types, compared by their heads (760 programs have the same), and the
+values, where the model's type isn't `undefined`: inty's `dynamics`, the
+model's `eval` and Node give the same on 630. A type or value that
+differs, an accepted program that gets stuck, or one Node raises an error
+on fails the test. Without the model built the test skips; CI sets
+`INTY_REQUIRE_MODEL`, under which it, and the differential test, fail
+instead.
+
+The eight:
 
 - an `Int` index, an annotated object type's method using `this` (a
   member of an object type is called on the object in inty), a record
@@ -477,7 +582,12 @@ accepting each but eight, listed with their reasons in
 
 Writing the lowering found the model's assignment to an annotated `let`
 unifying the value with the annotation rather than checking it against
-it (fixed in the wire format's front end). With `*`, `/`, the comparisons and `===` in the model, most programs left
+it. `HasType` still does, the front end rewriting the assignment
+(`x = (const t: T = e; t)`); `Sys.inty` has inty's rule
+(`HasTypeS.assignCheck`). Comparing values found a bug in inty's
+`dynamics`, which treated `undefined` as an unbound name, and two in the
+harness (strings escaped on one side only; a result read from `"use
+strict"` instead of the program). With `*`, `/`, the comparisons and `===` in the model, most programs left
 out read a builtin's property or name a builtin, or use a name before its
 declaration.
 
