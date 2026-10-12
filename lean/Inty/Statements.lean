@@ -5,6 +5,7 @@ import Inty.Textbook
 import Inty.PolyAnn
 import Inty.NoTimeout
 import Inty.AssignSub
+import Inty.MergeScheme
 import Inty.PinCount
 
 /-!
@@ -190,6 +191,49 @@ example : HasTypeI [] [] [] none .synth .synth assignSubExample (.maybe .null .n
 
 example : assignSubExample = .let_ true (some ⟨0, .app (.maybe .null) [.app .number []], []⟩)
     (.lit .null) (.seq (.assign 0 (.lit (.number 5))) (.var 0)) := rfl
+
+/-- Checking mode: an expression that doesn't take the expected type in is
+synthesised and injected; the rules for those that do type what synthesis
+and injection can't. -/
+example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr}
+    {T : Ty}, HasType L C Γ R rm .check e T → e.pushes T = false →
+    ∃ τ₀, HasType L C Γ R rm .synth e τ₀ ∧ (T = .unknown ∨ Entails C ⟨.inject T, [τ₀]⟩) :=
+  check_of_not_pushes
+
+example : ∀ {L : List String},
+    HasType L [] [] none .synth .check (.func 1 (.lit .null)) (.fn .undefined [.number] (.nullable .number)) ∧
+      ∀ τ, HasType L [] [] none .synth .synth (.func 1 (.lit .null)) τ →
+        ¬ TyEq τ (.fn .undefined [.number] (.nullable .number)) ∧
+          ¬ Entails [] ⟨.inject (.fn .undefined [.number] (.nullable .number)), [τ]⟩ :=
+  funcCheck_needed
+
+example : ∀ {L : List String},
+    HasType L [] [] none .synth .check (.arr [.lit .null]) (.array (.nullable .number)) ∧
+      ∀ τ, HasType L [] [] none .synth .synth (.arr [.lit .null]) τ →
+        ¬ TyEq τ (.array (.nullable .number)) ∧
+          ¬ Entails [] ⟨.inject (.array (.nullable .number)), [τ]⟩ :=
+  arrCheck_needed
+
+example : ∀ {L : List String},
+    HasType L [] [] none .synth .check (.lit (.string "a")) (.strLit "a") ∧
+      ∀ τ, HasType L [] [] none .synth .synth (.lit (.string "a")) τ →
+        ¬ TyEq τ (.strLit "a") ∧ ¬ Entails [] ⟨.inject (.strLit "a"), [τ]⟩ :=
+  litStr_needed
+
+/-- A scheme that keeps a `Merge`: every typing of `spreadMerge` gives its
+binding one, so deciding each `Merge` at the binding loses the program. -/
+example : HasType ["a"] [] [] none .synth .synth spreadMerge (.record ["a"] [.absSlot]) :=
+  spreadMerge_typed
+
+example : ∀ {s : Scheme} {F : List Nat} {τ₂ : Ty},
+    (∀ m, (∀ a ∈ F, a < m) →
+      HasType ["a"] ([] ++ s.openPreds m) [] none .synth .synth spreadFn (s.open m)) →
+    HasType ["a"] [] [s] none .synth .synth spreadUses τ₂ → ∃ p ∈ s.preds, p.cls = .merge :=
+  spreadMerge_needed
+
+example : spreadMerge = .let_ false none (.func 1 (.spread (.obj [] [] []) (.var 0)))
+    (.seq (.app (.var 0) [.obj ["a"] [.lit (.number 1)] [.data]]) (.app (.var 0) [.obj [] [] []])) :=
+  rfl
 
 example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → e.monoAnn = true →
     HasType e.labels.eraseDups [] [] none .synth .synth e τ' →

@@ -5,6 +5,7 @@ import Inty.Textbook
 import Inty.PolyAnn
 import Inty.NoTimeout
 import Inty.AssignSub
+import Inty.MergeScheme
 
 /-!
 # Axiom audit
@@ -100,3 +101,18 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.assignSub_separates' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.assignSub_separates
+
+/-- info: 'Inty.funcCheck_needed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.funcCheck_needed
+
+/-- info: 'Inty.arrCheck_needed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.arrCheck_needed
+
+/-- info: 'Inty.litStr_needed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.litStr_needed
+
+/-- info: 'Inty.spreadMerge_typed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.spreadMerge_typed
+
+/-- info: 'Inty.spreadMerge_needed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.spreadMerge_needed
