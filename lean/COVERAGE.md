@@ -21,6 +21,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.let_` | `infer_stmt_var`, `infer_stmt_function_decl`, `generalize` |
 | `HasTypeS.letPoly` | `check_polymorphic_annotation`, `skolemize` |
 | `HasTypeS.assign` | `infer_assign`, `infer_store_target` |
+| `HasTypeS.assignCheck` | `infer_assign`, `subsume` (the value subsumed into the variable's type; a rule of the system Sys.inty, not of HasType) |
 | `HasTypeS.cond` | `infer_conditional`, `infer_stmt_if` |
 | `HasTypeS.unop` | `infer_unary` |
 | `HasTypeS.binop` | `infer_binary`, `infer_add` |

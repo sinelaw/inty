@@ -4,6 +4,7 @@ import Inty.Principal
 import Inty.Textbook
 import Inty.PolyAnn
 import Inty.NoTimeout
+import Inty.AssignSub
 
 /-!
 # Axiom audit
@@ -90,3 +91,12 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.eval_noClock' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.eval_noClock
+
+/-- info: 'Inty.inty_eval_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inty_eval_sound
+
+/-- info: 'Inty.inty_never_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inty_never_stuck
+
+/-- info: 'Inty.assignSub_separates' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.assignSub_separates

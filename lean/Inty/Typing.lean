@@ -307,6 +307,13 @@ inductive HasTypeS (S : Sys) (L : List String) :
   | assign : Γ[i]? = some s → s.arity = 0 → s.preds = [] →
       HasTypeS S L C Γ R rm .synth e (s.inst []) →
       HasTypeS S L C Γ R rm .synth (.assign i e) (s.inst [])
+  /-- In a system that subsumes on assignment (`Sys.assignSub`), as inty
+  does: `x = e` checks `e` against `x`'s type `T` (up to equal types),
+  which has no type variables, so a value of any type that injects into it
+  may be stored. -/
+  | assignCheck : S.assignSub = true → Γ[i]? = some s → s.arity = 0 → s.preds = [] →
+      TyEq (s.inst []) T → S.closed T → HasTypeS S L C Γ R rm .check e T →
+      HasTypeS S L C Γ R rm .synth (.assign i e) T
   /-- Both branches have one type, as in Hindley–Milner: inty doesn't guess
   that disagreeing branches form a union. An expected type is pushed into
   each branch. -/
@@ -490,6 +497,9 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
   | assign : Γ[i]? = some s → s.arity = 0 → s.preds = [] →
       HasTypeS S L C Γ R rm .synth e (s.inst []) →
       HasTypeTopS S L C Γ R rm .synth (.assign i e) (s.inst [])
+  | assignCheck : S.assignSub = true → Γ[i]? = some s → s.arity = 0 → s.preds = [] →
+      TyEq (s.inst []) T → S.closed T → HasTypeS S L C Γ R rm .check e T →
+      HasTypeTopS S L C Γ R rm .synth (.assign i e) T
   | cond : HasTypeS S L C Γ R rm .synth c τc → HasTypeS S L C Γ R rm md t τ →
       HasTypeS S L C Γ R rm md e τ → HasTypeTopS S L C Γ R rm md (.cond c t e) τ
   | unop : UnOpTy op τ₁ τ → HasTypeS S L C Γ R rm .synth e τ₁ →
@@ -620,6 +630,7 @@ theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
   | letPoly a K h0 h1 h2 h3 h₁ hv hw h₂ =>
     exact ⟨_, _, .letPoly a K h0 h1 h2 h3 h₁ hv hw h₂, .refl⟩
   | assign hi ha hp he => exact ⟨_, _, .assign hi ha hp he, .refl⟩
+  | assignCheck hs hi ha hp hT hc he => exact ⟨_, _, .assignCheck hs hi ha hp hT hc he, .refl⟩
   | cond hc ht he => exact ⟨_, _, .cond hc ht he, .refl⟩
   | unop hop he => exact ⟨_, _, .unop hop he, .refl⟩
   | binop hop h₁ h₂ => exact ⟨_, _, .binop hop h₁ h₂, .refl⟩

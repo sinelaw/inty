@@ -967,6 +967,11 @@ theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List N
     refine .assign (by simp [List.getElem?_map, hi]) (by simpa using ha)
       (by simp [Scheme.rsub, hp]) ?_
     simpa [← Scheme.inst_rsub] using ih
+  | @assignCheck _ i s T _ _ _ _ hs hi ha hp hT hc _ ih =>
+    refine .assignCheck (s := s.rsub ρ) hs (by simp [List.getElem?_map, hi]) (by simpa using ha)
+      (by simp [Scheme.rsub, hp]) ?_ (hS.closed hc) ih
+    have := TyEq.rsub ρ hT
+    rwa [← Scheme.inst_rsub] at this
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih =>
     cases hop with

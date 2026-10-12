@@ -4,6 +4,7 @@ import Inty.Principal
 import Inty.Textbook
 import Inty.PolyAnn
 import Inty.NoTimeout
+import Inty.AssignSub
 import Inty.PinCount
 
 /-!
@@ -166,6 +167,29 @@ example : ∀ {L : List String},
 
 example : jonesExample = .let_ false none
     (.func 1 (.binop .plus (.lit (.boolean true)) (.lit (.boolean true)))) (.lit (.number 1)) := rfl
+
+/-- inty's assignment rule: `HasType` doesn't subsume an assignment's value
+into the variable's type (`Sys.narrow.assignSub` is off); the system that
+does is sound and types strictly more. -/
+example : Sys.inty = { Sys.narrow with assignSub := true } := rfl
+
+example : Sys.narrow.assignSub = false := rfl
+
+example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {e : Expr}
+    {τ : Ty}, HasType L C Γ R rm md e τ → HasTypeI L C Γ R rm md e τ :=
+  HasType.toInty
+
+example : ∀ {L : List String} {C : List Pred} {rm md : Mode} {e : Expr} {τ : Ty},
+    HasTypeI L C [] none rm md e τ → HoldsOrVar C → ∀ (clock : Nat) (s : Stuck),
+      eval clock [] [] e ≠ .stuck s :=
+  inty_never_stuck
+
+example : HasTypeI [] [] [] none .synth .synth assignSubExample (.maybe .null .number) ∧
+    ∀ τ, ¬ HasType [] [] [] none .synth .synth assignSubExample τ :=
+  assignSub_separates
+
+example : assignSubExample = .let_ true (some ⟨0, .app (.maybe .null) [.app .number []], []⟩)
+    (.lit .null) (.seq (.assign 0 (.lit (.number 5))) (.var 0)) := rfl
 
 example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → e.monoAnn = true →
     HasType e.labels.eraseDups [] [] none .synth .synth e τ' →
@@ -565,7 +589,9 @@ is a monotype. -/
 example : ¬ HasType L [] [⟨1, .bound 0, []⟩] none .synth .synth (.assign 0 (num 1)) τ := by
   intro h
   obtain ⟨_, -, h⟩ := h.top_synth
-  cases h with | assign hi ha _ _ => simp at hi; subst hi; simp at ha
+  cases h with
+  | assign hi ha _ _ => simp at hi; subst hi; simp at ha
+  | assignCheck hs => simp [Sys.narrow] at hs
 
 /-- An unbound variable. -/
 example : ¬ HasType L [] [] none .synth .synth (.var 0) τ := by
@@ -880,6 +906,15 @@ example : ∀ {S : Sys} {L : List String} {Γ : Ctx} {i : Nat} {s : Scheme} {C :
             HasTypeS S L C Γ R rm Mode.synth e (Scheme.inst s []) →
               HasTypeS S L C Γ R rm Mode.synth (Expr.assign i e) (Scheme.inst s []) :=
   @HasTypeS.assign
+example : ∀ {S : Sys} {L : List String} {Γ : Ctx} {i : Nat} {s : Scheme} {T : Ty} {C : List Pred} {R : Option Ty} {rm : Mode}
+      {e : Inty.Expr},
+      Sys.assignSub S = true →
+        Γ[i]? = some s →
+          Scheme.arity s = 0 →
+            Scheme.preds s = [] →
+              TyEq (Scheme.inst s []) T →
+                Sys.closed S T → HasTypeS S L C Γ R rm Mode.check e T → HasTypeS S L C Γ R rm Mode.synth (Expr.assign i e) T :=
+  @HasTypeS.assignCheck
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {c : Inty.Expr} {τc : Ty}
       {md : Mode} {t : Inty.Expr} {τ : Ty} {e : Inty.Expr},
       HasTypeS S L C Γ R rm Mode.synth c τc →
@@ -1925,7 +1960,7 @@ example : ∀ (a : Nat), Value.truthy (Value.arr a) = true :=
   @Value.truthy.eq_11
 example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
   @Value.truthy.eq_12
-#rules HasTypeS 38
+#rules HasTypeS 39
 #rules LitTy 5
 #rules UnOpTy 3
 #rules BinOpTyS 3
