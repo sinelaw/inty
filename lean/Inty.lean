@@ -17,6 +17,7 @@ import Inty.Rename
 import Inty.InferSound
 import Inty.InferInv
 import Inty.InferComplete
+import Inty.Principal
 import Inty.Builtins
 import Inty.Examples
 import Inty.Statements

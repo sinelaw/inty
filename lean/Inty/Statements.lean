@@ -1,5 +1,6 @@
 import Inty.Builtins
 import Inty.InferComplete
+import Inty.Principal
 import Inty.PinCount
 
 /-!
@@ -100,6 +101,38 @@ example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
     HasType L C Γ none .synth .synth e τ' →
     ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferIn_complete
+
+/-- Principal constrained types: inference's type and constraints `(τ, P)`
+characterise every typing of the program, under assumptions on type
+variables, as an instance whose constraints the assumptions entail. -/
+example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P C : List Pred}, ctxFtv Γ = [] →
+    (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true → e.monoAnn = true →
+    inferInC L Γ e = some (τ, P) → ∀ τ' : Ty,
+    (HasType L C Γ none .synth .synth e τ' ↔ ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ) :=
+  inferInC_principal
+
+example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P : List Pred}, ctxFtv Γ = [] →
+    inferInC L Γ e = some (τ, P) → HoldsOrVar P ∧ HasType L P Γ none .synth .synth e τ :=
+  inferInC_sound
+
+example : ∀ {e : Expr} {τ : Ty} {P C : List Pred}, (∀ p ∈ C, p.OnVarShaped) → e.scoped [] = true →
+    e.monoAnn = true → inferProgramC e = some (τ, P) → ∀ τ' : Ty,
+    (HasType e.labels.eraseDups C [] none .synth .synth e τ' ↔
+      ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ) :=
+  inferProgramC_principal
+
+/-- `inferInC` is `inferIn` keeping the constraints. -/
+example : ∀ (L : List String) (Γ : Ctx) (e : Expr), inferIn L Γ e = (inferInC L Γ e).map Prod.fst :=
+  inferIn_eq_inferInC
+
+/-- The cut rule: a typing under assumptions holds under any that entail
+them. -/
+example : ∀ {S : Sys} {L : List String} {D : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
+    {e : Expr} {τ : Ty}, HasTypeS S L D Γ R rm md e τ →
+    ∀ {C : List Pred}, (∀ d ∈ D, EntailsS S C d) → HasTypeS S L C Γ R rm md e τ :=
+  fun h => h.cutC
+
+example : Sat C P φ ↔ ∀ c ∈ P, Entails C (c.subst φ) := Iff.rfl
 
 example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → e.monoAnn = true →
     HasType e.labels.eraseDups [] [] none .synth .synth e τ' →
