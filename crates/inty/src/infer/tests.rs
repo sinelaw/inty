@@ -1370,8 +1370,16 @@ fn variable_waits_to_be_injected_into_a_typeof_sum() {
 #[test]
 fn typeof_object_takes_a_record_case_apart() {
     let src = "/** const v: Number | {a: Number} */ const v = {a: 1}; const x = v; \
-               (typeof x === \"object\" ? x.a : x - 1);";
+               (typeof x === \"object\" ? x.a : 0);";
     assert!(infer_program_via_program(src).is_ok());
+    // The other branch keeps the record case: a declaration may type a
+    // function as a record (`Promise`, `Object`), whose `typeof` is
+    // "function".
+    let src = "/** const v: String | {resolve: (Number) => Promise<Number>, \
+               reject: (Number) => Promise<Number>, all: (Promise<Number>[]) => \
+               Promise<Number[]>} */ const v = Promise; const x = v; \
+               (typeof x === \"object\" ? 0 : x.toUpperCase().length);";
+    assert!(infer_program_via_program_with_stdlib(src).is_err());
     let src = "/** const v: Number | {a: Number} */ const v = {a: 1}; v - 1;";
     assert!(infer_program_via_program(src).is_err());
 }

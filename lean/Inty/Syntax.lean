@@ -156,10 +156,13 @@ inductive Expr where
   `const x = e₁; x != null ? e₃ : e₂`; `e₁ ?? e₂` is `unwrap e₁ e₂ (var 0)`.
   -/
   | unwrap (e₁ e₂ e₃ : Expr)
-  /-- Taking apart a variant tagged by its field `l`: `e₃` if `e₁`'s value
-  has the tag `t` (its field `l` holds the string `t`), otherwise `e₂`,
-  each with that value as `var 0`. In JavaScript,
-  `const x = e₁; x.l === "t" ? e₃ : e₂`, whose branches see `x` narrowed. -/
+  /-- Taking apart a variant tagged by its field `l` (`d = .field l`) or a
+  sum told apart by `typeof` (`d = .typeOf`): `e₃` if `e₁`'s value has the
+  tag `t` (its field `l` holds the string `t`, or its `typeof` is `t`),
+  otherwise `e₂`, each with that value as `var 0`. In JavaScript,
+  `const x = e₁; x.l === "t" ? e₃ : e₂` or
+  `const x = e₁; typeof x === "t" ? e₃ : e₂`, whose branches see `x`
+  narrowed. -/
   | caseTag (e₁ : Expr) (d : Disc) (t : String) (e₂ e₃ : Expr)
   deriving Repr
 

@@ -452,12 +452,17 @@ touching the generic proofs.
 
   inty matches: a variable of a type not known yet flowing into a sum told
   apart by `typeof` waits for it (`Inject`, as for the nullable sums,
-  `Type::is_typeof_sum`) rather than being bound to the sum, and
-  `typeof x !== "object"` drops a closed record case. The differential
-  generator annotates sums of numbers, strings, booleans, functions and
-  records, checks values of their cases into them and takes them apart by
-  `typeof`; inty's join of a sum with one of its cases (`c ? v : 1`) is
-  the one divergence, put down to the waiting `Join` still to come.
+  `Type::is_typeof_sum`) rather than being bound to the sum, also across
+  a module boundary (an `Inject` or a `Strip` on a variable an importer
+  still sees waits for its uses), and `typeof x !== "object"` drops an
+  array, a tuple or `null` case, but not a record's (a declaration may
+  type a function as a record, `Promise` as `{resolve: …}`). The
+  differential generator annotates sums of numbers, strings, booleans,
+  functions and records, checks values of their cases into them and takes
+  them apart by `typeof`; inty's join of a sum with one of its cases
+  (`c ? v : 1`, its value used) and the record case it keeps are the
+  divergences, put down to the waiting `Join` still to come and to a
+  `typeof` for declared values.
 
   Next: an annotated function type without `this:` is polymorphic in
   `this`; the model fixes it to `undefined`, as inty does for an

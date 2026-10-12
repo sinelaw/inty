@@ -137,7 +137,8 @@ partial def parseTy (L : Option (List String)) : List String → Option (Ty × L
     let tags ← Rs.mapM fun R => match R.whnf with
       | .app c _ => c.typeTag
       | _ => none
-    if tags.Nodup then some (.variant .typeOf tags Rs, rest) else none
+    -- (At least two cases: inty reads `Number` alone as `Number`.)
+    if tags.Nodup ∧ 2 ≤ tags.length then some (.variant .typeOf tags Rs, rest) else none
   | _ => none
 
 mutual

@@ -744,7 +744,21 @@ impl InferState {
                         constraints = std::mem::take(&mut self.pending_constraints);
                         continue;
                     }
-                    self.pending_constraints.clear();
+                    // An `Inject` or a `Strip` on a variable an importing
+                    // module still sees waits for its uses there (`put(true)`
+                    // deciding what a cell's sum holds); dropped, they would
+                    // let a value of no case through.
+                    let pending = std::mem::take(&mut self.pending_constraints);
+                    self.pending_constraints = pending
+                        .into_iter()
+                        .filter(|c| {
+                            matches!(c.pred.class, ClassName::Inject | ClassName::Strip)
+                                && matches!(
+                                    c.pred.types.first().map(|t| self.zonk(t)),
+                                    Some(Type::Var(v)) if keep.contains(&v)
+                                )
+                        })
+                        .collect();
                     return Ok(());
                 }
                 constraints = rest;

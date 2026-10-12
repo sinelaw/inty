@@ -2625,6 +2625,14 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Reject) if features.contains("sum join") => {
             Some("a sum joined with one of its cases")
         }
+        // inty keeps a record case after `typeof x !== "object"`: a
+        // declaration may type a function as a record (`Promise`); the
+        // model's records are only object literals'.
+        (Typing::Reject | Typing::Type(_), Typing::Type(_))
+            if features.contains("typeof object") =>
+        {
+            Some("a record case kept after `typeof x !== \"object\"`")
+        }
         // Roadmap phase 4: inty wants an array's or a string's index to be
         // an `Int`; the model takes any number, a fractional one being out
         // of bounds (a fault).
@@ -2639,7 +2647,7 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
 /// annotated one, an alias of one, or the rest of one a test of its tag
 /// took apart, if two cases or more are left).
 fn reads_variant_field(e: &Core) -> bool {
-    scan_held(e, &mut Vec::new(), &|e, held| match e {
+    scan_held(e, &mut Vec::new(), true, &|e, held, _| match e {
         Get(x, _) | Set(x, _, _) | MCall(x, _, _) => {
             matches!(held_by(held, x), Some(T::Variant(..)))
         }
@@ -2649,16 +2657,30 @@ fn reads_variant_field(e: &Core) -> bool {
 
 /// Whether `e` joins a variable that holds a sum (one told apart by
 /// `typeof`, a nullable or optional one, or a variant) with something
-/// else: a branch of a conditional, or an array's element. inty joins a
-/// sum with one of its cases to the sum; the model's branches agree on one
-/// type.
+/// else, where the joined value is used: a branch of a conditional, or an
+/// array's element. inty joins a sum with one of its cases to the sum; the
+/// model's branches agree on one type.
 fn joins_sum(e: &Core) -> bool {
-    let sum = |held: &[Option<T>], x: &Core| held_by(held, x).is_some();
-    scan_held(e, &mut Vec::new(), &|e, held| match e {
-        Cond(_, y, z) => sum(held, y) || sum(held, z),
-        Arr(es) => es.len() > 1 && es.iter().any(|x| sum(held, x)),
+    // `x` holds a sum `y` doesn't (`y` another variable of the same sum is
+    // no join).
+    let joins = |held: &[Option<T>], x: &Core, y: &Core| {
+        held_by(held, x).is_some_and(|t| held_by(held, y) != Some(t))
+    };
+    scan_held(e, &mut Vec::new(), true, &|e, held, used| match e {
+        Cond(_, y, z) => used && (joins(held, y, z) || joins(held, z, y)),
+        Arr(es) => es.iter().any(|x| es.iter().any(|y| joins(held, x, y))),
         _ => false,
     })
+}
+
+/// Whether `e` tests a value's `typeof` against `"object"`.
+fn tests_typeof_object(e: &Core) -> bool {
+    scan_held(
+        e,
+        &mut Vec::new(),
+        true,
+        &|e, _, _| matches!(e, TypeTest(_, t, _, _) if t == "object"),
+    )
 }
 
 /// The sum variable `x` holds, if it's one.
@@ -2670,30 +2692,32 @@ fn held_by(held: &[Option<T>], x: &Core) -> Option<T> {
 }
 
 /// Whether `hit` holds of a subterm of `e`, `held` giving the sum each
-/// variable in scope holds, if any (an annotated one, an
-/// alias of one, or the rest of one a test took apart, if two cases or
-/// more are left).
+/// variable in scope holds, if any (an annotated one, an alias of one, or
+/// the rest of one a test took apart, if two cases or more are left), and
+/// `used` whether `e`'s value is used (not a statement's, dropped).
 fn scan_held(
     e: &Core,
     held: &mut Vec<Option<T>>,
-    hit: &dyn Fn(&Core, &[Option<T>]) -> bool,
+    used: bool,
+    hit: &dyn Fn(&Core, &[Option<T>], bool) -> bool,
 ) -> bool {
-    if hit(e, held) {
+    if hit(e, held, used) {
         return true;
     }
-    let under = |held: &mut Vec<Option<T>>, bound: &[Option<T>], x: &Core| {
+    let under = |held: &mut Vec<Option<T>>, bound: &[Option<T>], x: &Core, used: bool| {
         held.extend_from_slice(bound);
-        let r = scan_held(x, held, hit);
+        let r = scan_held(x, held, used, hit);
         held.truncate(held.len() - bound.len());
         r
     };
+    let go = |held: &mut Vec<Option<T>>, x: &Core| scan_held(x, held, true, hit);
     match e {
         Let(_, ann, x, y) => {
             let v = match ann {
                 Some(t @ (T::Variant(..) | T::Sum(_) | T::Maybe(..))) => Some(t.clone()),
                 _ => held_by(held, x),
             };
-            scan_held(x, held, hit) || under(held, &[v], y)
+            go(held, x) || under(held, &[v], y, used)
         }
         CaseTag(x, _, t, y, z) => {
             let rest = match held_by(held, x) {
@@ -2703,7 +2727,7 @@ fn scan_held(
                 }
                 _ => None,
             };
-            scan_held(x, held, hit) || under(held, &[rest], y) || under(held, &[None], z)
+            go(held, x) || under(held, &[rest], y, used) || under(held, &[None], z, used)
         }
         TypeTest(x, t, y, z) => {
             let rest = match held_by(held, x) {
@@ -2713,35 +2737,33 @@ fn scan_held(
                 }
                 _ => None,
             };
-            scan_held(x, held, hit) || under(held, &[rest], y) || under(held, &[None], z)
+            go(held, x) || under(held, &[rest], y, used) || under(held, &[None], z, used)
         }
-        Func(n, body) | Method(n, body) => under(held, &vec![None; n + 2], body),
-        Getter(body) => under(held, &[None, None], body),
-        TryCatch(x, y) => scan_held(x, held, hit) || under(held, &[None], y),
+        Func(n, body) | Method(n, body) => under(held, &vec![None; n + 2], body, true),
+        Getter(body) => under(held, &[None, None], body, true),
+        TryCatch(x, y) => scan_held(x, held, used, hit) || under(held, &[None], y, used),
         Unwrap(x, y, z) => {
-            scan_held(x, held, hit) || scan_held(y, held, hit) || under(held, &[None], z)
+            go(held, x) || scan_held(y, held, used, hit) || under(held, &[None], z, used)
         }
         // A class's members see binders of its own; not followed.
         Class(..) => false,
         App(f, args) | New(f, args) | MCall(f, _, args) => {
-            scan_held(f, held, hit) || args.iter().any(|a| scan_held(a, held, hit))
+            go(held, f) || args.iter().any(|a| go(held, a))
         }
-        Assign(_, x) | Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) | Get(x, _) => {
-            scan_held(x, held, hit)
+        Assign(_, x) | Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) | Get(x, _) => go(held, x),
+        // A statement's value is dropped.
+        Seq(x, y) => scan_held(x, held, false, hit) || scan_held(y, held, used, hit),
+        While(x, y) => go(held, x) || scan_held(y, held, false, hit),
+        TryFinally(x, y) => scan_held(x, held, used, hit) || scan_held(y, held, false, hit),
+        Plus(x, y) | Minus(x, y) | Spread(x, y) | Index(x, y) | Set(x, _, y) => {
+            go(held, x) || go(held, y)
         }
-        Plus(x, y)
-        | Minus(x, y)
-        | Seq(x, y)
-        | While(x, y)
-        | TryFinally(x, y)
-        | Spread(x, y)
-        | Index(x, y)
-        | Set(x, _, y) => scan_held(x, held, hit) || scan_held(y, held, hit),
-        Cond(x, y, z) | SetIndex(x, y, z) => {
-            scan_held(x, held, hit) || scan_held(y, held, hit) || scan_held(z, held, hit)
+        Cond(x, y, z) => {
+            go(held, x) || scan_held(y, held, used, hit) || scan_held(z, held, used, hit)
         }
-        Obj(fields) => fields.iter().any(|(_, e)| scan_held(e, held, hit)),
-        Arr(es) => es.iter().any(|e| scan_held(e, held, hit)),
+        SetIndex(x, y, z) => go(held, x) || go(held, y) || go(held, z),
+        Obj(fields) => fields.iter().any(|(_, e)| go(held, e)),
+        Arr(es) => es.iter().any(|e| go(held, e)),
         Num(..) | Str(_) | Bool(_) | Undef | Null | Var(_) | Break | Continue => false,
     }
 }
@@ -2812,6 +2834,9 @@ fn inty_agrees_with_the_lean_model() {
         }
         if sum_join {
             features.insert("sum join");
+        }
+        if tests_typeof_object(core) {
+            features.insert("typeof object");
         }
         let report = |what: &str| {
             format!(

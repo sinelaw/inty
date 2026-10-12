@@ -657,11 +657,9 @@ fn typeof_definitely_matches(ty: &Type, name: &str) -> bool {
         (Type::Boolean, "boolean") => true,
         (Type::Undefined, "undefined") => true,
         (_, "function") if ty.is_func() => true,
-        // A closed row without a call signature is an object, never a
-        // function (an open one's tail might add one).
-        (Type::Row(row), "object") => {
-            !ty.is_func() && matches!(row.tail, crate::types::RowTail::Closed)
-        }
+        // (Not a record type, even a closed one without a call signature:
+        // a declaration types functions so, `Promise` and `Object` among
+        // them.)
         (Type::Array(_) | Type::Tuple(_) | Type::Null, "object") => true,
         (Type::Literal(LitValue::String(_)), "string") => true,
         (Type::Literal(LitValue::Number(_)), "number") => true,

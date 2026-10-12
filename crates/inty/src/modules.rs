@@ -871,6 +871,38 @@ mod tests {
     }
 
     #[test]
+    fn a_sum_waits_for_an_importers_uses() {
+        // `first` takes the cell's element, of a type `put`'s callers
+        // decide, into a sum: the importer's `put(true)` puts no case in.
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "cell.js",
+            "const cell = []; export function put(x) { cell.push(x); } \
+             export function first() { /** const v: Number | String */ const v = cell[0]; \
+             return v; }",
+        );
+        for (arg, ok) in [("1", true), ("true", false)] {
+            write_file(
+                dir.path(),
+                "main.js",
+                &format!(
+                    "import {{ put, first }} from \"./cell.js\"; put({arg}); const r = first();"
+                ),
+            );
+            let main_path = dir.path().join("main.js");
+            let mut state = InferState::new();
+            let r = check_module(&mut state, crate::builtins::initial_env(), &main_path)
+                .and_then(|_| state.resolve_constraints());
+            assert_eq!(
+                r.is_ok() && state.errors.is_empty(),
+                ok,
+                "put({arg}): {r:?}"
+            );
+        }
+    }
+
+    #[test]
     fn named_import_resolves() {
         let dir = tempdir();
         write_file(
