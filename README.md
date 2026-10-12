@@ -29,6 +29,14 @@ fully type-checked program into Go, to show what the static types are
 worth at runtime. See [examples/go-backend](examples/go-backend/README.md)
 and the [benchmarks against Node and Bun](examples/go-backend/BENCHMARKS.md).
 
+**Formal model (work in progress).** A model of a core of inty's type
+system in Lean 4 has machine-checked proofs that well-typed programs don't
+get stuck, and that its type inference is sound and complete. Tests run
+inty, the model and Node on the same programs and compare the results. The
+model doesn't cover all of inty yet. See [lean/README.md](lean/README.md)
+for what is proved, and [lean/ROADMAP.md](lean/ROADMAP.md) for what is
+left.
+
 Try it online at: https://sinelaw.github.io/inty/
 
 inty is based on [infernu](https://github.com/sinelaw/infernu).
