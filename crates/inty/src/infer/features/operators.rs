@@ -28,18 +28,16 @@ impl InferState {
         };
 
         match op {
-            // `-3` is the literal `-3` (and `-0` isn't an `Int`: it isn't 0).
+            // `-3` is the literal `-3`.
             UnaryOp::Neg if matches!(arg_type, Type::Literal(LitValue::Number(_))) => {
                 let Type::Literal(LitValue::Number(n)) = arg_type else {
                     unreachable!()
                 };
                 Ok(Type::Literal(LitValue::Number(-n)))
             }
-            // `-i` is an `Int` for an `Int` `i`.
             UnaryOp::Neg | UnaryOp::Pos => {
-                let arg = self.widen(span, &arg_type);
-                self.require_num(span, &arg)?;
-                Ok(self.zonk(&arg))
+                self.require_num(span, &arg_type)?;
+                Ok(Type::Number)
             }
 
             UnaryOp::Not => {
@@ -50,7 +48,7 @@ impl InferState {
             // Bitwise operators work on 32-bit integers.
             UnaryOp::BitNot => {
                 self.require_num(span, &arg_type)?;
-                Ok(Type::Int)
+                Ok(Type::Number)
             }
 
             UnaryOp::Typeof => {
@@ -90,11 +88,9 @@ impl InferState {
                 Ok(Type::Error)
             }
 
-            // `i++` keeps `i`'s type: `Int ± 1` is an `Int`, and so is
-            // `Number ± 1` a `Number`.
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
                 self.require_num(span, &arg_type)?;
-                Ok(self.zonk(&arg_type))
+                Ok(Type::Number)
             }
 
             UnaryOp::Await => {
@@ -157,19 +153,13 @@ impl InferState {
         }
 
         match op {
-            // Arithmetic (require numbers)
-            // `Int` in, `Int` out (`Arith`); `/` and `**` (`2 ** -1`)
-            // make fractions.
-            BinOp::Sub | BinOp::Mul | BinOp::Mod | BinOp::FloorDiv => {
-                let left = self.widen(span, &left_type);
-                let right = self.widen(span, &right_type);
-                self.arith(span, &left, &right)
-            }
-            BinOp::Div | BinOp::Pow => {
-                self.require_num(span, &left_type)?;
-                self.require_num(span, &right_type)?;
-                Ok(Type::Number)
-            }
+            // Arithmetic: numbers in, a number out.
+            BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Mod
+            | BinOp::FloorDiv
+            | BinOp::Div
+            | BinOp::Pow => self.arith(span, &left_type, &right_type),
 
             // Plus is overloaded (Number or String)
             BinOp::Add => {
@@ -190,22 +180,9 @@ impl InferState {
             // subsumes into the other (either direction is fine —
             // `String < "a"` is meaningful in both orders).
             //
-            // Numbers compare whatever their kind: `i < n / 2` doesn't
-            // make `i` a `Number`.
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                 let left_widened = self.widen(span, &left_type);
                 let right_widened = self.widen(span, &right_type);
-                // Two property reads whose receivers are known by now
-                // (`state.n >= state.xs.length` in a nested closure):
-                // resolve them first so an `Int` and a `Number` compare
-                // as numbers instead of being unified.
-                if !self.is_numeric(&left_widened)
-                    && !self.is_numeric(&right_widened)
-                    && matches!(self.zonk(&left_widened), Type::Var(_))
-                    && matches!(self.zonk(&right_widened), Type::Var(_))
-                {
-                    self.simplify_has_props()?;
-                }
                 if self.is_numeric(&left_widened) || self.is_numeric(&right_widened) {
                     self.require_num(span, &left_widened)?;
                     self.require_num(span, &right_widened)?;
@@ -324,7 +301,7 @@ impl InferState {
             | BinOp::URShift => {
                 self.require_num(span, &left_type)?;
                 self.require_num(span, &right_type)?;
-                Ok(Type::Int)
+                Ok(Type::Number)
             }
 
             // Membership
@@ -340,20 +317,18 @@ impl InferState {
         }
     }
 
-    /// `left + right` (operands widened): `Plus left right result`,
-    /// decided as soon as anything about it is known (a number makes it an
-    /// `Arith`, so `1 + "a"` is rejected; a string makes all three
-    /// `String`), and waiting otherwise. One constraint whatever the order
-    /// the operands' types become known in, so the type is principal.
+    /// `left + right` (operands widened): both operands have one type,
+    /// the result's, which has `+` (`Plus`): a number or a string, so
+    /// `1 + "a"` is rejected; on a variable the constraint waits.
     pub(in crate::infer) fn infer_add(
         &mut self,
         span: Span,
         left: &Type,
         right: &Type,
     ) -> InferResult<Type> {
-        let result = self.fresh_type_var();
-        self.resolve_plus(left, right, &result, span)?;
-        Ok(self.zonk(&result))
+        self.unify(span, left, right)?;
+        self.resolve_plus(left, span)?;
+        Ok(self.zonk(left))
     }
 }
 
@@ -371,7 +346,7 @@ fn logical_part(ty: &Type, truthy: bool) -> Option<Type> {
             Type::Literal(LitValue::Number(n)) => (*n != 0.0 && !n.is_nan()) == truthy,
             Type::Literal(LitValue::String(s)) => s.is_empty() != truthy,
             // Either way.
-            Type::Boolean | Type::Number | Type::Int | Type::String => true,
+            Type::Boolean | Type::Number | Type::String => true,
             // Objects, arrays, functions, promises, … are always truthy.
             _ => truthy,
         };

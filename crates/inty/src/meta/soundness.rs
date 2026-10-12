@@ -18,7 +18,7 @@
 //! how we widen coverage as the type system grows.
 
 use crate::builtins::initial_env;
-use crate::dynamics::{run_to_end_checked, run_to_end_with_fuel, Stuck, Value};
+use crate::dynamics::{run_to_end_with_fuel, Stuck, Value};
 use crate::frontends::javascript::lexer::{Scanner, Token};
 use crate::frontends::javascript::parser::Parser;
 use crate::infer::InferState;
@@ -52,7 +52,7 @@ impl SynthType {
         // returning singletons.
         matches!(
             (self, t),
-            (SynthType::Number, Type::Number | Type::Int)
+            (SynthType::Number, Type::Number)
                 | (SynthType::String, Type::String)
                 | (SynthType::Boolean, Type::Boolean)
                 | (
@@ -210,15 +210,6 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
         .resolve_constraints()
         .map_err(|e| format!("infer error: {}", e))?;
     let ty = infer.apply_subst(&ty);
-    // The expressions typed `Int`: their arithmetic is checked.
-    let int_ops = infer
-        .expr_types
-        .take()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(_, t)| infer.flatten_type(t) == Type::Int)
-        .map(|(span, _)| span)
-        .collect();
     if !expected.matches_type(&ty) {
         return Err(format!(
             "synthesized program at expected type {:?} inferred to {} — generator bug",
@@ -226,11 +217,11 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
         ));
     }
 
-    // Reduce. `Int` arithmetic that leaves the safe-integer range is a
-    // defined fault, not a soundness violation: the program stops there.
-    let value = match run_to_end_checked(&program, 5_000, int_ops) {
+    // Reduce. An index out of bounds is a defined fault, not a soundness
+    // violation: the program stops there.
+    let value = match run_to_end_with_fuel(&program, 5_000) {
         Ok(value) => value,
-        Err(Stuck::IntRange { .. }) | Err(Stuck::OutOfBounds { .. }) => return Ok(()),
+        Err(Stuck::OutOfBounds { .. }) => return Ok(()),
         Err(Stuck::FuelExhausted) => {
             return Err("fuel exhausted (not a soundness violation)".to_string())
         }
@@ -242,12 +233,6 @@ pub fn check_program(source: &str, expected: SynthType) -> Result<(), String> {
             "value-type mismatch: expected {:?}, got {}",
             expected, value
         ));
-    }
-    // An `Int` is a safe integer: checked arithmetic faults rather than
-    // leave the range. (It can still make a `-0` from `Int`s — `-0 * 1` —
-    // which a Go `int` holds as 0: a known corner.)
-    if ty == Type::Int && !matches!(value, Value::Number(n) if crate::types::is_safe_int(n.abs())) {
-        return Err(format!("value-type mismatch: expected Int, got {}", value));
     }
     Ok(())
 }

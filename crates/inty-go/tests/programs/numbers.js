@@ -22,7 +22,7 @@ console.log(100);
 console.log(-42.5);
 console.log(Math.PI);
 console.log(Math.PI / 180);
-// Math.floor/ceil/trunc of an Int quotient: integer division, rounding
+// Math.floor/ceil/trunc of an integer quotient: integer division, rounding
 // like the double quotient does (toward -Infinity, +Infinity, zero).
 const quotients = [[7, 2], [-7, 2], [7, -2], [-7, -2], [6, 3], [-6, 3], [0, -5], [9007199254740991, 3], [-9007199254740991, 2], [9007199254740990, 4503599627370495]];
 for (const [a, b] of quotients) {

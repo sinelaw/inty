@@ -22,8 +22,6 @@ use super::ty::LitValue;
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeAst {
     Number,
-    /// A number with no fractional part (Python `int`).
-    Int,
     String,
     Boolean,
     Null,

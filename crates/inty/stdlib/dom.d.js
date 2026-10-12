@@ -41,13 +41,13 @@
 
 /** type DataTransfer = {
     dropEffect: String, effectAllowed: String, types: String[],
-    files: {length: Int, item: (Int) => {name: String, size: Number, type: String, lastModified: Number, text: () => Promise<String>} | Null},
+    files: {length: Number, item: (Number) => {name: String, size: Number, type: String, lastModified: Number, text: () => Promise<String>} | Null},
     getData: (String) => String, setData: (String, String) => Undefined,
     clearData: () => Undefined
 } */
 
 /** type Touch<T> = {
-    identifier: Int, target: T, clientX: Number, clientY: Number,
+    identifier: Number, target: T, clientX: Number, clientY: Number,
     pageX: Number, pageY: Number, screenX: Number, screenY: Number,
     radiusX: Number, radiusY: Number, force: Number
 } */
@@ -60,10 +60,10 @@
     clientX: Number, clientY: Number, pageX: Number, pageY: Number,
     screenX: Number, screenY: Number, offsetX: Number, offsetY: Number,
     movementX: Number, movementY: Number, x: Number, y: Number,
-    button: Int, buttons: Int, relatedTarget: T | Null,
-    pointerId: Int, pointerType: String, pressure: Number, width: Number, height: Number,
+    button: Number, buttons: Number, relatedTarget: T | Null,
+    pointerId: Number, pointerType: String, pressure: Number, width: Number, height: Number,
     isPrimary: Boolean,
-    deltaX: Number, deltaY: Number, deltaZ: Number, deltaMode: Int,
+    deltaX: Number, deltaY: Number, deltaZ: Number, deltaMode: Number,
     key: String, code: String, repeat: Boolean, isComposing: Boolean,
     shiftKey: Boolean, ctrlKey: Boolean, metaKey: Boolean, altKey: Boolean,
     getModifierState: (String) => Boolean,
@@ -119,8 +119,8 @@
     createLinearGradient: (Number, Number, Number, Number) => CanvasGradient,
     createRadialGradient: (Number, Number, Number, Number, Number, Number) => CanvasGradient,
     drawImage: (image: T, dx: Number, dy: Number, dw?: Number, dh?: Number) => Undefined,
-    getImageData: (Number, Number, Number, Number) => {width: Int, height: Int, data: Uint8Array},
-    putImageData: ({width: Int, height: Int, data: Uint8Array}, Number, Number) => Undefined
+    getImageData: (Number, Number, Number, Number) => {width: Number, height: Number, data: Uint8Array},
+    putImageData: ({width: Number, height: Number, data: Uint8Array}, Number, Number) => Undefined
 } */
 
 /** type Element<T> = {
@@ -185,13 +185,13 @@
     width: Number, height: Number,
     getContext: (String) => CanvasRenderingContext2D<T>,
     toDataURL: () => String,
-    setPointerCapture: (Int) => Undefined, releasePointerCapture: (Int) => Undefined,
-    hasPointerCapture: (Int) => Boolean,
+    setPointerCapture: (Number) => Undefined, releasePointerCapture: (Number) => Undefined,
+    hasPointerCapture: (Number) => Boolean,
     dataset: {},
     scrollBy: (Number, Number) => Undefined, scrollTo: (Number, Number) => Undefined,
     select: () => Undefined,
-    selectionStart: Int, selectionEnd: Int,
-    files: {length: Int, item: (Int) => {name: String, size: Number, type: String, lastModified: Number, text: () => Promise<String>} | Null},
+    selectionStart: Number, selectionEnd: Number,
+    files: {length: Number, item: (Number) => {name: String, size: Number, type: String, lastModified: Number, text: () => Promise<String>} | Null},
     play: () => Promise<Undefined>, pause: () => Undefined, currentTime: Number, paused: Boolean,
     title: String, placeholder: String, type: String, name: String, href: String,
     draggable: Boolean, contentEditable: String
@@ -364,12 +364,12 @@ const navigator;
 
 /** type Blob = {
     size: Number, type: String,
-    slice: (start?: Int, end?: Int, type?: String) => Blob,
+    slice: (start?: Number, end?: Number, type?: String) => Blob,
     text: () => Promise<String>, arrayBuffer: () => Promise<ArrayBuffer>
 } */
 
 /** type Response<T> = {
-    status: Int, ok: Boolean, statusText: String, url: String, redirected: Boolean,
+    status: Number, ok: Boolean, statusText: String, url: String, redirected: Boolean,
     json: () => Promise<T>, text: () => Promise<String>,
     arrayBuffer: () => Promise<ArrayBuffer>, blob: () => Promise<Blob>,
     headers: {get: (String) => String | Null, has: (String) => Boolean}
@@ -395,16 +395,16 @@ const navigator;
 // narrow it with `typeof e.data === "string"`.
 /** type WebSocketMessage = {data: String | ArrayBuffer, type: String} */
 /** const WebSocket: (url: String, protocols?: String) => {
-        url: String, readyState: Int, bufferedAmount: Int, binaryType: String,
+        url: String, readyState: Number, bufferedAmount: Number, binaryType: String,
         protocol: String,
         send: (data: String | ArrayBuffer | Uint8Array | Float32Array) => Undefined,
-        close: (code?: Int, reason?: String) => Undefined,
+        close: (code?: Number, reason?: String) => Undefined,
         onopen: ({type: String}) => Undefined,
-        onclose: ({code: Int, reason: String, wasClean: Boolean}) => Undefined,
+        onclose: ({code: Number, reason: String, wasClean: Boolean}) => Undefined,
         onerror: ({type: String}) => Undefined,
         onmessage: (WebSocketMessage) => Undefined,
         addEventListener: (String, (WebSocketMessage) => Undefined) => Undefined,
-        CONNECTING: Int, OPEN: Int, CLOSING: Int, CLOSED: Int
+        CONNECTING: Number, OPEN: Number, CLOSING: Number, CLOSED: Number
     } */
 const WebSocket;
 
@@ -429,18 +429,18 @@ const ResizeObserver;
     cancelScheduledValues: (time: Number) => Undefined
 } */
 /** type AudioBuffer = {
-    sampleRate: Number, length: Int, duration: Number, numberOfChannels: Int,
-    getChannelData: (Int) => Float32Array,
-    copyToChannel: (source: Float32Array, channel: Int, offset?: Int) => Undefined,
-    copyFromChannel: (target: Float32Array, channel: Int, offset?: Int) => Undefined
+    sampleRate: Number, length: Number, duration: Number, numberOfChannels: Number,
+    getChannelData: (Number) => Float32Array,
+    copyToChannel: (source: Float32Array, channel: Number, offset?: Number) => Undefined,
+    copyFromChannel: (target: Float32Array, channel: Number, offset?: Number) => Undefined
 } */
 /** type AudioNode<M> = {
-    numberOfInputs: Int, numberOfOutputs: Int, channelCount: Int,
-    connect: (destination: AudioNode<M>, output?: Int, input?: Int) => AudioNode<M>,
+    numberOfInputs: Number, numberOfOutputs: Number, channelCount: Number,
+    connect: (destination: AudioNode<M>, output?: Number, input?: Number) => AudioNode<M>,
     disconnect: () => Undefined,
     gain: AudioParam, frequency: AudioParam, detune: AudioParam, playbackRate: AudioParam,
     type: String,
-    fftSize: Int, frequencyBinCount: Int, smoothingTimeConstant: Number,
+    fftSize: Number, frequencyBinCount: Number, smoothingTimeConstant: Number,
     getFloatTimeDomainData: (Float32Array) => Undefined,
     getFloatFrequencyData: (Float32Array) => Undefined,
     getByteTimeDomainData: (Uint8Array) => Undefined,
@@ -460,14 +460,14 @@ const ResizeObserver;
     createGain: () => AudioNode<M>, createAnalyser: () => AudioNode<M>,
     createBufferSource: () => AudioNode<M>, createOscillator: () => AudioNode<M>,
     createMediaStreamSource: (MediaStream) => AudioNode<M>,
-    createBuffer: (channels: Int, length: Int, sampleRate: Number) => AudioBuffer,
+    createBuffer: (channels: Number, length: Number, sampleRate: Number) => AudioBuffer,
     decodeAudioData: (ArrayBuffer) => Promise<AudioBuffer>,
     audioWorklet: {addModule: (String) => Promise<Undefined>}
 } */
 /** const AudioContext: <M>(options?: {sampleRate?: Number, latencyHint?: String}) => AudioContext<M> */
 const AudioContext;
 /** const AudioWorkletNode: <M, P>(context: AudioContext<M>, name: String, options?: {
-        numberOfInputs?: Int, numberOfOutputs?: Int, outputChannelCount?: Int[],
+        numberOfInputs?: Number, numberOfOutputs?: Number, outputChannelCount?: Number[],
         processorOptions?: P
     }) => AudioNode<M> */
 const AudioWorkletNode;

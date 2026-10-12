@@ -211,19 +211,6 @@ impl InferState {
             self.escaped_locals,
             self.local_decl_spans,
         ) = outer_locals;
-        // The program's own numeric variables (`let i = 0` at the top
-        // level) get their defaults here, as a function's do when it's
-        // generalised — except, in an imported module, those its
-        // bindings reach: the importers' uses decide those (see
-        // `resolve_constraints_keeping`).
-        let keep = match (&result, self.module_depth > 0) {
-            (Ok((_, env)), true) => self.reachable_vars(env),
-            _ => Default::default(),
-        };
-        if let Err(e) = self.default_numeric(&keep, false) {
-            self.push_error(e);
-        }
-
         // Use before initialisation is invisible to inference, which lets
         // every binding of a scope be referenced from anywhere in it (so
         // hoisted functions can use later declarations). Check execution

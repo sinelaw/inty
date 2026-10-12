@@ -92,13 +92,13 @@ fn test_infer_function() {
 #[test]
 fn test_infer_array_length() {
     let ty = infer_expr_str("[1, 2, 3].length").unwrap();
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Number);
 }
 
 #[test]
 fn test_infer_string_length() {
     let ty = infer_expr_str("\"hello\".length").unwrap();
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Number);
 }
 
 #[test]
@@ -186,8 +186,6 @@ fn infer_program_with_state(source: &str) -> InferResult<(Type, TypeEnv, InferSt
         result_ty = ty;
         final_env = new_env;
     }
-    // What the end of a program does: default its numeric variables.
-    state.default_numeric(&Default::default(), false)?;
 
     Ok((result_ty, final_env, state))
 }
@@ -264,7 +262,7 @@ fn test_var_declared_then_assigned() {
     let (_, env, state) = infer_program_with_state("var x; x = 42;").unwrap();
     let scheme = env.lookup("x").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Number);
 }
 
 #[test]
@@ -308,7 +306,7 @@ fn test_value_restriction_variable_reference_polymorphic() {
     // myId should work with both Number and String
     let a_scheme = env.lookup("a").unwrap();
     let a_ty = state.apply_subst(&a_scheme.body.ty);
-    assert_eq!(a_ty, Type::Int);
+    assert_eq!(a_ty, Type::Number);
 
     let b_scheme = env.lookup("b").unwrap();
     let b_ty = state.apply_subst(&b_scheme.body.ty);
@@ -327,7 +325,7 @@ fn test_value_restriction_function_literal_polymorphic() {
 
     let a_scheme = env.lookup("a").unwrap();
     let a_ty = state.apply_subst(&a_scheme.body.ty);
-    assert_eq!(a_ty, Type::Int);
+    assert_eq!(a_ty, Type::Number);
 
     let b_scheme = env.lookup("b").unwrap();
     let b_ty = state.apply_subst(&b_scheme.body.ty);
@@ -343,7 +341,7 @@ fn test_value_restriction_array_literal_polymorphic() {
     let (_, env, state) = infer_program_with_state(source).unwrap();
     let scheme = env.lookup("arr").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    assert_eq!(ty, Type::array(Type::Int));
+    assert_eq!(ty, Type::array(Type::Number));
 }
 
 #[test]
@@ -420,12 +418,11 @@ fn test_var_used_but_never_assigned() {
     "#;
     let (_, env, state) = infer_program_with_state(source).unwrap();
 
-    // y is a number (`Int`, the end of the program's default), or still a
-    // variable.
+    // y is a number, or still a variable.
     let y_scheme = env.lookup("y").unwrap();
     let y_ty = state.apply_subst(&y_scheme.body.ty);
     assert!(
-        matches!(y_ty, Type::Int | Type::Number | Type::Var(_)),
+        matches!(y_ty, Type::Number | Type::Var(_)),
         "y should be a number, got {y_ty:?}"
     );
 }
@@ -460,8 +457,8 @@ fn test_this_method_returns_concrete_type() {
     let px_ty = state.apply_subst(&px_scheme.body.ty);
     assert_eq!(
         px_ty,
-        Type::Int,
-        "point.getX() should return Int, got {:?}",
+        Type::Number,
+        "point.getX() should return Number, got {:?}",
         px_ty
     );
 
@@ -470,8 +467,8 @@ fn test_this_method_returns_concrete_type() {
     let py_ty = state.apply_subst(&py_scheme.body.ty);
     assert_eq!(
         py_ty,
-        Type::Int,
-        "point.getY() should return Int, got {:?}",
+        Type::Number,
+        "point.getY() should return Number, got {:?}",
         py_ty
     );
 }
@@ -495,7 +492,7 @@ fn test_this_method_computed_return() {
     let a_ty = state.apply_subst(&a_scheme.body.ty);
     assert_eq!(
         a_ty,
-        Type::Int,
+        Type::Number,
         "rect.area() should return Number, got {:?}",
         a_ty
     );
@@ -690,7 +687,7 @@ fn test_simple_this_member_access() {
     // The type should be Number, not a type variable
     assert_eq!(
         result_type,
-        Type::Int,
+        Type::Number,
         "Result of obj.getValue() should be Number, got: {:?}",
         result_type
     );
@@ -721,7 +718,7 @@ fn test_chained_call_without_generalization() {
 
     assert_eq!(
         result_type,
-        Type::Int,
+        Type::Number,
         "Result of inline builder should be Number, got: {:?}",
         result_type
     );
@@ -754,7 +751,7 @@ fn test_builder_final_result_is_concrete() {
     // The type should be Number, not a type variable
     assert_eq!(
         result_type,
-        Type::Int,
+        Type::Number,
         "Result of builder.setValue(42).build() should be Number, got: {:?}",
         result_type
     );
@@ -1063,7 +1060,7 @@ fn test_rank_n_annotated_polymorphic_field_accepts_polymorphic_rhs() {
     let z1 = state.apply_subst(&env.lookup("z1").unwrap().body.ty);
     let z2 = state.apply_subst(&env.lookup("z2").unwrap().body.ty);
     assert_eq!(z1, Type::String);
-    assert_eq!(z2, Type::Int);
+    assert_eq!(z2, Type::Number);
 }
 
 #[test]
@@ -1119,13 +1116,12 @@ fn test_add_function_has_plus_constraint() {
     // The type should be a function
     assert!(ty.is_func(), "add should be a function type");
 
-    // The constraint relates the parameters to the result: `Plus a b c`,
-    // the operands' types not unified (`add(1, 0.5)` is a `Number`).
-    assert_eq!(pred.types.len(), 3);
+    // `Plus a` on the operands' one type.
+    assert_eq!(pred.types.len(), 1);
     if let Some((_, params, _)) = ty.as_callable() {
         assert_eq!(params.len(), 2);
         assert_eq!(params[0].ty, pred.types[0]);
-        assert_eq!(params[1].ty, pred.types[1]);
+        assert_eq!(params[1].ty, pred.types[0]);
     }
 }
 
@@ -1203,7 +1199,7 @@ fn test_map_function_complete_type_signature() {
         &["a", "b"],
     )
     .unwrap();
-    assert_eq!(t, ["Int[]", "String[]"]);
+    assert_eq!(t, ["Number[]", "String[]"]);
     // The element flows from `arr` into `fn`: a string's elements are
     // strings, so `c * 2` is wrong.
     assert!(check_program(&format!("{map}\nmap(\"ab\", (c) => c.toFixed(1));"), &[]).is_err());
@@ -1570,7 +1566,7 @@ fn test_phase7_find_returns_optional() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("v").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    assert_eq!(ty, Type::Maybe(Nothing::Undefined, Box::new(Type::Int)));
+    assert_eq!(ty, Type::Maybe(Nothing::Undefined, Box::new(Type::Number)));
 }
 
 #[test]
@@ -1588,7 +1584,7 @@ fn test_phase7_find_with_typeof_narrowing() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("pick").unwrap();
     let ty = state.apply_subst(scheme.ty());
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Number);
 }
 
 // ========================================================================
@@ -1858,7 +1854,7 @@ fn class_with_modifier_and_field_decls_types_check() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("n").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Number);
 }
 
 #[test]
@@ -1903,7 +1899,7 @@ fn class_field_array_type() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("first").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Number);
 }
 
 // ----- P7: optional chaining (?.) and nullish coalescing (??) -----
@@ -2018,7 +2014,7 @@ fn array_spread_propagates_element_type() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let scheme = env.lookup("ys").unwrap();
     let ty = state.apply_subst(&scheme.body.ty);
-    assert_eq!(ty, Type::array(Type::Int));
+    assert_eq!(ty, Type::array(Type::Number));
 }
 
 #[test]
@@ -2050,7 +2046,7 @@ fn object_spread_right_biased_merge() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     assert_eq!(
         state.apply_subst(&env.lookup("bx").unwrap().body.ty),
-        Type::Int
+        Type::Number
     );
     assert_eq!(
         state.apply_subst(&env.lookup("by").unwrap().body.ty),
@@ -2071,7 +2067,7 @@ fn object_spread_two_sources_merge() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     assert_eq!(
         state.apply_subst(&env.lookup("cx").unwrap().body.ty),
-        Type::Int
+        Type::Number
     );
     assert_eq!(
         state.apply_subst(&env.lookup("cy").unwrap().body.ty),
@@ -2089,11 +2085,11 @@ fn array_destructuring_rest_gives_array_type() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     assert_eq!(
         state.apply_subst(&env.lookup("hd").unwrap().body.ty),
-        Type::Int
+        Type::Number
     );
     assert_eq!(
         state.apply_subst(&env.lookup("tl").unwrap().body.ty),
-        Type::array(Type::Int)
+        Type::array(Type::Number)
     );
 }
 
@@ -2261,7 +2257,7 @@ fn generic_alias_used_as_function_return_type() {
         var f = p.first;";
     let (_, env, state) = infer_program_with_state(src).unwrap();
     let f = state.apply_subst(&env.lookup("f").unwrap().body.ty);
-    assert_eq!(f, Type::Int);
+    assert_eq!(f, Type::Number);
 }
 
 #[test]
@@ -2377,7 +2373,7 @@ fn quantifier_bound_identifier_resolves() {
     let (_, env, state) = infer_program_with_state(src).expect("explicit quantifier should bind T");
     assert_eq!(
         state.apply_subst(&env.lookup("n").unwrap().body.ty),
-        Type::Int
+        Type::Number
     );
     assert_eq!(
         state.apply_subst(&env.lookup("s").unwrap().body.ty),
@@ -2398,7 +2394,7 @@ fn polymorphic_annotation_checks_initializer_rigidly() {
     let (_, env, state) = infer_program_with_state(ok).expect("a polymorphic identity checks");
     assert_eq!(
         state.apply_subst(&env.lookup("n").unwrap().body.ty),
-        Type::Int
+        Type::Number
     );
     assert_eq!(
         state.apply_subst(&env.lookup("s").unwrap().body.ty),
@@ -2518,7 +2514,7 @@ fn object_destructuring_rest_strips_named_keys() {
     let (_, env, state) = infer_program_with_state(src).unwrap();
     assert_eq!(
         state.apply_subst(&env.lookup("av").unwrap().body.ty),
-        Type::Int
+        Type::Number
     );
     assert_eq!(
         state.apply_subst(&env.lookup("bv").unwrap().body.ty),
@@ -2587,7 +2583,7 @@ fn scc_forward_ref_through_intervening_const() {
     ";
     let (_, env, state) = infer_program_via_program(src).expect("must type-check");
     let x_ty = state.apply_subst(&env.lookup("x").unwrap().body.ty);
-    assert_eq!(x_ty, Type::Int);
+    assert_eq!(x_ty, Type::Number);
 }
 
 /// Forward reference from inside an object-literal property to a
@@ -2605,7 +2601,7 @@ fn scc_forward_ref_into_object_literal_property() {
     ";
     let (_, env, state) = infer_program_via_program(src).expect("must type-check");
     let y_ty = state.apply_subst(&env.lookup("y").unwrap().body.ty);
-    assert_eq!(y_ty, Type::Int);
+    assert_eq!(y_ty, Type::Number);
 }
 
 /// Mutual recursion produces one shared SCC. The pair `up` and
@@ -2649,7 +2645,7 @@ fn scc_polymorphic_callee_used_at_two_types() {
     ";
     let (_, env, state) = infer_program_via_program(src).expect("must type-check");
     let r_ty = state.apply_subst(&env.lookup("r").unwrap().body.ty);
-    assert_eq!(r_ty, Type::Int);
+    assert_eq!(r_ty, Type::Number);
 }
 
 /// Three-function dependency chain `a → b → c`, no cycles. Each
@@ -2666,7 +2662,7 @@ fn scc_topological_order_caller_after_callee() {
     ";
     let (_, env, state) = infer_program_via_program(src).expect("must type-check");
     let out_ty = state.apply_subst(&env.lookup("out").unwrap().body.ty);
-    assert_eq!(out_ty, Type::Int);
+    assert_eq!(out_ty, Type::Number);
 }
 
 /// IIFE library pattern — the gap-4c shape that motivated the SCC
@@ -2686,7 +2682,7 @@ fn scc_iife_library_pattern() {
     ";
     let (_, env, state) = infer_program_via_program(src).expect("must type-check");
     let y_ty = state.apply_subst(&env.lookup("y").unwrap().body.ty);
-    assert_eq!(y_ty, Type::Int);
+    assert_eq!(y_ty, Type::Number);
 }
 
 /// Phase 0.1 regression: `export function` declarations must hoist as a
@@ -2865,7 +2861,7 @@ fn object_property_shorthand() {
     let (_, env, state) = infer_program_via_program(src).unwrap();
     assert_eq!(
         state.apply_subst(&env.lookup("n").unwrap().body.ty),
-        Type::Int
+        Type::Number
     );
     assert_eq!(
         state.apply_subst(&env.lookup("s").unwrap().body.ty),
@@ -2924,7 +2920,7 @@ fn row_subst_merges_bindings_through_open_tail() {
         &["r"],
     )
     .unwrap();
-    assert_eq!(t[0], "{bar: String, foo: Int}");
+    assert_eq!(t[0], "{bar: String, foo: Number}");
 }
 
 /// Soundness companion to `row_subst_merges_bindings_through_open_tail`:
@@ -3301,7 +3297,7 @@ fn error_does_not_cascade_to_unrelated_bindings() {
     let _ = a_ty;
     // `b` is unrelated and must type-check to Number.
     let b_ty = state.apply_subst(&env_after.lookup("b").unwrap().body.ty);
-    assert_eq!(b_ty, Type::Int, "unrelated `b` should be Int");
+    assert_eq!(b_ty, Type::Number, "unrelated `b` should be Number");
 }
 
 // ---------------------------------------------------------------------------
@@ -3729,7 +3725,7 @@ fn test_for_init_literal_is_widened() {
     let mut state = InferState::new();
     state.infer_program(&initial_env(), &program).unwrap();
     let ty = state.apply_subst(state.get_decl_type(decl_span).unwrap());
-    assert_eq!(ty, Type::Int);
+    assert_eq!(ty, Type::Number);
 }
 
 /// Indexing an as-yet-unknown container with a literal (`xs[0]`) defers
@@ -3800,7 +3796,7 @@ fn gen_later_const_keeps_its_principal_type() {
     let t = check_program(src, &["pair", "both", "p"]).unwrap();
     assert_eq!(t[0], "<a, b>(a, b) => {first: a, second: b}");
     assert_eq!(t[1], "<a>(a) => {first: a, second: a}");
-    assert_eq!(t[2], "{first: String, second: Int}");
+    assert_eq!(t[2], "{first: String, second: Number}");
 }
 
 #[test]
@@ -3814,7 +3810,7 @@ fn gen_element_of_later_const_is_not_quantified() {
                const t = s * 2;";
     assert!(check_program(src, &[]).is_err());
     let ok = "function pick(i) { return NAMES[i]; }\nconst NAMES = [\"a\", \"b\"];";
-    assert_eq!(check_program(ok, &["pick"]).unwrap()[0], "(Int) => String");
+    assert_eq!(check_program(ok, &["pick"]).unwrap()[0], "(Number) => String");
 }
 
 #[test]
@@ -3837,8 +3833,8 @@ fn gen_captured_variable_is_not_quantified() {
     let src = "function outer(x) { function inner(y) { return x + y; } return inner; }\n\
                var addThree = outer(3);";
     let t = check_program(src, &["outer", "addThree"]).unwrap();
-    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a) => (b) => c");
-    assert_eq!(t[1], "(Int) => Int");
+    assert_eq!(t[0], "<a> where Plus a => (a) => (a) => a");
+    assert_eq!(t[1], "(Number) => Number");
 }
 
 #[test]
@@ -3866,12 +3862,10 @@ fn gen_hoisted_const_function_stays_immutable() {
 
 #[test]
 fn gen_parameter_shadows_function_name() {
-    // (`1`'s type is a variable of its own, `Int` or `Number`: `a + 1` is
-    // `a ⊔ b`.)
     let t = check_program("const f = (f) => f + 1;\nconst r = f(2);", &["f"]).unwrap();
-    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
+    assert_eq!(t[0], "(Number) => Number");
     let t = check_program("function g(g) { return g + 1; }\nconst r = g(2);", &["g"]).unwrap();
-    assert_eq!(t[0], "<a, b, c> where Arith a b c, Num b => (a) => c");
+    assert_eq!(t[0], "(Number) => Number");
 }
 
 #[test]
@@ -3890,13 +3884,13 @@ fn gen_return_in_both_branches_of_if() {
     // The `if` statement's completion type joined `Lit(0)` with `f`'s
     // return variable, pinning it to the singleton `0`.
     let src = "function f(n) { if (n == 0) return 0; else return f(n - 1); }";
-    let principal = "<a, b, c> where Arith a b a, Num c, Num b => (a) => c";
+    let principal = "(Number) => Number";
     assert_eq!(check_program(src, &["f"]).unwrap()[0], principal);
     let nested = "function f(n) { function g(m) { return f(m - 1); } \
                   if (n == 0) return 0; else return g(n); }";
     assert_eq!(
         check_program(nested, &["f"]).unwrap()[0],
-        "<a, b, c> where Arith a b a, Num b, Num c => (a) => c"
+        "(Number) => Number"
     );
 }
 
@@ -3951,7 +3945,7 @@ fn record_indexing_constrains_the_element() {
     .is_err());
     // A literal key selects the field; a computed key reads any field.
     let src = "const o = {x: \"s\", y: 1};\nconst a = o[\"x\"];\nconst b = o[\"y\"];";
-    assert_eq!(check_program(src, &["a", "b"]).unwrap(), ["String", "Int"]);
+    assert_eq!(check_program(src, &["a", "b"]).unwrap(), ["String", "Number"]);
     let src =
         "const o = {x: \"s\", y: \"t\"};\nfunction get(k) { return o[k]; }\nconst v = get(\"x\");";
     assert_eq!(check_program(src, &["v"]).unwrap(), ["String"]);
@@ -4018,14 +4012,14 @@ fn has_prop_string_parameter_used_through_methods() {
     // `s` is only known through its methods; a string satisfies them.
     let src = "function f(s) { return s.charCodeAt(0) + s.slice(1).length; }\n\
                const n = f(\"abc\");";
-    assert_eq!(check_program(src, &["n"]).unwrap(), ["Int"]);
+    assert_eq!(check_program(src, &["n"]).unwrap(), ["Number"]);
     // So does an array, for the methods arrays have.
     let arr = "function first(xs) { return xs.slice(0, 1); }\n\
                const a = first([1, 2]);\n\
                const b = first(\"xy\");";
     assert_eq!(
         check_program(arr, &["a", "b"]).unwrap(),
-        ["Int[]", "String"]
+        ["Number[]", "String"]
     );
     // A number has neither.
     assert!(check_program("function f(s) { return s.slice(1); }\nf(5);", &[]).is_err());
@@ -4077,7 +4071,7 @@ fn has_prop_unused_result_is_quantified() {
 fn has_prop_array_methods_on_a_parameter() {
     let src = "function add(xs, v) { xs.push(v); return xs.length; }\n\
                const n = add([1], 2);";
-    assert_eq!(check_program(src, &["n"]).unwrap(), ["Int"]);
+    assert_eq!(check_program(src, &["n"]).unwrap(), ["Number"]);
     // The pushed value must be an element.
     assert!(check_program(
         "function add(xs, v) { xs.push(v); return xs; }\nadd([1], \"s\");",
@@ -4131,7 +4125,7 @@ fn has_prop_on_a_union_needs_every_arm() {
               /** const b: String | Number[] */\n\
               const b = true ? \"abc\" : [1, 2];\n\
               const n = ln(b);";
-    assert_eq!(check_program(ok, &["s", "n"]).unwrap(), ["String", "Int"]);
+    assert_eq!(check_program(ok, &["s", "n"]).unwrap(), ["String", "Number"]);
 }
 
 #[test]
@@ -4161,14 +4155,14 @@ fn factories_reading_this_fields_stay_generic() {
     let src = "function W(s) { return { src: s, get: function() { return this.src; } }; }\n\
                const a = W(\"a\").get();\n\
                const b = W(5).get();";
-    assert_eq!(check_program(src, &["a", "b"]).unwrap(), ["String", "Int"]);
+    assert_eq!(check_program(src, &["a", "b"]).unwrap(), ["String", "Number"]);
 }
 
 #[test]
 fn has_prop_on_a_primitive_reports_the_missing_property() {
     let err = check_program("function up(s) { return s.toUpperCase(); }\nup(5);", &[]).unwrap_err();
     assert!(
-        err.contains("toUpperCase") && err.contains("Int"),
+        err.contains("toUpperCase") && err.contains("Number"),
         "{}",
         err
     );
@@ -4344,7 +4338,7 @@ fn a_null_branch_needs_the_sum_said() {
     let src = "/** function find<a>(xs: a[], v: a) => a | Null */\n\
                function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }\n\
                const hit = find([1, 2], 2);";
-    assert_eq!(check_program(src, &["hit"]).unwrap(), ["Int | Null"]);
+    assert_eq!(check_program(src, &["hit"]).unwrap(), ["Number | Null"]);
 }
 
 #[test]
@@ -4354,7 +4348,7 @@ fn statements_are_not_joined_by_value() {
     let src = "function w(line) { let n = 0; for (let i = 0; i < line.length; i++) { \
                const c = line.charCodeAt(i); if (c === 32) n += 1; else if (c === 9) n += 4; else break; } \
                return n; }\nconst k = w(\"  x\");";
-    assert_eq!(check_program(src, &["k"]).unwrap(), ["Int"]);
+    assert_eq!(check_program(src, &["k"]).unwrap(), ["Number"]);
 }
 
 #[test]
@@ -4388,7 +4382,7 @@ fn new_array_fill_is_an_array_of_the_value() {
     };
     assert_eq!(
         ty("const v = new Array(3).fill(-1);", "v").unwrap(),
-        "Int[]"
+        "Number[]"
     );
     assert_eq!(
         ty("const w = Array(2).fill(\"a\");", "w").unwrap(),
@@ -4396,11 +4390,11 @@ fn new_array_fill_is_an_array_of_the_value() {
     );
     assert_eq!(
         ty("const t = new Array(3); const v = t.fill(0);", "v").unwrap(),
-        "Int[]"
+        "Number[]"
     );
-    // The length is an `Int` (JS throws a RangeError otherwise), and a
-    // hole can't be read.
-    assert!(ty("const v = new Array(1.5).fill(0);", "v").is_err());
+    // The length is a number (one with a fraction is a fault: JavaScript
+    // throws a RangeError), and a hole can't be read.
+    assert!(ty("const v = new Array(1.5).fill(0);", "v").is_ok());
     assert!(ty("const t = new Array(3); const x = t[0];", "x").is_err());
     // A local `Array` is just that.
     assert_eq!(
@@ -4410,7 +4404,7 @@ fn new_array_fill_is_an_array_of_the_value() {
             "r"
         )
         .unwrap(),
-        "Int"
+        "Number"
     );
 }
 
@@ -4483,7 +4477,7 @@ fn narrowing_refines_only_bindings_that_never_change() {
         "let q = p(1); function f(a, b) { return a; } if (q !== null) { if (f(q = p(0), q.x)) {} }",
         // A `var` redeclared: its initialiser is a write.
         "function f() { var q = p(1); if (q === null) return 0; { var q = null; } return q.x; }",
-        // A local `undefined` is an `Int`, not the unit value.
+        // A local `undefined` is an `Number`, not the unit value.
         "function f() { const undefined = 0; const v = [1].find(x => x > 1); \
          if (v === undefined) return 0; return v + 1; }",
         // A closure writes it.
@@ -4617,7 +4611,7 @@ fn destructuring_defaults_are_checked() {
     .unwrap();
     assert!(state.errors.is_empty(), "{:?}", state.errors);
     let ty = |n: &str| state.apply_subst(&env.lookup(n).unwrap().body.ty);
-    assert_eq!(ty("a"), Type::Int);
+    assert_eq!(ty("a"), Type::Number);
     assert_eq!(ty("c"), Type::String);
     // A default must be of the property's type.
     assert!(infer_program_via_program_with_stdlib("const { a = \"s\" } = { a: 2 };").is_err());
@@ -4640,7 +4634,7 @@ fn typed_arrays_have_fixed_length_and_machine_elements() {
     );
     assert_eq!(
         ty("const a = new Int32Array(4); const x = a[0];", "x").unwrap(),
-        "Int"
+        "Number"
     );
     assert_eq!(
         ty(
@@ -4656,10 +4650,11 @@ fn typed_arrays_have_fixed_length_and_machine_elements() {
             "n"
         )
         .unwrap(),
-        "Int"
+        "Number"
     );
-    // An integer array stores `Int`s only (JavaScript would truncate).
-    assert!(ty("const a = new Int32Array(1); a[0] = 1.5;", "a").is_err());
+    // An integer array stores any number, wrapped to its bits as
+    // JavaScript does.
+    assert!(ty("const a = new Int32Array(1); a[0] = 1.5;", "a").is_ok());
     assert!(ty("const a = new Int32Array(1); a[0] = 3;", "a").is_ok());
     assert!(ty("const f = new Float64Array(1); f[0] = 3;", "f").is_ok());
     // Fixed length: no `push`. A typed array is not an ordinary array.
@@ -4669,9 +4664,9 @@ fn typed_arrays_have_fixed_length_and_machine_elements() {
         "c"
     )
     .is_err());
-    assert!(ty("const a = new Int32Array(1.5);", "a").is_err());
-    // An index is an `Int`.
-    assert!(ty("const a = new Int32Array(2); const x = a[0.5];", "x").is_err());
+    assert!(ty("const a = new Int32Array(1.5);", "a").is_ok());
+    // An index is a number (one with a fraction reads nothing: a fault).
+    assert!(ty("const a = new Int32Array(2); const x = a[0.5];", "x").is_ok());
     // Distinct kinds don't mix.
     assert!(ty("const a = new Int32Array(1); const b = new Uint8Array(1); const c = true ? a : b; c[0] = 1;", "c").is_err());
 }
@@ -4875,7 +4870,7 @@ fn test_while_true_with_break_falls_through() {
 fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
     // A spread operand of unknown shape may hold any field written before
     // it, and then wins: the two must agree on its type. (Taking the
-    // operand's tail alone typed `f({a: "s"}).a` as an `Int`.)
+    // operand's tail alone typed `f({a: "s"}).a` as an `Number`.)
     let rejected = [
         r#"
         function f(o) { return {a: 1, ...o}; }
@@ -4991,40 +4986,39 @@ fn test_indexing_a_string_literal() {
 
 #[test]
 fn plus_is_principal_whatever_the_order() {
-    // `xs.length` is an `Int` only once `xs` is known: `+` used to unify
-    // its operands while both were unknown, making `y` an `Int` too.
+    // `+` takes two operands of one type, a number or a string.
     let src = "function len(xs, y) { return xs.length + y; }\n\
                const a = len([1], 0.5);\n\
                const b = len(\"ab\", 1);\n\
                const c = len([1], \"!\") ;";
-    assert!(check_program(src, &[]).is_err(), "Int + String");
+    assert!(check_program(src, &[]).is_err(), "Number + String");
     let ok = "function len(xs, y) { return xs.length + y; }\n\
               const a = len([1], 0.5);\n\
               const b = len(\"ab\", 1);";
     let t = check_program(ok, &["a", "b"]).unwrap();
-    assert_eq!(t, vec!["Number".to_string(), "Int".to_string()]);
+    assert_eq!(t, vec!["Number".to_string(), "Number".to_string()]);
     let add = "function add(x, y) { return x + y; }\n\
                const n = add(1, 0.5);\n\
                const s = add(\"a\", \"b\");";
     let t = check_program(add, &["add", "n", "s"]).unwrap();
-    assert_eq!(t[0], "<a, b, c> where Plus a b c => (a, b) => c");
+    assert_eq!(t[0], "<a> where Plus a => (a, a) => a");
     assert_eq!(t[1], "Number");
     assert_eq!(t[2], "String");
 }
 
 #[test]
-fn a_scheme_keeps_its_numeric_variables() {
-    // Nothing is defaulted where a function is generalised, so each use
-    // picks its own instance.
+fn numbers_are_one_type() {
+    // An integer and a fraction are both `Number`s: nothing to choose
+    // between where a function is generalised, nor at a use.
     let src = "function half(x) { return x * 0.5; }\n\
                function k() { return 1; }\n\
                const xs = [0.5, k()];\n\
                const i = [10, 20][k()];";
     let t = check_program(src, &["half", "k", "xs", "i"]).unwrap();
-    assert_eq!(t[0], "<a> where Num a => (a) => Number");
-    assert_eq!(t[1], "<a> where Num a => () => a");
+    assert_eq!(t[0], "(Number) => Number");
+    assert_eq!(t[1], "() => Number");
     assert_eq!(t[2], "Number[]");
-    assert_eq!(t[3], "Int");
+    assert_eq!(t[3], "Number");
 }
 
 #[test]
@@ -5036,21 +5030,19 @@ fn arith_on_a_string_is_rejected_at_the_use() {
 }
 
 #[test]
-fn a_recursive_group_shares_its_numeric_variables() {
-    // `f`'s local number is `g`'s parameter: quantified by `g` alone, it was
-    // left in `f`'s body with nothing to decide it.
+fn a_recursive_group_types_its_numbers() {
     let src = "function f(s) { let x = 0; x = x + 1; return g(s, x); }\n\
                function g(s, i) { return i > 3 ? s : f(s + \"!\"); }";
     let t = check_program(src, &["f", "g"]).unwrap();
-    assert!(t[0].starts_with("<a"), "{}", t[0]);
-    assert!(t[1].starts_with("<a"), "{}", t[1]);
+    assert_eq!(t[0], "(String) => String");
+    assert_eq!(t[1], "(String, Number) => String");
 }
 
 /// A class's methods see the variables outside the class, not the
 /// constructor's parameters, but inty lowers a class to a factory taking
 /// those parameters with the methods inside it. A method reading a name
 /// that is also a constructor parameter was typed as reading the
-/// parameter: `m` below was a `() => Int` and `new A(5).m() - 1` was
+/// parameter: `m` below was a `() => Number` and `new A(5).m() - 1` was
 /// accepted, though it computes `"outer" - 1`. The class is rejected now.
 #[test]
 fn class_method_reading_a_constructor_parameter_name_is_rejected() {
@@ -5076,7 +5068,7 @@ fn class_method_reading_a_constructor_parameter_name_is_rejected() {
         &["r"],
     )
     .unwrap();
-    assert_eq!(t[0], "Int");
+    assert_eq!(t[0], "Number");
 }
 
 /// A class's methods, shorthand ones included, are checked with the
@@ -5090,7 +5082,7 @@ fn class_methods_are_checked_against_the_instance() {
         &["r"],
     )
     .unwrap();
-    assert_eq!(t[0], "Int");
+    assert_eq!(t[0], "Number");
     assert!(check_program(
         "class C { constructor() { this.v = 1; } get() { return this.v; } }\n\
          const c = new C();\n\
@@ -5139,7 +5131,7 @@ fn external_class_declarations() {
     // A class with a body doesn't extend, and a bodiless one needs its
     // annotation.
     assert!(check_program(
-        "/** class C { a: Int } */ class C; class D extends C { m() { return 1; } }",
+        "/** class C { a: Number } */ class C; class D extends C { m() { return 1; } }",
         &[]
     )
     .is_err());
@@ -5169,7 +5161,7 @@ fn class_initialisers_read_only_fields_set_before() {
         &["a", "b", "c"],
     )
     .unwrap();
-    assert_eq!(t, ["Int", "Int", "Int"]);
+    assert_eq!(t, ["Number", "Number", "Number"]);
     for (src, why) in [
         ("class A { x = this.y; y = 1; }", "isn't a field set before"),
         (
@@ -5233,7 +5225,7 @@ fn new_and_class_calls() {
         &["f"],
     )
     .unwrap();
-    assert_eq!(t[0], "Int");
+    assert_eq!(t[0], "Number");
 }
 
 /// An arrow function isn't a constructor: `new` on one throws a
@@ -5257,7 +5249,7 @@ fn arrow_functions_are_not_constructors() {
         &["r", "s"],
     )
     .unwrap();
-    assert_eq!(t, ["Int", "Int"]);
+    assert_eq!(t, ["Number", "Number"]);
 }
 
 /// A getter is read, not stored to (a store throws in strict code), and a
@@ -5272,7 +5264,7 @@ fn getters_and_prototype_members() {
         &["n", "c"],
     )
     .unwrap();
-    assert_eq!(t, ["Int", "Int"]);
+    assert_eq!(t, ["Number", "Number"]);
     for src in [
         "const o = { get g() { return 1; } }; o.g = 2;",
         "class A { get g() { return 1; } } const a = new A(); a.g = 2;",
@@ -5292,7 +5284,7 @@ fn getters_and_prototype_members() {
         &["a"],
     )
     .unwrap();
-    assert_eq!(t[0], "Int");
+    assert_eq!(t[0], "Number");
     // A class's own fields are copied, and stored to.
     let t = check_program(
         "class P { x = 1; m() { return this.x; } } const p = new P(); p.x = 2;\n\
@@ -5300,7 +5292,7 @@ fn getters_and_prototype_members() {
         &["r"],
     )
     .unwrap();
-    assert_eq!(t[0], "Int");
+    assert_eq!(t[0], "Number");
 }
 
 #[test]
@@ -5377,14 +5369,14 @@ fn a_builtin_calls_its_callbacks_detached() {
         (
             "const r = [1, 2].map(function (n) { return n + 1; });",
             "r",
-            "Int[]",
+            "Number[]",
         ),
-        ("const r = [1, 2].map((n) => n * 2);", "r", "Int[]"),
+        ("const r = [1, 2].map((n) => n * 2);", "r", "Number[]"),
         (
             "const o = { x: 1, m(n) { return this.x + n; } };\n\
              const r = [1, 2].map((n) => o.m(n));",
             "r",
-            "Int[]",
+            "Number[]",
         ),
         ("const r = \"ab\".slice(1);", "r", "String"),
     ] {

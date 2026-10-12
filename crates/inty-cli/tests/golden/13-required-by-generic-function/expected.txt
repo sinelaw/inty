@@ -1,9 +1,9 @@
-Error: Property 'toUpperCase' not found in type Int
+Error: Property 'toUpperCase' not found in type Number
    ╭─[ main.js:3:11 ]
    │
  3 │ const b = label({ name: 3 });
    │           ──┬──  
-   │             ╰──── Property 'toUpperCase' not found in type Int
+   │             ╰──── Property 'toUpperCase' not found in type Number
    │
    ├─[ lib.js:3:10 ]
    │

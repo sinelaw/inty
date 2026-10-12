@@ -377,36 +377,7 @@ impl InferState {
                     } else {
                         right_type.clone()
                     };
-                if let Err(mut e) = self.subsume(span, &rhs_for_assign, &left_type) {
-                    // A slot inferred `Int` (an integer initializer, and
-                    // nothing that needed more) given a fraction: say how
-                    // to declare it a `Number`.
-                    let fraction = matches!(
-                        self.zonk(&rhs_for_assign),
-                        Type::Number | Type::Literal(crate::types::LitValue::Number(_))
-                    );
-                    if lhs_resolved == Type::Int && fraction {
-                        let hint = match left {
-                            Expr::Member { property, .. } => Some(format!(
-                                "'{property}' was inferred Int from its integer initializer \
-                                 and its uses; if it holds fractions, declare it a Number \
-                                 where the object is written: `{property} /*: Number */: 0`"
-                            )),
-                            Expr::Ident { name, .. } => Some(format!(
-                                "'{name}' was inferred Int from its integer initializer \
-                                 and its uses; if it holds fractions, declare it a Number: \
-                                 `/** let {name}: Number */`"
-                            )),
-                            _ => None,
-                        };
-                        if let (Some(hint), Some(TypeError::UnificationError { context, .. })) =
-                            (hint, e.as_type_mut())
-                        {
-                            *context = Some(hint);
-                        }
-                    }
-                    return Err(e);
-                }
+                self.subsume(span, &rhs_for_assign, &left_type)?;
             }
 
             AssignOp::AddAssign => {
@@ -441,7 +412,7 @@ impl InferState {
             | AssignOp::BitXorAssign => {
                 self.require_num(span, &left_type)?;
                 self.require_num(span, &right_type)?;
-                self.subsume(span, &Type::Int, &left_type)?;
+                self.subsume(span, &Type::Number, &left_type)?;
             }
         }
 
@@ -599,11 +570,7 @@ impl InferState {
                                 || !is_mutable_container_literal(init)) =>
                     {
                         let env_free = new_env.free();
-                        if kind == VarKind::Const {
-                            self.generalize(&env_free, &var_type)
-                        } else {
-                            self.generalize_mutable(&env_free, &var_type)
-                        }
+                        self.generalize(&env_free, &var_type)
                     }
                     _ => TypeScheme::mono(var_type),
                 }

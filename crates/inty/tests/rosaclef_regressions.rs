@@ -47,7 +47,7 @@ fn new_date_without_argument() {
 }
 
 // 1. A comparison of property reads on a module-level binding, inside a
-// function declaration: `Number >= Int`.
+// function declaration.
 #[test]
 fn b1_compare_outer_property_reads() {
     ok("
@@ -156,7 +156,7 @@ fn b3_alias_forward_reference() {
 fn b3_recursive_aliases() {
     ok("
         /** type Tree = { label: String, kids: Tree[] } */
-        /** function size(t: Tree) => Int */
+        /** function size(t: Tree) => Number */
         function size(t) { let n = 1; for (const k of t.kids) n = n + size(k); return n; }
         const s = size({ label: \"a\", kids: [{ label: \"b\", kids: [] }] });
     ");
@@ -170,7 +170,7 @@ fn b3_recursive_aliases() {
     ");
     ok("
         /** type List<T> = { head: T, tail: List<T> | Null } */
-        /** const l: List<Int> */
+        /** const l: List<Number> */
         const l = { head: 1, tail: { head: 2, tail: null } };
     ");
     err("
@@ -209,7 +209,7 @@ fn b4_lib_class_visible_to_aliases() {
     ");
 }
 
-// 5. A non-literal `Int` flows into a `Number` field of a returned
+// 5. A length flows into a `Number` field of a returned
 // record: the annotation is pushed into the function literal.
 #[test]
 fn b5_int_into_number_positions() {
@@ -226,7 +226,7 @@ fn b5_int_into_number_positions() {
     ok("
         /** const p: Promise<{ n: Number }> */
         const p = Promise.resolve({ n: 1 });
-        /** const g: (Int) => { n: Number } */
+        /** const g: (Number) => { n: Number } */
         const g = (i) => ({ n: i });
     ");
     // The fresh object's slot is a Number: it may later hold a fraction.
@@ -237,9 +237,9 @@ fn b5_int_into_number_positions() {
         const s = f();
         s.n = 0.5;
     ");
-    // An existing Int record is not a Number record (it could be written
-    // a fraction through the other view).
-    err("
+    // An existing record of a length is a record of a number: there is
+    // one number type.
+    ok("
         const r = { n: [1].length };
         /** const s: { n: Number } */
         const s = r;
@@ -258,14 +258,14 @@ fn b5_literal_initialised_field() {
 fn b6_fewer_callback_parameters() {
     ok("const ys = [1, 2].map(() => \"a\");");
     ok("
-        /** function each(f: (Int, String) => Undefined) => Undefined */
+        /** function each(f: (Number, String) => Undefined) => Undefined */
         function each(f) { f(1, \"a\"); return undefined; }
         each(() => undefined);
         each((i) => undefined);
     ");
     // Not more than it is passed.
     err("
-        /** function each(f: (Int) => Undefined) => Undefined */
+        /** function each(f: (Number) => Undefined) => Undefined */
         function each(f) { f(1); return undefined; }
         each((i, j) => undefined);
     ");
@@ -292,7 +292,7 @@ fn b7_index_callbacks() {
         const k = ["a"].map(up);
         const n = ["1"].map(Number);
     "#);
-    // The index is an Int.
+    // The index is a number.
     err(r#"const xs = ["a"].map((x, i) => i.length);"#);
     ok("const s = [3, 1, 2].sort((a, b) => a - b); const t = [0.5].sort();");
 }
@@ -334,7 +334,7 @@ fn b9_promise_callbacks_return_values() {
         const p = Promise.resolve(true);
         /** const q: Promise<Boolean> */
         const q = p.catch((e) => false);
-        /** const r: Promise<Int> */
+        /** const r: Promise<Number> */
         const r = p.then((x) => Promise.resolve(x ? 1 : 2));
         /** const s: Promise<String> */
         const s = p.then((x) => x ? "a" : "b").then((y) => y + "!");
@@ -342,7 +342,7 @@ fn b9_promise_callbacks_return_values() {
     "#);
     ok(r#"
         function after(p) { return p.then((x) => x + 1); }
-        /** const q: Promise<Int> */
+        /** const q: Promise<Number> */
         const q = after(Promise.resolve(1));
     "#);
     err(r#"
@@ -364,7 +364,7 @@ fn b10_tuples() {
         const [a, b] = pairs[1];
         const c = a + "!";
         const d = b / 2;
-        /** function mk(s: String) => [String, Int] */
+        /** function mk(s: String) => [String, Number] */
         function mk(s) { return [s, s.length]; }
     "#);
     err(r#"/** const p: [String, Number] */ const p = [1, "a"];"#);
@@ -471,7 +471,7 @@ f[0] = 0.5;
 const u = new Uint8Array(8);
 u.set(u.subarray(0, 2), 4);
 const n = f.length + u.byteLength;
-/** const m: Map<String, Int> */
+/** const m: Map<String, Number> */
 const m = new Map();
 m.set("a", 1);
 /** const st: Set<String> */

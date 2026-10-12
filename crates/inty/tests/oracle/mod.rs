@@ -38,7 +38,7 @@ pub enum Run {
 
 pub fn core_type(t: &Type) -> String {
     match t {
-        Type::Number | Type::Int | Type::Literal(LitValue::Number(_)) => "number".into(),
+        Type::Number | Type::Literal(LitValue::Number(_)) => "number".into(),
         Type::String | Type::Literal(LitValue::String(_)) => "string".into(),
         Type::Boolean | Type::Literal(LitValue::Bool(_)) => "boolean".into(),
         Type::Undefined => "undefined".into(),
@@ -92,9 +92,6 @@ pub fn inty_run(program: &inty::ast::Program) -> Run {
         Err(Stuck::UncaughtThrow(v)) => Run::Thrown(value_wire(v)),
         Err(Stuck::FuelExhausted) => Run::Timeout,
         Err(Stuck::OutOfBounds { .. }) => Run::Fault("outOfBounds".into()),
-        // `Int` arithmetic leaving the safe integers, which the model's
-        // numbers, all one type, don't check.
-        Err(Stuck::IntRange { .. }) => Run::Fault("intRange".into()),
         // Spreading what isn't an object: JavaScript copies a primitive's
         // own properties, which the model and `dynamics` don't.
         Err(Stuck::NotImplemented(what)) if what.contains("spread") => {

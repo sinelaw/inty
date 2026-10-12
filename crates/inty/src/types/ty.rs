@@ -266,23 +266,8 @@ impl FieldEntry {
 /// Type class names for constraint-based polymorphism.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ClassName {
-    /// `Plus a b c`: `c` is the type of `a + b` — numbers (`Int` when
-    /// both are `Int`, `Number` when either is, as `Arith`), or strings
-    /// (all three `String`). `a` and `b` determine `c`; a known `String`
-    /// anywhere makes all three `String`, a number anywhere makes it an
-    /// `Arith`. `Plus a` is short for `Plus a a a`.
+    /// `Plus a`: `a + a` is an `a`, a `Number` or a `String`.
     Plus,
-    /// `Num a`: `a` is `Int` or `Number`.
-    Num,
-    /// `Num a` for the type of an integral literal (`0`, `42`): the same
-    /// constraint, printed as `Num`; it only differs in defaulting — to
-    /// `Int`, where a plain `Num` defaults to `Number`.
-    NumLit,
-    /// `Arith a b c`: `c` is the type of `a ∘ b` for an arithmetic
-    /// operator — `Int` when both are `Int`, `Number` when either is.
-    /// All three are `Num`. `a` and `b` determine `c`; `c = Int` also
-    /// determines `a = b = Int`.
-    Arith,
     /// Indexable class: types that support indexed access.
     /// Indexable(container, index, element)
     Indexable,
@@ -341,40 +326,11 @@ impl PartialEq for TypePred {
 impl Eq for TypePred {}
 
 impl TypePred {
-    /// `Plus t t t`: `+` on one type.
+    /// `Plus t`: `+` on `t`.
     pub fn plus(ty: Type) -> Self {
-        Self::plus3(ty.clone(), ty.clone(), ty)
-    }
-
-    /// `Plus left right result`.
-    pub fn plus3(left: Type, right: Type, result: Type) -> Self {
         TypePred {
             class: ClassName::Plus,
-            types: vec![left, right, result],
-            origin: None,
-        }
-    }
-
-    pub fn num(ty: Type) -> Self {
-        TypePred {
-            class: ClassName::Num,
             types: vec![ty],
-            origin: None,
-        }
-    }
-
-    pub fn num_lit(ty: Type) -> Self {
-        TypePred {
-            class: ClassName::NumLit,
-            types: vec![ty],
-            origin: None,
-        }
-    }
-
-    pub fn arith(left: Type, right: Type, result: Type) -> Self {
-        TypePred {
-            class: ClassName::Arith,
-            types: vec![left, right, result],
             origin: None,
         }
     }
@@ -689,15 +645,10 @@ impl RowType {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     // === Primitive types ===
-    /// JavaScript number type (all numbers are f64).
+    /// JavaScript number type (all numbers are f64). Whether a number is
+    /// an integer is not a matter of types: a code generator works it out
+    /// (the Go backend's integer analysis).
     Number,
-    /// A number with no fractional part: the refinement of `Number` that
-    /// array and string indices, `.length`, `indexOf` and the bitwise
-    /// operators range over. Every `Int` is a `Number` (`Int ≤ Number` in
-    /// `subsume`, at the top level only); they don't unify. A non-finite
-    /// result of an operation typed `Int` (`0 % 0`, `Math.floor(NaN)`)
-    /// is, like an out-of-bounds read, not ruled out.
-    Int,
     /// JavaScript string type.
     String,
     /// JavaScript boolean type.
@@ -876,14 +827,11 @@ impl TypedArrayKind {
         Self::ALL.into_iter().find(|k| k.name() == name)
     }
 
-    /// The type of an element as read, and as accepted by a store. An
-    /// integer array's store accepts only `Int`s: JavaScript would wrap
-    /// or truncate any other number, which a program rarely means.
+    /// The type of an element as read, and as accepted by a store (an
+    /// integer array converts what it stores, as JavaScript does: ToInt32
+    /// or ToUint8, wrapping).
     pub fn element(self) -> Type {
-        match self {
-            TypedArrayKind::Int32 | TypedArrayKind::Uint8 => Type::Int,
-            TypedArrayKind::Float32 | TypedArrayKind::Float64 => Type::Number,
-        }
+        Type::Number
     }
 }
 
@@ -1159,7 +1107,6 @@ impl Type {
             // to widen. `Error` is opaque — widening through it
             // would generate noise from a binding that already failed.
             Type::Number
-            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -1317,7 +1264,7 @@ impl Type {
     /// variable, a named type or a union has none).
     pub fn typeof_tag(&self) -> Option<&'static str> {
         match self {
-            Type::Number | Type::Int | Type::Literal(LitValue::Number(_)) => Some("number"),
+            Type::Number | Type::Literal(LitValue::Number(_)) => Some("number"),
             Type::String | Type::Literal(LitValue::String(_)) => Some("string"),
             Type::Boolean | Type::Literal(LitValue::Bool(_)) => Some("boolean"),
             Type::Undefined => Some("undefined"),
@@ -1531,7 +1478,6 @@ impl Type {
     fn collect_free_pvars(&self, pvars: &mut HashSet<PVarName>) {
         match self {
             Type::Number
-            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -1613,7 +1559,6 @@ impl Type {
     fn collect_free_vars(&self, vars: &mut HashSet<TVarName>) {
         match self {
             Type::Number
-            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -1845,7 +1790,6 @@ impl TypeScheme {
 fn union_member_sort_key(t: &Type) -> (u8, String) {
     match t {
         Type::Number => (0, String::new()),
-        Type::Int => (0, "int".to_string()),
         Type::String => (1, String::new()),
         Type::Boolean => (2, String::new()),
         Type::Undefined => (3, String::new()),

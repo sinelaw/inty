@@ -76,12 +76,7 @@ impl InferState {
                 {
                     // Named by their base types: `[String, Number]`, not
                     // `[String, 0.5]`, and variables renamed `a`, `b`, ….
-                    let base = |t: &Type| {
-                        t.widen_fresh_literals_with(&mut |lit| match lit {
-                            LitValue::Number(n) if crate::types::is_safe_int(*n) => Type::Int,
-                            lit => lit.base_type(),
-                        })
-                    };
+                    let base = |t: &Type| t.widen_fresh_literals();
                     let (l, r) = (self.zonk(&acc), self.zonk(&elem_ty));
                     let (left, right) = self.show_pair(&base(&l), &base(&r));
                     return Err(IntyError::from(TypeError::ArrayElementMismatch {
@@ -150,16 +145,16 @@ impl InferState {
         match &obj_type_resolved {
             Type::Array(elem_type) => {
                 // Array indexing: immediately unify index with Number and return element type
-                self.subsume(span, &index_type, &Type::Int)?;
+                self.subsume(span, &index_type, &Type::Number)?;
                 Ok(elem_type.as_ref().clone())
             }
             Type::String => {
                 // String indexing: returns String
-                self.subsume(span, &index_type, &Type::Int)?;
+                self.subsume(span, &index_type, &Type::Number)?;
                 Ok(Type::String)
             }
             Type::TypedArray(kind) => {
-                self.subsume(span, &index_type, &Type::Int)?;
+                self.subsume(span, &index_type, &Type::Number)?;
                 Ok(kind.element())
             }
             Type::Map(value_type) => {
@@ -173,7 +168,7 @@ impl InferState {
                 // so there's no single element type). A literal index
                 // selects that component; a dynamic index yields the union
                 // of all components (sound but lossy).
-                self.subsume(span, &index_type, &Type::Int)?;
+                self.subsume(span, &index_type, &Type::Number)?;
                 let elems = elems.clone();
                 match const_tuple_index(property, elems.len()) {
                     Some(Ok(i)) => Ok(elems[i].clone()),
@@ -206,7 +201,7 @@ impl InferState {
                         self.rebind_var(var_name.clone(), Type::array(elem_type.clone()));
                     }
 
-                    self.subsume(span, &index_type, &Type::Int)?;
+                    self.subsume(span, &index_type, &Type::Number)?;
                     Ok(elem_type)
                 } else {
                     // Regular object: use string indexing
@@ -244,15 +239,15 @@ impl InferState {
     ) -> InferResult<Type> {
         match obj_type {
             Type::Array(elem_type) => {
-                self.subsume(span, index_type, &Type::Int)?;
+                self.subsume(span, index_type, &Type::Number)?;
                 Ok(elem_type.as_ref().clone())
             }
             Type::String => {
-                self.subsume(span, index_type, &Type::Int)?;
+                self.subsume(span, index_type, &Type::Number)?;
                 Ok(Type::String)
             }
             Type::TypedArray(kind) => {
-                self.subsume(span, index_type, &Type::Int)?;
+                self.subsume(span, index_type, &Type::Number)?;
                 Ok(kind.element())
             }
             Type::Map(value_type) => {
@@ -263,7 +258,7 @@ impl InferState {
                 // No source-level index expression here (union elimination),
                 // so resolve a constant only from a literal index type;
                 // otherwise the union of components.
-                self.subsume(span, index_type, &Type::Int)?;
+                self.subsume(span, index_type, &Type::Number)?;
                 if let Type::Literal(LitValue::Number(n)) = self.zonk(index_type) {
                     if n.fract() == 0.0 && n >= 0.0 && (n as usize) < elems.len() {
                         return Ok(elems[n as usize].clone());
