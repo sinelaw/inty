@@ -11,7 +11,9 @@ statement breaks the build until the statement here is changed too, in the
 same diff, where a reviewer sees it.
 
 The rejected programs pin the other direction: the typing rules must not
-quietly become too permissive.
+quietly become too permissive. And the last two sections restate every
+typing rule and every equation of the interpreter, where a wrong model
+would hide: a theorem about the wrong rules is still a theorem.
 -/
 
 namespace Inty.Statements
@@ -668,5 +670,826 @@ example : ObjCase ls es T P ↔ P = T ∨ ∃ l ts Ps t, ∃ i : Nat, T.whnf = .
     rcases h with rfl | ⟨l, ts, Ps, t, i, hw, hl, hi, hP, ht⟩
     · exact .self
     · exact .variant hw hl hi hP ht⟩
+
+section Generated
+
+-- (The printed binders keep their names, used or not.)
+set_option linter.unusedVariables false
+
+/-! ## The typing rules
+
+Every rule of the typing judgement (`HasTypeS`), of literals' and
+operators' types (`LitTy`, `UnOpTy`, `BinOpTyS`) and of an object literal's
+case (`ObjCase`), restated: a rule changed, added to or dropped from these
+families breaks the build here until its statement here changes too, so
+a review sees each change to what the model types. (Printed by
+`scripts/PrintPins.lean`.) -/
+
+example : ∀ {S : Sys} {L : List String} {l : Lit} {τ : Ty} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode},
+      LitTy l τ → HasTypeS S L C Γ R rm Mode.synth (Expr.lit l) τ :=
+  @HasTypeS.lit
+
+example : ∀ {S : Sys} {L : List String} {Γ : Ctx} {i : Nat} {s : Scheme} {C : List Pred} {R : Option Ty} {rm : Mode}
+      {τs : List Ty},
+      Γ[i]? = some s →
+        List.length τs = Scheme.arity s →
+          (∀ (c : Pred), c ∈ Scheme.instPreds s τs → EntailsS S C c) →
+            HasTypeS S L C Γ R rm Mode.synth (Expr.var i) (Scheme.inst s τs) :=
+  @HasTypeS.var
+
+example : ∀ {S : Sys} {L : List String} {n : Nat} {C : List Pred} {Γ : List Scheme} {ρ : Ty} {body : Expr} {R : Option Ty}
+      {rm : Mode} {θ : Ty} {τs : List Ty},
+      List.length τs = n →
+        HasTypeS S L C (List.map Scheme.mono τs ++ Scheme.mono (Ty.fn θ τs ρ) :: Scheme.mono θ :: Γ) (some ρ) Mode.synth
+            Mode.synth body ρ →
+          HasTypeS S L C Γ R rm Mode.synth (Expr.func n body) (Ty.fn θ τs ρ) :=
+  @HasTypeS.func
+
+example : ∀ {S : Sys} {L : List String} {T : Ty} {n : Nat} {C : List Pred} {Γ : List Scheme} {θ : Ty} {τs : List Ty} {ρ : Ty}
+      {body : Expr} {R : Option Ty} {rm : Mode},
+      Ty.whnf T = Ty.fn θ τs ρ →
+        Sys.closed S T →
+          List.length τs = n →
+            HasTypeS S L C (List.map Scheme.mono τs ++ Scheme.mono (Ty.fn θ τs ρ) :: Scheme.mono θ :: Γ) (some ρ) Mode.check
+                Mode.check body ρ →
+              HasTypeS S L C Γ R rm Mode.check (Expr.func n body) T :=
+  @HasTypeS.funcCheck
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {f : Expr} {τs : List Ty} {ρ : Ty}
+      {args : List Expr},
+      HasTypeS S L C Γ R rm Mode.synth f (Ty.fn Ty.undefined τs ρ) →
+        List.length args = List.length τs →
+          (∀ (p : Expr × Ty), p ∈ List.zip args τs → HasTypeS S L C Γ R rm Mode.synth (Prod.fst p) (Prod.snd p)) →
+            HasTypeS S L C Γ R rm Mode.synth (Expr.app f args) ρ :=
+  @HasTypeS.app
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {ann : Option Scheme} {e₁ : Expr}
+      {md : Mode} {e₂ : Expr} {τ₂ : Ty} {mb : Bool} (s : Scheme) (F : List Nat),
+      (∀ (m : Nat),
+          (∀ (a : Nat), a ∈ F → a < m) →
+            HasTypeS S L (C ++ Scheme.openPreds s m) Γ R rm (annMode ann) e₁ (Scheme.open s m)) →
+        Scheme.arity s = 0 ∧ Scheme.preds s = [] ∨ Expr.IsValue e₁ ∧ Expr.writes 0 e₂ = false →
+          Scheme.Simple s →
+            Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ → HasTypeS S L C Γ R rm md (Expr.let_ mb ann e₁ e₂) τ₂ :=
+  @HasTypeS.let_
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e₁ : Expr} {md : Mode} {e₂ : Expr}
+      {τ₂ : Ty} {mb : Bool} (a : Scheme) (K : List Nat),
+      0 < Scheme.arity a →
+        Scheme.preds a = [] →
+          Scheme.ftv a = [] →
+            Scheme.rkeys a = [] →
+              (∀ (k : Nat), ¬k ∈ K → HasTypeS S L C Γ R rm Mode.check e₁ (Scheme.inst a (rigids k (Scheme.arity a)))) →
+                Expr.IsValue e₁ →
+                  Expr.writes 0 e₂ = false →
+                    HasTypeS S L C (a :: Γ) R rm md e₂ τ₂ → HasTypeS S L C Γ R rm md (Expr.let_ mb (some a) e₁ e₂) τ₂ :=
+  @HasTypeS.letPoly
+
+example : ∀ {S : Sys} {L : List String} {Γ : Ctx} {i : Nat} {s : Scheme} {C : List Pred} {R : Option Ty} {rm : Mode} {e : Expr},
+      Γ[i]? = some s →
+        Scheme.arity s = 0 →
+          Scheme.preds s = [] →
+            HasTypeS S L C Γ R rm Mode.synth e (Scheme.inst s []) →
+              HasTypeS S L C Γ R rm Mode.synth (Expr.assign i e) (Scheme.inst s []) :=
+  @HasTypeS.assign
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {c : Expr} {τc : Ty} {md : Mode}
+      {t : Expr} {τ : Ty} {e : Expr},
+      HasTypeS S L C Γ R rm Mode.synth c τc →
+        HasTypeS S L C Γ R rm md t τ → HasTypeS S L C Γ R rm md e τ → HasTypeS S L C Γ R rm md (Expr.cond c t e) τ :=
+  @HasTypeS.cond
+
+example : ∀ {S : Sys} {L : List String} {op : UnOp} {τ₁ τ : Ty} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr},
+      UnOpTy op τ₁ τ → HasTypeS S L C Γ R rm Mode.synth e τ₁ → HasTypeS S L C Γ R rm Mode.synth (Expr.unop op e) τ :=
+  @HasTypeS.unop
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {op : BinOp} {τ₁ τ₂ τ : Ty} {Γ : Ctx} {R : Option Ty} {rm : Mode}
+      {e₁ e₂ : Expr},
+      BinOpTyS S C op τ₁ τ₂ τ →
+        HasTypeS S L C Γ R rm Mode.synth e₁ τ₁ →
+          HasTypeS S L C Γ R rm Mode.synth e₂ τ₂ → HasTypeS S L C Γ R rm Mode.synth (Expr.binop op e₁ e₂) τ :=
+  @HasTypeS.binop
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {τr : Ty} {rm : Mode} {e : Expr} {md : Mode} {τ : Ty},
+      HasTypeS S L C Γ (some τr) rm rm e τr → HasTypeS S L C Γ (some τr) rm md (Expr.ret e) τ :=
+  @HasTypeS.ret
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τe τ : Ty},
+      HasTypeS S L C Γ R rm Mode.synth e τe → HasTypeS S L C Γ R rm Mode.synth (Expr.throw_ e) τ :=
+  @HasTypeS.throw_
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e₁ : Expr} {md : Mode} {e₂ : Expr}
+      {τ : Ty},
+      HasTypeS S L C Γ R rm Mode.check e₁ Ty.unknown →
+        HasTypeS S L C Γ R rm md e₂ τ → HasTypeS S L C Γ R rm md (Expr.seq e₁ e₂) τ :=
+  @HasTypeS.seq
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {c : Expr} {τc : Ty} {body : Expr},
+      HasTypeS S L C Γ R rm Mode.synth c τc →
+        HasTypeS S L C Γ R rm Mode.check body Ty.unknown →
+          HasTypeS S L C Γ R rm Mode.synth (Expr.while_ c body) Ty.undefined :=
+  @HasTypeS.while_
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {τ : Ty},
+      HasTypeS S L C Γ R rm md Expr.break_ τ :=
+  @HasTypeS.break_
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {τ : Ty},
+      HasTypeS S L C Γ R rm md Expr.continue_ τ :=
+  @HasTypeS.continue_
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {body : Expr} {τ : Ty}
+      {handler : Expr},
+      HasTypeS S L C Γ R rm md body τ →
+        HasTypeS S L C (Scheme.mono Ty.unknown :: Γ) R rm md handler τ →
+          HasTypeS S L C Γ R rm md (Expr.tryCatch body handler) τ :=
+  @HasTypeS.tryCatch
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {body : Expr} {τ : Ty}
+      {fin : Expr},
+      HasTypeS S L C Γ R rm md body τ →
+        HasTypeS S L C Γ R rm Mode.check fin Ty.unknown → HasTypeS S L C Γ R rm md (Expr.tryFinally body fin) τ :=
+  @HasTypeS.tryFinally
+
+example : ∀ {S : Sys} {L ls : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {ss : List Ty} {es : List Expr}
+      {ks : List FieldKind} {τs : List Ty},
+      List.length es = List.length ls →
+        List.length ks = List.length ls →
+          List.length τs = List.length ls →
+            List.length ss = List.length ls →
+              (∀ (l : String), l ∈ ls → l ∈ L) →
+                (∀ (p : Expr × Ty), p ∈ List.zip es τs → HasTypeS S L C Γ R rm Mode.synth (Prod.fst p) (Prod.snd p)) →
+                  (∀ (x : FieldKind × Expr × Ty × Ty),
+                      x ∈ List.zip ks (List.zip es (List.zip τs ss)) →
+                        FieldSlot (Ty.record L (objSlots L ls ss)) (Prod.fst x) (Prod.fst (Prod.snd x))
+                          (Prod.fst (Prod.snd (Prod.snd x))) (Prod.snd (Prod.snd (Prod.snd x)))) →
+                    HasTypeS S L C Γ R rm Mode.synth (Expr.obj ls es ks) (Ty.record L (objSlots L ls ss)) :=
+  @HasTypeS.obj
+
+example : ∀ {S : Sys} {L ls : List String} {es : List Expr} {ks : List ClassKind} {τs : List Ty} {C : List Pred} {Γ : Ctx}
+      {ss : List Ty} {R : Option Ty} {rm : Mode},
+      List.length es = List.length ls →
+        List.length ks = List.length ls →
+          List.length τs = List.length ls →
+            List.length ss = List.length ls →
+              List.Nodup ls →
+                (∀ (l : String), l ∈ ls → l ∈ L) →
+                  (∀ (i : Nat) (e : Expr) (k : ClassKind) (τ : Ty),
+                      es[i]? = some e →
+                        ks[i]? = some k →
+                          τs[i]? = some τ → HasTypeS S L C (memberCtx Γ ks τs i k) none Mode.synth Mode.synth e τ) →
+                    (∀ (x : ClassKind × Expr × Ty × Ty),
+                        x ∈ List.zip ks (List.zip es (List.zip τs ss)) →
+                          MemberSlotS S C (Ty.record L (objSlots L ls ss)) (Prod.fst x) (Prod.fst (Prod.snd x))
+                            (Prod.fst (Prod.snd (Prod.snd x))) (Prod.snd (Prod.snd (Prod.snd x)))) →
+                      HasTypeS S L C Γ R rm Mode.synth (Expr.cls ls es ks) (Ty.record L (objSlots L ls ss)) :=
+  @HasTypeS.cls
+
+example : ∀ {S : Sys} {L : List String} {n : Nat} {C : List Pred} {Γ : List Scheme} {ρ : Ty} {body : Expr} {R : Option Ty}
+      {rm : Mode} {τs : List Ty},
+      List.length τs = n →
+        HasTypeS S L C (List.map Scheme.mono τs ++ Scheme.mono (Ty.fn Ty.newTarget τs ρ) :: Scheme.mono Ty.newTarget :: Γ)
+            (some ρ) Mode.synth Mode.synth body ρ →
+          HasTypeS S L C Γ R rm Mode.synth (Expr.ctor n body) (Ty.fn Ty.newTarget τs ρ) :=
+  @HasTypeS.ctor
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {f : Expr} {τs : List Ty} {ρ : Ty}
+      {ss : List Ty} {args : List Expr},
+      HasTypeS S L C Γ R rm Mode.synth f (Ty.fn Ty.newTarget τs ρ) →
+        List.length args = List.length τs →
+          (∀ (p : Expr × Ty), p ∈ List.zip args τs → HasTypeS S L C Γ R rm Mode.synth (Prod.fst p) (Prod.snd p)) →
+            TyEq ρ (Ty.record L ss) → List.length ss = List.length L → HasTypeS S L C Γ R rm Mode.synth (Expr.new_ f args) ρ :=
+  @HasTypeS.new_
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ : Ty} {l : String}
+      {k σ : Ty},
+      HasTypeS S L C Γ R rm Mode.synth e τ →
+        EntailsS S C { cls := Cls.hasProp l, args := [τ, k, σ] } → HasTypeS S L C Γ R rm Mode.synth (Expr.get e l) σ :=
+  @HasTypeS.get
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ : Ty} {l : String}
+      {σ : Ty} {v : Expr},
+      HasTypeS S L C Γ R rm Mode.synth e τ →
+        EntailsS S C { cls := Cls.hasProp l, args := [τ, Ty.data, σ] } →
+          HasTypeS S L C Γ R rm Mode.synth v σ → HasTypeS S L C Γ R rm Mode.synth (Expr.set e l v) σ :=
+  @HasTypeS.set
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e₁ : Expr} {ss : List Ty}
+      {e₂ : Expr} {ps ks τs rs : List Ty},
+      List.length ps = List.length L →
+        List.length ks = List.length L →
+          List.length τs = List.length L →
+            List.length ss = List.length L →
+              List.length rs = List.length L →
+                HasTypeS S L C Γ R rm Mode.synth e₁ (Ty.record L ss) →
+                  HasTypeS S L C Γ R rm Mode.synth e₂ (Ty.record L (slots3 ps ks τs)) →
+                    (∀ (p : Pred), p ∈ mergePreds ps ks τs ss rs → EntailsS S C p) →
+                      HasTypeS S L C Γ R rm Mode.synth (Expr.spread e₁ e₂) (Ty.record L rs) :=
+  @HasTypeS.spread
+
+example : ∀ {S : Sys} {L : List String} {es : List Expr} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {τ : Ty},
+      (∀ (e : Expr), e ∈ es → HasTypeS S L C Γ R rm Mode.synth e τ) →
+        HasTypeS S L C Γ R rm Mode.synth (Expr.arr es) (Ty.array τ) :=
+  @HasTypeS.arr
+
+example : ∀ {S : Sys} {L : List String} {T : Ty} {es : List Expr} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {σ : Ty},
+      Ty.whnf T = Ty.array σ →
+        Sys.closed S T →
+          (∀ (e : Expr), e ∈ es → HasTypeS S L C Γ R rm Mode.check e σ) → HasTypeS S L C Γ R rm Mode.check (Expr.arr es) T :=
+  @HasTypeS.arrCheck
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ : Ty} {i : Expr}
+      {ι σ : Ty},
+      HasTypeS S L C Γ R rm Mode.synth e τ →
+        HasTypeS S L C Γ R rm Mode.synth i ι →
+          EntailsS S C { cls := Cls.indexable, args := [τ, ι, σ] } → HasTypeS S L C Γ R rm Mode.synth (Expr.index e i) σ :=
+  @HasTypeS.index
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ : Ty} {i : Expr}
+      {ι σ : Ty} {v : Expr},
+      HasTypeS S L C Γ R rm Mode.synth e τ →
+        HasTypeS S L C Γ R rm Mode.synth i ι →
+          EntailsS S C { cls := Cls.indexable, args := [τ, ι, σ] } →
+            EntailsS S C { cls := Cls.indexWrite, args := [τ] } →
+              HasTypeS S L C Γ R rm Mode.synth v σ → HasTypeS S L C Γ R rm Mode.synth (Expr.setIndex e i v) σ :=
+  @HasTypeS.setIndex
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ : Ty} {l : String}
+      {k : Ty} {τs : List Ty} {ρ : Ty} {args : List Expr},
+      HasTypeS S L C Γ R rm Mode.synth e τ →
+        EntailsS S C { cls := Cls.hasProp l, args := [τ, k, Ty.fn τ τs ρ] } →
+          List.length args = List.length τs →
+            (∀ (p : Expr × Ty), p ∈ List.zip args τs → HasTypeS S L C Γ R rm Mode.synth (Prod.fst p) (Prod.snd p)) →
+              HasTypeS S L C Γ R rm Mode.synth (Expr.mcall e l args) ρ :=
+  @HasTypeS.mcall
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e₁ : Expr} {τ₁ σ : Ty} {md : Mode}
+      {e₂ : Expr} {τ : Ty} {e₃ : Expr},
+      HasTypeS S L C Γ R rm Mode.synth e₁ τ₁ →
+        EntailsS S C { cls := Cls.strip, args := [τ₁, σ] } →
+          HasTypeS S L C Γ R rm md e₂ τ →
+            HasTypeS S L C (Scheme.mono σ :: Γ) R rm md e₃ τ → HasTypeS S L C Γ R rm md (Expr.unwrap e₁ e₂ e₃) τ :=
+  @HasTypeS.unwrap
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {s : String} {T : Ty},
+      Ty.whnf T = Ty.strLit s → HasTypeS S L C Γ R rm Mode.check (Expr.lit (Lit.string s)) T :=
+  @HasTypeS.litStr
+
+example : ∀ {S : Sys} {L ls : List String} {es : List Expr} {T P : Ty} {ks : List FieldKind} {τs : List Ty} {C : List Pred}
+      {Γ : Ctx} {R : Option Ty} {rm : Mode},
+      ObjCase ls es T P →
+        List.Nodup ls →
+          ks = List.map (fun _ => FieldKind.data) ls →
+            List.length es = List.length ls →
+              (∀ (l : String), l ∈ ls → l ∈ L) →
+                Ty.dataFields P ls = some τs →
+                  TyEq P (Ty.record L (objSlots L ls (List.map (fun τ => Ty.slot Ty.pre Ty.data τ) τs))) →
+                    (∀ (p : Expr × Ty), p ∈ List.zip es τs → HasTypeS S L C Γ R rm Mode.check (Prod.fst p) (Prod.snd p)) →
+                      HasTypeS S L C Γ R rm Mode.check (Expr.obj ls es ks) T :=
+  @HasTypeS.objCheck
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e₁ : Expr} {τ₁ : Ty} {d : Disc}
+      {t : String} {σ ρ : Ty} {md : Mode} {e₂ : Expr} {τ : Ty} {e₃ : Expr},
+      HasTypeS S L C Γ R rm Mode.synth e₁ τ₁ →
+        EntailsS S C { cls := Cls.caseTag d t, args := [τ₁, σ, ρ] } →
+          HasTypeS S L C (Scheme.mono ρ :: Γ) R rm md e₂ τ →
+            HasTypeS S L C (Scheme.mono σ :: Γ) R rm md e₃ τ → HasTypeS S L C Γ R rm md (Expr.caseTag e₁ d t e₂ e₃) τ :=
+  @HasTypeS.caseTag
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ τ' : Ty},
+      HasTypeS S L C Γ R rm Mode.synth e τ → TyEq τ τ' → HasTypeS S L C Γ R rm Mode.synth e τ' :=
+  @HasTypeS.conv
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ T : Ty},
+      HasTypeS S L C Γ R rm Mode.synth e τ →
+        Sys.closed S T → EntailsS S C (Sys.injPred S τ T) → HasTypeS S L C Γ R rm Mode.check e T :=
+  @HasTypeS.inj
+
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e : Expr} {τ : Ty},
+      HasTypeS S L C Γ R rm Mode.synth e τ → HasTypeS S L C Γ R rm Mode.check e Ty.unknown :=
+  @HasTypeS.drop
+
+example : ∀ {n : Float}, LitTy (Lit.number n) Ty.number :=
+  @LitTy.number
+
+example : ∀ {s : String}, LitTy (Lit.string s) Ty.string :=
+  @LitTy.string
+
+example : ∀ {b : Bool}, LitTy (Lit.boolean b) Ty.boolean :=
+  @LitTy.boolean
+
+example : LitTy Lit.undefined Ty.undefined :=
+  @LitTy.undefined
+
+example : LitTy Lit.null Ty.null :=
+  @LitTy.null
+
+example : ∀ {τ : Ty}, UnOpTy UnOp.not τ Ty.boolean :=
+  @UnOpTy.not
+
+example : ∀ {τ : Ty}, UnOpTy UnOp.typeof τ Ty.string :=
+  @UnOpTy.typeof
+
+example : UnOpTy UnOp.neg Ty.number Ty.number :=
+  @UnOpTy.neg
+
+example : ∀ {S : Sys} {C : List Pred} {τ : Ty}, EntailsS S C { cls := Cls.plus, args := [τ] } → BinOpTyS S C BinOp.plus τ τ τ :=
+  @BinOpTyS.plus
+
+example : ∀ {S : Sys} {C : List Pred}, BinOpTyS S C BinOp.minus Ty.number Ty.number Ty.number :=
+  @BinOpTyS.minus
+
+example : ∀ {ls : List String} {es : List Expr} {T : Ty}, ObjCase ls es T T :=
+  @ObjCase.self
+
+example : ∀ {ls : List String} {es : List Expr} {l t : String} {ts : List String} {i : Nat} {Ps : List Ty} {P T : Ty},
+      Ty.whnf T = Ty.variant (Disc.field l) ts Ps →
+        litTag l ls es = some t → firstIdx t ts = some i → Ps[i]? = some P → Ty.tagOf l P = some t → ObjCase ls es T P :=
+  @ObjCase.variant
+
+/-! ## The interpreter
+
+Every defining equation of the interpreter (`run` and the functions it
+calls, down to a literal's and an operator's value), restated, so a change
+to what a program does shows here too. (Printed by
+`scripts/PrintPins.lean`.) -/
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (l : Lit),
+      run clock env heap (Expr.lit l) = (Result.ok (Lit.eval l), clock, heap) :=
+  @run.eq_1
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (i : Nat),
+      run clock env heap (Expr.var i) =
+        match env[i]? with
+        | some ℓ =>
+          match heap[ℓ]? with
+          | some v => (Result.ok v, clock, heap)
+          | none => (Result.stuck Stuck.undefinedVariable, clock, heap)
+        | none => (Result.stuck Stuck.undefinedVariable, clock, heap) :=
+  @run.eq_2
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (n : Nat) (body : Expr),
+      run clock env heap (Expr.func n body) = (Result.ok (Value.closure env n body), clock, heap) :=
+  @run.eq_3
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (n : Nat) (body : Expr),
+      run clock env heap (Expr.ctor n body) = (Result.ok (Value.closure env n body), clock, heap) :=
+  @run.eq_4
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (f : Expr) (args : List Expr),
+      run clock env heap (Expr.app f args) =
+        bindC (run clock env heap f) fun vf c₁ h₁ =>
+          bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ => call (min c₂ clock) h₂ vf Value.undefined vs :=
+  @run.eq_5
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (f : Expr) (args : List Expr),
+      run clock env heap (Expr.new_ f args) =
+        bindC (run clock env heap f) fun vf c₁ h₁ =>
+          bindArgs (runArgs (min c₁ clock) env h₁ args) fun vs c₂ h₂ =>
+            match call (min c₂ clock) (h₂ ++ [Value.fields []]) (Value.asCtor vf) (Value.obj (List.length h₂)) vs with
+            | (Result.ok v, c₃, h₃) =>
+              (Result.ok (if Value.isObject v = true then v else Value.obj (List.length h₂)), c₃, h₃)
+            | p => p :=
+  @run.eq_6
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (mutable : Bool) (ann : Option Scheme) (e₁ e₂ : Expr),
+      run clock env heap (Expr.let_ mutable ann e₁ e₂) =
+        bindC (run clock env heap e₁) fun v c₁ h₁ => run (min c₁ clock) (List.length h₁ :: env) (h₁ ++ [v]) e₂ :=
+  @run.eq_7
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (i : Nat) (e_2 : Expr),
+      run clock env heap (Expr.assign i e_2) =
+        bindC (run clock env heap e_2) fun v c₁ h₁ =>
+          match env[i]? with
+          | some ℓ =>
+            if ℓ < List.length h₁ then (Result.ok v, c₁, List.set h₁ ℓ v)
+            else (Result.stuck Stuck.undefinedVariable, c₁, h₁)
+          | none => (Result.stuck Stuck.undefinedVariable, c₁, h₁) :=
+  @run.eq_8
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (c t e_2 : Expr),
+      run clock env heap (Expr.cond c t e_2) =
+        bindC (run clock env heap c) fun v c₁ h₁ =>
+          if Value.truthy v = true then run (min c₁ clock) env h₁ t else run (min c₁ clock) env h₁ e_2 :=
+  @run.eq_9
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (op : UnOp) (e_2 : Expr),
+      run clock env heap (Expr.unop op e_2) = bindC (run clock env heap e_2) fun v c₁ h₁ => (UnOp.eval op v, c₁, h₁) :=
+  @run.eq_10
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (op : BinOp) (e₁ e₂ : Expr),
+      run clock env heap (Expr.binop op e₁ e₂) =
+        bindC (run clock env heap e₁) fun v₁ c₁ h₁ =>
+          bindC (run (min c₁ clock) env h₁ e₂) fun v₂ c₂ h₂ => (BinOp.eval op v₁ v₂, c₂, h₂) :=
+  @run.eq_11
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e_2 : Expr),
+      run clock env heap (Expr.ret e_2) = bindC (run clock env heap e_2) fun v c₁ h₁ => (Result.returned v, c₁, h₁) :=
+  @run.eq_12
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e_2 : Expr),
+      run clock env heap (Expr.throw_ e_2) = bindC (run clock env heap e_2) fun v c₁ h₁ => (Result.thrown v, c₁, h₁) :=
+  @run.eq_13
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ e₂ : Expr),
+      run clock env heap (Expr.seq e₁ e₂) = bindC (run clock env heap e₁) fun x c₁ h₁ => run (min c₁ clock) env h₁ e₂ :=
+  @run.eq_14
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (test body : Expr),
+      run clock env heap (Expr.while_ test body) =
+        bindC (run clock env heap test) fun v c₁ h₁ =>
+          if Value.truthy v = true then
+            match run (min c₁ clock) env h₁ body with
+            | (Result.ok v, c₂, h₂) =>
+              match _h : min c₂ clock with
+              | 0 => (Result.timeout, 0, h₂)
+              | Nat.succ c => run c env h₂ (Expr.while_ test body)
+            | (Result.continued, c₂, h₂) =>
+              match _h : min c₂ clock with
+              | 0 => (Result.timeout, 0, h₂)
+              | Nat.succ c => run c env h₂ (Expr.while_ test body)
+            | (Result.broke, c₂, h₂) => (Result.ok Value.undefined, c₂, h₂)
+            | p => p
+          else (Result.ok Value.undefined, c₁, h₁) :=
+  @run.eq_15
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap), run clock env heap Expr.break_ = (Result.broke, clock, heap) :=
+  @run.eq_16
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap), run clock env heap Expr.continue_ = (Result.continued, clock, heap) :=
+  @run.eq_17
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ e₂ e₃ : Expr),
+      run clock env heap (Expr.unwrap e₁ e₂ e₃) =
+        bindC (run clock env heap e₁) fun v c₁ h₁ =>
+          if Value.isNothing v = true then run (min c₁ clock) env h₁ e₂
+          else run (min c₁ clock) (List.length h₁ :: env) (h₁ ++ [v]) e₃ :=
+  @run.eq_18
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ : Expr) (d : Disc) (t : String) (e₂ e₃ : Expr),
+      run clock env heap (Expr.caseTag e₁ d t e₂ e₃) =
+        bindC (run clock env heap e₁) fun v c₁ h₁ =>
+          bindC
+            (match d with
+            | Disc.field l => getter (min c₁ clock) h₁ v (Value.read h₁ l v)
+            | Disc.typeOf => (Result.ok (Value.string (Value.typeString v)), min c₁ clock, h₁))
+            fun w c₂ h₂ =>
+            match w with
+            | Value.string s =>
+              if s = t then run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₃
+              else run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₂
+            | x => run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₂ :=
+  @run.eq_19
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (body handler : Expr),
+      run clock env heap (Expr.tryCatch body handler) =
+        match run clock env heap body with
+        | (Result.thrown v, c₁, h₁) => run (min c₁ clock) (List.length h₁ :: env) (h₁ ++ [v]) handler
+        | p => p :=
+  @run.eq_20
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (body fin : Expr),
+      run clock env heap (Expr.tryFinally body fin) =
+        match run clock env heap body with
+        | (Result.timeout, c₁, h₁) => (Result.timeout, c₁, h₁)
+        | (Result.stuck s, c₁, h₁) => (Result.stuck s, c₁, h₁)
+        | (Result.fault f, c₁, h₁) => (Result.fault f, c₁, h₁)
+        | (r, c₁, h₁) =>
+          match run (min c₁ clock) env h₁ fin with
+          | (Result.ok v, c₂, h₂) => (r, c₂, h₂)
+          | p => p :=
+  @run.eq_21
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (ls : List String) (es : List Expr) (ks : List FieldKind),
+      run clock env heap (Expr.obj ls es ks) =
+        bindArgs (runArgs clock env heap es) fun vs c₁ h₁ =>
+          (Result.ok (Value.obj (List.length h₁)), c₁, h₁ ++ [objFields ls ks vs]) :=
+  @run.eq_22
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (ls : List String) (es : List Expr) (ks : List ClassKind),
+      run clock env heap (Expr.cls ls es ks) =
+        bindArgs (runInits clock env heap es ks) fun vs c₁ h₁ =>
+          match clsMembers env (Value.obj (List.length h₁)) ls es ks vs with
+          | some fs => (Result.ok (Value.obj (List.length h₁)), c₁, h₁ ++ [Value.fields (List.reverse fs)])
+          | none => (Result.stuck Stuck.typeMismatch, c₁, h₁) :=
+  @run.eq_23
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e_2 : Expr) (l : String),
+      run clock env heap (Expr.get e_2 l) =
+        bindC (run clock env heap e_2) fun vo c₁ h₁ => getter (min c₁ clock) h₁ vo (Value.read h₁ l vo) :=
+  @run.eq_24
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e_2 : Expr) (l : String) (v : Expr),
+      run clock env heap (Expr.set e_2 l v) =
+        bindC (run clock env heap e_2) fun vo c₁ h₁ =>
+          bindC (run (min c₁ clock) env h₁ v) fun vv c₂ h₂ =>
+            have p := Value.setProp vo h₂ l vv;
+            (Prod.fst p, c₂, Prod.snd p) :=
+  @run.eq_25
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ e₂ : Expr),
+      run clock env heap (Expr.spread e₁ e₂) =
+        bindC (run clock env heap e₁) fun v₁ c₁ h₁ =>
+          bindFields (own (min c₁ clock) h₁ v₁) fun fs₁ c₂ h₂ =>
+            bindC (run (min c₂ clock) env h₂ e₂) fun v₂ c₃ h₃ =>
+              bindFields (own (min c₃ clock) h₃ v₂) fun fs₂ c₄ h₄ =>
+                (Result.ok (Value.obj (List.length h₄)), c₄, h₄ ++ [Value.fields (fs₂ ++ fs₁)]) :=
+  @run.eq_26
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (es : List Expr),
+      run clock env heap (Expr.arr es) =
+        bindArgs (runArgs clock env heap es) fun vs c₁ h₁ =>
+          (Result.ok (Value.arr (List.length h₁)), c₁, h₁ ++ [Value.items vs]) :=
+  @run.eq_27
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e_2 i : Expr),
+      run clock env heap (Expr.index e_2 i) =
+        bindC (run clock env heap e_2) fun vo c₁ h₁ =>
+          bindC (run (min c₁ clock) env h₁ i) fun vi c₂ h₂ => getter (min c₂ clock) h₂ vo (Value.index h₂ vo vi) :=
+  @run.eq_28
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e_2 i v : Expr),
+      run clock env heap (Expr.setIndex e_2 i v) =
+        bindC (run clock env heap e_2) fun vo c₁ h₁ =>
+          bindC (run (min c₁ clock) env h₁ i) fun vi c₂ h₂ =>
+            bindC (run (min c₂ clock) env h₂ v) fun vv c₃ h₃ =>
+              have p := Value.setIndex vo h₃ vi vv;
+              (Prod.fst p, c₃, Prod.snd p) :=
+  @run.eq_29
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e_2 : Expr) (l : String) (args : List Expr),
+      run clock env heap (Expr.mcall e_2 l args) =
+        bindC (run clock env heap e_2) fun vo c₁ h₁ =>
+          bindC (getter (min c₁ clock) h₁ vo (Value.read h₁ l vo)) fun vf c₂ h₂ =>
+            bindArgs (runArgs (min c₂ clock) env h₂ args) fun vs c₃ h₃ => call (min c₃ clock) h₃ vf vo vs :=
+  @run.eq_30
+
+example : ∀ (clock : Nat) (h : Heap) (thisv : Value) (args : List Value) (cenv : List Nat) (n : Nat) (body : Expr),
+      call clock h (Value.closure cenv n body) thisv args =
+        callClosure clock h (Value.closure cenv n body) cenv n body thisv args :=
+  @call.eq_1
+
+example : ∀ (clock : Nat) (h : Heap) (thisv : Value) (args : List Value) (cenv : List Nat) (n : Nat) (body : Expr) (t : Value),
+      call clock h (Value.bound (Value.closure cenv n body) t) thisv args =
+        callClosure clock h (Value.closure cenv n body) cenv n body t args :=
+  @call.eq_2
+
+example : ∀ (h : Heap) (thisv : Value) (args : List Value) (p : Prim), call 0 h (Value.prim p) thisv args = (Result.timeout, 0, h) :=
+  @call.eq_3
+
+example : ∀ (h : Heap) (thisv : Value) (args : List Value) (p : Prim) (c : Nat),
+      call (Nat.succ c) h (Value.prim p) thisv args = (Prim.apply p args, c, h) :=
+  @call.eq_4
+
+example : ∀ (clock : Nat) (h : Heap) (vf thisv : Value) (args : List Value),
+      (∀ (cenv : List Nat) (n : Nat) (body : Expr), vf = Value.closure cenv n body → False) →
+        (∀ (cenv : List Nat) (n : Nat) (body : Expr) (t : Value), vf = Value.bound (Value.closure cenv n body) t → False) →
+          (∀ (p : Prim), vf = Value.prim p → False) →
+            call clock h vf thisv args = (Result.stuck Stuck.notCallable, clock, h) :=
+  @call.eq_5
+
+example : ∀ (h : Heap) (vf : Value) (cenv : Env) (n : Nat) (body : Expr) (thisv : Value) (args : List Value),
+      callClosure 0 h vf cenv n body thisv args =
+        if n ≤ List.length args then (Result.timeout, 0, h) else (Result.stuck Stuck.arityMismatch, 0, h) :=
+  @callClosure.eq_1
+
+example : ∀ (h : Heap) (vf : Value) (cenv : Env) (n : Nat) (body : Expr) (thisv : Value) (args : List Value) (c : Nat),
+      callClosure (Nat.succ c) h vf cenv n body thisv args =
+        if n ≤ List.length args then
+          have p := run c (callEnv h n cenv) (h ++ List.take n args ++ [vf, thisv]) body;
+          (Result.catchReturn (Prod.fst p), Prod.snd p)
+        else (Result.stuck Stuck.arityMismatch, Nat.succ c, h) :=
+  @callClosure.eq_2
+
+example : ∀ (clock : Nat) (h : Heap) (vo v : Value), getter clock h vo (Read.value v) = (Result.ok v, clock, h) :=
+  @getter.eq_1
+
+example : ∀ (clock : Nat) (h : Heap) (vo g : Value), getter clock h vo (Read.getter g) = call clock h g vo [] :=
+  @getter.eq_2
+
+example : ∀ (clock : Nat) (h : Heap) (vo : Value) (r : Result), getter clock h vo (Read.fail r) = (r, clock, h) :=
+  @getter.eq_3
+
+example : ∀ (clock : Nat) (h : Heap) (ℓ : Nat),
+      own clock h (Value.obj ℓ) =
+        match h[ℓ]? with
+        | some (Value.fields fs) =>
+          match copyOwn clock h (Value.obj ℓ) (List.reverse (dedupLabels fs)) with
+          | (Except.ok cs, c, h') => (Except.ok (List.reverse cs), c, h')
+          | p => p
+        | x => (Except.error (Result.stuck Stuck.notSpreadable), clock, h) :=
+  @own.eq_1
+
+example : ∀ (clock : Nat) (h : Heap) (v : Value),
+      (∀ (ℓ : Nat), v = Value.obj ℓ → False) → own clock h v = (Except.error (Result.stuck Stuck.notSpreadable), clock, h) :=
+  @own.eq_2
+
+example : ∀ (clock : Nat) (h : Heap) (vo : Value), copyOwn clock h vo [] = (Except.ok [], clock, h) :=
+  @copyOwn.eq_1
+
+example : ∀ (clock : Nat) (h : Heap) (vo : Value) (l : String) (m : MemberKind) (snd : Value)
+      (fs_2 : List (String × MemberKind × Value)),
+      copyOwn clock h vo ((l, m, snd) :: fs_2) =
+        if MemberKind.isOwn m = true then
+          match getter clock h vo (Value.read h l vo) with
+          | (Result.ok v, c₁, h₁) =>
+            match copyOwn (min c₁ clock) h₁ vo fs_2 with
+            | (Except.ok cs, c, h') => (Except.ok ((l, MemberKind.data, v) :: cs), c, h')
+            | p => p
+          | (r, c₁, h₁) => (Except.error r, c₁, h₁)
+        else copyOwn clock h vo fs_2 :=
+  @copyOwn.eq_2
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap), runArgs clock env heap [] = (Except.ok [], clock, heap) :=
+  @runArgs.eq_1
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (es : List Expr),
+      runArgs clock env heap (e :: es) =
+        match run clock env heap e with
+        | (Result.ok v, c₁, h₁) =>
+          match runArgs (min c₁ clock) env h₁ es with
+          | (Except.ok vs, c₂, h₂) => (Except.ok (v :: vs), c₂, h₂)
+          | (Except.error r, c₂, h₂) => (Except.error r, c₂, h₂)
+        | (r, c₁, h₁) => (Except.error r, c₁, h₁) :=
+  @runArgs.eq_2
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (es_2 : List Expr) (ks_2 : List ClassKind),
+      runInits clock env heap (e :: es_2) (ClassKind.data :: ks_2) =
+        match run clock env heap e with
+        | (Result.ok v, c₁, h₁) =>
+          match runInits (min c₁ clock) (List.length h₁ :: env) (h₁ ++ [v]) es_2 ks_2 with
+          | (Except.ok vs, c₂, h₂) => (Except.ok (v :: vs), c₂, h₂)
+          | (Except.error r, c₂, h₂) => (Except.error r, c₂, h₂)
+        | (r, c₁, h₁) => (Except.error r, c₁, h₁) :=
+  @runInits.eq_1
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (head : Expr) (es_2 : List Expr) (head_1 : ClassKind) (ks_2 : List ClassKind),
+      (head_1 = ClassKind.data → False) →
+        runInits clock env heap (head :: es_2) (head_1 :: ks_2) = runInits clock env heap es_2 ks_2 :=
+  @runInits.eq_2
+
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (es : List Expr) (ks : List ClassKind),
+      (∀ (e : Expr) (es_1 : List Expr) (ks_1 : List ClassKind), es = e :: es_1 → ks = ClassKind.data :: ks_1 → False) →
+        (∀ (head : Expr) (es_1 : List Expr) (head_1 : ClassKind) (ks_1 : List ClassKind),
+            es = head :: es_1 → ks = head_1 :: ks_1 → False) →
+          runInits clock env heap es ks = (Except.ok [], clock, heap) :=
+  @runInits.eq_3
+
+example : ∀ (k : Value → Nat → Heap → Ran) (v : Value) (c : Nat) (h : Heap), bindC (Result.ok v, c, h) k = k v c h :=
+  @bindC.eq_1
+
+example : ∀ (p : Ran) (k : Value → Nat → Heap → Ran),
+      (∀ (v : Value) (c : Nat) (h : Heap), p = (Result.ok v, c, h) → False) → bindC p k = p :=
+  @bindC.eq_2
+
+example : ∀ (k : List Value → Nat → Heap → Ran) (vs : List Value) (c : Nat) (h : Heap), bindArgs (Except.ok vs, c, h) k = k vs c h :=
+  @bindArgs.eq_1
+
+example : ∀ (k : List Value → Nat → Heap → Ran) (r : Result) (c : Nat) (h : Heap), bindArgs (Except.error r, c, h) k = (r, c, h) :=
+  @bindArgs.eq_2
+
+example : ∀ (k : List (String × MemberKind × Value) → Nat → Heap → Ran) (fs : List (String × MemberKind × Value)) (c : Nat)
+      (h : Heap), bindFields (Except.ok fs, c, h) k = k fs c h :=
+  @bindFields.eq_1
+
+example : ∀ (k : List (String × MemberKind × Value) → Nat → Heap → Ran) (r : Result) (c : Nat) (h : Heap),
+      bindFields (Except.error r, c, h) k = (r, c, h) :=
+  @bindFields.eq_2
+
+example : ∀ (h : Heap) (n : Nat) (cenv : Env), callEnv h n cenv = List.range' (List.length h) (n + 2) ++ cenv :=
+  @callEnv.eq_1
+
+example : ∀ (clock : Nat) (k : Nat → Heap → Ran) (v : Value) (c₂ : Nat) (h₂ : Heap),
+      loopNext clock (Result.ok v, c₂, h₂) k =
+        match min c₂ clock with
+        | 0 => (Result.timeout, 0, h₂)
+        | Nat.succ c => k c h₂ :=
+  @loopNext.eq_1
+
+example : ∀ (clock : Nat) (k : Nat → Heap → Ran) (c₂ : Nat) (h₂ : Heap),
+      loopNext clock (Result.continued, c₂, h₂) k =
+        match min c₂ clock with
+        | 0 => (Result.timeout, 0, h₂)
+        | Nat.succ c => k c h₂ :=
+  @loopNext.eq_2
+
+example : ∀ (clock : Nat) (k : Nat → Heap → Ran) (c₂ : Nat) (h₂ : Heap),
+      loopNext clock (Result.broke, c₂, h₂) k = (Result.ok Value.undefined, c₂, h₂) :=
+  @loopNext.eq_3
+
+example : ∀ (clock : Nat) (p : Ran) (k : Nat → Heap → Ran),
+      (∀ (v : Value) (c₂ : Nat) (h₂ : Heap), p = (Result.ok v, c₂, h₂) → False) →
+        (∀ (c₂ : Nat) (h₂ : Heap), p = (Result.continued, c₂, h₂) → False) →
+          (∀ (c₂ : Nat) (h₂ : Heap), p = (Result.broke, c₂, h₂) → False) → loopNext clock p k = p :=
+  @loopNext.eq_4
+
+example : ∀ (h : Heap) (l : String) (ℓ : Nat),
+      Value.read h l (Value.obj ℓ) =
+        match h[ℓ]? with
+        | some (Value.fields fs) => Option.getD (readMember fs l) (Read.fail (Result.stuck Stuck.propertyNotFound))
+        | x => Read.fail (Result.stuck Stuck.notIndexable) :=
+  @Value.read.eq_1
+
+example : ∀ (h : Heap) (l : String) (ℓ : Nat),
+      Value.read h l (Value.arr ℓ) =
+        match h[ℓ]? with
+        | some (Value.items vs) =>
+          if l = "length" then Read.value (Value.number (Nat.toFloat (List.length vs)))
+          else Read.fail (Result.stuck Stuck.propertyNotFound)
+        | x => Read.fail (Result.stuck Stuck.notIndexable) :=
+  @Value.read.eq_2
+
+example : ∀ (h : Heap) (l s : String),
+      Value.read h l (Value.string s) =
+        if l = "length" then Read.value (Value.number (Nat.toFloat (String.length s)))
+        else Read.fail (Result.stuck Stuck.propertyNotFound) :=
+  @Value.read.eq_3
+
+example : ∀ (h : Heap) (l : String) (x : Value),
+      (∀ (ℓ : Nat), x = Value.obj ℓ → False) →
+        (∀ (ℓ : Nat), x = Value.arr ℓ → False) →
+          (∀ (s : String), x = Value.string s → False) → Value.read h l x = Read.fail (Result.stuck Stuck.notIndexable) :=
+  @Value.read.eq_4
+
+example : ∀ (n : Float), Value.typeString (Value.number n) = "number" :=
+  @Value.typeString.eq_1
+
+example : ∀ (s : String), Value.typeString (Value.string s) = "string" :=
+  @Value.typeString.eq_2
+
+example : ∀ (b : Bool), Value.typeString (Value.boolean b) = "boolean" :=
+  @Value.typeString.eq_3
+
+example : Value.typeString Value.undefined = "undefined" :=
+  @Value.typeString.eq_4
+
+example : Value.typeString Value.null = "object" :=
+  @Value.typeString.eq_5
+
+example : ∀ (ℓ : Nat), Value.typeString (Value.obj ℓ) = "object" :=
+  @Value.typeString.eq_6
+
+example : ∀ (fs : List (String × MemberKind × Value)), Value.typeString (Value.fields fs) = "object" :=
+  @Value.typeString.eq_7
+
+example : ∀ (ℓ : Nat), Value.typeString (Value.arr ℓ) = "object" :=
+  @Value.typeString.eq_8
+
+example : ∀ (vs : List Value), Value.typeString (Value.items vs) = "object" :=
+  @Value.typeString.eq_9
+
+example : ∀ (env : List Nat) (arity : Nat) (body : Expr), Value.typeString (Value.closure env arity body) = "function" :=
+  @Value.typeString.eq_10
+
+example : ∀ (p : Prim), Value.typeString (Value.prim p) = "function" :=
+  @Value.typeString.eq_11
+
+example : ∀ (f thisv : Value), Value.typeString (Value.bound f thisv) = "function" :=
+  @Value.typeString.eq_12
+
+example : ∀ (n : Float), Lit.eval (Lit.number n) = Value.number n :=
+  @Lit.eval.eq_1
+
+example : ∀ (s : String), Lit.eval (Lit.string s) = Value.string s :=
+  @Lit.eval.eq_2
+
+example : ∀ (b : Bool), Lit.eval (Lit.boolean b) = Value.boolean b :=
+  @Lit.eval.eq_3
+
+example : Lit.eval Lit.undefined = Value.undefined :=
+  @Lit.eval.eq_4
+
+example : Lit.eval Lit.null = Value.null :=
+  @Lit.eval.eq_5
+
+example : ∀ (x : Value), UnOp.eval UnOp.not x = Result.ok (Value.boolean !Value.truthy x) :=
+  @UnOp.eval.eq_1
+
+example : ∀ (x : Value), UnOp.eval UnOp.typeof x = Result.ok (Value.string (Value.typeString x)) :=
+  @UnOp.eval.eq_2
+
+example : ∀ (n : Float), UnOp.eval UnOp.neg (Value.number n) = Result.ok (Value.number (-n)) :=
+  @UnOp.eval.eq_3
+
+example : ∀ (x : Value), (∀ (n : Float), x = Value.number n → False) → UnOp.eval UnOp.neg x = Result.stuck Stuck.typeMismatch :=
+  @UnOp.eval.eq_4
+
+example : ∀ (a b : Float), BinOp.eval BinOp.plus (Value.number a) (Value.number b) = Result.ok (Value.number (a + b)) :=
+  @BinOp.eval.eq_1
+
+example : ∀ (a b : String), BinOp.eval BinOp.plus (Value.string a) (Value.string b) = Result.ok (Value.string (a ++ b)) :=
+  @BinOp.eval.eq_2
+
+example : ∀ (a b : Float), BinOp.eval BinOp.minus (Value.number a) (Value.number b) = Result.ok (Value.number (a - b)) :=
+  @BinOp.eval.eq_3
+
+example : ∀ (x : BinOp) (x_1 x_2 : Value),
+      (∀ (a b : Float), x = BinOp.plus → x_1 = Value.number a → x_2 = Value.number b → False) →
+        (∀ (a b : String), x = BinOp.plus → x_1 = Value.string a → x_2 = Value.string b → False) →
+          (∀ (a b : Float), x = BinOp.minus → x_1 = Value.number a → x_2 = Value.number b → False) →
+            BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
+  @BinOp.eval.eq_4
+
+end Generated
 
 end Inty.Statements

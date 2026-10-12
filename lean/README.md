@@ -134,6 +134,34 @@ only have schemes equal to inference's (`CtxEq`), and a `let`'s typing of
 the rest moves to inference's more general scheme (`HasType.weaken`, in
 `Inty/Weaken.lean`).
 
+Why each of the `let` rule's side conditions is the rule, not a choice
+copied from the algorithm:
+
+- **The value restriction** is ML's (Wright 1995): only a syntactic value
+  is generalised, and a `let` that is assigned isn't, since a cell holds
+  one type. inty's `is_syntactic_value` and `written_at` are the same test.
+- **A scheme's constraints are on its quantified variables**
+  (`Scheme.Simple`): this is HM(X)'s and Jones's `let` rule, which splits
+  the initialiser's constraints into those on the quantified variables,
+  kept in the scheme, and the rest, which stay assumptions of the
+  enclosing context (`C`). A constraint on no quantified variable in a
+  scheme would be checked at every use instead of once; the split loses
+  no typing.
+- **`Merge` stays undecided in a scheme** while its determining arguments
+  are quantified (`PTy.TreeBound`): a spread over a parameter's object
+  has no field list until a call gives one, so deciding it at the `let`
+  would guess, and the most general scheme keeps it, as Haskell keeps a
+  class constraint on a quantified variable. inty decides a spread at
+  once (`merge_spread`), which is less general: the known divergence of
+  a spread over an operand of an unknown type. One consequence, as in
+  Haskell without the monomorphism restriction: a binding never used can
+  carry a `Merge` no instance satisfies, which is harmless, since only a
+  use instantiates it.
+- **The scope checks are beside the rules** (`Expr.scoped`): an
+  assignment to a `const` and a `break` outside a loop are JavaScript's
+  early errors, static semantics apart from typing, and a program with
+  one would run safely; inty reports them apart from its type errors too.
+
 A recursive type carries its whole system of equations, and an equation
 its unfolding never reaches may mention variables the type doesn't have,
 so equal types can differ in their free variables. Generalisation is over

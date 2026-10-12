@@ -22,9 +22,9 @@ Paths like `src/infer` are relative to `crates/inty`.
    allowed: out of clock, an uncaught `throw`, `Stuck::IntRange`, a
    non-finite `Int`, an out-of-bounds read, and so on. A `fault` outcome
    lists them, each citing where `docs/type-system.md` allows it. So the
-   model can be neither stronger nor weaker than what inty promises. (Not
-   yet so: `Fault` has only `outOfBounds`, with `Int` in phase 4, and no
-   fault cites the document.)
+   model can be neither stronger nor weaker than what inty promises. (So
+   for `outOfBounds`, which cites the document's table of faults; `Int`
+   out of range comes with phase 4.)
 2. **The specification is what inty means, not what Hindley–Milner
    allows.** "Declared, not guessed" unions, defaulting and narrowing are
    rules of `HasType`, not features of the algorithm only. That keeps
@@ -33,8 +33,10 @@ Paths like `src/infer` are relative to `crates/inty`.
 3. **One rule per Rust rule.** Every `HasType` rule, class instance and
    improvement rule names its counterpart in `src/infer/features/*.rs`,
    `src/classes` or `src/operators`. A generated coverage table, checked in
-   CI, lists the inty rules that have no Lean counterpart. (Not yet
-   written: the rules cite their counterparts in their docs only.)
+   CI, lists the inty rules that have no Lean counterpart. (Done for the
+   typing rules: `COVERAGE.md`, checked by
+   `crates/inty/tests/lean_coverage.rs`; not yet for the class instances
+   and improvement rules.)
 4. **The model runs on real programs.** inty writes out its lowered AST in
    the wire format, so the differential test runs on inty's own test suite
    and examples, beside the generated programs. Node, and later CPython and

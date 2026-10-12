@@ -409,6 +409,24 @@ an integer-literal field its importers write a fraction into is a
 `Number`, as in one file. `inty a.js b.js …` checks several files in one
 run the same way.
 
+### Faults
+
+inty's guarantee is that a program it accepts doesn't go wrong: it never
+calls what isn't a function, reads a property a value doesn't have, or
+mixes values of different types. It may still stop at one of these
+faults, which are not violations of that guarantee:
+
+| Fault | Where | In `dynamics` | In the Lean model |
+|---|---|---|---|
+| Out of bounds | an element read at an index an array or a string hasn't, or a store past an array's end (see [Primitive and compound types](#primitive-and-compound-types)) | `Stuck::OutOfBounds` | `Fault.outOfBounds` |
+| `Int` out of range | `Int` arithmetic leaving the safe integers, or `% 0` (see [Primitive and compound types](#primitive-and-compound-types)) | `Stuck::IntRange` | not yet (the model's numbers are one type, roadmap phase 4) |
+| An uncaught exception | a `throw` no `catch` catches | `Stuck::UncaughtThrow` | `Result.thrown` |
+| Out of fuel | `dynamics`'s step limit (a program that doesn't end) | `Stuck::FuelExhausted` | `Result.timeout` (its clock) |
+
+The model's soundness theorem (`lean/Inty/Soundness.lean`, `eval_sound`)
+says a well-typed program ends in a value of its type or in one of these,
+and never gets stuck otherwise.
+
 ## Unsupported JavaScript Idioms
 
 A binding's type is fixed at declaration. Operators that combine values still need their operands' types to agree. Output below is verbatim from `inty --no-color`.

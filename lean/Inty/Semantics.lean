@@ -113,10 +113,12 @@ inductive Stuck where
   deriving DecidableEq, Repr
 
 /-- A fault inty documents as allowed: the program stops there, and it is
-no soundness violation (`Stuck::OutOfBounds`). -/
+no soundness violation. Each is a row of the table of faults in
+`docs/type-system.md` ("Faults"). -/
 inductive Fault where
   /-- An element read at an index the array or string hasn't, or a store
-  past an array's end. -/
+  past an array's end (`docs/type-system.md`, "Faults": out of bounds;
+  `Stuck::OutOfBounds`). -/
   | outOfBounds
   deriving DecidableEq, Repr
 
