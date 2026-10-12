@@ -394,6 +394,11 @@ structure Sys where
   injPred : Ty → Ty → Pred
   /-- It is up to equal types. -/
   injPred_eq : ∀ {τ τ' T : Ty}, TyEq τ τ' → PredEq (injPred τ T) (injPred τ' T)
+  /-- Whether a `let` may give its binding a scheme with any constraints
+  (Jones's rule for qualified types), or only one whose constraints are on
+  its quantified variables (`Scheme.Simple`), as inty's generalisation
+  gives. -/
+  anyScheme : Bool
 
 /-- `p` holds in the system `S` as an instance, or is assumed in `C`, up to
 equal types. -/
@@ -403,7 +408,7 @@ def EntailsS (S : Sys) (C : List Pred) (p : Pred) : Prop := S.inst p ∨ ∃ q �
 types), and expected types without type variables. -/
 def Sys.narrow : Sys :=
   ⟨InstEq, fun T => T.ftv = [], fun h hq => InstEq.of_predEq h hq, fun τ T => ⟨.inject T, [τ]⟩,
-    fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h zip_tyEq_nil)⟩
+    fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h zip_tyEq_nil), false⟩
 
 /-- A system whose instances, expected types and injections survive
 substitution. -/
