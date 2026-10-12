@@ -2738,6 +2738,9 @@ theorem exTy_tyEq {ex : Option Ty} {τ₀ τ' : Ty} (hex : Ex.Closed ex) (hτT :
     simp only [Option.getD_some, Ty.closed_subst (hex T rfl)]
     rw [← hτT T rfl]; exact hτ₀
 
+-- (One induction over every form of expression, each case unfolding
+-- `infer`: more than the default budget.)
+set_option maxHeartbeats 400000 in
 theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComplete L e := by
   intro e
   induction e using Expr.ind with
@@ -3364,13 +3367,16 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
         refine Sat.absorb habs (Sat.app hsat₁₂ (fun p hp => ?_))
         simp only [List.mem_singleton] at hp; subst hp
         exact hent.of_predEq (PredEq.of_eqs (.cons hτ₂.symm .nil))
-      | minus =>
+      | strictEq =>
+        exact ⟨_, by simp only [infer, h₁, h₂]; rfl, φ₂, hag₁₂, by simpa using hτ₀, hsat₁₂⟩
+      | num hn =>
         obtain ⟨σ₃, hσ₃, habs₃⟩ := unify_mgu (τ₁ := o₁.τ.subst o₂.σ) (τ₂ := .number) (ψ := φ₂)
           (h₁₂.trans hτ₁)
         obtain ⟨σ₄, hσ₄, habs₄⟩ := unify_mgu (τ₁ := o₂.τ.subst σ₃) (τ₂ := .number) (ψ := φ₂)
           ((habs₃ _).trans hτ₂)
+        cases op <;> simp [BinOp.numeric] at hn <;>
         exact ⟨_, by simp only [infer, h₁, h₂, hσ₃, hσ₄]; rfl, φ₂,
-          (hag₁₂.absorb habs₃).absorb habs₄, by simpa using hτ₀,
+          (hag₁₂.absorb habs₃).absorb habs₄, by simpa [BinOp.resTy] using hτ₀,
           Sat.absorb habs₄ (Sat.absorb habs₃ hsat₁₂)⟩
   | ret e ih =>
     intro hm

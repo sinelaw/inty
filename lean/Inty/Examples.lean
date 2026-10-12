@@ -108,7 +108,7 @@ def countdown : Expr :=
 example : HasType L [] [] none .synth .synth countdown .string :=
   .app
     (.func (θ := .undefined) (τs := [.number]) (ρ := .string) rfl (.cond (.var_mono rfl)
-      (.app (.var_mono rfl) rfl (by simp; exact .binop .minus (.var_mono rfl) (.lit .number)))
+      (.app (.var_mono rfl) rfl (by simp; exact .binop (.num rfl) (.var_mono rfl) (.lit .number)))
       (.lit .string)))
     rfl (by simp; exact .lit .number)
 
@@ -125,6 +125,7 @@ example : ¬ HasType L [] [] none .synth .synth mixedPlus τ := by
   cases h with
   | binop hop h₁ h₂ =>
     cases hop with
+    | num h => simp [BinOp.numeric] at h
     | plus _ =>
       obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
       obtain ⟨_, e₂, h₂⟩ := h₂.top_synth

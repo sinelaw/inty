@@ -40,7 +40,28 @@ inductive BinOp where
   | plus
   /-- `-`: `Number` only. -/
   | minus
+  /-- `*`: `Number` only. -/
+  | times
+  /-- `/`: `Number` only. -/
+  | div
+  /-- `<`, `<=`, `>`, `>=`: of `Number`s (inty also compares two values of
+  any one type, by JavaScript's coercions, which the model doesn't
+  have). -/
+  | lt | le | gt | ge
+  /-- `===` (`negated = false`) or `!==`: of any two values. -/
+  | strictEq (negated : Bool)
   deriving DecidableEq, Repr
+
+/-- The operators of `Number`s: `-`, `*`, `/` and the comparisons. -/
+def BinOp.numeric : BinOp → Bool
+  | .minus | .times | .div | .lt | .le | .gt | .ge => true
+  | .plus | .strictEq _ => false
+
+/-- What a numeric operator gives: a comparison a `boolean`, the others a
+`number`. -/
+def BinOp.resTy : BinOp → Ty
+  | .lt | .le | .gt | .ge | .strictEq _ => .boolean
+  | _ => .number
 
 /-- How an object literal's field is written. -/
 inductive FieldKind where

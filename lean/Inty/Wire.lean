@@ -29,6 +29,8 @@ the string t, and (variant s:l (rec …) …), a variant tagged by its field l,
 whose cases are records with a string's type at l, and (sum T …), a sum told
 apart by `typeof` (`Number | String`)
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
+(times A B) (div A B)   `*`, `/`   (lt A B) (le A B) (gt A B) (ge A B)   `<` … `>=`
+(eq A B) (ne A B)   `===`, `!==`
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
 (obj (field s:x E) (method s:m F) (getter s:g F) …)   an object literal, a
@@ -260,6 +262,14 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
     let (a, rest) ← parseExpr L rest
     let (b, rest) ← parseExpr L rest
     some (.binop .minus a b, rest)
+  | "times", rest => parseBin L .times rest
+  | "div", rest => parseBin L .div rest
+  | "lt", rest => parseBin L .lt rest
+  | "le", rest => parseBin L .le rest
+  | "gt", rest => parseBin L .gt rest
+  | "ge", rest => parseBin L .ge rest
+  | "eq", rest => parseBin L (.strictEq false) rest
+  | "ne", rest => parseBin L (.strictEq true) rest
   | "ret", rest => do let (e, rest) ← parseExpr L rest; some (.ret e, rest)
   | "throw", rest => do let (e, rest) ← parseExpr L rest; some (.throw_ e, rest)
   | "seq", rest => do
@@ -354,6 +364,13 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
     let (args, rest) ← parseMany L rest
     some (.mcall e l args, rest)
   | _, _ => none
+
+/-- A binary operator's operands. -/
+partial def parseBin (L : Option (List String)) (op : BinOp) (ts : List String) :
+    Option (Expr × List String) := do
+  let (a, rest) ← parseExpr L ts
+  let (b, rest) ← parseExpr L rest
+  some (.binop op a b, rest)
 
 /-- A property label, written `s:` then the label. -/
 partial def parseLabel : List String → Option (String × List String)
@@ -607,6 +624,13 @@ def verdict (clock : Nat) (line : String) : String :=
   s!"reject;value num {(2 : Float).toBits}"
 #guard verdict 100 "(trycatch (throw (str s:x)) (typeof (var 0)))" == "type string;value str s:string"
 #guard verdict 100 "(break)" == "reject;stuck break"
+-- The operators of numbers, and `===`.
+#guard verdict 100 "(lt (times (num 3 0) (num 2 0)) (div (num 13 0) (num 2 0)))" ==
+  "type boolean;value bool true"
+#guard verdict 100 "(eq (str s:a) (num 1 0))" == "type boolean;value bool false"
+#guard verdict 100 "(ne (null) (undef))" == "type boolean;value bool true"
+#guard verdict 100 "(lt (str s:a) (str s:b))" == "reject;stuck typeMismatch"
+
 #guard verdict 100 "(letmut (num 2 0) (seq (while (var 0) (assign 0 (minus (var 0) (num 1 0)))) (var 0)))"
   == s!"type number;value num {(0 : Float).toBits}"
 #guard verdict 100 "(get (obj (field s:x (num 1 0)) (field s:y (str s:a))) s:y)" ==

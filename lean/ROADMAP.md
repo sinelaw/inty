@@ -41,7 +41,7 @@ Paths like `src/infer` are relative to `crates/inty`.
    the wire format, so the differential test runs on inty's own test suite
    and examples, beside the generated programs. Node, and later CPython and
    Lua, check the semantics. (Done for typing on the unit tests' programs
-   in the model's fragment, 496 of them: `inty::model_wire`,
+   in the model's fragment, 954 of them: `inty::model_wire`,
    `tests/model_corpus.rs`. Not yet: the examples, which use what the
    model lacks, and running the corpus in Node.)
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
@@ -276,6 +276,20 @@ touching the generic proofs.
 
 ### 4. Numbers and the remaining base types
 
+- **The operators of numbers and `===` (done, in the model's one number
+  type).** `*` and `/` (`BinOp.times`, `div`), the comparisons `<`,
+  `<=`, `>`, `>=` (`lt`, `le`, `gt`, `ge`, of numbers, IEEE: false with
+  a `NaN`) and `===`, `!==` (`strictEq`, of any two values; the model's
+  functions have no identity, so two are never equal) share one typing
+  rule, `BinOpTyS.num` (operands `number`, result `BinOp.resTy`), beside
+  `strictEq`'s; soundness and inference sound and complete. `%` waits for
+  an exact `fmod` (Lean's `Float` has none), and comparisons of strings
+  and of other values (inty compares any two values of one type, by
+  JavaScript's coercions) wait for a model of those coercions. inty's
+  lowering takes `&&` and `||` to `?:` (`const t = a; t ? b : t`, or
+  `a ? b : false` when `a` is a test). The differential generator uses
+  them all; inty's `Int` arithmetic leaving the safe integers is a fault
+  the model's numbers don't have, and its value isn't compared.
 - Typed arrays, regex, `Promise` (with `await` as the identity, as in
   `dynamics`).
 - Arrays and records invariant while mutable (#96).

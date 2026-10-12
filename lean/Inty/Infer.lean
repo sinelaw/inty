@@ -705,14 +705,17 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
           | some σ₃ =>
             some ⟨Subst.compose σ₃ σ₂₁, o₂.τ.subst σ₃,
               (preds ++ [(⟨.plus, [o₂.τ]⟩ : Pred)]).map (·.subst σ₃), o₂.next⟩
-        | .minus =>
+        -- `===` and `!==` take any two values.
+        | .strictEq _ => some ⟨σ₂₁, .boolean, preds, o₂.next⟩
+        -- `-`, `*`, `/` and the comparisons take two numbers.
+        | .minus | .times | .div | .lt | .le | .gt | .ge =>
           match unify (o₁.τ.subst o₂.σ) .number with
           | none => none
           | some σ₃ =>
             match unify (o₂.τ.subst σ₃) .number with
             | none => none
             | some σ₄ =>
-              some ⟨Subst.compose σ₄ (Subst.compose σ₃ σ₂₁), .number,
+              some ⟨Subst.compose σ₄ (Subst.compose σ₃ σ₂₁), op.resTy,
                 (preds.map (·.subst σ₃)).map (·.subst σ₄), o₂.next⟩
   -- `return e;` unifies `e`'s type with the function's, or checks `e`
   -- against it; it has any type: the expected one, or a fresh variable.

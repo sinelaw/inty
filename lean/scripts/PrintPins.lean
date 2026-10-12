@@ -1,5 +1,6 @@
 import Lean
-import Inty.Statements
+import Inty.Builtins
+import Inty.InferComplete
 
 /-!
 Prints the generated pins of `Inty/Statements.lean` (its section

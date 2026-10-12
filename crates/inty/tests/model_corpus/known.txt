@@ -26,3 +26,10 @@
 # never in inty, which joins with anything; in the model it returns
 # undefined.
 (let (func 0 (seq (while (bool true) (undef)) (undef))) (let (cond (bool true) (app (var 0)) (num 1 0)) (let (minus (var 0) (num 1 0)) (undef))))
+
+# Int and Number (roadmap phase 4): inty types an arithmetic result with a
+# variable its Arith class constrains, and leaves a property read on it
+# (the function is never called, so the read is never decided); the
+# model's numbers are one type, which has no such property.
+(let (func 1 (ret (times (var 0) (num 2 0)))) (let (func 1 (ret (get (app (var 3) (var 0)) s:first))) (let (func 1 (ret (plus (var 0) (str s:!)))) (let (func 1 (ret (obj (field s:first (var 0)) (field s:second (var 0))))) (let (app (var 0) (arr (num 1 0) (num 2 0))) (seq (var 0) (let (app (var 1) (str s:s)) (var 0))))))))
+(let (func 1 (ret (times (var 0) (num 2 0)))) (let (func 1 (ret (app (var 3) (var 0)))) (let (func 1 (ret (get (app (var 4) (var 0)) s:first))) (let (func 1 (ret (obj (field s:first (var 0)) (field s:second (var 0))))) (let (app (var 0) (arr (num 1 0) (num 2 0))) (var 0))))))

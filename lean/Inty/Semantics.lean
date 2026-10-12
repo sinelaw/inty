@@ -182,10 +182,31 @@ def UnOp.eval : UnOp → Value → Result
   | .neg, .number n => .ok (.number (-n))
   | .neg, _ => .stuck .typeMismatch
 
+/-- `===`: numbers by IEEE equality (`NaN` is no number's equal, `0` and
+`-0` are equal), strings, booleans, `undefined` and `null` by value, an
+object or an array by its cell. The model's functions are values without
+an identity: two of them are never equal (where JavaScript's `f === f`
+holds). -/
+def Value.strictEq : Value → Value → Bool
+  | .number a, .number b => a == b
+  | .string a, .string b => a == b
+  | .boolean a, .boolean b => a == b
+  | .undefined, .undefined | .null, .null => true
+  | .obj a, .obj b | .arr a, .arr b => a == b
+  | _, _ => false
+
 def BinOp.eval : BinOp → Value → Value → Result
   | .plus, .number a, .number b => .ok (.number (a + b))
   | .plus, .string a, .string b => .ok (.string (a ++ b))
   | .minus, .number a, .number b => .ok (.number (a - b))
+  | .times, .number a, .number b => .ok (.number (a * b))
+  | .div, .number a, .number b => .ok (.number (a / b))
+  -- IEEE comparisons, as JavaScript's on numbers: false with a `NaN`.
+  | .lt, .number a, .number b => .ok (.boolean (decide (a < b)))
+  | .le, .number a, .number b => .ok (.boolean (decide (a ≤ b)))
+  | .gt, .number a, .number b => .ok (.boolean (decide (b < a)))
+  | .ge, .number a, .number b => .ok (.boolean (decide (b ≤ a)))
+  | .strictEq neg, a, b => .ok (.boolean (a.strictEq b != neg))
   | _, _, _ => .stuck .typeMismatch
 
 def Prim.apply : Prim → List Value → Result

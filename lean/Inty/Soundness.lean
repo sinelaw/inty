@@ -1080,9 +1080,10 @@ theorem BinOp.eval_sound {W' : World} (hC : HoldsOrVarW C) (hop : BinOpTyS Sys.w
         exact Safe.ok hc hW hH (V.tyEq _ he.symm (by simp))
       all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
     · simp only [List.cons.injEq] at he; exact (V_whnf_var (by rw [he.1]; exact hw) hv₁).elim
-  | minus =>
+  | num hn =>
     simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
-    exact Safe.ok hc hW hH (by simp)
+    cases op <;> simp [BinOp.numeric] at hn <;> exact Safe.ok hc hW hH (by simp [BinOp.resTy])
+  | strictEq => exact Safe.ok hc hW hH (by simp)
 
 /-- Running a syntactic value gives a value, and takes no clock and no
 cell. -/

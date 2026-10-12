@@ -193,7 +193,7 @@ that didn't run out, so the model's verdicts don't depend on its clock.
 | `Ty`: a type variable, a constructor (`Con`) applied to types (`number`, `string`, `boolean`, `undefined`, `null`, `unknown` (what a `catch` binds: any value), `fn` (the type of `this`, the result's and the parameters'), `record` over a list of labels (a slot per label: a presence, `pre` or `abs` or a variable, and a type), `array`), or the `i`-th type of a system of recursive equations (`mu i sys`, right-hand sides `RTy` referring to the system's types as `self j`) | `types::Type` (an `fn` is the call signature of a callable row, `Type::Func`; a `record` is a `RowType`, whose tail the flat slots stand for; `number` stands for both `Int` and `Number`; a `mu` is a `Type::Named` with its equation in `InferState::named_types`) |
 | `TyEq` (`Inty/Equi.lean`): equality up to unfolding, as the unfolded trees' finite approximations | `unify` on `Named` types (`unroll_named`) |
 | `Scheme` (`∀ α₀ … αₖ₋₁. plus ⇒ τ`, body and constraints `PTy`s) | `types::TypeScheme`, with its `where` clause |
-| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals (a field holds a value, or is a method `l(…) {…}` or a getter `get l() {…}` written as a function expression whose `this` is the literal's type: `FieldSlot`), property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
+| `Expr`: literals, variables, named functions of any number of parameters (recursive, with `this`), calls outside a receiver (`this` is `undefined`; one argument per parameter), `const`, `let`, assignment to a variable, `?:`, `!`, `typeof`, unary `-`, `+`, `-`, `*`, `/`, `<`, `<=`, `>`, `>=` (of numbers), `===`, `!==`, `return`, `throw`, statement sequences, `while`, `break`, `continue`, `try`/`catch`, `try`/`finally`, object literals (a field holds a value, or is a method `l(…) {…}` or a getter `get l() {…}` written as a function expression whose `this` is the literal's type: `FieldSlot`), property reads and writes, object spread (`{...e₁, ...e₂}`, which a literal with spreads and fields lowers to), array literals, `e[i]`, `e[i] = v`, method calls `e.l(args)` (`this` the receiver) | `ast::Expr`, `ast::Stmt` |
 | A class without `extends` (`cls`: fields with initialisers that see the fields before them, arrow fields, methods and getters on the prototype, `MemberSlot`), its constructor (`ctor`, whose `this` is what `new` makes, `newTarget`) and `new`, which calls only a closure (`Value.asCtor`: an arrow field isn't a constructor, its `this` is `NotNew`) | the class lowering, `parse_class_declaration_named` in `src/frontends/javascript/parser`, `class_fields.rs`; an arrow function's `this` is `Type::ArrowThis`, which `unify_this` keeps from `NewTarget` |
 | `Result`: `ok`, `stuck`, `timeout`, `returned`, `thrown`, `broke`, `continued`; `bindC` | `dynamics::StmtOutcome`, `Stuck` |
 | `HasType` (declarative typing, Hindley–Milner style, with a conversion rule between equal types) | what `src/infer` implements |
@@ -368,8 +368,9 @@ These choices are meant to hold up as the calculus grows.
   where JavaScript throws a `TypeError` (typing rules out both: a method's
   `this` is its object, a constructor's `newTarget`); and a `break` in a
   function called from a loop ends that loop, which the scope check rules
-  out. The differential test keeps to programs where none of these
-  arises.
+  out; and a function has no identity, so `f === f` is false (typing
+  allows it: `===` takes any two values). The differential test keeps to
+  programs where none of these arises.
 
 ## Adding a feature
 
@@ -416,21 +417,25 @@ meaning (a name used before its declaration, `let x;` without an
 initialiser, a `let` or a parameter taken apart by a test and assigned, a
 test of `typeof` or of a tag on what no annotation declares a sum, a
 getter or a method beside a spread). Of the programs the unit tests check,
-496 are in the fragment (some tests generate theirs at random, so the
+954 are in the fragment (some tests generate theirs at random, so the
 corpus keeps each program it once recorded); inty and the model agree on
-accepting each but six, listed with their reasons in
+accepting each but eight, listed with their reasons in
 `tests/model_corpus/known.txt`:
 
 - an `Int` index, an annotated object type's method using `this` (a
   member of an object type is called on the object in inty), a record
   indexed by a string variable, inty's spread over an operand of an
   unknown type, a `typeof` test for a tag no case has (inty warns that the
-  branch is dead), and `never` from a `while (true)` body.
+  branch is dead), `never` from a `while (true)` body, and (twice) a
+  property read on an arithmetic result, which inty leaves on the
+  variable its `Arith` class constrains, where the model's numbers are one
+  type.
 
 Writing the lowering found the model's assignment to an annotated `let`
 unifying the value with the annotation rather than checking it against
-it (fixed in the wire format's front end). Most programs left out use
-`*` or a comparison, which come with the numbers of phase 4.
+it (fixed in the wire format's front end). With `*`, `/`, the comparisons and `===` in the model, most programs left
+out read a builtin's property or name a builtin, or use a name before its
+declaration.
 
 ## Differential testing
 

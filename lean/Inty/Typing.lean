@@ -39,7 +39,11 @@ types, result type. Both operands of `+` have the same type, one instance of
 `Plus`: inty's `+` never mixes a `Number` with a `String`. -/
 inductive BinOpTyS (S : Sys) (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
   | plus : EntailsS S C ⟨.plus, [τ]⟩ → BinOpTyS S C .plus τ τ τ
-  | minus : BinOpTyS S C .minus .number .number .number
+  /-- `-`, `*`, `/` and the comparisons: of `Number`s. -/
+  | num : op.numeric = true → BinOpTyS S C op .number .number op.resTy
+  /-- `===` and `!==`: of any two values, as inty's (JavaScript's is total,
+  comparing values of disjoint types gives `false`). -/
+  | strictEq : BinOpTyS S C (.strictEq neg) τ₁ τ₂ .boolean
 
 /-- The operator rules of the narrow system. -/
 abbrev BinOpTy := BinOpTyS Sys.narrow

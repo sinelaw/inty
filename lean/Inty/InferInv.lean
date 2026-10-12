@@ -1352,7 +1352,11 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       · simp only [List.mem_singleton] at hq; subst hq
         intro a ha; simp only [Pred.ftv, List.flatMap_cons, List.flatMap_nil,
           List.append_nil] at ha; exact hτ₂ a ha
-    | minus =>
+    | strictEq neg =>
+      simp only [Option.some.injEq] at h; subst h
+      exact ⟨by dsimp only; omega, (hσ₁.mono hn₂).compose hσ₂,
+        fun a ha => by simp [Ty.ftv] at ha, hpre⟩
+    | minus | times | div | lt | le | gt | ge =>
       simp only at h
       split at h
       · cases h
@@ -1363,7 +1367,8 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       simp only [Option.some.injEq] at h; subst h
       have hσ₃ := unify_within (hσ₂.subst_below (hτ₁.mono hn₂)) hnum hu₃
       have hσ₄ := unify_within (hσ₃.subst_below hτ₂) hnum hu₄
-      refine ⟨by dsimp only; omega, (((hσ₁.mono hn₂).compose hσ₂).compose hσ₃).compose hσ₄, hnum, ?_⟩
+      refine ⟨by dsimp only; omega, (((hσ₁.mono hn₂).compose hσ₂).compose hσ₃).compose hσ₄,
+        fun a ha => by simp [BinOp.resTy] at ha, ?_⟩
       intro p hp
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       obtain ⟨q', hq', rfl⟩ := List.mem_map.mp hq

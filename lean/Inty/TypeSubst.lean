@@ -237,7 +237,10 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
   | binop hop _ _ ih₁ ih₂ =>
     cases hop with
     | plus hc => exact .binop (.plus (hc.substS hS σ)) ih₁ ih₂
-    | minus => exact .binop .minus ih₁ ih₂
+    | num h =>
+      rw [show ∀ o : BinOp, o.resTy.subst σ = o.resTy from fun o => by cases o <;> rfl]
+      exact .binop (.num h) ih₁ ih₂
+    | strictEq => exact .binop .strictEq ih₁ ih₂
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂

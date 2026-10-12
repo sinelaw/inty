@@ -249,7 +249,8 @@ theorem BinOpTyS.toW {C : List Pred} (h : BinOpTy C op τ₁ τ₂ τ) :
     BinOpTyS Sys.wide (C.map Pred.toW) op τ₁ τ₂ τ := by
   cases h with
   | plus hc => exact .plus (by simpa [Pred.toW] using hc.toW)
-  | minus => exact .minus
+  | num h => exact .num h
+  | strictEq => exact .strictEq
 
 theorem MemberSlotS.toW {C : List Pred} (h : MemberSlot C T k e τ s) :
     MemberSlotS Sys.wide (C.map Pred.toW) T k e τ s := by

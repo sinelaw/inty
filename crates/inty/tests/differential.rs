@@ -43,6 +43,50 @@ use inty::types::{LitValue, Nothing, Type};
 
 // ---- The core calculus ---------------------------------------------------
 
+/// The operators beside `+` and `-`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Op2 {
+    Times,
+    Div,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+impl Op2 {
+    const NUMERIC: [Op2; 2] = [Op2::Times, Op2::Div];
+    const COMPARE: [Op2; 4] = [Op2::Lt, Op2::Le, Op2::Gt, Op2::Ge];
+
+    fn wire(self) -> &'static str {
+        match self {
+            Op2::Times => "times",
+            Op2::Div => "div",
+            Op2::Lt => "lt",
+            Op2::Le => "le",
+            Op2::Gt => "gt",
+            Op2::Ge => "ge",
+            Op2::Eq => "eq",
+            Op2::Ne => "ne",
+        }
+    }
+
+    fn js(self) -> &'static str {
+        match self {
+            Op2::Times => "*",
+            Op2::Div => "/",
+            Op2::Lt => "<",
+            Op2::Le => "<=",
+            Op2::Gt => ">",
+            Op2::Ge => ">=",
+            Op2::Eq => "===",
+            Op2::Ne => "!==",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Core {
     /// `m × 10^-e`.
@@ -78,6 +122,8 @@ enum Core {
     Neg(Box<Core>),
     Plus(Box<Core>, Box<Core>),
     Minus(Box<Core>, Box<Core>),
+    /// `*`, `/`, a comparison, `===` or `!==`.
+    Bin(Op2, Box<Core>, Box<Core>),
     /// `return e;`, in a function's statement position.
     Ret(Box<Core>),
     /// `throw e;`, in statement position.
@@ -349,6 +395,7 @@ fn wire(e: &Core) -> String {
         Neg(e) => format!("(neg {})", wire(e)),
         Plus(x, y) => format!("(plus {} {})", wire(x), wire(y)),
         Minus(x, y) => format!("(minus {} {})", wire(x), wire(y)),
+        Bin(o, x, y) => format!("({} {} {})", o.wire(), wire(x), wire(y)),
         Ret(e) => format!("(ret {})", wire(e)),
         Throw(e) => format!("(throw {})", wire(e)),
         Seq(x, y) => format!("(seq {} {})", wire(x), wire(y)),
@@ -458,6 +505,7 @@ fn fractional(e: &Core) -> Core {
         Neg(x) => Neg(f(x)),
         Plus(x, y) => Plus(f(x), f(y)),
         Minus(x, y) => Minus(f(x), f(y)),
+        Bin(o, x, y) => Bin(*o, f(x), f(y)),
         Ret(x) => Ret(f(x)),
         Throw(x) => Throw(f(x)),
         Seq(x, y) => Seq(f(x), f(y)),
@@ -555,6 +603,7 @@ impl Js {
             Neg(e) => format!("-({})", self.expr(e)),
             Plus(x, y) => format!("({} + {})", self.expr(x), self.expr(y)),
             Minus(x, y) => format!("({} - {})", self.expr(x), self.expr(y)),
+            Bin(o, x, y) => format!("({} {} {})", self.expr(x), o.js(), self.expr(y)),
             Obj(fields) => {
                 let fields: Vec<String> = fields
                     .iter()
@@ -825,6 +874,7 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
         Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) => refers_from_inner(x, i, inner),
         Plus(x, y)
         | Minus(x, y)
+        | Bin(_, x, y)
         | Seq(x, y)
         | While(x, y)
         | TryFinally(x, y)
@@ -1472,7 +1522,15 @@ impl Gen {
                 App(b(f), args)
             }
             _ => match t {
-                T::Num => match self.rng.below(4) {
+                T::Num => match self.rng.below(5) {
+                    3 => {
+                        let o = Op2::NUMERIC[self.rng.below(2)];
+                        Bin(
+                            o,
+                            b(self.typed(&T::Num, d, scope, false)),
+                            b(self.typed(&T::Num, d, scope, false)),
+                        )
+                    }
                     0 => Neg(b(self.typed(&T::Num, d, scope, false))),
                     1 => Minus(
                         b(self.typed(&T::Num, d, scope, false)),
@@ -1492,8 +1550,35 @@ impl Gen {
                     1 => Typeof(b(self.any(d, scope, false))),
                     _ => self.string(),
                 },
-                T::Bool => match self.rng.below(2) {
+                T::Bool => match self.rng.below(4) {
                     0 => Not(b(self.any(d, scope, false))),
+                    // A comparison of numbers.
+                    1 => {
+                        let o = Op2::COMPARE[self.rng.below(4)];
+                        Bin(
+                            o,
+                            b(self.typed(&T::Num, d, scope, false)),
+                            b(self.typed(&T::Num, d, scope, false)),
+                        )
+                    }
+                    // `===` of two values of some type, not functions (the
+                    // model's functions have no identity).
+                    2 => {
+                        let mut u = self.ty(1);
+                        if matches!(u, T::Arrow(..)) {
+                            u = T::Num;
+                        }
+                        let o = if self.rng.chance(50) {
+                            Op2::Eq
+                        } else {
+                            Op2::Ne
+                        };
+                        Bin(
+                            o,
+                            b(self.typed(&u, d, scope, false)),
+                            b(self.typed(&u, d, scope, false)),
+                        )
+                    }
                     _ => Bool(self.rng.chance(50)),
                 },
                 T::Arrow(ps, r) => {
@@ -2198,7 +2283,18 @@ impl Gen {
             5 => Typeof(b(self.any(d, scope, false))),
             6 => Neg(b(self.any(d, scope, false))),
             7 | 8 => Plus(b(self.any(d, scope, false)), b(self.any(d, scope, false))),
-            9 => Minus(b(self.any(d, scope, false)), b(self.any(d, scope, false))),
+            9 if self.rng.chance(50) => {
+                Minus(b(self.any(d, scope, false)), b(self.any(d, scope, false)))
+            }
+            // `*` and `/` want numbers in both; `===` takes anything.
+            9 => {
+                let o = [Op2::Times, Op2::Div, Op2::Eq, Op2::Ne][self.rng.below(4)];
+                Bin(
+                    o,
+                    b(self.any(d, scope, false)),
+                    b(self.any(d, scope, false)),
+                )
+            }
             _ => {
                 let e1 = self.any(d, scope, false);
                 let mutable = self.rng.chance(50);
@@ -2429,6 +2525,9 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Err(Stuck::UncaughtThrow(v)) => Run::Thrown(value_wire(v)),
         Err(Stuck::FuelExhausted) => Run::Timeout,
         Err(Stuck::OutOfBounds { .. }) => Run::Fault("outOfBounds".into()),
+        // `Int` arithmetic leaving the safe integers, which the model's
+        // numbers, all one type, don't check.
+        Err(Stuck::IntRange { .. }) => Run::Fault("intRange".into()),
         // Spreading what isn't an object: JavaScript copies a primitive's
         // own properties, which the model and `dynamics` don't.
         Err(Stuck::NotImplemented(what)) if what.contains("spread") => {
@@ -2445,7 +2544,6 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Err(Stuck::PropertyNotFound { .. }) => Run::Stuck("propertyNotFound".into()),
         Err(Stuck::BadAssignmentTarget) => Run::Stuck("badAssignmentTarget".into()),
         Err(Stuck::ReadOnly) => Run::Stuck("readOnly".into()),
-        Err(other) => Run::Stuck(format!("other {}", other)),
     }
 }
 
@@ -2755,7 +2853,7 @@ fn scan_held(
         Seq(x, y) => scan_held(x, held, false, hit) || scan_held(y, held, used, hit),
         While(x, y) => go(held, x) || scan_held(y, held, false, hit),
         TryFinally(x, y) => scan_held(x, held, used, hit) || scan_held(y, held, false, hit),
-        Plus(x, y) | Minus(x, y) | Spread(x, y) | Index(x, y) | Set(x, _, y) => {
+        Plus(x, y) | Minus(x, y) | Bin(_, x, y) | Spread(x, y) | Index(x, y) | Set(x, _, y) => {
             go(held, x) || go(held, y)
         }
         Cond(x, y, z) => {
@@ -2921,6 +3019,11 @@ fn inty_agrees_with_the_lean_model() {
             ("(casetag ", "with a test of a variant's tag"),
             ("(sum ", "with a sum told apart by typeof"),
             ("(typetest ", "with a test of typeof"),
+            ("(times ", "with `*`"),
+            ("(div ", "with `/`"),
+            ("(lt ", "with `<`"),
+            ("(ge ", "with `>=`"),
+            ("(eq ", "with `===`"),
         ] {
             if wire(&programs[i]).contains(form) {
                 *counts
@@ -2976,7 +3079,8 @@ fn inty_agrees_with_the_lean_model() {
                 Run::Value(_) | Run::Stuck(_) | Run::Thrown(_) | Run::Fault(_)
             )
         };
-        if finished(&run) && finished(&model_run) && run != model_run {
+        let int_range = run == Run::Fault("intRange".into());
+        if finished(&run) && finished(&model_run) && run != model_run && !int_range {
             failures.push(report("the interpreters disagree"));
         }
         // The engine. Where an interpreter finishes, the engine agrees; a

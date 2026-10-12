@@ -527,7 +527,8 @@ impl Cx {
             Some(Pattern::Typeof { name, tag, negated }) => {
                 let (i, b) = self.binder(name)?;
                 if b.sum != Some(Sum::Typeof) {
-                    return unsupported("a test of `typeof` on what isn't a declared sum");
+                    // Not a sum: a plain test (`===` on its `typeof`).
+                    return self.plain_test(test, yes, no);
                 }
                 self.tested(&b);
                 let (case, rest) = self.split(&b, yes, no, negated)?;
@@ -542,7 +543,7 @@ impl Cx {
             }) => {
                 let (i, b) = self.binder(name)?;
                 if b.sum != Some(Sum::Variant) {
-                    return unsupported("a test of a tag on what isn't a declared variant");
+                    return self.plain_test(test, yes, no);
                 }
                 self.tested(&b);
                 let (label, tag) = (tok(label)?, tok(tag)?);
@@ -551,13 +552,21 @@ impl Cx {
                     "(casetag (var {i}) s:{label} s:{tag} {rest} {case})"
                 ))
             }
-            None => {
-                let c = self.expr(test)?;
-                let t = yes(self)?;
-                let e = no(self)?;
-                Ok(format!("(cond {c} {t} {e})"))
-            }
+            None => self.plain_test(test, yes, no),
         }
+    }
+
+    /// A test that takes nothing apart: `?:` on its value.
+    fn plain_test(
+        &mut self,
+        test: &Expr,
+        yes: impl FnOnce(&mut Self) -> Lowered,
+        no: impl FnOnce(&mut Self) -> Lowered,
+    ) -> Lowered {
+        let c = self.expr(test)?;
+        let t = yes(self)?;
+        let e = no(self)?;
+        Ok(format!("(cond {c} {t} {e})"))
     }
 
     /// The branches of a test that takes `name` apart, each seeing it
@@ -756,6 +765,52 @@ impl Cx {
                     self.expr(left)?,
                     self.expr(right)?
                 )),
+                BinOp::Mul
+                | BinOp::Div
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::EqEqEq
+                | BinOp::NotEqEq => {
+                    let form = match op {
+                        BinOp::Mul => "times",
+                        BinOp::Div => "div",
+                        BinOp::Lt => "lt",
+                        BinOp::LtEq => "le",
+                        BinOp::Gt => "gt",
+                        BinOp::GtEq => "ge",
+                        BinOp::EqEqEq => "eq",
+                        _ => "ne",
+                    };
+                    Ok(format!(
+                        "({form} {} {})",
+                        self.expr(left)?,
+                        self.expr(right)?
+                    ))
+                }
+                // A test on the left (a boolean): `a && b` is `a ? b : false`,
+                // so `b` sees what `a` takes apart.
+                BinOp::And | BinOp::Or if pattern(left).is_some() => {
+                    if *op == BinOp::And {
+                        self.test(left, |cx| cx.expr(right), |_| Ok("(bool false)".into()))
+                    } else {
+                        self.test(left, |_| Ok("(bool true)".into()), |cx| cx.expr(right))
+                    }
+                }
+                // Otherwise `const t = a; t ? b : t` (`t ? t : b` for `||`).
+                BinOp::And | BinOp::Or => {
+                    let a = self.expr(left)?;
+                    self.push(None, Kind::Const);
+                    let b = self.expr(right);
+                    self.pop(1);
+                    let b = b?;
+                    Ok(if *op == BinOp::And {
+                        format!("(let {a} (cond (var 0) {b} (var 0)))")
+                    } else {
+                        format!("(let {a} (cond (var 0) (var 0) {b}))")
+                    })
+                }
                 op => unsupported(format!("the operator {op:?}")),
             },
             Expr::Assign {
@@ -1332,7 +1387,7 @@ mod tests {
 
     #[test]
     fn leaves_out_what_the_model_lacks() {
-        assert!(lower("1 * 2;").is_err());
+        assert!(lower("7 % 2;").is_err());
         assert!(lower("for (;;) {}").is_err());
         assert!(lower("Math.abs(1);").is_err());
         // Used before its declaration (hoisted).
@@ -1354,8 +1409,15 @@ mod tests {
         assert!(
             lower("const o = {x: 1}; const p = {...o, get g() { return this.x; }}; p.g;").is_err()
         );
-        // A test of `typeof` or of a tag on what isn't a declared sum.
-        assert!(lower("const n = 1; typeof n === \"number\" ? n - 1 : 0;").is_err());
-        assert!(lower("const o = {name: \"bob\"}; o.name === \"bob\" ? 1 : 2;").is_err());
+        // A test of `typeof` or of a tag on what isn't a declared sum is a
+        // plain one.
+        assert_eq!(
+            lower("const n = 1; typeof n === \"number\" ? n - 1 : 0;").unwrap(),
+            "(let (num 1 0) (cond (eq (typeof (var 0)) (str s:number)) (minus (var 0) (num 1 0)) (num 0 0)))"
+        );
+        assert_eq!(
+            lower("const a = 1; const b = 2; a && b;").unwrap(),
+            "(let (num 1 0) (let (num 2 0) (let (var 1) (cond (var 0) (var 1) (var 0)))))"
+        );
     }
 }

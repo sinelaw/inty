@@ -452,6 +452,7 @@ example : ¬ HasType L [] [] none .synth .synth (.binop .plus (num 1) (str "a"))
   cases h with
   | binop hop h₁ h₂ =>
     cases hop with
+    | num h => simp [BinOp.numeric] at h
     | plus _ =>
       obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
       obtain ⟨_, e₂, h₂⟩ := h₂.top_synth
@@ -468,6 +469,7 @@ example : ¬ HasType L [] [] none .synth .synth (.binop .plus (.lit (.boolean tr
   cases h with
   | binop hop h₁ _ =>
     cases hop with
+    | num h => simp [BinOp.numeric] at h
     | plus hc =>
       obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
       cases h₁ with
@@ -961,8 +963,10 @@ example : UnOpTy UnOp.neg Ty.number Ty.number :=
   @UnOpTy.neg
 example : ∀ {S : Sys} {C : List Pred} {τ : Ty}, EntailsS S C { cls := Cls.plus, args := [τ] } → BinOpTyS S C BinOp.plus τ τ τ :=
   @BinOpTyS.plus
-example : ∀ {S : Sys} {C : List Pred}, BinOpTyS S C BinOp.minus Ty.number Ty.number Ty.number :=
-  @BinOpTyS.minus
+example : ∀ {S : Sys} {C : List Pred} {op : BinOp}, BinOp.numeric op = true → BinOpTyS S C op Ty.number Ty.number (BinOp.resTy op) :=
+  @BinOpTyS.num
+example : ∀ {S : Sys} {C : List Pred} {neg : Bool} {τ₁ τ₂ : Ty}, BinOpTyS S C (BinOp.strictEq neg) τ₁ τ₂ Ty.boolean :=
+  @BinOpTyS.strictEq
 example : ∀ {ls : List String} {es : List Inty.Expr} {T : Ty}, ObjCase ls es T T :=
   @ObjCase.self
 example : ∀ {ls : List String} {es : List Inty.Expr} {l t : String} {ts : List String} {i : Nat} {Ps : List Ty} {P T : Ty},
@@ -1362,12 +1366,34 @@ example : ∀ (a b : String), BinOp.eval BinOp.plus (Value.string a) (Value.stri
   @BinOp.eval.eq_2
 example : ∀ (a b : Float), BinOp.eval BinOp.minus (Value.number a) (Value.number b) = Result.ok (Value.number (a - b)) :=
   @BinOp.eval.eq_3
-example : ∀ (x : BinOp) (x_1 x_2 : Value),
-      (∀ (a b : Float), x = BinOp.plus → x_1 = Value.number a → x_2 = Value.number b → False) →
-        (∀ (a b : String), x = BinOp.plus → x_1 = Value.string a → x_2 = Value.string b → False) →
-          (∀ (a b : Float), x = BinOp.minus → x_1 = Value.number a → x_2 = Value.number b → False) →
-            BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
+example : ∀ (a b : Float), BinOp.eval BinOp.times (Value.number a) (Value.number b) = Result.ok (Value.number (a * b)) :=
   @BinOp.eval.eq_4
+example : ∀ (a b : Float), BinOp.eval BinOp.div (Value.number a) (Value.number b) = Result.ok (Value.number (a / b)) :=
+  @BinOp.eval.eq_5
+example : ∀ (a b : Float), BinOp.eval BinOp.lt (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (a < b))) :=
+  @BinOp.eval.eq_6
+example : ∀ (a b : Float), BinOp.eval BinOp.le (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (a ≤ b))) :=
+  @BinOp.eval.eq_7
+example : ∀ (a b : Float), BinOp.eval BinOp.gt (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (b < a))) :=
+  @BinOp.eval.eq_8
+example : ∀ (a b : Float), BinOp.eval BinOp.ge (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (b ≤ a))) :=
+  @BinOp.eval.eq_9
+example : ∀ (x x_1 : Value) (neg : Bool),
+      BinOp.eval (BinOp.strictEq neg) x x_1 = Result.ok (Value.boolean (Value.strictEq x x_1 != neg)) :=
+  @BinOp.eval.eq_10
+example : ∀ (x : BinOp) (x_1 x_2 : Value),
+      (∀ (neg : Bool), x = BinOp.strictEq neg → False) →
+        (∀ (a b : Float), x = BinOp.plus → x_1 = Value.number a → x_2 = Value.number b → False) →
+          (∀ (a b : String), x = BinOp.plus → x_1 = Value.string a → x_2 = Value.string b → False) →
+            (∀ (a b : Float), x = BinOp.minus → x_1 = Value.number a → x_2 = Value.number b → False) →
+              (∀ (a b : Float), x = BinOp.times → x_1 = Value.number a → x_2 = Value.number b → False) →
+                (∀ (a b : Float), x = BinOp.div → x_1 = Value.number a → x_2 = Value.number b → False) →
+                  (∀ (a b : Float), x = BinOp.lt → x_1 = Value.number a → x_2 = Value.number b → False) →
+                    (∀ (a b : Float), x = BinOp.le → x_1 = Value.number a → x_2 = Value.number b → False) →
+                      (∀ (a b : Float), x = BinOp.gt → x_1 = Value.number a → x_2 = Value.number b → False) →
+                        (∀ (a b : Float), x = BinOp.ge → x_1 = Value.number a → x_2 = Value.number b → False) →
+                          BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
+  @BinOp.eval.eq_11
 example : ∀ (i : Nat) (l : Lit), Expr.writes i (Inty.Expr.lit l) = false :=
   @Expr.writes.eq_1
 example : ∀ (i i_1 : Nat), Expr.writes i (Expr.var i_1) = false :=
@@ -1719,7 +1745,7 @@ example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
 #rules HasTypeS 38
 #rules LitTy 5
 #rules UnOpTy 3
-#rules BinOpTyS 2
+#rules BinOpTyS 3
 #rules ObjCase 2
 #rules Expr.IsValue 4
 #equations run 30
@@ -1739,7 +1765,7 @@ example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
 #equations Value.typeString 12
 #equations Lit.eval 5
 #equations UnOp.eval 4
-#equations BinOp.eval 4
+#equations BinOp.eval 11
 #equations Expr.writes 30
 #equations Expr.writesList 2
 #equations Expr.writesCls 3

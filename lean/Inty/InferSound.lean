@@ -1700,7 +1700,14 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ hsat ⊢
       replace he₁ := he₁.conv ((unify_sound hu).subst φ)
       exact .binop (.plus (by simpa [Pred.subst] using hsat.2)) he₁ he₂
-    | minus =>
+    | strictEq neg =>
+      simp only [Option.some.injEq] at h; subst h
+      simp only [Sat.append] at hsat
+      have he₁ := ih₁ h₁ (by ret_ok) .none _ C (Sat.map.mp hsat.1)
+      have he₂ := ih₂ h₂ (by ret_ok) .none _ C hsat.2
+      simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
+      exact .binop .strictEq he₁ he₂
+    | minus | times | div | lt | le | gt | ge =>
       simp only at h
       split at h
       · cases h
@@ -1715,7 +1722,7 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
       replace he₁ := he₁.conv (((unify_sound hu₃).subst σ₄).subst φ)
       replace he₂ := he₂.conv ((unify_sound hu₄).subst φ)
-      exact .binop .minus (by simpa using he₁) (by simpa using he₂)
+      exact .binop (.num rfl) (by simpa using he₁) (by simpa using he₂)
   | ret e ih =>
     intro Γ R rm ex n o h hRo hex φ C hsat
     rw [exMode_pushes (fun _ => rfl)]
