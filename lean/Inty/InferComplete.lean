@@ -1116,6 +1116,31 @@ macro "ret_eq" : tactic =>
         (RetOk.eq_subst (RetOk.subst ‹_› _) (RetOk.eq_subst ‹_› ‹_› _) _) _
     | (intro h; cases h))
 
+mutual
+/-- Whether every annotation in a program is monomorphic. Inference is
+complete for such programs (`infer_complete`). A polymorphic annotation's
+initialiser may need a constraint on its rigid type variables that waits on
+a type variable of the context, which the algorithm doesn't keep: it is
+sound for them (`inferProgram_sound`), not complete. -/
+def Expr.monoAnn : Expr → Bool
+  | .lit _ | .var _ | .break_ | .continue_ => true
+  | .func _ body | .ctor _ body => body.monoAnn
+  | .app f args | .mcall f _ args | .new_ f args => f.monoAnn && Expr.monoAnnList args
+  | .let_ _ ann e₁ e₂ => (ann.all fun a => a.arity == 0) && e₁.monoAnn && e₂.monoAnn
+  | .assign _ e | .unop _ e | .ret e | .throw_ e | .get e _ => e.monoAnn
+  | .cond c t e | .setIndex c t e | .unwrap c t e => c.monoAnn && t.monoAnn && e.monoAnn
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ | .spread e₁ e₂
+  | .index e₁ e₂ | .tryCatch e₁ e₂ | .set e₁ _ e₂ => e₁.monoAnn && e₂.monoAnn
+  | .obj _ es _ | .arr es | .cls _ es _ => Expr.monoAnnList es
+/-- `monoAnn`, for a list of expressions. -/
+def Expr.monoAnnList : List Expr → Bool
+  | [] => true
+  | e :: es => e.monoAnn && Expr.monoAnnList es
+end
+
+@[simp] theorem Expr.monoAnnList_eq (es : List Expr) : Expr.monoAnnList es = es.all Expr.monoAnn := by
+  induction es <;> simp_all [Expr.monoAnnList]
+
 /-- What `infer_complete` says of one expression: if the expression has a
 type in a context equal to an instance of inference's, inference finds a
 type of which it is an instance, with the constraints satisfied. -/
@@ -2303,6 +2328,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
   cases h with
   | cond hc ht he => exact .cond hc ht he
   | let_ s F h₁ hv hs ha h₂ => exact .let_ s F h₁ hv hs ha h₂
+  | letPoly a K h0 hp' hf hr h₁ hv hw h₂ => exact .letPoly a K h0 hp' hf hr h₁ hv hw h₂
   | ret h => exact .ret h
   | seq h₁ h₂ => exact .seq h₁ h₂
   | break_ => exact .break_
@@ -2319,6 +2345,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     cases ht with
     | cond hc ht he' => exact .cond hc (.inj ht hT hi') (.inj he' hT hi')
     | let_ s F h₁ hv hs ha h₂ => exact .let_ s F h₁ hv hs ha (.inj h₂ hT hi')
+    | letPoly a K h0 hp' hf hr h₁ hv hw h₂ => exact .letPoly a K h0 hp' hf hr h₁ hv hw (.inj h₂ hT hi')
     | ret h => exact .ret h
     | seq h₁ h₂ => exact .seq h₁ (.inj h₂ hT hi')
     | break_ => exact .break_
@@ -2382,10 +2409,11 @@ theorem exTy_tyEq {ex : Option Ty} {τ₀ τ' : Ty} (hex : Ex.Closed ex) (hτT :
     simp only [Option.getD_some, Ty.closed_subst (hex T rfl)]
     rw [← hτT T rfl]; exact hτ₀
 
-theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
+theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComplete L e := by
   intro e
   induction e using Expr.ind with
   | lit l =>
+    intro _
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR _ _ _ ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2396,6 +2424,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       rw [LitTy.eq_ty hl] at hτ₀
       simpa [Lit.ty_subst] using hτ₀
   | var i =>
+    intro _
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR _ hΓ' _ ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2424,6 +2453,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
             (by simp [Scheme.instPreds, hse.2.1]) hpe _ hm
           exact (hc d hd).of_predEq hde
   | func k body ih =>
+    intro hm
+    simp only [Expr.monoAnn] at hm
+    replace ih : InferComplete L body := ih hm
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' _ ht
     obtain ⟨hmd, hmT⟩ := hm
     cases hft : funcTarget ex k with
@@ -2512,6 +2544,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           simp only [Ty.subst_fn, funSubst_this, funSubst_ret, hparams]; exact hτ₀
         · exact Sat.absorb habs hsat₁
   | app f args ihf iha =>
+    intro hm
+    simp only [Expr.monoAnn, Expr.monoAnnList_eq, Bool.and_eq_true, List.all_eq_true] at hm
+    replace ihf : InferComplete L f := ihf hm.1
+    replace iha : ∀ a ∈ args, InferComplete L a := fun a ha => iha a ha (hm.2 a ha)
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2545,6 +2581,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
         · exact Sat.fresh hp₂ hsat₂
   | let_ mb ann e₁ e₂ ih₁ ih₂ =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    obtain ⟨⟨hann, hm₁⟩, hm₂⟩ := hm
+    replace ih₁ : InferComplete L e₁ := ih₁ hm₁
+    replace ih₂ : InferComplete L e₂ := ih₂ hm₂
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
@@ -2555,7 +2596,7 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       cases ht with
       | let_ s F hgen hval hsimp hann h₂ =>
         subst hmd'
-        obtain ⟨hs, har, hap, haf⟩ := hann a rfl
+        obtain ⟨hs, har, hap, haf, har₀⟩ := hann a rfl
         subst a
         have hcl : ∀ ψ, s.subst ψ = s := fun ψ => Scheme.subst_of_ftv_nil ψ haf
         have hop : ∀ m, s.open m = s.inst [] := fun m => by simp [Scheme.open, har, varBlock]
@@ -2578,7 +2619,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           (hR'.trans (hag₁.ret hR).symm) h₂
         refine ⟨⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩,
           ?_, φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂.trans hτ₀, Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
-        simp only [infer, har, hap, haf, and_self, ↓reduceIte, h₁o, h₂o]
+        simp only [infer, har, hap, haf, har₀, and_self, ↓reduceIte, h₁o, h₂o]
+      | letPoly _ _ h0 =>
+        simp only [Option.all, beq_iff_eq] at hann
+        omega
     | none =>
     cases ht with
     | let_ s F hgen hval hsimp _ h₂ =>
@@ -2652,6 +2696,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         hτ₂.trans hτ₀, Sat.app (Sat.agree hag₂ hls.2 hsatr) hsat₂⟩
       simp only [infer, h₁, himp, hlsq, hall, ↓reduceIte, h₂o]
   | assign i e ih =>
+    intro hm
+    simp only [Expr.monoAnn] at hm
+    replace ih : InferComplete L e := ih hm
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2683,6 +2730,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         rw [Ty.subst_compose]
         exact (habs _).trans ((hag₁.ty hsb).trans (hsi.symm.trans hτ₀))
   | cond c t e ihc iht ihe =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ihc : InferComplete L c := ihc hm.1.1
+    replace iht : InferComplete L t := iht hm.1.2
+    replace ihe : InferComplete L e := ihe hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
@@ -2719,6 +2771,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
         · exact hp₂ p hp
   | unwrap e₁ e₂ e₃ ih₁ ih₂ ih₃ =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ih₁ : InferComplete L e₁ := ih₁ hm.1.1
+    replace ih₂ : InferComplete L e₂ := ih₂ hm.1.2
+    replace ih₃ : InferComplete L e₃ := ih₃ hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
@@ -2795,6 +2852,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           · exact (hσ₂.subst_below (hτb₁.mono hn₂)).mono (Nat.le_succ _)
           · exact hβ
   | unop op e ih =>
+    intro hm
+    simp only [Expr.monoAnn] at hm
+    replace ih : InferComplete L e := ih hm
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2814,6 +2874,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         exact ⟨_, by simp only [infer, h₁, hσ']; rfl, φ₁, hag₁.absorb habs, by simpa using hτ₀,
           Sat.absorb habs hsat₁⟩
   | binop op e₁ e₂ ih₁ ih₂ =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ih₁ : InferComplete L e₁ := ih₁ hm.1
+    replace ih₂ : InferComplete L e₂ := ih₂ hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2848,6 +2912,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           (hag₁₂.absorb habs₃).absorb habs₄, by simpa using hτ₀,
           Sat.absorb habs₄ (Sat.absorb habs₃ hsat₁₂)⟩
   | ret e ih =>
+    intro hm
+    simp only [Expr.monoAnn] at hm
+    replace ih : InferComplete L e := ih hm
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
@@ -2882,6 +2949,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           exact ⟨⟨o₁.σ, ex.getD (.var o₁.next), o₁.preds, o₁.next + 1⟩, by simp only [infer, h₁],
             (o₁.next, τ₀) :: φ₁, hag₁.fresh hσ₁ hn₁, exTy_tyEq hex hτT hτ₀ _ _, Sat.fresh hp₁ hsat₁⟩
   | throw_ e ih =>
+    intro hm
+    simp only [Expr.monoAnn] at hm
+    replace ih : InferComplete L e := ih hm
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2894,6 +2964,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         (o₁.next, τ₀) :: φ₁, hag₁.fresh hσ₁ hn₁, ?_, Sat.fresh hp₁ hsat₁⟩
       simp only [Ty.subst, Subst.find, ↓reduceIte, Option.getD_some]; exact hτ₀
   | seq e₁ e₂ ih₁ ih₂ =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ih₁ : InferComplete L e₁ := ih₁ hm.1
+    replace ih₂ : InferComplete L e₂ := ih₂ hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
@@ -2912,6 +2986,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂.trans hτ₀,
         Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
   | while_ c body ihc ihb =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ihc : InferComplete L c := ihc hm.1
+    replace ihb : InferComplete L body := ihb hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -2928,16 +3006,22 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₀,
         Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
   | break_ =>
+    intro _
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     exact ⟨⟨[], ex.getD (.var n), [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
       fun a ha => by simp [Ty.subst, Subst.find, Nat.ne_of_lt ha]; exact TyEq.refl _,
       exTy_tyEq hex (fun T hT => hm.2 T hT rfl) (TyEq.refl _) n ψ, by simp [Sat]⟩
   | continue_ =>
+    intro _
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     exact ⟨⟨[], ex.getD (.var n), [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
       fun a ha => by simp [Ty.subst, Subst.find, Nat.ne_of_lt ha]; exact TyEq.refl _,
       exTy_tyEq hex (fun T hT => hm.2 T hT rfl) (TyEq.refl _) n ψ, by simp [Sat]⟩
   | tryCatch body handler ihb ihh =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ihb : InferComplete L body := ihb hm.1
+    replace ihh : InferComplete L handler := ihh hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
@@ -2964,6 +3048,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         (habs _).trans (hτ₂.trans hτ₀),
         Sat.absorb habs (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)⟩
   | tryFinally body fin ihb ihf =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ihb : InferComplete L body := ihb hm.1
+    replace ihf : InferComplete L fin := ihf hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     rw [exMode_pushes (fun _ => rfl)] at hmd; subst hmd
@@ -2982,6 +3070,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂,
         (hag₂.ty hτb₁).trans (hτ₁.trans hτ₀), Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
   | obj ls es ks ih =>
+    intro hm
+    simp only [Expr.monoAnn, Expr.monoAnnList_eq, List.all_eq_true] at hm
+    replace ih : ∀ a ∈ es, InferComplete L a := fun a ha => ih a ha (hm a ha)
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3004,6 +3095,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       refine ⟨_, by simp only [infer, hc, and_self, ↓reduceIte, h, hf, hσ']; rfl, φ,
         hag.absorb habs, (habs _).trans (hT.trans hτ₀), Sat.absorb habs hsat⟩
   | cls ls es ks ih =>
+    intro hm
+    simp only [Expr.monoAnn, Expr.monoAnnList_eq, List.all_eq_true] at hm
+    replace ih : ∀ a ∈ es, InferComplete L a := fun a ha => ih a ha (hm a ha)
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3040,6 +3134,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         Sat.absorb habs (Sat.append.mpr ⟨fun p hp' => ?_, hnn⟩)⟩
       rw [hpφ p hp']; exact hsat p hp'
   | ctor k body ih =>
+    intro hm
+    simp only [Expr.monoAnn] at hm
+    replace ih : InferComplete L body := ih hm
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' _ ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3088,6 +3185,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         rw [Ty.subst_fn, ctorSubst_ret, hparams]; exact hτ₀
       · exact Sat.absorb habs hsat₁
   | new_ f args ihf iha =>
+    intro hm
+    simp only [Expr.monoAnn, Expr.monoAnnList_eq, Bool.and_eq_true, List.all_eq_true] at hm
+    replace ihf : InferComplete L f := ihf hm.1
+    replace iha : ∀ a ∈ args, InferComplete L a := fun a ha => iha a ha (hm.2 a ha)
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3125,6 +3226,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
         · exact Sat.block hp₂ hsat₂
   | get e l ih =>
+    intro hm
+    simp only [Expr.monoAnn] at hm
+    replace ih : InferComplete L e := ih hm
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3149,6 +3253,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       · simp [Ty.subst, Subst.find]; exact TyEq.refl _
       · simp [Ty.subst, Subst.find]; exact TyEq.refl _
   | set e l v ihe ihv =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ihe : InferComplete L e := ihe hm.1
+    replace ihv : InferComplete L v := ihv hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3170,6 +3278,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       exact hpr.of_predEq (PredEq.of_eqs (.cons (hτ₁.symm.trans (hag₂.ty hτb₁).symm)
         (.cons (by simp; exact TyEq.refl _) (.cons hτ₂.symm .nil))))
   | spread e₁ e₂ ih₁ ih₂ =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ih₁ : InferComplete L e₁ := ih₁ hm.1
+    replace ih₂ : InferComplete L e₂ := ih₂ hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3244,6 +3356,9 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
             exact List.mem_map_of_mem hp
           exact hm _ hmem
   | arr es ih =>
+    intro hm
+    simp only [Expr.monoAnn, Expr.monoAnnList_eq, List.all_eq_true] at hm
+    replace ih : ∀ a ∈ es, InferComplete L a := fun a ha => ih a ha (hm a ha)
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, hmT⟩ := hm
     cases hat : arrTarget ex with
@@ -3308,6 +3423,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
         refine (habs _).trans ?_
         simpa [Ty.subst, Subst.find] using hτ₀
   | index e i ihe ihi =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ihe : InferComplete L e := ihe hm.1
+    replace ihi : InferComplete L i := ihi hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3337,6 +3456,11 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
           (.cons hτ₂.symm (.cons ?_ .nil))))
         simp [Ty.subst, Subst.find]; exact TyEq.refl _
   | setIndex e i v ihe ihi ihv =>
+    intro hm
+    simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+    replace ihe : InferComplete L e := ihe hm.1.1
+    replace ihi : InferComplete L i := ihi hm.1.2
+    replace ihv : InferComplete L v := ihv hm.2
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3382,6 +3506,10 @@ theorem infer_complete (L : List String) : ∀ e, InferComplete L e := by
       · simp only [Pred.subst, List.map_cons, List.map_nil]
         exact hw.of_predEq (PredEq.of_eqs (.cons he₁.symm .nil))
   | mcall e l args ihe iha =>
+    intro hm
+    simp only [Expr.monoAnn, Expr.monoAnnList_eq, Bool.and_eq_true, List.all_eq_true] at hm
+    replace ihe : InferComplete L e := ihe hm.1
+    replace iha : ∀ a ∈ args, InferComplete L a := fun a ha => iha a ha (hm.2 a ha)
     intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
     obtain ⟨hmd, -⟩ := hm
     rw [exMode_synth (fun _ => rfl)] at hmd; subst hmd
@@ -3549,14 +3677,16 @@ theorem Pred.settled_of_keep {C : List Pred} (hC : ∀ c ∈ C, c.OnVarShaped) {
     | [], hk => simp [Pred.improveArgs] at hk
 
 /-- Completeness, for a program in a closed context (such as the builtins'):
-if it has a type, under assumptions on type variables, and passes the scope
-checks (`Expr.scoped`), inference accepts it, with a type of which that one
-is an instance up to equal types. -/
+if it has a type, under assumptions on type variables, passes the scope
+checks (`Expr.scoped`) and has only monomorphic annotations
+(`Expr.monoAnn`), inference accepts it, with a type of which that one is an
+instance up to equal types. -/
 theorem inferIn_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
     (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
-    (hm : e.scoped (Γ.map fun _ => false) = true) (ht : HasType L C Γ none .synth .synth e τ') :
+    (hm : e.scoped (Γ.map fun _ => false) = true) (hmono : e.monoAnn = true)
+    (ht : HasType L C Γ none .synth .synth e τ') :
     ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' := by
-  obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete L e (n := 0) (ψ := []) (R := none)
+  obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete L e hmono (n := 0) (ψ := []) (R := none)
     RetOk.synth nofun .none .none (fun a ha => by rw [hΓ] at ha; cases ha) (fun a ha => by simp [Ret.ftv] at ha)
     (fun p hp => (hC p hp).assumable false) (by rw [Ctx.subst_nil]; exact CtxEq.refl Γ) (RetEq.refl _) ht
   obtain ⟨σi, preds, himp, habs, hsat', hkeep, _⟩ :=
@@ -3567,11 +3697,12 @@ theorem inferIn_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C :
   exact ⟨o.τ.subst σi, by simp [inferIn, hm, h, himp, hall], φ, (habs _).trans hτ⟩
 
 /-- Completeness for closed programs: one that has a type, with records over
-its labels, and passes the scope checks is accepted, with a type of which
-that one is an instance up to equal types. -/
+its labels, passes the scope checks and has only monomorphic annotations
+is accepted, with a type of which that one is an instance up to equal
+types. -/
 theorem inferProgram_complete {e : Expr} {τ' : Ty} (hm : e.scoped [] = true)
-    (ht : HasType e.labels.eraseDups [] [] none .synth .synth e τ') :
+    (hmono : e.monoAnn = true) (ht : HasType e.labels.eraseDups [] [] none .synth .synth e τ') :
     ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
-  inferIn_complete (Γ := []) rfl (fun _ h => by cases h) hm ht
+  inferIn_complete (Γ := []) rfl (fun _ h => by cases h) hm hmono ht
 
 end Inty

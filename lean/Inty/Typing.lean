@@ -65,11 +65,63 @@ def Scheme.Simple (s : Scheme) : Prop :=
     ∃ q k τ t r, p = ⟨.merge, [q, k, τ, t, r]⟩ ∧
       ∃ i < s.arity, ∃ x ∈ [q, k, τ, t], x.TreeBound s.arity i
 
-/-- An annotation `ann` on a binding declares its scheme `s`: so far a
-type with no type variables, `/** const x: Number */`. (A polymorphic
-annotation's quantified variables would be rigid in the initialiser.) -/
+/-! ## Rigid type variables -/
+
+/-- The rigid type variables named `k`, one for each of an annotation's `n`
+quantified variables. -/
+def rigids (k n : Nat) : List Ty := (List.range n).map fun i => .app (.rigid k i) []
+
+/-- The names of the rigid type variables a constructor is. -/
+def Con.rkeys : Con → List Nat
+  | .rigid s _ => [s]
+  | _ => []
+
+mutual
+def RTy.rkeys : RTy → List Nat
+  | .free _ | .self _ => []
+  | .app c args => c.rkeys ++ RTy.rkeysL args
+  | .mu _ sys => RTy.rkeysL sys
+def RTy.rkeysL : List RTy → List Nat
+  | [] => []
+  | r :: rs => r.rkeys ++ RTy.rkeysL rs
+end
+
+mutual
+/-- The names of the rigid type variables in a type. -/
+def Ty.rkeys : Ty → List Nat
+  | .var _ => []
+  | .app c args => c.rkeys ++ Ty.rkeysL args
+  | .mu _ sys => RTy.rkeysL sys
+def Ty.rkeysL : List Ty → List Nat
+  | [] => []
+  | τ :: τs => τ.rkeys ++ Ty.rkeysL τs
+end
+
+mutual
+def PTy.rkeys : PTy → List Nat
+  | .free _ | .bound _ | .self _ => []
+  | .app c args => c.rkeys ++ PTy.rkeysL args
+  | .mu _ sys => PTy.rkeysL sys
+def PTy.rkeysL : List PTy → List Nat
+  | [] => []
+  | p :: ps => p.rkeys ++ PTy.rkeysL ps
+end
+
+def Cls.rkeys : Cls → List Nat
+  | .inject T => T.rkeys
+  | _ => []
+
+def Pred.rkeys (p : Pred) : List Nat := p.cls.rkeys ++ Ty.rkeysL p.args
+def PPred.rkeys (p : PPred) : List Nat := p.cls.rkeys ++ PTy.rkeysL p.args
+def Scheme.rkeys (s : Scheme) : List Nat := s.body.rkeys ++ s.preds.flatMap PPred.rkeys
+def ctxRkeys (Γ : Ctx) : List Nat := Γ.flatMap Scheme.rkeys
+def Ret.rkeys (R : Option Ty) : List Nat := (R.map Ty.rkeys).getD []
+
+/-- An annotation `ann` on a binding declares its scheme `s`, a type with no
+type variables, `/** const x: Number */`, in this rule; a polymorphic
+annotation's quantified variables are rigid in the initialiser (`letPoly`). -/
 def Annotated (ann : Option Scheme) (s : Scheme) : Prop :=
-  ∀ a, ann = some a → a = s ∧ s.arity = 0 ∧ s.preds = [] ∧ s.ftv = []
+  ∀ a, ann = some a → a = s ∧ s.arity = 0 ∧ s.preds = [] ∧ s.ftv = [] ∧ s.rkeys = []
 
 /-- How an object literal's field written as `k`, its expression `e` of the
 type `τ`, sits in the literal's record type `T`: its slot. A method and a
@@ -182,6 +234,17 @@ inductive HasTypeS (S : Sys) (L : List String) :
       (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
       Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ →
       HasTypeS S L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
+  /-- A binding annotated with a polymorphic scheme `a`
+  (`/** const id: <a>(a) => a */`): the initialiser, a syntactic value, is
+  checked against `a` with its quantified variables rigid, as fresh
+  constants (`rigids k`, for any `k` outside a finite set: they are
+  bound, so the assumptions `C` and the context can't mention them), and
+  the binding has every instance of `a`. -/
+  | letPoly (a : Scheme) (K : List Nat) :
+      0 < a.arity → a.preds = [] → a.ftv = [] → a.rkeys = [] →
+      (∀ k, k ∉ K → HasTypeS S L C Γ R rm .check e₁ (a.inst (rigids k a.arity))) →
+      e₁.IsValue → e₂.writes 0 = false → HasTypeS S L C (a :: Γ) R rm md e₂ τ₂ →
+      HasTypeS S L C Γ R rm md (.let_ mb (some a) e₁ e₂) τ₂
   /-- `x = e` stores a value of `x`'s type, which is a monotype: a binding
   that is assigned is never generalised. Its value is the assignment's.
   (That `x` is a `let` or a parameter, not a `const`, is checked apart,
@@ -339,6 +402,11 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
       (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
       Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ →
       HasTypeTopS S L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
+  | letPoly (a : Scheme) (K : List Nat) :
+      0 < a.arity → a.preds = [] → a.ftv = [] → a.rkeys = [] →
+      (∀ k, k ∉ K → HasTypeS S L C Γ R rm .check e₁ (a.inst (rigids k a.arity))) →
+      e₁.IsValue → e₂.writes 0 = false → HasTypeS S L C (a :: Γ) R rm md e₂ τ₂ →
+      HasTypeTopS S L C Γ R rm md (.let_ mb (some a) e₁ e₂) τ₂
   | assign : Γ[i]? = some s → s.arity = 0 → s.preds = [] →
       HasTypeS S L C Γ R rm .synth e (s.inst []) →
       HasTypeTopS S L C Γ R rm .synth (.assign i e) (s.inst [])
@@ -450,6 +518,8 @@ theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
   | funcCheck hw hT hl hb => exact ⟨_, _, .funcCheck hw hT hl hb, .refl⟩
   | app hf hl ha => exact ⟨_, _, .app hf hl ha, .refl⟩
   | let_ s F h₁ hv hs ha h₂ => exact ⟨_, _, .let_ s F h₁ hv hs ha h₂, .refl⟩
+  | letPoly a K h0 h1 h2 h3 h₁ hv hw h₂ =>
+    exact ⟨_, _, .letPoly a K h0 h1 h2 h3 h₁ hv hw h₂, .refl⟩
   | assign hi ha hp he => exact ⟨_, _, .assign hi ha hp he, .refl⟩
   | cond hc ht he => exact ⟨_, _, .cond hc ht he, .refl⟩
   | unop hop he => exact ⟨_, _, .unop hop he, .refl⟩

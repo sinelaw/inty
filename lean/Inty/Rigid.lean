@@ -579,6 +579,24 @@ theorem EntailsS.rsub (ρ : RSubst) {C : List Pred} {p : Pred} (h : EntailsS Sys
   h.elim (fun h => .inl (InstEqW.rsub ρ h))
     (fun ⟨q, hq, hpq⟩ => .inr ⟨q.rsub ρ, List.mem_map_of_mem hq, hpq.rsub ρ⟩)
 
+/-- A system whose instances, expected types and injections survive
+instantiating rigid type variables as `ρ` does. -/
+structure Sys.RSubstable (S : Sys) (ρ : RSubst) : Prop where
+  inst : ∀ {p : Pred}, S.inst p → S.inst (p.rsub ρ)
+  closed : ∀ {T : Ty}, S.closed T → S.closed (T.rsub ρ)
+  injPred : ∀ τ T, (S.injPred τ T).rsub ρ = S.injPred (τ.rsub ρ) (T.rsub ρ)
+
+/-- The wide system holds whatever types the rigid type variables are. -/
+theorem Sys.wide_rsubstable (ρ : RSubst) : Sys.wide.RSubstable ρ where
+  inst := InstEqW.rsub ρ
+  closed := fun _ => trivial
+  injPred _ _ := by simp [Sys.wide, Pred.rsub, Cls.rsub]
+
+theorem EntailsS.rsubS {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) {C : List Pred} {p : Pred}
+    (h : EntailsS S C p) : EntailsS S (C.map (Pred.rsub ρ)) (p.rsub ρ) :=
+  h.elim (fun h => .inl (hS.inst h))
+    (fun ⟨q, hq, hpq⟩ => .inr ⟨q.rsub ρ, List.mem_map_of_mem hq, hpq.rsub ρ⟩)
+
 theorem Ty.whnf_rsub_con {ρ : RSubst} {t : Ty} {c : Con} (h : t.whnf = .app c [])
     (hc : c.isRigid = false) : (t.rsub ρ).whnf = .app c [] := by
   simpa using Ty.whnf_rsub_of_app h (Con.rimgA_none (Con.rimg_of_not_rigid hc) [])
@@ -628,15 +646,15 @@ theorem FieldSlot.rsub (ρ : RSubst) (h : FieldSlot T k e τ s) :
   | method he => simpa using FieldSlot.method (τs := _) (ρ := _) (he.rsub ρ)
   | getter he => simpa using FieldSlot.getter (σ := _) (he.rsub ρ)
 
-theorem MemberSlotS.rsub (ρ : RSubst) (h : MemberSlotS Sys.wide C T k e τ s) :
-    MemberSlotS Sys.wide (C.map (Pred.rsub ρ)) (T.rsub ρ) k e (τ.rsub ρ) (s.rsub ρ) := by
+theorem MemberSlotS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (h : MemberSlotS S C T k e τ s) :
+    MemberSlotS S (C.map (Pred.rsub ρ)) (T.rsub ρ) k e (τ.rsub ρ) (s.rsub ρ) := by
   cases h with
   | data =>
-    simpa using MemberSlotS.data (S := Sys.wide) (C := C.map (Pred.rsub ρ)) (T := T.rsub ρ) (e := e)
+    simpa using MemberSlotS.data (S := S) (C := C.map (Pred.rsub ρ)) (T := T.rsub ρ) (e := e)
       (τ := τ.rsub ρ)
   | arrow he hn =>
     simpa using MemberSlotS.arrow (τs := _) (ρ := _) (he.rsub ρ)
-      (by simpa using hn.rsub ρ)
+      (by simpa using hn.rsubS hS)
   | method he => simpa using MemberSlotS.method (τs := _) (ρ := _) (he.rsub ρ)
   | getter he => simpa using MemberSlotS.getter (σ := _) (he.rsub ρ)
 
@@ -656,5 +674,276 @@ theorem memberCtx_rsub (ρ : RSubst) (Γ : Ctx) (ks : List ClassKind) (τs : Lis
       obtain ⟨k, τ⟩ := p
       cases k <;> simp_all [Scheme.mono_rsub]
   | _ => rfl
+
+
+/-! ## Away from a type's rigid type variables -/
+
+theorem RTy.rkeysL_eq (rs : List RTy) : RTy.rkeysL rs = rs.flatMap RTy.rkeys := by
+  induction rs <;> simp_all [RTy.rkeysL]
+
+theorem Ty.rkeysL_eq (τs : List Ty) : Ty.rkeysL τs = τs.flatMap Ty.rkeys := by
+  induction τs <;> simp_all [Ty.rkeysL]
+
+theorem PTy.rkeysL_eq (ps : List PTy) : PTy.rkeysL ps = ps.flatMap PTy.rkeys := by
+  induction ps <;> simp_all [PTy.rkeysL]
+
+/-- `ρ` has no image for the rigid type variables named in `ks`. -/
+def RSubst.Off (ρ : RSubst) (ks : List Nat) : Prop := ∀ s ∈ ks, ∀ i, ρ s i = none
+
+theorem RSubst.Off.mono {ρ : RSubst} {ks ks' : List Nat} (h : ρ.Off ks') (hk : ∀ s ∈ ks, s ∈ ks') :
+    ρ.Off ks := fun s hs => h s (hk s hs)
+
+theorem Con.rimg_off {ρ : RSubst} {c : Con} (h : ρ.Off c.rkeys) : c.rimg ρ = none := by
+  cases c <;> simp_all [Con.rimg, Con.rkeys, RSubst.Off]
+
+theorem RTy.rsub_off {ρ : RSubst} {r : RTy} (h : ρ.Off r.rkeys) : r.rsub ρ = r := by
+  induction r using RTy.ind with
+  | free a => rfl
+  | self j => rfl
+  | app c args ih =>
+    simp only [RSubst.Off, RTy.rkeys, RTy.rkeysL_eq, List.mem_append, List.mem_flatMap] at h
+    rw [RTy.rsub_app_none (Con.rimgA_none (Con.rimg_off fun s hs => h s (.inl hs)) _)]
+    congr 1
+    exact (List.map_congr_left fun p hp => ih p hp fun s hs => h s (.inr ⟨p, hp, hs⟩)).trans
+      (List.map_id _)
+  | mu i sys ih =>
+    simp only [RSubst.Off, RTy.rkeys, RTy.rkeysL_eq, List.mem_flatMap] at h
+    rw [RTy.rsub_mu]
+    congr 1
+    exact (List.map_congr_left fun p hp => ih p hp fun s hs => h s ⟨p, hp, hs⟩).trans
+      (List.map_id _)
+
+theorem Ty.rsub_off {ρ : RSubst} {τ : Ty} (h : ρ.Off τ.rkeys) : τ.rsub ρ = τ := by
+  induction τ using Ty.ind with
+  | var a => rfl
+  | app c args ih =>
+    simp only [RSubst.Off, Ty.rkeys, Ty.rkeysL_eq, List.mem_append, List.mem_flatMap] at h
+    rw [Ty.rsub_app_none (Con.rimgA_none (Con.rimg_off fun s hs => h s (.inl hs)) _)]
+    congr 1
+    exact (List.map_congr_left fun p hp => ih p hp fun s hs => h s (.inr ⟨p, hp, hs⟩)).trans
+      (List.map_id _)
+  | mu i sys =>
+    simp only [RSubst.Off, Ty.rkeys, RTy.rkeysL_eq, List.mem_flatMap] at h
+    rw [Ty.rsub_mu]
+    congr 1
+    exact (List.map_congr_left fun p hp => RTy.rsub_off fun s hs => h s ⟨p, hp, hs⟩).trans
+      (List.map_id _)
+
+theorem PTy.rsub_off {ρ : RSubst} {p : PTy} (h : ρ.Off p.rkeys) : p.rsub ρ = p := by
+  induction p using PTy.ind with
+  | free a => rfl
+  | bound i => rfl
+  | self j => rfl
+  | app c args ih =>
+    simp only [RSubst.Off, PTy.rkeys, PTy.rkeysL_eq, List.mem_append, List.mem_flatMap] at h
+    rw [PTy.rsub_app, Con.rimgA_none (Con.rimg_off fun s hs => h s (.inl hs))]
+    dsimp only
+    congr 1
+    exact (List.map_congr_left fun p hp => ih p hp fun s hs => h s (.inr ⟨p, hp, hs⟩)).trans
+      (List.map_id _)
+  | mu i sys ih =>
+    simp only [RSubst.Off, PTy.rkeys, PTy.rkeysL_eq, List.mem_flatMap] at h
+    rw [PTy.rsub_mu]
+    congr 1
+    exact (List.map_congr_left fun p hp => ih p hp fun s hs => h s ⟨p, hp, hs⟩).trans
+      (List.map_id _)
+
+theorem Cls.rsub_off {ρ : RSubst} {c : Cls} (h : ρ.Off c.rkeys) : c.rsub ρ = c := by
+  cases c <;> simp_all [Cls.rsub, Cls.rkeys, Ty.rsub_off]
+
+theorem Pred.rsub_off {ρ : RSubst} {p : Pred} (h : ρ.Off p.rkeys) : p.rsub ρ = p := by
+  obtain ⟨c, args⟩ := p
+  simp only [RSubst.Off, Pred.rkeys, Ty.rkeysL_eq, List.mem_append, List.mem_flatMap] at h
+  simp only [Pred.rsub, Pred.mk.injEq]
+  exact ⟨Cls.rsub_off fun s hs => h s (.inl hs),
+    (List.map_congr_left fun τ hτ => Ty.rsub_off fun s hs => h s (.inr ⟨τ, hτ, hs⟩)).trans
+      (List.map_id _)⟩
+
+theorem PPred.rsub_off {ρ : RSubst} {p : PPred} (h : ρ.Off p.rkeys) : p.rsub ρ = p := by
+  obtain ⟨c, args⟩ := p
+  simp only [RSubst.Off, PPred.rkeys, PTy.rkeysL_eq, List.mem_append, List.mem_flatMap] at h
+  simp only [PPred.rsub, PPred.mk.injEq]
+  exact ⟨Cls.rsub_off fun s hs => h s (.inl hs),
+    (List.map_congr_left fun τ hτ => PTy.rsub_off fun s hs => h s (.inr ⟨τ, hτ, hs⟩)).trans
+      (List.map_id _)⟩
+
+theorem Scheme.rsub_off {ρ : RSubst} {s : Scheme} (h : ρ.Off s.rkeys) : s.rsub ρ = s := by
+  obtain ⟨n, b, ps⟩ := s
+  simp only [RSubst.Off, Scheme.rkeys, List.mem_append, List.mem_flatMap] at h
+  simp only [Scheme.rsub, Scheme.mk.injEq, true_and]
+  exact ⟨PTy.rsub_off fun s hs => h s (.inl hs),
+    (List.map_congr_left fun p hp => PPred.rsub_off fun s hs => h s (.inr ⟨p, hp, hs⟩)).trans
+      (List.map_id _)⟩
+
+theorem Scheme.rsub_of_rkeys_nil (ρ : RSubst) {s : Scheme} (h : s.rkeys = []) : s.rsub ρ = s :=
+  Scheme.rsub_off (by simp [RSubst.Off, h])
+
+theorem ctx_rsub_off {ρ : RSubst} {Γ : Ctx} (h : ρ.Off (ctxRkeys Γ)) : Γ.map (Scheme.rsub ρ) = Γ :=
+  (List.map_congr_left fun s hs => Scheme.rsub_off fun k hk =>
+    h k (List.mem_flatMap.mpr ⟨s, hs, hk⟩)).trans (List.map_id _)
+
+theorem preds_rsub_off {ρ : RSubst} {C : List Pred} (h : ρ.Off (C.flatMap Pred.rkeys)) :
+    C.map (Pred.rsub ρ) = C :=
+  (List.map_congr_left fun p hp => Pred.rsub_off fun k hk =>
+    h k (List.mem_flatMap.mpr ⟨p, hp, hk⟩)).trans (List.map_id _)
+
+theorem ret_rsub_off {ρ : RSubst} {R : Option Ty} (h : ρ.Off (Ret.rkeys R)) :
+    R.map (·.rsub ρ) = R := by
+  cases R with
+  | none => rfl
+  | some τ => simpa using Ty.rsub_off (by simpa [Ret.rkeys] using h)
+
+/-- Rigid type variables without an image stay. -/
+theorem rigids_rsub {ρ : RSubst} {k : Nat} (h : ∀ i, ρ k i = none) (n : Nat) :
+    (rigids k n).map (·.rsub ρ) = rigids k n := by
+  simp [rigids, Con.rimgA, Con.rimg, h]
+
+/-- The instantiation of the rigid type variables named `k` at `τs`. -/
+def RSubst.at (k : Nat) (τs : List Ty) : RSubst := fun s i => if s = k then τs[i]? else none
+
+theorem rigids_rsub_at (k : Nat) (τs : List Ty) :
+    (rigids k τs.length).map (·.rsub (RSubst.at k τs)) = τs := by
+  apply List.ext_getElem (by simp [rigids])
+  intro i h₁ h₂
+  simp [rigids, Con.rimgA, Con.rimg, RSubst.at, List.getElem?_eq_getElem h₂]
+
+theorem RSubst.at_off {k : Nat} {τs : List Ty} {ks : List Nat} (h : k ∉ ks) : (RSubst.at k τs).Off ks :=
+  fun s hs i => by
+    have : s ≠ k := fun e => h (e ▸ hs)
+    simp [RSubst.at, this]
+
+/-- Instantiating rigid type variables in a derivation, in a system that
+survives it (`Sys.RSubstable`): the wide system holds whatever types they
+are. A polymorphic binding's initialiser is typed at fresh rigid type
+variables (`letPoly`), whose names `ρ` leaves (it has images only for names
+in `D`). -/
+theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List Nat)
+    (hD : ∀ s i τ, ρ s i = some τ → s ∈ D) (h : HasTypeS S L C Γ R rm md e τ) :
+    HasTypeS S L (C.map (Pred.rsub ρ)) (Γ.map (Scheme.rsub ρ)) (R.map (·.rsub ρ)) rm md e
+      (τ.rsub ρ) := by
+  induction h with
+  | lit hl => cases hl <;> exact .lit (by constructor)
+  | var hi hlen hc =>
+    rw [← Scheme.inst_rsub]
+    refine .var (by simp [List.getElem?_map, hi]) (by simpa using hlen) ?_
+    intro c hc'
+    rw [Scheme.instPreds_rsub] at hc'
+    obtain ⟨c₀, hc₀, rfl⟩ := List.mem_map.mp hc'
+    exact (hc c₀ hc₀).rsubS hS
+  | func hlen _ ih =>
+    refine .func (by simpa using hlen) ?_
+    simpa [List.map_append, Function.comp_def, Scheme.mono_rsub] using ih
+  | @funcCheck T n C Γ θ τs ρ' body R rm hT hT₀ hlen _ ih =>
+    refine .funcCheck (Ty.whnf_rsub_of_app hT (by simp [Con.rimgA])) (hS.closed hT₀) (by simpa using hlen) ?_
+    simpa [List.map_append, Function.comp_def, Scheme.mono_rsub] using ih
+  | app _ hlen _ ihf iha =>
+    refine .app (by simpa using ihf) (by simpa using hlen) (fun p hp => ?_)
+    rw [List.zip_map_right] at hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact iha q hq
+  | let_ s F _ hv hs ha _ ih₁ ih₂ =>
+    refine .let_ (s.rsub ρ) F (fun m hm => ?_) ?_ (hs.rsub ρ) ?_ (by simpa using ih₂)
+    · rw [Scheme.open_rsub, Scheme.openPreds_rsub, ← List.map_append]
+      exact ih₁ m hm
+    · simpa [Scheme.rsub] using hv
+    · intro a h
+      obtain ⟨rfl, h'⟩ := ha a h
+      rw [Scheme.rsub_of_rkeys_nil ρ h'.2.2.2]
+      exact ⟨rfl, h'⟩
+  | letPoly a K h0 hp hf hr _ hv hw _ ih₁ ih₂ =>
+    have ha : a.rsub ρ = a := Scheme.rsub_of_rkeys_nil ρ hr
+    refine .letPoly a (K ++ D) h0 hp hf hr (fun k hk => ?_) hv hw (by simpa [ha] using ih₂)
+    have hk' : ∀ i, ρ k i = none := fun i => by
+      cases hρ : ρ k i with
+      | none => rfl
+      | some τ => exact absurd (List.mem_append.mpr (.inr (hD k i τ hρ))) hk
+    have := ih₁ k (fun h => hk (List.mem_append.mpr (.inl h)))
+    rwa [← Scheme.inst_rsub, ha, rigids_rsub hk'] at this
+  | assign hi ha hp _ ih =>
+    rw [← Scheme.inst_rsub]
+    refine .assign (by simp [List.getElem?_map, hi]) (by simpa using ha)
+      (by simp [Scheme.rsub, hp]) ?_
+    simpa [← Scheme.inst_rsub] using ih
+  | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
+  | unop hop _ ih =>
+    cases hop with
+    | not => exact .unop .not ih
+    | typeof => exact .unop .typeof ih
+    | neg => exact .unop .neg ih
+  | binop hop _ _ ih₁ ih₂ =>
+    cases hop with
+    | plus hc => exact .binop (.plus (by simpa [Pred.rsub] using hc.rsubS hS)) ih₁ ih₂
+    | minus => exact .binop .minus ih₁ ih₂
+  | ret _ ih => exact .ret ih
+  | throw_ _ ih => exact .throw_ ih
+  | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
+  | while_ _ _ ihc ihb => exact .while_ ihc ihb
+  | break_ => exact .break_
+  | continue_ => exact .continue_
+  | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa [Scheme.mono_rsub] using ihh)
+  | unwrap _ hs _ _ ih₁ ih₂ ih₃ =>
+    exact .unwrap ih₁ (by simpa [Pred.rsub] using hs.rsubS hS) ih₂
+      (by simpa [Scheme.mono_rsub] using ih₃)
+  | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
+  | @obj _ _ _ _ _ _ _ _ τs hes hks hτs hss hL _ hm ih =>
+    simp only [Ty.rsub_record, objSlots_rsub]
+    refine .obj (τs := τs.map (·.rsub ρ)) hes hks (by simpa using hτs) (by simpa using hss) hL
+      (fun p hp => ?_) (fun x hx => ?_)
+    · rw [List.zip_map_right] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      exact ih q hq
+    · rw [zip4_map] at hx
+      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+      have := (hm y hy).rsub ρ
+      simpa [Ty.rsub_record, objSlots_rsub] using this
+  | @cls _ _ _ τs _ _ _ _ _ hes hks hτs hss hnd hL _ hm ih =>
+    simp only [Ty.rsub_record, objSlots_rsub]
+    refine .cls (τs := τs.map (·.rsub ρ)) hes hks (by simpa using hτs) (by simpa using hss) hnd hL
+      (fun i e k τ he hk hτ => ?_) (fun x hx => ?_)
+    · rw [List.getElem?_map] at hτ
+      obtain ⟨τ₀, hτ₀, rfl⟩ := Option.map_eq_some_iff.mp hτ
+      have := ih i e k τ₀ he hk hτ₀
+      rw [memberCtx_rsub] at this
+      simpa using this
+    · rw [zip4_map] at hx
+      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+      have := (hm y hy).rsub hS
+      simpa [Ty.rsub_record, objSlots_rsub] using this
+  | ctor hlen _ ih =>
+    refine .ctor (by simpa using hlen) ?_
+    simpa [List.map_append, Function.comp_def, Scheme.mono_rsub] using ih
+  | new_ _ hlen _ hρ hss ihf iha =>
+    refine .new_ (by simpa using ihf) (by simpa using hlen) (fun p hp => ?_)
+      (by simpa using hρ.rsub ρ) (by simpa using hss)
+    rw [List.zip_map_right] at hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact iha q hq
+  | get _ hp ih => exact .get ih (by simpa [Pred.rsub] using hp.rsubS hS)
+  | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.rsub] using hp.rsubS hS) ihv
+  | @spread _ _ _ _ _ _ _ ps ks τs _ hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
+    simp only [Ty.rsub_record] at ih₁ ih₂ ⊢
+    refine .spread (ps := ps.map (·.rsub ρ)) (ks := ks.map (·.rsub ρ)) (τs := τs.map (·.rsub ρ))
+      (by simpa using hps) (by simpa using hks) (by simpa using hτs) (by simpa using hss)
+      (by simpa using hrs) ih₁ ?_ (fun p hp => ?_)
+    · simpa [slots3_rsub] using ih₂
+    · rw [← mergePreds_rsub] at hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      exact (hm q hq).rsubS hS
+  | arr _ ih => exact .arr ih
+  | arrCheck hT hT₀ _ ih =>
+    exact .arrCheck (Ty.whnf_rsub_of_app hT (by simp [Con.rimgA])) (hS.closed hT₀)
+      (fun e he => by simpa using ih e he)
+  | index _ _ hp ihe ihi => exact .index ihe ihi (by simpa [Pred.rsub] using hp.rsubS hS)
+  | setIndex _ _ hp hw _ ihe ihi ihv =>
+    exact .setIndex ihe ihi (by simpa [Pred.rsub] using hp.rsubS hS)
+      (by simpa [Pred.rsub] using hw.rsubS hS) ihv
+  | mcall _ hp hlen _ ihe iha =>
+    refine .mcall ihe (by simpa [Pred.rsub] using hp.rsubS hS) (by simpa using hlen)
+      (fun p hp => ?_)
+    rw [List.zip_map_right] at hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    exact iha q hq
+  | conv _ he ih => exact .conv ih (he.rsub ρ)
+  | inj _ hT hi ih => exact .inj ih (hS.closed hT) (by rw [← hS.injPred]; exact hi.rsubS hS)
 
 end Inty

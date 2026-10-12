@@ -159,6 +159,23 @@ theorem zip3_map {α β γ : Type} (f : β → β) (g : γ → γ) : ∀ (ks : L
   | _ :: _, _ :: _, [] => rfl
   | k :: ks, t :: ts, s :: ss => by simp [zip3_map f g ks ts ss]
 
+@[simp] theorem rigids_subst (σ : Subst) (k n : Nat) : (rigids k n).map (·.subst σ) = rigids k n := by
+  simp [rigids, Function.comp_def]
+
+theorem varBlock_subst_fresh {σ : Subst} {m : Nat} (h : ∀ p ∈ σ, p.1 < m) (j : Nat) :
+    (varBlock m j).map (·.subst σ) = varBlock m j := by
+  simp only [varBlock, List.map_map]
+  refine List.map_congr_left fun i hi => ?_
+  have : σ.find i = none := Subst.find_none fun p hp e => by
+    have := h p hp; have := (List.mem_range'.mp hi); omega
+  simp [Ty.subst, this]
+
+theorem Ret.tv_subst_nil {σ : Subst} {R : Option Ty} (h : (R.map Ty.tv).getD [] = []) :
+    ((R.map (·.subst σ)).map Ty.tv).getD [] = [] := by
+  cases R with
+  | none => rfl
+  | some τr => simpa using Ty.tv_subst_nil (σ := σ) (by simpa using h)
+
 /-- A constructor application's head survives substitution. -/
 theorem Ty.whnf_subst_of_app {T : Ty} {c : Con} {xs : List Ty} (h : T.whnf = .app c xs)
     (σ : Subst) : (T.subst σ).whnf = .app c (xs.map (·.subst σ)) := by
@@ -204,8 +221,13 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
     · exact hs.subst σ
     · intro a h
       obtain ⟨rfl, h'⟩ := ha a h
-      rw [Scheme.subst_of_ftv_nil σ h'.2.2]
+      rw [Scheme.subst_of_ftv_nil σ h'.2.2.1]
       exact ⟨rfl, h'⟩
+  | letPoly a K h0 hp hf hr _ hv hw _ ih₁ ih₂ =>
+    have ha : a.subst σ = a := Scheme.subst_of_ftv_nil σ hf
+    refine .letPoly a K h0 hp hf hr (fun k hk => ?_) hv hw (by simpa [ha] using ih₂)
+    have := ih₁ k hk
+    rwa [Scheme.inst_subst, ha, rigids_subst] at this
   | assign hi ha hp _ ih =>
     rw [Scheme.inst_subst]
     refine .assign (by simp [List.getElem?_map, hi]) (by simpa [Scheme.subst] using ha)

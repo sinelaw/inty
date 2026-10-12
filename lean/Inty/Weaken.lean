@@ -285,6 +285,16 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
         | succ j => simp at hj) (fun i hw => by
           simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
     exact ih₂ (by simpa using this) hR hRc
+  | letPoly a K h0 hp hf hr _ hv hw _ ih₁ ih₂ =>
+    intro Γ' R' hg hR hRc
+    refine .letPoly a K h0 hp hf hr (fun k hk => ih₁ k hk (hg.sub fun i hw' => by
+      simp_all [Expr.writes]) hR hRc) hv hw ?_
+    have := hg.prepend (Δ := [a]) (fun j s' hj => by
+        cases j with
+        | zero => exact .inr hw
+        | succ j => simp at hj) (fun i hw' => by
+          simp only [Expr.writes, Bool.or_eq_false_iff] at hw'; simpa using hw'.2)
+    exact ih₂ (by simpa using this) hR hRc
   | @assign Γ i s C R _ e hi ha hp _ ih =>
     intro Γ' R' hg hR hRc
     obtain ⟨s', hs'⟩ := hg.length_some hi
@@ -448,6 +458,9 @@ theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
   | let_ s F _ hv hs ha _ ih₁ ih₂ =>
     intro ρ' ρ hm hR he hρ
     exact .let_ s F (fun m hm' => ih₁ m hm' hm hR he hρ) hv hs ha (ih₂ hm hR he hρ)
+  | letPoly a K h0 hp hf hr _ hv hw _ ih₁ ih₂ =>
+    intro ρ' ρ hm hR he hρ
+    exact .letPoly a K h0 hp hf hr (fun k hk => ih₁ k hk hm hR he hρ) hv hw (ih₂ hm hR he hρ)
   | assign hi ha hp _ ih => intro ρ' ρ hm hR he hρ; exact .assign hi ha hp (ih hm hR he hρ)
   | cond _ _ _ ihc iht ihe =>
     intro ρ' ρ hm hR he hρ

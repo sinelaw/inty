@@ -285,6 +285,8 @@ theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
       obtain ⟨rfl, h'⟩ := ha a h
       rw [Scheme.toW_of_preds_nil h'.2.1]
       exact ⟨rfl, h'⟩
+  | letPoly a K h0 hp hf hr _ hv hw _ ih₁ ih₂ =>
+    exact .letPoly a K h0 hp hf hr ih₁ hv hw (by simpa [Scheme.toW_of_preds_nil hp] using ih₂)
   | assign hi ha hp _ ih =>
     rw [← Scheme.toW_inst]
     exact .assign (by simp [List.getElem?_map, hi]) (by simpa using ha)

@@ -972,26 +972,55 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
     | some a =>
       simp only [infer] at h
       split at h
+      · rename_i ha
+        have hT := Scheme.inst_nil_closed ha.2.2.1
+        split at h
+        · cases h
+        rename_i o₁ h₁
+        obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := InferInv.check ih₁ hRo (Ex.Closed.some hT) hΓ hR h₁
+        split at h
+        · cases h
+        rename_i o₂ h₂
+        simp only [Option.some.injEq] at h; subst h
+        obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ih₂ (by ret_ok) hex
+          (Ctx.Below.cons (fun b hb => by simp [ha.2.2.1] at hb) (hσ₁.ctx_below (hΓ.mono hn₁)))
+          (hσ₁.ret_below (hR.mono hn₁)) h₂
+        refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hτ₂, ?_⟩
+        intro p hp
+        simp only [List.mem_append, List.mem_map] at hp
+        rcases hp with ⟨q, hq, rfl⟩ | hp
+        · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+        · exact hp₂ p hp
+      split at h
       rotate_left
       · cases h
       rename_i ha
-      have hT := Scheme.inst_nil_closed ha.2.2
+      obtain ⟨_, _, haf, _, _⟩ := ha
+      generalize maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) = k at h
+      have hT := Scheme.inst_rigids_closed haf k a.arity
       split at h
       · cases h
       rename_i o₁ h₁
-      obtain ⟨hn₁, hσ₁, hτ₁, hp₁⟩ := InferInv.check ih₁ hRo (Ex.Closed.some hT) hΓ hR h₁
+      obtain ⟨hn₁, hσ₁, _, hp₁⟩ := InferInv.check ih₁ hRo (Ex.Closed.some hT) hΓ hR h₁
+      split at h
+      · cases h
+      rename_i σi preds₁ himp
+      obtain ⟨hσi, hpi⟩ := improveAll_inv _ hp₁ himp
+      have hσ₁' := hσ₁.compose hσi
+      split at h
+      · cases h
       split at h
       · cases h
       rename_i o₂ h₂
       simp only [Option.some.injEq] at h; subst h
       obtain ⟨hn₂, hσ₂, hτ₂, hp₂⟩ := InferInv.check ih₂ (by ret_ok) hex
-        (Ctx.Below.cons (fun b hb => by simp [ha.2.2] at hb) (hσ₁.ctx_below (hΓ.mono hn₁)))
-        (hσ₁.ret_below (hR.mono hn₁)) h₂
-      refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁.mono hn₂).compose hσ₂, hτ₂, ?_⟩
+        (Ctx.Below.cons (fun b hb => by simp [haf] at hb) (hσ₁'.ctx_below (hΓ.mono hn₁)))
+        (hσ₁'.ret_below (hR.mono hn₁)) h₂
+      refine ⟨Nat.le_trans hn₁ hn₂, (hσ₁'.mono hn₂).compose hσ₂, hτ₂, ?_⟩
       intro p hp
       simp only [List.mem_append, List.mem_map] at hp
       rcases hp with ⟨q, hq, rfl⟩ | hp
-      · exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
+      · exact hσ₂.pred_below ((hpi q hq).mono hn₂)
       · exact hp₂ p hp
     | none =>
     simp only [infer] at h

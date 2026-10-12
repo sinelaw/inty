@@ -12,6 +12,7 @@ import Inty.Unify
 import Inty.TreeVars
 import Inty.Weaken
 import Inty.Infer
+import Inty.Rename
 import Inty.InferSound
 import Inty.InferInv
 import Inty.InferComplete

@@ -78,8 +78,8 @@ example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L builtinCtx e = s
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   inferIn_builtins_never_stuck
 
-example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {rm : Mode} {ex : Option Ty}
-    {n : Nat} {ψ : Subst} {C : List Pred} {md : Mode} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
+example : ∀ (L : List String) (e : Expr), e.monoAnn = true → ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode}
+    {ex : Option Ty} {n : Nat} {ψ : Subst} {C : List Pred} {md : Mode} {τ' : Ty} {Γ' : Ctx} {R' : Option Ty},
     (rm = .check → ∀ τ ∈ R, τ.ftv = []) → (rm = .check → R' = R) → (∀ T ∈ ex, T.ftv = []) →
     md = exMode ex e ∧ (∀ T ∈ ex, e.pushes T → τ' = T) →
     Ctx.Below n Γ → Ret.Below n R → (∀ p ∈ C, p.AssumableAt false) →
@@ -89,15 +89,20 @@ example : ∀ (L : List String) (e : Expr) {Γ : Ctx} {R : Option Ty} {rm : Mode
   infer_complete
 
 example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}, ctxFtv Γ = [] →
-    (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true →
+    (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true → e.monoAnn = true →
     HasType L C Γ none .synth .synth e τ' →
     ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferIn_complete
 
-example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true →
+example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → e.monoAnn = true →
     HasType e.labels.eraseDups [] [] none .synth .synth e τ' →
     ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
   inferProgram_complete
+
+/-- Completeness is for programs whose annotations are all monomorphic. -/
+example : (Expr.let_ m ann e₁ e₂).monoAnn =
+    ((ann.all fun a => a.arity == 0) && e₁.monoAnn && e₂.monoAnn) := by
+  simp [Expr.monoAnn]
 
 example : Agree n σ φ ψ ↔ ∀ a < n, TyEq (((Ty.var a).subst σ).subst φ) ((Ty.var a).subst ψ) :=
   Iff.rfl

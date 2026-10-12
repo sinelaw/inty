@@ -530,7 +530,7 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
   -- An annotated binding: the initialiser is checked against the declared
   -- type, which has no variables, and which the variable gets.
   | Γ, R, rm, ex, .let_ _ (some a) e₁ e₂, n =>
-    if a.arity = 0 ∧ a.preds = [] ∧ a.ftv = [] then
+    if a.arity = 0 ∧ a.preds = [] ∧ a.ftv = [] ∧ a.rkeys = [] then
       match (infer Γ R rm (some (a.inst [])) e₁ n).map (checkEx (some (a.inst [])) e₁) with
       | none => none
       | some o₁ =>
@@ -539,6 +539,29 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
         | none => none
         | some o₂ =>
           some ⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
+    -- A polymorphic annotation: the initialiser, a syntactic value, is
+    -- checked against it at rigid type variables named apart from the
+    -- context's, the constraints on known types are decided, and the rigid
+    -- type variables must not escape, into the context or into the
+    -- constraints left.
+    else if 0 < a.arity ∧ a.preds = [] ∧ a.ftv = [] ∧ a.rkeys = [] ∧ Expr.generalises e₁ e₂ then
+      let k := maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)
+      let T := a.inst (rigids k a.arity)
+      match (infer Γ R rm (some T) e₁ n).map (checkEx (some T) e₁) with
+      | none => none
+      | some o₁ =>
+        match improveAll false o₁.preds.length o₁.preds with
+        | none => none
+        | some (σi, preds₁) =>
+          let σ₁ := Subst.compose σi o₁.σ
+          if k ∈ ctxRkeys (Ctx.subst σ₁ Γ) ∨ k ∈ Ret.rkeys (Ret.subst σ₁ R) ∨
+              k ∈ preds₁.flatMap Pred.rkeys then none
+          else
+            match (infer (a :: Ctx.subst σ₁ Γ) (Ret.subst σ₁ R) rm ex e₂ o₁.next).map
+                (checkEx ex e₂) with
+            | none => none
+            | some o₂ =>
+              some ⟨Subst.compose o₂.σ σ₁, o₂.τ, preds₁.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩
     else none
   -- The constraints on known types are decided first, as inty's
   -- `simplify_has_props` does before it generalises.

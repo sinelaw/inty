@@ -1,4 +1,5 @@
 import Inty.Infer
+import Inty.Rename
 import Inty.Soundness
 import Inty.Weaken
 
@@ -433,6 +434,16 @@ theorem Scheme.inst_nil_closed {s : Scheme} (hs : s.ftv = []) : (s.inst []).ftv 
       rw [hs] at h'; cases h'
     · cases hτ
 
+theorem Scheme.inst_rigids_closed {s : Scheme} (hs : s.ftv = []) (k n : Nat) :
+    (s.inst (rigids k n)).ftv = [] :=
+  List.eq_nil_iff_forall_not_mem.mpr fun a ha => by
+    rcases PTy.ftv_inst ha with ha | ⟨τ, hτ, ha⟩
+    · have h' : a ∈ s.ftv := List.mem_append_left _ ha
+      rw [hs] at h'; cases h'
+    · simp only [rigids, List.mem_map, List.mem_range] at hτ
+      obtain ⟨i, _, rfl⟩ := hτ
+      simp at ha
+
 theorem RetOk.ret_eq {rm : Mode} {R : Option Ty} (h : RetOk rm R) (σ σ' : Subst) (hm : rm = .check) :
     Ret.subst σ R = Ret.subst σ' R := by
   subst hm; rw [h.subst_eq, h.subst_eq]
@@ -532,7 +543,20 @@ theorem infer_pushes {T : Ty} (hT : T.ftv = []) : ∀ {e : Expr} {Γ : Ctx} {R :
     | some a =>
       simp only [infer] at h
       split at h
+      · split at h
+        · cases h
+        split at h
+        · cases h
+        rename_i o₂ h₂
+        simp only [Option.some.injEq] at h; subst h
+        obtain ⟨o₂', h₂', rfl⟩ := Option.map_eq_some_iff.mp h₂
+        exact checkEx_ty (ih₂ h₂')
+      split at h
       rotate_left
+      · cases h
+      split at h
+      · cases h
+      split at h
       · cases h
       split at h
       · cases h
@@ -1134,31 +1158,92 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     | some a =>
       simp only [infer] at h
       split at h
+      · rename_i ha
+        obtain ⟨har, hap, haf, har₀⟩ := ha
+        split at h
+        · cases h
+        rename_i o₁ h₁
+        split at h
+        · cases h
+        rename_i o₂ h₂
+        simp only [Option.some.injEq] at h; subst h
+        simp only [Sat.map, Sat.append] at hsat
+        have hcl : ∀ ψ, a.subst ψ = a := fun ψ => Scheme.subst_of_ftv_nil ψ haf
+        have hT := Scheme.inst_nil_closed haf
+        have he₁ := InferSound.check ih₁ h₁ hRo (Ex.Closed.some hT) _ C hsat.1
+        rw [InferSound.check_ty h₁ (Ex.Closed.some hT) _ rfl, Ty.closed_subst hT] at he₁
+        have he₂ := InferSound.check ih₂ h₂ (by ret_ok) hex φ C hsat.2
+        simp only [Ctx.subst_cons, hcl, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
+        refine .let_ a [] (fun m _ => ?_) (.inl ⟨har, hap⟩) (fun p hp => by simp [hap] at hp)
+          (fun b hb => by cases hb; exact ⟨rfl, har, hap, haf, har₀⟩) he₂
+        have hop : a.open m = a.inst [] := by simp [Scheme.open, har, varBlock]
+        have hopp : a.openPreds m = [] := by simp [Scheme.openPreds, Scheme.instPreds, hap]
+        rw [hop, hopp, List.append_nil]
+        simpa only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose, annMode, Ex.mode_some]
+          using he₁
+      -- A polymorphic annotation: the initialiser is typed at the rigid type
+      -- variables named `k`, and at any other name `k'` by swapping them.
+      split at h
       rotate_left
       · cases h
-      rename_i ha
-      obtain ⟨har, hap, haf⟩ := ha
+      rename_i hpoly
+      obtain ⟨h0, hap, haf, har, hgen⟩ := hpoly
+      simp only [Expr.generalises, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hgen
+      generalize hk : maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) = k at h
       split at h
       · cases h
       rename_i o₁ h₁
       split at h
       · cases h
+      rename_i σi preds₁ himp
+      split at h
+      · cases h
+      rename_i hesc
+      split at h
+      · cases h
       rename_i o₂ h₂
       simp only [Option.some.injEq] at h; subst h
       simp only [Sat.map, Sat.append] at hsat
+      simp only [Ctx.subst_compose, Ret.subst_compose, not_or] at hesc
+      obtain ⟨hkΓ, hkR, hkP⟩ := hesc
       have hcl : ∀ ψ, a.subst ψ = a := fun ψ => Scheme.subst_of_ftv_nil ψ haf
-      have hT := Scheme.inst_nil_closed haf
-      have he₁ := InferSound.check ih₁ h₁ hRo (Ex.Closed.some hT) _ C hsat.1
-      rw [InferSound.check_ty h₁ (Ex.Closed.some hT) _ rfl, Ty.closed_subst hT] at he₁
+      have hT := Scheme.inst_rigids_closed haf k a.arity
       have he₂ := InferSound.check ih₂ h₂ (by ret_ok) hex φ C hsat.2
-      simp only [Ctx.subst_cons, hcl, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
-      refine .let_ a [] (fun m _ => ?_) (.inl ⟨har, hap⟩) (fun p hp => by simp [hap] at hp)
-        (fun b hb => by cases hb; exact ⟨rfl, har, hap, haf⟩) he₂
-      have hop : a.open m = a.inst [] := by simp [Scheme.open, har, varBlock]
-      have hopp : a.openPreds m = [] := by simp [Scheme.openPreds, Scheme.instPreds, hap]
-      rw [hop, hopp, List.append_nil]
-      simpa only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose, annMode, Ex.mode_some]
-        using he₁
+      simp only [Ctx.subst_cons, hcl, Ctx.subst_compose, Ret.subst_compose] at he₂ ⊢
+      -- `e₁`'s typing under a substitution `ψ` satisfying what improvement left.
+      have he₁ : ∀ ψ C', Sat C' preds₁ ψ →
+          HasType L C' (Ctx.subst ψ (Ctx.subst σi (Ctx.subst o₁.σ Γ)))
+            (Ret.subst ψ (Ret.subst σi (Ret.subst o₁.σ R))) rm .check e₁
+            (a.inst (rigids k a.arity)) := fun ψ C' hψ => by
+        have := InferSound.check ih₁ h₁ hRo (Ex.Closed.some hT) (Subst.compose ψ σi) C'
+          (improveAll_sound _ himp hψ)
+        rw [InferSound.check_ty h₁ (Ex.Closed.some hT) _ rfl, Ty.closed_subst hT] at this
+        simpa only [Ctx.subst_compose, Ret.subst_compose, Ex.mode_some] using this
+      refine .letPoly a (ctxRkeys (Ctx.subst σi (Ctx.subst o₁.σ Γ)) ++
+          Ret.rkeys (Ret.subst σi (Ret.subst o₁.σ R)) ++ preds₁.flatMap Pred.rkeys)
+        h0 hap haf har (fun k' hk' => ?_) (Expr.isValue_sound hgen.1) hgen.2 he₂
+      simp only [List.mem_append, not_or] at hk'
+      obtain ⟨⟨hk'Γ, hk'R⟩, hk'P⟩ := hk'
+      let π := RSubst.swap k k'
+      have hπr : π.Renaming := RSubst.swap_renaming k k'
+      have hπi : π.Invol := RSubst.swap_invol k k'
+      let φ₀ := Subst.compose φ o₂.σ
+      -- What improvement left holds with the names swapped.
+      have hsat' : Sat (C.map (Pred.rsub π)) preds₁ (Subst.rsub π φ₀) := fun p hp => by
+        have hoff : π.Off p.rkeys := RSubst.swap_off
+          (fun h => hkP (List.mem_flatMap.mpr ⟨p, hp, h⟩))
+          (fun h => hk'P (List.mem_flatMap.mpr ⟨p, hp, h⟩))
+        have := (hsat.1 p hp).rsubS (Sys.narrow_rsubstable hπr)
+        rwa [Pred.subst_rsub hπr, Pred.rsub_off hoff] at this
+      have h' := (he₁ _ _ hsat').rsub (Sys.narrow_rsubstable hπr) [k, k']
+        (fun _ _ _ h => RSubst.swap_dom h)
+      rw [List.map_map, Ctx.subst_rsub hπr, Ret.subst_rsub hπr, Subst.rsub_invol hπi,
+        ctx_rsub_off (RSubst.swap_off hkΓ hk'Γ), ret_rsub_off (RSubst.swap_off hkR hk'R),
+        ← Scheme.inst_rsub, Scheme.rsub_of_rkeys_nil _ har, rigids_rsub_swap] at h'
+      have hC : C.map (Pred.rsub π ∘ Pred.rsub π) = C := by
+        simp [Function.comp_def, Pred.rsub_invol hπi]
+      rw [hC] at h'
+      simpa only [φ₀, Ctx.subst_compose, Ret.subst_compose] using h'
     | none =>
     simp only [infer] at h
     split at h

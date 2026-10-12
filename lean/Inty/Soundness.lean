@@ -2582,6 +2582,48 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           exact hvv
         · simp [Result.Abrupt] at hv'
         · simp at hv'
+    | letPoly a K _ _ _ hr hgen hv _ h₂ =>
+      -- Type `e₁` at each instance of `a`: at rigid type variables named
+      -- apart from everything in sight, which are then instantiated.
+      let k₀ := maxPlusOne (K ++ ctxRkeys Γ ++ C.flatMap Pred.rkeys ++ Ret.rkeys R)
+      have hk₀ : ∀ s, s ∈ K ∨ s ∈ ctxRkeys Γ ∨ s ∈ C.flatMap Pred.rkeys ∨ s ∈ Ret.rkeys R →
+          s ≠ k₀ := fun s hs =>
+        Nat.ne_of_lt (lt_maxPlusOne s (by rcases hs with h | h | h | h <;> simp [h]))
+      have hinst : ∀ τs, τs.length = a.arity →
+          HasTypeS Sys.wide L C Γ R rm .check e₁ (a.inst τs) := by
+        intro τs hlen
+        have h := (hgen k₀ (fun h => hk₀ k₀ (.inl h) rfl)).rsub (Sys.wide_rsubstable (RSubst.at k₀ τs)) [k₀]
+          (fun s i τ hρ => by simp only [RSubst.at] at hρ; split at hρ <;> simp_all)
+        rwa [preds_rsub_off (RSubst.at_off fun h => hk₀ _ (.inr (.inr (.inl h))) rfl),
+          ctx_rsub_off (RSubst.at_off fun h => hk₀ _ (.inr (.inl h)) rfl),
+          ret_rsub_off (RSubst.at_off fun h => hk₀ _ (.inr (.inr (.inr h))) rfl),
+          ← Scheme.inst_rsub, Scheme.rsub_of_rkeys_nil _ hr, ← hlen, rigids_rsub_at] at h
+      simp only [run]
+      -- A syntactic value: it allocates nothing, so each instance's world
+      -- is `W` itself.
+      obtain ⟨v, hrun⟩ := IsValue.run_value hv (hgen k₀ (fun h => hk₀ k₀ (.inl h) rfl)) hG hH
+      rw [hrun, ok_bindC, Nat.min_self]
+      have hv : SchemeV k W a v := fun τs hl _ => by
+        have hs := ih₁ (hinst τs hl) hC hG hH
+        rw [hrun] at hs
+        obtain ⟨_, hs⟩ := hs
+        rcases hs with hs | ⟨W', hW', hH', ⟨v', hv', hvv⟩ | hv' | ⟨_, hv', _⟩⟩
+        · simp at hs
+        · simp at hv'; subst hv'
+          obtain rfl := hW'.eq_of_length (by rw [← hH'.1, hH.1])
+          exact hvv
+        · simp [Result.Abrupt] at hv'
+        · simp at hv'
+      have hW₂ : W <+: W ++ [.scheme a] := List.prefix_append _ _
+      have hcell : HeapOK k (W ++ [.scheme a]) (h ++ [v]) :=
+        hH.alloc (by simp) (fun i s' v' hs hv' => by
+          match i, hs, hv' with
+          | 0, hs, hv' =>
+            simp at hs hv'; subst hs hv'; exact hv.mono (Nat.le_refl _) hW₂
+          | _ + 1, hs, _ => simp at hs)
+      have hG₂ : G (W ++ [.scheme a]) (a :: Γ) (h.length :: env) :=
+        ⟨by rw [hH.1]; simp, G.mono hW₂ hG⟩
+      exact (ih₂ h₂ hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
   | assign i e ih =>
     intro k C Γ R rm md W env h τ ht hC hG hH
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top

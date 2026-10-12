@@ -657,6 +657,35 @@ theorem ctxTv_subst {σ : Subst} {Γ : Ctx} {b : Nat} (h : b ∈ ctxTv (Ctx.subs
   obtain ⟨a, ha, hb⟩ := Scheme.tv_subst h
   exact ⟨a, List.mem_flatMap.mpr ⟨s, hs, ha⟩, hb⟩
 
+/-- A scheme's tree variables through substitution come from its own. -/
+theorem Scheme.tv_subst_tv {σ : Subst} {s : Scheme} {b : Nat} (h : b ∈ (s.subst σ).tv) :
+    ∃ a ∈ s.tv, ((Ty.var a).subst σ).TV b := by
+  have hc : (s.subst σ).consts = s.consts := by simp [Scheme.consts]
+  simp only [Scheme.tv, hc, List.mem_append, List.mem_flatMap] at h
+  rcases h with h | ⟨p, hp, h⟩
+  · rw [← Scheme.consts_subst σ s, ← Scheme.inst_subst] at h
+    obtain ⟨a, ha, hb⟩ := Ty.TV.subst_inv (Ty.mem_tv.mp h)
+    exact ⟨a, by simp [Scheme.tv, Ty.mem_tv.mpr ha], hb⟩
+  · rw [← Scheme.consts_subst σ s, ← Scheme.instPreds_subst] at hp
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+    obtain ⟨a, ha, hb⟩ := Pred.tv_subst h
+    exact ⟨a, by simp only [Scheme.tv, List.mem_append, List.mem_flatMap]; exact .inr ⟨q, hq, ha⟩, hb⟩
+
+/-- A context without tree variables keeps none through substitution. -/
+theorem ctxTv_subst_nil {σ : Subst} {Γ : Ctx} (h : ctxTv Γ = []) : ctxTv (Ctx.subst σ Γ) = [] := by
+  refine List.eq_nil_iff_forall_not_mem.mpr fun b hb => ?_
+  simp only [ctxTv, Ctx.subst, List.flatMap_map, List.mem_flatMap] at hb
+  obtain ⟨s, hs, hb⟩ := hb
+  obtain ⟨a, ha, -⟩ := Scheme.tv_subst_tv hb
+  have : a ∈ ctxTv Γ := List.mem_flatMap.mpr ⟨s, hs, ha⟩
+  rw [h] at this; cases this
+
+theorem Ty.tv_subst_nil {σ : Subst} {τ : Ty} (h : τ.tv = []) : (τ.subst σ).tv = [] := by
+  refine List.eq_nil_iff_forall_not_mem.mpr fun b hb => ?_
+  obtain ⟨a, ha, -⟩ := Ty.TV.subst_inv (Ty.mem_tv.mp hb)
+  have := Ty.mem_tv.mpr ha
+  rw [h] at this; cases this
+
 /-! ## Equal schemes -/
 
 /-- Constraints equal through substitutions that agree on their tree
