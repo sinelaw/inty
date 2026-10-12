@@ -1,6 +1,7 @@
 import Inty.Builtins
 import Inty.InferComplete
 import Inty.Principal
+import Inty.Textbook
 import Inty.PinCount
 
 /-!
@@ -133,6 +134,30 @@ example : ∀ {S : Sys} {L : List String} {D : List Pred} {Γ : Ctx} {R : Option
   fun h => h.cutC
 
 example : Sat C P φ ↔ ∀ c ∈ P, Entails C (c.subst φ) := Iff.rfl
+
+/-- Jones's `let` rule: `HasType` is the system whose schemes have their
+constraints on their quantified variables; with any constraints, the system
+is still sound and types strictly more. -/
+example : Sys.jones = { Sys.narrow with anyScheme := true } := rfl
+
+example : Sys.narrow.anyScheme = false := rfl
+
+example : ∀ {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode} {e : Expr}
+    {τ : Ty}, HasType L C Γ R rm md e τ → HasTypeJ L C Γ R rm md e τ :=
+  HasType.toJones
+
+example : ∀ {L : List String} {C : List Pred} {rm md : Mode} {e : Expr} {τ : Ty},
+    HasTypeJ L C [] none rm md e τ → HoldsOrVar C → ∀ (clock : Nat) (s : Stuck),
+      eval clock [] [] e ≠ .stuck s :=
+  jones_never_stuck
+
+example : ∀ {L : List String},
+    HasTypeJ L [] [] none .synth .synth jonesExample .number ∧
+      ∀ τ, ¬ HasType L [] [] none .synth .synth jonesExample τ :=
+  jones_separates
+
+example : jonesExample = .let_ false none
+    (.func 1 (.binop .plus (.lit (.boolean true)) (.lit (.boolean true)))) (.lit (.number 1)) := rfl
 
 example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → e.monoAnn = true →
     HasType e.labels.eraseDups [] [] none .synth .synth e τ' →
@@ -765,7 +790,7 @@ example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
           (∀ (a : Nat), a ∈ F → a < m) →
             HasTypeS S L (C ++ Scheme.openPreds s m) Γ R rm (annMode ann) e₁ (Scheme.open s m)) →
         Scheme.arity s = 0 ∧ Scheme.preds s = [] ∨ Expr.IsValue e₁ ∧ Expr.writes 0 e₂ = false →
-          Scheme.Simple s →
+          Sys.anyScheme S = true ∨ Scheme.Simple s →
             Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ → HasTypeS S L C Γ R rm md (Expr.let_ mb ann e₁ e₂) τ₂ :=
   @HasTypeS.let_
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e₁ : Inty.Expr} {md : Mode}

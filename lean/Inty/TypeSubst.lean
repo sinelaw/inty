@@ -213,7 +213,7 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
       rw [← Scheme.open_subst s hσ, ← Scheme.openPreds_subst s hσ, ← List.map_append]
       exact ih₁ m (fun a ha => hm a (by simp [ha]))
     · simpa [Scheme.subst] using hv
-    · exact hs.subst σ
+    · exact hs.imp id (·.subst σ)
     · intro a h
       obtain ⟨rfl, h'⟩ := ha a h
       rw [Scheme.subst_of_ftv_nil σ h'.2.2.1]

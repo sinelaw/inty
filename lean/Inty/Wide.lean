@@ -58,7 +58,8 @@ theorem InstEqW.of_predEq {p q : Pred} (h : PredEq p q) (hq : InstEqW q) : InstE
 a substitution reaches. -/
 def Sys.wide : Sys :=
   ⟨InstEqW, fun _ => True, fun h hq => InstEqW.of_predEq h hq, fun τ T => ⟨.injectW, [τ, T]⟩,
-    fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil))⟩
+    fun h => PredEq.of_pairs (by simp) (zip_tyEq_cons h (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil)),
+    true⟩
 
 theorem Sys.wide_substable : Sys.wide.Substable where
   inst σ := fun h => InstEqW.subst σ h
@@ -271,9 +272,38 @@ theorem mergePreds_toW : ∀ {ps ks τs ss rs : List Ty} {p : Pred},
   | _ :: _, _ :: _, _ :: _, [], _, _, hp | _ :: _, _ :: _, _ :: _, _ :: _, [], _, hp => by
     simp [mergePreds] at hp
 
-/-- A narrow derivation is a wide one, its constraints translated. -/
-theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
-    {e : Expr} {τ : Ty} (h : HasType L C Γ R rm md e τ) :
+/-- A system with the narrow one's instances and injections, whatever the
+schemes its `let`s allow (`Sys.anyScheme`). -/
+structure Sys.NarrowLike (S : Sys) : Prop where
+  inst : S.inst = Sys.narrow.inst
+  injPred : S.injPred = Sys.narrow.injPred
+
+theorem Sys.narrow_narrowLike : Sys.narrow.NarrowLike := ⟨rfl, rfl⟩
+
+theorem EntailsS.narrowOf {S : Sys} (hS : S.NarrowLike) {C : List Pred} {p : Pred}
+    (h : EntailsS S C p) : Entails C p := by
+  show EntailsS Sys.narrow C p
+  unfold EntailsS at h ⊢; rw [hS.inst] at h; exact h
+
+theorem BinOpTyS.narrowOf {S : Sys} (hS : S.NarrowLike) {C : List Pred} {op : BinOp} {τ₁ τ₂ τ : Ty}
+    (h : BinOpTyS S C op τ₁ τ₂ τ) : BinOpTy C op τ₁ τ₂ τ := by
+  cases h with
+  | plus hp => exact .plus (hp.narrowOf hS)
+  | num h => exact .num h
+  | strictEq => exact .strictEq
+
+theorem MemberSlotS.narrowOf {S : Sys} (hS : S.NarrowLike) {C : List Pred} {T : Ty} {k : ClassKind}
+    {e : Expr} {τ s : Ty} (h : MemberSlotS S C T k e τ s) : MemberSlot C T k e τ s := by
+  cases h with
+  | data => exact .data
+  | arrow hθ hn => exact .arrow hθ (hn.narrowOf hS)
+  | method hθ => exact .method hθ
+  | getter hθ => exact .getter hθ
+
+/-- A derivation in a system like the narrow one is a wide one, its
+constraints translated. -/
+theorem HasTypeS.toWideOf {S : Sys} (hS : S.NarrowLike) {L : List String} {C : List Pred} {Γ : Ctx}
+    {R : Option Ty} {rm md : Mode} {e : Expr} {τ : Ty} (h : HasTypeS S L C Γ R rm md e τ) :
     HasTypeS Sys.wide L (C.map Pred.toW) (Γ.map Scheme.toW) R rm md e τ := by
   induction h with
   | lit hl => exact .lit hl
@@ -282,14 +312,14 @@ theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
     refine .var (by simp [List.getElem?_map, hi]) (by simpa using hlen) (fun c hc' => ?_)
     rw [Scheme.toW_instPreds] at hc'
     obtain ⟨c₀, hc₀, rfl⟩ := List.mem_map.mp hc'
-    exact (hc c₀ hc₀).toW
+    exact ((hc c₀ hc₀).narrowOf hS).toW
   | func hlen _ ih =>
     exact .func hlen (by simpa [List.map_append, Function.comp_def] using ih)
   | funcCheck hT _ hlen _ ih =>
     exact .funcCheck hT trivial hlen (by simpa [List.map_append, Function.comp_def] using ih)
   | app _ hlen _ ihf iha => exact .app ihf hlen iha
   | let_ s F _ hv hs ha _ ih₁ ih₂ =>
-    refine .let_ s.toW F (fun m hm => ?_) (by simpa [Scheme.toW] using hv) hs.toW ?_
+    refine .let_ s.toW F (fun m hm => ?_) (by simpa [Scheme.toW] using hv) (.inl rfl) ?_
       (by simpa using ih₂)
     · have := ih₁ m hm
       rwa [List.map_append, ← Scheme.toW_openPreds] at this
@@ -305,7 +335,7 @@ theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
       (by simp [Scheme.toW, hp]) (by simpa using ih)
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih => exact .unop hop ih
-  | binop hop _ _ ih₁ ih₂ => exact .binop hop.toW ih₁ ih₂
+  | binop hop _ _ ih₁ ih₂ => exact .binop (hop.narrowOf hS).toW ih₁ ih₂
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih
   | seq _ _ ih₁ ih₂ => exact .seq ih₁ ih₂
@@ -313,32 +343,40 @@ theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
   | break_ => exact .break_
   | continue_ => exact .continue_
   | tryCatch _ _ ihb ihh => exact .tryCatch ihb (by simpa using ihh)
-  | unwrap _ hs _ _ ih₁ ih₂ ih₃ => exact .unwrap ih₁ (by simpa [Pred.toW] using hs.toW) ih₂ (by simpa using ih₃)
+  | unwrap _ hs _ _ ih₁ ih₂ ih₃ => exact .unwrap ih₁ (by simpa [Pred.toW] using (hs.narrowOf hS).toW) ih₂ (by simpa using ih₃)
   | tryFinally _ _ ihb ihf => exact .tryFinally ihb ihf
   | obj hes hks hτs hss hL _ hm ih => exact .obj hes hks hτs hss hL ih hm
   | cls hes hks hτs hss hnd hL _ hm ih =>
-    refine .cls hes hks hτs hss hnd hL (fun i e k τ he hk hτ => ?_) (fun x hx => (hm x hx).toW)
+    refine .cls hes hks hτs hss hnd hL (fun i e k τ he hk hτ => ?_) (fun x hx => ((hm x hx).narrowOf hS).toW)
     have := ih i e k τ he hk hτ
     rwa [memberCtx_toW] at this
   | ctor hlen _ ih => exact .ctor hlen (by simpa [List.map_append, Function.comp_def] using ih)
   | new_ _ hlen _ hρ hss ihf iha => exact .new_ ihf hlen iha hρ hss
-  | get _ hp ih => exact .get ih (by simpa [Pred.toW] using hp.toW)
-  | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.toW] using hp.toW) ihv
+  | get _ hp ih => exact .get ih (by simpa [Pred.toW] using (hp.narrowOf hS).toW)
+  | set _ hp _ ihe ihv => exact .set ihe (by simpa [Pred.toW] using (hp.narrowOf hS).toW) ihv
   | spread hps hks hτs hss hrs _ _ hm ih₁ ih₂ =>
     exact .spread hps hks hτs hss hrs ih₁ ih₂ (fun p hp => by
-      simpa [mergePreds_toW hp] using (hm p hp).toW)
+      simpa [mergePreds_toW hp] using ((hm p hp).narrowOf hS).toW)
   | arr _ ih => exact .arr ih
   | arrCheck hT _ _ ih => exact .arrCheck hT trivial ih
-  | index _ _ hp ihe ihi => exact .index ihe ihi (by simpa [Pred.toW] using hp.toW)
+  | index _ _ hp ihe ihi => exact .index ihe ihi (by simpa [Pred.toW] using (hp.narrowOf hS).toW)
   | setIndex _ _ hp hw _ ihe ihi ihv =>
-    exact .setIndex ihe ihi (by simpa [Pred.toW] using hp.toW) (by simpa [Pred.toW] using hw.toW) ihv
-  | mcall _ hp hlen _ ihe iha => exact .mcall ihe (by simpa [Pred.toW] using hp.toW) hlen iha
+    exact .setIndex ihe ihi (by simpa [Pred.toW] using (hp.narrowOf hS).toW) (by simpa [Pred.toW] using (hw.narrowOf hS).toW) ihv
+  | mcall _ hp hlen _ ihe iha => exact .mcall ihe (by simpa [Pred.toW] using (hp.narrowOf hS).toW) hlen iha
   | conv _ he ih => exact .conv ih he
-  | inj _ _ hi ih => exact .inj ih trivial hi.toW
+  | inj _ _ hi ih =>
+    rw [hS.injPred] at hi
+    exact .inj ih trivial (hi.narrowOf hS).toW
   | drop _ ih => exact .drop ih
   | litStr hw => exact .litStr hw
   | objCheck hc hn hk hl hL hd he _ ih => exact .objCheck hc hn hk hl hL hd he ih
   | caseTag _ hc _ _ ih₁ ih₂ ih₃ =>
-    exact .caseTag ih₁ (by simpa [Pred.toW] using hc.toW) (by simpa using ih₂) (by simpa using ih₃)
+    exact .caseTag ih₁ (by simpa [Pred.toW] using (hc.narrowOf hS).toW) (by simpa using ih₂) (by simpa using ih₃)
+
+/-- A narrow derivation is a wide one, its constraints translated. -/
+theorem HasTypeS.toWide {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm md : Mode}
+    {e : Expr} {τ : Ty} (h : HasType L C Γ R rm md e τ) :
+    HasTypeS Sys.wide L (C.map Pred.toW) (Γ.map Scheme.toW) R rm md e τ :=
+  h.toWideOf Sys.narrow_narrowLike
 
 end Inty

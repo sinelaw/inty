@@ -140,12 +140,21 @@ copied from the algorithm:
   is generalised, and a `let` that is assigned isn't, since a cell holds
   one type. inty's `is_syntactic_value` and `written_at` are the same test.
 - **A scheme's constraints are on its quantified variables**
-  (`Scheme.Simple`): this is HM(X)'s and Jones's `let` rule, which splits
-  the initialiser's constraints into those on the quantified variables,
-  kept in the scheme, and the rest, which stay assumptions of the
-  enclosing context (`C`). A constraint on no quantified variable in a
-  scheme would be checked at every use instead of once; the split loses
-  no typing.
+  (`Scheme.Simple`): the initialiser's constraints split into those on the
+  quantified variables, kept in the scheme, and the rest, which stay
+  assumptions of the enclosing context (`C`), as HM(X) splits them. A
+  constraint on no quantified variable in a scheme would be checked at
+  every use instead of once. Jones's textbook rule (*Qualified Types*)
+  allows a scheme any constraints, and `Inty/Textbook.lean` relates the
+  two: `Sys.jones` is the system with Jones's rule (`Sys.anyScheme`, which
+  `HasType`'s `Sys.narrow` turns off), every typing of `HasType` is one of
+  it (`HasType.toJones`), it is sound too (`jones_eval_sound`,
+  `jones_never_stuck`), so the side condition is there for inference, not
+  for soundness, and it types strictly more (`jones_separates`):
+  `const f = (y) => true + true; 1`, whose unused `f` carries `Plus
+  boolean`, which no instance satisfies. Jones's rule accepts it, as
+  Haskell accepts an unused binding with an unsatisfiable constraint;
+  `HasType` and inty reject it.
 - **`Merge` stays undecided in a scheme** while its determining arguments
   are quantified (`PTy.TreeBound`): a spread over a parameter's object
   has no field list until a call gives one, so deciding it at the `let`

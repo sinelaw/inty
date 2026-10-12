@@ -278,12 +278,15 @@ inductive HasTypeS (S : Sys) (L : List String) :
   `e₂` never assigns to `x`: a `let` that is written has one type, which
   each assignment must have. Otherwise `s` quantifies nothing and has no
   constraints. Its constraints are on its quantified variables
-  (`Scheme.Simple`). An annotation fixes `s` (`Annotated`), and `e₁` is
-  checked against it. -/
+  (`Scheme.Simple`), in the system inference implements (`Sys.narrow`);
+  any constraints, in a system that allows them (`Sys.anyScheme`: the wide
+  one soundness is proved in, and Jones's rule, `Inty/Textbook.lean`). An
+  annotation fixes `s` (`Annotated`), and `e₁` is checked against it. -/
   | let_ (s : Scheme) (F : List Nat) :
       (∀ m, (∀ a ∈ F, a < m) →
         HasTypeS S L (C ++ s.openPreds m) Γ R rm (annMode ann) e₁ (s.open m)) →
-      (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
+      (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) →
+      S.anyScheme = true ∨ s.Simple →
       Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ →
       HasTypeS S L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
   /-- A binding annotated with a polymorphic scheme `a`
@@ -475,7 +478,8 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
   | let_ (s : Scheme) (F : List Nat) :
       (∀ m, (∀ a ∈ F, a < m) →
         HasTypeS S L (C ++ s.openPreds m) Γ R rm (annMode ann) e₁ (s.open m)) →
-      (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) → s.Simple →
+      (s.arity = 0 ∧ s.preds = []) ∨ (e₁.IsValue ∧ e₂.writes 0 = false) →
+      S.anyScheme = true ∨ s.Simple →
       Annotated ann s → HasTypeS S L C (s :: Γ) R rm md e₂ τ₂ →
       HasTypeTopS S L C Γ R rm md (.let_ mb ann e₁ e₂) τ₂
   | letPoly (a : Scheme) (K : List Nat) :
@@ -667,7 +671,7 @@ theorem HasTypeS.let_mono (h₁ : HasType L C Γ R rm .synth e₁ τ₁)
     HasType L C Γ R rm md (.let_ mb none e₁ e₂) τ₂ :=
   .let_ (.mono τ₁) [] (fun _ _ => by simpa [Scheme.open, Scheme.openPreds,
     Scheme.instPreds, Scheme.mono, Scheme.inst, annMode] using h₁) (.inl ⟨rfl, rfl⟩)
-    (fun _ h => by simp [Scheme.mono] at h) (fun _ h => by cases h) h₂
+    (.inr fun _ h => by simp [Scheme.mono] at h) (fun _ h => by cases h) h₂
 
 end Inty
 

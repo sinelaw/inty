@@ -945,7 +945,7 @@ theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List N
     obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
     exact iha q hq
   | let_ s F _ hv hs ha _ ih₁ ih₂ =>
-    refine .let_ (s.rsub ρ) F (fun m hm => ?_) ?_ (hs.rsub ρ) ?_ (by simpa using ih₂)
+    refine .let_ (s.rsub ρ) F (fun m hm => ?_) ?_ (hs.imp id (·.rsub ρ)) ?_ (by simpa using ih₂)
     · rw [Scheme.open_rsub, Scheme.openPreds_rsub, ← List.map_append]
       exact ih₁ m hm
     · simpa [Scheme.rsub] using hv

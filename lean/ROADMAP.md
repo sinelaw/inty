@@ -120,6 +120,9 @@ constraints left. The decisions it needed:
   quantified variable in the trees of its determining arguments. So a
   `Merge` no instance satisfies, in a binding that is never used, is
   accepted, where the same with `Plus` isn't; a use decides it.
+  Jones's rule, with any constraints in a scheme, is `Sys.jones`
+  (`Inty/Textbook.lean`): sound, containing `HasType`, and strictly
+  larger (`jones_separates`).
 - **Termination of unification.** A worklist algorithm that terminates by
   the variables still to eliminate (an explicit list, so no set library is
   needed) and then the size of the equations, proved sound and most

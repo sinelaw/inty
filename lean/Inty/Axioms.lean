@@ -1,6 +1,7 @@
 import Inty.Builtins
 import Inty.InferComplete
 import Inty.Principal
+import Inty.Textbook
 
 /-!
 # Axiom audit
@@ -57,3 +58,15 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.inferProgramC_principal' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.inferProgramC_principal
+
+/-- info: 'Inty.HasType.toJones' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Inty.HasType.toJones
+
+/-- info: 'Inty.jones_eval_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.jones_eval_sound
+
+/-- info: 'Inty.jones_never_stuck' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.jones_never_stuck
+
+/-- info: 'Inty.jones_separates' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.jones_separates

@@ -53,7 +53,7 @@ def idScheme : Scheme := ⟨2, .fn (.bound 0) [.bound 1] (.bound 1), []⟩
 -- `id` is used at `Number → Number` and at `String → String`.
 example : HasType L [] [] none .synth .synth polyId .string :=
   .let_ idScheme [] (fun _ _ => .func rfl (.var_mono rfl)) (.inr ⟨.func, rfl⟩)
-    (fun _ h => by simp [idScheme] at h) (fun _ h => by cases h)
+    (.inr fun _ h => by simp [idScheme] at h) (fun _ h => by cases h)
     (.let_mono
       (.app (.var (s := idScheme) (τs := [.undefined, .number]) rfl rfl nofun) rfl
         (by simp; exact .lit .number))
@@ -79,7 +79,7 @@ example : HasType L [] [] none .synth .synth polyDouble .string :=
     (fun m _ => .func rfl (.binop (.plus (.of_mem (by simp [Scheme.openPreds, Scheme.instPreds,
       doubleScheme, varBlock, PPred.inst, PTy.inst, List.range']))) (.var_mono rfl)
       (.var_mono rfl)))
-    (.inr ⟨.func, rfl⟩) (fun p hp => by
+    (.inr ⟨.func, rfl⟩) (.inr fun p hp => by
       simp [doubleScheme] at hp; subst hp; exact .inl ⟨by decide, rfl, 1, by decide, [], rfl⟩)
     (fun _ h => by cases h)
     (.let_mono

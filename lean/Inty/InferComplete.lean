@@ -2975,6 +2975,7 @@ theorem infer_complete_let_ (L : List String) (mb : Bool) (ann : Option Scheme) 
   cases ht with
   | let_ s F hgen hval hsimp _ h₂ =>
     subst hmd'
+    replace hsimp : s.Simple := hsimp.resolve_left (by simp [Sys.narrow])
     -- Open `s` at a block of variables fresh for everything in sight.
     obtain ⟨m, hmF, hms, hmC, hmψ⟩ : ∃ m, (∀ a ∈ F, a < m) ∧ (∀ a ∈ s.ftv, a < m) ∧
         (∀ p ∈ C, ∀ a ∈ p.ftv, a < m) ∧
