@@ -410,6 +410,27 @@ touching the generic proofs.
   The differential generator annotates the polymorphic identity with
   `<a>(a) => a`, sometimes over an initialiser that isn't that polymorphic.
 
+  - variants tagged by a field (`Con.variant l ts`, its tags `ts` the
+    constructor's so that a case is picked whatever is known of the cases,
+    and `Con.strLit s`, a tag's type): an object literal checked against a
+    variant is checked against the case of the tag it writes, a string
+    literal (`ObjCase`, and `HasTypeS.litStr` for the tag); against a record
+    type, field by field (`HasTypeS.objCheck`). `caseTag e₁ l t e₂ e₃`
+    (`const x = e₁; x.l === "t" ? e₃ : e₂`) takes a variant apart:
+    `Case_{l,t} τ₁ σ ρ` relates its type to the case of the tag `t` (`σ`,
+    which `e₃` sees) and the rest (`ρ`, a variant of the other cases or the
+    one left, which `e₂` sees). A variant's values are its cases', each a
+    record whose tag field holds its tag (`V`). Soundness and inference
+    sound and complete. Not yet: `switch` on the tag and its exhaustiveness,
+    and a field read on a variant without a test of the tag (one every case
+    has, which inty allows).
+
+  inty matches: an object literal checked against a discriminated union
+  takes the arm whose tag it writes, when several arms have its shape
+  (`try_check_object`), and widening keeps a declared union that isn't one
+  of literals. The differential generator annotates variants, builds them
+  from tagged literals and takes them apart by their tags.
+
   Next: an annotated function type without `this:` is polymorphic in
   `this`; the model fixes it to `undefined`, as inty does for an
   initialiser.

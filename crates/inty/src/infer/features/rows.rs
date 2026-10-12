@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::ast::{AnnotationKind, Expr, Literal, PropDef, PropKey};
 use crate::span::Span;
 use crate::types::{
-    FieldEntry, Presence, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme,
+    FieldEntry, LitValue, Presence, PropName, RowTail, RowType, TVarId, TVarName, Type, TypePred, TypeScheme,
 };
 
 use super::super::env::TypeEnv;
@@ -589,8 +589,7 @@ impl InferState {
                     PropDef::Spread { .. } => None,
                 })
                 .collect();
-            let mut chosen: Option<Type> = None;
-            let mut count = 0;
+            let mut shaped: Vec<Type> = Vec::new();
             for m in members {
                 let mut m_resolved = self.zonk(m);
                 // A recursive alias arm (`B | Null`) is its unrolling.
@@ -610,22 +609,43 @@ impl InferState {
                             .collect::<std::collections::BTreeSet<_>>()
                             == lit_keys
                     {
-                        count += 1;
-                        if count == 1 {
-                            chosen = Some(m_resolved.clone());
-                        } else {
-                            // Multiple shape-matching arms — defer
-                            // to synthesis, where S-UnionR with the
-                            // exactly-one disambiguator can sort it
-                            // out (or fail loudly).
-                            return Ok(None);
-                        }
+                        shaped.push(m_resolved.clone());
                     }
                 }
             }
-            if let Some(arm) = chosen {
-                return self.try_check_object(env, properties, span, &arm);
+            if shaped.len() == 1 {
+                return self.try_check_object(env, properties, span, &shaped[0]);
             }
+            // Several arms of the literal's shape: a discriminated union,
+            // whose arm is the one whose tag the literal writes, a string
+            // literal in a field where each arm has a string literal type
+            // (the Lean model's `ObjCase.variant`).
+            for prop in properties {
+                let PropDef::Property { key, value, .. } = prop else {
+                    continue;
+                };
+                let Expr::Lit {
+                    value: Literal::String(tag),
+                    ..
+                } = value
+                else {
+                    continue;
+                };
+                let name = self.prop_key_to_name(key);
+                let tagged: Vec<&Type> = shaped
+                    .iter()
+                    .filter(|arm| {
+                        matches!(arm, Type::Row(row) if row.props.get(&name).is_some_and(|e|
+                            matches!(self.zonk(&e.ty), Type::Literal(LitValue::String(s)) if s == *tag)))
+                    })
+                    .collect();
+                if tagged.len() == 1 {
+                    let arm = tagged[0].clone();
+                    return self.try_check_object(env, properties, span, &arm);
+                }
+            }
+            // Otherwise defer to synthesis, where S-UnionR with the
+            // exactly-one disambiguator can sort it out (or fail loudly).
             return Ok(None);
         }
 

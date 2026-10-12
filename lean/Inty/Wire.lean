@@ -18,6 +18,11 @@ JavaScript and for this model as an s-expression, one program per line:
 (letpoly N T E₁ E₂)   `/** const v: <a, b, …>T */`, a scheme quantifying N
                variables, written (tv I) in T
 (unwrap E₁ E₂ E₃)   `const x = E₁; x != null ? E₃ : E₂`, x as var 0 in E₃
+(casetag E₁ s:l s:t E₂ E₃)   `const x = E₁; x.l === "t" ? E₃ : E₂`, x as var 0
+               in both
+annotations also take (rec (s:x T) …), a record, (strlit s:t), the type of
+the string t, and (variant s:l (rec …) …), a variant tagged by its field l,
+whose cases are records with a string's type at l
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
@@ -48,7 +53,7 @@ def tokenize (s : String) : List String :=
   spaced.splitOn " " |>.filter (· ≠ "")
 
 /-- Parse an annotation's type from the front of the tokens. -/
-partial def parseTy : List String → Option (Ty × List String)
+partial def parseTy (L : Option (List String)) : List String → Option (Ty × List String)
   | "number" :: rest => some (.number, rest)
   | "string" :: rest => some (.string, rest)
   | "boolean" :: rest => some (.boolean, rest)
@@ -56,30 +61,66 @@ partial def parseTy : List String → Option (Ty × List String)
   | "null" :: rest => some (.null, rest)
   | "(" :: "tv" :: i :: ")" :: rest => do some (.var (← i.toNat?), rest)
   | "(" :: "arr" :: rest => do
-    let (t, rest) ← parseTy rest
+    let (t, rest) ← parseTy L rest
     match rest with
     | ")" :: rest => some (.array t, rest)
     | _ => none
   | "(" :: "nullable" :: rest => do
-    let (t, rest) ← parseTy rest
+    let (t, rest) ← parseTy L rest
     match rest with
     | ")" :: rest => some (.nullable t, rest)
     | _ => none
   | "(" :: "optional" :: rest => do
-    let (t, rest) ← parseTy rest
+    let (t, rest) ← parseTy L rest
     match rest with
     | ")" :: rest => some (.optional t, rest)
     | _ => none
   | "(" :: "fn" :: rest => do
-    let (r, rest) ← parseTy rest
+    let (r, rest) ← parseTy L rest
     let rec params (ts : List String) (acc : List Ty) : Option (List Ty × List String) :=
       match ts with
       | ")" :: rest => some (acc.reverse, rest)
       | _ => do
-        let (t, rest) ← parseTy ts
+        let (t, rest) ← parseTy L ts
         params rest (t :: acc)
     let (ps, rest) ← params rest []
     some (.fn .undefined ps r, rest)
+  | "(" :: "strlit" :: t :: ")" :: rest =>
+    if t.startsWith "s:" then some (.strLit (t.drop 2).toString, rest) else none
+  -- A record: its fields over the program's labels `L`, once they are
+  -- known, and over its own labels before.
+  | "(" :: "rec" :: rest => do
+    let rec fields (ts : List String) (acc : List (String × Ty)) :
+        Option (List (String × Ty) × List String) :=
+      match ts with
+      | ")" :: rest => some (acc.reverse, rest)
+      | "(" :: l :: ts =>
+        if l.startsWith "s:" then do
+          let (t, rest) ← parseTy L ts
+          match rest with
+          | ")" :: rest => fields rest (((l.drop 2).toString, t) :: acc)
+          | _ => none
+        else none
+      | _ => none
+    let (fs, rest) ← fields rest []
+    let ls := fs.map (·.1)
+    let ss := fs.map fun f => Ty.slot .pre .data f.2
+    match L with
+    | some L => some (.record L (objSlots L ls ss), rest)
+    | none => some (.record ls ss, rest)
+  -- A variant tagged by `l`: its cases, each with a tag.
+  | "(" :: "variant" :: l :: rest => do
+    unless l.startsWith "s:" do none
+    let l := (l.drop 2).toString
+    let rec cases (ts : List String) (acc : List Ty) : Option (List Ty × List String) :=
+      match ts with
+      | ")" :: rest => some (acc.reverse, rest)
+      | _ => do
+        let (t, rest) ← parseTy L ts
+        cases rest (t :: acc)
+    let (Rs, rest) ← cases rest []
+    let tags ← Rs.mapM (·.tagOf l)
+    some (.variant l tags Rs, rest)
   | _ => none
 
 mutual
@@ -97,15 +138,16 @@ end
 
 mutual
 /-- Parse one expression from the front of the tokens. -/
-partial def parseExpr : List String → Option (Expr × List String)
+partial def parseExpr (L : Option (List String)) : List String → Option (Expr × List String)
   | "(" :: tag :: rest => do
-    let (e, rest) ← parseForm tag rest
+    let (e, rest) ← parseForm L tag rest
     match rest with
     | ")" :: rest => some (e, rest)
     | _ => none
   | _ => none
 
-partial def parseForm (tag : String) (ts : List String) : Option (Expr × List String) :=
+partial def parseForm (L : Option (List String)) (tag : String) (ts : List String) :
+    Option (Expr × List String) :=
   match tag, ts with
   | "num", m :: e :: rest => do
     let m ← m.toNat?
@@ -120,83 +162,90 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
   | "var", i :: rest => do some (.var (← i.toNat?), rest)
   | "func", n :: rest => do
     let n ← n.toNat?
-    let (b, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr L rest
     some (.func n b, rest)
   | "app", rest => do
-    let (f, rest) ← parseExpr rest
-    let (args, rest) ← parseMany rest
+    let (f, rest) ← parseExpr L rest
+    let (args, rest) ← parseMany L rest
     some (.app f args, rest)
   | "let", rest => do
-    let (e₁, rest) ← parseExpr rest
-    let (e₂, rest) ← parseExpr rest
+    let (e₁, rest) ← parseExpr L rest
+    let (e₂, rest) ← parseExpr L rest
     some (.let_ false none e₁ e₂, rest)
   | "letmut", rest => do
-    let (e₁, rest) ← parseExpr rest
-    let (e₂, rest) ← parseExpr rest
+    let (e₁, rest) ← parseExpr L rest
+    let (e₂, rest) ← parseExpr L rest
     some (.let_ true none e₁ e₂, rest)
   | "letann", rest => do
-    let (t, rest) ← parseTy rest
-    let (e₁, rest) ← parseExpr rest
-    let (e₂, rest) ← parseExpr rest
+    let (t, rest) ← parseTy L rest
+    let (e₁, rest) ← parseExpr L rest
+    let (e₂, rest) ← parseExpr L rest
     some (.let_ false (some (.mono t)) e₁ e₂, rest)
   | "letpoly", n :: rest => do
     let n ← n.toNat?
-    let (t, rest) ← parseTy rest
-    let (e₁, rest) ← parseExpr rest
-    let (e₂, rest) ← parseExpr rest
+    let (t, rest) ← parseTy L rest
+    let (e₁, rest) ← parseExpr L rest
+    let (e₂, rest) ← parseExpr L rest
     some (.let_ false (some ⟨n, bindVars t, []⟩) e₁ e₂, rest)
   | "letmutann", rest => do
-    let (t, rest) ← parseTy rest
-    let (e₁, rest) ← parseExpr rest
-    let (e₂, rest) ← parseExpr rest
+    let (t, rest) ← parseTy L rest
+    let (e₁, rest) ← parseExpr L rest
+    let (e₂, rest) ← parseExpr L rest
     some (.let_ true (some (.mono t)) e₁ e₂, rest)
   | "assign", i :: rest => do
     let i ← i.toNat?
-    let (e, rest) ← parseExpr rest
+    let (e, rest) ← parseExpr L rest
     some (.assign i e, rest)
   | "cond", rest => do
-    let (c, rest) ← parseExpr rest
-    let (t, rest) ← parseExpr rest
-    let (e, rest) ← parseExpr rest
+    let (c, rest) ← parseExpr L rest
+    let (t, rest) ← parseExpr L rest
+    let (e, rest) ← parseExpr L rest
     some (.cond c t e, rest)
-  | "not", rest => do let (e, rest) ← parseExpr rest; some (.unop .not e, rest)
-  | "typeof", rest => do let (e, rest) ← parseExpr rest; some (.unop .typeof e, rest)
-  | "neg", rest => do let (e, rest) ← parseExpr rest; some (.unop .neg e, rest)
+  | "not", rest => do let (e, rest) ← parseExpr L rest; some (.unop .not e, rest)
+  | "typeof", rest => do let (e, rest) ← parseExpr L rest; some (.unop .typeof e, rest)
+  | "neg", rest => do let (e, rest) ← parseExpr L rest; some (.unop .neg e, rest)
   | "plus", rest => do
-    let (a, rest) ← parseExpr rest
-    let (b, rest) ← parseExpr rest
+    let (a, rest) ← parseExpr L rest
+    let (b, rest) ← parseExpr L rest
     some (.binop .plus a b, rest)
   | "minus", rest => do
-    let (a, rest) ← parseExpr rest
-    let (b, rest) ← parseExpr rest
+    let (a, rest) ← parseExpr L rest
+    let (b, rest) ← parseExpr L rest
     some (.binop .minus a b, rest)
-  | "ret", rest => do let (e, rest) ← parseExpr rest; some (.ret e, rest)
-  | "throw", rest => do let (e, rest) ← parseExpr rest; some (.throw_ e, rest)
+  | "ret", rest => do let (e, rest) ← parseExpr L rest; some (.ret e, rest)
+  | "throw", rest => do let (e, rest) ← parseExpr L rest; some (.throw_ e, rest)
   | "seq", rest => do
-    let (a, rest) ← parseExpr rest
-    let (b, rest) ← parseExpr rest
+    let (a, rest) ← parseExpr L rest
+    let (b, rest) ← parseExpr L rest
     some (.seq a b, rest)
   | "while", rest => do
-    let (c, rest) ← parseExpr rest
-    let (b, rest) ← parseExpr rest
+    let (c, rest) ← parseExpr L rest
+    let (b, rest) ← parseExpr L rest
     some (.while_ c b, rest)
   | "break", rest => some (.break_, rest)
   | "continue", rest => some (.continue_, rest)
   | "trycatch", rest => do
-    let (b, rest) ← parseExpr rest
-    let (h, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr L rest
+    let (h, rest) ← parseExpr L rest
     some (.tryCatch b h, rest)
   | "unwrap", rest => do
-    let (a, rest) ← parseExpr rest
-    let (b, rest) ← parseExpr rest
-    let (c, rest) ← parseExpr rest
+    let (a, rest) ← parseExpr L rest
+    let (b, rest) ← parseExpr L rest
+    let (c, rest) ← parseExpr L rest
     some (.unwrap a b c, rest)
+  | "casetag", rest => do
+    let (a, rest) ← parseExpr L rest
+    let (l, rest) ← parseLabel rest
+    let (t, rest) ← parseLabel rest
+    let (b, rest) ← parseExpr L rest
+    let (c, rest) ← parseExpr L rest
+    some (.caseTag a l t b c, rest)
   | "tryfinally", rest => do
-    let (b, rest) ← parseExpr rest
-    let (f, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr L rest
+    let (f, rest) ← parseExpr L rest
     some (.tryFinally b f, rest)
   | "obj", rest => do
-    let (fs, rest) ← parseFields rest
+    let (fs, rest) ← parseFields L rest
     let ks ← fs.mapM fun f => match f.2.2 with
       | "field" => some FieldKind.data
       | "method" => some .method
@@ -204,7 +253,7 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
       | _ => none
     some (.obj (fs.map (·.1)) (fs.map (·.2.1)) ks, rest)
   | "class", rest => do
-    let (fs, rest) ← parseFields rest
+    let (fs, rest) ← parseFields L rest
     let ks ← fs.mapM fun f => match f.2.2 with
       | "field" => some ClassKind.data
       | "arrow" => some .arrow
@@ -214,41 +263,41 @@ partial def parseForm (tag : String) (ts : List String) : Option (Expr × List S
     some (.cls (fs.map (·.1)) (fs.map (·.2.1)) ks, rest)
   | "ctor", n :: rest => do
     let n ← n.toNat?
-    let (b, rest) ← parseExpr rest
+    let (b, rest) ← parseExpr L rest
     some (.ctor n b, rest)
   | "new", rest => do
-    let (f, rest) ← parseExpr rest
-    let (args, rest) ← parseMany rest
+    let (f, rest) ← parseExpr L rest
+    let (args, rest) ← parseMany L rest
     some (.new_ f args, rest)
   | "get", rest => do
-    let (e, rest) ← parseExpr rest
+    let (e, rest) ← parseExpr L rest
     let (l, rest) ← parseLabel rest
     some (.get e l, rest)
   | "set", rest => do
-    let (e, rest) ← parseExpr rest
+    let (e, rest) ← parseExpr L rest
     let (l, rest) ← parseLabel rest
-    let (v, rest) ← parseExpr rest
+    let (v, rest) ← parseExpr L rest
     some (.set e l v, rest)
   | "spread", rest => do
-    let (a, rest) ← parseExpr rest
-    let (b, rest) ← parseExpr rest
+    let (a, rest) ← parseExpr L rest
+    let (b, rest) ← parseExpr L rest
     some (.spread a b, rest)
   | "arr", rest => do
-    let (es, rest) ← parseMany rest
+    let (es, rest) ← parseMany L rest
     some (.arr es, rest)
   | "index", rest => do
-    let (e, rest) ← parseExpr rest
-    let (i, rest) ← parseExpr rest
+    let (e, rest) ← parseExpr L rest
+    let (i, rest) ← parseExpr L rest
     some (.index e i, rest)
   | "setindex", rest => do
-    let (e, rest) ← parseExpr rest
-    let (i, rest) ← parseExpr rest
-    let (v, rest) ← parseExpr rest
+    let (e, rest) ← parseExpr L rest
+    let (i, rest) ← parseExpr L rest
+    let (v, rest) ← parseExpr L rest
     some (.setIndex e i v, rest)
   | "mcall", rest => do
-    let (e, rest) ← parseExpr rest
+    let (e, rest) ← parseExpr L rest
     let (l, rest) ← parseLabel rest
-    let (args, rest) ← parseMany rest
+    let (args, rest) ← parseMany L rest
     some (.mcall e l args, rest)
   | _, _ => none
 
@@ -259,31 +308,46 @@ partial def parseLabel : List String → Option (String × List String)
 
 /-- An object literal's or a class's members, `(KIND s:x E)` each, with
 its kind, up to a closing `)`, which is left in place. -/
-partial def parseFields : List String → Option (List (String × Expr × String) × List String)
+partial def parseFields (L : Option (List String)) :
+    List String → Option (List (String × Expr × String) × List String)
   | ")" :: rest => some ([], ")" :: rest)
   | "(" :: kind :: ts => do
     let (l, rest) ← parseLabel ts
-    let (e, rest) ← parseExpr rest
+    let (e, rest) ← parseExpr L rest
     match rest with
     | ")" :: rest => do
-      let (fs, rest) ← parseFields rest
+      let (fs, rest) ← parseFields L rest
       some ((l, e, kind) :: fs, rest)
     | _ => none
   | _ => none
 
 /-- Parse expressions up to a closing `)`, which is left in place. -/
-partial def parseMany : List String → Option (List Expr × List String)
+partial def parseMany (L : Option (List String)) : List String → Option (List Expr × List String)
   | ")" :: rest => some ([], ")" :: rest)
   | ts => do
-    let (e, rest) ← parseExpr ts
-    let (es, rest) ← parseMany rest
+    let (e, rest) ← parseExpr L ts
+    let (es, rest) ← parseMany L rest
     some (e :: es, rest)
 end
 
-/-- Parse a whole line. -/
-def parse (s : String) : Option Expr :=
-  match parseExpr (tokenize s) with
-  | some (e, []) => some e
+/-- The labels of the annotations' records: an `s:` token right after `(`. -/
+def annLabels : List String → List String
+  | "(" :: l :: rest => if l.startsWith "s:" then (l.drop 2).toString :: annLabels rest
+    else annLabels (l :: rest)
+  | _ :: rest => annLabels rest
+  | [] => []
+
+/-- Parse a whole line, with the labels its records are over: the
+program's and its annotations'. The annotations' records are over the
+labels once these are known, so the line is parsed twice. -/
+def parse (s : String) : Option (List String × Expr) :=
+  let ts := tokenize s
+  match parseExpr none ts with
+  | some (e₀, []) =>
+    let L := (e₀.labels ++ annLabels ts).eraseDups
+    match parseExpr (some L) ts with
+    | some (e, []) => some (L, e)
+    | _ => none
   | _ => none
 
 def tyWire : Ty → String
@@ -313,8 +377,8 @@ an object doesn't have) and a program failing the scope checks (an
 assignment to a `const`, a `break` outside a loop). A constraint left on a
 type variable is harmless, and inty leaves it in place; `T` keeps the
 variable, as inty's type does. -/
-def inferVerdict (e : Expr) : String :=
-  match inferProgram e with
+def inferVerdict (L : List String) (e : Expr) : String :=
+  match inferIn L [] e with
   | none => "reject"
   | some τ => s!"type {tyWire τ}"
 
@@ -362,7 +426,7 @@ def evalVerdict (clock : Nat) (e : Expr) : String :=
 def verdict (clock : Nat) (line : String) : String :=
   match parse line with
   | none => "error unparsable"
-  | some e => s!"{inferVerdict e};{evalVerdict clock e}"
+  | some (L, e) => s!"{inferVerdict L e};{evalVerdict clock e}"
 
 #guard verdict 100 "(app (func 1 (var 0)) (num 15 1))" ==
   s!"type number;value num {(1.5 : Float).toBits}"
@@ -376,6 +440,25 @@ def verdict (clock : Nat) (line : String) : String :=
 -- want one argument per parameter (optional parameters come with phase 10).
 #guard verdict 100 "(app (func 0 (str s:a)) (num 1 0))" == "reject;value str s:a"
 #guard verdict 100 "(app (num 1 0" == "error unparsable"
+-- A variant tagged by `k`: an object literal checked against it takes its
+-- tag's case, and a test of the tag takes it apart, the case's fields
+-- readable in its branch and only the rest's in the other.
+#guard verdict 100
+  "(letann (variant s:k (rec (s:k (strlit s:a)) (s:x number)) (rec (s:k (strlit s:b)))) (obj (field s:k (str s:a)) (field s:x (num 1 0))) (casetag (var 0) s:k s:a (num 0 0) (get (var 0) s:x)))"
+  == s!"type number;value num {(1 : Float).toBits}"
+#guard verdict 100
+  "(letann (variant s:k (rec (s:k (strlit s:a)) (s:x number)) (rec (s:k (strlit s:b)))) (obj (field s:k (str s:b))) (casetag (var 0) s:k s:a (str s:no) (str s:yes)))"
+  == "type string;value str s:no"
+#guard verdict 100
+  "(letann (variant s:k (rec (s:k (strlit s:a)) (s:x number)) (rec (s:k (strlit s:b)))) (obj (field s:k (str s:b))) (casetag (var 0) s:k s:a (get (var 0) s:x) (num 0 0)))"
+  == s!"reject;stuck propertyNotFound"
+#guard verdict 100 "(letann (variant s:k (rec (s:k (strlit s:a)) (s:x number)) (rec (s:k (strlit s:b)))) (obj (field s:k (str s:c))) (num 0 0))" ==
+  s!"reject;value num {(0 : Float).toBits}"
+#guard verdict 100 "(letann (variant s:k (rec (s:k (strlit s:a)) (s:x number)) (rec (s:k (strlit s:b)))) (obj (field s:k (str s:a))) (num 0 0))" ==
+  s!"reject;value num {(0 : Float).toBits}"
+#guard verdict 100
+  "(let (obj (field s:k (str s:a))) (casetag (var 0) s:k s:a (num 0 0) (num 1 0)))"
+  == s!"reject;value num {(1 : Float).toBits}"
 #guard verdict 100 "(app (func 1 (seq (ret (str s:a)) (str s:b))) (null))" == "type string;value str s:a"
 -- A polymorphic annotation: the initialiser is checked with its variables
 -- rigid; one that isn't polymorphic enough, or whose rigid variable would

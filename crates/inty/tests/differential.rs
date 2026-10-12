@@ -26,7 +26,8 @@
 //! or `INTY_LEAN_MODEL`. Without it the test is skipped. `INTY_DIFF_CASES`
 //! sets the number of programs (default 3000), `INTY_DIFF_SEED` the seed,
 //! and `INTY_DIFF_SUMS=1` prints each disagreement on a program with a sum
-//! (`T | Null`, `T | Undefined`) or a test for nothing (`!= null`, `??`).
+//! (`T | Null`, `T | Undefined`, a variant) or a test for nothing (`!= null`,
+//! `??`) or of a variant's tag.
 //! The engine is `node` (or `INTY_NODE`) running `tests/differential/engine.js`;
 //! without it the engine comparison is skipped, except on CI.
 
@@ -123,6 +124,10 @@ enum Core {
     /// `const v = e₁; v != null ? e₃ : e₂`, with `v` bound in `e₃`; only
     /// in statement position. `e₁ ?? e₂` is `Unwrap(e₁, e₂, Var(0))`.
     Unwrap(Box<Core>, Box<Core>, Box<Core>),
+    /// `const v = e₁; v.l === "t" ? e₃ : e₂`, a variant tagged by `l` taken
+    /// apart by its tag: `v` bound in both branches, in `e₃` as the case of
+    /// the tag `t`, in `e₂` as the rest; only in statement position.
+    CaseTag(Box<Core>, String, String, Box<Core>, Box<Core>),
 }
 
 /// How a class holds a member.
@@ -147,6 +152,9 @@ fn annotatable(t: &T) -> bool {
         T::Num | T::Str | T::Bool | T::Undef | T::Null => true,
         T::Arrow(ps, r) => ps.iter().all(annotatable) && annotatable(r),
         T::Arr(t) | T::Maybe(_, t) => annotatable(t),
+        T::Variant(_, cases) => cases
+            .iter()
+            .all(|(_, fs)| fs.iter().all(|(_, t)| annotatable(t))),
         // Only the polymorphic identity's annotation has variables.
         T::Obj(_) | T::TVar(_) => false,
     }
@@ -169,6 +177,20 @@ fn wire_ty(t: &T) -> String {
         T::Maybe(true, t) => format!("(nullable {})", wire_ty(t)),
         T::Maybe(false, t) => format!("(optional {})", wire_ty(t)),
         T::TVar(i) => format!("(tv {})", i),
+        T::Variant(l, cases) => {
+            let cases: Vec<String> = cases
+                .iter()
+                .map(|(tag, fs)| {
+                    let mut fields = vec![(l.clone(), format!("(strlit s:{tag})"))];
+                    fields.extend(fs.iter().map(|(f, t)| (f.clone(), wire_ty(t))));
+                    fields.sort();
+                    let fields: Vec<String> =
+                        fields.iter().map(|(f, t)| format!(" (s:{f} {t})")).collect();
+                    format!(" (rec{})", fields.concat())
+                })
+                .collect();
+            format!("(variant s:{}{})", l, cases.concat())
+        }
         T::Obj(_) => unreachable!("records aren't annotated"),
     }
 }
@@ -190,6 +212,17 @@ fn js_ty(t: &T) -> String {
         T::Maybe(true, t) => format!("({} | Null)", js_ty(t)),
         T::Maybe(false, t) => format!("({} | Undefined)", js_ty(t)),
         T::TVar(i) => tvar_name(*i),
+        T::Variant(l, cases) => {
+            let cases: Vec<String> = cases
+                .iter()
+                .map(|(tag, fs)| {
+                    let mut fields = vec![format!("{l}: \"{tag}\"")];
+                    fields.extend(fs.iter().map(|(f, t)| format!("{f}: {}", js_ty(t))));
+                    format!("{{{}}}", fields.join(", "))
+                })
+                .collect();
+            format!("({})", cases.join(" | "))
+        }
         T::Obj(_) => unreachable!("records aren't annotated"),
     }
 }
@@ -211,6 +244,11 @@ fn tvar_count(t: &T) -> usize {
             .unwrap_or(0),
         T::Arr(t) | T::Maybe(_, t) => tvar_count(t),
         T::Obj(fs) => fs.iter().map(|(_, t)| tvar_count(t)).max().unwrap_or(0),
+        T::Variant(_, cases) => cases
+            .iter()
+            .flat_map(|(_, fs)| fs.iter().map(|(_, t)| tvar_count(t)))
+            .max()
+            .unwrap_or(0),
         T::Num | T::Str | T::Bool | T::Undef | T::Null => 0,
     }
 }
@@ -336,6 +374,14 @@ fn wire(e: &Core) -> String {
             format!("(new {}{})", wire(f), args.concat())
         }
         Unwrap(x, y, z) => format!("(unwrap {} {} {})", wire(x), wire(y), wire(z)),
+        CaseTag(x, l, t, y, z) => format!(
+            "(casetag {} s:{} s:{} {} {})",
+            wire(x),
+            l,
+            t,
+            wire(y),
+            wire(z)
+        ),
     }
 }
 
@@ -345,7 +391,7 @@ fn ends_in_statement(e: &Core) -> bool {
     match e {
         Let(_, _, _, rest) | Seq(_, rest) => ends_in_statement(rest),
         Throw(_) | Ret(_) | While(..) | Break | Continue | TryCatch(..) | TryFinally(..) => true,
-        Cond(_, t, f) | Unwrap(_, t, f) => is_stmt(t) || is_stmt(f),
+        Cond(_, t, f) | Unwrap(_, t, f) | CaseTag(_, _, _, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
     }
 }
@@ -355,7 +401,7 @@ fn ends_in_statement(e: &Core) -> bool {
 fn is_stmt(e: &Core) -> bool {
     match e {
         Ret(_) | Throw(_) | Seq(..) | Let(..) | While(..) | Break | Continue | TryCatch(..)
-        | TryFinally(..) | Unwrap(..) => true,
+        | TryFinally(..) | Unwrap(..) | CaseTag(..) => true,
         Cond(_, t, f) => is_stmt(t) || is_stmt(f),
         _ => false,
     }
@@ -405,6 +451,7 @@ fn fractional(e: &Core) -> Core {
         ),
         New(x, args) => New(f(x), args.iter().map(fractional).collect()),
         Unwrap(x, y, z) => Unwrap(f(x), f(y), f(z)),
+        CaseTag(x, l, t, y, z) => CaseTag(f(x), l.clone(), t.clone(), f(y), f(z)),
         other => other.clone(),
     }
 }
@@ -464,7 +511,7 @@ impl Js {
                 format!("{}({})", callee, args.join(", "))
             }
             Let(..) | Ret(_) | Throw(_) | Seq(..) | While(..) | Break | Continue | TryCatch(..)
-            | TryFinally(..) | Unwrap(..) => {
+            | TryFinally(..) | Unwrap(..) | CaseTag(..) => {
                 unreachable!("statements only in statement position: {e:?}")
             }
             Assign(i, e) => format!("({} = {})", self.name(*i), self.expr(e)),
@@ -674,6 +721,25 @@ impl Js {
                     format!("const {v} = {init}; {last}({v} != null ? {some} : {none});")
                 }
             }
+            // `const v = e₁;`, then a test of `v`'s tag, which inty narrows
+            // `v` by in each branch.
+            CaseTag(e1, l, t, e2, e3) => {
+                let v = self.fresh("v");
+                let init = self.expr(e1);
+                self.names.push(v.clone());
+                let test = format!("{v}.{l} === \"{t}\"");
+                let out = if is_stmt(e2) || is_stmt(e3) {
+                    let rest = self.stmts(e2, last);
+                    let case = self.stmts(e3, last);
+                    format!("const {v} = {init}; if ({test}) {{ {case} }} else {{ {rest} }}")
+                } else {
+                    let rest = self.expr(e2);
+                    let case = self.expr(e3);
+                    format!("const {v} = {init}; {last}({test} ? {case} : {rest});")
+                };
+                self.names.pop();
+                out
+            }
             Cond(c, t, f) if is_stmt(t) || is_stmt(f) => format!(
                 "if ({}) {{ {} }} else {{ {} }}",
                 self.expr(c),
@@ -715,6 +781,11 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
         Unwrap(x, y, z) => {
             refers_from_inner(x, i, inner)
                 || refers_from_inner(y, i, inner)
+                || refers_from_inner(z, i + 1, inner)
+        }
+        CaseTag(x, _, _, y, z) => {
+            refers_from_inner(x, i, inner)
+                || refers_from_inner(y, i + 1, inner)
                 || refers_from_inner(z, i + 1, inner)
         }
         Break | Continue => false,
@@ -794,6 +865,10 @@ enum T {
     /// A polymorphic annotation's quantified variable `i`, written `a`,
     /// `b`, … (`ty` never makes one).
     TVar(usize),
+    /// A variant tagged by its field `l`: its cases, each a tag and the
+    /// case's other fields, sorted by label; only as an annotation's
+    /// (`ty` never makes one).
+    Variant(String, Vec<(String, Vec<(String, T)>)>),
 }
 
 /// The property labels the generated programs use.
@@ -924,12 +999,110 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
-            T::Arrow(..) | T::Obj(_) | T::Arr(_) | T::Maybe(..) | T::TVar(_) => return None,
+            T::Arrow(..)
+            | T::Obj(_)
+            | T::Arr(_)
+            | T::Maybe(..)
+            | T::TVar(_)
+            | T::Variant(..) => return None,
         })
+    }
+
+    /// A variant tagged by one of the labels, of two or three cases, each
+    /// with some of the other labels' fields.
+    fn variant_ty(&mut self) -> T {
+        const TAGS: [&str; 3] = ["circle", "square", "line"];
+        let l = self.label();
+        let n = 2 + self.rng.below(2);
+        let mut cases = Vec::new();
+        for tag in &TAGS[..n] {
+            let mut fields = Vec::new();
+            for f in LABELS {
+                if f != l && self.rng.chance(50) {
+                    fields.push((f.to_string(), self.base()));
+                }
+            }
+            cases.push((tag.to_string(), fields));
+        }
+        T::Variant(l, cases)
+    }
+
+    /// A value of the variant `t`: a variable of its type, or an object
+    /// literal of one of its cases, its tag written as a string, which
+    /// only checking it against `t` takes as the case's.
+    fn variant_value(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let T::Variant(l, cases) = t else {
+            unreachable!()
+        };
+        let fits: Vec<usize> = (0..scope.len())
+            .filter(|&i| matches!(&scope[scope.len() - 1 - i], Binding::Mono(u) if u == t))
+            .collect();
+        if !fits.is_empty() && self.rng.chance(50) {
+            return Var(fits[self.rng.below(fits.len())]);
+        }
+        let (tag, fs) = cases[self.rng.below(cases.len())].clone();
+        let mut fields = vec![(l.clone(), Str(tag))];
+        fields.extend(fs.iter().map(|(f, u)| (f.clone(), self.typed(u, d, scope, false))));
+        if self.rng.chance(50) {
+            fields.reverse();
+        }
+        Obj(fields)
+    }
+
+    /// A variant's variable `x`, of the variant `v`, taken apart by one of
+    /// its tags: each branch of type `t` sees the variable as the case's
+    /// fields, or as the rest (another variant, or the one case left).
+    fn case_on(&mut self, x: Core, v: &T, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let T::Variant(l, cases) = v else {
+            unreachable!()
+        };
+        let k = self.rng.below(cases.len());
+        let (tag, fs) = cases[k].clone();
+        let mut rest = cases.clone();
+        rest.remove(k);
+        scope.push(if rest.len() == 1 {
+            Binding::This(rest[0].1.clone())
+        } else {
+            Binding::Mono(T::Variant(l.clone(), rest))
+        });
+        let e2 = self.typed(t, d, scope, true);
+        scope.pop();
+        scope.push(Binding::This(fs));
+        let e3 = self.typed(t, d, scope, true);
+        scope.pop();
+        CaseTag(b(x), l.clone(), tag, b(e2), b(e3))
+    }
+
+    /// A program of type `t` with a variant: one annotated `const` of a
+    /// variant type, or one in scope, taken apart by its tag.
+    fn variant_use(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let existing: Vec<(usize, T)> = (0..scope.len())
+            .filter_map(|i| match &scope[scope.len() - 1 - i] {
+                Binding::Mono(v @ T::Variant(..)) => Some((i, v.clone())),
+                _ => None,
+            })
+            .collect();
+        if !existing.is_empty() && self.rng.chance(60) {
+            let (i, v) = existing[self.rng.below(existing.len())].clone();
+            return self.case_on(Var(i), &v, t, d, scope);
+        }
+        let v = self.variant_ty();
+        let e1 = self.variant_value(&v, d, scope);
+        scope.push(Binding::Mono(v.clone()));
+        let rest = if self.rng.chance(70) {
+            self.case_on(Var(0), &v, t, d, scope)
+        } else {
+            self.typed(t, d, scope, true)
+        };
+        scope.pop();
+        Let(false, Some(v), b(e1), b(rest))
     }
 
     /// A program of type `t`, mostly well typed.
     fn typed(&mut self, t: &T, depth: usize, scope: &mut Vec<Binding>, stmt: bool) -> Core {
+        if matches!(t, T::Variant(..)) {
+            return self.variant_value(t, depth.saturating_sub(1), scope);
+        }
         // A variable of the right type.
         let fits: Vec<usize> = (0..scope.len())
             .filter(|&i| match &scope[scope.len() - 1 - i] {
@@ -1018,6 +1191,10 @@ impl Gen {
         // A class, and a member of type `t` of a new instance.
         if stmt && depth > 0 && self.no_this == 0 && self.rng.chance(8) {
             return self.class_use(t, d, scope);
+        }
+        // A variant, taken apart by its tag.
+        if stmt && depth > 0 && self.rng.chance(6) {
+            return self.variant_use(t, d, scope);
         }
         // A sum's binding, or another value that isn't nothing, tested for
         // nothing: `v != null ? … : …`, or `v ?? …`.
@@ -2039,6 +2216,18 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
         features.insert("unify depth");
     }
     shown.extend(errors);
+    // A spread over an operand of an unknown type: inty gives a field it
+    // may or may not write a union with a type variable (`String | b`).
+    if source.contains("...")
+        && shown.iter().any(|t| {
+            t.split(" | ").skip(1).any(|m| {
+                let v: String = m.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+                v.len() == 1 && v.chars().all(|c| c.is_ascii_lowercase())
+            })
+        })
+    {
+        features.insert("spread of unknown");
+    }
     for text in &shown {
         if text.contains("never") {
             features.insert("never");
@@ -2256,6 +2445,17 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Reject, Typing::Type(_)) if features.contains("unify depth") => {
             Some("inty's unifier gives up on a spread over a recursive type")
         }
+        // The same roadmap item: a spread over an operand of an unknown
+        // type, whose fields the model merges once the operand is known.
+        (Typing::Reject, Typing::Type(_)) if features.contains("spread of unknown") => {
+            Some("inty's spread over an operand of an unknown type")
+        }
+        // inty reads a field every arm of a discriminated union has (its
+        // tag, say) without a test of the tag; the model reads a variant's
+        // fields only once a test has taken it apart.
+        (Typing::Type(_), Typing::Reject) if features.contains("variant field") => {
+            Some("a variant's field read without a test of its tag")
+        }
         // Roadmap phase 4: inty wants an array's or a string's index to be
         // an `Int`; the model takes any number, a fractional one being out
         // of bounds (a fault).
@@ -2263,6 +2463,59 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
             Some("Int indices (the model has only number)")
         }
         _ => None,
+    }
+}
+
+/// Whether `e` reads a property of a variable that holds a variant (an
+/// annotated one, an alias of one, or the rest of one a test of its tag
+/// took apart), `variant` saying which variables in scope do.
+fn reads_variant_field(e: &Core, variant: &mut Vec<bool>) -> bool {
+    let holds = |variant: &Vec<bool>, x: &Core| {
+        matches!(x, Var(i) if variant.len() > *i && variant[variant.len() - 1 - i])
+    };
+    let under = |variant: &mut Vec<bool>, bound: &[bool], x: &Core| {
+        variant.extend_from_slice(bound);
+        let r = reads_variant_field(x, variant);
+        variant.truncate(variant.len() - bound.len());
+        r
+    };
+    match e {
+        Get(x, _) | Set(x, _, _) | MCall(x, _, _) if holds(variant, x) => true,
+        Let(_, ann, x, y) => {
+            let v = matches!(ann, Some(T::Variant(..))) || holds(variant, x);
+            reads_variant_field(x, variant) || under(variant, &[v], y)
+        }
+        CaseTag(x, _, _, y, z) => {
+            reads_variant_field(x, variant) || under(variant, &[true], y) || under(variant, &[false], z)
+        }
+        Func(n, body) | Method(n, body) => under(variant, &vec![false; n + 2], body),
+        Getter(body) => under(variant, &[false, false], body),
+        TryCatch(x, y) => reads_variant_field(x, variant) || under(variant, &[false], y),
+        Unwrap(x, y, z) => {
+            reads_variant_field(x, variant)
+                || reads_variant_field(y, variant)
+                || under(variant, &[false], z)
+        }
+        // A class's members see binders of its own; not followed.
+        Class(..) => false,
+        App(f, args) | New(f, args) | MCall(f, _, args) => {
+            reads_variant_field(f, variant) || args.iter().any(|a| reads_variant_field(a, variant))
+        }
+        Assign(_, x) | Not(x) | Typeof(x) | Neg(x) | Ret(x) | Throw(x) | Get(x, _) => {
+            reads_variant_field(x, variant)
+        }
+        Plus(x, y) | Minus(x, y) | Seq(x, y) | While(x, y) | TryFinally(x, y) | Spread(x, y)
+        | Index(x, y) | Set(x, _, y) => {
+            reads_variant_field(x, variant) || reads_variant_field(y, variant)
+        }
+        Cond(x, y, z) | SetIndex(x, y, z) => {
+            reads_variant_field(x, variant)
+                || reads_variant_field(y, variant)
+                || reads_variant_field(z, variant)
+        }
+        Obj(fields) => fields.iter().any(|(_, e)| reads_variant_field(e, variant)),
+        Arr(es) => es.iter().any(|e| reads_variant_field(e, variant)),
+        Num(..) | Str(_) | Bool(_) | Undef | Null | Var(_) | Break | Continue => false,
     }
 }
 
@@ -2306,7 +2559,8 @@ fn inty_agrees_with_the_lean_model() {
         // stack.
         let source = js.clone();
         let fractional_source = javascript(&fractional(core));
-        let (typing, features, run) =
+        let reads_variant = reads_variant_field(core, &mut Vec::new());
+        let (typing, mut features, run) =
             inty::worker::run_with_inference_stack("inty-differential", move || {
                 let parse = |src: &str| {
                     inty::frontends::javascript::parse_source(src).unwrap_or_else(|e| {
@@ -2325,6 +2579,9 @@ fn inty_agrees_with_the_lean_model() {
                 }
                 (typing, features, inty_run(&program))
             });
+        if reads_variant {
+            features.insert("variant field");
+        }
         let report = |what: &str| {
             format!(
                 "{what}\n  js:     {js}\n  core:   {}\n  inty:   {:?} / {:?}\n  model:  {:?} / {:?}\n  engine: {:?}",
@@ -2383,10 +2640,10 @@ fn inty_agrees_with_the_lean_model() {
                 .or_default() += 1;
         }
         // `INTY_DIFF_SUMS=1` prints every disagreement on a program with a
-        // sum or a test for nothing, whatever it is put down to.
+        // sum or a test for nothing or of a tag, whatever it is put down to.
         if std::env::var_os("INTY_DIFF_SUMS").is_some()
             && accepted != model_accepted
-            && ["(unwrap ", "(nullable ", "(optional "]
+            && ["(unwrap ", "(nullable ", "(optional ", "(variant ", "(casetag "]
                 .iter()
                 .any(|f| wire(&programs[i]).contains(f))
         {
@@ -2396,6 +2653,8 @@ fn inty_agrees_with_the_lean_model() {
             ("(unwrap ", "with a test for nothing (`!= null`, `??`)"),
             ("(nullable ", "with a `T | Null` annotation"),
             ("(optional ", "with a `T | Undefined` annotation"),
+            ("(variant ", "with a variant annotation"),
+            ("(casetag ", "with a test of a variant's tag"),
         ] {
             if wire(&programs[i]).contains(form) {
                 *counts

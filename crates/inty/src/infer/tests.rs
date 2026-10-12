@@ -1351,6 +1351,26 @@ fn unsound_string_into_literal_arm_rejected() {
 }
 
 #[test]
+fn tagged_literal_takes_the_arm_of_its_tag() {
+    // Arms of one shape: the literal's tag picks its arm, as the Lean
+    // model's `ObjCase.variant` does, rather than synthesis widening the
+    // tag to `String`.
+    let src = "/** const v: {b: \"circle\"} | {b: \"square\"} */ const v = {b: \"circle\"}; \
+               const w = v; (w.b === \"square\" ? 1 : 2);";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "/** const v: {b: \"circle\", c: Number} | {b: \"square\", c: Number} */ \
+               const v = {c: 1, b: \"square\"};";
+    assert!(infer_program_via_program(src).is_ok());
+    // A tag that isn't an arm's is still rejected.
+    let src = "/** const v: {b: \"circle\"} | {b: \"square\"} */ const v = {b: \"line\"};";
+    assert!(infer_program_via_program(src).is_err());
+    // As is a field the tag's arm doesn't have.
+    let src = "/** const v: {b: \"circle\", c: Number} | {b: \"square\", c: Number} */ \
+               const v = {c: \"x\", b: \"square\"};";
+    assert!(infer_program_via_program(src).is_err());
+}
+
+#[test]
 fn lit_widens_on_var_binding() {
     // `var k = "circle"` widens at the binding site (no annotation
     // ⇒ fresh-literal widening). The annotation is the escape hatch
