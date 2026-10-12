@@ -3120,11 +3120,7 @@ impl<'a> Emitter<'a> {
                 self.demand(&t);
                 let v = self.expr(arg)?;
                 let want = self.go_type_at(span)?;
-                Ok(self.coerce(
-                    format!("int(^{})", to_i32(v, &t)),
-                    &GoType::Int,
-                    &want,
-                ))
+                Ok(self.coerce(format!("int(^{})", to_i32(v, &t)), &GoType::Int, &want))
             }
             UnaryOp::Typeof if matches!(arg, Expr::Ident { .. }) => Ok(go_string_lit(match t {
                 GoType::Float | GoType::Int | GoType::NumVar(_) => "number",

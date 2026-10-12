@@ -35,7 +35,6 @@ pub use heap::{Cell, Heap, Loc};
 pub use step::{eval_expr, eval_stmt, run_program, State, StmtOutcome, Stuck};
 pub use value::{Closure, Value};
 
-
 use crate::ast::{Expr, Program};
 
 /// Default fuel for `run_to_end`. Loops decrement fuel each iteration;

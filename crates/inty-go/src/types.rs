@@ -636,9 +636,7 @@ impl TypeMapper {
         match (from, to) {
             (GoType::NumVar(a), GoType::NumVar(b)) => self.kinds.edge(*a, *b),
             (GoType::Int, GoType::NumVar(b)) => self.kinds.raise(*b, crate::kinds::Kind::Int),
-            (GoType::Float, GoType::NumVar(b)) => {
-                self.kinds.raise(*b, crate::kinds::Kind::Float)
-            }
+            (GoType::Float, GoType::NumVar(b)) => self.kinds.raise(*b, crate::kinds::Kind::Float),
             // Into a fixed kind: a conversion where it's used.
             (_, GoType::Int | GoType::Float) => {}
             _ => self.unify(from, to),

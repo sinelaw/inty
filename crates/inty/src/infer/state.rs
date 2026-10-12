@@ -1176,8 +1176,7 @@ impl InferState {
 
         // The same for a sum told apart by `typeof` (`Number | String`):
         // the variable may be the sum or one of its cases.
-        if matches!(sub, Type::Var(TVarName::Flex(_))) && sup.is_typeof_sum()
-        {
+        if matches!(sub, Type::Var(TVarName::Flex(_))) && sup.is_typeof_sum() {
             self.add_constraint(TypePred::inject(sub.clone(), sup.clone()), span);
             return Ok(());
         }
