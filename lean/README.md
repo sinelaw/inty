@@ -562,7 +562,7 @@ an initialiser, a `let` or a parameter taken apart by a test and
 assigned, a getter or a method beside a spread). Of the programs the unit tests check,
 1242 are in the fragment (some tests generate theirs at random, so the
 corpus keeps each program it once recorded); inty and the model agree on
-accepting each but five, listed with their reasons in
+accepting each but four, listed with their reasons in
 `tests/model_corpus/known.txt`. Where both accept, the test compares more:
 the types, compared by their heads (761 programs have the same), and the
 values, where the model's type isn't `undefined`: inty's `dynamics`, the
@@ -572,13 +572,19 @@ on fails the test. Without the model built the test skips; CI sets
 `INTY_REQUIRE_MODEL`, under which it, and the differential test, fail
 instead.
 
-The five:
+The four:
 
 - an annotated object type's method using `this` (a member of an object
-  type is called on the object in inty), a record indexed by a string
-  variable, inty's spread over an operand of an unknown type, a `typeof`
-  test for a tag no case has (inty warns that the branch is dead), and
-  `never` from a `while (true)` body.
+  type is called on the object in inty), inty's spread over an operand of
+  an unknown type, a `typeof` test for a tag no case has (inty warns that
+  the branch is dead), and `never` from a `while (true)` body.
+
+A fifth went when inty stopped reading a record with a key known only at
+run time (`o[k]`, `k` a string variable). inty gave the union of the
+fields' types, but the key may name no field, and the read gives
+`undefined`: `o[k].length` was accepted and threw. Now only a literal key
+reads a record (`o["x"]`, as `o.x`), as in the model, and a string-keyed
+map is a `Dict<V>`, whose read gives `V | Undefined`.
 
 Three more went when inty's numbers became one type: an index with a
 fraction, and (twice) a property read on an arithmetic result, which

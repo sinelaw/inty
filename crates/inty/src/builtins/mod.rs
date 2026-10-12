@@ -965,11 +965,10 @@ impl InferState {
     }
 
     /// `record[key]`. A literal key selects that field (which must exist).
-    /// A computed key can read any field, so on a closed record the
-    /// element is the union of the field types (like array indexing, a
-    /// missing key's `undefined` isn't modelled). On a record whose other
-    /// fields are unknown there is no sound element type; that's an error
-    /// rather than the unconstrained variable inty used to leave.
+    /// Any other key is an error: a string known only at run time may name
+    /// no field, and the read would give `undefined` where the type says
+    /// otherwise. A string-keyed map is a `Dict<V>`, whose read gives
+    /// `V | Undefined`.
     fn resolve_record_index(
         &mut self,
         container: &Type,
@@ -977,51 +976,25 @@ impl InferState {
         element: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        use crate::types::{is_callable_key, PropName, RowTail, RowType};
-        if let Some(key) = literal_key {
-            let rest = self.fresh_flex();
-            let mut props = std::collections::BTreeMap::new();
-            props.insert(PropName(key), self.read_entry(element.clone()));
-            let wanted = Type::Row(RowType {
-                props,
-                tail: RowTail::Open(rest),
-            });
-            return self.unify(span, container, &wanted);
-        }
-        let row = match self.flatten_type(container) {
-            Type::Row(row) => row,
-            other => {
-                return Err(TypeError::ConstraintNotSatisfied {
-                    class: "Indexable".to_string(),
-                    ty: other.to_string(),
-                    span,
-                }
-                .into())
-            }
-        };
-        if !matches!(row.tail, RowTail::Closed) {
+        use crate::types::{PropName, RowTail, RowType};
+        let Some(key) = literal_key else {
             return Err(TypeError::ConstraintNotSatisfied {
-                class: "Indexable (a computed key needs every field of the record to be known)"
+                class: "Indexable (a key known only at run time may name no field: \
+                        use a literal key, or a `Dict<V>`)"
                     .to_string(),
-                ty: Type::Row(row).to_string(),
+                ty: self.show(container),
                 span,
             }
             .into());
-        }
-        let fields: Vec<Type> = row
-            .props
-            .iter()
-            .filter(|(k, f)| {
-                !is_callable_key(k) && !k.0.starts_with('\u{2}') && !f.presence.is_abs()
-            })
-            .map(|(_, f)| f.ty.clone())
-            .collect();
-        let union = if fields.is_empty() {
-            Type::Undefined
-        } else {
-            Type::union(fields)
         };
-        self.unify(span, element, &union)
+        let rest = self.fresh_flex();
+        let mut props = std::collections::BTreeMap::new();
+        props.insert(PropName(key), self.read_entry(element.clone()));
+        let wanted = Type::Row(RowType {
+            props,
+            tail: RowTail::Open(rest),
+        });
+        self.unify(span, container, &wanted)
     }
 
     /// Resolve a single type class constraint. An instance of a scheme's
@@ -1400,16 +1373,20 @@ mod tests {
     #[test]
     fn test_resolve_indexable_object_row() {
         let mut state = InferState::new();
-        // {foo: String, bar: Number} is NOT array-like, should use string indexing
+        // {foo: String, bar: Number} is not array-like: a string key reads
+        // a field, the one a literal key names.
         let row = Type::object([("foo", Type::String), ("bar", Type::Number)]);
-        let index = Type::flex(0);
+        let key = Type::Literal(crate::types::LitValue::String("bar".into()));
         let elem = Type::flex(1);
-
         assert!(state
-            .resolve_indexable(&row, &index, &elem, Span::new(0, 0))
+            .resolve_indexable(&row, &key, &elem, Span::new(0, 0))
             .is_ok());
+        assert_eq!(state.apply_subst(&elem), Type::Number);
 
-        // Index should be string for object access
-        assert_eq!(state.apply_subst(&index), Type::String);
+        // A key known only at run time may name no field.
+        let index = Type::flex(0);
+        assert!(state
+            .resolve_indexable(&row, &index, &Type::flex(2), Span::new(0, 0))
+            .is_err());
     }
 }
