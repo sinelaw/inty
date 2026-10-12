@@ -74,6 +74,10 @@ example : ∀ {e : Expr} {τ : Ty}, inferProgram e = some τ →
     ∀ (clock : Nat) (s : Stuck), eval clock [] [] e ≠ .stuck s :=
   inferProgram_never_stuck
 
+example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L [] e = some τ →
+    ∀ clock s, eval clock [] [] e ≠ .stuck s :=
+  inferIn_never_stuck
+
 example : ∀ {L : List String} {e : Expr} {τ : Ty}, inferIn L builtinCtx e = some τ →
     ∀ (clock : Nat) (s : Stuck), eval clock builtinEnv builtinHeap e ≠ .stuck s :=
   inferIn_builtins_never_stuck

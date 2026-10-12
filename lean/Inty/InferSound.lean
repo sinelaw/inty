@@ -2179,6 +2179,14 @@ theorem inferProgram_sound {e : Expr} {τ : Ty} (h : inferProgram e = some τ) :
     ∃ C, HoldsOrVar C ∧ HasType e.labels.eraseDups C [] none .synth .synth e τ :=
   inferIn_sound rfl h
 
+/-- A closed program inference accepts with records over any labels never
+gets stuck, whatever the clock (the wire format's labels are the program's
+and its annotations'). -/
+theorem inferIn_never_stuck {e : Expr} {τ : Ty} (h : inferIn L [] e = some τ)
+    (clock : Nat) (s : Stuck) : eval clock [] [] e ≠ .stuck s := by
+  obtain ⟨C, hC, ht⟩ := inferIn_sound rfl h
+  exact never_stuck ht hC clock s
+
 /-- A program inference accepts never gets stuck, whatever the clock. -/
 theorem inferProgram_never_stuck {e : Expr} {τ : Ty} (h : inferProgram e = some τ)
     (clock : Nat) (s : Stuck) : eval clock [] [] e ≠ .stuck s := by

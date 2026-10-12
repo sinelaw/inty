@@ -436,7 +436,9 @@ or a test for nothing), and on programs with sums the two agree but for
 the divergences above. So do they on variants tagged by a field
 (discriminated unions, `{kind: "circle", r: Number} | {kind: "square", s:
 Number}`), built by tagged literals checked against an annotation and
-taken apart by a test of the tag (`v.kind === "circle" ? … : …`).
+taken apart by a test of the tag (`v.kind === "circle" ? … : …`), but for
+the divergences above (a disagreement on a program that reads a variant's
+field without a test is put down to that one, for the whole program).
 
 With method calls and recursive types, over 40,000 more programs (eight
 seeds), with about 450 accepted method calls per 5,000 programs,

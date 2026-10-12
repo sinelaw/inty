@@ -120,7 +120,7 @@ partial def parseTy (L : Option (List String)) : List String → Option (Ty × L
         cases rest (t :: acc)
     let (Rs, rest) ← cases rest []
     let tags ← Rs.mapM (·.tagOf l)
-    some (.variant l tags Rs, rest)
+    if tags.Nodup then some (.variant l tags Rs, rest) else none
   | _ => none
 
 mutual

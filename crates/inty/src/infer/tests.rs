@@ -1368,6 +1368,31 @@ fn tagged_literal_takes_the_arm_of_its_tag() {
     let src = "/** const v: {b: \"circle\", c: Number} | {b: \"square\", c: Number} */ \
                const v = {c: \"x\", b: \"square\"};";
     assert!(infer_program_via_program(src).is_err());
+    // Only a field every arm has a different string literal type in is a
+    // tag, whatever the literal's field order.
+    for lit in ["{k: \"a\", c: \"x\"}", "{c: \"x\", k: \"a\"}"] {
+        let src = format!(
+            "/** const v: {{k: \"a\", c: String}} | {{k: \"b\", c: \"x\"}} */ const v = {lit};"
+        );
+        assert!(infer_program_via_program(&src).is_ok(), "{src}");
+    }
+}
+
+#[test]
+fn alias_keeps_a_declared_records_literal_fields() {
+    // Widening at an unannotated binding stops at a record: the copy is
+    // the same object, so a write through it must keep the original's
+    // literal field types.
+    let src = "/** const v: {k: \"a\"} */ const v = {k: \"a\"}; let w = v; w.k = \"z\";";
+    assert!(infer_program_via_program(src).is_err());
+    let src = "/** const v: {k: \"a\", n: Number} | {k: \"b\", s: String} */ \
+               const v = {k: \"a\", n: 1}; \
+               function f() { if (v.k === \"a\") { let w = v; w.k = \"b\"; } return 0; }";
+    assert!(infer_program_via_program(src).is_err());
+    // A fresh literal's fields and elements still widen.
+    let src = "const o = {k: \"a\"}; o.k = \"z\"; let p = [1]; p[0] = 2.5; \
+               function mk() { return {k: \"a\"}; } let q = mk(); q.k = \"z\";";
+    assert!(infer_program_via_program(src).is_ok());
 }
 
 #[test]

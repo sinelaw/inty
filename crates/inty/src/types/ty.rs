@@ -1110,16 +1110,18 @@ impl Type {
     ///
     /// * `Lit("circle")` → `String`, `Lit(42)` → `Number`,
     ///   `Lit(true)` → `Boolean`.
-    /// * Recurses through `Row` (each property value), `Array`, `Map`,
-    ///   `Promise`, and a `Union` of literals (each member, then
+    /// * Recurses through what holds a value as it is: a sum (`Maybe`),
+    ///   a tuple, and a `Union` of literals (each member, then
     ///   re-normalises so that `"a" | "b"` widens to `String` rather than
     ///   the awkward `String | String`). Any other union was declared and
     ///   is left alone.
-    /// * Recurses through `Func` covariantly into the return type and
-    ///   contravariantly into parameters — a parameter typed `"a"`
-    ///   really means "only the literal `"a"` is acceptable", and
-    ///   widening it would change the function's contract, so we
-    ///   leave parameters alone. (TS makes the same call.)
+    /// * Stops at what may be shared: a record, an array, a map, a promise
+    ///   and a function are left alone. Their type is the one every alias
+    ///   has, so widening a field of one (`let w = v` with `v: {k: "a"}`)
+    ///   would let a write through the copy (`w.k = "z"`) break the
+    ///   original's. A literal's own parts are widened where it is made
+    ///   (an object literal's fields, an array literal's elements, a
+    ///   function's returns), so a fresh one has nothing left to widen.
     /// * Type variables, named types, and modules are left alone.
     ///   Widening through a substitution is the substitution's job.
     pub fn widen_fresh_literals(&self) -> Self {
@@ -1131,21 +1133,10 @@ impl Type {
     pub fn widen_fresh_literals_with(&self, f: &mut dyn FnMut(&LitValue) -> Type) -> Self {
         match self {
             Type::Literal(lit) => f(lit),
-            Type::Row(row) => {
-                let props = row
-                    .props
-                    .iter()
-                    .map(|(k, e)| (k.clone(), e.with_ty(e.ty.widen_fresh_literals_with(f))))
-                    .collect();
-                Type::Row(RowType {
-                    props,
-                    tail: row.tail.clone(),
-                })
+            Type::Row(_) | Type::Array(_) | Type::Map(_) | Type::Promise(_) | Type::Func { .. } => {
+                self.clone()
             }
-            Type::Array(elem) => Type::Array(Box::new(elem.widen_fresh_literals_with(f))),
             Type::Maybe(z, elem) => Type::Maybe(*z, Box::new(elem.widen_fresh_literals_with(f))),
-            Type::Map(v) => Type::Map(Box::new(v.widen_fresh_literals_with(f))),
-            Type::Promise(inner) => Type::Promise(Box::new(inner.widen_fresh_literals_with(f))),
             Type::Tuple(elems) => Type::Tuple(
                 elems
                     .iter()
@@ -1164,15 +1155,6 @@ impl Type {
                 Type::union(widened)
             }
             Type::Union(_) => self.clone(),
-            Type::Func {
-                this_type,
-                params,
-                ret,
-            } => Type::Func {
-                this_type: this_type.clone(),
-                params: params.clone(),
-                ret: Box::new(ret.widen_fresh_literals_with(f)),
-            },
             // Primitives, vars, named refs, modules, error: nothing
             // to widen. `Error` is opaque — widening through it
             // would generate noise from a binding that already failed.

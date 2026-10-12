@@ -426,10 +426,17 @@ touching the generic proofs.
     has, which inty allows).
 
   inty matches: an object literal checked against a discriminated union
-  takes the arm whose tag it writes, when several arms have its shape
-  (`try_check_object`), and widening keeps a declared union that isn't one
-  of literals. The differential generator annotates variants, builds them
-  from tagged literals and takes them apart by their tags.
+  takes the arm whose tag it writes, when several arms have its shape and
+  a field holds a different string literal type in each (`try_check_object`),
+  and widening keeps a declared union that isn't one of literals. Reviewing
+  this found a soundness bug in inty's widening: an unannotated `let w = v`
+  widened the literal fields of `v`'s declared record, so `w.k = "z"` broke
+  `v: {k: "a"}`; widening now stops at what may be shared (a record, an
+  array, a function), a literal's own parts being widened where it is
+  made. The differential generator annotates variants, builds them from
+  tagged literals and takes them apart by their tags; a disagreement on a
+  program reading a field of a variant without a test is put down to that
+  gap, for the whole program.
 
   Next: an annotated function type without `this:` is polymorphic in
   `this`; the model fixes it to `undefined`, as inty does for an

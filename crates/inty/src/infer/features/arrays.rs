@@ -60,7 +60,13 @@ impl InferState {
                     self.unify(*spread_span, &arg_ty, &expected)?;
                     self.zonk(&elem_var)
                 }
-                other => self.infer_expr(env, other)?,
+                // An element's literal type widens where the array is
+                // made (`[1]` is a `Number[]`, which a later write may
+                // change), as a binding's does.
+                other => {
+                    let ty = self.infer_expr(env, other)?;
+                    self.widen(other.span(), &ty)
+                }
             };
             acc = match self.join(span, &acc, &elem_ty) {
                 Ok(t) => t,

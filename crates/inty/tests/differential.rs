@@ -2473,10 +2473,15 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
 
 /// Whether `e` reads a property of a variable that holds a variant (an
 /// annotated one, an alias of one, or the rest of one a test of its tag
-/// took apart), `variant` saying which variables in scope do.
-fn reads_variant_field(e: &Core, variant: &mut Vec<bool>) -> bool {
-    let holds = |variant: &Vec<bool>, x: &Core| matches!(x, Var(i) if variant.len() > *i && variant[variant.len() - 1 - i]);
-    let under = |variant: &mut Vec<bool>, bound: &[bool], x: &Core| {
+/// took apart, if two cases or more are left), `variant` giving the
+/// variant each variable in scope holds, if any.
+fn reads_variant_field(e: &Core, variant: &mut Vec<Option<T>>) -> bool {
+    let held = |variant: &Vec<Option<T>>, x: &Core| match x {
+        Var(i) if variant.len() > *i => variant[variant.len() - 1 - i].clone(),
+        _ => None,
+    };
+    let holds = |variant: &Vec<Option<T>>, x: &Core| held(variant, x).is_some();
+    let under = |variant: &mut Vec<Option<T>>, bound: &[Option<T>], x: &Core| {
         variant.extend_from_slice(bound);
         let r = reads_variant_field(x, variant);
         variant.truncate(variant.len() - bound.len());
@@ -2485,21 +2490,31 @@ fn reads_variant_field(e: &Core, variant: &mut Vec<bool>) -> bool {
     match e {
         Get(x, _) | Set(x, _, _) | MCall(x, _, _) if holds(variant, x) => true,
         Let(_, ann, x, y) => {
-            let v = matches!(ann, Some(T::Variant(..))) || holds(variant, x);
+            let v = match ann {
+                Some(t @ T::Variant(..)) => Some(t.clone()),
+                _ => held(variant, x),
+            };
             reads_variant_field(x, variant) || under(variant, &[v], y)
         }
-        CaseTag(x, _, _, y, z) => {
+        CaseTag(x, _, t, y, z) => {
+            let rest = match held(variant, x) {
+                Some(T::Variant(l, cases)) => {
+                    let rest: Vec<_> = cases.into_iter().filter(|(tag, _)| tag != t).collect();
+                    (rest.len() > 1).then_some(T::Variant(l, rest))
+                }
+                _ => None,
+            };
             reads_variant_field(x, variant)
-                || under(variant, &[true], y)
-                || under(variant, &[false], z)
+                || under(variant, &[rest], y)
+                || under(variant, &[None], z)
         }
-        Func(n, body) | Method(n, body) => under(variant, &vec![false; n + 2], body),
-        Getter(body) => under(variant, &[false, false], body),
-        TryCatch(x, y) => reads_variant_field(x, variant) || under(variant, &[false], y),
+        Func(n, body) | Method(n, body) => under(variant, &vec![None; n + 2], body),
+        Getter(body) => under(variant, &[None, None], body),
+        TryCatch(x, y) => reads_variant_field(x, variant) || under(variant, &[None], y),
         Unwrap(x, y, z) => {
             reads_variant_field(x, variant)
                 || reads_variant_field(y, variant)
-                || under(variant, &[false], z)
+                || under(variant, &[None], z)
         }
         // A class's members see binders of its own; not followed.
         Class(..) => false,

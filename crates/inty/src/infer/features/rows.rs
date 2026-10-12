@@ -633,17 +633,31 @@ impl InferState {
                     continue;
                 };
                 let name = self.prop_key_to_name(key);
-                let tagged: Vec<&Type> = shaped
+                // The arms' types of the field: a tag field only if each
+                // is a string literal, all different.
+                let tags: Vec<Option<String>> = shaped
                     .iter()
-                    .filter(|arm| {
-                        matches!(arm, Type::Row(row) if row.props.get(&name).is_some_and(|e|
-                            matches!(self.zonk(&e.ty), Type::Literal(LitValue::String(s)) if s == *tag)))
+                    .map(|arm| match arm {
+                        Type::Row(row) => {
+                            row.props.get(&name).and_then(|e| match self.zonk(&e.ty) {
+                                Type::Literal(LitValue::String(s)) => Some(s),
+                                _ => None,
+                            })
+                        }
+                        _ => None,
                     })
                     .collect();
-                if tagged.len() == 1 {
-                    let arm = tagged[0].clone();
-                    return self.try_check_object(env, properties, span, &arm);
+                let distinct: std::collections::BTreeSet<&Option<String>> = tags.iter().collect();
+                if tags.iter().any(Option::is_none) || distinct.len() != tags.len() {
+                    continue;
                 }
+                return match tags.iter().position(|t| t.as_deref() == Some(tag.as_str())) {
+                    Some(i) => {
+                        let arm = shaped[i].clone();
+                        self.try_check_object(env, properties, span, &arm)
+                    }
+                    None => Ok(None),
+                };
             }
             // Otherwise defer to synthesis, where S-UnionR with the
             // exactly-one disambiguator can sort it out (or fail loudly).
