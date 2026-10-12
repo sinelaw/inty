@@ -107,10 +107,19 @@ theorem run_clock_le (clock : Nat) (env : Env) (heap : Heap) (e : Expr) :
     split
     · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
     · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
-  | .caseTag e₁ l t e₂ e₃ => by
+  | .caseTag e₁ (.field l) t e₂ e₃ => by
     rw [run]
     refine bindC_le (run_clock_le clock env heap e₁) fun v _ => ?_
     refine bindC_le (Nat.le_trans (getter_clock_le _ _ _ _) lt_min_le) fun w _ => ?_
+    split
+    · split
+      · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
+      · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
+    · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
+  | .caseTag e₁ .typeOf t e₂ e₃ => by
+    rw [run]
+    refine bindC_le (run_clock_le clock env heap e₁) fun v _ => ?_
+    refine bindC_le lt_min_le fun w _ => ?_
     split
     · split
       · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
@@ -469,7 +478,19 @@ theorem run_mono (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (k : Nat)
     split at h
     · rename_i hv; simp only [hv, ite_true]; exact run_mono _ _ _ e₂ k h
     · rename_i hv; simp only [hv]; exact run_mono _ _ _ e₃ k h
-  | .caseTag e₁ l t e₂ e₃ => by
+  | .caseTag e₁ .typeOf t e₂ e₃ => by
+    simp only [run] at hne ⊢
+    refine bindC_mono (run_mono clock env heap e₁ k) (fun v _ h => ?_) hne
+    have hc₁ := run_clock_le clock env heap e₁
+    simp only [Nat.min_eq_left hc₁, Nat.min_eq_left (Nat.add_le_add_right hc₁ k)] at h ⊢
+    refine bindC_mono (fun _ => rfl) (fun w _ h => ?_) h
+    simp only [Nat.min_eq_left hc₁, Nat.min_eq_left (Nat.add_le_add_right hc₁ k)] at h ⊢
+    split at h
+    · split at h
+      · rename_i hs; simp only [hs, ite_true]; exact run_mono _ _ _ e₃ k h
+      · rename_i hs; simp only [hs, ite_false]; exact run_mono _ _ _ e₂ k h
+    · exact run_mono _ _ _ e₂ k h
+  | .caseTag e₁ (.field l) t e₂ e₃ => by
     simp only [run] at hne ⊢
     refine bindC_mono (run_mono clock env heap e₁ k) (fun v _ h => ?_) hne
     have hc₁ := run_clock_le clock env heap e₁

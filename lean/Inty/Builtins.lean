@@ -24,7 +24,7 @@ takes a tick and leaves the heap alone. -/
 theorem Prim.abs_sound (k : Nat) (W : World) (θ : Ty) (hθ : ¬ TyEq θ .newTarget) :
     V k W (.fn θ [.number] .number) (.prim .abs) := by
   rw [V_fn]
-  refine ⟨fun h => absurd h hθ, ?_⟩
+  refine ⟨⟨rfl, fun h => absurd h hθ⟩, ?_⟩
   intro j _ W' _ h _ args _ hh _ hargs
   cases j with
   | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩
@@ -43,7 +43,7 @@ theorem Prim.abs_sound (k : Nat) (W : World) (θ : Ty) (hθ : ¬ TyEq θ .newTar
 theorem Prim.truthy_sound (k : Nat) (W : World) (θ τ : Ty) (hθ : ¬ TyEq θ .newTarget) :
     V k W (.fn θ [τ] .boolean) (.prim .truthy) := by
   rw [V_fn]
-  refine ⟨fun h => absurd h hθ, ?_⟩
+  refine ⟨⟨rfl, fun h => absurd h hθ⟩, ?_⟩
   intro j _ W' _ h _ args _ hh _ hargs
   cases j with
   | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩

@@ -28,6 +28,8 @@ inductive InstW : Pred → Prop where
   | injectSelf : InstW ⟨.injectW, [T, T]⟩
   | injectNothing : InstW ⟨.injectW, [z.ty, .maybe z σ]⟩
   | injectSome : InstW ⟨.injectW, [σ, .maybe z σ]⟩
+  | injectArm : Rs[(i : Nat)]? = some R → R.whnf = .app c xs → c.typeTag = some t →
+      ts[i]? = some t → InstW ⟨.injectW, [R, .variant .typeOf ts Rs]⟩
   | stripSelf : InstW ⟨.strip, [τ, τ]⟩
 
 theorem InstW.subst (σ : Subst) {p : Pred} (h : InstW p) : InstW (p.subst σ) := by
@@ -36,6 +38,9 @@ theorem InstW.subst (σ : Subst) {p : Pred} (h : InstW p) : InstW (p.subst σ) :
   | injectSelf => exact .injectSelf
   | injectNothing => simpa [Pred.subst, Nothing.ty, Ty.subst_app] using InstW.injectNothing
   | injectSome => simpa [Pred.subst, Ty.subst_app] using InstW.injectSome
+  | @injectArm Rs i R c xs t ts hR hw hc hi =>
+    simpa [Pred.subst, Ty.subst_app] using
+      InstW.injectArm (Rs := Rs.map (·.subst σ)) (by simp [hR]) (Ty.whnf_subst_of_app hw σ) hc hi
   | stripSelf => exact .stripSelf
 
 /-- A wide instance up to equal types. -/
@@ -70,6 +75,7 @@ theorem InstEqW.narrow_of {p : Pred} (h : InstEqW p) (hi : p.cls ≠ .injectW)
   cases hq with
   | narrow hq _ => exact ⟨_, hpq, hq⟩
   | injectSelf | injectNothing | injectSome => exact absurd hpq.1 hi
+  | injectArm _ _ _ _ => exact absurd hpq.1 hi
   | stripSelf => exact absurd hpq.1 hs
 
 /-- `EntailsS.instOrVar` for a class whose wide instances are narrow ones. -/
@@ -171,6 +177,11 @@ theorem Inst.toW {p : Pred} (h : Inst p) : InstEqW p.toW := by
     exact ⟨⟨.injectW, [.app c args, .maybe z (.app c args)]⟩,
       PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons he zip_tyEq_nil)),
       .injectSome⟩
+  | injectArm _ hw _ htag hi hR he _ =>
+    obtain ⟨ys, hys, -⟩ := TyEq.whnf_app he (Ty.whnf_app _ _)
+    exact ⟨_,
+      PredEq.of_pairs (by simp) (zip_tyEq_cons he (zip_tyEq_cons (TyEq.of_whnf hw) zip_tyEq_nil)),
+      .injectArm hR hys htag hi⟩
   | _ => exact ⟨_, PredEq.refl _, .narrow (by constructor <;> assumption) (by simp [Pred.toW])⟩
 
 theorem InstEq.toW {p : Pred} (h : InstEq p) : InstEqW p.toW := by

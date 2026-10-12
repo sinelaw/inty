@@ -145,11 +145,14 @@ private theorem lex_le {c c' s s' : Nat} (hc : c' ≤ c) (hs : s' < s) :
   · exact .right _ hs
 
 /-- The measure of `V`'s recursion: a recursive type unfolds, at the same
-index, to a constructor application, and a sum `Ty.maybe` goes, at the
-same index, to the head under its layers, which is neither. -/
+index, to a constructor application; a sum `Ty.maybe` goes, at the same
+index, to the head under its layers, which is neither (but may be a variant
+told apart by `typeof`); and such a variant goes to its cases' heads, each
+of a `typeof` (`Con.typeTag`), so none of these. -/
 def Ty.rank : Ty → Nat
-  | .mu _ _ => 2
-  | .app (.maybe _) _ => 1
+  | .mu _ _ => 3
+  | .app (.maybe _) _ => 2
+  | .app (.variant .typeOf _) _ => 1
   | _ => 0
 
 /-- The layers of sums `Ty.maybe` on top of a type, unfolding recursive
@@ -162,16 +165,23 @@ def Ty.strip : Nat → Ty → List Nothing × Option Ty
     | .app (.maybe z) [σ] => ((z :: (Ty.strip n σ).1), (Ty.strip n σ).2)
     | t => ([], some t)
 
+theorem Ty.rank_le (τ : Ty) : τ.rank ≤ 3 := by
+  unfold Ty.rank; split <;> omega
+
+theorem Ty.rank_app_le (c : Con) (args : List Ty) : (Ty.app c args).rank ≤ 2 := by
+  unfold Ty.rank; split <;> simp_all
+
 theorem Ty.rank_app_lt_mu (c : Con) (args : List Ty) (i : Nat) (sys : List RTy) :
     (Ty.app c args).rank < (Ty.mu i sys).rank := by
-  cases c <;> simp [Ty.rank]
+  have := Ty.rank_app_le c args; show _ < 3; omega
 
-theorem Ty.rank_lt_maybe {t : Ty} (h : t.rank = 0) (z : Nothing) (τ : Ty) :
+theorem Ty.rank_lt_maybe {t : Ty} (h : t.rank ≤ 1) (z : Nothing) (τ : Ty) :
     t.rank < (Ty.maybe z τ).rank := by
-  rw [h]; simp [Ty.rank]
+  show _ < 2; omega
 
-theorem Ty.rank_le (τ : Ty) : τ.rank ≤ 2 := by
-  unfold Ty.rank; split <;> omega
+theorem Ty.rank_lt_tsum {t : Ty} (h : t.rank = 0) (ts : List String) (Rs : List Ty) :
+    t.rank < (Ty.variant .typeOf ts Rs).rank := by
+  show _ < 1; omega
 
 mutual
 /-- `V k W τ v`: the value `v` has type `τ` for `k` more calls, in the world
@@ -184,7 +194,10 @@ runs a tick down. A record is an object whose cell the world says holds
 fields of a record type equal to it, and an array one whose cell holds
 elements of a type equal to its element type (`CellP`). A string
 literal's type has its string. A variant has the values of its cases, each
-a record with its tag. A recursive type
+a record with its tag, told apart by a field; told apart by `typeof`, the
+values of its cases whose `typeof` is their tag, each case's head of a
+`typeof` (`Con.typeTag`). A function's `typeof` is `"function"`. A
+recursive type
 has the values of its unfolding, if that is a constructor application. A
 slot, a presence, or a constructor applied to the wrong number of types has
 no values. -/
@@ -197,7 +210,7 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .strLit t, v => v = .string t
   | .unknown, _ => True
   | .newTarget, _ => True
-  | .fn θ τs ρ, f => (TyEq θ .newTarget → f.isCtor = true) ∧
+  | .fn θ τs ρ, f => (f.typeString = "function" ∧ (TyEq θ .newTarget → f.isCtor = true)) ∧
       ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args, args.length = τs.length →
       (∀ i, i < j → HeapInv (CellP (fun τ v => V i W' τ v)) W' h) →
       (∀ i, i < j → V i W' θ thisv) → (∀ i, i < j → VList i W' τs args) →
@@ -207,16 +220,18 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .record ls slots, v => ∃ ℓ τc, v = .obj ℓ ∧ W[ℓ]? = some (.obj τc) ∧
       TyEq (.record ls slots) τc
   | .array τ, v => ∃ ℓ τc, v = .arr ℓ ∧ W[ℓ]? = some (.arr τc) ∧ TyEq τ τc
-  | .variant l ts Rs, v => ∃ i : Nat, ∃ R t ls slots ℓ τc, Rs[i]? = some R ∧ ts[i]? = some t ∧
-      R.tagOf l = some t ∧ TyEq R (.record ls slots) ∧
+  | .variant (.field l) ts Rs, v => ∃ i : Nat, ∃ R t ls slots ℓ τc, Rs[i]? = some R ∧
+      ts[i]? = some t ∧ R.tagOf l = some t ∧ TyEq R (.record ls slots) ∧
       v = .obj ℓ ∧ W[ℓ]? = some (.obj τc) ∧ TyEq (.record ls slots) τc
+  | .variant .typeOf ts Rs, v => ∃ i : Nat, ∃ R t, Rs[i]? = some R ∧ ts[i]? = some t ∧
+      v.typeString = t ∧ (if _ : R.whnf.rank = 0 then V k W R.whnf v else False)
   | .mu i sys, v =>
     match (Ty.mu i sys).view with
     | some (.app c args) => V k W (.app c args) v
     | _ => False
   | .maybe z τ, v => v = z.value ∨ ∃ n, v ∈ (Ty.strip n τ).1.map Nothing.value ∨
       match (Ty.strip n τ).2 with
-      | some t => if _ : t.rank = 0 then V k W t v else False
+      | some t => if _ : t.rank ≤ 1 then V k W t v else False
       | none => False
   | _, _ => False
 termination_by τ => (k, τ.rank)
@@ -225,12 +240,13 @@ decreasing_by
     | exact .left _ _ (by omega)
     | exact .right _ (Ty.rank_app_lt_mu _ _ _ _)
     | exact .right _ (Ty.rank_lt_maybe ‹_› _ _)
+    | exact .right _ (Ty.rank_lt_tsum ‹_› _ _)
 /-- `VList k W τs vs`: one value of each type. -/
 def VList (k : Nat) (W : World) : List Ty → List Value → Prop
   | [], [] => True
   | τ :: τs, v :: vs => V k W τ v ∧ VList k W τs vs
   | _, _ => False
-termination_by τs => (k, 3 + τs.length)
+termination_by τs => (k, 4 + τs.length)
 decreasing_by
   all_goals first
     | exact .left _ _ (by omega)
@@ -258,7 +274,8 @@ def HeapOK (k : Nat) (W : World) (h : Heap) : Prop := HeapInv (CellV k W) W h
 
 /-- The function clause of `V`, in terms of `HeapOK`. -/
 theorem V_fn {k : Nat} {W : World} {θ ρ : Ty} {τs : List Ty} {f : Value} :
-    V k W (.fn θ τs ρ) f ↔ (TyEq θ .newTarget → f.isCtor = true) ∧ ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
+    V k W (.fn θ τs ρ) f ↔ (f.typeString = "function" ∧ (TyEq θ .newTarget → f.isCtor = true)) ∧
+      ∀ j, j ≤ k → ∀ W', W <+: W' → ∀ h thisv args,
       args.length = τs.length → (∀ i, i < j → HeapOK i W' h) →
       (∀ i, i < j → V i W' θ thisv) → (∀ i, i < j → VList i W' τs args) →
       Lands (call j h f thisv args) j W' (fun c W'' h'' => c < j → HeapOK c W'' h'')
@@ -284,10 +301,17 @@ theorem V_array : V k W (.array τ) v ↔ ∃ ℓ τc, v = .arr ℓ ∧ W[ℓ]? 
 
 @[simp] theorem V_strLit : V k W (.strLit t) v ↔ v = .string t := by rw [V.eq_def]
 
-theorem V_variant_def : V k W (.variant l ts Rs) v ↔ ∃ i : Nat, ∃ R t ls slots ℓ τc,
+theorem V_variant_def : V k W (.variant (.field l) ts Rs) v ↔ ∃ i : Nat, ∃ R t ls slots ℓ τc,
       Rs[i]? = some R ∧ ts[i]? = some t ∧ R.tagOf l = some t ∧ TyEq R (.record ls slots) ∧
       v = .obj ℓ ∧ W[ℓ]? = some (.obj τc) ∧ TyEq (.record ls slots) τc := by
   rw [V.eq_def]
+
+theorem V_tsum_def : V k W (.variant .typeOf ts Rs) v ↔ ∃ i : Nat, ∃ R t,
+      Rs[i]? = some R ∧ ts[i]? = some t ∧ v.typeString = t ∧ R.whnf.rank = 0 ∧
+      V k W R.whnf v := by
+  rw [V.eq_def]
+  refine exists_congr fun i => exists_congr fun R => exists_congr fun t => ?_
+  by_cases h : R.whnf.rank = 0 <;> simp [h]
 
 theorem V_mu : V k W (.mu i sys) v ↔
     ∃ c args, (Ty.mu i sys).view = some (.app c args) ∧ V k W (.app c args) v := by
@@ -330,10 +354,20 @@ theorem prefix_getElem? {α : Type} {W W' : List α} (hW : W <+: W') {ℓ : Nat}
   obtain ⟨t, rfl⟩ := hW
   rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hs).1, hs]
 
-/-- `V.mono` for a constructor application other than a sum's. -/
-theorem V.mono_app_base {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c : Con}
-    {args : List Ty} {v : Value} (hc : ∀ z, c ≠ .maybe z) (hv : V k W (.app c args) v) :
+theorem Ty.rank_app_zero {c : Con} {args : List Ty} (hc : ∀ z, c ≠ .maybe z)
+    (ht : ∀ ts, c ≠ .variant .typeOf ts) : (Ty.app c args).rank = 0 := by
+  unfold Ty.rank; split <;> simp_all
+
+theorem Ty.rank_zero_app {c : Con} {args : List Ty} (h : (Ty.app c args).rank = 0) :
+    (∀ z, c ≠ .maybe z) ∧ ∀ ts, c ≠ .variant .typeOf ts := by
+  refine ⟨fun z e => ?_, fun ts e => ?_⟩ <;> subst e <;> simp [Ty.rank] at h
+
+/-- `V.mono` for a constructor application of rank 0: neither a sum's nor
+a variant's told apart by `typeof`. -/
+theorem V.mono_app0 {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c : Con}
+    {args : List Ty} {v : Value} (h0 : (Ty.app c args).rank = 0) (hv : V k W (.app c args) v) :
     V j W' (.app c args) v := by
+  obtain ⟨hc, ht⟩ := Ty.rank_zero_app h0
   by_cases hfn : ∃ θ τs ρ, Ty.app c args = .fn θ τs ρ
   · obtain ⟨θ, τs, ρ, e⟩ := hfn
     rw [e] at hv ⊢
@@ -353,23 +387,47 @@ theorem V.mono_app_base {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W
         rw [V_array] at hv ⊢
         obtain ⟨ℓ, τc, rfl, hℓ, hτ⟩ := hv
         exact ⟨ℓ, τc, rfl, prefix_getElem? hW hℓ, hτ⟩
-      · by_cases hvar : ∃ l ts Rs, Ty.app c args = .variant l ts Rs
-        · obtain ⟨l, ts, Rs, e⟩ := hvar
-          rw [e] at hv ⊢
-          rw [V_variant_def] at hv ⊢
-          obtain ⟨i, R, t, ls, slots, ℓ, τc, hR, ht, hRt, hRr, rfl, hℓ, hτ⟩ := hv
-          exact ⟨i, R, t, ls, slots, ℓ, τc, hR, ht, hRt, hRr, rfl, prefix_getElem? hW hℓ, hτ⟩
+      · by_cases hvar : ∃ d ts Rs, Ty.app c args = .variant d ts Rs
+        · obtain ⟨d, ts, Rs, e⟩ := hvar
+          cases d with
+          | typeOf => cases e; exact absurd rfl (ht ts)
+          | field l =>
+            rw [e] at hv ⊢
+            rw [V_variant_def] at hv ⊢
+            obtain ⟨i, R, t, ls, slots, ℓ, τc, hR, ht, hRt, hRr, rfl, hℓ, hτ⟩ := hv
+            exact ⟨i, R, t, ls, slots, ℓ, τc, hR, ht, hRt, hRr, rfl, prefix_getElem? hW hℓ, hτ⟩
         · exact (V.base (fun θ τs ρ e => hfn ⟨θ, τs, ρ, e⟩)
             (fun ls slots e => hrec ⟨ls, slots, e⟩) (fun σ e => harr ⟨σ, e⟩)
             (fun i sys e => by cases e) (fun z σ e => by cases e; exact hc z rfl)
             (fun l ts Rs e => hvar ⟨l, ts, Rs, e⟩)).mp hv
+
+/-- `V.mono` for a variant told apart by `typeof`: by its cases' heads. -/
+theorem V.mono_tsum {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {ts : List String}
+    {Rs : List Ty} {v : Value} (hv : V k W (.variant .typeOf ts Rs) v) :
+    V j W' (.variant .typeOf ts Rs) v := by
+  rw [V_tsum_def] at hv ⊢
+  obtain ⟨i, R, t, hR, ht, hs, h0, hv⟩ := hv
+  refine ⟨i, R, t, hR, ht, hs, h0, ?_⟩
+  cases hw : R.whnf with
+  | var a => rw [hw] at hv; simp at hv
+  | app c xs => rw [hw] at hv h0; exact V.mono_app0 hjk hW h0 hv
+  | mu i sys => rw [hw] at h0; simp [Ty.rank] at h0
+
+/-- `V.mono` for a constructor application other than a sum's. -/
+theorem V.mono_app_base {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {c : Con}
+    {args : List Ty} {v : Value} (hc : ∀ z, c ≠ .maybe z) (hv : V k W (.app c args) v) :
+    V j W' (.app c args) v := by
+  by_cases ht : ∃ ts, c = .variant .typeOf ts
+  · obtain ⟨ts, rfl⟩ := ht
+    exact V.mono_tsum hjk hW hv
+  · exact V.mono_app0 hjk hW (Ty.rank_app_zero hc (fun ts e => ht ⟨ts, e⟩)) hv
 
 /-! ### Sums -/
 
 /-- What `V` says of a sum's layers, with fuel `n`. -/
 def StripV (k : Nat) (W : World) (τ : Ty) (n : Nat) (v : Value) : Prop :=
   v ∈ (Ty.strip n τ).1.map Nothing.value ∨
-    ∃ t, (Ty.strip n τ).2 = some t ∧ t.rank = 0 ∧ V k W t v
+    ∃ t, (Ty.strip n τ).2 = some t ∧ t.rank ≤ 1 ∧ V k W t v
 
 theorem V_maybe_def : V k W (.maybe z τ) v ↔ v = z.value ∨ ∃ n, StripV k W τ n v := by
   rw [V.eq_def]
@@ -400,6 +458,19 @@ theorem V_whnf : V k W τ v ↔ V k W τ.whnf v := by
     · simp [hv]
     · exact ⟨fun ⟨c', a', h, h'⟩ => by rw [hv] at h; cases h; exact h',
         fun h => ⟨c, args, hv, h⟩⟩
+
+theorem Ty.rank_app_le_one {c : Con} {args : List Ty} (hc : ∀ z, c ≠ .maybe z) :
+    (Ty.app c args).rank ≤ 1 := by
+  unfold Ty.rank; split <;> simp_all
+
+theorem Ty.rank_le_one {t : Ty} (h : t.rank ≤ 1) :
+    (∃ a, t = .var a) ∨ ∃ c args, t = .app c args ∧ ∀ z, c ≠ .maybe z := by
+  cases t with
+  | var a => exact .inl ⟨a, rfl⟩
+  | app c args =>
+    refine .inr ⟨c, args, rfl, fun z e => ?_⟩
+    subst e; simp [Ty.rank] at h
+  | mu i sys => simp [Ty.rank] at h
 
 theorem Ty.rank_zero {t : Ty} (h : t.rank = 0) :
     (∃ a, t = .var a) ∨ ∃ c args, t = .app c args ∧ ∀ z, c ≠ .maybe z := by
@@ -466,6 +537,7 @@ theorem V_maybe : V k W (.maybe z σ) v ↔ v = z.value ∨ V k W σ v := by
           | [σ'], _, hw => exact absurd ⟨z', σ', hw⟩ hm
           | [], h, _ => rw [V.eq_def] at h; simp at h
           | _ :: _ :: _, h, _ => rw [V.eq_def] at h; simp at h
+        | variant d ts => cases d <;> simp [Ty.rank]
         | _ => simp [Ty.rank]
 
 /-- A sum's layers, with fuel, in a larger world and for fewer calls. -/
@@ -474,7 +546,7 @@ theorem StripV.mono {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {
   rcases h with h | ⟨t, ht, hr, hv⟩
   · exact .inl h
   · refine .inr ⟨t, ht, hr, ?_⟩
-    rcases Ty.rank_zero hr with ⟨a, rfl⟩ | ⟨c, args, rfl, hc⟩
+    rcases Ty.rank_le_one hr with ⟨a, rfl⟩ | ⟨c, args, rfl, hc⟩
     · simp at hv
     · exact V.mono_app_base hjk hW hc hv
 
@@ -619,11 +691,13 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
   intro k
   induction k using Nat.strongRecOn with
   | _ k ihk =>
-  -- A constructor application other than a sum's, at this index.
-  have happ : ∀ {W : World} {c : Con} {args args' : List Ty} {v : Value},
-      (∀ z, c ≠ .maybe z) → TyEq (.app c args') (.app c args) → V k W (.app c args) v →
+  -- A constructor application of rank 0 (neither a sum's nor a variant's
+  -- told apart by `typeof`), at this index.
+  have happ0 : ∀ {W : World} {c : Con} {args args' : List Ty} {v : Value},
+      (Ty.app c args).rank = 0 → TyEq (.app c args') (.app c args) → V k W (.app c args) v →
       V k W (.app c args') v := by
-    intro W c args args' v hc h₂ hv
+    intro W c args args' v h0 h₂ hv
+    obtain ⟨hc, htc⟩ := Ty.rank_zero_app h0
     obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp h₂
     -- `hz` relates `args'` to `args`.
     by_cases hfn : c = .fn
@@ -638,7 +712,7 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
         change V k W (.fn θ' τs' ρ') v
         change V k W (.fn θ τs ρ) v at hv
         rw [V_fn] at hv ⊢
-        refine ⟨fun h' => hv.1 (hθ.symm.trans h'), ?_⟩
+        refine ⟨⟨hv.1.1, fun h' => hv.1.2 (hθ.symm.trans h')⟩, ?_⟩
         intro j hj W' hW h thisv xs hxs hh hthis hargs
         have H := hv.2 j hj W' hW h thisv xs (by rw [hxs]; exact hl'.symm) hh
           (fun i hi => ihk i (by omega) hθ (hthis i hi))
@@ -670,10 +744,10 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
             exact ⟨ℓ, τc, rfl, hℓ, (hz (σ', σ) (by simp)).trans hτc⟩
           | [], _, _, _, hv | _ :: _ :: _, _, _, _, hv => rw [V.eq_def] at hv; simp at hv
           | [_], [], hl, _, _ | [_], _ :: _ :: _, hl, _, _ => simp at hl
-        · by_cases hvar : ∃ l ts, c = .variant l ts
+        · by_cases hvar : ∃ l ts, c = .variant (.field l) ts
           · obtain ⟨l, ts, rfl⟩ := hvar
-            change V k W (.variant l ts args') v
-            change V k W (.variant l ts args) v at hv
+            change V k W (.variant (.field l) ts args') v
+            change V k W (.variant (.field l) ts args) v at hv
             rw [V_variant_def] at hv ⊢
             obtain ⟨i, R, t, ls, slots, ℓ, τc, hR, ht, hRt, hRr, rfl, hℓ, hτ⟩ := hv
             have hi : i < args.length := (List.getElem?_eq_some_iff.mp hR).1
@@ -684,8 +758,43 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
               exact ⟨i, by simp [List.getElem?_zip_eq_some, hR, hR']⟩)
             exact ⟨i, R', t, ls, slots, ℓ, τc, hR', ht, Ty.tagOf_tyEq he.symm hRt, he.trans hRr, rfl,
               hℓ, hτ⟩
-          · exact (V.app_congr_base hl.symm hfn (fun ls e => hrec ⟨ls, e⟩) harr hc
-              (fun l ts e => hvar ⟨l, ts, e⟩)).mp hv
+          · refine (V.app_congr_base hl.symm hfn (fun ls e => hrec ⟨ls, e⟩) harr hc
+              (fun d ts e => ?_)).mp hv
+            subst e
+            cases d with
+            | field l => exact hvar ⟨l, ts, rfl⟩
+            | typeOf => exact htc ts rfl
+  -- A variant told apart by `typeof`, by its cases' heads.
+  have htsum : ∀ {W : World} {ts : List String} {args args' : List Ty} {v : Value},
+      TyEq (.variant .typeOf ts args') (.variant .typeOf ts args) →
+      V k W (.variant .typeOf ts args) v → V k W (.variant .typeOf ts args') v := by
+    intro W ts args args' v h₂ hv
+    obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp h₂
+    rw [V_tsum_def] at hv ⊢
+    obtain ⟨i, R, t, hR, ht, hs, h0, hvR⟩ := hv
+    have hi : i < args.length := (List.getElem?_eq_some_iff.mp hR).1
+    obtain ⟨R', hR'⟩ : ∃ R', args'[i]? = some R' :=
+      ⟨args'[i]'(by omega), List.getElem?_eq_getElem (by omega)⟩
+    have he : TyEq R' R := hz (R', R) (by
+      rw [List.mem_iff_getElem?]
+      exact ⟨i, by simp [List.getElem?_zip_eq_some, hR, hR']⟩)
+    cases hw : R.whnf with
+    | var a => rw [hw] at hvR; simp at hvR
+    | mu j sys => rw [hw] at h0; simp [Ty.rank] at h0
+    | app c xs =>
+      rw [hw] at h0 hvR
+      obtain ⟨ys, hw', he'⟩ := TyEq.whnf_app he.symm hw
+      have h0' : (Ty.app c ys).rank = 0 :=
+        Ty.rank_app_zero (Ty.rank_zero_app h0).1 (Ty.rank_zero_app h0).2
+      exact ⟨i, R', t, hR', ht, hs, by rw [hw']; exact h0', by rw [hw']; exact happ0 h0 he'.symm hvR⟩
+  have happ : ∀ {W : World} {c : Con} {args args' : List Ty} {v : Value},
+      (∀ z, c ≠ .maybe z) → TyEq (.app c args') (.app c args) → V k W (.app c args) v →
+      V k W (.app c args') v := by
+    intro W c args args' v hc h₂ hv
+    by_cases ht : ∃ ts, c = .variant .typeOf ts
+    · obtain ⟨ts, rfl⟩ := ht
+      exact htsum h₂ hv
+    · exact happ0 (Ty.rank_app_zero hc (fun ts e => ht ⟨ts, e⟩)) h₂ hv
   intro W τ τ' v he hv
   obtain ⟨c, args, hτ, hv⟩ := V_view.mp hv
   have h₁ : TyEq τ' (.app c args) := by
@@ -707,14 +816,11 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
       rcases h with h | ⟨t, ht, hr, hvt⟩
       · exact .inl (h1 ▸ h)
       · obtain ⟨ρ, ρ', rfl, ht', hρ⟩ := h2 _ ht
-        rcases Ty.rank_zero hr with ⟨a, ha⟩ | ⟨c', a', ha, hc'⟩
+        rcases Ty.rank_le_one hr with ⟨a, ha⟩ | ⟨c', a', ha, hc'⟩
         · rw [ha] at hvt; simp at hvt
         · obtain ⟨ys, hw', he'⟩ := TyEq.whnf_app hρ ha
           refine .inr ⟨ρ'.whnf, ht', ?_, ?_⟩
-          · rw [hw']
-            cases c' with
-            | maybe z' => exact absurd rfl (hc' z')
-            | _ => simp [Ty.rank]
+          · rw [hw']; exact Ty.rank_app_le_one hc'
           · rw [hw']; rw [ha] at hvt
             exact happ hc' he'.symm hvt
     | [], _, _, hv | _ :: _ :: _, _, _, hv => rw [V.eq_def] at hv; simp at hv
@@ -1501,7 +1607,7 @@ theorem tagOf_read {l : String} {R : Ty} {t : String} {v : Value} {c : Nat} {W :
 theorem V_variant_of {l : String} {ts : List String} {Rs : List Ty} {i : Nat} {R : Ty} {t : String}
     {ls : List String} {slots : List Ty} {k : Nat} {W : World} {v : Value} (hR : Rs[i]? = some R)
     (ht : ts[i]? = some t) (hRt : R.tagOf l = some t) (hr : TyEq R (.record ls slots))
-    (hv : V k W R v) : V k W (.variant l ts Rs) v := by
+    (hv : V k W R v) : V k W (.variant (.field l) ts Rs) v := by
   obtain ⟨ℓ, τc, rfl, hℓ, hτc⟩ := V_record.mp (V.tyEq _ hr hv)
   exact V_variant_def.mpr ⟨i, R, t, ls, slots, ℓ, τc, hR, ht, hRt, hr, rfl, hℓ, hτc⟩
 
@@ -1510,13 +1616,58 @@ itself, of the cases `Rs`. -/
 theorem V_variantRest {l : String} {ts : List String} {Rs : List Ty} {i : Nat} {R : Ty}
     {t : String} {ls : List String} {slots : List Ty} {k : Nat} {W : World} {v : Value}
     (hR : Rs[i]? = some R) (ht : ts[i]? = some t) (hRt : R.tagOf l = some t)
-    (hr : TyEq R (.record ls slots)) (hv : V k W R v) : V k W (variantRest l ts Rs) v := by
+    (hr : TyEq R (.record ls slots)) (hv : V k W R v) : V k W (variantRest (.field l) ts Rs) v := by
   match Rs, hR with
   | [R'], hR =>
     cases i with
     | zero => simp at hR; subst hR; exact hv
     | succ i => simp at hR
   | _ :: _ :: _, hR => exact V_variant_of hR ht hRt hr hv
+
+/-- A value of a variant's case, told apart by `typeof`, has the type of the
+variant, or the case itself, of the cases `Rs`. -/
+theorem V_tsumRest {ts : List String} {Rs : List Ty} {i : Nat} {R : Ty} {t : String} {k : Nat}
+    {W : World} {v : Value} (hR : Rs[i]? = some R) (ht : ts[i]? = some t)
+    (hs : v.typeString = t) (h0 : R.whnf.rank = 0) (hv : V k W R.whnf v) :
+    V k W (variantRest .typeOf ts Rs) v := by
+  match Rs, hR with
+  | [R'], hR =>
+    cases i with
+    | zero => simp at hR; subst hR; exact V_whnf.mpr hv
+    | succ i => simp at hR
+  | _ :: _ :: _, hR => exact V_tsum_def.mpr ⟨i, R, t, hR, ht, hs, h0, hv⟩
+
+theorem Con.rank_of_typeTag {c : Con} {t : String} (h : c.typeTag = some t) (args : List Ty) :
+    (Ty.app c args).rank = 0 :=
+  Ty.rank_app_zero (fun z e => by subst e; simp [Con.typeTag] at h)
+    (fun ts e => by subst e; simp [Con.typeTag] at h)
+
+/-- A value's `typeof` is its type's head's (`Con.typeTag`). -/
+theorem V_typeString {k : Nat} {W : World} {c : Con} {args : List Ty} {v : Value} {t : String}
+    (hv : V k W (.app c args) v) (ht : c.typeTag = some t) : v.typeString = t := by
+  cases c
+  case variant d ts =>
+    cases d with
+    | typeOf => simp [Con.typeTag] at ht
+    | field l =>
+      simp only [Con.typeTag, Option.some.injEq] at ht; subst ht
+      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, rfl, _⟩ := V_variant_def.mp hv; rfl
+  all_goals simp only [Con.typeTag, Option.some.injEq, reduceCtorEq] at ht
+  all_goals subst ht
+  case record ls =>
+    obtain ⟨_, _, rfl, _⟩ := V_record.mp hv; rfl
+  case array =>
+    match args, hv with
+    | [σ], hv => obtain ⟨_, _, rfl, _⟩ := V_array.mp hv; rfl
+    | [], hv | _ :: _ :: _, hv => rw [V.eq_def] at hv; simp at hv
+  case fn =>
+    match args, hv with
+    | θ :: ρ :: τs, hv => exact (V_fn.mp hv).1.1
+    | [], hv | [_], hv => rw [V.eq_def] at hv; simp at hv
+  all_goals
+    match args, hv with
+    | [], hv => (rw [V.eq_def] at hv; first | (obtain ⟨_, rfl⟩ := hv; rfl) | (subst hv; rfl))
+    | _ :: _, hv => rw [V.eq_def] at hv; simp at hv
 
 /-- What an object literal is checked against has its values. -/
 theorem V_objCase {ls : List String} {es : List Expr} {T P : Ty} {ls' : List String}
@@ -2250,7 +2401,7 @@ theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} 
   | zero =>
     intro W _
     rw [V_fn]
-    refine ⟨fun _ => rfl, ?_⟩
+    refine ⟨⟨rfl, fun _ => rfl⟩, ?_⟩
     intro i hi W' _ h' thisv args hl _ _ _
     obtain rfl : i = 0 := by omega
     simp only [call, callClosure, hl, Nat.le_refl, ↓reduceIte]
@@ -2258,7 +2409,7 @@ theorem closure_sound {L : List String} {C : List Pred} {Γ : Ctx} {θ ρ : Ty} 
   | succ j ihj =>
     intro W hGW
     rw [V_fn]
-    refine ⟨fun _ => rfl, ?_⟩
+    refine ⟨⟨rfl, fun _ => rfl⟩, ?_⟩
     intro i hi W' hW' h' thisv args hl hh hthis hargs
     cases i with
     | zero =>
@@ -2311,7 +2462,7 @@ theorem V_bound {k : Nat} {W : World} {θ θ' ρ : Ty} {τs : List Ty} {cenv : E
     (hs : ∀ i, i ≤ k → V i W θ self) (hθ' : ¬ TyEq θ' .newTarget) :
     V k W (.fn θ' τs ρ) (.bound (.closure cenv n b) self) := by
   rw [V_fn] at hf ⊢
-  refine ⟨fun h' => absurd h' hθ', ?_⟩
+  refine ⟨⟨rfl, fun h' => absurd h' hθ'⟩, ?_⟩
   intro j hj W' hW' h thisv args hl hh _ ha
   have e : call j h (.bound (.closure cenv n b) self) thisv args =
       call j h (.closure cenv n b) self args := by simp only [call]
@@ -2338,6 +2489,12 @@ theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVarW C)
         refine V.tyEq k hT.symm (V_maybe.mpr (.inl ?_))
         cases z <;> simpa [Nothing.ty, Nothing.con, Nothing.value] using hv'
       | injectSome => exact V.tyEq k hT.symm (V_maybe.mpr (.inr hv'))
+      | injectArm hR hw hc hi =>
+        -- Into a variant told apart by `typeof`: its case of the tag of the
+        -- value's `typeof`.
+        rw [V_whnf, hw] at hv'
+        exact V.tyEq k hT.symm (V_tsum_def.mpr ⟨_, _, _, hR, hi, V_typeString hv' hc,
+          by rw [hw]; exact Con.rank_of_typeTag hc _, by rw [hw]; exact hv'⟩)
   · simp only [List.cons.injEq] at ht
     obtain ⟨rfl, -⟩ := ht
     exact (V_whnf_var hw hv).elim
@@ -2990,7 +3147,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
         have hG₂ : G (W₁ ++ [.mono σ]) (.mono σ :: Γ) ((run k env h e₁).2.2.length :: env) :=
           ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
         exact (ih₃ h₃ hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
-  | caseTag e₁ l t e₂ e₃ ih₁ ih₂ ih₃ =>
+  | caseTag e₁ d t e₂ e₃ ih₁ ih₂ ih₃ =>
     intro k C Γ R rm md W env h τ ht hC hG hH
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
     refine Safe.lift hC hτ₀ ?_
@@ -3000,60 +3157,85 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       refine Safe.bindC (ih₁ h₁ hC hG hH) fun v W₁ _ hW₁ hH₁ hv => ?_
       have hc₁ := run_clock_le k env h e₁
       rw [Nat.min_eq_left hc₁]
+      -- The value, in a new cell of the type the branch sees it at.
+      have hbranch : ∀ (θ : Ty) (e : Expr) (md' : Mode) (τ' : Ty),
+          V (run k env h e₁).2.1 W₁ θ v →
+          HasTypeS Sys.wide L C (.mono θ :: Γ) R rm md' e τ' → RunSound L e →
+          Safe (run (run k env h e₁).2.1 ((run k env h e₁).2.2.length :: env)
+            ((run k env h e₁).2.2 ++ [v]) e) (run k env h e₁).2.1 W₁ τ' R := by
+        intro θ e md' τ' hθ he ihe
+        have hW₂ : W₁ <+: W₁ ++ [.mono θ] := List.prefix_append _ _
+        have hcell : HeapOK (run k env h e₁).2.1 (W₁ ++ [.mono θ])
+            ((run k env h e₁).2.2 ++ [v]) :=
+          hH₁.alloc (by simp) (fun i s' v' hs' hv'' => by
+            match i, hs', hv'' with
+            | 0, hs', hv'' =>
+              simp at hs' hv''; subst hs' hv''
+              exact SchemeV.mono_iff.mpr (hθ.mono (Nat.le_refl _) hW₂)
+            | _ + 1, hs', _ => simp at hs')
+        have hG₂ : G (W₁ ++ [.mono θ]) (.mono θ :: Γ) ((run k env h e₁).2.2.length :: env) :=
+          ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
+        exact (ihe he hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
+      -- Another case than the tag's: its index among the rest.
+      have hrest : ∀ {ts : List String} {Rs : List Ty} {i j : Nat} {Rj : Ty} {tj : String},
+          j ≠ i → Rs[j]? = some Rj → ts[j]? = some tj → ∃ j' : Nat, (Rs.eraseIdx i)[j']? = some Rj ∧
+            (ts.eraseIdx i)[j']? = some tj := by
+        intro ts Rs i j Rj tj hji hRj htj
+        rcases Nat.lt_or_gt_of_ne hji with hlt | hgt
+        · exact ⟨j, by rw [List.getElem?_eraseIdx]; simp [hlt, hRj],
+            by rw [List.getElem?_eraseIdx]; simp [hlt, htj]⟩
+        · refine ⟨j - 1, ?_, ?_⟩ <;> rw [List.getElem?_eraseIdx] <;>
+            simp only [show ¬ j - 1 < i by omega, ↓reduceIte,
+              Nat.sub_add_cancel (show 1 ≤ j by omega)]
+          · exact hRj
+          · exact htj
       rcases hc.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
       · cases hi
-        case caseHit ts i t' Rs Ri l' hnd hti hR =>
+        case caseHit ts i t' Rs Ri d' hnd hti hR =>
           obtain ⟨hcls, hτ, hσ, hρ⟩ := PredEq.three hq
           cases hcls
-          -- The value is of one of the cases, whose tag is read.
-          obtain ⟨j, Rj, tj, ls, slots, ℓ, τc, hRj, htj, hRt, hRr, rfl, hℓ, hτc⟩ :=
-            V_variant_def.mp (V.tyEq _ hτ hv)
-          have hvR : V (run k env h e₁).2.1 W₁ Rj (.obj ℓ) := V.tyEq _ hRr.symm (V_record.mpr ⟨ℓ, τc, rfl, hℓ, hτc⟩)
-          rw [tagOf_read hRt hvR hH₁]
-          simp only [bindC]
-          rw [Nat.min_eq_left hc₁]
-          -- The value, in a new cell of the type the branch sees it at.
-          have hbranch : ∀ (θ : Ty) (e : Expr) (md' : Mode) (τ' : Ty),
-              V (run k env h e₁).2.1 W₁ θ (.obj ℓ) →
-              HasTypeS Sys.wide L C (.mono θ :: Γ) R rm md' e τ' → RunSound L e →
-              Safe (run (run k env h e₁).2.1 ((run k env h e₁).2.2.length :: env)
-                ((run k env h e₁).2.2 ++ [.obj ℓ]) e) (run k env h e₁).2.1 W₁ τ' R := by
-            intro θ e md' τ' hθ he ihe
-            have hW₂ : W₁ <+: W₁ ++ [.mono θ] := List.prefix_append _ _
-            have hcell : HeapOK (run k env h e₁).2.1 (W₁ ++ [.mono θ])
-                ((run k env h e₁).2.2 ++ [.obj ℓ]) :=
-              hH₁.alloc (by simp) (fun i s' v' hs' hv'' => by
-                match i, hs', hv'' with
-                | 0, hs', hv'' =>
-                  simp at hs' hv''; subst hs' hv''
-                  exact SchemeV.mono_iff.mpr (hθ.mono (Nat.le_refl _) hW₂)
-                | _ + 1, hs', _ => simp at hs')
-            have hG₂ : G (W₁ ++ [.mono θ]) (.mono θ :: Γ) ((run k env h e₁).2.2.length :: env) :=
-              ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
-            exact (ihe he hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
-          split
-          · -- The tag read is the case's: it is that case.
-            rename_i htt
-            subst htt
-            have hji : j = i := (hnd.getElem?_inj (List.getElem?_eq_some_iff.mp htj).1).mp
-              (by rw [htj, hti])
-            subst hji
-            rw [hR] at hRj; cases hRj
-            exact hbranch σ e₃ _ _ (V.tyEq _ hσ.symm hvR) h₃ ih₃
-          · -- Another case: one of the rest.
-            rename_i htt
-            have hji : j ≠ i := fun e => by subst e; rw [htj] at hti; cases hti; exact htt rfl
-            obtain ⟨j', hj', htj'⟩ : ∃ j', (Rs.eraseIdx i)[j']? = some Rj ∧
-                (ts.eraseIdx i)[j']? = some tj := by
-              rcases Nat.lt_or_gt_of_ne hji with hlt | hgt
-              · exact ⟨j, by rw [List.getElem?_eraseIdx]; simp [hlt, hRj],
-                  by rw [List.getElem?_eraseIdx]; simp [hlt, htj]⟩
-              · refine ⟨j - 1, ?_, ?_⟩ <;> rw [List.getElem?_eraseIdx] <;>
-                  simp only [show ¬ j - 1 < i by omega, ↓reduceIte,
-                    Nat.sub_add_cancel (show 1 ≤ j by omega)]
-                · exact hRj
-                · exact htj
-            exact hbranch ρ e₂ _ _ (V.tyEq _ hρ.symm (V_variantRest hj' htj' hRt hRr hvR)) h₂ ih₂
+          cases d with
+          | field l =>
+            -- The value is of one of the cases, whose tag is read.
+            obtain ⟨j, Rj, tj, ls, slots, ℓ, τc, hRj, htj, hRt, hRr, rfl, hℓ, hτc⟩ :=
+              V_variant_def.mp (V.tyEq _ hτ hv)
+            have hvR : V (run k env h e₁).2.1 W₁ Rj (.obj ℓ) :=
+              V.tyEq _ hRr.symm (V_record.mpr ⟨ℓ, τc, rfl, hℓ, hτc⟩)
+            simp only
+            rw [tagOf_read hRt hvR hH₁]
+            simp only [bindC]
+            rw [Nat.min_eq_left hc₁]
+            split
+            · -- The tag read is the case's: it is that case.
+              rename_i htt
+              subst htt
+              have hji : j = i := (hnd.getElem?_inj (List.getElem?_eq_some_iff.mp htj).1).mp
+                (by rw [htj, hti])
+              subst hji
+              rw [hR] at hRj; cases hRj
+              exact hbranch σ e₃ _ _ (V.tyEq _ hσ.symm hvR) h₃ ih₃
+            · -- Another case: one of the rest.
+              rename_i htt
+              have hji : j ≠ i := fun e => by subst e; rw [htj] at hti; cases hti; exact htt rfl
+              obtain ⟨j', hj', htj'⟩ := hrest hji hRj htj
+              exact hbranch ρ e₂ _ _ (V.tyEq _ hρ.symm (V_variantRest hj' htj' hRt hRr hvR)) h₂ ih₂
+          | typeOf =>
+            -- The value is of one of the cases, whose tag is its `typeof`.
+            obtain ⟨j, Rj, tj, hRj, htj, hs, h0, hvR⟩ := V_tsum_def.mp (V.tyEq _ hτ hv)
+            simp only [bindC]
+            rw [Nat.min_eq_left hc₁, hs]
+            split
+            · rename_i htt
+              subst htt
+              have hji : j = i := (hnd.getElem?_inj (List.getElem?_eq_some_iff.mp htj).1).mp
+                (by rw [htj, hti])
+              subst hji
+              rw [hR] at hRj; cases hRj
+              exact hbranch σ e₃ _ _ (V.tyEq _ hσ.symm (V_whnf.mpr hvR)) h₃ ih₃
+            · rename_i htt
+              have hji : j ≠ i := fun e => by subst e; rw [htj] at hti; cases hti; exact htt rfl
+              obtain ⟨j', hj', htj'⟩ := hrest hji hRj htj
+              exact hbranch ρ e₂ _ _ (V.tyEq _ hρ.symm (V_tsumRest hj' htj' hs h0 hvR)) h₂ ih₂
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · simp only [List.cons.injEq] at he; exact (V_whnf_var (by rw [he.1]; exact hw) hv).elim
   | tryFinally body fin ihb ihf =>
@@ -3373,7 +3555,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
       have hvf' := (hvf.mono hc₂ hW₂).mono (Nat.le_refl _) hW₃
       -- A constructor: `new` calls it.
       have hctor : vf.asCtor = vf := by
-        simp [Value.asCtor, (V_fn.mp hvf').1 (TyEq.refl _)]
+        simp [Value.asCtor, (V_fn.mp hvf').1.2 (TyEq.refl _)]
       rw [hctor]
       have hcall := (V_fn.mp hvf').2 c₂ (Nat.le_refl _) _
         (List.prefix_refl _) (h₂ ++ [.fields []]) (.obj h₂.length) vs hvs.length

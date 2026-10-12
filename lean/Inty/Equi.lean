@@ -174,6 +174,8 @@ theorem Ty.approx_congr_view {n : Nat} {s t : Ty} (h : s.view = t.view) :
 /-- Unfolding a type's head gives an equal type. -/
 theorem TyEq.whnf (τ : Ty) : TyEq τ.whnf τ := fun _ => Ty.approx_congr_view (Ty.view_whnf τ)
 
+theorem TyEq.of_whnf {τ t : Ty} (h : τ.whnf = t) : TyEq τ t := h ▸ (TyEq.whnf τ).symm
+
 @[simp] theorem Ty.whnf_app (c : Con) (args : List Ty) : (Ty.app c args).whnf = .app c args := rfl
 @[simp] theorem Ty.whnf_var (a : Nat) : (Ty.var a).whnf = .var a := rfl
 

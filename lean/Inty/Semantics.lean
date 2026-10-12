@@ -494,9 +494,11 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
   -- The tag is read as `x.l` is (a getter runs), and the value goes in a
   -- new cell, which either branch sees: `x.l === "t"`, where a value that
   -- isn't a string is no tag.
-  | .caseTag e₁ l t e₂ e₃ =>
+  | .caseTag e₁ d t e₂ e₃ =>
     bindC (run clock env heap e₁) fun v c₁ h₁ =>
-    bindC (getter (min c₁ clock) h₁ v (v.read h₁ l)) fun w c₂ h₂ =>
+    bindC (match d with
+      | .field l => getter (min c₁ clock) h₁ v (v.read h₁ l)
+      | .typeOf => (.ok (.string v.typeString), min c₁ clock, h₁)) fun w c₂ h₂ =>
       match w with
       | .string s =>
         if s = t then run (min c₂ clock) (h₂.length :: env) (h₂ ++ [v]) e₃

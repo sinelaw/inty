@@ -185,7 +185,7 @@ example : CellV k W (.scheme s) v ↔
 example : Result.Abrupt r ↔
     (∃ v, r = .thrown v) ∨ r = .broke ∨ r = .continued ∨ ∃ f, r = .fault f := by
   cases r <;> simp [Result.Abrupt] <;> exact ⟨.outOfBounds, trivial⟩
-example : V k W (.fn θ τs ρ) f ↔ (TyEq θ .newTarget → f.isCtor = true) ∧
+example : V k W (.fn θ τs ρ) f ↔ (f.typeString = "function" ∧ (TyEq θ .newTarget → f.isCtor = true)) ∧
     ∀ j ≤ k, ∀ W', W <+: W' → ∀ h thisv args,
     args.length = τs.length → (∀ i < j, HeapOK i W' h) → (∀ i < j, V i W' θ thisv) →
     (∀ i < j, VList i W' τs args) →
@@ -267,8 +267,11 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     (∃ z σ, p = ⟨.strip, [.maybe z σ, σ]⟩) ∨
     (∃ c args, (∀ z, c ≠ .maybe z) ∧ c ≠ .null ∧ c ≠ .undefined ∧
       p = ⟨.strip, [.app c args, .app c args]⟩) ∨
-    ∃ l ts Rs t R, ∃ i : Nat, ts.Nodup ∧ ts[i]? = some t ∧ Rs[i]? = some R ∧
-      p = ⟨.caseTag l t, [.variant l ts Rs, R, variantRest l (ts.eraseIdx i) (Rs.eraseIdx i)]⟩ :=
+    (∃ d ts Rs t R, ∃ i : Nat, ts.Nodup ∧ ts[i]? = some t ∧ Rs[i]? = some R ∧
+      p = ⟨.caseTag d t, [.variant d ts Rs, R, variantRest d (ts.eraseIdx i) (Rs.eraseIdx i)]⟩) ∨
+    ∃ T ts Rs c t R args, ∃ i : Nat, T.ftv = [] ∧ T.whnf = .variant .typeOf ts Rs ∧ ts.Nodup ∧
+      c.typeTag = some t ∧ ts[i]? = some t ∧ Rs[i]? = some R ∧ TyEq (.app c args) R ∧
+      (Ty.app c args).ftv = [] ∧ p = ⟨.inject T, [.app c args]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
@@ -299,13 +302,16 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     | stripSelf hm hn hu =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, hm, hn, hu, rfl⟩)))))))))))))))))
     | caseHit hn hi hR =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, _, _, _, hn, hi, hR, rfl⟩))))))))))))))))),
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, _, _, _, hn, hi, hR, rfl⟩))))))))))))))))))
+    | injectArm hT hw hn htag hi hR he ha =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, _, _, _, _, _, hT, hw, hn, htag, hi, hR, he, ha, rfl⟩)))))))))))))))))),
    fun h => by
     rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
       ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ |
       ⟨c, args, hc, rfl⟩ | ⟨T, hT, rfl⟩ | ⟨T, z, σ, he, hT, rfl⟩ |
       ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩ | ⟨z, σ, rfl⟩ | ⟨c, args, hm, hn, hu, rfl⟩ |
-      ⟨l, ts, Rs, t, R, i, hnd, hi, hR, rfl⟩
+      ⟨l, ts, Rs, t, R, i, hnd, hi, hR, rfl⟩ |
+      ⟨T, ts, Rs, c, t, R, args, i, hT, hw, hn, htag, hti, hR', he, ha, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
@@ -324,7 +330,8 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .injectSome he hT ha hc hn
     · exact .stripSome
     · exact .stripSelf hm hn hu
-    · exact .caseHit hnd hi hR⟩
+    · exact .caseHit hnd hi hR
+    · exact .injectArm hT hw hn htag hti hR' he ha⟩
 
 /-- A constraint left on a type variable, or a `Merge` waiting on one (each
 looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/
@@ -629,12 +636,29 @@ example : ¬ HasType L [] [] none .synth .synth (.app (.func 0 (.unop .neg (.var
 /-! ## Variants tagged by a field -/
 
 /-- A variant's values: one of its cases, a record with its tag. -/
-example : V k W (.variant l ts Rs) v ↔ ∃ i : Nat, ∃ R t ls slots ℓ τc,
+example : V k W (.variant (.field l) ts Rs) v ↔ ∃ i : Nat, ∃ R t ls slots ℓ τc,
     Rs[i]? = some R ∧ ts[i]? = some t ∧ R.tagOf l = some t ∧ TyEq R (.record ls slots) ∧
       v = .obj ℓ ∧ W[ℓ]? = some (.obj τc) ∧ TyEq (.record ls slots) τc := V_variant_def
 
+/-- A variant told apart by `typeof`'s values: those of a case whose
+`typeof` is its tag, the case's head of a `typeof`. -/
+example : V k W (.variant .typeOf ts Rs) v ↔ ∃ i : Nat, ∃ R t,
+    Rs[i]? = some R ∧ ts[i]? = some t ∧ v.typeString = t ∧ R.whnf.rank = 0 ∧
+      V k W R.whnf v := V_tsum_def
+
+/-- The `typeof` of a type's head's values. -/
+example : Con.typeTag c = match c with
+    | .number => some "number"
+    | .string | .strLit _ => some "string"
+    | .boolean => some "boolean"
+    | .undefined => some "undefined"
+    | .null | .record _ | .array | .variant (.field _) _ => some "object"
+    | .fn => some "function"
+    | _ => none := by
+  cases c <;> rfl
+
 /-- What an object literal checked against `T` is checked against. -/
-example : ObjCase ls es T P ↔ P = T ∨ ∃ l ts Ps t, ∃ i : Nat, T.whnf = .variant l ts Ps ∧
+example : ObjCase ls es T P ↔ P = T ∨ ∃ l ts Ps t, ∃ i : Nat, T.whnf = .variant (.field l) ts Ps ∧
     litTag l ls es = some t ∧ firstIdx t ts = some i ∧ Ps[i]? = some P ∧ P.tagOf l = some t :=
   ⟨fun h => by
     cases h with

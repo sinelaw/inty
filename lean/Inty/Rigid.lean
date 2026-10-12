@@ -568,8 +568,8 @@ theorem Ty.tagOf_rsub (ρ : RSubst) {l : String} {R : Ty} {t : String} (h : R.ta
     · cases h
   · cases h
 
-theorem variantRest_rsub (ρ : RSubst) (l : String) (ts : List String) (Rs : List Ty) :
-    (variantRest l ts Rs).rsub ρ = variantRest l ts (Rs.map (·.rsub ρ)) := by
+theorem variantRest_rsub (ρ : RSubst) (d : Disc) (ts : List String) (Rs : List Ty) :
+    (variantRest d ts Rs).rsub ρ = variantRest d ts (Rs.map (·.rsub ρ)) := by
   match Rs with
   | [] => simp [variantRest, Con.rimgA, Con.rimg]
   | [_] => rfl
@@ -655,17 +655,22 @@ theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) :=
     | injectSelf _ => exact absurd rfl (hc _)
     | injectNothing _ _ => exact absurd rfl (hc _)
     | injectSome _ _ _ _ _ => exact absurd rfl (hc _)
+    | injectArm _ _ _ _ _ _ _ _ => exact absurd rfl (hc _)
     | stripSome => simpa [Pred.rsub] using InstW.narrow Inst.stripSome (by simp)
     | @stripSelf c args _ _ _ => simpa [Pred.rsub] using InstW.stripSelf (τ := (Ty.app c args).rsub ρ)
-    | @caseHit ts i t Rs R l hn hi hR =>
+    | @caseHit ts i t Rs R d hn hi hR =>
       refine InstW.narrow ?_ (by simp [Pred.rsub, Cls.rsub])
       simpa [Pred.rsub, Cls.rsub, variantRest_rsub, ← eraseIdx_map, Ty.rsub_app, Con.rimgA,
-        Con.rimg] using Inst.caseHit (l := l) (ts := ts) hn hi (by simp [hR])
+        Con.rimg] using Inst.caseHit (d := d) (ts := ts) hn hi (by simp [hR])
   | injectSelf => simpa [Pred.rsub] using InstW.injectSelf
   | @injectNothing z σ =>
     have : z.ty.rsub ρ = z.ty := Nothing.ty_rsub ρ z
     simpa [Pred.rsub, this] using InstW.injectNothing (z := z) (σ := σ.rsub ρ)
   | injectSome => simpa [Pred.rsub] using InstW.injectSome
+  | @injectArm Rs i R c xs t ts hR hw hc hi =>
+    simpa [Pred.rsub, Ty.rsub_app, Con.rimgA, Con.rimg] using
+      InstW.injectArm (Rs := Rs.map (·.rsub ρ)) (by simp [hR])
+        (Ty.whnf_rsub_nr (ρ := ρ) hw (Con.isRigid_of_typeTag hc)) hc hi
   | stripSelf => simpa [Pred.rsub] using InstW.stripSelf
 
 theorem InstEqW.rsub (ρ : RSubst) {p : Pred} (h : InstEqW p) : InstEqW (p.rsub ρ) := by

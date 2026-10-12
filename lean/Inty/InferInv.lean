@@ -344,16 +344,16 @@ theorem Pred.decideCopy_below {n : Nat} {s r a b : Ty} (hs : s.Below n) (hr : r.
   · cases h
   · cases h
 
-theorem variantRest_below {n : Nat} {l : String} {ts : List String} {Rs : List Ty}
-    (h : ∀ R ∈ Rs, R.Below n) : (variantRest l ts Rs).Below n := by
+theorem variantRest_below {n : Nat} {d : Disc} {ts : List String} {Rs : List Ty}
+    (h : ∀ R ∈ Rs, R.Below n) : (variantRest d ts Rs).Below n := by
   match Rs, h with
   | [R], h => exact h R (by simp)
   | [], _ => exact Ty.Below.app.mpr (fun _ h => by cases h)
   | _ :: _ :: _, h => exact Ty.Below.app.mpr h
 
-theorem Pred.decideCase_below {n : Nat} {l t l' : String} {ts : List String} {Ps : List Ty}
-    {σ ρ a b : Ty} (hP : (Ty.variant l' ts Ps).Below n) (hσ : σ.Below n) (hρ : ρ.Below n)
-    (h : Pred.decideCase l t l' ts Ps σ ρ = .eq a b) : a.Below n ∧ b.Below n := by
+theorem Pred.decideCase_below {n : Nat} {d d' : Disc} {t : String} {ts : List String}
+    {Ps : List Ty} {σ ρ a b : Ty} (hP : (Ty.variant d' ts Ps).Below n) (hσ : σ.Below n)
+    (hρ : ρ.Below n) (h : Pred.decideCase d t d' ts Ps σ ρ = .eq a b) : a.Below n ∧ b.Below n := by
   have hPs : ∀ P ∈ Ps, P.Below n := fun P hP' => Ty.Below.app.mp hP P hP'
   unfold Pred.decideCase at h
   split at h
@@ -445,6 +445,22 @@ theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b 
         · split at h
           · cases h; exact ⟨hnum, hnum⟩
           · cases h; exact ⟨ht, hσ⟩
+      · cases h; exact ⟨ht, hTb⟩
+    · rename_i ts Rs hw
+      split at h
+      · split at h
+        · split at h
+          · split at h
+            · split at h
+              · rename_i R hR
+                cases h
+                exact ⟨ht, fun x hx => hTb x (Ty.whnf_ftv (by
+                  rw [hw]; simp only [Ty.ftv_app, List.mem_flatMap]
+                  exact ⟨_, List.mem_of_getElem? hR, hx⟩))⟩
+              · cases h
+            · cases h
+          · cases h
+        · cases h; exact ⟨ht, hTb⟩
       · cases h; exact ⟨ht, hTb⟩
     · cases h; exact ⟨ht, hTb⟩
   · rename_i σ

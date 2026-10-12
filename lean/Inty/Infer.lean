@@ -125,7 +125,8 @@ def Pred.decidePre (k τ s r : Ty) : Improve :=
   | _ => .fail
 
 /-- An `Inject T τ` whose `τ` is known (unfolded): the heads decide which
-instance it can be. (`T` is an annotation's type, without variables.) -/
+instance it can be, and into a variant told apart by `typeof` the tag of
+`τ`'s head which case. (`T` is an annotation's type, without variables.) -/
 def Pred.decideInject (τ T : Ty) : Improve :=
   if T.ftv = [] then
     match T.whnf with
@@ -135,6 +136,23 @@ def Pred.decideInject (τ T : Ty) : Improve :=
         if c = .maybe z then .eq τ T
         else if c = z.con ∧ args = [] then .eq .number .number
         else .eq τ σ
+      | _ => .eq τ T
+    -- Into a variant told apart by `typeof`, its case of the tag `τ`'s
+    -- head's values have.
+    | .app (.variant .typeOf ts) Rs =>
+      match τ with
+      | .app c _ =>
+        match c.typeTag with
+        | some t =>
+          if ts.Nodup then
+            match firstIdx t ts with
+            | some i =>
+              match Rs[i]? with
+              | some R => .eq τ R
+              | none => .fail
+            | none => .fail
+          else .fail
+        | none => .eq τ T
       | _ => .eq τ T
     | _ => .eq τ T
   else .fail
@@ -152,12 +170,13 @@ def Pred.decideStrip (t σ : Ty) : Improve :=
 
 /-- A `Case_{l,t}` on a variant tagged by `l'` with the tags `ts` and the
 cases `Ps`: the case of the tag `t` and the rest, if the tags differ. -/
-def Pred.decideCase (l t l' : String) (ts : List String) (Ps : List Ty) (σ ρ : Ty) : Improve :=
-  if l' = l ∧ ts.Nodup then
+def Pred.decideCase (d : Disc) (t : String) (d' : Disc) (ts : List String) (Ps : List Ty)
+    (σ ρ : Ty) : Improve :=
+  if d' = d ∧ ts.Nodup then
     match firstIdx t ts with
     | some i =>
       match Ps[i]? with
-      | some P => .eq (.tuple [σ, ρ]) (.tuple [P, variantRest l (ts.eraseIdx i) (Ps.eraseIdx i)])
+      | some P => .eq (.tuple [σ, ρ]) (.tuple [P, variantRest d (ts.eraseIdx i) (Ps.eraseIdx i)])
       | none => .fail
     | none => .fail
   else .fail
@@ -188,7 +207,7 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
   | .merge, .abs, [_, _, s, r] => Pred.decideCopy s r
   | .inject T, τ, [] => Pred.decideInject τ T
   | .strip, t, [σ] => Pred.decideStrip t σ
-  | .caseTag l t, .app (.variant l' ts) Ps, [σ, ρ] => Pred.decideCase l t l' ts Ps σ ρ
+  | .caseTag d t, .app (.variant d' ts) Ps, [σ, ρ] => Pred.decideCase d t d' ts Ps σ ρ
   | _, _, _ => .fail
 
 /-- `Pred.decide₀` on the known type unfolded (`Ty.whnf`): a property of a
@@ -400,7 +419,7 @@ the case of a variant `T` the literal's tag picks. -/
 def objTarget (T : Ty) (ls : List String) (es : List Expr) : Option Ty :=
   match T.whnf with
   | .app (.record _) _ => some T
-  | .app (.variant l ts) Ps =>
+  | .app (.variant (.field l) ts) Ps =>
     match litTag l ls es with
     | some t =>
       match firstIdx t ts with
@@ -974,7 +993,7 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
   -- (a fresh variable), `e₃` as the case of the tag (another), which
   -- `Case_{l,t}` relates to `e₁`'s type; an expected type is pushed into
   -- both branches.
-  | Γ, R, rm, ex, .caseTag e₁ l t e₂ e₃, n =>
+  | Γ, R, rm, ex, .caseTag e₁ d t e₂ e₃, n =>
     match infer Γ R rm none e₁ n with
     | none => none
     | some o₁ =>
@@ -993,7 +1012,7 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
           | some σ₄ =>
             some ⟨Subst.compose σ₄ (Subst.compose o₃.σ (Subst.compose o₂.σ o₁.σ)), o₃.τ.subst σ₄,
               ((o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
-                [(⟨.caseTag l t, [o₁.τ.subst o₂.σ, σv, ρv.subst o₂.σ]⟩ : Pred)]).map
+                [(⟨.caseTag d t, [o₁.τ.subst o₂.σ, σv, ρv.subst o₂.σ]⟩ : Pred)]).map
                   (·.subst o₃.σ) ++ o₃.preds).map (·.subst σ₄),
               o₃.next⟩
 
@@ -1093,7 +1112,8 @@ def Expr.labels : Expr → List String
   | .setIndex a b c => a.labels ++ b.labels ++ c.labels
   | .mcall e l args => l :: (e.labels ++ Expr.labelsList args)
   | .unwrap a b c => a.labels ++ b.labels ++ c.labels
-  | .caseTag a l _ b c => l :: (a.labels ++ b.labels ++ c.labels)
+  | .caseTag a (.field l) _ b c => l :: (a.labels ++ b.labels ++ c.labels)
+  | .caseTag a .typeOf _ b c => a.labels ++ b.labels ++ c.labels
 /-- `labels`, for a list of expressions. -/
 def Expr.labelsList : List Expr → List String
   | [] => []

@@ -20,9 +20,11 @@ JavaScript and for this model as an s-expression, one program per line:
 (unwrap E₁ E₂ E₃)   `const x = E₁; x != null ? E₃ : E₂`, x as var 0 in E₃
 (casetag E₁ s:l s:t E₂ E₃)   `const x = E₁; x.l === "t" ? E₃ : E₂`, x as var 0
                in both
+(typetest E₁ s:t E₂ E₃)   `const x = E₁; typeof x === "t" ? E₃ : E₂`, alike
 annotations also take (rec (s:x T) …), a record, (strlit s:t), the type of
 the string t, and (variant s:l (rec …) …), a variant tagged by its field l,
-whose cases are records with a string's type at l
+whose cases are records with a string's type at l, and (sum T …), a sum told
+apart by `typeof` (`Number | String`)
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (ret E)     (throw E)      (seq A B)
 (while C B) (break) (continue) (trycatch B H) (tryfinally B F)
@@ -120,7 +122,21 @@ partial def parseTy (L : Option (List String)) : List String → Option (Ty × L
         cases rest (t :: acc)
     let (Rs, rest) ← cases rest []
     let tags ← Rs.mapM (·.tagOf l)
-    if tags.Nodup then some (.variant l tags Rs, rest) else none
+    if tags.Nodup then some (.variant (.field l) tags Rs, rest) else none
+  -- A sum told apart by `typeof`: its cases, each tagged by its head's
+  -- `typeof`.
+  | "(" :: "sum" :: rest => do
+    let rec arms (ts : List String) (acc : List Ty) : Option (List Ty × List String) :=
+      match ts with
+      | ")" :: rest => some (acc.reverse, rest)
+      | _ => do
+        let (t, rest) ← parseTy L ts
+        arms rest (t :: acc)
+    let (Rs, rest) ← arms rest []
+    let tags ← Rs.mapM fun R => match R.whnf with
+      | .app c _ => c.typeTag
+      | _ => none
+    if tags.Nodup then some (.variant .typeOf tags Rs, rest) else none
   | _ => none
 
 mutual
@@ -239,7 +255,13 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
     let (t, rest) ← parseLabel rest
     let (b, rest) ← parseExpr L rest
     let (c, rest) ← parseExpr L rest
-    some (.caseTag a l t b c, rest)
+    some (.caseTag a (.field l) t b c, rest)
+  | "typetest", rest => do
+    let (a, rest) ← parseExpr L rest
+    let (t, rest) ← parseLabel rest
+    let (b, rest) ← parseExpr L rest
+    let (c, rest) ← parseExpr L rest
+    some (.caseTag a .typeOf t b c, rest)
   | "tryfinally", rest => do
     let (b, rest) ← parseExpr L rest
     let (f, rest) ← parseExpr L rest
@@ -440,6 +462,24 @@ def verdict (clock : Nat) (line : String) : String :=
 -- want one argument per parameter (optional parameters come with phase 10).
 #guard verdict 100 "(app (func 0 (str s:a)) (num 1 0))" == "reject;value str s:a"
 #guard verdict 100 "(app (num 1 0" == "error unparsable"
+-- A sum told apart by `typeof`: a value of a case is injected into it, and a
+-- test of its `typeof` takes it apart; it can't be used as a case.
+#guard verdict 100
+  "(letann (sum number string) (num 1 0) (typetest (var 0) s:number (num 0 0) (minus (var 0) (num 1 0))))"
+  == s!"type number;value num {(0 : Float).toBits}"
+#guard verdict 100
+  "(letann (sum number string) (str s:ab) (typetest (var 0) s:number (str s:no) (str s:yes)))"
+  == "type string;value str s:no"
+#guard verdict 100 "(letann (sum number string) (num 1 0) (minus (var 0) (num 1 0)))" ==
+  s!"reject;value num {(0 : Float).toBits}"
+#guard verdict 100 "(letann (sum number string) (bool true) (num 0 0))" ==
+  s!"reject;value num {(0 : Float).toBits}"
+#guard verdict 100
+  "(letann (sum number (fn number number)) (func 1 (var 0)) (typetest (var 0) s:function (num 0 0) (app (var 0) (num 2 0))))"
+  == s!"type number;value num {(2 : Float).toBits}"
+#guard verdict 100
+  "(letann (sum number string) (num 1 0) (typetest (var 0) s:boolean (num 0 0) (num 1 0)))" ==
+  s!"reject;value num {(0 : Float).toBits}"
 -- A variant tagged by `k`: an object literal checked against it takes its
 -- tag's case, and a test of the tag takes it apart, the case's fields
 -- readable in its branch and only the rest's in the other.

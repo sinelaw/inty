@@ -79,7 +79,6 @@ theorem Pred.decide₀_record_sound {l : String} {ls : List String} {slots : Lis
     (zip_tyEq_cons (TyEq.app (by simpa using hl) hz)
       (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.refl _) zip_tyEq_nil)))
 
-theorem TyEq.of_whnf {τ t : Ty} (h : τ.whnf = t) : TyEq τ t := h ▸ (TyEq.whnf τ).symm
 
 /-- What `Pred.decideCopy`'s equation says: the result is what is copied
 of the slot, up to equal types. -/
@@ -164,6 +163,41 @@ theorem Pred.decideInject_sound {τ T a b : Ty} (h : Pred.decideInject τ T = .e
             or_false, forall_eq]
           exact hσw
     · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
+  · -- Into a variant told apart by `typeof`: its case of the tag.
+    rename_i ts Rs hw
+    split at h
+    · rename_i c args
+      split at h
+      · rename_i t htag
+        split at h
+        · rename_i hn
+          split at h
+          · rename_i i hi
+            split at h
+            · rename_i R' hR
+              cases h
+              have hRc : b.ftv = [] := by
+                have := Ty.ftv_nil_of_whnf hw hT
+                simp only [Ty.ftv_app, List.flatMap_eq_nil_iff] at this
+                exact this b (List.mem_of_getElem? hR)
+              have hbψ : b.subst ψ = b := Ty.subst_id (fun x hx => by rw [hRc] at hx; cases hx)
+              rw [hbψ] at hab
+              obtain ⟨ys, hys, hye⟩ :=
+                TyEq.whnf_app (xs := args.map (·.subst ψ)) hab (by rw [Ty.subst_app]; rfl)
+              have hyf : (Ty.app c ys).ftv = [] := by
+                have : ∀ x ∈ (Ty.app c ys).ftv, x ∈ b.ftv := fun x hx =>
+                  Ty.whnf_ftv (by rw [hys]; exact hx)
+                rw [hRc] at this
+                exact List.eq_nil_iff_forall_not_mem.mpr fun x hx => by simpa using this x hx
+              exact InstEq.of_predEq (q := ⟨.inject T, [.app c ys]⟩)
+                (PredEq.of_pairs (by simp) (zip_tyEq_cons (hab.trans (TyEq.of_whnf hys)) zip_tyEq_nil))
+                (Inst.injectArm hT hw hn htag (firstIdx_getElem hi) hR (TyEq.of_whnf hys).symm
+                  hyf).instEq
+            · cases h
+          · cases h
+        · cases h
+      · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
+    · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
   · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
 
 /-- What `Pred.decideStrip`'s equation says. -/
@@ -192,10 +226,10 @@ theorem Pred.decideStrip_sound {t σ a b : Ty} (h : Pred.decideStrip t σ = .eq 
   · cases h
 
 /-- What `Pred.decideCase`'s equation says. -/
-theorem Pred.decideCase_sound {l t l' : String} {ts : List String} {Ps : List Ty} {σ ρ a b : Ty}
-    (h : Pred.decideCase l t l' ts Ps σ ρ = .eq a b) {ψ : Subst}
+theorem Pred.decideCase_sound {d d' : Disc} {t : String} {ts : List String} {Ps : List Ty}
+    {σ ρ a b : Ty} (h : Pred.decideCase d t d' ts Ps σ ρ = .eq a b) {ψ : Subst}
     (hab : TyEq (a.subst ψ) (b.subst ψ)) :
-    InstEq (Pred.subst ψ ⟨.caseTag l t, [.variant l' ts Ps, σ, ρ]⟩) := by
+    InstEq (Pred.subst ψ ⟨.caseTag d t, [.variant d' ts Ps, σ, ρ]⟩) := by
   unfold Pred.decideCase at h
   split at h
   · rename_i hc
@@ -208,7 +242,7 @@ theorem Pred.decideCase_sound {l t l' : String} {ts : List String} {Ps : List Ty
         simp only [Ty.subst_app] at hab
         obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
         have h₁ : TyEq (σ.subst ψ) (P.subst ψ) := hz (_, _) (by simp)
-        have h₂ : TyEq (ρ.subst ψ) ((variantRest l' (ts.eraseIdx i) (Ps.eraseIdx i)).subst ψ) :=
+        have h₂ : TyEq (ρ.subst ψ) ((variantRest d' (ts.eraseIdx i) (Ps.eraseIdx i)).subst ψ) :=
           hz (_, _) (by simp)
         rw [variantRest_subst, ← eraseIdx_map] at h₂
         simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]

@@ -128,9 +128,9 @@ def Ty.tagOf (l : String) (R : Ty) : Option String :=
 /-- The rest of a variant tagged by `l` once a case is taken out, its tags
 `ts` and its cases `Rs` left: the one case left as it is (so that its
 fields can be read), or a variant of them. -/
-def variantRest (l : String) (ts : List String) : List Ty → Ty
+def variantRest (d : Disc) (ts : List String) : List Ty → Ty
   | [R] => R
-  | Rs => .variant l ts Rs
+  | Rs => .variant d ts Rs
 
 /-- The first index of `t` in `ts`. -/
 def firstIdx (t : String) : List String → Option Nat
@@ -184,8 +184,8 @@ theorem eraseIdx_map {α β : Type} (f : α → β) : ∀ (l : List α) (i : Nat
   | _ :: _, 0 => rfl
   | a :: l, i + 1 => by simp [eraseIdx_map f l i]
 
-theorem variantRest_subst (σ : Subst) (l : String) (ts : List String) (Rs : List Ty) :
-    (variantRest l ts Rs).subst σ = variantRest l ts (Rs.map (·.subst σ)) := by
+theorem variantRest_subst (σ : Subst) (d : Disc) (ts : List String) (Rs : List Ty) :
+    (variantRest d ts Rs).subst σ = variantRest d ts (Rs.map (·.subst σ)) := by
   match Rs with
   | [] => rfl
   | [_] => rfl
@@ -234,16 +234,21 @@ inductive Inst : Pred → Prop where
   overlap, so the heads decide which one holds. -/
   | injectSome : TyEq T (.maybe z (.app c args)) → T.ftv = [] → (Ty.app c args).ftv = [] →
       c ≠ .maybe z → ¬ (c = z.con ∧ args = []) → Inst ⟨.inject T, [.app c args]⟩
+  /-- `Inject T τ`, `T` a variant told apart by `typeof` (`Number | String`)
+  and `τ` its case of the tag `τ`'s head's values have. -/
+  | injectArm : T.ftv = [] → T.whnf = .variant .typeOf ts Rs → ts.Nodup → c.typeTag = some t →
+      ts[(i : Nat)]? = some t → Rs[i]? = some R → TyEq (.app c args) R →
+      (Ty.app c args).ftv = [] → Inst ⟨.inject T, [.app c args]⟩
   /-- `Strip (Nullable σ) σ` and `Strip (Optional σ) σ`. -/
   | stripSome : Inst ⟨.strip, [.maybe z σ, σ]⟩
   /-- `Strip τ τ`, for a `τ` whose head is known and is neither a sum nor
   `Null` or `Undefined` (whose values are all nothing). -/
   | stripSelf : (∀ z, c ≠ .maybe z) → c ≠ .null → c ≠ .undefined →
       Inst ⟨.strip, [.app c args, .app c args]⟩
-  /-- `Case_{l,t} (variant l ts Rs) R ρ`: the variant's tags differ, `R` is
+  /-- `Case_{d,t} (variant d ts Rs) R ρ`: the variant's tags differ, `R` is
   the case of the tag `t` and `ρ` the rest. -/
   | caseHit : ts.Nodup → ts[i]? = some t → Rs[i]? = some R →
-      Inst ⟨.caseTag l t, [.variant l ts Rs, R, variantRest l (ts.eraseIdx i) (Rs.eraseIdx i)]⟩
+      Inst ⟨.caseTag d t, [.variant d ts Rs, R, variantRest d (ts.eraseIdx i) (Rs.eraseIdx i)]⟩
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
@@ -275,6 +280,10 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
     simp only [Pred.subst, List.map_cons, List.map_nil]
     rw [Ty.subst_id (by simp [ha])]
     exact .injectSome he hT ha hc hn
+  | injectArm hT hw hn hc hi hR he ha =>
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    rw [Ty.subst_id (by simp [ha])]
+    exact .injectArm hT hw hn hc hi hR he ha
   | stripSome =>
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
     exact .stripSome

@@ -160,7 +160,7 @@ inductive Expr where
   has the tag `t` (its field `l` holds the string `t`), otherwise `e₂`,
   each with that value as `var 0`. In JavaScript,
   `const x = e₁; x.l === "t" ? e₃ : e₂`, whose branches see `x` narrowed. -/
-  | caseTag (e₁ : Expr) (l t : String) (e₂ e₃ : Expr)
+  | caseTag (e₁ : Expr) (d : Disc) (t : String) (e₂ e₃ : Expr)
   deriving Repr
 
 /-- Syntactic values, which the value restriction lets a `const` generalise:
@@ -198,8 +198,8 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
     (ctor : ∀ n body, motive body → motive (.ctor n body))
     (new_ : ∀ f args, motive f → (∀ a ∈ args, motive a) → motive (.new_ f args))
     (unwrap : ∀ e₁ e₂ e₃, motive e₁ → motive e₂ → motive e₃ → motive (.unwrap e₁ e₂ e₃))
-    (caseTag : ∀ e₁ l t e₂ e₃, motive e₁ → motive e₂ → motive e₃ →
-      motive (.caseTag e₁ l t e₂ e₃)) :
+    (caseTag : ∀ e₁ d t e₂ e₃, motive e₁ → motive e₂ → motive e₃ →
+      motive (.caseTag e₁ d t e₂ e₃)) :
     ∀ e, motive e
   | .lit l => lit l
   | .var i => var i
@@ -309,8 +309,8 @@ theorem Expr.ind {motive : Expr → Prop} (lit : ∀ l, motive (.lit l))
         tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₂)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_
         tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_ unwrap caseTag e₃)
-  | .caseTag e₁ l t e₂ e₃ =>
-    caseTag e₁ l t e₂ e₃ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_
+  | .caseTag e₁ d t e₂ e₃ =>
+    caseTag e₁ d t e₂ e₃ (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_
         break_ continue_ tryCatch tryFinally obj get set spread arr index setIndex mcall cls ctor new_
         unwrap caseTag e₁)
       (Expr.ind lit var func app let_ assign cond unop binop ret throw_ seq while_ break_ continue_

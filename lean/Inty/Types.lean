@@ -17,6 +17,13 @@ inductive Nothing where
   | undefined
   deriving DecidableEq, Repr
 
+/-- What tells a variant's cases apart: a field, holding a string literal
+(`x.kind === "circle"`), or the value's `typeof` (`typeof x === "number"`). -/
+inductive Disc where
+  | field (l : String)
+  | typeOf
+  deriving DecidableEq, Repr
+
 /-- Type constructors. Every type former is one, applied to its argument
 types (`Ty.app`), so substitution, unification and their lemmas are written
 once for all of them. -/
@@ -85,20 +92,38 @@ inductive Con where
   (`{kind: "circle", …}`), which only a string literal checked against it
   has. -/
   | strLit (s : String)
-  /-- A variant tagged by its field `l`, with the tags `ts`, applied to the
-  types of its cases, the case of the tag `ts[i]` a record whose field `l`
-  holds that tag's string literal type: a discriminated union `{kind:
-  "circle", r: Number} | {kind: "square", w: Number}`. The tags are the
-  constructor's, so that a case is picked by its tag whatever is known of
-  the cases. Only an object literal checked against it makes one, and only
-  a test of the tag (`caseTag`) takes it apart. -/
-  | variant (l : String) (ts : List String)
+  /-- A variant told apart by `d`, with the tags `ts`, applied to the
+  types of its cases. Told apart by a field `l`, the case of the tag
+  `ts[i]` is a record whose field `l` holds that tag's string literal type:
+  a discriminated union `{kind: "circle", r: Number} | {kind: "square", w:
+  Number}`, which only an object literal checked against it makes. Told
+  apart by `typeof`, the case of the tag `ts[i]` is a type whose values'
+  `typeof` is that tag: `Number | String`, into which a value of a case is
+  injected. The tags are the constructor's, so that a case is picked by
+  its tag whatever is known of the cases. Only a test of the tag
+  (`caseTag`) takes one apart. -/
+  | variant (d : Disc) (ts : List String)
   deriving DecidableEq, Repr
+
+/-- The `typeof` of the values of a type of this head, if one string: what
+tells the cases of a variant told apart by `typeof` apart. -/
+def Con.typeTag : Con → Option String
+  | .number => some "number"
+  | .string | .strLit _ => some "string"
+  | .boolean => some "boolean"
+  | .undefined => some "undefined"
+  | .null | .record _ | .array | .variant (.field _) _ => some "object"
+  | .fn => some "function"
+  | _ => none
 
 /-- Whether a constructor is a rigid type variable. -/
 def Con.isRigid : Con → Bool
   | .rigid _ _ => true
   | _ => false
+
+theorem Con.isRigid_of_typeTag {c : Con} {t : String} (h : c.typeTag = some t) :
+    c.isRigid = false := by
+  cases c <;> simp_all [Con.typeTag, Con.isRigid]
 
 /-- The right-hand side of one equation of a recursive type: a type that
 may refer to the system's types by position, `self j`. A free variable is
@@ -258,8 +283,8 @@ as an absent field has no type in Rémy's rows. -/
 @[match_pattern] abbrev Ty.nullable (τ : Ty) : Ty := .maybe .null τ
 @[match_pattern] abbrev Ty.optional (τ : Ty) : Ty := .maybe .undefined τ
 @[match_pattern] abbrev Ty.strLit (s : String) : Ty := .app (.strLit s) []
-@[match_pattern] abbrev Ty.variant (l : String) (ts : List String) (cases : List Ty) : Ty :=
-  .app (.variant l ts) cases
+@[match_pattern] abbrev Ty.variant (d : Disc) (ts : List String) (cases : List Ty) : Ty :=
+  .app (.variant d ts) cases
 
 /-- The constructor of the type of the value a sum adds. -/
 def Nothing.con : Nothing → Con
@@ -368,7 +393,7 @@ inductive Cls where
   case of the tag `t`, `σ`, and `ρ` the rest of it, the cases of the other
   tags (`variantRest`). It waits while `τ` is a type variable, so taking a
   variant apart (`caseTag`) has a principal type. -/
-  | caseTag (l t : String)
+  | caseTag (d : Disc) (t : String)
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/

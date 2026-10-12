@@ -197,7 +197,8 @@ checked against `T`, is checked against: `T` itself, or, `T` a variant
 tagged by `l`, the case of the tag the literal writes in its field `l`. -/
 inductive ObjCase (ls : List String) (es : List Expr) : Ty → Ty → Prop where
   | self : ObjCase ls es T T
-  | variant : T.whnf = .variant l ts Ps → litTag l ls es = some t → firstIdx t ts = some i →
+  | variant : T.whnf = .variant (.field l) ts Ps → litTag l ls es = some t →
+      firstIdx t ts = some i →
       Ps[i]? = some P → P.tagOf l = some t → ObjCase ls es T P
 
 /-- The context a class's member `i`, written as `k`, is checked in: a
@@ -428,9 +429,9 @@ inductive HasTypeS (S : Sys) (L : List String) :
   /-- Taking a variant apart by its tag `t`: `e₃` sees `e₁`'s value as the
   case of the tag `t` (`σ`), `e₂` as the rest (`ρ`): `Case_{l,t} τ₁ σ ρ`.
   Both branches have one type, and an expected type is pushed into each. -/
-  | caseTag : HasTypeS S L C Γ R rm .synth e₁ τ₁ → EntailsS S C ⟨.caseTag l t, [τ₁, σ, ρ]⟩ →
+  | caseTag : HasTypeS S L C Γ R rm .synth e₁ τ₁ → EntailsS S C ⟨.caseTag d t, [τ₁, σ, ρ]⟩ →
       HasTypeS S L C (.mono ρ :: Γ) R rm md e₂ τ → HasTypeS S L C (.mono σ :: Γ) R rm md e₃ τ →
-      HasTypeS S L C Γ R rm md (.caseTag e₁ l t e₂ e₃) τ
+      HasTypeS S L C Γ R rm md (.caseTag e₁ d t e₂ e₃) τ
   /-- A type may be replaced by an equal one (`TyEq`): a recursive type by
   its unfolding, or the other way round. -/
   | conv : HasTypeS S L C Γ R rm .synth e τ → TyEq τ τ' → HasTypeS S L C Γ R rm .synth e τ'
@@ -552,9 +553,9 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
       TyEq P (.record L (objSlots L ls (τs.map fun τ => .slot .pre .data τ))) →
       (∀ p ∈ es.zip τs, HasTypeS S L C Γ R rm .check p.1 p.2) →
       HasTypeTopS S L C Γ R rm .check (.obj ls es ks) T
-  | caseTag : HasTypeS S L C Γ R rm .synth e₁ τ₁ → EntailsS S C ⟨.caseTag l t, [τ₁, σ, ρ]⟩ →
+  | caseTag : HasTypeS S L C Γ R rm .synth e₁ τ₁ → EntailsS S C ⟨.caseTag d t, [τ₁, σ, ρ]⟩ →
       HasTypeS S L C (.mono ρ :: Γ) R rm md e₂ τ → HasTypeS S L C (.mono σ :: Γ) R rm md e₃ τ →
-      HasTypeTopS S L C Γ R rm md (.caseTag e₁ l t e₂ e₃) τ
+      HasTypeTopS S L C Γ R rm md (.caseTag e₁ d t e₂ e₃) τ
 
 /-- The narrow system's typing judgement, the one inference implements. -/
 abbrev HasType := HasTypeS Sys.narrow
