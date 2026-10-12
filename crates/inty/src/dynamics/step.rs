@@ -901,8 +901,7 @@ fn apply(
     }
 }
 
-/// The operators that are `Int` arithmetic when the checker types them
-/// `Int` (the `Arith` class): their results are checked.
+/// The operator a compound assignment applies.
 fn compound_to_binop(op: AssignOp) -> BinOp {
     match op {
         AssignOp::Assign => unreachable!("Assign handled separately"),

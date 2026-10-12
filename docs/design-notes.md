@@ -52,21 +52,21 @@ empty classes in a `.d.js` as brands, loaded before its aliases (bug 4),
 and identity casts in a `#brands` module.
 
 **What exists.** inty already has declared nominal types:
-`/** nominal type InsertIx = Int */`. A nominal type keeps its identity
-through unification — an `InsertIx` is neither a `TrackIx` nor an `Int` —
+`/** nominal type InsertIx = Number */`. A nominal type keeps its identity
+through unification — an `InsertIx` is neither a `TrackIx` nor a `Number` —
 while comparisons and field access see through it. It needs no empty
 class, and with bug 4 fixed it can sit next to the aliases that use it.
 
 ```javascript
 // globals.d.js
-/** nominal type InsertIx = Int */
-/** nominal type TrackIx = Int */
+/** nominal type InsertIx = Number */
+/** nominal type TrackIx = Number */
 /** type Channel = { name: String, mixer: InsertIx } */
 
 // brands.d.js — typed identity casts, `x => x` at runtime (brands.js)
-/** const insertIx: (Int) => InsertIx */
+/** const insertIx: (Number) => InsertIx */
 export const insertIx;
-/** const insertIndex: (InsertIx) => Int */
+/** const insertIndex: (InsertIx) => Number */
 export const insertIndex;
 ```
 
@@ -98,7 +98,7 @@ instance.
 ```javascript
 const utils = { id: (x) => x };
 utils.id(1);
-utils.id("s");   // error: expected 'Number | Int', found 'String'
+utils.id("s");   // error: expected 'Number', found '"s"'
 ```
 
 **Why.** inty's polymorphism is rank-1, as in Hindley–Milner: a binding's

@@ -86,8 +86,8 @@ pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
             (0i32..100).prop_map(|n| n.to_string()),
             Just("0".to_string()),
             Just("1".to_string()),
-            // near the edge of the safe-integer range, where `Int`
-            // arithmetic overflows
+            // near the edge of the safe-integer range, where a double
+            // rounds
             Just("1073741824".to_string()),
             Just("9007199254740991".to_string()),
         ]
@@ -105,7 +105,7 @@ pub fn arb_number(depth: u32) -> BoxedStrategy<String> {
             .prop_map(|(a, b)| format!("({} * {})", a, b)),
         (arb_number(depth - 1), arb_number(depth - 1))
             .prop_map(|(a, b)| format!("({} % {})", a, b)),
-        // a fraction: the `Int`/`Number` split
+        // a fraction
         arb_number(depth - 1).prop_map(|a| format!("({} / 2)", a)),
         // unary
         arb_number(depth - 1).prop_map(|a| format!("-({})", a)),
@@ -261,11 +261,10 @@ mod tests {
         }
     }
 
-    /// `Int` arithmetic that leaves the safe-integer range faults (a
-    /// checked-arithmetic fault, not a soundness violation) instead of
-    /// producing an `Int` that isn't a safe integer.
+    /// Arithmetic past the safe integers, or a remainder by zero, gives a
+    /// number, as in JavaScript (a rounded one, or `NaN`).
     #[test]
-    fn int_arithmetic_out_of_range_faults() {
+    fn arithmetic_past_the_safe_integers_gives_a_number() {
         for src in [
             "1073741824 * 1073741824",
             "9007199254740992 + 9007199254740992",

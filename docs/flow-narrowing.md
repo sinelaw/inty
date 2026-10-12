@@ -314,8 +314,8 @@ Special-casing the syntax in `infer_call` is replaced by a type, declared
 in `core.d.js`:
 
 ```
-Array:        new (n: Int) => Holes<a>,  (n: Int) => Holes<a>
-Holes<a>:     { length: Int, fill: (v: a) => a[] }
+Array:        new (n: Number) => Holes<a>,  (n: Number) => Holes<a>
+Holes<a>:     { length: Number, fill: (v: a) => a[] }
 ```
 
 `Holes<a>` has no index, iteration or read method, because a hole reads

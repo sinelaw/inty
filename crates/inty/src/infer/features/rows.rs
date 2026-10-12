@@ -397,7 +397,7 @@ impl InferState {
     /// presences and types; two open rows then share their unknown parts.
     /// (Taking the operand's tail alone, as this used to, was unsound:
     /// with `function f(o) { return {a: 1, ...o}; }`, `f({a: "s"}).a`
-    /// was an `Int`.) A recursive tail counts as closed, as it does for
+    /// was a number.) A recursive tail counts as closed, as it does for
     /// the finished literal.
     fn merge_spread(
         &mut self,
@@ -758,8 +758,8 @@ impl InferState {
                         props.insert(prop_name, self.zonk(&annotated_type));
                     } else {
                         // A fresh object's field slot has the expected
-                        // type; the value only has to fit it (`Int` into
-                        // a `Number` field is a value flowing, not a
+                        // type; the value only has to fit it (a literal
+                        // into a `Number` field is a value flowing, not a
                         // shared slot being reinterpreted).
                         self.check_expr(env, value, &expected_prop_ty)?;
                         let slot = self.zonk(&expected_prop_ty);

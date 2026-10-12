@@ -19,12 +19,11 @@ Paths like `src/infer` are relative to `crates/inty`.
 
 1. **inty's documented contract is the theorem.** Soundness says a
    well-typed program never gets stuck except by a fault inty documents as
-   allowed: out of clock, an uncaught `throw`, `Stuck::IntRange`, a
-   non-finite `Int`, an out-of-bounds read, and so on. A `fault` outcome
-   lists them, each citing where `docs/type-system.md` allows it. So the
-   model can be neither stronger nor weaker than what inty promises. (So
-   for `outOfBounds`, which cites the document's table of faults; `Int`
-   out of range comes with phase 4.)
+   allowed: out of clock, an uncaught `throw`, an out-of-bounds read, and
+   so on. A `fault` outcome lists them, each citing where
+   `docs/type-system.md` allows it. So the model can be neither stronger
+   nor weaker than what inty promises. (So for `outOfBounds`, which cites
+   the document's table of faults.)
 2. **The specification is what inty means, not what Hindley–Milner
    allows.** "Declared, not guessed" unions, defaulting and narrowing are
    rules of `HasType`, not features of the algorithm only. That keeps
@@ -90,9 +89,7 @@ The parts every later feature touches.
   entailment is an instance or an assumption in scope (HM(X); Jones,
   "Qualified Types"). `Plus` is the first class defined this way. Still to
   come with the classes that need them: improvement rules (functional
-  dependencies), first for `HasProp` in phase 3, and defaulting (`Num` to
-  `Number`, `NumLit` to `Int`) as a rule of the specification, in phases 1
-  and 5.
+  dependencies), first for `HasProp` in phase 3.
 
 ### 1. Completeness of inference
 
@@ -207,7 +204,7 @@ touching the generic proofs.
 
 - **One representation for every type former.** `Ty` is a variable or a
   constructor applied to types (`app c args`): `Number`, functions,
-  records, presences, and later `Int`, arrays, `Map`, `Promise`, tuples,
+  records, presences, and later arrays, `Map`, `Promise`, tuples,
   literal types and named types are constructors (`Con`). Substitution,
   free variables, unification and their lemmas are written once.
 - **Rows are Rémy's flat rows over the program's labels.** A record type
@@ -249,8 +246,8 @@ touching the generic proofs.
   `TypeError` in strict code), as were stores of a built-in property
   (`xs.length = 0`, `f.call = 1`) and out-of-bounds reads and writes,
   which `dynamics` let through; and a string literal couldn't be indexed
-  (`"xyz"[0]` was rejected). inty wants an index to be an `Int`, where
-  the model takes any number (phase 4).
+  (`"xyz"[0]` was rejected). An index is any number, in inty as in the
+  model; a fractional one is out of bounds, a fault.
 - **Spread (done).** inty was unsound three ways: `{a: 1, ...o}` with `o`
   an open row kept the literal's `a` (`f({a: "s"}).a - 1` was accepted), a
   closed spread after an open one closed the result, and an open operand
@@ -293,39 +290,29 @@ touching the generic proofs.
   JavaScript's coercions) wait for a model of those coercions. inty's
   lowering takes `&&` and `||` to `?:` (`const t = a; t ? b : t`, or
   `a ? b : false` when `a` is a test). The differential generator uses
-  them all; inty's `Int` arithmetic leaving the safe integers is a fault
-  the model's numbers don't have, and its value isn't compared.
+  them all.
 - Typed arrays, regex, `Promise` (with `await` as the identity, as in
   `dynamics`).
 - Arrays and records invariant while mutable (#96).
-- **inty's numbers are principal (done).** inty defaulted numeric
-  variables where it generalised a binding (an ambiguous literal to
-  `Int`, a parameter-only variable to `Number`, a result-only one to
-  `Int`), and typed `+` by whether an operand was already known to be a
-  number when it met it (`Arith`) or not (`Plus a`, unifying both
-  operands), so `xs.length + y` made `y` an `Int`. Neither is a rule a
-  declarative system can state. Now a scheme keeps its numeric variables
-  and constraints (`inc` is `<a, b, c> where Arith a b c, NumLit b =>
-  (a) => c`); only the end of the program defaults, to `Int`; `+` is one
-  class, `Plus a b c` (numbers as `Arith`, or three strings), decided by
-  improvement whatever the order; and a recursive group's members are
-  generalised over the same variables. Writing it found an unsoundness:
-  a scheme's `Arith` didn't check that its operands are numbers (its
-  `Num`s are tidied away), so `function h(x) { return x * 2; }
-  h("s")` was accepted. Indices stay `Int` (`Indexable`), which is what
-  the Go backend needs for machine-integer indexing; the backend compiles
-  a function once per type it is used at, takes a parameter that only
-  feeds floating-point arithmetic as `float64` (an `Int` argument is a
-  `Number`), and gives a polymorphic literal `const` one variable per
-  type it is used at. On its benchmarks the generated Go
-  has more `int`s and fewer `float64`s, and runs as fast or faster but
-  for `spectral-norm` (7% slower, with identical code but for `int` loop
-  bounds).
-- `Int ≤ Number`, at the top level only; the `Num`, `NumLit`, `Arith`
-  and `Plus` classes; `Int` indices; checked `Int` arithmetic (`Stuck::IntRange`) as a
-  fault. `Float` is opaque in Lean, so proofs rely on inty's runtime range
-  checks, and a bit-level binary64 model, tested against Node, where inty
-  doesn't check.
+- **One number type (done).** inty had `Int` beside `Number`: `Int ≤
+  Number` for values, the `Num`, `NumLit` and `Arith` classes deciding
+  which an operation gave, defaulting at the end of the program, integer
+  indices and checked `Int` arithmetic, all for its Go backend's machine
+  integers. Now numbers are one type, `Number`, in inty as in the model:
+  arithmetic takes and gives `Number`s, `+` is `Plus a` on its operands'
+  one type, an index is a number (a fractional one a fault), and an
+  integer typed array wraps what it stores. The Go backend finds the
+  integers itself, by a type-qualifier analysis (`int ⊑ float`, after
+  Foster, Fähndrich and Aiken; `crates/inty-go/src/kinds.rs`): least
+  kinds over where values flow, a function copied per pattern of integer
+  and float arguments, a parameter a float where no use needs it as an
+  integer and it meets a float anyway. It can't reject a program, so it
+  is no part of the type system. On the backend's benchmarks the Go code
+  prints the same and runs as fast or faster (`fuzzy-search` 1.9x).
+  The model's three corpus disagreements on numbers and the differential
+  test's two went with it.
+- A bit-level binary64 model, tested against Node, for `%` and the
+  conversions (`ToInt32`) Lean's opaque `Float` can't state.
 
 ### 5. Literal types, unions and narrowing
 

@@ -5035,8 +5035,8 @@ fn numbers_are_one_type() {
 
 #[test]
 fn arith_on_a_string_is_rejected_at_the_use() {
-    // A scheme's `Arith` stands for its operands' `Num`s: an instance on a
-    // string fails (it used to be accepted, and got stuck).
+    // Arithmetic's operands are numbers: a call with a string fails (it
+    // used to be accepted, and got stuck).
     let src = "function h(x) { return x * 2; }\nconst r = h(\"s\");";
     assert!(check_program(src, &[]).is_err());
 }
