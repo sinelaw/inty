@@ -196,6 +196,8 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
 
         Expr::Ident { name, .. } => match env.lookup(name) {
             Some(loc) => deref_var(&state.heap, loc),
+            // The global `undefined`, unless a binding shadows it.
+            None if name == "undefined" => Ok(Value::Undefined),
             None => Err(Stuck::UndefinedVariable(name.clone())),
         },
 

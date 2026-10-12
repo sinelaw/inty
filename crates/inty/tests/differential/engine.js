@@ -1,6 +1,7 @@
 // The JavaScript engine oracle for crates/inty/tests/differential.rs.
 //
-// Reads one program per line on stdin, runs each as a strict-mode script in
+// Reads one program per line on stdin (a program of several lines as a JSON
+// string after `JSON:`), runs each as a strict-mode script in
 // a fresh realm, and prints one verdict per line, in the model's value wire format
 // (lean/Inty/Wire.lean):
 //
@@ -19,13 +20,19 @@ const vm = require("node:vm");
 
 const view = new DataView(new ArrayBuffer(8));
 
+// A string's text as the model writes it (`Inty.Wire.escape`): whitespace,
+// parentheses and `%` as `%XX`.
+function escape(s) {
+  return s.replace(/[ \t\r\n()%]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0"));
+}
+
 function wire(v) {
   switch (typeof v) {
     case "number":
       view.setFloat64(0, v);
       return `num ${view.getBigUint64(0)}`;
     case "string":
-      return `str s:${v}`;
+      return `str s:${escape(v)}`;
     case "boolean":
       return `bool ${v}`;
     case "undefined":
@@ -44,7 +51,9 @@ function wire(v) {
 // sloppy mode makes it the global object.
 function run(source) {
   try {
-    const strict = `"use strict"; ${source}`;
+    // `void 0` so that a program whose statements have no value (a
+    // declaration) completes with `undefined`, not the directive's string.
+    const strict = `"use strict"; void 0; ${source}`;
     return `value ${wire(vm.runInNewContext(strict, {}, { timeout: 200 }))}`;
   } catch (e) {
     // The engine's own errors have a stack; the plain objects a program
@@ -60,5 +69,5 @@ function run(source) {
 const out = [];
 readline
   .createInterface({ input: process.stdin, crlfDelay: Infinity })
-  .on("line", (line) => out.push(run(line)))
+  .on("line", (line) => out.push(run(line.startsWith("JSON:") ? JSON.parse(line.slice(5)) : line)))
   .on("close", () => process.stdout.write(out.map((l) => l + "\n").join("")));
