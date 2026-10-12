@@ -46,6 +46,9 @@ pub fn lower_program(program: &Program) -> Lowered {
         read: Vec::new(),
         arrow: false,
         new: false,
+        next_id: 0,
+        tested: Vec::new(),
+        assigned: Vec::new(),
         var_ok: true,
     };
     let wire = cx.block(&program.statements, Tail::Program)?;
@@ -60,6 +63,9 @@ pub fn lower_program(program: &Program) -> Lowered {
     if cx.arrow && cx.new {
         return unsupported("`new` in a program with an arrow function");
     }
+    if cx.tested.iter().any(|t| cx.assigned.contains(t)) {
+        return unsupported("a `let` or a parameter taken apart by a test and assigned");
+    }
     Ok(wire)
 }
 
@@ -68,6 +74,20 @@ pub fn lower_program(program: &Program) -> Lowered {
 struct Binder {
     name: Option<String>,
     kind: Kind,
+    /// Which binder it is, for `tested` and `assigned`.
+    id: usize,
+    /// The sum its annotation declares, if any: what a test of its tag
+    /// field or of its `typeof` can take apart in the model.
+    sum: Option<Sum>,
+}
+
+/// A declared sum a test takes apart.
+#[derive(Clone, Copy, PartialEq)]
+enum Sum {
+    /// A variant tagged by a field: `x.l === "t"`.
+    Variant,
+    /// A sum told apart by `typeof`.
+    Typeof,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -105,6 +125,11 @@ struct Cx {
     /// Whether the program has an arrow function, and `new`.
     arrow: bool,
     new: bool,
+    /// The last binder's id; the `let`s and parameters a test took apart,
+    /// and those assigned.
+    next_id: usize,
+    tested: Vec<usize>,
+    assigned: Vec<usize>,
     /// Whether the block being lowered is a function's body or the
     /// program, where a `var` is a `let` (in a nested block it would be
     /// the function's).
@@ -126,10 +151,38 @@ enum Tail {
 
 impl Cx {
     fn push(&mut self, name: Option<&str>, kind: Kind) {
+        self.push_sum(name, kind, None);
+    }
+
+    fn push_sum(&mut self, name: Option<&str>, kind: Kind, sum: Option<Sum>) {
+        self.next_id += 1;
         self.scope.push(Binder {
             name: name.map(str::to_string),
             kind,
+            id: self.next_id,
+            sum,
         });
+    }
+
+    /// The binder `name` resolves to, and its de Bruijn index.
+    fn binder(&self, name: &str) -> Result<(usize, Binder), Unsupported> {
+        let (i, _) = self.lookup(name)?;
+        let b = self
+            .scope
+            .iter()
+            .rev()
+            .find(|b| b.name.as_deref() == Some(name))
+            .expect("looked up");
+        Ok((i, b.clone()))
+    }
+
+    /// `name` taken apart by a test, in the branches: a `let` or a
+    /// parameter so tested mustn't be assigned anywhere (the branches see
+    /// a copy, and a closure may assign the original).
+    fn tested(&mut self, b: &Binder) {
+        if b.kind == Kind::Mut {
+            self.tested.push(b.id);
+        }
     }
 
     fn pop(&mut self, n: usize) {
@@ -229,6 +282,11 @@ impl Cx {
                 if type_annotation.is_some() || return_type_ast.is_some() {
                     return unsupported("an annotated function");
                 }
+                // (In a nested block, sloppy JavaScript also assigns it to
+                // the function's `var` of that name.)
+                if !self.var_ok {
+                    return unsupported("a function declaration in a nested block");
+                }
                 self.unlater(name);
                 let f = self.function_named(Some(name), Kind::FnName, params, body, false)?;
                 self.push(Some(name), Kind::FnName);
@@ -313,8 +371,22 @@ impl Cx {
             }
             None => None,
         };
+        // The sum the binding declares, or an alias's (`const w = v`).
+        let sum = match &ann {
+            Some(Ann::Mono(t)) if t.starts_with("(variant") => Some(Sum::Variant),
+            Some(Ann::Mono(t)) if t.starts_with("(sum") => Some(Sum::Typeof),
+            Some(_) => None,
+            None => match &d.init {
+                Some(Expr::Ident { name, .. }) => self.binder(name).ok().and_then(|(_, b)| b.sum),
+                _ => None,
+            },
+        };
         self.unlater(&d.name);
-        self.push(Some(&d.name), if mutable { Kind::Mut } else { Kind::Const });
+        self.push_sum(
+            Some(&d.name),
+            if mutable { Kind::Mut } else { Kind::Const },
+            sum,
+        );
         let body = self.decls(more, rest, tail, falls_off);
         self.pop(1);
         let body = body?;
@@ -434,17 +506,18 @@ impl Cx {
     ) -> Lowered {
         match pattern(test) {
             Some(Pattern::Nothing { name, negated }) => {
-                let (i, _) = self.lookup(name)?;
+                let (i, b) = self.binder(name)?;
+                self.tested(&b);
                 // `x != null ? some : none`: `some` sees `x`'s value.
                 let (none, some) = if negated {
                     let none = no(self)?;
-                    self.push(Some(name), Kind::Shadow);
+                    self.push_sum(Some(name), Kind::Shadow, b.sum);
                     let some = yes(self);
                     self.pop(1);
                     (none, some)
                 } else {
                     let none = yes(self)?;
-                    self.push(Some(name), Kind::Shadow);
+                    self.push_sum(Some(name), Kind::Shadow, b.sum);
                     let some = no(self);
                     self.pop(1);
                     (none, some)
@@ -452,8 +525,12 @@ impl Cx {
                 Ok(format!("(unwrap (var {i}) {none} {})", some?))
             }
             Some(Pattern::Typeof { name, tag, negated }) => {
-                let (i, _) = self.lookup(name)?;
-                let (case, rest) = self.split(name, yes, no, negated)?;
+                let (i, b) = self.binder(name)?;
+                if b.sum != Some(Sum::Typeof) {
+                    return unsupported("a test of `typeof` on what isn't a declared sum");
+                }
+                self.tested(&b);
+                let (case, rest) = self.split(&b, yes, no, negated)?;
                 let tag = tok(tag)?;
                 Ok(format!("(typetest (var {i}) s:{tag} {rest} {case})"))
             }
@@ -463,9 +540,13 @@ impl Cx {
                 tag,
                 negated,
             }) => {
-                let (i, _) = self.lookup(name)?;
+                let (i, b) = self.binder(name)?;
+                if b.sum != Some(Sum::Variant) {
+                    return unsupported("a test of a tag on what isn't a declared variant");
+                }
+                self.tested(&b);
                 let (label, tag) = (tok(label)?, tok(tag)?);
-                let (case, rest) = self.split(name, yes, no, negated)?;
+                let (case, rest) = self.split(&b, yes, no, negated)?;
                 Ok(format!(
                     "(casetag (var {i}) s:{label} s:{tag} {rest} {case})"
                 ))
@@ -483,12 +564,12 @@ impl Cx {
     /// rebound: the case's, then the rest's.
     fn split(
         &mut self,
-        name: &str,
+        b: &Binder,
         yes: impl FnOnce(&mut Self) -> Lowered,
         no: impl FnOnce(&mut Self) -> Lowered,
         negated: bool,
     ) -> Result<(String, String), Unsupported> {
-        self.push(Some(name), Kind::Shadow);
+        self.push_sum(b.name.as_deref(), Kind::Shadow, b.sum);
         let r = (|| {
             let y = yes(self)?;
             let n = no(self)?;
@@ -685,7 +766,9 @@ impl Cx {
                 }
                 match &**left {
                     Expr::Ident { name, .. } => {
-                        let (i, k) = self.lookup(name)?;
+                        let (i, b) = self.binder(name)?;
+                        let k = b.kind;
+                        self.assigned.push(b.id);
                         if k == Kind::Shadow {
                             return unsupported("an assignment to a binding a test took apart");
                         }
@@ -755,6 +838,17 @@ impl Cx {
     /// An object literal: its runs of fields between spreads are literals,
     /// spread left to right (`{a: 1, ...o}` is `{...{a: 1}, ...o}`).
     fn object(&mut self, props: &[PropDef]) -> Lowered {
+        // A getter or a method beside a spread would be lowered into an
+        // operand of the spread: a getter would run there, with the
+        // operand as `this`, and a method's `this` would be the operand's
+        // type.
+        if props.iter().any(|p| matches!(p, PropDef::Spread { .. }))
+            && props
+                .iter()
+                .any(|p| matches!(p, PropDef::Getter { .. } | PropDef::Method { .. }))
+        {
+            return unsupported("a getter or a method in a literal with a spread");
+        }
         let mut parts: Vec<String> = Vec::new();
         let mut run: Vec<String> = Vec::new();
         let mut labels: Vec<String> = Vec::new();
@@ -1018,7 +1112,7 @@ fn pattern(test: &Expr) -> Option<Pattern<'_>> {
 /// of hex code `XX` a token can't hold (`unescape` in `Wire.lean`).
 fn tok(l: &str) -> Lowered {
     if l.contains('\x01') {
-        return unsupported("a call signature's key");
+        return unsupported("a label or string holding \\x01, inty's call signature's key");
     }
     Ok(l.chars()
         .map(|c| {
@@ -1250,5 +1344,18 @@ mod tests {
             "(let (num 1 0) (let (func 0 (ret (var 2))) (app (var 0))))"
         );
         assert!(lower("(() => this);").is_err());
+        // A tested `let` assigned elsewhere: the branch sees a copy.
+        assert!(lower(
+            "/** let x: Number | Null */ let x = 1; let f = function () { return 0; }; \
+             if (x != null) { f = function () { return x - 1; }; } x = null; f();"
+        )
+        .is_err());
+        // A getter beside a spread.
+        assert!(
+            lower("const o = {x: 1}; const p = {...o, get g() { return this.x; }}; p.g;").is_err()
+        );
+        // A test of `typeof` or of a tag on what isn't a declared sum.
+        assert!(lower("const n = 1; typeof n === \"number\" ? n - 1 : 0;").is_err());
+        assert!(lower("const o = {name: \"bob\"}; o.name === \"bob\" ? 1 : 2;").is_err());
     }
 }

@@ -157,10 +157,12 @@ copied from the algorithm:
   Haskell without the monomorphism restriction: a binding never used can
   carry a `Merge` no instance satisfies, which is harmless, since only a
   use instantiates it.
-- **The scope checks are beside the rules** (`Expr.scoped`): an
-  assignment to a `const` and a `break` outside a loop are JavaScript's
-  early errors, static semantics apart from typing, and a program with
-  one would run safely; inty reports them apart from its type errors too.
+- **The scope checks are beside the rules** (`Expr.scoped`): a `break`
+  outside a loop is one of JavaScript's early errors, static semantics
+  apart from typing, and an assignment to a `const` throws a `TypeError`
+  when it runs, which a value's type doesn't predict (the variable keeps
+  its type either way). Neither is about the types of values, so each is a
+  check of its own, as inty reports them apart from its type errors.
 
 A recursive type carries its whole system of equations, and an equation
 its unfolding never reaches may mention variables the type doesn't have,
@@ -411,9 +413,12 @@ nothing, of its `typeof` or of its tag field is `unwrap`, `typetest` or
 operator other than `+` and `-`, a builtin, a class, a module, a loop
 other than `while`, `?.`, `??`) or whose lowering would change its
 meaning (a name used before its declaration, `let x;` without an
-initialiser, an assignment to a binding a test took apart). Of the about
-2,900 programs the unit tests check, 405 are in the fragment; inty and the
-model agree on accepting each but six, listed with their reasons in
+initialiser, a `let` or a parameter taken apart by a test and assigned, a
+test of `typeof` or of a tag on what no annotation declares a sum, a
+getter or a method beside a spread). Of the programs the unit tests check,
+496 are in the fragment (some tests generate theirs at random, so the
+corpus keeps each program it once recorded); inty and the model agree on
+accepting each but six, listed with their reasons in
 `tests/model_corpus/known.txt`:
 
 - an `Int` index, an annotated object type's method using `this` (a

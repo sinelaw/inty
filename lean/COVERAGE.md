@@ -45,9 +45,9 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.index` | `infer_computed_member` |
 | `HasTypeS.setIndex` | `infer_assign`, `infer_store_target` |
 | `HasTypeS.mcall` | `infer_call` |
-| `HasTypeS.unwrap` | `infer_nullish_coalesce`, `apply_narrowing`, `resolve_strip` |
+| `HasTypeS.unwrap` | `infer_nullish_coalesce`, `infer_branching_test`, `apply_narrowing`, `resolve_strip` |
 | `HasTypeS.litStr` | `check_expr` |
-| `HasTypeS.caseTag` | `apply_narrowing`, `test_facts` |
+| `HasTypeS.caseTag` | `infer_branching_test`, `apply_narrowing`, `test_facts` |
 | `HasTypeS.conv` | `unify`, `unroll_named` |
 | `HasTypeS.inj` | `check_expr`, `subsume` |
 | `HasTypeS.drop` | `infer_discarded` |
@@ -61,7 +61,6 @@ Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 | inty | Why |
 |---|---|
 | `check_numeric_if_known` | `Int` and `Number` (roadmap phase 4) |
-| `infer_branching_test` | `&&` and `\|\|` (phase 5) |
 | `infer_function_group` | mutually recursive functions (phase 7, strongly connected components) |
 | `infer_group_with_deps` | the same |
 | `infer_ready_groups` | the same |

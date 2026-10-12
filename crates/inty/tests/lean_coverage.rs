@@ -31,10 +31,15 @@ fn constructors(lean: &str, name: &str) -> Vec<String> {
         .unwrap_or_else(|| panic!("no inductive {name}"));
     let mut out = Vec::new();
     for line in lean[start..].lines().skip(1) {
-        if !line.is_empty() && !line.starts_with(' ') && !line.starts_with("--") {
+        // (A rule may start at column 0: `| c …`.)
+        if !line.is_empty()
+            && !line.starts_with(' ')
+            && !line.starts_with("--")
+            && !line.starts_with('|')
+        {
             break;
         }
-        if let Some(rest) = line.strip_prefix("  | ") {
+        if let Some(rest) = line.trim_start().strip_prefix("| ") {
             let c: String = rest
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
@@ -126,9 +131,17 @@ fn the_coverage_table_matches_the_model_and_inty() {
     // Every inty function named exists.
     let mut fns = BTreeSet::new();
     rust_fns(&root.join("crates/inty/src"), &mut fns);
-    let named: BTreeSet<String> = ticked(&table)
-        .into_iter()
-        .filter(|n| n.chars().all(|c| c.is_ascii_lowercase() || c == '_') && n.contains('_'))
+    // The inty column of each table: every name there is a function.
+    let named: BTreeSet<String> = rule_rows
+        .iter()
+        .flat_map(|(_, inty)| inty.clone())
+        .chain(missing_rows.iter().flat_map(|(n, _)| n.clone()))
+        .chain(
+            ticked(&table)
+                .into_iter()
+                .filter(|n| n.starts_with("infer_") || n.starts_with("check_")),
+        )
+        .filter(|n| n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
         .collect();
     for n in &named {
         if !fns.contains(n) {

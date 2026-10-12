@@ -100,8 +100,13 @@ fn the_model_agrees_with_inty_on_its_own_programs() {
     if let Some(raw) = std::env::var_os("INTY_CORPUS_RAW") {
         let mut seen = std::collections::BTreeSet::new();
         let mut why_not: std::collections::BTreeMap<String, usize> = Default::default();
-        let kept: Vec<String> = records(&std::fs::read_to_string(raw).unwrap())
+        // The corpus so far, then what the unit tests check now: some of
+        // them generate their programs at random, so a program once in
+        // the corpus stays (while it's in the fragment).
+        let old = std::fs::read_to_string(&path).unwrap_or_default();
+        let kept: Vec<String> = records(&old)
             .into_iter()
+            .chain(records(&std::fs::read_to_string(raw).unwrap()))
             .filter(|s| seen.insert(s.clone()))
             .filter(|s| match lower(s) {
                 Ok(_) => true,
@@ -140,11 +145,14 @@ fn the_model_agrees_with_inty_on_its_own_programs() {
     let mut agree = 0;
     let mut excused = 0;
     let mut failures = Vec::new();
+    // A known disagreement must still be one.
+    let mut stale: Vec<&str> = known.clone();
     for ((source, wire), m) in programs.iter().zip(&wires).zip(model) {
         let i = inty_accepts(source);
         if i == m {
             agree += 1;
         } else if known.contains(&wire.as_str()) {
+            stale.retain(|k| *k != wire.as_str());
             excused += 1;
         } else {
             failures.push(format!(
@@ -159,6 +167,11 @@ fn the_model_agrees_with_inty_on_its_own_programs() {
         programs.len(),
         failures.len()
     );
+    for k in stale {
+        failures.push(format!(
+            "known.txt lists a program inty and the model now agree on, or not in the corpus:\n  wire: {k}"
+        ));
+    }
     assert!(
         failures.is_empty(),
         "{} disagreements:\n\n{}",
