@@ -41,7 +41,7 @@ Paths like `src/infer` are relative to `crates/inty`.
    the wire format, so the differential test runs on inty's own test suite
    and examples, beside the generated programs. Node, and later CPython and
    Lua, check the semantics. (Done for typing on the unit tests' programs
-   in the model's fragment, 949 of them: `inty::model_wire`,
+   in the model's fragment, 1242 of them: `inty::model_wire`,
    `tests/model_corpus.rs`. Not yet: the examples, which use what the
    model lacks, and running the corpus in Node.)
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
