@@ -487,57 +487,6 @@ fn is_stmt(e: &Core) -> bool {
     }
 }
 
-/// The program with every number literal fractional (`n` becomes `n.5`),
-/// so that inty types no number `Int`.
-fn fractional(e: &Core) -> Core {
-    let f = |e: &Core| b(fractional(e));
-    match e {
-        Num(m, x) => Num(m * 10 + 5, x + 1),
-        Func(n, body) => Func(*n, f(body)),
-        Method(n, body) => Method(*n, f(body)),
-        Getter(body) => Getter(f(body)),
-        App(x, args) => App(f(x), args.iter().map(fractional).collect()),
-        Let(m, a, x, y) => Let(*m, a.clone(), f(x), f(y)),
-        Assign(i, x) => Assign(*i, f(x)),
-        Cond(c, t, e) => Cond(f(c), f(t), f(e)),
-        Not(x) => Not(f(x)),
-        Typeof(x) => Typeof(f(x)),
-        Neg(x) => Neg(f(x)),
-        Plus(x, y) => Plus(f(x), f(y)),
-        Minus(x, y) => Minus(f(x), f(y)),
-        Bin(o, x, y) => Bin(*o, f(x), f(y)),
-        Ret(x) => Ret(f(x)),
-        Throw(x) => Throw(f(x)),
-        Seq(x, y) => Seq(f(x), f(y)),
-        While(x, y) => While(f(x), f(y)),
-        TryCatch(x, y) => TryCatch(f(x), f(y)),
-        TryFinally(x, y) => TryFinally(f(x), f(y)),
-        Obj(fields) => Obj(fields
-            .iter()
-            .map(|(l, e)| (l.clone(), fractional(e)))
-            .collect()),
-        Get(x, l) => Get(f(x), l.clone()),
-        Set(x, l, y) => Set(f(x), l.clone(), f(y)),
-        Spread(x, y) => Spread(f(x), f(y)),
-        Arr(es) => Arr(es.iter().map(fractional).collect()),
-        Index(x, i) => Index(f(x), f(i)),
-        SetIndex(x, i, y) => SetIndex(f(x), f(i), f(y)),
-        MCall(x, l, args) => MCall(f(x), l.clone(), args.iter().map(fractional).collect()),
-        Class(n, members) => Class(
-            *n,
-            members
-                .iter()
-                .map(|(l, m, e)| (l.clone(), *m, fractional(e)))
-                .collect(),
-        ),
-        New(x, args) => New(f(x), args.iter().map(fractional).collect()),
-        Unwrap(x, y, z) => Unwrap(f(x), f(y), f(z)),
-        CaseTag(x, l, t, y, z) => CaseTag(f(x), l.clone(), t.clone(), f(y), f(z)),
-        TypeTest(x, t, y, z) => TypeTest(f(x), t.clone(), f(y), f(z)),
-        other => other.clone(),
-    }
-}
-
 /// JavaScript, with a fresh name for every binder.
 struct Js {
     names: Vec<String>,
@@ -2358,7 +2307,7 @@ enum Run {
 
 fn core_type(t: &Type) -> String {
     match t {
-        Type::Number | Type::Int | Type::Literal(LitValue::Number(_)) => "number".into(),
+        Type::Number | Type::Literal(LitValue::Number(_)) => "number".into(),
         Type::String | Type::Literal(LitValue::String(_)) => "string".into(),
         Type::Boolean | Type::Literal(LitValue::Bool(_)) => "boolean".into(),
         Type::Undefined => "undefined".into(),
@@ -2462,14 +2411,6 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     if fewer_params {
         features.insert("fewer parameters");
     }
-    // An error between `Int` and `Number` (`Int[]` and `Number[]`, say,
-    // which don't unify): the model has only `number`.
-    if errors
-        .iter()
-        .any(|e| e.contains("Int") && e.contains("Number"))
-    {
-        features.insert("Int");
-    }
     // inty's unifier gave up on a recursive type (`TypeError::UnifyDepth`).
     if errors.iter().any(|e| e.contains("Type too complex")) {
         features.insert("unify depth");
@@ -2493,10 +2434,6 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     for text in &shown {
         if text.contains("never") {
             features.insert("never");
-        }
-        // An array or string index inty wants an `Int`.
-        if text.contains("expected Int") || text.ends_with("found Int") {
-            features.insert("Int index");
         }
     }
     (typing, features)
@@ -2528,9 +2465,6 @@ fn inty_run(program: &inty::ast::Program) -> Run {
         Err(Stuck::UncaughtThrow(v)) => Run::Thrown(value_wire(v)),
         Err(Stuck::FuelExhausted) => Run::Timeout,
         Err(Stuck::OutOfBounds { .. }) => Run::Fault("outOfBounds".into()),
-        // `Int` arithmetic leaving the safe integers, which the model's
-        // numbers, all one type, don't check.
-        Err(Stuck::IntRange { .. }) => Run::Fault("intRange".into()),
         // Spreading what isn't an object: JavaScript copies a primitive's
         // own properties, which the model and `dynamics` don't.
         Err(Stuck::NotImplemented(what)) if what.contains("spread") => {
@@ -2694,13 +2628,6 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Type(m)) if m == "var" => {
             Some("what doesn't complete (the model's free type variable)")
         }
-        // Roadmap phase 4, the other way: the model folds `Int` into
-        // `number`, but in inty `Int ≤ Number` holds for values only, so
-        // `(a) => Int` and `(b) => Number` don't join. Evidence: inty
-        // accepts the program once no literal is an `Int`.
-        (Typing::Reject, Typing::Type(_)) if features.contains("Int") => {
-            Some("Int and Number (the model has only number)")
-        }
         // inty's unifier gives up ("Type too complex") on some spreads over
         // an object whose type is recursive through a method's `this`
         // (`this.a = {...this.a}` in a method that returns `this`): its
@@ -2733,12 +2660,6 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
             if features.contains("typeof object") =>
         {
             Some("a record case kept after `typeof x !== \"object\"`")
-        }
-        // Roadmap phase 4: inty wants an array's or a string's index to be
-        // an `Int`; the model takes any number, a fractional one being out
-        // of bounds (a fault).
-        (Typing::Reject, Typing::Type(_)) if features.contains("Int index") => {
-            Some("Int indices (the model has only number)")
         }
         _ => None,
     }
@@ -2908,7 +2829,6 @@ fn inty_agrees_with_the_lean_model() {
         // Parsing, inference and the recursive dynamics need inty's big
         // stack.
         let source = js.clone();
-        let fractional_source = javascript(&fractional(core));
         let reads_variant = reads_variant_field(core);
         let sum_join = joins_sum(core);
         let (typing, mut features, run) =
@@ -2919,15 +2839,7 @@ fn inty_agrees_with_the_lean_model() {
                     })
                 };
                 let program = parse(&source);
-                let (typing, mut features) = inty_typing(&program, &source);
-                if typing == Typing::Reject
-                    && matches!(
-                        inty_typing(&parse(&fractional_source), &fractional_source).0,
-                        Typing::Type(_)
-                    )
-                {
-                    features.insert("Int");
-                }
+                let (typing, features) = inty_typing(&program, &source);
                 (typing, features, inty_run(&program))
             });
         if reads_variant {
@@ -3082,8 +2994,7 @@ fn inty_agrees_with_the_lean_model() {
                 Run::Value(_) | Run::Stuck(_) | Run::Thrown(_) | Run::Fault(_)
             )
         };
-        let int_range = run == Run::Fault("intRange".into());
-        if finished(&run) && finished(&model_run) && run != model_run && !int_range {
+        if finished(&run) && finished(&model_run) && run != model_run {
             failures.push(report("the interpreters disagree"));
         }
         // The engine. Where an interpreter finishes, the engine agrees; a

@@ -1,12 +1,12 @@
 
-Error: Type mismatch: expected '{a: String, b: Number}', found '{a: Number | Int, b: Number | Int}'
+Error: Type mismatch: expected '{a: String, b: Number}', found '{a: Number, b: Number}'
    ╭─[ main.js:4:11 ]
    │
  4 │ const p = pair(1, 2);
    │           ─────┬────  
-   │                ╰────── Type mismatch: expected '{a: String, b: Number}', found '{a: Number | Int, b: Number | Int}'
+   │                ╰────── Type mismatch: expected '{a: String, b: Number}', found '{a: Number, b: Number}'
    │ 
-   │ Note: Cannot unify expected '{a: String, b: Number}' with found '{a: Number | Int, b: Number | Int}'
+   │ Note: Cannot unify expected '{a: String, b: Number}' with found '{a: Number, b: Number}'
 ───╯
 
 

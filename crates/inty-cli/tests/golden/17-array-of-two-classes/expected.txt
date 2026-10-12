@@ -1,9 +1,9 @@
-Error: Array elements have different types: 'Base<Number | Int>' and 'Other<a>'
+Error: Array elements have different types: 'Base<Number>' and 'Other'
    ╭─[ main.js:3:26 ]
    │
  3 │ const xs = [new Base(1), new Other()];
    │                          ─────┬─────  
-   │                               ╰─────── Array elements have different types: 'Base<Number | Int>' and 'Other<a>'
+   │                               ╰─────── Array elements have different types: 'Base<Number>' and 'Other'
    │ 
-   │ Help: an array holds one element type. For a fixed group of values annotate a tuple, e.g. `/** const p: [Base<Number | Int>, Other<a>] */` (or `[Base<Number | Int>, Other<a>][]` for a list of them), or use a record `{ a: Base<Number | Int>, b: Other<a> }`; for either type in any position, annotate the element union `(Base<Number | Int> | Other<a>)[]`
+   │ Help: an array holds one element type. For a fixed group of values annotate a tuple, e.g. `/** const p: [Base<Number>, Other] */` (or `[Base<Number>, Other][]` for a list of them), or use a record `{ a: Base<Number>, b: Other }`; for either type in any position, annotate the element union `(Base<Number> | Other)[]`
 ───╯

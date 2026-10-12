@@ -106,7 +106,6 @@ fn zonk_with_visited(
     };
     match ty {
         Type::Number => Type::Number,
-        Type::Int => Type::Int,
         Type::String => Type::String,
         Type::Boolean => Type::Boolean,
         Type::Undefined => Type::Undefined,
@@ -376,7 +375,6 @@ fn zonk_filtered(table: &mut VarTable, subst: &Subst, ty: &Type, quantified: &[T
         }
         Type::Var(_) => ty.clone(), // Skolem
         Type::Number
-        | Type::Int
         | Type::String
         | Type::Boolean
         | Type::Undefined

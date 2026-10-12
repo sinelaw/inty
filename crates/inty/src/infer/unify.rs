@@ -140,7 +140,6 @@ impl InferState {
 
             // Primitives
             (Type::Number, Type::Number) => Ok(()),
-            (Type::Int, Type::Int) => Ok(()),
             (Type::String, Type::String) => Ok(()),
             (Type::Boolean, Type::Boolean) => Ok(()),
             (Type::Undefined, Type::Undefined) => Ok(()),
@@ -837,23 +836,9 @@ impl InferState {
             .format_type(&shown)
     }
 
-    /// `ty` resolved and tidied for display, a number-kinded variable
-    /// shown as `Int | Number` (which it is, not yet known).
+    /// `ty` resolved and tidied for display.
     fn display_form(&self, tidy: &mut crate::types::TidyEnv, ty: &Type) -> Type {
         let flat = self.flatten_type(ty);
-        let numeric: Vec<TVarName> = flat
-            .free_vars()
-            .into_iter()
-            .filter(|v| self.numeric_vars.contains(v))
-            .collect();
-        let flat = if numeric.is_empty() {
-            flat
-        } else {
-            let either = Type::Union(vec![Type::Int, Type::Number]);
-            let subst: crate::types::Subst =
-                numeric.into_iter().map(|v| (v, either.clone())).collect();
-            subst.apply(&flat)
-        };
         tidy.tidy_type(&flat)
     }
 

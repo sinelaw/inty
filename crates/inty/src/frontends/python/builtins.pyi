@@ -1,7 +1,7 @@
 # Curated Python builtins prelude for inty.
 #
 # Signatures are *inspired by* typeshed but written against inty's native
-# primitives: `int` -> Int, `float` -> Number, `str` -> String, `bool` -> Boolean,
+# primitives: `int` and `float` -> Number, `str` -> String, `bool` -> Boolean,
 # `list[T]` -> Array<T>. Builtins inty cannot model precisely — variadics
 # (`print`, `min`), heavy overloads, gradual `Any` — are exposed opaquely
 # (a `forall a. a` binding) so calls type-check without false positives,

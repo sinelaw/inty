@@ -108,12 +108,10 @@ impl TypeMapper {
         let d = depth + 1;
         Ok(match ty {
             Type::Number => GoType::Float,
-            Type::Int => GoType::Int,
             Type::String => GoType::Str,
             Type::Boolean => GoType::Bool,
             Type::Undefined => GoType::Unit,
             Type::Literal(lit) => match lit {
-                inty::types::LitValue::Number(n) if is_int(*n) => GoType::Int,
                 inty::types::LitValue::Number(_) => GoType::Float,
                 inty::types::LitValue::String(_) => GoType::Str,
                 inty::types::LitValue::Bool(_) => GoType::Bool,
@@ -536,7 +534,6 @@ pub fn canonical(ty: &Type) -> Type {
 
 fn widen(ty: &Type) -> Type {
     match ty {
-        Type::Literal(inty::types::LitValue::Number(n)) if is_int(*n) => Type::Int,
         Type::Literal(inty::types::LitValue::Number(_)) => Type::Number,
         Type::Literal(inty::types::LitValue::String(_)) => Type::String,
         Type::Literal(inty::types::LitValue::Bool(_)) => Type::Boolean,

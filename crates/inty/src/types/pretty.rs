@@ -133,7 +133,7 @@ impl PrettyContext {
 
     fn write_type_ts<W: Write>(&mut self, w: &mut W, ty: &Type, in_func_arg: bool) -> fmt::Result {
         match ty {
-            Type::Number | Type::Int => write!(w, "number"),
+            Type::Number => write!(w, "number"),
             Type::String => write!(w, "string"),
             Type::Boolean => write!(w, "boolean"),
             Type::Undefined => write!(w, "undefined"),
@@ -308,7 +308,6 @@ impl PrettyContext {
         }
         match ty {
             Type::Number => write!(w, "Number"),
-            Type::Int => write!(w, "Int"),
             Type::String => write!(w, "String"),
             Type::Boolean => write!(w, "Boolean"),
             Type::Undefined => write!(w, "Undefined"),
@@ -696,25 +695,6 @@ impl PrettyContext {
             ClassName::Plus => {
                 write!(w, "Plus ")?;
                 self.write_type(w, &pred.types[0], true)?;
-                // `Plus a` for `Plus a a a`.
-                if pred.types.iter().any(|t| t != &pred.types[0]) {
-                    for t in &pred.types[1..] {
-                        write!(w, " ")?;
-                        self.write_type(w, t, true)?;
-                    }
-                }
-            }
-            ClassName::Num | ClassName::NumLit => {
-                write!(w, "Num ")?;
-                self.write_type(w, &pred.types[0], true)?;
-            }
-            ClassName::Arith => {
-                write!(w, "Arith ")?;
-                self.write_type(w, &pred.types[0], true)?;
-                write!(w, " ")?;
-                self.write_type(w, &pred.types[1], true)?;
-                write!(w, " ")?;
-                self.write_type(w, &pred.types[2], true)?;
             }
             ClassName::IndexWrite => {
                 write!(w, "IndexWrite ")?;
@@ -890,8 +870,6 @@ impl Display for ClassName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ClassName::Plus => write!(f, "Plus"),
-            ClassName::Num | ClassName::NumLit => write!(f, "Num"),
-            ClassName::Arith => write!(f, "Arith"),
             ClassName::Indexable => write!(f, "Indexable"),
             ClassName::IndexWrite => write!(f, "IndexWrite"),
             ClassName::FieldWrite => write!(f, "FieldWrite"),

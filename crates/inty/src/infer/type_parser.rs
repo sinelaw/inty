@@ -276,8 +276,7 @@ impl<'a> TypeParser<'a> {
         self.parse_simple_type()
     }
 
-    /// One constraint of a `where` clause: `Plus t`, `Num t`, `Arith t t t`,
-    /// `Indexable t t t`, or `t has {name: T, …}` (one `HasProp` per field).
+    /// One constraint of a `where` clause: `Plus t`, `Indexable t t t`, or `t has {name: T, …}` (one `HasProp` per field).
     fn parse_constraint(&mut self) -> ParseResult<()> {
         let rest = &self.input[self.pos..];
         let keyword = |kw: &str| {
@@ -288,43 +287,10 @@ impl<'a> TypeParser<'a> {
                     .is_some_and(|c| c.is_whitespace())
         };
         if keyword("Plus") {
-            // `Plus t`, short for `Plus t t t`, or `Plus a b c`.
             self.pos += 4;
             self.skip_whitespace();
             let a = self.parse_simple_type()?;
-            self.skip_whitespace();
-            let more = self.input[self.pos..]
-                .chars()
-                .next()
-                .is_some_and(|c| !matches!(c, ',' | '=' | ')'));
-            if more {
-                let b = self.parse_simple_type()?;
-                self.skip_whitespace();
-                let c = self.parse_simple_type()?;
-                self.preds.push(TypePred::plus3(a, b, c));
-            } else {
-                self.preds.push(TypePred::plus(a));
-            }
-            return Ok(());
-        }
-        if keyword("Num") {
-            self.pos += 3;
-            self.skip_whitespace();
-            let t = self.parse_simple_type()?;
-            self.preds.push(TypePred::num(t));
-            return Ok(());
-        }
-        if keyword("Arith") {
-            self.pos += "Arith".len();
-            let mut ts = Vec::new();
-            for _ in 0..3 {
-                self.skip_whitespace();
-                ts.push(self.parse_simple_type()?);
-            }
-            let c = ts.pop().expect("three");
-            let b = ts.pop().expect("three");
-            let a = ts.pop().expect("three");
-            self.preds.push(TypePred::arith(a, b, c));
+            self.preds.push(TypePred::plus(a));
             return Ok(());
         }
         if keyword("FieldWrite") {
@@ -373,7 +339,7 @@ impl<'a> TypeParser<'a> {
                 .is_some_and(|c| c.is_whitespace() || c == '{'))
         {
             return Err(self.error(
-                "expected a constraint: `Plus t`, `Num t`, `Arith a b c`, `Indexable t i e` \
+                "expected a constraint: `Plus t`, `Indexable t i e` \
                  or `t has {field: T}`"
                     .to_string(),
             ));
@@ -1052,7 +1018,6 @@ impl<'a> TypeParser<'a> {
 
         match ident {
             "Number" | "number" => Ok(Type::Number),
-            "Int" => Ok(Type::Int),
             "String" | "string" => Ok(Type::String),
             "Boolean" | "boolean" => Ok(Type::Boolean),
             "Undefined" | "undefined" | "void" => Ok(Type::Undefined),
@@ -1365,6 +1330,10 @@ fn unsupported_ts_alternative(ident: &str) -> Option<&'static str> {
         "unknown" => Some(
             "Help: same as `any` — the parser cannot model an opaque \"any value\" without subtyping.",
         ),
+        "Int" | "int" => Some(
+            "Help: inty has one number type, `Number`, as JavaScript has; write `Number`. \
+             (Whether a number is an integer is for a code generator to work out.)",
+        ),
         // `never` is supported as the empty union; not rejected.
         _ => None,
     }
@@ -1401,7 +1370,6 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         }
         Type::Var(_) => ty.clone(),
         Type::Number
-        | Type::Int
         | Type::String
         | Type::Boolean
         | Type::Undefined

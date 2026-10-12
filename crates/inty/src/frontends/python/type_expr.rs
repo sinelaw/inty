@@ -403,7 +403,7 @@ impl Cursor<'_> {
 /// Map a bare type name with no subscript.
 fn map_simple_name(name: &str) -> TypeAst {
     match name {
-        "int" => TypeAst::Int,
+        "int" => TypeAst::Number,
         "float" | "complex" => TypeAst::Number,
         "str" => TypeAst::String,
         "bool" => TypeAst::Boolean,
@@ -467,20 +467,20 @@ mod tests {
 
     #[test]
     fn primitives_and_containers() {
-        assert_eq!(ty("int"), Type::Int);
+        assert_eq!(ty("int"), Type::Number);
         assert_eq!(ty("float"), Type::Number);
         assert_eq!(ty("str"), Type::String);
         assert_eq!(ty("bool"), Type::Boolean);
         assert_eq!(ty("None"), Type::Null);
-        assert_eq!(ty("list[int]"), Type::array(Type::Int));
-        assert_eq!(ty("dict[str, int]"), Type::map(Type::Int));
+        assert_eq!(ty("list[int]"), Type::array(Type::Number));
+        assert_eq!(ty("dict[str, int]"), Type::map(Type::Number));
     }
 
     #[test]
     fn callable_maps_to_function() {
         let expected = Type::wrap_callable(Type::raw_func_with_params(
             None,
-            vec![crate::types::FuncParam::required(Type::Int)],
+            vec![crate::types::FuncParam::required(Type::Number)],
             Type::String,
         ));
         assert_eq!(ty("Callable[[int], str]"), expected);
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn erasable_wrappers_are_transparent() {
-        assert_eq!(ty("Final[int]"), Type::Int);
+        assert_eq!(ty("Final[int]"), Type::Number);
         assert_eq!(ty("ClassVar[str]"), Type::String);
         assert_eq!(ty("Annotated[bool, \"doc\"]"), Type::Boolean);
     }
@@ -529,13 +529,13 @@ mod tests {
     #[test]
     fn annotated_metadata_is_erased_and_fully_consumed() {
         for (src, want) in [
-            ("Annotated[int, Depends(get_bar)]", Type::Int),
+            ("Annotated[int, Depends(get_bar)]", Type::Number),
             ("Annotated[str, Field(default=\"x\", gt=0)]", Type::String),
             (
                 "Annotated[bool, ValueRange(3, 10), ctype(\"char\")]",
                 Type::Boolean,
             ),
-            ("Annotated[int, {\"k\": [1, 2]}]", Type::Int),
+            ("Annotated[int, {\"k\": [1, 2]}]", Type::Number),
             ("Annotated[str, mod.Marker.FLAG]", Type::String),
         ] {
             let toks = tokenize(src).expect("tokenize");
@@ -569,7 +569,7 @@ mod tests {
     fn dotted_names_parse_and_resolve() {
         // A qualified *constructor* still maps by its final segment, so a
         // qualified container generic behaves like its bare form.
-        assert_eq!(ty("typing.List[int]"), Type::array(Type::Int));
+        assert_eq!(ty("typing.List[int]"), Type::array(Type::Number));
         assert_eq!(
             ty("t.Optional[str]"),
             Type::union(vec![Type::String, Type::Null])
@@ -589,7 +589,7 @@ mod tests {
         use super::TypeAst;
         let leaf = prop_oneof![
             Just(TypeAst::Number),
-            Just(TypeAst::Int),
+            Just(TypeAst::Number),
             Just(TypeAst::String),
             Just(TypeAst::Boolean),
             Just(TypeAst::Null),
@@ -637,7 +637,6 @@ mod tests {
             let t = InferState::new().lower_type_ast(&ast);
             match &ast {
                 TypeAst::Number => prop_assert_eq!(t, Type::Number),
-                TypeAst::Int => prop_assert_eq!(t, Type::Int),
                 TypeAst::String => prop_assert_eq!(t, Type::String),
                 TypeAst::Boolean => prop_assert_eq!(t, Type::Boolean),
                 TypeAst::Null => prop_assert_eq!(t, Type::Null),

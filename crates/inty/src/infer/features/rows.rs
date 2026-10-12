@@ -956,7 +956,7 @@ impl InferState {
             }
             Type::Array(elem_ty) => {
                 if property == "length" {
-                    return Ok(Type::Int);
+                    return Ok(Type::Number);
                 }
                 // The primitive-method surface is language-specific: Python
                 // `list` vs JavaScript `Array` (issue #67). Lua has no
@@ -976,7 +976,7 @@ impl InferState {
             }
             Type::String => {
                 if property == "length" {
-                    return Ok(Type::Int);
+                    return Ok(Type::Number);
                 }
                 let method = match language {
                     SourceLanguage::Python => {
@@ -1092,7 +1092,6 @@ impl InferState {
         if matches!(
             receiver,
             Type::Number
-                | Type::Int
                 | Type::Boolean
                 | Type::Null
                 | Type::Undefined

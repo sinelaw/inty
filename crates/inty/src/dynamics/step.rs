@@ -13,12 +13,10 @@
 //! into a `Block`-like form so non-terminating typed programs raise
 //! `Stuck::FuelExhausted` cleanly.
 
-use std::collections::HashSet;
 
 use crate::ast::{
     AssignOp, BinOp, Expr, ForInLhs, ForInit, Literal, PropDef, PropKey, Stmt, UnaryOp,
 };
-use crate::span::Span;
 use crate::types::PropName;
 
 use super::env::RuntimeEnv;
@@ -55,21 +53,10 @@ pub enum Stuck {
     /// An uncaught `throw`. The payload is the thrown value.
     UncaughtThrow(Value),
     FuelExhausted,
-    /// `Int` arithmetic (`+ - * % //`, their compound assignments, `++`,
-    /// `--`) whose result is not a safe integer: `|n| ≥ 2^53` (where a
-    /// double may already have rounded), or `NaN` from `% 0`. Arithmetic
-    /// on `Int`s is checked: leaving the range is a fault (the Go backend
-    /// stops at a product or `% 0`), not a soundness violation. Only raised for the
-    /// expressions in [`State::int_ops`].
-    IntRange {
-        op: &'static str,
-        value: f64,
-    },
     /// Reading an array's or a string's element at an index it hasn't (or
     /// at one that isn't a non-negative integer), or storing an array's
     /// past its end. JavaScript reads `undefined` and makes a hole; inty
-    /// types an element read as the element type, so, like `IntRange`,
-    /// this is a fault the program stops at (the Go backend panics), not
+    /// types an element read as the element type, so this is a fault the program stops at (the Go backend panics), not
     /// a soundness violation.
     OutOfBounds {
         index: f64,
@@ -98,14 +85,6 @@ impl std::fmt::Display for Stuck {
             Stuck::NotImplemented(s) => write!(f, "not implemented in dynamics: {}", s),
             Stuck::UncaughtThrow(v) => write!(f, "uncaught throw: {}", v),
             Stuck::FuelExhausted => write!(f, "fuel exhausted"),
-            Stuck::IntRange { op, value } => {
-                write!(
-                    f,
-                    "Int {}: {} is not a safe integer",
-                    op,
-                    Value::Number(*value)
-                )
-            }
             Stuck::OutOfBounds { index, len } => {
                 write!(
                     f,
@@ -123,11 +102,6 @@ impl std::fmt::Display for Stuck {
 pub struct State {
     pub heap: Heap,
     pub fuel: usize,
-    /// The `(start, end)` spans of the expressions the checker typed
-    /// `Int`. Arithmetic at one of these is checked (`Stuck::IntRange`);
-    /// the dynamics has no types of its own, so it's empty unless a
-    /// caller fills it from inference.
-    pub int_ops: HashSet<(usize, usize)>,
 }
 
 impl State {
@@ -135,24 +109,6 @@ impl State {
         State {
             heap: Heap::new(),
             fuel,
-            int_ops: HashSet::new(),
-        }
-    }
-
-    /// `value`, the result of `op` at the expression spanning `span`,
-    /// unless that expression is `Int` arithmetic and `value` is not an
-    /// integer below 2^53 in magnitude (`Number.isSafeInteger`; a result
-    /// of exactly 2^53 may be a rounded 2^53 + 1). `-0` passes: it is an
-    /// integer, and a Go `int` holds it as `0`.
-    fn check_int(&self, span: Span, op: &'static str, value: Value) -> Result<Value, Stuck> {
-        match value {
-            Value::Number(n)
-                if self.int_ops.contains(&(span.start, span.end))
-                    && !(n.fract() == 0.0 && n.abs() < 9007199254740992.0) =>
-            {
-                Err(Stuck::IntRange { op, value: n })
-            }
-            v => Ok(v),
         }
     }
 
@@ -425,7 +381,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         Expr::NewTarget { .. } => Ok(Value::Undefined),
 
         // `++x`, `o.p--`: the target is evaluated once, read, then written.
-        Expr::Unary { op, argument, span }
+        Expr::Unary { op, argument, .. }
             if matches!(
                 op,
                 UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
@@ -442,12 +398,12 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                     })
                 }
             };
-            let (delta, name) = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
-                (1.0, "++")
+            let delta = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
+                1.0
             } else {
-                (-1.0, "--")
+                -1.0
             };
-            let new_val = state.check_int(*span, name, Value::Number(cur + delta))?;
+            let new_val = Value::Number(cur + delta);
             write_place(state, env, &place, new_val.clone())?;
             if matches!(op, UnaryOp::PreInc | UnaryOp::PreDec) {
                 Ok(new_val)
@@ -465,10 +421,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
         }
 
         Expr::Binary {
-            op,
-            left,
-            right,
-            span,
+            op, left, right, ..
         } => {
             // `&&` and `||` short-circuit on the left operand.
             if matches!(op, BinOp::And | BinOp::Or) {
@@ -481,18 +434,11 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
             }
             let l = eval_expr(state, env, left)?;
             let r = eval_expr(state, env, right)?;
-            let v = apply_binary(*op, &l, &r)?;
-            match int_op_name(*op) {
-                Some(name) => state.check_int(*span, name, v),
-                None => Ok(v),
-            }
+            apply_binary(*op, &l, &r)
         }
 
         Expr::Assign {
-            op,
-            left,
-            right,
-            span,
+            op, left, right, ..
         } => {
             // Short-circuit assignment (`??=`, `||=`, `&&=`): evaluate
             // LHS first, decide whether to fire, then evaluate RHS
@@ -529,11 +475,7 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                     let cur = read_place(state, env, &place)?;
                     let rhs = eval_expr(state, env, right)?;
                     let bin = compound_to_binop(*op);
-                    let v = apply_binary(bin, &cur, &rhs)?;
-                    match int_op_name(bin) {
-                        Some(name) => state.check_int(*span, name, v)?,
-                        None => v,
-                    }
+                    apply_binary(bin, &cur, &rhs)?
                 }
             };
             write_place(state, env, &place, new_value.clone())?;
@@ -960,17 +902,6 @@ fn apply(
 
 /// The operators that are `Int` arithmetic when the checker types them
 /// `Int` (the `Arith` class): their results are checked.
-fn int_op_name(op: BinOp) -> Option<&'static str> {
-    match op {
-        BinOp::Add => Some("+"),
-        BinOp::Sub => Some("-"),
-        BinOp::Mul => Some("*"),
-        BinOp::Mod => Some("%"),
-        BinOp::FloorDiv => Some("//"),
-        _ => None,
-    }
-}
-
 fn compound_to_binop(op: AssignOp) -> BinOp {
     match op {
         AssignOp::Assign => unreachable!("Assign handled separately"),

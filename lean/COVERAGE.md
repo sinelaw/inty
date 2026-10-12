@@ -60,7 +60,6 @@ Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 
 | inty | Why |
 |---|---|
-| `check_numeric_if_known` | `Int` and `Number` (roadmap phase 4) |
 | `infer_function_group` | mutually recursive functions (phase 7, strongly connected components) |
 | `infer_group_with_deps` | the same |
 | `infer_ready_groups` | the same |

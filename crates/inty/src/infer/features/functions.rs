@@ -1054,7 +1054,6 @@ impl InferState {
         let result = self.zonk(result);
         let primitive = match &result {
             Type::Number
-            | Type::Int
             | Type::String
             | Type::Boolean
             | Type::Undefined
@@ -1066,7 +1065,6 @@ impl InferState {
                 matches!(
                     t,
                     Type::Number
-                        | Type::Int
                         | Type::String
                         | Type::Boolean
                         | Type::Undefined
