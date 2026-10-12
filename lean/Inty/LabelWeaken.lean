@@ -1126,7 +1126,8 @@ theorem HasTypeS.extLabels {S : Sys} {L L' : List String} (hS : S.LExtable L L')
     exact iha q hq
   | let_ s F _ hv hs ha _ ih₁ ih₂ =>
     simp only [Expr.extAnn]
-    refine .let_ (s.ext L L') F (fun m hm => ?_) ?_ (hs.ext L L') (ha.ext L L') (by simpa using ih₂)
+    refine .let_ (s.ext L L') F (fun m hm => ?_) ?_ (hs.imp id (·.ext L L')) (ha.ext L L')
+      (by simpa using ih₂)
     · rw [Scheme.open_ext, Scheme.openPreds_ext, ← List.map_append, annMode_ext]
       exact ih₁ m hm
     · rcases hv with ⟨h1, h2⟩ | ⟨h1, h2⟩
@@ -1144,6 +1145,11 @@ theorem HasTypeS.extLabels {S : Sys} {L L' : List String} (hS : S.LExtable L L')
     refine .assign (by simp [List.getElem?_map, hi]) (by simpa using ha)
       (by simp [Scheme.ext, hp]) ?_
     simpa [← Scheme.inst_ext] using ih
+  | @assignCheck _ i s T _ _ _ _ hs hi ha hp hT hc _ ih =>
+    refine .assignCheck (s := s.ext L L') hs (by simp [List.getElem?_map, hi]) (by simpa using ha)
+      (by simp [Scheme.ext, hp]) ?_ (hS.closed hc) ih
+    have := TyEq.ext L L' hT
+    rwa [← Scheme.inst_ext, List.map_nil] at this
   | cond _ _ _ ihc iht ihe => exact .cond ihc iht ihe
   | unop hop _ ih =>
     cases hop with

@@ -6,6 +6,7 @@ import Inty.PolyAnn
 import Inty.NoTimeout
 import Inty.AssignSub
 import Inty.MergeScheme
+import Inty.LabelWeaken
 
 /-!
 # Axiom audit
@@ -116,3 +117,6 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.spreadMerge_needed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.spreadMerge_needed
+
+/-- info: 'Inty.HasType.extLabels' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.HasType.extLabels
