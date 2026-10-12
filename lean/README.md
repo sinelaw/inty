@@ -104,12 +104,32 @@ ctxFtv Γ = [] → (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => fa
   ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ'
 ```
 
-`monoAnn` says the program's annotations are monomorphic. With a
-polymorphic one the rule can type a program inference rejects: the
-initialiser may need a constraint on a rigid variable that waits on a type
-variable of the context, which a complete algorithm would keep as an
-implication constraint, as GHC's OutsideIn(X) does; this one reports an
-escape.
+`monoAnn` says the program's annotations are monomorphic. With
+polymorphic ones (`Inty/PolyAnn.lean`), inference has one more way to
+reject a program than the rules: a rigid variable escaping. Where none
+escapes, in whatever context an annotation's initialiser is checked at
+fresh rigid variables (neither the instance of a type variable of the
+context nor a constraint left after improvement mentions them:
+`RigidStays`, `Expr.PolyOK`), it finds every typing
+(`infer_complete_polyOK`, `inferProgram_complete_polyOK`), and its
+constrained type is principal (`inferProgramC_principal_polyOK`): the typing
+checks the initialiser at any rigid names outside a finite set, and renamed
+(`HasTypeS.rsub` with a swap), it is a typing at inference's. Every program
+with only monomorphic annotations is `PolyOK`, and so is
+`/** const id: <a>(a) => a */ const id = (y) => y; id(1)` (`polyId_polyOK`).
+Where a rigid variable does escape, inference is incomplete
+(`polyGap_separates`): in
+
+```
+/** const f: <a>(a) => a */
+const f = (y) => { const g = true ? (o) => o.l : (o) => y; return y; };
+```
+
+`o.l` has the rigid type `a`, which leaves `HasProp l` on `o`'s type, a
+variable nothing fixes, with the field's type `a`. A typing picks `o` the
+type `{l: a}` at each rigid name; inference would have to keep the
+constraint on the rigid variable waiting on a type variable, an implication
+constraint, as GHC's OutsideIn(X) does, and rejects it instead.
 
 `scoped` is the pair of scope checks JavaScript makes: a program assigns
 only to its own `let`s and parameters, never to a `const`

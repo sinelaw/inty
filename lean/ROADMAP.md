@@ -415,9 +415,11 @@ touching the generic proofs.
     finite set, and the binding has every instance. Soundness and inference
     soundness are proved; inference rejects a rigid variable escaping into
     the context or into the constraints left. Completeness is proved for
-    programs whose annotations are monomorphic (`Expr.monoAnn`): a complete
-    algorithm for polymorphic ones needs implication constraints (a rigid
-    variable's constraint waiting on a variable of the context, as in GHC's
+    every program where no rigid variable escapes (`Expr.PolyOK`,
+    `Inty/PolyAnn.lean`), which includes those whose annotations are
+    monomorphic, and can fail where one does (`polyGap_separates`): a complete
+    algorithm would keep the escaping constraint, on a rigid variable and
+    waiting on a type variable, as an implication constraint (GHC's
     OutsideIn(X)). An annotation with constraints (`<a> where Plus a => …`)
     isn't in the model.
 
