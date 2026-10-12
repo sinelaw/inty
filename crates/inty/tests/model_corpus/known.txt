@@ -6,10 +6,6 @@
 # the model's function types in annotations are called detached.
 (letann (rec (s:m (fn number number)) (s:x number)) (obj (field s:x (num 1 0)) (method s:m (func 1 (ret (plus (get (var 2) s:x) (var 0)))))) (let (mcall (var 0) s:m (num 1 0)) (undef)))
 
-# A record indexed by a string variable: inty reads a field; the model
-# indexes only arrays and strings.
-(let (obj (field s:x (str s:s)) (field s:y (str s:t))) (let (func 1 (ret (index (var 3) (var 0)))) (let (app (var 0) (str s:x)) (undef))))
-
 # inty's spread over an operand of an unknown type (roadmap: a deferred
 # Spread constraint, merging slot by slot once the operand is known).
 (let (func 2 (ret (spread (var 0) (var 1)))) (let (spread (obj (field s:a (str s:s))) (app (var 0) (obj (field s:a (num 1 0))) (obj))) (undef)))

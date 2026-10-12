@@ -463,6 +463,29 @@ Error: Type mismatch: expected 'Number', found 'String'
    │                  ╰──────── Type mismatch: expected 'Number', found 'String'
 ```
 
+**No reading a record with a key known only at run time.** `o[k]` on a record needs `k` to be a literal (`o["x"]` reads the field `x`, as `o.x` does). A string variable may name no field, and then the read gives `undefined`. An object used as a string-keyed map is a `Dict<V>`, whose read gives `V | Undefined` (see [Primitive and compound types](#primitive-and-compound-types)).
+
+```javascript
+// ❌ Rejected
+const o = {x: "s", y: "t"};
+function get(k) { return o[k]; }
+
+// ✅ Accepted
+/** const d: Dict<String> */
+const d = {x: "s", y: "t"};
+function get2(k) { return d[k] ?? ""; }
+```
+
+```
+Error: Type '{x: String, y: String}' is not an instance of Indexable (a key known only at run time may name no field: use a literal key, or a `Dict<V>`)
+   ╭─[ <stdin>:2:26 ]
+   │
+ 2 │ function get(k) { return o[k]; }
+   │                          ──┬─  
+   │                            ╰─── Type '{x: String, y: String}' is not an instance of Indexable (a key known only at run time may name no field: use a literal key, or a `Dict<V>`)
+───╯
+```
+
 **No `&&` / `||` between values of different types.** `&&` and `||` return one of their operands and inty unifies them, so `1 && "hi"` is rejected. The default-value pattern `name || "Guest"` only works when `name` is also `String`.
 
 ```javascript

@@ -3946,14 +3946,20 @@ fn record_indexing_constrains_the_element() {
         &[]
     )
     .is_err());
-    // A literal key selects the field; a computed key reads any field.
+    // A literal key selects the field.
     let src = "const o = {x: \"s\", y: 1};\nconst a = o[\"x\"];\nconst b = o[\"y\"];";
     assert_eq!(
         check_program(src, &["a", "b"]).unwrap(),
         ["String", "Number"]
     );
+    // A key known only at run time may name no field (`get("z")` reads
+    // `undefined`): an error, which says to use a `Dict`.
     let src =
-        "const o = {x: \"s\", y: \"t\"};\nfunction get(k) { return o[k]; }\nconst v = get(\"x\");";
+        "const o = {x: \"s\", y: \"t\"};\nfunction get(k) { return o[k]; }\nconst v = get(\"z\").length;";
+    let err = check_program(src, &[]).unwrap_err();
+    assert!(err.contains("Dict"), "{}", err);
+    // A `Dict` says so in its type.
+    let src = "/** const o: Dict<String> */\nconst o = {x: \"s\"};\nfunction get(k) { return o[k] ?? \"\"; }\nconst v = get(\"z\");";
     assert_eq!(check_program(src, &["v"]).unwrap(), ["String"]);
 }
 
