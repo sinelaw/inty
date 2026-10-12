@@ -2,6 +2,7 @@ import Inty.Builtins
 import Inty.InferComplete
 import Inty.Principal
 import Inty.Textbook
+import Inty.PolyAnn
 
 /-!
 # Axiom audit
@@ -70,3 +71,18 @@ new axiom changes this output and fails the build.
 
 /-- info: 'Inty.jones_separates' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Inty.jones_separates
+
+/-- info: 'Inty.infer_complete_polyOK' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.infer_complete_polyOK
+
+/-- info: 'Inty.inferProgram_complete_polyOK' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferProgram_complete_polyOK
+
+/-- info: 'Inty.inferProgramC_principal_polyOK' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.inferProgramC_principal_polyOK
+
+/-- info: 'Inty.polyGap_separates' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.polyGap_separates
+
+/-- info: 'Inty.polyId_polyOK' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Inty.polyId_polyOK

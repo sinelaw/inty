@@ -2,6 +2,7 @@ import Inty.Builtins
 import Inty.InferComplete
 import Inty.Principal
 import Inty.Textbook
+import Inty.PolyAnn
 import Inty.PinCount
 
 /-!
@@ -175,6 +176,61 @@ example : HasType L C Γ R rm .check e₁ .unknown → HasType L C Γ R rm md e�
 example : (Expr.let_ m ann e₁ e₂).monoAnn =
     ((ann.all fun a => a.arity == 0) && e₁.monoAnn && e₂.monoAnn) := by
   simp [Expr.monoAnn]
+
+/-- With polymorphic annotations, completeness holds where no rigid type
+variable escapes (`RigidStays`), in any context: inference rejects a program
+where one does, and `polyGap` is typed but rejected. -/
+example : RigidStays L a e₁ ↔
+    ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {n : Nat} {o₁ : Out} {σi : Subst} {preds₁ : List Pred},
+      Ctx.Below n Γ → Ret.Below n R → RetOk rm R →
+      (infer L Γ R rm (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity))) e₁
+        n).map (checkEx (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity)))
+          e₁) = some o₁ →
+      improveAll false o₁.preds.length o₁.preds = some (σi, preds₁) →
+      (∀ b < n, maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉
+        ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys) ∧
+        maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ preds₁.flatMap Pred.rkeys := Iff.rfl
+
+example : (Expr.let_ m ann e₁ e₂).PolyOK L ↔
+    ((∀ a ∈ ann, 0 < a.arity → RigidStays L a e₁) ∧ e₁.PolyOK L) ∧ e₂.PolyOK L := Iff.rfl
+
+example : ∀ (L : List String) {e : Expr}, e.monoAnn = true → e.PolyOK L := Expr.polyOK_of_monoAnn
+
+example : ∀ (L : List String) (e : Expr), e.PolyOK L → InferComplete L e := infer_complete_polyOK
+
+example : ∀ {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}, ctxFtv Γ = [] →
+    (∀ p ∈ C, p.OnVarShaped) → e.scoped (Γ.map fun _ => false) = true → e.PolyOK L →
+    HasType L C Γ none .synth .synth e τ' →
+    ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
+  inferIn_complete_polyOK
+
+example : ∀ {e : Expr} {τ' : Ty}, e.scoped [] = true → e.PolyOK e.labels.eraseDups →
+    HasType e.labels.eraseDups [] [] none .synth .synth e τ' →
+    ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
+  inferProgram_complete_polyOK
+
+example : ∀ {e : Expr} {τ : Ty} {P C : List Pred}, (∀ p ∈ C, p.OnVarShaped) → e.scoped [] = true →
+    e.PolyOK e.labels.eraseDups → inferProgramC e = some (τ, P) → ∀ τ' : Ty,
+    (HasType e.labels.eraseDups C [] none .synth .synth e τ' ↔
+      ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ) :=
+  inferProgramC_principal_polyOK
+
+example : HasType polyGap.labels.eraseDups [] [] none .synth .synth polyGap .number ∧
+    inferProgram polyGap = none :=
+  polyGap_separates
+
+example : ¬ polyGap.PolyOK polyGap.labels.eraseDups := polyGap_not_polyOK
+
+example : polyGap = .let_ false (some ⟨1, .fn .undefined [.bound 0] (.bound 0), []⟩)
+    (.func 1 (.let_ false none
+      (.cond (.lit (.boolean true)) (.func 1 (.get (.var 0) "l")) (.func 1 (.var 3)))
+      (.ret (.var 1))))
+    (.lit (.number 1)) := rfl
+
+example : ∀ L, polyId.PolyOK L := polyId_polyOK
+
+example : polyId = .let_ false (some ⟨1, .fn .undefined [.bound 0] (.bound 0), []⟩)
+    (.func 1 (.var 0)) (.app (.var 0) [.lit (.number 1)]) := rfl
 
 example : Agree n σ φ ψ ↔ ∀ a < n, TyEq (((Ty.var a).subst σ).subst φ) ((Ty.var a).subst ψ) :=
   Iff.rfl

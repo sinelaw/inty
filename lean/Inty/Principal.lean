@@ -164,16 +164,16 @@ theorem inferInC_sound {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P : Li
     exact ⟨HoldsOrVar.of_settled hall, by simpa [hclosed] using infer_sound ho RetOk.synth .none σi preds hsat⟩
   · cases h
 
-/-- Every typing of a program (with only monomorphic annotations, under
+/-- Every typing of a program (letting no rigid type variable escape, under
 assumptions on type variables) is an instance of inference's constrained
 type: its type is one up to equal types, and its assumptions entail the
 instance's constraints. -/
-theorem inferInC_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
+theorem inferInC_complete_polyOK {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
     (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
-    (hm : e.scoped (Γ.map fun _ => false) = true) (hmono : e.monoAnn = true)
+    (hm : e.scoped (Γ.map fun _ => false) = true) (hpoly : e.PolyOK L)
     (ht : HasType L C Γ none .synth .synth e τ') :
     ∃ τ P, inferInC L Γ e = some (τ, P) ∧ ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ := by
-  obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete L e hmono (n := 0) (ψ := []) (R := none)
+  obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete_polyOK L e hpoly (n := 0) (ψ := []) (R := none)
     RetOk.synth nofun .none .none (fun a ha => by rw [hΓ] at ha; cases ha) (fun a ha => by simp [Ret.ftv] at ha)
     (fun p hp => (hC p hp).assumable false) (by rw [Ctx.subst_nil]; exact CtxEq.refl Γ) (RetEq.refl _) ht
   obtain ⟨σi, preds, himp, habs, hsat', hkeep, _⟩ :=
@@ -182,6 +182,13 @@ theorem inferInC_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C 
   have hall : preds.all Pred.settled = true := List.all_eq_true.mpr (fun p hp =>
     Pred.settled_of_keep hC (hkeep p hp) (hsat' p hp))
   exact ⟨o.τ.subst σi, preds, by simp [inferInC, hm, h, himp, hall], φ, (habs _).trans hτ, hsat'⟩
+
+theorem inferInC_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
+    (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
+    (hm : e.scoped (Γ.map fun _ => false) = true) (hmono : e.monoAnn = true)
+    (ht : HasType L C Γ none .synth .synth e τ') :
+    ∃ τ P, inferInC L Γ e = some (τ, P) ∧ ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ :=
+  inferInC_complete_polyOK hΓ hC hm (Expr.polyOK_of_monoAnn L hmono) ht
 
 /-- Every instance of inference's constrained type is a typing: its type
 under any assumptions that entail its constraints. -/
@@ -196,17 +203,17 @@ theorem inferInC_instance {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P :
   exact hφ p hp
 
 /-- Inference's constrained type `(τ, P)` is principal: under assumptions
-on type variables, a program with only monomorphic annotations has the
-type `τ'` exactly when `τ'` is an instance `τ.subst φ` (up to equal types)
-whose constraints `P.subst φ` the assumptions entail. -/
-theorem inferInC_principal {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P C : List Pred}
+on type variables, a program that lets no rigid type variable escape has
+the type `τ'` exactly when `τ'` is an instance `τ.subst φ` (up to equal
+types) whose constraints `P.subst φ` the assumptions entail. -/
+theorem inferInC_principal_polyOK {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P C : List Pred}
     (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
-    (hm : e.scoped (Γ.map fun _ => false) = true) (hmono : e.monoAnn = true)
+    (hm : e.scoped (Γ.map fun _ => false) = true) (hpoly : e.PolyOK L)
     (h : inferInC L Γ e = some (τ, P)) (τ' : Ty) :
     HasType L C Γ none .synth .synth e τ' ↔ ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ := by
   constructor
   · intro ht
-    obtain ⟨τ₀, P₀, h₀, hφ⟩ := inferInC_complete hΓ hC hm hmono ht
+    obtain ⟨τ₀, P₀, h₀, hφ⟩ := inferInC_complete_polyOK hΓ hC hm hpoly ht
     rw [h] at h₀
     simp only [Option.some.injEq, Prod.mk.injEq] at h₀
     obtain ⟨rfl, rfl⟩ := h₀
@@ -214,17 +221,33 @@ theorem inferInC_principal {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P 
   · rintro ⟨φ, hτ, hsat⟩
     exact .conv (inferInC_instance hΓ h φ hsat) hτ
 
+/-- Principality for programs whose annotations are all monomorphic. -/
+theorem inferInC_principal {L : List String} {Γ : Ctx} {e : Expr} {τ : Ty} {P C : List Pred}
+    (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
+    (hm : e.scoped (Γ.map fun _ => false) = true) (hmono : e.monoAnn = true)
+    (h : inferInC L Γ e = some (τ, P)) (τ' : Ty) :
+    HasType L C Γ none .synth .synth e τ' ↔ ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ :=
+  inferInC_principal_polyOK hΓ hC hm (Expr.polyOK_of_monoAnn L hmono) h τ'
+
 /-- For closed programs: `inferProgram`'s constrained type. -/
 def inferProgramC (e : Expr) : Option (Ty × List Pred) := inferInC e.labels.eraseDups [] e
 
-/-- A closed program with only monomorphic annotations has the type `τ'`,
-assuming constraints on type variables `C`, exactly when `τ'` is an
+/-- A closed program that lets no rigid type variable escape has the type
+`τ'`, assuming constraints on type variables `C`, exactly when `τ'` is an
 instance of its inferred constrained type whose constraints `C` entails. -/
+theorem inferProgramC_principal_polyOK {e : Expr} {τ : Ty} {P C : List Pred}
+    (hC : ∀ p ∈ C, p.OnVarShaped) (hm : e.scoped [] = true) (hpoly : e.PolyOK e.labels.eraseDups)
+    (h : inferProgramC e = some (τ, P)) (τ' : Ty) :
+    HasType e.labels.eraseDups C [] none .synth .synth e τ' ↔
+      ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ :=
+  inferInC_principal_polyOK (Γ := []) rfl hC hm hpoly h τ'
+
+/-- The same for a closed program with only monomorphic annotations. -/
 theorem inferProgramC_principal {e : Expr} {τ : Ty} {P C : List Pred}
     (hC : ∀ p ∈ C, p.OnVarShaped) (hm : e.scoped [] = true) (hmono : e.monoAnn = true)
     (h : inferProgramC e = some (τ, P)) (τ' : Ty) :
     HasType e.labels.eraseDups C [] none .synth .synth e τ' ↔
       ∃ φ, TyEq (τ.subst φ) τ' ∧ Sat C P φ :=
-  inferInC_principal (Γ := []) rfl hC hm hmono h τ'
+  inferProgramC_principal_polyOK hC hm (Expr.polyOK_of_monoAnn _ hmono) h τ'
 
 end Inty

@@ -16,9 +16,11 @@ import Inty.Infer
 import Inty.Rename
 import Inty.InferSound
 import Inty.InferInv
+import Inty.RigidKeys
 import Inty.InferComplete
 import Inty.Principal
 import Inty.Textbook
+import Inty.PolyAnn
 import Inty.Builtins
 import Inty.Examples
 import Inty.Statements

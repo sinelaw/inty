@@ -1,4 +1,4 @@
-import Inty.InferInv
+import Inty.RigidKeys
 
 /-!
 # Completeness of inference
@@ -1211,10 +1211,9 @@ macro "ret_eq" : tactic =>
 
 mutual
 /-- Whether every annotation in a program is monomorphic. Inference is
-complete for such programs (`infer_complete`). A polymorphic annotation's
-initialiser may need a constraint on its rigid type variables that waits on
-a type variable of the context, which the algorithm doesn't keep: it is
-sound for them (`inferProgram_sound`), not complete. -/
+complete for such programs (`infer_complete`). With polymorphic ones it is
+complete where no rigid type variable escapes (`Expr.PolyOK`,
+`infer_complete_polyOK`), and not elsewhere (`polyGap`). -/
 def Expr.monoAnn : Expr → Bool
   | .lit _ | .var _ | .break_ | .continue_ => true
   | .func _ body | .ctor _ body => body.monoAnn
@@ -1234,6 +1233,65 @@ end
 
 @[simp] theorem Expr.monoAnnList_eq (es : List Expr) : Expr.monoAnnList es = es.all Expr.monoAnn := by
   induction es <;> simp_all [Expr.monoAnnList]
+
+/-- At a polymorphic annotation `a` on the initialiser `e₁`, no rigid type
+variable escapes, in any context: where inference checks `e₁` against `a` at
+fresh rigid variables `k`, and improvement decides what it can, neither a
+type variable of the context (one below `n`) nor a constraint left mentions
+`k`. Inference rejects the program where one does, and can miss a typing
+there (`polyGap`): a constraint on `k` that waits on a type variable would
+need an implication constraint to keep, as in OutsideIn(X). -/
+def RigidStays (L : List String) (a : Scheme) (e₁ : Expr) : Prop :=
+  ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {n : Nat} {o₁ : Out} {σi : Subst} {preds₁ : List Pred},
+    Ctx.Below n Γ → Ret.Below n R → RetOk rm R →
+    (infer L Γ R rm (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity))) e₁
+      n).map (checkEx (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity))) e₁) =
+      some o₁ →
+    improveAll false o₁.preds.length o₁.preds = some (σi, preds₁) →
+    (∀ b < n, maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉
+      ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys) ∧
+      maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ preds₁.flatMap Pred.rkeys
+
+mutual
+/-- Whether no rigid type variable escapes at any polymorphic annotation in a
+program (`RigidStays`): inference is complete for such programs
+(`infer_complete_polyOK`), which include those whose annotations are all
+monomorphic (`Expr.polyOK_of_monoAnn`). -/
+def Expr.PolyOK (L : List String) : Expr → Prop
+  | .lit _ | .var _ | .break_ | .continue_ => True
+  | .func _ body | .ctor _ body => body.PolyOK L
+  | .app f args | .mcall f _ args | .new_ f args => f.PolyOK L ∧ Expr.PolyOKList L args
+  | .let_ _ ann e₁ e₂ =>
+    ((∀ a ∈ ann, 0 < a.arity → RigidStays L a e₁) ∧ e₁.PolyOK L) ∧ e₂.PolyOK L
+  | .assign _ e | .unop _ e | .ret e | .throw_ e | .get e _ => e.PolyOK L
+  | .cond c t e | .setIndex c t e | .unwrap c t e | .caseTag c _ _ t e =>
+    (c.PolyOK L ∧ t.PolyOK L) ∧ e.PolyOK L
+  | .binop _ e₁ e₂ | .seq e₁ e₂ | .while_ e₁ e₂ | .tryFinally e₁ e₂ | .spread e₁ e₂
+  | .index e₁ e₂ | .tryCatch e₁ e₂ | .set e₁ _ e₂ => e₁.PolyOK L ∧ e₂.PolyOK L
+  | .obj _ es _ | .arr es | .cls _ es _ => Expr.PolyOKList L es
+/-- `PolyOK`, for a list of expressions. -/
+def Expr.PolyOKList (L : List String) : List Expr → Prop
+  | [] => True
+  | e :: es => e.PolyOK L ∧ Expr.PolyOKList L es
+end
+
+@[simp] theorem Expr.PolyOKList_eq (L : List String) (es : List Expr) :
+    Expr.PolyOKList L es ↔ ∀ e ∈ es, e.PolyOK L := by
+  induction es <;> simp_all [Expr.PolyOKList]
+
+/-- A program whose annotations are all monomorphic has no rigid type
+variables to escape. -/
+theorem Expr.polyOK_of_monoAnn (L : List String) : ∀ {e : Expr}, e.monoAnn = true → e.PolyOK L := by
+  intro e
+  induction e using Expr.ind with
+  | let_ mb ann e₁ e₂ ih₁ ih₂ =>
+    intro h
+    simp only [Expr.monoAnn, Bool.and_eq_true] at h
+    refine ⟨⟨fun a ha h0 => ?_, ih₁ h.1.2⟩, ih₂ h.2⟩
+    subst ha
+    simp only [Option.all, beq_iff_eq] at h
+    omega
+  | _ => intro h; simp_all [Expr.monoAnn, Expr.PolyOK]
 
 /-- What `infer_complete` says of one expression: if the expression has a
 type in a context equal to an instance of inference's, inference finds a
@@ -2739,7 +2797,7 @@ theorem exTy_tyEq {ex : Option Ty} {τ₀ τ' : Ty} (hex : Ex.Closed ex) (hτT :
     rw [← hτT T rfl]; exact hτ₀
 
 theorem infer_complete_lit (L : List String) (l : Lit) :
-    (Expr.lit l).monoAnn = true → InferComplete L (Expr.lit l) := by
+    (Expr.lit l).PolyOK L → InferComplete L (Expr.lit l) := by
   intro _
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC _ _ ht
   obtain ⟨hmd, hmT⟩ := hm
@@ -2765,7 +2823,7 @@ theorem infer_complete_lit (L : List String) (l : Lit) :
     simpa [Lit.ty_subst] using hτ₀
 
 theorem infer_complete_var (L : List String) (i : Nat) :
-    (Expr.var i).monoAnn = true → InferComplete L (Expr.var i) := by
+    (Expr.var i).PolyOK L → InferComplete L (Expr.var i) := by
   intro _
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR _ hΓ' _ ht
   obtain ⟨hmd, -⟩ := hm
@@ -2795,10 +2853,10 @@ theorem infer_complete_var (L : List String) (i : Nat) :
           (by simp [Scheme.instPreds, hse.2.1]) hpe _ hm
         exact (hc d hd).of_predEq hde
 
-theorem infer_complete_func (L : List String) (k : Nat) (body : Expr) (ih : body.monoAnn = true → InferComplete L body) :
-    (Expr.func k body).monoAnn = true → InferComplete L (Expr.func k body) := by
+theorem infer_complete_func (L : List String) (k : Nat) (body : Expr) (ih : body.PolyOK L → InferComplete L body) :
+    (Expr.func k body).PolyOK L → InferComplete L (Expr.func k body) := by
   intro hm
-  simp only [Expr.monoAnn] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih : InferComplete L body := ih hm
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' _ ht
   obtain ⟨hmd, hmT⟩ := hm
@@ -2888,10 +2946,10 @@ theorem infer_complete_func (L : List String) (k : Nat) (body : Expr) (ih : body
         simp only [Ty.subst_fn, funSubst_this, funSubst_ret, hparams]; exact hτ₀
       · exact Sat.absorb habs hsat₁
 
-theorem infer_complete_app (L : List String) (f : Expr) (args : List Expr) (ihf : f.monoAnn = true → InferComplete L f) (iha : ∀ a ∈ args, a.monoAnn = true → InferComplete L a) :
-    (Expr.app f args).monoAnn = true → InferComplete L (Expr.app f args) := by
+theorem infer_complete_app (L : List String) (f : Expr) (args : List Expr) (ihf : f.PolyOK L → InferComplete L f) (iha : ∀ a ∈ args, a.PolyOK L → InferComplete L a) :
+    (Expr.app f args).PolyOK L → InferComplete L (Expr.app f args) := by
   intro hm
-  simp only [Expr.monoAnn, Expr.monoAnnList_eq, Bool.and_eq_true, List.all_eq_true] at hm
+  simp only [Expr.PolyOK, Expr.PolyOKList_eq] at hm
   replace ihf : InferComplete L f := ihf hm.1
   replace iha : ∀ a ∈ args, InferComplete L a := fun a ha => iha a ha (hm.2 a ha)
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -2927,10 +2985,156 @@ theorem infer_complete_app (L : List String) (f : Expr) (args : List Expr) (ihf 
         exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
       · exact Sat.fresh hp₂ hsat₂
 
-theorem infer_complete_let_ (L : List String) (mb : Bool) (ann : Option Scheme) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.monoAnn = true → InferComplete L e₁) (ih₂ : e₂.monoAnn = true → InferComplete L e₂) :
-    (Expr.let_ mb ann e₁ e₂).monoAnn = true → InferComplete L (Expr.let_ mb ann e₁ e₂) := by
+theorem Pred.AssumableAt.rsub {p : Pred} (h : p.AssumableAt false) (ρ : RSubst) :
+    (p.rsub ρ).AssumableAt false := by
+  obtain ⟨cls, args⟩ := p
+  rcases h with ⟨hc, hl, a, rest, ha⟩ | ⟨q, k, τ, s, r, he, -⟩
+  · simp only at hc hl ha
+    subst ha
+    refine .inl ⟨fun e => hc ?_, ?_, a, rest.map (·.rsub ρ), rfl⟩
+    · cases cls <;> simp_all [Pred.rsub, Cls.rsub]
+    · cases cls <;> simp_all [Pred.rsub, Cls.rsub, Cls.arity]
+  · cases he
+    exact .inr ⟨q.rsub ρ, k.rsub ρ, τ.rsub ρ, s.rsub ρ, r.rsub ρ, rfl, nofun⟩
+
+/-- The case of a polymorphic annotation: the typing checks the initialiser
+at any rigid names outside a finite set; renamed, it checks it at
+inference's, inference succeeds there, and where no rigid variable escapes
+(`RigidStays`), the rest is typed at the annotation as before. -/
+theorem infer_complete_letPoly {L : List String} {mb : Bool} {a : Scheme} {e₁ e₂ : Expr}
+    (ih₁ : InferComplete L e₁) (ih₂ : InferComplete L e₂) (hrs : RigidStays L a e₁)
+    {Γ : Ctx} {R : Option Ty} {rm : Mode} {ex : Option Ty} {n : Nat} {ψ : Subst} {C : List Pred}
+    {τ₀ : Ty} {Γ' : Ctx} {R' : Option Ty} {K : List Nat}
+    (hRo : RetOk rm R) (hRc : rm = .check → R' = R) (hex : Ex.Closed ex) (hτT : ∀ T ∈ ex, τ₀ = T)
+    (hΓ : Ctx.Below n Γ) (hR : Ret.Below n R) (hC : ∀ p ∈ C, p.AssumableAt false)
+    (hΓ' : CtxEq Γ' (Ctx.subst ψ Γ)) (hR' : RetEq R' (Ret.subst ψ R))
+    (h0 : 0 < a.arity) (hp : a.preds = []) (hf : a.ftv = []) (hr : a.rkeys = [])
+    (hgen : ∀ k, k ∉ K → HasType L C Γ' R' rm .check e₁ (a.inst (rigids k a.arity)))
+    (hv : e₁.IsValue) (hw : e₂.writes 0 = false)
+    (h₂ : HasType L C (a :: Γ') R' rm (Ex.mode ex) e₂ τ₀) :
+    ∃ o, infer L Γ R rm ex (.let_ mb (some a) e₁ e₂) n = some o ∧ ∃ φ, Agree n o.σ φ ψ ∧
+      TyEq (o.τ.subst φ) τ₀ ∧ Sat C o.preds φ := by
+  -- Inference's rigid name, fresh for its context.
+  have hkΓ : maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ ctxRkeys Γ := fun h =>
+    Nat.lt_irrefl _ (lt_maxPlusOne _ (List.mem_append_left _ h))
+  have hkR : maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ Ret.rkeys R := fun h =>
+    Nat.lt_irrefl _ (lt_maxPlusOne _ (List.mem_append_right _ h))
+  generalize hk : maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) = k at hkΓ hkR
+  have hT := Scheme.inst_rigids_closed hf k a.arity
+  -- The typing at a name `k'`, renamed to `k`, is one inference completes.
+  have key : ∀ k', k' ∉ K → k' ≠ k → k' ∉ ctxRkeys Γ → k' ∉ Ret.rkeys R →
+      ∃ o₁, (infer L Γ R rm (some (a.inst (rigids k a.arity))) e₁ n).map
+          (checkEx (some (a.inst (rigids k a.arity))) e₁) = some o₁ ∧
+        ∃ φ, Agree n o₁.σ φ (Subst.rsub (RSubst.swap k' k) ψ) ∧
+          TyEq (o₁.τ.subst φ) (a.inst (rigids k a.arity)) ∧
+          Sat (C.map (Pred.rsub (RSubst.swap k' k))) o₁.preds φ := by
+    intro k' hK hne hk'Γ hk'R
+    have hren := RSubst.swap_renaming k' k
+    have hinv := RSubst.swap_invol k' k
+    have h := (hgen k' hK).rsub (Sys.narrow_rsubstable hren) [k', k]
+      (fun _ _ _ h => RSubst.swap_dom h)
+    rw [← Scheme.inst_rsub, Scheme.rsub_of_rkeys_nil _ hr, rigids_rsub_swap] at h
+    refine InferComplete.check ih₁ hRo (fun hc => ?_) (Ex.Closed.some hT) (fun _ h => by cases h; rfl)
+      hΓ hR (fun p hp => ?_) ?_ ?_ h
+    · rw [hRc hc]; exact ret_rsub_off (RSubst.swap_off hk'R hkR)
+    · obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp; exact (hC q hq).rsub _
+    · have := hΓ'.rsub hinv
+      rwa [Ctx.subst_rsub hren, ctx_rsub_off (RSubst.swap_off hk'Γ hkΓ)] at this
+    · have := hR'.rsub (RSubst.swap k' k)
+      rwa [Ret.subst_rsub hren, ret_rsub_off (RSubst.swap_off hk'R hkR)] at this
+  -- Inference succeeds on the initialiser, and improvement on what it leaves.
+  have fresh : ∀ {l l' : List Nat}, (∀ x ∈ l', x ∈ l) → maxPlusOne l ∉ l' := fun hl h =>
+    Nat.lt_irrefl _ (lt_maxPlusOne _ (hl _ h))
+  have hC' : ∀ ρ, ∀ c ∈ C.map (Pred.rsub ρ), c.AssumableAt false := fun ρ c hc => by
+    obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hc; exact (hC q hq).rsub _
+  have nek : ∀ {l : List Nat}, k ∈ l → maxPlusOne l ≠ k := fun hl e =>
+    fresh (l' := [k]) (fun x hx => by rw [List.mem_singleton] at hx; subst hx; exact hl)
+      (List.mem_singleton.mpr e)
+  obtain ⟨o₁, h₁o, φ₀, -, -, hsat₀⟩ := key (maxPlusOne (K ++ [k] ++ ctxRkeys Γ ++ Ret.rkeys R))
+    (fresh (fun x hx => by simp [hx])) (nek (by simp)) (fresh (fun x hx => by simp [hx]))
+    (fresh (fun x hx => by simp [hx]))
+  obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check (infer_inv L e₁) hRo (Ex.Closed.some hT) hΓ hR h₁o
+  obtain ⟨σi, preds₁, himp, -⟩ := improveAll_complete (hC' _) o₁.preds.length (Nat.le_refl _) hsat₀
+  obtain ⟨hesc, hescp⟩ := hk ▸ hrs hΓ hR hRo (by rw [hk]; exact h₁o) himp
+  -- A second name, fresh for what inference found too.
+  generalize hks : K ++ [k] ++ ctxRkeys Γ ++ Ret.rkeys R ++
+    (List.range n).flatMap (fun b => ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys) ++
+    preds₁.flatMap Pred.rkeys = ks
+  have hk'σ : ∀ b < n, maxPlusOne ks ∉ ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys := by
+    intro b hb
+    refine fresh (fun x hx => ?_)
+    subst hks
+    simp only [List.mem_append, List.mem_flatMap, List.mem_range]
+    exact .inl (.inr ⟨b, hb, hx⟩)
+  have hk'p : maxPlusOne ks ∉ preds₁.flatMap Pred.rkeys :=
+    fresh (fun x hx => by subst hks; exact List.mem_append_right _ hx)
+  obtain ⟨o₁', h₁o', φ₁, hag₁, -, hsat₁⟩ := key (maxPlusOne ks)
+    (fresh (fun x hx => by subst hks; simp [hx])) (nek (by subst hks; simp))
+    (fresh (fun x hx => by subst hks; simp [hx])) (fresh (fun x hx => by subst hks; simp [hx]))
+  obtain rfl : o₁ = o₁' := Option.some.inj (h₁o.symm.trans h₁o')
+  generalize maxPlusOne ks = k' at hk'σ hk'p hag₁ hsat₁
+  obtain ⟨σi', preds₁', himp', habsi, hsat₁', -, -⟩ :=
+    improveAll_complete (hC' _) o₁.preds.length (Nat.le_refl _) hsat₁
+  obtain ⟨rfl, rfl⟩ : σi = σi' ∧ preds₁ = preds₁' := by
+    simpa using himp.symm.trans himp'
+  obtain ⟨hσi, hpi⟩ := improveAll_inv _ hp₁ himp
+  have hσ₁' := hσ₁.compose hσi
+  have hagS := hag₁.absorb habsi
+  -- Renamed back, `φ₁` is an instance at the typing's names.
+  have hren := RSubst.swap_renaming k' k
+  have hinv := RSubst.swap_invol k' k
+  have hagT : Agree n (Subst.compose σi o₁.σ) (Subst.rsub (RSubst.swap k' k) φ₁) ψ := by
+    intro b hb
+    have hoff : (RSubst.swap k' k).Off ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys :=
+      RSubst.swap_off (hk'σ b hb) (hesc b hb)
+    rw [← Ty.rsub_off hoff, ← Ty.subst_rsub hren]
+    have e : ((Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ)).rsub (RSubst.swap k' k) =
+        (Ty.var b).subst ψ := by
+      rw [show (Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ) =
+        ((Ty.var b).rsub (RSubst.swap k' k)).subst (Subst.rsub (RSubst.swap k' k) ψ) from rfl,
+        ← Ty.subst_rsub hren, Ty.rsub_invol hinv]
+    exact e ▸ TyEq.rsub _ (hagS b hb)
+  have hCC : (C.map (Pred.rsub (RSubst.swap k' k))).map (Pred.rsub (RSubst.swap k' k)) = C := by
+    simp only [List.map_map]
+    exact (List.map_congr_left fun p _ => Pred.rsub_invol hinv p).trans (List.map_id _)
+  have hsatT : Sat C preds₁ (Subst.rsub (RSubst.swap k' k) φ₁) := fun p hp => by
+    have hoff : (RSubst.swap k' k).Off p.rkeys := RSubst.swap_off
+      (fun h => hk'p (List.mem_flatMap.mpr ⟨p, hp, h⟩))
+      (fun h => hescp (List.mem_flatMap.mpr ⟨p, hp, h⟩))
+    have := (hsat₁' p hp).rsubS (Sys.narrow_rsubstable hren)
+    rwa [hCC, Pred.subst_rsub hren, Pred.rsub_off hoff] at this
+  -- The rigid name escapes nowhere inference looks.
+  have hnΓ : k ∉ ctxRkeys (Ctx.subst (Subst.compose σi o₁.σ) Γ) := fun h => by
+    rcases ctxRkeys_subst h with h | ⟨b, hb, h⟩
+    · exact hkΓ h
+    · exact hesc b (hΓ b hb) h
+  have hnR : k ∉ Ret.rkeys (Ret.subst (Subst.compose σi o₁.σ) R) := fun h => by
+    rcases Ret.rkeys_subst h with h | ⟨b, hb, h⟩
+    · exact hkR h
+    · exact hesc b (hR b hb) h
+  -- The rest, typed at the annotation.
+  obtain ⟨o₂, h₂o, φ₂, hag₂, hτ₂, hsat₂⟩ := InferComplete.check ih₂
+    (Γ := a :: Ctx.subst (Subst.compose σi o₁.σ) Γ) (R := Ret.subst (Subst.compose σi o₁.σ) R)
+    (ψ := Subst.rsub (RSubst.swap k' k) φ₁) (hRo.subst _) (RetOk.eq_subst hRo hRc _) hex hτT
+    (Ctx.Below.cons (fun b hb => by simp [hf] at hb) (hσ₁'.ctx_below (hΓ.mono hn₁)))
+    (hσ₁'.ret_below (hR.mono hn₁)) hC
+    (by
+      simp only [Ctx.subst_cons, Scheme.subst_of_ftv_nil _ hf]
+      exact CtxEq.cons (SchemeEq.refl _) (hΓ'.trans (hagT.ctx hΓ).symm))
+    (hR'.trans (hagT.ret hR).symm) h₂
+  refine ⟨⟨Subst.compose o₂.σ (Subst.compose σi o₁.σ), o₂.τ,
+    preds₁.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩, ?_, φ₂, hagT.trans hσ₁' hn₁ hag₂, hτ₂,
+    Sat.app (Sat.agree hag₂ hpi hsatT) hsat₂⟩
+  have hgz : Expr.generalises e₁ e₂ = true := by
+    simp [Expr.generalises, Expr.isValue_complete hv, hw]
+  subst hk
+  simp only [infer, Nat.pos_iff_ne_zero.mp h0, hp, hf, hr, h0, hgz, h₁o, himp, hnΓ, hnR, hescp,
+    h₂o, false_and, and_self, ↓reduceIte, or_self]
+
+theorem infer_complete_let_ (L : List String) (mb : Bool) (ann : Option Scheme) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) :
+    (Expr.let_ mb ann e₁ e₂).PolyOK L → InferComplete L (Expr.let_ mb ann e₁ e₂) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   obtain ⟨⟨hann, hm₁⟩, hm₂⟩ := hm
   replace ih₁ : InferComplete L e₁ := ih₁ hm₁
   replace ih₂ : InferComplete L e₂ := ih₂ hm₂
@@ -2968,9 +3172,11 @@ theorem infer_complete_let_ (L : List String) (mb : Bool) (ann : Option Scheme) 
       refine ⟨⟨Subst.compose o₂.σ o₁.σ, o₂.τ, o₁.preds.map (·.subst o₂.σ) ++ o₂.preds, o₂.next⟩,
         ?_, φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂.trans hτ₀, Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
       simp only [infer, har, hap, haf, har₀, and_self, ↓reduceIte, h₁o, h₂o]
-    | letPoly _ _ h0 =>
-      simp only [Option.all, beq_iff_eq] at hann
-      omega
+    | letPoly _ K h0 hp hf hr hgen hv hw h₂ =>
+      subst hmd'
+      obtain ⟨o, ho, φ, hag, hτ, hsat⟩ := infer_complete_letPoly ih₁ ih₂ (hann a rfl h0) hRo hRc hex
+        hτT hΓ hR hC hΓ' hR' h0 hp hf hr hgen hv hw h₂
+      exact ⟨o, ho, φ, hag, hτ.trans hτ₀, hsat⟩
   | none =>
   cases ht with
   | let_ s F hgen hval hsimp _ h₂ =>
@@ -3045,10 +3251,10 @@ theorem infer_complete_let_ (L : List String) (mb : Bool) (ann : Option Scheme) 
       hτ₂.trans hτ₀, Sat.app (Sat.agree hag₂ hls.2 hsatr) hsat₂⟩
     simp only [infer, h₁, himp, hlsq, hall, ↓reduceIte, h₂o]
 
-theorem infer_complete_assign (L : List String) (i : Nat) (e : Expr) (ih : e.monoAnn = true → InferComplete L e) :
-    (Expr.assign i e).monoAnn = true → InferComplete L (Expr.assign i e) := by
+theorem infer_complete_assign (L : List String) (i : Nat) (e : Expr) (ih : e.PolyOK L → InferComplete L e) :
+    (Expr.assign i e).PolyOK L → InferComplete L (Expr.assign i e) := by
   intro hm
-  simp only [Expr.monoAnn] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih : InferComplete L e := ih hm
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, -⟩ := hm
@@ -3081,10 +3287,10 @@ theorem infer_complete_assign (L : List String) (i : Nat) (e : Expr) (ih : e.mon
       rw [Ty.subst_compose]
       exact (habs _).trans ((hag₁.ty hsb).trans (hsi.symm.trans hτ₀))
 
-theorem infer_complete_cond (L : List String) (c : Expr) (t : Expr) (e : Expr) (ihc : c.monoAnn = true → InferComplete L c) (iht : t.monoAnn = true → InferComplete L t) (ihe : e.monoAnn = true → InferComplete L e) :
-    (Expr.cond c t e).monoAnn = true → InferComplete L (Expr.cond c t e) := by
+theorem infer_complete_cond (L : List String) (c : Expr) (t : Expr) (e : Expr) (ihc : c.PolyOK L → InferComplete L c) (iht : t.PolyOK L → InferComplete L t) (ihe : e.PolyOK L → InferComplete L e) :
+    (Expr.cond c t e).PolyOK L → InferComplete L (Expr.cond c t e) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ihc : InferComplete L c := ihc hm.1.1
   replace iht : InferComplete L t := iht hm.1.2
   replace ihe : InferComplete L e := ihe hm.2
@@ -3124,10 +3330,10 @@ theorem infer_complete_cond (L : List String) (c : Expr) (t : Expr) (e : Expr) (
         exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
       · exact hp₂ p hp
 
-theorem infer_complete_unwrap (L : List String) (e₁ : Expr) (e₂ : Expr) (e₃ : Expr) (ih₁ : e₁.monoAnn = true → InferComplete L e₁) (ih₂ : e₂.monoAnn = true → InferComplete L e₂) (ih₃ : e₃.monoAnn = true → InferComplete L e₃) :
-    (Expr.unwrap e₁ e₂ e₃).monoAnn = true → InferComplete L (Expr.unwrap e₁ e₂ e₃) := by
+theorem infer_complete_unwrap (L : List String) (e₁ : Expr) (e₂ : Expr) (e₃ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) (ih₃ : e₃.PolyOK L → InferComplete L e₃) :
+    (Expr.unwrap e₁ e₂ e₃).PolyOK L → InferComplete L (Expr.unwrap e₁ e₂ e₃) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih₁ : InferComplete L e₁ := ih₁ hm.1.1
   replace ih₂ : InferComplete L e₂ := ih₂ hm.1.2
   replace ih₃ : InferComplete L e₃ := ih₃ hm.2
@@ -3207,10 +3413,10 @@ theorem infer_complete_unwrap (L : List String) (e₁ : Expr) (e₂ : Expr) (e�
         · exact (hσ₂.subst_below (hτb₁.mono hn₂)).mono (Nat.le_succ _)
         · exact hβ
 
-theorem infer_complete_caseTag (L : List String) (e₁ : Expr) (l : Disc) (t : String) (e₂ : Expr) (e₃ : Expr) (ih₁ : e₁.monoAnn = true → InferComplete L e₁) (ih₂ : e₂.monoAnn = true → InferComplete L e₂) (ih₃ : e₃.monoAnn = true → InferComplete L e₃) :
-    (Expr.caseTag e₁ l t e₂ e₃).monoAnn = true → InferComplete L (Expr.caseTag e₁ l t e₂ e₃) := by
+theorem infer_complete_caseTag (L : List String) (e₁ : Expr) (l : Disc) (t : String) (e₂ : Expr) (e₃ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) (ih₃ : e₃.PolyOK L → InferComplete L e₃) :
+    (Expr.caseTag e₁ l t e₂ e₃).PolyOK L → InferComplete L (Expr.caseTag e₁ l t e₂ e₃) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih₁ : InferComplete L e₁ := ih₁ hm.1.1
   replace ih₂ : InferComplete L e₂ := ih₂ hm.1.2
   replace ih₃ : InferComplete L e₃ := ih₃ hm.2
@@ -3328,10 +3534,10 @@ theorem infer_complete_caseTag (L : List String) (e₁ : Expr) (l : Disc) (t : S
         · exact hσv
         · exact (hσ₂.subst_below (hρv.mono hn₂)).mono (Nat.le_succ _)
 
-theorem infer_complete_unop (L : List String) (op : UnOp) (e : Expr) (ih : e.monoAnn = true → InferComplete L e) :
-    (Expr.unop op e).monoAnn = true → InferComplete L (Expr.unop op e) := by
+theorem infer_complete_unop (L : List String) (op : UnOp) (e : Expr) (ih : e.PolyOK L → InferComplete L e) :
+    (Expr.unop op e).PolyOK L → InferComplete L (Expr.unop op e) := by
   intro hm
-  simp only [Expr.monoAnn] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih : InferComplete L e := ih hm
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, -⟩ := hm
@@ -3352,10 +3558,10 @@ theorem infer_complete_unop (L : List String) (op : UnOp) (e : Expr) (ih : e.mon
       exact ⟨_, by simp only [infer, h₁, hσ']; rfl, φ₁, hag₁.absorb habs, by simpa using hτ₀,
         Sat.absorb habs hsat₁⟩
 
-theorem infer_complete_binop (L : List String) (op : BinOp) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.monoAnn = true → InferComplete L e₁) (ih₂ : e₂.monoAnn = true → InferComplete L e₂) :
-    (Expr.binop op e₁ e₂).monoAnn = true → InferComplete L (Expr.binop op e₁ e₂) := by
+theorem infer_complete_binop (L : List String) (op : BinOp) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) :
+    (Expr.binop op e₁ e₂).PolyOK L → InferComplete L (Expr.binop op e₁ e₂) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih₁ : InferComplete L e₁ := ih₁ hm.1
   replace ih₂ : InferComplete L e₂ := ih₂ hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3395,10 +3601,10 @@ theorem infer_complete_binop (L : List String) (op : BinOp) (e₁ : Expr) (e₂ 
         (hag₁₂.absorb habs₃).absorb habs₄, by simpa [BinOp.resTy] using hτ₀,
         Sat.absorb habs₄ (Sat.absorb habs₃ hsat₁₂)⟩
 
-theorem infer_complete_ret (L : List String) (e : Expr) (ih : e.monoAnn = true → InferComplete L e) :
-    (Expr.ret e).monoAnn = true → InferComplete L (Expr.ret e) := by
+theorem infer_complete_ret (L : List String) (e : Expr) (ih : e.PolyOK L → InferComplete L e) :
+    (Expr.ret e).PolyOK L → InferComplete L (Expr.ret e) := by
   intro hm
-  simp only [Expr.monoAnn] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih : InferComplete L e := ih hm
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, hmT⟩ := hm
@@ -3434,10 +3640,10 @@ theorem infer_complete_ret (L : List String) (e : Expr) (ih : e.monoAnn = true �
         exact ⟨⟨o₁.σ, ex.getD (.var o₁.next), o₁.preds, o₁.next + 1⟩, by simp only [infer, h₁],
           (o₁.next, τ₀) :: φ₁, hag₁.fresh hσ₁ hn₁, exTy_tyEq hex hτT hτ₀ _ _, Sat.fresh hp₁ hsat₁⟩
 
-theorem infer_complete_throw_ (L : List String) (e : Expr) (ih : e.monoAnn = true → InferComplete L e) :
-    (Expr.throw_ e).monoAnn = true → InferComplete L (Expr.throw_ e) := by
+theorem infer_complete_throw_ (L : List String) (e : Expr) (ih : e.PolyOK L → InferComplete L e) :
+    (Expr.throw_ e).PolyOK L → InferComplete L (Expr.throw_ e) := by
   intro hm
-  simp only [Expr.monoAnn] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih : InferComplete L e := ih hm
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, -⟩ := hm
@@ -3451,10 +3657,10 @@ theorem infer_complete_throw_ (L : List String) (e : Expr) (ih : e.monoAnn = tru
       (o₁.next, τ₀) :: φ₁, hag₁.fresh hσ₁ hn₁, ?_, Sat.fresh hp₁ hsat₁⟩
     simp only [Ty.subst, Subst.find, ↓reduceIte, Option.getD_some]; exact hτ₀
 
-theorem infer_complete_seq (L : List String) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.monoAnn = true → InferComplete L e₁) (ih₂ : e₂.monoAnn = true → InferComplete L e₂) :
-    (Expr.seq e₁ e₂).monoAnn = true → InferComplete L (Expr.seq e₁ e₂) := by
+theorem infer_complete_seq (L : List String) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) :
+    (Expr.seq e₁ e₂).PolyOK L → InferComplete L (Expr.seq e₁ e₂) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih₁ : InferComplete L e₁ := ih₁ hm.1
   replace ih₂ : InferComplete L e₂ := ih₂ hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3477,10 +3683,10 @@ theorem infer_complete_seq (L : List String) (e₁ : Expr) (e₂ : Expr) (ih₁ 
       by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂, hτ₂.trans hτ₀,
       Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
-theorem infer_complete_while_ (L : List String) (c : Expr) (body : Expr) (ihc : c.monoAnn = true → InferComplete L c) (ihb : body.monoAnn = true → InferComplete L body) :
-    (Expr.while_ c body).monoAnn = true → InferComplete L (Expr.while_ c body) := by
+theorem infer_complete_while_ (L : List String) (c : Expr) (body : Expr) (ihc : c.PolyOK L → InferComplete L c) (ihb : body.PolyOK L → InferComplete L body) :
+    (Expr.while_ c body).PolyOK L → InferComplete L (Expr.while_ c body) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ihc : InferComplete L c := ihc hm.1
   replace ihb : InferComplete L body := ihb hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3501,7 +3707,7 @@ theorem infer_complete_while_ (L : List String) (c : Expr) (body : Expr) (ihc : 
       Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
 theorem infer_complete_break_ (L : List String) :
-    (Expr.break_).monoAnn = true → InferComplete L (Expr.break_) := by
+    (Expr.break_).PolyOK L → InferComplete L (Expr.break_) := by
   intro _
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   exact ⟨⟨[], ex.getD (.var n), [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
@@ -3509,17 +3715,17 @@ theorem infer_complete_break_ (L : List String) :
     exTy_tyEq hex (fun T hT => hm.2 T hT rfl) (TyEq.refl _) n ψ, by simp [Sat]⟩
 
 theorem infer_complete_continue_ (L : List String) :
-    (Expr.continue_).monoAnn = true → InferComplete L (Expr.continue_) := by
+    (Expr.continue_).PolyOK L → InferComplete L (Expr.continue_) := by
   intro _
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   exact ⟨⟨[], ex.getD (.var n), [], n + 1⟩, by simp only [infer], (n, τ') :: ψ,
     fun a ha => by simp [Ty.subst, Subst.find, Nat.ne_of_lt ha]; exact TyEq.refl _,
     exTy_tyEq hex (fun T hT => hm.2 T hT rfl) (TyEq.refl _) n ψ, by simp [Sat]⟩
 
-theorem infer_complete_tryCatch (L : List String) (body : Expr) (handler : Expr) (ihb : body.monoAnn = true → InferComplete L body) (ihh : handler.monoAnn = true → InferComplete L handler) :
-    (Expr.tryCatch body handler).monoAnn = true → InferComplete L (Expr.tryCatch body handler) := by
+theorem infer_complete_tryCatch (L : List String) (body : Expr) (handler : Expr) (ihb : body.PolyOK L → InferComplete L body) (ihh : handler.PolyOK L → InferComplete L handler) :
+    (Expr.tryCatch body handler).PolyOK L → InferComplete L (Expr.tryCatch body handler) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ihb : InferComplete L body := ihb hm.1
   replace ihh : InferComplete L handler := ihh hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3548,10 +3754,10 @@ theorem infer_complete_tryCatch (L : List String) (body : Expr) (handler : Expr)
       (habs _).trans (hτ₂.trans hτ₀),
       Sat.absorb habs (Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂)⟩
 
-theorem infer_complete_tryFinally (L : List String) (body : Expr) (fin : Expr) (ihb : body.monoAnn = true → InferComplete L body) (ihf : fin.monoAnn = true → InferComplete L fin) :
-    (Expr.tryFinally body fin).monoAnn = true → InferComplete L (Expr.tryFinally body fin) := by
+theorem infer_complete_tryFinally (L : List String) (body : Expr) (fin : Expr) (ihb : body.PolyOK L → InferComplete L body) (ihf : fin.PolyOK L → InferComplete L fin) :
+    (Expr.tryFinally body fin).PolyOK L → InferComplete L (Expr.tryFinally body fin) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ihb : InferComplete L body := ihb hm.1
   replace ihf : InferComplete L fin := ihf hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3573,10 +3779,10 @@ theorem infer_complete_tryFinally (L : List String) (body : Expr) (fin : Expr) (
       o₂.next⟩, by simp only [infer, h₁, h₂], φ₂, hag₁.trans hσ₁ hn₁ hag₂,
       (hag₂.ty hτb₁).trans (hτ₁.trans hτ₀), Sat.app (Sat.agree hag₂ hp₁ hsat₁) hsat₂⟩
 
-theorem infer_complete_obj (L : List String) (ls : List String) (es : List Expr) (ks : List FieldKind) (ih : ∀ a ∈ es, a.monoAnn = true → InferComplete L a) :
-    (Expr.obj ls es ks).monoAnn = true → InferComplete L (Expr.obj ls es ks) := by
+theorem infer_complete_obj (L : List String) (ls : List String) (es : List Expr) (ks : List FieldKind) (ih : ∀ a ∈ es, a.PolyOK L → InferComplete L a) :
+    (Expr.obj ls es ks).PolyOK L → InferComplete L (Expr.obj ls es ks) := by
   intro hm
-  simp only [Expr.monoAnn, Expr.monoAnnList_eq, List.all_eq_true] at hm
+  simp only [Expr.PolyOK, Expr.PolyOKList_eq] at hm
   replace ih : ∀ a ∈ es, InferComplete L a := fun a ha => ih a ha (hm a ha)
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, hmT⟩ := hm
@@ -3626,10 +3832,10 @@ theorem infer_complete_obj (L : List String) (ls : List String) (es : List Expr)
     refine ⟨_, by simp only [infer]; rw [hfn]; simp only [hc, and_self, ↓reduceIte, h, hf, hσ']; rfl, φ,
       hag.absorb habs, (habs _).trans (hT.trans hτ₀), Sat.absorb habs hsat⟩
 
-theorem infer_complete_cls (L : List String) (ls : List String) (es : List Expr) (ks : List ClassKind) (ih : ∀ a ∈ es, a.monoAnn = true → InferComplete L a) :
-    (Expr.cls ls es ks).monoAnn = true → InferComplete L (Expr.cls ls es ks) := by
+theorem infer_complete_cls (L : List String) (ls : List String) (es : List Expr) (ks : List ClassKind) (ih : ∀ a ∈ es, a.PolyOK L → InferComplete L a) :
+    (Expr.cls ls es ks).PolyOK L → InferComplete L (Expr.cls ls es ks) := by
   intro hm
-  simp only [Expr.monoAnn, Expr.monoAnnList_eq, List.all_eq_true] at hm
+  simp only [Expr.PolyOK, Expr.PolyOKList_eq] at hm
   replace ih : ∀ a ∈ es, InferComplete L a := fun a ha => ih a ha (hm a ha)
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, -⟩ := hm
@@ -3667,10 +3873,10 @@ theorem infer_complete_cls (L : List String) (ls : List String) (es : List Expr)
       Sat.absorb habs (Sat.append.mpr ⟨fun p hp' => ?_, hnn⟩)⟩
     rw [hpφ p hp']; exact hsat p hp'
 
-theorem infer_complete_ctor (L : List String) (k : Nat) (body : Expr) (ih : body.monoAnn = true → InferComplete L body) :
-    (Expr.ctor k body).monoAnn = true → InferComplete L (Expr.ctor k body) := by
+theorem infer_complete_ctor (L : List String) (k : Nat) (body : Expr) (ih : body.PolyOK L → InferComplete L body) :
+    (Expr.ctor k body).PolyOK L → InferComplete L (Expr.ctor k body) := by
   intro hm
-  simp only [Expr.monoAnn] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih : InferComplete L body := ih hm
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' _ ht
   obtain ⟨hmd, -⟩ := hm
@@ -3720,10 +3926,10 @@ theorem infer_complete_ctor (L : List String) (k : Nat) (body : Expr) (ih : body
       rw [Ty.subst_fn, ctorSubst_ret, hparams]; exact hτ₀
     · exact Sat.absorb habs hsat₁
 
-theorem infer_complete_new_ (L : List String) (f : Expr) (args : List Expr) (ihf : f.monoAnn = true → InferComplete L f) (iha : ∀ a ∈ args, a.monoAnn = true → InferComplete L a) :
-    (Expr.new_ f args).monoAnn = true → InferComplete L (Expr.new_ f args) := by
+theorem infer_complete_new_ (L : List String) (f : Expr) (args : List Expr) (ihf : f.PolyOK L → InferComplete L f) (iha : ∀ a ∈ args, a.PolyOK L → InferComplete L a) :
+    (Expr.new_ f args).PolyOK L → InferComplete L (Expr.new_ f args) := by
   intro hm
-  simp only [Expr.monoAnn, Expr.monoAnnList_eq, Bool.and_eq_true, List.all_eq_true] at hm
+  simp only [Expr.PolyOK, Expr.PolyOKList_eq] at hm
   replace ihf : InferComplete L f := ihf hm.1
   replace iha : ∀ a ∈ args, InferComplete L a := fun a ha => iha a ha (hm.2 a ha)
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3763,10 +3969,10 @@ theorem infer_complete_new_ (L : List String) (f : Expr) (args : List Expr) (ihf
         exact hσ₂.pred_below ((hp₁ q hq).mono hn₂)
       · exact Sat.block hp₂ hsat₂
 
-theorem infer_complete_get (L : List String) (e : Expr) (l : String) (ih : e.monoAnn = true → InferComplete L e) :
-    (Expr.get e l).monoAnn = true → InferComplete L (Expr.get e l) := by
+theorem infer_complete_get (L : List String) (e : Expr) (l : String) (ih : e.PolyOK L → InferComplete L e) :
+    (Expr.get e l).PolyOK L → InferComplete L (Expr.get e l) := by
   intro hm
-  simp only [Expr.monoAnn] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih : InferComplete L e := ih hm
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, -⟩ := hm
@@ -3792,10 +3998,10 @@ theorem infer_complete_get (L : List String) (e : Expr) (l : String) (ih : e.mon
     · simp [Ty.subst, Subst.find]; exact TyEq.refl _
     · simp [Ty.subst, Subst.find]; exact TyEq.refl _
 
-theorem infer_complete_set (L : List String) (e : Expr) (l : String) (v : Expr) (ihe : e.monoAnn = true → InferComplete L e) (ihv : v.monoAnn = true → InferComplete L v) :
-    (Expr.set e l v).monoAnn = true → InferComplete L (Expr.set e l v) := by
+theorem infer_complete_set (L : List String) (e : Expr) (l : String) (v : Expr) (ihe : e.PolyOK L → InferComplete L e) (ihv : v.PolyOK L → InferComplete L v) :
+    (Expr.set e l v).PolyOK L → InferComplete L (Expr.set e l v) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ihe : InferComplete L e := ihe hm.1
   replace ihv : InferComplete L v := ihv hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3819,10 +4025,10 @@ theorem infer_complete_set (L : List String) (e : Expr) (l : String) (v : Expr) 
     exact hpr.of_predEq (PredEq.of_eqs (.cons (hτ₁.symm.trans (hag₂.ty hτb₁).symm)
       (.cons (by simp; exact TyEq.refl _) (.cons hτ₂.symm .nil))))
 
-theorem infer_complete_spread (L : List String) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.monoAnn = true → InferComplete L e₁) (ih₂ : e₂.monoAnn = true → InferComplete L e₂) :
-    (Expr.spread e₁ e₂).monoAnn = true → InferComplete L (Expr.spread e₁ e₂) := by
+theorem infer_complete_spread (L : List String) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) :
+    (Expr.spread e₁ e₂).PolyOK L → InferComplete L (Expr.spread e₁ e₂) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ih₁ : InferComplete L e₁ := ih₁ hm.1
   replace ih₂ : InferComplete L e₂ := ih₂ hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -3899,10 +4105,10 @@ theorem infer_complete_spread (L : List String) (e₁ : Expr) (e₂ : Expr) (ih�
           exact List.mem_map_of_mem hp
         exact hm _ hmem
 
-theorem infer_complete_arr (L : List String) (es : List Expr) (ih : ∀ a ∈ es, a.monoAnn = true → InferComplete L a) :
-    (Expr.arr es).monoAnn = true → InferComplete L (Expr.arr es) := by
+theorem infer_complete_arr (L : List String) (es : List Expr) (ih : ∀ a ∈ es, a.PolyOK L → InferComplete L a) :
+    (Expr.arr es).PolyOK L → InferComplete L (Expr.arr es) := by
   intro hm
-  simp only [Expr.monoAnn, Expr.monoAnnList_eq, List.all_eq_true] at hm
+  simp only [Expr.PolyOK, Expr.PolyOKList_eq] at hm
   replace ih : ∀ a ∈ es, InferComplete L a := fun a ha => ih a ha (hm a ha)
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
   obtain ⟨hmd, hmT⟩ := hm
@@ -3968,10 +4174,10 @@ theorem infer_complete_arr (L : List String) (es : List Expr) (ih : ∀ a ∈ es
       refine (habs _).trans ?_
       simpa [Ty.subst, Subst.find] using hτ₀
 
-theorem infer_complete_index (L : List String) (e : Expr) (i : Expr) (ihe : e.monoAnn = true → InferComplete L e) (ihi : i.monoAnn = true → InferComplete L i) :
-    (Expr.index e i).monoAnn = true → InferComplete L (Expr.index e i) := by
+theorem infer_complete_index (L : List String) (e : Expr) (i : Expr) (ihe : e.PolyOK L → InferComplete L e) (ihi : i.PolyOK L → InferComplete L i) :
+    (Expr.index e i).PolyOK L → InferComplete L (Expr.index e i) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ihe : InferComplete L e := ihe hm.1
   replace ihi : InferComplete L i := ihi hm.2
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -4003,10 +4209,10 @@ theorem infer_complete_index (L : List String) (e : Expr) (i : Expr) (ihe : e.mo
         (.cons hτ₂.symm (.cons ?_ .nil))))
       simp [Ty.subst, Subst.find]; exact TyEq.refl _
 
-theorem infer_complete_setIndex (L : List String) (e : Expr) (i : Expr) (v : Expr) (ihe : e.monoAnn = true → InferComplete L e) (ihi : i.monoAnn = true → InferComplete L i) (ihv : v.monoAnn = true → InferComplete L v) :
-    (Expr.setIndex e i v).monoAnn = true → InferComplete L (Expr.setIndex e i v) := by
+theorem infer_complete_setIndex (L : List String) (e : Expr) (i : Expr) (v : Expr) (ihe : e.PolyOK L → InferComplete L e) (ihi : i.PolyOK L → InferComplete L i) (ihv : v.PolyOK L → InferComplete L v) :
+    (Expr.setIndex e i v).PolyOK L → InferComplete L (Expr.setIndex e i v) := by
   intro hm
-  simp only [Expr.monoAnn, Bool.and_eq_true] at hm
+  simp only [Expr.PolyOK] at hm
   replace ihe : InferComplete L e := ihe hm.1.1
   replace ihi : InferComplete L i := ihi hm.1.2
   replace ihv : InferComplete L v := ihv hm.2
@@ -4055,10 +4261,10 @@ theorem infer_complete_setIndex (L : List String) (e : Expr) (i : Expr) (v : Exp
     · simp only [Pred.subst, List.map_cons, List.map_nil]
       exact hw.of_predEq (PredEq.of_eqs (.cons he₁.symm .nil))
 
-theorem infer_complete_mcall (L : List String) (e : Expr) (l : String) (args : List Expr) (ihe : e.monoAnn = true → InferComplete L e) (iha : ∀ a ∈ args, a.monoAnn = true → InferComplete L a) :
-    (Expr.mcall e l args).monoAnn = true → InferComplete L (Expr.mcall e l args) := by
+theorem infer_complete_mcall (L : List String) (e : Expr) (l : String) (args : List Expr) (ihe : e.PolyOK L → InferComplete L e) (iha : ∀ a ∈ args, a.PolyOK L → InferComplete L a) :
+    (Expr.mcall e l args).PolyOK L → InferComplete L (Expr.mcall e l args) := by
   intro hm
-  simp only [Expr.monoAnn, Expr.monoAnnList_eq, Bool.and_eq_true, List.all_eq_true] at hm
+  simp only [Expr.PolyOK, Expr.PolyOKList_eq] at hm
   replace ihe : InferComplete L e := ihe hm.1
   replace iha : ∀ a ∈ args, InferComplete L a := fun a ha => iha a ha (hm.2 a ha)
   intro Γ R rm ex n ψ C md τ' Γ' R' hRo hRc hex hm hΓ hR hC hΓ' hR' ht
@@ -4104,7 +4310,7 @@ theorem infer_complete_mcall (L : List String) (e : Expr) (l : String) (args : L
 /-- Inference is complete for every program whose annotations are
 monomorphic: one lemma per form of expression, each from the induction
 hypotheses for its parts. -/
-theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComplete L e := by
+theorem infer_complete_polyOK (L : List String) : ∀ e, e.PolyOK L → InferComplete L e := by
   intro e
   induction e using Expr.ind with
   | lit l => exact infer_complete_lit L l
@@ -4137,6 +4343,9 @@ theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComp
   | index e i ihe ihi => exact infer_complete_index L e i ihe ihi
   | setIndex e i v ihe ihi ihv => exact infer_complete_setIndex L e i v ihe ihi ihv
   | mcall e l args ihe iha => exact infer_complete_mcall L e l args ihe iha
+
+theorem infer_complete (L : List String) : ∀ e, e.monoAnn = true → InferComplete L e :=
+  fun e h => infer_complete_polyOK L e (Expr.polyOK_of_monoAnn L h)
 
 /-! ## Programs -/
 
@@ -4268,15 +4477,15 @@ theorem Pred.settled_of_keep {C : List Pred} (hC : ∀ c ∈ C, c.OnVarShaped) {
 
 /-- Completeness, for a program in a closed context (such as the builtins'):
 if it has a type, under assumptions on type variables, passes the scope
-checks (`Expr.scoped`) and has only monomorphic annotations
-(`Expr.monoAnn`), inference accepts it, with a type of which that one is an
-instance up to equal types. -/
-theorem inferIn_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
+checks (`Expr.scoped`) and lets no rigid type variable escape at a
+polymorphic annotation (`Expr.PolyOK`), inference accepts it, with a type of
+which that one is an instance up to equal types. -/
+theorem inferIn_complete_polyOK {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
     (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
-    (hm : e.scoped (Γ.map fun _ => false) = true) (hmono : e.monoAnn = true)
+    (hm : e.scoped (Γ.map fun _ => false) = true) (hpoly : e.PolyOK L)
     (ht : HasType L C Γ none .synth .synth e τ') :
     ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' := by
-  obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete L e hmono (n := 0) (ψ := []) (R := none)
+  obtain ⟨o, h, φ, _, hτ, hsat⟩ := infer_complete_polyOK L e hpoly (n := 0) (ψ := []) (R := none)
     RetOk.synth nofun .none .none (fun a ha => by rw [hΓ] at ha; cases ha) (fun a ha => by simp [Ret.ftv] at ha)
     (fun p hp => (hC p hp).assumable false) (by rw [Ctx.subst_nil]; exact CtxEq.refl Γ) (RetEq.refl _) ht
   obtain ⟨σi, preds, himp, habs, hsat', hkeep, _⟩ :=
@@ -4286,13 +4495,30 @@ theorem inferIn_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C :
     Pred.settled_of_keep hC (hkeep p hp) (hsat' p hp))
   exact ⟨o.τ.subst σi, by simp [inferIn, hm, h, himp, hall], φ, (habs _).trans hτ⟩
 
+/-- Completeness for programs whose annotations are all monomorphic
+(`Expr.monoAnn`). -/
+theorem inferIn_complete {L : List String} {Γ : Ctx} {e : Expr} {τ' : Ty} {C : List Pred}
+    (hΓ : ctxFtv Γ = []) (hC : ∀ p ∈ C, p.OnVarShaped)
+    (hm : e.scoped (Γ.map fun _ => false) = true) (hmono : e.monoAnn = true)
+    (ht : HasType L C Γ none .synth .synth e τ') :
+    ∃ τ, inferIn L Γ e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
+  inferIn_complete_polyOK hΓ hC hm (Expr.polyOK_of_monoAnn L hmono) ht
+
 /-- Completeness for closed programs: one that has a type, with records over
-its labels, passes the scope checks and has only monomorphic annotations
+its labels, passes the scope checks and lets no rigid type variable escape
 is accepted, with a type of which that one is an instance up to equal
 types. -/
+theorem inferProgram_complete_polyOK {e : Expr} {τ' : Ty} (hm : e.scoped [] = true)
+    (hpoly : e.PolyOK e.labels.eraseDups)
+    (ht : HasType e.labels.eraseDups [] [] none .synth .synth e τ') :
+    ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
+  inferIn_complete_polyOK (Γ := []) rfl (fun _ h => by cases h) hm hpoly ht
+
+/-- Completeness for closed programs whose annotations are all
+monomorphic. -/
 theorem inferProgram_complete {e : Expr} {τ' : Ty} (hm : e.scoped [] = true)
     (hmono : e.monoAnn = true) (ht : HasType e.labels.eraseDups [] [] none .synth .synth e τ') :
     ∃ τ, inferProgram e = some τ ∧ ∃ φ, TyEq (τ.subst φ) τ' :=
-  inferIn_complete (Γ := []) rfl (fun _ h => by cases h) hm hmono ht
+  inferProgram_complete_polyOK hm (Expr.polyOK_of_monoAnn _ hmono) ht
 
 end Inty
