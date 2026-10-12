@@ -357,8 +357,9 @@ This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
    new type former. A native function needs only its
    `V` proof (`Prim.abs_sound`).
 6. An example in `Inty/Examples.lean`.
-7. The wire format (`Inty/Wire.lean`) and the differential test's
-   generator and JavaScript printer (`crates/inty/tests/differential.rs`).
+7. The wire format (`Inty/Wire.lean`), the differential test's
+   generator and JavaScript printer (`crates/inty/tests/differential.rs`),
+   and inty's lowering into the wire format (`crates/inty/src/model_wire.rs`).
 
 Lean's exhaustiveness checks point at every case still missing.
 
@@ -367,6 +368,36 @@ Lean's exhaustiveness checks point at every case still missing.
 [ROADMAP.md](ROADMAP.md) plans the rest: seven phases to a complete model
 of inty's type system, with the ground rules that keep it faithful to what
 inty implements and documents.
+
+## inty's own programs
+
+`crates/inty/tests/model_corpus.rs` runs the model on inty's own programs
+(ground rule 4 of the roadmap): every program inty's unit tests check
+that lies in the model's fragment, which inty writes in the wire format
+itself (`inty::model_wire`), the inverse of the differential test's
+printer: a statement list is a sequence, a declaration binds the rest of
+its block (function declarations moved up as JavaScript hoists them), a
+function's body ends in what it returns, and a test of a binding for
+nothing, of its `typeof` or of its tag field is `unwrap`, `typetest` or
+`casetag`. A program is left out when it uses what the model lacks (an
+operator other than `+` and `-`, a builtin, a class, a module, a loop
+other than `while`, `?.`, `??`) or whose lowering would change its
+meaning (a name used before its declaration, `let x;` without an
+initialiser, an assignment to a binding a test took apart). Of the about
+2,900 programs the unit tests check, 405 are in the fragment; inty and the
+model agree on accepting each but six, listed with their reasons in
+`tests/model_corpus/known.txt`:
+
+- an `Int` index, an annotated object type's method using `this` (a
+  member of an object type is called on the object in inty), a record
+  indexed by a string variable, inty's spread over an operand of an
+  unknown type, a `typeof` test for a tag no case has (inty warns that the
+  branch is dead), and `never` from a `while (true)` body.
+
+Writing the lowering found the model's assignment to an annotated `let`
+unifying the value with the annotation rather than checking it against
+it (fixed in the wire format's front end). Most programs left out use
+`*` or a comparison, which come with the numbers of phase 4.
 
 ## Differential testing
 

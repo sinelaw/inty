@@ -28,8 +28,33 @@ pub struct Scanner<'a> {
     last_ident: Option<(String, usize)>,
 }
 
+/// With `INTY_CORPUS_OUT` set, the unit tests append each program they
+/// scan to that file, one per record (separated by a line holding `\x1e`):
+/// the corpus `tests/model_corpus.rs` runs the Lean model on, the programs
+/// in its fragment (`model_wire`). Declaration files are left out.
+#[cfg(test)]
+fn record_corpus(source: &str) {
+    use std::io::Write;
+    let Some(path) = std::env::var_os("INTY_CORPUS_OUT") else {
+        return;
+    };
+    if source.len() > 4000 {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        // One write per record, so parallel tests don't interleave.
+        let _ = f.write_all(format!("{source}\n\x1e\n").as_bytes());
+    }
+}
+
 impl<'a> Scanner<'a> {
     pub fn new(source: &'a str) -> Self {
+        #[cfg(test)]
+        record_corpus(source);
         Self {
             source,
             chars: source.char_indices().peekable(),

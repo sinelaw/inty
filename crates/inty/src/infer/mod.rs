@@ -15,7 +15,7 @@ pub(crate) use features::functions::extract_callable;
 mod lower;
 mod narrow;
 mod state;
-mod type_parser;
+pub(crate) mod type_parser;
 mod unify;
 mod var_table;
 mod zonk;

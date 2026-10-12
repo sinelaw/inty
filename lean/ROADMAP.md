@@ -38,7 +38,10 @@ Paths like `src/infer` are relative to `crates/inty`.
 4. **The model runs on real programs.** inty writes out its lowered AST in
    the wire format, so the differential test runs on inty's own test suite
    and examples, beside the generated programs. Node, and later CPython and
-   Lua, check the semantics.
+   Lua, check the semantics. (Done for typing on the unit tests' programs
+   in the model's fragment, 405 of about 2,900: `inty::model_wire`,
+   `tests/model_corpus.rs`. Not yet: the examples, which use what the
+   model lacks, and running the corpus in Node.)
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
    inference sound and complete, for everything modelled so far (one
    exception, stated where it arises: completeness for polymorphic

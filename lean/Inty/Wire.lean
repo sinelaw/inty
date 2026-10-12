@@ -8,7 +8,9 @@ The Rust side generates core programs, writes each one for inty as
 JavaScript and for this model as an s-expression, one program per line:
 
 ```
-(num M E)   M × 10^-E      (str s:abc)   a string, `s:` then [a-z]*
+(num M E)   M × 10^-E      (str s:abc)   a string, `s:` then its text, `%XX`
+               for a character of hex code XX a token can't hold (also in
+               labels)
 (bool true) (undef) (null) (var i)  (func N BODY)  (app F A₀ A₁ …)
 (let E₁ E₂) (letmut E₁ E₂) (assign I E)   `const`, `let` and `x = e` (to an
                annotated `let`, read as `x = (const t: T = e; t)`)
@@ -55,6 +57,34 @@ def tokenize (s : String) : List String :=
   let spaced := s.replace "(" " ( " |>.replace ")" " ) "
   spaced.splitOn " " |>.filter (· ≠ "")
 
+/-- A string's or a label's text as a token: `unescape`'s inverse. -/
+def escape (s : String) : String :=
+  String.join (s.toList.map fun c =>
+    if c.isWhitespace ∨ c = '(' ∨ c = ')' ∨ c = '%' then
+      let h := Nat.toDigits 16 c.toNat
+      "%" ++ String.ofList ((if h.length < 2 then ['0'] else []) ++ h.map Char.toUpper)
+    else c.toString)
+
+/-- A hexadecimal digit's value. -/
+def hexVal (c : Char) : Option Nat :=
+  if '0' ≤ c ∧ c ≤ '9' then some (c.toNat - '0'.toNat)
+  else if 'A' ≤ c ∧ c ≤ 'F' then some (c.toNat - 'A'.toNat + 10)
+  else if 'a' ≤ c ∧ c ≤ 'f' then some (c.toNat - 'a'.toNat + 10)
+  else none
+
+/-- A string's or a label's text in a token: `%XX` is the character of the
+hexadecimal code `XX`, for what a token can't hold (whitespace, `(`, `)`
+and `%`). -/
+def unescape (s : String) : String :=
+  let rec go : List Char → List Char
+    | '%' :: a :: b :: rest =>
+      match hexVal a, hexVal b with
+      | some x, some y => Char.ofNat (16 * x + y) :: go rest
+      | _, _ => '%' :: go (a :: b :: rest)
+    | c :: rest => c :: go rest
+    | [] => []
+  String.ofList (go s.toList)
+
 /-- Parse an annotation's type from the front of the tokens. -/
 partial def parseTy (L : Option (List String)) : List String → Option (Ty × List String)
   | "number" :: rest => some (.number, rest)
@@ -89,7 +119,7 @@ partial def parseTy (L : Option (List String)) : List String → Option (Ty × L
     let (ps, rest) ← params rest []
     some (.fn .undefined ps r, rest)
   | "(" :: "strlit" :: t :: ")" :: rest =>
-    if t.startsWith "s:" then some (.strLit (t.drop 2).toString, rest) else none
+    if t.startsWith "s:" then some (.strLit (unescape (t.drop 2).toString), rest) else none
   -- A record: its fields over the program's labels `L`, once they are
   -- known, and over its own labels before.
   | "(" :: "rec" :: rest => do
@@ -101,7 +131,7 @@ partial def parseTy (L : Option (List String)) : List String → Option (Ty × L
         if l.startsWith "s:" then do
           let (t, rest) ← parseTy L ts
           match rest with
-          | ")" :: rest => fields rest (((l.drop 2).toString, t) :: acc)
+          | ")" :: rest => fields rest ((unescape (l.drop 2).toString, t) :: acc)
           | _ => none
         else none
       | _ => none
@@ -114,7 +144,7 @@ partial def parseTy (L : Option (List String)) : List String → Option (Ty × L
   -- A variant tagged by `l`: its cases, each with a tag.
   | "(" :: "variant" :: l :: rest => do
     unless l.startsWith "s:" do none
-    let l := (l.drop 2).toString
+    let l := unescape (l.drop 2).toString
     let rec cases (ts : List String) (acc : List Ty) : Option (List Ty × List String) :=
       match ts with
       | ")" :: rest => some (acc.reverse, rest)
@@ -172,7 +202,7 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
     let e ← e.toNat?
     some (.lit (.number (Float.ofScientific m true e)), rest)
   | "str", s :: rest =>
-    if s.startsWith "s:" then some (.lit (.string (s.drop 2).toString), rest) else none
+    if s.startsWith "s:" then some (.lit (.string (unescape (s.drop 2).toString)), rest) else none
   | "bool", "true" :: rest => some (.lit (.boolean true), rest)
   | "bool", "false" :: rest => some (.lit (.boolean false), rest)
   | "undef", rest => some (.lit .undefined, rest)
@@ -327,7 +357,7 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
 
 /-- A property label, written `s:` then the label. -/
 partial def parseLabel : List String → Option (String × List String)
-  | l :: rest => if l.startsWith "s:" then some ((l.drop 2).toString, rest) else none
+  | l :: rest => if l.startsWith "s:" then some (unescape (l.drop 2).toString, rest) else none
   | [] => none
 
 /-- An object literal's or a class's members, `(KIND s:x E)` each, with
@@ -406,7 +436,7 @@ end
 
 /-- The labels of the annotations' records: an `s:` token right after `(`. -/
 def annLabels : List String → List String
-  | "(" :: l :: rest => if l.startsWith "s:" then (l.drop 2).toString :: annLabels rest
+  | "(" :: l :: rest => if l.startsWith "s:" then unescape (l.drop 2).toString :: annLabels rest
     else annLabels (l :: rest)
   | _ :: rest => annLabels rest
   | [] => []
@@ -458,7 +488,7 @@ def inferVerdict (L : List String) (e : Expr) : String :=
 
 def valueWire : Value → String
   | .number n => s!"num {n.toBits}"
-  | .string s => s!"str s:{s}"
+  | .string s => s!"str s:{escape s}"
   | .boolean b => s!"bool {b}"
   | .undefined => "undef"
   | .null => "null"

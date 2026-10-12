@@ -1,0 +1,28 @@
+# Disagreements between inty and the Lean model on inty's own programs
+# (tests/model_corpus.rs), each a program's wire line after its reason.
+
+# Int indices (roadmap phase 4): inty wants an index to be an Int; the
+# model takes any number, a fractional one out of bounds (a fault).
+(index (arr (num 1 0) (num 2 0)) (num 5 1))
+
+# A member of an annotated object type is called on the object (its `this`
+# is the object), as inty checks an object literal's methods against it;
+# the model's function types in annotations are called detached.
+(letann (rec (s:m (fn number number)) (s:x number)) (obj (field s:x (num 1 0)) (method s:m (func 1 (ret (plus (get (var 2) s:x) (var 0)))))) (let (mcall (var 0) s:m (num 1 0)) (undef)))
+
+# A record indexed by a string variable: inty reads a field; the model
+# indexes only arrays and strings.
+(let (obj (field s:x (str s:s)) (field s:y (str s:t))) (let (func 1 (ret (index (var 3) (var 0)))) (let (app (var 0) (str s:x)) (undef))))
+
+# inty's spread over an operand of an unknown type (roadmap: a deferred
+# Spread constraint, merging slot by slot once the operand is known).
+(let (func 2 (ret (spread (var 0) (var 1)))) (let (spread (obj (field s:a (str s:s))) (app (var 0) (obj (field s:a (num 1 0))) (obj))) (undef)))
+
+# A test of a tag no case of the sum has: inty warns that the branch is
+# dead; the model's Case has no instance.
+(let (func 1 (letmutann (sum number string) (var 0) (typetest (var 0) s:boolean (ret (num 2 0)) (ret (num 1 0))))) (undef))
+
+# never (roadmap phase 5): a function whose body loops forever returns
+# never in inty, which joins with anything; in the model it returns
+# undefined.
+(let (func 0 (seq (while (bool true) (undef)) (undef))) (let (cond (bool true) (app (var 0)) (num 1 0)) (let (minus (var 0) (num 1 0)) (undef))))

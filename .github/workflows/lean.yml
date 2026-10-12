@@ -35,3 +35,8 @@ jobs:
     - name: Differential test
       working-directory: .
       run: cargo test -p inty --test differential -- --nocapture
+    # The Lean model on inty's own unit-test programs in its fragment,
+    # written in the wire format by inty; see crates/inty/tests/model_corpus.rs.
+    - name: Corpus test
+      working-directory: .
+      run: cargo test -p inty --test model_corpus -- --nocapture
