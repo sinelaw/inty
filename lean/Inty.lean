@@ -12,6 +12,7 @@ import Inty.Clock
 import Inty.Unify
 import Inty.TreeVars
 import Inty.Weaken
+import Inty.LabelWeaken
 import Inty.Infer
 import Inty.Rename
 import Inty.InferSound
