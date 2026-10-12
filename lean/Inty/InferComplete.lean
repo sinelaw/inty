@@ -1234,22 +1234,29 @@ end
 @[simp] theorem Expr.monoAnnList_eq (es : List Expr) : Expr.monoAnnList es = es.all Expr.monoAnn := by
   induction es <;> simp_all [Expr.monoAnnList]
 
-/-- At a polymorphic annotation `a` on the initialiser `e₁`, no rigid type
-variable escapes, in any context: where inference checks `e₁` against `a` at
-fresh rigid variables `k`, and improvement decides what it can, neither a
-type variable of the context (one below `n`) nor a constraint left mentions
-`k`. Inference rejects the program where one does, and can miss a typing
-there (`polyGap`): a constraint on `k` that waits on a type variable would
-need an implication constraint to keep, as in OutsideIn(X). -/
+/-- At a polymorphic annotation `a` on the initialiser `e₁`, inference's
+escape check passes wherever the rules type `e₁`: in every context in which
+`e₁` has the annotation's type at every rigid name outside a finite set,
+checking `e₁` against `a` at inference's fresh rigid variables `k` and
+deciding what improvement can leaves `k` in neither the context, the return
+type, nor a constraint left. Inference rejects the program where it doesn't,
+and can miss a typing there (`polyGap`): a constraint on `k` that waits on a
+type variable would need an implication constraint to keep, as in
+OutsideIn(X). In such a context `k` is never in the tree of a context
+variable's instance (`infer_complete_letPoly`), so the check can fire there
+only on a constraint left, or on a recursive type's unreached equation. -/
 def RigidStays (L : List String) (a : Scheme) (e₁ : Expr) : Prop :=
-  ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {n : Nat} {o₁ : Out} {σi : Subst} {preds₁ : List Pred},
-    Ctx.Below n Γ → Ret.Below n R → RetOk rm R →
+  ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {n : Nat} {ψ : Subst} {C : List Pred} {Γ' : Ctx}
+    {R' : Option Ty} {K : List Nat} {o₁ : Out} {σi : Subst} {preds₁ : List Pred},
+    RetOk rm R → (rm = .check → R' = R) → Ctx.Below n Γ → Ret.Below n R →
+    (∀ p ∈ C, p.AssumableAt false) → CtxEq Γ' (Ctx.subst ψ Γ) → RetEq R' (Ret.subst ψ R) →
+    (∀ k, k ∉ K → HasType L C Γ' R' rm .check e₁ (a.inst (rigids k a.arity))) →
     (infer L Γ R rm (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity))) e₁
       n).map (checkEx (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity))) e₁) =
       some o₁ →
     improveAll false o₁.preds.length o₁.preds = some (σi, preds₁) →
-    (∀ b < n, maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉
-      ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys) ∧
+    maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ ctxRkeys (Ctx.subst (Subst.compose σi o₁.σ) Γ) ∧
+      maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ Ret.rkeys (Ret.subst (Subst.compose σi o₁.σ) R) ∧
       maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ preds₁.flatMap Pred.rkeys
 
 mutual
@@ -3055,24 +3062,33 @@ theorem infer_complete_letPoly {L : List String} {mb : Bool} {a : Scheme} {e₁ 
     (fresh (fun x hx => by simp [hx]))
   obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check (infer_inv L e₁) hRo (Ex.Closed.some hT) hΓ hR h₁o
   obtain ⟨σi, preds₁, himp, -⟩ := improveAll_complete (hC' _) o₁.preds.length (Nat.le_refl _) hsat₀
-  obtain ⟨hesc, hescp⟩ := hk ▸ hrs hΓ hR hRo (by rw [hk]; exact h₁o) himp
-  -- A second name, fresh for what inference found too.
+  obtain ⟨hnΓ, hnR, hescp⟩ :=
+    hk ▸ hrs hRo hRc hΓ hR hC hΓ' hR' hgen (by rw [hk]; exact h₁o) himp
+  -- A second name, fresh for what inference found and the typing's
+  -- instance too.
   generalize hks : K ++ [k] ++ ctxRkeys Γ ++ Ret.rkeys R ++
     (List.range n).flatMap (fun b => ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys) ++
-    preds₁.flatMap Pred.rkeys = ks
+    preds₁.flatMap Pred.rkeys ++ (List.range n).flatMap (fun b => ((Ty.var b).subst ψ).rkeys) = ks
   have hk'σ : ∀ b < n, maxPlusOne ks ∉ ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys := by
     intro b hb
     refine fresh (fun x hx => ?_)
     subst hks
     simp only [List.mem_append, List.mem_flatMap, List.mem_range]
-    exact .inl (.inr ⟨b, hb, hx⟩)
+    exact .inl (.inl (.inr ⟨b, hb, hx⟩))
   have hk'p : maxPlusOne ks ∉ preds₁.flatMap Pred.rkeys :=
-    fresh (fun x hx => by subst hks; exact List.mem_append_right _ hx)
+    fresh (fun x hx => by subst hks; exact List.mem_append_left _ (List.mem_append_right _ hx))
+  have hk'ψ : ∀ b < n, maxPlusOne ks ∉ ((Ty.var b).subst ψ).rkeys := by
+    intro b hb
+    refine fresh (fun x hx => ?_)
+    subst hks
+    simp only [List.mem_append, List.mem_flatMap, List.mem_range]
+    exact .inr ⟨b, hb, hx⟩
   obtain ⟨o₁', h₁o', φ₁, hag₁, -, hsat₁⟩ := key (maxPlusOne ks)
     (fresh (fun x hx => by subst hks; simp [hx])) (nek (by subst hks; simp))
     (fresh (fun x hx => by subst hks; simp [hx])) (fresh (fun x hx => by subst hks; simp [hx]))
   obtain rfl : o₁ = o₁' := Option.some.inj (h₁o.symm.trans h₁o')
-  generalize maxPlusOne ks = k' at hk'σ hk'p hag₁ hsat₁
+  have hk'k : maxPlusOne ks ≠ k := nek (by subst hks; simp)
+  generalize maxPlusOne ks = k' at hk'σ hk'p hk'ψ hk'k hag₁ hsat₁
   obtain ⟨σi', preds₁', himp', habsi, hsat₁', -, -⟩ :=
     improveAll_complete (hC' _) o₁.preds.length (Nat.le_refl _) hsat₁
   obtain ⟨rfl, rfl⟩ : σi = σi' ∧ preds₁ = preds₁' := by
@@ -3083,17 +3099,26 @@ theorem infer_complete_letPoly {L : List String} {mb : Bool} {a : Scheme} {e₁ 
   -- Renamed back, `φ₁` is an instance at the typing's names.
   have hren := RSubst.swap_renaming k' k
   have hinv := RSubst.swap_invol k' k
+  have hψb : ∀ b, ((Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ)).rsub (RSubst.swap k' k) =
+      (Ty.var b).subst ψ := fun b => by
+    rw [show (Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ) =
+      ((Ty.var b).rsub (RSubst.swap k' k)).subst (Subst.rsub (RSubst.swap k' k) ψ) from rfl,
+      ← Ty.subst_rsub hren, Ty.rsub_invol hinv]
+  -- In a context where the typing types the initialiser, the rigid name is
+  -- never in the tree of a context variable's instance: renamed, it would
+  -- be `k'` in the typing's, which `k'` is fresh for.
+  have hstay : ∀ b < n, ¬ ((Ty.var b).subst (Subst.compose σi o₁.σ)).TreeRk k := by
+    intro b hb ht
+    have h₁ := TyEq.treeRk (hagS b hb) (ht.subst φ₁)
+    rw [show (Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ) =
+      ((Ty.var b).subst ψ).rsub (RSubst.swap k' k) by rw [← hψb b, Ty.rsub_invol hinv]] at h₁
+    exact hk'ψ b hb (Ty.TreeRk.of_swap (Ne.symm hk'k) h₁).rkeys
   have hagT : Agree n (Subst.compose σi o₁.σ) (Subst.rsub (RSubst.swap k' k) φ₁) ψ := by
     intro b hb
-    have hoff : (RSubst.swap k' k).Off ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys :=
-      RSubst.swap_off (hk'σ b hb) (hesc b hb)
-    rw [← Ty.rsub_off hoff, ← Ty.subst_rsub hren]
-    have e : ((Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ)).rsub (RSubst.swap k' k) =
-        (Ty.var b).subst ψ := by
-      rw [show (Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ) =
-        ((Ty.var b).rsub (RSubst.swap k' k)).subst (Subst.rsub (RSubst.swap k' k) ψ) from rfl,
-        ← Ty.subst_rsub hren, Ty.rsub_invol hinv]
-    exact e ▸ TyEq.rsub _ (hagS b hb)
+    have hsw := Ty.rsub_swap_tyEq (hstay b hb) (fun h => hk'σ b hb h.rkeys)
+    refine (TyEq.subst _ hsw).symm.trans ?_
+    rw [← Ty.subst_rsub hren]
+    exact hψb b ▸ TyEq.rsub _ (hagS b hb)
   have hCC : (C.map (Pred.rsub (RSubst.swap k' k))).map (Pred.rsub (RSubst.swap k' k)) = C := by
     simp only [List.map_map]
     exact (List.map_congr_left fun p _ => Pred.rsub_invol hinv p).trans (List.map_id _)
@@ -3103,15 +3128,6 @@ theorem infer_complete_letPoly {L : List String} {mb : Bool} {a : Scheme} {e₁ 
       (fun h => hescp (List.mem_flatMap.mpr ⟨p, hp, h⟩))
     have := (hsat₁' p hp).rsubS (Sys.narrow_rsubstable hren)
     rwa [hCC, Pred.subst_rsub hren, Pred.rsub_off hoff] at this
-  -- The rigid name escapes nowhere inference looks.
-  have hnΓ : k ∉ ctxRkeys (Ctx.subst (Subst.compose σi o₁.σ) Γ) := fun h => by
-    rcases ctxRkeys_subst h with h | ⟨b, hb, h⟩
-    · exact hkΓ h
-    · exact hesc b (hΓ b hb) h
-  have hnR : k ∉ Ret.rkeys (Ret.subst (Subst.compose σi o₁.σ) R) := fun h => by
-    rcases Ret.rkeys_subst h with h | ⟨b, hb, h⟩
-    · exact hkR h
-    · exact hesc b (hR b hb) h
   -- The rest, typed at the annotation.
   obtain ⟨o₂, h₂o, φ₂, hag₂, hτ₂, hsat₂⟩ := InferComplete.check ih₂
     (Γ := a :: Ctx.subst (Subst.compose σi o₁.σ) Γ) (R := Ret.subst (Subst.compose σi o₁.σ) R)
