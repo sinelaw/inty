@@ -239,6 +239,9 @@ inductive Inst : Pred → Prop where
   | injectArm : T.ftv = [] → T.whnf = .variant .typeOf ts Rs → ts.Nodup → c.typeTag = some t →
       ts[(i : Nat)]? = some t → Rs[i]? = some R → TyEq (.app c args) R →
       (Ty.app c args).ftv = [] → Inst ⟨.inject T, [.app c args]⟩
+  /-- `Inject T "s"`, for a `T` a `String` is injected into: a value of a
+  string literal type is a string (`subsume`'s `Lit(l) ≤ Base`). -/
+  | injectLit : Inst ⟨.inject T, [x]⟩ → TyEq x .string → Inst ⟨.inject T, [.strLit s]⟩
   /-- `Strip (Nullable σ) σ` and `Strip (Optional σ) σ`. -/
   | stripSome : Inst ⟨.strip, [.maybe z σ, σ]⟩
   /-- `Strip τ τ`, for a `τ` whose head is known and is neither a sum nor
@@ -252,7 +255,7 @@ inductive Inst : Pred → Prop where
 
 /-- Instances are closed under substitution. -/
 theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
-  cases h with
+  induction h with
   | plusNumber => exact .plusNumber
   | plusString => exact .plusString
   | hasProp hf =>
@@ -284,6 +287,8 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
     simp only [Pred.subst, List.map_cons, List.map_nil]
     rw [Ty.subst_id (by simp [ha])]
     exact .injectArm hT hw hn hc hi hR he ha
+  | injectLit _ hx ih =>
+    simpa [Pred.subst] using Inst.injectLit ih (by simpa using hx.subst σ)
   | stripSome =>
     simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app]
     exact .stripSome

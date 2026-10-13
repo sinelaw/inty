@@ -137,7 +137,7 @@ theorem Ty.ftv_rsub_ren {ρ : RSubst} (hρ : ρ.Renaming) (τ : Ty) : (τ.rsub �
 /-! ## The narrow system survives renaming -/
 
 theorem Inst.rsub {ρ : RSubst} (hρ : ρ.Renaming) {p : Pred} (h : Inst p) : Inst (p.rsub ρ) := by
-  cases h with
+  induction h with
   | plusNumber => exact .plusNumber
   | plusString => exact .plusString
   | @hasProp l ls fs k σ hf =>
@@ -189,6 +189,10 @@ theorem Inst.rsub {ρ : RSubst} (hρ : ρ.Renaming) {p : Pred} (h : Inst p) : In
     rw [Ty.rsub_app_nr hr] at he' ha'
     simpa [Pred.rsub, Cls.rsub, Ty.rsub_app_nr hr] using
       Inst.injectArm hT' (Ty.whnf_rsub_nr hw rfl) hn htag hi (by simp [hR]) he' ha'
+  | injectLit _ hx ih =>
+    simpa [Pred.rsub, Cls.rsub, Ty.rsub_app, Con.rimgA, Con.rimg] using
+      Inst.injectLit (by simpa [Pred.rsub, Cls.rsub] using ih)
+        (by simpa [Ty.rsub_app, Con.rimgA, Con.rimg] using hx.rsub ρ)
   | @caseHit ts i t Rs R d hn hi hR =>
     simpa [Pred.rsub, Cls.rsub, variantRest_rsub, ← eraseIdx_map, Ty.rsub_app, Con.rimgA,
       Con.rimg] using Inst.caseHit (d := d) (ts := ts) hn hi (by simp [hR])

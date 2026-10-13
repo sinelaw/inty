@@ -374,6 +374,44 @@ theorem Pred.decideCase_below {n : Nat} {d d' : Disc} {t : String} {ts : List St
     · cases h
   · cases h
 
+/-- What `Pred.decideInject₀`'s equation relates is below `n`. -/
+theorem Pred.decideInject₀_below {n : Nat} {t T a b : Ty} (ht : t.Below n)
+    (h : Pred.decideInject₀ t T = .eq a b) : a.Below n ∧ b.Below n := by
+  have hnum : Ty.number.Below n := Ty.Below.con
+  unfold Pred.decideInject₀ at h
+  split at h
+  rotate_left
+  · cases h
+  rename_i hT
+  have hTb : T.Below n := fun x hx => by rw [hT] at hx; cases hx
+  split at h
+  · rename_i z σ hw
+    have hσ : σ.Below n := fun x hx => hTb x (Ty.whnf_ftv (by rw [hw]; simp [hx]))
+    split at h
+    · split at h
+      · cases h; exact ⟨ht, hTb⟩
+      · split at h
+        · cases h; exact ⟨hnum, hnum⟩
+        · cases h; exact ⟨ht, hσ⟩
+    · cases h; exact ⟨ht, hTb⟩
+  · rename_i ts Rs hw
+    split at h
+    · split at h
+      · split at h
+        · split at h
+          · split at h
+            · rename_i R hR
+              cases h
+              exact ⟨ht, fun x hx => hTb x (Ty.whnf_ftv (by
+                rw [hw]; simp only [Ty.ftv_app, List.mem_flatMap]
+                exact ⟨_, List.mem_of_getElem? hR, hx⟩))⟩
+            · cases h
+          · cases h
+        · cases h
+      · cases h; exact ⟨ht, hTb⟩
+    · cases h; exact ⟨ht, hTb⟩
+  · cases h; exact ⟨ht, hTb⟩
+
 /-- A decision's equation mentions only the constraint's variables. -/
 theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
     (hp : Pred.Below n ⟨c, t :: rest⟩) (h : Pred.decide₀ c t rest = .eq a b) :
@@ -432,37 +470,13 @@ theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b 
   · rename_i T
     unfold Pred.decideInject at h
     split at h
-    rotate_left
-    · cases h
-    rename_i hT
-    have hTb : T.Below n := fun x hx => by rw [hT] at hx; cases hx
-    split at h
-    · rename_i z σ hw
-      have hσ : σ.Below n := fun x hx => hTb x (Ty.whnf_ftv (by rw [hw]; simp [hx]))
-      split at h
-      · split at h
-        · cases h; exact ⟨ht, hTb⟩
-        · split at h
-          · cases h; exact ⟨hnum, hnum⟩
-          · cases h; exact ⟨ht, hσ⟩
-      · cases h; exact ⟨ht, hTb⟩
-    · rename_i ts Rs hw
-      split at h
-      · split at h
-        · split at h
-          · split at h
-            · split at h
-              · rename_i R hR
-                cases h
-                exact ⟨ht, fun x hx => hTb x (Ty.whnf_ftv (by
-                  rw [hw]; simp only [Ty.ftv_app, List.mem_flatMap]
-                  exact ⟨_, List.mem_of_getElem? hR, hx⟩))⟩
-              · cases h
-            · cases h
-          · cases h
-        · cases h; exact ⟨ht, hTb⟩
-      · cases h; exact ⟨ht, hTb⟩
-    · cases h; exact ⟨ht, hTb⟩
+    · split at h
+      · rename_i a' X h₀
+        split at h
+        · cases h; exact Pred.decideInject₀_below ht h₀
+        · exact Pred.decideInject₀_below Ty.Below.con h
+      · rename_i h₀; exact (h₀ _ _ h).elim
+    · exact Pred.decideInject₀_below ht h
   · rename_i σ
     have hσ : σ.Below n := hr σ (by simp)
     unfold Pred.decideStrip at h

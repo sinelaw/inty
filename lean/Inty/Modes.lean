@@ -27,10 +27,11 @@ theorem check_of_not_pushes {L : List String} {C : List Pred} {Γ : Ctx} {R : Op
     ∃ τ₀, HasType L C Γ R rm .synth e τ₀ ∧ (T = .unknown ∨ Entails C ⟨.inject T, [τ₀]⟩) :=
   h.inj_inv hp
 
-/-- Nothing injects into a type that isn't a sum, but itself. -/
+/-- Nothing injects into a type that isn't a sum, but itself and, into a
+`String`, a string literal type. -/
 theorem not_entails_inject {T τ : Ty} (hm : ∀ z σ, ¬ TyEq T (.maybe z σ))
-    (hv : ∀ ts Rs, T.whnf ≠ .variant .typeOf ts Rs) (hne : ¬ TyEq τ T) :
-    ¬ Entails [] ⟨.inject T, [τ]⟩ := by
+    (hv : ∀ ts Rs, T.whnf ≠ .variant .typeOf ts Rs) (hne : ¬ TyEq τ T)
+    (hl : ∀ s, ¬ TyEq τ (.strLit s)) : ¬ Entails [] ⟨.inject T, [τ]⟩ := by
   rintro (⟨q, hq, hi⟩ | ⟨c, hc, -⟩)
   · cases hi with
     | injectSelf _ =>
@@ -49,6 +50,9 @@ theorem not_entails_inject {T τ : Ty} (hm : ∀ z σ, ¬ TyEq T (.maybe z σ))
       obtain ⟨hcls, -⟩ := PredEq.one hq
       cases hcls
       exact hv _ _ hw
+    | injectLit _ _ =>
+      obtain ⟨hcls, hτ⟩ := PredEq.one hq
+      exact hl _ hτ
     | _ => obtain ⟨hcls, -, -⟩ := hq; cases hcls
   · cases hc
 
@@ -68,7 +72,8 @@ theorem litStr_needed {L : List String} :
     cases hl
     have hne : ¬ TyEq τ (.strLit "a") := fun e => not_tyEq_con (by simp) (h₀.trans e)
     exact ⟨hne, not_entails_inject (fun _ _ e => not_tyEq_con (by simp) e)
-      (fun _ _ h => by simp at h) hne⟩
+      (fun _ _ h => by simp at h) hne
+      (fun _ e => not_tyEq_con (by simp) (h₀.trans e))⟩
 
 /-! ## An array literal -/
 
@@ -92,7 +97,8 @@ theorem arrCheck_needed {L : List String} :
           exact not_tyEq_con (c := .null) (c' := .maybe .null) (by simp)
             (h₁.trans (hz (_, .nullable .number) List.mem_cons_self))
         exact ⟨hne, not_entails_inject (fun _ _ e => not_tyEq_con (by simp) e)
-          (fun _ _ h => by simp at h) hne⟩
+          (fun _ _ h => by simp at h) hne
+      (fun _ e => not_tyEq_con (by simp) (h₀.trans e))⟩
 
 /-! ## A function -/
 
@@ -115,6 +121,7 @@ theorem funcCheck_needed {L : List String} :
           exact not_tyEq_con (c := .null) (c' := .maybe .null) (by simp)
             (h₁.trans (hz (_, .nullable .number) (List.mem_cons_of_mem _ List.mem_cons_self)))
         exact ⟨hne, not_entails_inject (fun _ _ e => not_tyEq_con (by simp) e)
-          (fun _ _ h => by simp at h) hne⟩
+          (fun _ _ h => by simp at h) hne
+      (fun _ e => not_tyEq_con (by simp) (h₀.trans e))⟩
 
 end Inty

@@ -86,7 +86,7 @@ theorem polyId_rigidStays (L : List String) : RigidStays L idAnn (.func 1 (.var 
     · exact hkR h
     · exact hid b h
   simp [improveAll, improveOne, Pred.improve, Pred.improveArgs, Pred.decide, Pred.decide₀,
-    Pred.decideInject, Ty.isVar] at himp
+    Pred.decideInject, Pred.decideInject₀, Ty.isVar] at himp
   split at himp
   · cases himp
   · simp only [Option.some.injEq, Prod.mk.injEq] at himp

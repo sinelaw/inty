@@ -882,7 +882,7 @@ theorem ObjCase.ext (L L' : List String) {ls : List String} {es : List Expr} {T 
   cases z <;> simp [Nothing.ty, Nothing.con]
 
 theorem Inst.ext (L L' : List String) {p : Pred} (h : Inst p) : Inst (p.ext L L') := by
-  cases h with
+  induction h with
   | plusNumber => simpa [Pred.ext, Cls.ext] using Inst.plusNumber
   | plusString => simpa [Pred.ext, Cls.ext] using Inst.plusString
   | @hasProp l ls fs k σ hf =>
@@ -927,6 +927,9 @@ theorem Inst.ext (L L' : List String) {p : Pred} (h : Inst p) : Inst (p.ext L L'
       (by simp [hR]) (by simpa using TyEq.ext L L' he)
       (by simpa using (show ((Ty.app c args).ext L L').ftv = [] by rw [Ty.ftv_ext, ha]))
     simpa [Pred.ext, Cls.ext] using this
+  | injectLit _ hx ih =>
+    simpa [Pred.ext, Cls.ext] using
+      Inst.injectLit (by simpa [Pred.ext, Cls.ext] using ih) (by simpa using TyEq.ext L L' hx)
   | stripSome => simpa [Pred.ext, Cls.ext] using Inst.stripSome
   | @stripSelf c args hm hn hu =>
     rcases Con.extL_cases L L' c Ty.absSlot with ⟨h1, h2⟩ | ⟨rfl, h1, h2⟩
@@ -958,6 +961,12 @@ theorem InstW.ext (L L' : List String) {p : Pred} (h : InstW p) : InstW (p.ext L
   | @injectArm Rs i R c xs t ts hR hw hc hi =>
     have := InstW.injectArm (Rs := Rs.map (·.ext L L')) (by simp [hR])
       (Ty.whnf_ext_of_app (L := L) (L' := L') hw) (by simpa using hc) hi
+    simpa [Pred.ext, Cls.ext] using this
+  | injectLitSelf => simpa [Pred.ext, Cls.ext] using InstW.injectLitSelf
+  | injectLitSome => simpa [Pred.ext, Cls.ext] using InstW.injectLitSome
+  | @injectLitArm Rs i R ts s hR hw hi =>
+    have := InstW.injectLitArm (s := s) (Rs := Rs.map (·.ext L L')) (by simp [hR])
+      (Ty.whnf_ext_of_app (L := L) (L' := L') hw) hi
     simpa [Pred.ext, Cls.ext] using this
   | stripSelf => simpa [Pred.ext, Cls.ext] using InstW.stripSelf
 

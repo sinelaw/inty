@@ -113,11 +113,11 @@ theorem Pred.decideCopy_sound {s r a b : Ty} (h : Pred.decideCopy s r = .eq a b)
   · cases h
   · cases h
 
-/-- What `Pred.decideInject`'s equation says. -/
-theorem Pred.decideInject_sound {τ T a b : Ty} (h : Pred.decideInject τ T = .eq a b) {ψ : Subst}
+/-- What `Pred.decideInject₀`'s equation says. -/
+theorem Pred.decideInject₀_sound {τ T a b : Ty} (h : Pred.decideInject₀ τ T = .eq a b) {ψ : Subst}
     (hab : TyEq (a.subst ψ) (b.subst ψ)) : InstEq (Pred.subst ψ ⟨.inject T, [τ]⟩) := by
   simp only [Pred.subst, List.map_cons, List.map_nil]
-  unfold Pred.decideInject at h
+  unfold Pred.decideInject₀ at h
   split at h
   rotate_left
   · cases h
@@ -199,6 +199,30 @@ theorem Pred.decideInject_sound {τ T a b : Ty} (h : Pred.decideInject τ T = .e
       · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
     · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
   · cases h; rw [hTψ] at hab; exact Pred.inject_self hT hab
+
+/-- What `Pred.decideInject`'s equation says. -/
+theorem Pred.decideInject_sound {τ T a b : Ty} (h : Pred.decideInject τ T = .eq a b) {ψ : Subst}
+    (hab : TyEq (a.subst ψ) (b.subst ψ)) : InstEq (Pred.subst ψ ⟨.inject T, [τ]⟩) := by
+  unfold Pred.decideInject at h
+  split at h
+  · rename_i s
+    split at h
+    · rename_i a' X h₀
+      split at h
+      · cases h; exact Pred.decideInject₀_sound h₀ hab
+      · -- Injected as a string.
+        obtain ⟨q, hpq, hq⟩ := Pred.decideInject₀_sound h hab
+        obtain ⟨c, args⟩ := q
+        simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app] at hpq ⊢
+        have hl := hpq.2.1
+        match args, hpq, hl with
+        | [x], hpq, _ =>
+          obtain ⟨hc, hx⟩ := PredEq.one hpq
+          subst hc
+          exact ⟨_, PredEq.refl _, Inst.injectLit hq hx.symm⟩
+    · rename_i h₀
+      exact (h₀ _ _ h).elim
+  · exact Pred.decideInject₀_sound h hab
 
 /-- What `Pred.decideStrip`'s equation says. -/
 theorem Pred.decideStrip_sound {t σ a b : Ty} (h : Pred.decideStrip t σ = .eq a b) {ψ : Subst}

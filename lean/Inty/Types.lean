@@ -88,9 +88,10 @@ inductive Con where
   rigid variables are named by a key `s` apart from every other in sight
   (`HasTypeS.letPoly` takes any key outside a finite set). -/
   | rigid (s i : Nat)
-  /-- The type of the one string `s`: a variant's tag field
-  (`{kind: "circle", …}`), which only a string literal checked against it
-  has. -/
+  /-- The type of the one string `s`: an annotation's (`/** const t: "a"
+  */`) or a variant's tag field (`{kind: "circle", …}`), which only a
+  string literal checked against it has. A value of it is a string, and is
+  injected wherever one is (`Inst.injectLit`). -/
   | strLit (s : String)
   /-- A variant told apart by `d`, with the tags `ts`, applied to the
   types of its cases. Told apart by a field `l`, the case of the tag

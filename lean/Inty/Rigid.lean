@@ -656,6 +656,7 @@ theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) :=
     | injectNothing _ _ => exact absurd rfl (hc _)
     | injectSome _ _ _ _ _ => exact absurd rfl (hc _)
     | injectArm _ _ _ _ _ _ _ _ => exact absurd rfl (hc _)
+    | injectLit _ _ => exact absurd rfl (hc _)
     | stripSome => simpa [Pred.rsub] using InstW.narrow Inst.stripSome (by simp)
     | @stripSelf c args _ _ _ => simpa [Pred.rsub] using InstW.stripSelf (τ := (Ty.app c args).rsub ρ)
     | @caseHit ts i t Rs R d hn hi hR =>
@@ -671,6 +672,12 @@ theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) :=
     simpa [Pred.rsub, Ty.rsub_app, Con.rimgA, Con.rimg] using
       InstW.injectArm (Rs := Rs.map (·.rsub ρ)) (by simp [hR])
         (Ty.whnf_rsub_nr (ρ := ρ) hw (Con.isRigid_of_typeTag hc)) hc hi
+  | injectLitSelf => simpa [Pred.rsub, Ty.rsub_app, Con.rimgA, Con.rimg] using InstW.injectLitSelf
+  | injectLitSome => simpa [Pred.rsub, Ty.rsub_app, Con.rimgA, Con.rimg] using InstW.injectLitSome
+  | @injectLitArm Rs i R ts s hR hw hi =>
+    simpa [Pred.rsub, Ty.rsub_app, Con.rimgA, Con.rimg] using
+      InstW.injectLitArm (s := s) (Rs := Rs.map (·.rsub ρ)) (by simp [hR])
+        (Ty.whnf_rsub_nr (ρ := ρ) hw rfl) hi
   | stripSelf => simpa [Pred.rsub] using InstW.stripSelf
 
 theorem InstEqW.rsub (ρ : RSubst) {p : Pred} (h : InstEqW p) : InstEqW (p.rsub ρ) := by
