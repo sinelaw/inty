@@ -181,7 +181,7 @@ def Pred.decideStrip (t σ : Ty) : Improve :=
 
 /-- A `Case_{l,t}` on a variant tagged by `l'` with the tags `ts` and the
 cases `Ps`: the case of the tag `t` and the rest, if the tags differ. -/
-def Pred.decideCase (d : Disc) (t : String) (d' : Disc) (ts : List String) (Ps : List Ty)
+def Pred.decideCase (d : Disc) (t : Tag) (d' : Disc) (ts : List Tag) (Ps : List Ty)
     (σ ρ : Ty) : Improve :=
   if d' = d ∧ ts.Nodup then
     match firstIdx t ts with
@@ -451,6 +451,7 @@ def Expr.pushes (T : Ty) : Expr → Bool
   | .cond .. | .seq .. | .let_ .. | .tryCatch .. | .tryFinally .. | .ret _ | .break_
   | .continue_ | .unwrap .. | .caseTag .. => true
   | .lit (.string s) => decide (T.whnf = .strLit s)
+  | .lit (.boolean b) => decide (T.whnf = .boolLit b)
   | .obj ls es ks =>
     (objTarget T ls es).isSome && decide ls.Nodup && decide (ks = ls.map fun _ => .data)
   | .func k _ => (funcTarget (some T) k).isSome

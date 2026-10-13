@@ -376,6 +376,7 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
         (fun i hw => by simp only [Expr.writes, Bool.or_eq_false_iff] at hw; simpa using hw.2)
       exact ih₃ (by simpa using this) hR hRc
   | litStr hw => intros; exact .litStr hw
+  | litBool hw => intros; exact .litBool hw
   | objCheck hc hn hk hl hL hd he _ ih =>
     intro Γ' R' hg hR hRc
     exact .objCheck hc hn hk hl hL hd he (fun p hp => ih p hp (hg.sub fun i hw => by
@@ -522,6 +523,7 @@ theorem HasTypeS.checkRet {L : List String} {C : List Pred} {Γ : Ctx} {R : Opti
     intro ρ' ρ hm hR he hρ
     exact .caseTag (ih₁ hm hR he hρ) hc (ih₂ hm hR he hρ) (ih₃ hm hR he hρ)
   | litStr hw => intros; exact .litStr hw
+  | litBool hw => intros; exact .litBool hw
   | objCheck hc hn hk hl hL hd he' _ ih =>
     intro ρ' ρ hm hR he hρ
     exact .objCheck hc hn hk hl hL hd he' (fun p hp => ih p hp hm hR he hρ)

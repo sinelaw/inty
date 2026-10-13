@@ -316,18 +316,24 @@ touching the generic proofs.
 
 ### 5. Literal types, unions and narrowing
 
-- **Literal types, in the model's own terms (string literal types,
-  done).** A literal synthesises its base type; a string literal type is
-  made by checking a literal against it, and a value of one is injected
+- **Literal types, in the model's own terms (done for strings and
+  booleans).** A literal synthesises its base type; a string literal type
+  is made by checking a literal against it, and a value of one is injected
   wherever a `String` is (`Inst.injectLit`, an instance of the `Inject`
   that checking mode uses): into `String`, a sum of it and a sum told
-  apart by `typeof` with a string case. Joins stay what the model has:
-  one type, or the expected type pushed into each branch. Soundness and
-  inference sound and complete; the differential generator annotates
-  string literal types and checks them into those. Not in the model, so
-  a listed divergence: inty's widening of a literal type where it
-  synthesises (`c ? t : "b"` with `t: "a"` is a `String` in inty). Number
-  and boolean literal types are still to come.
+  apart by `typeof` with a string case. A variant's tag is a string or a
+  boolean (`Tag`), so `{ok: true, value: T} | {ok: false, error: E}` is a
+  variant, built by a tagged literal (`HasTypeS.litBool` checks `true`
+  against the type of that boolean, `Con.boolLit`) and taken apart by
+  `x.ok === true`. Joins stay what the model has: one type, or the
+  expected type pushed into each branch. Soundness and inference sound
+  and complete; the differential generator annotates string literal types
+  and variants tagged by booleans. It found inty widening a boolean tag
+  where the union's arms have one shape (`{a: false, b: undefined}`
+  against `{a: true, b: Number} | {a: false, b: Undefined}`), now fixed.
+  Left out on purpose ([GAPS.md](GAPS.md)): number literal types, boolean
+  literal types beyond tags, and inty's widening of a literal type where
+  it synthesises.
 - Literal types and their widening; the join rules of
   `docs/type-system.md` (literals widen, `null` and `undefined` make a
   result nullable, a declared union absorbs its arms); `never`; operations
@@ -507,7 +513,7 @@ programs are run against CPython and Lua, as JavaScript is against Node.
 
 ## Done means
 
-- The coverage table has no gaps.
+- The coverage table has no gaps but those [GAPS.md](GAPS.md) lists.
 - The theorems hold for the whole AST.
 - The model agrees with inty and the engines on inty's whole test corpus.
   Every disagreement is fixed or is a documented fault.

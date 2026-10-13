@@ -621,9 +621,7 @@ theorem run_good : ∀ e, NoClockGood e := by
     have hh' := hh₂.append (Value.CellOK.of_plain hv)
     have he' := (he.mono hx₂).push hv
     split
-    · split
-      · exact (ih₃ hn.2 _ _ _ hh' he').weaken hx
-      · exact (ih₂ hn.1.2 _ _ _ hh' he').weaken hx
+    · exact (ih₃ hn.2 _ _ _ hh' he').weaken hx
     · exact (ih₂ hn.1.2 _ _ _ hh' he').weaken hx
   | tryCatch body handler ihb ihh =>
     intro hn clock env heap hh he

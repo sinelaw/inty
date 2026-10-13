@@ -777,7 +777,7 @@ theorem Pred.decideStrip_app {c : Con} {xs : List Ty} {σ : Ty} (hm : ∀ z, c �
     Pred.decideStrip (.app c xs) σ = .eq σ (.app c xs) := by
   cases c <;> simp_all [Pred.decideStrip]
 
-theorem firstIdx_of_nodup {t : String} : ∀ {ts : List String} {i : Nat}, ts.Nodup →
+theorem firstIdx_of_nodup {t : Tag} : ∀ {ts : List Tag} {i : Nat}, ts.Nodup →
     ts[i]? = some t → firstIdx t ts = some i
   | [], _, _, h => by simp at h
   | x :: xs, 0, _, h => by simp at h; subst h; simp [firstIdx]
@@ -797,7 +797,7 @@ theorem zip_eraseIdx_mem {α β : Type} : ∀ (xs : List α) (ys : List β) (i :
     · exact .inl rfl
     · exact .inr (zip_eraseIdx_mem xs ys i (by simpa using h) p hp)
 
-theorem variantRest_tyEq {d : Disc} {ts : List String} : ∀ {xs ys : List Ty},
+theorem variantRest_tyEq {d : Disc} {ts : List Tag} : ∀ {xs ys : List Ty},
     xs.length = ys.length → (∀ p ∈ xs.zip ys, TyEq p.1 p.2) →
       TyEq (variantRest d ts xs) (variantRest d ts ys)
   | [], [], _, _ => TyEq.refl _
@@ -808,8 +808,8 @@ theorem variantRest_tyEq {d : Disc} {ts : List String} : ∀ {xs ys : List Ty},
 
 /-- An `Inject T τ` whose image is into a variant told apart by `typeof`, at
 its case of `τ`'s head's tag: its decision holds. -/
-theorem Pred.decideInject_arm₀ {t T R : Ty} {ts : List String} {Rs : List Ty} {c : Con}
-    {args : List Ty} {t' : String} {i : Nat} {φ : Subst} (hT : T.ftv = [])
+theorem Pred.decideInject_arm₀ {t T R : Ty} {ts : List Tag} {Rs : List Ty} {c : Con}
+    {args : List Ty} {t' : Tag} {i : Nat} {φ : Subst} (hT : T.ftv = [])
     (hw : T.whnf = .variant .typeOf ts Rs) (hn : ts.Nodup) (htag : c.typeTag = some t')
     (hi : ts[i]? = some t') (hR : Rs[i]? = some R) (he : TyEq (.app c args) R)
     (ht : TyEq (t.subst φ) (.app c args)) (hnv : t.whnf.isVar = false) :
@@ -1491,7 +1491,7 @@ theorem objTarget_complete {ls : List String} {es : List Expr} {T P : Ty} {L : L
   | variant hw hl hi hP ht => unfold objTarget; simp [hw, hl, hi, hP, ht]
 
 /-- A variant's rest has the tree variables of its cases. -/
-theorem variantRest_tv {d : Disc} {ts : List String} {Rs : List Ty} {b : Nat}
+theorem variantRest_tv {d : Disc} {ts : List Tag} {Rs : List Ty} {b : Nat}
     (h : (variantRest d ts Rs).TV b) : ∃ R ∈ Rs, R.TV b := by
   match Rs, h with
   | [R], h => exact ⟨R, by simp, h⟩
@@ -1509,6 +1509,7 @@ theorem HasTypeS.inj_inv {L : List String} {C : List Pred} {Γ : Ctx} {R : Optio
   | funcCheck hw _ hlen _ => simp [Expr.pushes, funcTarget, hw, hlen] at hp
   | arrCheck hw _ _ => simp [Expr.pushes, arrTarget, hw] at hp
   | litStr hw => simp [Expr.pushes, hw] at hp
+  | litBool hw => simp [Expr.pushes, hw] at hp
   | objCheck hc hnd hk _ _ _ he _ => simp [Expr.pushes, objTarget_complete hc he, hnd, hk] at hp
   | _ => simp [Expr.pushes] at hp
 
@@ -2368,7 +2369,7 @@ theorem Pred.decideInject_ne_keep {t T : Ty} : Pred.decideInject t T ≠ .keep :
   · exact Pred.decideInject₀_ne_keep h
 
 /-- A `Case` on a known type is decided. -/
-theorem Pred.decideCase_ne_keep {d d' : Disc} {t : String} {ts : List String} {Ps : List Ty}
+theorem Pred.decideCase_ne_keep {d d' : Disc} {t : Tag} {ts : List Tag} {Ps : List Ty}
     {σ ρ : Ty} : Pred.decideCase d t d' ts Ps σ ρ ≠ .keep := by
   intro h
   unfold Pred.decideCase at h
@@ -2856,6 +2857,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
   | funcCheck hw hT' hl hb => exact .funcCheck hw hT' hl hb
   | arrCheck hw hT' hes => exact .arrCheck hw hT' hes
   | litStr hw => exact .litStr hw
+  | litBool hw => exact .litBool hw
   | objCheck hc hnd hk hl hL hd he hf => exact .objCheck hc hnd hk hl hL hd he hf
   | caseTag h₁ hs h₂ h₃ => exact .caseTag h₁ hs h₂ h₃
   | inj h' _ hi =>
@@ -2876,8 +2878,9 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     | caseTag h₁ hs h₂ h₃ => exact .caseTag h₁ hs (.inj h₂ hT hi') (.inj h₃ hT hi')
     | lit hl =>
       cases hl <;> simp only [Expr.pushes, decide_eq_true_eq, Bool.false_eq_true] at hp
-      have := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hp (by simp)) (fun _ _ e => by rw [hp] at e; cases e) (fun _ e => by cases e)
-      exact absurd (TyEq.con (this.trans (TyEq.of_whnf hp))) (by simp)
+      all_goals
+        have := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hp (by simp)) (fun _ _ e => by rw [hp] at e; cases e) (fun _ e => by cases e)
+        exact absurd (TyEq.con (this.trans (TyEq.of_whnf hp))) (by simp)
     | obj hes hks hτs hss hL hargs hfs =>
       rename_i ls ss es ks τs
       simp only [Expr.pushes, Bool.and_eq_true, decide_eq_true_eq] at hp
@@ -3611,7 +3614,7 @@ theorem infer_complete_unwrap (L : List String) (e₁ : Expr) (e₂ : Expr) (e�
         · exact (hσ₂.subst_below (hτb₁.mono hn₂)).mono (Nat.le_succ _)
         · exact hβ
 
-theorem infer_complete_caseTag (L : List String) (e₁ : Expr) (l : Disc) (t : String) (e₂ : Expr) (e₃ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) (ih₃ : e₃.PolyOK L → InferComplete L e₃) :
+theorem infer_complete_caseTag (L : List String) (e₁ : Expr) (l : Disc) (t : Tag) (e₂ : Expr) (e₃ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) (ih₃ : e₃.PolyOK L → InferComplete L e₃) :
     (Expr.caseTag e₁ l t e₂ e₃).PolyOK L → InferComplete L (Expr.caseTag e₁ l t e₂ e₃) := by
   intro hm
   simp only [Expr.PolyOK] at hm

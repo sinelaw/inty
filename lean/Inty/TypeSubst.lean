@@ -317,6 +317,7 @@ theorem HasTypeS.subst {S : Sys} (hS : S.Substable) (σ : Subst) (h : HasTypeS S
     exact .inj ih (hS.closed σ hT) (by rw [← hS.injPred σ _ hT]; exact hi.substS hS σ)
   | drop _ ih => exact .drop ih
   | litStr hw => exact .litStr (Ty.whnf_subst_of_app hw σ)
+  | litBool hw => exact .litBool (Ty.whnf_subst_of_app hw σ)
   | objCheck hc hn hk hl hL hd he _ ih =>
     refine .objCheck (hc.subst σ) hn hk hl hL (Ty.dataFields_subst σ hd) ?_ (fun p hp => ?_)
     · simpa [objSlots_subst, List.map_map, Function.comp_def] using he.subst σ

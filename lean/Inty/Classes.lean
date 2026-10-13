@@ -106,10 +106,10 @@ inductive SlotCopy : Ty → Ty → Prop where
 theorem SlotCopy.subst (σ : Subst) (h : SlotCopy s r) : SlotCopy (s.subst σ) (r.subst σ) := by
   cases h <;> simp only [Ty.subst_app, List.map_cons, List.map_nil] <;> constructor
 
-/-- The tag of a variant's case `R` over its field `l`: the string of the
-type of `R`'s field `l`, present and holding a value (each looked at
-unfolded). -/
-def Ty.tagOf (l : String) (R : Ty) : Option String :=
+/-- The tag of a variant's case `R` over its field `l`: the string or the
+boolean of the literal type of `R`'s field `l`, present and holding a
+value (each looked at unfolded). -/
+def Ty.tagOf (l : String) (R : Ty) : Option Tag :=
   match R.whnf with
   | .app (.record ls) slots =>
     match Ty.field l ls slots with
@@ -118,7 +118,8 @@ def Ty.tagOf (l : String) (R : Ty) : Option String :=
       | .app .slot [p, k, τ] =>
         if p.whnf = .pre ∧ k.whnf = .data then
           match τ.whnf with
-          | .app (.strLit t) [] => some t
+          | .app (.strLit t) [] => some (.str t)
+          | .app (.boolLit b) [] => some (.bool b)
           | _ => none
         else none
       | _ => none
@@ -128,16 +129,16 @@ def Ty.tagOf (l : String) (R : Ty) : Option String :=
 /-- The rest of a variant tagged by `l` once a case is taken out, its tags
 `ts` and its cases `Rs` left: the one case left as it is (so that its
 fields can be read), or a variant of them. -/
-def variantRest (d : Disc) (ts : List String) : List Ty → Ty
+def variantRest (d : Disc) (ts : List Tag) : List Ty → Ty
   | [R] => R
   | Rs => .variant d ts Rs
 
 /-- The first index of `t` in `ts`. -/
-def firstIdx (t : String) : List String → Option Nat
+def firstIdx (t : Tag) : List Tag → Option Nat
   | [] => none
   | x :: xs => if x = t then some 0 else (firstIdx t xs).map (· + 1)
 
-theorem firstIdx_getElem {t : String} : ∀ {ts : List String} {i : Nat},
+theorem firstIdx_getElem {t : Tag} : ∀ {ts : List Tag} {i : Nat},
     firstIdx t ts = some i → ts[i]? = some t
   | [], _, h => by simp [firstIdx] at h
   | x :: xs, i, h => by
@@ -147,7 +148,7 @@ theorem firstIdx_getElem {t : String} : ∀ {ts : List String} {i : Nat},
     · obtain ⟨j, hj, rfl⟩ := Option.map_eq_some_iff.mp h
       simpa using firstIdx_getElem hj
 
-theorem Ty.tagOf_subst {l : String} {R : Ty} {t : String} (h : R.tagOf l = some t) (σ : Subst) :
+theorem Ty.tagOf_subst {l : String} {R : Ty} {t : Tag} (h : R.tagOf l = some t) (σ : Subst) :
     (R.subst σ).tagOf l = some t := by
   unfold Ty.tagOf at h ⊢
   split at h
@@ -172,6 +173,9 @@ theorem Ty.tagOf_subst {l : String} {R : Ty} {t : String} (h : R.tagOf l = some 
           · rename_i t' hτ
             rw [Ty.whnf_subst_of_app hτ σ]
             simpa using h
+          · rename_i b hτ
+            rw [Ty.whnf_subst_of_app hτ σ]
+            simpa using h
           · cases h
         · cases h
       · cases h
@@ -184,7 +188,7 @@ theorem eraseIdx_map {α β : Type} (f : α → β) : ∀ (l : List α) (i : Nat
   | _ :: _, 0 => rfl
   | a :: l, i + 1 => by simp [eraseIdx_map f l i]
 
-theorem variantRest_subst (σ : Subst) (d : Disc) (ts : List String) (Rs : List Ty) :
+theorem variantRest_subst (σ : Subst) (d : Disc) (ts : List Tag) (Rs : List Ty) :
     (variantRest d ts Rs).subst σ = variantRest d ts (Rs.map (·.subst σ)) := by
   match Rs with
   | [] => rfl

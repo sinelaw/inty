@@ -509,7 +509,12 @@ These choices are meant to hold up as the calculus grows.
   is pushed into each; there is no widening of a synthesised type. inty
   widens literal types where it synthesises (an unannotated binding, an
   operand, the join of `c ? t : "b"` with `t: "a"`), which the model, with
-  no such concept, rejects without an annotation.
+  no such concept, rejects without an annotation: an intentional gap
+  ([GAPS.md](GAPS.md)). A variant's tag is a string or a boolean (`Tag`):
+  a boolean's tag field has the type of that boolean (`Con.boolLit`),
+  which only `true` or `false` checked against it has (`HasTypeS.litBool`),
+  and `x.ok === true` takes the variant apart, comparing by kind as `===`
+  does, so `true` is never the tag `"true"`.
 - **Where the interpreter isn't JavaScript.** Besides the faults: a
   string is a sequence of code points, as `dynamics`' are, where
   JavaScript's are UTF-16 units (`"😀".length` is 1 here, 2 there); `new`
@@ -549,7 +554,8 @@ Lean's exhaustiveness checks point at every case still missing.
 
 [ROADMAP.md](ROADMAP.md) plans the rest: seven phases to a complete model
 of inty's type system, with the ground rules that keep it faithful to what
-inty implements and documents.
+inty implements and documents. [GAPS.md](GAPS.md) lists what inty has that
+the model leaves out on purpose, and why.
 
 ## inty's own programs
 
@@ -674,7 +680,6 @@ disagreements in typing all fall into features the model lacks:
 | A spread over an operand of an unknown type: `{...a, ...xs[0]}` with `xs` an empty array | a field the operand may write gets a union with a type variable | merges slot by slot once the operand is known | 3 (a deferred `Spread`) |
 | A record case after `typeof x !== "object"`: `typeof x === "object" ? 0 : x - 1` with `x: Number \| {a: Number}` | keeps it (a declaration may type a function as a record: `Promise`, `Object`) | drops it (its records are object literals') | a `typeof` for declared values |
 | A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | the waiting `Join` (`docs/sum-types-design.md`) |
-| A value of a string literal type where its base type is synthesised: `c ? t : "b"`, `t + "b"`, `k(t)` with `t: "a"` and `k`'s parameter a `String` | widens it to `String` | rejects unless an annotation checks it (`/** const u: String */ const u = c ? t : "b"`) | 5 (literal types) |
 
 The nullable join is gone from both: inty now has the model's sums
 (`T | Null` is `Nullable T`, made by an annotation, taken apart by `??`

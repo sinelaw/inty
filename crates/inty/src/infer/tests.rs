@@ -1406,6 +1406,14 @@ fn tagged_literal_takes_the_arm_of_its_tag() {
         );
         assert!(infer_program_via_program(&src).is_ok(), "{src}");
     }
+    // A boolean tag picks its arm too, where the arms have one shape (the
+    // differential test found it widened to `Boolean`).
+    let src = "/** const v: {a: true, b: Number} | {a: false, b: Undefined} */ \
+               const v = {b: undefined, a: false}; const w = v; (w.a === false ? 1 : 2);";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "/** const v: {a: true, b: Number} | {a: false, b: Undefined} */ \
+               const v = {b: 1, a: false};";
+    assert!(infer_program_via_program(src).is_err());
 }
 
 #[test]

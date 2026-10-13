@@ -789,7 +789,7 @@ theorem Ty.whnf_ext_nr {L L' : List String} {T : Ty} {c : Con} {xs : List Ty}
     (T.ext L L').whnf = .app c (xs.map (·.ext L L')) := by
   rw [Ty.whnf_ext, h, Ty.ext_app_nr hc]
 
-theorem Ty.tagOf_ext (L L' : List String) {l : String} {R : Ty} {t : String}
+theorem Ty.tagOf_ext (L L' : List String) {l : String} {R : Ty} {t : Tag}
     (h : R.tagOf l = some t) : (R.ext L L').tagOf l = some t := by
   unfold Ty.tagOf at h ⊢
   split at h
@@ -811,6 +811,9 @@ theorem Ty.tagOf_ext (L L' : List String) {l : String} {R : Ty} {t : String}
           simp only [List.map_nil, and_self, ↓reduceIte]
           split at h
           · rename_i t' hτ
+            rw [Ty.whnf_ext_nr hτ (by simp)]
+            simpa using h
+          · rename_i b hτ
             rw [Ty.whnf_ext_nr hτ (by simp)]
             simpa using h
           · cases h
@@ -861,7 +864,7 @@ theorem Ty.dataFields_ext (L L' : List String) {T : Ty} : ∀ {ls : List String}
       rfl
     · cases h
 
-theorem variantRest_ext (L L' : List String) (d : Disc) (ts : List String) (Rs : List Ty) :
+theorem variantRest_ext (L L' : List String) (d : Disc) (ts : List Tag) (Rs : List Ty) :
     (variantRest d ts Rs).ext L L' = variantRest d ts (Rs.map (·.ext L L')) := by
   match Rs with
   | [] => simp [variantRest]
@@ -1262,6 +1265,7 @@ theorem HasTypeS.extLabels {S : Sys} {L L' : List String} (hS : S.LExtable L L')
   | inj _ hT hi ih => exact .inj ih (hS.closed hT) (by rw [← hS.injPred]; exact hi.extS hS)
   | drop _ ih => exact .drop ih
   | litStr hw => exact .litStr (by rw [Ty.whnf_ext, hw]; rfl)
+  | litBool hw => exact .litBool (by rw [Ty.whnf_ext, hw]; rfl)
   | objCheck hc hn hk hl hls hd he _ ih =>
     simp only [Expr.extAnn, Expr.extAnns_eq]
     refine .objCheck (hc.ext L L') hn hk (by simpa using hl)

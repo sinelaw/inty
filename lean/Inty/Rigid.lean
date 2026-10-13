@@ -537,7 +537,7 @@ theorem Ty.whnf_rsub_nr {ρ : RSubst} {T : Ty} {c : Con} {xs : List Ty} (h : T.w
     (hc : c.isRigid = false) : (T.rsub ρ).whnf = .app c (xs.map (·.rsub ρ)) :=
   Ty.whnf_rsub_of_app h (Con.rimgA_none (Con.rimg_of_not_rigid hc) xs)
 
-theorem Ty.tagOf_rsub (ρ : RSubst) {l : String} {R : Ty} {t : String} (h : R.tagOf l = some t) :
+theorem Ty.tagOf_rsub (ρ : RSubst) {l : String} {R : Ty} {t : Tag} (h : R.tagOf l = some t) :
     (R.rsub ρ).tagOf l = some t := by
   unfold Ty.tagOf at h ⊢
   split at h
@@ -562,13 +562,16 @@ theorem Ty.tagOf_rsub (ρ : RSubst) {l : String} {R : Ty} {t : String} (h : R.ta
           · rename_i t' hτ
             rw [Ty.whnf_rsub_nr hτ rfl]
             simpa using h
+          · rename_i b hτ
+            rw [Ty.whnf_rsub_nr hτ rfl]
+            simpa using h
           · cases h
         · cases h
       · cases h
     · cases h
   · cases h
 
-theorem variantRest_rsub (ρ : RSubst) (d : Disc) (ts : List String) (Rs : List Ty) :
+theorem variantRest_rsub (ρ : RSubst) (d : Disc) (ts : List Tag) (Rs : List Ty) :
     (variantRest d ts Rs).rsub ρ = variantRest d ts (Rs.map (·.rsub ρ)) := by
   match Rs with
   | [] => simp [variantRest, Con.rimgA, Con.rimg]
@@ -1065,6 +1068,7 @@ theorem HasTypeS.rsub {S : Sys} {ρ : RSubst} (hS : S.RSubstable ρ) (D : List N
   | inj _ hT hi ih => exact .inj ih (hS.closed hT) (by rw [← hS.injPred]; exact hi.rsubS hS)
   | drop _ ih => exact .drop ih
   | litStr hw => exact .litStr (Ty.whnf_rsub_nr hw rfl)
+  | litBool hw => exact .litBool (Ty.whnf_rsub_nr hw rfl)
   | objCheck hc hn hk hl hL hd he _ ih =>
     refine .objCheck (hc.rsub ρ) hn hk hl hL (Ty.dataFields_rsub ρ hd) ?_ (fun p hp => ?_)
     · simpa [objSlots_rsub, List.map_map, Function.comp_def] using he.rsub ρ

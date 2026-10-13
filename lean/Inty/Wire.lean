@@ -22,11 +22,12 @@ JavaScript and for this model as an s-expression, one program per line:
                variables, written (tv I) in T
 (unwrap E₁ E₂ E₃)   `const x = E₁; x != null ? E₃ : E₂`, x as var 0 in E₃
 (casetag E₁ s:l s:t E₂ E₃)   `const x = E₁; x.l === "t" ? E₃ : E₂`, x as var 0
-               in both
+               in both; the tag `true` or `false` for `x.l === true`
 (typetest E₁ s:t E₂ E₃)   `const x = E₁; typeof x === "t" ? E₃ : E₂`, alike
 annotations also take (rec (s:x T) …), a record, (strlit s:t), the type of
-the string t, and (variant s:l (rec …) …), a variant tagged by its field l,
-whose cases are records with a string's type at l, and (sum T …), a sum told
+the string t, (boollit true) and (boollit false), and (variant s:l (rec …) …),
+a variant tagged by its field l, whose cases are records with a string's or
+a boolean's type at l, and (sum T …), a sum told
 apart by `typeof` (`Number | String`)
 (cond C T E)   (not E) (typeof E) (neg E)  (plus A B) (minus A B)
 (times A B) (div A B)   `*`, `/`   (lt A B) (le A B) (gt A B) (ge A B)   `<` … `>=`
@@ -122,6 +123,8 @@ partial def parseTy (L : Option (List String)) : List String → Option (Ty × L
     some (.fn .undefined ps r, rest)
   | "(" :: "strlit" :: t :: ")" :: rest =>
     if t.startsWith "s:" then some (.strLit (unescape (t.drop 2).toString), rest) else none
+  | "(" :: "boollit" :: "true" :: ")" :: rest => some (.boolLit true, rest)
+  | "(" :: "boollit" :: "false" :: ")" :: rest => some (.boolLit false, rest)
   -- A record: its fields over the program's labels `L`, once they are
   -- known, and over its own labels before.
   | "(" :: "rec" :: rest => do
@@ -294,7 +297,10 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
   | "casetag", rest => do
     let (a, rest) ← parseExpr L rest
     let (l, rest) ← parseLabel rest
-    let (t, rest) ← parseLabel rest
+    let (t, rest) ← match rest with
+      | "true" :: rest => some (Tag.bool true, rest)
+      | "false" :: rest => some (Tag.bool false, rest)
+      | _ => (parseLabel rest).map fun (t, rest) => (Tag.str t, rest)
     let (b, rest) ← parseExpr L rest
     let (c, rest) ← parseExpr L rest
     some (.caseTag a (.field l) t b c, rest)
@@ -303,7 +309,7 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
     let (t, rest) ← parseLabel rest
     let (b, rest) ← parseExpr L rest
     let (c, rest) ← parseExpr L rest
-    some (.caseTag a .typeOf t b c, rest)
+    some (.caseTag a .typeOf (.str t) b c, rest)
   | "tryfinally", rest => do
     let (b, rest) ← parseExpr L rest
     let (f, rest) ← parseExpr L rest

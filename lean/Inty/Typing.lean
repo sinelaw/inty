@@ -191,9 +191,14 @@ theorem Ty.dataFields_length {T : Ty} : ∀ {ls : List String} {τs : List Ty},
 
 /-- The tag an object literal with the labels `ls` and the expressions `es`
 writes in its field `l`: a string literal. -/
-def litTag (l : String) : List String → List Expr → Option String
+def litTag (l : String) : List String → List Expr → Option Tag
   | l' :: ls, e :: es =>
-    if l' = l then (match e with | .lit (.string t) => some t | _ => none) else litTag l ls es
+    if l' = l then
+      (match e with
+        | .lit (.string t) => some (.str t)
+        | .lit (.boolean b) => some (.bool b)
+        | _ => none)
+    else litTag l ls es
   | _, _ => none
 
 /-- What an object literal with the labels `ls` and the expressions `es`,
@@ -431,6 +436,9 @@ inductive HasTypeS (S : Sys) (L : List String) :
   /-- A string literal checked against its own string type: a variant's
   tag. -/
   | litStr : T.whnf = .strLit s → HasTypeS S L C Γ R rm .check (.lit (.string s)) T
+  /-- A boolean literal checked against the type of that boolean (a
+  variant's tag, `{ok: true, …}`). -/
+  | litBool : T.whnf = .boolLit b → HasTypeS S L C Γ R rm .check (.lit (.boolean b)) T
   /-- An object literal whose fields all hold values, checked against a
   record type equal to the one with those fields (present, holding values)
   and no others, or a variant with such a case (`ObjCase`): each field
@@ -566,6 +574,7 @@ inductive HasTypeTopS (S : Sys) (L : List String) :
       HasTypeS S L C Γ R rm md e₂ τ → HasTypeS S L C (.mono σ :: Γ) R rm md e₃ τ →
       HasTypeTopS S L C Γ R rm md (.unwrap e₁ e₂ e₃) τ
   | litStr : T.whnf = .strLit s → HasTypeTopS S L C Γ R rm .check (.lit (.string s)) T
+  | litBool : T.whnf = .boolLit b → HasTypeTopS S L C Γ R rm .check (.lit (.boolean b)) T
   | objCheck : ObjCase ls es T P → ls.Nodup → ks = ls.map (fun _ => .data) →
       es.length = ls.length → (∀ l ∈ ls, l ∈ L) → P.dataFields ls = some τs →
       TyEq P (.record L (objSlots L ls (τs.map fun τ => .slot .pre .data τ))) →
@@ -642,6 +651,7 @@ theorem HasTypeS.top {S : Sys} (h : HasTypeS S L C Γ R rm md e τ) :
   | continue_ => exact ⟨_, _, .continue_, .refl⟩
   | unwrap h₁ hs h₂ h₃ => exact ⟨_, _, .unwrap h₁ hs h₂ h₃, .refl⟩
   | litStr hw => exact ⟨_, _, .litStr hw, .refl⟩
+  | litBool hw => exact ⟨_, _, .litBool hw, .refl⟩
   | objCheck hc hn hk hl hL hd he hf => exact ⟨_, _, .objCheck hc hn hk hl hL hd he hf, .refl⟩
   | caseTag h₁ hc h₂ h₃ => exact ⟨_, _, .caseTag h₁ hc h₂ h₃, .refl⟩
   | tryCatch hb hh => exact ⟨_, _, .tryCatch hb hh, .refl⟩

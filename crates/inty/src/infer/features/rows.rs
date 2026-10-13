@@ -618,40 +618,49 @@ impl InferState {
                 return self.try_check_object(env, properties, span, &shaped[0]);
             }
             // Several arms of the literal's shape: a discriminated union,
-            // whose arm is the one whose tag the literal writes, a string
-            // literal in a field where each arm has a string literal type
-            // (the Lean model's `ObjCase.variant`).
+            // whose arm is the one whose tag the literal writes, a string or
+            // a boolean literal in a field where each arm has a literal type
+            // of one (the Lean model's `ObjCase.variant`).
             for prop in properties {
                 let PropDef::Property { key, value, .. } = prop else {
                     continue;
                 };
-                let Expr::Lit {
-                    value: Literal::String(tag),
-                    ..
-                } = value
-                else {
-                    continue;
+                let tag = match value {
+                    Expr::Lit {
+                        value: Literal::String(s),
+                        ..
+                    } => LitValue::String(s.clone()),
+                    Expr::Lit {
+                        value: Literal::Boolean(b),
+                        ..
+                    } => LitValue::Bool(*b),
+                    _ => continue,
                 };
                 let name = self.prop_key_to_name(key);
                 // The arms' types of the field: a tag field only if each
-                // is a string literal, all different.
-                let tags: Vec<Option<String>> = shaped
+                // is a string or a boolean literal, all different.
+                let tags: Vec<Option<LitValue>> = shaped
                     .iter()
                     .map(|arm| match arm {
                         Type::Row(row) => {
                             row.props.get(&name).and_then(|e| match self.zonk(&e.ty) {
-                                Type::Literal(LitValue::String(s)) => Some(s),
+                                Type::Literal(l @ (LitValue::String(_) | LitValue::Bool(_))) => {
+                                    Some(l)
+                                }
                                 _ => None,
                             })
                         }
                         _ => None,
                     })
                     .collect();
-                let distinct: std::collections::BTreeSet<&Option<String>> = tags.iter().collect();
-                if tags.iter().any(Option::is_none) || distinct.len() != tags.len() {
+                let distinct = tags
+                    .iter()
+                    .enumerate()
+                    .all(|(i, a)| tags[..i].iter().all(|b| b != a));
+                if tags.iter().any(Option::is_none) || !distinct {
                     continue;
                 }
-                return match tags.iter().position(|t| t.as_deref() == Some(tag.as_str())) {
+                return match tags.iter().position(|t| t.as_ref() == Some(&tag)) {
                     Some(i) => {
                         let arm = shaped[i].clone();
                         self.try_check_object(env, properties, span, &arm)

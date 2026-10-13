@@ -184,7 +184,7 @@ inductive Expr where
   `const x = e₁; x.l === "t" ? e₃ : e₂` or
   `const x = e₁; typeof x === "t" ? e₃ : e₂`, whose branches see `x`
   narrowed. -/
-  | caseTag (e₁ : Expr) (d : Disc) (t : String) (e₂ e₃ : Expr)
+  | caseTag (e₁ : Expr) (d : Disc) (t : Tag) (e₂ e₃ : Expr)
   deriving Repr
 
 /-- Syntactic values, which the value restriction lets a `const` generalise:
