@@ -202,7 +202,7 @@ fn b(e: Core) -> Box<Core> {
 /// whose labels are the program's.
 fn annotatable(t: &T) -> bool {
     match t {
-        T::Num | T::Str | T::Bool | T::Undef | T::Null => true,
+        T::Num | T::Str | T::Bool | T::Undef | T::Null | T::StrLit(_) => true,
         T::Arrow(ps, r) => ps.iter().all(annotatable) && annotatable(r),
         T::Arr(t) | T::Maybe(_, t) => annotatable(t),
         T::Variant(_, cases) => cases
@@ -231,6 +231,7 @@ fn wire_ty(t: &T) -> String {
         T::Maybe(true, t) => format!("(nullable {})", wire_ty(t)),
         T::Maybe(false, t) => format!("(optional {})", wire_ty(t)),
         T::TVar(i) => format!("(tv {})", i),
+        T::StrLit(s) => format!("(strlit s:{s})"),
         T::Variant(l, cases) => {
             let cases: Vec<String> = cases
                 .iter()
@@ -279,6 +280,7 @@ fn js_ty(t: &T) -> String {
         T::Maybe(true, t) => format!("({} | Null)", js_ty(t)),
         T::Maybe(false, t) => format!("({} | Undefined)", js_ty(t)),
         T::TVar(i) => tvar_name(*i),
+        T::StrLit(s) => format!("{s:?}"),
         T::Variant(l, cases) => {
             let cases: Vec<String> = cases
                 .iter()
@@ -327,7 +329,7 @@ fn tvar_count(t: &T) -> usize {
             .max()
             .unwrap_or(0),
         T::Sum(arms) => arms.iter().map(tvar_count).max().unwrap_or(0),
-        T::Num | T::Str | T::Bool | T::Undef | T::Null => 0,
+        T::Num | T::Str | T::Bool | T::Undef | T::Null | T::StrLit(_) => 0,
     }
 }
 
@@ -926,6 +928,9 @@ enum T {
     /// A sum told apart by `typeof` (`Number | String`): its cases, of
     /// different `typeof`s; only as an annotation's (`ty` never makes one).
     Sum(Vec<T>),
+    /// The type of the one string, `"s"`; only as an annotation's (`ty`
+    /// never makes one).
+    StrLit(String),
 }
 
 /// The property labels the generated programs use.
@@ -1056,6 +1061,7 @@ impl Gen {
             T::Bool => Bool(self.rng.chance(50)),
             T::Undef => Undef,
             T::Null => Null,
+            T::StrLit(s) => Str(s.clone()),
             T::Arrow(..)
             | T::Obj(_)
             | T::Arr(_)
@@ -1249,6 +1255,61 @@ impl Gen {
         }
     }
 
+    /// A program of type `t` with a string literal type: a `const`
+    /// annotated with the type of one string, checked by another annotated
+    /// `const` into `String`, a sum of `String`, a sum told apart by `typeof`
+    /// with a string case, or a string literal type (mostly its own), alone
+    /// or as a branch of `?:`.
+    fn lit_use(&mut self, t: &T, d: usize, scope: &mut Vec<Binding>) -> Core {
+        let Str(s) = self.string() else {
+            unreachable!()
+        };
+        let lit = T::StrLit(s.clone());
+        let target = match self.rng.below(6) {
+            0 | 1 => T::Str,
+            2 => T::Maybe(self.rng.chance(50), b2(T::Str)),
+            3 => loop {
+                let sum = self.sum_ty();
+                if matches!(&sum, T::Sum(arms) if arms.contains(&T::Str)) {
+                    break sum;
+                }
+            },
+            4 => lit.clone(),
+            _ => {
+                let Str(o) = self.string() else {
+                    unreachable!()
+                };
+                T::StrLit(o)
+            }
+        };
+        scope.push(Binding::Mono(lit.clone()));
+        let e2 = if self.rng.chance(30) {
+            let other = if self.rng.chance(50) {
+                Str(s.clone())
+            } else {
+                self.string()
+            };
+            let (x, y) = if self.rng.chance(50) {
+                (Var(0), other)
+            } else {
+                (other, Var(0))
+            };
+            Cond(b(Bool(self.rng.chance(50))), b(x), b(y))
+        } else {
+            Var(0)
+        };
+        scope.push(Binding::Mono(target.clone()));
+        let rest = self.typed(t, d, scope, true);
+        scope.pop();
+        scope.pop();
+        Let(
+            false,
+            Some(lit),
+            b(Str(s)),
+            b(Let(false, Some(target), b(e2), b(rest))),
+        )
+    }
+
     /// A program of type `t`, mostly well typed.
     fn typed(&mut self, t: &T, depth: usize, scope: &mut Vec<Binding>, stmt: bool) -> Core {
         if matches!(t, T::Variant(..)) {
@@ -1353,6 +1414,10 @@ impl Gen {
         // A sum told apart by `typeof`, taken apart by a test of it.
         if stmt && depth > 0 && self.rng.chance(6) {
             return self.sum_use(t, d, scope);
+        }
+        // A value of a string literal type, checked into another type.
+        if stmt && depth > 0 && self.rng.chance(4) {
+            return self.lit_use(t, d, scope);
         }
         // A sum's binding, or another value that isn't nothing, tested for
         // nothing: `v != null ? … : …`, or `v ?? …`.

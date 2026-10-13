@@ -316,6 +316,18 @@ touching the generic proofs.
 
 ### 5. Literal types, unions and narrowing
 
+- **Literal types, in the model's own terms (string literal types,
+  done).** A literal synthesises its base type; a string literal type is
+  made by checking a literal against it, and a value of one is injected
+  wherever a `String` is (`Inst.injectLit`, an instance of the `Inject`
+  that checking mode uses): into `String`, a sum of it and a sum told
+  apart by `typeof` with a string case. Joins stay what the model has:
+  one type, or the expected type pushed into each branch. Soundness and
+  inference sound and complete; the differential generator annotates
+  string literal types and checks them into those. Not in the model, so
+  a listed divergence: inty's widening of a literal type where it
+  synthesises (`c ? t : "b"` with `t: "a"` is a `String` in inty). Number
+  and boolean literal types are still to come.
 - Literal types and their widening; the join rules of
   `docs/type-system.md` (literals widen, `null` and `undefined` make a
   result nullable, a declared union absorbs its arms); `never`; operations

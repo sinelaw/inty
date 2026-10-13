@@ -127,7 +127,7 @@ def Pred.decidePre (k τ s r : Ty) : Improve :=
 /-- An `Inject T τ` whose `τ` is known (unfolded): the heads decide which
 instance it can be, and into a variant told apart by `typeof` the tag of
 `τ`'s head which case. (`T` is an annotation's type, without variables.) -/
-def Pred.decideInject (τ T : Ty) : Improve :=
+def Pred.decideInject₀ (τ T : Ty) : Improve :=
   if T.ftv = [] then
     match T.whnf with
     | .app (.maybe z) [σ] =>
@@ -156,6 +156,17 @@ def Pred.decideInject (τ T : Ty) : Improve :=
       | _ => .eq τ T
     | _ => .eq τ T
   else .fail
+
+/-- `Pred.decideInject₀`, but that a value of a string literal type is
+injected as itself where the place it goes is that literal type, and as a
+string otherwise (`Inst.injectLit`). -/
+def Pred.decideInject (τ T : Ty) : Improve :=
+  match τ with
+  | .app (.strLit s) [] =>
+    match Pred.decideInject₀ τ T with
+    | .eq a X => if X.whnf = .strLit s then .eq a X else Pred.decideInject₀ .string T
+    | r => r
+  | _ => Pred.decideInject₀ τ T
 
 /-- A `Strip τ σ` whose `τ` is known (unfolded): a sum's value type, or `τ`
 itself; `Null` and `Undefined` have no value but nothing. -/

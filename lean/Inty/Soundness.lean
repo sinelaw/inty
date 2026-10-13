@@ -2496,6 +2496,18 @@ theorem EntailsS.inject {C : List Pred} {T τ : Ty} (hC : HoldsOrVarW C)
         rw [V_whnf, hw] at hv'
         exact V.tyEq k hT.symm (V_tsum_def.mpr ⟨_, _, _, hR, hi, V_typeString hv' hc,
           by rw [hw]; exact Con.rank_of_typeTag hc _, by rw [hw]; exact hv'⟩)
+      -- A value of a string literal type is a string.
+      | injectLitSelf =>
+        rw [V_strLit] at hv'
+        exact V.tyEq k hT.symm (V_string.mpr ⟨_, hv'⟩)
+      | injectLitSome =>
+        rw [V_strLit] at hv'
+        exact V.tyEq k hT.symm (V_maybe.mpr (.inr (V_string.mpr ⟨_, hv'⟩)))
+      | injectLitArm hR hw hi =>
+        rw [V_strLit] at hv'
+        have hs : V k W .string v := V_string.mpr ⟨_, hv'⟩
+        exact V.tyEq k hT.symm (V_tsum_def.mpr ⟨_, _, _, hR, hi, V_typeString hs rfl,
+          by rw [hw]; exact Con.rank_of_typeTag (c := .string) rfl _, by rw [hw]; exact hs⟩)
   · simp only [List.cons.injEq] at ht
     obtain ⟨rfl, -⟩ := ht
     exact (V_whnf_var hw hv).elim

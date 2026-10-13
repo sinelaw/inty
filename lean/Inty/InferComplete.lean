@@ -592,14 +592,128 @@ theorem Ty.whnf_of_tyEq_maybe {T σ₀ : Ty} {z : Nothing} (h : TyEq T (.maybe z
 theorem Pred.decide₀_inject (T t : Ty) : Pred.decide₀ (.inject T) t [] = Pred.decideInject t T := by
   unfold Pred.decide₀; split <;> simp_all
 
+/-- Deciding `Inject T "s"` takes the path deciding `Inject T String`
+does, to the same place. -/
+theorem Pred.decideInject₀_lit (s : String) (T : Ty) :
+    Pred.decideInject₀ (.strLit s) T =
+      match Pred.decideInject₀ .string T with
+      | .eq _ X => .eq (.strLit s) X
+      | r => r := by
+  unfold Pred.decideInject₀
+  by_cases hT : T.ftv = []
+  · simp only [hT, ↓reduceIte]
+    split
+    · rename_i z σ _
+      cases z <;> simp [Nothing.con]
+    · rename_i ts Rs _
+      simp only [Con.typeTag]
+      split
+      · split
+        · split
+          · rfl
+          · rfl
+        · rfl
+      · rfl
+    · rfl
+  · simp [hT]
+
+/-- An equation of `Pred.decideInject₀` on a type without variables is
+between types without variables. -/
+theorem Pred.decideInject₀_closed {τ T a X : Ty} (h : Pred.decideInject₀ τ T = .eq a X)
+    (hτ : τ.ftv = []) : a.ftv = [] ∧ X.ftv = [] := by
+  have hb := Pred.decideInject₀_below (n := 0) (fun x hx => by rw [hτ] at hx; cases hx) h
+  exact ⟨List.eq_nil_iff_forall_not_mem.mpr fun x hx => absurd (hb.1 x hx) (Nat.not_lt_zero _),
+    List.eq_nil_iff_forall_not_mem.mpr fun x hx => absurd (hb.2 x hx) (Nat.not_lt_zero _)⟩
+
+/-- Deciding `Inject T String` equates `String` with a place. -/
+theorem Pred.decideInject₀_string_lhs {T a X : Ty} (h : Pred.decideInject₀ .string T = .eq a X) :
+    a = .string := by
+  have h' := Pred.decideInject₀_lit "" T
+  rw [h] at h'
+  unfold Pred.decideInject₀ at h
+  split at h
+  · split at h
+    · rename_i z σ _
+      cases z <;> simp [Nothing.con] at h <;> exact h.1.symm
+    · rename_i ts Rs _
+      simp only [Con.typeTag] at h
+      split at h
+      · split at h
+        · split at h
+          · cases h; rfl
+          · cases h
+        · cases h
+      · cases h
+    · cases h; rfl
+  · cases h
+
+theorem Ty.whnf_of_tyEq_closed {X : Ty} {c : Con} (hX : X.ftv = []) (h : TyEq X (.app c [])) :
+    X.whnf = .app c [] := by
+  rcases Ty.whnf_con_of_tyEq (φ := []) (by rw [Ty.closed_subst hX]; exact h) with ⟨a, ha⟩ | hw
+  · have : a ∈ X.ftv := Ty.whnf_ftv (by rw [ha]; simp [Ty.ftv])
+    rw [hX] at this; cases this
+  · exact hw
+
+/-- Where `Inject T "s"` holds as `"s"` itself goes, it is decided so. -/
+theorem Pred.decideInject_lit_of₀ {s : String} {T : Ty} {φ : Subst}
+    (h : (Pred.decideInject₀ (.strLit s) T).Holds φ) : (Pred.decideInject (.strLit s) T).Holds φ := by
+  unfold Pred.decideInject
+  simp only
+  generalize hd : Pred.decideInject₀ (.strLit s) T = d at h ⊢
+  cases d with
+  | eq a X =>
+    obtain ⟨ha, hX⟩ := Pred.decideInject₀_closed hd (by simp [Ty.ftv])
+    have ha' : a = .strLit s := by
+      rw [Pred.decideInject₀_lit] at hd
+      split at hd <;> simp_all
+    subst ha'
+    simp only [Improve.Holds, Ty.closed_subst ha, Ty.closed_subst hX] at h ⊢
+    simp only [Ty.whnf_of_tyEq_closed hX h.symm, ↓reduceIte, Ty.closed_subst ha,
+      Ty.closed_subst hX]
+    exact h
+  | _ => exact h
+
+/-- Where `Inject T String` holds, `Inject T "s"` is decided as a string's. -/
+theorem Pred.decideInject_lit_of_string {s : String} {T : Ty} {φ : Subst}
+    (h : (Pred.decideInject₀ .string T).Holds φ) : (Pred.decideInject (.strLit s) T).Holds φ := by
+  unfold Pred.decideInject
+  simp only
+  rw [Pred.decideInject₀_lit]
+  generalize hd : Pred.decideInject₀ .string T = d at h ⊢
+  cases d with
+  | eq a X =>
+    obtain ⟨ha, hX⟩ := Pred.decideInject₀_closed hd (by simp [Ty.ftv])
+    have ha' := Pred.decideInject₀_string_lhs hd
+    subst ha'
+    simp only [Improve.Holds, Ty.closed_subst ha, Ty.closed_subst hX] at h
+    have hw := Ty.whnf_of_tyEq_closed hX h.symm
+    simp only [hw, Ty.strLit, Ty.string, Ty.app.injEq, reduceCtorEq, false_and, ↓reduceIte,
+      Improve.Holds, Ty.closed_subst ha, Ty.closed_subst hX]
+    exact h
+  | _ => exact h
+
+/-- A decision of `Pred.decideInject₀` that holds is one of
+`Pred.decideInject`. -/
+theorem Pred.decideInject_of₀ {w T : Ty} {φ : Subst} (h : (Pred.decideInject₀ w T).Holds φ) :
+    (Pred.decideInject w T).Holds φ := by
+  by_cases hw : ∃ s, w = .strLit s
+  · obtain ⟨s, rfl⟩ := hw
+    exact Pred.decideInject_lit_of₀ h
+  · have : Pred.decideInject w T = Pred.decideInject₀ w T := by
+      unfold Pred.decideInject
+      split
+      · exact absurd ⟨_, rfl⟩ hw
+      · rfl
+    rw [this]; exact h
+
 /-- An `Inject T τ` whose image is `Inject T T`: its decision holds. -/
-theorem Pred.decideInject_self {t T : Ty} {φ : Subst} (hT : T.ftv = [])
+theorem Pred.decideInject_self₀ {t T : Ty} {φ : Subst} (hT : T.ftv = [])
     (ht : TyEq (t.subst φ) T) (hnv : t.whnf.isVar = false) :
-    (Pred.decideInject t.whnf T).Holds φ := by
+    (Pred.decideInject₀ t.whnf T).Holds φ := by
   have hW : TyEq (t.whnf.subst φ) T := ((TyEq.whnf t).subst φ).trans ht
   generalize t.whnf = w at hnv hW
   have hTφ := Ty.closed_subst hT φ
-  unfold Pred.decideInject
+  unfold Pred.decideInject₀
   simp only [hT, ↓reduceIte]
   split
   · rename_i z σ hTw
@@ -623,24 +737,24 @@ theorem Pred.decideInject_self {t T : Ty} {φ : Subst} (hT : T.ftv = [])
 
 /-- An `Inject T τ` whose image is `Inject (Nullable σ) Null` (or alike):
 its decision holds. -/
-theorem Pred.decideInject_nothing {t T σ₀ : Ty} {z : Nothing} {φ : Subst} (hT : T.ftv = [])
+theorem Pred.decideInject_nothing₀ {t T σ₀ : Ty} {z : Nothing} {φ : Subst} (hT : T.ftv = [])
     (hTm : TyEq T (.maybe z σ₀)) (ht : TyEq (t.subst φ) z.ty) (hnv : t.whnf.isVar = false) :
-    (Pred.decideInject t.whnf T).Holds φ := by
+    (Pred.decideInject₀ t.whnf T).Holds φ := by
   rcases Ty.whnf_con_of_tyEq (c := z.con) ht with ⟨a, ha⟩ | hw
   · simp [ha, Ty.isVar] at hnv
   rw [hw]
   obtain ⟨σ, hTw, -⟩ := Ty.whnf_of_tyEq_maybe hTm
   have hne : z.con ≠ .maybe z := by cases z <;> simp [Nothing.con]
-  unfold Pred.decideInject
+  unfold Pred.decideInject₀
   simp only [hT, ↓reduceIte, hTw, hne, and_self, Improve.Holds]
   exact TyEq.refl _
 
 /-- An `Inject T τ` whose image is `Inject (Nullable τ') τ'` (or alike):
 its decision holds. -/
-theorem Pred.decideInject_some {t T : Ty} {z : Nothing} {c₀ : Con} {a₀ : List Ty} {φ : Subst}
+theorem Pred.decideInject_some₀ {t T : Ty} {z : Nothing} {c₀ : Con} {a₀ : List Ty} {φ : Subst}
     (hT : T.ftv = []) (hTm : TyEq T (.maybe z (.app c₀ a₀))) (hc₀ : c₀ ≠ .maybe z)
     (hn₀ : ¬ (c₀ = z.con ∧ a₀ = [])) (ht : TyEq (t.subst φ) (.app c₀ a₀))
-    (hnv : t.whnf.isVar = false) : (Pred.decideInject t.whnf T).Holds φ := by
+    (hnv : t.whnf.isVar = false) : (Pred.decideInject₀ t.whnf T).Holds φ := by
   rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, hxl, -⟩
   · simp [ha, Ty.isVar] at hnv
   obtain ⟨σ, hTw, hσ⟩ := Ty.whnf_of_tyEq_maybe hTm
@@ -651,7 +765,7 @@ theorem Pred.decideInject_some {t T : Ty} {z : Nothing} {c₀ : Con} {a₀ : Lis
   rw [hxs] at hW ⊢
   have hn : ¬ (c₀ = z.con ∧ xs = []) := fun ⟨h1, h2⟩ =>
     hn₀ ⟨h1, List.eq_nil_of_length_eq_zero (by rw [← hxl, h2]; rfl)⟩
-  unfold Pred.decideInject
+  unfold Pred.decideInject₀
   simp only [hT, ↓reduceIte, hTw, hc₀, hn, Improve.Holds, Ty.closed_subst hσc]
   exact hW
 
@@ -694,12 +808,12 @@ theorem variantRest_tyEq {d : Disc} {ts : List String} : ∀ {xs ys : List Ty},
 
 /-- An `Inject T τ` whose image is into a variant told apart by `typeof`, at
 its case of `τ`'s head's tag: its decision holds. -/
-theorem Pred.decideInject_arm {t T R : Ty} {ts : List String} {Rs : List Ty} {c : Con}
+theorem Pred.decideInject_arm₀ {t T R : Ty} {ts : List String} {Rs : List Ty} {c : Con}
     {args : List Ty} {t' : String} {i : Nat} {φ : Subst} (hT : T.ftv = [])
     (hw : T.whnf = .variant .typeOf ts Rs) (hn : ts.Nodup) (htag : c.typeTag = some t')
     (hi : ts[i]? = some t') (hR : Rs[i]? = some R) (he : TyEq (.app c args) R)
     (ht : TyEq (t.subst φ) (.app c args)) (hnv : t.whnf.isVar = false) :
-    (Pred.decideInject t.whnf T).Holds φ := by
+    (Pred.decideInject₀ t.whnf T).Holds φ := by
   rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, -, -⟩
   · simp [ha, Ty.isVar] at hnv
   have hRc : R.ftv = [] := by
@@ -708,10 +822,50 @@ theorem Pred.decideInject_arm {t T R : Ty} {ts : List String} {Rs : List Ty} {c 
     exact this R (List.mem_of_getElem? hR)
   have hW : TyEq ((Ty.app c xs).subst φ) R := by
     rw [← hxs]; exact (((TyEq.whnf t).subst φ).trans ht).trans he
-  unfold Pred.decideInject
+  unfold Pred.decideInject₀
   simp only [hT, ↓reduceIte, hw, hxs, htag, hn, firstIdx_of_nodup hn hi, hR, Improve.Holds,
     Ty.closed_subst hRc]
   exact hW
+
+/-- Where `Inject T String` is an instance, its decision holds. -/
+theorem Pred.decideInject₀_string_of_inst {T x : Ty} {φ : Subst} (hq : Inst ⟨.inject T, [x]⟩)
+    (hx : TyEq x .string) : (Pred.decideInject₀ .string T).Holds φ := by
+  have hcon : ∀ {c : Con} {args : List Ty}, TyEq (.app c args) .string → c = .string ∧ args = [] :=
+    fun he => by
+      obtain ⟨h₁, h₂, -⟩ := TyEq.app_iff.mp he
+      exact ⟨h₁, List.eq_nil_of_length_eq_zero (by simpa using h₂)⟩
+  have hs : (Ty.string).whnf = .string := rfl
+  generalize hp : (⟨.inject T, [x]⟩ : Pred) = p at hq
+  cases hq with
+  | injectSelf hT =>
+    simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hp
+    obtain ⟨h₁, h₂⟩ := hp
+    subst h₁; subst h₂
+    rw [← hs]
+    exact Pred.decideInject_self₀ hT (by simpa using hx.symm) (by simp [Ty.isVar])
+  | @injectNothing T' z _ _ _ =>
+    simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hp
+    obtain ⟨-, rfl⟩ := hp
+    have := (hcon (c := z.con) (args := []) (by simpa [Nothing.ty] using hx)).1
+    cases z <;> simp [Nothing.con] at this
+  | injectSome he hT _ hc hn =>
+    simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hp
+    obtain ⟨rfl, rfl⟩ := hp
+    obtain ⟨rfl, rfl⟩ := hcon hx
+    rw [← hs]
+    exact Pred.decideInject_some₀ hT he hc hn (by simpa using TyEq.refl _) (by simp [Ty.isVar])
+  | injectArm hT hw hn htag hi hR he _ =>
+    simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hp
+    obtain ⟨rfl, rfl⟩ := hp
+    obtain ⟨rfl, rfl⟩ := hcon hx
+    rw [← hs]
+    exact Pred.decideInject_arm₀ hT hw hn htag hi hR he (by simpa using TyEq.refl _)
+      (by simp [Ty.isVar])
+  | injectLit _ _ =>
+    simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hp
+    obtain ⟨-, rfl⟩ := hp
+    exact absurd (hcon hx).1 (by simp)
+  | _ => simp_all
 
 /-- Deciding a constraint whose image is equal to an instance: it waits, or
 its equation holds. -/
@@ -881,7 +1035,7 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       · simp [Cls.arity, Improve.Holds]
       rename_i hnv
       rw [Pred.decide₀_inject]
-      exact Pred.decideInject_self hT ht (by simpa using hnv)
+      exact Pred.decideInject_of₀ (Pred.decideInject_self₀ hT ht (by simpa using hnv))
   | @injectNothing T z σ₀ hTm hT =>
     match args, hl with
     | [t], _ =>
@@ -891,7 +1045,7 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       · simp [Cls.arity, Improve.Holds]
       rename_i hnv
       rw [Pred.decide₀_inject]
-      exact Pred.decideInject_nothing hT hTm ht (by simpa using hnv)
+      exact Pred.decideInject_of₀ (Pred.decideInject_nothing₀ hT hTm ht (by simpa using hnv))
   | @injectSome T z c₀ a₀ hTm hT _ hc₀ hn₀ =>
     match args, hl with
     | [t], _ =>
@@ -901,7 +1055,7 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       · simp [Cls.arity, Improve.Holds]
       rename_i hnv
       rw [Pred.decide₀_inject]
-      exact Pred.decideInject_some hT hTm hc₀ hn₀ ht (by simpa using hnv)
+      exact Pred.decideInject_of₀ (Pred.decideInject_some₀ hT hTm hc₀ hn₀ ht (by simpa using hnv))
   | injectArm hT hw hn htag hi hR he _ =>
     match args, hl with
     | [t], _ =>
@@ -911,7 +1065,20 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       · simp [Cls.arity, Improve.Holds]
       rename_i hnv
       rw [Pred.decide₀_inject]
-      exact Pred.decideInject_arm hT hw hn htag hi hR he ht (by simpa using hnv)
+      exact Pred.decideInject_of₀ (Pred.decideInject_arm₀ hT hw hn htag hi hR he ht (by simpa using hnv))
+  | @injectLit T x s hx₀ hx =>
+    match args, hl with
+    | [t], _ =>
+      obtain ⟨rfl, ht⟩ := PredEq.one hq
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rw [Pred.decide₀_inject]
+      rcases Ty.whnf_con_of_tyEq ht with ⟨a, ha⟩ | hw
+      · simp [ha, Ty.isVar] at hnv
+      rw [hw]
+      exact Pred.decideInject_lit_of_string (Pred.decideInject₀_string_of_inst hx₀ hx)
   | @stripSome z σ₀ =>
     match args, hl with
     | [t, s], _ =>
@@ -1975,7 +2142,8 @@ theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep 
   intro r hr b hb
   cases h with
   | plusNumber | plusString => simp [Pred.fundep] at hf
-  | injectSelf _ | injectNothing _ _ | injectSome _ _ _ _ _ | injectArm _ _ _ _ _ _ _ _ =>
+  | injectSelf _ | injectNothing _ _ | injectSome _ _ _ _ _ | injectArm _ _ _ _ _ _ _ _
+  | injectLit _ _ =>
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨-, rfl⟩ := hf
     cases hr
@@ -2181,12 +2349,23 @@ theorem EntailsS.arity {top : Bool} {C : List Pred} (hC : ∀ c ∈ C, c.Assumab
     · exact hl
     · rfl
 
+theorem Pred.decideInject₀_ne_keep {t T : Ty} : Pred.decideInject₀ t T ≠ .keep := by
+  intro h
+  unfold Pred.decideInject₀ at h
+  repeat' split at h
+  all_goals cases h
+
 /-- An `Inject` on a known type is decided. -/
 theorem Pred.decideInject_ne_keep {t T : Ty} : Pred.decideInject t T ≠ .keep := by
   intro h
   unfold Pred.decideInject at h
-  repeat' split at h
-  all_goals cases h
+  split at h
+  · split at h
+    · split at h
+      · cases h
+      · exact Pred.decideInject₀_ne_keep h
+    · exact Pred.decideInject₀_ne_keep h
+  · exact Pred.decideInject₀_ne_keep h
 
 /-- A `Case` on a known type is decided. -/
 theorem Pred.decideCase_ne_keep {d d' : Disc} {t : String} {ts : List String} {Ps : List Ty}
@@ -2529,7 +2708,8 @@ theorem letScheme_complete {C : List Pred} (hC : ∀ p ∈ C, p.AssumableAt fals
 assumptions each on a type variable: `τ` is `T`. -/
 theorem EntailsS.inject_app {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt false) {T : Ty} {c : Con}
     {xs : List Ty} (h : Entails C ⟨.inject T, [.app c xs]⟩) (hT : ∀ z σ, ¬ TyEq T (.maybe z σ))
-    (hV : ∀ ts Rs, T.whnf ≠ .variant .typeOf ts Rs) : TyEq (.app c xs) T := by
+    (hV : ∀ ts Rs, T.whnf ≠ .variant .typeOf ts Rs) (hc : ∀ s, c ≠ .strLit s) :
+    TyEq (.app c xs) T := by
   rcases h with ⟨q₀, hpq, hi⟩ | ⟨q, hq, hpq⟩
   · obtain ⟨cq, args⟩ := q₀
     match args, hpq.2.1 with
@@ -2541,6 +2721,7 @@ theorem EntailsS.inject_app {C : List Pred} (hC : ∀ c ∈ C, c.AssumableAt fal
       | injectNothing he _ => exact absurd he (hT _ _)
       | injectSome he _ _ _ _ => exact absurd he (hT _ _)
       | injectArm _ hw _ _ _ _ _ _ => exact absurd hw (hV _ _)
+      | injectLit _ _ => exact absurd (TyEq.app_iff.mp hτ).1 (hc _)
   · rcases hC q hq with ⟨-, -, a, rest, hqa⟩ | ⟨q', k, τ, s, r, rfl, -⟩
     · obtain ⟨cq, args⟩ := q
       simp only at hqa; subst hqa
@@ -2695,7 +2876,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
     | caseTag h₁ hs h₂ h₃ => exact .caseTag h₁ hs (.inj h₂ hT hi') (.inj h₃ hT hi')
     | lit hl =>
       cases hl <;> simp only [Expr.pushes, decide_eq_true_eq, Bool.false_eq_true] at hp
-      have := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hp (by simp)) (fun _ _ e => by rw [hp] at e; cases e)
+      have := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hp (by simp)) (fun _ _ e => by rw [hp] at e; cases e) (fun _ e => by cases e)
       exact absurd (TyEq.con (this.trans (TyEq.of_whnf hp))) (by simp)
     | obj hes hks hτs hss hL hargs hfs =>
       rename_i ls ss es ks τs
@@ -2703,7 +2884,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
       obtain ⟨⟨hts, hnd⟩, hk⟩ := hp
       obtain ⟨P, hP⟩ := Option.isSome_iff_exists.mp hts
       rcases objTarget_whnf hP with ⟨L', ys, hw, -⟩ | ⟨l, ts, Ps, hw⟩
-      · have hRT := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e)
+      · have hRT := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e) (fun _ e => by cases e)
         have hks' : ∀ k ∈ ks, k = .data := fun k hk' => by
           rw [hk] at hk'; obtain ⟨_, _, rfl⟩ := List.mem_map.mp hk'; rfl
         obtain rfl := slots_of_data ks es τs ss hks' (by omega) (by omega) (by omega)
@@ -2727,7 +2908,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
         obtain ⟨τ, hm₁, hm₂⟩ := zip_trans_mem₃ es τs τs' (by omega) hl' p hp
         have hc := hτc p.2 (List.of_mem_zip hp).2
         exact .inj (hargs (p.1, τ) hm₁) hc (.inl (Pred.inject_self hc (hz' (τ, p.2) hm₂)))
-      · have hRT := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e)
+      · have hRT := EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e) (fun _ e => by cases e)
         exact absurd (TyEq.con (hRT.trans (TyEq.of_whnf hw))) (by simp)
     | @func _ _ _ ρ' _ _ _ θ' τs' hlen hb =>
       simp only [Expr.pushes, Option.isSome_iff_exists] at hp
@@ -2737,7 +2918,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
       simp only [Ty.ftv, Ty.ftvs_eq, List.flatMap_cons, List.append_eq_nil_iff] at hfn
       have hρc : ρ.ftv = [] := hfn.2.1
       have heq : TyEq (.fn θ' τs' ρ') (.fn θ τs ρ) :=
-        (EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e)).trans (TyEq.of_whnf hw)
+        (EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e) (fun _ e => by cases e)).trans (TyEq.of_whnf hw)
       obtain ⟨-, hl, hz⟩ := TyEq.app_iff.mp heq
       have hθ : TyEq θ' θ := hz (θ', θ) (by simp)
       have hρ : TyEq ρ' ρ := hz (ρ', ρ) (by simp)
@@ -2754,7 +2935,7 @@ theorem HasTypeS.check_top {L : List String} {C : List Pred} {Γ : Ctx} {R : Opt
       obtain ⟨-, hw⟩ := arrTarget_fst hat rfl
       have hσc : σ.ftv = [] := by simpa [Ty.ftv] using Ty.ftv_nil_of_whnf hw hT
       have heq : TyEq (.array σ') (.array σ) :=
-        (EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e)).trans (TyEq.of_whnf hw)
+        (EntailsS.inject_app hC hi' (Ty.not_maybe_of_whnf hw (by simp)) (fun _ _ e => by rw [hw] at e; cases e) (fun _ e => by cases e)).trans (TyEq.of_whnf hw)
       have hσ : TyEq σ' σ := (TyEq.app_iff.mp heq).2.2 (σ', σ) (by simp)
       exact .arrCheck hw hT (fun e he => .inj (hes e he) hσc (.inl (Pred.inject_self hσc hσ)))
     | _ => simp [Expr.pushes] at hp

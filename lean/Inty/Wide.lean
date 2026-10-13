@@ -30,6 +30,13 @@ inductive InstW : Pred → Prop where
   | injectSome : InstW ⟨.injectW, [σ, .maybe z σ]⟩
   | injectArm : Rs[(i : Nat)]? = some R → R.whnf = .app c xs → c.typeTag = some t →
       ts[i]? = some t → InstW ⟨.injectW, [R, .variant .typeOf ts Rs]⟩
+  /-- A value of a string literal type is a string: it is one of `String`,
+  of a sum of `String`, and of a variant told apart by `typeof` whose
+  `"string"` case is `String`. -/
+  | injectLitSelf : InstW ⟨.injectW, [.strLit s, .string]⟩
+  | injectLitSome : InstW ⟨.injectW, [.strLit s, .maybe z .string]⟩
+  | injectLitArm : Rs[(i : Nat)]? = some R → R.whnf = .string → ts[i]? = some "string" →
+      InstW ⟨.injectW, [.strLit s, .variant .typeOf ts Rs]⟩
   | stripSelf : InstW ⟨.strip, [τ, τ]⟩
 
 theorem InstW.subst (σ : Subst) {p : Pred} (h : InstW p) : InstW (p.subst σ) := by
@@ -41,6 +48,12 @@ theorem InstW.subst (σ : Subst) {p : Pred} (h : InstW p) : InstW (p.subst σ) :
   | @injectArm Rs i R c xs t ts hR hw hc hi =>
     simpa [Pred.subst, Ty.subst_app] using
       InstW.injectArm (Rs := Rs.map (·.subst σ)) (by simp [hR]) (Ty.whnf_subst_of_app hw σ) hc hi
+  | injectLitSelf => exact .injectLitSelf
+  | injectLitSome => simpa [Pred.subst, Ty.subst_app] using InstW.injectLitSome
+  | @injectLitArm Rs i R ts s hR hw hi =>
+    simpa [Pred.subst, Ty.subst_app] using
+      InstW.injectLitArm (s := s) (Rs := Rs.map (·.subst σ)) (by simp [hR])
+        (Ty.whnf_subst_of_app hw σ) hi
   | stripSelf => exact .stripSelf
 
 /-- A wide instance up to equal types. -/
@@ -77,6 +90,7 @@ theorem InstEqW.narrow_of {p : Pred} (h : InstEqW p) (hi : p.cls ≠ .injectW)
   | narrow hq _ => exact ⟨_, hpq, hq⟩
   | injectSelf | injectNothing | injectSome => exact absurd hpq.1 hi
   | injectArm _ _ _ _ => exact absurd hpq.1 hi
+  | injectLitSelf | injectLitSome | injectLitArm _ _ _ => exact absurd hpq.1 hi
   | stripSelf => exact absurd hpq.1 hs
 
 /-- `EntailsS.instOrVar` for a class whose wide instances are narrow ones. -/
@@ -183,6 +197,52 @@ theorem Inst.toW {p : Pred} (h : Inst p) : InstEqW p.toW := by
     exact ⟨_,
       PredEq.of_pairs (by simp) (zip_tyEq_cons he (zip_tyEq_cons (TyEq.of_whnf hw) zip_tyEq_nil)),
       .injectArm hR hys htag hi⟩
+  | @injectLit T x s h hx =>
+    -- The string's own injection, into `String`, its sum or a variant's
+    -- case.
+    have hcon : ∀ {c : Con} {args : List Ty}, TyEq (.app c args) .string → c = .string ∧ args = [] :=
+      fun he => by
+        obtain ⟨h₁, h₂, -⟩ := TyEq.app_iff.mp he
+        exact ⟨h₁, List.eq_nil_of_length_eq_zero (by simpa using h₂)⟩
+    generalize hq : (⟨.inject T, [x]⟩ : Pred) = q at h
+    cases h with
+    | injectSelf _ =>
+      simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hq
+      obtain ⟨h₁, h₂⟩ := hq
+      subst h₁; subst h₂
+      exact ⟨⟨.injectW, [.strLit s, .string]⟩,
+        PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons hx zip_tyEq_nil)),
+        .injectLitSelf⟩
+    | @injectNothing T' z _ _ _ =>
+      simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hq
+      obtain ⟨-, rfl⟩ := hq
+      have := (hcon (c := z.con) (args := []) (by simpa [Nothing.ty] using hx)).1
+      cases z <;> simp [Nothing.con] at this
+    | @injectSome T' z c args he _ _ _ _ =>
+      simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hq
+      obtain ⟨rfl, rfl⟩ := hq
+      obtain ⟨rfl, rfl⟩ := hcon hx
+      exact ⟨⟨.injectW, [.strLit s, .maybe z .string]⟩,
+        PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons he zip_tyEq_nil)),
+        .injectLitSome⟩
+    | injectArm _ hw _ htag hi hR he _ =>
+      simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hq
+      obtain ⟨rfl, rfl⟩ := hq
+      obtain ⟨rfl, rfl⟩ := hcon hx
+      obtain ⟨ys, hys, hye⟩ := TyEq.whnf_app he (Ty.whnf_app _ _)
+      have hyl : ys = [] := by
+        have := (TyEq.app_iff.mp hye).2.1; simpa using this.symm
+      subst hyl
+      simp only [Con.typeTag, Option.some.injEq] at htag
+      subst htag
+      exact ⟨_,
+        PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _) (zip_tyEq_cons (TyEq.of_whnf hw) zip_tyEq_nil)),
+        .injectLitArm hR hys hi⟩
+    | injectLit _ _ =>
+      simp only [Pred.mk.injEq, Cls.inject.injEq, List.cons.injEq, and_true] at hq
+      obtain ⟨-, rfl⟩ := hq
+      exact absurd (hcon hx).1 (by simp)
+    | _ => simp_all
   | _ => exact ⟨_, PredEq.refl _, .narrow (by constructor <;> assumption) (by simp [Pred.toW])⟩
 
 theorem InstEq.toW {p : Pred} (h : InstEq p) : InstEqW p.toW := by
