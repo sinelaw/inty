@@ -334,16 +334,22 @@ touching the generic proofs.
   Left out on purpose ([GAPS.md](GAPS.md)): number literal types, boolean
   literal types beyond tags, and inty's widening of a literal type where
   it synthesises.
-- Literal types and their widening; the join rules of
-  `docs/type-system.md` (literals widen, `null` and `undefined` make a
-  result nullable, a declared union absorbs its arms); `never`; operations
-  pushed through each arm of a union; `&&` and `||`. Subsumption only where
-  `src/infer` applies it, never as a general conversion rule.
-- Narrowing by `typeof`, `===`, `==`, truthiness and discriminants, on
-  bindings that never change; after an early exit and in loops; `switch`
-  with its exhaustiveness check. The semantic relation handles it as
-  "Revisiting Soundness for Occurrence Typing, Semantically" (arXiv
-  2609.16299) does.
+- **Narrowing, early exits and `switch` (done, as tests of a tag).**
+  `caseTag` tests one value's tag and binds its case in one branch and the
+  rest in the other. inty's narrowing of a variable by a test, an early
+  exit and a `switch` on the tag are that test, so they need no rule of
+  their own; the differential generator prints `caseTag` in each form. It
+  found inty not carrying the narrowing after an early exit into a
+  function or class defined after it (inty is imprecise there, a row of
+  the README's divergence table). Reading a field every case has without
+  a test is left out on purpose ([GAPS.md](GAPS.md)).
+- Still to come: `never`; `&&` and `||`; operations pushed through each
+  arm of a union; a declared union absorbing its arms (the waiting
+  `Join`, `docs/sum-types-design.md`); narrowing by truthiness and `==`,
+  and in loops; a `switch`'s exhaustiveness check. Subsumption only where
+  `src/infer` applies it, never as a general conversion rule. The
+  semantic relation handles narrowing as "Revisiting Soundness for
+  Occurrence Typing, Semantically" (arXiv 2609.16299) does.
 
 ### 6. Recursive types, methods and classes
 

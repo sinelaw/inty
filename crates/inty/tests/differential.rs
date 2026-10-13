@@ -212,8 +212,10 @@ enum Core {
     Unwrap(Box<Core>, Box<Core>, Box<Core>),
     /// `const v = e₁; v.l === "t" ? e₃ : e₂`, a variant tagged by `l` taken
     /// apart by its tag: `v` bound in both branches, in `e₃` as the case of
-    /// the tag `t`, in `e₂` as the rest; only in statement position.
-    CaseTag(Box<Core>, String, Tag, Box<Core>, Box<Core>),
+    /// the tag `t`, in `e₂` as the rest; only in statement position. The
+    /// last field is the tag of the one case the rest has, if it has one
+    /// (only how the test is printed: a `switch` names that case).
+    CaseTag(Box<Core>, String, Tag, Box<Core>, Box<Core>, Option<Tag>),
     /// `const v = e₁; typeof v === "t" ? e₃ : e₂`, a sum told apart by
     /// `typeof` taken apart by its tag: `v` bound in both branches, in `e₃`
     /// as the case of the tag `t`, in `e₂` as the rest; only in statement
@@ -493,7 +495,7 @@ fn wire(e: &Core) -> String {
             format!("(new {}{})", wire(f), args.concat())
         }
         Unwrap(x, y, z) => format!("(unwrap {} {} {})", wire(x), wire(y), wire(z)),
-        CaseTag(x, l, t, y, z) => format!(
+        CaseTag(x, l, t, y, z, _) => format!(
             "(casetag {} s:{} {} {} {})",
             wire(x),
             l,
@@ -511,7 +513,7 @@ fn ends_in_statement(e: &Core) -> bool {
     match e {
         Let(_, _, _, rest) | Seq(_, rest) => ends_in_statement(rest),
         Throw(_) | Ret(_) | While(..) | Break | Continue | TryCatch(..) | TryFinally(..) => true,
-        Cond(_, t, f) | Unwrap(_, t, f) | CaseTag(_, _, _, t, f) | TypeTest(_, _, t, f) => {
+        Cond(_, t, f) | Unwrap(_, t, f) | CaseTag(_, _, _, t, f, _) | TypeTest(_, _, t, f) => {
             is_stmt(t) || is_stmt(f)
         }
         _ => false,
@@ -533,6 +535,11 @@ fn is_stmt(e: &Core) -> bool {
 struct Js {
     names: Vec<String>,
     next: usize,
+    /// Whether the statements being printed are ones whose value is
+    /// dropped (a statement before another, a loop's body, a `finally`
+    /// block): a `switch` is printed only there, its value being no
+    /// program's or function's.
+    discard: bool,
 }
 
 impl Js {
@@ -689,7 +696,9 @@ impl Js {
         for x in xs.iter().rev() {
             self.names.push(x.clone());
         }
+        let discard = std::mem::replace(&mut self.discard, false);
         let body = self.stmts(body, "return ");
+        self.discard = discard;
         self.names.truncate(self.names.len() - n - 2);
         let prelude = alias
             .map(|t| format!("const {t} = this; "))
@@ -710,7 +719,9 @@ impl Js {
         for x in xs.iter().rev() {
             self.names.push(x.clone());
         }
+        let discard = std::mem::replace(&mut self.discard, false);
         let body = self.stmts(body, "return ");
+        self.discard = discard;
         self.names.truncate(self.names.len() - n - 2);
         let prelude = alias
             .map(|t| format!("const {t} = this; "))
@@ -747,7 +758,9 @@ impl Js {
                 format!("{}{} {} = {}; {}", ann, keyword, v, init, rest)
             }
             Seq(e1, e2) => {
+                let discard = std::mem::replace(&mut self.discard, true);
                 let first = self.stmts(e1, "");
+                self.discard = discard;
                 format!("{} {}", first, self.stmts(e2, last))
             }
             Ret(e) => format!("return {};", self.expr(e)),
@@ -755,12 +768,13 @@ impl Js {
             // A loop completes with `undefined`: in a function, the
             // function returns it; at the top, it is the program's value
             // (where a bare loop's would be its body's last).
-            While(c, body) => format!(
-                "while ({}) {{ {} }} {}(void 0);",
-                self.expr(c),
-                self.stmts(body, ""),
-                last
-            ),
+            While(c, body) => {
+                let c = self.expr(c);
+                let discard = std::mem::replace(&mut self.discard, true);
+                let body = self.stmts(body, "");
+                self.discard = discard;
+                format!("while ({c}) {{ {body} }} {last}(void 0);")
+            }
             Break => "break;".into(),
             Continue => "continue;".into(),
             TryCatch(body, handler) => {
@@ -771,11 +785,13 @@ impl Js {
                 self.names.pop();
                 format!("try {{ {} }} catch ({}) {{ {} }}", body, v, handler)
             }
-            TryFinally(body, fin) => format!(
-                "try {{ {} }} finally {{ {} }}",
-                self.stmts(body, last),
-                self.stmts(fin, "")
-            ),
+            TryFinally(body, fin) => {
+                let body = self.stmts(body, last);
+                let discard = std::mem::replace(&mut self.discard, true);
+                let fin = self.stmts(fin, "");
+                self.discard = discard;
+                format!("try {{ {body} }} finally {{ {fin} }}")
+            }
             // `const v = e₁;`, then a test that `v` holds something, which
             // inty narrows `v` by in the branch that sees it.
             Unwrap(e1, e2, e3) => {
@@ -795,21 +811,80 @@ impl Js {
                     format!("const {v} = {init}; {last}({v} != null ? {some} : {none});")
                 }
             }
-            // `const v = e₁;`, then a test of `v`'s tag, which inty narrows
-            // `v` by in each branch.
-            CaseTag(e1, l, t, e2, e3) => {
-                let v = self.fresh("v");
-                let init = self.expr(e1);
+            // A test of a variable's tag, or of `const v = e₁;`'s, which inty
+            // narrows the variable by in each branch: an `if`, an early exit
+            // (`if (v.l !== t) { …return…; } …`), or, for a chain of tests of
+            // one value whose value is dropped, a `switch`.
+            CaseTag(e1, l, t, e2, e3, rest_tag) => {
+                // A variable nothing assigns is tested as it is (the model's
+                // `caseTag` binds a copy of its value, the same object), if
+                // the branches refer only to the copy, which inty's
+                // narrowing of the variable is; an early exit narrows what
+                // follows the test too, so it tests a copy.
+                let (v, prefix) = match **e1 {
+                    Var(i)
+                        if plain_name(&self.name(i))
+                            && !assigns(e2)
+                            && !assigns(e3)
+                            && !exits(e2)
+                            && !refers_from_inner(e2, i + 1, true)
+                            && !refers_from_inner(e3, i + 1, true) =>
+                    {
+                        (self.name(i), String::new())
+                    }
+                    _ => {
+                        let v = self.fresh("v");
+                        let init = self.expr(e1);
+                        (v.clone(), format!("const {v} = {init}; "))
+                    }
+                };
                 self.names.push(v.clone());
                 let test = format!("{v}.{l} === {}", t.js());
-                let out = if is_stmt(e2) || is_stmt(e3) {
+                // The chain of tests of `v`'s tag in the rest branches.
+                let mut arms: Vec<(&Tag, &Core)> = vec![(t, e3)];
+                let mut rest: &Core = e2;
+                let mut last_tag = rest_tag;
+                while let CaseTag(x, l2, t2, r2, c2, lt2) = rest {
+                    if !matches!(**x, Var(0)) || l2 != l {
+                        break;
+                    }
+                    arms.push((t2, c2));
+                    rest = r2;
+                    last_tag = lt2;
+                }
+                let out = if self.discard && arms.len() >= 2 && !breaks(e2) && !breaks(e3) {
+                    let mut cases = String::new();
+                    for (k, (tag, arm)) in arms.iter().enumerate() {
+                        // The `k`-th test binds `v` again.
+                        for _ in 0..k {
+                            self.names.push(v.clone());
+                        }
+                        let body = self.stmts(arm, "");
+                        self.names.truncate(self.names.len() - k);
+                        cases += &format!("case {}: {{ {body} }} break; ", tag.js());
+                    }
+                    for _ in 0..arms.len() - 1 {
+                        self.names.push(v.clone());
+                    }
+                    let body = self.stmts(rest, "");
+                    self.names.truncate(self.names.len() - (arms.len() - 1));
+                    let last_case = match last_tag {
+                        Some(tag) => format!("case {}: {{ {body} }} break;", tag.js()),
+                        None => format!("default: {{ {body} }}"),
+                    };
+                    format!("{prefix}switch ({v}.{l}) {{ {cases}{last_case} }}")
+                } else if exits(e2) {
                     let rest = self.stmts(e2, last);
                     let case = self.stmts(e3, last);
-                    format!("const {v} = {init}; if ({test}) {{ {case} }} else {{ {rest} }}")
+                    format!("{prefix}if ({v}.{l} !== {}) {{ {rest} }} {case}", t.js())
+                } else if is_stmt(e2) || is_stmt(e3) {
+                    let rest = self.stmts(e2, last);
+                    let case = self.stmts(e3, last);
+                    format!("{prefix}if ({test}) {{ {case} }} else {{ {rest} }}")
                 } else {
                     let rest = self.expr(e2);
                     let case = self.expr(e3);
-                    format!("const {v} = {init}; {last}({test} ? {case} : {rest});")
+                    format!("{prefix}{last}({test} ? {case} : {rest});")
                 };
                 self.names.pop();
                 out
@@ -877,7 +952,7 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
                 || refers_from_inner(y, i, inner)
                 || refers_from_inner(z, i + 1, inner)
         }
-        CaseTag(x, _, _, y, z) | TypeTest(x, _, y, z) => {
+        CaseTag(x, _, _, y, z, _) | TypeTest(x, _, y, z) => {
             refers_from_inner(x, i, inner)
                 || refers_from_inner(y, i + 1, inner)
                 || refers_from_inner(z, i + 1, inner)
@@ -911,10 +986,38 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
     }
 }
 
+/// Whether a name is a variable's own (not `this`, a field of it, or
+/// missing).
+fn plain_name(n: &str) -> bool {
+    n != "this" && n != "unbound" && n.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Whether `e` assigns any variable (conservatively, anywhere in it).
+fn assigns(e: &Core) -> bool {
+    wire(e).contains("(assign ")
+}
+
+/// Whether `e` has a `break` anywhere (which a `switch` around it would
+/// take for its own).
+fn breaks(e: &Core) -> bool {
+    wire(e).contains("(break)")
+}
+
+/// Whether `e` always leaves the function or throws: it ends in a `return`
+/// or a `throw`.
+fn exits(e: &Core) -> bool {
+    match e {
+        Ret(_) | Throw(_) => true,
+        Seq(_, e) | Let(_, _, _, e) => exits(e),
+        _ => false,
+    }
+}
+
 fn javascript(e: &Core) -> String {
     Js {
         names: Vec::new(),
         next: 0,
+        discard: false,
     }
     .stmts(e, "")
 }
@@ -1171,17 +1274,28 @@ impl Gen {
         let (tag, fs) = cases[k].clone();
         let mut rest = cases.clone();
         rest.remove(k);
+        let rest_tag = (rest.len() == 1).then(|| rest[0].0.clone());
+        let rest_ty = T::Variant(l.clone(), rest.clone());
         scope.push(if rest.len() == 1 {
             Binding::This(rest[0].1.clone())
         } else {
-            Binding::Mono(T::Variant(l.clone(), rest))
+            Binding::Mono(rest_ty.clone())
         });
-        let e2 = self.typed(t, d, scope, true);
+        // The rest: often another test of the same value's tag (a chain,
+        // printed as a `switch` where its value is dropped), or, in a
+        // function, a `return` (an early exit).
+        let e2 = match self.funcs.last().cloned() {
+            _ if rest.len() > 1 && self.rng.chance(50) => {
+                self.case_on(Var(0), &rest_ty, t, d, scope)
+            }
+            Some(Some(r)) if self.rng.chance(25) => Ret(b(self.typed(&r, d, scope, false))),
+            _ => self.typed(t, d, scope, true),
+        };
         scope.pop();
         scope.push(Binding::This(fs));
         let e3 = self.typed(t, d, scope, true);
         scope.pop();
-        CaseTag(b(x), l.clone(), tag, b(e2), b(e3))
+        CaseTag(b(x), l.clone(), tag, b(e2), b(e3), rest_tag)
     }
 
     /// A program of type `t` with a variant: one annotated `const` of a
@@ -2572,16 +2686,25 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         }
         // inty reads a field every arm of a discriminated union has (its
         // tag, say) without a test of the tag; the model reads a variant's
-        // fields only once a test has taken it apart.
+        // fields only once a test has taken it apart (an intentional gap).
         (Typing::Type(_), Typing::Reject) if features.contains("variant field") => {
             Some("a variant's field read without a test of its tag")
+        }
+        // inty doesn't carry the narrowing after an early exit into a
+        // function or class defined after it (it does inside an `if`'s
+        // branch).
+        (Typing::Reject, Typing::Type(_)) if features.contains("early exit") => {
+            Some("narrowing after an early exit, which inty doesn't carry into a function or class defined after it")
+        }
+        (Typing::Type(_), Typing::Reject) if features.contains("literal type") => {
+            Some("inty's widening of a literal type where it synthesises (an intentional gap)")
+        }
+        (Typing::Type(_), Typing::Reject) if features.contains("try at end") => {
+            Some("a `try` ending the program, whose value only the model types")
         }
         // inty joins a sum (or a variant) with one of its cases to the sum;
         // the model's branches must agree (sum-types-design: a waiting
         // `Join` constraint is still to come).
-        (Typing::Type(_), Typing::Reject) if features.contains("try at end") => {
-            Some("a `try` ending the program, whose value only the model types")
-        }
         (Typing::Type(_), Typing::Reject) if features.contains("sum join") => {
             Some("a sum joined with one of its cases")
         }
@@ -2629,12 +2752,9 @@ fn joins_sum(e: &Core) -> bool {
 
 /// Whether `e` tests a value's `typeof` against `"object"`.
 fn tests_typeof_object(e: &Core) -> bool {
-    scan_held(
-        e,
-        &mut Vec::new(),
-        true,
-        &|e, _, _| matches!(e, TypeTest(_, t, _, _) if t == "object"),
-    )
+    // Anywhere, a class's members included (no generated string is
+    // "object", so only such a test writes it).
+    wire(e).contains(" s:object ")
 }
 
 /// The sum variable `x` holds, if it's one.
@@ -2673,7 +2793,7 @@ fn scan_held(
             };
             go(held, x) || under(held, &[v], y, used)
         }
-        CaseTag(x, _, t, y, z) => {
+        CaseTag(x, _, t, y, z, _) => {
             let rest = match held_by(held, x) {
                 Some(T::Variant(l, cases)) => {
                     let rest: Vec<_> = cases.into_iter().filter(|(tag, _)| tag != t).collect();
@@ -2789,6 +2909,13 @@ fn inty_agrees_with_the_lean_model() {
         }
         if ends_in_try(core) {
             features.insert("try at end");
+        }
+        // A tag tested by an early exit, `if (v.l !== t) { … }`.
+        if LABELS.iter().any(|l| js.contains(&format!(".{l} !== "))) {
+            features.insert("early exit");
+        }
+        if wire(core).contains("(letann (strlit") {
+            features.insert("literal type");
         }
         let report = |what: &str| {
             format!(
