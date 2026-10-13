@@ -49,7 +49,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.unwrap` | `infer_nullish_coalesce`, `infer_branching_test`, `apply_narrowing`, `resolve_strip` |
 | `HasTypeS.litStr` | `check_expr` |
 | `HasTypeS.litBool` | `check_expr` |
-| `HasTypeS.caseTag` | `infer_branching_test`, `apply_narrowing`, `test_facts` |
+| `HasTypeS.caseTag` | `infer_branching_test`, `apply_narrowing`, `test_facts`, `infer_stmt_switch` (a switch statement on a variant's tag is a chain of tests of one value's tag) |
 | `HasTypeS.conv` | `unify`, `unroll_named` |
 | `HasTypeS.inj` | `check_expr`, `subsume` |
 | `HasTypeS.drop` | `infer_discarded` |
@@ -73,6 +73,5 @@ Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 | `infer_stmt_for` | `for` (remaining syntax) |
 | `infer_stmt_for_in` | `for … in` (remaining syntax) |
 | `infer_stmt_for_of` | `for … of` (remaining syntax) |
-| `infer_stmt_switch` | `switch` (phase 5) |
 | `infer_template_literal` | template literals (remaining syntax) |
 | `infer_tuple` | tuples (remaining syntax) |

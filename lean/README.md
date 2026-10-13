@@ -515,6 +515,15 @@ These choices are meant to hold up as the calculus grows.
   which only `true` or `false` checked against it has (`HasTypeS.litBool`),
   and `x.ok === true` takes the variant apart, comparing by kind as `===`
   does, so `true` is never the tag `"true"`.
+- **Narrowing, early exits and `switch`, as tests of a tag.** The model
+  takes a variant apart with `caseTag`, which tests one value's tag and
+  binds the case in one branch and the rest in the other. inty's narrowing
+  of a variable by `if (v.kind === "a")`, an early exit (`if (v.kind !==
+  "a") { return …; }` and `v` after it as the case) and a `switch` on
+  `v.kind` (a chain of such tests) are that test, so the model needs no
+  rule of its own for them; the differential test prints `caseTag` in
+  each of these forms. Reading a field every case has, without a test, is
+  left out ([GAPS.md](GAPS.md)).
 - **Where the interpreter isn't JavaScript.** Besides the faults: a
   string is a sequence of code points, as `dynamics`' are, where
   JavaScript's are UTF-16 units (`"😀".length` is 1 here, 2 there); `new`
@@ -669,14 +678,18 @@ arguments, which inty's typing lets a function literal ignore.
 
 Over 200,000 programs (ten seeds), the interpreters never disagreed, and
 the model never accepted a program inty rejects, except as below. The
-disagreements in typing all fall into features the model lacks:
+disagreements in typing all fall into features the model lacks, gaps
+left on purpose, or places where inty is less precise than the model:
 
 | Divergence | inty | model | Roadmap phase |
 |---|---|---|---|
 | A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 5 |
 | A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
 | A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 5 (`never`) |
-| A field every arm of a discriminated union has, read without a test of the tag: `v.kind` | accepts (the union of the arms' field types) | rejects (a variant's fields are read once a test takes it apart) | 7 |
+| A field every arm of a discriminated union has, read without a test of the tag: `v.kind` | accepts (the union of the arms' field types) | rejects (a variant's fields are read once a test takes it apart) | none: intentional ([GAPS.md](GAPS.md)) |
+| A literal type where a type is synthesised: `c ? t : "b"` with `t: "a"` | widens it to `String` | rejects (a literal synthesises `String`, and branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
+| A program whose last statement is a `try` | doesn't type the `try` block's last expression as the program's value | types it | none: intentional ([GAPS.md](GAPS.md)) |
+| A tag tested by an early exit, `if (v.kind !== "a") { return …; }`, then `v` read in a function or class defined after the test | rejects (the narrowing doesn't reach it; it does inside an `if`'s branch) | accepts (the test binds the case) | none: inty is imprecise |
 | A spread over an operand of an unknown type: `{...a, ...xs[0]}` with `xs` an empty array | a field the operand may write gets a union with a type variable | merges slot by slot once the operand is known | 3 (a deferred `Spread`) |
 | A record case after `typeof x !== "object"`: `typeof x === "object" ? 0 : x - 1` with `x: Number \| {a: Number}` | keeps it (a declaration may type a function as a record: `Promise`, `Object`) | drops it (its records are object literals') | a `typeof` for declared values |
 | A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | the waiting `Join` (`docs/sum-types-design.md`) |
@@ -738,6 +751,17 @@ that raises `TypeError`; it also found inty's `dynamics` running `new` on
 an arrow field that uses `this`, which the class lowering turns into a
 method. Over 21,000 programs (seven seeds), about 9% with a class, it
 finds no other disagreement.
+
+With tests of a tag printed as inty narrows a variable, as an early exit
+and as a `switch` (per 3,000 programs, about 100 direct tests, 20 early
+exits and 2 switches), thirteen seeds agreed but for three disagreements,
+each now a row above or a gap: inty doesn't carry the narrowing after an
+early exit into a function or class defined after it, widens a literal
+type where it synthesises, and doesn't type a `try` that ends a program.
+Two more imprecisions in inty don't show in the
+generated programs, which avoid them: a `switch`'s `default:` sees the
+whole union, not the cases left, and a `switch` whose every branch
+returns is taken to complete normally.
 
 Each row is recognised from evidence, not guessed: a union in the
 types inty gave the program's expressions, say. (Two rows, `Int` and
