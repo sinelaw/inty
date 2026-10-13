@@ -99,6 +99,7 @@ theorem HasTypeS.cutC {S : Sys} {L : List String} {D : List Pred} {Γ : Ctx} {R 
   | unwrap _ hs _ _ ih₁ ih₂ ih₃ =>
     intro C hD; exact .unwrap (ih₁ hD) (hs.cutS hD) (ih₂ hD) (ih₃ hD)
   | litStr hw => intro C _; exact .litStr hw
+  | litBool hw => intro C _; exact .litBool hw
   | objCheck hc hn hk hl hL hd he _ ih =>
     intro C hD; exact .objCheck hc hn hk hl hL hd he (fun p hp => ih p hp hD)
   | caseTag _ hc _ _ ih₁ ih₂ ih₃ =>

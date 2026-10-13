@@ -250,7 +250,7 @@ theorem Pred.decideStrip_sound {t σ a b : Ty} (h : Pred.decideStrip t σ = .eq 
   · cases h
 
 /-- What `Pred.decideCase`'s equation says. -/
-theorem Pred.decideCase_sound {d d' : Disc} {t : String} {ts : List String} {Ps : List Ty}
+theorem Pred.decideCase_sound {d d' : Disc} {t : Tag} {ts : List Tag} {Ps : List Ty}
     {σ ρ a b : Ty} (h : Pred.decideCase d t d' ts Ps σ ρ = .eq a b) {ψ : Subst}
     (hab : TyEq (a.subst ψ) (b.subst ψ)) :
     InstEq (Pred.subst ψ ⟨.caseTag d t, [.variant d' ts Ps, σ, ρ]⟩) := by
@@ -1300,12 +1300,13 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
     intro Γ R rm ex n o h hRo hex φ C hsat
     simp only [infer, Option.some.injEq] at h; subst h
     by_cases hp : ∃ T, ex = some T ∧ (Expr.lit l).pushes T
-    · -- A string literal checked against its own string type.
+    · -- A string or boolean literal checked against its own literal type.
       obtain ⟨T, rfl, hp⟩ := hp
       have hT := hex T rfl
       simp only [exMode, hp, ↓reduceIte, Option.filter, Option.getD_some, Ty.closed_subst hT]
       match l, hp with
       | .string s, hp => exact .litStr (by simpa [Expr.pushes] using hp)
+      | .boolean b, hp => exact .litBool (by simpa [Expr.pushes] using hp)
     · have hf : (ex.filter fun T => (Expr.lit l).pushes T) = none := by
         cases ex with
         | none => rfl

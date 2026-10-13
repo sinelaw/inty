@@ -48,6 +48,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.mcall` | `infer_call` |
 | `HasTypeS.unwrap` | `infer_nullish_coalesce`, `infer_branching_test`, `apply_narrowing`, `resolve_strip` |
 | `HasTypeS.litStr` | `check_expr` |
+| `HasTypeS.litBool` | `check_expr` |
 | `HasTypeS.caseTag` | `infer_branching_test`, `apply_narrowing`, `test_facts` |
 | `HasTypeS.conv` | `unify`, `unroll_named` |
 | `HasTypeS.inj` | `check_expr`, `subsume` |

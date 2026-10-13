@@ -112,18 +112,14 @@ theorem run_clock_le (clock : Nat) (env : Env) (heap : Heap) (e : Expr) :
     refine bindC_le (run_clock_le clock env heap e₁) fun v _ => ?_
     refine bindC_le (Nat.le_trans (getter_clock_le _ _ _ _) lt_min_le) fun w _ => ?_
     split
-    · split
-      · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
-      · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
+    · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
     · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
   | .caseTag e₁ .typeOf t e₂ e₃ => by
     rw [run]
     refine bindC_le (run_clock_le clock env heap e₁) fun v _ => ?_
     refine bindC_le lt_min_le fun w _ => ?_
     split
-    · split
-      · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
-      · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
+    · exact Nat.le_trans (run_clock_le _ _ _ e₃) lt_min_le
     · exact Nat.le_trans (run_clock_le _ _ _ e₂) lt_min_le
   | .tryCatch body handler => by
     rw [run]
@@ -486,10 +482,8 @@ theorem run_mono (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (k : Nat)
     refine bindC_mono (fun _ => rfl) (fun w _ h => ?_) h
     simp only [Nat.min_eq_left hc₁, Nat.min_eq_left (Nat.add_le_add_right hc₁ k)] at h ⊢
     split at h
-    · split at h
-      · rename_i hs; simp only [hs, ite_true]; exact run_mono _ _ _ e₃ k h
-      · rename_i hs; simp only [hs, ite_false]; exact run_mono _ _ _ e₂ k h
-    · exact run_mono _ _ _ e₂ k h
+    · rename_i hs; simp only [hs, ite_true]; exact run_mono _ _ _ e₃ k h
+    · rename_i hs; simp only [hs]; exact run_mono _ _ _ e₂ k h
   | .caseTag e₁ (.field l) t e₂ e₃ => by
     simp only [run] at hne ⊢
     refine bindC_mono (run_mono clock env heap e₁ k) (fun v _ h => ?_) hne
@@ -500,10 +494,8 @@ theorem run_mono (clock : Nat) (env : Env) (heap : Heap) (e : Expr) (k : Nat)
       v (v.read (run clock env heap e₁).2.2 l)) hc₁
     simp only [Nat.min_eq_left hc₂, Nat.min_eq_left (Nat.add_le_add_right hc₂ k)] at h ⊢
     split at h
-    · split at h
-      · rename_i hs; simp only [hs, ite_true]; exact run_mono _ _ _ e₃ k h
-      · rename_i hs; simp only [hs, ite_false]; exact run_mono _ _ _ e₂ k h
-    · exact run_mono _ _ _ e₂ k h
+    · rename_i hs; simp only [hs, ite_true]; exact run_mono _ _ _ e₃ k h
+    · rename_i hs; simp only [hs]; exact run_mono _ _ _ e₂ k h
   | .tryCatch body handler => by
     have hb := run_clock_le clock env heap body
     have ihb := run_mono clock env heap body k

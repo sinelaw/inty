@@ -169,6 +169,27 @@ def Value.typeString : Value → String
   | .null | .obj _ | .fields _ | .arr _ | .items _ => "object"
   | .closure .. | .prim _ | .bound .. => "function"
 
+/-- Whether a value is the tag `t`, by `===`: a string or a boolean of the
+tag's kind, equal to it. -/
+def Value.isTag : Value → Tag → Bool
+  | .string s, .str t => s == t
+  | .boolean b, .bool t => b == t
+  | _, _ => false
+
+/-- The value a tag is. -/
+def Tag.value : Tag → Value
+  | .str s => .string s
+  | .bool b => .boolean b
+
+@[simp] theorem Value.isTag_value (t : Tag) : t.value.isTag t = true := by
+  cases t <;> simp [Tag.value, Value.isTag]
+
+theorem Value.eq_of_isTag {v : Value} {t : Tag} (h : v.isTag t = true) : v = t.value := by
+  cases v <;> cases t <;> simp_all [Value.isTag, Tag.value]
+
+theorem Tag.eq_of_value_isTag {t' t : Tag} (h : t'.value.isTag t = true) : t' = t := by
+  cases t' <;> cases t <;> simp_all [Value.isTag, Tag.value]
+
 def Lit.eval : Lit → Value
   | .number n => .number n
   | .string s => .string s
@@ -515,18 +536,15 @@ def run (clock : Nat) (env : Env) (heap : Heap) (e : Expr) : Ran :=
       if v.isNothing then run (min c₁ clock) env h₁ e₂
       else run (min c₁ clock) (h₁.length :: env) (h₁ ++ [v]) e₃
   -- The tag is read as `x.l` is (a getter runs), and the value goes in a
-  -- new cell, which either branch sees: `x.l === "t"`, where a value that
-  -- isn't a string is no tag.
+  -- new cell, which either branch sees: `x.l === "t"` or `x.l === true`,
+  -- strict equality, so a value of another kind is no tag.
   | .caseTag e₁ d t e₂ e₃ =>
     bindC (run clock env heap e₁) fun v c₁ h₁ =>
     bindC (match d with
       | .field l => getter (min c₁ clock) h₁ v (v.read h₁ l)
       | .typeOf => (.ok (.string v.typeString), min c₁ clock, h₁)) fun w c₂ h₂ =>
-      match w with
-      | .string s =>
-        if s = t then run (min c₂ clock) (h₂.length :: env) (h₂ ++ [v]) e₃
-        else run (min c₂ clock) (h₂.length :: env) (h₂ ++ [v]) e₂
-      | _ => run (min c₂ clock) (h₂.length :: env) (h₂ ++ [v]) e₂
+      if w.isTag t then run (min c₂ clock) (h₂.length :: env) (h₂ ++ [v]) e₃
+      else run (min c₂ clock) (h₂.length :: env) (h₂ ++ [v]) e₂
   -- The caught value goes in a new cell.
   | .tryCatch body handler =>
     match run clock env heap body with

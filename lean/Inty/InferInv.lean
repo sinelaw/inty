@@ -344,14 +344,14 @@ theorem Pred.decideCopy_below {n : Nat} {s r a b : Ty} (hs : s.Below n) (hr : r.
   · cases h
   · cases h
 
-theorem variantRest_below {n : Nat} {d : Disc} {ts : List String} {Rs : List Ty}
+theorem variantRest_below {n : Nat} {d : Disc} {ts : List Tag} {Rs : List Ty}
     (h : ∀ R ∈ Rs, R.Below n) : (variantRest d ts Rs).Below n := by
   match Rs, h with
   | [R], h => exact h R (by simp)
   | [], _ => exact Ty.Below.app.mpr (fun _ h => by cases h)
   | _ :: _ :: _, h => exact Ty.Below.app.mpr h
 
-theorem Pred.decideCase_below {n : Nat} {d d' : Disc} {t : String} {ts : List String}
+theorem Pred.decideCase_below {n : Nat} {d d' : Disc} {t : Tag} {ts : List Tag}
     {Ps : List Ty} {σ ρ a b : Ty} (hP : (Ty.variant d' ts Ps).Below n) (hσ : σ.Below n)
     (hρ : ρ.Below n) (h : Pred.decideCase d t d' ts Ps σ ρ = .eq a b) : a.Below n ∧ b.Below n := by
   have hPs : ∀ P ∈ Ps, P.Below n := fun P hP' => Ty.Below.app.mp hP P hP'

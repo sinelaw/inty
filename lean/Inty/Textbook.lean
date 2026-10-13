@@ -100,6 +100,7 @@ theorem HasTypeS.mono {S₁ S₂ : Sys} (hle : S₁.Le S₂) {L : List String} {
   | mcall _ hp hlen _ ihe iha => exact .mcall ihe (hp.mono hle) hlen iha
   | unwrap _ hs _ _ ih₁ ih₂ ih₃ => exact .unwrap ih₁ (hs.mono hle) ih₂ ih₃
   | litStr hw => exact .litStr hw
+  | litBool hw => exact .litBool hw
   | objCheck hc hn hk hl hL hd he _ ih => exact .objCheck hc hn hk hl hL hd he ih
   | caseTag _ hc _ _ ih₁ ih₂ ih₃ => exact .caseTag ih₁ (hc.mono hle) ih₂ ih₃
   | conv _ he ih => exact .conv ih he

@@ -179,7 +179,7 @@ theorem Ty.rank_lt_maybe {t : Ty} (h : t.rank ≤ 1) (z : Nothing) (τ : Ty) :
     t.rank < (Ty.maybe z τ).rank := by
   show _ < 2; omega
 
-theorem Ty.rank_lt_tsum {t : Ty} (h : t.rank = 0) (ts : List String) (Rs : List Ty) :
+theorem Ty.rank_lt_tsum {t : Ty} (h : t.rank = 0) (ts : List Tag) (Rs : List Ty) :
     t.rank < (Ty.variant .typeOf ts Rs).rank := by
   show _ < 1; omega
 
@@ -208,6 +208,7 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
   | .undefined, v => v = .undefined
   | .null, v => v = .null
   | .strLit t, v => v = .string t
+  | .boolLit b, v => v = .boolean b
   | .unknown, _ => True
   | .newTarget, _ => True
   | .fn θ τs ρ, f => (f.typeString = "function" ∧ (TyEq θ .newTarget → f.isCtor = true)) ∧
@@ -224,7 +225,7 @@ def V (k : Nat) (W : World) : Ty → Value → Prop
       ts[i]? = some t ∧ R.tagOf l = some t ∧ TyEq R (.record ls slots) ∧
       v = .obj ℓ ∧ W[ℓ]? = some (.obj τc) ∧ TyEq (.record ls slots) τc
   | .variant .typeOf ts Rs, v => ∃ i : Nat, ∃ R t, Rs[i]? = some R ∧ ts[i]? = some t ∧
-      v.typeString = t ∧ (if _ : R.whnf.rank = 0 then V k W R.whnf v else False)
+      .str v.typeString = t ∧ (if _ : R.whnf.rank = 0 then V k W R.whnf v else False)
   | .mu i sys, v =>
     match (Ty.mu i sys).view with
     | some (.app c args) => V k W (.app c args) v
@@ -300,6 +301,7 @@ theorem V_array : V k W (.array τ) v ↔ ∃ ℓ τc, v = .arr ℓ ∧ W[ℓ]? 
   rw [V.eq_def]
 
 @[simp] theorem V_strLit : V k W (.strLit t) v ↔ v = .string t := by rw [V.eq_def]
+@[simp] theorem V_boolLit : V k W (.boolLit b) v ↔ v = .boolean b := by rw [V.eq_def]
 
 theorem V_variant_def : V k W (.variant (.field l) ts Rs) v ↔ ∃ i : Nat, ∃ R t ls slots ℓ τc,
       Rs[i]? = some R ∧ ts[i]? = some t ∧ R.tagOf l = some t ∧ TyEq R (.record ls slots) ∧
@@ -307,7 +309,7 @@ theorem V_variant_def : V k W (.variant (.field l) ts Rs) v ↔ ∃ i : Nat, ∃
   rw [V.eq_def]
 
 theorem V_tsum_def : V k W (.variant .typeOf ts Rs) v ↔ ∃ i : Nat, ∃ R t,
-      Rs[i]? = some R ∧ ts[i]? = some t ∧ v.typeString = t ∧ R.whnf.rank = 0 ∧
+      Rs[i]? = some R ∧ ts[i]? = some t ∧ .str v.typeString = t ∧ R.whnf.rank = 0 ∧
       V k W R.whnf v := by
   rw [V.eq_def]
   refine exists_congr fun i => exists_congr fun R => exists_congr fun t => ?_
@@ -402,7 +404,7 @@ theorem V.mono_app0 {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {
             (fun l ts Rs e => hvar ⟨l, ts, Rs, e⟩)).mp hv
 
 /-- `V.mono` for a variant told apart by `typeof`: by its cases' heads. -/
-theorem V.mono_tsum {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {ts : List String}
+theorem V.mono_tsum {j k : Nat} {W W' : World} (hjk : j ≤ k) (hW : W <+: W') {ts : List Tag}
     {Rs : List Ty} {v : Value} (hv : V k W (.variant .typeOf ts Rs) v) :
     V j W' (.variant .typeOf ts Rs) v := by
   rw [V_tsum_def] at hv ⊢
@@ -655,7 +657,7 @@ theorem TyEq.whnf_con {s t : Ty} {c : Con} (h : TyEq s t) (hs : s.whnf = .app c 
   rw [hys, List.eq_nil_of_length_eq_zero hl.symm]
 
 /-- Equal types have the same tag. -/
-theorem Ty.tagOf_tyEq {l : String} {R R' : Ty} {t : String} (he : TyEq R R')
+theorem Ty.tagOf_tyEq {l : String} {R R' : Ty} {t : Tag} (he : TyEq R R')
     (h : R.tagOf l = some t) : R'.tagOf l = some t := by
   unfold Ty.tagOf at h
   split at h
@@ -675,6 +677,12 @@ theorem Ty.tagOf_tyEq {l : String} {R R' : Ty} {t : String} (he : TyEq R R')
           · rename_i hpk
             split at h
             · rename_i t' hτ
+              cases h
+              have hp' := TyEq.whnf_con (hz' (p, p') (by simp)) hpk.1
+              have hk' := TyEq.whnf_con (hz' (k, k') (by simp)) hpk.2
+              have hτ' := TyEq.whnf_con (hz' (τ, τ') (by simp)) hτ
+              simp only [Ty.tagOf, hR', hf', hsw', hp', hk', hτ', and_self, ↓reduceIte]
+            · rename_i b hτ
               cases h
               have hp' := TyEq.whnf_con (hz' (p, p') (by simp)) hpk.1
               have hk' := TyEq.whnf_con (hz' (k, k') (by simp)) hpk.2
@@ -765,7 +773,7 @@ theorem V.tyEq : ∀ (k : Nat) {W : World} {τ τ' : Ty} {v : Value},
             | field l => exact hvar ⟨l, ts, rfl⟩
             | typeOf => exact htc ts rfl
   -- A variant told apart by `typeof`, by its cases' heads.
-  have htsum : ∀ {W : World} {ts : List String} {args args' : List Ty} {v : Value},
+  have htsum : ∀ {W : World} {ts : List Tag} {args args' : List Ty} {v : Value},
       TyEq (.variant .typeOf ts args') (.variant .typeOf ts args) →
       V k W (.variant .typeOf ts args) v → V k W (.variant .typeOf ts args') v := by
     intro W ts args args' v h₂ hv
@@ -1102,6 +1110,7 @@ theorem IsValue.run_value (hv : e.IsValue) (ht : HasTypeS Sys.wide L C Γ R rm m
   case inj ih => exact ih hv hG
   case drop ih => exact ih hv hG
   case litStr => exact ⟨_, by simp [run]; rfl⟩
+  case litBool => exact ⟨_, by simp [run]; rfl⟩
   all_goals cases hv
 
 /-! ## Objects -/
@@ -1575,9 +1584,9 @@ theorem readData_sound {l : String} {ls : List String} {fs : List Ty} {s σ : Ty
   · exact absurd (TyEq.slot (hss.trans h₁)).1 TyEq.pre_abs
 
 /-- Reading a variant case's tag field gives its tag. -/
-theorem tagOf_read {l : String} {R : Ty} {t : String} {v : Value} {c : Nat} {W : World}
+theorem tagOf_read {l : String} {R : Ty} {t : Tag} {v : Value} {c : Nat} {W : World}
     {h : Heap} (ht : R.tagOf l = some t) (hv : V c W R v) (hH : HeapOK c W h) :
-    getter c h v (v.read h l) = (.ok (.string t), c, h) := by
+    getter c h v (v.read h l) = (.ok t.value, c, h) := by
   unfold Ty.tagOf at ht
   split at ht
   · rename_i ls slots hR
@@ -1597,7 +1606,17 @@ theorem tagOf_read {l : String} {R : Ty} {t : String} {v : Value} {c : Nat} {W :
             rw [V_whnf, hR] at hv
             obtain ⟨w, hw, hvw⟩ := readData_sound hf hs hv hH
             rw [V_whnf, hτ, V_strLit] at hvw
-            rw [hw, hvw]
+            rw [hw, hvw]; rfl
+          · rename_i b hτ
+            cases ht
+            have hp : TyEq p .pre := hpk.1 ▸ TyEq.whnf p |>.symm
+            have hk : TyEq k .data := hpk.2 ▸ TyEq.whnf k |>.symm
+            have hs : TyEq s (.slot .pre .data τ) :=
+              (hsw ▸ (TyEq.whnf s).symm).trans (TyEq.slot_mk hp hk (TyEq.refl τ))
+            rw [V_whnf, hR] at hv
+            obtain ⟨w, hw, hvw⟩ := readData_sound hf hs hv hH
+            rw [V_whnf, hτ, V_boolLit] at hvw
+            rw [hw, hvw]; rfl
           · cases ht
         · cases ht
       · cases ht
@@ -1605,7 +1624,7 @@ theorem tagOf_read {l : String} {R : Ty} {t : String} {v : Value} {c : Nat} {W :
   · cases ht
 
 /-- A record value has the type of a variant with its type as a case. -/
-theorem V_variant_of {l : String} {ts : List String} {Rs : List Ty} {i : Nat} {R : Ty} {t : String}
+theorem V_variant_of {l : String} {ts : List Tag} {Rs : List Ty} {i : Nat} {R : Ty} {t : Tag}
     {ls : List String} {slots : List Ty} {k : Nat} {W : World} {v : Value} (hR : Rs[i]? = some R)
     (ht : ts[i]? = some t) (hRt : R.tagOf l = some t) (hr : TyEq R (.record ls slots))
     (hv : V k W R v) : V k W (.variant (.field l) ts Rs) v := by
@@ -1614,8 +1633,8 @@ theorem V_variant_of {l : String} {ts : List String} {Rs : List Ty} {i : Nat} {R
 
 /-- A value of a variant's case has the type of the variant, or the case
 itself, of the cases `Rs`. -/
-theorem V_variantRest {l : String} {ts : List String} {Rs : List Ty} {i : Nat} {R : Ty}
-    {t : String} {ls : List String} {slots : List Ty} {k : Nat} {W : World} {v : Value}
+theorem V_variantRest {l : String} {ts : List Tag} {Rs : List Ty} {i : Nat} {R : Ty}
+    {t : Tag} {ls : List String} {slots : List Ty} {k : Nat} {W : World} {v : Value}
     (hR : Rs[i]? = some R) (ht : ts[i]? = some t) (hRt : R.tagOf l = some t)
     (hr : TyEq R (.record ls slots)) (hv : V k W R v) : V k W (variantRest (.field l) ts Rs) v := by
   match Rs, hR with
@@ -1627,9 +1646,9 @@ theorem V_variantRest {l : String} {ts : List String} {Rs : List Ty} {i : Nat} {
 
 /-- A value of a variant's case, told apart by `typeof`, has the type of the
 variant, or the case itself, of the cases `Rs`. -/
-theorem V_tsumRest {ts : List String} {Rs : List Ty} {i : Nat} {R : Ty} {t : String} {k : Nat}
+theorem V_tsumRest {ts : List Tag} {Rs : List Ty} {i : Nat} {R : Ty} {t : Tag} {k : Nat}
     {W : World} {v : Value} (hR : Rs[i]? = some R) (ht : ts[i]? = some t)
-    (hs : v.typeString = t) (h0 : R.whnf.rank = 0) (hv : V k W R.whnf v) :
+    (hs : .str v.typeString = t) (h0 : R.whnf.rank = 0) (hv : V k W R.whnf v) :
     V k W (variantRest .typeOf ts Rs) v := by
   match Rs, hR with
   | [R'], hR =>
@@ -1638,14 +1657,14 @@ theorem V_tsumRest {ts : List String} {Rs : List Ty} {i : Nat} {R : Ty} {t : Str
     | succ i => simp at hR
   | _ :: _ :: _, hR => exact V_tsum_def.mpr ⟨i, R, t, hR, ht, hs, h0, hv⟩
 
-theorem Con.rank_of_typeTag {c : Con} {t : String} (h : c.typeTag = some t) (args : List Ty) :
+theorem Con.rank_of_typeTag {c : Con} {t : Tag} (h : c.typeTag = some t) (args : List Ty) :
     (Ty.app c args).rank = 0 :=
   Ty.rank_app_zero (fun z e => by subst e; simp [Con.typeTag] at h)
     (fun ts e => by subst e; simp [Con.typeTag] at h)
 
 /-- A value's `typeof` is its type's head's (`Con.typeTag`). -/
-theorem V_typeString {k : Nat} {W : World} {c : Con} {args : List Ty} {v : Value} {t : String}
-    (hv : V k W (.app c args) v) (ht : c.typeTag = some t) : v.typeString = t := by
+theorem V_typeString {k : Nat} {W : World} {c : Con} {args : List Ty} {v : Value} {t : Tag}
+    (hv : V k W (.app c args) v) (ht : c.typeTag = some t) : .str v.typeString = t := by
   cases c
   case variant d ts =>
     cases d with
@@ -1663,7 +1682,7 @@ theorem V_typeString {k : Nat} {W : World} {c : Con} {args : List Ty} {v : Value
     | [], hv | _ :: _ :: _, hv => rw [V.eq_def] at hv; simp at hv
   case fn =>
     match args, hv with
-    | θ :: ρ :: τs, hv => exact (V_fn.mp hv).1.1
+    | θ :: ρ :: τs, hv => rw [(V_fn.mp hv).1.1]
     | [], hv | [_], hv => rw [V.eq_def] at hv; simp at hv
   all_goals
     match args, hv with
@@ -2811,6 +2830,9 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
     | litStr hw =>
       simp only [run]
       exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (V_whnf.mpr (by simp [hw, Lit.eval]))
+    | litBool hw =>
+      simp only [run]
+      exact Safe.ok (Nat.le_refl k) (List.prefix_refl W) hH (V_whnf.mpr (by simp [hw, Lit.eval]))
   | var i =>
     intro k C Γ R rm md W env h τ ht hC hG hH
     obtain ⟨_, τ₀, ht, hτ₀⟩ := ht.top
@@ -3200,7 +3222,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
           ⟨by rw [hH₁.1]; simp, G.mono (hW₁.trans hW₂) hG⟩
         exact (ihe he hC hG₂ hcell).weaken (Nat.le_refl _) hW₂
       -- Another case than the tag's: its index among the rest.
-      have hrest : ∀ {ts : List String} {Rs : List Ty} {i j : Nat} {Rj : Ty} {tj : String},
+      have hrest : ∀ {ts : List Tag} {Rs : List Ty} {i j : Nat} {Rj : Ty} {tj : Tag},
           j ≠ i → Rs[j]? = some Rj → ts[j]? = some tj → ∃ j' : Nat, (Rs.eraseIdx i)[j']? = some Rj ∧
             (ts.eraseIdx i)[j']? = some tj := by
         intro ts Rs i j Rj tj hji hRj htj
@@ -3231,6 +3253,7 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
             split
             · -- The tag read is the case's: it is that case.
               rename_i htt
+              have htt := Tag.eq_of_value_isTag htt
               subst htt
               have hji : j = i := (hnd.getElem?_inj (List.getElem?_eq_some_iff.mp htj).1).mp
                 (by rw [htj, hti])
@@ -3239,16 +3262,19 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
               exact hbranch σ e₃ _ _ (V.tyEq _ hσ.symm hvR) h₃ ih₃
             · -- Another case: one of the rest.
               rename_i htt
-              have hji : j ≠ i := fun e => by subst e; rw [htj] at hti; cases hti; exact htt rfl
+              have hji : j ≠ i := fun e => by
+                subst e; rw [htj] at hti; cases hti; exact htt (Value.isTag_value _)
               obtain ⟨j', hj', htj'⟩ := hrest hji hRj htj
               exact hbranch ρ e₂ _ _ (V.tyEq _ hρ.symm (V_variantRest hj' htj' hRt hRr hvR)) h₂ ih₂
           | typeOf =>
             -- The value is of one of the cases, whose tag is its `typeof`.
             obtain ⟨j, Rj, tj, hRj, htj, hs, h0, hvR⟩ := V_tsum_def.mp (V.tyEq _ hτ hv)
             simp only [bindC]
-            rw [Nat.min_eq_left hc₁, hs]
+            rw [Nat.min_eq_left hc₁]
+            subst hs
             split
             · rename_i htt
+              have htt := Tag.eq_of_value_isTag (t' := .str v.typeString) htt
               subst htt
               have hji : j = i := (hnd.getElem?_inj (List.getElem?_eq_some_iff.mp htj).1).mp
                 (by rw [htj, hti])
@@ -3256,9 +3282,10 @@ theorem run_sound (L : List String) (e : Expr) : RunSound L e := by
               rw [hR] at hRj; cases hRj
               exact hbranch σ e₃ _ _ (V.tyEq _ hσ.symm (V_whnf.mpr hvR)) h₃ ih₃
             · rename_i htt
-              have hji : j ≠ i := fun e => by subst e; rw [htj] at hti; cases hti; exact htt rfl
+              have hji : j ≠ i := fun e => by
+                subst e; rw [htj] at hti; cases hti; exact htt (Value.isTag_value (.str _))
               obtain ⟨j', hj', htj'⟩ := hrest hji hRj htj
-              exact hbranch ρ e₂ _ _ (V.tyEq _ hρ.symm (V_tsumRest hj' htj' hs h0 hvR)) h₂ ih₂
+              exact hbranch ρ e₂ _ _ (V.tyEq _ hρ.symm (V_tsumRest hj' htj' rfl h0 hvR)) h₂ ih₂
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · simp only [List.cons.injEq] at he; exact (V_whnf_var (by rw [he.1]; exact hw) hv).elim
   | tryFinally body fin ihb ihf =>

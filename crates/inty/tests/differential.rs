@@ -89,6 +89,44 @@ impl Op2 {
     }
 }
 
+/// A variant's tag: the string or the boolean its tag field holds.
+#[derive(Clone, Debug, PartialEq)]
+enum Tag {
+    Str(String),
+    Bool(bool),
+}
+
+impl Tag {
+    /// The tag as JavaScript writes it, a literal.
+    fn js(&self) -> String {
+        match self {
+            Tag::Str(s) => format!("{s:?}"),
+            Tag::Bool(b) => b.to_string(),
+        }
+    }
+    /// The tag in the wire format's `casetag`.
+    fn wire(&self) -> String {
+        match self {
+            Tag::Str(s) => format!("s:{s}"),
+            Tag::Bool(b) => b.to_string(),
+        }
+    }
+    /// The type of a tag field holding it, in the wire format.
+    fn wire_ty(&self) -> String {
+        match self {
+            Tag::Str(s) => format!("(strlit s:{s})"),
+            Tag::Bool(b) => format!("(boollit {b})"),
+        }
+    }
+    /// The literal holding it.
+    fn core(&self) -> Core {
+        match self {
+            Tag::Str(s) => Str(s.clone()),
+            Tag::Bool(b) => Bool(*b),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Core {
     /// `m × 10^-e`.
@@ -175,7 +213,7 @@ enum Core {
     /// `const v = e₁; v.l === "t" ? e₃ : e₂`, a variant tagged by `l` taken
     /// apart by its tag: `v` bound in both branches, in `e₃` as the case of
     /// the tag `t`, in `e₂` as the rest; only in statement position.
-    CaseTag(Box<Core>, String, String, Box<Core>, Box<Core>),
+    CaseTag(Box<Core>, String, Tag, Box<Core>, Box<Core>),
     /// `const v = e₁; typeof v === "t" ? e₃ : e₂`, a sum told apart by
     /// `typeof` taken apart by its tag: `v` bound in both branches, in `e₃`
     /// as the case of the tag `t`, in `e₂` as the rest; only in statement
@@ -236,7 +274,7 @@ fn wire_ty(t: &T) -> String {
             let cases: Vec<String> = cases
                 .iter()
                 .map(|(tag, fs)| {
-                    let mut fields = vec![(l.clone(), format!("(strlit s:{tag})"))];
+                    let mut fields = vec![(l.clone(), tag.wire_ty())];
                     fields.extend(fs.iter().map(|(f, t)| (f.clone(), wire_ty(t))));
                     fields.sort();
                     let fields: Vec<String> = fields
@@ -285,7 +323,7 @@ fn js_ty(t: &T) -> String {
             let cases: Vec<String> = cases
                 .iter()
                 .map(|(tag, fs)| {
-                    let mut fields = vec![format!("{l}: \"{tag}\"")];
+                    let mut fields = vec![format!("{l}: {}", tag.js())];
                     fields.extend(fs.iter().map(|(f, t)| format!("{f}: {}", js_ty(t))));
                     format!("{{{}}}", fields.join(", "))
                 })
@@ -456,10 +494,10 @@ fn wire(e: &Core) -> String {
         }
         Unwrap(x, y, z) => format!("(unwrap {} {} {})", wire(x), wire(y), wire(z)),
         CaseTag(x, l, t, y, z) => format!(
-            "(casetag {} s:{} s:{} {} {})",
+            "(casetag {} s:{} {} {} {})",
             wire(x),
             l,
-            t,
+            t.wire(),
             wire(y),
             wire(z)
         ),
@@ -763,7 +801,7 @@ impl Js {
                 let v = self.fresh("v");
                 let init = self.expr(e1);
                 self.names.push(v.clone());
-                let test = format!("{v}.{l} === \"{t}\"");
+                let test = format!("{v}.{l} === {}", t.js());
                 let out = if is_stmt(e2) || is_stmt(e3) {
                     let rest = self.stmts(e2, last);
                     let case = self.stmts(e3, last);
@@ -924,7 +962,7 @@ enum T {
     /// A variant tagged by its field `l`: its cases, each a tag and the
     /// case's other fields, sorted by label; only as an annotation's
     /// (`ty` never makes one).
-    Variant(String, Vec<(String, Vec<(String, T)>)>),
+    Variant(String, Vec<(Tag, Vec<(String, T)>)>),
     /// A sum told apart by `typeof` (`Number | String`): its cases, of
     /// different `typeof`s; only as an annotation's (`ty` never makes one).
     Sum(Vec<T>),
@@ -1072,21 +1110,27 @@ impl Gen {
         })
     }
 
-    /// A variant tagged by one of the labels, of two or three cases, each
+    /// A variant tagged by one of the labels, of two or three cases told
+    /// apart by strings, or of two told apart by `true` and `false`, each
     /// with some of the other labels' fields.
     fn variant_ty(&mut self) -> T {
         const TAGS: [&str; 3] = ["circle", "square", "line"];
         let l = self.label();
-        let n = 2 + self.rng.below(2);
+        let tags: Vec<Tag> = if self.rng.chance(30) {
+            vec![Tag::Bool(true), Tag::Bool(false)]
+        } else {
+            let n = 2 + self.rng.below(2);
+            TAGS[..n].iter().map(|t| Tag::Str(t.to_string())).collect()
+        };
         let mut cases = Vec::new();
-        for tag in &TAGS[..n] {
+        for tag in tags {
             let mut fields = Vec::new();
             for f in LABELS {
                 if f != l && self.rng.chance(50) {
                     fields.push((f.to_string(), self.base()));
                 }
             }
-            cases.push((tag.to_string(), fields));
+            cases.push((tag, fields));
         }
         T::Variant(l, cases)
     }
@@ -1105,7 +1149,7 @@ impl Gen {
             return Var(fits[self.rng.below(fits.len())]);
         }
         let (tag, fs) = cases[self.rng.below(cases.len())].clone();
-        let mut fields = vec![(l.clone(), Str(tag))];
+        let mut fields = vec![(l.clone(), tag.core())];
         fields.extend(
             fs.iter()
                 .map(|(f, u)| (f.clone(), self.typed(u, d, scope, false))),
@@ -2452,6 +2496,17 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     (typing, features)
 }
 
+/// Whether the program's last statement is a `try`: inty types the last
+/// expression of a program, but one inside a `try` block as a statement,
+/// where the model types it as the program's value.
+fn ends_in_try(e: &Core) -> bool {
+    match e {
+        Let(_, _, _, body) | Seq(_, body) => ends_in_try(body),
+        TryCatch(..) | TryFinally(..) => true,
+        _ => false,
+    }
+}
+
 /// Run the model on every program, in one process.
 fn run_model(model: &PathBuf, programs: &[Core]) -> Vec<(Typing, Run)> {
     let input: String = programs.iter().map(|p| wire(p) + "\n").collect();
@@ -2524,6 +2579,9 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // inty joins a sum (or a variant) with one of its cases to the sum;
         // the model's branches must agree (sum-types-design: a waiting
         // `Join` constraint is still to come).
+        (Typing::Type(_), Typing::Reject) if features.contains("try at end") => {
+            Some("a `try` ending the program, whose value only the model types")
+        }
         (Typing::Type(_), Typing::Reject) if features.contains("sum join") => {
             Some("a sum joined with one of its cases")
         }
@@ -2728,6 +2786,9 @@ fn inty_agrees_with_the_lean_model() {
         }
         if tests_typeof_object(core) {
             features.insert("typeof object");
+        }
+        if ends_in_try(core) {
+            features.insert("try at end");
         }
         let report = |what: &str| {
             format!(

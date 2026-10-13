@@ -17,11 +17,19 @@ inductive Nothing where
   | undefined
   deriving DecidableEq, Repr
 
-/-- What tells a variant's cases apart: a field, holding a string literal
-(`x.kind === "circle"`), or the value's `typeof` (`typeof x === "number"`). -/
+/-- What tells a variant's cases apart: a field, holding a string or a
+boolean literal (`x.kind === "circle"`, `x.ok === true`), or the value's
+`typeof` (`typeof x === "number"`). -/
 inductive Disc where
   | field (l : String)
   | typeOf
+  deriving DecidableEq, Repr
+
+/-- A variant's tag: the string or the boolean its tag field holds, or the
+string its values' `typeof` gives. -/
+inductive Tag where
+  | str (s : String)
+  | bool (b : Bool)
   deriving DecidableEq, Repr
 
 /-- Type constructors. Every type former is one, applied to its argument
@@ -93,6 +101,10 @@ inductive Con where
   string literal checked against it has. A value of it is a string, and is
   injected wherever one is (`Inst.injectLit`). -/
   | strLit (s : String)
+  /-- The type of the one boolean `b`: a variant's tag field
+  (`{ok: true, …}`), which only a boolean literal checked against it
+  has. -/
+  | boolLit (b : Bool)
   /-- A variant told apart by `d`, with the tags `ts`, applied to the
   types of its cases. Told apart by a field `l`, the case of the tag
   `ts[i]` is a record whose field `l` holds that tag's string literal type:
@@ -103,18 +115,18 @@ inductive Con where
   injected. The tags are the constructor's, so that a case is picked by
   its tag whatever is known of the cases. Only a test of the tag
   (`caseTag`) takes one apart. -/
-  | variant (d : Disc) (ts : List String)
+  | variant (d : Disc) (ts : List Tag)
   deriving DecidableEq, Repr
 
 /-- The `typeof` of the values of a type of this head, if one string: what
 tells the cases of a variant told apart by `typeof` apart. -/
-def Con.typeTag : Con → Option String
-  | .number => some "number"
-  | .string | .strLit _ => some "string"
-  | .boolean => some "boolean"
-  | .undefined => some "undefined"
-  | .null | .record _ | .array | .variant (.field _) _ => some "object"
-  | .fn => some "function"
+def Con.typeTag : Con → Option Tag
+  | .number => some (.str "number")
+  | .string | .strLit _ => some (.str "string")
+  | .boolean | .boolLit _ => some (.str "boolean")
+  | .undefined => some (.str "undefined")
+  | .null | .record _ | .array | .variant (.field _) _ => some (.str "object")
+  | .fn => some (.str "function")
   | _ => none
 
 /-- Whether a constructor is a rigid type variable. -/
@@ -122,7 +134,7 @@ def Con.isRigid : Con → Bool
   | .rigid _ _ => true
   | _ => false
 
-theorem Con.isRigid_of_typeTag {c : Con} {t : String} (h : c.typeTag = some t) :
+theorem Con.isRigid_of_typeTag {c : Con} {t : Tag} (h : c.typeTag = some t) :
     c.isRigid = false := by
   cases c <;> simp_all [Con.typeTag, Con.isRigid]
 
@@ -284,7 +296,8 @@ as an absent field has no type in Rémy's rows. -/
 @[match_pattern] abbrev Ty.nullable (τ : Ty) : Ty := .maybe .null τ
 @[match_pattern] abbrev Ty.optional (τ : Ty) : Ty := .maybe .undefined τ
 @[match_pattern] abbrev Ty.strLit (s : String) : Ty := .app (.strLit s) []
-@[match_pattern] abbrev Ty.variant (d : Disc) (ts : List String) (cases : List Ty) : Ty :=
+@[match_pattern] abbrev Ty.boolLit (b : Bool) : Ty := .app (.boolLit b) []
+@[match_pattern] abbrev Ty.variant (d : Disc) (ts : List Tag) (cases : List Ty) : Ty :=
   .app (.variant d ts) cases
 
 /-- The constructor of the type of the value a sum adds. -/
@@ -394,7 +407,7 @@ inductive Cls where
   case of the tag `t`, `σ`, and `ρ` the rest of it, the cases of the other
   tags (`variantRest`). It waits while `τ` is a type variable, so taking a
   variant apart (`caseTag`) has a principal type. -/
-  | caseTag (d : Disc) (t : String)
+  | caseTag (d : Disc) (t : Tag)
   deriving DecidableEq, Repr
 
 /-- How many types a class is applied to. -/
@@ -1129,5 +1142,10 @@ theorem lt_maxPlusOne {l : List Nat} : ∀ a ∈ l, a < maxPlusOne l := by
     rcases List.mem_cons.mp ha with rfl | ha
     · omega
     · have := ih a ha; omega
+
+/-- The type of a tag field holding the tag `t`. -/
+def Tag.ty : Tag → Ty
+  | .str s => .strLit s
+  | .bool b => .boolLit b
 
 end Inty

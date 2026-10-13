@@ -865,17 +865,17 @@ example : V k W (.variant (.field l) ts Rs) v ↔ ∃ i : Nat, ∃ R t ls slots 
 /-- A variant told apart by `typeof`'s values: those of a case whose
 `typeof` is its tag, the case's head of a `typeof`. -/
 example : V k W (.variant .typeOf ts Rs) v ↔ ∃ i : Nat, ∃ R t,
-    Rs[i]? = some R ∧ ts[i]? = some t ∧ v.typeString = t ∧ R.whnf.rank = 0 ∧
+    Rs[i]? = some R ∧ ts[i]? = some t ∧ .str v.typeString = t ∧ R.whnf.rank = 0 ∧
       V k W R.whnf v := V_tsum_def
 
 /-- The `typeof` of a type's head's values. -/
 example : Con.typeTag c = match c with
-    | .number => some "number"
-    | .string | .strLit _ => some "string"
-    | .boolean => some "boolean"
-    | .undefined => some "undefined"
-    | .null | .record _ | .array | .variant (.field _) _ => some "object"
-    | .fn => some "function"
+    | .number => some (.str "number")
+    | .string | .strLit _ => some (.str "string")
+    | .boolean | .boolLit _ => some (.str "boolean")
+    | .undefined => some (.str "undefined")
+    | .null | .record _ | .array | .variant (.field _) _ => some (.str "object")
+    | .fn => some (.str "function")
     | _ => none := by
   cases c <;> rfl
 
@@ -1141,6 +1141,9 @@ example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {s : String} {T : Ty},
       Ty.whnf T = Ty.strLit s → HasTypeS S L C Γ R rm Mode.check (Inty.Expr.lit (Lit.string s)) T :=
   @HasTypeS.litStr
+example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {b : Bool} {T : Ty},
+      Ty.whnf T = Ty.boolLit b → HasTypeS S L C Γ R rm Mode.check (Inty.Expr.lit (Lit.boolean b)) T :=
+  @HasTypeS.litBool
 example : ∀ {S : Sys} {L ls : List String} {es : List Inty.Expr} {T P : Ty} {ks : List FieldKind} {τs : List Ty} {C : List Pred}
       {Γ : Ctx} {R : Option Ty} {rm : Mode},
       ObjCase ls es T P →
@@ -1155,7 +1158,7 @@ example : ∀ {S : Sys} {L ls : List String} {es : List Inty.Expr} {T P : Ty} {k
                       HasTypeS S L C Γ R rm Mode.check (Expr.obj ls es ks) T :=
   @HasTypeS.objCheck
 example : ∀ {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx} {R : Option Ty} {rm : Mode} {e₁ : Inty.Expr} {τ₁ : Ty}
-      {d : Disc} {t : String} {σ ρ : Ty} {md : Mode} {e₂ : Inty.Expr} {τ : Ty} {e₃ : Inty.Expr},
+      {d : Disc} {t : Tag} {σ ρ : Ty} {md : Mode} {e₂ : Inty.Expr} {τ : Ty} {e₃ : Inty.Expr},
       HasTypeS S L C Γ R rm Mode.synth e₁ τ₁ →
         EntailsS S C { cls := Cls.caseTag d t, args := [τ₁, σ, ρ] } →
           HasTypeS S L C (Scheme.mono ρ :: Γ) R rm md e₂ τ →
@@ -1195,7 +1198,7 @@ example : ∀ {S : Sys} {C : List Pred} {neg : Bool} {τ₁ τ₂ : Ty}, BinOpTy
   @BinOpTyS.strictEq
 example : ∀ {ls : List String} {es : List Inty.Expr} {T : Ty}, ObjCase ls es T T :=
   @ObjCase.self
-example : ∀ {ls : List String} {es : List Inty.Expr} {l t : String} {ts : List String} {i : Nat} {Ps : List Ty} {P T : Ty},
+example : ∀ {ls : List String} {es : List Inty.Expr} {l : String} {t : Tag} {ts : List Tag} {i : Nat} {Ps : List Ty} {P T : Ty},
       Ty.whnf T = Ty.variant (Disc.field l) ts Ps →
         litTag l ls es = some t → firstIdx t ts = some i → Ps[i]? = some P → Ty.tagOf l P = some t → ObjCase ls es T P :=
   @ObjCase.variant
@@ -1301,7 +1304,7 @@ example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ e₂ e₃ : Inty.Exp
           if Value.isNothing v = true then run (min c₁ clock) env h₁ e₂
           else run (min c₁ clock) (List.length h₁ :: env) (h₁ ++ [v]) e₃ :=
   @run.eq_18
-example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ : Inty.Expr) (d : Disc) (t : String) (e₂ e₃ : Inty.Expr),
+example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ : Inty.Expr) (d : Disc) (t : Tag) (e₂ e₃ : Inty.Expr),
       run clock env heap (Expr.caseTag e₁ d t e₂ e₃) =
         bindC (run clock env heap e₁) fun v c₁ h₁ =>
           bindC
@@ -1309,11 +1312,8 @@ example : ∀ (clock : Nat) (env : Env) (heap : Heap) (e₁ : Inty.Expr) (d : Di
             | Disc.field l => getter (min c₁ clock) h₁ v (Value.read h₁ l v)
             | Disc.typeOf => (Result.ok (Value.string (Value.typeString v)), min c₁ clock, h₁))
             fun w c₂ h₂ =>
-            match w with
-            | Value.string s =>
-              if s = t then run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₃
-              else run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₂
-            | x => run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₂ :=
+            if Value.isTag w t = true then run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₃
+            else run (min c₂ clock) (List.length h₂ :: env) (h₂ ++ [v]) e₂ :=
   @run.eq_19
 example : ∀ (clock : Nat) (env : Env) (heap : Heap) (body handler : Inty.Expr),
       run clock env heap (Expr.tryCatch body handler) =
@@ -1747,7 +1747,7 @@ example : ∀ (i n : Nat) (body : Inty.Expr), Expr.writes i (Expr.ctor n body) =
 example : ∀ (i : Nat) (e₁ e₂ e₃ : Inty.Expr),
       Expr.writes i (Expr.unwrap e₁ e₂ e₃) = (Expr.writes i e₁ || Expr.writes i e₂ || Expr.writes (i + 1) e₃) :=
   @Expr.writes.eq_29
-example : ∀ (i : Nat) (e₁ : Inty.Expr) (d : Disc) (t : String) (e₂ e₃ : Inty.Expr),
+example : ∀ (i : Nat) (e₁ : Inty.Expr) (d : Disc) (t : Tag) (e₂ e₃ : Inty.Expr),
       Expr.writes i (Expr.caseTag e₁ d t e₂ e₃) = (Expr.writes i e₁ || Expr.writes (i + 1) e₂ || Expr.writes (i + 1) e₃) :=
   @Expr.writes.eq_30
 example : ∀ (i : Nat), Expr.writesList i [] = false :=
@@ -1887,7 +1887,7 @@ example : ∀ (mutables : List Bool) (e₁ e₂ e₃ : Inty.Expr),
       Expr.assignsMutable mutables (Expr.unwrap e₁ e₂ e₃) =
         (Expr.assignsMutable mutables e₁ && Expr.assignsMutable mutables e₂ && Expr.assignsMutable (false :: mutables) e₃) :=
   @Expr.assignsMutable.eq_29
-example : ∀ (mutables : List Bool) (e₁ : Inty.Expr) (d : Disc) (t : String) (e₂ e₃ : Inty.Expr),
+example : ∀ (mutables : List Bool) (e₁ : Inty.Expr) (d : Disc) (t : Tag) (e₂ e₃ : Inty.Expr),
       Expr.assignsMutable mutables (Expr.caseTag e₁ d t e₂ e₃) =
         (Expr.assignsMutable mutables e₁ && Expr.assignsMutable (false :: mutables) e₂ &&
           Expr.assignsMutable (false :: mutables) e₃) :=
@@ -1992,7 +1992,7 @@ example : ∀ (inLoop : Bool) (e₁ e₂ e₃ : Inty.Expr),
       Expr.jumpsInLoop inLoop (Expr.unwrap e₁ e₂ e₃) =
         (Expr.jumpsInLoop inLoop e₁ && Expr.jumpsInLoop inLoop e₂ && Expr.jumpsInLoop inLoop e₃) :=
   @Expr.jumpsInLoop.eq_29
-example : ∀ (inLoop : Bool) (e₁ : Inty.Expr) (d : Disc) (t : String) (e₂ e₃ : Inty.Expr),
+example : ∀ (inLoop : Bool) (e₁ : Inty.Expr) (d : Disc) (t : Tag) (e₂ e₃ : Inty.Expr),
       Expr.jumpsInLoop inLoop (Expr.caseTag e₁ d t e₂ e₃) =
         (Expr.jumpsInLoop inLoop e₁ && Expr.jumpsInLoop inLoop e₂ && Expr.jumpsInLoop inLoop e₃) :=
   @Expr.jumpsInLoop.eq_30
@@ -2025,7 +2025,7 @@ example : ∀ (a : Nat), Value.truthy (Value.arr a) = true :=
   @Value.truthy.eq_11
 example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
   @Value.truthy.eq_12
-#rules HasTypeS 39
+#rules HasTypeS 40
 #rules LitTy 5
 #rules UnOpTy 3
 #rules BinOpTyS 3

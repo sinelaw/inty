@@ -35,7 +35,7 @@ inductive InstW : Pred → Prop where
   `"string"` case is `String`. -/
   | injectLitSelf : InstW ⟨.injectW, [.strLit s, .string]⟩
   | injectLitSome : InstW ⟨.injectW, [.strLit s, .maybe z .string]⟩
-  | injectLitArm : Rs[(i : Nat)]? = some R → R.whnf = .string → ts[i]? = some "string" →
+  | injectLitArm : Rs[(i : Nat)]? = some R → R.whnf = .string → ts[i]? = some (.str "string") →
       InstW ⟨.injectW, [.strLit s, .variant .typeOf ts Rs]⟩
   | stripSelf : InstW ⟨.strip, [τ, τ]⟩
 
@@ -433,6 +433,7 @@ theorem HasTypeS.toWideOf {S : Sys} (hS : S.NarrowLike) {L : List String} {C : L
     exact .inj ih trivial (hi.narrowOf hS).toW
   | drop _ ih => exact .drop ih
   | litStr hw => exact .litStr hw
+  | litBool hw => exact .litBool hw
   | objCheck hc hn hk hl hL hd he _ ih => exact .objCheck hc hn hk hl hL hd he ih
   | caseTag _ hc _ _ ih₁ ih₂ ih₃ =>
     exact .caseTag ih₁ (by simpa [Pred.toW] using (hc.narrowOf hS).toW) (by simpa using ih₂) (by simpa using ih₃)
