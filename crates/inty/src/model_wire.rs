@@ -88,6 +88,9 @@ enum Sum {
     Variant,
     /// A sum told apart by `typeof`.
     Typeof,
+    /// `T | Null` or `T | Undefined`: a test of its truthiness takes it
+    /// apart.
+    Maybe,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -294,6 +297,20 @@ impl Cx {
                 self.pop(1);
                 Ok(format!("(let {f} {})", rest?))
             }
+            // An early exit, `if (v.kind !== "a") { return …; } rest`: the
+            // rest runs only where the test fails, so it is that branch of
+            // the test, and sees what the test takes apart (inty narrows
+            // what follows an exit by the test's facts).
+            Stmt::If {
+                test,
+                consequent,
+                alternate: None,
+                ..
+            } if !last && pattern(test).is_some() && exits(consequent) => self.test(
+                test,
+                |cx| cx.branch(consequent, tail),
+                |cx| cx.stmts(rest, tail, falls_off),
+            ),
             // A program ending in a statement other than an expression
             // has no value inty types (it types it `undefined`).
             s if last && tail == Tail::Program && !matches!(s, Stmt::Expr { .. }) => {
@@ -375,6 +392,9 @@ impl Cx {
         let sum = match &ann {
             Some(Ann::Mono(t)) if t.starts_with("(variant") => Some(Sum::Variant),
             Some(Ann::Mono(t)) if t.starts_with("(sum") => Some(Sum::Typeof),
+            Some(Ann::Mono(t)) if t.starts_with("(nullable") || t.starts_with("(optional") => {
+                Some(Sum::Maybe)
+            }
             Some(_) => None,
             None => match &d.init {
                 Some(Expr::Ident { name, .. }) => self.binder(name).ok().and_then(|(_, b)| b.sum),
@@ -501,10 +521,35 @@ impl Cx {
     fn test(
         &mut self,
         test: &Expr,
-        yes: impl FnOnce(&mut Self) -> Lowered,
-        no: impl FnOnce(&mut Self) -> Lowered,
+        yes: impl Fn(&mut Self) -> Lowered,
+        no: impl Fn(&mut Self) -> Lowered,
     ) -> Lowered {
         match pattern(test) {
+            Some(Pattern::Truthy { name, negated }) => {
+                let (i, b) = self.binder(name)?;
+                if b.sum != Some(Sum::Maybe) {
+                    return self.plain_test(test, yes, no);
+                }
+                self.tested(&b);
+                // `x ? truthy : falsy` on a sum of nothing is
+                // `unwrap x falsy (x' ? truthy : falsy)`: `truthy` sees
+                // `x`'s value; `falsy` runs once either way, and sees `x`
+                // as it is, as inty's does.
+                let (truthy, falsy): (&Branch<Self>, &Branch<Self>) =
+                    if negated { (&no, &yes) } else { (&yes, &no) };
+                let none = falsy(self)?;
+                self.push_sum(Some(name), Kind::Shadow, None);
+                let some = truthy(self);
+                self.pop(1);
+                let some = some?;
+                self.push(None, Kind::Const);
+                let other = falsy(self);
+                self.pop(1);
+                Ok(format!(
+                    "(unwrap (var {i}) {none} (cond (var 0) {some} {}))",
+                    other?
+                ))
+            }
             Some(Pattern::Nothing { name, negated }) => {
                 let (i, b) = self.binder(name)?;
                 self.tested(&b);
@@ -805,21 +850,22 @@ impl Cx {
                         self.expr(right)?
                     ))
                 }
-                // inty types `a && b` of two types as their union, which the
-                // model's `?:` hasn't: only booleans, both sides.
-                BinOp::And | BinOp::Or if !boolean(left) || !boolean(right) => {
-                    unsupported("`&&` or `||` on what isn't a boolean")
-                }
                 // A test on the left (a boolean): `a && b` is `a ? b : false`,
                 // so `b` sees what `a` takes apart.
-                BinOp::And | BinOp::Or if pattern(left).is_some() => {
+                BinOp::And | BinOp::Or
+                    if matches!(pattern(left), Some(p) if !matches!(p, Pattern::Truthy { .. }))
+                        && boolean(right) =>
+                {
                     if *op == BinOp::And {
                         self.test(left, |cx| cx.expr(right), |_| Ok("(bool false)".into()))
                     } else {
                         self.test(left, |_| Ok("(bool true)".into()), |cx| cx.expr(right))
                     }
                 }
-                // Otherwise `const t = a; t ? b : t` (`t ? t : b` for `||`).
+                // Otherwise `const t = a; t ? b : t` (`t ? t : b` for `||`),
+                // whose branches have one type, or an expected type pushed
+                // into each; inty's union of two known types (`c && obj`)
+                // is the model's waiting `Join`, not yet in it.
                 BinOp::And | BinOp::Or => {
                     let a = self.expr(left)?;
                     self.push(None, Kind::Const);
@@ -904,7 +950,13 @@ impl Cx {
             }
             Expr::Tuple { .. } => unsupported("a tuple"),
             Expr::NewTarget { .. } => unsupported("`new.target`"),
-            Expr::NullishCoalesce { .. } => unsupported("`??`"),
+            // `a ?? b` is `unwrap a b x`: `a`'s value if it isn't nothing,
+            // else `b`'s.
+            Expr::NullishCoalesce { left, right, .. } => {
+                let a = self.expr(left)?;
+                let b = self.expr(right)?;
+                Ok(format!("(unwrap {a} {b} (var 0))"))
+            }
             Expr::Spread { .. } => unsupported("a spread"),
             Expr::RestArray { .. } | Expr::RestRow { .. } => unsupported("destructuring"),
             Expr::TemplateLiteral { .. } => unsupported("a template literal"),
@@ -1080,6 +1132,24 @@ fn boolean(e: &Expr) -> bool {
     }
 }
 
+/// Whether a statement always leaves the statements after it: it
+/// returns, throws, breaks or continues on every path (as inty's
+/// `always_exits` reads it).
+fn exits(s: &Stmt) -> bool {
+    match s {
+        Stmt::Return { .. } | Stmt::Throw { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {
+            true
+        }
+        Stmt::Block { body, .. } => body.iter().any(exits),
+        Stmt::If {
+            consequent,
+            alternate: Some(alt),
+            ..
+        } => exits(consequent) && exits(alt),
+        _ => false,
+    }
+}
+
 /// The names a statement declares in its block.
 fn declared(s: &Stmt) -> Vec<String> {
     match s {
@@ -1147,9 +1217,35 @@ enum Pattern<'a> {
         tag: &'a str,
         negated: bool,
     },
+    /// `x` as a test, or `!x` (`negated`): truthy only if not nothing.
+    Truthy { name: &'a str, negated: bool },
 }
 
+/// One branch of a test, lowered in the scope it sees.
+type Branch<'a, S> = dyn Fn(&mut S) -> Lowered + 'a;
+
 fn pattern(test: &Expr) -> Option<Pattern<'_>> {
+    match test {
+        Expr::Ident { name, .. } => {
+            return Some(Pattern::Truthy {
+                name,
+                negated: false,
+            })
+        }
+        Expr::Unary {
+            op: UnaryOp::Not,
+            argument,
+            ..
+        } => {
+            if let Expr::Ident { name, .. } = &**argument {
+                return Some(Pattern::Truthy {
+                    name,
+                    negated: true,
+                });
+            }
+        }
+        _ => {}
+    }
     let Expr::Binary {
         op, left, right, ..
     } = test
@@ -1469,8 +1565,31 @@ mod tests {
             lower("const a = 1; const b = 2; a < b && b < a;").unwrap(),
             "(let (num 1 0) (let (num 2 0) (let (lt (var 1) (var 0)) (cond (var 0) (lt (var 1) (var 2)) (var 0)))))"
         );
-        // inty types `a && b` of a number as a union.
-        assert!(lower("const a = 1; const b = 2; a && b;").is_err());
+        // `a && b` of anything: `const t = a; t ? b : t`.
+        assert_eq!(
+            lower("const a = 1; const b = 2; a && b;").unwrap(),
+            "(let (num 1 0) (let (num 2 0) (let (var 1) (cond (var 0) (var 1) (var 0)))))"
+        );
+        // `??`, and a test of a sum's truthiness.
+        assert_eq!(
+            lower("/** const x: Number | Null */ const x = 1; x ?? 0;").unwrap(),
+            "(letann (nullable number) (num 1 0) (unwrap (var 0) (num 0 0) (var 0)))"
+        );
+        assert_eq!(
+            lower("/** const x: Number | Null */ const x = 1; x ? x - 1 : 0;").unwrap(),
+            "(letann (nullable number) (num 1 0) (unwrap (var 0) (num 0 0) \
+             (cond (var 0) (minus (var 0) (num 1 0)) (num 0 0))))"
+        );
+        // An early exit: what follows is the branch the test doesn't take.
+        assert_eq!(
+            lower(
+                "/** const x: Number | Null */ const x = 1; \
+                 function f() { if (x == null) { return 0; } return x - 1; } f();"
+            )
+            .unwrap(),
+            "(letann (nullable number) (num 1 0) (let (func 0 (unwrap (var 2) (ret (num 0 0)) \
+             (ret (minus (var 0) (num 1 0))))) (app (var 0))))"
+        );
         assert!(lower("\"a\" < \"b\";").is_err());
     }
 }

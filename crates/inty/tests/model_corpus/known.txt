@@ -14,3 +14,12 @@
 # never in inty, which joins with anything; in the model it returns
 # undefined.
 (let (func 0 (seq (while (bool true) (undef)) (undef))) (let (cond (bool true) (app (var 0)) (num 1 0)) (let (minus (var 0) (num 1 0)) (undef))))
+
+# `&&` or `||` of two types: inty types it as what can come out (`"s" &&
+# []` is an array; `false || "s"` is `false` or a string), the model's
+# `const t = a; t ? b : t` gives both branches one type (the waiting
+# `Join`, docs/sum-types-design.md).
+(let (str s:F%20%207I7xRvS) (cond (var 0) (arr) (var 0)))
+(let (undef) (cond (var 0) (var 0) (bool true)))
+(let (bool false) (cond (var 0) (var 0) (str s:xuP9s%20JyV)))
+(let (bool true) (cond (var 0) (neg (num 488 0)) (var 0)))

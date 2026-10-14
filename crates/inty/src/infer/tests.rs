@@ -5520,7 +5520,17 @@ fn spread_of_an_operand_not_known_yet_waits_for_it() {
     // signature it carries as absent doesn't make it a function's (the
     // differential test found `{...{...o}}` refused a store).
     let src = "function k(o) { const r = {...{...o}}; r.c = 5; return r; } k({c: 1}).c - 1;";
-    assert!(infer_program_via_program(src).is_ok());
+    assert!(infer_program_via_program(src).is_ok()); // Its result is an object even before the operand is known: it can't
+                                                     // be called (the differential test found it callable).
+    let src = "function f(o) { return ({...o})(1); }";
+    assert!(infer_program_via_program(src).is_err()); // A spread whose result flows back into its operand (`x = {...x}`)
+                                                      // isn't a cycle (the differential test found the unifier giving up).
+    for src in [
+        "let x = [][0]; x = {...{a: \"\"}, ...x};",
+        "const o = {b: [][0], m() { this.b = {...{a: \"\"}, ...this.b}; return this; }}; o.m();",
+    ] {
+        assert!(infer_program_via_program(src).is_ok(), "{src}");
+    }
 }
 
 #[test]
@@ -5530,4 +5540,20 @@ fn instance_holding_its_own_factory_is_a_recursive_type() {
     let src = "function f6() { class C7 { constructor() { this.c = f6; } \
                get g() { return this; } } return new C7(); } const h = f6().g.c; h().g;";
     assert!(infer_program_via_program(src).is_ok());
+}
+
+#[test]
+fn a_body_that_never_completes_returns_any_type() {
+    // It gives no value, so its result is a type variable the binding
+    // generalises, as the Lean model has it: it joins with any other
+    // function's (`never` joined with none).
+    for src in [
+        "const f = function () { throw 1; }; const g = function () { return 1; }; \
+         const h = true ? f : g; h() - 1;",
+        "const f = function () { throw 1; }; const xs = [f, function () { return \"s\"; }];",
+        "function apply(k) { return k(); } apply(function () { throw 1; }) + 1;",
+        "function f() { throw 1; } f() - 1; f().length;",
+    ] {
+        assert!(infer_program_via_program(src).is_ok(), "{src}");
+    }
 }

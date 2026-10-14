@@ -380,6 +380,13 @@ impl InferState {
                         );
                         row_tail = RowTail::Open(result.clone());
                         waiting_spread = Some(result);
+                        // A spread's result is an object: no call
+                        // signature, whatever the operand turns out to be
+                        // (as `merge_spread` makes the operand's absent).
+                        props.insert(
+                            PropName(crate::types::CALLABLE_KEY.to_string()),
+                            FieldEntry::absent(self.fresh_type_var()),
+                        );
                     } else {
                         let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
                         let merged = self.merge_spread(*spread_span, so_far, spread_row)?;
@@ -452,7 +459,14 @@ impl InferState {
         }
         let spread_row = self.coerce_to_row(&operand, span)?;
         let so_far_row = self.coerce_to_row(so_far, span)?;
-        let merged = self.merge_spread(span, so_far_row, spread_row)?;
+        let mut merged = self.merge_spread(span, so_far_row, spread_row)?;
+        // The literal's row holds the absent call signature beside
+        // `result` (its tail), so `result` doesn't: kept, it would meet
+        // the operand's tail, which may be `result`'s own (`x = {...x}`),
+        // in a cycle.
+        merged
+            .props
+            .remove(&PropName(crate::types::CALLABLE_KEY.to_string()));
         let merged = match merged.tail {
             RowTail::Open(var) => RowType::open_entries(merged.props, var),
             _ => RowType::closed_entries(merged.props),
