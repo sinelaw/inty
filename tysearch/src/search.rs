@@ -402,7 +402,11 @@ pub fn search_con<L: Language>(
         }
         s.chosen.push(best);
     }
-    lap("selected");
+    lap(&format!(
+        "selected ({} forgets, memo {})",
+        sem.forgets,
+        sem.memo_size()
+    ));
     s.best_refuted = refuted
         .into_iter()
         .min_by_key(|(r, _)| (r.constants(), std::cmp::Reverse(r.vars().len())));
@@ -650,7 +654,11 @@ fn binder_sources<L: Language>(
                 };
                 let mut fits = Vec::new();
                 for (k, &bk) in c.binds.iter().enumerate() {
-                    if bk == 0 && k != i && oracle.eval(&node.kids[k]) == Outcome::Value(v.clone())
+                    if bk == 0
+                        && k != i
+                        && oracle
+                            .lang
+                            .same_outcome(&oracle.eval(&node.kids[k]), &Outcome::Value(v.clone()))
                     {
                         fits.push(Source::Child(k));
                     }
@@ -667,11 +675,12 @@ fn binder_sources<L: Language>(
                     let mut env = vec![v.clone()];
                     env.extend(args.iter().cloned());
                     if let Outcome::Value(r) = oracle.eval_in(&t.term, &env) {
-                        if r == v {
+                        let same = |x: &L::Value, y: &L::Value| oracle.lang.same(x, y);
+                        if same(&r, &v) {
                             fits.push(Source::Node);
                         }
                         for (m, a) in args.iter().enumerate() {
-                            if *a == r && args.iter().filter(|x| *x == a).count() == 1 {
+                            if same(a, &r) && args.iter().filter(|x| same(x, a)).count() == 1 {
                                 fits.push(Source::Arg(m));
                             }
                         }
@@ -906,6 +915,32 @@ fn observe<L: Language>(
     out
 }
 
+/// Runs open `t` on copies of `env`, its variables of types `beta`: the
+/// outcome, or `None` if the run left a variable outside its type (Kripke
+/// monotonicity: a premise about a body is about what it does to its
+/// variables, too).
+fn run_keeping<L: Language>(
+    oracle: &mut Oracle<L>,
+    sem: &mut Semantics<L::Value>,
+    t: &Term,
+    env: &[L::Value],
+    beta: &[Ty],
+) -> Option<Outcome<L::Value>> {
+    let env: Vec<L::Value> = env.iter().map(|x| oracle.lang.isolate(x)).collect();
+    let before: Vec<L::Value> = env.iter().map(|x| oracle.lang.isolate(x)).collect();
+    let o = oracle.eval_shared(t, &env);
+    // Only a variable the run changed needs checking again.
+    for ((x, b), ty) in env.iter().zip(&before).zip(beta) {
+        if !oracle.lang.same(x, b) {
+            sem.forget(x);
+            if !sem.holds(oracle, x, ty) {
+                return None;
+            }
+        }
+    }
+    Some(o)
+}
+
 /// Environments binding variables of types `beta` to sampled members:
 /// the same samples wherever the same types are tested.
 fn envs<L: Language>(
@@ -945,7 +980,12 @@ fn open_types<L: Language>(
             .collect();
         envs.extend(first);
     }
-    let outcomes: Vec<Outcome<L::Value>> = envs.iter().map(|e| oracle.eval_in(t, e)).collect();
+    let mut outcomes = Vec::new();
+    for e in &envs {
+        // A run that leaves a bound variable outside its type breaks the
+        // premise just as getting stuck does.
+        outcomes.push(run_keeping(oracle, sem, t, e, beta)?);
+    }
     if outcomes.iter().any(Outcome::is_stuck) {
         return None;
     }
@@ -1214,8 +1254,8 @@ pub fn falsify<L: Language>(
                     let t = &open[rng.below(open.len())];
                     let ok = !es.is_empty()
                         && es.iter().all(|e| {
-                            let o = oracle.eval_in(t, e);
-                            sem.in_e(oracle, &o, &want)
+                            run_keeping(oracle, sem, t, e, &beta)
+                                .is_some_and(|o| sem.in_e(oracle, &o, &want))
                         });
                     if ok {
                         fit.push((t.clone(), None));
@@ -1233,20 +1273,34 @@ pub fn falsify<L: Language>(
         product(&refs, &mut Vec::new(), &mut |kids| {
             nodes.push(kids.to_vec())
         });
+        let premises: Vec<Ty> = rule
+            .kids
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| c.binds[*k] == 0)
+            .map(|(_, p)| subst(&p.ty, &theta))
+            .collect();
         for kids in nodes.into_iter().take(27) {
-            // Closed children refer to the environment by slot, under no
-            // binders, so unshifted.
-            let env: Vec<L::Value> = kids.iter().filter_map(|(_, v)| v.clone()).collect();
-            let terms: Vec<Term> = kids.into_iter().map(|(t, _)| t).collect();
+            let terms: Vec<Term> = kids.iter().map(|(t, _)| t.clone()).collect();
             for atom in c.atoms_or_none() {
+                // Closed children refer to the environment by slot, under
+                // no binders, so unshifted. The node runs on copies it may
+                // store into, which are then checked again: a rule must
+                // also keep its children in their types (Kripke
+                // monotonicity), or `set : (Ref<a>, b) -> b` would pass.
+                let env: Vec<L::Value> = kids
+                    .iter()
+                    .filter_map(|(_, v)| v.as_ref().map(|v| oracle.lang.isolate(v)))
+                    .collect();
+                let before: Vec<L::Value> = env.iter().map(|v| oracle.lang.isolate(v)).collect();
                 let node = Term {
                     con: rule.con,
                     atom,
                     kids: terms.clone(),
                 };
-                let o = oracle.eval_in(&node, &env);
+                let o = oracle.eval_shared(&node, &env);
+                let vals: Vec<String> = env.iter().map(|v| oracle.lang.show_value(v)).collect();
                 if !sem.in_e(oracle, &o, &want) {
-                    let vals: Vec<String> = env.iter().map(|v| oracle.lang.show_value(v)).collect();
                     return Some(format!(
                         "{} with x0.. = [{}] gives {:?}, not a {:?}",
                         oracle.lang.show_term(&node),
@@ -1254,6 +1308,20 @@ pub fn falsify<L: Language>(
                         o,
                         want
                     ));
+                }
+                for ((v, b), p) in env.iter().zip(&before).zip(&premises) {
+                    if oracle.lang.same(v, b) {
+                        continue;
+                    }
+                    sem.forget(v);
+                    if !sem.holds(oracle, v, p) {
+                        return Some(format!(
+                            "{} with x0.. = [{}] leaves a child no longer a {:?}",
+                            oracle.lang.show_term(&node),
+                            vals.join(", "),
+                            p
+                        ));
+                    }
                 }
             }
         }

@@ -16,6 +16,8 @@ pub struct Enumerator<'a> {
     max: usize,
     /// Stop growing a size class past this many terms.
     pub cap: usize,
+    /// If set, only these constructors are used.
+    pub allowed: Option<Vec<bool>>,
 }
 
 impl<'a> Enumerator<'a> {
@@ -25,6 +27,7 @@ impl<'a> Enumerator<'a> {
             memo: Vec::new(),
             max,
             cap: usize::MAX,
+            allowed: None,
         }
     }
 
@@ -50,9 +53,27 @@ impl<'a> Enumerator<'a> {
         let sig = self.sig;
         let cap = self.cap;
         for (ci, c) in sig.iter().enumerate() {
+            if self.allowed.as_ref().is_some_and(|a| !a[ci]) {
+                continue;
+            }
             if c.kind == Kind::Var {
                 if size == 1 {
                     out.extend((0..depth).map(|i| Term::leaf(ci, Atom::Int(i as i64))));
+                }
+                continue;
+            }
+            if c.kind == Kind::Assign {
+                if size >= 2 {
+                    let kids = self.exactly(size - 1, depth).to_vec();
+                    for i in 0..depth {
+                        for k in &kids {
+                            out.push(Term {
+                                con: ci,
+                                atom: Atom::Int(i as i64),
+                                kids: vec![k.clone()],
+                            });
+                        }
+                    }
                 }
                 continue;
             }

@@ -17,6 +17,7 @@ pub mod langs {
     pub mod core;
     pub mod model;
     pub mod pairs;
+    pub mod refs;
     pub mod subtyping;
     pub mod unityped;
 }

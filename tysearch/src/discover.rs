@@ -15,9 +15,9 @@
 //!    can't type measure what it gave up.
 
 use crate::enumerate::{Enumerator, Rng};
-use crate::infer::{Checker, Order};
+use crate::infer::{Checker, Order, Policy};
 use crate::lang::{Atom, Kind, Language, Outcome, Term};
-use crate::search::{search_con, ConSearch, Pools, SearchConfig};
+use crate::search::{search_con, ConSearch, Pools, SearchConfig, Source};
 use crate::semantics::{Oracle, Semantics};
 use crate::types::{lgg, Names, Schema, Ty};
 use std::collections::{HashMap, HashSet};
@@ -35,9 +35,16 @@ pub struct Config {
     pub search: SearchConfig,
     /// All closed terms up to this size check the result...
     pub check_size: usize,
-    /// ...and this many random ones up to `random_size`.
+    /// ...and this many random ones up to `random_size`...
     pub random_terms: usize,
     pub random_size: usize,
+    /// ...and this many generated well typed, of sizes up to `typed_size`
+    /// (also how many try each generalisation policy).
+    pub typed_terms: usize,
+    pub typed_size: usize,
+    /// Child terms whose value is tested in all instances of its type at
+    /// once, to choose a generalisation policy.
+    pub poly_tests: usize,
     pub seed: u64,
 }
 
@@ -52,6 +59,9 @@ impl Default for Config {
             check_size: 4,
             random_terms: 20000,
             random_size: 9,
+            typed_terms: 4000,
+            typed_size: 14,
+            poly_tests: 300,
             seed: 1,
         }
     }
@@ -60,6 +70,8 @@ impl Default for Config {
 pub struct Check {
     pub size: usize,
     pub terms: usize,
+    /// How many of the terms were generated well typed.
+    pub generated: usize,
     pub safe: usize,
     pub typed: usize,
     /// Typed terms that get stuck or give a value of another type.
@@ -87,6 +99,7 @@ pub struct Discovery {
     /// The description lengths of the system without subtyping and, if
     /// tried, with it.
     pub sizes: (usize, Option<usize>),
+    pub generalisation: Generalisation,
     pub check: Check,
     pub evals: usize,
 }
@@ -99,17 +112,7 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
     // 1. The corpus and its values, each with the smallest term giving it.
     let mut en = Enumerator::new(sig, cfg.corpus_size.max(cfg.open_size));
     en.cap = 400_000;
-    let corpus = en.up_to(cfg.corpus_size, 0);
-    let mut pool = Vec::new();
-    let mut origin: HashMap<L::Value, Term> = HashMap::new();
-    for t in &corpus {
-        if let Outcome::Value(v) = oracle.eval(t) {
-            if !origin.contains_key(&v) {
-                origin.insert(v.clone(), t.clone());
-                pool.push(v);
-            }
-        }
-    }
+    let (corpus, pool, origin) = ground(&mut oracle, &mut en, cfg);
     let probes: Vec<L::Value> = pool.iter().take(cfg.probes).cloned().collect();
     let clock = std::time::Instant::now();
     let trace = std::env::var_os("TYSEARCH_TRACE").is_some();
@@ -189,7 +192,7 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         let mut searches = Vec::new();
         let mut rules = Vec::new();
         for (ci, c) in sig.iter().enumerate() {
-            if c.kind == Kind::Var {
+            if c.kind != Kind::Op {
                 continue;
             }
             let s = search_con(oracle, sem, &pools, ci, &cfg.search, rng);
@@ -224,8 +227,31 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         }
     }
 
-    // 4. Check.
-    let check = check(lang, &mut oracle, &mut sem, &rules, cfg, &mut en, &mut rng);
+    // 4. Generalisation: for each binder, the most permissive policy that
+    // typed programs don't refute.
+    let gen = generalise(
+        lang,
+        &mut oracle,
+        &mut sem,
+        &rules,
+        &searches,
+        &corpus,
+        cfg,
+        &mut rng,
+    );
+    note("generalised");
+
+    // 5. Check.
+    let check = check(
+        lang,
+        &mut oracle,
+        &mut sem,
+        &rules,
+        &gen,
+        cfg,
+        &mut en,
+        &mut rng,
+    );
     Discovery {
         language: lang.name().to_string(),
         config: cfg.clone(),
@@ -239,20 +265,20 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         rules,
         subtypes,
         sizes,
+        generalisation: gen,
         check,
         evals: oracle.evals,
     }
 }
 
-fn check<L: Language>(
+/// The checker for a rule set, with the order (if subtyping is on), the
+/// binders' policies and the syntactic values.
+fn checker_for<L: Language>(
     lang: &L,
-    oracle: &mut Oracle<L>,
-    sem: &mut Semantics<L::Value>,
+    sem: &Semantics<L::Value>,
     rules: &[Schema],
-    cfg: &Config,
-    en: &mut Enumerator,
-    rng: &mut Rng,
-) -> Check {
+    gen: &Generalisation,
+) -> Checker {
     let mut checker = Checker::new(lang.signature(), rules);
     if sem.subtyping {
         let n = sem.count();
@@ -263,6 +289,46 @@ fn check<L: Language>(
                 .collect(),
         });
     }
+    checker.policies = gen.policies.clone();
+    checker.inert = gen.inert.clone();
+    checker
+}
+
+/// Whether running a term typed `types` gave a member of each: a type
+/// with variables claims every instance, tried with the unrefined sorts.
+fn sound_for<L: Language>(
+    oracle: &mut Oracle<L>,
+    sem: &mut Semantics<L::Value>,
+    out: &Outcome<L::Value>,
+    types: &[Ty],
+) -> bool {
+    let bases: Vec<Ty> = sem
+        .universe
+        .iter()
+        .filter(|t| matches!(t, Ty::Base(_)))
+        .cloned()
+        .collect();
+    types.iter().all(|ty| {
+        let mut vs = Vec::new();
+        ty.vars(&mut vs);
+        ground_instances(ty, &vs, &bases)
+            .iter()
+            .all(|g| sem.in_e(oracle, out, g))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check<L: Language>(
+    lang: &L,
+    oracle: &mut Oracle<L>,
+    sem: &mut Semantics<L::Value>,
+    rules: &[Schema],
+    gen: &Generalisation,
+    cfg: &Config,
+    en: &mut Enumerator,
+    rng: &mut Rng,
+) -> Check {
+    let checker = checker_for(lang, sem, rules, gen);
     let mut terms = Enumerator::new(lang.signature(), cfg.check_size);
     terms.cap = en.cap;
     let mut terms = terms.up_to(cfg.check_size, 0);
@@ -273,15 +339,20 @@ fn check<L: Language>(
             terms.push(t);
         }
     }
-    let bases: Vec<Ty> = sem
-        .universe
-        .iter()
-        .filter(|t| matches!(t, Ty::Base(_)))
-        .cloned()
-        .collect();
+    // And programs well typed by construction (T2).
+    let mut generated = 0;
+    for k in 0..cfg.typed_terms {
+        if let Some(t) = checker.generate(rng, 3 + k % cfg.typed_size) {
+            if seen.insert(t.clone()) {
+                terms.push(t);
+                generated += 1;
+            }
+        }
+    }
     let mut c = Check {
         size: cfg.check_size,
         terms: terms.len(),
+        generated,
         safe: 0,
         typed: 0,
         unsound: 0,
@@ -307,16 +378,7 @@ fn check<L: Language>(
             continue;
         }
         c.typed += 1;
-        // A type with variables claims every instance: try each with the
-        // unrefined sorts.
-        let good = types.iter().all(|ty| {
-            let mut vs = Vec::new();
-            ty.vars(&mut vs);
-            ground_instances(ty, &vs, &bases)
-                .iter()
-                .all(|g| sem.in_e(oracle, &out, g))
-        });
-        if !good {
+        if !sound_for(oracle, sem, &out, &types) {
             c.unsound += 1;
             if c.violations.len() < 5 {
                 c.violations.push(format!(
@@ -329,6 +391,338 @@ fn check<L: Language>(
         }
     }
     c
+}
+
+/// How each binder's variables are generalised, and why.
+#[derive(Clone, Default)]
+pub struct Generalisation {
+    pub policies: HashMap<(usize, usize, usize), (Policy, usize)>,
+    pub inert: Vec<bool>,
+    /// Per policy tried: the binder, the policy, programs it typed that
+    /// the next stricter one didn't, and a typed program that got stuck.
+    pub trials: Vec<((usize, usize, usize), Policy, usize, Option<String>)>,
+}
+
+/// Which constructors make syntactic values: those that, given children
+/// that would get stuck, still give a value, so run none of them.
+fn inert<L: Language>(lang: &L) -> Vec<bool> {
+    let sig = lang.signature();
+    let var = sig.iter().position(|c| c.kind == Kind::Var);
+    sig.iter()
+        .enumerate()
+        .map(|(ci, c)| match c.kind {
+            Kind::Var => true,
+            Kind::Assign => false,
+            Kind::Op => {
+                let Some(var) = var else { return c.arity == 0 };
+                let stuck = Term::leaf(var, Atom::Int(1_000));
+                let node = Term {
+                    con: ci,
+                    atom: c.atoms_or_none()[0].clone(),
+                    kids: vec![stuck; c.arity],
+                };
+                matches!(lang.eval(&node), Outcome::Value(_))
+            }
+        })
+        .collect()
+}
+
+/// The corpus, the values it reaches, and the smallest term giving each.
+type Ground<V> = (Vec<Term>, Vec<V>, HashMap<V, Term>);
+
+fn ground<L: Language>(
+    oracle: &mut Oracle<L>,
+    en: &mut Enumerator,
+    cfg: &Config,
+) -> Ground<L::Value> {
+    let corpus = en.up_to(cfg.corpus_size, 0);
+    let mut pool = Vec::new();
+    let mut origin: HashMap<L::Value, Term> = HashMap::new();
+    for t in &corpus {
+        if let Outcome::Value(v) = oracle.eval(t) {
+            if !origin.contains_key(&v) {
+                origin.insert(v.clone(), t.clone());
+                pool.push(v);
+            }
+        }
+    }
+    (corpus, pool, origin)
+}
+
+/// Whether `t`, typed by `d`'s rules with its binders generalising
+/// always, has a value in every instance of its type at once: the test
+/// that chooses generalisation policies, on a term of one's choosing (the
+/// semantics rebuilt as `discover` builds it, so the sorts agree).
+pub fn generalisable<L: Language>(lang: &L, cfg: &Config, d: &Discovery, t: &Term) -> Option<bool> {
+    let mut oracle = Oracle::new(lang);
+    let mut en = Enumerator::new(lang.signature(), cfg.corpus_size.max(cfg.open_size));
+    en.cap = 400_000;
+    let (_, pool, _) = ground(&mut oracle, &mut en, cfg);
+    let probes: Vec<L::Value> = pool.iter().take(cfg.probes).cloned().collect();
+    let mut sem = Semantics::discover(&mut oracle, &pool, &probes, cfg.samples_per_type);
+    if !d.subtypes.is_empty() {
+        sem.set_subtyping(true);
+    }
+    let mut gen = d.generalisation.clone();
+    for p in gen.policies.values_mut() {
+        p.0 = Policy::Always;
+    }
+    let checker = checker_for(lang, &sem, &d.rules, &gen);
+    let ty = checker.types(t).into_iter().find(|ty| !ty.is_ground())?;
+    let Outcome::Value(v) = oracle.eval(t) else {
+        return None;
+    };
+    Some(poly_member(
+        &mut oracle,
+        &mut sem,
+        &d.rules,
+        &v,
+        &ty,
+        64,
+        &mut Rng(cfg.seed),
+    ))
+}
+
+/// Whether `v` is in every instance of `ty` at once: used again and again,
+/// each time at an instance chosen at random, by a rule that takes that
+/// instance (an eliminator, but also, say, a store into a reference), its
+/// other children sampled from their types, and each result checked, all
+/// without starting over. A pure value passes as it would one instance at a
+/// time; one over a fresh mutable cell fails once a use at one instance
+/// sees what a use at another stored. That difference is the value
+/// restriction's reason.
+fn poly_member<L: Language>(
+    oracle: &mut Oracle<L>,
+    sem: &mut Semantics<L::Value>,
+    rules: &[Schema],
+    v: &L::Value,
+    ty: &Ty,
+    rounds: usize,
+    rng: &mut Rng,
+) -> bool {
+    let sig = oracle.lang.signature();
+    let Some(var) = sig.iter().position(|c| c.kind == Kind::Var) else {
+        return true;
+    };
+    let bases: Vec<Ty> = sem
+        .universe
+        .iter()
+        .filter(|t| matches!(t, Ty::Base(_)))
+        .cloned()
+        .collect();
+    let mut vars = Vec::new();
+    ty.vars(&mut vars);
+    // The uses: a rule without binders, and a child of it to put `v` in.
+    let uses: Vec<(&Schema, usize)> = rules
+        .iter()
+        .filter(|r| r.kids.iter().all(|k| k.bound.is_empty()))
+        .flat_map(|r| (0..r.kids.len()).map(move |p| (r, p)))
+        .collect();
+    let mut tried = 0;
+    for _ in 0..rounds * 8 {
+        if tried >= rounds || uses.is_empty() {
+            break;
+        }
+        let sigma: HashMap<u32, Ty> = vars
+            .iter()
+            .map(|&x| (x, bases[rng.below(bases.len())].clone()))
+            .collect();
+        let want = crate::types::subst(ty, &sigma);
+        let (rule, p) = uses[rng.below(uses.len())];
+        // Fresh variables above any in `ty`.
+        let mut u = crate::types::Unifier::default();
+        u.next = 1_000_000;
+        let r = u.instantiate(rule);
+        if !u.unify(&r.kids[p].ty, &want) {
+            continue;
+        }
+        // The rule's other variables, at random sorts.
+        let mut rest = Vec::new();
+        for k in &r.kids {
+            u.resolve(&k.ty).vars(&mut rest);
+        }
+        u.resolve(&r.res).vars(&mut rest);
+        for x in rest {
+            let b = bases[rng.below(bases.len())].clone();
+            u.unify(&Ty::Var(x), &b);
+        }
+        // The other children are sampled, and samples of a higher-order
+        // type (functions of functions) are too few to trust: a sampled
+        // `g` passes as taking any `(bool) => a` though it calls it on 0.
+        if r.kids
+            .iter()
+            .enumerate()
+            .any(|(k, prem)| k != p && u.resolve(&prem.ty).depth() > 1)
+        {
+            continue;
+        }
+        let mut env = Vec::new();
+        let mut kids = Vec::new();
+        let mut ok = true;
+        for (k, prem) in r.kids.iter().enumerate() {
+            let value = if k == p {
+                v.clone()
+            } else {
+                let samples = sem.samples(oracle, &u.resolve(&prem.ty));
+                if samples.is_empty() {
+                    ok = false;
+                    break;
+                }
+                oracle.lang.isolate(&samples[rng.below(samples.len())])
+            };
+            kids.push(Term::leaf(var, Atom::Int(env.len() as i64)));
+            env.push(value);
+        }
+        if !ok {
+            continue;
+        }
+        tried += 1;
+        let atoms = sig[rule.con].atoms_or_none();
+        let node = Term {
+            con: rule.con,
+            atom: atoms[0].clone(),
+            kids,
+        };
+        // `v` itself, not a copy: the uses share its state.
+        let o = oracle.eval_shared(&node, &env);
+        if !sem.in_e(oracle, &o, &u.resolve(&r.res)) {
+            if std::env::var_os("TYSEARCH_TRACE").is_some() {
+                let vals: Vec<String> = env.iter().map(|v| oracle.lang.show_value(v)).collect();
+                eprintln!(
+                    "    not in all instances: {} on [{}] gives {:?}, not a {:?}",
+                    oracle.lang.show_term(&node),
+                    vals.join(", "),
+                    o,
+                    u.resolve(&r.res)
+                );
+            }
+            return false;
+        }
+    }
+    true
+}
+
+/// For each bound variable whose value is a child's, the most permissive
+/// generalisation the semantics supports. A policy generalises some of the
+/// child terms (all of them, or the syntactic values); it is refuted by one
+/// whose value, typed with free variables, is not in all their instances
+/// at once (`Semantics::holds_poly`), and it is worth having only if it
+/// generalises some. The child terms tried are the corpus and programs
+/// generated well typed.
+fn generalise<L: Language>(
+    lang: &L,
+    oracle: &mut Oracle<L>,
+    sem: &mut Semantics<L::Value>,
+    rules: &[Schema],
+    searches: &[ConSearch],
+    corpus: &[Term],
+    cfg: &Config,
+    rng: &mut Rng,
+) -> Generalisation {
+    let mut gen = Generalisation {
+        inert: inert(lang),
+        ..Default::default()
+    };
+    let mut binders = Vec::new();
+    for s in searches {
+        for (i, srcs) in s.sources.iter().enumerate() {
+            for (j, src) in srcs.iter().enumerate() {
+                if let Source::Child(k) = src {
+                    binders.push(((s.con, i, j), *k));
+                }
+            }
+        }
+    }
+    if binders.is_empty() {
+        return gen;
+    }
+    // Candidate child terms, with a type that has free variables.
+    let checker = checker_for(lang, sem, rules, &gen);
+    let clock = std::time::Instant::now();
+    let mut inits: Vec<Term> = corpus.to_vec();
+    for n in 0..cfg.typed_terms {
+        inits.extend(checker.generate(rng, 3 + n % cfg.typed_size));
+    }
+    if std::env::var_os("TYSEARCH_TRACE").is_some() {
+        eprintln!(
+            "    generated initialisers in {:.2}s",
+            clock.elapsed().as_secs_f64()
+        );
+    }
+    // Per candidate: whether it is a syntactic value, and whether its value
+    // is in every instance of its type at once.
+    let mut verdicts: Vec<(bool, bool, Term, Ty)> = Vec::new();
+    let mut typing = 0.0;
+    // Non-values first (only they can tell `Always` from `IfValue`), small
+    // first, and a bounded number: each test runs many uses.
+    let mut seen = HashSet::new();
+    inits.retain(|t| seen.insert(t.clone()));
+    inits.sort_by_key(|t| (gen.inert[t.con], t.size()));
+    let mut tested = 0;
+    for t in inits {
+        if tested >= cfg.poly_tests {
+            break;
+        }
+        // A value of an unrefined sort has a ground type: nothing to
+        // generalise, and no need to type it.
+        let Outcome::Value(v) = oracle.eval(&t) else {
+            continue;
+        };
+        if sem
+            .sort(oracle, &v)
+            .is_none_or(|s| sem.templates[s].is_empty())
+        {
+            continue;
+        }
+        let t0 = std::time::Instant::now();
+        let Some(ty) = checker
+            .types(&t)
+            .into_iter()
+            .find(|ty| !ty.is_ground() && ty.depth() <= 2)
+        else {
+            continue;
+        };
+        typing += t0.elapsed().as_secs_f64();
+        tested += 1;
+        let ok = poly_member(oracle, sem, rules, &v, &ty, 16, rng);
+        verdicts.push((gen.inert[t.con], ok, t, ty));
+    }
+    if std::env::var_os("TYSEARCH_TRACE").is_some() {
+        eprintln!(
+            "    tested {} in {:.2}s ({typing:.2}s typing)",
+            verdicts.len(),
+            clock.elapsed().as_secs_f64()
+        );
+    }
+    for (key, k) in binders {
+        let mut chosen = Policy::Never;
+        for policy in [Policy::Always, Policy::IfValue] {
+            let applies = |value: bool| policy == Policy::Always || value;
+            let gained = verdicts
+                .iter()
+                .filter(|(value, ..)| applies(*value))
+                .count();
+            let bad = verdicts
+                .iter()
+                .filter(|(value, ok, ..)| applies(*value) && !ok)
+                .min_by_key(|(_, _, t, _)| t.size());
+            let why = bad.map(|(_, _, t, ty)| {
+                format!(
+                    "{} has type {:?} but is not in all its instances",
+                    lang.show_term(t),
+                    ty
+                )
+            });
+            let ok = why.is_none() && gained > 0;
+            gen.trials.push((key, policy, gained, why));
+            if ok {
+                chosen = policy;
+                break;
+            }
+        }
+        gen.policies.insert(key, (chosen, k));
+    }
+    gen
 }
 
 fn ground_instances(t: &Ty, vars: &[u32], bases: &[Ty]) -> Vec<Ty> {
@@ -356,6 +750,16 @@ pub fn random_term(sig: &[crate::lang::Con], rng: &mut Rng, size: usize, depth: 
         if c.kind == Kind::Var {
             if depth > 0 {
                 return Term::leaf(ci, Atom::Int(rng.below(depth) as i64));
+            }
+            continue;
+        }
+        if c.kind == Kind::Assign {
+            if depth > 0 && size >= 2 {
+                return Term {
+                    con: ci,
+                    atom: Atom::Int(rng.below(depth) as i64),
+                    kids: vec![random_term(sig, rng, size - 1, depth)],
+                };
             }
             continue;
         }
@@ -477,6 +881,27 @@ impl fmt::Display for Discovery {
                 }
             }
         }
+        if !self.generalisation.trials.is_empty() {
+            writeln!(f, "\ngeneralisation (does each term's value inhabit every instance of its type at once?):")?;
+            for ((con, i, j), policy, gained, why) in &self.generalisation.trials {
+                write!(
+                    f,
+                    "  {} child {i}, x{j}: {policy:?} would generalise {gained} terms",
+                    self.con_names[*con]
+                )?;
+                match why {
+                    Some(w) => writeln!(f, "; refuted: {w}")?,
+                    None => writeln!(f)?,
+                }
+            }
+            for ((con, i, j), (policy, _)) in &self.generalisation.policies {
+                writeln!(
+                    f,
+                    "  => {} child {i}, x{j}: {policy:?}",
+                    self.con_names[*con]
+                )?;
+            }
+        }
         writeln!(f, "\nsearch:")?;
         for s in &self.searches {
             write!(
@@ -492,8 +917,8 @@ impl fmt::Display for Discovery {
         let c = &self.check;
         writeln!(
             f,
-            "\nend-to-end check on {} terms (all of size <= {}, and random ones up to {}):",
-            c.terms, c.size, self.config.random_size
+            "\nend-to-end check on {} terms (all of size <= {}, random ones up to {}, and {} generated well typed):",
+            c.terms, c.size, self.config.random_size, c.generated
         )?;
         writeln!(f, "  safe terms:           {}", c.safe)?;
         writeln!(f, "  typed terms:          {}", c.typed)?;

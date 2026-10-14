@@ -52,12 +52,15 @@ impl Term {
 }
 
 /// What kind of constructor: an ordinary one, whose typing rule the search
-/// looks for, or the variable, whose rule (look the variable up in the
-/// context) every type system with binders shares.
+/// looks for; the variable, whose rule (look the variable up in the
+/// context) every type system with binders shares; or assignment to the
+/// variable its payload names, `x = e`, whose rule is as fixed: `e` has
+/// the variable's type, which must not be generalised.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Op,
     Var,
+    Assign,
 }
 
 /// A term constructor. A literal family (`num`, `str`) has arity 0 and the
@@ -111,6 +114,17 @@ impl Con {
             binds: Vec::new(),
             atoms: Vec::new(),
             kind: Kind::Var,
+        }
+    }
+
+    /// `x_i = e`, the variable's index as the payload.
+    pub fn assign() -> Con {
+        Con {
+            name: "assign",
+            arity: 1,
+            binds: vec![0],
+            atoms: Vec::new(),
+            kind: Kind::Assign,
         }
     }
 
@@ -183,10 +197,35 @@ pub trait Language {
         self.eval_in(t, &[])
     }
 
+    /// A copy of `v` with state of its own: new cells holding copies of the
+    /// old ones' contents. Each run the search makes starts from copies, so
+    /// what one run stores can't leak into the next, or into the pool of
+    /// values the search keeps (a test that stores into a reference
+    /// shouldn't change the reference everyone else samples).
+    fn isolate(&self, v: &Self::Value) -> Self::Value {
+        v.clone()
+    }
+
+    /// Whether two values are the same as far as the search can tell: `==`
+    /// unless the language's values have identity (cells) that `==` sees
+    /// and the search shouldn't (two closures made by two runs of one
+    /// term are the same closure).
+    fn same(&self, a: &Self::Value, b: &Self::Value) -> bool {
+        a == b
+    }
+
+    fn same_outcome(&self, a: &Outcome<Self::Value>, b: &Outcome<Self::Value>) -> bool {
+        match (a, b) {
+            (Outcome::Value(x), Outcome::Value(y)) => self.same(x, y),
+            (a, b) => a == b,
+        }
+    }
+
     fn show_term(&self, t: &Term) -> String {
         let c = &self.signature()[t.con];
         let head = match (&t.atom, c.kind) {
             (Atom::Int(n), Kind::Var) => format!("x{n}"),
+            (Atom::Int(n), Kind::Assign) => format!("x{n} ="),
             (Atom::None, _) => c.name.to_string(),
             (Atom::Int(n), _) => n.to_string(),
             (Atom::Str(s), _) => format!("{s:?}"),

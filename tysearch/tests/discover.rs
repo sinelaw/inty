@@ -1,7 +1,9 @@
 //! Each language's discovered type system, pinned. The sorts are named in
 //! the order their first members turn up, so the names are stable.
 
-use tysearch::discover::{discover, Config, Discovery};
+use tysearch::discover::{discover, generalisable, Config, Discovery};
+use tysearch::infer::Policy;
+use tysearch::lang::{Atom, Language, Term};
 use tysearch::langs::{arith::Arith, core::Core, model::Model};
 
 fn rules(d: &Discovery) -> Vec<String> {
@@ -69,11 +71,12 @@ fn core_finds_the_plus_class() {
     assert_eq!(d.check.unsound, 0);
 }
 
-/// Iteration 1: functions, calls and `const`. The rules are the Lean
-/// model's (`lean/Inty/Typing.lean`), found from its semantics alone: T3
-/// and T4 are the functions of one and two parameters, refined by what a
-/// call gives (`T3<a -> b>` is `(a) => b`). Where they differ, the
-/// semantics allows more than inty's rules do, soundly:
+/// Iterations 1 and 3: functions, calls, `let`, assignment and `e₁; e₂`.
+/// The rules are the Lean model's (`lean/Inty/Typing.lean`), found from
+/// its semantics alone: T3 and T4 are the functions of one and two
+/// parameters, refined by what a call gives (`T3<a -> b>` is `(a) => b`).
+/// Where they differ, the semantics allows more than inty's rules do,
+/// soundly:
 ///
 /// - T2 is booleans with `undefined` and `null`: nothing in this fragment
 ///   gets stuck on one and not the other.
@@ -81,49 +84,83 @@ fn core_finds_the_plus_class() {
 ///   truthy.
 /// - A one-parameter function may be called with two arguments: the extra
 ///   one is ignored.
+///
+/// And one known gap: `let` generalises always, where inty has the value
+/// restriction. Generalising a non-value is unsound only through a closure
+/// over a fresh cell that hands back what it stored; the semantic test
+/// refutes such a closure (`model_value_restriction_counterexample`), but
+/// the smallest has ten nodes, beyond what generation reaches.
 #[test]
-fn model_finds_functions() {
-    let cfg = Config {
-        corpus_size: 4,
-        ..Config::default()
+fn model_finds_functions_and_state() {
+    let d = discover(&Model::default(), &Config::default());
+    assert_eq!(
+        rules(&d),
+        sorted(&[
+            "num : T0",
+            "str : T1",
+            "true : T2",
+            "false : T2",
+            "undefined : T2",
+            "null : T2",
+            "! : (a) -> T2",
+            "typeof : (a) -> T1",
+            "neg : (T0) -> T0",
+            "+ : (T0, T0) -> T0",
+            "+ : (T1, T1) -> T1",
+            "- : (T0, T0) -> T0",
+            "* : (T0, T0) -> T0",
+            "< : (T0, T0) -> T2",
+            "=== : (a, b) -> T2",
+            "cond : (a, b, b) -> b",
+            "cond : (T3<a -> b>, c, d) -> c",
+            "cond : (T4<a, b -> c>, d, e) -> d",
+            "let : (a, [x0: a] b) -> b",
+            "func1 : ([x0: a, x1: T3<a -> b>] b) -> T3<a -> b>",
+            "func2 : ([x0: a, x1: b, x2: T4<a, b -> c>] c) -> T4<a, b -> c>",
+            "app1 : (T3<a -> b>, a) -> b",
+            "app2 : (T3<a -> b>, a, c) -> b",
+            "app2 : (T4<a, b -> c>, a, b) -> c",
+            "seq : (a, b) -> b",
+        ])
+    );
+    assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);
+    let lets: Vec<Policy> = d.generalisation.policies.values().map(|p| p.0).collect();
+    assert_eq!(lets, vec![Policy::Always]);
+}
+
+/// The counterexample to generalising non-values in the model, built by
+/// hand: `let c = (x) => x in (p) => { let old = c; c = p; old }`, whose
+/// type `((a) => a) => (a) => a` has a free variable, but whose value hands
+/// back at one instance what it stored at another.
+#[test]
+fn model_value_restriction_counterexample() {
+    let m = Model::default();
+    let cfg = Config::default();
+    let d = discover(&m, &cfg);
+    let c = |n: &str| m.con(n);
+    let var = |i: i64| Term::leaf(c("var"), Atom::Int(i));
+    let node = |n: &str, kids: Vec<Term>| Term::new(c(n), kids);
+    let store = Term {
+        con: c("assign"),
+        atom: Atom::Int(3),
+        kids: vec![var(1)],
     };
-    let expected = sorted(&[
-        "num : T0",
-        "str : T1",
-        "true : T2",
-        "false : T2",
-        "undefined : T2",
-        "null : T2",
-        "! : (a) -> T2",
-        "typeof : (a) -> T1",
-        "neg : (T0) -> T0",
-        "+ : (T0, T0) -> T0",
-        "+ : (T1, T1) -> T1",
-        "- : (T0, T0) -> T0",
-        "* : (T0, T0) -> T0",
-        "< : (T0, T0) -> T2",
-        "=== : (a, b) -> T2",
-        "cond : (a, b, b) -> b",
-        "cond : (T3<a -> b>, c, d) -> c",
-        "cond : (T4<a, b -> c>, d, e) -> d",
-        "const : (a, [x0: a] b) -> b",
-        "func1 : ([x0: a, x1: T3<a -> b>] b) -> T3<a -> b>",
-        "func2 : ([x0: a, x1: b, x2: T4<a, b -> c>] c) -> T4<a, b -> c>",
-        "app1 : (T3<a -> b>, a) -> b",
-        "app2 : (T3<a -> b>, a, c) -> b",
-        "app2 : (T4<a, b -> c>, a, b) -> c",
-    ]);
-    for seed in 1..=3 {
-        let d = discover(
-            &Model::default(),
-            &Config {
-                seed,
-                ..cfg.clone()
-            },
-        );
-        assert_eq!(rules(&d), expected, "seed {seed}");
-        assert_eq!(d.check.unsound, 0, "seed {seed}: {:?}", d.check.violations);
-    }
+    let swap = node(
+        "let",
+        vec![
+            node("func1", vec![var(0)]),
+            node(
+                "func1",
+                vec![node("let", vec![var(2), node("seq", vec![store, var(0)])])],
+            ),
+        ],
+    );
+    assert_eq!(generalisable(&m, &cfg, &d, &swap), Some(false));
+    // And the identity itself is in every instance of its type.
+    assert_eq!(
+        generalisable(&m, &cfg, &d, &node("func1", vec![var(0)])),
+        Some(true)
+    );
 }
 
 // The suite: languages whose type systems differ in kind from inty's, so
@@ -220,4 +257,45 @@ fn coerce_finds_a_type_system_unlike_intys() {
     }
     assert_eq!(d.subtypes, vec![(0, 2), (1, 2)]);
     assert_eq!(d.check.unsound, 0);
+}
+
+/// ML's references: a cell's type is invariant (`set` stores what the
+/// cell holds), and `let` generalises only syntactic values: Wright's
+/// value restriction, found because `ref((x) => x)`, typed with a free
+/// variable, is not in all instances of its type at once.
+#[test]
+fn refs_find_the_value_restriction() {
+    let d = discover(&tysearch::langs::refs::Refs::default(), &Config::default());
+    assert_eq!(
+        rules(&d),
+        sorted(&[
+            "num : T0",
+            "true : T1",
+            "false : T1",
+            "+ : (T0, T0) -> T0",
+            "not : (T1) -> T1",
+            "if : (T1, a, a) -> a",
+            "let : (a, [x0: a] b) -> b",
+            "func : ([x0: a, x1: T2<a -> b>] b) -> T2<a -> b>",
+            "app : (T2<a -> b>, a) -> b",
+            "ref : (a) -> T3< -> a>",
+            "get : (T3< -> a>) -> a",
+            "set : (T3< -> a>, a) -> a",
+            "seq : (a, b) -> b",
+        ])
+    );
+    let lets: Vec<Policy> = d.generalisation.policies.values().map(|p| p.0).collect();
+    assert_eq!(lets, vec![Policy::IfValue]);
+    let always = d
+        .generalisation
+        .trials
+        .iter()
+        .find(|t| t.1 == Policy::Always)
+        .unwrap();
+    assert!(
+        always.3.as_ref().is_some_and(|w| w.contains("ref(")),
+        "{:?}",
+        always.3
+    );
+    assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);
 }

@@ -110,13 +110,80 @@ booleans with nothing are the top, since they are accepted only by
 operators that take anything. But the system with subtyping is longer (65
 against 59), so the search keeps the one without, as before.
 
+## 3. State and let-polymorphism
+
+**Model.** Variables live in cells, as in the Lean model's environment.
+`const` becomes `let`, since the model types the two alike. There is now
+assignment `x = e`, which closures see, and `e₁; e₂`. The suite gains `refs`:
+ML's `ref`, `get` and `set`, with `let` and functions.
+
+**Generalisation is a policy per binder.** For each bound variable whose
+value is a child's, the choice is to generalise that child's type never,
+only when the child is a syntactic value (one that runs none of its
+children: a constructor that, given children that would get stuck, still
+gives a value), or always. A generalisable variable may also be used
+monomorphically, and only a monomorphic one may be assigned, as in the Lean
+model.
+
+A policy is judged semantically. Take a child term whose type has free
+variables. Its value must be in every instance of that type at once. The
+test (`poly_member`) uses the value again and again, each time at a random
+instance, through any rule that takes that instance: a call, but also a
+store into a reference. It never starts over, and checks each result
+against its instance.
+
+- A pure value passes.
+- A reference, or a closure over a fresh cell, fails once a use at one
+  instance sees what a use at another stored.
+
+The search keeps the most permissive policy that no tested term refutes.
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| Closures with cells were never equal, so the function sort was refined by `app2` too | `Language::same`: a structural comparison to a bounded depth |
+| Tests stored into the pool's references (`ref 0` came to hold a function) | Every run gets copies with cells of their own (`Language::isolate`). The tests about state share explicitly (`eval_shared`) |
+| `set : (Ref<a>, b) -> b` passed every local test | **Kripke monotonicity.** A run must leave the values it was given in their types: checked for the children `falsify` gives a node, for the variables a premise binds, and for the arguments when testing a refined type's members. The result: `set : (T3< -> a>, a) -> a`, invariant |
+| A function counted as taking `Ref<num>` though it stored a boolean there | The same check, in membership |
+| Generated programs never used a generalised variable at two types, so no policy could be justified | Policies are judged by the semantic test above, not by generated programs |
+| A sampled `g : ((bool) => a) => num` calls its argument on 0, and refuted generalising a function that diverges | The polymorphism test samples only first-order values for the other children |
+| A string doubled through recursion ran out of memory | Strings past 4096 characters count as running out of fuel, as in the Lean model's driver |
+| Minutes spent forgetting what was known of values a run had changed | The membership memo is keyed by value first, so forgetting is a single removal. Only a value that actually changed is re-checked |
+
+**Found.**
+
+- **`refs`:** exactly ML's system. Formation and use of references are
+  `ref : (a) -> T3< -> a>`, `get : (T3< -> a>) -> a` and
+  `set : (T3< -> a>, a) -> a`. `let` uses the **value restriction**:
+  "always" is refuted by `ref((x) => 1)`, typed `Ref<(a) => num>`, whose
+  value is not in all those instances at once.
+- **`model`:** the rules of iteration 1, with `let` in place of `const`,
+  and `seq : (a, b) -> b`. No typed term gets stuck, among all terms up to
+  size 4, 20,000 random ones, and about 1,500 generated well typed.
+
+**Known gap.** In the model, `let` generalises always, where inty
+generalises only syntactic values. In the model, generalising a non-value
+is unsound only through a closure over a fresh cell that hands back at one
+instance what it stored at another:
+
+```
+let c = (x) => x in (p) => { let old = c; c = p; old }
+```
+
+The semantic test refutes it
+(`tests/discover.rs: model_value_restriction_counterexample`). But it has
+ten nodes, and neither random generation (60,000 terms) nor exhaustive
+enumeration (too slow beyond size 5) reaches it. With references the
+counterexample is three nodes, and the search finds the restriction.
+
 ## Next
 
-- **Let-polymorphism,** then mutable `let` and assignment: the value
-  restriction (DESIGN.md §8.2).
+- **Reach the model's value restriction:** generation aimed at state that
+  outlives its initialiser, or a symbolic argument.
 - **Statements:** `return`, `throw`, `try` and loops, with faults and
   abrupt completions.
 - **Objects and arrays:** refinement by an eliminator per field label, which
   gives rows. Records with width subtyping go in the suite too.
-- **More of the suite:** a language whose conditional takes only booleans
-  but whose `==` coerces; one with sum types and a tag test.
+- **Speed:** the model takes about three minutes now, mostly attacking
+  rules under the state checks.

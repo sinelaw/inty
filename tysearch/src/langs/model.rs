@@ -3,19 +3,22 @@
 //! iteration (ITERATIONS.md) adds features here, then improves the search
 //! until it finds their typing rules.
 //!
-//! So far (iteration 1): the literals, `!`, `typeof` and unary `-`, the
-//! binary operators `+` (numbers or strings), `-`, `*`, `<` (numbers) and
-//! `===` (anything), the conditional (read by truthiness, so any test),
-//! `const` bindings, and functions of one and two parameters that can call
-//! themselves, with calls that ignore extra arguments and get stuck on
-//! missing ones, as the model's do.
+//! So far: the literals, `!`, `typeof` and unary `-`, the binary operators
+//! `+` (numbers or strings), `-`, `*`, `<` (numbers) and `===` (anything),
+//! the conditional (read by truthiness, so any test), and functions of one
+//! and two parameters that can call themselves, with calls that ignore
+//! extra arguments and get stuck on missing ones, as the model's do
+//! (iteration 1); and variables in cells, as the model's environment holds
+//! them: `let`, assignment `x = e`, which closures see, and `e₁; e₂`
+//! (iteration 3).
 //!
 //! Variables are de Bruijn indices. In a function's body `var(i)` is
 //! parameter `i` for `i` below the arity, and `var(arity)` is the function
 //! itself, as in the model.
 
 use crate::lang::{Atom, Con, Language, Outcome, Term};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 pub struct Model {
@@ -45,12 +48,42 @@ const FUNC2: usize = 17;
 const APP1: usize = 18;
 const APP2: usize = 19;
 const VAR: usize = 20;
+const ASSIGN: usize = 21;
+const SEQ: usize = 22;
+
+/// A variable's cell. Two are equal only if they are the same cell.
+#[derive(Clone, Debug)]
+pub struct Slot(Rc<RefCell<Val>>);
+
+impl Slot {
+    fn new(v: Val) -> Slot {
+        Slot(Rc::new(RefCell::new(v)))
+    }
+
+    fn get(&self) -> Val {
+        self.0.borrow().clone()
+    }
+}
+
+impl PartialEq for Slot {
+    fn eq(&self, other: &Slot) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Slot {}
+
+impl Hash for Slot {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (Rc::as_ptr(&self.0) as usize).hash(h)
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Closure {
     pub arity: usize,
     pub body: Term,
-    pub env: Vec<Val>,
+    pub env: Vec<Slot>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -69,6 +102,41 @@ fn num(f: f64) -> Val {
 }
 
 impl Val {
+    /// Structural equality, cells compared by their contents to a bounded
+    /// depth (an assigned cell can hold a closure over itself).
+    fn same(&self, other: &Val, depth: usize) -> bool {
+        match (self, other) {
+            (Val::Clo(a), Val::Clo(b)) => {
+                Rc::ptr_eq(a, b)
+                    || (a.arity == b.arity
+                        && a.body == b.body
+                        && a.env.len() == b.env.len()
+                        && (depth == 0
+                            || a.env
+                                .iter()
+                                .zip(&b.env)
+                                .all(|(x, y)| x == y || x.get().same(&y.get(), depth - 1))))
+            }
+            (a, b) => a == b,
+        }
+    }
+
+    /// A copy whose closures have cells of their own, to a bounded depth.
+    fn isolate(&self, depth: usize) -> Val {
+        match self {
+            Val::Clo(c) if depth > 0 => Val::Clo(Rc::new(Closure {
+                arity: c.arity,
+                body: c.body.clone(),
+                env: c
+                    .env
+                    .iter()
+                    .map(|s| Slot::new(s.get().isolate(depth - 1)))
+                    .collect(),
+            })),
+            v => v.clone(),
+        }
+    }
+
     /// JavaScript truthiness, as `Value.truthy` in the model.
     fn truthy(&self) -> bool {
         match self {
@@ -111,12 +179,14 @@ impl Default for Model {
                 Con::op("<", 2),
                 Con::op("===", 2),
                 Con::op("cond", 3),
-                Con::binder("const", vec![0, 1]),
+                Con::binder("let", vec![0, 1]),
                 Con::binder("func1", vec![2]),
                 Con::binder("func2", vec![3]),
                 Con::op("app1", 2),
                 Con::op("app2", 3),
                 Con::var(),
+                Con::assign(),
+                Con::op("seq", 2),
             ],
             fuel: 64,
         }
@@ -124,9 +194,9 @@ impl Default for Model {
 }
 
 impl Model {
-    fn ev(&self, t: &Term, env: &[Val], fuel: &Cell<usize>) -> Outcome<Val> {
+    fn ev(&self, t: &Term, env: &[Slot], fuel: &Cell<usize>) -> Outcome<Val> {
         use Outcome::Value;
-        let kid = |i: usize, env: &[Val]| self.ev(&t.kids[i], env, fuel).from_inside();
+        let kid = |i: usize, env: &[Slot]| self.ev(&t.kids[i], env, fuel).from_inside();
         macro_rules! value {
             ($e:expr) => {
                 match $e {
@@ -149,9 +219,21 @@ impl Model {
             UNDEFINED => Value(Val::Undefined),
             NULL => Value(Val::Null),
             VAR => match t.atom {
-                Atom::Int(i) if (i as usize) < env.len() => Value(env[i as usize].clone()),
+                Atom::Int(i) if (i as usize) < env.len() => Value(env[i as usize].get()),
                 _ => Outcome::stuck("undefinedVariable"),
             },
+            ASSIGN => match t.atom {
+                Atom::Int(i) if (i as usize) < env.len() => {
+                    let v = value!(kid(0, env));
+                    *env[i as usize].0.borrow_mut() = v.clone();
+                    Value(v)
+                }
+                _ => Outcome::stuck("undefinedVariable"),
+            },
+            SEQ => {
+                value!(kid(0, env));
+                kid(1, env)
+            }
             NOT => Value(Val::Bool(!value!(kid(0, env)).truthy())),
             TYPEOF => Value(Val::Str(
                 match value!(kid(0, env)) {
@@ -173,6 +255,12 @@ impl Model {
                 let b = value!(kid(1, env));
                 match (t.con, &a, &b) {
                     (EQ, a, b) => Value(Val::Bool(a.strict_eq(b))),
+                    // A string doubled call after call outgrows memory long
+                    // before the fuel runs out; past a bound, it counts as
+                    // out of fuel (the Lean model's driver does the same).
+                    (PLUS, Val::Str(x), Val::Str(y)) if x.len() + y.len() > 4096 => {
+                        Outcome::Timeout
+                    }
                     (PLUS, Val::Str(x), Val::Str(y)) => Value(Val::Str(format!("{x}{y}"))),
                     (_, Val::Num(x), Val::Num(y)) => {
                         let (x, y) = (f64::from_bits(*x), f64::from_bits(*y));
@@ -195,7 +283,7 @@ impl Model {
             }
             LET => {
                 let v = value!(kid(0, env));
-                let mut inner = vec![v];
+                let mut inner = vec![Slot::new(v)];
                 inner.extend_from_slice(env);
                 kid(1, &inner)
             }
@@ -221,8 +309,8 @@ impl Model {
                 }
                 fuel.set(fuel.get() - 1);
                 // Extra arguments are ignored, as in JavaScript.
-                let mut inner: Vec<Val> = args[..c.arity].to_vec();
-                inner.push(f.clone());
+                let mut inner: Vec<Slot> = args[..c.arity].iter().cloned().map(Slot::new).collect();
+                inner.push(Slot::new(f.clone()));
                 inner.extend_from_slice(&c.env);
                 self.ev(&c.body, &inner, fuel).from_inside()
             }
@@ -235,7 +323,7 @@ impl Language for Model {
     type Value = Val;
 
     fn name(&self) -> &str {
-        "model (inty's Lean model, iteration 1: functions and const)"
+        "model (inty's Lean model, iteration 3: functions, let, assignment)"
     }
 
     fn signature(&self) -> &[Con] {
@@ -243,7 +331,16 @@ impl Language for Model {
     }
 
     fn eval_in(&self, t: &Term, env: &[Val]) -> Outcome<Val> {
-        self.ev(t, env, &Cell::new(self.fuel))
+        let slots: Vec<Slot> = env.iter().cloned().map(Slot::new).collect();
+        self.ev(t, &slots, &Cell::new(self.fuel))
+    }
+
+    fn same(&self, a: &Val, b: &Val) -> bool {
+        a.same(b, 3)
+    }
+
+    fn isolate(&self, v: &Val) -> Val {
+        v.isolate(6)
     }
 
     fn show_value(&self, v: &Val) -> String {

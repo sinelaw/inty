@@ -52,10 +52,12 @@ impl<'a, L: Language> Oracle<'a, L> {
         }
     }
 
+    /// Runs `t` on copies of `env` (`Language::isolate`).
     pub fn eval_in(&mut self, t: &Term, env: &[L::Value]) -> Outcome<L::Value> {
         self.evals += 1;
         if !self.caching {
-            return self.lang.eval_in(t, env);
+            let env: Vec<L::Value> = env.iter().map(|v| self.lang.isolate(v)).collect();
+            return self.lang.eval_in(t, &env);
         }
         let key = (t.clone(), env.to_vec());
         if let Some(o) = self.cache.get(&key) {
@@ -68,6 +70,13 @@ impl<'a, L: Language> Oracle<'a, L> {
 
     pub fn eval(&mut self, t: &Term) -> Outcome<L::Value> {
         self.eval_in(t, &[])
+    }
+
+    /// Runs `t` on `env` itself, so that what it stores stays stored: for
+    /// the tests that are about state.
+    pub fn eval_shared(&mut self, t: &Term, env: &[L::Value]) -> Outcome<L::Value> {
+        self.evals += 1;
+        self.lang.eval_in(t, env)
     }
 }
 
@@ -94,7 +103,9 @@ pub struct Semantics<V> {
     contexts: Vec<Ctx<V>>,
     by_print: HashMap<Vec<bool>, usize>,
     sort_memo: HashMap<V, Option<usize>>,
-    holds_memo: HashMap<(V, Ty), bool>,
+    /// Per value, what is known of its types: one entry per value, so a
+    /// value a run stored into is forgotten at once.
+    holds_memo: HashMap<V, HashMap<Ty, bool>>,
     samples_memo: HashMap<Ty, Vec<V>>,
     behaviour_memo: HashMap<V, Vec<i64>>,
     /// Values per sort, smallest first.
@@ -111,6 +122,7 @@ pub struct Semantics<V> {
     pub le: Vec<Vec<bool>>,
     /// Whether a sort's type includes its subsorts' values.
     pub subtyping: bool,
+    pub forgets: usize,
 }
 
 /// Builds `con` with child `hole` the variable `var(0)` and the others
@@ -144,7 +156,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         let has_var = sig.iter().any(|c| c.kind == Kind::Var);
         let mut contexts = Vec::new();
         for (ci, c) in sig.iter().enumerate() {
-            if c.kind == Kind::Var || c.arity == 0 || !has_var {
+            if c.kind != Kind::Op || c.arity == 0 || !has_var {
                 continue;
             }
             for hole in 0..c.arity {
@@ -173,6 +185,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
             samples_per_type,
             le: Vec::new(),
             subtyping: false,
+            forgets: 0,
         };
         for v in pool {
             let print = sem.fingerprint(oracle, v);
@@ -341,7 +354,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                         }
                         let long = oracle.eval_in(&out[j].term, &Self::env(m, a));
                         let short = oracle.eval_in(&out[i].term, &Self::env(m, &a[..out[i].k]));
-                        if long != short {
+                        if !oracle.lang.same_outcome(&long, &short) {
                             same = false;
                             break 'check;
                         }
@@ -412,7 +425,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
 
     /// Whether `v` is in ground type `t`.
     pub fn holds<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>, v: &V, t: &Ty) -> bool {
-        if let Some(b) = self.holds_memo.get(&(v.clone(), t.clone())) {
+        if let Some(b) = self.holds_memo.get(v).and_then(|m| m.get(t)) {
             return *b;
         }
         let b = match t {
@@ -438,14 +451,41 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                                 envs.push(Self::env(v, xs))
                             });
                             envs.into_iter().take(81).all(|env| {
-                                let o = oracle.eval_in(&tmpl.term, &env);
+                                // On copies, so that what the run stores into
+                                // its arguments can be checked: a member must
+                                // leave each argument in its type (Kripke
+                                // monotonicity), or a function that stores a
+                                // boolean into a number reference would pass
+                                // as taking number references.
+                                let env: Vec<V> =
+                                    env.iter().map(|x| oracle.lang.isolate(x)).collect();
+                                let o = oracle.eval_shared(&tmpl.term, &env);
                                 self.in_e(oracle, &o, res)
+                                    && env[1..].iter().zip(args).all(|(x, a)| {
+                                        !matches!(a, Ty::Ref(..)) || {
+                                            self.forget(x);
+                                            self.holds(oracle, x, a)
+                                        }
+                                    })
                             })
                         })
             }
         };
-        self.holds_memo.insert((v.clone(), t.clone()), b);
+        self.holds_memo
+            .entry(v.clone())
+            .or_default()
+            .insert(t.clone(), b);
         b
+    }
+
+    /// Forgets what is known of `v`'s types: after a run stored into it.
+    pub fn memo_size(&self) -> usize {
+        self.holds_memo.len()
+    }
+
+    pub fn forget(&mut self, v: &V) {
+        self.forgets += 1;
+        self.holds_memo.remove(v);
     }
 
     /// Whether an outcome is good for ground type `t`: a value of it, an
