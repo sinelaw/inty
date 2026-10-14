@@ -217,6 +217,21 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         fault_kinds,
     };
     note(&format!("{} representatives", pools.reps.len()));
+    // `unknown` is a type only where something binds a value of no known
+    // source: otherwise no term has it, and a rule's variables don't range
+    // over it (`==` on two values of one type is not for two unknowns).
+    let mut probe_rng = Rng(cfg.seed ^ 0x5EED_0F_70B);
+    let unknown = (0..sig.len()).any(|ci| {
+        sig[ci].kind == Kind::Op
+            && sig[ci].binds.iter().any(|&b| b > 0)
+            && crate::search::binder_sources(&mut oracle, &mut sem, &pools, ci, &mut probe_rng)
+                .iter()
+                .flatten()
+                .any(|s| *s == crate::search::Source::Unknown)
+    });
+    if !unknown {
+        sem.universe.retain(|t| *t != Ty::Top);
+    }
 
     // 3. Search, without subtyping and, if the fingerprints order any
     // sorts, with it; keep the shorter system (the one without, on a tie).
@@ -288,7 +303,7 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
                         match t {
                             Ty::Base(s) => w[*s],
                             Ty::Var(_) | Ty::Top | Ty::Never => false,
-                            Ty::Ref(_, ps) => ps.iter().any(|p| has(p, w)),
+                            Ty::Ref(_, ps) | Ty::Union(ps) => ps.iter().any(|p| has(p, w)),
                         }
                     }
                     has(t, &widened)
@@ -378,6 +393,9 @@ fn checker_for<L: Language>(
     }
     checker.policies = gen.policies.clone();
     checker.inert = gen.inert.clone();
+    for (r, vs) in &gen.no_unions {
+        checker.set_no_unions(r, vs);
+    }
     checker
 }
 
@@ -515,6 +533,9 @@ pub struct Generalisation {
     /// Per policy tried: the binder, the policy, programs it typed that
     /// the next stricter one didn't, and a typed program that got stuck.
     pub trials: Vec<Trial>,
+    /// Per rule, the variables that may not stand for unions (the
+    /// search's).
+    pub no_unions: Vec<(Schema, Vec<u32>)>,
 }
 
 /// Which constructors make syntactic values: those that, given children
@@ -760,6 +781,11 @@ fn generalise<L: Language>(
 ) -> Generalisation {
     let mut gen = Generalisation {
         inert: inert(lang),
+        no_unions: searches
+            .iter()
+            .flat_map(|s| s.chosen.iter().cloned().zip(s.no_unions.iter().cloned()))
+            .filter(|(_, vs)| !vs.is_empty())
+            .collect(),
         ..Default::default()
     };
     let mut binders = Vec::new();
@@ -838,7 +864,7 @@ fn generalise<L: Language>(
                 match t {
                     Ty::Var(v) => out.push(*v),
                     Ty::Base(_) | Ty::Top | Ty::Never => {}
-                    Ty::Ref(_, ps) => ps.iter().for_each(|p| all(p, out)),
+                    Ty::Ref(_, ps) | Ty::Union(ps) => ps.iter().for_each(|p| all(p, out)),
                 }
             }
             all(ty, &mut vs);
@@ -1148,8 +1174,21 @@ impl fmt::Display for Discovery {
             if s.chosen.is_empty() {
                 writeln!(f, "  {} : (no rule; not typable)", self.con_names[s.con])?;
             }
-            for r in &s.chosen {
-                writeln!(f, "  {}", names.schema(r))?;
+            for (i, r) in s.chosen.iter().enumerate() {
+                let no = s.no_unions.get(i).filter(|vs| !vs.is_empty());
+                match no {
+                    Some(vs) => {
+                        let vs: Vec<String> =
+                            vs.iter().map(|v| crate::types::var_name(*v)).collect();
+                        writeln!(
+                            f,
+                            "  {}  ({} may not be a union)",
+                            names.schema(r),
+                            vs.join(", ")
+                        )?
+                    }
+                    None => writeln!(f, "  {}", names.schema(r))?,
+                }
             }
             if let Some((r, cols)) = (s.chosen.len() > 1).then(|| lgg(&s.chosen)).flatten() {
                 let vs = r.vars();

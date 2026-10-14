@@ -458,6 +458,16 @@ func1  : ([x0: a, x1: T3<a -> b>] b (return b)) -> T3<a -> b>
 
 At the top there is nothing to return from: the exit type is `never`.
 
+### 8.6 Unions
+
+A rule's variable may stand for a union of types where the attacks don't
+break the rule when it does: `cond : (a, b, b) -> b` with `b` as
+`T0 | T1`, but not `== : (a, a) -> T2` when `1 == "a"` is stuck. The
+checker widens a variable to a union when a child doesn't fit it. It does
+so only for a variable at the top of two or more children's types, and in
+no other premise, since a child typed against a structure holding it saw
+it narrower.
+
 ---
 
 ## 9. Connecting tysearch to inty
@@ -512,7 +522,7 @@ test that pins it.
 | M3 (in part) | L3: field labels as eliminators; containers | Records, and reads overloaded as `HasProp` (iteration 5); arrays (iteration 6) |
 | M3s (done) | Statements: abrupt completions, `unknown`, exit types (§8.5) | The Lean model's `throw`, `try`, loops (iteration 7) and `return` with its `R` (iteration 8) |
 | M4 | inty adapters (model wire format, `dynamics`); the corpus; comparison report | A diff of the discovered system against `HasType` on the model's fragment, with every disagreement explained or filed |
-| M5 (in part) | Subtyping from the fingerprint order (done: iteration 2); the Pareto frontier in output; L4 unions | `Int <: Float` (done); a frontier plot for `core`, from unions to no unions |
+| M5 (in part) | Subtyping from the fingerprint order (done: iteration 2); unions, for the variables the attacks allow (done: iteration 9); the Pareto frontier in output | `Int <: Float`, `cond : (a, b, b) -> b` with `b` a union (done); a frontier plot for `core`, from unions to no unions |
 | M6 | T4: Lean export of `HasType`, with a proof template | Soundness of the M1 system proved in Lean |
 
 ---

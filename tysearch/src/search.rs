@@ -137,6 +137,9 @@ pub struct ConSearch {
     /// Candidates the greedy cover picked but `falsify` refuted.
     pub falsified: usize,
     pub chosen: Vec<Schema>,
+    /// Per rule chosen, the variables that may not stand for a union of
+    /// types: those the attacks break the rule with when they do.
+    pub no_unions: Vec<Vec<u32>>,
     /// The most general refuted candidate, and why.
     pub best_refuted: Option<(Schema, String)>,
 }
@@ -300,6 +303,7 @@ pub fn search_con<L: Language>(
         refuted: 0,
         falsified: 0,
         chosen: Vec::new(),
+        no_unions: Vec::new(),
         best_refuted: None,
     };
     let mut sound: Vec<(Schema, Vec<(usize, Ty)>)> = Vec::new();
@@ -471,7 +475,16 @@ pub fn search_con<L: Language>(
             .into_iter()
             .map(|i| obs[i].node.clone())
             .collect();
-        if let Some(why) = falsify(oracle, sem, pools, &best, &examples, cfg, rng) {
+        if let Some(why) = falsify(
+            oracle,
+            sem,
+            pools,
+            &best,
+            &examples,
+            &HashMap::new(),
+            cfg,
+            rng,
+        ) {
             if std::env::var_os("TYSEARCH_TRACE").is_some() {
                 eprintln!("    falsified {:?}: {why}", best);
             }
@@ -519,11 +532,17 @@ pub fn search_con<L: Language>(
             res: Ty::Var(n),
             exit: None,
         };
-        match falsify(oracle, sem, pools, &r, &[], cfg, rng) {
+        match falsify(oracle, sem, pools, &r, &[], &HashMap::new(), cfg, rng) {
             None => s.chosen.push(r),
             Some(why) => refuted.push((r, why)),
         }
     }
+    s.no_unions = s
+        .chosen
+        .clone()
+        .iter()
+        .map(|r| no_union_vars(oracle, sem, pools, r, cfg, rng))
+        .collect();
     lap(&format!(
         "selected ({} forgets, memo {})",
         sem.forgets,
@@ -756,6 +775,7 @@ fn skeleton(s: &Schema) -> Schema {
             Ty::Never => Ty::Never,
             Ty::Var(v) => Ty::Var(*v),
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(blank).collect()),
+            Ty::Union(ts) => Ty::Union(ts.iter().map(blank).collect()),
         }
     }
     Schema {
@@ -911,6 +931,46 @@ fn exit_flow<L: Language>(
     Some(ExitFlow { caught, origin })
 }
 
+/// The variables of `r` that may not stand for a union of two types: those
+/// the attacks break the rule with when they do (`== : (a, a) -> T2` where
+/// `1 == "a"` is stuck).
+fn no_union_vars<L: Language>(
+    oracle: &mut Oracle<L>,
+    sem: &mut Semantics<L::Value>,
+    pools: &Pools,
+    r: &Schema,
+    cfg: &SearchConfig,
+    rng: &mut Rng,
+) -> Vec<u32> {
+    let bases: Vec<Ty> = sem
+        .universe
+        .iter()
+        .filter(|t| matches!(t, Ty::Base(_)))
+        .cloned()
+        .collect();
+    let mut out = Vec::new();
+    for v in r.vars() {
+        let quick = SearchConfig {
+            attacks: cfg.attacks / 6,
+            ..cfg.clone()
+        };
+        let mut ok = true;
+        'pairs: for (i, a) in bases.iter().enumerate() {
+            for b in &bases[i + 1..] {
+                let fixed: HashMap<u32, Ty> = [(v, Ty::union(a, b))].into_iter().collect();
+                if falsify(oracle, sem, pools, r, &[], &fixed, &quick, rng).is_some() {
+                    ok = false;
+                    break 'pairs;
+                }
+            }
+        }
+        if !ok {
+            out.push(v);
+        }
+    }
+    out
+}
+
 fn c_arity<L: Language>(oracle: &Oracle<L>, con: usize) -> usize {
     oracle.lang.signature()[con].arity
 }
@@ -921,7 +981,7 @@ fn var_con(sig: &[crate::lang::Con]) -> usize {
 
 /// Where each bound variable's value comes from, found by making the child
 /// the variable itself.
-fn binder_sources<L: Language>(
+pub fn binder_sources<L: Language>(
     oracle: &mut Oracle<L>,
     sem: &mut Semantics<L::Value>,
     pools: &Pools,
@@ -1655,13 +1715,19 @@ pub fn falsify<L: Language>(
     pools: &Pools,
     rule: &Schema,
     examples: &[Term],
+    fixed: &HashMap<u32, Ty>,
     cfg: &SearchConfig,
     rng: &mut Rng,
 ) -> Option<String> {
     let sig = oracle.lang.signature();
     let c = sig[rule.con].clone();
     let var = var_con(sig);
-    let vars = rule.vars();
+    // The variables to instantiate: all but those `fixed` says.
+    let vars: Vec<u32> = rule
+        .vars()
+        .into_iter()
+        .filter(|v| !fixed.contains_key(v))
+        .collect();
     let u = sem.universe.clone();
     let all: usize = u.len().saturating_pow(vars.len() as u32);
     // Every instantiation with the unrefined sorts first (cheap, and where
@@ -1693,6 +1759,9 @@ pub fn falsify<L: Language>(
                 .map(|&v| (v, u[rng.below(u.len())].clone()))
                 .collect(),
         );
+    }
+    for theta in thetas.iter_mut() {
+        theta.extend(fixed.iter().map(|(v, t)| (*v, t.clone())));
     }
     let returns = pools
         .faults

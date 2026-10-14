@@ -12,6 +12,21 @@ fn rules(d: &Discovery) -> Vec<String> {
     r
 }
 
+/// The rules with variables that may not stand for unions, and those.
+fn no_unions(d: &Discovery) -> Vec<String> {
+    let mut out: Vec<String> = d
+        .generalisation
+        .no_unions
+        .iter()
+        .map(|(r, vs)| {
+            let vs: Vec<String> = vs.iter().map(|v| tysearch::types::var_name(*v)).collect();
+            format!("{}: {}", d.names().schema(r), vs.join(", "))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 fn sorted(rs: &[&str]) -> Vec<String> {
     let mut r: Vec<String> = rs.iter().map(|s| s.to_string()).collect();
     r.sort();
@@ -38,12 +53,15 @@ fn arith_finds_bool_and_nat() {
     );
     assert_eq!(d.check.unsound, 0);
     // The price of compositional types: a conditional whose branches
-    // differ is safe and untyped.
+    // differ is typed by their union, but not where a union won't do
+    // (`succ(if(true, succ(zero), true))`), safe as it is.
     assert!(d.check.untyped_safe > 0);
+    assert!(no_unions(&d).is_empty());
 }
 
 /// `+` is overloaded on numbers and strings: two rules, whose lgg is one
-/// schema over a class, inty's `Plus`.
+/// schema over a class, inty's `Plus`. `==` compares two values of one
+/// type, which can't be a union: `1 == "a"` is stuck.
 #[test]
 fn core_finds_the_plus_class() {
     let d = discover(&Core::default(), &Config::default());
@@ -63,8 +81,10 @@ fn core_finds_the_plus_class() {
             "typeof : (a) -> T1",
             "length : (T1) -> T0",
             "if : (T2, a, a) -> a",
+            "== : (a, a) -> T2",
         ])
     );
+    assert_eq!(no_unions(&d), vec!["== : (a, a) -> T2: a"]);
     let plus = d.search("+");
     let (schema, _) = tysearch::types::lgg(&plus.chosen).unwrap();
     assert_eq!(d.names().schema(&schema.normalize()), "+ : (a, a) -> a");
@@ -168,6 +188,10 @@ fn model_finds_functions_state_and_the_value_restriction() {
         ])
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);
+    // Unions (iteration 9): any variable may stand for one, as in inty:
+    // a conditional's branches, an array's elements, a `try`'s body and
+    // handler may differ.
+    assert!(no_unions(&d).is_empty());
     let lets: Vec<Policy> = d.generalisation.policies.values().map(|p| p.0).collect();
     assert_eq!(lets, vec![Policy::IfValue]);
     let always = d

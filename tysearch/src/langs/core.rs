@@ -6,6 +6,8 @@
 //! the first-order fixture.
 //!
 //! Unlike JavaScript, and like the model, `1 + "a"` and `1 < "a"` are stuck.
+//! So is `1 == "a"`: `==` compares values of one type (`===` any two), so
+//! its operands' type may not be a union.
 
 use crate::lang::{Atom, Con, Language, Outcome, Term};
 
@@ -25,6 +27,7 @@ const TYPEOF: usize = 8;
 const LENGTH: usize = 9;
 const IF: usize = 10;
 const VAR: usize = 11;
+const EQ_STRICT: usize = 12;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Val {
@@ -49,6 +52,7 @@ impl Default for Core {
                 Con::op("length", 1),
                 Con::op("if", 3),
                 Con::var(),
+                Con::op("==", 2),
             ],
         }
     }
@@ -93,6 +97,9 @@ impl Language for Core {
             (MINUS, _, [Num(a), Num(b)]) => Value(Num(a - b)),
             (LT, _, [Num(a), Num(b)]) => Value(Bool(a < b)),
             (EQ, _, [a, b]) => Value(Bool(a == b)),
+            (EQ_STRICT, _, [a, b]) if std::mem::discriminant(a) == std::mem::discriminant(b) => {
+                Value(Bool(a == b))
+            }
             (TYPEOF, _, [v]) => Value(Str(match v {
                 Num(_) => "number",
                 Str(_) => "string",

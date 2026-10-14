@@ -36,6 +36,10 @@ struct Sch {
 
 pub struct Checker {
     by_con: Vec<Vec<Schema>>,
+    /// Per rule (as `by_con`), the variables that may not stand for a
+    /// union, and those a child that doesn't fit may widen to one.
+    no_unions: Vec<Vec<Vec<u32>>>,
+    widen: Vec<Vec<Vec<u32>>>,
     sig: Vec<Con>,
     /// With subtyping, the order on sorts and their joins: a child may
     /// have a subtype of its premise's type, and a variable fixed at a
@@ -56,14 +60,47 @@ pub struct Checker {
     pub assign_weight: usize,
 }
 
+/// The variables of `r` a child that doesn't fit could widen to a union:
+/// those at the top of two or more children's types, and in no premise
+/// otherwise. A child typed against a structure holding one, or under a
+/// binder of its type, saw it narrower.
+fn widenable(r: &Schema) -> Vec<u32> {
+    let mut out = Vec::new();
+    for v in r.vars() {
+        let top = r.kids.iter().filter(|k| k.ty == Ty::Var(v)).count();
+        let mut elsewhere = Vec::new();
+        for k in &r.kids {
+            for t in k.bound.iter().chain(&k.exit) {
+                t.vars(&mut elsewhere);
+            }
+            if k.ty != Ty::Var(v) {
+                k.ty.vars(&mut elsewhere);
+            }
+        }
+        if let Some(x) = &r.exit {
+            x.vars(&mut elsewhere);
+        }
+        if top >= 2 && !elsewhere.contains(&v) {
+            out.push(v);
+        }
+    }
+    out
+}
+
 impl Checker {
     pub fn new(sig: &[Con], rules: &[Schema]) -> Self {
         let mut by_con = vec![Vec::new(); sig.len()];
+        let mut no_unions = vec![Vec::new(); sig.len()];
+        let mut widen = vec![Vec::new(); sig.len()];
         for r in rules {
             by_con[r.con].push(r.clone());
+            no_unions[r.con].push(Vec::new());
+            widen[r.con].push(widenable(r));
         }
         Checker {
             by_con,
+            no_unions,
+            widen,
             sig: sig.to_vec(),
             order: None,
             policies: HashMap::new(),
@@ -89,11 +126,41 @@ impl Checker {
         out
     }
 
+    /// Which variables of `rule` may not stand for unions.
+    pub fn set_no_unions(&mut self, rule: &Schema, vars: &[u32]) {
+        if let Some(i) = self.by_con[rule.con].iter().position(|r| r == rule) {
+            self.no_unions[rule.con][i] = vars.to_vec();
+            self.widen[rule.con][i].retain(|v| !vars.contains(v));
+        }
+    }
+
     /// Whether a child of type `ty` meets premise `prem`: by unification,
-    /// or with subtyping, by subsumption between sorts.
-    fn fits(&self, u: &mut Unifier, ty: &Ty, prem: &Ty) -> bool {
+    /// by subsumption into a union, or with subtyping, between sorts.
+    /// `widen` are the premise's variables that may stand for unions.
+    fn fits(&self, u: &mut Unifier, ty: &Ty, prem: &Ty, widen: &[u32]) -> bool {
         let Some(order) = &self.order else {
-            return u.unify(ty, prem);
+            let mut u2 = u.clone();
+            if u2.unify(ty, prem) {
+                *u = u2;
+                return true;
+            }
+            let (t, p) = (u.resolve(ty), u.resolve(prem));
+            if !t.is_ground() || !p.is_ground() {
+                return false;
+            }
+            // A value of `T1` is one of `T0 | T1`.
+            if t.below(&p) {
+                return true;
+            }
+            // A variable bound to a type directly, by this rule's own
+            // children only, widens to the union.
+            if let Ty::Var(x) = prem {
+                if widen.contains(x) && u.binding(prem).0 == Some(*x) && !u.pointed_to(*x) {
+                    u.rebind(*x, Ty::union(&p, &t));
+                    return true;
+                }
+            }
+            return false;
         };
         let Ty::Base(a) = u.resolve(ty) else {
             return u.unify(ty, prem);
@@ -185,15 +252,26 @@ impl Checker {
                 self.infer(u, ctx, exit, &t.kids[0])
                     .into_iter()
                     .filter_map(|(mut u, ty)| {
-                        self.fits(&mut u, &ty, &s.ty).then_some((u, s.ty.clone()))
+                        self.fits(&mut u, &ty, &s.ty, &[])
+                            .then_some((u, s.ty.clone()))
                     })
                     .collect()
             }
             Kind::Op => {
                 let mut out = Vec::new();
-                for rule in &self.by_con[t.con] {
+                for (ri, rule) in self.by_con[t.con].iter().enumerate() {
                     let mut u = u.clone();
-                    let r = u.instantiate(rule);
+                    let (r, names) = u.instantiate_map(rule);
+                    let renamed = |vs: &[u32]| -> Vec<u32> {
+                        vs.iter()
+                            .filter_map(|v| match names.get(v) {
+                                Some(Ty::Var(w)) => Some(*w),
+                                _ => None,
+                            })
+                            .collect()
+                    };
+                    let widen = renamed(&self.widen[t.con][ri]);
+                    let no_unions = renamed(&self.no_unions[t.con][ri]);
                     if let Some(x) = &r.exit {
                         if !u.unify(x, exit) {
                             continue;
@@ -223,7 +301,7 @@ impl Checker {
                                 ctx.extend(bs.into_iter().rev());
                                 let kid_exit = prem.exit.as_ref().unwrap_or(exit);
                                 for (mut ub, ty) in self.infer(ua.clone(), ctx, kid_exit, kid) {
-                                    if self.fits(&mut ub, &ty, &prem.ty) {
+                                    if self.fits(&mut ub, &ty, &prem.ty, &widen) {
                                         next.push(ub);
                                     }
                                 }
@@ -236,6 +314,12 @@ impl Checker {
                             break;
                         }
                     }
+                    // A variable that may not be a union isn't one.
+                    alts.retain(|ua| {
+                        no_unions
+                            .iter()
+                            .all(|v| !matches!(ua.resolve(&Ty::Var(*v)), Ty::Union(_)))
+                    });
                     out.extend(alts.into_iter().map(|ua| (ua, r.res.clone())));
                 }
                 out.truncate(self.cap);

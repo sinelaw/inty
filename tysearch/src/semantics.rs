@@ -472,6 +472,10 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         let b = match t {
             Ty::Var(_) | Ty::Never => false,
             Ty::Top => true,
+            Ty::Union(ts) => {
+                let ts = ts.clone();
+                ts.iter().any(|t| self.holds(oracle, v, t))
+            }
             Ty::Base(s) => match self.sort(oracle, v) {
                 Some(v) if self.subtyping => self.le[v][*s],
                 v => v == Some(*s),
@@ -575,6 +579,14 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         let n = self.samples_per_type;
         let out = match t {
             Ty::Var(_) | Ty::Never => Vec::new(),
+            // Some of each.
+            Ty::Union(ts) => {
+                let mut out = Vec::new();
+                for t in ts.clone() {
+                    out.extend(self.samples(oracle, &t));
+                }
+                out
+            }
             // The smallest member of each sort.
             Ty::Top => self
                 .members

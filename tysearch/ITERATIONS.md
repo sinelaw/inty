@@ -375,6 +375,47 @@ typed term gets stuck or returns at the top.
 | `try : (a, [x0: b] a) -> a`, unsound, beat `[x0: unknown]` in one run. Attacks drew 2 random abrupt terms per instantiation, and with returns and breaks in the pool a throw came up about half the time | One abrupt term of each kind per closed child |
 | `idx : (T1, T0) -> T1` came and went. `idx` on a string and a number has 4 nodes, of which one gives a value, and random tuples of groups found 3 | Stratified observation goes through every tuple of groups, each with its share of the nodes |
 
+## 9. Unions
+
+**Goal.** `cond(c, 0, "a")` is safe, and inty types it `number | string`;
+the search typed it not at all. Same for `[1, "a"]`, and a `try` whose
+body and handler differ.
+
+**Found.** The rules don't change. What's new is which of their variables
+may stand for a **union** of types. In the model, every one may, as in
+inty: `cond : (a, b, b) -> b` types `cond(c, 0, "a")` as `T0 | T1`. In
+`core`, whose new `==` compares two values of one type, one may not:
+
+```
+== : (a, a) -> T2  (a may not be a union)
+```
+
+`1 == "a"` is stuck. Of the model's safe terms, 68.5% are typed, up from
+63.5%. None gets stuck.
+
+**How.**
+
+- **Union types** `T0 | T1` in the type language. A value is in one if
+  it's in a member.
+- **Which variables.** The attacks try each variable as each union of two
+  sorts. It may stand for a union if none breaks the rule.
+- **The checker.**
+  - A child may have a type below a ground premise: `T1` fits `T0 | T1`.
+  - A child that doesn't fit a variable widens it to the union. That
+    needs a variable at the top of two or more children's types, and in
+    no other premise, bound directly to a type by the rule's own children,
+    with no other variable bound to it. Otherwise a function's parameter,
+    already used as a number, could be widened behind its use's back.
+  - A rule whose variable may not be a union doesn't apply where it would
+    be one.
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| `core`'s `==` came out as three overloads, not `(a, a) -> T2`: the attacks instantiated `a` to `unknown`, and two unknowns may differ | `unknown` is in the universe only if something binds a value of no known source (the model's `catch`); a rule's variables range over it only then |
+| `==(if(false, false, 0), false)` was typed and got stuck. At first only the variables the checker could widen were tested, so `==`'s `a` became a union through a child that was one | Every variable is tested, and the checker refuses a union where the attacks did |
+
 ## Next
 
 - **Keys:** a string literal `"x"`, so that `idx` on objects by string

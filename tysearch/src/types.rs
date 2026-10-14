@@ -21,6 +21,8 @@ pub enum Ty {
     Top,
     /// No value: the exit type where there is nothing to return from.
     Never,
+    /// The values of any of two or more ground types, sorted: `T0 | T1`.
+    Union(Vec<Ty>),
 }
 
 impl Ty {
@@ -32,7 +34,7 @@ impl Ty {
                 }
             }
             Ty::Base(_) | Ty::Top | Ty::Never => {}
-            Ty::Ref(_, ps) => ps.iter().for_each(|p| p.vars(out)),
+            Ty::Ref(_, ps) | Ty::Union(ps) => ps.iter().for_each(|p| p.vars(out)),
         }
     }
 
@@ -40,7 +42,7 @@ impl Ty {
         match self {
             Ty::Var(_) => false,
             Ty::Base(_) | Ty::Top | Ty::Never => true,
-            Ty::Ref(_, ps) => ps.iter().all(Ty::is_ground),
+            Ty::Ref(_, ps) | Ty::Union(ps) => ps.iter().all(Ty::is_ground),
         }
     }
 
@@ -49,6 +51,7 @@ impl Ty {
         match self {
             Ty::Var(_) => 0,
             Ty::Base(_) | Ty::Top | Ty::Never => 1,
+            Ty::Union(ts) => ts.iter().map(Ty::constants).sum(),
             Ty::Ref(_, ps) => 1 + ps.iter().map(Ty::constants).sum::<usize>(),
         }
     }
@@ -67,6 +70,42 @@ impl Ty {
             Ty::Top => Ty::Top,
             Ty::Never => Ty::Never,
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(|p| p.map_vars(f)).collect()),
+            Ty::Union(ts) => Ty::Union(ts.iter().map(|p| p.map_vars(f)).collect()),
+        }
+    }
+
+    /// The ground types a ground type's values are in: its union's members,
+    /// or itself.
+    pub fn members(&self) -> Vec<Ty> {
+        match self {
+            Ty::Union(ts) => ts.clone(),
+            t => vec![t.clone()],
+        }
+    }
+
+    /// Whether every value of ground `self` is one of `other`'s, as unions
+    /// of their members.
+    pub fn below(&self, other: &Ty) -> bool {
+        let theirs = other.members();
+        self.members().iter().all(|t| theirs.contains(t))
+    }
+
+    /// The union of two ground types: their members, flattened, sorted,
+    /// without repeats; one type if they are the same.
+    pub fn union(a: &Ty, b: &Ty) -> Ty {
+        let mut ts = Vec::new();
+        for t in [a, b] {
+            match t {
+                Ty::Union(us) => ts.extend(us.iter().cloned()),
+                t => ts.push(t.clone()),
+            }
+        }
+        ts.sort();
+        ts.dedup();
+        if ts.len() == 1 {
+            ts.pop().unwrap()
+        } else {
+            Ty::Union(ts)
         }
     }
 }
@@ -179,6 +218,9 @@ pub fn match_ground(p: &Ty, g: &Ty, theta: &mut HashMap<u32, Ty>) -> bool {
         },
         (Ty::Base(a), Ty::Base(b)) => a == b,
         (Ty::Top, Ty::Top) | (Ty::Never, Ty::Never) => true,
+        (Ty::Union(ps), Ty::Union(gs)) => {
+            ps.len() == gs.len() && ps.iter().zip(gs).all(|(p, g)| match_ground(p, g, theta))
+        }
         (Ty::Ref(a, ps), Ty::Ref(b, gs)) => {
             a == b
                 && ps.len() == gs.len()
@@ -207,8 +249,19 @@ impl Unifier {
 
     /// A copy of `s` with fresh variables.
     pub fn instantiate(&mut self, s: &Schema) -> Schema {
+        self.instantiate_map(s).0
+    }
+
+    /// As `instantiate`, with the renaming.
+    pub fn instantiate_map(&mut self, s: &Schema) -> (Schema, HashMap<u32, Ty>) {
         let mut m: HashMap<u32, Ty> = HashMap::new();
-        s.map_vars(&mut |v| m.entry(v).or_insert_with(|| self.fresh()).clone())
+        let r = s.map_vars(&mut |v| m.entry(v).or_insert_with(|| self.fresh()).clone());
+        (r, m)
+    }
+
+    /// Whether another variable is bound to `v` itself.
+    pub fn pointed_to(&self, v: u32) -> bool {
+        self.map.values().any(|t| *t == Ty::Var(v))
     }
 
     pub fn resolve(&self, t: &Ty) -> Ty {
@@ -219,6 +272,22 @@ impl Unifier {
             },
             Ty::Base(_) | Ty::Top | Ty::Never => t.clone(),
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(|p| self.resolve(p)).collect()),
+            Ty::Union(ts) => {
+                let ts: Vec<Ty> = ts.iter().map(|p| self.resolve(p)).collect();
+                ts[1..].iter().fold(ts[0].clone(), |acc, t| {
+                    if acc.is_ground() && t.is_ground() {
+                        Ty::union(&acc, t)
+                    } else {
+                        match acc {
+                            Ty::Union(mut us) => {
+                                us.push(t.clone());
+                                Ty::Union(us)
+                            }
+                            a => Ty::Union(vec![a, t.clone()]),
+                        }
+                    }
+                })
+            }
         }
     }
 
@@ -226,7 +295,7 @@ impl Unifier {
         match self.resolve(t) {
             Ty::Var(w) => v == w,
             Ty::Base(_) | Ty::Top | Ty::Never => false,
-            Ty::Ref(_, ps) => ps.iter().any(|p| self.occurs(v, p)),
+            Ty::Ref(_, ps) | Ty::Union(ps) => ps.iter().any(|p| self.occurs(v, p)),
         }
     }
 
@@ -243,6 +312,7 @@ impl Unifier {
             }
             (Ty::Base(x), Ty::Base(y)) => x == y,
             (Ty::Top, Ty::Top) | (Ty::Never, Ty::Never) => true,
+            (Ty::Union(_), Ty::Union(_)) => self.resolve(&a) == self.resolve(&b),
             (Ty::Ref(x, ps), Ty::Ref(y, qs)) => {
                 x == y && ps.len() == qs.len() && ps.iter().zip(qs).all(|(p, q)| self.unify(p, q))
             }
@@ -383,6 +453,11 @@ impl Names<'_> {
             Ty::Base(s) => self.sorts[*s].clone(),
             Ty::Top => "unknown".into(),
             Ty::Never => "never".into(),
+            Ty::Union(ts) => ts
+                .iter()
+                .map(|t| self.ty(t))
+                .collect::<Vec<_>>()
+                .join(" | "),
             Ty::Ref(s, ps) => {
                 let shape = self.shapes.get(*s).map_or(&[][..], |v| v.as_slice());
                 let slice = |ps: &[Ty]| {
