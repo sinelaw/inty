@@ -13,6 +13,10 @@ pub mod types;
 
 pub mod langs {
     pub mod arith;
+    pub mod coerce;
     pub mod core;
     pub mod model;
+    pub mod pairs;
+    pub mod subtyping;
+    pub mod unityped;
 }

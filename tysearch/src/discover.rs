@@ -15,7 +15,7 @@
 //!    can't type measure what it gave up.
 
 use crate::enumerate::{Enumerator, Rng};
-use crate::infer::Checker;
+use crate::infer::{Checker, Order};
 use crate::lang::{Atom, Kind, Language, Outcome, Term};
 use crate::search::{search_con, ConSearch, Pools, SearchConfig};
 use crate::semantics::{Oracle, Semantics};
@@ -75,11 +75,18 @@ pub struct Discovery {
     pub con_names: Vec<&'static str>,
     pub sort_names: Vec<String>,
     pub sort_examples: Vec<Vec<String>>,
-    /// Per sort, the eliminator it is refined by.
+    /// Per sort, the eliminators it is refined by.
     pub refined_by: Vec<Option<String>>,
+    /// Per sort, its eliminators' names and parameter counts.
+    pub shapes: Vec<Vec<(String, usize)>>,
     pub universe: usize,
     pub searches: Vec<ConSearch>,
     pub rules: Vec<Schema>,
+    /// The subtyping kept, as pairs `(s, t)` for `s <: t`; empty without.
+    pub subtypes: Vec<(usize, usize)>,
+    /// The description lengths of the system without subtyping and, if
+    /// tried, with it.
+    pub sizes: (usize, Option<usize>),
     pub check: Check,
     pub evals: usize,
 }
@@ -131,10 +138,26 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
                 .collect()
         })
         .collect();
+    let shapes: Vec<Vec<(String, usize)>> = sem
+        .templates
+        .iter()
+        .map(|ts| {
+            ts.iter()
+                .map(|t| (sig[t.elim].name.to_string(), t.k + 1))
+                .collect()
+        })
+        .collect();
     let refined_by = sem
         .templates
         .iter()
-        .map(|t| t.as_ref().map(|t| sig[t.elim].name.to_string()))
+        .map(|ts| {
+            (!ts.is_empty()).then(|| {
+                ts.iter()
+                    .map(|t| sig[t.elim].name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+        })
         .collect();
 
     // Representatives: per behaviour (the set of universe types a value
@@ -160,20 +183,45 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
     let pools = Pools { reps, open };
     note(&format!("{} representatives", pools.reps.len()));
 
-    // 3. Search.
-    let mut searches = Vec::new();
-    let mut rules = Vec::new();
-    for (ci, c) in sig.iter().enumerate() {
-        if c.kind == Kind::Var {
-            continue;
+    // 3. Search, without subtyping and, if the fingerprints order any
+    // sorts, with it; keep the shorter system (the one without, on a tie).
+    let run = |sem: &mut Semantics<L::Value>, oracle: &mut Oracle<L>, rng: &mut Rng| {
+        let mut searches = Vec::new();
+        let mut rules = Vec::new();
+        for (ci, c) in sig.iter().enumerate() {
+            if c.kind == Kind::Var {
+                continue;
+            }
+            let s = search_con(oracle, sem, &pools, ci, &cfg.search, rng);
+            note(&format!(
+                "searched {} ({} candidates)",
+                c.name, s.candidates
+            ));
+            rules.extend(s.chosen.iter().cloned());
+            searches.push(s);
         }
-        let s = search_con(&mut oracle, &mut sem, &pools, ci, &cfg.search, &mut rng);
-        note(&format!(
-            "searched {} ({} candidates)",
-            c.name, s.candidates
-        ));
-        rules.extend(s.chosen.iter().cloned());
-        searches.push(s);
+        (searches, rules)
+    };
+    let (mut searches, mut rules) = run(&mut sem, &mut oracle, &mut rng);
+    let size = |rules: &[Schema]| rules.iter().map(|r| 1 + r.constants()).sum::<usize>();
+    let mut subtypes: Vec<(usize, usize)> = Vec::new();
+    let mut sizes = (size(&rules), None);
+    if sem.has_order() {
+        sem.set_subtyping(true);
+        let (s2, r2) = run(&mut sem, &mut oracle, &mut rng);
+        let order: Vec<(usize, usize)> = (0..nsorts)
+            .flat_map(|a| (0..nsorts).map(move |b| (a, b)))
+            .filter(|&(a, b)| a != b && sem.le[a][b])
+            .collect();
+        let with = size(&r2) + order.len();
+        sizes.1 = Some(with);
+        if with < sizes.0 {
+            searches = s2;
+            rules = r2;
+            subtypes = order;
+        } else {
+            sem.set_subtyping(false);
+        }
     }
 
     // 4. Check.
@@ -185,9 +233,12 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         sort_names,
         sort_examples,
         refined_by,
+        shapes,
         universe: sem.universe.len(),
         searches,
         rules,
+        subtypes,
+        sizes,
         check,
         evals: oracle.evals,
     }
@@ -202,7 +253,16 @@ fn check<L: Language>(
     en: &mut Enumerator,
     rng: &mut Rng,
 ) -> Check {
-    let checker = Checker::new(lang.signature(), rules);
+    let mut checker = Checker::new(lang.signature(), rules);
+    if sem.subtyping {
+        let n = sem.count();
+        checker.order = Some(Order {
+            le: sem.le.clone(),
+            join: (0..n)
+                .map(|a| (0..n).map(|b| sem.join(a, b)).collect())
+                .collect(),
+        });
+    }
     let mut terms = Enumerator::new(lang.signature(), cfg.check_size);
     terms.cap = en.cap;
     let mut terms = terms.up_to(cfg.check_size, 0);
@@ -325,6 +385,7 @@ impl Discovery {
         Names {
             sorts: &self.sort_names,
             cons: &self.con_names,
+            shapes: &self.shapes,
         }
     }
 
@@ -352,11 +413,23 @@ impl fmt::Display for Discovery {
         for (i, (n, ex)) in self.sort_names.iter().zip(&self.sort_examples).enumerate() {
             write!(f, "  {n} = {{{}, ...}}", ex.join(", "))?;
             if let Some(e) = &self.refined_by[i] {
-                write!(f, "  refined by what `{e}` gives: {n}<args -> result>")?;
+                write!(f, "  refined by what {e} gives")?;
             }
             writeln!(f)?;
         }
         writeln!(f, "  ({} ground types observed)", self.universe)?;
+        if let (a, Some(b)) = self.sizes {
+            writeln!(
+                f,
+                "\nsubtyping from the fingerprints' order: size {b} with it, {a} without"
+            )?;
+            for &(x, y) in &self.subtypes {
+                writeln!(f, "  {} <: {}", self.sort_names[x], self.sort_names[y])?;
+            }
+            if self.subtypes.is_empty() {
+                writeln!(f, "  (not kept)")?;
+            }
+        }
         writeln!(f, "\nrules:")?;
         for s in &self.searches {
             if s.chosen.is_empty() {

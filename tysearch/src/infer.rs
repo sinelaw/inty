@@ -4,9 +4,20 @@
 use crate::lang::{Atom, Con, Kind, Term};
 use crate::types::{Schema, Ty, Unifier};
 
+/// The subtype order on sorts, and joins.
+#[derive(Clone, Debug)]
+pub struct Order {
+    pub le: Vec<Vec<bool>>,
+    pub join: Vec<Vec<Option<usize>>>,
+}
+
 pub struct Checker {
     by_con: Vec<Vec<Schema>>,
     kinds: Vec<Kind>,
+    /// With subtyping, the order on sorts and their joins: a child may
+    /// have a subtype of its premise's type, and a variable fixed at a
+    /// sort widens to the join when a later child needs it.
+    pub order: Option<Order>,
     /// Typings kept per node when overloads branch.
     pub cap: usize,
 }
@@ -20,6 +31,7 @@ impl Checker {
         Checker {
             by_con,
             kinds: sig.iter().map(|c| c.kind).collect(),
+            order: None,
             cap: 8,
         }
     }
@@ -36,6 +48,35 @@ impl Checker {
         out.sort();
         out.dedup();
         out
+    }
+
+    /// Whether a child of type `ty` meets premise `prem`: by unification,
+    /// or with subtyping, by subsumption between sorts.
+    fn fits(&self, u: &mut Unifier, ty: &Ty, prem: &Ty) -> bool {
+        let Some(order) = &self.order else {
+            return u.unify(ty, prem);
+        };
+        let Ty::Base(a) = u.resolve(ty) else {
+            return u.unify(ty, prem);
+        };
+        match u.binding(prem) {
+            // A sort in the rule itself.
+            (None, Ty::Base(b)) => order.le[a][b],
+            // A variable already fixed at a sort: fine if below it, else
+            // widened to the join. The children typed against it so far
+            // stay below the join, and the result only grows.
+            (Some(v), Ty::Base(b)) => {
+                if order.le[a][b] {
+                    true
+                } else if let Some(j) = order.join[a][b] {
+                    u.rebind(v, Ty::Base(j));
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => u.unify(ty, prem),
+        }
     }
 
     /// `ctx.last()` is `var(0)`'s type.
@@ -62,7 +103,7 @@ impl Checker {
                     let depth = ctx.len();
                     ctx.extend(prem.bound.iter().rev().cloned());
                     for (mut ub, ty) in self.infer(ua, ctx, kid) {
-                        if ub.unify(&ty, &prem.ty) {
+                        if self.fits(&mut ub, &ty, &prem.ty) {
                             next.push(ub);
                         }
                     }

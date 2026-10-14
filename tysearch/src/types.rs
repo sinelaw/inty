@@ -224,6 +224,28 @@ impl Unifier {
         }
     }
 
+    /// What `t` stands for, one variable deep: the last variable on its
+    /// chain (if any) and that variable's binding, or `t` itself.
+    pub fn binding(&self, t: &Ty) -> (Option<u32>, Ty) {
+        let mut last = None;
+        let mut cur = t.clone();
+        while let Ty::Var(v) = cur {
+            match self.map.get(&v) {
+                Some(b) => {
+                    last = Some(v);
+                    cur = b.clone();
+                }
+                None => return (last, Ty::Var(v)),
+            }
+        }
+        (last, cur)
+    }
+
+    /// Changes a bound variable's binding.
+    pub fn rebind(&mut self, v: u32, t: Ty) {
+        self.map.insert(v, t);
+    }
+
     fn shallow(&self, t: &Ty) -> Ty {
         match t {
             Ty::Var(v) => match self.map.get(v) {
@@ -314,6 +336,8 @@ fn au(col: &[Ty], columns: &mut Vec<Vec<Ty>>, offset: u32) -> Ty {
 pub struct Names<'a> {
     pub sorts: &'a [String],
     pub cons: &'a [&'a str],
+    /// Per refined sort, its eliminators' names and parameter counts.
+    pub shapes: &'a [Vec<(String, usize)>],
 }
 
 impl Names<'_> {
@@ -322,14 +346,26 @@ impl Names<'_> {
             Ty::Var(v) => var_name(*v),
             Ty::Base(s) => self.sorts[*s].clone(),
             Ty::Ref(s, ps) => {
-                let (res, args) = ps.split_last().unwrap();
-                let args: Vec<String> = args.iter().map(|a| self.ty(a)).collect();
-                format!(
-                    "{}<{} -> {}>",
-                    self.sorts[*s],
-                    args.join(", "),
-                    self.ty(res)
-                )
+                let shape = self.shapes.get(*s).map_or(&[][..], |v| v.as_slice());
+                let slice = |ps: &[Ty]| {
+                    let (res, args) = ps.split_last().unwrap();
+                    let args: Vec<String> = args.iter().map(|a| self.ty(a)).collect();
+                    format!("{} -> {}", args.join(", "), self.ty(res))
+                };
+                if shape.len() <= 1 {
+                    format!("{}<{}>", self.sorts[*s], slice(ps))
+                } else {
+                    // One part per eliminator: `T2{fst: -> a, snd: -> b}`.
+                    let mut at = 0;
+                    let parts: Vec<String> = shape
+                        .iter()
+                        .map(|(name, n)| {
+                            at += n;
+                            format!("{name}: {}", slice(&ps[at - n..at]).trim_start())
+                        })
+                        .collect();
+                    format!("{}{{{}}}", self.sorts[*s], parts.join(", "))
+                }
             }
         }
     }

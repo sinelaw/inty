@@ -83,16 +83,40 @@ semantics:
 - **`const` is monomorphic.** The model generalises a `const` whose
   initialiser is a syntactic value. That is next.
 
+## 2. A suite of languages with other kinds of type system
+
+The search has to work for languages whose type systems differ in kind
+from inty's, not only for inty's model. Each language here is pinned by
+a test, and every change to the search runs against all of them.
+
+| Language | Type system found |
+|---|---|
+| `unityped`: nothing ever gets stuck | One sort; every safe term typed |
+| `pairs`: products, `fst` and `snd` | `pair : (a, b) -> T2{fst: -> a, snd: -> b}`, which is `a × b`; `fst` gives `a` and `snd` gives `b` |
+| `subtyping`: integers and floats, only integers count repetitions | `Int <: Float`; `+ : (Float, Float) -> Float` and `+ : (Int, Int) -> Int`; `floor : (Float) -> Int`; `repeat : (Str, Int) -> Str` |
+| `coerce`: JavaScript's `+` and `-` | Booleans and `null` form the top sort (they are accepted only where everything is); `+ : (a, a) -> a` at the join, `+ : (a, Str) -> Str` and `(Str, a) -> Str`; `- : (a, b) -> Num` |
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| `snd` untypable: a pair was refined by `fst` alone | A sort is refined by every eliminator whose result depends on the member, and its type's parameters are each eliminator's in turn. An eliminator that only repeats another with extra arguments ignored (a two-argument call of a one-parameter function) is dropped |
+| Overloads where subtyping would do: `+` and `<` each had four rules on numbers | **Subtyping from the fingerprints.** `s <: t` when `s` gets stuck in no context that accepts `t`. With subtyping, a sort's type includes its subsorts' values, and samples include them. The checker accepts a child below its premise, and widens a variable to the join. The search runs with and without subtyping, and keeps the system with the shorter description (counting each subtype pair) |
+| With subtyping, `+ : (Int, Int) -> Int` was dropped, because `+ : (Float, Float) -> Float` already covered those runs | Selection counts precision: a rule gains where it gives a strictly more specific type than the rules chosen so far |
+| `coerce`'s overloads each gained 11%, under the 15% bar | The bar is now 10%. The model's rules are unchanged |
+
+**inty's model under the same search.** The fingerprints order its sorts:
+booleans with nothing are the top, since they are accepted only by
+operators that take anything. But the system with subtyping is longer (65
+against 59), so the search keeps the one without, as before.
+
 ## Next
 
-- **A suite of languages with different kinds of type system**, so the
-  search is judged on all of them and can't overfit to inty's model:
-  - subtyping (integers and floats, with only integers as indices);
-  - implicit coercion (a JavaScript-like `+`);
-  - a unityped control language where nothing gets stuck;
-  - later, records with width subtyping.
-- **Let-polymorphism**, then mutable `let` and assignment: the value
+- **Let-polymorphism,** then mutable `let` and assignment: the value
   restriction (DESIGN.md §8.2).
 - **Statements:** `return`, `throw`, `try` and loops, with faults and
   abrupt completions.
-- **Objects and arrays:** refinement indexed by a field label (rows).
+- **Objects and arrays:** refinement by an eliminator per field label, which
+  gives rows. Records with width subtyping go in the suite too.
+- **More of the suite:** a language whose conditional takes only booleans
+  but whose `==` coerces; one with sum types and a tag test.

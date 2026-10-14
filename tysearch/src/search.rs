@@ -79,7 +79,7 @@ impl Default for SearchConfig {
             seeds_per_group: 3,
             climb: 120,
             attacks: 60,
-            min_gain: 0.15,
+            min_gain: 0.1,
             substantial: 0.25,
         }
     }
@@ -266,7 +266,7 @@ pub fn search_con<L: Language>(
         chosen: Vec::new(),
         best_refuted: None,
     };
-    let mut sound: Vec<(Schema, Vec<usize>)> = Vec::new();
+    let mut sound: Vec<(Schema, Vec<(usize, Ty)>)> = Vec::new();
     let mut refuted: Vec<(Schema, String)> = Vec::new();
     for cand in candidates {
         match test(oracle, sem, &index, &cand, &obs) {
@@ -335,19 +335,32 @@ pub fn search_con<L: Language>(
     // Select: among the rules gaining a good share of the most any rule
     // gains, the simplest, attacked before it joins; until what is left to
     // gain is a small share of all there is.
-    let mut covered = vec![false; obs.len()];
+    // Per observation, the most specific type a chosen rule gives it. A
+    // rule gains where none does yet, or where it gives a strictly more
+    // specific type (with subtyping: `+ : (Int, Int) -> Int` after `+ :
+    // (Float, Float) -> Float`).
+    let mut covered: Vec<Option<Ty>> = vec![None; obs.len()];
     let coverable: f64 = {
         let mut any = vec![false; obs.len()];
         for (_, c) in &sound {
-            for &i in c {
-                any[i] = true;
+            for (i, _) in c {
+                any[*i] = true;
             }
         }
         (0..obs.len()).filter(|&i| any[i]).map(|i| weight[i]).sum()
     };
     loop {
-        let gain = |c: &[usize], covered: &[bool]| -> f64 {
-            c.iter().filter(|&&i| !covered[i]).map(|&i| weight[i]).sum()
+        let order = (sem.subtyping, sem.le.clone());
+        let improves = move |i: usize, p: &Ty, covered: &[Option<Ty>]| match (&covered[i], p) {
+            (None, _) => true,
+            (Some(Ty::Base(b)), Ty::Base(a)) => a != b && order.0 && order.1[*a][*b],
+            _ => false,
+        };
+        let gain = |c: &[(usize, Ty)], covered: &[Option<Ty>]| -> f64 {
+            c.iter()
+                .filter(|(i, p)| improves(*i, p, covered))
+                .map(|(i, _)| weight[*i])
+                .sum()
         };
         let gains: Vec<f64> = sound.iter().map(|(_, c)| gain(c, &covered)).collect();
         let max = gains.iter().cloned().fold(0.0, f64::max);
@@ -382,8 +395,10 @@ pub fn search_con<L: Language>(
                 100.0 * gains[at] / coverable
             );
         }
-        for i in cov {
-            covered[i] = true;
+        for (i, p) in cov {
+            if improves(i, &p, &covered) {
+                covered[i] = Some(p);
+            }
         }
         s.chosen.push(best);
     }
@@ -404,27 +419,28 @@ fn faithful<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
     sem: &Semantics<V>,
     r: &Schema,
 ) -> bool {
-    for (s, t) in sem.templates.iter().enumerate() {
-        let Some(t) = t else { continue };
-        if t.elim != r.con {
-            continue;
-        }
-        let Ty::Ref(s2, ps) = &r.kids[t.hole].ty else {
-            continue;
-        };
-        if *s2 != s {
-            continue;
-        }
-        let others: Vec<&Ty> = (0..r.kids.len())
-            .filter(|&j| j != t.hole)
-            .map(|j| &r.kids[j].ty)
-            .collect();
-        let (res, args) = ps.split_last().unwrap();
-        if others.len() != args.len()
-            || others.iter().zip(args).any(|(o, a)| *o != a)
-            || r.res != *res
-        {
-            return false;
+    for (s, ts) in sem.templates.iter().enumerate() {
+        for (t, (at, n)) in ts.iter().zip(sem.slices(s)) {
+            if t.elim != r.con {
+                continue;
+            }
+            let Ty::Ref(s2, ps) = &r.kids[t.hole].ty else {
+                continue;
+            };
+            if *s2 != s {
+                continue;
+            }
+            let others: Vec<&Ty> = (0..r.kids.len())
+                .filter(|&j| j != t.hole)
+                .map(|j| &r.kids[j].ty)
+                .collect();
+            let (res, args) = ps[at..at + n].split_last().unwrap();
+            if others.len() != args.len()
+                || others.iter().zip(args).any(|(o, a)| *o != a)
+                || r.res != *res
+            {
+                return false;
+            }
         }
     }
     true
@@ -465,16 +481,16 @@ fn simple_rules<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
             return;
         }
         for s in 0..sem.count() {
-            match &sem.templates[s] {
-                None => {
+            match sem.arity(s) {
+                0 => {
                     acc.push(Ty::Base(s));
                     go(sem, positions, acc, next, true, out);
                     acc.pop();
                 }
-                Some(t) => {
+                arity => {
                     // Parameters: variables, old or new, in order.
                     let mut params: Vec<(Vec<Ty>, u32)> = vec![(Vec::new(), next)];
-                    for _ in 0..=t.k {
+                    for _ in 0..arity {
                         params = params
                             .into_iter()
                             .flat_map(|(ps, n)| {
@@ -641,7 +657,10 @@ fn binder_sources<L: Language>(
                 }
                 // Through the value's eliminator, with arguments drawn at
                 // random: an argument that comes back names its position.
-                if let Some(t) = sem.sort(oracle, &v).and_then(|s| sem.templates[s].clone()) {
+                if let Some(t) = sem
+                    .sort(oracle, &v)
+                    .and_then(|s| sem.templates[s].first().cloned())
+                {
                     let args: Vec<L::Value> = (0..t.k)
                         .map(|_| pool[rng.below(pool.len())].clone())
                         .collect();
@@ -1040,24 +1059,40 @@ fn test<L: Language>(
     index: &HashMap<Ty, usize>,
     cand: &Schema,
     obs: &[Observation<L::Value>],
-) -> Result<Vec<usize>, usize> {
+) -> Result<Vec<(usize, Ty)>, usize> {
     let mut covered = Vec::new();
     for (i, o) in obs.iter().enumerate() {
         let thetas = matches(cand, o, &sem.universe, index);
         if thetas.is_empty() {
             continue;
         }
+        let mut preds = Vec::new();
         for theta in &thetas {
             let p = subst(&cand.res, theta);
             if !sem.in_e(oracle, &o.outcome, &p) {
                 return Err(i);
             }
+            preds.push(p);
         }
         if matches!(o.outcome, Outcome::Value(_)) {
-            covered.push(i);
+            // The most specific type the rule gives the node.
+            let best = preds
+                .iter()
+                .find(|p| preds.iter().all(|q| *p == q || below(sem, p, q)))
+                .unwrap_or(&preds[0])
+                .clone();
+            covered.push((i, best));
         }
     }
     Ok(covered)
+}
+
+/// Whether ground `a` is a strict subtype of `b`.
+fn below<V>(sem: &Semantics<V>, a: &Ty, b: &Ty) -> bool {
+    match (a, b) {
+        (Ty::Base(x), Ty::Base(y)) => x != y && sem.subtyping && sem.le[*x][*y],
+        _ => false,
+    }
 }
 
 /// The ways the candidate's premises match an observation.

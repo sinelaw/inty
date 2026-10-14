@@ -1,7 +1,10 @@
 use tysearch::discover::{discover, Config};
-use tysearch::langs::{arith::Arith, core::Core, model::Model};
+use tysearch::langs::{
+    arith::Arith, coerce::Coerce, core::Core, model::Model, pairs::Pairs, subtyping::Subtyping,
+    unityped::Unityped,
+};
 
-const USAGE: &str = "usage: tysearch <arith|core|model> [--corpus N] [--check N] [--seed N]";
+const USAGE: &str = "usage: tysearch <arith|core|model|unityped|coerce|pairs|subtyping> [--corpus N] [--check N] [--seed N]";
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -26,6 +29,10 @@ fn main() {
         "arith" => discover(&Arith::default(), &cfg),
         "core" => discover(&Core::default(), &cfg),
         "model" => discover(&Model::default(), &cfg),
+        "unityped" => discover(&Unityped::default(), &cfg),
+        "coerce" => discover(&Coerce::default(), &cfg),
+        "pairs" => discover(&Pairs::default(), &cfg),
+        "subtyping" => discover(&Subtyping::default(), &cfg),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2)

@@ -114,8 +114,110 @@ fn model_finds_functions() {
         "app2 : (T4<a, b -> c>, a, b) -> c",
     ]);
     for seed in 1..=3 {
-        let d = discover(&Model::default(), &Config { seed, ..cfg.clone() });
+        let d = discover(
+            &Model::default(),
+            &Config {
+                seed,
+                ..cfg.clone()
+            },
+        );
         assert_eq!(rules(&d), expected, "seed {seed}");
         assert_eq!(d.check.unsound, 0, "seed {seed}: {:?}", d.check.violations);
     }
+}
+
+// The suite: languages whose type systems differ in kind from inty's, so
+// the search is judged on all of them and can't fit itself to one.
+
+/// Nothing gets stuck, so there is one sort, and every safe term is typed.
+#[test]
+fn unityped_has_one_sort() {
+    let d = discover(
+        &tysearch::langs::unityped::Unityped::default(),
+        &Config::default(),
+    );
+    assert_eq!(d.sort_names.len(), 1);
+    assert_eq!(d.check.unsound, 0);
+    assert_eq!(d.check.untyped_safe, 0);
+}
+
+/// Products: a pair's sort is refined by both its eliminators, and the
+/// type found is `a × b`.
+#[test]
+fn pairs_find_products() {
+    let d = discover(
+        &tysearch::langs::pairs::Pairs::default(),
+        &Config::default(),
+    );
+    assert_eq!(
+        rules(&d),
+        sorted(&[
+            "num : T0",
+            "true : T1",
+            "false : T1",
+            "pair : (a, b) -> T2{fst: -> a, snd: -> b}",
+            "fst : (T2{fst: -> a, snd: -> b}) -> a",
+            "snd : (T2{fst: -> a, snd: -> b}) -> b",
+            "+ : (T0, T0) -> T0",
+            "not : (T1) -> T1",
+            "if : (T1, a, a) -> a",
+        ])
+    );
+    assert_eq!(d.check.unsound, 0);
+}
+
+/// Integers are accepted wherever floats are, and as a repeat count: the
+/// fingerprints' order gives `Int <: Float` (T0 <: T1), which makes the
+/// system half the size of the one with overloads alone, and `+` keeps
+/// its more precise integer rule.
+#[test]
+fn subtyping_finds_int_below_float() {
+    let d = discover(
+        &tysearch::langs::subtyping::Subtyping::default(),
+        &Config::default(),
+    );
+    assert_eq!(d.subtypes, vec![(0, 1)]);
+    assert_eq!(
+        rules(&d),
+        sorted(&[
+            "int : T0",
+            "float : T1",
+            "str : T2",
+            "true : T3",
+            "+ : (T1, T1) -> T1",
+            "+ : (T0, T0) -> T0",
+            "floor : (T1) -> T0",
+            "< : (T1, T1) -> T3",
+            "repeat : (T2, T0) -> T2",
+            "len : (T2) -> T0",
+            "if : (T3, a, a) -> a",
+        ])
+    );
+    assert_eq!(d.check.unsound, 0);
+}
+
+/// JavaScript's coercions: `+` takes anything, and a string on either side
+/// makes a string; only `length` and `toFixed` are particular. Booleans and
+/// `null` are accepted only where everything is, so their sort is the top
+/// of the order, and `+` of two values is at most their join.
+#[test]
+fn coerce_finds_a_type_system_unlike_intys() {
+    let d = discover(
+        &tysearch::langs::coerce::Coerce::default(),
+        &Config::default(),
+    );
+    let r = rules(&d);
+    for want in [
+        "+ : (a, a) -> a",
+        "+ : (a, T1) -> T1",
+        "+ : (T1, a) -> T1",
+        "- : (a, b) -> T0",
+        "length : (T1) -> T0",
+        "toFixed : (T0) -> T1",
+        "if : (a, b, b) -> b",
+    ] {
+        assert!(r.contains(&want.to_string()), "missing {want} in {r:?}");
+    }
+    assert_eq!(d.subtypes, vec![(0, 2), (1, 2)]);
+    assert_eq!(d.check.unsound, 0);
 }
