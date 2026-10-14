@@ -71,8 +71,8 @@ fn core_finds_the_plus_class() {
     assert_eq!(d.check.unsound, 0);
 }
 
-/// Iterations 1, 3, 4 and 5: functions, calls, `let`, assignment,
-/// `e₁; e₂`, and objects. The rules are the Lean model's (`lean/Inty/Typing.lean`),
+/// Iterations 1, 3 to 6: functions, calls, `let`, assignment,
+/// `e₁; e₂`, objects and arrays. The rules are the Lean model's (`lean/Inty/Typing.lean`),
 /// found from its semantics alone: T3 and T4 are the functions of one and
 /// two parameters, refined by what a call gives (`T3<a -> b>` is
 /// `(a) => b`). Where they differ, the semantics allows more than inty's
@@ -122,24 +122,39 @@ fn model_finds_functions_state_and_the_value_restriction() {
             "app2 : (T3<a -> b>, a, c) -> b",
             "app2 : (T4<a, b -> c>, a, b) -> c",
             "seq : (a, b) -> b",
-            // Objects (iteration 5): T5, T6 and T7 are `{x: a}`, `{y: a}`
+            // Objects (iteration 5): T5, T6 and T8 are `{x: a}`, `{y: a}`
             // and `{x: a, y: b}`, refined by their reads. A read is
             // overloaded on the objects that have the property (inty's
             // `HasProp`); a store keeps the property's type.
             "cond : (T5< -> a>, b, c) -> b",
             "cond : (T6< -> a>, b, c) -> b",
-            "cond : (T7{.x: -> a, .y: -> b}, c, d) -> c",
+            "cond : (T8{.x: -> a, .y: -> b}, c, d) -> c",
             "{x} : (a) -> T5< -> a>",
             "{y} : (a) -> T6< -> a>",
-            "{x,y} : (a, b) -> T7{.x: -> a, .y: -> b}",
+            "{x,y} : (a, b) -> T8{.x: -> a, .y: -> b}",
             ".x : (T5< -> a>) -> a",
-            ".x : (T7{.x: -> a, .y: -> b}) -> a",
+            ".x : (T8{.x: -> a, .y: -> b}) -> a",
             ".y : (T6< -> a>) -> a",
-            ".y : (T7{.x: -> a, .y: -> b}) -> b",
+            ".y : (T8{.x: -> a, .y: -> b}) -> b",
             ".x= : (T5< -> a>, a) -> a",
-            ".x= : (T7{.x: -> a, .y: -> b}, a) -> a",
+            ".x= : (T8{.x: -> a, .y: -> b}, a) -> a",
             ".y= : (T6< -> a>, a) -> a",
-            ".y= : (T7{.x: -> a, .y: -> b}, b) -> b",
+            ".y= : (T8{.x: -> a, .y: -> b}, b) -> b",
+            // Arrays (iteration 6): T7 is `a[]`, refined by `idx`, whose
+            // elements share a type. Indexing an object gives `undefined`,
+            // since no term builds the string "x" or "y".
+            "cond : (T7<a -> b>, c, d) -> c",
+            "[a] : (a) -> T7<T0 -> a>",
+            "[a,b] : (a, a) -> T7<T0 -> a>",
+            "idx : (T7<a -> b>, a) -> b",
+            "idx : (T1, T0) -> T1",
+            "idx : (T5< -> a>, T0) -> T2",
+            "idx : (T5< -> a>, T1) -> T2",
+            "idx : (T6< -> a>, T0) -> T2",
+            "idx : (T6< -> a>, T1) -> T2",
+            "idx : (T8{.x: -> a, .y: -> b}, T0) -> T2",
+            "idx : (T8{.x: -> a, .y: -> b}, T1) -> T2",
+            "idx= : (T7<a -> b>, a, b) -> b",
         ])
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);

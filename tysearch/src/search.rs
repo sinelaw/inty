@@ -82,7 +82,7 @@ impl Default for SearchConfig {
             climb: 120,
             attacks: 60,
             min_gain: 0.2,
-            first_gain: 0.05,
+            first_gain: 0.005,
             substantial: 0.25,
         }
     }
@@ -113,6 +113,7 @@ pub struct Observation<V> {
     pub res_fixed: Option<usize>,
 }
 
+#[derive(Clone)]
 pub struct ConSearch {
     pub con: usize,
     pub sources: Vec<Vec<Source>>,
@@ -372,18 +373,41 @@ pub fn search_con<L: Language>(
         };
         let gains: Vec<f64> = sound.iter().map(|(_, c)| gain(c, &covered)).collect();
         // A rule must gain a share of what the best rule chosen gained (or,
-        // for the first, a small share of all there is).
+        // for the first, a small share of all there is). A simple rule (at
+        // most one constant) that types what no rule does yet needs only
+        // the small share: an overload for a rare shape (`app2` on
+        // two-argument functions, next to `app2` on one-argument ones) is
+        // no less a rule for being rare. A gain in precision alone must
+        // pull its weight.
+        let small = cfg.first_gain * coverable;
         let bar = if best_gain > 0.0 {
             cfg.min_gain * best_gain
         } else {
-            cfg.first_gain * coverable
+            small
         };
-        let max = gains.iter().cloned().fold(0.0, f64::max);
-        if max <= 1e-9 || max < bar {
+        let fresh = |i: usize| -> f64 {
+            sound[i]
+                .1
+                .iter()
+                .filter(|(j, _)| covered[*j].is_none())
+                .map(|(j, _)| weight[*j])
+                .sum()
+        };
+        let passing: Vec<usize> = (0..sound.len())
+            .filter(|&i| {
+                gains[i] > 1e-9
+                    && (gains[i] >= bar
+                        || (sound[i].0.constants() <= 1 && fresh(i) >= small.max(1e-9)))
+            })
+            .collect();
+        let max = passing.iter().map(|&i| gains[i]).fold(0.0, f64::max);
+        if passing.is_empty() {
             break;
         }
-        let at = (0..sound.len())
-            .filter(|&i| gains[i] >= cfg.substantial * max && gains[i] >= bar)
+        let at = passing
+            .iter()
+            .copied()
+            .filter(|&i| gains[i] >= cfg.substantial * max)
             .min_by(|&i, &j| {
                 let key = |k: usize| {
                     (
@@ -536,17 +560,25 @@ fn simple_rules<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
                     acc.pop();
                 }
                 arity => {
-                    // Parameters: variables, old or new, in order.
+                    // Parameters: variables, old or new, in order, or
+                    // unrefined sorts (`T7<num -> a>`, an array indexed by
+                    // numbers, is one commitment).
+                    let bases: Vec<usize> =
+                        (0..sem.count()).filter(|&b| sem.arity(b) == 0).collect();
                     let mut params: Vec<(Vec<Ty>, u32)> = vec![(Vec::new(), next)];
                     for _ in 0..arity {
                         params = params
                             .into_iter()
                             .flat_map(|(ps, n)| {
-                                (0..=n).map(move |v| {
-                                    let mut ps = ps.clone();
-                                    ps.push(Ty::Var(v));
-                                    (ps, n.max(v + 1))
-                                })
+                                let vars = (0..=n).map(|v| (Ty::Var(v), n.max(v + 1)));
+                                let sorts = bases.iter().map(|&b| (Ty::Base(b), n));
+                                vars.chain(sorts)
+                                    .map(|(p, n2)| {
+                                        let mut ps = ps.clone();
+                                        ps.push(p);
+                                        (ps, n2)
+                                    })
+                                    .collect::<Vec<_>>()
                             })
                             .collect();
                     }

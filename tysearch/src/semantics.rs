@@ -318,8 +318,10 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                     Outcome::Stuck { root: true, .. } => None,
                     Outcome::Value(w) => Some(self.sort(oracle, &w).map_or(-3, |s| s as i64)),
                     Outcome::Stuck { .. } => Some(-1),
-                    Outcome::Fault(_) => Some(-2),
-                    Outcome::Timeout => continue,
+                    // An allowed fault (an index out of bounds) is no
+                    // behaviour of the member's: as an index, 0 and 1 differ
+                    // only in where they fault.
+                    Outcome::Fault(_) | Outcome::Timeout => continue,
                 };
                 results.push(r);
             }
@@ -528,7 +530,13 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         let out = match t {
             Ty::Var(_) => Vec::new(),
             Ty::Base(s) => {
-                let mut out = self.spread(&self.members[*s].clone(), n);
+                // The smallest members first (0 and 1 are the indices an
+                // array of two has), then one from the far end.
+                let ms = &self.members[*s];
+                let mut out: Vec<V> = ms.iter().take(n.saturating_sub(1)).cloned().collect();
+                if ms.len() >= n {
+                    out.extend(ms.last().cloned());
+                }
                 // A subsort's values are the type's too: one of each.
                 if self.subtyping {
                     for u in 0..self.count() {

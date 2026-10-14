@@ -485,10 +485,10 @@ test that pins it.
 |---|---|---|
 | **M0** (done) | L0, a black-box `Language` trait, fingerprint sorts, T0 and T1, a weighted cover, anti-unified classes, an end-to-end check | TAPL ch. 8 exactly. `Plus` on `core`. 0 typed terms stuck up to size 6. Correct even when learning from size-2 terms |
 | M1 (done) | L1: binders, closing substitutions, `→` with a bounded logical relation, unification checker | The model's functions, calls and `const` (ITERATIONS.md, iteration 1) |
-| M2 | L2: generalisation switches; T2 typed generation with shrinking | HM `let`. With `ref`, the value restriction as the frontier's knee |
-| M3 | L3: rows and field labels; containers | Records with row polymorphism; `HasProp` |
+| M2 (done) | L2: generalisation policies, judged by whether a value is in all instances of its type at once; Kripke monotonicity for state; T2 typed generation | HM `let`. The value restriction, both in `refs` and in the model (iterations 3 and 4) |
+| M3 (in part) | L3: field labels as eliminators; containers | Records, and reads overloaded as `HasProp` (iteration 5); arrays (iteration 6) |
 | M4 | inty adapters (model wire format, `dynamics`); the corpus; comparison report | A diff of the discovered system against `HasType` on the model's fragment, with every disagreement explained or filed |
-| M5 | The Pareto frontier in output; L4 unions and subtyping from the fingerprint order | A frontier plot for `core`, from unions to no unions |
+| M5 (in part) | Subtyping from the fingerprint order (done: iteration 2); the Pareto frontier in output; L4 unions | `Int <: Float` (done); a frontier plot for `core`, from unions to no unions |
 | M6 | T4: Lean export of `HasType`, with a proof template | Soundness of the M1 system proved in Lean |
 
 ---
@@ -520,8 +520,13 @@ test that pins it.
 
 ## 12. The prototype today
 
-*This section shows iteration 0's output. For the current state (functions,
-calls, `const`, binder flow and refined sorts), see ITERATIONS.md.*
+*This section shows iteration 0's output. For the current state, see
+ITERATIONS.md:*
+
+- *functions, state, objects and arrays in the model of inty's;*
+- *the language suite (unityped, products, subtyping, coercion, ML
+  references);*
+- *the value restriction.*
 
 ```sh
 cd tysearch

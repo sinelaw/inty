@@ -32,7 +32,8 @@ interpreter, it:
 - checks the result on all terms up to a size, and on random larger ones.
 
 On TAPL's arithmetic language it finds TAPL's rules. On the model of inty's
-core, with functions, calls and `const`, it finds the Lean model's rules,
+core (functions, calls, `let` with assignment, objects and arrays), it
+finds the Lean model's rules and its value restriction,
 with differences that are all sound. To keep it from fitting itself to
 inty, a suite of languages with other kinds of type system runs alongside:
 

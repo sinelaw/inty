@@ -191,14 +191,33 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
 
     // 3. Search, without subtyping and, if the fingerprints order any
     // sorts, with it; keep the shorter system (the one without, on a tie).
-    let run = |sem: &mut Semantics<L::Value>, oracle: &mut Oracle<L>, rng: &mut Rng| {
+    // `reuse` has, per constructor, a search to keep rather than redo.
+    let run = |sem: &mut Semantics<L::Value>,
+               oracle: &mut Oracle<L>,
+               rng: &mut Rng,
+               reuse: &[Option<ConSearch>]| {
         let mut searches = Vec::new();
         let mut rules = Vec::new();
         for (ci, c) in sig.iter().enumerate() {
             if c.kind != Kind::Op {
                 continue;
             }
-            let s = search_con(oracle, sem, &pools, ci, &cfg.search, rng);
+            // For working on the search: `TYSEARCH_ONLY='app2|.x='` searches
+            // just those.
+            if let Ok(only) = std::env::var("TYSEARCH_ONLY") {
+                if !only.split('|').any(|n| n == c.name) {
+                    continue;
+                }
+            }
+            if let Some(Some(s)) = reuse.get(ci) {
+                rules.extend(s.chosen.iter().cloned());
+                searches.push(s.clone());
+                continue;
+            }
+            // Each constructor draws from its own stream, so its search
+            // doesn't depend on how many draws the others made.
+            let mut own = Rng(rng.0 ^ (ci as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let s = search_con(oracle, sem, &pools, ci, &cfg.search, &mut own);
             note(&format!(
                 "searched {} ({} candidates)",
                 c.name, s.candidates
@@ -208,7 +227,7 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         }
         (searches, rules)
     };
-    let (mut searches, mut rules) = run(&mut sem, &mut oracle, &mut rng);
+    let (mut searches, mut rules) = run(&mut sem, &mut oracle, &mut rng, &[]);
     let size = |rules: &[Schema]| rules.iter().map(|r| 1 + r.constants()).sum::<usize>();
     let mut subtypes: Vec<(usize, usize)> = Vec::new();
     let mut sizes = (size(&rules), None);
@@ -226,7 +245,31 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         });
     if could_help {
         sem.set_subtyping(true);
-        let (s2, r2) = run(&mut sem, &mut oracle, &mut rng);
+        // Subtyping widens only the sorts with strict subsorts: a
+        // constructor whose rules mention none of them, and that has rules,
+        // keeps its search.
+        let widened: Vec<bool> = (0..nsorts)
+            .map(|t| (0..nsorts).any(|u| u != t && sem.le[u][t]))
+            .collect();
+        let mut reuse: Vec<Option<ConSearch>> = vec![None; sig.len()];
+        for sr in &searches {
+            let mentions = sr.chosen.iter().any(|r| {
+                r.types().any(|t| {
+                    fn has(t: &Ty, w: &[bool]) -> bool {
+                        match t {
+                            Ty::Base(s) => w[*s],
+                            Ty::Var(_) => false,
+                            Ty::Ref(_, ps) => ps.iter().any(|p| has(p, w)),
+                        }
+                    }
+                    has(t, &widened)
+                })
+            });
+            if !sr.chosen.is_empty() && !mentions {
+                reuse[sr.con] = Some(sr.clone());
+            }
+        }
+        let (s2, r2) = run(&mut sem, &mut oracle, &mut rng, &reuse);
         let order: Vec<(usize, usize)> = (0..nsorts)
             .flat_map(|a| (0..nsorts).map(move |b| (a, b)))
             .filter(|&(a, b)| a != b && sem.le[a][b])

@@ -246,12 +246,57 @@ No typed term gets stuck.
 | No rule for stores. The invariant rule was a candidate, but the gain bar was relative to everything coverable, which counted what non-invariant rules (refuted later, by monotonicity) covered | A rule's bar is relative to the best rule chosen so far (20%). The first needs 5% of what the standing candidates cover |
 | Junk `app2 : (T3<T2 -> T0>, a, b) -> T0` came back | **Aliases.** An eliminator dropped from a refinement because it only repeats another with extra arguments ignored (`app2` on a one-parameter function) is recorded, and held to the same faithfulness: its leading arguments have the parameters' types |
 
+## 6. Arrays
+
+**Model.** The literals `[a]` and `[a,b]`, and the Lean model's `index` and
+`setIndex`:
+
+- `idx` reads an element of an array or a character of a string, and
+  faults out of bounds. On an object it reads a property by name, or gives
+  `undefined`.
+- `idx=` stores into an array, in bounds or just past the end (a push), and
+  faults further out.
+
+Property stores now add a missing property, as the Lean `setProp` does.
+
+**Found.**
+
+- **Arrays.** T7 is the arrays, refined by `idx`: `[a,b] : (a, a) -> T7<T0 -> a>`,
+  which is `a[]`, indexed by numbers. The search finds that the two
+  elements must share a type.
+- **Reads.** `idx : (T7<a -> b>, a) -> b`. Strings indexed by numbers give
+  strings, `(T1, T0) -> T1`.
+- **Objects by key.** `idx` gives T2 on an object, by number or by string.
+  That is sound here only because no term can build the string `"x"` or
+  `"y"`: the literals are `""` and `"a"`, and no `typeof` name holds an
+  `x` or a `y`. The closed world shows through.
+- **Stores.** `idx= : (T7<a -> b>, a, b) -> b`, invariant, like the
+  property stores.
+- **Truthiness.** A conditional on an array takes its first branch.
+
+No typed term gets stuck.
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| Numbers were refined by `idx`: as indices, 0 and 1 differ in whether they fault | Faults count as no behaviour when refining. A fault is allowed, so it tells nothing about a member's type |
+| `[a,b]` typed `[1, "s"]` as an array of numbers: the samples of T0 had no 1, so index 1 was never read | A base sort's samples are its smallest members, then one from the far end |
+| `[a,b] : (a, a) -> T7<T0 -> a>` was never proposed: a refined head counted as one constant only with variable parameters | `simple_rules` also takes unrefined sorts as a refined head's parameters |
+| `app2 : (T4<a, b -> c>, a, b) -> c` lost out at the 20%-of-best bar. Two-argument calls are rare among the observations | A simple rule (at most one constant) that types what no chosen rule does needs only the first rule's small share (0.5%). A gain in precision alone still needs the 20% bar: without that, `coerce` took `+ : (T0, a) -> a`, sound only because T2 is the top, in place of `+ : (a, T1) -> T1` |
+| Results changed with the set of constructors searched | Each constructor's search draws from its own random stream |
+| The search with subtyping redid every constructor | It keeps the search of each constructor whose rules mention no widened sort |
+
+Also new: `TYSEARCH_ONLY='app2|[a,b]'` searches just those constructors.
+Constructor names have commas in them, hence the `|`.
+
 ## Next
 
 - **Statements:** `return`, `throw`, `try` and loops, with faults and
   abrupt completions. `return` needs a context type (the enclosing
   function's result), which the rule format doesn't have yet.
-- **Arrays:** indexing that faults out of bounds.
+- **Keys:** a string literal `"x"`, so that `idx` on objects by string
+  has no one result type. inty gives literal string types for keys.
 - **Sums:** `undefined`/`null` unions with `unwrap`, and tag tests
   (`typetest`, `caseTag`) with narrowing.
 - **Records with width subtyping in the suite:** order refined sorts by

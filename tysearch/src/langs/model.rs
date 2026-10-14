@@ -11,7 +11,8 @@
 //! (iteration 1); and variables in cells, as the model's environment holds
 //! them: `let`, assignment `x = e`, which closures see, and `e₁; e₂`
 //! (iteration 3); and objects with properties `x` and `y`, read with `.x`,
-//! stored with `.x =` (iteration 5).
+//! stored with `.x =` (iteration 5); and arrays, indexed as the model's
+//! `Value.index` and `Value.setIndex` do (iteration 6).
 //!
 //! Variables are de Bruijn indices. In a function's body `var(i)` is
 //! parameter `i` for `i` below the arity, and `var(arity)` is the function
@@ -58,6 +59,40 @@ const GET_X: usize = 26;
 const GET_Y: usize = 27;
 const SET_X: usize = 28;
 const SET_Y: usize = 29;
+const ARR1: usize = 30;
+const ARR2: usize = 31;
+const IDX: usize = 32;
+const SET_IDX: usize = 33;
+
+/// An array's cell: its elements. Equal only if the same cell.
+#[derive(Clone)]
+pub struct ArrCell(Rc<RefCell<Vec<Val>>>);
+
+impl std::fmt::Debug for ArrCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "arr@{:p}", Rc::as_ptr(&self.0))
+    }
+}
+
+impl PartialEq for ArrCell {
+    fn eq(&self, other: &ArrCell) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ArrCell {}
+
+impl Hash for ArrCell {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (Rc::as_ptr(&self.0) as usize).hash(h)
+    }
+}
+
+/// A number as an array index: a non-negative integer.
+fn to_index(bits: u64) -> Option<usize> {
+    let n = f64::from_bits(bits);
+    (n >= 0.0 && n.fract() == 0.0 && n < 1e9).then_some(n as usize)
+}
 
 /// An object's cell: its properties, in order. Two objects are the same
 /// object only if they are the same cell, as `===` sees them.
@@ -136,6 +171,7 @@ pub enum Val {
     Null,
     Clo(Rc<Closure>),
     Obj(ObjCell),
+    Arr(ArrCell),
 }
 
 fn num(f: f64) -> Val {
@@ -168,6 +204,13 @@ impl Val {
                                 .all(|((l, v), (m, w))| l == m && v.same(w, depth - 1)))
                 }
             }
+            (Val::Arr(a), Val::Arr(b)) => {
+                a == b || {
+                    let (x, y) = (a.0.borrow(), b.0.borrow());
+                    x.len() == y.len()
+                        && (depth == 0 || x.iter().zip(y.iter()).all(|(v, w)| v.same(w, depth - 1)))
+                }
+            }
             (a, b) => a == b,
         }
     }
@@ -184,6 +227,9 @@ impl Val {
                     .map(|s| Slot::new(s.get().isolate(depth - 1)))
                     .collect(),
             })),
+            Val::Arr(a) if depth > 0 => Val::Arr(ArrCell(Rc::new(RefCell::new(
+                a.0.borrow().iter().map(|v| v.isolate(depth - 1)).collect(),
+            )))),
             Val::Obj(o) if depth > 0 => Val::Obj(ObjCell(Rc::new(RefCell::new(
                 o.0.borrow()
                     .iter()
@@ -204,7 +250,7 @@ impl Val {
             Val::Str(s) => !s.is_empty(),
             Val::Bool(b) => *b,
             Val::Undefined | Val::Null => false,
-            Val::Clo(_) | Val::Obj(_) => true,
+            Val::Clo(_) | Val::Obj(_) | Val::Arr(_) => true,
         }
     }
 
@@ -252,6 +298,10 @@ impl Default for Model {
                 Con::op(".y", 1),
                 Con::op(".x=", 2),
                 Con::op(".y=", 2),
+                Con::op("[a]", 1),
+                Con::op("[a,b]", 2),
+                Con::op("idx", 2),
+                Con::op("idx=", 3),
             ],
             fuel: 64,
         }
@@ -327,14 +377,73 @@ impl Model {
                         None => Outcome::stuck("propertyNotFound"),
                     };
                 }
+                // As the model's `setProp`: a property the object has keeps
+                // its place; one it hasn't is added.
                 let v = value!(kid(1, env));
                 let mut fields = o.0.borrow_mut();
                 match fields.iter_mut().find(|(l, _)| *l == label) {
-                    Some(slot) => {
-                        slot.1 = v.clone();
-                        Value(v)
+                    Some(slot) => slot.1 = v.clone(),
+                    None => fields.push((label, v.clone())),
+                }
+                Value(v)
+            }
+            ARR1 | ARR2 => {
+                let mut items = Vec::new();
+                for i in 0..t.kids.len() {
+                    items.push(value!(kid(i, env)));
+                }
+                Value(Val::Arr(ArrCell(Rc::new(RefCell::new(items)))))
+            }
+            // As the model's `Value.index`: an array's or a string's element,
+            // a fault at an index it hasn't; an object's property by name,
+            // or `undefined`.
+            IDX => {
+                let o = value!(kid(0, env));
+                let i = value!(kid(1, env));
+                match (&o, &i) {
+                    (Val::Arr(a), Val::Num(n)) => {
+                        match to_index(*n).and_then(|k| a.0.borrow().get(k).cloned()) {
+                            Some(v) => Value(v),
+                            None => Outcome::Fault("outOfBounds".into()),
+                        }
                     }
-                    None => Outcome::stuck("propertyNotFound"),
+                    (Val::Str(s), Val::Num(n)) => match to_index(*n).and_then(|k| s.chars().nth(k))
+                    {
+                        Some(c) => Value(Val::Str(c.to_string())),
+                        None => Outcome::Fault("outOfBounds".into()),
+                    },
+                    (Val::Obj(o), Val::Str(k)) => Value(
+                        o.0.borrow()
+                            .iter()
+                            .find(|(l, _)| l == k)
+                            .map_or(Val::Undefined, |(_, v)| v.clone()),
+                    ),
+                    (Val::Obj(_), Val::Num(_)) => Value(Val::Undefined),
+                    _ => Outcome::stuck("notIndexable"),
+                }
+            }
+            // As the model's `Value.setIndex`: in bounds, or just past the
+            // end (a push); a fault further.
+            SET_IDX => {
+                let o = value!(kid(0, env));
+                let i = value!(kid(1, env));
+                let v = value!(kid(2, env));
+                match (&o, &i) {
+                    (Val::Arr(a), Val::Num(n)) => {
+                        let mut items = a.0.borrow_mut();
+                        match to_index(*n) {
+                            Some(k) if k < items.len() => {
+                                items[k] = v.clone();
+                                Value(v)
+                            }
+                            Some(k) if k == items.len() && k < 64 => {
+                                items.push(v.clone());
+                                Value(v)
+                            }
+                            _ => Outcome::Fault("outOfBounds".into()),
+                        }
+                    }
+                    _ => Outcome::stuck("badAssignmentTarget"),
                 }
             }
             SEQ => {
@@ -350,7 +459,7 @@ impl Model {
                     Val::Undefined => "undefined",
                     Val::Null => "object",
                     Val::Clo(_) => "function",
-                    Val::Obj(_) => "object",
+                    Val::Obj(_) | Val::Arr(_) => "object",
                 }
                 .into(),
             )),
@@ -459,6 +568,17 @@ impl Language for Model {
             Val::Undefined => "undefined".into(),
             Val::Null => "null".into(),
             Val::Clo(c) => format!("fn{}({})", c.arity, self.show_term(&c.body)),
+            Val::Arr(a) => {
+                let items: Vec<String> =
+                    a.0.borrow()
+                        .iter()
+                        .map(|v| match v {
+                            Val::Arr(_) | Val::Obj(_) => "...".to_string(),
+                            v => self.show_value(v),
+                        })
+                        .collect();
+                format!("[{}]", items.join(", "))
+            }
             // Shallow: an object can hold itself.
             Val::Obj(o) => {
                 let fields: Vec<String> =
