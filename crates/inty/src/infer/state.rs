@@ -304,6 +304,12 @@ pub struct InferState {
     /// `default`, and those whose cases cover every value of a finite
     /// discriminant. `definitely_returns` reads it once a body is inferred.
     pub exhaustive_switches: std::collections::HashSet<crate::span::Span>,
+    /// Set just before a member of an object literal or class (a method,
+    /// a getter, a field holding a function literal) is inferred, and taken
+    /// by that function's body: what never completes there returns `never`,
+    /// not a type variable, as the object's type holds the member
+    /// monomorphically (each use would otherwise fix it).
+    pub(crate) member_function: bool,
     /// The spans of the factory functions `class` declarations lowered to
     /// (`Program::class_decls`): typed where they stand, not hoisted.
     pub class_decls: std::collections::HashSet<crate::span::Span>,
@@ -519,6 +525,7 @@ impl InferState {
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
             exhaustive_switches: std::collections::HashSet::new(),
+            member_function: false,
             class_decls: std::collections::HashSet::new(),
             reserved_class_ids: HashMap::new(),
             promise_results: Vec::new(),

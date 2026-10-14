@@ -143,7 +143,10 @@ impl InferState {
                     span: prop_span,
                 } => {
                     let prop_name = self.prop_key_to_name(key);
-                    let value_type = self.infer_expr(env, value)?;
+                    self.member_function = matches!(value, Expr::Function { .. });
+                    let value_type = self.infer_expr(env, value);
+                    self.member_function = false;
+                    let value_type = value_type?;
                     // IR-channel annotation (Python `field: T`): lower the
                     // shared `TypeAst` to a `Type` through the canonical
                     // bridge — the same path params and method returns use
@@ -287,6 +290,7 @@ impl InferState {
                     // Infer method with the shared 'this' type. A Python
                     // method's `-> T` return annotation (if any) is checked
                     // here too.
+                    self.member_function = true;
                     let method_type = self.infer_function_with_this(
                         env,
                         None,
@@ -296,7 +300,9 @@ impl InferState {
                         return_type_ast.as_ref(),
                         shared_this.clone(),
                         *method_span,
-                    )?;
+                    );
+                    self.member_function = false;
+                    let method_type = method_type?;
                     // A class's method is on its prototype; an object
                     // literal's is its own data property.
                     let entry = if *proto {
@@ -324,7 +330,10 @@ impl InferState {
                     // enclosing function's return type.
                     let getter_env =
                         env.extend("this".to_string(), TypeScheme::mono(shared_this.clone()));
-                    let ret_type = self.infer_body_return_type(&getter_env, body, true, *span)?;
+                    self.member_function = true;
+                    let ret_type = self.infer_body_return_type(&getter_env, body, true, *span);
+                    self.member_function = false;
+                    let ret_type = ret_type?;
                     // A getter is read, not stored to: a store throws. A
                     // class's getter is on its prototype.
                     let entry = if *proto {
@@ -431,12 +440,16 @@ impl InferState {
         if written.is_empty() {
             return Ok((written, RowTail::Open(base)));
         }
-        let merged = self.merge_spread(
-            span,
-            RowType::empty_open(base),
-            RowType::closed_entries(written),
-        )?;
-        Ok((merged.props, merged.tail))
+        // A written field is there, so it wins over whatever the spread
+        // gives, and keeps its own entry: a getter stays one (a spread's
+        // copy rule, which makes every field a value's, is the operand's).
+        // The spread's result keeps the rest, beyond the written labels.
+        let base_row =
+            self.extend_row_with(span, RowType::empty_open(base), written.keys().cloned())?;
+        let base_row = self.row_view(base_row);
+        let mut props = base_row.props;
+        props.extend(written);
+        Ok((props, base_row.tail))
     }
 
     /// Resolve `Spread(operand, so_far, result)` (`{...so_far,

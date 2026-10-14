@@ -526,7 +526,11 @@ impl Cx {
     ) -> Lowered {
         match pattern(test) {
             Some(Pattern::Truthy { name, negated }) => {
-                let (i, b) = self.binder(name)?;
+                // (A name the program doesn't bind, a builtin's, is tested
+                // as any value is.)
+                let Ok((i, b)) = self.binder(name) else {
+                    return self.plain_test(test, yes, no);
+                };
                 if b.sum != Some(Sum::Maybe) {
                     return self.plain_test(test, yes, no);
                 }

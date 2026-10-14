@@ -684,6 +684,7 @@ left on purpose, or places where inty is less precise than the model:
 | Divergence | inty | model | Roadmap phase |
 |---|---|---|---|
 | A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
+| A member of an object or class that never completes (`m() { throw 1; }`), its result then stored where another type goes | `never`, which unifies with no other type | a type variable, fixed by its first use | none: inty keeps `never` for members so that `util.fail` can be used at several types, which the model's monomorphic object can't |
 | A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | none yet: inty decides what completes syntactically (`definitely_returns`), the model by typing |
 | A field every arm of a discriminated union has, read without a test of the tag: `v.kind` | accepts (the union of the arms' field types) | rejects (a variant's fields are read once a test takes it apart) | none: intentional ([GAPS.md](GAPS.md)) |
 | A literal type where a type is synthesised: `c ? t : "b"` with `t: "a"` | widens it to `String` | rejects (a literal synthesises `String`, and branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
@@ -781,7 +782,10 @@ where inty's `&&` and `||` give what can come out, the row above. inty's
 function that never completes (it only throws, or loops forever) now
 returns a type variable, as the model's does, not `never`, which joined
 with no other return type (`c ? f : g`, `[f, g]`, and a callback were
-refused). The front end that writes inty's unit-test programs for the
+refused). A member of an object or a class keeps `never`: the object's
+type holds it as it is, unlike a binding's scheme, so a variable would be
+fixed by its first use (`util.fail` used as a number, then as a string,
+which `never` lets through and the model's monomorphic object rejects). The front end that writes inty's unit-test programs for the
 model now also writes `&&` and `||` of any type, a test of a sum's
 truthiness, an early exit (`if (x == null) return …; rest`, the rest
 the test's other branch) and `??`: of the 2,909 programs the unit tests
