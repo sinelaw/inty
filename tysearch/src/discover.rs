@@ -1520,6 +1520,16 @@ impl Climb {
 /// each capability the system can do without, typing no fewer programs.
 /// No configuration: the language decides what the type system needs.
 pub fn climb<L: Language>(lang: &L, cfg: &Config) -> Climb {
+    climb_with(lang, cfg, |_, _| {})
+}
+
+/// `climb`, calling `on_step` with each step as soon as it is run (and its
+/// number), so the type systems can be shown as they appear.
+pub fn climb_with<L: Language>(
+    lang: &L,
+    cfg: &Config,
+    mut on_step: impl FnMut(usize, &Step),
+) -> Climb {
     let mut cache = SearchCache::new();
     let mut run = |f: Features| {
         let mut c = cfg.clone();
@@ -1535,6 +1545,7 @@ pub fn climb<L: Language>(lang: &L, cfg: &Config) -> Climb {
         kept: true,
         discovery: run(cur),
     });
+    on_step(steps.len() - 1, steps.last().unwrap());
     let mut best = 0;
     let applicable = steps[0].discovery.applicable;
     // A gain is at least one program in five hundred (and at least one)
@@ -1566,6 +1577,7 @@ pub fn climb<L: Language>(lang: &L, cfg: &Config) -> Climb {
                 kept,
                 discovery: d,
             });
+            on_step(steps.len() - 1, steps.last().unwrap());
             if kept {
                 cur = cand;
                 best = steps.len() - 1;
@@ -1598,6 +1610,7 @@ pub fn climb<L: Language>(lang: &L, cfg: &Config) -> Climb {
                 kept,
                 discovery: d,
             });
+            on_step(steps.len() - 1, steps.last().unwrap());
             if kept {
                 cur = cand;
                 best = steps.len() - 1;
@@ -1611,41 +1624,86 @@ pub fn climb<L: Language>(lang: &L, cfg: &Config) -> Climb {
     Climb { steps, last: best }
 }
 
+/// What one step of the climb did, and, if it was kept, the type system
+/// it leaves: every rule, those new since `prev` (the last kept step's)
+/// marked `+`, and those gone listed after.
+pub fn step_report(i: usize, s: &Step, prev: &[String]) -> String {
+    let d = &s.discovery;
+    let mut out = format!(
+        "step {i}: {}  ->  {:.1}% of safe programs typed, {} unsound, {} rules (size {})  [{}]\n",
+        s.change,
+        100.0 * d.check.coverage(),
+        d.check.unsound,
+        d.rules.len(),
+        d.size(),
+        if s.kept { "kept" } else { "dropped" }
+    );
+    if !s.kept {
+        return out;
+    }
+    let names = d.names();
+    let now = d.rule_strings();
+    if i == 0 {
+        out.push_str("  sorts (kinds of value, by where they get stuck):\n");
+        for (t, ex) in d.sort_examples.iter().enumerate() {
+            out.push_str(&format!("    T{t} = {}, ...\n", ex.join(", ")));
+        }
+    }
+    let caps: Vec<&str> = capabilities()
+        .into_iter()
+        .filter(|c| (c.get)(&s.features))
+        .map(|c| c.name)
+        .collect();
+    out.push_str(&format!(
+        "  the type system now, with {}:\n",
+        if caps.is_empty() {
+            "ground rules only".to_string()
+        } else {
+            caps.join(", ")
+        }
+    ));
+    if !d.subtypes.is_empty() {
+        let order: Vec<String> = d
+            .subtypes
+            .iter()
+            .map(|&(a, b)| format!("{} <: {}", names.sorts[a], names.sorts[b]))
+            .collect();
+        out.push_str(&format!("    subtyping: {}\n", order.join(", ")));
+    }
+    for r in &now {
+        let mark = if prev.contains(r) { ' ' } else { '+' };
+        out.push_str(&format!("  {mark} {r}\n"));
+    }
+    for r in prev.iter().filter(|r| !now.contains(r)) {
+        out.push_str(&format!("  - {r}\n"));
+    }
+    out
+}
+
 impl fmt::Display for Climb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut prev: Vec<String> = Vec::new();
         for (i, s) in self.steps.iter().enumerate() {
-            let d = &s.discovery;
-            writeln!(
-                f,
-                "step {i}: {}  ->  {:.1}% of safe programs typed, {} unsound, {} rules (size {})  [{}]",
-                s.change,
-                100.0 * d.check.coverage(),
-                d.check.unsound,
-                d.rules.len(),
-                d.size(),
-                if s.kept { "kept" } else { "dropped" }
-            )?;
+            write!(f, "{}", step_report(i, s, &prev))?;
             if s.kept {
-                let now = d.rule_strings();
-                for r in now.iter().filter(|r| !prev.contains(r)) {
-                    writeln!(f, "    + {r}")?;
-                }
-                for r in prev.iter().filter(|r| !now.contains(r)) {
-                    writeln!(f, "    - {r}")?;
-                }
-                prev = now;
+                prev = s.discovery.rule_strings();
             }
         }
+        write!(f, "{}", self.summary())
+    }
+}
+
+impl Climb {
+    /// The capabilities kept, and the coverage.
+    pub fn summary(&self) -> String {
         let last = &self.steps[self.last];
         let caps: Vec<&str> = capabilities()
             .into_iter()
             .filter(|c| (c.get)(&last.features))
             .map(|c| c.name)
             .collect();
-        writeln!(
-            f,
-            "\nresult (step {}): {:.1}% of safe programs typed, with {}",
+        format!(
+            "\nresult (step {}): {:.1}% of safe programs typed, with {}\n",
             self.last,
             100.0 * last.discovery.check.coverage(),
             if caps.is_empty() {

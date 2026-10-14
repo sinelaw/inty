@@ -1,4 +1,4 @@
-use tysearch::discover::{climb, discover, Config};
+use tysearch::discover::{climb_with, discover, step_report, Config};
 use tysearch::lang::Language;
 use tysearch::langs::{
     arith::Arith, coerce::Coerce, core::Core, effects::Effects, files::Files, model::Model,
@@ -14,9 +14,18 @@ const USAGE: &str = "usage: tysearch <arith|core|model|unityped|coerce|pairs|sub
 
 fn run<L: Language>(lang: &L, cfg: &Config, climbing: bool) {
     if climbing {
-        let c = climb(lang, cfg);
-        print!("{c}");
-        println!("\nthe system found:\n");
+        // Each step as it comes, with the type system it leaves.
+        let mut prev: Vec<String> = Vec::new();
+        let c = climb_with(lang, cfg, |i, s| {
+            print!("{}", step_report(i, s, &prev));
+            if s.kept {
+                prev = s.discovery.rule_strings();
+            }
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        });
+        print!("{}", c.summary());
+        println!("\nthe system found, in full:\n");
         print!("{}", c.result());
     } else {
         print!("{}", discover(lang, cfg));

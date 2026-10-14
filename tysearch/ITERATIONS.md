@@ -475,6 +475,11 @@ as many with a smaller system, and gets none stuck. It stops when nothing
 helps or nearly everything is typed, then drops what the result can do
 without. Runs reuse the searches a change doesn't bear on.
 
+**Shown as it goes.** Each step prints when it is done: whether it was
+kept, and if so the whole type system it leaves, with the capabilities in
+force, rules new since the last kept step marked `+`, and those gone
+marked `-`. The sorts are listed once, at the start.
+
 **Found.**
 
 ```
