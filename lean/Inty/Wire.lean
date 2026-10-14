@@ -570,6 +570,11 @@ def verdict (clock : Nat) (line : String) : String :=
 -- want one argument per parameter (optional parameters come with phase 10).
 #guard verdict 100 "(app (func 0 (str s:a)) (num 1 0))" == "reject;value str s:a"
 #guard verdict 100 "(app (num 1 0" == "error unparsable"
+-- A string's and an array's methods, natives by their number of arguments.
+#guard verdict 100 "(mcall (str s:hello) s:slice/1 (num 1 0))" == "type string;value str s:ello"
+#guard verdict 100 "(get (mcall (arr (num 1 0) (num 2 0)) s:slice/1 (num 1 0)) s:length)" ==
+  s!"type number;value num {(1 : Float).toBits}"
+#guard verdict 100 "(mcall (num 1 0) s:slice/1 (num 1 0))" == "reject;stuck notIndexable"
 -- A sum told apart by `typeof`: a value of a case is injected into it, and a
 -- test of its `typeof` takes it apart; it can't be used as a case.
 #guard verdict 100

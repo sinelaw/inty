@@ -973,6 +973,44 @@ theorem Pred.improveArgs_inst {c : Cls} {args : List Ty} {φ : Subst} {q₀ : Pr
       simp only [hstr, Pred.decide₀, ↓reduceIte, Improve.Holds, Ty.subst_app, List.map_cons,
         List.map_nil]
       exact TyEq.tuple₂ hκ hσ
+  | @methodString l σ₀ hm =>
+    match args, hl with
+    | [t, κ, σ], _ =>
+      obtain ⟨rfl, ht, hκ, hσ⟩ := PredEq.three hq
+      have hne : l ≠ "length" := fun e => by subst e; simp [stringMethod] at hm
+      have he := stringMethod_hom (f := (·.subst φ)) (fun _ _ _ => by simp [Ty.subst_app]) hm
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rcases Ty.whnf_con_of_tyEq ht with ⟨a, ha⟩ | hstr
+      · simp [ha, Ty.isVar] at hnv
+      simp only [hstr, Pred.decide₀, hne, ↓reduceIte, hm, Improve.Holds, Ty.subst_app,
+        List.map_cons, List.map_nil, he]
+      exact TyEq.tuple₂ hκ hσ
+  | @methodArray τ₀ l σ₀ hm =>
+    match args, hl with
+    | [t, κ, σ], _ =>
+      obtain ⟨rfl, ht, hκ, hσ⟩ := PredEq.three hq
+      have hne : l ≠ "length" := fun e => by subst e; simp [arrayMethod] at hm
+      rw [Pred.improveArgs_cons]
+      split
+      · simp [Cls.arity, Improve.Holds]
+      rename_i hnv
+      rcases Ty.whnf_app_of_tyEq ht with ⟨a, ha⟩ | ⟨xs, hxs, hxl, hz⟩
+      · simp [ha, Ty.isVar] at hnv
+      match xs, hxl with
+      | [x], _ =>
+        have hx : TyEq τ₀ (x.subst φ) := (hz (x, τ₀) (by simp)).symm
+        obtain ⟨σx, hmx, hσx⟩ := arrayMethod_tyEq hm hx
+        -- The method on the unfolded type, before the substitution.
+        obtain ⟨σ₁, hm₁⟩ := arrayMethod_any (τ' := x) hm
+        have hsub := arrayMethod_hom (f := (·.subst φ)) (fun _ _ _ => by simp [Ty.subst_app]) hm₁
+        rw [hsub] at hmx
+        cases hmx
+        simp only [hxs, Pred.decide₀, hne, ↓reduceIte, hm₁, Improve.Holds, Ty.subst_app,
+          List.map_cons, List.map_nil]
+        exact TyEq.tuple₂ hκ (hσ.trans hσx)
   | @indexArray τ₀ =>
     match args, hl with
     | [t, i, e], _ =>
@@ -2185,6 +2223,20 @@ theorem Inst.fundep_tv {q : Pred} (h : Inst q) {ds rs : List Ty} (hf : q.fundep 
     obtain ⟨rfl, rfl⟩ := hf
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
     rcases hr with rfl | rfl <;> exact absurd hb Ty.tv_con
+  | methodString hm =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with rfl | rfl
+    · exact absurd hb Ty.tv_con
+    · exact absurd hb (stringMethod_tv hm)
+  | @methodArray τ l σ hm =>
+    simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨rfl, rfl⟩ := hf
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with rfl | rfl
+    · exact absurd hb Ty.tv_con
+    · exact ⟨_, List.mem_singleton_self _, Ty.tv_app.mpr ⟨τ, by simp, arrayMethod_tv hm hb⟩⟩
   | @indexArray τ =>
     simp only [Pred.fundep, Option.some.injEq, Prod.mk.injEq] at hf
     obtain ⟨rfl, rfl⟩ := hf
@@ -2392,6 +2444,7 @@ theorem Pred.decide₀_keep_merge {c : Cls} {t : Ty} {rest : List Ty}
     (h : Pred.decide₀ c t rest = .keep) : c = .merge := by
   unfold Pred.decide₀ at h
   split at h <;> first | rfl | (split at h <;> cases h) | cases h |
+    (split at h <;> (try split at h) <;> cases h) |
     exact absurd h Pred.decideInject_ne_keep | exact absurd h Pred.decideStrip_ne_keep |
     exact absurd h Pred.decideCase_ne_keep
 
@@ -4603,6 +4656,7 @@ theorem Pred.decide₀_merge_keep {t : Ty} {rest : List Ty} (h : Pred.decide₀ 
     | exact ⟨_, _, _, _, rfl, .inr ⟨rfl, h⟩⟩
     | cases h
     | (split at h <;> cases h)
+    | (split at h <;> (try split at h) <;> cases h)
     | exact absurd h Pred.decideInject_ne_keep
     | exact absurd h Pred.decideStrip_ne_keep
     | exact absurd h Pred.decideCase_ne_keep

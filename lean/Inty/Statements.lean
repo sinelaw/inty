@@ -485,7 +485,9 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     (∃ T ts Rs c t R args, ∃ i : Nat, T.ftv = [] ∧ T.whnf = .variant .typeOf ts Rs ∧ ts.Nodup ∧
       c.typeTag = some t ∧ ts[i]? = some t ∧ Rs[i]? = some R ∧ TyEq (.app c args) R ∧
       (Ty.app c args).ftv = [] ∧ p = ⟨.inject T, [.app c args]⟩) ∨
-    ∃ T x s, Inst ⟨.inject T, [x]⟩ ∧ TyEq x .string ∧ p = ⟨.inject T, [.strLit s]⟩ :=
+    (∃ T x s, Inst ⟨.inject T, [x]⟩ ∧ TyEq x .string ∧ p = ⟨.inject T, [.strLit s]⟩) ∨
+    (∃ l σ, stringMethod l = some σ ∧ p = ⟨.hasProp l, [.string, .proto, σ]⟩) ∨
+    ∃ τ l σ, arrayMethod τ l = some σ ∧ p = ⟨.hasProp l, [.array τ, .proto, σ]⟩ :=
   ⟨fun h => by
     cases h with
     | plusNumber => exact .inl rfl
@@ -520,7 +522,11 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     | injectArm hT hw hn htag hi hR he ha =>
       exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, _, _, _, _, _, hT, hw, hn, htag, hi, hR, he, ha, rfl⟩)))))))))))))))))))
     | injectLit h hx =>
-      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, h, hx, rfl⟩))))))))))))))))))),
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, _, h, hx, rfl⟩))))))))))))))))))))
+    | methodString h =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inl ⟨_, _, h, rfl⟩)))))))))))))))))))))
+    | methodArray h =>
+      exact .inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr (.inr ⟨_, _, _, h, rfl⟩))))))))))))))))))))),
    fun h => by
     rcases h with rfl | rfl | ⟨l, ls, fs, k, σ, hf, rfl⟩ | ⟨τ, s, rfl⟩ | ⟨τ, s, rfl⟩ |
       ⟨k, τ, s, r, hc, rfl⟩ | ⟨τ, s, r, hc, rfl⟩ | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ | rfl | ⟨τ, rfl⟩ |
@@ -528,7 +534,7 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
       ⟨T, z, c, args, he, hT, ha, hc, hn, rfl⟩ | ⟨z, σ, rfl⟩ | ⟨c, args, hm, hn, hu, rfl⟩ |
       ⟨l, ts, Rs, t, R, i, hnd, hi, hR, rfl⟩ |
       ⟨T, ts, Rs, c, t, R, args, i, hT, hw, hn, htag, hti, hR', he, ha, rfl⟩ |
-      ⟨T, x, s, h, hx, rfl⟩
+      ⟨T, x, s, h, hx, rfl⟩ | ⟨l, σ, hm, rfl⟩ | ⟨τ, l, σ, hm, rfl⟩
     · exact .plusNumber
     · exact .plusString
     · exact .hasProp hf
@@ -549,7 +555,9 @@ example : Inst p ↔ p = ⟨.plus, [.number]⟩ ∨ p = ⟨.plus, [.string]⟩ �
     · exact .stripSelf hm hn hu
     · exact .caseHit hnd hi hR
     · exact .injectArm hT hw hn htag hti hR' he ha
-    · exact .injectLit h hx⟩
+    · exact .injectLit h hx
+    · exact .methodString hm
+    · exact .methodArray hm⟩
 
 /-- A constraint left on a type variable, or a `Merge` waiting on one (each
 looked at unfolded), is all `HoldsOrVar` allows beside the instances. -/
@@ -744,6 +752,10 @@ example : ¬ HasType L [] [] none .synth .synth (.get (.obj ["x"] [num 1] [.data
           exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         case lengthString =>
           exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case methodString =>
+          exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case methodArray =>
+          exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · obtain ⟨_, hm, -⟩ := hi; cases hm
 
@@ -774,6 +786,8 @@ example : ¬ HasType L [] [] none .synth .synth
           exact ne_con (by decide) (hk.trans (TyEq.slot hss').2.1)
         case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case methodString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case methodArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · obtain ⟨_, hm, -⟩ := hi; cases hm
 
@@ -792,6 +806,8 @@ example : ¬ HasType L [] [] none .synth .synth (.get (num 1) "x") τ := by
         case hasProp => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         case lengthArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         case lengthString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case methodString => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
+        case methodArray => exact ne_con (by simp) (e₁.trans (PredEq.three hq).2.1)
         all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
       · obtain ⟨_, hm, -⟩ := hi; cases hm
 
@@ -1399,7 +1415,8 @@ example : ∀ (clock : Nat) (h : Heap) (thisv : Value) (args : List Value) (cenv
 example : ∀ (h : Heap) (thisv : Value) (args : List Value) (p : Prim), call 0 h (Value.prim p) thisv args = (Result.timeout, 0, h) :=
   @call.eq_3
 example : ∀ (h : Heap) (thisv : Value) (args : List Value) (p : Prim) (n : Nat),
-      call (Nat.succ n) h (Value.prim p) thisv args = (Prim.apply p args, n, h) :=
+      call (Nat.succ n) h (Value.prim p) thisv args =
+        (Prod.fst (Prim.apply p h thisv args), n, Prod.snd (Prim.apply p h thisv args)) :=
   @call.eq_4
 example : ∀ (clock : Nat) (h : Heap) (vf thisv : Value) (args : List Value),
       (∀ (cenv : List Nat) (n : Nat) (body : Inty.Expr), vf = Value.closure cenv n body → False) →
@@ -1531,13 +1548,19 @@ example : ∀ (h : Heap) (l : String) (ℓ : Nat),
         match h[ℓ]? with
         | some (Value.items vs) =>
           if l = "length" then Read.value (Value.number (Nat.toFloat (List.length vs)))
-          else Read.fail (Result.stuck Stuck.propertyNotFound)
+          else
+            match Prim.ofArray l with
+            | some p => Read.value (Value.prim p)
+            | none => Read.fail (Result.stuck Stuck.propertyNotFound)
         | x => Read.fail (Result.stuck Stuck.notIndexable) :=
   @Value.read.eq_2
 example : ∀ (h : Heap) (l s : String),
       Value.read h l (Value.string s) =
         if l = "length" then Read.value (Value.number (Nat.toFloat (String.length s)))
-        else Read.fail (Result.stuck Stuck.propertyNotFound) :=
+        else
+          match Prim.ofString l with
+          | some p => Read.value (Value.prim p)
+          | none => Read.fail (Result.stuck Stuck.propertyNotFound) :=
   @Value.read.eq_3
 example : ∀ (h : Heap) (l : String) (x : Value),
       (∀ (ℓ : Nat), x = Value.obj ℓ → False) →

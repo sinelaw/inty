@@ -192,11 +192,15 @@ theorem Value.read_good {h : Heap} (hh : NoGetterHeap h) (v : Value) (l : String
   · split
     · split
       · exact .inl ⟨_, rfl, rfl⟩
-      · exact .inr ⟨_, rfl, trivial, nofun⟩
+      · split
+        · exact .inl ⟨_, rfl, rfl⟩
+        · exact .inr ⟨_, rfl, trivial, nofun⟩
     · exact .inr ⟨_, rfl, trivial, nofun⟩
   · split
     · exact .inl ⟨_, rfl, rfl⟩
-    · exact .inr ⟨_, rfl, trivial, nofun⟩
+    · split
+      · exact .inl ⟨_, rfl, rfl⟩
+      · exact .inr ⟨_, rfl, trivial, nofun⟩
   · exact .inr ⟨_, rfl, trivial, nofun⟩
 
 theorem Value.index_good {h : Heap} (hh : NoGetterHeap h) (v i : Value) :

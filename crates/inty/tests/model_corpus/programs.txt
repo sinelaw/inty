@@ -14274,3 +14274,7373 @@ r0;
 const r1 = h0(({ first: "s", length: 2 }));
 r1;
 
+"hello".slice(0 / 0);
+
+"hello".slice(1.7, -1);
+
+"AB".charCodeAt(-1);
+
+"AB".charCodeAt(2);
+
+"AB".charCodeAt(1.9);
+
+const o = {}; [{}, o].indexOf(o);
+
+[0 / 0].indexOf(0 / 0);
+
+var y = [];
+
+var fO24 = [];
+
+null >= (typeof (-8));
+
+-"qLn2r 8";
+
+var b1_uPT = !null;
+
+var Q_x = [-990, undefined];
+
+[];
+var BZfmC = typeof (-784);
+
+![false];
+
+true !== 0.9;
+
+undefined * -0.2;
+
+"u5";
+
+typeof false;
+
+var _WZ = 3.1;
+
+const r = "ab".slice(1);
+
+function g(o) { const y = o.x; const s = "" + y; const w = s === y; return y.toUpperCase(); }
+/** const o: {x: String | Number} */
+const o = {x: true ? "hi" : 5};
+g(o);
+
+/** const xs: (Number | String)[] */
+const xs = [5, "a"];
+function up(a, i) { const v = a[i]; const s = "" + v; const w = s === v; return v.toUpperCase(); }
+up(xs, 0);
+
+function up(s) { return s.toUpperCase(); }
+up(5);
+
+function inline(s) {
+if (s.length > 0 && s.charCodeAt(0) === 42) {
+return "<em>" + inline(s.slice(1, s.length - 1)) + "</em>";
+}
+return s;
+}
+const h = inline("*a*");
+
+function f(s) { return s.charCodeAt(0) + s.slice(1).length; }
+const n = f("abc");
+
+function first(xs) { return xs.slice(0, 1); }
+const a = first([1, 2]);
+const b = first("xy");
+
+function f(s) { return s.slice(1); }
+f(5);
+
+function f(s) { return s.charCodeAt(0); }
+f([1]);
+
+function f(o) { const a = o.x; function mk() { return { v: a, me: mk }; } o.z = mk(); return 0; }
+function mk2() { return { v: "s", me: mk2 }; }
+const obj = { x: 1, z: mk2() };
+f(obj);
+obj.z.v.toUpperCase();
+
+function w(line) { let n = 0; for (let i = 0; i < line.length; i++) { const c = line.charCodeAt(i); if (c === 32) n += 1; else if (c === 9) n += 4; else break; } return n; }
+const k = w("  x");
+
+function h2(x) { return x * 2; }
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return h2(x); }
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h2(true);
+r1.first;
+
+const h0 = (x) => x + "!";
+function h1(x) { return ({ first: x, second: x }); }
+const h3 = (x) => x;
+function h2(x) { return x.first; }
+const r0 = h3([1, 2]);
+r0.length * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.slice(1);
+
+function h1(x) { return x.slice(0, 1); }
+const h3 = (x) => x.slice(0, 1);
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return h3(x).first; }
+const r0 = h3("abc");
+r0.toUpperCase();
+
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h0 = (x) => x + "!";
+const h2 = (x) => h3(x).first;
+function h1(x) { return h3(x); }
+const r0 = h3("s");
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h2 = (x) => x * 2;
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1(x.indexOf("s"));
+const r0 = h1(true);
+r0;
+
+function h0(x) { return x; }
+const h2 = (x) => x * 2;
+function h1(x) { return x.slice(1); }
+const r0 = h0("s");
+r0 * 2;
+const r1 = h2(1);
+r1 * 2;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x.toUpperCase(); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h0("abc");
+r0.toUpperCase();
+const r1 = h2(({ first: "s", length: 2 }));
+r1.toUpperCase();
+
+function h2(x) { return x; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h1(1);
+const r0 = h2(1);
+r0.length * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+function h2(x) { return h3(x.charCodeAt(0)); }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h2("s");
+r0 + "!";
+
+const h1 = (x) => x + "!";
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0 * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1(x);
+const r0 = h0([1, 2]);
+r0 * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(x.toUpperCase()); }
+function h2(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+const r1 = h1("s");
+r1;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return x.length; }
+const r0 = h0([1, 2]);
+r0.slice(1);
+const r1 = h1("s");
+r1 * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h0("s");
+r0.length * 2;
+const r1 = h1(true);
+r1 * 2;
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+function h3(x) { return x.indexOf("s"); }
+function h0(x) { return x + "!"; }
+function h1(x) { return h2(x); }
+const r0 = h3(true);
+r0;
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x * 2;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return ({ first: x, second: x }); }
+const h2 = (x) => x;
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h0("s");
+r1.toUpperCase();
+
+const h0 = (x) => h1("s");
+function h1(x) { return x; }
+const r0 = h1("s");
+r0.slice(1);
+const r1 = h0("s");
+r1.toUpperCase();
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h1 = (x) => x.charCodeAt(0);
+function h0(x) { return x; }
+const r0 = h1("s");
+r0.toUpperCase();
+
+const h1 = (x) => h2(x.slice(1));
+const h0 = (x) => x;
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2([1, 2]);
+r0 * 2;
+const r1 = h0(1);
+r1.length * 2;
+
+function h0(x) { return x.slice(1); }
+const h1 = (x) => x + "!";
+function h3(x) { return ({ first: x, second: x }); }
+const h2 = (x) => x + "!";
+const r0 = h3(true);
+r0.slice(1);
+
+function h0(x) { return x; }
+function h1(x) { return x + "!"; }
+function h3(x) { return x; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h3(true);
+r0.first;
+const r1 = h2([1, 2]);
+r1.slice(1);
+
+const h3 = (x) => ({ first: x, second: x });
+function h1(x) { return x.toUpperCase(); }
+const h0 = (x) => x + "!";
+const h2 = (x) => h3(x);
+const r0 = h2(true);
+r0.toUpperCase();
+const r1 = h1("s");
+r1.slice(1);
+
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return h1(x).first; }
+function h1(x) { return x + "!"; }
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0 * 2;
+
+function h0(x) { return h1(x.indexOf("s")); }
+function h1(x) { return x; }
+const r0 = h1("s");
+r0;
+const r1 = h1("abc");
+r1.toUpperCase();
+
+function h2(x) { return h3(x); }
+const h0 = (x) => x * 2;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0 + "!";
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h1 = (x) => x * 2;
+const h2 = (x) => x * 2;
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.slice(1);
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return h1(x).first; }
+const r0 = h0(true);
+r0.length * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x * 2; }
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h0("s");
+r1 + "!";
+
+function h2(x) { return x.slice(0, 1); }
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x; }
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h1(true);
+r1 * 2;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h2(x) { return x + "!"; }
+const h0 = (x) => h1(x).first;
+const r0 = h0("abc");
+r0.length * 2;
+const r1 = h2(true);
+r1.slice(1);
+
+function h0(x) { return h2(x); }
+const h1 = (x) => ({ first: x, second: x });
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2("s");
+r0.toUpperCase();
+const r1 = h0("abc");
+r1.first;
+
+const h0 = (x) => x.toUpperCase();
+const h1 = (x) => x + "!";
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return h3(x); }
+const h1 = (x) => x * 2;
+const r0 = h1([1, 2]);
+r0 * 2;
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+function h1(x) { return h2(x); }
+const h0 = (x) => h2(x);
+const r0 = h1("abc");
+r0 + "!";
+const r1 = h1("s");
+r1 + "!";
+
+const h2 = (x) => ({ first: x, second: x });
+function h1(x) { return h2(x).first; }
+const h0 = (x) => x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x + "!"; }
+const r0 = h1("abc");
+r0.length * 2;
+const r1 = h0(1);
+r1.length * 2;
+
+function h1(x) { return x; }
+const h0 = (x) => h1(x);
+const r0 = h1("abc");
+r0 + "!";
+
+function h3(x) { return x; }
+function h2(x) { return x + "!"; }
+function h0(x) { return h3(x); }
+function h1(x) { return x; }
+const r0 = h2(1);
+r0 * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h3(x) { return x + "!"; }
+function h1(x) { return ({ first: x, second: x }); }
+const h2 = (x) => x.first;
+const r0 = h2(true);
+r0 + "!";
+const r1 = h1("abc");
+r1.length * 2;
+
+const h1 = (x) => h2(x);
+const h0 = (x) => h2(x);
+function h2(x) { return x; }
+const r0 = h2("s");
+r0.length * 2;
+
+function h1(x) { return h2(x); }
+const h3 = (x) => x + "!";
+function h0(x) { return x; }
+function h2(x) { return x + "!"; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h3("s");
+r1.slice(1);
+
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => h3(x);
+function h0(x) { return x.indexOf("s"); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const r0 = h1("s");
+r0 + "!";
+
+function h1(x) { return x; }
+function h2(x) { return h3(({ first: "s", length: 2 })); }
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+function h0(x) { return h1(({ first: "s", length: 2 })); }
+const r0 = h0("abc");
+r0.toUpperCase();
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x;
+const r0 = h0([1, 2]);
+r0.first;
+const r1 = h0("abc");
+r1;
+
+function h2(x) { return x * 2; }
+function h1(x) { return x * 2; }
+const h0 = (x) => h1("s");
+const r0 = h1(1);
+r0.toUpperCase();
+
+function h2(x) { return h3(1); }
+function h0(x) { return h3("s"); }
+const h1 = (x) => x + "!";
+function h3(x) { return x; }
+const r0 = h0([1, 2]);
+r0;
+
+function h3(x) { return x.toUpperCase(); }
+function h0(x) { return x.first; }
+function h1(x) { return h3(1); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+const r1 = h3(1);
+r1.toUpperCase();
+
+function h0(x) { return x.charCodeAt(0); }
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h1 = (x) => x + "!";
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const r0 = h2(true);
+r0 * 2;
+const r1 = h0(1);
+r1.length * 2;
+
+const h1 = (x) => x + "!";
+function h0(x) { return x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h1(1);
+r1.toUpperCase();
+
+const h0 = (x) => x.charCodeAt(0);
+function h1(x) { return x + "!"; }
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h0(true);
+r1.length * 2;
+
+const h1 = (x) => x.slice(0, 1);
+const h0 = (x) => x * 2;
+const r0 = h0(1);
+r0.toUpperCase();
+
+const h0 = (x) => h1(x.length);
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h0 = (x) => h1(x.indexOf("s"));
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1([1, 2]);
+r0;
+const r1 = h1(1);
+r1;
+
+function h1(x) { return h3("abc"); }
+function h3(x) { return x + "!"; }
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => h3(x);
+const r0 = h2(true);
+r0.length * 2;
+const r1 = h1("s");
+r1 + "!";
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x + "!"; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h0 = (x) => h2(x.slice(0, 1));
+function h1(x) { return ({ first: x, second: x }); }
+function h2(x) { return x * 2; }
+const r0 = h2("abc");
+r0;
+const r1 = h0("s");
+r1.slice(1);
+
+const h0 = (x) => h2(x);
+function h2(x) { return x; }
+const h1 = (x) => h2(true);
+const r0 = h2(true);
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1.first;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return x; }
+const h1 = (x) => x;
+const r0 = h2(1);
+r0.toUpperCase();
+const r1 = h2("abc");
+r1.slice(1);
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return x.length; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1("s");
+r0 + "!";
+
+const h3 = (x) => ({ first: x, second: x });
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h1(x) { return h3(x).first; }
+function h2(x) { return h3(x); }
+const r0 = h1([1, 2]);
+r0.length * 2;
+const r1 = h3([1, 2]);
+r1 * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.slice(0, 1); }
+const r0 = h1("s");
+r0.slice(1);
+const r1 = h0("abc");
+r1 * 2;
+
+function h1(x) { return x * 2; }
+function h0(x) { return h1(true); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h0(x) { return x; }
+const h1 = (x) => x;
+const h2 = (x) => x * 2;
+const r0 = h2(true);
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h0(x) { return h1(x.charCodeAt(0)); }
+const h1 = (x) => x + "!";
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h0(1);
+r1 * 2;
+
+function h1(x) { return x + "!"; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0.first;
+const r1 = h0(1);
+r1 * 2;
+
+const h1 = (x) => x * 2;
+const h3 = (x) => x + "!";
+function h2(x) { return x; }
+const h0 = (x) => x * 2;
+const r0 = h3(1);
+r0.toUpperCase();
+const r1 = h0(true);
+r1.slice(1);
+
+function h2(x) { return x + "!"; }
+const h0 = (x) => h2(x).first;
+const h1 = (x) => h2(x.charCodeAt(0));
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+function h0(x) { return h1([1, 2]); }
+const h1 = (x) => x.slice(0, 1);
+const r0 = h1(true);
+r0 + "!";
+
+const h1 = (x) => x.toUpperCase();
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h3(x) { return x; }
+function h0(x) { return h1(x); }
+function h1(x) { return h2(x); }
+const h2 = (x) => h3(x).first;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+const h0 = (x) => x.toUpperCase();
+const h3 = (x) => x * 2;
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h1(1);
+r0.length * 2;
+const r1 = h2([1, 2]);
+r1;
+
+const h3 = (x) => x + "!";
+function h0(x) { return x.slice(0, 1); }
+const h1 = (x) => x.toUpperCase();
+const h2 = (x) => x.indexOf("s");
+const r0 = h1(true);
+r0 * 2;
+const r1 = h0(1);
+r1 + "!";
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x.first); }
+const r0 = h0(true);
+r0 * 2;
+const r1 = h1("abc");
+r1.toUpperCase();
+
+function h0(x) { return x + "!"; }
+const h2 = (x) => x.charCodeAt(0);
+const h1 = (x) => x + "!";
+const r0 = h1(true);
+r0 * 2;
+const r1 = h1(1);
+r1.slice(1);
+
+function h1(x) { return x; }
+function h0(x) { return h1(x); }
+const r0 = h1(1);
+r0.slice(1);
+
+const h1 = (x) => x * 2;
+const h3 = (x) => ({ first: x, second: x });
+function h0(x) { return x; }
+const h2 = (x) => h3("abc");
+const r0 = h1("abc");
+r0;
+
+function h3(x) { return x * 2; }
+function h1(x) { return h2(x); }
+const h2 = (x) => h3(x);
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h1(1);
+r1;
+
+function h0(x) { return x * 2; }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const h2 = (x) => h3(x.slice(0, 1));
+function h1(x) { return h2([1, 2]); }
+const r0 = h3(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h2("abc");
+r1;
+
+const h1 = (x) => x;
+function h2(x) { return x.indexOf("s"); }
+const h0 = (x) => x * 2;
+const r0 = h0("abc");
+r0.toUpperCase();
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x;
+const r0 = h1(true);
+r0.first;
+
+const h1 = (x) => x + "!";
+function h0(x) { return h1(x); }
+const r0 = h0(1);
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h2(x) { return x * 2; }
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x + "!";
+const r0 = h1([1, 2]);
+r0.length * 2;
+const r1 = h2(true);
+r1;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return x.first; }
+const r0 = h1(1);
+r0.length * 2;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x + "!"; }
+const r0 = h1([1, 2]);
+r0.length * 2;
+
+function h1(x) { return x * 2; }
+const h3 = (x) => x + "!";
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return x.length; }
+const r0 = h0(1);
+r0.toUpperCase();
+
+function h0(x) { return h1("abc"); }
+const h1 = (x) => x.toUpperCase();
+const r0 = h0(({ first: "s", length: 2 }));
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.first;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h0(x) { return x; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+const h2 = (x) => x;
+const h1 = (x) => h2([1, 2]);
+const h0 = (x) => h2(x);
+const r0 = h1("s");
+r0.length * 2;
+
+function h1(x) { return x * 2; }
+function h0(x) { return h1(x.length); }
+const r0 = h0("abc");
+r0.length * 2;
+
+const h0 = (x) => h1("s");
+function h1(x) { return x * 2; }
+const r0 = h1("abc");
+r0 * 2;
+const r1 = h1(1);
+r1 + "!";
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0([1, 2]);
+r0.length * 2;
+const r1 = h1("s");
+r1.toUpperCase();
+
+function h1(x) { return h2(x.first); }
+const h0 = (x) => x * 2;
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return x.slice(0, 1); }
+const r0 = h0("s");
+r0 * 2;
+const r1 = h0(1);
+r1.toUpperCase();
+
+function h1(x) { return h2(x.slice(1)); }
+const h2 = (x) => x * 2;
+const h0 = (x) => x.indexOf("s");
+const r0 = h0("abc");
+r0;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x.length; }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const r0 = h0(1);
+r0.toUpperCase();
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h1(x) { return x * 2; }
+const r0 = h0(true);
+r0 * 2;
+
+const h1 = (x) => x + "!";
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(({ first: "s", length: 2 }));
+r0 * 2;
+const r1 = h1("s");
+r1.first;
+
+function h2(x) { return x; }
+function h0(x) { return x + "!"; }
+function h1(x) { return x + "!"; }
+function h3(x) { return x.charCodeAt(0); }
+const r0 = h1("abc");
+r0.length * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return x + "!"; }
+const r0 = h1([1, 2]);
+r0.slice(1);
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x * 2; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h0(x) { return h1(x).first; }
+function h1(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h0(x) { return x; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0;
+
+const h2 = (x) => x + "!";
+const h1 = (x) => h2(1);
+function h0(x) { return x * 2; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0;
+const r1 = h2([1, 2]);
+r1 + "!";
+
+const h0 = (x) => x * 2;
+function h1(x) { return ({ first: x, second: x }); }
+const h2 = (x) => x.slice(0, 1);
+const r0 = h2([1, 2]);
+r0;
+const r1 = h1("abc");
+r1.length * 2;
+
+const h2 = (x) => h3(x.toUpperCase());
+const h0 = (x) => x;
+function h3(x) { return x * 2; }
+const h1 = (x) => h2(x);
+const r0 = h0("abc");
+r0 + "!";
+
+const h1 = (x) => x * 2;
+const h2 = (x) => x;
+const h0 = (x) => ({ first: x, second: x });
+function h3(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0.first;
+const r1 = h0([1, 2]);
+r1;
+
+function h0(x) { return h1(({ first: "s", length: 2 })); }
+const h2 = (x) => ({ first: x, second: x });
+function h1(x) { return x * 2; }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const r0 = h3(({ first: "s", length: 2 }));
+r0.first;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x + "!";
+const r0 = h1(1);
+r0 * 2;
+
+const h2 = (x) => x * 2;
+const h1 = (x) => x + "!";
+const h0 = (x) => h2([1, 2]);
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h0(x) { return h3(x.first); }
+function h1(x) { return h2([1, 2]); }
+const h2 = (x) => x.toUpperCase();
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h0 = (x) => x.slice(0, 1);
+function h2(x) { return x.slice(1); }
+function h1(x) { return x.indexOf("s"); }
+const r0 = h0("s");
+r0.length * 2;
+
+function h0(x) { return x * 2; }
+const h1 = (x) => x * 2;
+const r0 = h1(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x;
+const r0 = h0([1, 2]);
+r0;
+
+function h1(x) { return x * 2; }
+function h0(x) { return h1([1, 2]); }
+const r0 = h0("abc");
+r0.length * 2;
+const r1 = h1("s");
+r1 * 2;
+
+const h0 = (x) => x * 2;
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h2(true);
+r0.slice(1);
+const r1 = h1(true);
+r1.toUpperCase();
+
+function h1(x) { return x; }
+const h0 = (x) => h1(true);
+const h2 = (x) => x + "!";
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h3(true);
+r0 * 2;
+
+const h2 = (x) => x;
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const h0 = (x) => h2(x).first;
+function h1(x) { return h2(x); }
+const r0 = h1([1, 2]);
+r0.length * 2;
+const r1 = h3(({ first: "s", length: 2 }));
+r1;
+
+function h0(x) { return h2(x.slice(0, 1)); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+function h1(x) { return h2(x); }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h0("s");
+r1 + "!";
+
+function h1(x) { return x + "!"; }
+const h0 = (x) => ({ first: x, second: x });
+function h2(x) { return x * 2; }
+const r0 = h1("s");
+r0 * 2;
+const r1 = h2([1, 2]);
+r1;
+
+function h0(x) { return h2(x.charCodeAt(0)); }
+function h2(x) { return h3(x.slice(1)); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x; }
+const r0 = h1("abc");
+r0.length * 2;
+
+const h0 = (x) => x;
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0("s");
+r0.slice(1);
+
+function h1(x) { return x + "!"; }
+function h0(x) { return h1(x); }
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h0(true);
+r0 + "!";
+
+function h0(x) { return h1(x); }
+const h1 = (x) => x + "!";
+const r0 = h0([1, 2]);
+r0;
+const r1 = h0(true);
+r1 + "!";
+
+function h0(x) { return x; }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => ({ first: x, second: x });
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h0("s");
+r0 * 2;
+const r1 = h0("abc");
+r1.slice(1);
+
+const h1 = (x) => x * 2;
+function h0(x) { return h1(x); }
+const r0 = h0([1, 2]);
+r0 + "!";
+
+const h1 = (x) => x + "!";
+const h2 = (x) => x + "!";
+const h0 = (x) => h1(({ first: "s", length: 2 }));
+const r0 = h2(1);
+r0.first;
+
+const h1 = (x) => x;
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h0 = (x) => x + "!";
+function h3(x) { return x + "!"; }
+const r0 = h1([1, 2]);
+r0.length * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1(true);
+r1 * 2;
+
+function h0(x) { return x * 2; }
+const h3 = (x) => x * 2;
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return h3(x); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+
+const h1 = (x) => x.indexOf("s");
+function h0(x) { return x + "!"; }
+const r0 = h1("abc");
+r0.slice(1);
+
+function h1(x) { return x; }
+const h0 = (x) => h1(true);
+const r0 = h0(true);
+r0.toUpperCase();
+
+function h0(x) { return h1([1, 2]); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => h2(x).first;
+const r0 = h0("abc");
+r0.first;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.first;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => x;
+function h2(x) { return x * 2; }
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h1("abc");
+r1.toUpperCase();
+
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => x.length;
+function h1(x) { return h2(1); }
+const r0 = h2(1);
+r0.length * 2;
+
+function h0(x) { return x.indexOf("s"); }
+function h1(x) { return x * 2; }
+const h2 = (x) => x.length;
+const r0 = h2("s");
+r0;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x; }
+const h1 = (x) => h2(x.charCodeAt(0));
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h2(true);
+r1.first;
+
+const h2 = (x) => x.length;
+function h1(x) { return h2(x.indexOf("s")); }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h2(true);
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.toUpperCase();
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x.length;
+const r0 = h0([1, 2]);
+r0.slice(1);
+const r1 = h1(({ first: "s", length: 2 }));
+r1.first;
+
+const h1 = (x) => h2(x.charCodeAt(0));
+function h2(x) { return x * 2; }
+const h0 = (x) => h1(({ first: "s", length: 2 }));
+const r0 = h2(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h0 = (x) => x;
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0;
+
+function h1(x) { return x * 2; }
+const h2 = (x) => x + "!";
+function h0(x) { return h1("s"); }
+const r0 = h0("abc");
+r0 + "!";
+
+function h0(x) { return x + "!"; }
+function h1(x) { return x + "!"; }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h2(1);
+r1 + "!";
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return ({ first: x, second: x }); }
+function h2(x) { return x * 2; }
+const r0 = h0(1);
+r0.length * 2;
+
+const h3 = (x) => x.first;
+const h1 = (x) => h3(x);
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => h3(x.slice(1));
+const r0 = h2(true);
+r0 + "!";
+
+const h1 = (x) => h2(x.slice(0, 1));
+const h3 = (x) => x + "!";
+function h0(x) { return h3(x).first; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h0([1, 2]);
+r1.toUpperCase();
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.slice(0, 1);
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1([1, 2]);
+r1 + "!";
+
+const h1 = (x) => x;
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x + "!"; }
+const r0 = h0("abc");
+r0.slice(1);
+const r1 = h1(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h2 = (x) => x.toUpperCase();
+function h0(x) { return x + "!"; }
+const h1 = (x) => x.length;
+const h3 = (x) => x.toUpperCase();
+const r0 = h3(true);
+r0;
+const r1 = h2(1);
+r1.length * 2;
+
+function h2(x) { return x.toUpperCase(); }
+function h1(x) { return h3(x.indexOf("s")); }
+const h0 = (x) => h2(x);
+const h3 = (x) => x + "!";
+const r0 = h1("s");
+r0.slice(1);
+
+function h2(x) { return x + "!"; }
+const h1 = (x) => h3(x.toUpperCase());
+function h3(x) { return x.slice(0, 1); }
+const h0 = (x) => x;
+const r0 = h3(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h2(1);
+r1.length * 2;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h2([1, 2]);
+r0;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h2(x) { return h3([1, 2]); }
+function h3(x) { return x + "!"; }
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h2(true);
+r0.slice(1);
+const r1 = h2(true);
+r1.length * 2;
+
+const h1 = (x) => x;
+function h3(x) { return x.indexOf("s"); }
+function h0(x) { return x; }
+const h2 = (x) => x.charCodeAt(0);
+const r0 = h3("abc");
+r0 * 2;
+const r1 = h3(true);
+r1 * 2;
+
+function h1(x) { return x.toUpperCase(); }
+const h0 = (x) => h1(x.length);
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h0(1);
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h0(x) { return h1(1); }
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+const h2 = (x) => x + "!";
+const r0 = h1([1, 2]);
+r0 + "!";
+const r1 = h0(1);
+r1.toUpperCase();
+
+const h1 = (x) => x;
+function h3(x) { return x; }
+function h2(x) { return ({ first: x, second: x }); }
+const h0 = (x) => h3(x).first;
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h3("s");
+r1.slice(1);
+
+const h0 = (x) => x + "!";
+const h2 = (x) => x * 2;
+function h1(x) { return x; }
+const r0 = h0(1);
+r0.toUpperCase();
+
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+function h1(x) { return ({ first: x, second: x }); }
+const h2 = (x) => h3(x).first;
+function h0(x) { return h2(x).first; }
+const r0 = h3([1, 2]);
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+function h0(x) { return h1(1); }
+const h1 = (x) => h2([1, 2]);
+function h2(x) { return ({ first: x, second: x }); }
+function h3(x) { return x.charCodeAt(0); }
+const r0 = h3("abc");
+r0;
+const r1 = h0(1);
+r1.toUpperCase();
+
+function h0(x) { return h1("abc"); }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1("s");
+r0.slice(1);
+const r1 = h0("s");
+r1 * 2;
+
+function h1(x) { return x + "!"; }
+const h0 = (x) => h1(true);
+const r0 = h0(1);
+r0.length * 2;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return ({ first: x, second: x }); }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x * 2; }
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+function h2(x) { return x; }
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const r0 = h0(true);
+r0 + "!";
+const r1 = h0(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h1 = (x) => x + "!";
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h0 = (x) => h1(true);
+const r0 = h2("abc");
+r0 * 2;
+const r1 = h0([1, 2]);
+r1.slice(1);
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return x * 2; }
+const r0 = h1("s");
+r0.slice(1);
+const r1 = h1(1);
+r1 * 2;
+
+function h0(x) { return x.slice(0, 1); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return x + "!"; }
+function h1(x) { return h3(x); }
+const r0 = h1(true);
+r0;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h3 = (x) => x.indexOf("s");
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h2(x) { return h3(x); }
+const r0 = h1("abc");
+r0.length * 2;
+
+function h1(x) { return x + "!"; }
+const h0 = (x) => x.indexOf("s");
+const r0 = h0("s");
+r0 * 2;
+
+function h0(x) { return x * 2; }
+const h1 = (x) => h3(x).first;
+function h3(x) { return x * 2; }
+const h2 = (x) => x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h2([1, 2]);
+r1.toUpperCase();
+
+function h0(x) { return x + "!"; }
+const h1 = (x) => x;
+const r0 = h1(1);
+r0.slice(1);
+
+function h2(x) { return h3(x); }
+const h1 = (x) => h3(x);
+const h0 = (x) => ({ first: x, second: x });
+function h3(x) { return x * 2; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h0([1, 2]);
+r1.slice(1);
+
+function h0(x) { return h1(true); }
+function h1(x) { return x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+
+const h0 = (x) => x * 2;
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.slice(1);
+
+function h1(x) { return x * 2; }
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1(x);
+const r0 = h0("abc");
+r0 * 2;
+const r1 = h1(true);
+r1 + "!";
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1("s");
+r0 * 2;
+
+function h2(x) { return ({ first: x, second: x }); }
+const h1 = (x) => h3(({ first: "s", length: 2 }));
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1("s");
+r0;
+
+function h3(x) { return x.toUpperCase(); }
+function h1(x) { return h3("s"); }
+function h0(x) { return x * 2; }
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h0(true);
+r0 + "!";
+
+function h1(x) { return h2("abc"); }
+function h2(x) { return ({ first: x, second: x }); }
+const h0 = (x) => h2("s");
+const r0 = h2(1);
+r0;
+
+function h1(x) { return x * 2; }
+const h0 = (x) => x + "!";
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h2 = (x) => x * 2;
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h0 = (x) => h1(1);
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+const r1 = h0("s");
+r1.length * 2;
+
+const h3 = (x) => x * 2;
+function h2(x) { return x * 2; }
+function h0(x) { return x * 2; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0("abc");
+r0.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x * 2; }
+const r0 = h0([1, 2]);
+r0.toUpperCase();
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h1("s");
+const r0 = h0(true);
+r0 + "!";
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h0("abc");
+r0.slice(1);
+
+function h1(x) { return x * 2; }
+function h0(x) { return h2(x).first; }
+const h2 = (x) => x + "!";
+const r0 = h2(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h1(x) { return x.slice(0, 1); }
+const h0 = (x) => h1(x.toUpperCase());
+const r0 = h0("abc");
+r0 * 2;
+
+function h2(x) { return x.toUpperCase(); }
+function h1(x) { return x + "!"; }
+const h0 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h3 = (x) => x.charCodeAt(0);
+const h1 = (x) => h3(x);
+function h0(x) { return h2([1, 2]); }
+const h2 = (x) => h3(x);
+const r0 = h2(1);
+r0.slice(1);
+const r1 = h3([1, 2]);
+r1 + "!";
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1(1);
+r0 * 2;
+
+const h0 = (x) => x;
+const h1 = (x) => x + "!";
+const h2 = (x) => x;
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const r0 = h1("abc");
+r0;
+
+const h2 = (x) => x * 2;
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const r0 = h1("abc");
+r0.slice(1);
+const r1 = h0(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h3 = (x) => ({ first: x, second: x });
+function h1(x) { return h3(x).first; }
+function h0(x) { return x.slice(1); }
+const h2 = (x) => h3(x).first;
+const r0 = h1(1);
+r0 * 2;
+const r1 = h1(true);
+r1.toUpperCase();
+
+const h2 = (x) => x + "!";
+function h0(x) { return h2(x); }
+function h3(x) { return x.toUpperCase(); }
+function h1(x) { return x; }
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h3(1);
+r1.slice(1);
+
+function h0(x) { return h1(x).first; }
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.slice(0, 1);
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h0(x) { return h1(x.length); }
+const h1 = (x) => x * 2;
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0("abc");
+r0;
+const r1 = h1("s");
+r1.slice(1);
+
+function h1(x) { return x; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0("abc");
+r0.toUpperCase();
+const r1 = h0(({ first: "s", length: 2 }));
+r1.first;
+
+function h2(x) { return x.toUpperCase(); }
+function h1(x) { return x.charCodeAt(0); }
+const h0 = (x) => h1([1, 2]);
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+function h2(x) { return x + "!"; }
+const h0 = (x) => x;
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h1(x) { return x; }
+const h0 = (x) => h3(x.indexOf("s"));
+const h2 = (x) => x;
+function h3(x) { return x; }
+const r0 = h1(1);
+r0.length * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h2(x) { return x; }
+const h1 = (x) => h2(x).first;
+function h0(x) { return h1(({ first: "s", length: 2 })); }
+const r0 = h2("s");
+r0 * 2;
+const r1 = h2(true);
+r1.toUpperCase();
+
+function h1(x) { return h2(x); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return h2("s"); }
+const r0 = h0(true);
+r0 + "!";
+
+const h0 = (x) => x + "!";
+function h3(x) { return x * 2; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h2(x) { return x.charCodeAt(0); }
+const r0 = h2(1);
+r0.slice(1);
+
+function h2(x) { return x.length; }
+const h0 = (x) => x.charCodeAt(0);
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h1 = (x) => x;
+const r0 = h3(({ first: "s", length: 2 }));
+r0;
+const r1 = h0(true);
+r1;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.indexOf("s");
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h1([1, 2]);
+r1.first;
+
+function h2(x) { return x; }
+const h0 = (x) => h2(x.charCodeAt(0));
+function h1(x) { return x + "!"; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+const r1 = h1("s");
+r1 + "!";
+
+function h1(x) { return x; }
+function h2(x) { return x * 2; }
+const h0 = (x) => x.slice(1);
+const r0 = h1("s");
+r0 * 2;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => x.charCodeAt(0);
+const r0 = h1(true);
+r0 * 2;
+
+function h0(x) { return h2(x).first; }
+const h2 = (x) => ({ first: x, second: x });
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.length * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x + "!";
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1(true);
+r1.toUpperCase();
+
+const h0 = (x) => ({ first: x, second: x });
+function h2(x) { return x + "!"; }
+function h1(x) { return h2(x).first; }
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h2("abc");
+r1 * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const r0 = h3(true);
+r0.slice(1);
+const r1 = h2("s");
+r1 * 2;
+
+function h1(x) { return x + "!"; }
+const h2 = (x) => x + "!";
+function h0(x) { return x; }
+const r0 = h0(true);
+r0.length * 2;
+
+function h0(x) { return x; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(true);
+r0.toUpperCase();
+
+function h2(x) { return x + "!"; }
+const h1 = (x) => h2(x.slice(1));
+const h0 = (x) => h2(x);
+const r0 = h1(1);
+r0;
+
+function h1(x) { return x.slice(1); }
+function h0(x) { return x + "!"; }
+const r0 = h0("s");
+r0.slice(1);
+
+function h1(x) { return x.slice(1); }
+const h0 = (x) => x * 2;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+const h2 = (x) => x.indexOf("s");
+function h0(x) { return x; }
+const h3 = (x) => ({ first: x, second: x });
+function h1(x) { return h2(x.slice(0, 1)); }
+const r0 = h1(true);
+r0.slice(1);
+
+function h2(x) { return x + "!"; }
+function h1(x) { return h3(x); }
+function h3(x) { return x + "!"; }
+const h0 = (x) => x.length;
+const r0 = h1([1, 2]);
+r0.slice(1);
+
+const h0 = (x) => x.slice(1);
+function h2(x) { return x * 2; }
+const h1 = (x) => x.slice(0, 1);
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1("s");
+r1 + "!";
+
+const h2 = (x) => x + "!";
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h2(x) { return h3(x.length); }
+const h1 = (x) => x * 2;
+const h0 = (x) => h1(x.slice(0, 1));
+const h3 = (x) => x + "!";
+const r0 = h2("abc");
+r0.toUpperCase();
+
+const h1 = (x) => x + "!";
+const h0 = (x) => h1([1, 2]);
+const h2 = (x) => x * 2;
+const r0 = h2([1, 2]);
+r0;
+
+function h2(x) { return x * 2; }
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h2(x); }
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h2(true);
+r1.first;
+
+const h2 = (x) => x * 2;
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h2(x);
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h2(true);
+r1.first;
+
+function h1(x) { return x.indexOf("s"); }
+function h0(x) { return x + "!"; }
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h1("s");
+r1 * 2;
+
+const h1 = (x) => x;
+const h2 = (x) => x * 2;
+function h3(x) { return x + "!"; }
+function h0(x) { return h1(x); }
+const r0 = h0("abc");
+r0.toUpperCase();
+
+function h0(x) { return x + "!"; }
+function h1(x) { return ({ first: x, second: x }); }
+function h3(x) { return x; }
+function h2(x) { return x.first; }
+const r0 = h3([1, 2]);
+r0.length * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h0 = (x) => x + "!";
+const h1 = (x) => ({ first: x, second: x });
+const h3 = (x) => x;
+const h2 = (x) => x.first;
+const r0 = h3([1, 2]);
+r0.length * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h2 = (x) => x.slice(1);
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h1(x) { return x.slice(0, 1); }
+function h3(x) { return x.slice(0, 1); }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h3(x).first; }
+const r0 = h3("abc");
+r0.toUpperCase();
+
+const h1 = (x) => x.slice(0, 1);
+const h3 = (x) => x.slice(0, 1);
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => h3(x).first;
+const r0 = h3("abc");
+r0.toUpperCase();
+
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h0(x) { return x + "!"; }
+function h2(x) { return h3(x).first; }
+function h1(x) { return h3(x); }
+const r0 = h3("s");
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h1 = (x) => x.length;
+const h0 = (x) => x;
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h3(x) { return x + "!"; }
+const r0 = h3(true);
+r0.length * 2;
+const r1 = h3("abc");
+r1.length * 2;
+
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h0 = (x) => x + "!";
+const h2 = (x) => h3(x).first;
+const h1 = (x) => h3(x);
+const r0 = h3("s");
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+function h2(x) { return x * 2; }
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x.indexOf("s")); }
+const r0 = h1(true);
+r0;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return h1(x.charCodeAt(0)); }
+const r0 = h0("s");
+r0;
+
+function h3(x) { return x; }
+const h2 = (x) => h3(x.first);
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.charCodeAt(0);
+const r0 = h3("abc");
+r0.toUpperCase();
+const r1 = h0("s");
+r1;
+
+function h1(x) { return x; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return x; }
+const r0 = h1(1);
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h1 = (x) => x;
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => x;
+const r0 = h1(1);
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h1(x) { return x; }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => x;
+const r0 = h1(1);
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x.indexOf("s")); }
+function h1(x) { return h3(x); }
+function h3(x) { return x * 2; }
+const r0 = h1("s");
+r0.first;
+const r1 = h3(true);
+r1.toUpperCase();
+
+function h2(x) { return x * 2; }
+function h0(x) { return h1(true); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h2("abc");
+r0.length * 2;
+
+const h2 = (x) => x * 2;
+function h0(x) { return h1(true); }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h2("abc");
+r0.length * 2;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1(1);
+r0.toUpperCase();
+
+function h3(x) { return x; }
+function h1(x) { return h2(x); }
+function h2(x) { return h3(x.charCodeAt(0)); }
+function h0(x) { return x * 2; }
+const r0 = h0([1, 2]);
+r0.length * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x.slice(0, 1);
+const r0 = h1([1, 2]);
+r0.toUpperCase();
+
+function h3(x) { return x; }
+const h1 = (x) => h2(x);
+function h2(x) { return h3(x.charCodeAt(0)); }
+const h0 = (x) => x * 2;
+const r0 = h0([1, 2]);
+r0.length * 2;
+
+const h1 = (x) => x * 2;
+function h2(x) { return x * 2; }
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h0(true);
+r0.length * 2;
+const r1 = h2("abc");
+r1.slice(1);
+
+function h3(x) { return ({ first: x, second: x }); }
+function h0(x) { return x + "!"; }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return h3(x); }
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h2(true);
+r1 + "!";
+
+const h3 = (x) => ({ first: x, second: x });
+const h0 = (x) => x + "!";
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => h3(x);
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h2(true);
+r1 + "!";
+
+const h3 = (x) => ({ first: x, second: x });
+function h0(x) { return x + "!"; }
+function h2(x) { return ({ first: x, second: x }); }
+const h1 = (x) => h3(x);
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h2(true);
+r1 + "!";
+
+function h0(x) { return ({ first: x, second: x }); }
+function h3(x) { return x; }
+function h2(x) { return x.indexOf("s"); }
+function h1(x) { return h3(x.slice(0, 1)); }
+const r0 = h1("s");
+r0 + "!";
+const r1 = h1("s");
+r1 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+const h3 = (x) => x;
+const h2 = (x) => x.indexOf("s");
+const h1 = (x) => h3(x.slice(0, 1));
+const r0 = h1("s");
+r0 + "!";
+const r1 = h1("s");
+r1 * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+const h3 = (x) => x;
+function h2(x) { return x.indexOf("s"); }
+const h1 = (x) => h3(x.slice(0, 1));
+const r0 = h1("s");
+r0 + "!";
+const r1 = h1("s");
+r1 * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h2(x) { return ({ first: x, second: x }); }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h0(true);
+r0;
+
+function h1(x) { return x * 2; }
+function h0(x) { return x * 2; }
+const r0 = h1(1);
+r0 * 2;
+const r1 = h0([1, 2]);
+r1.slice(1);
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x * 2;
+const r0 = h1(1);
+r0 * 2;
+const r1 = h0([1, 2]);
+r1.slice(1);
+
+function h1(x) { return x * 2; }
+const h0 = (x) => x * 2;
+const r0 = h1(1);
+r0 * 2;
+const r1 = h0([1, 2]);
+r1.slice(1);
+
+function h0(x) { return x; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h2 = (x) => h3(x);
+function h3(x) { return x + "!"; }
+function h0(x) { return x * 2; }
+const h1 = (x) => x.length;
+const r0 = h1(true);
+r0.slice(1);
+
+const h0 = (x) => x;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h0 = (x) => x;
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h0(x) { return h1(true); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0("abc");
+r0;
+
+function h3(x) { return x.toUpperCase(); }
+const h2 = (x) => x + "!";
+function h1(x) { return x.indexOf("s"); }
+function h0(x) { return x; }
+const r0 = h3(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1("s");
+r1 * 2;
+
+function h2(x) { return x + "!"; }
+function h1(x) { return h3(x.charCodeAt(0)); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h0(x) { return h3(1); }
+const r0 = h0(1);
+r0.toUpperCase();
+const r1 = h2("abc");
+r1 + "!";
+
+const h1 = (x) => x.charCodeAt(0);
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+
+const h2 = (x) => x + "!";
+function h1(x) { return h3(x.charCodeAt(0)); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h0(x) { return h3(1); }
+const r0 = h0(1);
+r0.toUpperCase();
+const r1 = h2("abc");
+r1 + "!";
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x.length; }
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x.length;
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+function h2(x) { return x * 2; }
+const h1 = (x) => x.slice(0, 1);
+function h0(x) { return h2([1, 2]); }
+const r0 = h1("s");
+r0 * 2;
+
+const h1 = (x) => x + "!";
+function h0(x) { return x.length; }
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+const h2 = (x) => ({ first: x, second: x });
+function h3(x) { return ({ first: x, second: x }); }
+const h0 = (x) => x;
+function h1(x) { return x; }
+const r0 = h0([1, 2]);
+r0.slice(1);
+const r1 = h0("s");
+r1.toUpperCase();
+
+function h1(x) { return h2(true); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return x; }
+const r0 = h1("abc");
+r0;
+const r1 = h2([1, 2]);
+r1;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h1 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+function h1(x) { return h2(true); }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x; }
+const r0 = h1("abc");
+r0;
+const r1 = h2([1, 2]);
+r1;
+
+function h1(x) { return x * 2; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1(true);
+r0;
+const r1 = h0(1);
+r1;
+
+const h2 = (x) => x.toUpperCase();
+function h0(x) { return x * 2; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1(true);
+r0;
+const r1 = h0(1);
+r1;
+
+function h1(x) { return x * 2; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1(true);
+r0;
+const r1 = h0(1);
+r1;
+
+function h1(x) { return x.slice(0, 1); }
+function h3(x) { return x + "!"; }
+function h0(x) { return h2(x); }
+function h2(x) { return x; }
+const r0 = h2(true);
+r0 * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+function h2(x) { return x + "!"; }
+function h0(x) { return h1(x.indexOf("s")); }
+const r0 = h0([1, 2]);
+r0 + "!";
+const r1 = h2("abc");
+r1.toUpperCase();
+
+function h1(x) { return x.slice(0, 1); }
+function h3(x) { return x + "!"; }
+function h0(x) { return h2(x); }
+const h2 = (x) => x;
+const r0 = h2(true);
+r0 * 2;
+
+function h1(x) { return x * 2; }
+function h3(x) { return x + "!"; }
+function h2(x) { return x; }
+function h0(x) { return h2(x); }
+const r0 = h3(1);
+r0.length * 2;
+const r1 = h3(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h1 = (x) => x * 2;
+const h3 = (x) => x + "!";
+const h2 = (x) => x;
+const h0 = (x) => h2(x);
+const r0 = h3(1);
+r0.length * 2;
+const r1 = h3(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h2 = (x) => x.slice(1);
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h1(x) { return h2(x.toUpperCase()); }
+const r0 = h0(true);
+r0.length * 2;
+const r1 = h1("abc");
+r1.toUpperCase();
+
+function h1(x) { return x * 2; }
+function h3(x) { return x + "!"; }
+const h2 = (x) => x;
+function h0(x) { return h2(x); }
+const r0 = h3(1);
+r0.length * 2;
+const r1 = h3(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h2(1); }
+function h1(x) { return h2(x).first; }
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1("abc");
+r1.toUpperCase();
+
+function h2(x) { return x.slice(1); }
+function h0(x) { return h1(x).first; }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h2(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h0(true);
+r1 * 2;
+
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => h2(1);
+const h1 = (x) => h2(x).first;
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1("abc");
+r1.toUpperCase();
+
+function h0(x) { return x * 2; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(true);
+r0 + "!";
+const r1 = h0(1);
+r1 * 2;
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h0(true);
+r0 + "!";
+const r1 = h0(1);
+r1 * 2;
+
+const h0 = (x) => x * 2;
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(true);
+r0 + "!";
+const r1 = h0(1);
+r1 * 2;
+
+function h1(x) { return h2(x); }
+const h2 = (x) => x + "!";
+function h3(x) { return ({ first: x, second: x }); }
+const h0 = (x) => x.slice(1);
+const r0 = h1("s");
+r0.length * 2;
+const r1 = h0([1, 2]);
+r1.slice(1);
+
+function h0(x) { return h1("s"); }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(x).first; }
+const r0 = h2(1);
+r0.first;
+
+function h0(x) { return h1("s"); }
+function h2(x) { return ({ first: x, second: x }); }
+const h1 = (x) => h2(x).first;
+const r0 = h2(1);
+r0.first;
+
+function h2(x) { return x; }
+function h1(x) { return h2(x).first; }
+function h0(x) { return h1(x).first; }
+const r0 = h2("abc");
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+function h0(x) { return h2(x).first; }
+function h2(x) { return x * 2; }
+const r0 = h2("abc");
+r0.toUpperCase();
+const r1 = h2(1);
+r1.slice(1);
+
+const h1 = (x) => h2(({ first: "s", length: 2 }));
+function h0(x) { return h2(x).first; }
+function h2(x) { return x * 2; }
+const r0 = h2("abc");
+r0.toUpperCase();
+const r1 = h2(1);
+r1.slice(1);
+
+function h1(x) { return x.indexOf("s"); }
+function h2(x) { return x; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h2("s");
+r0 * 2;
+
+const h1 = (x) => x.indexOf("s");
+const h2 = (x) => x;
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h2("s");
+r0 * 2;
+
+function h1(x) { return ({ first: x, second: x }); }
+const h0 = (x) => x.toUpperCase();
+const r0 = h0([1, 2]);
+r0.length * 2;
+
+function h1(x) { return x.indexOf("s"); }
+function h2(x) { return x; }
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h2("s");
+r0 * 2;
+
+const h2 = (x) => x;
+const h1 = (x) => h2("s");
+function h0(x) { return h1(x); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h3(x) { return x; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return h3(1); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(true);
+r0.length * 2;
+
+const h3 = (x) => x;
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => h3(1);
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h0(true);
+r0.length * 2;
+
+const h0 = (x) => x;
+const h1 = (x) => x;
+const r0 = h1([1, 2]);
+r0.slice(1);
+
+const h3 = (x) => x;
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return h3(1); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(true);
+r0.length * 2;
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0(1);
+r0 + "!";
+
+function h0(x) { return h1(x.slice(0, 1)); }
+function h1(x) { return x; }
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h0("s");
+r1;
+
+function h0(x) { return h1(x.slice(0, 1)); }
+const h1 = (x) => x;
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h0("s");
+r1;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h0(x) { return x + "!"; }
+function h1(x) { return x * 2; }
+function h2(x) { return ({ first: x, second: x }); }
+function h3(x) { return x.length; }
+const r0 = h2([1, 2]);
+r0.length * 2;
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+function h0(x) { return h2("s"); }
+const h1 = (x) => x + "!";
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x * 2;
+const h2 = (x) => ({ first: x, second: x });
+const h3 = (x) => x.length;
+const r0 = h2([1, 2]);
+r0.length * 2;
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x * 2;
+function h2(x) { return ({ first: x, second: x }); }
+const h3 = (x) => x.length;
+const r0 = h2([1, 2]);
+r0.length * 2;
+
+function h0(x) { return x + "!"; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h2(x) { return x; }
+const r0 = h1(true);
+r0 + "!";
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => x;
+const r0 = h1(true);
+r0 + "!";
+
+function h0(x) { return x + "!"; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => x;
+const r0 = h1(true);
+r0 + "!";
+
+function h0(x) { return h1("abc"); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(1);
+r0.length * 2;
+
+function h0(x) { return x * 2; }
+const h1 = (x) => ({ first: x, second: x });
+const h2 = (x) => x * 2;
+const h3 = (x) => x + "!";
+const r0 = h3("s");
+r0.length * 2;
+const r1 = h3([1, 2]);
+r1.slice(1);
+
+function h0(x) { return h1("abc"); }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h0(1);
+r0.length * 2;
+
+const h1 = (x) => x + "!";
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0(true);
+r0.toUpperCase();
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return x + "!"; }
+const r0 = h2("s");
+r0;
+
+function h3(x) { return x.indexOf("s"); }
+function h0(x) { return h2(x).first; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h3("s");
+r0.slice(1);
+const r1 = h0("s");
+r1 + "!";
+
+function h3(x) { return x.indexOf("s"); }
+const h0 = (x) => h2(x).first;
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h3("s");
+r0.slice(1);
+const r1 = h0("s");
+r1 + "!";
+
+const h1 = (x) => x + "!";
+function h0(x) { return x; }
+function h2(x) { return x.slice(1); }
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+
+function h0(x) { return x + "!"; }
+function h2(x) { return x.toUpperCase(); }
+function h1(x) { return h2(x); }
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h1 = (x) => x;
+function h0(x) { return x; }
+const r0 = h1("abc");
+r0 + "!";
+const r1 = h1("abc");
+r1.toUpperCase();
+
+const h0 = (x) => x + "!";
+const h2 = (x) => x.toUpperCase();
+const h1 = (x) => h2(x);
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h0 = (x) => x + "!";
+function h2(x) { return x.toUpperCase(); }
+function h1(x) { return h2(x); }
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h2 = (x) => x + "!";
+function h0(x) { return x.toUpperCase(); }
+const r0 = h0([1, 2]);
+r0 * 2;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => h1(x);
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1("abc");
+r1.slice(1);
+
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return x.charCodeAt(0); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x.toUpperCase(); }
+const r0 = h1("s");
+r0.length * 2;
+
+const h3 = (x) => ({ first: x, second: x });
+const h2 = (x) => x.charCodeAt(0);
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x.toUpperCase();
+const r0 = h1("s");
+r0.length * 2;
+
+const h3 = (x) => ({ first: x, second: x });
+function h2(x) { return x.charCodeAt(0); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x.toUpperCase(); }
+const r0 = h1("s");
+r0.length * 2;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h0(x) { return x.toUpperCase(); }
+const r0 = h1(true);
+r0 + "!";
+
+function h1(x) { return x.slice(0, 1); }
+function h2(x) { return x.indexOf("s"); }
+function h0(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h2("s");
+r1.first;
+
+const h0 = (x) => x * 2;
+function h1(x) { return x * 2; }
+const r0 = h1(true);
+r0.toUpperCase();
+
+const h1 = (x) => x.slice(0, 1);
+const h2 = (x) => x.indexOf("s");
+const h0 = (x) => x * 2;
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h2("s");
+r1.first;
+
+function h1(x) { return x.slice(0, 1); }
+function h2(x) { return x.indexOf("s"); }
+const h0 = (x) => x * 2;
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h2("s");
+r1.first;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0([1, 2]);
+r0 * 2;
+const r1 = h1(1);
+r1.length * 2;
+
+function h0(x) { return x + "!"; }
+function h1(x) { return h2(x.indexOf("s")); }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2([1, 2]);
+r0.first;
+
+function h0(x) { return x + "!"; }
+const h1 = (x) => h2(x.indexOf("s"));
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2([1, 2]);
+r0.first;
+
+function h3(x) { return x + "!"; }
+function h2(x) { return h3(x); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1([1, 2]);
+r0.length * 2;
+
+const h0 = (x) => h1(x);
+const h2 = (x) => x + "!";
+function h1(x) { return x.charCodeAt(0); }
+const r0 = h2(true);
+r0 * 2;
+
+const h3 = (x) => x + "!";
+const h2 = (x) => h3(x);
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1([1, 2]);
+r0.length * 2;
+
+const h0 = (x) => x;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h0("abc");
+r1.toUpperCase();
+
+const h3 = (x) => x + "!";
+function h2(x) { return h3(x); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1([1, 2]);
+r0.length * 2;
+
+function h2(x) { return ({ first: x, second: x }); }
+const h3 = (x) => x + "!";
+const h1 = (x) => x;
+const h0 = (x) => x.indexOf("s");
+const r0 = h3(1);
+r0;
+const r1 = h0("abc");
+r1.slice(1);
+
+function h3(x) { return x * 2; }
+function h0(x) { return h3("s"); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h1 = (x) => x + "!";
+const r0 = h3(({ first: "s", length: 2 }));
+r0 * 2;
+const r1 = h1([1, 2]);
+r1.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x; }
+const r0 = h1("abc");
+r0.slice(1);
+const r1 = h1([1, 2]);
+r1 + "!";
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x;
+const r0 = h1("abc");
+r0.slice(1);
+const r1 = h1([1, 2]);
+r1 + "!";
+
+function h0(x) { return ({ first: x, second: x }); }
+const h1 = (x) => x;
+const r0 = h1("abc");
+r0.slice(1);
+const r1 = h1([1, 2]);
+r1 + "!";
+
+function h0(x) { return x.slice(1); }
+function h1(x) { return h2(x.length); }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h1([1, 2]);
+r0 + "!";
+
+function h0(x) { return x.slice(1); }
+function h1(x) { return h2(x.length); }
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h1([1, 2]);
+r0 + "!";
+
+function h0(x) { return h1(x.length); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return x.indexOf("s"); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const r0 = h2("abc");
+r0.length * 2;
+const r1 = h2(true);
+r1.toUpperCase();
+
+const h3 = (x) => x.slice(0, 1);
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h2(true);
+function h2(x) { return h3(x); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1([1, 2]);
+r1;
+
+function h1(x) { return x * 2; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h0("abc");
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h1(x) { return h2("abc"); }
+const h2 = (x) => h3(x.toUpperCase());
+function h3(x) { return x; }
+const h0 = (x) => h3(true);
+const r0 = h0(1);
+r0 + "!";
+const r1 = h3(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h1(x) { return h2(x.toUpperCase()); }
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return h3(x).first; }
+function h0(x) { return x; }
+const r0 = h0(true);
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x + "!";
+function h2(x) { return x * 2; }
+const r0 = h0("abc");
+r0.toUpperCase();
+
+function h1(x) { return h2(x.toUpperCase()); }
+const h3 = (x) => ({ first: x, second: x });
+const h2 = (x) => h3(x).first;
+function h0(x) { return x; }
+const r0 = h0(true);
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.slice(1);
+
+function h2(x) { return x + "!"; }
+function h1(x) { return x + "!"; }
+function h0(x) { return x * 2; }
+const r0 = h2("abc");
+r0 * 2;
+const r1 = h0("s");
+r1 + "!";
+
+function h0(x) { return h2("s"); }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.slice(1);
+
+const h2 = (x) => x + "!";
+const h1 = (x) => x + "!";
+const h0 = (x) => x * 2;
+const r0 = h2("abc");
+r0 * 2;
+const r1 = h0("s");
+r1 + "!";
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x; }
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+function h2(x) { return x + "!"; }
+const h1 = (x) => x + "!";
+function h0(x) { return x * 2; }
+const r0 = h2("abc");
+r0 * 2;
+const r1 = h0("s");
+r1 + "!";
+
+function h0(x) { return h1(x.toUpperCase()); }
+function h2(x) { return x * 2; }
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+const r0 = h1(true);
+r0.length * 2;
+
+function h0(x) { return x.length; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0("s");
+r0;
+const r1 = h0("s");
+r1 * 2;
+
+const h2 = (x) => x;
+function h1(x) { return ({ first: x, second: x }); }
+const h0 = (x) => x + "!";
+const r0 = h1("abc");
+r0.toUpperCase();
+
+const h0 = (x) => x.length;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0("s");
+r0;
+const r1 = h0("s");
+r1 * 2;
+
+const h0 = (x) => x;
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return ({ first: x, second: x }); }
+function h3(x) { return x + "!"; }
+const r0 = h0([1, 2]);
+r0.toUpperCase();
+const r1 = h1(1);
+r1 * 2;
+
+function h1(x) { return h2(x).first; }
+function h0(x) { return h2(x.first); }
+function h2(x) { return x; }
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+function h1(x) { return h2(x).first; }
+function h0(x) { return h2(x.first); }
+const h2 = (x) => x;
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x.length; }
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x.length;
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h1 = (x) => x.slice(0, 1);
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => ({ first: x, second: x });
+const h3 = (x) => x * 2;
+const r0 = h2(1);
+r0.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("abc");
+r1.length * 2;
+
+function h0(x) { return x.indexOf("s"); }
+function h1(x) { return x * 2; }
+const r0 = h0(true);
+r0 * 2;
+const r1 = h0(1);
+r1.slice(1);
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("abc");
+r1.length * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("abc");
+r1.length * 2;
+
+const h3 = (x) => x;
+const h0 = (x) => h1(x);
+function h1(x) { return h3([1, 2]); }
+const h2 = (x) => h3(x.charCodeAt(0));
+const r0 = h2([1, 2]);
+r0.slice(1);
+
+function h0(x) { return h1(x); }
+const h1 = (x) => x.indexOf("s");
+const r0 = h0([1, 2]);
+r0.length * 2;
+const r1 = h0("abc");
+r1.slice(1);
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x.slice(1);
+const r0 = h0(true);
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h2(x) { return h3("s"); }
+function h3(x) { return x; }
+function h1(x) { return x; }
+function h0(x) { return h3(x); }
+const r0 = h3(1);
+r0.slice(1);
+const r1 = h3([1, 2]);
+r1.slice(1);
+
+const h1 = (x) => x;
+const h0 = (x) => x + "!";
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h1(true);
+r1.length * 2;
+
+function h2(x) { return h3("s"); }
+function h3(x) { return x; }
+function h1(x) { return x; }
+const h0 = (x) => h3(x);
+const r0 = h3(1);
+r0.slice(1);
+const r1 = h3([1, 2]);
+r1.slice(1);
+
+const h1 = (x) => x + "!";
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1([1, 2]);
+r0 + "!";
+
+function h1(x) { return h3(true); }
+function h3(x) { return x.charCodeAt(0); }
+function h2(x) { return x + "!"; }
+function h0(x) { return h3(x.charCodeAt(0)); }
+const r0 = h3([1, 2]);
+r0;
+const r1 = h0("s");
+r1 + "!";
+
+const h1 = (x) => h3(x);
+function h0(x) { return h1("s"); }
+function h2(x) { return h3(x).first; }
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h3(true);
+r0.toUpperCase();
+const r1 = h2(({ first: "s", length: 2 }));
+r1.slice(1);
+
+function h1(x) { return h3(true); }
+function h3(x) { return x.charCodeAt(0); }
+const h2 = (x) => x + "!";
+const h0 = (x) => h3(x.charCodeAt(0));
+const r0 = h3([1, 2]);
+r0;
+const r1 = h0("s");
+r1 + "!";
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+function h0(x) { return h1(x.charCodeAt(0)); }
+function h1(x) { return x; }
+const r0 = h1("abc");
+r0 + "!";
+const r1 = h0(1);
+r1 * 2;
+
+function h3(x) { return x + "!"; }
+const h2 = (x) => h3(x).first;
+function h1(x) { return h2(x.slice(1)); }
+const h0 = (x) => h2(x).first;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+
+function h0(x) { return h1(x.charCodeAt(0)); }
+const h1 = (x) => x;
+const r0 = h1("abc");
+r0 + "!";
+const r1 = h0(1);
+r1 * 2;
+
+function h1(x) { return x + "!"; }
+function h0(x) { return h1(x.slice(0, 1)); }
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h1(true);
+r1.toUpperCase();
+
+const h1 = (x) => x + "!";
+const h0 = (x) => h1(x.slice(0, 1));
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h1(true);
+r1.toUpperCase();
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h2(x) { return h3(x); }
+function h3(x) { return ({ first: x, second: x }); }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0(1);
+r0.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+function h3(x) { return x.length; }
+function h2(x) { return h3(x); }
+function h1(x) { return h3(x.indexOf("s")); }
+const h0 = (x) => h2(x);
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+const h2 = (x) => x + "!";
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x.slice(0, 1);
+const r0 = h1("abc");
+r0;
+
+function h0(x) { return h1(x.slice(1)); }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0.toUpperCase();
+
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+function h2(x) { return x * 2; }
+function h1(x) { return h2(x); }
+const h0 = (x) => x + "!";
+const r0 = h1(true);
+r0.toUpperCase();
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x + "!"; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h0(1);
+r1.first;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h0(1);
+r1.first;
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x + "!"; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h0(1);
+r1.first;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return h2(true); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h2([1, 2]);
+r0 + "!";
+const r1 = h0(true);
+r1.length * 2;
+
+function h1(x) { return h2(x.first); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x * 2; }
+const r0 = h0([1, 2]);
+r0.length * 2;
+const r1 = h3([1, 2]);
+r1.slice(1);
+
+const h0 = (x) => h1(x);
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h1 = (x) => h2(x.first);
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x * 2; }
+const r0 = h0([1, 2]);
+r0.length * 2;
+const r1 = h3([1, 2]);
+r1.slice(1);
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return h1(x); }
+const r0 = h1("s");
+r0.length * 2;
+
+const h0 = (x) => x.indexOf("s");
+function h1(x) { return x * 2; }
+const r0 = h1([1, 2]);
+r0;
+
+function h3(x) { return x + "!"; }
+function h2(x) { return x * 2; }
+function h0(x) { return h1(x); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h3("abc");
+r0 + "!";
+const r1 = h0("abc");
+r1 + "!";
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x; }
+const r0 = h1("abc");
+r0.slice(1);
+const r1 = h1("s");
+r1.toUpperCase();
+
+const h3 = (x) => x + "!";
+const h2 = (x) => x * 2;
+function h0(x) { return h1(x); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h3("abc");
+r0 + "!";
+const r1 = h0("abc");
+r1 + "!";
+
+function h0(x) { return x * 2; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 * 2;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x.first); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h0(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1(x.first);
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h0(({ first: "s", length: 2 }));
+r1 + "!";
+
+function h1(x) { return h2(x); }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h2 = (x) => x;
+const r0 = h2("abc");
+r0.slice(1);
+
+function h1(x) { return ({ first: x, second: x }); }
+const h0 = (x) => h1(x.first);
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h0(({ first: "s", length: 2 }));
+r1 + "!";
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x + "!"; }
+const r0 = h0(true);
+r0;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const r0 = h0(true);
+r0;
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x + "!"; }
+const r0 = h0(true);
+r0;
+
+const h2 = (x) => x.slice(0, 1);
+const h1 = (x) => h2(x).first;
+function h0(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h0(x) { return h1(x); }
+function h1(x) { return x.toUpperCase(); }
+const r0 = h1([1, 2]);
+r0;
+const r1 = h0(true);
+r1.toUpperCase();
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return x; }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0(1);
+r0.first;
+
+function h0(x) { return x; }
+function h1(x) { return x * 2; }
+const r0 = h1("abc");
+r0.length * 2;
+const r1 = h1(1);
+r1 + "!";
+
+const h0 = (x) => x;
+const h1 = (x) => x * 2;
+const r0 = h1("abc");
+r0.length * 2;
+const r1 = h1(1);
+r1 + "!";
+
+function h0(x) { return x; }
+const h1 = (x) => x * 2;
+const r0 = h1("abc");
+r0.length * 2;
+const r1 = h1(1);
+r1 + "!";
+
+function h0(x) { return ({ first: x, second: x }); }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return ({ first: x, second: x }); }
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+
+const h2 = (x) => x * 2;
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h3 = (x) => x + "!";
+function h1(x) { return h3(x).first; }
+const r0 = h3(true);
+r0.length * 2;
+const r1 = h3(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => ({ first: x, second: x });
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => x.slice(1);
+const r0 = h0("s");
+r0.length * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => ({ first: x, second: x });
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+
+function h3(x) { return x; }
+function h1(x) { return h2(x.first); }
+function h0(x) { return h3(1); }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h3("abc");
+r0 * 2;
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h0 = (x) => h2(x);
+const h1 = (x) => x * 2;
+function h2(x) { return x + "!"; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h1("abc");
+r1.slice(1);
+
+function h3(x) { return x; }
+function h1(x) { return h2(x.first); }
+const h0 = (x) => h3(1);
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h3("abc");
+r0 * 2;
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h2 = (x) => x.first;
+const h0 = (x) => h2("s");
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1("s");
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1;
+
+function h0(x) { return x * 2; }
+function h1(x) { return x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("abc");
+r1 * 2;
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("abc");
+r1 * 2;
+
+function h0(x) { return x * 2; }
+const h1 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("abc");
+r1 * 2;
+
+function h2(x) { return x * 2; }
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x + "!"; }
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+
+const h2 = (x) => x;
+const h0 = (x) => x + "!";
+function h1(x) { return x.slice(1); }
+const r0 = h0(true);
+r0.length * 2;
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => h2(x).first;
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(true);
+r0.length * 2;
+const r1 = h1([1, 2]);
+r1.length * 2;
+
+function h0(x) { return x + "!"; }
+function h2(x) { return x; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.slice(1);
+
+const h0 = (x) => x * 2;
+function h1(x) { return h2(x.toUpperCase()); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+const h0 = (x) => x + "!";
+const h2 = (x) => x;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.slice(1);
+
+const h0 = (x) => x + "!";
+function h1(x) { return x + "!"; }
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h0(true);
+r1.slice(1);
+
+const h0 = (x) => x + "!";
+function h2(x) { return x; }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.slice(1);
+
+const h0 = (x) => h2(x).first;
+const h1 = (x) => h2(x);
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h0([1, 2]);
+r1.toUpperCase();
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x.slice(0, 1);
+const r0 = h0(true);
+r0.length * 2;
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h0([1, 2]);
+r1.toUpperCase();
+
+function h1(x) { return x + "!"; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h0([1, 2]);
+r1.toUpperCase();
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h3(x) { return x.slice(1); }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.first; }
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h1("abc");
+r1;
+
+const h1 = (x) => x * 2;
+function h0(x) { return h1(x.charCodeAt(0)); }
+const r0 = h1([1, 2]);
+r0 + "!";
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h3 = (x) => x.slice(1);
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.first;
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h1("abc");
+r1;
+
+const h0 = (x) => x;
+function h1(x) { return x; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h1(true);
+r0 + "!";
+const r1 = h0("abc");
+r1 + "!";
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h3 = (x) => x.slice(1);
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.first; }
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h1("abc");
+r1;
+
+const h2 = (x) => x + "!";
+function h1(x) { return x + "!"; }
+const h0 = (x) => x.slice(1);
+const r0 = h0("s");
+r0 + "!";
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return x * 2; }
+const r0 = h1(1);
+r0 * 2;
+const r1 = h1(true);
+r1.toUpperCase();
+
+const h2 = (x) => x;
+function h1(x) { return x * 2; }
+function h0(x) { return x; }
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h1("s");
+r0.first;
+const r1 = h2("s");
+r1.slice(1);
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x * 2;
+const r0 = h1(1);
+r0 * 2;
+const r1 = h1(true);
+r1.toUpperCase();
+
+const h0 = (x) => h1(x);
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0([1, 2]);
+r0 + "!";
+
+function h1(x) { return ({ first: x, second: x }); }
+const h0 = (x) => x * 2;
+const r0 = h1(1);
+r0 * 2;
+const r1 = h1(true);
+r1.toUpperCase();
+
+const h0 = (x) => h1(x.length);
+function h1(x) { return x * 2; }
+const r0 = h1("s");
+r0.slice(1);
+const r1 = h0(1);
+r1 + "!";
+
+function h1(x) { return h2(true); }
+function h3(x) { return x; }
+function h0(x) { return h2(1); }
+function h2(x) { return h3(true); }
+const r0 = h3(true);
+r0 * 2;
+
+const h0 = (x) => x.toUpperCase();
+function h1(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h0("s");
+r1 + "!";
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x * 2; }
+function h2(x) { return x; }
+const r0 = h1([1, 2]);
+r0 + "!";
+
+function h1(x) { return h2(true); }
+function h3(x) { return x; }
+function h0(x) { return h2(1); }
+const h2 = (x) => h3(true);
+const r0 = h3(true);
+r0 * 2;
+
+function h2(x) { return x + "!"; }
+function h1(x) { return h2(1); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0(1);
+r0.slice(1);
+
+function h0(x) { return x.toUpperCase(); }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1(1);
+r0.first;
+const r1 = h1("abc");
+r1.toUpperCase();
+
+const h0 = (x) => x.toUpperCase();
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0.first;
+const r1 = h1("abc");
+r1.toUpperCase();
+
+function h2(x) { return x; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h2(1);
+r0;
+const r1 = h0(1);
+r1.first;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h0(1);
+r0.slice(1);
+
+function h0(x) { return h2(x); }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x + "!"; }
+function h3(x) { return x + "!"; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+
+function h1(x) { return h3([1, 2]); }
+function h2(x) { return h3(({ first: "s", length: 2 })); }
+const h0 = (x) => ({ first: x, second: x });
+const h3 = (x) => x + "!";
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h0(x) { return h2(x); }
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const h3 = (x) => x + "!";
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+
+function h1(x) { return x + "!"; }
+function h2(x) { return x * 2; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h2("s");
+r0 + "!";
+
+const h1 = (x) => x + "!";
+const h2 = (x) => x * 2;
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h2("s");
+r0 + "!";
+
+const h1 = (x) => x + "!";
+const h2 = (x) => x * 2;
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h2("s");
+r0 + "!";
+
+const h0 = (x) => x.first;
+function h1(x) { return x.indexOf("s"); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+function h2(x) { return x; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return h2(1); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h0(true);
+r1.length * 2;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h0 = (x) => x * 2;
+const h1 = (x) => h2(x.first);
+const r0 = h1(({ first: "s", length: 2 }));
+r0;
+const r1 = h1(1);
+r1.toUpperCase();
+
+const h2 = (x) => x;
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => h2(1);
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h0(true);
+r1.length * 2;
+
+function h1(x) { return h2("s"); }
+const h3 = (x) => x * 2;
+const h0 = (x) => ({ first: x, second: x });
+function h2(x) { return h3(x).first; }
+const r0 = h2(true);
+r0.slice(1);
+const r1 = h0("s");
+r1 * 2;
+
+function h2(x) { return x; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => h2(1);
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h0(true);
+r1.length * 2;
+
+function h1(x) { return h2(x.slice(0, 1)); }
+function h0(x) { return x; }
+function h2(x) { return x + "!"; }
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1("abc");
+r1 * 2;
+
+function h0(x) { return h2(x.toUpperCase()); }
+const h2 = (x) => x.charCodeAt(0);
+function h1(x) { return h2(x.charCodeAt(0)); }
+const r0 = h2(1);
+r0.length * 2;
+
+const h1 = (x) => x;
+const h0 = (x) => x * 2;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h1(x) { return h2(x.slice(0, 1)); }
+const h0 = (x) => x;
+const h2 = (x) => x + "!";
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1("abc");
+r1 * 2;
+
+function h0(x) { return x * 2; }
+function h1(x) { return x * 2; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h0(x) { return h1(x).first; }
+function h2(x) { return x.indexOf("s"); }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0("abc");
+r0.first;
+
+function h1(x) { return x.charCodeAt(0); }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h3(x) { return x.length; }
+const r0 = h3("abc");
+r0.length * 2;
+const r1 = h0("s");
+r1;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return h1([1, 2]); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+
+const h1 = (x) => x.charCodeAt(0);
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h3 = (x) => x.length;
+const r0 = h3("abc");
+r0.length * 2;
+const r1 = h0("s");
+r1;
+
+function h1(x) { return x.charCodeAt(0); }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h3 = (x) => x.length;
+const r0 = h3("abc");
+r0.length * 2;
+const r1 = h0("s");
+r1;
+
+function h3(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(x); }
+function h0(x) { return x + "!"; }
+function h2(x) { return h3(x); }
+const r0 = h1([1, 2]);
+r0 * 2;
+
+function h0(x) { return x.slice(1); }
+const h1 = (x) => x * 2;
+const r0 = h1("abc");
+r0;
+const r1 = h1([1, 2]);
+r1 * 2;
+
+function h0(x) { return h1(x); }
+function h1(x) { return h2(x.slice(1)); }
+const h2 = (x) => x + "!";
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h1(x) { return x + "!"; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h1(1);
+r1.toUpperCase();
+
+const h1 = (x) => x + "!";
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h1(1);
+r1.toUpperCase();
+
+const h1 = (x) => x + "!";
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h1(1);
+r1.toUpperCase();
+
+function h0(x) { return h1(x); }
+function h3(x) { return x.first; }
+function h1(x) { return x.first; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0;
+
+function h2(x) { return x.slice(0, 1); }
+function h0(x) { return x.length; }
+function h1(x) { return x.slice(0, 1); }
+const r0 = h0("s");
+r0.length * 2;
+const r1 = h2(true);
+r1.slice(1);
+
+const h1 = (x) => ({ first: x, second: x });
+function h2(x) { return x + "!"; }
+function h0(x) { return h2(x); }
+const r0 = h0(1);
+r0 + "!";
+const r1 = h0("abc");
+r1.slice(1);
+
+function h0(x) { return h1(x); }
+const h3 = (x) => x.first;
+function h1(x) { return x.first; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0;
+
+function h2(x) { return x * 2; }
+function h0(x) { return x.charCodeAt(0); }
+function h1(x) { return x + "!"; }
+const r0 = h1(1);
+r0.slice(1);
+
+const h2 = (x) => x * 2;
+const h0 = (x) => x.charCodeAt(0);
+const h1 = (x) => x + "!";
+const r0 = h1(1);
+r0.slice(1);
+
+function h0(x) { return h1(x); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(1);
+r0 * 2;
+const r1 = h0("s");
+r1 * 2;
+
+const h2 = (x) => x * 2;
+function h0(x) { return x.charCodeAt(0); }
+function h1(x) { return x + "!"; }
+const r0 = h1(1);
+r0.slice(1);
+
+function h2(x) { return x; }
+function h1(x) { return h3([1, 2]); }
+function h0(x) { return x * 2; }
+function h3(x) { return x.length; }
+const r0 = h2([1, 2]);
+r0.slice(1);
+const r1 = h3([1, 2]);
+r1 + "!";
+
+function h1(x) { return h2(x); }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x * 2; }
+const r0 = h1(1);
+r0 * 2;
+
+const h2 = (x) => x;
+const h1 = (x) => h3([1, 2]);
+const h0 = (x) => x * 2;
+function h3(x) { return x.length; }
+const r0 = h2([1, 2]);
+r0.slice(1);
+const r1 = h3([1, 2]);
+r1 + "!";
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return h1(x.toUpperCase()); }
+const r0 = h1("abc");
+r0;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h1(x.toUpperCase());
+const r0 = h1("abc");
+r0;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h0(x) { return h1(x.toUpperCase()); }
+const r0 = h1("abc");
+r0;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h0(x) { return h1(true); }
+function h1(x) { return x; }
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h1("s");
+r1.toUpperCase();
+
+function h1(x) { return x * 2; }
+const h0 = (x) => h1(x.indexOf("s"));
+const h2 = (x) => x * 2;
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h3("s");
+r0.first;
+const r1 = h3(true);
+r1.first;
+
+function h3(x) { return x; }
+function h1(x) { return ({ first: x, second: x }); }
+function h2(x) { return h3(x).first; }
+function h0(x) { return h1([1, 2]); }
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h2(true);
+r1 * 2;
+
+function h0(x) { return x + "!"; }
+const h2 = (x) => h3(x.toUpperCase());
+function h3(x) { return ({ first: x, second: x }); }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+const h3 = (x) => x;
+const h1 = (x) => ({ first: x, second: x });
+const h2 = (x) => h3(x).first;
+const h0 = (x) => h1([1, 2]);
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h2(true);
+r1 * 2;
+
+const h3 = (x) => x;
+const h1 = (x) => ({ first: x, second: x });
+const h2 = (x) => h3(x).first;
+function h0(x) { return h1([1, 2]); }
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h2(true);
+r1 * 2;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return x.indexOf("s"); }
+function h3(x) { return x * 2; }
+const h0 = (x) => x;
+const r0 = h0("s");
+r0.length * 2;
+const r1 = h2("s");
+r1 * 2;
+
+function h1(x) { return h2(x); }
+function h2(x) { return h3(x.charCodeAt(0)); }
+function h3(x) { return x + "!"; }
+function h0(x) { return x + "!"; }
+const r0 = h3(true);
+r0;
+const r1 = h1("abc");
+r1 + "!";
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return x.slice(1); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h0("s");
+r0 + "!";
+
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return h3(x).first; }
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x + "!"; }
+const r0 = h1("abc");
+r0.length * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+function h2(x) { return x.indexOf("s"); }
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1([1, 2]);
+r0 + "!";
+
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h2 = (x) => h3(x).first;
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const r0 = h1("abc");
+r0.length * 2;
+
+const h1 = (x) => h2(x).first;
+function h2(x) { return ({ first: x, second: x }); }
+const h0 = (x) => h1("s");
+const r0 = h2([1, 2]);
+r0.slice(1);
+const r1 = h1("abc");
+r1 + "!";
+
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+function h2(x) { return h3(x).first; }
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x + "!";
+const r0 = h1("abc");
+r0.length * 2;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x * 2;
+const r0 = h0(1);
+r0.toUpperCase();
+const r1 = h0(true);
+r1 + "!";
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1("s");
+r1 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1("s");
+r1 * 2;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x.toUpperCase(); }
+const r0 = h1(1);
+r0 + "!";
+const r1 = h0(1);
+r1.toUpperCase();
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => x.toUpperCase();
+const r0 = h1(1);
+r0 + "!";
+const r1 = h0(1);
+r1.toUpperCase();
+
+function h0(x) { return x.first; }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(x.charCodeAt(0)); }
+const r0 = h1("s");
+r0.slice(1);
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h1(x) { return x + "!"; }
+const r0 = h0("s");
+r0.length * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+const h0 = (x) => x.first;
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => h2(x.charCodeAt(0));
+const r0 = h1("s");
+r0.slice(1);
+
+const h0 = (x) => x.first;
+function h2(x) { return ({ first: x, second: x }); }
+const h1 = (x) => h2(x.charCodeAt(0));
+const r0 = h1("s");
+r0.slice(1);
+
+function h0(x) { return x * 2; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(true);
+r0 * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(1); }
+const h2 = (x) => x;
+const r0 = h2("s");
+r0.slice(1);
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(true);
+r0 * 2;
+
+function h1(x) { return x.slice(1); }
+function h0(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h2(x) { return ({ first: x, second: x }); }
+function h3(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.first; }
+function h0(x) { return x.slice(1); }
+const r0 = h2("abc");
+r0.length * 2;
+const r1 = h0(true);
+r1;
+
+const h2 = (x) => ({ first: x, second: x });
+const h3 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.first;
+const h0 = (x) => x.slice(1);
+const r0 = h2("abc");
+r0.length * 2;
+const r1 = h0(true);
+r1;
+
+function h2(x) { return ({ first: x, second: x }); }
+const h3 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.first;
+function h0(x) { return x.slice(1); }
+const r0 = h2("abc");
+r0.length * 2;
+const r1 = h0(true);
+r1;
+
+function h3(x) { return x.slice(0, 1); }
+function h0(x) { return x * 2; }
+function h1(x) { return h2(x); }
+function h2(x) { return h3(x.toUpperCase()); }
+const r0 = h0("abc");
+r0;
+
+const h3 = (x) => x.slice(0, 1);
+const h0 = (x) => x * 2;
+const h1 = (x) => h2(x);
+function h2(x) { return h3(x.toUpperCase()); }
+const r0 = h0("abc");
+r0;
+
+function h1(x) { return x + "!"; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return h1(({ first: "s", length: 2 })); }
+const r0 = h0([1, 2]);
+r0.length * 2;
+
+const h1 = (x) => x + "!";
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => h1(({ first: "s", length: 2 }));
+const r0 = h0([1, 2]);
+r0.length * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.charCodeAt(0); }
+const r0 = h1([1, 2]);
+r0.toUpperCase();
+const r1 = h1(true);
+r1;
+
+function h1(x) { return x + "!"; }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => h1(({ first: "s", length: 2 }));
+const r0 = h0([1, 2]);
+r0.length * 2;
+
+const h2 = (x) => x + "!";
+const h1 = (x) => h2(x.slice(0, 1));
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x).first; }
+const r0 = h2("s");
+r0 * 2;
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1(x).first;
+const r0 = h2("s");
+r0 * 2;
+
+function h2(x) { return x.indexOf("s"); }
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h2(true); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+const h2 = (x) => x.indexOf("s");
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h2(true);
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+function h3(x) { return x.first; }
+function h0(x) { return h1(x).first; }
+const h1 = (x) => h3(x).first;
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+
+const h2 = (x) => x.indexOf("s");
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h2(true); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+function h1(x) { return x + "!"; }
+function h3(x) { return x.indexOf("s"); }
+const h2 = (x) => h3(x);
+const h0 = (x) => x * 2;
+const r0 = h0(1);
+r0;
+
+function h2(x) { return x + "!"; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return h1(x); }
+const r0 = h0(1);
+r0;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h0 = (x) => h1(x.indexOf("s"));
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1;
+
+const h2 = (x) => x + "!";
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h1(x);
+const r0 = h0(1);
+r0;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.slice(1);
+
+const h1 = (x) => h2(x).first;
+function h2(x) { return h3([1, 2]); }
+function h3(x) { return x.toUpperCase(); }
+function h0(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 * 2;
+
+function h0(x) { return x; }
+function h1(x) { return ({ first: x, second: x }); }
+function h3(x) { return x * 2; }
+function h2(x) { return x; }
+const r0 = h3(1);
+r0.slice(1);
+const r1 = h1(true);
+r1.slice(1);
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return h2([1, 2]); }
+const h3 = (x) => x.slice(1);
+const h0 = (x) => x + "!";
+const r0 = h3(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h0 = (x) => x;
+const h1 = (x) => ({ first: x, second: x });
+const h3 = (x) => x * 2;
+const h2 = (x) => x;
+const r0 = h3(1);
+r0.slice(1);
+const r1 = h1(true);
+r1.slice(1);
+
+const h0 = (x) => x;
+function h1(x) { return ({ first: x, second: x }); }
+function h3(x) { return x * 2; }
+function h2(x) { return x; }
+const r0 = h3(1);
+r0.slice(1);
+const r1 = h1(true);
+r1.slice(1);
+
+const h0 = (x) => h1("s");
+function h1(x) { return x * 2; }
+const r0 = h1("s");
+r0.toUpperCase();
+const r1 = h1("s");
+r1;
+
+function h3(x) { return x + "!"; }
+function h1(x) { return x * 2; }
+function h2(x) { return x.charCodeAt(0); }
+function h0(x) { return x.slice(0, 1); }
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+
+const h3 = (x) => x + "!";
+const h1 = (x) => x * 2;
+const h2 = (x) => x.charCodeAt(0);
+const h0 = (x) => x.slice(0, 1);
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h2("s");
+r0.length * 2;
+const r1 = h1("abc");
+r1.slice(1);
+
+const h3 = (x) => x + "!";
+function h1(x) { return x * 2; }
+const h2 = (x) => x.charCodeAt(0);
+function h0(x) { return x.slice(0, 1); }
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h1("s");
+const r0 = h1(true);
+r0 + "!";
+
+function h2(x) { return h3(x.indexOf("s")); }
+function h1(x) { return h2(x); }
+function h3(x) { return x.toUpperCase(); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0(1);
+r0 + "!";
+
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h0 = (x) => x.length;
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h2 = (x) => x + "!";
+const r0 = h2("abc");
+r0 + "!";
+const r1 = h1("s");
+r1;
+
+function h1(x) { return x; }
+function h0(x) { return x.indexOf("s"); }
+const r0 = h0("s");
+r0.toUpperCase();
+
+const h1 = (x) => x;
+const h0 = (x) => x.indexOf("s");
+const r0 = h0("s");
+r0.toUpperCase();
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x + "!";
+const r0 = h0(true);
+r0.toUpperCase();
+
+const h0 = (x) => x;
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h1(({ first: "s", length: 2 }));
+r1.first;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return h1(x.indexOf("s")); }
+const r0 = h0(1);
+r0 * 2;
+
+function h0(x) { return h2(x.charCodeAt(0)); }
+function h2(x) { return x + "!"; }
+function h1(x) { return x; }
+const r0 = h2("s");
+r0 + "!";
+const r1 = h1(true);
+r1;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h1(x.indexOf("s"));
+const r0 = h0(1);
+r0 * 2;
+
+const h1 = (x) => x * 2;
+const h2 = (x) => x + "!";
+function h0(x) { return x; }
+const h3 = (x) => x + "!";
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h0 = (x) => h1(x.indexOf("s"));
+const r0 = h0(1);
+r0 * 2;
+
+function h2(x) { return x * 2; }
+function h1(x) { return x * 2; }
+const h0 = (x) => h1("s");
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const r0 = h2(1);
+r0 * 2;
+const r1 = h3(true);
+r1.length * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.charCodeAt(0); }
+const r0 = h0(true);
+r0;
+const r1 = h1(1);
+r1;
+
+function h2(x) { return x.slice(1); }
+function h3(x) { return x; }
+function h0(x) { return h3(x).first; }
+const h1 = (x) => h2(x).first;
+const r0 = h2([1, 2]);
+r0 * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.charCodeAt(0);
+const r0 = h0(true);
+r0;
+const r1 = h1(1);
+r1;
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x.charCodeAt(0); }
+const r0 = h0(true);
+r0;
+const r1 = h1(1);
+r1;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => h1(x);
+const r0 = h1([1, 2]);
+r0.slice(1);
+
+function h1(x) { return h2(true); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0(1);
+r0;
+const r1 = h2(1);
+r1 * 2;
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x.slice(0, 1); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h1("s");
+r0.length * 2;
+
+function h1(x) { return h2(true); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0(1);
+r0;
+const r1 = h2(1);
+r1 * 2;
+
+const h1 = (x) => x.toUpperCase();
+function h0(x) { return h1(x).first; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h0(x) { return h1(x).first; }
+function h1(x) { return x + "!"; }
+function h2(x) { return x + "!"; }
+const r0 = h1([1, 2]);
+r0.toUpperCase();
+const r1 = h0(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h0(x) { return h3(x.indexOf("s")); }
+function h2(x) { return h3(x.toUpperCase()); }
+function h3(x) { return x * 2; }
+function h1(x) { return x + "!"; }
+const r0 = h1("abc");
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1.first;
+
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return x; }
+function h1(x) { return x.toUpperCase(); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1([1, 2]);
+r1;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => h1(x);
+const r0 = h0(true);
+r0;
+
+const h3 = (x) => x.indexOf("s");
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return x.first; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h2([1, 2]);
+r0.slice(1);
+const r1 = h1(true);
+r1.slice(1);
+
+function h1(x) { return h2(x).first; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h3(x) { return ({ first: x, second: x }); }
+const h0 = (x) => h2(x).first;
+const r0 = h3("s");
+r0 + "!";
+const r1 = h3("abc");
+r1 + "!";
+
+function h1(x) { return x * 2; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1(1);
+r0.length * 2;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1(1);
+r0.length * 2;
+
+function h2(x) { return x + "!"; }
+const h1 = (x) => h2(x).first;
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0.toUpperCase();
+
+function h1(x) { return x.slice(0, 1); }
+function h0(x) { return x.slice(0, 1); }
+const r0 = h1("abc");
+r0;
+
+const h0 = (x) => h1(x).first;
+const h3 = (x) => ({ first: x, second: x });
+function h1(x) { return x + "!"; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h3("s");
+r0.length * 2;
+const r1 = h2(true);
+r1 * 2;
+
+const h1 = (x) => x.slice(0, 1);
+const h0 = (x) => x.slice(0, 1);
+const r0 = h1("abc");
+r0;
+
+const h1 = (x) => x.slice(0, 1);
+function h0(x) { return x.slice(0, 1); }
+const r0 = h1("abc");
+r0;
+
+function h0(x) { return h1(x); }
+function h1(x) { return x + "!"; }
+const r0 = h0(1);
+r0 * 2;
+
+function h0(x) { return h1(x); }
+const h1 = (x) => x + "!";
+const r0 = h0(1);
+r0 * 2;
+
+function h0(x) { return h1(({ first: "s", length: 2 })); }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0.length * 2;
+const r1 = h1("abc");
+r1 + "!";
+
+function h2(x) { return x.slice(1); }
+const h0 = (x) => x * 2;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0(1);
+r0 + "!";
+const r1 = h0("abc");
+r1 + "!";
+
+const h0 = (x) => h1(({ first: "s", length: 2 }));
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0.length * 2;
+const r1 = h1("abc");
+r1 + "!";
+
+function h0(x) { return h1(x); }
+const h1 = (x) => x.slice(1);
+function h3(x) { return ({ first: x, second: x }); }
+const h2 = (x) => h3(x).first;
+const r0 = h3([1, 2]);
+r0.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h2(x) { return x.toUpperCase(); }
+function h3(x) { return x + "!"; }
+function h1(x) { return h2(x.slice(0, 1)); }
+const r0 = h1("s");
+r0.slice(1);
+
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => x.toUpperCase();
+const h3 = (x) => x + "!";
+const h1 = (x) => h2(x.slice(0, 1));
+const r0 = h1("s");
+r0.slice(1);
+
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return h3(x).first; }
+function h0(x) { return x * 2; }
+function h3(x) { return x.toUpperCase(); }
+const r0 = h0("abc");
+r0 * 2;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h2 = (x) => x;
+const h1 = (x) => x + "!";
+const h3 = (x) => x * 2;
+const r0 = h0(1);
+r0.toUpperCase();
+
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return h2([1, 2]); }
+function h1(x) { return x * 2; }
+const r0 = h0(true);
+r0.toUpperCase();
+
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return h3(x).first; }
+function h0(x) { return x * 2; }
+const h3 = (x) => x.toUpperCase();
+const r0 = h0("abc");
+r0 * 2;
+
+function h3(x) { return x * 2; }
+function h1(x) { return h2("s"); }
+function h0(x) { return x.indexOf("s"); }
+const h2 = (x) => x + "!";
+const r0 = h3("abc");
+r0 + "!";
+
+function h0(x) { return h1(x); }
+function h1(x) { return x.toUpperCase(); }
+const r0 = h1(true);
+r0.length * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.first;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.slice(1);
+const h2 = (x) => x * 2;
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h0("abc");
+r1.length * 2;
+
+const h0 = (x) => x * 2;
+function h1(x) { return x.first; }
+function h2(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("s");
+r1.first;
+
+function h1(x) { return h2(x); }
+function h0(x) { return ({ first: x, second: x }); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h1("s");
+r0 + "!";
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h1 = (x) => x;
+function h0(x) { return h1(x); }
+const r0 = h0(1);
+r0.slice(1);
+const r1 = h0("abc");
+r1.length * 2;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("s");
+r1.toUpperCase();
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x;
+const r0 = h1(true);
+r0.slice(1);
+const r1 = h1("s");
+r1.toUpperCase();
+
+function h2(x) { return x; }
+function h1(x) { return x; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h2 = (x) => x;
+const h1 = (x) => x;
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h0(true);
+r1.first;
+
+const h2 = (x) => x;
+const h1 = (x) => x;
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h2 = (x) => x.slice(0, 1);
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(x); }
+const r0 = h0([1, 2]);
+r0.toUpperCase();
+const r1 = h0([1, 2]);
+r1.first;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h1 = (x) => h2([1, 2]);
+const h0 = (x) => x.toUpperCase();
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return x + "!"; }
+function h1(x) { return x * 2; }
+const r0 = h2(1);
+r0.length * 2;
+const r1 = h0(1);
+r1 + "!";
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => x + "!";
+const h1 = (x) => x * 2;
+const r0 = h2(1);
+r0.length * 2;
+const r1 = h0(1);
+r1 + "!";
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+function h0(x) { return x + "!"; }
+function h1(x) { return x * 2; }
+const r0 = h2(1);
+r0.length * 2;
+const r1 = h0(1);
+r1 + "!";
+
+function h1(x) { return h2("abc"); }
+function h2(x) { return x + "!"; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1(true);
+r1.slice(1);
+
+function h0(x) { return x.first; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+const r1 = h1([1, 2]);
+r1.toUpperCase();
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h0 = (x) => h2(true);
+const h1 = (x) => x;
+const r0 = h1("s");
+r0 * 2;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1([1, 2]); }
+const r0 = h1("abc");
+r0.first;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x * 2; }
+function h1(x) { return h3("abc"); }
+function h3(x) { return x * 2; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1([1, 2]);
+const r0 = h1("abc");
+r0.first;
+
+const h2 = (x) => x.indexOf("s");
+function h0(x) { return x.slice(0, 1); }
+function h1(x) { return x + "!"; }
+const r0 = h1(1);
+r0.length * 2;
+
+const h0 = (x) => x * 2;
+const h3 = (x) => x + "!";
+const h2 = (x) => ({ first: x, second: x });
+function h1(x) { return x.slice(1); }
+const r0 = h1(1);
+r0.first;
+
+function h0(x) { return x.first; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h2(x) { return x.toUpperCase(); }
+function h0(x) { return h2(x).first; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+const h0 = (x) => x.first;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const h0 = (x) => h2(x.length);
+const h1 = (x) => h3(x.toUpperCase());
+const r0 = h1([1, 2]);
+r0 * 2;
+
+const h0 = (x) => x.first;
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h0(x) { return h1(({ first: "s", length: 2 })); }
+function h1(x) { return h2(x).first; }
+function h2(x) { return h3(x.indexOf("s")); }
+const h3 = (x) => x * 2;
+const r0 = h3(true);
+r0.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x * 2; }
+const r0 = h0(1);
+r0.slice(1);
+const r1 = h1(1);
+r1.toUpperCase();
+
+function h0(x) { return h1(1); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(x); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+
+function h0(x) { return h1(x); }
+function h1(x) { return x + "!"; }
+const r0 = h0(1);
+r0.toUpperCase();
+
+function h2(x) { return x + "!"; }
+function h1(x) { return h2("abc"); }
+const h3 = (x) => x * 2;
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h2(1);
+r0.toUpperCase();
+const r1 = h2("abc");
+r1.first;
+
+function h1(x) { return x.length; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1([1, 2]);
+r0.slice(1);
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x * 2; }
+function h2(x) { return x + "!"; }
+const r0 = h2("abc");
+r0;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x * 2;
+const h2 = (x) => x + "!";
+const r0 = h2("abc");
+r0;
+
+function h1(x) { return x + "!"; }
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h2(true);
+r0.slice(1);
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x * 2; }
+const h2 = (x) => x + "!";
+const r0 = h2("abc");
+r0;
+
+const h1 = (x) => x + "!";
+function h0(x) { return x.slice(0, 1); }
+const r0 = h0(1);
+r0 + "!";
+const r1 = h0("s");
+r1;
+
+const h2 = (x) => x + "!";
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h0 = (x) => x;
+const r0 = h2(true);
+r0.length * 2;
+
+function h0(x) { return h1("s"); }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h1("abc");
+r1 + "!";
+
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.charCodeAt(0); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0("s");
+r0;
+
+function h0(x) { return x * 2; }
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return x.indexOf("s"); }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.charCodeAt(0);
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h0("s");
+r0;
+
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.charCodeAt(0);
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0("s");
+r0;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return ({ first: x, second: x }); }
+const h0 = (x) => ({ first: x, second: x });
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h2(true);
+r0.first;
+
+function h3(x) { return x * 2; }
+function h2(x) { return x * 2; }
+function h0(x) { return x * 2; }
+function h1(x) { return h2("s"); }
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h2([1, 2]);
+r1.length * 2;
+
+const h3 = (x) => x * 2;
+const h2 = (x) => x * 2;
+const h0 = (x) => x * 2;
+const h1 = (x) => h2("s");
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h2([1, 2]);
+r1.length * 2;
+
+const h3 = (x) => x * 2;
+function h2(x) { return x * 2; }
+const h0 = (x) => x * 2;
+function h1(x) { return h2("s"); }
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h2([1, 2]);
+r1.length * 2;
+
+function h0(x) { return h2(x.toUpperCase()); }
+const h1 = (x) => h2(x).first;
+function h2(x) { return x; }
+const r0 = h2(1);
+r0 * 2;
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h1 = (x) => x * 2;
+const h0 = (x) => h1([1, 2]);
+const r0 = h0("abc");
+r0.slice(1);
+
+function h1(x) { return x; }
+function h2(x) { return x; }
+function h0(x) { return h1(x); }
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h2([1, 2]);
+r1.length * 2;
+
+const h1 = (x) => x;
+const h2 = (x) => x;
+const h0 = (x) => h1(x);
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h2([1, 2]);
+r1.length * 2;
+
+const h2 = (x) => x.toUpperCase();
+function h0(x) { return h1(x.indexOf("s")); }
+function h1(x) { return x * 2; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h1(x) { return x; }
+function h2(x) { return x; }
+const h0 = (x) => h1(x);
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h2([1, 2]);
+r1.length * 2;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return h2(x.indexOf("s")); }
+function h0(x) { return h2(x.slice(1)); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h0(true);
+r1.slice(1);
+
+function h0(x) { return h1([1, 2]); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0("s");
+r0 * 2;
+const r1 = h1("abc");
+r1.length * 2;
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => h2(x.indexOf("s"));
+const h0 = (x) => h2(x.slice(1));
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h0(true);
+r1.slice(1);
+
+function h1(x) { return x; }
+function h0(x) { return x.slice(1); }
+const h2 = (x) => x + "!";
+const r0 = h0(true);
+r0.slice(1);
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return h2(x.indexOf("s")); }
+const h0 = (x) => h2(x.slice(1));
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h0(true);
+r1.slice(1);
+
+(((false && true) && (1 === 0)) && (9007199254740991 === -(0)))
+
+const h0 = (x) => x;
+function h1(x) { return h2(x).first; }
+function h2(x) { return x.charCodeAt(0); }
+const r0 = h0(1);
+r0 * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.toUpperCase();
+
+(true && ((1073741824 % 56) < (91 * 0)))
+
+!(((1 - 9007199254740991) === 54))
+
+((function(x) { return x; })(-(9007199254740991)) < 1073741824)
+
+(((function(x) { return x; })(0) / 2) < ((true ? 0 : 1) / 2))
+
+(((5 * 75) / 2) === ((51 % 1) + (2 - 0)))
+
+(1073741824 === -((95 % 1073741824)))
+
+const h1 = (x) => x.length;
+const h0 = (x) => x * 2;
+const h3 = (x) => x;
+const h2 = (x) => x + "!";
+const r0 = h1("s");
+r0.toUpperCase();
+const r1 = h2(({ first: "s", length: 2 }));
+r1;
+
+(((9007199254740991 % 1) % (function(x) { return x; })(9007199254740991)) === ((function(x) { return x; })(1) - (1073741824 * 34)))
+
+((!(true) ? (0 - 1073741824) : 1073741824) === ((function(x) { return x; })(0) * (85 + 36)))
+
+(false && !((true && false)))
+
+function h1(x) { return x; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x.length; }
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h1(1);
+r1.toUpperCase();
+
+(((function(x) { return x; })(0) < 48) && ((2 - 1073741824) < (function(x) { return x; })(1)))
+
+function h2(x) { return h3(true); }
+function h0(x) { return x; }
+function h1(x) { return x.indexOf("s"); }
+function h3(x) { return x + "!"; }
+const r0 = h2("s");
+r0 * 2;
+const r1 = h2(({ first: "s", length: 2 }));
+r1;
+
+(!(true) && (-(1) < (9007199254740991 + 0)))
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const h0 = (x) => x;
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0(true);
+r0.length * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1 + "!";
+
+(((function(x) { return x; })(9007199254740991) * (9007199254740991 % 1073741824)) === ((function(x) { return x; })(1073741824) - 1073741824))
+
+(!((0 < 0)) && ((1 - 9007199254740991) < (1073741824 + 0)))
+
+(((1 * 1073741824) + (1 * 9007199254740991)) === (-(9007199254740991) / 2))
+
+((-(1) / 2) < (function(x) { return x; })((true ? 1 : 5)))
+
+const h0 = (x) => x;
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0(true);
+r1.length * 2;
+
+(((false && true) ? (1073741824 + 82) : 0) < (!(false) ? (0 + 1) : (9007199254740991 + 1073741824)))
+
+!(((true && true) && (false && true)))
+
+!(((false && true) && (1 < 1073741824)))
+
+(((9007199254740991 === 54) && !(true)) && true)
+
+function h0(x) { return h1(x.slice(1)); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1([1, 2]);
+r0 + "!";
+
+(!((1073741824 === 62)) && !(false))
+
+((-(1) === -(0)) && ((true ? 9007199254740991 : 1) < (function(x) { return x; })(1073741824)))
+
+function h2(x) { return h3(true); }
+function h0(x) { return x; }
+function h1(x) { return x.indexOf("s"); }
+const h3 = (x) => x + "!";
+const r0 = h2("s");
+r0 * 2;
+const r1 = h2(({ first: "s", length: 2 }));
+r1;
+
+(((9007199254740991 + 1073741824) - (9007199254740991 * 15)) === (9007199254740991 % (1073741824 + 9007199254740991)))
+
+function h0(x) { return h1(x.slice(1)); }
+const h1 = (x) => x + "!";
+const r0 = h1("abc");
+r0.length * 2;
+
+(((1073741824 % 9007199254740991) * (function(x) { return x; })(1)) < (95 - (true ? 0 : 0)))
+
+(0 < ((9007199254740991 % 9007199254740991) % 0))
+
+(!((51 < 9007199254740991)) && ((1073741824 % 0) === (true ? 1 : 0)))
+
+(((function(x) { return x; })(0) + (1073741824 / 2)) < ((true ? 98 : 9007199254740991) % (1 * 49)))
+
+(((true ? 0 : 0) / 2) === ((function(x) { return x; })(1) % (true ? 1073741824 : 9007199254740991)))
+
+(((1 % 64) === (9007199254740991 / 2)) && false)
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x + "!"; }
+const r0 = h1(true);
+r0 + "!";
+
+(-((1 % 1)) < (-(9007199254740991) % (function(x) { return x; })(9007199254740991)))
+
+!((-(9007199254740991) < (1 + 1)))
+
+const h3 = (x) => x;
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x.charCodeAt(0); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h1("s");
+r0.toUpperCase();
+const r1 = h2(true);
+r1 + "!";
+
+(true && ((function(x) { return x; })(0) < -(1073741824)))
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x + "!";
+const r0 = h1(true);
+r0 + "!";
+
+(((9007199254740991 === 79) && (9007199254740991 === 1)) && ((83 / 2) < (9007199254740991 / 2)))
+
+!((-(1073741824) < (1 + 40)))
+
+(1 < ((0 + 9007199254740991) + (function(x) { return x; })(1073741824)))
+
+!(((26 * 1073741824) === 0))
+
+(-((0 - 1073741824)) === (!(true) ? (1 - 1) : (9007199254740991 % 9007199254740991)))
+
+(true && !((true && false)))
+
+((-(1) % (function(x) { return x; })(1073741824)) === ((1073741824 % 5) / 2))
+
+const h1 = (x) => h2("abc");
+function h2(x) { return x.toUpperCase(); }
+const h3 = (x) => x + "!";
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1(1);
+r0 + "!";
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return ({ first: x, second: x }); }
+function h2(x) { return x; }
+const r0 = h0(1);
+r0.slice(1);
+const r1 = h0(1);
+r1 + "!";
+
+(((0 + 1) + (0 - 51)) < (!(true) ? (true ? 9007199254740991 : 1073741824) : (32 % 1)))
+
+((-(0) * -(1073741824)) === ((true ? 9007199254740991 : 21) - (false ? 9007199254740991 : 0)))
+
+(((20 * 9007199254740991) / 2) === 0)
+
+((1 % 1073741824) < (-(83) - -(1073741824)))
+
+(((1073741824 / 2) * 1) < ((1073741824 % 1) + (9007199254740991 % 1073741824)))
+
+function h0(x) { return x * 2; }
+function h2(x) { return x + "!"; }
+function h1(x) { return h2(x.indexOf("s")); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => x;
+const r0 = h0(1);
+r0.slice(1);
+const r1 = h0(1);
+r1 + "!";
+
+((-(1073741824) / 2) === (function(x) { return x; })((1073741824 - 9007199254740991)))
+
+(-((65 / 2)) === (1 - 1073741824))
+
+function h3(x) { return x * 2; }
+function h2(x) { return x.charCodeAt(0); }
+function h1(x) { return x; }
+function h0(x) { return h3(x).first; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+((63 < (1073741824 / 2)) && (false && (0 < 1073741824)))
+
+function h0(x) { return x + "!"; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1("s");
+r0.toUpperCase();
+const r1 = h0("s");
+r1;
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => ({ first: x, second: x });
+function h2(x) { return x; }
+const r0 = h0(1);
+r0.slice(1);
+const r1 = h0(1);
+r1 + "!";
+
+function h1(x) { return x; }
+function h0(x) { return h1(x); }
+const r0 = h1(true);
+r0.slice(1);
+const r1 = h0(1);
+r1.toUpperCase();
+
+function h0(x) { return h1(x); }
+function h1(x) { return x * 2; }
+function h2(x) { return x * 2; }
+const r0 = h0(1);
+r0.toUpperCase();
+
+const h1 = (x) => x;
+const h0 = (x) => h1(x);
+const r0 = h1(true);
+r0.slice(1);
+const r1 = h0(1);
+r1.toUpperCase();
+
+(((9007199254740991 / 2) % (80 * 9007199254740991)) % ((1073741824 + 1073741824) * (true ? 9007199254740991 : 1073741824)))
+
+(9007199254740991 % (function(x) { return x; })(17))
+
+(function(x) { return x; })(((9007199254740991 < 0) ? (1 % 9007199254740991) : 0))
+
+function h1(x) { return x.length; }
+const h0 = (x) => x.charCodeAt(0);
+const r0 = h0("abc");
+r0 + "!";
+const r1 = h0(1);
+r1;
+
+-(-((true ? 77 : 0)))
+
+function h1(x) { return x; }
+const h0 = (x) => h1(x);
+const r0 = h1(true);
+r0.slice(1);
+const r1 = h0(1);
+r1.toUpperCase();
+
+(-(57) * (false ? 1073741824 : (function(x) { return x; })(1073741824)))
+
+function h1(x) { return x.slice(1); }
+function h0(x) { return h1(x); }
+const r0 = h0("s");
+r0.length * 2;
+
+((function(x) { return x; })((9007199254740991 + 9007199254740991)) * ((9007199254740991 / 2) % (1 % 9007199254740991)))
+
+18
+
+((-(9007199254740991) / 2) + -((true ? 1073741824 : 1)))
+
+(function(x) { return x; })((function(x) { return x; })((94 - 0)))
+
+function h2(x) { return x * 2; }
+function h0(x) { return h1(x).first; }
+function h3(x) { return x.first; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h3(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h2("s");
+r1 + "!";
+
+-(((1 % 1) % (1 + 55)))
+
+(((9007199254740991 < 36) && !(false)) ? 9007199254740991 : ((53 * 9007199254740991) - (function(x) { return x; })(1)))
+
+((1073741824 / 2) - -((function(x) { return x; })(9007199254740991)))
+
+(((9007199254740991 % 1) === (0 * 94)) ? ((function(x) { return x; })(0) - (1073741824 * 28)) : -((9007199254740991 + 89)))
+
+(-(-(9007199254740991)) / 2)
+
+function h3(x) { return x + "!"; }
+function h2(x) { return x + "!"; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h3("s");
+r0 + "!";
+const r1 = h0(({ first: "s", length: 2 }));
+r1.toUpperCase();
+
+(((1073741824 < 0) ? (1 - 66) : (false ? 0 : 9007199254740991)) / 2)
+
+((function(x) { return x; })((95 + 95)) % ((true && false) ? -(1073741824) : 1073741824))
+
+(((50 - 0) % 1) + ((1 - 1) - (1073741824 + 1073741824)))
+
+(-((1 * 1073741824)) + 9)
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x.length; }
+const r0 = h1("abc");
+r0 * 2;
+
+(((9007199254740991 * 23) / 2) + ((1073741824 * 1) % (81 * 1073741824)))
+
+(-((9007199254740991 + 9007199254740991)) - ((function(x) { return x; })(73) - (0 - 1073741824)))
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x; }
+const h2 = (x) => x + "!";
+const r0 = h2([1, 2]);
+r0 + "!";
+
+(!((0 < 1073741824)) ? ((9007199254740991 / 2) / 2) : ((9007199254740991 % 0) * (9007199254740991 * 1)))
+
+((function(x) { return x; })(9007199254740991) % -(-(0)))
+
+(-((function(x) { return x; })(1073741824)) - ((function(x) { return x; })(0) * (9007199254740991 % 1073741824)))
+
+function h3(x) { return x + "!"; }
+function h1(x) { return x + "!"; }
+function h0(x) { return ({ first: x, second: x }); }
+const h2 = (x) => h3(x);
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h3("abc");
+r1 + "!";
+
+(((false ? 1073741824 : 0) + (1073741824 / 2)) % ((1073741824 / 2) / 2))
+
+(((1 % 1) % -(1)) - ((19 - 9007199254740991) % (1 * 1)))
+
+(false ? -((function(x) { return x; })(1073741824)) : ((function(x) { return x; })(9007199254740991) % 0))
+
+(((true && true) ? (true ? 1 : 88) : -(1073741824)) / 2)
+
+(((true ? 1073741824 : 9007199254740991) / 2) - 75)
+
+(((1 + 1) * (0 + 65)) / 2)
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h1 = (x) => x.indexOf("s");
+const r0 = h0([1, 2]);
+r0.length * 2;
+const r1 = h1(({ first: "s", length: 2 }));
+r1 + "!";
+
+function h0(x) { return x.charCodeAt(0); }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 * 2;
+
+(((function(x) { return x; })(0) % (0 * 1)) + ((true ? 1 : 1) - (0 * 1)))
+
+(!((0 < 1073741824)) ? ((0 + 0) / 2) : (function(x) { return x; })((false ? 0 : 59)))
+
+function h1(x) { return x; }
+const h0 = (x) => h1(x);
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h1(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h0 = (x) => x.charCodeAt(0);
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0 * 2;
+
+(((0 + 0) - (0 + 9007199254740991)) - 90)
+
+(function(x) { return x; })((1 % (1073741824 / 2)))
+
+(function(x) { return x; })((function(x) { return x; })((40 * 9007199254740991)))
+
+(((function(x) { return x; })(1073741824) * (true ? 9007199254740991 : 9007199254740991)) * (-(1073741824) + (function(x) { return x; })(92)))
+
+-((1073741824 / 2))
+
+(((1073741824 + 58) % (0 + 1073741824)) - ((false ? 4 : 1) % 57))
+
+-(30)
+
+(-((false ? 1073741824 : 0)) % ((function(x) { return x; })(1073741824) - (0 - 1)))
+
+(function(x) { return x; })(-((63 - 1073741824)))
+
+function h0(x) { return x * 2; }
+const h2 = (x) => x.charCodeAt(0);
+function h1(x) { return x.toUpperCase(); }
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+(((true && true) ? (24 * 9007199254740991) : (1073741824 + 39)) * -((function(x) { return x; })(9007199254740991)))
+
+-(((58 - 0) % 9007199254740991))
+
+(((26 < 0) ? (0 / 2) : (function(x) { return x; })(1073741824)) - -((true ? 1 : 9007199254740991)))
+
+function h0(x) { return h3(x).first; }
+function h1(x) { return ({ first: x, second: x }); }
+function h3(x) { return x + "!"; }
+function h2(x) { return x; }
+const r0 = h1(1);
+r0.first;
+const r1 = h0("s");
+r1.toUpperCase();
+
+function h0(x) { return ({ first: x, second: x }); }
+const h1 = (x) => x + "!";
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h1("abc");
+r1.toUpperCase();
+
+(((9007199254740991 === 59) && (1073741824 === 1)) ? ((17 % 64) + (97 * 0)) : ((9007199254740991 < 1) ? (1 - 0) : (1 * 1)))
+
+(!((1073741824 === 53)) ? ((9007199254740991 / 2) / 2) : (-(0) % (0 * 1)))
+
+(((57 * 9007199254740991) - -(1)) - ((false ? 81 : 1073741824) - -(0)))
+
+(((57 % 1073741824) + (true ? 1073741824 : 88)) - (1073741824 - (1 / 2)))
+
+(((true ? 9007199254740991 : 9007199254740991) % (false ? 9007199254740991 : 1)) % 9007199254740991)
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return h1(x); }
+const r0 = h1(1);
+r0 * 2;
+const r1 = h1("abc");
+r1.toUpperCase();
+
+(1073741824 / 2)
+
+-(((55 < 67) ? 9007199254740991 : (1 % 9007199254740991)))
+
+(((1 / 2) / 2) / 2)
+
+(((9007199254740991 < 1073741824) && (1073741824 < 9007199254740991)) ? ((96 + 1073741824) * (1 - 1073741824)) : (function(x) { return x; })((false ? 62 : 1073741824)))
+
+((function(x) { return x; })((9007199254740991 - 65)) / 2)
+
+-((-(9007199254740991) % (0 - 0)))
+
+(9007199254740991 * (false ? (function(x) { return x; })(9007199254740991) : (function(x) { return x; })(9007199254740991)))
+
+const h0 = (x) => h3(x).first;
+function h1(x) { return ({ first: x, second: x }); }
+function h3(x) { return x + "!"; }
+function h2(x) { return x; }
+const r0 = h1(1);
+r0.first;
+const r1 = h0("s");
+r1.toUpperCase();
+
+function h2(x) { return x * 2; }
+function h0(x) { return x * 2; }
+function h1(x) { return h2(x.indexOf("s")); }
+const r0 = h2(1);
+r0;
+const r1 = h0([1, 2]);
+r1.length * 2;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h2(true);
+r0;
+const r1 = h1(({ first: "s", length: 2 }));
+r1.length * 2;
+
+(((10 % 0) < (0 * 0)) ? ((false ? "abc" : "a") + "abc") : "")
+
+(((40 === 9007199254740991) ? "abc" : ("abc" + "")) + "")
+
+(((0 < 1) && (1073741824 < 90)) ? ((1073741824 === 1) ? "abc" : "abc") : "")
+
+(((9007199254740991 * 85) === -(1073741824)) ? "" : "abc")
+
+(((0 < 73) ? (false ? "a" : "") : ("a" + "")) + (!(true) ? "" : ("abc" + "")))
+
+((!(true) ? "" : "") + "")
+
+(((function(x) { return x; })(1073741824) < (9007199254740991 % 1073741824)) ? ((false ? "a" : "abc") + ("abc" + "abc")) : ("a" + ("" + "abc")))
+
+(!((22 === 9007199254740991)) ? ((true ? "a" : "abc") + ("a" + "a")) : ((1 === 51) ? ("" + "abc") : ""))
+
+(((true ? "abc" : "a") + ("abc" + "a")) + ((true ? "abc" : "a") + (false ? "a" : "a")))
+
+(!((false && false)) ? "abc" : ("abc" + ("abc" + "abc")))
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x + "!";
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h1(true);
+r1.toUpperCase();
+
+(!((0 < 0)) ? ((1 === 1) ? (false ? "" : "a") : ("" + "abc")) : (("a" + "a") + ("a" + "")))
+
+((!(false) && (0 === 6)) ? ("abc" + "abc") : ((1073741824 < 1073741824) ? (true ? "a" : "") : (false ? "" : "a")))
+
+(("" + (true ? "a" : "a")) + ((1 === 1073741824) ? (true ? "a" : "abc") : (false ? "" : "abc")))
+
+("a" + ((true ? "" : "abc") + "a"))
+
+("a" + (("" + "") + ("a" + "")))
+
+(("" + ("" + "a")) + (!(false) ? (false ? "a" : "abc") : ("" + "abc")))
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x.slice(0, 1);
+const r0 = h0(true);
+r0 + "!";
+const r1 = h1(({ first: "s", length: 2 }));
+r1.first;
+
+(((function(x) { return x; })(22) === (1073741824 % 1)) ? ((1 === 1) ? "" : ("" + "")) : "")
+
+(("" + ("a" + "abc")) + "abc")
+
+(((true ? "a" : "abc") + ("a" + "abc")) + ("abc" + "a"))
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x; }
+function h2(x) { return x + "!"; }
+const r0 = h1("s");
+r0.slice(1);
+
+((("abc" + "") + ("a" + "a")) + ((true ? "abc" : "") + "abc"))
+
+((!(false) ? "a" : "") + (("a" + "a") + (true ? "abc" : "abc")))
+
+(((90 % 9007199254740991) === (function(x) { return x; })(35)) ? "" : ("abc" + ""))
+
+(((13 < 1073741824) ? (true ? "a" : "") : ("a" + "a")) + ("a" + "abc"))
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x;
+const h2 = (x) => x + "!";
+const r0 = h1("s");
+r0.slice(1);
+
+const h0 = (x) => h2(1);
+const h1 = (x) => h2(x.toUpperCase());
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h0("s");
+r0 + "!";
+
+(((false && true) ? (false ? "a" : "") : (false ? "a" : "")) + ("abc" + ("" + "a")))
+
+((-(48) === (1073741824 % 9007199254740991)) ? ((false && false) ? "" : ("" + "")) : "abc")
+
+(((9007199254740991 === 1073741824) && (9007199254740991 < 9007199254740991)) ? (false ? "abc" : (false ? "a" : "a")) : ("a" + ("" + "")))
+
+("abc" + ((9007199254740991 === 1) ? ("" + "abc") : ("a" + "abc")))
+
+("a" + ((1 < 1073741824) ? ("abc" + "a") : ("abc" + "")))
+
+(((0 === 1) ? "" : ("a" + "abc")) + ((true ? "a" : "a") + ("a" + "a")))
+
+((-(0) === (0 + 1)) ? (("abc" + "a") + (false ? "a" : "a")) : ("a" + (false ? "abc" : "")))
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x + "!"; }
+const r0 = h2("s");
+r0 + "!";
+const r1 = h0(1);
+r1.length * 2;
+
+(((false && false) ? "abc" : (true ? "a" : "abc")) + "a")
+
+((true ? "" : (true ? "a" : "a")) + "a")
+
+(("" + "a") + (("abc" + "a") + "abc"))
+
+((("a" + "abc") + ("" + "abc")) + "")
+
+(((1 / 2) === -(99)) ? ("" + "abc") : ((false && false) ? (true ? "" : "a") : (true ? "a" : "")))
+
+(((true ? 1 : 0) === (9007199254740991 / 2)) ? "abc" : (("a" + "a") + ""))
+
+(((9007199254740991 < 9007199254740991) ? "" : ("" + "abc")) + ((14 === 85) ? (false ? "" : "a") : "a"))
+
+(((50 < 29) ? "" : ("a" + "abc")) + "abc")
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => x + "!";
+const r0 = h2("s");
+r0 + "!";
+const r1 = h0(1);
+r1.length * 2;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => x.slice(0, 1);
+const h1 = (x) => x.toUpperCase();
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+const r1 = h0(true);
+r1.slice(1);
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return x + "!"; }
+const r0 = h2("s");
+r0 + "!";
+const r1 = h0(1);
+r1.length * 2;
+
+export function f(x) { return x; } export default 1; f(2);
+
+const f = (n) => n > 0 ? f(n - 1) : 0; f(3);
+
+"abc".slice(1).toUpperCase();
+
+[1, 2].indexOf(2);
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x;
+const r0 = h1(true);
+r0 + "!";
+const r1 = h0(1);
+r1.toUpperCase();
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1("s");
+r1.slice(1);
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1(1);
+r0.toUpperCase();
+
+const h2 = (x) => x;
+const h1 = (x) => h2(x.indexOf("s"));
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1("abc");
+r0 + "!";
+
+function h1(x) { return ({ first: x, second: x }); }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1(1);
+r0.toUpperCase();
+
+const h1 = (x) => ({ first: x, second: x });
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const h0 = (x) => x * 2;
+const h2 = (x) => h3(x);
+const r0 = h3(true);
+r0 + "!";
+
+const h2 = (x) => x;
+function h0(x) { return h1(x); }
+function h1(x) { return h2(x.indexOf("s")); }
+const r0 = h1(true);
+r0;
+const r1 = h0(1);
+r1.toUpperCase();
+
+function h0(x) { return h3("s"); }
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.toUpperCase(); }
+function h3(x) { return x + "!"; }
+const r0 = h0(true);
+r0 + "!";
+const r1 = h2(1);
+r1.first;
+
+function h3(x) { return x * 2; }
+function h1(x) { return x * 2; }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => h2(x);
+const r0 = h1(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h2(x) { return x.indexOf("s"); }
+function h0(x) { return h3(x).first; }
+const h1 = (x) => x * 2;
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h1(({ first: "s", length: 2 }));
+r1 + "!";
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => x.charCodeAt(0);
+const h0 = (x) => x.charCodeAt(0);
+const r0 = h2("abc");
+r0.slice(1);
+const r1 = h1("s");
+r1 + "!";
+
+const h0 = (x) => h3("s");
+function h2(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.toUpperCase(); }
+function h3(x) { return x + "!"; }
+const r0 = h0(true);
+r0 + "!";
+const r1 = h2(1);
+r1.first;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x.slice(0, 1)); }
+function h3(x) { return x; }
+function h1(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h2("abc");
+r1;
+
+function h2(x) { return x * 2; }
+const h1 = (x) => h2("s");
+function h0(x) { return x * 2; }
+const r0 = h0("s");
+r0.slice(1);
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x; }
+const r0 = h1(true);
+r0.slice(1);
+
+function h1(x) { return x * 2; }
+function h0(x) { return x * 2; }
+const r0 = h0("abc");
+r0 + "!";
+const r1 = h0("s");
+r1.length * 2;
+
+function h1(x) { return x.first; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0("abc");
+r0.toUpperCase();
+const r1 = h0("s");
+r1 + "!";
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x * 2;
+const r0 = h0("abc");
+r0 + "!";
+const r1 = h0("s");
+r1.length * 2;
+
+function h1(x) { return x * 2; }
+const h0 = (x) => x * 2;
+const r0 = h0("abc");
+r0 + "!";
+const r1 = h0("s");
+r1.length * 2;
+
+function h0(x) { return h2(x.toUpperCase()); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h2(({ first: "s", length: 2 }));
+r1 + "!";
+
+function h0(x) { return h2(x); }
+const h1 = (x) => h2(x.slice(0, 1));
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h1("s");
+r0.first;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.first;
+
+const h1 = (x) => x * 2;
+function h0(x) { return ({ first: x, second: x }); }
+function h2(x) { return x; }
+const r0 = h0("abc");
+r0.first;
+const r1 = h1([1, 2]);
+r1.toUpperCase();
+
+function h2(x) { return x; }
+function h0(x) { return h2("abc"); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1([1, 2]);
+r1.length * 2;
+
+function h3(x) { return x; }
+function h1(x) { return h2(x); }
+function h0(x) { return ({ first: x, second: x }); }
+function h2(x) { return h3(({ first: "s", length: 2 })); }
+const r0 = h0(1);
+r0.toUpperCase();
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => x;
+const h1 = (x) => x + "!";
+const r0 = h1(true);
+r0 + "!";
+const r1 = h0(1);
+r1 * 2;
+
+function h1(x) { return x * 2; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0.slice(1);
+
+function h3(x) { return x; }
+function h1(x) { return h2(x); }
+const h0 = (x) => ({ first: x, second: x });
+const h2 = (x) => h3(({ first: "s", length: 2 }));
+const r0 = h0(1);
+r0.toUpperCase();
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h0(x) { return h1(x.slice(1)); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h0("abc");
+r1.first;
+
+function h0(x) { return h1(1); }
+function h1(x) { return x.charCodeAt(0); }
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h0([1, 2]);
+r1 * 2;
+
+function h0(x) { return x.slice(0, 1); }
+function h1(x) { return x; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h3 = (x) => x * 2;
+const r0 = h2("s");
+r0.slice(1);
+const r1 = h3(1);
+r1;
+
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return h3(x); }
+function h0(x) { return h1(x); }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0 * 2;
+
+function h2(x) { return x + "!"; }
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h0("s");
+r0.toUpperCase();
+const r1 = h0(({ first: "s", length: 2 }));
+r1.first;
+
+function h1(x) { return x; }
+function h0(x) { return x * 2; }
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h1([1, 2]);
+r1 * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.toUpperCase(); }
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h1(1);
+r1.toUpperCase();
+
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const h2 = (x) => h3(x);
+const h0 = (x) => h1(x);
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0 * 2;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h0(x) { return h1(({ first: "s", length: 2 })); }
+const r0 = h1("abc");
+r0 + "!";
+const r1 = h0("abc");
+r1.first;
+
+function h1(x) { return x + "!"; }
+function h0(x) { return h1(true); }
+function h2(x) { return h3("s"); }
+function h3(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1(1);
+r1 + "!";
+
+function h0(x) { return h2("abc"); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const h1 = (x) => x * 2;
+const r0 = h1("s");
+r0 + "!";
+const r1 = h2(({ first: "s", length: 2 }));
+r1;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => x + "!";
+const r0 = h1("s");
+r0.length * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x); }
+const r0 = h0(true);
+r0 * 2;
+
+const h1 = (x) => x + "!";
+const h0 = (x) => h1(true);
+const h2 = (x) => h3("s");
+function h3(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1(1);
+r1 + "!";
+
+function h3(x) { return x * 2; }
+function h2(x) { return x + "!"; }
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return x * 2; }
+const r0 = h3("s");
+r0.slice(1);
+
+const h1 = (x) => x.slice(1);
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1("s");
+r0.length * 2;
+const r1 = h1("s");
+r1.toUpperCase();
+
+function h1(x) { return x + "!"; }
+function h0(x) { return h1([1, 2]); }
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h1(1);
+r1.slice(1);
+
+function h2(x) { return x; }
+function h1(x) { return h2(x.indexOf("s")); }
+function h0(x) { return h2("s"); }
+const r0 = h1("s");
+r0 + "!";
+
+const h1 = (x) => x + "!";
+const h0 = (x) => h1([1, 2]);
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h1(1);
+r1.slice(1);
+
+function h3(x) { return ({ first: x, second: x }); }
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return h3(x).first; }
+const r0 = h3(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h2([1, 2]);
+r1.toUpperCase();
+
+function h1(x) { return x + "!"; }
+const h0 = (x) => h1([1, 2]);
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h1(1);
+r1.slice(1);
+
+function h1(x) { return h2(true); }
+function h2(x) { return x; }
+function h3(x) { return x * 2; }
+function h0(x) { return h3("abc"); }
+const r0 = h1("abc");
+r0.slice(1);
+
+function h1(x) { return h2(true); }
+function h2(x) { return x; }
+function h3(x) { return x * 2; }
+const h0 = (x) => h3("abc");
+const r0 = h1("abc");
+r0.slice(1);
+
+const h0 = (x) => x.charCodeAt(0);
+const h1 = (x) => x.slice(0, 1);
+const r0 = h0("s");
+r0;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h1 = (x) => h3(true);
+function h2(x) { return x; }
+function h3(x) { return x.toUpperCase(); }
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h0 = (x) => x;
+function h2(x) { return h3(x.indexOf("s")); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x.length; }
+const r0 = h3(1);
+r0;
+
+function h1(x) { return x * 2; }
+function h0(x) { return x * 2; }
+const h3 = (x) => x.charCodeAt(0);
+function h2(x) { return h3(x.charCodeAt(0)); }
+const r0 = h2("s");
+r0.length * 2;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h1(x) { return x * 2; }
+const r0 = h0(1);
+r0 * 2;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x); }
+function h2(x) { return x; }
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+const r1 = h2([1, 2]);
+r1.toUpperCase();
+
+function h1(x) { return ({ first: x, second: x }); }
+const h2 = (x) => h3(x);
+function h3(x) { return x.slice(0, 1); }
+const h0 = (x) => x.slice(1);
+const r0 = h2(true);
+r0.slice(1);
+
+function h1(x) { return x.indexOf("s"); }
+function h3(x) { return x; }
+const h2 = (x) => x * 2;
+function h0(x) { return h1(x).first; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h3(true);
+r1.first;
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1(x);
+const h2 = (x) => x;
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+const r1 = h2([1, 2]);
+r1.toUpperCase();
+
+function h1(x) { return h2(x.length); }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h2(x) { return x.charCodeAt(0); }
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return h1(x); }
+const h2 = (x) => x;
+const r0 = h2([1, 2]);
+r0.toUpperCase();
+const r1 = h2([1, 2]);
+r1.toUpperCase();
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1("s");
+r0.slice(1);
+
+function h2(x) { return x.indexOf("s"); }
+function h0(x) { return h2(true); }
+function h1(x) { return x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h1 = (x) => x * 2;
+const h0 = (x) => h1(x.charCodeAt(0));
+const h2 = (x) => x * 2;
+const r0 = h1([1, 2]);
+r0.toUpperCase();
+const r1 = h1([1, 2]);
+r1 * 2;
+
+const h2 = (x) => x.indexOf("s");
+const h0 = (x) => h2(true);
+const h1 = (x) => x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h2(x) { return x + "!"; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h3 = (x) => x + "!";
+function h1(x) { return x * 2; }
+const r0 = h0("abc");
+r0 * 2;
+const r1 = h3("s");
+r1.slice(1);
+
+function h2(x) { return x.indexOf("s"); }
+function h0(x) { return h2(true); }
+const h1 = (x) => x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h3(x) { return x + "!"; }
+function h1(x) { return h3(x); }
+function h0(x) { return x; }
+const h2 = (x) => h3(x);
+const r0 = h0(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h0(x) { return x * 2; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h1(true);
+r0.first;
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return h1(x); }
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h0("abc");
+r1;
+
+function h0(x) { return x.length; }
+const h2 = (x) => ({ first: x, second: x });
+const h1 = (x) => h2(x.length);
+const r0 = h2("abc");
+r0.slice(1);
+const r1 = h0(1);
+r1;
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => x * 2;
+const r0 = h2(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => h1(x);
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h0("abc");
+r1;
+
+function h2(x) { return x.toUpperCase(); }
+function h0(x) { return x + "!"; }
+const h1 = (x) => x + "!";
+const r0 = h1(1);
+r0.length * 2;
+const r1 = h2(1);
+r1.length * 2;
+
+function h0(x) { return x + "!"; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+const h0 = (x) => x + "!";
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h1(x) { return x.slice(0, 1); }
+const h0 = (x) => h1(x);
+const r0 = h0("abc");
+r0.slice(1);
+
+function h0(x) { return x + "!"; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h1(x) { return h2(x.length); }
+const h0 = (x) => h2([1, 2]);
+function h2(x) { return x.charCodeAt(0); }
+const r0 = h2("abc");
+r0;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return x.length; }
+function h0(x) { return h1(x).first; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h2("abc");
+r1 + "!";
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h2 = (x) => x.length;
+const h0 = (x) => h1(x).first;
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h2("abc");
+r1 + "!";
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x; }
+const h2 = (x) => h3(({ first: "s", length: 2 }));
+function h3(x) { return x * 2; }
+const r0 = h3(true);
+r0 * 2;
+const r1 = h0(1);
+r1.toUpperCase();
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+function h2(x) { return x.length; }
+const h0 = (x) => h1(x).first;
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h2("abc");
+r1 + "!";
+
+function h3(x) { return x * 2; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h2 = (x) => x + "!";
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h2("s");
+r0.toUpperCase();
+
+function h1(x) { return h2(x); }
+function h2(x) { return h3(x); }
+function h3(x) { return ({ first: x, second: x }); }
+function h0(x) { return h2("abc"); }
+const r0 = h1(1);
+r0.length * 2;
+
+const h0 = (x) => h1(x);
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1(1);
+r0.slice(1);
+const r1 = h0(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h0 = (x) => h2(x.slice(1));
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return x + "!"; }
+const r0 = h1("abc");
+r0.slice(1);
+
+function h0(x) { return h2(x); }
+function h2(x) { return x.toUpperCase(); }
+function h1(x) { return x.toUpperCase(); }
+function h3(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h3(x).first; }
+const h3 = (x) => x.slice(1);
+function h1(x) { return x + "!"; }
+const r0 = h2("abc");
+r0.slice(1);
+
+function h1(x) { return x; }
+function h2(x) { return x + "!"; }
+function h0(x) { return h1(x); }
+const r0 = h1([1, 2]);
+r0.slice(1);
+const r1 = h1("s");
+r1 * 2;
+
+function h2(x) { return x * 2; }
+function h0(x) { return x; }
+function h1(x) { return x + "!"; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x.toUpperCase();
+function h2(x) { return x * 2; }
+const r0 = h0(1);
+r0.toUpperCase();
+const r1 = h1([1, 2]);
+r1 * 2;
+
+const h2 = (x) => x * 2;
+const h0 = (x) => x;
+const h1 = (x) => x + "!";
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h0 = (x) => x + "!";
+function h3(x) { return x.slice(0, 1); }
+const h1 = (x) => x + "!";
+const h2 = (x) => x;
+const r0 = h2(true);
+r0.toUpperCase();
+
+function h2(x) { return x * 2; }
+const h0 = (x) => x;
+function h1(x) { return x + "!"; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => x;
+const r0 = h0("abc");
+r0.toUpperCase();
+
+const h1 = (x) => x * 2;
+function h0(x) { return h1(x); }
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1(true);
+r1 * 2;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => x + "!";
+const h3 = (x) => x;
+const r0 = h1("s");
+r0 + "!";
+const r1 = h3(true);
+r1.slice(1);
+
+const h1 = (x) => x.slice(1);
+const h0 = (x) => h1(({ first: "s", length: 2 }));
+const r0 = h1(true);
+r0.slice(1);
+
+function h0(x) { return h1(x.toUpperCase()); }
+function h1(x) { return x * 2; }
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h1(true);
+r1.length * 2;
+
+const h2 = (x) => x + "!";
+function h1(x) { return h2(x); }
+const h0 = (x) => h2(x);
+const r0 = h2("abc");
+r0.toUpperCase();
+
+function h1(x) { return h2(x.indexOf("s")); }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h2(x).first; }
+const r0 = h0("abc");
+r0;
+const r1 = h2("s");
+r1 + "!";
+
+function h2(x) { return x; }
+function h1(x) { return x * 2; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+
+const h1 = (x) => ({ first: x, second: x });
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0.first;
+const r1 = h0([1, 2]);
+r1 + "!";
+
+const h2 = (x) => x;
+const h1 = (x) => x * 2;
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0;
+
+function h1(x) { return x.slice(1); }
+const h3 = (x) => ({ first: x, second: x });
+function h2(x) { return h3(x).first; }
+const h0 = (x) => h3(x.slice(0, 1));
+const r0 = h1(true);
+r0.toUpperCase();
+
+function h2(x) { return h3(x).first; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h0(x) { return x + "!"; }
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h2("abc");
+r0.toUpperCase();
+const r1 = h0("abc");
+r1.toUpperCase();
+
+function h0(x) { return h3("abc"); }
+function h1(x) { return h2(x); }
+function h2(x) { return h3(x.slice(1)); }
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h3("s");
+r0.slice(1);
+const r1 = h1(1);
+r1.toUpperCase();
+
+function h2(x) { return x.slice(0, 1); }
+function h1(x) { return x.length; }
+function h0(x) { return h2(x.length); }
+const r0 = h0("s");
+r0.length * 2;
+
+function h1(x) { return x; }
+function h0(x) { return h1(x.indexOf("s")); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.toUpperCase();
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x * 2; }
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1("s");
+r1.length * 2;
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x * 2;
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1("s");
+r1.length * 2;
+
+const h1 = (x) => x + "!";
+function h0(x) { return x * 2; }
+const r0 = h0(true);
+r0.slice(1);
+const r1 = h1("s");
+r1.length * 2;
+
+function h1(x) { return x; }
+function h0(x) { return x; }
+const r0 = h1(1);
+r0 + "!";
+
+const h1 = (x) => x;
+const h0 = (x) => x;
+const r0 = h1(1);
+r0 + "!";
+
+function h0(x) { return h1(x).first; }
+function h1(x) { return h2(true); }
+function h2(x) { return x.length; }
+function h3(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0 * 2;
+
+function h0(x) { return h1(x).first; }
+function h1(x) { return h2(true); }
+const h2 = (x) => x.length;
+const h3 = (x) => ({ first: x, second: x });
+const r0 = h1("abc");
+r0 * 2;
+
+function h0(x) { return x.slice(1); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h0 = (x) => x.slice(1);
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0 * 2;
+
+function h0(x) { return x.slice(1); }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(({ first: "s", length: 2 }));
+r0 * 2;
+
+function h1(x) { return h2(x); }
+function h0(x) { return x.toUpperCase(); }
+function h2(x) { return x + "!"; }
+const r0 = h0(1);
+r0.slice(1);
+
+const h1 = (x) => h2(x);
+const h0 = (x) => x.toUpperCase();
+function h2(x) { return x + "!"; }
+const r0 = h0(1);
+r0.slice(1);
+
+function h0(x) { return x * 2; }
+function h2(x) { return x * 2; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0;
+const r1 = h1(1);
+r1 * 2;
+
+const h0 = (x) => x * 2;
+const h2 = (x) => x * 2;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1("abc");
+r0;
+const r1 = h1(1);
+r1 * 2;
+
+const h0 = (x) => x * 2;
+function h2(x) { return x * 2; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1("abc");
+r0;
+const r1 = h1(1);
+r1 * 2;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return x; }
+function h3(x) { return x * 2; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h3("abc");
+r0 * 2;
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h2 = (x) => x;
+const h3 = (x) => x * 2;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h3("abc");
+r0 * 2;
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => x;
+const h3 = (x) => x * 2;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h3("abc");
+r0 * 2;
+
+function h1(x) { return x; }
+function h0(x) { return h1(x); }
+const r0 = h1("abc");
+r0;
+const r1 = h0("abc");
+r1;
+
+const h1 = (x) => x;
+const h0 = (x) => h1(x);
+const r0 = h1("abc");
+r0;
+const r1 = h0("abc");
+r1;
+
+function h1(x) { return x * 2; }
+function h0(x) { return x + "!"; }
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.slice(1);
+
+const h1 = (x) => x * 2;
+const h0 = (x) => x + "!";
+const r0 = h1("abc");
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.slice(1);
+
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h1(x) { return x; }
+const r0 = h0(1);
+r0.length * 2;
+const r1 = h1("abc");
+r1.slice(1);
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h1 = (x) => x;
+const r0 = h0(1);
+r0.length * 2;
+const r1 = h1("abc");
+r1.slice(1);
+
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+function h1(x) { return x; }
+const r0 = h0(1);
+r0.length * 2;
+const r1 = h1("abc");
+r1.slice(1);
+
+function h1(x) { return h2(x).first; }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.slice(1);
+const r1 = h0("abc");
+r1.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.first; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+const r1 = h1("abc");
+r1;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.first;
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+const r1 = h1("abc");
+r1;
+
+function h1(x) { return x; }
+function h0(x) { return x.indexOf("s"); }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h1 = (x) => x;
+const h0 = (x) => x.indexOf("s");
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h1 = (x) => x;
+function h0(x) { return x.indexOf("s"); }
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h2(x); }
+function h1(x) { return x; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1("abc");
+r1.length * 2;
+
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => h2(x);
+const h1 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1("abc");
+r1.length * 2;
+
+const h2 = (x) => ({ first: x, second: x });
+function h0(x) { return h2(x); }
+const h1 = (x) => x;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1("abc");
+r1.length * 2;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x * 2; }
+function h2(x) { return x.toUpperCase(); }
+const r0 = h3(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h3(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h3 = (x) => x * 2;
+const h2 = (x) => x.toUpperCase();
+const r0 = h3(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h3(({ first: "s", length: 2 }));
+r1 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x * 2; }
+const h2 = (x) => x.toUpperCase();
+const r0 = h3(({ first: "s", length: 2 }));
+r0 + "!";
+const r1 = h3(({ first: "s", length: 2 }));
+r1 * 2;
+
+function h1(x) { return x.indexOf("s"); }
+function h0(x) { return h1("s"); }
+const r0 = h0("abc");
+r0 + "!";
+const r1 = h1(true);
+r1;
+
+const h1 = (x) => x.indexOf("s");
+const h0 = (x) => h1("s");
+const r0 = h0("abc");
+r0 + "!";
+const r1 = h1(true);
+r1;
+
+const h1 = (x) => x.indexOf("s");
+function h0(x) { return h1("s"); }
+const r0 = h0("abc");
+r0 + "!";
+const r1 = h1(true);
+r1;
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x * 2; }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return x * 2; }
+const r0 = h3([1, 2]);
+r0 * 2;
+const r1 = h1(1);
+r1.toUpperCase();
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h3 = (x) => x * 2;
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h2 = (x) => x * 2;
+const r0 = h3([1, 2]);
+r0 * 2;
+const r1 = h1(1);
+r1.toUpperCase();
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x * 2; }
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const h2 = (x) => x * 2;
+const r0 = h3([1, 2]);
+r0 * 2;
+const r1 = h1(1);
+r1.toUpperCase();
+
+function h0(x) { return x.slice(0, 1); }
+function h1(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1("abc");
+r1 + "!";
+
+const h0 = (x) => x.slice(0, 1);
+const h1 = (x) => x * 2;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.length * 2;
+const r1 = h1("abc");
+r1 + "!";
+
+function h1(x) { return h2(1); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0([1, 2]);
+r0;
+
+function h1(x) { return h2(1); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h0([1, 2]);
+r0;
+
+function h3(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.toUpperCase(); }
+function h0(x) { return h2("s"); }
+function h2(x) { return x * 2; }
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h3("s");
+r1 + "!";
+
+const h3 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.toUpperCase();
+function h0(x) { return h2("s"); }
+const h2 = (x) => x * 2;
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h3("s");
+r1 + "!";
+
+function h0(x) { return h1(true); }
+function h1(x) { return x.charCodeAt(0); }
+const r0 = h0(true);
+r0;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.first;
+
+function h0(x) { return h1(x.charCodeAt(0)); }
+function h1(x) { return x.toUpperCase(); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return x * 2; }
+const r0 = h3(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1(true);
+r1;
+
+function h0(x) { return h1(x.charCodeAt(0)); }
+const h1 = (x) => x.toUpperCase();
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return x * 2; }
+const r0 = h3(({ first: "s", length: 2 }));
+r0.toUpperCase();
+const r1 = h1(true);
+r1;
+
+function h0(x) { return h1(x).first; }
+function h2(x) { return x.slice(0, 1); }
+function h1(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+function h0(x) { return h1(x).first; }
+const h2 = (x) => x.slice(0, 1);
+function h1(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+function h1(x) { return h2(x).first; }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return h3(x).first; }
+const r0 = h2([1, 2]);
+r0;
+const r1 = h3(true);
+r1.first;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x + "!"; }
+function h1(x) { return h2(x.length); }
+const r0 = h2([1, 2]);
+r0;
+const r1 = h2("s");
+r1 + "!";
+
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => x + "!";
+const h1 = (x) => h2(x.length);
+const r0 = h2([1, 2]);
+r0;
+const r1 = h2("s");
+r1 + "!";
+
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return x * 2; }
+function h1(x) { return h2(x).first; }
+function h0(x) { return h3(x.toUpperCase()); }
+const r0 = h3(1);
+r0.first;
+
+const h3 = (x) => ({ first: x, second: x });
+const h2 = (x) => x * 2;
+const h1 = (x) => h2(x).first;
+const h0 = (x) => h3(x.toUpperCase());
+const r0 = h3(1);
+r0.first;
+
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return x * 2; }
+const h1 = (x) => h2(x).first;
+const h0 = (x) => h3(x.toUpperCase());
+const r0 = h3(1);
+r0.first;
+
+function h1(x) { return x * 2; }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(1);
+r0.first;
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+const h1 = (x) => x * 2;
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0.first;
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+function h1(x) { return x * 2; }
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0.first;
+const r1 = h0(({ first: "s", length: 2 }));
+r1;
+
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h2(({ first: "s", length: 2 }));
+r0 * 2;
+
+function h1(x) { return x + "!"; }
+function h0(x) { return x * 2; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h0(true);
+r1 * 2;
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x * 2;
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h0(true);
+r1 * 2;
+
+const h1 = (x) => x + "!";
+const h0 = (x) => x * 2;
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2([1, 2]);
+r0.first;
+const r1 = h0(true);
+r1 * 2;
+
+function h0(x) { return x + "!"; }
+function h1(x) { return h2(1); }
+function h2(x) { return x * 2; }
+const r0 = h0(1);
+r0;
+const r1 = h2("s");
+r1;
+
+const h0 = (x) => x + "!";
+function h1(x) { return h2(1); }
+const h2 = (x) => x * 2;
+const r0 = h0(1);
+r0;
+const r1 = h2("s");
+r1;
+
+function h0(x) { return x * 2; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1(true);
+r0 + "!";
+
+const h0 = (x) => x * 2;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1(true);
+r0 + "!";
+
+function h1(x) { return h2(1); }
+function h2(x) { return x; }
+function h0(x) { return x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+
+function h1(x) { return h2(1); }
+function h2(x) { return x; }
+const h0 = (x) => x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0.first;
+
+function h3(x) { return ({ first: x, second: x }); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+function h1(x) { return h3(x).first; }
+function h0(x) { return h3([1, 2]); }
+const r0 = h1(1);
+r0.first;
+
+const h3 = (x) => ({ first: x, second: x });
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const h1 = (x) => h3(x).first;
+const h0 = (x) => h3([1, 2]);
+const r0 = h1(1);
+r0.first;
+
+function h3(x) { return ({ first: x, second: x }); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+function h1(x) { return h3(x).first; }
+const h0 = (x) => h3([1, 2]);
+const r0 = h1(1);
+r0.first;
+
+function h0(x) { return x + "!"; }
+function h2(x) { return x; }
+function h1(x) { return h2(x); }
+const r0 = h1("abc");
+r0;
+const r1 = h0([1, 2]);
+r1 * 2;
+
+const h0 = (x) => x + "!";
+const h2 = (x) => x;
+const h1 = (x) => h2(x);
+const r0 = h1("abc");
+r0;
+const r1 = h0([1, 2]);
+r1 * 2;
+
+function h0(x) { return x.charCodeAt(0); }
+function h1(x) { return h2(true); }
+function h2(x) { return x * 2; }
+const r0 = h2("abc");
+r0;
+const r1 = h1("abc");
+r1;
+
+function h0(x) { return x.charCodeAt(0); }
+function h1(x) { return h2(true); }
+const h2 = (x) => x * 2;
+const r0 = h2("abc");
+r0;
+const r1 = h1("abc");
+r1;
+
+function h0(x) { return h1(true); }
+function h1(x) { return x + "!"; }
+const r0 = h1(1);
+r0;
+const r1 = h0(1);
+r1.slice(1);
+
+function h0(x) { return x; }
+function h1(x) { return x + "!"; }
+function h3(x) { return x * 2; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2(1);
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1;
+
+const h0 = (x) => x;
+const h1 = (x) => x + "!";
+const h3 = (x) => x * 2;
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h2(1);
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1;
+
+const h0 = (x) => x;
+function h1(x) { return x + "!"; }
+function h3(x) { return x * 2; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h2(1);
+r0.first;
+const r1 = h2(({ first: "s", length: 2 }));
+r1;
+
+function h1(x) { return x; }
+function h0(x) { return h3(x.charCodeAt(0)); }
+function h2(x) { return x + "!"; }
+function h3(x) { return x + "!"; }
+const r0 = h1([1, 2]);
+r0 + "!";
+const r1 = h3([1, 2]);
+r1 * 2;
+
+function h1(x) { return x; }
+const h0 = (x) => h3(x.charCodeAt(0));
+const h2 = (x) => x + "!";
+function h3(x) { return x + "!"; }
+const r0 = h1([1, 2]);
+r0 + "!";
+const r1 = h3([1, 2]);
+r1 * 2;
+
+function h1(x) { return x.indexOf("s"); }
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h1("abc");
+r1;
+
+const h1 = (x) => x.indexOf("s");
+const h0 = (x) => x.length > 1 ? h0(x.slice(1)) : x;
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h1("abc");
+r1;
+
+const h1 = (x) => x.indexOf("s");
+function h0(x) { return x.length > 1 ? h0(x.slice(1)) : x; }
+const r0 = h1([1, 2]);
+r0 * 2;
+const r1 = h1("abc");
+r1;
+
+function h1(x) { return h2(x.toUpperCase()); }
+function h0(x) { return x; }
+function h2(x) { return x.indexOf("s"); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+const r0 = h3(1);
+r0;
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h2(x) { return x; }
+const r0 = h2(true);
+r0 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h2 = (x) => x;
+const r0 = h2(true);
+r0 * 2;
+
+const h0 = (x) => ({ first: x, second: x });
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h2(x) { return x; }
+const r0 = h2(true);
+r0 * 2;
+
+function h2(x) { return h3(x.length); }
+function h0(x) { return x * 2; }
+function h3(x) { return ({ first: x, second: x }); }
+function h1(x) { return x * 2; }
+const r0 = h0("s");
+r0.length * 2;
+const r1 = h2([1, 2]);
+r1.toUpperCase();
+
+const h2 = (x) => h3(x.length);
+const h0 = (x) => x * 2;
+function h3(x) { return ({ first: x, second: x }); }
+const h1 = (x) => x * 2;
+const r0 = h0("s");
+r0.length * 2;
+const r1 = h2([1, 2]);
+r1.toUpperCase();
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x.charCodeAt(0); }
+function h1(x) { return h2(x.length); }
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.first;
+
+const h2 = (x) => ({ first: x, second: x });
+const h0 = (x) => x.charCodeAt(0);
+const h1 = (x) => h2(x.length);
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.first;
+
+function h2(x) { return ({ first: x, second: x }); }
+function h0(x) { return x.charCodeAt(0); }
+const h1 = (x) => h2(x.length);
+const r0 = h1(true);
+r0.toUpperCase();
+const r1 = h1("abc");
+r1.first;
+
+function h0(x) { return x + "!"; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1(1);
+r0.first;
+const r1 = h1(1);
+r1 + "!";
+
+const h0 = (x) => x + "!";
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0.first;
+const r1 = h1(1);
+r1 + "!";
+
+function h0(x) { return x + "!"; }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1(1);
+r0.first;
+const r1 = h1(1);
+r1 + "!";
+
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h0(x) { return x + "!"; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+const h0 = (x) => x + "!";
+const h2 = (x) => ({ first: x, second: x });
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const h3 = (x) => x.length > 1 ? h3(x.slice(1)) : x;
+function h0(x) { return x + "!"; }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h0(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h2(x) { return h3(x); }
+function h3(x) { return x.length > 1 ? h3(x.slice(1)) : x; }
+function h0(x) { return x.slice(1); }
+function h1(x) { return h2(x); }
+const r0 = h2("abc");
+r0.toUpperCase();
+
+function h2(x) { return x.toUpperCase(); }
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+const h2 = (x) => x.toUpperCase();
+const h1 = (x) => h2(({ first: "s", length: 2 }));
+const h0 = (x) => ({ first: x, second: x });
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+const h2 = (x) => x.toUpperCase();
+const h1 = (x) => h2(({ first: "s", length: 2 }));
+function h0(x) { return ({ first: x, second: x }); }
+const r0 = h1(({ first: "s", length: 2 }));
+r0.first;
+
+function h1(x) { return x + "!"; }
+function h3(x) { return x; }
+function h2(x) { return x.indexOf("s"); }
+function h0(x) { return h1(x.slice(0, 1)); }
+const r0 = h1([1, 2]);
+r0.toUpperCase();
+const r1 = h0([1, 2]);
+r1.toUpperCase();
+
+const h1 = (x) => x + "!";
+const h3 = (x) => x;
+const h2 = (x) => x.indexOf("s");
+const h0 = (x) => h1(x.slice(0, 1));
+const r0 = h1([1, 2]);
+r0.toUpperCase();
+const r1 = h0([1, 2]);
+r1.toUpperCase();
+
+const h1 = (x) => x + "!";
+const h3 = (x) => x;
+function h2(x) { return x.indexOf("s"); }
+const h0 = (x) => h1(x.slice(0, 1));
+const r0 = h1([1, 2]);
+r0.toUpperCase();
+const r1 = h0([1, 2]);
+r1.toUpperCase();
+
+function h0(x) { return x * 2; }
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+function h2(x) { return x + "!"; }
+const r0 = h0("s");
+r0.slice(1);
+const r1 = h1("s");
+r1.slice(1);
+
+function h0(x) { return h1(x).first; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h0(true);
+r0.length * 2;
+
+function h0(x) { return h1(x).first; }
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h0(true);
+r0.length * 2;
+
+function h1(x) { return h2([1, 2]); }
+function h0(x) { return h2("s"); }
+function h2(x) { return ({ first: x, second: x }); }
+const r0 = h1(1);
+r0.first;
+const r1 = h2(true);
+r1.slice(1);
+
+function h1(x) { return ({ first: x, second: x }); }
+function h0(x) { return x + "!"; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+const h1 = (x) => ({ first: x, second: x });
+const h0 = (x) => x + "!";
+const r0 = h0(({ first: "s", length: 2 }));
+r0;
+
+function h0(x) { return x * 2; }
+function h3(x) { return ({ first: x, second: x }); }
+function h1(x) { return h3(x); }
+function h2(x) { return x + "!"; }
+const r0 = h3(true);
+r0;
+const r1 = h0([1, 2]);
+r1;
+
+const h0 = (x) => x * 2;
+const h3 = (x) => ({ first: x, second: x });
+const h1 = (x) => h3(x);
+const h2 = (x) => x + "!";
+const r0 = h3(true);
+r0;
+const r1 = h0([1, 2]);
+r1;
+
+function h0(x) { return x.first; }
+function h1(x) { return ({ first: x, second: x }); }
+const r0 = h1(true);
+r0.slice(1);
+
+const h0 = (x) => x.first;
+const h1 = (x) => ({ first: x, second: x });
+const r0 = h1(true);
+r0.slice(1);
+
+function h0(x) { return ({ first: x, second: x }); }
+function h1(x) { return x * 2; }
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1("abc");
+r1;
+
+const h0 = (x) => ({ first: x, second: x });
+const h1 = (x) => x * 2;
+const r0 = h0(({ first: "s", length: 2 }));
+r0.first;
+const r1 = h1("abc");
+r1;
+
+function h0(x) { return x + "!"; }
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+function h2(x) { return x.length > 1 ? h2(x.slice(1)) : x; }
+const r0 = h2(({ first: "s", length: 2 }));
+r0 + "!";
+
+const h0 = (x) => x + "!";
+function h1(x) { return h2(({ first: "s", length: 2 })); }
+const h2 = (x) => x.length > 1 ? h2(x.slice(1)) : x;
+const r0 = h2(({ first: "s", length: 2 }));
+r0 + "!";
+
+function h0(x) { return h1(x.charCodeAt(0)); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0("s");
+r0;
+
+const h0 = (x) => h1(x.charCodeAt(0));
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h0("s");
+r0;
+
+function h1(x) { return x.toUpperCase(); }
+function h0(x) { return x * 2; }
+const r0 = h0("abc");
+r0.length * 2;
+
+const h1 = (x) => x.toUpperCase();
+const h0 = (x) => x * 2;
+const r0 = h0("abc");
+r0.length * 2;
+
+function h2(x) { return x.first; }
+function h0(x) { return h2(({ first: "s", length: 2 })); }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h2("s");
+r0.length * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.length * 2;
+
+const h2 = (x) => x.first;
+const h0 = (x) => h2(({ first: "s", length: 2 }));
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h2("s");
+r0.length * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h2(x) { return x.first; }
+function h0(x) { return h2(({ first: "s", length: 2 })); }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h2("s");
+r0.length * 2;
+const r1 = h0(({ first: "s", length: 2 }));
+r1.length * 2;
+
+function h1(x) { return x; }
+function h0(x) { return x.slice(0, 1); }
+function h2(x) { return x * 2; }
+function h3(x) { return x * 2; }
+const r0 = h2(1);
+r0.length * 2;
+const r1 = h3("s");
+r1;
+
+const h1 = (x) => x;
+const h0 = (x) => x.slice(0, 1);
+const h2 = (x) => x * 2;
+const h3 = (x) => x * 2;
+const r0 = h2(1);
+r0.length * 2;
+const r1 = h3("s");
+r1;
+
+function h1(x) { return x; }
+const h0 = (x) => x.slice(0, 1);
+const h2 = (x) => x * 2;
+function h3(x) { return x * 2; }
+const r0 = h2(1);
+r0.length * 2;
+const r1 = h3("s");
+r1;
+
+function h0(x) { return h3(x).first; }
+function h3(x) { return x * 2; }
+function h2(x) { return h3(x.charCodeAt(0)); }
+function h1(x) { return h3(({ first: "s", length: 2 })); }
+const r0 = h1(1);
+r0.toUpperCase();
+const r1 = h2(true);
+r1.length * 2;
+
+function h0(x) { return x * 2; }
+function h1(x) { return x; }
+const r0 = h0(true);
+r0.length * 2;
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x;
+const r0 = h0(true);
+r0.length * 2;
+
+function h0(x) { return x * 2; }
+const h1 = (x) => x;
+const r0 = h0(true);
+r0.length * 2;
+
+function h1(x) { return x; }
+function h0(x) { return x * 2; }
+const r0 = h0(true);
+r0;
+const r1 = h0("s");
+r1.toUpperCase();
+
+const h1 = (x) => x;
+const h0 = (x) => x * 2;
+const r0 = h0(true);
+r0;
+const r1 = h0("s");
+r1.toUpperCase();
+
+function h1(x) { return x; }
+const h0 = (x) => x * 2;
+const r0 = h0(true);
+r0;
+const r1 = h0("s");
+r1.toUpperCase();
+
+function h0(x) { return h1(x); }
+function h1(x) { return x + "!"; }
+const r0 = h0(true);
+r0.toUpperCase();
+const r1 = h1([1, 2]);
+r1.length * 2;
+
+function h0(x) { return x * 2; }
+function h1(x) { return x.length > 1 ? h1(x.slice(1)) : x; }
+const r0 = h1(true);
+r0 + "!";
+
+const h0 = (x) => x * 2;
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(true);
+r0 + "!";
+
+function h0(x) { return x * 2; }
+const h1 = (x) => x.length > 1 ? h1(x.slice(1)) : x;
+const r0 = h1(true);
+r0 + "!";
+

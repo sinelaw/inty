@@ -526,7 +526,10 @@ These choices are meant to hold up as the calculus grows.
   left out ([GAPS.md](GAPS.md)).
 - **Where the interpreter isn't JavaScript.** Besides the faults: a
   string is a sequence of code points, as `dynamics`' are, where
-  JavaScript's are UTF-16 units (`"😀".length` is 1 here, 2 there); `new`
+  JavaScript's are UTF-16 units (`"😀".length` is 1 here, 2 there, and
+  so for `slice`, `indexOf` and `charCodeAt`); `toUpperCase` maps ASCII
+  letters only (Lean's `Char.toUpper`), where JavaScript and `dynamics`
+  map all of Unicode's; `new`
   runs a method and a class's constructor can be called without `new`,
   where JavaScript throws a `TypeError` (typing rules out both: a method's
   `this` is its object, a constructor's `newTarget`); and a `break` in a
@@ -551,7 +554,11 @@ This mirrors "Adding a typing feature" in `ARCHITECTURE.md`:
    (or `UnOp.eval_sound` / `BinOp.eval_sound`), `run_clock_le`, `run_mono`,
    `infer_inv`, `infer_sound` and `infer_complete`, and a clause of `V` for a
    new type former. A native function needs only its
-   `V` proof (`Prim.abs_sound`).
+   `V` proof (`Prim.abs_sound`, `Prim.pure_sound` for one that leaves the
+   heap alone, `Prim.arrSlice_sound` for one that allocates); a method of
+   strings or arrays, a row of `stringMethod` or `arrayMethod` and of
+   `Prim.ofString` or `Prim.ofArray`, and its case in `stringMethod_sound`
+   or `arrayMethod_sound`.
 6. An example in `Inty/Examples.lean`.
 7. The wire format (`Inty/Wire.lean`), the differential test's
    generator and JavaScript printer (`crates/inty/tests/differential.rs`),
@@ -834,17 +841,41 @@ front end writes them with what it has.
   `let` taken apart by a test that its module assigns, a cycle of
   imports, and a builtin or declared module.
 
-The corpus (`tests/model_corpus/programs.txt`) now holds 3,181 programs
-in the fragment, and inty and the model agree on all but the eleven
+The corpus (`tests/model_corpus/programs.txt`) then held 3,181 programs
+in the fragment, and inty and the model agreed on all but the eleven
 `known.txt` lists, each a gap or a divergence of the table above. The
 corpus keeps every program it has recorded, and some unit tests generate
 theirs at random, so it grows with each regeneration: of the 2,918
-distinct programs one run of the unit tests checks, 837 are in the
+distinct programs one run of the unit tests checks, 837 were in the
 fragment. (Earlier counts here, "2,156 of the 2,909", compared the
-corpus with one run and overstated the share.) What keeps most of the
-rest out is the standard library (a builtin's property, 980 programs; a
+corpus with one run and overstated the share.) What kept most of the
+rest out was the standard library (a builtin's property, 980 programs; a
 builtin, 186), then a name used before its declaration where no order
 works (408), and annotated functions (84).
+
+The standard library starts with the methods `dynamics` has: a string's
+`slice`, `toUpperCase`, `charCodeAt` and `indexOf`, and an array's
+`slice` and `indexOf`. Each is a native (`Prim`), related to its type by
+what it does, as `Math.abs` was, and the type comes from an instance of
+`HasProp` on `string` or on `τ[]`, beside `length`'s: no new rule or
+class. Two things the model lacks shape them. Its functions have no
+optional parameters, so each number of arguments is a native of its own,
+and the front end writes a call by its arguments, `s.slice(1)` as the
+property `slice/1` (inty's own constraint for `x.slice(1)` holds a
+function of one parameter too). And a native now gets `this` and the
+heap, so an array's `slice` makes a new array, in a world grown by its
+cell (`Prim.arrSlice_sound`). The natives match Node bit for bit on
+edge cases (`slice(NaN)`, `charCodeAt(-1)`, `[NaN].indexOf(NaN)`), and
+reading `dynamics` against them found three bugs there, now fixed:
+`slice(NaN)` started at the end, `charCodeAt(-1)` gave the first
+character's code, and an array's `indexOf` never found an object (it
+compared only primitives); and `dynamics` ran no exported declaration
+(`export function f` left `f` undefined). A program whose objects have a
+method of one of these names is left out, since which a call means
+depends on its receiver's type. With them, of the 2,965 distinct
+programs a run of the unit tests checks, 1,713 are in the fragment, and
+the corpus holds 4,353, on which inty and the model agree but for the
+same eleven.
 
 `tests/model_examples.rs` measures the model against inty's examples,
 each file checked as the entry of the modules it imports, by inty as the

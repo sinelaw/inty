@@ -137,6 +137,17 @@ enum Target {
     Namespace(usize),
 }
 
+/// The methods of strings and arrays the model has, natives, by their name
+/// and number of arguments (`dynamics`' `BUILTIN_METHODS`).
+const NATIVE_METHODS: &[(&str, usize)] = &[
+    ("slice", 0),
+    ("slice", 1),
+    ("slice", 2),
+    ("toUpperCase", 0),
+    ("charCodeAt", 1),
+    ("indexOf", 1),
+];
+
 /// The name an `export default` of what isn't a named function binds.
 const DEFAULT: &str = "*default*";
 
@@ -334,6 +345,7 @@ fn lower_modules(modules: Vec<Module>) -> Lowered {
         modules,
         module: 0,
         this_users: Vec::new(),
+        natives: Vec::new(),
     };
     let wire = cx.enter_module(0)?;
     for (m, x) in reexports {
@@ -346,6 +358,13 @@ fn lower_modules(modules: Vec<Module>) -> Lowered {
     if let Some(l) = cx.read.iter().find(|l| !cx.defined.contains(l)) {
         return unsupported(format!(
             "the property `{l}`, which no object of the program has"
+        ));
+    }
+    // A method of the program's objects that a string or an array has
+    // too: which a call means depends on the receiver's type.
+    if let Some(l) = cx.natives.iter().find(|l| cx.defined.contains(l)) {
+        return unsupported(format!(
+            "a method `{l}` of the program's, which strings or arrays have too"
         ));
     }
     // An arrow function isn't a constructor; the model's functions are.
@@ -466,6 +485,8 @@ struct Cx {
     /// The function declarations whose body uses `this`, by their binders'
     /// ids.
     this_users: Vec<usize>,
+    /// The natives' names the program calls.
+    natives: Vec<String>,
 }
 
 /// What the end of a statement list is.
@@ -1510,6 +1531,24 @@ impl Cx {
                             self.exprs(arguments)?
                         ))
                     }
+                    // A string's or an array's method: the model's native of
+                    // that name and number of arguments (`lean/Inty/Classes.lean`,
+                    // `stringMethod`, `arrayMethod`).
+                    Expr::Member {
+                        object, property, ..
+                    } if NATIVE_METHODS.iter().any(|(m, _)| m == property) => {
+                        let n = arguments.len();
+                        if !NATIVE_METHODS.contains(&(property.as_str(), n)) {
+                            return unsupported(format!("`{property}` with {n} arguments"));
+                        }
+                        self.natives.push(property.clone());
+                        Ok(format!(
+                            "(mcall {} s:{}/{n}{})",
+                            self.expr(object)?,
+                            tok(property)?,
+                            self.exprs(arguments)?
+                        ))
+                    }
                     Expr::Member {
                         object, property, ..
                     } => {
@@ -2473,6 +2512,23 @@ mod tests {
              (num 0 0)))) (app (var 0) (num 3 0)))"
         );
         assert!(lower("let f = (n) => n > 0 ? f(n - 1) : 0; f(3);").is_err());
+    }
+
+    #[test]
+    fn lowers_native_methods_by_their_arguments() {
+        // `s.slice(1)` is the native `slice/1` (no optional parameters).
+        assert_eq!(
+            lower("\"abc\".slice(1).toUpperCase();").unwrap(),
+            "(mcall (mcall (str s:abc) s:slice/1 (num 1 0)) s:toUpperCase/0)"
+        );
+        assert_eq!(
+            lower("[1, 2].indexOf(2);").unwrap(),
+            "(mcall (arr (num 1 0) (num 2 0)) s:indexOf/1 (num 2 0))"
+        );
+        assert!(lower("\"abc\".indexOf(\"b\", 1);").is_err());
+        assert!(lower("\"abc\".map(1);").is_err());
+        // A program whose objects have such a method too.
+        assert!(lower("const o = {slice: function (a) { return a; }}; o.slice(1);").is_err());
     }
 
     #[test]

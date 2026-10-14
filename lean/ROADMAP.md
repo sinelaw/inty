@@ -42,8 +42,8 @@ Paths like `src/infer` are relative to `crates/inty`.
    Lua, check the semantics. (Done for typing on the unit tests' programs
    in the model's fragment, 1242 of them: `inty::model_wire`,
    `tests/model_corpus.rs`, which also compares their types and runs them
-   in `dynamics`, the model and Node; the corpus holds 3,181 programs in
-   the fragment, 837 of the 2,918 one run of the unit tests checks. And on
+   in `dynamics`, the model and Node; the corpus holds 4,353 programs in
+   the fragment, 1,713 of the 2,965 one run of the unit tests checks. And on
    the examples: `tests/model_examples.rs` writes each JavaScript file
    under `examples/`, with the modules it imports, for the model, counts
    those in the fragment (13 of 51, 169 of 4,199 lines) and the first
@@ -538,7 +538,14 @@ touching the generic proofs.
   (`model_wire::lower_entry`, `tests/model_modules.rs`).
 - Every builtin and standard-library signature as Lean data generated from
   inty's Rust sources, each native function implemented as `dynamics`
-  implements it and proved in `V`.
+  implements it and proved in `V`. Done for the methods `dynamics` has
+  (a string's `slice`, `toUpperCase`, `charCodeAt`, `indexOf`; an array's
+  `slice`, `indexOf`): natives with `this` and the heap, typed by
+  instances of `HasProp` on `string` and `τ[]` (`stringMethod`,
+  `arrayMethod`), one per number of arguments, as the model has no
+  optional parameters. Next: the globals (`Math`, `console`, `String`,
+  which template literals need) in a context of builtins, with
+  `dynamics`; then methods that call back (`map`, `filter`).
 
 ## Frontends
 

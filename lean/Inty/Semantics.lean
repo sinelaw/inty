@@ -30,6 +30,21 @@ inductive Prim where
   | abs
   /-- `Boolean`: truthiness. -/
   | truthy
+  /-- A string's `slice`, called with `n` arguments (`dynamics`'
+  `apply_builtin`, as the methods below): the model's functions have no
+  optional parameters, so each number of arguments is a native of its
+  own. -/
+  | strSlice (n : Nat)
+  /-- A string's `toUpperCase`. -/
+  | toUpperCase
+  /-- A string's `charCodeAt`. -/
+  | charCodeAt
+  /-- A string's `indexOf`, of a string. -/
+  | strIndexOf
+  /-- An array's `slice`, called with `n` arguments: a new array. -/
+  | arrSlice (n : Nat)
+  /-- An array's `indexOf`. -/
+  | arrIndexOf
   deriving DecidableEq, Repr
 
 /-- How an object holds a property: an own value, an own getter, or, for
@@ -255,11 +270,102 @@ def BinOp.eval : BinOp → Value → Value → Result
   | .strictEq neg, a, b => .ok (.boolean (a.strictEq b != neg))
   | _, _, _ => .stuck .typeMismatch
 
-def Prim.apply : Prim → List Value → Result
-  | .abs, [.number n] => .ok (.number n.abs)
-  | .abs, [_] => .stuck .typeMismatch
-  | .truthy, [v] => .ok (.boolean v.truthy)
-  | _, _ => .stuck .arityMismatch
+/-- `ToIntegerOrInfinity`: a number truncated toward zero, `NaN` as `0`. -/
+def _root_.Float.toIntegerOrInf (x : Float) : Float :=
+  if x.isNaN then 0 else if x < 0 then x.ceil else x.floor
+
+/-- An index of `slice` into a sequence of `len`: counted from the end if
+negative, and clamped to `[0, len]`. -/
+def _root_.Float.sliceIndex (len : Nat) (x : Float) : Nat :=
+  let r := x.toIntegerOrInf
+  let n := if r < 0 then (if len.toFloat + r < 0 then 0 else len.toFloat + r)
+    else if r < len.toFloat then r else len.toFloat
+  n.toUInt64.toNat
+
+/-- `slice`'s bounds in a sequence of `len`, from its number arguments:
+`start` (`0` if absent) and `end` (`len` if absent). -/
+def sliceBounds (len : Nat) : List Float → Nat × Nat
+  | [] => (0, len)
+  | [a] => (Float.sliceIndex len a, len)
+  | a :: b :: _ => (Float.sliceIndex len a, Float.sliceIndex len b)
+
+/-- The elements from `a` to `b` (none if `b ≤ a`). -/
+def sliceOf {α : Type} (xs : List α) (b : Nat × Nat) : List α :=
+  (xs.drop b.1).take (b.2 - b.1)
+
+/-- Arguments that are all numbers. -/
+def numberArgs : List Value → Option (List Float)
+  | [] => some []
+  | .number n :: vs => (numberArgs vs).map (n :: ·)
+  | _ => none
+
+/-- Where `ys` first occurs in `xs`, or `-1`. -/
+def indexOfSub (xs ys : List Char) : Float :=
+  match (List.range (xs.length + 1)).find? (fun i => ys.isPrefixOf (xs.drop i)) with
+  | some i => i.toFloat
+  | none => -1
+
+/-- A string's code unit at a position, as `charCodeAt` (`NaN` outside the
+string). The model's strings are sequences of characters, so a character
+outside the Basic Multilingual Plane is one, where JavaScript has two code
+units. -/
+def charCodeAtOf (cs : List Char) (i : Float) : Float :=
+  let r := i.toIntegerOrInf
+  if r < 0 || cs.length.toFloat ≤ r then 0.0 / 0.0
+  else match cs[r.toUInt64.toNat]? with
+    | some c => c.toNat.toFloat
+    | none => 0.0 / 0.0
+
+/-- Calling a native with `this` and arguments, on a heap: what it gives,
+and the heap after (an array's `slice` makes a new array). -/
+def Prim.apply : Prim → Heap → Value → List Value → Result × Heap
+  | .abs, h, _, [.number n] => (.ok (.number n.abs), h)
+  | .abs, h, _, [_] => (.stuck .typeMismatch, h)
+  | .truthy, h, _, [v] => (.ok (.boolean v.truthy), h)
+  | .strSlice n, h, .string s, args =>
+    match numberArgs args with
+    | some ns => if ns.length = n ∧ n ≤ 2 then
+        (.ok (.string (String.ofList (sliceOf s.toList (sliceBounds s.length ns)))), h)
+      else (.stuck .arityMismatch, h)
+    | none => (.stuck .typeMismatch, h)
+  | .toUpperCase, h, .string s, [] => (.ok (.string (s.map Char.toUpper)), h)
+  | .charCodeAt, h, .string s, [.number i] => (.ok (.number (charCodeAtOf s.toList i)), h)
+  | .strIndexOf, h, .string s, [.string t] =>
+    (.ok (.number (indexOfSub s.toList t.toList)), h)
+  | .arrSlice n, h, .arr ℓ, args =>
+    match h[ℓ]?, numberArgs args with
+    | some (.items vs), some ns => if ns.length = n ∧ n ≤ 2 then
+        (.ok (.arr h.length), h ++ [.items (sliceOf vs (sliceBounds vs.length ns))])
+      else (.stuck .arityMismatch, h)
+    | _, _ => (.stuck .typeMismatch, h)
+  | .arrIndexOf, h, .arr ℓ, [v] =>
+    match h[ℓ]? with
+    | some (.items vs) =>
+      (.ok (.number (match vs.findIdx? (·.strictEq v) with
+        | some i => i.toFloat
+        | none => -1)), h)
+    | _ => (.stuck .typeMismatch, h)
+  | _, h, _, _ => (.stuck .arityMismatch, h)
+
+/-- A string's methods the model has, by their name and their number of
+arguments, as the front end writes a call (`s.slice(1)` reads `slice/1`):
+`dynamics`' `BUILTIN_METHODS`. -/
+def Prim.ofString : String → Option Prim
+  | "slice/0" => some (.strSlice 0)
+  | "slice/1" => some (.strSlice 1)
+  | "slice/2" => some (.strSlice 2)
+  | "toUpperCase/0" => some .toUpperCase
+  | "charCodeAt/1" => some .charCodeAt
+  | "indexOf/1" => some .strIndexOf
+  | _ => none
+
+/-- An array's methods the model has, as `Prim.ofString`. -/
+def Prim.ofArray : String → Option Prim
+  | "slice/0" => some (.arrSlice 0)
+  | "slice/1" => some (.arrSlice 1)
+  | "slice/2" => some (.arrSlice 2)
+  | "indexOf/1" => some .arrIndexOf
+  | _ => none
 
 /-- What reading a property finds: a value, a getter to call (with the
 object as `this`), or an outcome that stops there. -/
@@ -277,8 +383,9 @@ def readMember (fs : List (String × MemberKind × Value)) (l : String) : Option
   | none => none
 
 /-- Reading the property `l` of `v`, as `dynamics::step::read_member`. An
-array and a string have their `length`; their methods come with the
-standard library, and any other property is not found. -/
+array and a string have their `length` and the methods the model has
+(`Prim.ofArray`, `Prim.ofString`), natives; any other property is not
+found. -/
 def Value.read (h : Heap) (l : String) : Value → Read
   | .obj ℓ =>
     match h[ℓ]? with
@@ -288,10 +395,15 @@ def Value.read (h : Heap) (l : String) : Value → Read
     match h[ℓ]? with
     | some (.items vs) =>
       if l = "length" then .value (.number vs.length.toFloat)
-      else .fail (.stuck .propertyNotFound)
+      else match Prim.ofArray l with
+        | some p => .value (.prim p)
+        | none => .fail (.stuck .propertyNotFound)
     | _ => .fail (.stuck .notIndexable)
   | .string s =>
-    if l = "length" then .value (.number s.length.toFloat) else .fail (.stuck .propertyNotFound)
+    if l = "length" then .value (.number s.length.toFloat)
+    else match Prim.ofString l with
+      | some p => .value (.prim p)
+      | none => .fail (.stuck .propertyNotFound)
   | _ => .fail (.stuck .notIndexable)
 
 /-- A number as an index: a non-negative integer, as `dynamics`'
@@ -655,7 +767,7 @@ def call (clock : Nat) (h : Heap) (vf thisv : Value) (args : List Value) : Ran :
   | .prim p =>
     match clock with
     | 0 => (.timeout, 0, h)
-    | c + 1 => (p.apply args, c, h)
+    | c + 1 => ((p.apply h thisv args).1, c, (p.apply h thisv args).2)
   | _ => (.stuck .notCallable, clock, h)
 termination_by (clock, 0, 1)
 decreasing_by all_goals exact lex3_of (Nat.le_refl _) (.inr ⟨rfl, by omega⟩)

@@ -435,12 +435,30 @@ theorem Pred.decide₀_below {n : Nat} {c : Cls} {t : Ty} {rest : List Ty} {a b 
     · cases h
       exact ⟨Ty.Below.app.mpr (fun τ hτ => hr τ (by simpa using hτ)),
         Ty.Below.app.mpr (fun τ hτ => by simp at hτ; rcases hτ with rfl | rfl <;> exact Ty.Below.con)⟩
-    · cases h
+    · split at h
+      · rename_i σ' hm
+        cases h
+        refine ⟨Ty.Below.app.mpr (fun τ hτ => hr τ (by simpa using hτ)),
+          Ty.Below.app.mpr (fun τ hτ => ?_)⟩
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+        rcases hτ with rfl | rfl
+        · exact Ty.Below.con
+        · exact fun x hx => ht x (by simpa using arrayMethod_ftv hm x hx)
+      · cases h
   · split at h
     · cases h
       exact ⟨Ty.Below.app.mpr (fun τ hτ => hr τ (by simpa using hτ)),
         Ty.Below.app.mpr (fun τ hτ => by simp at hτ; rcases hτ with rfl | rfl <;> exact Ty.Below.con)⟩
-    · cases h
+    · split at h
+      · rename_i σ' hm
+        cases h
+        refine ⟨Ty.Below.app.mpr (fun τ hτ => hr τ (by simpa using hτ)),
+          Ty.Below.app.mpr (fun τ hτ => ?_)⟩
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ
+        rcases hτ with rfl | rfl
+        · exact Ty.Below.con
+        · exact fun x hx => by simp [stringMethod_ftv hm] at hx
+      · cases h
   · cases h
     refine ⟨Ty.Below.app.mpr (fun τ hτ => hr τ (by simpa using hτ)), Ty.Below.app.mpr (fun τ hτ => ?_)⟩
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hτ

@@ -714,11 +714,13 @@ fn builtin_method(kind: &str, property: &str) -> Option<&'static str> {
         .map(|(_, m)| *m)
 }
 
-/// `start`/`end` of `slice`: a negative index counts from the end.
+/// `start`/`end` of `slice`: truncated toward zero (`NaN` as `0`), and a
+/// negative index counts from the end.
 fn slice_bounds(args: &[Value], len: usize) -> Result<(usize, usize), Stuck> {
     let at = |i: usize, default: f64| -> Result<usize, Stuck> {
         let n = match args.get(i) {
             None | Some(Value::Undefined) => default,
+            Some(Value::Number(n)) if n.is_nan() => 0.0,
             Some(Value::Number(n)) => n.trunc(),
             Some(_) => return Err(Stuck::NotImplemented("slice with a non-number index")),
         };
@@ -764,11 +766,16 @@ fn apply_builtin(
             let Value::Number(i) = args[0] else {
                 return Err(Stuck::NotImplemented("charCodeAt with a non-number index"));
             };
-            Ok(Value::Number(
-                s.encode_utf16()
-                    .nth(i as usize)
-                    .map_or(f64::NAN, |c| c as f64),
-            ))
+            // Truncated toward zero (`NaN` as `0`); `NaN` outside the
+            // string. Like `length`, `slice` and `indexOf`, by characters,
+            // where JavaScript counts UTF-16 code units.
+            let i = if i.is_nan() { 0.0 } else { i.trunc() };
+            let chars: Vec<char> = s.chars().collect();
+            Ok(Value::Number(if i < 0.0 || i >= chars.len() as f64 {
+                f64::NAN
+            } else {
+                chars[i as usize] as u32 as f64
+            }))
         }
         (Some(Value::String(s)), "indexOf") => {
             arity(1, 1)?;
@@ -796,12 +803,8 @@ fn apply_builtin(
                 Some(Cell::Array(v)) => v.clone(),
                 _ => return Err(Stuck::NotImplemented("array loc not Array cell")),
             };
-            let found = items.iter().position(|v| match (v, &args[0]) {
-                (Value::Number(a), Value::Number(b)) => a == b,
-                (Value::String(a), Value::String(b)) => a == b,
-                (Value::Boolean(a), Value::Boolean(b)) => a == b,
-                _ => false,
-            });
+            // By `===`: an object or an array by its identity.
+            let found = items.iter().position(|v| strict_equal(v, &args[0]));
             Ok(Value::Number(found.map_or(-1.0, |i| i as f64)))
         }
         // A method detached from its receiver (`const f = s.slice; f()`):
@@ -1530,11 +1533,86 @@ pub fn eval_stmt(
     }
 }
 
+/// A module's statement with its `export` taken off: an exported
+/// declaration runs as the declaration it is, `export default e` binds
+/// `default` to `e`'s value, and an export list or a re-export runs
+/// nothing here.
+fn unexported(stmt: &Stmt) -> Stmt {
+    use crate::ast::{ExportDecl, VarDeclarator};
+    let Stmt::Export { declaration, span } = stmt else {
+        return stmt.clone();
+    };
+    match declaration {
+        ExportDecl::Var {
+            kind,
+            declarations,
+            span,
+        } => Stmt::Var {
+            kind: *kind,
+            declarations: declarations.clone(),
+            span: *span,
+        },
+        ExportDecl::Function {
+            name,
+            params,
+            body,
+            type_annotation,
+            span,
+        } => Stmt::FunctionDecl {
+            name: name.clone(),
+            params: params.clone(),
+            body: body.clone(),
+            type_annotation: type_annotation.clone(),
+            return_type_ast: None,
+            span: *span,
+        },
+        ExportDecl::Default {
+            value:
+                Expr::Function {
+                    name: Some(name),
+                    params,
+                    body,
+                    type_annotation,
+                    arrow: false,
+                    ..
+                },
+            span,
+        } => Stmt::FunctionDecl {
+            name: name.clone(),
+            params: params.clone(),
+            body: body.clone(),
+            type_annotation: type_annotation.clone(),
+            return_type_ast: None,
+            span: *span,
+        },
+        ExportDecl::Default { value, span } => Stmt::Var {
+            kind: crate::ast::VarKind::Const,
+            declarations: vec![VarDeclarator {
+                name: "default".to_string(),
+                init: Some(value.clone()),
+                type_annotation: None,
+                type_ast: None,
+                kind: crate::ast::VarKind::Const,
+                span: *span,
+            }],
+            span: *span,
+        },
+        ExportDecl::List { .. } | ExportDecl::From { .. } => Stmt::Empty { span: *span },
+    }
+}
+
 fn eval_block(
     state: &mut State,
     env: &RuntimeEnv,
     body: &[Stmt],
 ) -> Result<(StmtOutcome, RuntimeEnv), Stuck> {
+    let owned: Vec<Stmt>;
+    let body = if body.iter().any(|s| matches!(s, Stmt::Export { .. })) {
+        owned = body.iter().map(unexported).collect();
+        &owned[..]
+    } else {
+        body
+    };
     // JS hoists `var` and `function` declarations to the top of their
     // enclosing scope. We approximate by pre-allocating a `Cell::Var`
     // for every directly-declared name in this block and binding it in
