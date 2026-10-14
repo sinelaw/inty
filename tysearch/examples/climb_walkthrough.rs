@@ -2,7 +2,7 @@
 //! by each step's type system: what each capability lets the checker
 //! accept. `cargo run --release --example climb_walkthrough`.
 
-use tysearch::discover::{climb, Config};
+use tysearch::discover::{climb_with, step_report, Config};
 use tysearch::lang::{Atom, Language, Outcome, Term};
 use tysearch::langs::model::Model;
 
@@ -106,8 +106,17 @@ fn main() {
         ),
     ];
 
-    let cl = climb(&m, &Config::default());
-    print!("{cl}");
+    // Each step as it finishes.
+    let mut prev: Vec<String> = Vec::new();
+    let cl = climb_with(&m, &Config::default(), |i, s| {
+        print!("{}", step_report(i, s, &prev));
+        if s.kept {
+            prev = s.discovery.rule_strings();
+        }
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+    });
+    print!("{}", cl.summary());
     println!("\nexamples (what each kept step's checker says):");
     for (label, t) in &examples {
         let run = match m.eval_in(t, &[]) {
