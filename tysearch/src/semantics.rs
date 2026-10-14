@@ -345,7 +345,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                     // An allowed fault (an index out of bounds) is no
                     // behaviour of the member's: as an index, 0 and 1 differ
                     // only in where they fault.
-                    Outcome::Fault(_) | Outcome::Timeout => continue,
+                    Outcome::Fault(_) | Outcome::Timeout | Outcome::Return(_) => continue,
                 };
                 results.push(r);
             }
@@ -470,7 +470,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
             return *b;
         }
         let b = match t {
-            Ty::Var(_) => false,
+            Ty::Var(_) | Ty::Never => false,
             Ty::Top => true,
             Ty::Base(s) => match self.sort(oracle, v) {
                 Some(v) if self.subtyping => self.le[v][*s],
@@ -492,7 +492,15 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                             product(&refs, &mut Vec::new(), &mut |xs| {
                                 envs.push(Self::env(v, xs))
                             });
-                            envs.into_iter().take(81).all(|env| {
+                            // Fewer runs where the result's type is itself
+                            // judged by runs: deep function types (from
+                            // generated programs) would cost 3^depth.
+                            let limit = match res.depth() {
+                                0 => 81,
+                                1 => 9,
+                                _ => 1,
+                            };
+                            envs.into_iter().take(limit).all(|env| {
                                 // On copies, so that what the run stores into
                                 // its arguments can be checked: a member must
                                 // leave each argument in its type (Kripke
@@ -538,10 +546,23 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         o: &Outcome<V>,
         t: &Ty,
     ) -> bool {
+        self.in_x(oracle, o, t, None)
+    }
+
+    /// Whether outcome `o` is safe for type `t` where what a `return`
+    /// carries must be an `exit` (no `return` is, without one).
+    pub fn in_x<L: Language<Value = V>>(
+        &mut self,
+        oracle: &mut Oracle<L>,
+        o: &Outcome<V>,
+        t: &Ty,
+        exit: Option<&Ty>,
+    ) -> bool {
         match o {
             Outcome::Value(w) => self.holds(oracle, w, t),
             Outcome::Stuck { .. } => false,
             Outcome::Fault(_) | Outcome::Timeout => true,
+            Outcome::Return(w) => exit.is_some_and(|e| self.holds(oracle, w, e)),
         }
     }
 
@@ -553,7 +574,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         }
         let n = self.samples_per_type;
         let out = match t {
-            Ty::Var(_) => Vec::new(),
+            Ty::Var(_) | Ty::Never => Vec::new(),
             // The smallest member of each sort.
             Ty::Top => self
                 .members
@@ -619,6 +640,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                     Outcome::Stuck { .. } => -1,
                     Outcome::Fault(_) => -2,
                     Outcome::Timeout => -3,
+                    Outcome::Return(_) => -5,
                 });
             }
         }

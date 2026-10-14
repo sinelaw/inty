@@ -71,7 +71,7 @@ fn core_finds_the_plus_class() {
     assert_eq!(d.check.unsound, 0);
 }
 
-/// Iterations 1, 3 to 7: functions, calls, `let`, assignment,
+/// Iterations 1, 3 to 8: functions, calls, `let`, assignment,
 /// `e₁; e₂`, objects, arrays and statements. The rules are the Lean model's (`lean/Inty/Typing.lean`),
 /// found from its semantics alone: T3 and T4 are the functions of one and
 /// two parameters, refined by what a call gives (`T3<a -> b>` is
@@ -116,8 +116,9 @@ fn model_finds_functions_state_and_the_value_restriction() {
             "cond : (T3<a -> b>, c, d) -> c",
             "cond : (T4<a, b -> c>, d, e) -> d",
             "let : (a, [x0: a] b) -> b",
-            "func1 : ([x0: a, x1: T3<a -> b>] b) -> T3<a -> b>",
-            "func2 : ([x0: a, x1: b, x2: T4<a, b -> c>] c) -> T4<a, b -> c>",
+            // A function's body returns its result (iteration 8).
+            "func1 : ([x0: a, x1: T3<a -> b>] b (return b)) -> T3<a -> b>",
+            "func2 : ([x0: a, x1: b, x2: T4<a, b -> c>] c (return c)) -> T4<a, b -> c>",
             "app1 : (T3<a -> b>, a) -> b",
             "app2 : (T3<a -> b>, a, c) -> b",
             "app2 : (T4<a, b -> c>, a, b) -> c",
@@ -162,6 +163,8 @@ fn model_finds_functions_state_and_the_value_restriction() {
             "while : (a, b) -> T2",
             "break : a",
             "continue : a",
+            // `return` (iteration 8): its exit type is its value's.
+            "return : (a) -> b (return a)",
         ])
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);

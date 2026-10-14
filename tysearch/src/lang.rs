@@ -156,6 +156,10 @@ pub enum Outcome<V> {
     Fault(String),
     /// Out of fuel: says nothing either way.
     Timeout,
+    /// An abrupt completion carrying a value to a frame that turns it into
+    /// a value (a `return`, which a call catches). Safe only where an
+    /// enclosing frame's type says what it may carry: the exit type.
+    Return(V),
 }
 
 impl<V> Outcome<V> {

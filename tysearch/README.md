@@ -33,8 +33,9 @@ interpreter, it:
 
 On TAPL's arithmetic language it finds TAPL's rules. On the model of inty's
 core (functions, calls, `let` with assignment, objects, arrays, `throw`,
-`try` and loops), it finds the Lean model's rules and its value
-restriction, with differences that are all sound. To keep it from fitting itself to
+`try`, loops and `return`), it finds the Lean model's rules, its value
+restriction and its functions' exit types, with differences that are all
+sound. To keep it from fitting itself to
 inty, a suite of languages with other kinds of type system runs alongside:
 
 - a unityped control;

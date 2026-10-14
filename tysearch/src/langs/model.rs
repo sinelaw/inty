@@ -13,7 +13,8 @@
 //! (iteration 3); and objects with properties `x` and `y`, read with `.x`,
 //! stored with `.x =` (iteration 5); and arrays, indexed as the model's
 //! `Value.index` and `Value.setIndex` do (iteration 6); and `throw`,
-//! `try`/`catch`, `while`, `break` and `continue` (iteration 7).
+//! `try`/`catch`, `while`, `break` and `continue` (iteration 7); and
+//! `return` (iteration 8).
 //!
 //! Variables are de Bruijn indices. In a function's body `var(i)` is
 //! parameter `i` for `i` below the arity, and `var(arity)` is the function
@@ -69,6 +70,7 @@ const TRY: usize = 35;
 const WHILE: usize = 36;
 const BREAK: usize = 37;
 const CONTINUE: usize = 38;
+const RET: usize = 39;
 
 /// A run's state besides the store: the fuel left, and the value a `throw`
 /// is carrying to its `try`.
@@ -328,6 +330,7 @@ impl Default for Model {
                 Con::op("while", 2),
                 Con::op("break", 0),
                 Con::op("continue", 0),
+                Con::op("return", 1),
             ],
             fuel: 64,
         }
@@ -555,8 +558,13 @@ impl Model {
                 let mut inner: Vec<Slot> = args[..c.arity].iter().cloned().map(Slot::new).collect();
                 inner.push(Slot::new(f.clone()));
                 inner.extend_from_slice(&c.env);
-                self.ev(&c.body, &inner, run).from_inside()
+                // A call turns its body's `return` into its value.
+                match self.ev(&c.body, &inner, run).from_inside() {
+                    Outcome::Return(v) => Value(v),
+                    o => o,
+                }
             }
+            RET => Outcome::Return(value!(kid(0, env))),
             THROW => {
                 let v = value!(kid(0, env));
                 let what = format!("{THROWN} {}", self.show_value(&v));

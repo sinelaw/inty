@@ -186,19 +186,36 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
             }
         }
     }
+    // Abrupt completions: per kind (the reason's first word), a few of the
+    // smallest terms, each a different reason (a different value thrown).
     let mut faults = Vec::new();
+    let mut fault_kinds = Vec::new();
     let mut reasons = std::collections::HashSet::new();
+    let mut per_kind: HashMap<String, usize> = HashMap::new();
+    let mut kinds: Vec<String> = Vec::new();
     for t in &corpus {
-        if faults.len() >= cfg.search.reps_per_type * 4 {
-            break;
-        }
-        if let Outcome::Fault(r) = oracle.eval(t) {
-            if reasons.insert(r) {
-                faults.push(t.clone());
+        let reason = match oracle.eval(t) {
+            Outcome::Fault(r) => r,
+            Outcome::Return(v) => format!("return {}", lang.show_value(&v)),
+            _ => continue,
+        };
+        let kind = reason.split(' ').next().unwrap_or("").to_string();
+        let n = per_kind.entry(kind.clone()).or_default();
+        if *n < cfg.search.reps_per_type * 2 && reasons.insert(reason) {
+            *n += 1;
+            faults.push(t.clone());
+            if !kinds.contains(&kind) {
+                kinds.push(kind.clone());
             }
+            fault_kinds.push(kinds.iter().position(|k| *k == kind).unwrap());
         }
     }
-    let pools = Pools { reps, open, faults };
+    let pools = Pools {
+        reps,
+        open,
+        faults,
+        fault_kinds,
+    };
     note(&format!("{} representatives", pools.reps.len()));
 
     // 3. Search, without subtyping and, if the fingerprints order any
@@ -270,7 +287,7 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
                     fn has(t: &Ty, w: &[bool]) -> bool {
                         match t {
                             Ty::Base(s) => w[*s],
-                            Ty::Var(_) | Ty::Top => false,
+                            Ty::Var(_) | Ty::Top | Ty::Never => false,
                             Ty::Ref(_, ps) => ps.iter().any(|p| has(p, w)),
                         }
                     }
@@ -399,6 +416,13 @@ fn check<L: Language>(
     rng: &mut Rng,
 ) -> Check {
     let checker = checker_for(lang, sem, rules, gen);
+    let clock = std::time::Instant::now();
+    let trace = std::env::var_os("TYSEARCH_TRACE").is_some();
+    let lap = |what: &str| {
+        if trace {
+            eprintln!("    {:>7.2}s check: {what}", clock.elapsed().as_secs_f64());
+        }
+    };
     let mut terms = Enumerator::new(lang.signature(), cfg.check_size);
     terms.cap = en.cap;
     let mut terms = terms.up_to(cfg.check_size, 0);
@@ -409,6 +433,7 @@ fn check<L: Language>(
             terms.push(t);
         }
     }
+    lap(&format!("{} terms", terms.len()));
     // And programs well typed by construction (T2).
     let mut generated = 0;
     for k in 0..cfg.typed_terms {
@@ -419,6 +444,7 @@ fn check<L: Language>(
             }
         }
     }
+    lap(&format!("{generated} generated"));
     let mut c = Check {
         size: cfg.check_size,
         terms: terms.len(),
@@ -430,14 +456,23 @@ fn check<L: Language>(
         untyped_safe: 0,
         untyped_safe_examples: Vec::new(),
     };
+    let (mut t_eval, mut t_types, mut t_sound) = (0.0, 0.0, 0.0);
+    let mut tick = std::time::Instant::now();
+    let mut lapse = |acc: &mut f64| {
+        *acc += tick.elapsed().as_secs_f64();
+        tick = std::time::Instant::now();
+    };
     for t in &terms {
         let out = oracle.eval(t);
+        lapse(&mut t_eval);
         if matches!(out, Outcome::Timeout) {
             continue;
         }
-        let safe = !out.is_stuck();
+        // A `return` with nothing to return from is as wrong as stuck.
+        let safe = !out.is_stuck() && !matches!(out, Outcome::Return(_));
         c.safe += safe as usize;
         let types = checker.types(t);
+        lapse(&mut t_types);
         if types.is_empty() {
             if safe {
                 c.untyped_safe += 1;
@@ -448,7 +483,9 @@ fn check<L: Language>(
             continue;
         }
         c.typed += 1;
-        if !sound_for(oracle, sem, &out, &types) {
+        let sound = sound_for(oracle, sem, &out, &types);
+        lapse(&mut t_sound);
+        if !sound {
             c.unsound += 1;
             if c.violations.len() < 5 {
                 c.violations.push(format!(
@@ -460,6 +497,9 @@ fn check<L: Language>(
             }
         }
     }
+    lap(&format!(
+        "ran {t_eval:.1}s, typed {t_types:.1}s, judged {t_sound:.1}s"
+    ));
     c
 }
 
@@ -797,7 +837,7 @@ fn generalise<L: Language>(
             fn all(t: &Ty, out: &mut Vec<u32>) {
                 match t {
                     Ty::Var(v) => out.push(*v),
-                    Ty::Base(_) | Ty::Top => {}
+                    Ty::Base(_) | Ty::Top | Ty::Never => {}
                     Ty::Ref(_, ps) => ps.iter().for_each(|p| all(p, out)),
                 }
             }

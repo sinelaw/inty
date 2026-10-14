@@ -329,10 +329,54 @@ assumed. It is inty's rigid `unknown`. No typed term gets stuck.
 | Junk `try` rules (`[x0: T4<b, c -> d>] a`, a handler that's an object) survived the attacks. Open terms are of size 3 at most, so no handler calls a two-argument `x0`. The handlers that fit were those that only fault, and those refute nothing | Attacks try **uses** of each bound variable first: a context its sort is accepted in and another sort is not (`app2(x0, 0, 1)`, `neg(x0)`). Then the children of nodes the rule covers. Children that only fault are skipped |
 | The value restriction's hand-built counterexample stopped being refuted. `throw`, `while` and the like were among the uses that test a value at many instances, and they tell nothing about its type, so they crowded out the uses that do | A use must have a result that depends on the value's type: its type is not a bare variable, or that variable is in the result |
 
+## 8. `return`, and exit types
+
+**Model.** The Lean model's `ret`: `return e` completes abruptly with `e`'s
+value, and a call turns its body's `return` into its value. At the top,
+with nothing to return from, it is as wrong as getting stuck. So the
+black box gets a new outcome, `Return(v)`, safe only where an enclosing
+frame's type says what it may carry.
+
+**Found.** The Lean model's `ret`, and its functions' `R`:
+
+```
+return : (a) -> b (return a)
+func1  : ([x0: a, x1: T3<a -> b>] b (return b)) -> T3<a -> b>
+func2  : ([x0: a, x1: b, x2: T4<a, b -> c>] c (return c)) -> T4<a, b -> c>
+```
+
+Every other rule passes its exit type down unchanged, so it shows none. No
+typed term gets stuck or returns at the top.
+
+**How.**
+
+- **Exit types in the rule format.** A premise may give its child an exit
+  type of its own, and a rule may fix the node's. The checker threads an
+  exit type through each judgement, `never` at the top.
+- **Exit flow, by probing.** A returning term in each position shows
+  whether its `return` goes through the node or is caught. `func1(return
+  0)` gives a function, not a `return`. A node that returns with values
+  and variables for children starts one. Only those positions get an exit
+  type to search for.
+- **Observations record exits:** the types every value a child returns is
+  in. A node's `return` refutes a rule unless every exit type the
+  premises allow holds the value.
+- **Attacks** draw closed children that return, where the value fits the
+  exit type. They count open children that return, not only those that
+  complete, as children that can break a rule. `func1`'s body getting an
+  exit type unrelated to its result was refuted only after that.
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| No `return` term reached the pools: the abrupt pool was capped at 8, filled by `break`, `continue` and throws | A few of each kind (fault reason, or `return`) |
+| A full run of `func1` alone took minutes: generated programs nest functions deeply, and judging `T3<a -> T3<b -> …>>` runs 3^depth calls | Fewer runs where the result's type is itself a function's |
+| `try : (a, [x0: b] a) -> a`, unsound, beat `[x0: unknown]` in one run. Attacks drew 2 random abrupt terms per instantiation, and with returns and breaks in the pool a throw came up about half the time | One abrupt term of each kind per closed child |
+| `idx : (T1, T0) -> T1` came and went. `idx` on a string and a number has 4 nodes, of which one gives a value, and random tuples of groups found 3 | Stratified observation goes through every tuple of groups, each with its share of the nodes |
+
 ## Next
 
-- **`return`:** it needs a context type (the enclosing function's
-  result), which the rule format doesn't have yet.
 - **Keys:** a string literal `"x"`, so that `idx` on objects by string
   has no one result type. inty gives literal string types for keys.
 - **Sums:** `undefined`/`null` unions with `unwrap`, and tag tests

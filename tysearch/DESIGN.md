@@ -435,6 +435,29 @@ doesn't need to rule them out. This is inty's ground rule 1: the language's
 documented contract is the theorem, so the discovered system is neither
 stronger nor weaker than what the language promises.
 
+### 8.5 Abrupt completions and exit types
+
+An uncaught `throw`, `break` or `continue` is allowed, as a fault is (the
+Lean model's `Result.Abrupt`). So a construct that never completes
+normally is of every type: `throw : (a) -> b`. A `catch` binds a value
+from no child, so it binds `unknown` (`Top`): the type of every value,
+which is no value's own type.
+
+A `return` is different: it is safe only where an enclosing frame says
+what it may carry. So every judgement gets an **exit type**, as inty's
+`HasType` has its `R`. A child's exit type is the node's unless its premise
+says otherwise, and a rule may fix the node's. Probing tells which: a
+returning child in each position shows whether the `return` goes through
+the node or is caught (a function's body's, by the call). Whether the node
+starts one shows too. Then the search finds:
+
+```
+return : (a) -> b (return a)
+func1  : ([x0: a, x1: T3<a -> b>] b (return b)) -> T3<a -> b>
+```
+
+At the top there is nothing to return from: the exit type is `never`.
+
 ---
 
 ## 9. Connecting tysearch to inty
@@ -487,6 +510,7 @@ test that pins it.
 | M1 (done) | L1: binders, closing substitutions, `→` with a bounded logical relation, unification checker | The model's functions, calls and `const` (ITERATIONS.md, iteration 1) |
 | M2 (done) | L2: generalisation policies, judged by whether a value is in all instances of its type at once; Kripke monotonicity for state; T2 typed generation | HM `let`. The value restriction, both in `refs` and in the model (iterations 3 and 4) |
 | M3 (in part) | L3: field labels as eliminators; containers | Records, and reads overloaded as `HasProp` (iteration 5); arrays (iteration 6) |
+| M3s (done) | Statements: abrupt completions, `unknown`, exit types (§8.5) | The Lean model's `throw`, `try`, loops (iteration 7) and `return` with its `R` (iteration 8) |
 | M4 | inty adapters (model wire format, `dynamics`); the corpus; comparison report | A diff of the discovered system against `HasType` on the model's fragment, with every disagreement explained or filed |
 | M5 (in part) | Subtyping from the fingerprint order (done: iteration 2); the Pareto frontier in output; L4 unions | `Int <: Float` (done); a frontier plot for `core`, from unions to no unions |
 | M6 | T4: Lean export of `HasType`, with a proof template | Soundness of the M1 system proved in Lean |

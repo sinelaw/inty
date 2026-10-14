@@ -78,8 +78,9 @@ impl Checker {
     /// unconstrained.
     pub fn types(&self, t: &Term) -> Vec<Ty> {
         let mut ctx = Vec::new();
+        // At the top there is nothing to return from.
         let mut out: Vec<Ty> = self
-            .infer(Unifier::default(), &mut ctx, t)
+            .infer(Unifier::default(), &mut ctx, &Ty::Never, t)
             .into_iter()
             .map(|(u, ty)| u.resolve(&ty))
             .collect();
@@ -165,8 +166,9 @@ impl Checker {
         }
     }
 
-    /// `ctx.last()` is `var(0)`'s scheme.
-    fn infer(&self, u: Unifier, ctx: &mut Vec<Sch>, t: &Term) -> Vec<(Unifier, Ty)> {
+    /// `ctx.last()` is `var(0)`'s scheme; `exit` is what a `return` in `t`
+    /// may carry.
+    fn infer(&self, u: Unifier, ctx: &mut Vec<Sch>, exit: &Ty, t: &Term) -> Vec<(Unifier, Ty)> {
         match self.sig[t.con].kind {
             Kind::Var => {
                 let Some(s) = Self::lookup(ctx, &t.atom) else {
@@ -180,7 +182,7 @@ impl Checker {
                 let Some(s) = Self::lookup(ctx, &t.atom).filter(|s| s.quant.is_empty()) else {
                     return Vec::new();
                 };
-                self.infer(u, ctx, &t.kids[0])
+                self.infer(u, ctx, exit, &t.kids[0])
                     .into_iter()
                     .filter_map(|(mut u, ty)| {
                         self.fits(&mut u, &ty, &s.ty).then_some((u, s.ty.clone()))
@@ -192,6 +194,11 @@ impl Checker {
                 for rule in &self.by_con[t.con] {
                     let mut u = u.clone();
                     let r = u.instantiate(rule);
+                    if let Some(x) = &r.exit {
+                        if !u.unify(x, exit) {
+                            continue;
+                        }
+                    }
                     let mut alts = vec![u];
                     for (i, (kid, prem)) in t.kids.iter().zip(&r.kids).enumerate() {
                         let mut next = Vec::new();
@@ -214,7 +221,8 @@ impl Checker {
                             for bs in binds {
                                 let depth = ctx.len();
                                 ctx.extend(bs.into_iter().rev());
-                                for (mut ub, ty) in self.infer(ua.clone(), ctx, kid) {
+                                let kid_exit = prem.exit.as_ref().unwrap_or(exit);
+                                for (mut ub, ty) in self.infer(ua.clone(), ctx, kid_exit, kid) {
                                     if self.fits(&mut ub, &ty, &prem.ty) {
                                         next.push(ub);
                                     }
@@ -249,7 +257,16 @@ impl Checker {
     pub fn generate_shaped(&self, rng: &mut Rng, size: usize, shape: &[Vec<bool>]) -> Option<Term> {
         let mut u = Unifier::default();
         let want = u.fresh();
-        let t = self.gen(rng, &mut u, &mut Vec::new(), &want, size, &mut 64, shape)?;
+        let t = self.gen(
+            rng,
+            &mut u,
+            &mut Vec::new(),
+            &want,
+            &Ty::Never,
+            size,
+            &mut 64,
+            shape,
+        )?;
         // Generation can type a term in ways inference won't find (an
         // overload branch past the cap): keep only what the checker types.
         (!self.types(&t).is_empty()).then_some(t)
@@ -262,6 +279,7 @@ impl Checker {
         u: &mut Unifier,
         ctx: &mut Vec<Sch>,
         want: &Ty,
+        exit: &Ty,
         size: usize,
         fuel: &mut usize,
         shape: &[Vec<bool>],
@@ -312,7 +330,7 @@ impl Checker {
             }
             let mut u2 = u.clone();
             let inst = u2.instantiate(r);
-            if u2.unify(&inst.res, want) {
+            if u2.unify(&inst.res, want) && inst.exit.as_ref().is_none_or(|x| u2.unify(x, exit)) {
                 choices.push(Choice::Rule(ri));
             }
         }
@@ -333,7 +351,7 @@ impl Checker {
                     let ty = ctx[ctx.len() - 1 - i].ty.clone();
                     u2.unify(&ty, want);
                     let con = self.sig.iter().position(|c| c.kind == Kind::Assign)?;
-                    self.gen(rng, &mut u2, ctx, &ty, size - 1, fuel, &[])
+                    self.gen(rng, &mut u2, ctx, &ty, exit, size - 1, fuel, &[])
                         .map(|e| Term {
                             con,
                             atom: Atom::Int(i as i64),
@@ -346,6 +364,7 @@ impl Checker {
                     ctx,
                     rules[ri],
                     want,
+                    exit,
                     size,
                     fuel,
                     shape.get(1..).unwrap_or(&[]),
@@ -367,6 +386,7 @@ impl Checker {
         ctx: &mut Vec<Sch>,
         rule: &Schema,
         want: &Ty,
+        exit: &Ty,
         size: usize,
         fuel: &mut usize,
         shape: &[Vec<bool>],
@@ -374,6 +394,11 @@ impl Checker {
         let r = u.instantiate(rule);
         if !u.unify(&r.res, want) {
             return None;
+        }
+        if let Some(x) = &r.exit {
+            if !u.unify(x, exit) {
+                return None;
+            }
         }
         let c = &self.sig[rule.con];
         let atoms = c.atoms_or_none();
@@ -409,7 +434,8 @@ impl Checker {
             ctx.extend(bs.into_iter().rev());
             // The shape goes on down the last child.
             let rest: &[Vec<bool>] = if i + 1 == n { shape } else { &[] };
-            let kid = self.gen(rng, u, ctx, &prem.ty, sizes[i], fuel, rest);
+            let kid_exit = prem.exit.as_ref().unwrap_or(exit);
+            let kid = self.gen(rng, u, ctx, &prem.ty, kid_exit, sizes[i], fuel, rest);
             ctx.truncate(depth);
             node.kids.push(kid?);
         }

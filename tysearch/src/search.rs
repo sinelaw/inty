@@ -100,6 +100,16 @@ pub enum Source {
     Unknown,
 }
 
+/// Where `return`s go, if the language has them: per child, whether its
+/// `return` goes through the node (its exit type is the node's) or is
+/// caught (a function's body's, by the call); and whether the node starts
+/// one itself.
+#[derive(Clone, Debug)]
+pub struct ExitFlow {
+    pub caught: Vec<bool>,
+    pub origin: bool,
+}
+
 pub struct Observation<V> {
     pub node: Term,
     pub outcome: Outcome<V>,
@@ -108,6 +118,9 @@ pub struct Observation<V> {
     /// Per child, the universe indices of the types it has; `None` if a
     /// run of it got stuck.
     pub kid_types: Vec<Option<Vec<usize>>>,
+    /// Per child, the universe indices of the types its `return`s carry
+    /// (all of them if it returns nothing).
+    pub kid_exits: Vec<Option<Vec<usize>>>,
     /// Types the binder flow fixed: per child, and for the node.
     pub kid_fixed: Vec<Option<usize>>,
     pub res_fixed: Option<usize>,
@@ -117,6 +130,7 @@ pub struct Observation<V> {
 pub struct ConSearch {
     pub con: usize,
     pub sources: Vec<Vec<Source>>,
+    pub exits: Option<ExitFlow>,
     pub observations: usize,
     pub candidates: usize,
     pub refuted: usize,
@@ -133,9 +147,13 @@ pub struct Pools {
     pub reps: Vec<Term>,
     /// Open terms by how many variables they may use.
     pub open: HashMap<usize, Vec<Term>>,
-    /// Small closed terms that fault, one per kind of fault: in every type,
-    /// and what a catcher catches.
+    /// Small closed terms that complete abruptly, one per kind of fault or
+    /// value returned: a fault is in every type, and these are what
+    /// catchers catch.
     pub faults: Vec<Term>,
+    /// Each one's kind (its reason's first word: a throw, a `break`, a
+    /// `return`), numbered.
+    pub fault_kinds: Vec<usize>,
 }
 
 pub fn search_con<L: Language>(
@@ -154,7 +172,10 @@ pub fn search_con<L: Language>(
         }
     };
     let sources = binder_sources(oracle, sem, pools, con, rng);
+    let flow = exit_flow(oracle, pools, con, rng);
     let obs = observe(oracle, sem, pools, con, &sources, cfg, rng);
+    // A construct that never completes normally may claim any result type.
+    let free_res = !obs.iter().any(|o| matches!(o.outcome, Outcome::Value(_)));
     lap(&format!("observed {}", obs.len()));
     let index: HashMap<Ty, usize> = sem
         .universe
@@ -175,7 +196,7 @@ pub fn search_con<L: Language>(
     };
     let mut ground: Vec<Schema> = Vec::new();
     for i in proposers {
-        ground.extend(instances(oracle, sem, &obs[i], con, rng));
+        ground.extend(instances(oracle, sem, &obs[i], con, flow.as_ref(), rng));
     }
     ground.sort();
     ground.dedup();
@@ -259,13 +280,21 @@ pub fn search_con<L: Language>(
     }
     // Top down: every rule committing to at most one sort, so the simplest
     // sound rules are always candidates.
-    candidates.extend(simple_rules(oracle.lang.signature(), sem, con, &sources));
+    candidates.extend(simple_rules(
+        oracle.lang.signature(),
+        sem,
+        con,
+        &sources,
+        flow.as_ref(),
+        free_res,
+    ));
     candidates.retain(|r| faithful(sem, r));
     lap(&format!("proposed {}", candidates.len()));
     // Refute by observation.
     let mut s = ConSearch {
         con,
         sources,
+        exits: flow.clone(),
         observations: obs.len(),
         candidates: candidates.len(),
         refuted: 0,
@@ -331,6 +360,7 @@ pub fn search_con<L: Language>(
                 Outcome::Stuck { .. } => "stuck",
                 Outcome::Fault(_) => "fault",
                 Outcome::Timeout => "timeout",
+                Outcome::Return(_) => "return",
             };
             *hist.entry(format!("{k:?} {kind}")).or_default() += 1;
         }
@@ -424,8 +454,20 @@ pub fn search_con<L: Language>(
         let (best, cov) = sound.swap_remove(at);
         // The open children of nodes it covers fit its premises, where
         // random open terms may not.
+        // Those only it covers first: what it adds is where it is wrong,
+        // if anywhere.
+        let fresh_cov: Vec<usize> = cov
+            .iter()
+            .map(|(i, _)| *i)
+            .filter(|&i| covered[i].is_none())
+            .collect();
+        let pool_cov = if fresh_cov.is_empty() {
+            cov.iter().map(|(i, _)| *i).collect::<Vec<_>>()
+        } else {
+            fresh_cov
+        };
         let examples: Vec<Term> = rng
-            .sample(&cov.iter().map(|(i, _)| *i).collect::<Vec<_>>(), 6)
+            .sample(&pool_cov, 6)
             .into_iter()
             .map(|i| obs[i].node.clone())
             .collect();
@@ -468,12 +510,14 @@ pub fn search_con<L: Language>(
             .map(|k| Premise {
                 bound: s.sources[k as usize].iter().map(|_| Ty::Top).collect(),
                 ty: Ty::Var(k),
+                exit: None,
             })
             .collect();
         let r = Schema {
             con,
             kids,
             res: Ty::Var(n),
+            exit: None,
         };
         match falsify(oracle, sem, pools, &r, &[], cfg, rng) {
             None => s.chosen.push(r),
@@ -565,9 +609,16 @@ fn simple_rules<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
     sem: &Semantics<V>,
     con: usize,
     sources: &[Vec<Source>],
+    flow: Option<&ExitFlow>,
+    free_res: bool,
 ) -> Vec<Schema> {
     let c = &sig[con];
-    let positions = c.arity + 1;
+    // The children's types, the result's, and the exit types that aren't
+    // the node's: caught children's, and the node's if it starts a return.
+    let caught: Vec<bool> = flow.map_or(vec![false; c.arity], |f| f.caught.clone());
+    let origin = flow.is_some_and(|f| f.origin);
+    let n_exits = caught.iter().filter(|c| **c).count() + origin as usize;
+    let positions = c.arity + 1 + n_exits;
     // Each position: a variable (an old one, or the next new one), or, once
     // per rule, a constant.
     fn go<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
@@ -637,7 +688,9 @@ fn simple_rules<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
     let unknown = sources.iter().flatten().any(|s| *s == Source::Unknown);
     let tops: &[bool] = if unknown { &[false, true] } else { &[false] };
     for (tys, &top) in tuples.iter().flat_map(|t| tops.iter().map(move |b| (t, b))) {
-        let (res, kid_tys) = tys.split_last().unwrap();
+        let (kid_tys, rest) = tys.split_at(c.arity);
+        let res = &rest[0];
+        let mut exits = rest[1..].iter().cloned();
         let mut fresh = tys
             .iter()
             .map(|t| {
@@ -672,14 +725,22 @@ fn simple_rules<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
                     })
                     .collect(),
                 ty: ty.clone(),
+                exit: None,
             })
             .collect();
+        let mut kids = kids;
+        for (k, kid) in kids.iter_mut().enumerate() {
+            if caught[k] {
+                kid.exit = exits.next();
+            }
+        }
         let r = Schema {
             con,
             kids,
             res: res.clone(),
+            exit: if origin { exits.next() } else { None },
         };
-        if ok && r.res_bound() {
+        if ok && (free_res || r.res_bound()) {
             out.push(r.normalize());
         }
     }
@@ -692,6 +753,7 @@ fn skeleton(s: &Schema) -> Schema {
         match t {
             Ty::Base(_) => Ty::Base(0),
             Ty::Top => Ty::Top,
+            Ty::Never => Ty::Never,
             Ty::Var(v) => Ty::Var(*v),
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(blank).collect()),
         }
@@ -704,9 +766,11 @@ fn skeleton(s: &Schema) -> Schema {
             .map(|k| Premise {
                 bound: k.bound.iter().map(blank).collect(),
                 ty: blank(&k.ty),
+                exit: k.exit.as_ref().map(blank),
             })
             .collect(),
         res: blank(&s.res),
+        exit: s.exit.as_ref().map(blank),
     }
 }
 
@@ -765,6 +829,86 @@ fn uses_of<L: Language>(
         }
     }
     out
+}
+
+/// Where `return`s go through `con`, found by putting a returning term in
+/// each child; `None` if nothing returns.
+fn exit_flow<L: Language>(
+    oracle: &mut Oracle<L>,
+    pools: &Pools,
+    con: usize,
+    rng: &mut Rng,
+) -> Option<ExitFlow> {
+    let returning: Vec<Term> = pools
+        .faults
+        .iter()
+        .filter(|t| matches!(oracle.eval(t), Outcome::Return(_)))
+        .cloned()
+        .collect();
+    if returning.is_empty() || pools.reps.is_empty() {
+        return None;
+    }
+    let sig = oracle.lang.signature();
+    let var = var_con(sig);
+    let c = sig[con].clone();
+    let atoms = c.atoms_or_none();
+    let others = |k: usize, rng: &mut Rng, plain: bool| -> Term {
+        if c.binds[k] == 0 {
+            // Values, or (to run a catcher) faults.
+            if !plain && rng.below(2) == 0 && !pools.faults.is_empty() {
+                pools.faults[rng.below(pools.faults.len())].clone()
+            } else {
+                pools.reps[rng.below(pools.reps.len())].clone()
+            }
+        } else if plain {
+            Term::leaf(var, Atom::Int(0))
+        } else {
+            let open = &pools.open[&c.binds[k]];
+            open[rng.below(open.len())].clone()
+        }
+    };
+    let mut caught = Vec::new();
+    for k in 0..c.arity {
+        let (mut through, mut not) = (0, 0);
+        for _ in 0..16 {
+            let r = &returning[rng.below(returning.len())];
+            let kids: Vec<Term> = (0..c.arity)
+                .map(|j| {
+                    if j == k {
+                        r.clone()
+                    } else {
+                        others(j, rng, false)
+                    }
+                })
+                .collect();
+            let atom = atoms[rng.below(atoms.len())].clone();
+            let node = Term { con, atom, kids };
+            let o = oracle.eval(&node);
+            // Only if the child ran: another child there changes things.
+            let mut alt = node.clone();
+            alt.kids[k] = pools.reps[rng.below(pools.reps.len())].clone();
+            if oracle.lang.same_outcome(&oracle.eval(&alt), &o) {
+                continue;
+            }
+            if oracle.lang.same_outcome(&o, &oracle.eval(r)) {
+                through += 1;
+            } else {
+                not += 1;
+            }
+        }
+        caught.push(not > through);
+    }
+    // A node that returns with children that are values or variables.
+    let mut origin = false;
+    for _ in 0..16 {
+        let kids: Vec<Term> = (0..c.arity).map(|j| others(j, rng, true)).collect();
+        let atom = atoms[rng.below(atoms.len())].clone();
+        if matches!(oracle.eval(&Term { con, atom, kids }), Outcome::Return(_)) {
+            origin = true;
+            break;
+        }
+    }
+    Some(ExitFlow { caught, origin })
 }
 
 fn c_arity<L: Language>(oracle: &Oracle<L>, con: usize) -> usize {
@@ -939,30 +1083,58 @@ fn observe<L: Language>(
         };
         let atoms = c.atoms_or_none();
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..cfg.nodes * 3 {
-            let kids = c
-                .binds
-                .iter()
-                .zip(&kid_pools)
-                .map(|(&b, p)| {
-                    if b == 0 && !by_sort.is_empty() {
-                        let s = &by_sort[rng.below(by_sort.len())];
-                        s[rng.below(s.len())].clone()
-                    } else {
-                        p[rng.below(p.len())].clone()
-                    }
-                })
-                .collect();
-            let t = Term {
-                con,
-                atom: atoms[rng.below(atoms.len())].clone(),
-                kids,
-            };
-            if seen.insert(t.clone()) {
-                nodes.push(t);
-            }
-            if nodes.len() >= cfg.nodes {
-                break;
+        // Every tuple of groups for the closed children, each its share of
+        // the nodes (a tuple with few terms, like a string and a number,
+        // gets them all); or, if there are too many tuples, at random.
+        let closed = c.binds.iter().filter(|&&b| b == 0).count();
+        let n_keys = by_sort
+            .len()
+            .checked_pow(closed as u32)
+            .unwrap_or(usize::MAX);
+        let keys: Vec<Option<Vec<usize>>> = if !by_sort.is_empty() && n_keys <= cfg.nodes {
+            let groups: Vec<usize> = (0..by_sort.len()).collect();
+            let refs: Vec<&[usize]> = (0..closed).map(|_| groups.as_slice()).collect();
+            let mut all = Vec::new();
+            product(&refs, &mut Vec::new(), &mut |k| all.push(Some(k.to_vec())));
+            all
+        } else {
+            vec![None]
+        };
+        let share = cfg.nodes / keys.len();
+        for key in &keys {
+            let mut mine = 0;
+            for _ in 0..share * 3 {
+                let mut at = 0;
+                let kids = c
+                    .binds
+                    .iter()
+                    .zip(&kid_pools)
+                    .map(|(&b, p)| {
+                        if b == 0 && !by_sort.is_empty() {
+                            let g = match key {
+                                Some(k) => k[at],
+                                None => rng.below(by_sort.len()),
+                            };
+                            at += 1;
+                            let s = &by_sort[g];
+                            s[rng.below(s.len())].clone()
+                        } else {
+                            p[rng.below(p.len())].clone()
+                        }
+                    })
+                    .collect();
+                let t = Term {
+                    con,
+                    atom: atoms[rng.below(atoms.len())].clone(),
+                    kids,
+                };
+                if seen.insert(t.clone()) {
+                    nodes.push(t);
+                    mine += 1;
+                }
+                if mine >= share {
+                    break;
+                }
             }
         }
     }
@@ -977,18 +1149,23 @@ fn observe<L: Language>(
         }
         // Closed children's types don't depend on the bound variables.
         let mut closed: Vec<Option<Vec<usize>>> = Vec::new();
+        let mut closed_exits: Vec<Option<Vec<usize>>> = Vec::new();
+        let every: Vec<usize> = (0..n_u).filter(|&u| sem.universe[u] != Ty::Top).collect();
         for (k, b) in node.kids.iter().zip(&c.binds) {
-            closed.push(if *b == 0 {
+            let (t, x) = if *b == 0 {
                 match oracle.eval(k) {
-                    Outcome::Value(v) => Some(sem.types_of(oracle, &v)),
+                    Outcome::Value(v) => (Some(sem.types_of(oracle, &v)), Some(every.clone())),
                     Outcome::Fault(_) | Outcome::Timeout => {
-                        Some((0..n_u).filter(|&u| sem.universe[u] != Ty::Top).collect())
+                        (Some(every.clone()), Some(every.clone()))
                     }
-                    Outcome::Stuck { .. } => None,
+                    Outcome::Return(v) => (Some(every.clone()), Some(sem.types_of(oracle, &v))),
+                    Outcome::Stuck { .. } => (None, None),
                 }
             } else {
-                None
-            });
+                (None, None)
+            };
+            closed.push(t);
+            closed_exits.push(x);
         }
         if flat.is_empty() {
             out.push(Observation {
@@ -996,6 +1173,7 @@ fn observe<L: Language>(
                 outcome,
                 beta: vec![Vec::new(); c.arity],
                 kid_types: closed,
+                kid_exits: closed_exits,
                 kid_fixed: vec![None; c.arity],
                 res_fixed: None,
             });
@@ -1074,16 +1252,22 @@ fn observe<L: Language>(
         for (flat_beta, kid_fixed, res_fixed) in tries {
             let mut beta = Vec::new();
             let mut kid_types = Vec::new();
+            let mut kid_exits = Vec::new();
             let mut at = 0;
             for (i, b) in c.binds.iter().enumerate() {
                 let mine: Vec<usize> = flat_beta[at..at + b].to_vec();
                 at += b;
-                kid_types.push(if *b == 0 {
-                    closed[i].clone()
+                let (t, x) = if *b == 0 {
+                    (closed[i].clone(), closed_exits[i].clone())
                 } else {
                     let tys: Vec<Ty> = mine.iter().map(|&u| sem.universe[u].clone()).collect();
-                    open_types(oracle, sem, &node.kids[i], &tys, &actual[at - b..at])
-                });
+                    match open_types(oracle, sem, &node.kids[i], &tys, &actual[at - b..at]) {
+                        Some((t, x)) => (Some(t), Some(x)),
+                        None => (None, None),
+                    }
+                };
+                kid_types.push(t);
+                kid_exits.push(x);
                 beta.push(mine);
             }
             out.push(Observation {
@@ -1091,6 +1275,7 @@ fn observe<L: Language>(
                 outcome: outcome.clone(),
                 beta,
                 kid_types,
+                kid_exits,
                 kid_fixed,
                 res_fixed,
             });
@@ -1140,16 +1325,17 @@ fn envs<L: Language>(
     out
 }
 
-/// The universe types every run of open `t` gives, its variables bound to
-/// sampled members of `beta` (and to the `actual` values that flow into
-/// them, where known); `None` if a run gets stuck.
+/// The universe types every run of open `t` gives, and those every value
+/// it returns is in, its variables bound to sampled members of `beta` (and
+/// to the `actual` values that flow into them, where known); `None` if a
+/// run gets stuck.
 fn open_types<L: Language>(
     oracle: &mut Oracle<L>,
     sem: &mut Semantics<L::Value>,
     t: &Term,
     beta: &[Ty],
     actual: &[Option<L::Value>],
-) -> Option<Vec<usize>> {
+) -> Option<(Vec<usize>, Vec<usize>)> {
     let mut envs = envs(oracle, sem, beta);
     // The values that really flow in, where the binder flow says which:
     // a premise judged on samples alone can miss them.
@@ -1173,14 +1359,32 @@ fn open_types<L: Language>(
     if outcomes.iter().any(Outcome::is_stuck) {
         return None;
     }
-    Some(
-        (0..sem.universe.len())
-            .filter(|&u| {
-                let ty = sem.universe[u].clone();
-                ty != Ty::Top && outcomes.iter().all(|o| sem.in_e(oracle, o, &ty))
-            })
-            .collect(),
-    )
+    let returned: Vec<L::Value> = outcomes
+        .iter()
+        .filter_map(|o| match o {
+            Outcome::Return(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut types = Vec::new();
+    let mut exits = Vec::new();
+    for u in 0..sem.universe.len() {
+        let ty = sem.universe[u].clone();
+        if ty == Ty::Top {
+            continue;
+        }
+        // A `return` is in every type, as the node's value goes.
+        if outcomes
+            .iter()
+            .all(|o| matches!(o, Outcome::Return(_)) || sem.in_e(oracle, o, &ty))
+        {
+            types.push(u);
+        }
+        if returned.iter().all(|v| sem.holds(oracle, v, &ty)) {
+            exits.push(u);
+        }
+    }
+    Some((types, exits))
 }
 
 /// Ground rule instances an observation supports, a few at random.
@@ -1189,11 +1393,15 @@ fn instances<L: Language>(
     sem: &mut Semantics<L::Value>,
     o: &Observation<L::Value>,
     con: usize,
+    flow: Option<&ExitFlow>,
     rng: &mut Rng,
 ) -> Vec<Schema> {
     let Outcome::Value(v) = &o.outcome else {
         return Vec::new();
     };
+    let arity = o.kid_types.len();
+    let caught: Vec<bool> = flow.map_or(vec![false; arity], |f| f.caught.clone());
+    let origin = flow.is_some_and(|f| f.origin);
     let res = match o.res_fixed {
         Some(r) => vec![r],
         None => sem.types_of(oracle, v),
@@ -1208,6 +1416,19 @@ fn instances<L: Language>(
         })
         .collect();
     choices.push(res);
+    // Then the exit types that aren't the node's.
+    for (k, x) in o.kid_exits.iter().enumerate() {
+        if caught[k] {
+            choices.push(x.clone().unwrap_or_default());
+        }
+    }
+    if origin {
+        choices.push(
+            (0..sem.universe.len())
+                .filter(|&u| sem.universe[u] != Ty::Top)
+                .collect(),
+        );
+    }
     if choices.iter().any(Vec::is_empty) {
         return Vec::new();
     }
@@ -1256,18 +1477,22 @@ fn instances<L: Language>(
             continue;
         }
         let u = &sem.universe;
+        let mut exits = pick[arity + 1..].iter().map(|&x| u[x].clone());
         out.push(Schema {
             con,
             kids: o
                 .beta
                 .iter()
                 .zip(&pick)
-                .map(|(b, &k)| Premise {
+                .enumerate()
+                .map(|(k, (b, &t))| Premise {
                     bound: b.iter().map(|&x| u[x].clone()).collect(),
-                    ty: u[k].clone(),
+                    ty: u[t].clone(),
+                    exit: if caught[k] { exits.next() } else { None },
                 })
                 .collect(),
-            res: u[*pick.last().unwrap()].clone(),
+            res: u[pick[arity]].clone(),
+            exit: if origin { exits.next() } else { None },
         });
     }
     out.sort();
@@ -1291,12 +1516,54 @@ fn test<L: Language>(
             continue;
         }
         let mut preds = Vec::new();
+        let mut applied = false;
         for theta in &thetas {
+            // The node's exit types the premises allow: those of every
+            // child whose exit is the node's, and the rule's own.
+            let mut exits: Vec<usize> = (0..sem.universe.len())
+                .filter(|&u| sem.universe[u] != Ty::Top)
+                .collect();
+            for (k, xs) in cand.kids.iter().zip(&o.kid_exits) {
+                if k.exit.is_none() {
+                    let xs = xs.as_deref().unwrap_or(&[]);
+                    exits.retain(|u| xs.contains(u));
+                }
+            }
+            if let Some(x) = &cand.exit {
+                match index.get(&subst(x, theta)) {
+                    Some(u) => exits.retain(|w| w == u),
+                    None => continue,
+                }
+            }
+            if exits.is_empty() {
+                continue;
+            }
+            applied = true;
+            match &o.outcome {
+                // Wrong if any exit type allowed is wrong for it.
+                Outcome::Return(v) => {
+                    for u in exits {
+                        let t = sem.universe[u].clone();
+                        if !sem.holds(oracle, v, &t) {
+                            return Err(i);
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             let p = subst(&cand.res, theta);
             if !sem.in_e(oracle, &o.outcome, &p) {
                 return Err(i);
             }
             preds.push(p);
+        }
+        if !applied {
+            continue;
+        }
+        if matches!(o.outcome, Outcome::Return(_)) {
+            covered.push((i, Ty::Top));
+            continue;
         }
         if matches!(o.outcome, Outcome::Value(_)) {
             // The most specific type the rule gives the node.
@@ -1335,13 +1602,25 @@ fn matches<V>(
         }
     }
     let mut thetas = vec![theta];
-    for (k, ts) in cand.kids.iter().zip(&o.kid_types) {
+    // Each child's type, and its exit type where the rule gives one.
+    let pats = cand
+        .kids
+        .iter()
+        .zip(&o.kid_types)
+        .map(|(k, ts)| (&k.ty, ts))
+        .chain(
+            cand.kids
+                .iter()
+                .zip(&o.kid_exits)
+                .filter_map(|(k, xs)| k.exit.as_ref().map(|x| (x, xs))),
+        );
+    for (pat, ts) in pats {
         let Some(ts) = ts else {
             return Vec::new();
         };
         let mut next = Vec::new();
         for th in thetas {
-            let p = subst(&k.ty, &th);
+            let p = subst(pat, &th);
             if p.is_ground() {
                 if index.get(&p).is_some_and(|u| ts.contains(u)) {
                     next.push(th);
@@ -1415,23 +1694,46 @@ pub fn falsify<L: Language>(
                 .collect(),
         );
     }
+    let returns = pools
+        .faults
+        .iter()
+        .any(|t| matches!(oracle.eval(t), Outcome::Return(_)));
     for theta in thetas {
+        // The node's exit type: the rule's, or any.
+        let node_exit = match &rule.exit {
+            Some(x) => subst(x, &theta),
+            None if bases.is_empty() || !returns => Ty::Never,
+            None => bases[rng.below(bases.len())].clone(),
+        };
         let mut choices: Vec<Vec<Child<L::Value>>> = Vec::new();
         for (k, prem) in rule.kids.iter().enumerate() {
             let want = subst(&prem.ty, &theta);
+            let exit = prem
+                .exit
+                .as_ref()
+                .map_or(node_exit.clone(), |x| subst(x, &theta));
             if c.binds[k] == 0 {
                 // A closed child is a variable bound, in the environment, to
                 // a member of its type (numbered below); or a computation
-                // that faults, which is in every type.
+                // that faults, which is in every type, or that returns a
+                // member of its exit type.
                 let vals = sem.samples(oracle, &want);
                 let mut mine: Vec<Child<L::Value>> = vals
                     .into_iter()
                     .map(|v| (Term::leaf(var, Atom::Int(0)), Some(v)))
                     .collect();
-                if !pools.faults.is_empty() {
-                    for _ in 0..2 {
-                        mine.push((pools.faults[rng.below(pools.faults.len())].clone(), None));
+                // One of each kind.
+                let mut by_kind: std::collections::BTreeMap<usize, Vec<Term>> = Default::default();
+                for (t, &kind) in pools.faults.iter().zip(&pools.fault_kinds) {
+                    if let Outcome::Return(v) = oracle.eval(t) {
+                        if !sem.holds(oracle, &v, &exit) {
+                            continue;
+                        }
                     }
+                    by_kind.entry(kind).or_default().push(t.clone());
+                }
+                for ts in by_kind.values() {
+                    mine.push((ts[rng.below(ts.len())].clone(), None));
                 }
                 choices.push(mine);
             } else {
@@ -1454,13 +1756,13 @@ pub fn falsify<L: Language>(
                         continue;
                     }
                     // A child that only ever faults makes the node fault,
-                    // which breaks no rule.
+                    // which breaks no rule (one that returns may).
                     let mut ok = !es.is_empty();
                     let mut completes = false;
                     for e in &es {
                         match run_keeping(oracle, sem, t, e, &beta) {
-                            Some(o) if sem.in_e(oracle, &o, &want) => {
-                                completes |= matches!(o, Outcome::Value(_));
+                            Some(o) if sem.in_x(oracle, &o, &want, Some(&exit)) => {
+                                completes |= matches!(o, Outcome::Value(_) | Outcome::Return(_));
                             }
                             _ => {
                                 ok = false;
@@ -1485,7 +1787,7 @@ pub fn falsify<L: Language>(
             nodes.push(kids.to_vec())
         });
         // A sample, faults and all.
-        let take = 27.min(nodes.len());
+        let take = 36.min(nodes.len());
         for i in 0..take {
             let j = i + rng.below(nodes.len() - i);
             nodes.swap(i, j);
@@ -1529,7 +1831,7 @@ pub fn falsify<L: Language>(
                 };
                 let o = oracle.eval_shared(&node, &env);
                 let vals: Vec<String> = env.iter().map(|v| oracle.lang.show_value(v)).collect();
-                if !sem.in_e(oracle, &o, &want) {
+                if !sem.in_x(oracle, &o, &want, Some(&node_exit)) {
                     return Some(format!(
                         "{} with x0.. = [{}] gives {:?}, not a {:?}",
                         oracle.lang.show_term(&node),

@@ -19,6 +19,8 @@ pub enum Ty {
     /// Every value: inty's `unknown`, the type of what a `catch` binds.
     /// Nothing can be done with one but what can be done with anything.
     Top,
+    /// No value: the exit type where there is nothing to return from.
+    Never,
 }
 
 impl Ty {
@@ -29,7 +31,7 @@ impl Ty {
                     out.push(*v)
                 }
             }
-            Ty::Base(_) | Ty::Top => {}
+            Ty::Base(_) | Ty::Top | Ty::Never => {}
             Ty::Ref(_, ps) => ps.iter().for_each(|p| p.vars(out)),
         }
     }
@@ -37,7 +39,7 @@ impl Ty {
     pub fn is_ground(&self) -> bool {
         match self {
             Ty::Var(_) => false,
-            Ty::Base(_) | Ty::Top => true,
+            Ty::Base(_) | Ty::Top | Ty::Never => true,
             Ty::Ref(_, ps) => ps.iter().all(Ty::is_ground),
         }
     }
@@ -46,7 +48,7 @@ impl Ty {
     pub fn constants(&self) -> usize {
         match self {
             Ty::Var(_) => 0,
-            Ty::Base(_) | Ty::Top => 1,
+            Ty::Base(_) | Ty::Top | Ty::Never => 1,
             Ty::Ref(_, ps) => 1 + ps.iter().map(Ty::constants).sum::<usize>(),
         }
     }
@@ -63,17 +65,21 @@ impl Ty {
             Ty::Var(v) => f(*v),
             Ty::Base(s) => Ty::Base(*s),
             Ty::Top => Ty::Top,
+            Ty::Never => Ty::Never,
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(|p| p.map_vars(f)).collect()),
         }
     }
 }
 
 /// A child's premise: the types of the variables it sees bound (`var(0)`
-/// first), and its own type.
+/// first), its own type, and, if not the node's, its exit type: what a
+/// `return` in it may carry (a function's body's is the function's
+/// result).
 #[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct Premise {
     pub bound: Vec<Ty>,
     pub ty: Ty,
+    pub exit: Option<Ty>,
 }
 
 /// A typing rule for constructor `con`:
@@ -83,11 +89,17 @@ pub struct Premise {
 ///   ───────────────────────────────────────────
 ///          Γ ⊢ con(e₁, …, eₙ) : P₀
 /// ```
+///
+/// Every judgement has an exit type besides (what a `return` in the term
+/// may carry), the node's passed down to each child unless its premise
+/// says otherwise; `exit`, if the rule fixes the node's (`return e` needs
+/// it to be `e`'s type).
 #[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct Schema {
     pub con: usize,
     pub kids: Vec<Premise>,
     pub res: Ty,
+    pub exit: Option<Ty>,
 }
 
 impl Schema {
@@ -95,8 +107,14 @@ impl Schema {
     pub fn types(&self) -> impl Iterator<Item = &Ty> {
         self.kids
             .iter()
-            .flat_map(|k| k.bound.iter().chain([&k.ty]))
+            .flat_map(|k| k.bound.iter().chain([&k.ty]).chain(&k.exit))
             .chain([&self.res])
+            .chain(&self.exit)
+    }
+
+    /// Whether the rule says anything about exit types.
+    pub fn has_exits(&self) -> bool {
+        self.exit.is_some() || self.kids.iter().any(|k| k.exit.is_some())
     }
 
     pub fn vars(&self) -> Vec<u32> {
@@ -133,9 +151,11 @@ impl Schema {
                 .map(|k| Premise {
                     bound: k.bound.iter().map(|t| t.map_vars(f)).collect(),
                     ty: k.ty.map_vars(f),
+                    exit: k.exit.as_ref().map(|t| t.map_vars(f)),
                 })
                 .collect(),
             res: self.res.map_vars(f),
+            exit: self.exit.as_ref().map(|t| t.map_vars(f)),
         }
     }
 
@@ -158,7 +178,7 @@ pub fn match_ground(p: &Ty, g: &Ty, theta: &mut HashMap<u32, Ty>) -> bool {
             }
         },
         (Ty::Base(a), Ty::Base(b)) => a == b,
-        (Ty::Top, Ty::Top) => true,
+        (Ty::Top, Ty::Top) | (Ty::Never, Ty::Never) => true,
         (Ty::Ref(a, ps), Ty::Ref(b, gs)) => {
             a == b
                 && ps.len() == gs.len()
@@ -197,7 +217,7 @@ impl Unifier {
                 Some(b) => self.resolve(b),
                 None => t.clone(),
             },
-            Ty::Base(_) | Ty::Top => t.clone(),
+            Ty::Base(_) | Ty::Top | Ty::Never => t.clone(),
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(|p| self.resolve(p)).collect()),
         }
     }
@@ -205,7 +225,7 @@ impl Unifier {
     fn occurs(&self, v: u32, t: &Ty) -> bool {
         match self.resolve(t) {
             Ty::Var(w) => v == w,
-            Ty::Base(_) | Ty::Top => false,
+            Ty::Base(_) | Ty::Top | Ty::Never => false,
             Ty::Ref(_, ps) => ps.iter().any(|p| self.occurs(v, p)),
         }
     }
@@ -222,7 +242,7 @@ impl Unifier {
                 true
             }
             (Ty::Base(x), Ty::Base(y)) => x == y,
-            (Ty::Top, Ty::Top) => true,
+            (Ty::Top, Ty::Top) | (Ty::Never, Ty::Never) => true,
             (Ty::Ref(x, ps), Ty::Ref(y, qs)) => {
                 x == y && ps.len() == qs.len() && ps.iter().zip(qs).all(|(p, q)| self.unify(p, q))
             }
@@ -270,7 +290,15 @@ impl Unifier {
 /// `T1`: read as a type class. Of ground instances observed together, it
 /// is the candidate rule they suggest (as in Golem's relative lgg).
 pub fn lgg(rules: &[Schema]) -> Option<(Schema, Vec<Vec<Ty>>)> {
-    let shape = |s: &Schema| s.kids.iter().map(|k| k.bound.len()).collect::<Vec<_>>();
+    let shape = |s: &Schema| {
+        (
+            s.kids
+                .iter()
+                .map(|k| (k.bound.len(), k.exit.is_some()))
+                .collect::<Vec<_>>(),
+            s.exit.is_some(),
+        )
+    };
     if rules.is_empty()
         || rules
             .iter()
@@ -300,9 +328,11 @@ pub fn lgg(rules: &[Schema]) -> Option<(Schema, Vec<Vec<Ty>>)> {
             .map(|k| Premise {
                 bound: k.bound.iter().map(|_| it.next().unwrap()).collect(),
                 ty: it.next().unwrap(),
+                exit: k.exit.as_ref().map(|_| it.next().unwrap()),
             })
             .collect(),
         res: it.next().unwrap(),
+        exit: rules[0].exit.as_ref().map(|_| it.next().unwrap()),
     };
     Some((schema, columns))
 }
@@ -352,6 +382,7 @@ impl Names<'_> {
             Ty::Var(v) => var_name(*v),
             Ty::Base(s) => self.sorts[*s].clone(),
             Ty::Top => "unknown".into(),
+            Ty::Never => "never".into(),
             Ty::Ref(s, ps) => {
                 let shape = self.shapes.get(*s).map_or(&[][..], |v| v.as_slice());
                 let slice = |ps: &[Ty]| {
@@ -382,8 +413,12 @@ impl Names<'_> {
             .kids
             .iter()
             .map(|k| {
+                let ty = match &k.exit {
+                    Some(e) => format!("{} (return {})", self.ty(&k.ty), self.ty(e)),
+                    None => self.ty(&k.ty),
+                };
                 if k.bound.is_empty() {
-                    self.ty(&k.ty)
+                    ty
                 } else {
                     let b: Vec<String> = k
                         .bound
@@ -391,15 +426,19 @@ impl Names<'_> {
                         .enumerate()
                         .map(|(i, t)| format!("x{i}: {}", self.ty(t)))
                         .collect();
-                    format!("[{}] {}", b.join(", "), self.ty(&k.ty))
+                    format!("[{}] {ty}", b.join(", "))
                 }
             })
             .collect();
         let con = self.cons[s.con];
+        let res = match &s.exit {
+            Some(e) => format!("{} (return {})", self.ty(&s.res), self.ty(e)),
+            None => self.ty(&s.res),
+        };
         if kids.is_empty() {
-            format!("{con} : {}", self.ty(&s.res))
+            format!("{con} : {res}")
         } else {
-            format!("{con} : ({}) -> {}", kids.join(", "), self.ty(&s.res))
+            format!("{con} : ({}) -> {res}", kids.join(", "))
         }
     }
 }
