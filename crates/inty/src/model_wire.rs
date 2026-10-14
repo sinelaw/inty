@@ -3,10 +3,11 @@
 //! `lean/ROADMAP.md`), not only on the differential test's generated ones.
 //!
 //! [`lower_program`] writes a parsed JavaScript program as one wire line,
-//! or says why it can't: the program uses something the model doesn't
-//! have (`%`, a bitwise operator, a comparison of strings, a `for` loop,
-//! a class, a builtin, …), or something whose lowering would change its meaning (a
-//! name used before its declaration). The lowering is the inverse of the
+//! and [`lower_entry`] a program of several modules, or says why it
+//! can't: the program uses something the model doesn't have (a bitwise
+//! operator, a comparison of strings, a class, a builtin, …), or
+//! something whose lowering would change its meaning (a name used before
+//! its declaration). The lowering is the inverse of the
 //! differential test's printer (`tests/differential.rs`): a statement list
 //! is a sequence whose value is its last statement's, a declaration binds
 //! the rest of its block, a function's body ends in what it returns, and a
@@ -15,12 +16,13 @@
 //! each branch with the binding the model's form makes.
 
 use crate::ast::{
-    AssignOp, BinOp, ChainSegment, Expr, ForInit, Literal, Param, Program, PropDef, PropKey, Stmt,
-    UnaryOp, VarKind,
+    AssignOp, BinOp, ChainSegment, ExportDecl, ExportFromKind, Expr, ForInit, ImportSpecifier,
+    Literal, Param, Program, PropDef, PropKey, Stmt, UnaryOp, VarDeclarator, VarKind,
 };
 use crate::span::Span;
 use crate::types::{LitValue, Nothing, Presence, RowTail, TVarName, Type};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Why a program isn't in the model's fragment.
 pub type Unsupported = String;
@@ -33,6 +35,117 @@ fn unsupported<T>(what: impl Into<String>) -> Result<T, Unsupported> {
 
 /// The program in the wire format, or what keeps it out of the model.
 pub fn lower_program(program: &Program) -> Lowered {
+    let module = read_module(program, &mut |source| {
+        unsupported(format!("an import of `{source}`"))
+    })?;
+    lower_modules(vec![module])
+}
+
+/// The program whose entry module is the file `path`, with the modules it
+/// imports, in the wire format; or what keeps it out of the model.
+///
+/// The modules run in the order JavaScript runs them, each once: those an
+/// importer imports first, in the order it imports them. Each module's
+/// declarations bind the modules after it, which see only what they
+/// import: an import is the exporting module's binding itself, so a use
+/// takes a new instance of its scheme, and an exported `let` is live.
+pub fn lower_entry(path: &Path) -> Lowered {
+    let mut loader = Loader {
+        modules: Vec::new(),
+        index: HashMap::new(),
+    };
+    loader.load(path)?;
+    lower_modules(loader.modules)
+}
+
+/// The modules of a program, in the order they run.
+struct Loader {
+    modules: Vec<Module>,
+    /// Each file's module, or `None` while its imports load.
+    index: HashMap<PathBuf, Option<usize>>,
+}
+
+impl Loader {
+    fn load(&mut self, path: &Path) -> Result<usize, Unsupported> {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        match self.index.get(&path) {
+            Some(Some(k)) => return Ok(*k),
+            Some(None) => return unsupported("a cycle of imports"),
+            None => {}
+        }
+        self.index.insert(path.clone(), None);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return unsupported(format!("a module that can't be read ({})", path.display()));
+        };
+        let Ok(program) = crate::frontends::javascript::parse_source(&text) else {
+            return unsupported(format!("a module that doesn't parse ({})", path.display()));
+        };
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let module = read_module(&program, &mut |source| {
+            let target = match crate::modules::resolve_path(&dir, source) {
+                Ok(t) => t,
+                Err(_) => return unsupported(format!("an import of `{source}`, not found")),
+            };
+            let name = target.to_string_lossy();
+            if name.starts_with(crate::stdlib::BUILTIN_MODULE_PREFIX) || name.ends_with(".d.js") {
+                return unsupported(format!("an import of `{source}`, a declared module"));
+            }
+            self.load(&target)
+        })?;
+        self.modules.push(module);
+        let k = self.modules.len() - 1;
+        self.index.insert(path, Some(k));
+        Ok(k)
+    }
+}
+
+/// A module of the program: its statements, its imports and exports read
+/// off them.
+struct Module {
+    stmts: Vec<Stmt>,
+    /// Each local name an import binds, and what to.
+    imports: Vec<(String, Imported)>,
+    /// Each name it exports, and what.
+    exports: Vec<(String, Exported)>,
+    /// What each name it exports is, once its declarations are lowered.
+    table: HashMap<String, Target>,
+}
+
+enum Imported {
+    /// The export of that name of the module.
+    Name(usize, String),
+    /// `import * as ns`: the module's namespace.
+    Namespace(usize),
+}
+
+enum Exported {
+    /// A binding of the module's own.
+    Local(String),
+    /// `export { x } from "…"`: the export of that name of the module.
+    From(usize, String),
+    /// `export * from "…"`: the module's exports but its default.
+    All(usize),
+    /// `export * as ns from "…"`: the module's namespace.
+    Namespace(usize),
+}
+
+#[derive(Clone, Copy)]
+enum Target {
+    /// A binder, by its id.
+    Binder(usize),
+    /// A module's namespace, whose members are its exports.
+    Namespace(usize),
+}
+
+/// The name an `export default` of what isn't a named function binds.
+const DEFAULT: &str = "*default*";
+
+/// A module's statements, without its imports and with its exports'
+/// declarations; `resolve` gives the module an import names.
+fn read_module(
+    program: &Program,
+    resolve: &mut dyn FnMut(&str) -> Result<usize, Unsupported>,
+) -> Result<Module, Unsupported> {
     if !program.type_aliases.is_empty() {
         return unsupported("a type alias");
     }
@@ -40,6 +153,171 @@ pub fn lower_program(program: &Program) -> Lowered {
     if !program.class_brands.is_empty() {
         return unsupported("a class");
     }
+    let mut module = Module {
+        stmts: Vec::new(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        table: HashMap::new(),
+    };
+    for s in &program.statements {
+        match s {
+            Stmt::Import {
+                specifiers, source, ..
+            } => {
+                let m = resolve(source)?;
+                for spec in specifiers {
+                    module.imports.push(match spec {
+                        ImportSpecifier::Named {
+                            imported, local, ..
+                        } => (local.clone(), Imported::Name(m, imported.clone())),
+                        ImportSpecifier::Default { local, .. } => {
+                            (local.clone(), Imported::Name(m, "default".to_string()))
+                        }
+                        ImportSpecifier::Namespace { local, .. } => {
+                            (local.clone(), Imported::Namespace(m))
+                        }
+                    });
+                }
+            }
+            Stmt::Export { declaration, .. } => match declaration {
+                ExportDecl::Var {
+                    kind,
+                    declarations,
+                    span,
+                } => {
+                    for d in declarations {
+                        module
+                            .exports
+                            .push((d.name.clone(), Exported::Local(d.name.clone())));
+                    }
+                    module.stmts.push(Stmt::Var {
+                        kind: *kind,
+                        declarations: declarations.clone(),
+                        span: *span,
+                    });
+                }
+                ExportDecl::Function {
+                    name,
+                    params,
+                    body,
+                    type_annotation,
+                    span,
+                } => {
+                    module
+                        .exports
+                        .push((name.clone(), Exported::Local(name.clone())));
+                    module.stmts.push(Stmt::FunctionDecl {
+                        name: name.clone(),
+                        params: params.clone(),
+                        body: body.clone(),
+                        type_annotation: type_annotation.clone(),
+                        return_type_ast: None,
+                        span: *span,
+                    });
+                }
+                // `export default function f() {}` declares `f`.
+                ExportDecl::Default {
+                    value:
+                        Expr::Function {
+                            name: Some(name),
+                            params,
+                            body,
+                            type_annotation,
+                            arrow: false,
+                            ..
+                        },
+                    span,
+                } => {
+                    module
+                        .exports
+                        .push(("default".to_string(), Exported::Local(name.clone())));
+                    module.stmts.push(Stmt::FunctionDecl {
+                        name: name.clone(),
+                        params: params.clone(),
+                        body: body.clone(),
+                        type_annotation: type_annotation.clone(),
+                        return_type_ast: None,
+                        span: *span,
+                    });
+                }
+                ExportDecl::Default { value, span } => {
+                    module
+                        .exports
+                        .push(("default".to_string(), Exported::Local(DEFAULT.to_string())));
+                    module.stmts.push(Stmt::Var {
+                        kind: VarKind::Const,
+                        declarations: vec![VarDeclarator {
+                            name: DEFAULT.to_string(),
+                            init: Some(value.clone()),
+                            type_annotation: None,
+                            type_ast: None,
+                            kind: VarKind::Const,
+                            span: *span,
+                        }],
+                        span: *span,
+                    });
+                }
+                ExportDecl::List { specifiers, .. } => {
+                    for sp in specifiers {
+                        module
+                            .exports
+                            .push((sp.exported.clone(), Exported::Local(sp.local.clone())));
+                    }
+                }
+                ExportDecl::From { kind, source, .. } => {
+                    let m = resolve(source)?;
+                    match kind {
+                        ExportFromKind::Named(specs) => {
+                            for sp in specs {
+                                module.exports.push((
+                                    sp.exported.clone(),
+                                    Exported::From(m, sp.local.clone()),
+                                ));
+                            }
+                        }
+                        ExportFromKind::All => {
+                            module.exports.push((String::new(), Exported::All(m)))
+                        }
+                        ExportFromKind::AllAs(ns) => {
+                            module.exports.push((ns.clone(), Exported::Namespace(m)))
+                        }
+                    }
+                }
+            },
+            s => module.stmts.push(s.clone()),
+        }
+    }
+    Ok(module)
+}
+
+/// The modules, in the order they run, the last the program's entry.
+fn lower_modules(modules: Vec<Module>) -> Lowered {
+    // What a module exports of its own it declares, or imports (inty
+    // rejects an export of what it doesn't).
+    for m in &modules {
+        let local: Vec<String> = m
+            .stmts
+            .iter()
+            .flat_map(declared)
+            .chain(m.imports.iter().map(|(l, _)| l.clone()))
+            .collect();
+        for (_, e) in &m.exports {
+            if let Exported::Local(l) = e {
+                if !local.contains(l) {
+                    return unsupported(format!("an export of `{l}`, which isn't declared"));
+                }
+            }
+        }
+    }
+    let entry = modules.len() - 1;
+    let reexports: Vec<(usize, String)> = modules[entry]
+        .exports
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Exported::From(m, x) => Some((*m, x.clone())),
+            _ => None,
+        })
+        .collect();
     let mut cx = Cx {
         scope: Vec::new(),
         depth: 0,
@@ -52,8 +330,17 @@ pub fn lower_program(program: &Program) -> Lowered {
         assigned: Vec::new(),
         var_ok: true,
         iteration: Vec::new(),
+        groups: HashMap::new(),
+        modules,
+        module: 0,
+        this_users: Vec::new(),
     };
-    let wire = cx.block(&program.statements, Tail::Program)?;
+    let wire = cx.enter_module(0)?;
+    for (m, x) in reexports {
+        if !cx.modules[m].table.contains_key(&x) {
+            return unsupported(format!("a re-export of `{x}`, which isn't exported"));
+        }
+    }
     // A property only a builtin has (`xs.map`, `s.slice`): the model's
     // strings and arrays have only `length`.
     if let Some(l) = cx.read.iter().find(|l| !cx.defined.contains(l)) {
@@ -83,6 +370,8 @@ struct Binder {
     sum: Option<Sum>,
     /// How many functions it is declared inside.
     depth: usize,
+    /// The module it is declared in: only that module's code sees it.
+    module: usize,
     /// A `for` loop's `let`, which JavaScript binds afresh each iteration:
     /// the model's one binding is the same only where no closure sees it.
     per_iteration: bool,
@@ -122,6 +411,26 @@ enum Kind {
     /// (a function) or in its temporal dead zone: a use resolves to it,
     /// which the model's scoping can't say. Not a binder of the model's.
     Later,
+    /// A function of a group of mutually recursive ones, inside the group:
+    /// the field of that name of what the group's function (the binder of
+    /// that id) returns. Not a binder of the model's.
+    Member(usize),
+    /// An import: the binder of that id, another module's. Not a binder
+    /// of the model's.
+    Alias(usize),
+    /// `import * as ns`: that module's namespace, whose members are its
+    /// exports. Not a binder of the model's.
+    Namespace(usize),
+}
+
+impl Kind {
+    /// Whether the model has a binder for it.
+    fn bound(self) -> bool {
+        !matches!(
+            self,
+            Kind::Later | Kind::Member(_) | Kind::Alias(_) | Kind::Namespace(_)
+        )
+    }
 }
 
 struct Cx {
@@ -146,6 +455,17 @@ struct Cx {
     var_ok: bool,
     /// The names a `for` loop's initialiser is about to declare.
     iteration: Vec<String>,
+    /// The groups of mutually recursive function declarations of the
+    /// blocks being lowered: each group's first declaration, and how many
+    /// it has (`hoist` puts them together).
+    groups: HashMap<*const Stmt, usize>,
+    /// The program's modules, in the order they run, and the one being
+    /// lowered.
+    modules: Vec<Module>,
+    module: usize,
+    /// The function declarations whose body uses `this`, by their binders'
+    /// ids.
+    this_users: Vec<usize>,
 }
 
 /// What the end of a statement list is.
@@ -153,6 +473,8 @@ struct Cx {
 enum Tail {
     /// The program's: its value is the last statement's.
     Program,
+    /// A module's other than the entry's: the next module follows it.
+    Module,
     /// A function body's: it returns what its last statement returns, or
     /// `undefined` when it falls off its end.
     Body,
@@ -174,20 +496,34 @@ impl Cx {
             id: self.next_id,
             sum,
             depth: self.depth,
+            module: self.module,
             per_iteration: false,
         });
     }
 
-    /// The binder `name` resolves to, and its de Bruijn index.
+    /// The binder `name` resolves to (an import's, the exporting module's),
+    /// and its de Bruijn index.
     fn binder(&self, name: &str) -> Result<(usize, Binder), Unsupported> {
         let (i, _) = self.lookup(name)?;
-        let b = self
-            .scope
+        let b = self.own(name).expect("looked up");
+        let b = match b.kind {
+            Kind::Alias(id) => self
+                .scope
+                .iter()
+                .find(|t| t.id == id)
+                .expect("an import's binding"),
+            _ => b,
+        };
+        Ok((i, b.clone()))
+    }
+
+    /// The binder of the current module `name` names (an import's alias
+    /// itself).
+    fn own(&self, name: &str) -> Option<&Binder> {
+        self.scope
             .iter()
             .rev()
-            .find(|b| b.name.as_deref() == Some(name))
-            .expect("looked up");
-        Ok((i, b.clone()))
+            .find(|b| b.module == self.module && b.name.as_deref() == Some(name))
     }
 
     /// `name` taken apart by a test, in the branches: a `let` or a
@@ -203,24 +539,50 @@ impl Cx {
         self.scope.truncate(self.scope.len() - n);
     }
 
-    /// `name`'s de Bruijn index and kind.
+    /// `name`'s de Bruijn index and kind; a group's member's is its
+    /// group's function's index.
     fn lookup(&self, name: &str) -> Result<(usize, Kind), Unsupported> {
         let mut i = 0;
+        let mut member = None;
+        let mut alias = None;
         for b in self.scope.iter().rev() {
-            if b.name.as_deref() == Some(name) {
-                return match b.kind {
-                    Kind::Later => unsupported(format!("`{name}` used before its declaration")),
-                    _ if b.per_iteration && b.depth < self.depth => {
-                        unsupported("a closure seeing a `for` loop's `let`")
+            if let Some(g) = member {
+                if b.id == g {
+                    return Ok((i, Kind::Member(g)));
+                }
+            } else if let Some(a) = alias {
+                if b.id == a {
+                    return Ok((i, b.kind));
+                }
+            } else if b.module == self.module && b.name.as_deref() == Some(name) {
+                match b.kind {
+                    Kind::Later => {
+                        return unsupported(format!("`{name}` used before its declaration"))
                     }
-                    k => Ok((i, k)),
-                };
+                    Kind::Member(g) => member = Some(g),
+                    Kind::Alias(a) => alias = Some(a),
+                    Kind::Namespace(_) => return Ok((0, b.kind)),
+                    _ if b.per_iteration && b.depth < self.depth => {
+                        return unsupported("a closure seeing a `for` loop's `let`")
+                    }
+                    k => return Ok((i, k)),
+                }
             }
-            if b.kind != Kind::Later {
+            if b.kind.bound() {
                 i += 1;
             }
         }
         unsupported(format!("`{name}` isn't bound in the program (a builtin)"))
+    }
+
+    /// The de Bruijn index of the binder of that id.
+    fn index_of(&self, id: usize) -> usize {
+        self.scope
+            .iter()
+            .rev()
+            .take_while(|b| b.id != id)
+            .filter(|b| b.kind.bound())
+            .count()
     }
 
     fn this(&self) -> Lowered {
@@ -228,7 +590,7 @@ impl Cx {
         for b in self.scope.iter().rev() {
             match b.kind {
                 Kind::This => return Ok(format!("(var {i})")),
-                Kind::Later => continue,
+                k if !k.bound() => continue,
                 _ => i += 1,
             }
         }
@@ -237,12 +599,13 @@ impl Cx {
 
     /// A statement list: each declaration binds the rest of the list.
     fn block(&mut self, stmts: &[Stmt], tail: Tail) -> Lowered {
-        let stmts = hoist(
+        let (stmts, groups) = hoist(
             stmts
                 .iter()
                 .filter(|s| !matches!(s, Stmt::Empty { .. }))
                 .collect(),
         );
+        self.groups.extend(groups);
         // The names the list declares are in scope, as `Later`, until
         // their declarations.
         let mut names: Vec<String> = stmts.iter().flat_map(|s| declared(s)).collect();
@@ -276,7 +639,7 @@ impl Cx {
 
     fn stmts(&mut self, stmts: &[&Stmt], tail: Tail, falls_off: bool) -> Lowered {
         let Some((first, rest)) = stmts.split_first() else {
-            return Ok("(undef)".to_string());
+            return self.rest(&[], tail, falls_off);
         };
         let last = rest.is_empty();
         match first {
@@ -287,6 +650,13 @@ impl Cx {
                     return unsupported("a `var` in a nested block");
                 }
                 self.decls(declarations, rest, tail, falls_off)
+            }
+            Stmt::FunctionDecl { .. } if self.groups.contains_key(&(*first as *const Stmt)) => {
+                let k = self
+                    .groups
+                    .remove(&(*first as *const Stmt))
+                    .expect("a group");
+                self.group(&stmts[..k], &stmts[k..], tail, falls_off)
             }
             Stmt::FunctionDecl {
                 name,
@@ -307,6 +677,9 @@ impl Cx {
                 self.unlater(name);
                 let f = self.function_named(Some(name), Kind::FnName, params, body, false)?;
                 self.push(Some(name), Kind::FnName);
+                if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                    self.this_users.push(self.next_id);
+                }
                 let rest = self.rest(rest, tail, falls_off);
                 self.pop(1);
                 Ok(format!("(let {f} {})", rest?))
@@ -322,7 +695,16 @@ impl Cx {
                 ..
             } if !last && pattern(test).is_some() && exits(consequent) => self.test(
                 test,
-                |cx| cx.branch(consequent, tail),
+                |cx| {
+                    cx.branch(
+                        consequent,
+                        if tail == Tail::Module {
+                            Tail::Stmt
+                        } else {
+                            tail
+                        },
+                    )
+                },
                 |cx| cx.stmts(rest, tail, falls_off),
             ),
             // A program ending in a statement other than an expression
@@ -330,6 +712,11 @@ impl Cx {
             s if last && tail == Tail::Program && !matches!(s, Stmt::Expr { .. }) => {
                 let s = self.stmt(first, Tail::Stmt)?;
                 Ok(format!("(seq {s} (undef))"))
+            }
+            // A module's last statement, then the next module.
+            _ if last && tail == Tail::Module => {
+                let s = self.stmt(first, Tail::Stmt)?;
+                Ok(format!("(seq {s} {})", self.next_module()?))
             }
             _ => {
                 let s = self.stmt(first, if last { tail } else { Tail::Stmt })?;
@@ -347,9 +734,203 @@ impl Cx {
         }
     }
 
+    /// A group of mutually recursive function declarations, `function f(…)
+    /// {… g(…) …} function g(…) {… f(…) …}`: a function returning an object
+    /// of them, `const G = function () { return {f: …, g: …}; }`, through
+    /// which they reach each other (`g(…)` in `f` is `G().g(…)`), then each
+    /// name bound to `function (x₀, …) { return G().f(x₀, …); }`. Inside
+    /// the group, its members have one type each, as `G`'s own name has in
+    /// its body; `G` is generalised, and so is each name, a function: the
+    /// typing of a strongly connected component (`docs/scc-inference.md`).
+    fn group(&mut self, members: &[&Stmt], rest: &[&Stmt], tail: Tail, falls_off: bool) -> Lowered {
+        let mut fns = Vec::new();
+        for s in members {
+            let Stmt::FunctionDecl {
+                name,
+                params,
+                body,
+                type_annotation,
+                return_type_ast,
+                ..
+            } = s
+            else {
+                unreachable!("a group holds function declarations");
+            };
+            if type_annotation.is_some() || return_type_ast.is_some() {
+                return unsupported("an annotated function");
+            }
+            if !self.var_ok {
+                return unsupported("a function declaration in a nested block");
+            }
+            // (Called through `G().f`, its `this` would be that object.)
+            if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                return unsupported("a mutually recursive function using `this`");
+            }
+            for p in params.iter() {
+                if p.optional || p.default.is_some() || p.type_ast.is_some() {
+                    return unsupported("an optional or annotated parameter");
+                }
+            }
+            fns.push((name.as_str(), params.as_slice(), &**body));
+        }
+        for (name, ..) in &fns {
+            self.unlater(name);
+            self.defined.push(name.to_string());
+        }
+        // `G`: its `this` and itself, then its members.
+        self.push(None, Kind::This);
+        self.push(None, Kind::Const);
+        let g = self.next_id;
+        self.depth += 1;
+        for (name, ..) in &fns {
+            self.push(Some(name), Kind::Member(g));
+        }
+        let fields: Result<Vec<String>, Unsupported> = fns
+            .iter()
+            .map(|(name, params, body)| {
+                let f = self.function_named(Some(name), Kind::FnName, params, body, false)?;
+                Ok(format!("(field s:{} {f})", tok(name)?))
+            })
+            .collect();
+        self.pop(fns.len());
+        self.depth -= 1;
+        self.pop(2);
+        let group = format!("(func 0 (ret (obj {})))", fields?.join(" "));
+        self.push(None, Kind::Const);
+        let g = self.next_id;
+        let mut wrappers = Vec::new();
+        for (name, params, _) in &fns {
+            let n = params.len();
+            // Inside the wrapper, its parameters, itself and its `this`
+            // come first.
+            let gi = self.index_of(g) + n + 2;
+            let args: String = (0..n).map(|i| format!(" (var {i})")).collect();
+            wrappers.push(format!(
+                "(func {n} (ret (app (get (app (var {gi})) s:{}){args})))",
+                tok(name)?
+            ));
+            self.push(Some(name), Kind::FnName);
+        }
+        let rest = self.rest(rest, tail, falls_off);
+        self.pop(fns.len() + 1);
+        let mut out = rest?;
+        for w in wrappers.iter().rev() {
+            out = format!("(let {w} {out})");
+        }
+        Ok(format!("(let {group} {out})"))
+    }
+
+    /// Module `k`, with its imports, and those after it.
+    fn enter_module(&mut self, k: usize) -> Lowered {
+        self.module = k;
+        let imports = std::mem::take(&mut self.modules[k].imports);
+        let mut pushed = 0;
+        for (local, imported) in imports {
+            let target = match imported {
+                Imported::Name(m, x) => match self.modules[m].table.get(&x) {
+                    Some(t) => *t,
+                    None => {
+                        return unsupported(format!("an import of `{x}`, which isn't exported"))
+                    }
+                },
+                Imported::Namespace(m) => Target::Namespace(m),
+            };
+            self.push(
+                Some(&local),
+                match target {
+                    Target::Binder(id) => Kind::Alias(id),
+                    Target::Namespace(m) => Kind::Namespace(m),
+                },
+            );
+            pushed += 1;
+        }
+        let stmts = std::mem::take(&mut self.modules[k].stmts);
+        let tail = if k + 1 == self.modules.len() {
+            Tail::Program
+        } else {
+            Tail::Module
+        };
+        let r = self.block(&stmts, tail);
+        self.pop(pushed);
+        r
+    }
+
+    /// The end of the current module: its exports, then the next module.
+    fn next_module(&mut self) -> Lowered {
+        let k = self.module;
+        for (name, exported) in std::mem::take(&mut self.modules[k].exports) {
+            match exported {
+                Exported::Local(l) => {
+                    let Some(b) = self
+                        .scope
+                        .iter()
+                        .rev()
+                        .find(|b| b.module == k && b.name.as_deref() == Some(&*l))
+                    else {
+                        return unsupported(format!("an export of `{l}`, which isn't declared"));
+                    };
+                    let t = match b.kind {
+                        Kind::Alias(id) => Target::Binder(id),
+                        Kind::Namespace(m) => Target::Namespace(m),
+                        k if k.bound() => Target::Binder(b.id),
+                        _ => return unsupported(format!("an export of `{l}`")),
+                    };
+                    self.modules[k].table.insert(name, t);
+                }
+                Exported::From(m, x) => {
+                    let Some(t) = self.modules[m].table.get(&x).copied() else {
+                        return unsupported(format!("a re-export of `{x}`, which isn't exported"));
+                    };
+                    self.modules[k].table.insert(name, t);
+                }
+                Exported::All(m) => {
+                    let all: Vec<(String, Target)> = self.modules[m]
+                        .table
+                        .iter()
+                        .filter(|(x, _)| *x != "default")
+                        .map(|(x, t)| (x.clone(), *t))
+                        .collect();
+                    for (x, t) in all {
+                        self.modules[k].table.entry(x).or_insert(t);
+                    }
+                }
+                Exported::Namespace(m) => {
+                    self.modules[k].table.insert(name, Target::Namespace(m));
+                }
+            }
+        }
+        let r = self.enter_module(k + 1);
+        self.module = k;
+        r
+    }
+
+    /// A module's export, `ns.x`, as the binder it is.
+    fn namespace_member(&self, m: usize, x: &str) -> Lowered {
+        match self.modules[m].table.get(x) {
+            Some(Target::Binder(id)) => Ok(format!("(var {})", self.index_of(*id))),
+            Some(Target::Namespace(_)) => {
+                unsupported("a namespace in a namespace, used as a value")
+            }
+            None => unsupported(format!("`{x}`, which the module doesn't export")),
+        }
+    }
+
+    /// The module whose namespace `e` is, if it is one.
+    fn namespace(&self, e: &Expr) -> Option<usize> {
+        let Expr::Ident { name, .. } = e else {
+            return None;
+        };
+        match self.lookup(name) {
+            Ok((_, Kind::Namespace(m))) => Some(m),
+            _ => None,
+        }
+    }
+
     /// The rest of a list after a declaration: `undefined` if nothing.
     fn rest(&mut self, rest: &[&Stmt], tail: Tail, falls_off: bool) -> Lowered {
-        if rest.is_empty() {
+        if rest.is_empty() && tail == Tail::Module {
+            self.next_module()
+        } else if rest.is_empty() {
             Ok("(undef)".to_string())
         } else {
             self.stmts(rest, tail, falls_off)
@@ -382,6 +963,23 @@ impl Cx {
         }
         let mutable = d.kind != VarKind::Const;
         let init = match &d.init {
+            // `const f = (x) => … f(…) …`: the function's own name, which
+            // the model's function binds, is `f`, the `const` it is.
+            Some(
+                e @ Expr::Function {
+                    name: None,
+                    params,
+                    body,
+                    type_annotation: None,
+                    arrow,
+                    ..
+                },
+            ) if !mutable
+                && d.type_annotation.is_none()
+                && crate::ast::free_idents::free_identifiers_in_expr(e).contains(&d.name) =>
+            {
+                self.function_named(Some(&d.name), Kind::FnName, params, body, *arrow)?
+            }
             Some(e) => self.expr(e)?,
             // (inty gives `let x;` a type its later assignments decide.)
             None => return unsupported("a declaration without an initialiser"),
@@ -781,12 +1379,19 @@ impl Cx {
     /// An assignment to the binding `name` of `value`, given `name`'s
     /// index.
     fn assign(&mut self, name: &str, value: impl FnOnce(&mut Self, usize) -> Lowered) -> Lowered {
+        // (JavaScript's imports are read-only.)
+        if self
+            .own(name)
+            .is_some_and(|b| matches!(b.kind, Kind::Alias(_) | Kind::Namespace(_)))
+        {
+            return unsupported("an assignment to an import");
+        }
         let (i, b) = self.binder(name)?;
         self.assigned.push(b.id);
         if b.kind == Kind::Shadow {
             return unsupported("an assignment to a binding a test took apart");
         }
-        if b.kind == Kind::FnName {
+        if matches!(b.kind, Kind::FnName | Kind::Member(_)) {
             return unsupported("an assignment to a function declaration's name");
         }
         Ok(format!("(assign {i} {})", value(self, i)?))
@@ -805,6 +1410,8 @@ impl Cx {
         match e {
             Expr::Lit { value, .. } => literal(value),
             Expr::Ident { name, .. } => match self.lookup(name) {
+                Ok((i, Kind::Member(_))) => Ok(format!("(get (app (var {i})) s:{})", tok(name)?)),
+                Ok((_, Kind::Namespace(_))) => unsupported("a module's namespace as a value"),
                 Ok((i, _)) => Ok(format!("(var {i})")),
                 Err(_) if name == "undefined" => Ok("(undef)".to_string()),
                 Err(why) => Err(why),
@@ -838,6 +1445,13 @@ impl Cx {
                     return unsupported("an annotated function");
                 }
                 self.function(name.as_deref(), params, body, *arrow)
+            }
+            // `ns.x`, of a module's namespace: its export `x`, a new
+            // instance of its scheme at each use.
+            Expr::Member {
+                object, property, ..
+            } if self.namespace(object).is_some() => {
+                self.namespace_member(self.namespace(object).expect("a namespace"), property)
             }
             Expr::Member {
                 object, property, ..
@@ -877,6 +1491,25 @@ impl Cx {
                     return unsupported("a spread argument");
                 }
                 match &**callee {
+                    // (Its `this` is the namespace, which the model has no
+                    // value for: a function using it is left out.)
+                    Expr::Member {
+                        object, property, ..
+                    } if self.namespace(object).is_some() => {
+                        let m = self.namespace(object).expect("a namespace");
+                        if let Some(Target::Binder(id)) = self.modules[m].table.get(property) {
+                            if self.this_users.contains(id) {
+                                return unsupported(
+                                    "a call through a namespace of a function using `this`",
+                                );
+                            }
+                        }
+                        Ok(format!(
+                            "(app {}{})",
+                            self.namespace_member(m, property)?,
+                            self.exprs(arguments)?
+                        ))
+                    }
                     Expr::Member {
                         object, property, ..
                     } => {
@@ -1182,9 +1815,10 @@ impl Cx {
 /// them, each after the declarations it refers to: the model has no
 /// forward reference. The other statements keep their order (a function's
 /// declaration has no effect, so it can move). Functions calling each
-/// other, or one refusing every order, leave the block as it is (and the
-/// program is left out by `Later`).
-fn hoist(stmts: Vec<&Stmt>) -> Vec<&Stmt> {
+/// other are a group, moved as one, and returned beside the block; a
+/// block refusing every order is left as it is (and the program is left
+/// out by `Later`).
+fn hoist(stmts: Vec<&Stmt>) -> (Vec<&Stmt>, Vec<(*const Stmt, usize)>) {
     let n = stmts.len();
     let is_fn = |s: &Stmt| matches!(s, Stmt::FunctionDecl { .. });
     let declares: Vec<Vec<String>> = stmts.iter().map(|s| declared(s)).collect();
@@ -1204,17 +1838,61 @@ fn hoist(stmts: Vec<&Stmt>) -> Vec<&Stmt> {
             }
         }
     }
+    // Functions that reach each other through the functions they call are
+    // one group, placed as one: `unit[j]` is the first of `j`'s.
+    let fns: Vec<usize> = (0..n).filter(|&j| is_fn(stmts[j])).collect();
+    let mut reach = vec![vec![false; n]; n];
+    for &j in &fns {
+        for &i in &after[j] {
+            reach[j][i] = is_fn(stmts[i]);
+        }
+    }
+    for &k in &fns {
+        for &a in &fns {
+            if reach[a][k] {
+                for &b in &fns {
+                    reach[a][b] |= reach[k][b];
+                }
+            }
+        }
+    }
+    let unit: Vec<usize> = (0..n)
+        .map(|j| {
+            if is_fn(stmts[j]) {
+                fns.iter()
+                    .copied()
+                    .find(|&i| i == j || (reach[i][j] && reach[j][i]))
+                    .expect("j itself")
+            } else {
+                j
+            }
+        })
+        .collect();
+    let members = |u: usize| -> Vec<usize> { (0..n).filter(|&j| unit[j] == u).collect() };
     let mut out = Vec::with_capacity(n);
+    let mut groups = Vec::new();
     let mut placed = vec![false; n];
     while out.len() < n {
-        // The first statement whose predecessors are all placed.
-        let Some(j) = (0..n).find(|&j| !placed[j] && after[j].iter().all(|&i| placed[i])) else {
-            return stmts;
+        // The first unit whose predecessors are all placed.
+        let Some(u) = (0..n).find(|&u| {
+            unit[u] == u
+                && !placed[u]
+                && members(u)
+                    .iter()
+                    .all(|&j| after[j].iter().all(|&i| unit[i] == u || placed[i]))
+        }) else {
+            return (stmts, Vec::new());
         };
-        placed[j] = true;
-        out.push(stmts[j]);
+        let ms = members(u);
+        if ms.len() > 1 {
+            groups.push((stmts[u] as *const Stmt, ms.len()));
+        }
+        for j in ms {
+            placed[j] = true;
+            out.push(stmts[j]);
+        }
     }
-    out
+    (out, groups)
 }
 
 /// Whether `e` is a boolean whatever its operands: a test, a comparison,
@@ -1676,7 +2354,7 @@ mod tests {
         assert!(lower("x => x++;").is_err());
         assert!(lower("Math.abs(1);").is_err());
         // Used before its declaration (hoisted).
-        assert!(lower("function f() { return g(); } function g() { return f(); }").is_err());
+        assert!(lower("const y = f(); function f() { return x; } const x = 1;").is_err());
         assert!(lower("function f() { return x; } f(); const x = 1;").is_err());
         // A function declaration moves up after what it reads.
         assert_eq!(
@@ -1759,5 +2437,53 @@ mod tests {
         // The value of `i++` is the old `i`'s.
         assert!(lower("let i = 0; i++;").is_err());
         assert!(lower("let i = 0; const j = i++;").is_err());
+    }
+
+    #[test]
+    fn lowers_mutual_recursion_as_a_group() {
+        // `G = function () { return {f: …, g: …}; }`, `g` in `f` is
+        // `G().g`, and each name a function calling through `G`.
+        assert_eq!(
+            lower("function f(n) { return g(n); } function g(n) { return f(n); } f(1);").unwrap(),
+            "(let (func 0 (ret (obj (field s:f (func 1 (ret (app (get (app (var 3)) s:g) (var 0))))) \
+             (field s:g (func 1 (ret (app (get (app (var 3)) s:f) (var 0)))))))) \
+             (let (func 1 (ret (app (get (app (var 3)) s:f) (var 0)))) \
+             (let (func 1 (ret (app (get (app (var 4)) s:g) (var 0)))) (app (var 1) (num 1 0)))))"
+        );
+        // A group moves up as one, after what it reads.
+        assert!(lower(
+            "const a = f(1); function f(n) { return n > 0 ? g(n - 1) : k; } \
+             function g(n) { return f(n); } const k = 0;"
+        )
+        .is_err());
+        assert!(lower(
+            "const k = 0; const a = f(1); function f(n) { return n > 0 ? g(n - 1) : k; } \
+             function g(n) { return f(n); }"
+        )
+        .is_ok());
+        // Through `G().f`, `this` would be the group's object.
+        assert!(
+            lower("function f() { g; return this; } function g() { return f(); } g();").is_err()
+        );
+        assert!(lower("function f() { return g(); } function g() { return f(); } f = 1;").is_err());
+        // A `const` function calling itself: the function's own name.
+        assert_eq!(
+            lower("const f = (n) => n > 0 ? f(n - 1) : 0; f(3);").unwrap(),
+            "(let (func 1 (ret (cond (gt (var 0) (num 0 0)) (app (var 1) (minus (var 0) (num 1 0))) \
+             (num 0 0)))) (app (var 0) (num 3 0)))"
+        );
+        assert!(lower("let f = (n) => n > 0 ? f(n - 1) : 0; f(3);").is_err());
+    }
+
+    #[test]
+    fn lowers_a_module() {
+        // Its exports' declarations; the program's value is its last
+        // statement's.
+        assert_eq!(
+            lower("export function f(x) { return x; } export default 1; f(2);").unwrap(),
+            "(let (func 1 (ret (var 0))) (let (num 1 0) (app (var 1) (num 2 0))))"
+        );
+        assert!(lower("export { ghost };").is_err());
+        assert!(lower("import { f } from \"./f.js\"; f(1);").is_err());
     }
 }

@@ -17,15 +17,13 @@ use std::process::Command;
 mod oracle;
 use oracle::*;
 
-/// Whether inty accepts a program, as the CLI checks it.
-fn inty_accepts(source: &str) -> bool {
-    let source = source.to_string();
+/// Whether inty accepts the program whose entry module is `path`, as the
+/// CLI checks it (with the modules it imports).
+fn inty_accepts(path: &Path) -> bool {
+    let path = path.to_path_buf();
     inty::worker::run_with_inference_stack("inty-examples", move || {
-        let Ok(program) = inty::frontends::javascript::parse_source(&source) else {
-            return false;
-        };
         let mut state = InferState::new();
-        state.infer_program(&initial_env(), &program).is_ok()
+        inty::modules::check_module(&mut state, initial_env(), &path).is_ok()
             && state.take_errors().is_empty()
             && state.resolve_constraints().is_ok()
     })
@@ -83,9 +81,7 @@ fn the_model_on_inty_examples() {
         let source = std::fs::read_to_string(f).unwrap();
         let n = source.lines().count();
         lines.1 += n;
-        let wire = inty::frontends::javascript::parse_source(&source)
-            .map_err(|e| format!("parse: {e}"))
-            .and_then(|p| inty::model_wire::lower_program(&p));
+        let wire = inty::model_wire::lower_entry(f);
         match wire {
             Ok(w) => {
                 lines.0 += n;
@@ -134,8 +130,7 @@ fn the_model_on_inty_examples() {
         .filter_map(|((f, w), line)| {
             let (typing, _) = parse_model_line(line);
             let model = typing != Typing::Reject;
-            let source = std::fs::read_to_string(f).unwrap();
-            let inty = inty_accepts(&source);
+            let inty = inty_accepts(f);
             (model != inty).then(|| {
                 format!(
                     "{}: inty {}, the model {}\n  wire: {w}",

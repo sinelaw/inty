@@ -2635,6 +2635,25 @@ fn scc_mutual_recursion_collapses_to_one_group() {
     );
 }
 
+/// A group's members have one type each inside the group, and are
+/// generalised together after it (as the Lean model's lowering of a group,
+/// `model_wire::Cx::group`, types them).
+#[test]
+fn scc_group_monomorphic_inside_polymorphic_after() {
+    let after = "
+        function f(x, n) { return n > 0 ? g(x, n - 1) : x; }
+        function g(x, n) { return f(x, n); }
+        const a = f(1, 2) - 1;
+        const b = g(\"s\", 1).length;
+    ";
+    assert!(infer_program_via_program(after).is_ok());
+    let inside = "
+        function f(x) { g(1); g(\"s\"); return x; }
+        function g(y) { return f(y); }
+    ";
+    assert!(infer_program_via_program(inside).is_err());
+}
+
 /// Non-recursive callee in its own SCC keeps its polymorphism, so a
 /// later caller can use it at two different instantiations. This is
 /// the principal-types property — adjacent grouping forced both call
