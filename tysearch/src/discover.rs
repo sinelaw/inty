@@ -1513,8 +1513,10 @@ pub struct Step {
     pub change: String,
     pub kept: bool,
     pub discovery: Discovery,
-    /// Its score when it ran (`Score`).
+    /// Its score when it ran (`Score`), and the best's on the same
+    /// programs, which it was judged against.
     pub score: Score,
+    pub against: Score,
 }
 
 /// How a system does on the programs the climb judges by: the fixed set,
@@ -1616,15 +1618,18 @@ pub fn climb_with<L: Language>(
         kept: true,
         discovery: d,
         score: sc,
+        against: sc,
     });
     on_step(steps.len() - 1, steps.last().unwrap());
     let mut best = 0;
     let applicable = steps[0].discovery.applicable;
-    // Better: sound, and at least one program in five hundred (and at
+    // Better: sound, and at least one program in two thousand (and at
     // least one) more typed; or as many by a smaller system. Both judged on
-    // the pool as it is now, which the candidate's own run added to.
+    // the pool as it is now, which the candidate's own run added to: each
+    // run adds a few hundred programs, so what only a capability types
+    // (`let`-generalisation's, say) is a small share of the whole.
     let better = |c: &Score, cd: &Discovery, b: &Score, bd: &Discovery| {
-        let tol = (b.safe / 500).max(1);
+        let tol = (b.safe / 2000).max(1);
         c.unsound == 0
             && (c.typed >= b.typed + tol || (c.typed >= b.typed && cd.size() < bd.size()))
     };
@@ -1653,6 +1658,7 @@ pub fn climb_with<L: Language>(
             kept,
             discovery: d,
             score: sc,
+            against: bs,
         });
         on_step(steps.len() - 1, steps.last().unwrap());
         if kept {
@@ -1743,11 +1749,13 @@ pub fn climb_with<L: Language>(
 /// marked `+`, and those gone listed after.
 pub fn step_report(i: usize, s: &Step, prev: &[String]) -> String {
     let d = &s.discovery;
+    let gain = s.score.typed as i64 - s.against.typed as i64;
     let mut out = format!(
-        "step {i}: {}  ->  {:.1}% of {} safe programs typed, {} unsound, {} rules (size {})  [{}]\n",
+        "step {i}: {}  ->  {:.1}% of {} safe programs typed ({}{gain} vs the best), {} unsound, {} rules (size {})  [{}]\n",
         s.change,
         100.0 * s.score.coverage(),
         s.score.safe,
+        if gain >= 0 { "+" } else { "" },
         s.score.unsound,
         d.rules.len(),
         d.size(),
