@@ -55,8 +55,9 @@ Paths like `src/infer` are relative to `crates/inty`.
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
    inference sound and complete, for everything modelled so far (one
    exception, stated where it arises: completeness for polymorphic
-   annotations holds where no rigid variable escapes, `Expr.PolyOK`, and
-   beyond that needs implication constraints); the axiom
+   annotations holds where no constraint left mentions a rigid variable,
+   `Expr.PolyOK`, and beyond that needs implication constraints, planned);
+   the axiom
    audit and pinned statements updated; the differential test extended to
    the new syntax.
 
@@ -427,7 +428,7 @@ touching the generic proofs.
   annotation and `.d.js` type syntax; optional parameters (presence on
   function parameters, `types::FuncParam`). Done, each with soundness
   and inference sound and complete (but polymorphic annotations: sound,
-  and complete where no rigid variable escapes):
+  and complete where no constraint left mentions a rigid variable):
   - a binding annotated with a type without variables
     (`/** const x: Number */`);
   - check mode (`HasType`'s return and expression modes): an annotation
@@ -450,13 +451,15 @@ touching the generic proofs.
     the quantified variables rigid (`Con.rigid`), at any name outside a
     finite set, and the binding has every instance. Soundness and inference
     soundness are proved; inference rejects a rigid variable escaping into
-    the context or into the constraints left. Completeness is proved for
-    every program where no rigid variable escapes (`Expr.PolyOK`,
-    `Inty/PolyAnn.lean`), which includes those whose annotations are
-    monomorphic, and can fail where one does (`polyGap_separates`): a complete
-    algorithm would keep the escaping constraint, on a rigid variable and
-    waiting on a type variable, as an implication constraint (GHC's
-    OutsideIn(X)). An annotation with constraints (`<a> where Plus a => …`)
+    the trees of the context's types (`Ty.trk`) or into the constraints
+    left. The first never fires where the rules type the initialiser.
+    Completeness is proved for every program where no constraint left
+    mentions a rigid variable (`Expr.PolyOK`, `Inty/PolyAnn.lean`), which
+    includes those whose annotations are monomorphic, and can fail where
+    one does (`polyGap_separates`): a complete algorithm would keep the
+    escaping constraint, on a rigid variable and waiting on a type
+    variable, as an implication constraint (GHC's OutsideIn(X)), planned
+    (`GAPS.md`). An annotation with constraints (`<a> where Plus a => …`)
     isn't in the model.
 
   inty matches: a polymorphic annotation on an initialiser is checked with

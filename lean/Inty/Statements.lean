@@ -268,10 +268,12 @@ example : (Expr.let_ m ann e₁ e₂).monoAnn =
     ((ann.all fun a => a.arity == 0) && e₁.monoAnn && e₂.monoAnn) := by
   simp [Expr.monoAnn]
 
-/-- With polymorphic annotations, completeness holds where inference's escape
-check passes in every context the rules type the initialiser in
-(`RigidStays`): inference rejects a program where it fails, and `polyGap` is
-typed but rejected. -/
+/-- With polymorphic annotations, completeness holds where no constraint
+left at an annotation mentions its rigid variables, in every context the
+rules type the initialiser in (`RigidStays`): inference rejects a program
+where one does, and `polyGap` is typed but rejected. (The other half of the
+escape check, the rigid variables in the tree of a context variable's
+instance, never fires where the rules type the initialiser.) -/
 example : RigidStays L a e₁ ↔
     ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {n : Nat} {ψ : Subst} {C : List Pred} {Γ' : Ctx}
       {R' : Option Ty} {K : List Nat} {o₁ : Out} {σi : Subst} {preds₁ : List Pred},
@@ -282,10 +284,7 @@ example : RigidStays L a e₁ ↔
         n).map (checkEx (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity)))
           e₁) = some o₁ →
       improveAll false o₁.preds.length o₁.preds = some (σi, preds₁) →
-      maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ ctxRkeys (Ctx.subst (Subst.compose σi o₁.σ) Γ) ∧
-        maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉
-          Ret.rkeys (Ret.subst (Subst.compose σi o₁.σ) R) ∧
-        maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ preds₁.flatMap Pred.rkeys := Iff.rfl
+      maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ preds₁.flatMap Pred.rkeys := Iff.rfl
 
 example : (Expr.let_ m ann e₁ e₂).PolyOK L ↔
     ((∀ a ∈ ann, 0 < a.arity → RigidStays L a e₁) ∧ e₁.PolyOK L) ∧ e₂.PolyOK L := Iff.rfl

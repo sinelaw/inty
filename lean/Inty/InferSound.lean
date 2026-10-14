@@ -534,6 +534,32 @@ theorem Ret.subst_congr_tv {σ σ' : Subst} {R : Option Ty}
   | some τ =>
     exact Ty.subst_tyEq_congr_tv (fun a ha => h a (by simpa [Ret.tv] using Ty.mem_tv.mpr ha))
 
+/-! Swapping two rigid names that the trees of the types a substitution
+gives a context's type variables have neither of keeps the context equal. -/
+
+theorem Ty.swap_subst_tyEq {k k' : Nat} {σ : Subst} (φ : Subst) {b : Nat}
+    (h : ¬ ((Ty.var b).subst σ).TreeRk k) (h' : ¬ ((Ty.var b).subst σ).TreeRk k') :
+    TyEq ((Ty.var b).subst (Subst.rsub (RSubst.swap k k')
+        (Subst.compose (Subst.rsub (RSubst.swap k k') φ) σ)))
+      ((Ty.var b).subst (Subst.compose φ σ)) := by
+  have e : (Ty.var b).subst (Subst.rsub (RSubst.swap k k')
+      (Subst.compose (Subst.rsub (RSubst.swap k k') φ) σ)) =
+      ((Ty.var b).subst (Subst.compose (Subst.rsub (RSubst.swap k k') φ) σ)).rsub
+        (RSubst.swap k k') := by
+    rw [Ty.subst_rsub (RSubst.swap_renaming k k')]; rfl
+  rw [e, Ty.subst_compose, Ty.subst_compose, Ty.subst_rsub (RSubst.swap_renaming k k'),
+    Subst.rsub_invol (RSubst.swap_invol k k')]
+  exact (Ty.rsub_swap_tyEq h' h).subst φ
+
+theorem Ctx.swap_subst_ctxEq {k k' : Nat} {σ : Subst} (φ : Subst) {Γ : Ctx}
+    (hΓ : (RSubst.swap k k').Off (ctxRkeys Γ))
+    (h : ∀ b ∈ ctxTv Γ, ¬ ((Ty.var b).subst σ).TreeRk k ∧ ¬ ((Ty.var b).subst σ).TreeRk k') :
+    CtxEq ((Ctx.subst (Subst.rsub (RSubst.swap k k') φ) (Ctx.subst σ Γ)).map
+      (Scheme.rsub (RSubst.swap k k'))) (Ctx.subst φ (Ctx.subst σ Γ)) := by
+  rw [← Ctx.subst_compose, Ctx.subst_rsub (RSubst.swap_renaming k k'), ctx_rsub_off hΓ,
+    ← Ctx.subst_compose]
+  exact Ctx.subst_congr_tv fun b hb => Ty.swap_subst_tyEq φ (h b hb).1 (h b hb).2
+
 theorem Scheme.inst_nil_closed {s : Scheme} (hs : s.ftv = []) : (s.inst []).ftv = [] :=
   List.eq_nil_iff_forall_not_mem.mpr fun a ha => by
     rcases PTy.ftv_inst ha with ha | ⟨τ, hτ, _⟩
@@ -1463,8 +1489,13 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       rename_i o₂ h₂
       simp only [Option.some.injEq] at h; subst h
       simp only [Sat.map, Sat.append] at hsat
-      simp only [Ctx.subst_compose, Ret.subst_compose, not_or] at hesc
-      obtain ⟨hkΓ, hkR, hkP⟩ := hesc
+      simp only [not_or] at hesc
+      obtain ⟨hkT, hkP⟩ := hesc
+      have hk₀ : k ∉ ctxRkeys Γ := fun h => by
+        have := lt_maxPlusOne _ (List.mem_append_left (Ret.rkeys R) h)
+        rw [hk] at this; exact Nat.lt_irrefl k this
+      have hkt : ∀ b ∈ ctxTv Γ, ¬ ((Ty.var b).subst (Subst.compose σi o₁.σ)).TreeRk k :=
+        fun b hb ht => hkT (List.mem_flatMap.mpr ⟨b, hb, Ty.mem_trk.mpr ht⟩)
       have hcl : ∀ ψ, a.subst ψ = a := fun ψ => Scheme.subst_of_ftv_nil ψ haf
       have hT := Scheme.inst_rigids_closed haf k a.arity
       have he₂ := InferSound.check ih₂ h₂ (by ret_ok) hex φ C hsat.2
@@ -1478,11 +1509,16 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
           (improveAll_sound _ himp hψ)
         rw [InferSound.check_ty h₁ (Ex.Closed.some hT) _ rfl, Ty.closed_subst hT] at this
         simpa only [Ctx.subst_compose, Ret.subst_compose, Ex.mode_some] using this
-      refine .letPoly a (ctxRkeys (Ctx.subst σi (Ctx.subst o₁.σ Γ)) ++
-          Ret.rkeys (Ret.subst σi (Ret.subst o₁.σ R)) ++ preds₁.flatMap Pred.rkeys)
+      -- Any other name `k'` apart from the context's, from the rigid
+      -- variables of the types its type variables get, and from the
+      -- constraints left.
+      refine .letPoly a (ctxRkeys Γ ++ preds₁.flatMap Pred.rkeys ++
+          (ctxTv Γ).flatMap (fun b => ((Ty.var b).subst (Subst.compose σi o₁.σ)).rkeys))
         h0 hap haf har (fun k' hk' => ?_) (Expr.isValue_sound hgen.1) hgen.2 he₂
       simp only [List.mem_append, not_or] at hk'
-      obtain ⟨⟨hk'Γ, hk'R⟩, hk'P⟩ := hk'
+      obtain ⟨⟨hk'Γ, hk'P⟩, hk'T⟩ := hk'
+      have hk't : ∀ b ∈ ctxTv Γ, ¬ ((Ty.var b).subst (Subst.compose σi o₁.σ)).TreeRk k' :=
+        fun b hb ht => hk'T (List.mem_flatMap.mpr ⟨b, hb, ht.rkeys⟩)
       let π := RSubst.swap k k'
       have hπr : π.Renaming := RSubst.swap_renaming k k'
       have hπi : π.Invol := RSubst.swap_invol k k'
@@ -1496,13 +1532,18 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
         rwa [Pred.subst_rsub hπr, Pred.rsub_off hoff] at this
       have h' := (he₁ _ _ hsat').rsub (Sys.narrow_rsubstable hπr) [k, k']
         (fun _ _ _ h => RSubst.swap_dom h)
-      rw [List.map_map, Ctx.subst_rsub hπr, Ret.subst_rsub hπr, Subst.rsub_invol hπi,
-        ctx_rsub_off (RSubst.swap_off hkΓ hk'Γ), ret_rsub_off (RSubst.swap_off hkR hk'R),
-        ← Scheme.inst_rsub, Scheme.rsub_of_rkeys_nil _ har, rigids_rsub_swap] at h'
+      rw [List.map_map, ← Scheme.inst_rsub, Scheme.rsub_of_rkeys_nil _ har,
+        rigids_rsub_swap] at h'
       have hC : C.map (Pred.rsub π ∘ Pred.rsub π) = C := by
         simp [Function.comp_def, Pred.rsub_invol hπi]
-      rw [hC] at h'
-      simpa only [φ₀, Ctx.subst_compose, Ret.subst_compose] using h'
+      rw [hC, ← Ctx.subst_compose σi o₁.σ] at h'
+      -- The context with the names swapped is the context, up to equal
+      -- types; and a value's typing doesn't depend on the return type.
+      have hΓ := Ctx.swap_subst_ctxEq φ₀ (RSubst.swap_off hk₀ hk'Γ)
+        (fun b hb => ⟨hkt b hb, hk't b hb⟩)
+      have h'' := (h'.weaken hΓ.ctxGen (RetEq.refl _) (fun _ => rfl)).ret_value
+        (Expr.isValue_sound hgen.1) (Ret.subst φ (Ret.subst o₂.σ (Ret.subst σi (Ret.subst o₁.σ R))))
+      simpa only [φ₀, Ctx.subst_compose, Ret.subst_compose] using h''
     | none =>
     simp only [infer] at h
     split at h
