@@ -195,7 +195,9 @@ def Pred.decideCase (d : Disc) (t : Tag) (d' : Disc) (ts : List Tag) (Ps : List 
 /-- Deciding a constraint whose first argument is known, as inty's
 `resolve_has_prop` and `resolve_indexable`: a record's field `l` must be
 present, of the kind and at the type the read gives; an array's or a
-string's `length` is a number, which a getter gives; an array's element
+string's `length` is a number, which a getter gives, and its methods
+the model has natives on its prototype (`arrayMethod`, `stringMethod`);
+an array's element
 has the array's type, a string's character is a string; a store into an
 array holds. A `Merge`'s presence and kind decide it, and if the operand
 doesn't write over the slot, that slot (`Pred.decideCopy`). The known type
@@ -205,10 +207,16 @@ def Pred.decide₀ : Cls → Ty → List Ty → Improve
     match Ty.field l ls slots with
     | some s => .eq s (.slot .pre κ σ)
     | none => .fail
-  | .hasProp l, .array _, [κ, σ] =>
-    if l = "length" then .eq (.tuple [κ, σ]) (.tuple [.getter, .number]) else .fail
+  | .hasProp l, .array τ, [κ, σ] =>
+    if l = "length" then .eq (.tuple [κ, σ]) (.tuple [.getter, .number])
+    else match arrayMethod τ l with
+      | some σ' => .eq (.tuple [κ, σ]) (.tuple [.proto, σ'])
+      | none => .fail
   | .hasProp l, .string, [κ, σ] =>
-    if l = "length" then .eq (.tuple [κ, σ]) (.tuple [.getter, .number]) else .fail
+    if l = "length" then .eq (.tuple [κ, σ]) (.tuple [.getter, .number])
+    else match stringMethod l with
+      | some σ' => .eq (.tuple [κ, σ]) (.tuple [.proto, σ'])
+      | none => .fail
   | .indexable, .array τ, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, τ])
   | .indexable, .string, [i, e] => .eq (.tuple [i, e]) (.tuple [.number, .string])
   -- (An instance holds: a trivial equation drops it.)

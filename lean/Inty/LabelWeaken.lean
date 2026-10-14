@@ -897,6 +897,17 @@ theorem Inst.ext (L L' : List String) {p : Pred} (h : Inst p) : Inst (p.ext L L'
   | mergeProto hs => simpa [Pred.ext, Cls.ext] using Inst.mergeProto (τ := _) (hs.ext L L')
   | lengthArray => simpa [Pred.ext, Cls.ext] using Inst.lengthArray
   | lengthString => simpa [Pred.ext, Cls.ext] using Inst.lengthString
+  | methodString h =>
+    have hf : ∀ c args, c ∈ [Con.fn, .array, .number, .string] →
+        (Ty.app c args).ext L L' = .app c (args.map (·.ext L L')) := fun c args hc =>
+      Ty.ext_app_nr (fun ls e => by subst e; simp at hc) args
+    have he := stringMethod_hom (f := (·.ext L L')) hf h
+    simpa [Pred.ext, Cls.ext, he] using Inst.methodString h
+  | methodArray h =>
+    have hf : ∀ c args, c ∈ [Con.fn, .array, .number, .string] →
+        (Ty.app c args).ext L L' = .app c (args.map (·.ext L L')) := fun c args hc =>
+      Ty.ext_app_nr (fun ls e => by subst e; simp at hc) args
+    simpa [Pred.ext, Cls.ext] using Inst.methodArray (arrayMethod_hom (f := (·.ext L L')) hf h)
   | indexArray => simpa [Pred.ext, Cls.ext] using Inst.indexArray
   | indexString => simpa [Pred.ext, Cls.ext] using Inst.indexString
   | writeArray => simpa [Pred.ext, Cls.ext] using Inst.writeArray

@@ -885,4 +885,30 @@ theorem PTy.TreeBound.subst {k : Nat} {p : PTy} {i : Nat} (hi : i < k) (h : p.Tr
   rw [← hvb, ← PTy.inst_subst]
   exact Ty.TV.subst_of h (by simp [Ty.subst, hσ (N + i) (by omega), Ty.tv_var_self])
 
+/-- A string's methods' types have no tree variables. -/
+theorem stringMethod_tv {l : String} {σ : Ty} (h : stringMethod l = some σ) {b : Nat} :
+    ¬ σ.TV b := by
+  unfold stringMethod at h
+  split at h <;> cases h <;> simp [Ty.tv_app]
+
+/-- An array's methods' types have only its element type's. -/
+theorem arrayMethod_tv {τ σ : Ty} {l : String} (h : arrayMethod τ l = some σ) {b : Nat}
+    (hb : σ.TV b) : τ.TV b := by
+  unfold arrayMethod at h
+  split at h <;> cases h <;> simp [Ty.tv_app] at hb <;> exact hb
+
+/-- An array's methods are the same names whatever its element type. -/
+theorem arrayMethod_any {τ τ' σ : Ty} {l : String} (h : arrayMethod τ l = some σ) :
+    ∃ σ', arrayMethod τ' l = some σ' := by
+  unfold arrayMethod at h ⊢
+  split at h <;> simp_all
+
+/-- Equal element types give equal array methods' types. -/
+theorem arrayMethod_tyEq {τ τ' σ : Ty} {l : String} (h : arrayMethod τ l = some σ)
+    (he : TyEq τ τ') : ∃ σ', arrayMethod τ' l = some σ' ∧ TyEq σ σ' := by
+  have ha : TyEq (.array τ) (.array τ') := TyEq.app (by simp) (by simpa using he)
+  unfold arrayMethod at h ⊢
+  split at h <;> cases h <;> simp only [Option.some.injEq, exists_eq_left']
+  all_goals exact TyEq.app (by simp) (by simp [ha, he, TyEq.refl])
+
 end Inty

@@ -195,6 +195,55 @@ theorem variantRest_subst (σ : Subst) (d : Disc) (ts : List Tag) (Rs : List Ty)
   | [_] => rfl
   | _ :: _ :: _ => simp [variantRest]
 
+/-- The types of a string's methods the model has (`Prim.ofString`), by
+their name and number of arguments, as the front end writes a call
+(`s.slice(1)` reads `slice/1`): each takes the string as its `this`. -/
+def stringMethod : String → Option Ty
+  | "slice/0" => some (.fn .string [] .string)
+  | "slice/1" => some (.fn .string [.number] .string)
+  | "slice/2" => some (.fn .string [.number, .number] .string)
+  | "toUpperCase/0" => some (.fn .string [] .string)
+  | "charCodeAt/1" => some (.fn .string [.number] .number)
+  | "indexOf/1" => some (.fn .string [.string] .number)
+  | _ => none
+
+/-- The types of an array's methods the model has (`Prim.ofArray`), on an
+array of `τ`, as `stringMethod`. -/
+def arrayMethod (τ : Ty) : String → Option Ty
+  | "slice/0" => some (.fn (.array τ) [] (.array τ))
+  | "slice/1" => some (.fn (.array τ) [.number] (.array τ))
+  | "slice/2" => some (.fn (.array τ) [.number, .number] (.array τ))
+  | "indexOf/1" => some (.fn (.array τ) [τ] .number)
+  | _ => none
+
+/-- A map of types that keeps the constructors of the methods' types
+(substitution, renaming, extending the labels) keeps a string's methods'
+types. -/
+theorem stringMethod_hom {f : Ty → Ty}
+    (hf : ∀ c args, c ∈ [Con.fn, .array, .number, .string] → f (.app c args) = .app c (args.map f))
+    {l : String} {σ : Ty} (h : stringMethod l = some σ) : f σ = σ := by
+  unfold stringMethod at h
+  split at h <;> cases h <;> simp [hf]
+
+/-- ... and maps an array's methods' types to those of the mapped array. -/
+theorem arrayMethod_hom {f : Ty → Ty}
+    (hf : ∀ c args, c ∈ [Con.fn, .array, .number, .string] → f (.app c args) = .app c (args.map f))
+    {τ : Ty} {l : String} {σ : Ty} (h : arrayMethod τ l = some σ) :
+    arrayMethod (f τ) l = some (f σ) := by
+  unfold arrayMethod at h ⊢
+  split at h <;> cases h <;> simp [hf]
+
+/-- A string's methods' types have no type variables. -/
+theorem stringMethod_ftv {l : String} {σ : Ty} (h : stringMethod l = some σ) : σ.ftv = [] := by
+  unfold stringMethod at h
+  split at h <;> cases h <;> simp
+
+/-- An array's methods' types have only the array's element type's. -/
+theorem arrayMethod_ftv {τ : Ty} {l : String} {σ : Ty} (h : arrayMethod τ l = some σ) :
+    ∀ x ∈ σ.ftv, x ∈ τ.ftv := by
+  unfold arrayMethod at h
+  split at h <;> cases h <;> simp
+
 /-- The instances, as `classes::instances` (and, for `HasProp`, inty's
 `resolve_has_prop`). -/
 inductive Inst : Pred → Prop where
@@ -220,6 +269,11 @@ inductive Inst : Pred → Prop where
   which a program reads but doesn't store to, as a getter's. -/
   | lengthArray : Inst ⟨.hasProp "length", [.array τ, .getter, .number]⟩
   | lengthString : Inst ⟨.hasProp "length", [.string, .getter, .number]⟩
+  /-- A string's and an array's methods the model has, natives on their
+  prototype, which a program calls but doesn't store to or copy
+  (`stringMethod`, `arrayMethod`). -/
+  | methodString : stringMethod l = some σ → Inst ⟨.hasProp l, [.string, .proto, σ]⟩
+  | methodArray : arrayMethod τ l = some σ → Inst ⟨.hasProp l, [.array τ, .proto, σ]⟩
   /-- `Indexable τ[] Number τ` and `Indexable String Number String`
   (`resolve_indexable`). -/
   | indexArray : Inst ⟨.indexable, [.array τ, .number, τ]⟩
@@ -271,6 +325,13 @@ theorem Inst.subst (σ : Subst) (h : Inst p) : Inst (p.subst σ) := by
   | mergeProto hc => exact .mergeProto (hc.subst σ)
   | lengthArray => exact .lengthArray
   | lengthString => exact .lengthString
+  | methodString h =>
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    rw [stringMethod_hom (f := (·.subst σ)) (fun _ _ _ => by simp [Ty.subst_app]) h]
+    exact .methodString h
+  | methodArray h =>
+    simp only [Pred.subst, List.map_cons, List.map_nil]
+    exact .methodArray (arrayMethod_hom (f := (·.subst σ)) (fun _ _ _ => by simp [Ty.subst_app]) h)
   | indexArray => exact .indexArray
   | indexString => exact .indexString
   | writeArray => exact .writeArray
@@ -553,6 +614,8 @@ def Pred.isInst : Pred → Bool
   | ⟨.merge, [.abs, _, _, s, r]⟩ => slotCopy? s r
   | ⟨.hasProp l, [.array _, .getter, .number]⟩ | ⟨.hasProp l, [.string, .getter, .number]⟩ =>
     decide (l = "length")
+  | ⟨.hasProp l, [.array τ, .proto, σ]⟩ => decide (arrayMethod τ l = some σ)
+  | ⟨.hasProp l, [.string, .proto, σ]⟩ => decide (stringMethod l = some σ)
   | ⟨.indexable, [.array τ, .number, e]⟩ => decide (e = τ)
   | ⟨.indexable, [.string, .number, .string]⟩ => true
   | ⟨.indexWrite, [.array _]⟩ => true
@@ -573,6 +636,8 @@ theorem Pred.isInst_sound {p : Pred} (h : p.isInst = true) : Inst p := by
   · exact .mergeAbs (slotCopy?_sound h)
   · rw [of_decide_eq_true h]; exact .lengthArray
   · rw [of_decide_eq_true h]; exact .lengthString
+  · exact .methodArray (of_decide_eq_true h)
+  · exact .methodString (of_decide_eq_true h)
   · rw [of_decide_eq_true h]; exact .indexArray
   · exact .indexString
   · exact .writeArray

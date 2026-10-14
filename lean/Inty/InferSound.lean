@@ -303,7 +303,17 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
       exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
         (zip_tyEq_cons (hz (_, _) (by simp)) (zip_tyEq_cons (hz (_, _) (by simp)) zip_tyEq_nil))))
         Inst.lengthArray.instEq
-    · cases h
+    · -- An array's method.
+      split at h
+      · rename_i σ' hm
+        cases h
+        obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
+        simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app] at hz ⊢
+        exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+          (zip_tyEq_cons (hz (_, _) (by simp)) (zip_tyEq_cons (hz (_, _) (by simp)) zip_tyEq_nil))))
+          (Inst.methodArray
+            (arrayMethod_hom (f := (·.subst ψ)) (fun _ _ _ => by simp [Ty.subst_app]) hm)).instEq
+      · cases h
   · -- A string's `length`.
     split at h
     · rename_i hl
@@ -313,7 +323,17 @@ theorem Pred.decide₀_sound {c : Cls} {t : Ty} {rest : List Ty} {a b : Ty}
       exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
         (zip_tyEq_cons (hz (_, _) (by simp)) (zip_tyEq_cons (hz (_, _) (by simp)) zip_tyEq_nil))))
         Inst.lengthString.instEq
-    · cases h
+    · -- A string's method.
+      split at h
+      · rename_i σ' hm
+        cases h
+        obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab
+        have he := stringMethod_hom (f := (·.subst ψ)) (fun _ _ _ => by simp [Ty.subst_app]) hm
+        simp only [Pred.subst, List.map_cons, List.map_nil, Ty.subst_app, Ty.substs_eq, he] at hz ⊢
+        exact InstEq.of_predEq (PredEq.of_pairs (by simp) (zip_tyEq_cons (TyEq.refl _)
+          (zip_tyEq_cons (hz (_, _) (by simp)) (zip_tyEq_cons (hz (_, _) (by simp)) zip_tyEq_nil))))
+          (Inst.methodString hm).instEq
+      · cases h
   · cases h
     rename_i τ i e
     obtain ⟨-, -, hz⟩ := TyEq.app_iff.mp hab

@@ -150,6 +150,12 @@ theorem Inst.rsub {ρ : RSubst} (hρ : ρ.Renaming) {p : Pred} (h : Inst p) : In
   | mergeProto hs => simpa [Pred.rsub] using Inst.mergeProto (hs.rsub ρ)
   | lengthArray => simpa [Pred.rsub] using Inst.lengthArray
   | lengthString => simpa [Pred.rsub] using Inst.lengthString
+  | methodString h =>
+    have he := stringMethod_hom (f := (·.rsub ρ)) (Ty.rsub_hom ρ) h
+    simpa [Pred.rsub, he] using Inst.methodString h
+  | methodArray h =>
+    simpa [Pred.rsub] using
+      Inst.methodArray (arrayMethod_hom (f := (·.rsub ρ)) (Ty.rsub_hom ρ) h)
   | indexArray => simpa [Pred.rsub] using Inst.indexArray
   | indexString => simpa [Pred.rsub] using Inst.indexString
   | writeArray => simpa [Pred.rsub] using Inst.writeArray

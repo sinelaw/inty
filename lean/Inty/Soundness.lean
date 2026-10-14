@@ -1532,6 +1532,143 @@ theorem readSlot_sound {l : String} {ls : List String} {fs : List Ty} {s k σ : 
     exact getter_call_sound (V.tyEq _ (TyEq.fn_ret hσσ.symm) h₃) hself hH
   · exact absurd (TyEq.slot (hss.trans h₁)).1 TyEq.pre_abs
 
+/-! ## Natives
+
+A native function has its type because of what it does (`Prim.apply`), not
+by a typing derivation: each is related to its type by its definition. -/
+
+/-- A native that, called with a `this` and arguments of their types on a
+heap of the world, gives a value of `ρ` and leaves the heap as it is, has
+its function type. A call takes a tick. -/
+theorem Prim.pure_sound {p : Prim} {θ ρ : Ty} {τs : List Ty} {k : Nat} {W : World}
+    (hθ : ¬ TyEq θ .newTarget)
+    (hp : ∀ i (W : World) h thisv args, HeapOK i W h → V i W θ thisv → VList i W τs args →
+      ∃ v, p.apply h thisv args = (.ok v, h) ∧ V i W ρ v) :
+    V k W (.fn θ τs ρ) (.prim p) := by
+  rw [V_fn]
+  refine ⟨⟨rfl, fun h => absurd h hθ⟩, ?_⟩
+  intro j _ W' _ h thisv args _ hh hthis hargs
+  cases j with
+  | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩
+  | succ j =>
+    obtain ⟨v, hv, hρ⟩ :=
+      hp j W' h thisv args (hh j (by omega)) (hthis j (by omega)) (hargs j (by omega))
+    simp only [call, hv]
+    exact ⟨by simp, .inr ⟨by simp, W', List.prefix_refl _, fun _ => hh j (by omega),
+      .inl ⟨_, rfl, fun _ => hρ⟩⟩⟩
+
+theorem string_ne_newTarget : ¬ TyEq .string .newTarget := TyEq.con_ne (by decide)
+
+theorem array_ne_newTarget {τ : Ty} : ¬ TyEq (.array τ) .newTarget := fun h => by
+  cases TyEq.con h
+
+/-- A string's methods: each name `stringMethod` types is a native of that
+type (`Prim.ofString`). -/
+theorem stringMethod_sound {l : String} {σ : Ty} (hl : stringMethod l = some σ) (k : Nat)
+    (W : World) : ∃ p, Prim.ofString l = some p ∧ V k W σ (.prim p) := by
+  unfold stringMethod at hl
+  split at hl <;> cases hl
+  all_goals refine ⟨_, rfl, Prim.pure_sound string_ne_newTarget
+    fun i W h thisv args _ hthis hargs => ?_⟩
+  all_goals obtain ⟨s, rfl⟩ := V_string.mp hthis
+  · match args, hargs with
+    | [], _ => simp [Prim.apply, numberArgs]
+    | _ :: _, hargs => simp at hargs
+  · match args, hargs with
+    | [a], hargs =>
+      simp only [VList_cons, V_number, VList_nil, and_true] at hargs
+      obtain ⟨n, rfl⟩ := hargs
+      simp [Prim.apply, numberArgs]
+    | [], hargs | _ :: _ :: _, hargs => simp at hargs
+  · match args, hargs with
+    | [a, b], hargs =>
+      simp only [VList_cons, V_number, VList_nil, and_true] at hargs
+      obtain ⟨⟨n, rfl⟩, ⟨m, rfl⟩⟩ := hargs
+      simp [Prim.apply, numberArgs]
+    | [], hargs | [_], hargs | _ :: _ :: _ :: _, hargs => simp at hargs
+  · match args, hargs with
+    | [], _ => simp [Prim.apply]
+    | _ :: _, hargs => simp at hargs
+  · match args, hargs with
+    | [a], hargs =>
+      simp only [VList_cons, V_number, VList_nil, and_true] at hargs
+      obtain ⟨n, rfl⟩ := hargs
+      simp [Prim.apply]
+    | [], hargs | _ :: _ :: _, hargs => simp at hargs
+  · match args, hargs with
+    | [a], hargs =>
+      simp only [VList_cons, V_string, VList_nil, and_true] at hargs
+      obtain ⟨t, rfl⟩ := hargs
+      simp [Prim.apply]
+    | [], hargs | _ :: _ :: _, hargs => simp at hargs
+
+/-- Arguments of number types are numbers. -/
+theorem numberArgs_of_VList {i : Nat} {W : World} : ∀ {n : Nat} {args : List Value},
+    VList i W (List.replicate n .number) args → ∃ ns, numberArgs args = some ns ∧ ns.length = n
+  | 0, [], _ => ⟨[], rfl, rfl⟩
+  | 0, _ :: _, h => absurd h (by simp only [List.replicate_zero]; exact VList_nil_cons)
+  | _ + 1, [], h => absurd h (by simp only [List.replicate_succ]; exact VList_cons_nil)
+  | _ + 1, _ :: _, h => by
+    simp only [List.replicate_succ, VList_cons, V_number] at h
+    obtain ⟨⟨m, rfl⟩, hr⟩ := h
+    obtain ⟨ns, hns, hl⟩ := numberArgs_of_VList hr
+    exact ⟨m :: ns, by simp [numberArgs, hns], by simp [hl]⟩
+
+/-- An array's `slice`, called with `n` number arguments: a new array of
+the receiver's elements, in a new cell of the receiver's cell's type. -/
+theorem Prim.arrSlice_sound {n : Nat} {τ : Ty} (hn : n ≤ 2) {k : Nat} {W : World} :
+    V k W (.fn (.array τ) (List.replicate n .number) (.array τ)) (.prim (.arrSlice n)) := by
+  rw [V_fn]
+  refine ⟨⟨rfl, fun h => absurd h array_ne_newTarget⟩, ?_⟩
+  intro j _ W' _ h thisv args hlen hh hthis hargs
+  cases j with
+  | zero => simp only [call]; exact ⟨Nat.le_refl 0, .inl rfl⟩
+  | succ j =>
+    have hH := hh j (by omega)
+    have hv := hthis j (by omega)
+    rw [V_array] at hv
+    obtain ⟨ℓ, τc, rfl, hℓ, hτc⟩ := hv
+    obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
+    obtain ⟨vs, rfl, hvs⟩ := CellV_arr.mp hsv
+    obtain ⟨ns, hns, hnl⟩ := numberArgs_of_VList (hargs j (by omega))
+    have hb : h.length = W'.length := hH.1
+    have hW₂ := List.prefix_append W' [Cell.arr τc]
+    simp only [call, Prim.apply, hcv, hns, hnl, hn, and_self, ite_true]
+    refine ⟨by simp, .inr ⟨by simp, W' ++ [Cell.arr τc], hW₂, fun _ => ?_,
+      .inl ⟨_, rfl, fun _ => ?_⟩⟩⟩
+    · exact hH.alloc (by simp) (fun i s' v' hs hv' => by
+        match i, hs, hv' with
+        | 0, hs, hv' =>
+          simp at hs hv'; subst hs hv'
+          exact CellV_arr.mpr ⟨_, rfl, fun w hw =>
+            (hvs w (List.mem_of_mem_drop (List.mem_of_mem_take hw))).mono (Nat.le_refl _) hW₂⟩
+        | _ + 1, hs, _ => simp at hs)
+    · rw [V_array, hb]
+      exact ⟨_, _, rfl, by simp, hτc⟩
+
+/-- An array's `indexOf`: a number, the heap as it is. -/
+theorem Prim.arrIndexOf_sound {τ : Ty} {k : Nat} {W : World} :
+    V k W (.fn (.array τ) [τ] .number) (.prim .arrIndexOf) :=
+  Prim.pure_sound array_ne_newTarget fun i W h thisv args hH hthis hargs => by
+    rw [V_array] at hthis
+    obtain ⟨ℓ, τc, rfl, hℓ, -⟩ := hthis
+    obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
+    obtain ⟨vs, rfl, -⟩ := CellV_arr.mp hsv
+    match args, hargs with
+    | [a], _ => simp [Prim.apply, hcv]
+    | [], hargs | _ :: _ :: _, hargs => simp at hargs
+
+/-- An array's methods: each name `arrayMethod` types is a native of that
+type (`Prim.ofArray`). -/
+theorem arrayMethod_sound {τ : Ty} {l : String} {σ : Ty} (hl : arrayMethod τ l = some σ)
+    (k : Nat) (W : World) : ∃ p, Prim.ofArray l = some p ∧ V k W σ (.prim p) := by
+  unfold arrayMethod at hl
+  split at hl <;> cases hl
+  · exact ⟨_, rfl, Prim.arrSlice_sound (n := 0) (by decide)⟩
+  · exact ⟨_, rfl, Prim.arrSlice_sound (n := 1) (by decide)⟩
+  · exact ⟨_, rfl, Prim.arrSlice_sound (n := 2) (by decide)⟩
+  · exact ⟨_, rfl, Prim.arrIndexOf_sound⟩
+
 /-- Reading a property: an instance of `HasProp` says the object's contents
 have it, a getter called gives a value of its type, and a type variable has
 no values. -/
@@ -1561,6 +1698,26 @@ theorem read_sound {C : List Pred} {l : String} {τ κ σ : Ty} {v : Value} {c :
       obtain ⟨s, rfl⟩ := V_string.mp (V.tyEq _ hτ hv)
       simp only [Value.read, ite_true, getter]
       exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσ.symm (by simp))
+    case methodString σq hl =>
+      obtain ⟨hcls, hτ, -, hσ⟩ := PredEq.three hq
+      cases hcls
+      obtain ⟨s, rfl⟩ := V_string.mp (V.tyEq _ hτ hv)
+      obtain ⟨p, hp, hpv⟩ := stringMethod_sound hl c W
+      have hne : l ≠ "length" := fun e => by subst e; simp [stringMethod] at hl
+      simp only [Value.read, hne, ite_false, hp, getter]
+      exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσ.symm hpv)
+    case methodArray τq σq hl =>
+      obtain ⟨hcls, hτ, -, hσ⟩ := PredEq.three hq
+      cases hcls
+      have hv' := V.tyEq _ hτ hv
+      rw [V_array] at hv'
+      obtain ⟨ℓ, τc, rfl, hℓ, -⟩ := hv'
+      obtain ⟨cv, hcv, hsv⟩ := hH.2 ℓ _ hℓ
+      obtain ⟨vs, rfl, -⟩ := CellV_arr.mp hsv
+      obtain ⟨p, hp, hpv⟩ := arrayMethod_sound hl c W
+      have hne : l ≠ "length" := fun e => by subst e; simp [arrayMethod] at hl
+      simp only [Value.read, hcv, hne, ite_false, hp, getter]
+      exact Safe.ok (Nat.le_refl c) (List.prefix_refl W) hH (V.tyEq _ hσ.symm hpv)
     all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
   · simp only [List.cons.injEq] at he; exact (V_whnf_var (by rw [he.1]; exact hw) hv).elim
 
@@ -1758,6 +1915,8 @@ theorem setProp_sound {C : List Pred} {l : String} {τ σ : Ty} {vo vv : Value} 
         exact ⟨ls, fs, _, σ', hτ', hf, TyEq.slot_mk (TyEq.refl _) hk.symm (TyEq.refl _), hσ⟩
       case lengthArray => exact absurd (PredEq.three hq).2.2.1 (TyEq.con_ne (by decide))
       case lengthString => exact absurd (PredEq.three hq).2.2.1 (TyEq.con_ne (by decide))
+      case methodString => exact absurd (PredEq.three hq).2.2.1 (TyEq.con_ne (by decide))
+      case methodArray => exact absurd (PredEq.three hq).2.2.1 (TyEq.con_ne (by decide))
       all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
     · simp only [List.cons.injEq] at he; exact (V_whnf_var (by rw [he.1]; exact hw) hvo).elim
   obtain ⟨ℓ, fs', cv, rfl, hℓ, hcv, hsv, hl, hz⟩ := obj_cell (V.tyEq _ hτr hvo) hH

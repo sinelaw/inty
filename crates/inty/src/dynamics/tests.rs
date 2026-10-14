@@ -461,3 +461,26 @@ fn spread_copies_properties_in_the_order_they_were_made() {
         9.0,
     );
 }
+
+#[test]
+fn string_and_array_methods_as_javascript() {
+    // `NaN` as an index is `0`.
+    assert_string("\"hello\".slice(0 / 0);", "hello");
+    assert_string("\"hello\".slice(1.7, -1);", "ell");
+    // `charCodeAt` outside the string is `NaN`; an index is truncated.
+    assert!(matches!(run("\"AB\".charCodeAt(-1);"), Ok(Value::Number(n)) if n.is_nan()));
+    assert!(matches!(run("\"AB\".charCodeAt(2);"), Ok(Value::Number(n)) if n.is_nan()));
+    assert_number("\"AB\".charCodeAt(1.9);", 66.0);
+    // An array's `indexOf` is by `===`: an object by its identity.
+    assert_number("const o = {}; [{}, o].indexOf(o);", 1.0);
+    assert_number("[0 / 0].indexOf(0 / 0);", -1.0);
+}
+
+#[test]
+fn exported_declarations_run() {
+    assert_number(
+        "export function f(x) { return x; } export default 1; f(2);",
+        2.0,
+    );
+    assert_number("export const a = 1; export let b = a + 1; b;", 2.0);
+}

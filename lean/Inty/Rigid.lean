@@ -629,6 +629,16 @@ theorem ObjCase.rsub (ρ : RSubst) {ls : List String} {es : List Expr} {T P : Ty
   | variant hw hl hi hP ht =>
     exact .variant (Ty.whnf_rsub_nr hw rfl) hl hi (by simp [hP]) (Ty.tagOf_rsub ρ ht)
 
+/-- Renaming rigid variables keeps the constructors of the natives'
+types. -/
+theorem Ty.rsub_hom (ρ : RSubst) (c : Con) (args : List Ty)
+    (hc : c ∈ [Con.fn, .array, .number, .string]) :
+    (Ty.app c args).rsub ρ = .app c (args.map (·.rsub ρ)) := by
+  apply Ty.rsub_app_none
+  apply Con.rimgA_none
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+  rcases hc with rfl | rfl | rfl | rfl <;> rfl
+
 theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) := by
   cases h with
   | narrow h hc =>
@@ -645,6 +655,13 @@ theorem InstW.rsub (ρ : RSubst) {p : Pred} (h : InstW p) : InstW (p.rsub ρ) :=
     | mergeProto hs => simpa [Pred.rsub] using InstW.narrow (Inst.mergeProto (hs.rsub ρ)) (by simp)
     | lengthArray => simpa [Pred.rsub] using InstW.narrow Inst.lengthArray (by simp)
     | lengthString => simpa [Pred.rsub] using InstW.narrow Inst.lengthString (by simp)
+    | methodString h =>
+      have he := stringMethod_hom (f := (·.rsub ρ)) (Ty.rsub_hom ρ) h
+      simpa [Pred.rsub, he] using InstW.narrow (Inst.methodString h) (by simp)
+    | methodArray h =>
+      simpa [Pred.rsub] using
+        InstW.narrow (Inst.methodArray (arrayMethod_hom (f := (·.rsub ρ)) (Ty.rsub_hom ρ) h))
+          (by simp)
     | indexArray => simpa [Pred.rsub] using InstW.narrow Inst.indexArray (by simp)
     | indexString => simpa [Pred.rsub] using InstW.narrow Inst.indexString (by simp)
     | writeArray => simpa [Pred.rsub] using InstW.narrow Inst.writeArray (by simp)
