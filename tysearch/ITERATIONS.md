@@ -455,6 +455,59 @@ binds `never`, which fits anything. This is inty's flow typing.
 | T8 seemed to reach the number branch: two runs that each `return` a new array compared unequal | `same_outcome` compares returned values as it does values |
 | Junk `typeof=number : (a, [x0: a] T7<a -> b>, [x0: a] c) -> c`. A branch no value reaches has every type, so matching branched on its 57 types past the cap of 32 before reaching the branch that fixed `b`. So the plain rule matched nothing there | Matching takes the most constrained child first |
 
+## 11. The climb: the type system grows itself
+
+**What.** `--climb` chooses how much type system a language needs, with
+nothing to configure. It starts from sorts and ground rules, and tries one
+capability at a time:
+
+- type variables;
+- function and object types;
+- binders;
+- `let`-generalisation;
+- exit types;
+- subtyping;
+- unions;
+- narrowing.
+
+It keeps a capability that types more of a fixed set of safe programs, or
+as many with a smaller system, and gets none stuck. It stops when nothing
+helps or nearly everything is typed, then drops what the result can do
+without. Runs reuse the searches a change doesn't bear on.
+
+**Found.**
+
+```
+core:
+step 0: start: sorts and ground rules only  ->  72.9% typed, 27 rules (size 99)  [kept]
+step 1: + type variables                    ->  72.9% typed, 13 rules (size 35)  [kept]
+step 2: + unions                            ->  90.1% typed, 13 rules (size 35)  [kept]
+step 3: - unions                            ->  72.9%                            [dropped]
+step 4: - type variables                    ->  72.9%, 27 rules                  [dropped]
+```
+
+TAPL's arithmetic climbs the same way: from 33.9% to 60.3% of safe
+programs typed, with type variables and unions.
+
+ML references show what the objective prefers. Refined sorts make a cell's
+type its content's, so `get` is typed. But that also makes `set` keep the
+content's type, and in this language a cell may hold anything. Among the
+small programs, more store something else into a cell than read one. So
+the climb ends with untyped cells (69.9% typed) rather than ML's (67.8%).
+Both are sound. The objective decides, and here it isn't ML's.
+
+**What had to change:**
+
+- **Comparable runs.** Coverage is measured on a fixed set of programs:
+  all the small ones, and random ones from a fixed seed. Generated
+  programs depend on the rules, so they are left out.
+- **Type variables at first typed nothing more**, only fewer rules: 27
+  ground overloads in `core` become 13 rules. Unions need variables. So
+  size breaks ties, as the description length of §6.1.
+- **Capabilities that can't matter aren't tried:** no binders, no
+  generalisation; nothing returns, no exit types; sorts unordered, no
+  subtyping.
+
 ## Next
 
 - **Keys:** a string literal `"x"`, so that `idx` on objects by string

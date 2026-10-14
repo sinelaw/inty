@@ -257,6 +257,21 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         sem
     }
 
+    /// Forgets the refinements: every sort plain, the universe the sorts
+    /// alone (and `unknown`, if it was there).
+    pub fn unrefine(&mut self) {
+        let n = self.count();
+        self.templates = vec![Vec::new(); n];
+        self.aliases = vec![Vec::new(); n];
+        let top = self.universe.contains(&Ty::Top);
+        self.universe = (0..n).map(Ty::Base).collect();
+        if top {
+            self.universe.push(Ty::Top);
+        }
+        self.holds_memo.clear();
+        self.samples_memo.clear();
+    }
+
     /// Whether the fingerprints order any two sorts.
     pub fn has_order(&self) -> bool {
         (0..self.count()).any(|a| (0..self.count()).any(|b| a != b && self.le[a][b]))

@@ -17,7 +17,7 @@
 use crate::enumerate::{Enumerator, Rng};
 use crate::infer::{Checker, Order, Policy};
 use crate::lang::{Atom, Kind, Language, Outcome, Term};
-use crate::search::{search_con, ConSearch, Pools, SearchConfig, Source};
+use crate::search::{search_con, ConSearch, Features, Pools, SearchConfig, Source};
 use crate::semantics::{Oracle, Semantics};
 use crate::types::{lgg, Names, Schema, Ty};
 use std::collections::{HashMap, HashSet};
@@ -82,6 +82,18 @@ pub struct Check {
     pub violations: Vec<String>,
     pub untyped_safe: usize,
     pub untyped_safe_examples: Vec<String>,
+    /// Of the terms every run checks (all small ones and the same random
+    /// ones, not those generated from the rules): the safe, and the typed
+    /// among them. What runs with different type languages compare on.
+    pub fixed_safe: usize,
+    pub fixed_typed: usize,
+}
+
+impl Check {
+    /// The share of the fixed terms' safe ones that are typed.
+    pub fn coverage(&self) -> f64 {
+        self.fixed_typed as f64 / self.fixed_safe.max(1) as f64
+    }
 }
 
 pub struct Discovery {
@@ -107,9 +119,29 @@ pub struct Discovery {
     pub evals: usize,
     /// The checker the rules induce, as checked.
     pub checker: Checker,
+    /// The capabilities that could matter for this language at all: no
+    /// binders, no `let`-generalisation or narrowing; nothing returns, no
+    /// exit types.
+    pub applicable: Features,
 }
 
+impl Discovery {
+    /// The system's description length: a rule and each sort it commits to.
+    pub fn size(&self) -> usize {
+        self.rules.iter().map(|r| 1 + r.constants()).sum()
+    }
+}
+
+/// Searches kept across runs (by the ladder): per constructor and what of
+/// the type language bears on its search.
+pub type SearchCache = HashMap<(usize, Vec<bool>), ConSearch>;
+
 pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
+    discover_with(lang, cfg, &mut SearchCache::new())
+}
+
+/// `discover`, reusing (and adding to) `cache`.
+pub fn discover_with<L: Language>(lang: &L, cfg: &Config, cache: &mut SearchCache) -> Discovery {
     let sig = lang.signature();
     let mut oracle = Oracle::new(lang);
     let mut rng = Rng(cfg.seed);
@@ -134,6 +166,11 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
 
     // 2. Sorts, refinements and the universe.
     let mut sem = Semantics::discover(&mut oracle, &pool, &probes, cfg.samples_per_type);
+    let feats = cfg.search.features;
+    let any_refined = sem.templates.iter().any(|t| !t.is_empty());
+    if !feats.refined {
+        sem.unrefine();
+    }
     let nsorts = sem.count();
     note(&format!("{nsorts} sorts, universe {}", sem.universe.len()));
     let sort_names: Vec<String> = (0..nsorts).map(|s| format!("T{s}")).collect();
@@ -240,21 +277,25 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
                 .flatten()
                 .any(|s| *s == crate::search::Source::Unknown)
     });
-    if !unknown {
+    if !unknown || !feats.unknown {
         sem.universe.retain(|t| *t != Ty::Top);
     }
 
     // 3. Search, without subtyping and, if the fingerprints order any
     // sorts, with it; keep the shorter system (the one without, on a tie).
     // `reuse` has, per constructor, a search to keep rather than redo.
-    let run = |sem: &mut Semantics<L::Value>,
-               oracle: &mut Oracle<L>,
-               rng: &mut Rng,
-               reuse: &[Option<ConSearch>]| {
+    let returns = pools
+        .faults
+        .iter()
+        .any(|t| matches!(oracle.eval(t), Outcome::Return(_)));
+    let mut run = |sem: &mut Semantics<L::Value>,
+                   oracle: &mut Oracle<L>,
+                   rng: &mut Rng,
+                   reuse: &[Option<ConSearch>]| {
         let mut searches = Vec::new();
         let mut rules = Vec::new();
         for (ci, c) in sig.iter().enumerate() {
-            if c.kind != Kind::Op {
+            if c.kind != Kind::Op || (!feats.binders && c.binds.iter().any(|&b| b > 0)) {
                 continue;
             }
             // For working on the search: `TYSEARCH_ONLY='app2|.x='` searches
@@ -272,7 +313,57 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
             // Each constructor draws from its own stream, so its search
             // doesn't depend on how many draws the others made.
             let mut own = Rng(rng.0 ^ (ci as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            // What bears on this search, as it actually is: a search is
+            // kept across runs that differ in none of it.
+            let binds = c.binds.iter().any(|&b| b > 0);
+            let key = (
+                ci,
+                vec![
+                    feats.vars,
+                    feats.refined,
+                    sem.universe.contains(&Ty::Top),
+                    feats.exits && returns,
+                    feats.narrowing && binds,
+                    sem.subtyping,
+                ],
+            );
+            if let Some(s) = cache.get_mut(&key) {
+                if feats.unions && !s.unions_tested {
+                    s.no_unions = s
+                        .chosen
+                        .clone()
+                        .iter()
+                        .map(|r| {
+                            crate::search::no_union_vars(
+                                oracle,
+                                sem,
+                                &pools,
+                                r,
+                                &cfg.search,
+                                &mut own,
+                            )
+                        })
+                        .collect();
+                    s.unions_tested = true;
+                }
+                let mut s = s.clone();
+                if !feats.unions {
+                    s.no_unions = vec![Vec::new(); s.chosen.len()];
+                }
+                for (i, vs) in s.narrow.iter().enumerate() {
+                    for (j, n) in vs.iter().enumerate() {
+                        if let Some(sorts) = n {
+                            sem.narrow.insert((ci, i, j), sorts.clone());
+                        }
+                    }
+                }
+                note(&format!("kept {}", c.name));
+                rules.extend(s.chosen.iter().cloned());
+                searches.push(s);
+                continue;
+            }
             let s = search_con(oracle, sem, &pools, ci, &cfg.search, &mut own);
+            cache.insert(key, s.clone());
             note(&format!(
                 "searched {} ({} candidates)",
                 c.name, s.candidates
@@ -298,7 +389,7 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
                 })
             })
         });
-    if could_help {
+    if could_help && feats.subtyping {
         sem.set_subtyping(true);
         // Subtyping widens only the sorts with strict subsorts: a
         // constructor whose rules mention none of them, and that has rules,
@@ -366,7 +457,20 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         &mut rng,
     );
     let checker = checker_for(lang, &sem, &rules, &gen);
+    let binders = sig.iter().any(|c| c.binds.iter().any(|&b| b > 0));
+    let applicable = Features {
+        vars: true,
+        refined: any_refined,
+        binders,
+        unknown: binders,
+        generalise: binders,
+        exits: returns,
+        subtyping: sem.has_order(),
+        unions: true,
+        narrowing: binders,
+    };
     Discovery {
+        applicable,
         checker,
         language: lang.name().to_string(),
         config: cfg.clone(),
@@ -409,6 +513,9 @@ fn checker_for<L: Language>(
     checker.narrow = sem.narrow.clone();
     for (r, vs) in &gen.no_unions {
         checker.set_no_unions(r, vs);
+    }
+    if gen.no_widening {
+        checker.no_widening();
     }
     checker
 }
@@ -459,12 +566,15 @@ fn check<L: Language>(
     terms.cap = en.cap;
     let mut terms = terms.up_to(cfg.check_size, 0);
     let mut seen: HashSet<Term> = terms.iter().cloned().collect();
+    // The same random terms whatever the rules, so runs compare.
+    let mut fixed_rng = Rng(cfg.seed ^ 0xC0FF_EE00);
     for _ in 0..cfg.random_terms {
-        let t = random_term(lang.signature(), rng, cfg.random_size, 0);
+        let t = random_term(lang.signature(), &mut fixed_rng, cfg.random_size, 0);
         if seen.insert(t.clone()) {
             terms.push(t);
         }
     }
+    let n_fixed = terms.len();
     lap(&format!("{} terms", terms.len()));
     // And programs well typed by construction (T2).
     let mut generated = 0;
@@ -487,6 +597,8 @@ fn check<L: Language>(
         violations: Vec::new(),
         untyped_safe: 0,
         untyped_safe_examples: Vec::new(),
+        fixed_safe: 0,
+        fixed_typed: 0,
     };
     let (mut t_eval, mut t_types, mut t_sound) = (0.0, 0.0, 0.0);
     let mut tick = std::time::Instant::now();
@@ -494,7 +606,7 @@ fn check<L: Language>(
         *acc += tick.elapsed().as_secs_f64();
         tick = std::time::Instant::now();
     };
-    for t in &terms {
+    for (i, t) in terms.iter().enumerate() {
         let out = oracle.eval(t);
         lapse(&mut t_eval);
         if matches!(out, Outcome::Timeout) {
@@ -505,6 +617,10 @@ fn check<L: Language>(
         c.safe += safe as usize;
         let types = checker.types(t);
         lapse(&mut t_types);
+        if i < n_fixed && safe {
+            c.fixed_safe += 1;
+            c.fixed_typed += !types.is_empty() as usize;
+        }
         if types.is_empty() {
             if safe {
                 c.untyped_safe += 1;
@@ -550,6 +666,8 @@ pub struct Generalisation {
     /// Per rule, the variables that may not stand for unions (the
     /// search's).
     pub no_unions: Vec<(Schema, Vec<u32>)>,
+    /// No variable widens to a union (the ladder's rungs before unions).
+    pub no_widening: bool,
 }
 
 /// Which constructors make syntactic values: those that, given children
@@ -622,6 +740,9 @@ pub fn generalisable<L: Language>(lang: &L, cfg: &Config, d: &Discovery, t: &Ter
     let (_, pool, _) = ground(&mut oracle, &mut en, cfg);
     let probes: Vec<L::Value> = pool.iter().take(cfg.probes).cloned().collect();
     let mut sem = Semantics::discover(&mut oracle, &pool, &probes, cfg.samples_per_type);
+    if !cfg.search.features.refined {
+        sem.unrefine();
+    }
     if !d.subtypes.is_empty() {
         sem.set_subtyping(true);
     }
@@ -795,6 +916,7 @@ fn generalise<L: Language>(
 ) -> Generalisation {
     let mut gen = Generalisation {
         inert: inert(lang),
+        no_widening: !cfg.search.features.unions,
         no_unions: searches
             .iter()
             .flat_map(|s| s.chosen.iter().cloned().zip(s.no_unions.iter().cloned()))
@@ -812,7 +934,7 @@ fn generalise<L: Language>(
             }
         }
     }
-    if binders.is_empty() {
+    if binders.is_empty() || !cfg.search.features.generalise {
         return gen;
     }
     // Candidate child terms, with a type that has free variables.
@@ -1310,5 +1432,227 @@ impl fmt::Display for Discovery {
             writeln!(f, "    e.g. {e}")?;
         }
         writeln!(f, "  evaluations:          {}", self.evals)
+    }
+}
+
+/// A capability of the type language the climb may add or remove.
+pub struct Capability {
+    pub name: &'static str,
+    get: fn(&Features) -> bool,
+    set: fn(&mut Features, bool),
+}
+
+/// What the climb chooses from, in the order it tries them: each needs
+/// only those before it to be of any use.
+pub fn capabilities() -> Vec<Capability> {
+    vec![
+        Capability {
+            name: "type variables",
+            get: |f| f.vars,
+            set: |f, b| f.vars = b,
+        },
+        Capability {
+            name: "refined sorts (function, object and array types)",
+            get: |f| f.refined,
+            set: |f, b| f.refined = b,
+        },
+        Capability {
+            name: "binders (and `unknown` for what they bind from nowhere)",
+            get: |f| f.binders,
+            set: |f, b| {
+                f.binders = b;
+                f.unknown = b
+            },
+        },
+        Capability {
+            name: "let-generalisation",
+            get: |f| f.generalise,
+            set: |f, b| f.generalise = b,
+        },
+        Capability {
+            name: "exit types (for return)",
+            get: |f| f.exits,
+            set: |f, b| f.exits = b,
+        },
+        Capability {
+            name: "subtyping",
+            get: |f| f.subtyping,
+            set: |f, b| f.subtyping = b,
+        },
+        Capability {
+            name: "unions",
+            get: |f| f.unions,
+            set: |f, b| f.unions = b,
+        },
+        Capability {
+            name: "narrowing",
+            get: |f| f.narrowing,
+            set: |f, b| f.narrowing = b,
+        },
+    ]
+}
+
+/// One run of the climb: the type language tried, the change that made
+/// it, whether the climb kept it, and what it found.
+pub struct Step {
+    pub features: Features,
+    pub change: String,
+    pub kept: bool,
+    pub discovery: Discovery,
+}
+
+pub struct Climb {
+    pub steps: Vec<Step>,
+    /// The step whose system the climb ends with.
+    pub last: usize,
+}
+
+impl Climb {
+    pub fn result(&self) -> &Discovery {
+        &self.steps[self.last].discovery
+    }
+}
+
+/// Discovers a type system by climbing: from sorts and ground rules only,
+/// it adds, one at a time, each capability that types more of the safe
+/// programs and keeps every typed one safe; it stops when none does, or
+/// when nearly every safe program is typed. Then it minimises: it drops
+/// each capability the system can do without, typing no fewer programs.
+/// No configuration: the language decides what the type system needs.
+pub fn climb<L: Language>(lang: &L, cfg: &Config) -> Climb {
+    let mut cache = SearchCache::new();
+    let mut run = |f: Features| {
+        let mut c = cfg.clone();
+        c.search.features = f;
+        discover_with(lang, &c, &mut cache)
+    };
+    let caps = capabilities();
+    let mut steps = Vec::new();
+    let mut cur = Features::NONE;
+    steps.push(Step {
+        features: cur,
+        change: "start: sorts and ground rules only".into(),
+        kept: true,
+        discovery: run(cur),
+    });
+    let mut best = 0;
+    let applicable = steps[0].discovery.applicable;
+    // A gain is at least one program in five hundred (and at least one)
+    // more typed; or as many typed by a smaller system.
+    let tol = |d: &Discovery| (d.check.fixed_safe / 500).max(1);
+    let better = |d: &Discovery, b: &Discovery| {
+        d.check.unsound == 0
+            && (d.check.fixed_typed >= b.check.fixed_typed + tol(b)
+                || (d.check.fixed_typed >= b.check.fixed_typed && d.size() < b.size()))
+    };
+    let covered = |d: &Discovery| d.check.coverage() >= 0.99;
+    // Grow.
+    'grow: loop {
+        let mut progress = false;
+        for cap in &caps {
+            if covered(&steps[best].discovery) {
+                break 'grow;
+            }
+            if (cap.get)(&cur) || !(cap.get)(&applicable) {
+                continue;
+            }
+            let mut cand = cur;
+            (cap.set)(&mut cand, true);
+            let d = run(cand);
+            let kept = better(&d, &steps[best].discovery);
+            steps.push(Step {
+                features: cand,
+                change: format!("+ {}", cap.name),
+                kept,
+                discovery: d,
+            });
+            if kept {
+                cur = cand;
+                best = steps.len() - 1;
+                progress = true;
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+    // Minimise: the latest additions first, which may have made earlier
+    // ones redundant.
+    loop {
+        let mut removed = false;
+        for cap in caps.iter().rev() {
+            if !(cap.get)(&cur) {
+                continue;
+            }
+            let mut cand = cur;
+            (cap.set)(&mut cand, false);
+            let d = run(cand);
+            let b = &steps[best].discovery;
+            // As many programs typed, by a system no bigger.
+            let kept = d.check.unsound == 0
+                && d.check.fixed_typed >= b.check.fixed_typed
+                && d.size() <= b.size();
+            steps.push(Step {
+                features: cand,
+                change: format!("- {}", cap.name),
+                kept,
+                discovery: d,
+            });
+            if kept {
+                cur = cand;
+                best = steps.len() - 1;
+                removed = true;
+            }
+        }
+        if !removed {
+            break;
+        }
+    }
+    Climb { steps, last: best }
+}
+
+impl fmt::Display for Climb {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut prev: Vec<String> = Vec::new();
+        for (i, s) in self.steps.iter().enumerate() {
+            let d = &s.discovery;
+            writeln!(
+                f,
+                "step {i}: {}  ->  {:.1}% of safe programs typed, {} unsound, {} rules (size {})  [{}]",
+                s.change,
+                100.0 * d.check.coverage(),
+                d.check.unsound,
+                d.rules.len(),
+                d.size(),
+                if s.kept { "kept" } else { "dropped" }
+            )?;
+            if s.kept {
+                let now = d.rule_strings();
+                for r in now.iter().filter(|r| !prev.contains(r)) {
+                    writeln!(f, "    + {r}")?;
+                }
+                for r in prev.iter().filter(|r| !now.contains(r)) {
+                    writeln!(f, "    - {r}")?;
+                }
+                prev = now;
+            }
+        }
+        let last = &self.steps[self.last];
+        let caps: Vec<&str> = capabilities()
+            .into_iter()
+            .filter(|c| (c.get)(&last.features))
+            .map(|c| c.name)
+            .collect();
+        writeln!(
+            f,
+            "\nresult (step {}): {:.1}% of safe programs typed, with {}",
+            self.last,
+            100.0 * last.discovery.check.coverage(),
+            if caps.is_empty() {
+                "nothing beyond ground rules".to_string()
+            } else {
+                caps.join(", ")
+            }
+        )
     }
 }

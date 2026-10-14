@@ -46,7 +46,17 @@ inty, a suite of languages with other kinds of type system runs alongside:
   and Wright's value restriction for `let`. [ITERATIONS.md](ITERATIONS.md) has
 what each round found, and what had to change in the search to find it.
 
+**The climb.** With `--climb`, tysearch grows the type system itself.
+It starts from sorts and ground rules, and tries each capability in turn:
+type variables, function and object types, binders, `let`-generalisation,
+exit types, subtyping, unions, narrowing. It keeps one if the result types
+more of the safe programs, or as many with a smaller system, and still gets
+none stuck. It stops when nothing helps, or when nearly every safe program
+is typed. Then it removes each capability the result can do without. There
+is nothing to configure: the language decides what its type system needs.
+
 ```sh
+cargo run --release -- core --climb   # each step, what it added, coverage
 cargo run --release -- arith
 cargo run --release -- core
 cargo run --release -- model
@@ -66,5 +76,5 @@ cargo test --release
 | `src/types.rs` | Types, rule schemas, matching, unification, lgg |
 | `src/search.rs` | Per constructor: binder flow, observation, proposals, refutation, `falsify`, selection |
 | `src/infer.rs` | The checker a rule set induces: algorithm W with overloads |
-| `src/discover.rs` | The pipeline, the end-to-end check, the report |
+| `src/discover.rs` | The pipeline, the end-to-end check, the report; the climb |
 | `src/langs/` | `arith` (TAPL ch. 3), `core` (first-order slice), `model` (the growing model of inty's), and the suite: `unityped`, `pairs`, `subtyping`, `coerce`, `refs` |

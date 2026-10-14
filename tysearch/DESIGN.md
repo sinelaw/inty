@@ -348,6 +348,38 @@ rule shapes. Verification is unchanged: a proposal is a candidate like any
 other and passes or fails the same tiers. This is optional and not part of
 the core.
 
+### 6.4 The climb: how much type system
+
+What the type language may use is itself chosen by search. Each capability
+is something the search can turn on:
+
+- type variables;
+- refined sorts (function, object and array types);
+- binders, with `unknown`;
+- `let`-generalisation;
+- exit types;
+- subtyping;
+- unions;
+- narrowing.
+
+The climb starts from sorts and ground rules. It tries the capabilities in
+that order, each needing only those before it to be of use, and keeps one
+if the result:
+
+- types more of a fixed set of safe programs (one in five hundred), or as
+  many with a smaller system (§6.1's description length);
+- and gets none of them stuck.
+
+It goes round again while anything was kept. It stops when nothing helps,
+or when 99% of the safe programs are typed. Then it minimises: it removes
+each kept capability, the latest first, if the system without it types as
+many programs and is no bigger. A capability that can't matter for the
+language (exit types where nothing returns) is not tried.
+
+Each run reuses the searches of the last for every constructor on which
+nothing that changed bears. A new capability costs a full run only where
+it touches the search.
+
 ---
 
 ## 7. Verification tiers

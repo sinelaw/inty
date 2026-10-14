@@ -1,10 +1,11 @@
 //! Each language's discovered type system, pinned. The sorts are named in
 //! the order their first members turn up, so the names are stable.
 
-use tysearch::discover::{discover, generalisable, Config, Discovery};
+use tysearch::discover::{climb, discover, generalisable, Config, Discovery};
 use tysearch::infer::Policy;
 use tysearch::lang::{Atom, Language, Term};
 use tysearch::langs::{arith::Arith, core::Core, model::Model};
+use tysearch::search::Features;
 
 fn rules(d: &Discovery) -> Vec<String> {
     let mut r = d.rule_strings();
@@ -404,4 +405,34 @@ fn refs_find_the_value_restriction() {
         always.3
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);
+}
+
+/// The climb, from ground rules: it keeps a capability that types more
+/// programs or as many with a smaller system, stops when none does, then
+/// drops what the result can do without. TAPL's arithmetic and `core` need
+/// type variables (fewer rules for the same programs) and unions (a
+/// conditional's branches may differ): nothing else, with nothing set.
+#[test]
+fn the_climb_finds_what_each_language_needs() {
+    let need = Features {
+        vars: true,
+        unions: true,
+        ..Features::NONE
+    };
+    for c in [
+        climb(&Arith::default(), &Config::default()),
+        climb(&Core::default(), &Config::default()),
+    ] {
+        assert!(c.steps.iter().all(|s| s.discovery.check.unsound == 0));
+        assert_eq!(c.steps[c.last].features, need);
+        // Every kept step types at least as much as the one before.
+        let kept: Vec<f64> = c
+            .steps
+            .iter()
+            .filter(|s| s.kept)
+            .map(|s| s.discovery.check.coverage())
+            .collect();
+        assert!(kept.windows(2).all(|w| w[1] >= w[0]), "{kept:?}");
+        assert!(c.result().check.coverage() > c.steps[0].discovery.check.coverage());
+    }
 }

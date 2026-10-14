@@ -130,6 +130,13 @@ impl Checker {
         out
     }
 
+    /// No variable widens to a union.
+    pub fn no_widening(&mut self) {
+        for ws in self.widen.iter_mut().flatten() {
+            ws.clear();
+        }
+    }
+
     /// Which variables of `rule` may not stand for unions.
     pub fn set_no_unions(&mut self, rule: &Schema, vars: &[u32]) {
         if let Some(i) = self.by_con[rule.con].iter().position(|r| r == rule) {

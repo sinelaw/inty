@@ -43,8 +43,91 @@ use crate::semantics::{Oracle, Semantics};
 use crate::types::{lgg, match_ground, subst, Premise, Schema, Ty};
 use std::collections::{BTreeSet, HashMap};
 
+/// What the type language and the search may use. All of it by default;
+/// the ladder (`discover::ladder`) turns them on one at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Features {
+    /// Type variables in rules (without: ground rules, overloaded).
+    pub vars: bool,
+    /// Sorts refined by what their eliminators give: function, object and
+    /// array types.
+    pub refined: bool,
+    /// Constructors that bind variables (`let`, functions, `catch`).
+    pub binders: bool,
+    /// `unknown`, for what is bound from no known source.
+    pub unknown: bool,
+    /// Generalising `let`-bound variables, where a policy allows.
+    pub generalise: bool,
+    /// Exit types, for `return`.
+    pub exits: bool,
+    /// Subtyping from the fingerprints' order.
+    pub subtyping: bool,
+    /// Variables that stand for unions, widened by the checker.
+    pub unions: bool,
+    /// Bound variables narrowed to the sorts that reach them.
+    pub narrowing: bool,
+}
+
+impl Features {
+    pub const ALL: Features = Features {
+        vars: true,
+        refined: true,
+        binders: true,
+        unknown: true,
+        generalise: true,
+        exits: true,
+        subtyping: true,
+        unions: true,
+        narrowing: true,
+    };
+
+    pub const NONE: Features = Features {
+        vars: false,
+        refined: false,
+        binders: false,
+        unknown: false,
+        generalise: false,
+        exits: false,
+        subtyping: false,
+        unions: false,
+        narrowing: false,
+    };
+
+    /// The rungs of the ladder: each the last with one more feature.
+    pub fn ladder() -> Vec<(&'static str, Features)> {
+        let mut f = Features::NONE;
+        let mut out = vec![("ground rules", f)];
+        let steps: [(&'static str, fn(&mut Features)); 8] = [
+            ("+ type variables", |f| f.vars = true),
+            ("+ refined sorts (functions, objects)", |f| f.refined = true),
+            ("+ binders and unknown", |f| {
+                f.binders = true;
+                f.unknown = true
+            }),
+            ("+ let-generalisation", |f| f.generalise = true),
+            ("+ exit types", |f| f.exits = true),
+            ("+ subtyping", |f| f.subtyping = true),
+            ("+ unions", |f| f.unions = true),
+            ("+ narrowing", |f| f.narrowing = true),
+        ];
+        for (name, step) in steps {
+            step(&mut f);
+            out.push((name, f));
+        }
+        out
+    }
+}
+
+impl Default for Features {
+    fn default() -> Self {
+        Features::ALL
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
+    /// What the search may use.
+    pub features: Features,
     /// Closed representatives per type in the universe.
     pub reps_per_type: usize,
     /// Nodes observed per constructor.
@@ -73,6 +156,7 @@ pub struct SearchConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
+            features: Features::ALL,
             reps_per_type: 2,
             nodes: 1500,
             betas: 6,
@@ -143,6 +227,8 @@ pub struct ConSearch {
     /// Per rule chosen, the variables that may not stand for a union of
     /// types: those the attacks break the rule with when they do.
     pub no_unions: Vec<Vec<u32>>,
+    /// Whether `no_unions` was worked out (with unions in the language).
+    pub unions_tested: bool,
     /// The most general refuted candidate, and why.
     pub best_refuted: Option<(Schema, String)>,
 }
@@ -192,8 +278,13 @@ pub fn search_con<L: Language>(
             eprintln!("    {:>7.2}s {what}", clock.elapsed().as_secs_f64());
         }
     };
+    let feats = cfg.features;
     let sources = binder_sources(oracle, sem, pools, con, rng);
-    let narrow = narrowing(oracle, pools, con, &sources, rng);
+    let narrow = if feats.narrowing {
+        narrowing(oracle, pools, con, &sources, rng)
+    } else {
+        sources.iter().map(|s| vec![None; s.len()]).collect()
+    };
     for (i, vs) in narrow.iter().enumerate() {
         for (j, n) in vs.iter().enumerate() {
             if let Some(sorts) = n {
@@ -201,7 +292,11 @@ pub fn search_con<L: Language>(
             }
         }
     }
-    let flow = exit_flow(oracle, pools, con, rng);
+    let flow = if feats.exits {
+        exit_flow(oracle, pools, con, rng)
+    } else {
+        None
+    };
     let obs = observe(oracle, sem, pools, con, &sources, cfg, rng);
     // A construct that never completes normally may claim any result type.
     let free_res = !obs.iter().any(|o| matches!(o.outcome, Outcome::Value(_)));
@@ -318,6 +413,9 @@ pub fn search_con<L: Language>(
         free_res,
     ));
     candidates.retain(|r| faithful(sem, r));
+    if !feats.vars {
+        candidates.retain(|r| r.vars().is_empty());
+    }
     lap(&format!("proposed {}", candidates.len()));
     // Refute by observation.
     let mut s = ConSearch {
@@ -331,6 +429,7 @@ pub fn search_con<L: Language>(
         falsified: 0,
         chosen: Vec::new(),
         no_unions: Vec::new(),
+        unions_tested: feats.unions,
         best_refuted: None,
     };
     let mut sound: Vec<(Schema, Vec<(usize, Ty)>)> = Vec::new();
@@ -544,7 +643,7 @@ pub fn search_con<L: Language>(
                 Outcome::Value(_) | Outcome::Stuck { root: true, .. }
             )
         });
-    if s.chosen.is_empty() && abrupt {
+    if s.chosen.is_empty() && abrupt && feats.vars {
         let n = c_arity(oracle, con) as u32;
         let kids = (0..n)
             .map(|k| Premise {
@@ -564,12 +663,15 @@ pub fn search_con<L: Language>(
             Some(why) => refuted.push((r, why)),
         }
     }
-    s.no_unions = s
-        .chosen
-        .clone()
-        .iter()
-        .map(|r| no_union_vars(oracle, sem, pools, r, cfg, rng))
-        .collect();
+    s.no_unions = if feats.unions {
+        s.chosen
+            .clone()
+            .iter()
+            .map(|r| no_union_vars(oracle, sem, pools, r, cfg, rng))
+            .collect()
+    } else {
+        vec![Vec::new(); s.chosen.len()]
+    };
     lap(&format!(
         "selected ({} forgets, memo {})",
         sem.forgets,
@@ -1032,7 +1134,7 @@ fn exit_flow<L: Language>(
 /// The variables of `r` that may not stand for a union of two types: those
 /// the attacks break the rule with when they do (`== : (a, a) -> T2` where
 /// `1 == "a"` is stuck).
-fn no_union_vars<L: Language>(
+pub fn no_union_vars<L: Language>(
     oracle: &mut Oracle<L>,
     sem: &mut Semantics<L::Value>,
     pools: &Pools,
