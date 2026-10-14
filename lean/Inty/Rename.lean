@@ -1,5 +1,6 @@
 import Inty.Rigid
 import Inty.Infer
+import Inty.TreeRk
 
 /-!
 # Renaming rigid type variables
@@ -413,5 +414,98 @@ theorem Ctx.subst_rsub {ρ : RSubst} (hρ : ρ.Renaming) (ψ : Subst) (Γ : Ctx)
 theorem Ret.subst_rsub {ρ : RSubst} (hρ : ρ.Renaming) (ψ : Subst) (R : Option Ty) :
     (Ret.subst ψ R).map (·.rsub ρ) = Ret.subst (Subst.rsub ρ ψ) (R.map (·.rsub ρ)) := by
   cases R <;> simp [Ret.subst, Ty.subst_rsub hρ]
+
+/-! ## Swapping names a tree hasn't -/
+
+/-- A leaf `k` of a type with `k'` and `k` swapped was a leaf `k'`. -/
+theorem Ty.treeRk_swap {k k' : Nat} (hne : k ≠ k') :
+    ∀ {n : Nat} {τ : Ty}, ((τ.approx n).graftR (RSubst.swap k' k) n).HasRk k → (τ.approx n).HasRk k'
+  | 0, _, h => by cases h
+  | n + 1, τ, h => by
+    rw [Ty.approx_succ] at h ⊢
+    split at h
+    · cases h
+    · rename_i c args _
+      simp only [Tree.graftR, Con.rimgA_map] at h
+      split at h
+      · rename_i τ' hc
+        obtain ⟨hc, rfl⟩ := Con.rimgA_some hc
+        clear ‹Con.rimgA _ _ [] = some _›
+        cases c with
+        | rigid s i =>
+          simp only [Con.rimg, RSubst.swap] at hc
+          by_cases hs : s = k'
+          · subst hs; exact .here (by simp [Con.rkeys]) rfl
+          · by_cases hs' : s = k
+            · simp [hs', hne] at hc
+              subst hc
+              simp only [Ty.approx_succ, Ty.view, List.map_nil] at h
+              cases h with
+              | here hk _ => simp [Con.rkeys] at hk; exact absurd hk hne
+              | under ht _ => cases ht
+            · simp [hs, hs'] at hc
+        | _ => simp [Con.rimg] at hc
+      · rename_i hc
+        cases h with
+        | here hk he =>
+          exfalso
+          cases c with
+          | rigid s i =>
+            simp only [Con.rkeys, List.mem_singleton] at hk
+            subst hk
+            simp only [List.map_eq_nil_iff] at he
+            subst he
+            simp only [Con.rimgA, List.isEmpty_nil, ite_true, Con.rimg, RSubst.swap] at hc
+            split at hc <;> simp at hc
+          | _ => simp [Con.rkeys] at hk
+        | under ht hh =>
+          simp only [List.map_map, List.mem_map, Function.comp_apply] at ht
+          obtain ⟨a, ha, rfl⟩ := ht
+          exact .under (List.mem_map.mpr ⟨a, ha, rfl⟩) (Ty.treeRk_swap hne hh)
+    · cases h
+
+theorem Ty.TreeRk.of_swap {k k' : Nat} (hne : k ≠ k') {τ : Ty}
+    (h : (τ.rsub (RSubst.swap k' k)).TreeRk k) : τ.TreeRk k' := by
+  obtain ⟨n, hn⟩ := h
+  rw [Ty.approx_rsub] at hn
+  exact ⟨n, Ty.treeRk_swap hne hn⟩
+
+theorem Tree.graftR_swap_off {k k' : Nat} :
+    ∀ {n : Nat} {τ : Ty}, ¬ (τ.approx n).HasRk k → ¬ (τ.approx n).HasRk k' →
+      (τ.approx n).graftR (RSubst.swap k' k) n = τ.approx n
+  | 0, _, _, _ => rfl
+  | n + 1, τ, h, h' => by
+    rw [Ty.approx_succ] at h h' ⊢
+    split at h
+    · rfl
+    · rename_i c args hv
+      simp only [hv] at h'
+      simp only [Tree.graftR, Con.rimgA_map]
+      split
+      · rename_i τ' hc
+        exfalso
+        obtain ⟨hc, rfl⟩ := Con.rimgA_some hc
+        clear ‹Con.rimgA _ _ [] = some _›
+        cases c with
+        | rigid s i =>
+          simp only [Con.rimg, RSubst.swap] at hc
+          by_cases hs : s = k'
+          · subst hs; exact h' (.here (by simp [Con.rkeys]) rfl)
+          · by_cases hs' : s = k
+            · subst hs'; exact h (.here (by simp [Con.rkeys]) rfl)
+            · simp [hs, hs'] at hc
+        | _ => simp [Con.rimg] at hc
+      · congr 1
+        rw [List.map_map]
+        refine List.map_congr_left fun a ha => Tree.graftR_swap_off
+          (fun hh => h (.under (List.mem_map.mpr ⟨a, ha, rfl⟩) hh))
+          (fun hh => h' (.under (List.mem_map.mpr ⟨a, ha, rfl⟩) hh))
+    · rfl
+
+/-- Swapping two names a type's tree has no leaf of leaves it equal. -/
+theorem Ty.rsub_swap_tyEq {k k' : Nat} {τ : Ty} (h : ¬ τ.TreeRk k) (h' : ¬ τ.TreeRk k') :
+    TyEq (τ.rsub (RSubst.swap k' k)) τ := fun n => by
+  rw [Ty.approx_rsub]
+  exact Tree.graftR_swap_off (fun hn => h ⟨n, hn⟩) (fun hn => h' ⟨n, hn⟩)
 
 end Inty

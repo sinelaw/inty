@@ -1439,17 +1439,16 @@ end
 @[simp] theorem Expr.monoAnnList_eq (es : List Expr) : Expr.monoAnnList es = es.all Expr.monoAnn := by
   induction es <;> simp_all [Expr.monoAnnList]
 
-/-- At a polymorphic annotation `a` on the initialiser `e₁`, inference's
-escape check passes wherever the rules type `e₁`: in every context in which
-`e₁` has the annotation's type at every rigid name outside a finite set,
-checking `e₁` against `a` at inference's fresh rigid variables `k` and
-deciding what improvement can leaves `k` in neither the context, the return
-type, nor a constraint left. Inference rejects the program where it doesn't,
-and can miss a typing there (`polyGap`): a constraint on `k` that waits on a
-type variable would need an implication constraint to keep, as in
-OutsideIn(X). In such a context `k` is never in the tree of a context
-variable's instance (`infer_complete_letPoly`), so the check can fire there
-only on a constraint left, or on a recursive type's unreached equation. -/
+/-- At a polymorphic annotation `a` on the initialiser `e₁`, no constraint
+left mentions its rigid variables: in every context in which `e₁` has the
+annotation's type at every rigid name outside a finite set, checking `e₁`
+against `a` at inference's fresh rigid variables `k` and deciding what
+improvement can leaves `k` in no constraint. Inference rejects the program
+where one does, and can miss a typing there (`polyGap`): a
+constraint on `k` that waits on a type variable would need an implication
+constraint to keep, as in OutsideIn(X) (`GAPS.md`). The other half of
+inference's escape check, `k` in the tree of a context variable's instance,
+never fires where the rules type `e₁` (`infer_complete_letPoly`). -/
 def RigidStays (L : List String) (a : Scheme) (e₁ : Expr) : Prop :=
   ∀ {Γ : Ctx} {R : Option Ty} {rm : Mode} {n : Nat} {ψ : Subst} {C : List Pred} {Γ' : Ctx}
     {R' : Option Ty} {K : List Nat} {o₁ : Out} {σi : Subst} {preds₁ : List Pred},
@@ -1460,9 +1459,7 @@ def RigidStays (L : List String) (a : Scheme) (e₁ : Expr) : Prop :=
       n).map (checkEx (some (a.inst (rigids (maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)) a.arity))) e₁) =
       some o₁ →
     improveAll false o₁.preds.length o₁.preds = some (σi, preds₁) →
-    maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ ctxRkeys (Ctx.subst (Subst.compose σi o₁.σ) Γ) ∧
-      maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ Ret.rkeys (Ret.subst (Subst.compose σi o₁.σ) R) ∧
-      maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ preds₁.flatMap Pred.rkeys
+    maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ preds₁.flatMap Pred.rkeys
 
 mutual
 /-- Whether no rigid type variable escapes at any polymorphic annotation in a
@@ -3299,7 +3296,7 @@ theorem infer_complete_letPoly {L : List String} {mb : Bool} {a : Scheme} {e₁ 
     (fresh (fun x hx => by simp [hx]))
   obtain ⟨hn₁, hσ₁, -, hp₁⟩ := InferInv.check (infer_inv L e₁) hRo (Ex.Closed.some hT) hΓ hR h₁o
   obtain ⟨σi, preds₁, himp, -⟩ := improveAll_complete (hC' _) o₁.preds.length (Nat.le_refl _) hsat₀
-  obtain ⟨hnΓ, hnR, hescp⟩ :=
+  have hescp : k ∉ preds₁.flatMap Pred.rkeys :=
     hk ▸ hrs hRo hRc hΓ hR hC hΓ' hR' hgen (by rw [hk]; exact h₁o) himp
   -- A second name, fresh for what inference found and the typing's
   -- instance too.
@@ -3350,6 +3347,10 @@ theorem infer_complete_letPoly {L : List String} {mb : Bool} {a : Scheme} {e₁ 
     rw [show (Ty.var b).subst (Subst.rsub (RSubst.swap k' k) ψ) =
       ((Ty.var b).subst ψ).rsub (RSubst.swap k' k) by rw [← hψb b, Ty.rsub_invol hinv]] at h₁
     exact hk'ψ b hb (Ty.TreeRk.of_swap (Ne.symm hk'k) h₁).rkeys
+  have hnT : k ∉ (ctxTv Γ).flatMap (fun b => ((Ty.var b).subst (Subst.compose σi o₁.σ)).trk) :=
+    fun h => by
+      obtain ⟨b, hb, ht⟩ := List.mem_flatMap.mp h
+      exact hstay b (hΓ b (ctxTv_sub_ftv hb)) (Ty.mem_trk.mp ht)
   have hagT : Agree n (Subst.compose σi o₁.σ) (Subst.rsub (RSubst.swap k' k) φ₁) ψ := by
     intro b hb
     have hsw := Ty.rsub_swap_tyEq (hstay b hb) (fun h => hk'σ b hb h.rkeys)
@@ -3381,7 +3382,7 @@ theorem infer_complete_letPoly {L : List String} {mb : Bool} {a : Scheme} {e₁ 
   have hgz : Expr.generalises e₁ e₂ = true := by
     simp [Expr.generalises, Expr.isValue_complete hv, hw]
   subst hk
-  simp only [infer, Nat.pos_iff_ne_zero.mp h0, hp, hf, hr, h0, hgz, h₁o, himp, hnΓ, hnR, hescp,
+  simp only [infer, Nat.pos_iff_ne_zero.mp h0, hp, hf, hr, h0, hgz, h₁o, himp, hnT, hescp,
     h₂o, false_and, and_self, ↓reduceIte, or_self]
 
 theorem infer_complete_let_ (L : List String) (mb : Bool) (ann : Option Scheme) (e₁ : Expr) (e₂ : Expr) (ih₁ : e₁.PolyOK L → InferComplete L e₁) (ih₂ : e₂.PolyOK L → InferComplete L e₂) :

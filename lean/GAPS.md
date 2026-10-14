@@ -26,3 +26,44 @@ The other differences are not here:
 | Keyword arguments in calls (`infer_keyword_call`) | none | Python only. The model types the shared AST of the JavaScript fragment. |
 | Lowering from Python and Lua onto the shared AST | none | The model types the AST after lowering. Lowering is tested by running lowered programs against CPython and Lua instead ([ROADMAP.md](ROADMAP.md), "Frontends"). |
 | The Go backend's integer analysis (`crates/inty-go/src/kinds.rs`) | none | It is outside the type system: it can't reject a program, and only chooses how a number is represented. |
+
+## Planned: implication constraints
+
+A known place where the model's inference rejects programs, which should
+be closed later. It is not a decision like the rows above, but work to do.
+
+A polymorphic annotation (`/** const f: <a>(a) => a */`) checks its
+initialiser with `a` as a fixed, unknown type. The model's inference is
+complete there except for one case: a constraint left over from the
+initialiser that mentions `a` (`RigidStays`, `Expr.PolyOK` in
+`Inty/InferComplete.lean`). Inference then rejects the program. Two kinds
+of program fall there:
+
+- a constraint on a local type nothing will ever fix: `polyGap` in
+  `Inty/PolyAnn.lean`, where `o.l` has type `a` for a parameter `o` of an
+  unused function. The rules type it (`polyGap_separates`); inty rejects
+  it too (an escaped skolem).
+- a constraint on a type of the enclosing code that is fixed only later:
+
+  ```
+  const g = (x) => {
+    /** const f: <a>(a) => a */
+    const f = (y) => { const z = {...x, l: y}; return y; };
+    return 1;
+  };
+  g({});
+  ```
+
+  The spread's constraint waits on `x`'s type and mentions `a`. The model
+  rejects it; inty accepts it, as it defers the spread's constraint, and
+  still rejects what would go wrong later (`h("s").toFixed(1)` with
+  `f`'s result returned, or a write `x.l = y`).
+
+Accepting these needs a constraint that holds "for every `a`", kept until
+the types it waits on are known: an implication constraint, `∀a. (Q ⇒ C)`,
+as GHC's OutsideIn(X) has. What would change is inference, its constraint
+language and the completeness proof; the typing rules stay as they are.
+Until then, the theorems state the boundary exactly
+(`infer_complete_polyOK`, and `polyGap_separates` for a program past it).
+In a program, an annotation on the local function, or one that fixes `x`'s
+type, avoids it.

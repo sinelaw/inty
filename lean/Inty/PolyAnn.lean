@@ -4,30 +4,41 @@ import Inty.Principal
 # Completeness with polymorphic annotations
 
 Inference checks a polymorphic annotation's initialiser at fresh rigid type
-variables and rejects the program if one escapes: into the context, the
-return type, or a constraint it leaves. Completeness needs that check to
-pass only where the rules type the initialiser: in every context in which
-the initialiser has the annotation's type at every rigid name outside a
-finite set (`RigidStays`, collected over a program by `Expr.PolyOK`). There,
-inference finds every typing (`infer_complete_polyOK`,
-`inferProgram_complete_polyOK`) and its constrained type is principal
-(`inferProgramC_principal_polyOK`). In such a context the rigid variable is
-never in the tree of a context variable's instance (the proof of
-`infer_complete_letPoly`), so the check can fire there only on a constraint
-left, as in `polyGap`, or on an equation of a recursive type its unfolding
-never reaches.
+variables and rejects the program if one escapes: into the tree of a type
+the context's type variables get (`Ty.trk`), or into a constraint it
+leaves. The first never fires where the rules type the initialiser (the
+proof of `infer_complete_letPoly`). Completeness needs the second not to
+fire either: no constraint left mentions the rigid variables, in every
+context in which the initialiser has the annotation's type at every rigid
+name outside a finite set (`RigidStays`, collected over a program by
+`Expr.PolyOK`). There, inference finds every typing
+(`infer_complete_polyOK`, `inferProgram_complete_polyOK`) and its
+constrained type is principal (`inferProgramC_principal_polyOK`).
+
+That boundary is exact: where a constraint left does mention a rigid
+variable, the algorithm would have to keep it, waiting, under the
+annotation's quantifier, which is an implication constraint (as in GHC's
+OutsideIn(X)), a concept the model doesn't have (`GAPS.md`). Two kinds of
+program fall there:
+
+* a constraint on a local type nothing will ever fix (`polyGap`, below);
+* a constraint on a type of the enclosing context that is fixed only
+  later, as in `const g = (x) => { /** const f: <a>(a) => a */ const f =
+  (y) => { const z = {...x, l: y}; return y; }; return 1; }; g({})`: the
+  spread's constraint waits on `x`'s type, and mentions the rigid `a`
+  (inty, which defers the spread's constraint, accepts it).
 
 `PolyOK` is still about the algorithm, and quantifies over contexts, so it
 has to be proved program by program; it holds of every program whose
 annotations are all monomorphic. For `polyApp`, which inference accepts
 (`polyApp_accepted`), it isn't proved here: it would need what unification
-does in an arbitrary context.
+and improvement do in an arbitrary context.
 
 Three programs show what is and isn't covered:
 
-* `polyId`, `/** const id: <a>(a) => a */ const id = (y) => y; id(1)`, lets
-  no rigid variable escape, in any context (`polyId_polyOK`), so inference
-  finds every typing it has.
+* `polyId`, `/** const id: <a>(a) => a */ const id = (y) => y; id(1)`,
+  leaves no constraint on a rigid variable, in any context
+  (`polyId_polyOK`), so inference finds every typing it has.
 * `polyApp`, `const h = (x) => x; /** const f: <a>(a) => a */
   const f = (y) => h(y); f(1)`, is accepted by inference, but whether it is
   `PolyOK` is open.
@@ -45,8 +56,8 @@ Three programs show what is and isn't covered:
   variable escapes into a constraint left. A typing picks `o`'s type
   `{l: a}` at each rigid name, which the algorithm can't, as it would have
   to keep a constraint on the rigid variable waiting on a type variable
-  (an implication constraint, as in GHC's OutsideIn(X)). So `polyGap`
-  isn't `PolyOK` (`polyGap_not_polyOK`).
+  (an implication constraint). So `polyGap` isn't `PolyOK`
+  (`polyGap_not_polyOK`).
 -/
 
 namespace Inty
@@ -64,27 +75,9 @@ def polyId : Expr :=
 improvement decides, in any context. -/
 theorem polyId_rigidStays (L : List String) : RigidStays L idAnn (.func 1 (.var 0)) := by
   intro Γ R rm n _ _ _ _ _ o₁ σi preds₁ _ _ _ _ _ _ _ _ h₁ himp
-  have hkΓ : maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ ctxRkeys Γ := fun h =>
-    Nat.lt_irrefl _ (lt_maxPlusOne _ (List.mem_append_left _ h))
-  have hkR : maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) ∉ Ret.rkeys R := fun h =>
-    Nat.lt_irrefl _ (lt_maxPlusOne _ (List.mem_append_right _ h))
-  generalize maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) = k at h₁ hkΓ hkR ⊢
+  generalize maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R) = k at h₁ ⊢
   simp [infer, funcTarget, idAnn, Scheme.inst, rigids, PTy.inst, checkEx, Expr.pushes] at h₁
   subst h₁
-  have hb : ∀ p ∈ [(⟨.inject (.app (.rigid k 0) []), [.app (.rigid k 0) []]⟩ : Pred)], p.Below 0 :=
-    fun p hp => by simp at hp; subst hp; simp [Pred.Below, Pred.ftv, Ty.ftv]
-  obtain ⟨hσ, -⟩ := improveAll_inv _ hb himp
-  -- Improvement binds no type variable, so the context and return type
-  -- keep their rigid variables.
-  have hid : ∀ b, k ∉ ((Ty.var b).subst (Subst.compose σi [])).rkeys := fun b => by
-    simp [Ty.subst_compose, (hσ b).2 (Nat.zero_le b), Ty.rkeys]
-  refine ⟨fun h => ?_, fun h => ?_, ?_⟩
-  · rcases ctxRkeys_subst h with h | ⟨b, -, h⟩
-    · exact hkΓ h
-    · exact hid b h
-  · rcases Ret.rkeys_subst h with h | ⟨b, -, h⟩
-    · exact hkR h
-    · exact hid b h
   simp [improveAll, improveOne, Pred.improve, Pred.improveArgs, Pred.decide, Pred.decide₀,
     Pred.decideInject, Pred.decideInject₀, Ty.isVar] at himp
   split at himp

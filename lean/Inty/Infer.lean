@@ -1,5 +1,6 @@
 import Inty.Typing
 import Inty.TreeVars
+import Inty.TreeRk
 import Inty.Classes
 import Inty.Syntax
 
@@ -621,8 +622,11 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
     -- A polymorphic annotation: the initialiser, a syntactic value, is
     -- checked against it at rigid type variables named apart from the
     -- context's, the constraints on known types are decided, and the rigid
-    -- type variables must not escape, into the context or into the
-    -- constraints left.
+    -- type variables must not escape: into the trees of the types the
+    -- context's type variables get (`Ty.trk`; a recursive type can name one
+    -- in an equation its unfolding never reaches), or into the constraints
+    -- left. (The enclosing function's return type is not the initialiser's
+    -- concern: a value has no `return` of its own.)
     else if 0 < a.arity ∧ a.preds = [] ∧ a.ftv = [] ∧ a.rkeys = [] ∧ Expr.generalises e₁ e₂ then
       let k := maxPlusOne (ctxRkeys Γ ++ Ret.rkeys R)
       let T := a.inst (rigids k a.arity)
@@ -633,7 +637,7 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
         | none => none
         | some (σi, preds₁) =>
           let σ₁ := Subst.compose σi o₁.σ
-          if k ∈ ctxRkeys (Ctx.subst σ₁ Γ) ∨ k ∈ Ret.rkeys (Ret.subst σ₁ R) ∨
+          if k ∈ (ctxTv Γ).flatMap (fun b => ((Ty.var b).subst σ₁).trk) ∨
               k ∈ preds₁.flatMap Pred.rkeys then none
           else
             match (infer (a :: Ctx.subst σ₁ Γ) (Ret.subst σ₁ R) rm ex e₂ o₁.next).map

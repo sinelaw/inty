@@ -39,9 +39,9 @@ pins the version.
 | What inference finds is a typing | `inferProgram_sound`, `inferIn_sound` | `InferSound.lean` |
 | A program inference accepts never gets stuck | `inferProgram_never_stuck` | `InferSound.lean` |
 | Inference finds a most general type whenever there is one | `inferIn_complete`, `inferProgram_complete` | `InferComplete.lean` |
-| ... with polymorphic annotations, where no rigid variable escapes | `infer_complete_polyOK`, `inferProgram_complete_polyOK` | `InferComplete.lean` |
+| ... with polymorphic annotations, where no constraint left mentions a rigid variable | `infer_complete_polyOK`, `inferProgram_complete_polyOK` | `InferComplete.lean` |
 | Inference's type with its constraints is principal | `inferInC_principal`, `inferProgramC_principal`, `inferProgramC_principal_polyOK` | `Principal.lean` |
-| Where a rigid variable escapes, inference is incomplete | `polyGap_separates` | `PolyAnn.lean` |
+| Where one does, inference is incomplete (implication constraints, planned) | `polyGap_separates` | `PolyAnn.lean` |
 | Jones's `let` rule is sound and types strictly more | `jones_eval_sound`, `jones_separates` | `Textbook.lean` |
 | inty's assignment rule is sound and types strictly more | `inty_eval_sound`, `assignSub_separates` | `AssignSub.lean` |
 | A scheme needs its `Merge` | `spreadMerge_needed` | `MergeScheme.lean` |
@@ -120,8 +120,12 @@ initialiser at each instance by instantiating the rigid variables
 (`Inty.HasTypeS.rsub`, in `Inty/Rigid.lean`), in the wide system, which
 holds whatever types they are. Inference checks the initialiser at fresh
 rigid variables, decides the constraints on known types, and rejects the
-program if a rigid variable escapes into the context or into the
-constraints left; its soundness swaps the rigid names (`Inty/Rename.lean`).
+program if a rigid variable escapes into the tree a type the context's type
+variables get unfolds to (`Ty.trk`, `Inty/TreeRk.lean`) or into the
+constraints left; its soundness swaps the rigid names (`Inty/Rename.lean`),
+which keeps the context equal, as neither name is in its trees. The
+enclosing function's return type isn't checked: the initialiser, a value,
+has no `return` of its own (`HasTypeS.ret_value`).
 
 `Inty.inferProgram_sound` (in `Inty/InferSound.lean`): whatever type inference
 finds is a valid typing,
@@ -164,22 +168,22 @@ round sets a constraint aside.
 
 `monoAnn` says the program's annotations are monomorphic. With
 polymorphic ones (`Inty/PolyAnn.lean`), inference has one more way to
-reject a program than the rules: a rigid variable escaping. `RigidStays`
-says none does: in every context where an annotation's initialiser is
-checked and typable as the rules allow, inference's check at fresh rigid
-variables leaves them out of the context's instance, out of the enclosing
-return type and out of the constraints left after improvement, which is
-exactly the test inference makes. `Expr.PolyOK` asks it of every
+reject a program than the rules: a rigid variable escaping into a
+constraint left. `RigidStays` says none does: in every context where an
+annotation's initialiser is checked and typable as the rules allow,
+inference's check at fresh rigid variables leaves them out of the
+constraints left after improvement. `Expr.PolyOK` asks it of every
 annotation in the program. Under it inference finds every typing
 (`infer_complete_polyOK`, `inferProgram_complete_polyOK`), and its
 constrained type is principal (`inferProgramC_principal_polyOK`): the typing
 checks the initialiser at any rigid names outside a finite set, and renamed
-(`HasTypeS.rsub` with a swap), it is a typing at inference's. Escaping
-into the context is the case the proof handles itself: a typing's context
-has no rigid variables, so no unfolded tree of the context's instance can
-have one (`Ty.TreeRk`, `Inty/RigidKeys.lean`); only an equation of a
-recursive type its unfolding never reaches could, which the check counts
-and the rules don't see. Every program with only monomorphic annotations is
+(`HasTypeS.rsub` with a swap), it is a typing at inference's. The other half
+of the check, escaping into the context, the proof shows never fires where
+the rules type the initialiser: a typing's context has no rigid variables,
+so no tree a type of the context's instance unfolds to can have one
+(`Ty.TreeRk`), and the check looks at those trees, not at the types'
+syntax, which can name a rigid variable in an equation of a recursive type
+its unfolding never reaches. Every program with only monomorphic annotations is
 `PolyOK` (`Expr.polyOK_of_monoAnn`), and so is
 `/** const id: <a>(a) => a */ const id = (y) => y; id(1)` (`polyId_polyOK`).
 `PolyOK` is a semantic condition, decided here per program, not a syntactic
@@ -196,7 +200,11 @@ const f = (y) => { const g = true ? (o) => o.l : (o) => y; return y; };
 variable nothing fixes, with the field's type `a`. A typing picks `o` the
 type `{l: a}` at each rigid name; inference would have to keep the
 constraint on the rigid variable waiting on a type variable, an implication
-constraint, as GHC's OutsideIn(X) does, and rejects it instead.
+constraint, as GHC's OutsideIn(X) does, and rejects it instead. The same
+holds where the constraint waits on a type of the enclosing context that is
+fixed only later (a spread `{...x, l: y}` of a parameter `x`, with `y` of
+the rigid type), which inty accepts. That is the whole of the gap:
+implication constraints would close it, and are planned (`GAPS.md`).
 
 One more divergence of the model from inty: inty checks a polymorphic
 initialiser with the binding itself in scope at its scheme
@@ -699,6 +707,7 @@ left on purpose, or places where inty is less precise than the model:
 | A record case after `typeof x !== "object"`: `typeof x === "object" ? 0 : x - 1` with `x: Number \| {a: Number}` | keeps it (a declaration may type a function as a record: `Promise`, `Object`) | drops it (its records are object literals') | a `typeof` for declared values |
 | `a && b` or `a \|\| b` of two types: `"s" && []`, `false \|\| "s"` | what can come out: their union, or `b`'s type alone where `a` is never falsy (an object) | rejects, or `a`'s and `b`'s type made one (branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
 | A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
+| A constraint left at a polymorphic annotation that mentions its rigid variable and waits on the enclosing code's types: `{...x, l: y}` in the initialiser, with `x` a parameter of the enclosing function and `y: a` | accepts (defers the spread's constraint) | rejects (the rigid variable escapes into a constraint) | none yet: implication constraints, planned ([GAPS.md](GAPS.md)) |
 
 The nullable join is gone from both: inty now has the model's sums
 (`T | Null` is `Nullable T`, made by an annotation, taken apart by `??`

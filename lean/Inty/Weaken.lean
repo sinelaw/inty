@@ -464,6 +464,24 @@ theorem HasTypeS.weaken {L : List String} {C : List Pred} {Γ : Ctx} {R : Option
     intro Γ' R' hg hR hRc
     exact .drop (ih hg hR hRc)
 
+/-- A value's typing doesn't depend on the enclosing function's return
+type: a value has no `return` of its own, a function's body its own. -/
+theorem HasTypeS.ret_value {S : Sys} {L : List String} {C : List Pred} {Γ : Ctx}
+    {R : Option Ty} {e : Expr} {τ : Ty} {rm md : Mode} (h : HasTypeS S L C Γ R rm md e τ)
+    (hv : e.IsValue) (R' : Option Ty) : HasTypeS S L C Γ R' rm md e τ := by
+  induction h with
+  | lit hl => exact .lit hl
+  | var hi hlen hc => exact .var hi hlen hc
+  | func hlen hb => exact .func hlen hb
+  | funcCheck hT hcl hlen hb => exact .funcCheck hT hcl hlen hb
+  | ctor hlen hb => exact .ctor hlen hb
+  | litStr hT => exact .litStr hT
+  | litBool hT => exact .litBool hT
+  | conv _ he ih => exact .conv (ih hv) he
+  | inj _ hT hi ih => exact .inj (ih hv) hT hi
+  | drop _ ih => exact .drop (ih hv)
+  | _ => cases hv
+
 /-- An `Inject` of a type equal to its expected one, which has no type
 variables, is an instance. -/
 theorem Pred.inject_self {T τ : Ty} (hT : T.ftv = []) (h : TyEq τ T) :
