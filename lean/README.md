@@ -689,8 +689,6 @@ left on purpose, or places where inty is less precise than the model:
 | A field every arm of a discriminated union has, read without a test of the tag: `v.kind` | accepts (the union of the arms' field types) | rejects (a variant's fields are read once a test takes it apart) | none: intentional ([GAPS.md](GAPS.md)) |
 | A literal type where a type is synthesised: `c ? t : "b"` with `t: "a"` | widens it to `String` | rejects (a literal synthesises `String`, and branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
 | A program whose last statement is a `try` | doesn't type the `try` block's last expression as the program's value | types it | none: intentional ([GAPS.md](GAPS.md)) |
-| A tag tested by an early exit, `if (v.kind !== "a") { return …; }`, then `v` read in a function or class defined after the test | rejects (the narrowing doesn't reach it; it does inside an `if`'s branch) | accepts (the test binds the case) | none: inty is imprecise |
-| A spread over an operand of an unknown type: `{...a, ...xs[0]}` with `xs` an empty array | a field the operand may write gets a union with a type variable | merges slot by slot once the operand is known | 3 (a deferred `Spread`) |
 | A record case after `typeof x !== "object"`: `typeof x === "object" ? 0 : x - 1` with `x: Number \| {a: Number}` | keeps it (a declaration may type a function as a record: `Promise`, `Object`) | drops it (its records are object literals') | a `typeof` for declared values |
 | A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | the waiting `Join` (`docs/sum-types-design.md`) |
 
@@ -755,13 +753,24 @@ finds no other disagreement.
 With tests of a tag printed as inty narrows a variable, as an early exit
 and as a `switch` (per 3,000 programs, about 100 direct tests, 20 early
 exits and 2 switches), thirteen seeds agreed but for three disagreements,
-each now a row above or a gap: inty doesn't carry the narrowing after an
-early exit into a function or class defined after it, widens a literal
-type where it synthesises, and doesn't type a `try` that ends a program.
-Two more imprecisions in inty don't show in the
-generated programs, which avoid them: a `switch`'s `default:` sees the
-whole union, not the cases left, and a `switch` whose every branch
-returns is taken to complete normally.
+two of them gaps: inty widens a literal type where it synthesises, and
+doesn't type a `try` that ends a program. The third was inty not carrying
+the narrowing after an early exit into a function-valued `const` or a
+class defined after it, which inty now does: neither can run before its
+declaration, so each is typed where it stands (a `function` declaration,
+hoisted, still isn't). Reading inty's `switch` found two more
+imprecisions, now fixed: `default:` saw the whole union, not the cases
+left, and a `switch` that covers every tag, each case returning, was
+taken to complete normally. inty's `Spread` constraint (a spread of an
+operand not known yet, decided once it is) removed the row for a spread
+over an operand of an unknown type; with it, a store into a field of a
+spread's result is no longer refused for the call signature the result
+carries as absent (`{...{...o}}`, which `main` refused too). And an
+instance holding the factory that made it (`this.c = f` in a class `f`
+returns) is now a recursive type, not an occurs-check failure. With these
+fixes, 21 seeds of 3,000 programs agree with none of the three rows
+these removed (an early exit, a spread of an unknown operand, inty's
+unifier giving up on a spread over a recursive type).
 
 Each row is recognised from evidence, not guessed: a union in the
 types inty gave the program's expressions, say. (Two rows, `Int` and

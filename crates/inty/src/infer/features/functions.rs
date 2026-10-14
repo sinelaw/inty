@@ -283,7 +283,7 @@ impl InferState {
         body_result?;
 
         let mut parts = returns;
-        if !definitely_returns(body) {
+        if !definitely_returns(body, &self.exhaustive_switches) {
             parts.push(self.unit_type.clone());
         }
         if widen {
@@ -1722,18 +1722,22 @@ pub(crate) fn tarjan_scc(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
 /// function's inferred return type must also include `Undefined` (the
 /// implicit `None`/`undefined` of a fall-through). Erring toward `false`
 /// is sound: it only adds `Undefined`, matching the runtime fall-through.
-fn definitely_returns(stmt: &Stmt) -> bool {
+fn definitely_returns(
+    stmt: &Stmt,
+    exhaustive: &std::collections::HashSet<crate::span::Span>,
+) -> bool {
+    let returns = |s: &Stmt| definitely_returns(s, exhaustive);
     match stmt {
         Stmt::Return { .. } | Stmt::Throw { .. } => true,
-        Stmt::Block { body, .. } => body.last().is_some_and(definitely_returns),
-        Stmt::Labeled { body, .. } => definitely_returns(body),
+        Stmt::Block { body, .. } => body.last().is_some_and(returns),
+        Stmt::Labeled { body, .. } => returns(body),
         // Both arms must return for the `if` to be exhaustive; a missing
         // `else` can fall through.
         Stmt::If {
             consequent,
             alternate: Some(alt),
             ..
-        } => definitely_returns(consequent) && definitely_returns(alt),
+        } => returns(consequent) && returns(alt),
         // `try` completes abnormally only if every path that can reach the
         // end returns: the body, and the handler if there is one (without
         // one, an exception leaves the `try` abruptly). A `finally` that
@@ -1745,12 +1749,11 @@ fn definitely_returns(stmt: &Stmt) -> bool {
             ..
         } => {
             if let Some(fin) = finalizer {
-                if definitely_returns(fin) {
+                if returns(fin) {
                     return true;
                 }
             }
-            definitely_returns(block)
-                && handler.as_ref().is_none_or(|h| definitely_returns(&h.body))
+            returns(block) && handler.as_ref().is_none_or(|h| returns(&h.body))
         }
         // `while True:` never falls through, unless a `break` leaves it.
         Stmt::While { test, body, .. } => {
@@ -1761,6 +1764,18 @@ fn definitely_returns(stmt: &Stmt) -> bool {
                     ..
                 }
             ) && !super::control::breaks_out(body)
+        }
+        // A switch that always takes some case, none of which breaks out
+        // of it, runs on to its last case (falling through the others):
+        // it returns if that one does.
+        Stmt::Switch { cases, span, .. } => {
+            exhaustive.contains(span)
+                && !cases
+                    .iter()
+                    .any(|c| c.consequent.iter().any(super::control::breaks_out))
+                && cases
+                    .last()
+                    .is_some_and(|c| c.consequent.last().is_some_and(returns))
         }
         _ => false,
     }

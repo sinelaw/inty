@@ -303,6 +303,13 @@ pub enum ClassName {
     /// still a variable, and resolved once it is known (the model's
     /// `Strip`). `τ` determines `σ`.
     Strip,
+    /// `Spread operand so_far result`: an object literal spreading an
+    /// `operand` over the row `so_far` of the fields before it is a
+    /// `result`. Posed when the operand's type is still a variable, and
+    /// decided once it is known, field by field as a spread of a known
+    /// object is (the model's waiting `Merge`). The operand and `so_far`
+    /// determine `result`.
+    Spread,
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
@@ -396,6 +403,16 @@ impl TypePred {
         TypePred {
             class: ClassName::Strip,
             types: vec![ty, sigma],
+            origin: None,
+        }
+    }
+
+    /// `Spread operand so_far result`: `{...so_far, ...operand}` is a
+    /// `result`.
+    pub fn spread(operand: Type, so_far: Type, result: Type) -> Self {
+        TypePred {
+            class: ClassName::Spread,
+            types: vec![operand, so_far, result],
             origin: None,
         }
     }

@@ -717,7 +717,7 @@ impl PrettyContext {
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
             }
-            ClassName::Inject | ClassName::Strip => {
+            ClassName::Inject | ClassName::Strip | ClassName::Spread => {
                 write!(w, "{}", pred.class)?;
                 for t in &pred.types {
                     write!(w, " ")?;
@@ -876,6 +876,7 @@ impl Display for ClassName {
             ClassName::HasProp => write!(f, "HasProp"),
             ClassName::Inject => write!(f, "Inject"),
             ClassName::Strip => write!(f, "Strip"),
+            ClassName::Spread => write!(f, "Spread"),
         }
     }
 }

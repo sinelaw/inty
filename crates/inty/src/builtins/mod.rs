@@ -734,16 +734,21 @@ impl InferState {
                     // An `Inject` or a `Strip` on a variable an importing
                     // module still sees waits for its uses there (`put(true)`
                     // deciding what a cell's sum holds); dropped, they would
-                    // let a value of no case through.
+                    // let a value of no case through. (So does a `Spread`;
+                    // one on a variable nothing will decide is dropped, as
+                    // the Lean model leaves its `Merge`s: no value has a
+                    // type nothing fixes, so no run reaches the spread.)
                     let pending = std::mem::take(&mut self.pending_constraints);
                     self.pending_constraints = pending
                         .into_iter()
                         .filter(|c| {
-                            matches!(c.pred.class, ClassName::Inject | ClassName::Strip)
-                                && matches!(
-                                    c.pred.types.first().map(|t| self.zonk(t)),
-                                    Some(Type::Var(v)) if keep.contains(&v)
-                                )
+                            matches!(
+                                c.pred.class,
+                                ClassName::Inject | ClassName::Strip | ClassName::Spread
+                            ) && matches!(
+                                c.pred.types.first().map(|t| self.zonk(t)),
+                                Some(Type::Var(v)) if keep.contains(&v)
+                            )
                         })
                         .collect();
                     return Ok(());
@@ -774,6 +779,7 @@ impl InferState {
                             | ClassName::Indexable
                             | ClassName::Inject
                             | ClassName::Strip
+                            | ClassName::Spread
                             | ClassName::Plus
                     ) && !self.is_deferred(pred)
                 })
@@ -832,6 +838,7 @@ impl InferState {
                 | ClassName::HasProp
                 | ClassName::Inject
                 | ClassName::Strip
+                | ClassName::Spread
                 | ClassName::Plus
         ) && matches!(
             pred.types.first().map(|c| self.apply_subst(c)),
@@ -1049,6 +1056,9 @@ impl InferState {
             // constraint again if the type is still a variable.
             ClassName::Inject => self.subsume(span, &pred.types[0], &pred.types[1]),
             ClassName::Strip => self.resolve_strip(&pred.types[0], &pred.types[1], span),
+            ClassName::Spread => {
+                self.resolve_spread(&pred.types[0], &pred.types[1], &pred.types[2], span)
+            }
         }
     }
 
@@ -1141,7 +1151,15 @@ impl InferState {
     ) -> Result<(), IntyError> {
         let receiver = self.apply_subst(receiver);
         let builtin = match &receiver {
-            Type::Row(row) => row.props.keys().any(|k| k.0 == crate::types::CALLABLE_KEY),
+            // A function's row has a call signature; one a spread's result
+            // carries as absent (`{...{...o}}`) is an object's.
+            Type::Row(row) => row.props.iter().any(|(k, e)| {
+                k.0 == crate::types::CALLABLE_KEY
+                    && !matches!(
+                        self.main_subst.resolve_presence(&e.presence),
+                        crate::types::Presence::Abs
+                    )
+            }),
             Type::Var(_) | Type::Named(..) | Type::Error => false,
             _ => true,
         };

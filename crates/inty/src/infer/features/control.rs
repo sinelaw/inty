@@ -720,6 +720,15 @@ impl InferState {
         let mut covered_literals: Vec<crate::types::LitValue> = Vec::new();
         let mut has_default = false;
 
+        // `default:` is taken when no case's value is the discriminant's
+        // (every case test is evaluated first, wherever `default` stands):
+        // each case of a singleton type is ruled out there.
+        let default_facts: Vec<Narrowing> = cases
+            .iter()
+            .filter_map(|c| c.test.as_ref())
+            .filter_map(|t| self.singleton_operand(env, t).map(Narrowing::IsNot))
+            .collect();
+
         for (i, case) in cases.iter().enumerate() {
             let mut narrowing = None;
             if let Some(test) = &case.test {
@@ -749,6 +758,9 @@ impl InferState {
             let falls_into = i > 0 && !cases[i - 1].consequent.iter().any(always_exits);
             let case_env = match (falls_into, disc_path.as_ref(), narrowing) {
                 (false, Some(path), Some(n)) => apply_narrowing(self, env, path, &n),
+                (false, Some(path), None) if case.test.is_none() => default_facts
+                    .iter()
+                    .fold(env.clone(), |e, n| apply_narrowing(self, &e, path, n)),
                 _ => env.clone(),
             };
 
@@ -764,15 +776,27 @@ impl InferState {
         // the switch has no default, every literal in the union
         // must be covered by some case test. Otherwise we warn.
         // Suppressed when `config.exhaustiveness_warnings` is off.
+        // A switch with a `default`, or whose cases cover every value of a
+        // finite discriminant, always takes some case; whether it then
+        // completes is up to the cases (`definitely_returns`).
+        let missing: Option<Vec<crate::types::LitValue>> = if has_default {
+            Some(Vec::new())
+        } else {
+            self.resolve_finite_literal_set(discriminant, &disc_type)
+                .map(|domain| {
+                    domain
+                        .into_iter()
+                        .filter(|d| !covered_literals.contains(d))
+                        .collect()
+                })
+        };
+        if missing.as_ref().is_some_and(|m| m.is_empty()) {
+            self.exhaustive_switches.insert(span);
+        }
         if !has_default && self.config.exhaustiveness_warnings {
-            let disc_finite = self.resolve_finite_literal_set(discriminant, &disc_type);
-            if let Some(domain) = disc_finite {
-                let missing: Vec<&crate::types::LitValue> = domain
-                    .iter()
-                    .filter(|d| !covered_literals.contains(d))
-                    .collect();
+            if let Some(missing) = &missing {
                 if !missing.is_empty() {
-                    let names: Vec<String> = missing.iter().map(|l| format_literal(l)).collect();
+                    let names: Vec<String> = missing.iter().map(format_literal).collect();
                     self.warn(
                         span,
                         format!(

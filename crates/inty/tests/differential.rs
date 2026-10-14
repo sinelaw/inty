@@ -2582,26 +2582,7 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
     if fewer_params {
         features.insert("fewer parameters");
     }
-    // inty's unifier gave up on a recursive type (`TypeError::UnifyDepth`).
-    if errors.iter().any(|e| e.contains("Type too complex")) {
-        features.insert("unify depth");
-    }
     shown.extend(errors);
-    // A spread over an operand of an unknown type: inty gives a field it
-    // may or may not write a union with a type variable (`String | b`).
-    if source.contains("...")
-        && shown.iter().any(|t| {
-            t.split(" | ").skip(1).any(|m| {
-                let v: String = m
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .collect();
-                v.len() == 1 && v.chars().all(|c| c.is_ascii_lowercase())
-            })
-        })
-    {
-        features.insert("spread of unknown");
-    }
     for text in &shown {
         if text.contains("never") {
             features.insert("never");
@@ -2671,30 +2652,11 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Type(m)) if m == "var" => {
             Some("what doesn't complete (the model's free type variable)")
         }
-        // inty's unifier gives up ("Type too complex") on some spreads over
-        // an object whose type is recursive through a method's `this`
-        // (`this.a = {...this.a}` in a method that returns `this`): its
-        // spread shares the operand's open row tail where the model merges
-        // slot by slot (roadmap: a deferred `Spread` constraint).
-        (Typing::Reject, Typing::Type(_)) if features.contains("unify depth") => {
-            Some("inty's unifier gives up on a spread over a recursive type")
-        }
-        // The same roadmap item: a spread over an operand of an unknown
-        // type, whose fields the model merges once the operand is known.
-        (Typing::Reject, Typing::Type(_)) if features.contains("spread of unknown") => {
-            Some("inty's spread over an operand of an unknown type")
-        }
         // inty reads a field every arm of a discriminated union has (its
         // tag, say) without a test of the tag; the model reads a variant's
         // fields only once a test has taken it apart (an intentional gap).
         (Typing::Type(_), Typing::Reject) if features.contains("variant field") => {
             Some("a variant's field read without a test of its tag")
-        }
-        // inty doesn't carry the narrowing after an early exit into a
-        // function or class defined after it (it does inside an `if`'s
-        // branch).
-        (Typing::Reject, Typing::Type(_)) if features.contains("early exit") => {
-            Some("narrowing after an early exit, which inty doesn't carry into a function or class defined after it")
         }
         (Typing::Type(_), Typing::Reject) if features.contains("literal type") => {
             Some("inty's widening of a literal type where it synthesises (an intentional gap)")
@@ -2909,10 +2871,6 @@ fn inty_agrees_with_the_lean_model() {
         }
         if ends_in_try(core) {
             features.insert("try at end");
-        }
-        // A tag tested by an early exit, `if (v.l !== t) { … }`.
-        if LABELS.iter().any(|l| js.contains(&format!(".{l} !== "))) {
-            features.insert("early exit");
         }
         if wire(core).contains("(letann (strlit") {
             features.insert("literal type");

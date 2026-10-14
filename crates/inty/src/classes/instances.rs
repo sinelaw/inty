@@ -85,6 +85,8 @@ pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
         ClassName::HasProp => &[],
         // Relations between a type and a sum, not catalogued shapes.
         ClassName::Inject | ClassName::Strip => &[],
+        // A merge of two rows, not a catalogued shape.
+        ClassName::Spread => &[],
     }
 }
 

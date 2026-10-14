@@ -257,13 +257,16 @@ touching the generic proofs.
   model decides each label's slot by a `Merge` constraint that waits for
   the operand's presence, so a spread of a row not yet known has a
   principal type; a scheme keeps its `Merge`s as they are, and the top
-  level decides them. inty instead decides at once, making a field the
-  operand may lack agree with the one it overrides, and unifies two open
-  operands' unknown parts: sound, but it rejects
-  `(function (o) { return {...{a: 1}, ...o}; })({a: "s"})`, which the model
-  accepts, and its verdict can depend on the order of inference. Matching
-  the model would need a deferred spread constraint in inty (a row-level
-  `Spread a b c`, decided once `b` is known), which is still to do.
+  level decides them. inty now does the same with a row-level constraint,
+  `Spread operand so_far result`, posed when the operand's type is still
+  a variable and decided once it is known, field by field as a spread of
+  a known object is; a scheme carries it, so
+  `(function (o) { return {...{a: 1}, ...o}; })({a: "s"})` is accepted,
+  as the model accepts it. Only one left at the top level with its
+  operand never known is decided at once, the operand taken for an object
+  of unknown fields. A spread of an operand whose row is known but open
+  (a parameter whose fields are read) is still decided at once, sharing
+  the open parts.
   Evaluation copies each operand's fields once it is evaluated, as
   JavaScript and `dynamics` do.
 - **Generalisation quantifies every variable the environment doesn't fix.**

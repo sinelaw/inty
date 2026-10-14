@@ -84,6 +84,9 @@ pub struct Parser {
     /// identical classes are then distinct types (JS classes are nominal
     /// by default, matching `new`/`instanceof` semantics).
     class_brands: Vec<String>,
+    /// The spans of the factory functions `class` declarations lowered to
+    /// (`Program::class_decls`).
+    class_decls: Vec<Span>,
     /// Original source text. Used to slice byte ranges out of the source
     /// when we need to reconstruct content the lexer didn't capture as a
     /// JSDoc annotation — currently only TS-style `field: T` annotations
@@ -116,6 +119,7 @@ impl Parser {
             next_fn_is_async: false,
             class_depth: 0,
             class_brands: Vec::new(),
+            class_decls: Vec::new(),
             source,
             base: 0,
         }
@@ -175,6 +179,7 @@ impl Parser {
             span: Span::new(start, end),
             type_aliases: Vec::new(),
             class_brands: std::mem::take(&mut self.class_brands),
+            class_decls: std::mem::take(&mut self.class_decls),
             language: crate::ast::SourceLanguage::JavaScript,
         })
     }
@@ -1714,6 +1719,7 @@ impl Parser {
             span,
         };
 
+        self.class_decls.push(span);
         Ok(Stmt::FunctionDecl {
             name,
             params: ctor_params,
