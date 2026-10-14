@@ -118,6 +118,15 @@ pub fn mentions_this(expr: &Expr) -> bool {
     state.saw_this
 }
 
+/// Whether `this` occurs anywhere in `stmt`, inside nested functions too.
+pub fn mentions_this_in_stmt(stmt: &Stmt) -> bool {
+    let mut state = State::new();
+    state.enter_block();
+    state.collect_block_bindings(std::slice::from_ref(stmt));
+    state.visit_stmt(stmt);
+    state.saw_this
+}
+
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------

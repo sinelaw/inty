@@ -629,7 +629,7 @@ fn try_extensions(candidate: &Path) -> Option<PathBuf> {
     None
 }
 
-fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_path(base_dir: &Path, source: &str) -> Result<PathBuf, String> {
     // Node built-ins (`node:fs`, `fs`, …) resolve to embedded declarations.
     if let Some((name, _)) = crate::stdlib::builtin_module(source) {
         return Ok(PathBuf::from(format!(

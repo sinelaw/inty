@@ -582,8 +582,8 @@ program is left out when it uses what the model lacks (a bitwise
 operator, a comparison of strings or booleans, `&&` or `||` on what isn't
 a boolean, whose result inty types as a union, a builtin, a class (inty's
 parser lowers it to a factory function, which the corpus would then check
-as one; the differential test generates real class declarations), a
-module, a `do`, `for … in` or `for … of` loop, `?.`, `??`) or whose lowering would
+as one; the differential test generates real class declarations), an
+import, a `do`, `for … in` or `for … of` loop, `?.`, `??`) or whose lowering would
 change its meaning (a name used before its declaration, `let x;` without
 an initialiser, a `let` or a parameter taken apart by a test and
 assigned, a getter or a method beside a spread). Of the programs the unit tests check,
@@ -788,11 +788,8 @@ fixed by its first use (`util.fail` used as a number, then as a string,
 which `never` lets through and the model's monomorphic object rejects). The front end that writes inty's unit-test programs for the
 model now also writes `&&` and `||` of any type, a test of a sum's
 truthiness, an early exit (`if (x == null) return …; rest`, the rest
-the test's other branch) and `??`: of the 2,909 programs the unit tests
-check, 2,156 are in the model's fragment, where 1,242 were, and inty and
-the model agree on all but the seven `known.txt` lists. The differential
-generator writes `%` too (about 200 programs per 3,000), and 21 seeds
-agree on it. With `%` in the
+the test's other branch) and `??`. The differential generator writes `%`
+too (about 200 programs per 3,000), and 21 seeds agree on it. With `%` in the
 model (`BinOp.mod`: JavaScript's remainder, the dividend's sign, exact,
 by subtracting doublings of the divisor, each subtraction exact by
 Sterbenz's lemma; tested bit for bit against Node) and the front end
@@ -800,20 +797,68 @@ writing `for (init; test; update) body` as `{ init; while (test) { body;
 update } }` (left out where a `continue` would skip the update or a
 closure sees a loop variable, which JavaScript binds afresh each
 iteration), `x += e` as `x = x + e` and `x++` whose value is dropped as
-`x = x - -1`, 2,538 are, and they agree on all but nine: the two more
+`x = x - -1`, more programs are in the fragment; two more disagreements
 are a member that never completes used at two types (the divergence
 table's second row).
 
-`tests/model_examples.rs` measures the model against inty's examples:
-10 of the 51 JavaScript files under `examples/` (143 of their 4,199
-lines) are in the fragment, and inty and the model agree on each. The
-rest are left out for what the model lacks, by the first construct:
-modules (14 files), the standard library (`Math`, `String`,
-`performance`, `find`, `toFixed`, a declared object: 15), annotated
-functions (5), template literals (2), annotated fields (2), a class
-(which the front end doesn't write yet), a closure seeing a `for` loop's
-variable and a type alias. `%` and `for`, which blocked 13 files, now
-block none.
+Mutual recursion and modules need nothing new in the model either: the
+front end writes them with what it has.
+
+- A group of mutually recursive function declarations (a strongly
+  connected component of the calls between a block's functions, as inty
+  groups them: `docs/scc-inference.md`) is one function returning an
+  object of them, `const G = function () { return {f: …, g: …}; }`,
+  through which they reach each other (`g(…)` in `f` is `G().g(…)`),
+  then each name bound to `function (x₀, …) { return G().f(x₀, …); }`.
+  Inside the group each member has one type, as `G`'s own name has in
+  its body; `G` is generalised, and so is each name, a function: the
+  typing of a strongly connected component, monomorphic inside and
+  generalised after. A member using `this` is left out (through
+  `G().f` its `this` would be the object). A `const` whose function
+  calls itself is the model's function, which binds its own name.
+- A program of several modules (`model_wire::lower_entry`) runs each
+  module once, in the order JavaScript runs them (an importer's imports
+  first, in order). Each module's declarations bind the modules after
+  it, which see only what they import, and an import is the exporting
+  module's binding itself: each use takes a new instance of its scheme,
+  as inty's import of the export's scheme does, `ns.x` of a namespace
+  is the export `x`, and an exported `let` is live. Default exports,
+  export lists with renaming, `export … from`, `export *` and
+  `export * as ns` are the same bindings under other names.
+  `tests/model_modules.rs` checks twelve programs of several modules
+  (polymorphic exports used at two types, live bindings, a module two
+  importers share running once, re-exports, mutual recursion across
+  exports, and two that both reject); inty and the model agree on each,
+  and the model's value is JavaScript's. Left out, as their lowering
+  would change their meaning: an assignment to an import, an imported
+  `let` taken apart by a test that its module assigns, a cycle of
+  imports, and a builtin or declared module.
+
+The corpus (`tests/model_corpus/programs.txt`) now holds 3,181 programs
+in the fragment, and inty and the model agree on all but the eleven
+`known.txt` lists, each a gap or a divergence of the table above. The
+corpus keeps every program it has recorded, and some unit tests generate
+theirs at random, so it grows with each regeneration: of the 2,918
+distinct programs one run of the unit tests checks, 837 are in the
+fragment. (Earlier counts here, "2,156 of the 2,909", compared the
+corpus with one run and overstated the share.) What keeps most of the
+rest out is the standard library (a builtin's property, 980 programs; a
+builtin, 186), then a name used before its declaration where no order
+works (408), and annotated functions (84).
+
+`tests/model_examples.rs` measures the model against inty's examples,
+each file checked as the entry of the modules it imports, by inty as the
+CLI checks it and by the model through `lower_entry`: 13 of the 51
+JavaScript files under `examples/` (169 of their 4,199 lines) are in the
+fragment, and inty and the model agree on each. The rest are left out
+for what the model lacks, by the first construct: the standard library
+(`Math`, `String`, `console`, `performance`, `find`, `toFixed`, `push`, a
+declared object, `node:fs`: 19 files), template literals (9: a
+template's holes are converted to strings, which the model's `+`, of
+operands of one type, can't say), annotated functions (5), annotated
+fields (2), a class (which the front end doesn't write yet), a closure
+seeing a `for` loop's variable and a type alias. `%` and `for`, which
+blocked 13 files, and modules, which blocked 14, now block none.
 
 Each row is recognised from evidence, not guessed: a union in the
 types inty gave the program's expressions, say. (Two rows, `Int` and

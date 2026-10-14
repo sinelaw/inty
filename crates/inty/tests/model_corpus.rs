@@ -84,6 +84,15 @@ fn inty_verdict(source: &str) -> (Typing, Run) {
     })
 }
 
+/// Whether a program is a module that exports.
+fn exports(source: &str) -> bool {
+    inty::frontends::javascript::parse_source(source).is_ok_and(|p| {
+        p.statements
+            .iter()
+            .any(|s| matches!(s, inty::ast::Stmt::Export { .. }))
+    })
+}
+
 /// The model's verdicts (its inference's and its interpreter's), in one
 /// process.
 fn model_verdicts(model: &PathBuf, wires: &[String]) -> Vec<(Typing, Run)> {
@@ -172,7 +181,9 @@ fn the_model_agrees_with_inty_on_its_own_programs() {
         let (it, ir) = &inty[n];
         let i = *it != Typing::Reject;
         let m = *mt != Typing::Reject;
-        let er = engine.as_ref().map(|e| &e[n]);
+        // (The engine runs each program as a script, where an `export` is a
+        // syntax error; a module has no completion value to compare.)
+        let er = engine.as_ref().map(|e| &e[n]).filter(|_| !exports(source));
         let mut note = |what: &'static str| {
             *counts.entry(what).or_default() += 1;
             if FAILING.iter().any(|f| what == *f) {

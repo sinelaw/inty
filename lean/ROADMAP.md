@@ -42,11 +42,12 @@ Paths like `src/infer` are relative to `crates/inty`.
    Lua, check the semantics. (Done for typing on the unit tests' programs
    in the model's fragment, 1242 of them: `inty::model_wire`,
    `tests/model_corpus.rs`, which also compares their types and runs them
-   in `dynamics`, the model and Node; 2,538 of the 2,909 programs the unit
-   tests check are in the fragment. And on the examples:
-   `tests/model_examples.rs` writes each JavaScript file under `examples/`
-   for the model, counts those in the fragment (10 of 51, 143 of 4,199
-   lines) and the first construct the model lacks in each of the others,
+   in `dynamics`, the model and Node; the corpus holds 3,181 programs in
+   the fragment, 837 of the 2,918 one run of the unit tests checks. And on
+   the examples: `tests/model_examples.rs` writes each JavaScript file
+   under `examples/`, with the modules it imports, for the model, counts
+   those in the fragment (13 of 51, 169 of 4,199 lines) and the first
+   construct the model lacks in each of the others,
    and checks inty and the model agree on the ones in it. Not yet: classes,
    which the front end sees lowered.)
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
@@ -525,9 +526,16 @@ touching the generic proofs.
   Next: an annotated function type without `this:` is polymorphic in
   `this`; the model fixes it to `undefined`, as inty does for an
   initialiser.
-- Mutual recursion by strongly connected components
-  (`docs/scc-inference.md`); modules, each `ns.foo` re-instantiating the
-  export's scheme; several files in one run.
+- **Mutual recursion and modules (done, in the model's own terms).** A
+  strongly connected component of mutually recursive functions
+  (`docs/scc-inference.md`) is a function returning an object of them,
+  through which they reach each other, then each name a function calling
+  through it: monomorphic inside the group, generalised after, with no
+  rule of its own. A program of several files runs each module once, in
+  JavaScript's order; an import is the exporting module's binding
+  itself, so each use (and each `ns.foo`) takes a new instance of the
+  export's scheme, and an exported `let` is live
+  (`model_wire::lower_entry`, `tests/model_modules.rs`).
 - Every builtin and standard-library signature as Lean data generated from
   inty's Rust sources, each native function implemented as `dynamics`
   implements it and proved in `V`.

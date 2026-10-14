@@ -23,6 +23,8 @@
 (let (undef) (cond (var 0) (var 0) (bool true)))
 (let (bool false) (cond (var 0) (var 0) (str s:xuP9s%20JyV)))
 (let (bool true) (cond (var 0) (neg (num 488 0)) (var 0)))
+(let (str s:jGE%200W1c2w) (cond (var 0) (ne (neg (num 51 1)) (bool false)) (var 0)))
+(let (bool true) (cond (var 0) (neg (num 3 0)) (var 0)))
 
 # A member that never completes (`fail(msg) { throw msg; }`): inty types
 # its result `never`, so `util.fail` serves at several types; the model's

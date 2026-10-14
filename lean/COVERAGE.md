@@ -18,7 +18,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.func` | `infer_function`, `infer_function_with_this`, `infer_body_return_type` |
 | `HasTypeS.funcCheck` | `check_function_literal`, `infer_function_expecting`, `infer_body_return_type_expecting` |
 | `HasTypeS.app` | `infer_call` |
-| `HasTypeS.let_` | `infer_stmt_var`, `infer_stmt_function_decl`, `generalize` |
+| `HasTypeS.let_` | `infer_stmt_var`, `infer_stmt_function_decl`, `generalize`, `infer_function_group`, `infer_group_with_deps`, `infer_ready_groups` (a group of mutually recursive functions is const G = function () { return {f: …, g: …}; } and each name a function calling G().f, as the front end writes it; a module's import is the exporting module's binding) |
 | `HasTypeS.letPoly` | `check_polymorphic_annotation`, `skolemize` |
 | `HasTypeS.assign` | `infer_assign`, `infer_store_target`, `infer_unary` (x += e is x = x + e, and x++ whose value is dropped is x = x - -1, as the front end writes them) |
 | `HasTypeS.assignCheck` | `infer_assign`, `subsume` (the value subsumed into the variable's type; a rule of the system Sys.inty, not of HasType) |
@@ -62,9 +62,6 @@ Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 
 | inty | Why |
 |---|---|
-| `infer_function_group` | mutually recursive functions (phase 7, strongly connected components) |
-| `infer_group_with_deps` | the same |
-| `infer_ready_groups` | the same |
 | `infer_keyword_call` | Python's keyword arguments |
 | `infer_optional_chain` | `?.` (phase 5) |
 | `infer_rest_array` | destructuring (remaining syntax) |
