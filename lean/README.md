@@ -683,13 +683,13 @@ left on purpose, or places where inty is less precise than the model:
 
 | Divergence | inty | model | Roadmap phase |
 |---|---|---|---|
-| A function that only throws | returns `never`, which nothing else unifies with | a free type variable | 5 |
 | A function literal with fewer parameters than the type expected of it: `f(function () {…})` where `f` calls its argument with one | accepts (extra arguments are ignored) | rejects | 7 |
-| A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | 5 (`never`) |
+| A program that can't complete normally, such as a function whose body only throws | a type of its own (`undefined` for a body that ends in a statement) | a free type variable, which no value has | none yet: inty decides what completes syntactically (`definitely_returns`), the model by typing |
 | A field every arm of a discriminated union has, read without a test of the tag: `v.kind` | accepts (the union of the arms' field types) | rejects (a variant's fields are read once a test takes it apart) | none: intentional ([GAPS.md](GAPS.md)) |
 | A literal type where a type is synthesised: `c ? t : "b"` with `t: "a"` | widens it to `String` | rejects (a literal synthesises `String`, and branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
 | A program whose last statement is a `try` | doesn't type the `try` block's last expression as the program's value | types it | none: intentional ([GAPS.md](GAPS.md)) |
 | A record case after `typeof x !== "object"`: `typeof x === "object" ? 0 : x - 1` with `x: Number \| {a: Number}` | keeps it (a declaration may type a function as a record: `Promise`, `Object`) | drops it (its records are object literals') | a `typeof` for declared values |
+| `a && b` or `a \|\| b` of two types: `"s" && []`, `false \|\| "s"` | what can come out: their union, or `b`'s type alone where `a` is never falsy (an object) | rejects, or `a`'s and `b`'s type made one (branches have one type) | the waiting `Join` |
 | A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | the waiting `Join` (`docs/sum-types-design.md`) |
 
 The nullable join is gone from both: inty now has the model's sums
@@ -771,6 +771,31 @@ returns) is now a recursive type, not an occurs-check failure. With these
 fixes, 21 seeds of 3,000 programs agree with none of the three rows
 these removed (an early exit, a spread of an unknown operand, inty's
 unifier giving up on a spread over a recursive type).
+
+`&&` and `||` are the model's `const t = a; t ? b : t` (`t ? t : b`), and
+a test of a sum's truthiness, `x ? e₃ : e₂`, is `unwrap x e₂ (x' ? e₃ :
+e₂)`, `e₂` running once either way: forms the front end writes, with no
+rule of their own. The generator writes both (about 420 programs with
+`&&` or `||` that both accept per 3,000); inty and the model agree but
+where inty's `&&` and `||` give what can come out, the row above. inty's
+function that never completes (it only throws, or loops forever) now
+returns a type variable, as the model's does, not `never`, which joined
+with no other return type (`c ? f : g`, `[f, g]`, and a callback were
+refused). The front end that writes inty's unit-test programs for the
+model now also writes `&&` and `||` of any type, a test of a sum's
+truthiness, an early exit (`if (x == null) return …; rest`, the rest
+the test's other branch) and `??`: of the 2,909 programs the unit tests
+check, 2,156 are in the model's fragment, where 1,242 were, and inty and
+the model agree on all but the seven `known.txt` lists.
+
+`tests/model_examples.rs` measures the model against inty's examples:
+10 of the 51 JavaScript files under `examples/` (143 of their 4,199
+lines) are in the fragment, and inty and the model agree on each. The
+rest are left out for what the model lacks, by the first construct:
+modules (14 files), `%` (7), `for` (6), the standard library (`String`,
+`Math`, `find`, `toFixed`, a declared object: 6), annotated functions
+(4), annotated fields (2), a class (which the front end doesn't write
+yet) and a type alias.
 
 Each row is recognised from evidence, not guessed: a union in the
 types inty gave the program's expressions, say. (Two rows, `Int` and

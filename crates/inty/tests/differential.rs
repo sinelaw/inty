@@ -207,6 +207,10 @@ enum Core {
     Class(usize, Vec<(String, Member, Core)>),
     /// `new f(a₀, …)`.
     New(Box<Core>, Vec<Core>),
+    /// `e₁ && e₂` (`true`) or `e₁ || e₂`: `const t = e₁; t ? e₂ : t`
+    /// (`t ? t : e₂`), with `e₂` under `t`'s binder but never referring to
+    /// it.
+    Logical(bool, Box<Core>, Box<Core>),
     /// `const v = e₁; v != null ? e₃ : e₂`, with `v` bound in `e₃`; only
     /// in statement position. `e₁ ?? e₂` is `Unwrap(e₁, e₂, Var(0))`.
     Unwrap(Box<Core>, Box<Core>, Box<Core>),
@@ -495,6 +499,8 @@ fn wire(e: &Core) -> String {
             format!("(new {}{})", wire(f), args.concat())
         }
         Unwrap(x, y, z) => format!("(unwrap {} {} {})", wire(x), wire(y), wire(z)),
+        Logical(true, x, y) => format!("(let {} (cond (var 0) {} (var 0)))", wire(x), wire(y)),
+        Logical(false, x, y) => format!("(let {} (cond (var 0) (var 0) {}))", wire(x), wire(y)),
         CaseTag(x, l, t, y, z, _) => format!(
             "(casetag {} s:{} {} {} {})",
             wire(x),
@@ -567,6 +573,14 @@ impl Js {
             Str(s) => format!("\"{}\"", s),
             Bool(v) => v.to_string(),
             Undef => "(void 0)".into(),
+            Logical(and, x, y) => {
+                let x = self.expr(x);
+                // `y` never refers to the binder it is under.
+                self.names.push("hidden".into());
+                let y = self.expr(y);
+                self.names.pop();
+                format!("({x} {} {y})", if *and { "&&" } else { "||" })
+            }
             Null => "null".into(),
             Var(i) => self.name(*i),
             Func(n, body) => {
@@ -794,6 +808,24 @@ impl Js {
             }
             // `const v = e₁;`, then a test that `v` holds something, which
             // inty narrows `v` by in the branch that sees it.
+            Unwrap(e1, e2, e3) if truthy_test(e2, e3).is_some() => {
+                let (none, some) = truthy_test(e2, e3).unwrap();
+                let v = self.fresh("v");
+                let init = self.expr(e1);
+                if is_stmt(none) || is_stmt(some) {
+                    let no = self.stmts(none, last);
+                    self.names.push(v.clone());
+                    let yes = self.stmts(some, last);
+                    self.names.pop();
+                    format!("const {v} = {init}; if ({v}) {{ {yes} }} else {{ {no} }}")
+                } else {
+                    let no = self.expr(none);
+                    self.names.push(v.clone());
+                    let yes = self.expr(some);
+                    self.names.pop();
+                    format!("const {v} = {init}; {last}({v} ? {yes} : {no});")
+                }
+            }
             Unwrap(e1, e2, e3) => {
                 let v = self.fresh("v");
                 let init = self.expr(e1);
@@ -919,6 +951,93 @@ impl Js {
     }
 }
 
+/// `e` with its variables from `c` on moved up by `d`: `e` put under `d`
+/// more binders (at `c` binders deep).
+fn shift(e: &Core, c: usize, d: usize) -> Core {
+    let s = |x: &Core, k: usize| b(shift(x, c + k, d));
+    let v = |j: usize| if j >= c { j + d } else { j };
+    match e {
+        Num(m, x) => Num(*m, *x),
+        Str(x) => Str(x.clone()),
+        Bool(x) => Bool(*x),
+        Undef => Undef,
+        Null => Null,
+        Break => Break,
+        Continue => Continue,
+        Var(j) => Var(v(*j)),
+        Assign(j, x) => Assign(v(*j), s(x, 0)),
+        Func(n, body) => Func(*n, s(body, n + 2)),
+        Method(n, body) => Method(*n, s(body, n + 2)),
+        Getter(body) => Getter(s(body, 2)),
+        App(f, args) => App(s(f, 0), args.iter().map(|a| shift(a, c, d)).collect()),
+        New(f, args) => New(s(f, 0), args.iter().map(|a| shift(a, c, d)).collect()),
+        MCall(x, l, args) => MCall(
+            s(x, 0),
+            l.clone(),
+            args.iter().map(|a| shift(a, c, d)).collect(),
+        ),
+        Let(m, ann, x, y) => Let(*m, ann.clone(), s(x, 0), s(y, 1)),
+        Logical(a, x, y) => Logical(*a, s(x, 0), s(y, 1)),
+        TryCatch(x, y) => TryCatch(s(x, 0), s(y, 1)),
+        Unwrap(x, y, z) => Unwrap(s(x, 0), s(y, 0), s(z, 1)),
+        CaseTag(x, l, t, y, z, r) => {
+            CaseTag(s(x, 0), l.clone(), t.clone(), s(y, 1), s(z, 1), r.clone())
+        }
+        TypeTest(x, t, y, z) => TypeTest(s(x, 0), t.clone(), s(y, 1), s(z, 1)),
+        Cond(x, y, z) => Cond(s(x, 0), s(y, 0), s(z, 0)),
+        Not(x) => Not(s(x, 0)),
+        Typeof(x) => Typeof(s(x, 0)),
+        Neg(x) => Neg(s(x, 0)),
+        Ret(x) => Ret(s(x, 0)),
+        Throw(x) => Throw(s(x, 0)),
+        Plus(x, y) => Plus(s(x, 0), s(y, 0)),
+        Minus(x, y) => Minus(s(x, 0), s(y, 0)),
+        Bin(o, x, y) => Bin(*o, s(x, 0), s(y, 0)),
+        Seq(x, y) => Seq(s(x, 0), s(y, 0)),
+        While(x, y) => While(s(x, 0), s(y, 0)),
+        TryFinally(x, y) => TryFinally(s(x, 0), s(y, 0)),
+        Spread(x, y) => Spread(s(x, 0), s(y, 0)),
+        Index(x, y) => Index(s(x, 0), s(y, 0)),
+        Get(x, l) => Get(s(x, 0), l.clone()),
+        Set(x, l, y) => Set(s(x, 0), l.clone(), s(y, 0)),
+        SetIndex(x, y, z) => SetIndex(s(x, 0), s(y, 0), s(z, 0)),
+        Obj(fields) => Obj(fields
+            .iter()
+            .map(|(l, x)| (l.clone(), shift(x, c, d)))
+            .collect()),
+        Arr(es) => Arr(es.iter().map(|x| shift(x, c, d)).collect()),
+        Class(n, members) => {
+            let mut fields = 0;
+            Class(
+                *n,
+                members
+                    .iter()
+                    .map(|(l, m, x)| {
+                        let k = match m {
+                            Member::Field => {
+                                fields += 1;
+                                n + 2 + fields - 1
+                            }
+                            _ => n + 2,
+                        };
+                        (l.clone(), *m, shift(x, c + k, d))
+                    })
+                    .collect(),
+            )
+        }
+    }
+}
+
+/// `x ? z : y` on a sum of nothing, as the model has it:
+/// `unwrap x y (x' ? z : y)`, the second `y` the first under the binder
+/// (and so never referring to it): `Some((y, z))`.
+fn truthy_test<'a>(y: &'a Core, z: &'a Core) -> Option<(&'a Core, &'a Core)> {
+    match z {
+        Cond(c, t, f) if matches!(**c, Var(0)) && wire(f) == wire(&shift(y, 0, 1)) => Some((y, t)),
+        _ => None,
+    }
+}
+
 /// Whether `e` refers to variable `i` from inside a function nested in it
 /// (`inner`: already inside one), where JavaScript's `this` would mean the
 /// nested function's.
@@ -946,7 +1065,9 @@ fn refers_from_inner(e: &Core, i: usize, inner: bool) -> bool {
         | TryFinally(x, y)
         | Spread(x, y)
         | Index(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i, inner),
-        TryCatch(x, y) => refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner),
+        TryCatch(x, y) | Logical(_, x, y) => {
+            refers_from_inner(x, i, inner) || refers_from_inner(y, i + 1, inner)
+        }
         Unwrap(x, y, z) => {
             refers_from_inner(x, i, inner)
                 || refers_from_inner(y, i, inner)
@@ -1524,6 +1645,16 @@ impl Gen {
                 return s;
             }
         }
+        // `a && b` or `a || b`, both of this type: the model's
+        // `const t = a; t ? b : t`, whose branches have one type.
+        if depth > 0 && self.rng.chance(6) {
+            let and = self.rng.chance(50);
+            let x = self.typed(t, d, scope, false);
+            scope.push(Binding::Hidden);
+            let y = self.typed(t, d, scope, false);
+            scope.pop();
+            return Logical(and, b(x), b(y));
+        }
         // A read, or a write, of a property of this type.
         if depth > 0 && self.rng.chance(12) {
             let l = self.label();
@@ -1608,6 +1739,13 @@ impl Gen {
                 self.typed(t, d, scope, true)
             };
             scope.pop();
+            // A test of a sum's truthiness, `v ? e₃ : e₂`: inty takes the
+            // value apart in `e₃`; the model's `unwrap v e₂ (v' ? e₃ : e₂)`
+            // does, `e₂` running once either way.
+            if matches!(e1, Var(_)) && self.rng.chance(40) {
+                let e3 = Cond(b(Var(0)), b(e3), b(shift(&e2, 0, 1)));
+                return Unwrap(b(e1), b(e2), b(e3));
+            }
             return Unwrap(b(e1), b(e2), b(e3));
         }
         if stmt && depth > 0 && self.rng.chance(25) {
@@ -2583,11 +2721,6 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
         features.insert("fewer parameters");
     }
     shown.extend(errors);
-    for text in &shown {
-        if text.contains("never") {
-            features.insert("never");
-        }
-    }
     (typing, features)
 }
 
@@ -2634,16 +2767,6 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(_), Typing::Reject) if features.contains("fewer parameters") => {
             Some("fewer parameters than the expected function type")
         }
-        // inty types what never returns (a function that only throws)
-        // `never`, the empty union, which unifies with nothing else and
-        // can't be called, as in TypeScript; the model leaves it a free
-        // type variable.
-        (Typing::Reject, Typing::Type(_)) if features.contains("never") => {
-            Some("never (a function that only throws)")
-        }
-        (Typing::Type(t), Typing::Type(_)) if t == "never" => {
-            Some("never (a function that only throws)")
-        }
         // The model types a program that can't complete normally (it only
         // throws, or a function in it falls off its end only after a
         // `throw`) with a free type variable, which no value has; inty
@@ -2673,6 +2796,20 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // inty keeps a record case after `typeof x !== "object"`: a
         // declaration may type a function as a record (`Promise`); the
         // model's records are only object literals'.
+        // inty types `a && b` (`a || b`) as what can come out: `b` alone
+        // when `a` is never falsy (an object, an array, a function), with
+        // no relation to `a`'s type; the model's `const t = a; t ? b : t`
+        // gives both branches one type. Both accept; inty's type is the
+        // more general one.
+        (Typing::Type(_), Typing::Type(_)) if features.contains("logical") => {
+            Some("`&&` or `||` on what is never falsy (inty's type is `b`'s alone)")
+        }
+        // inty joins the operands of `&&` or `||` of two known types into
+        // their union, which the model's branches, of one type, don't (the
+        // waiting `Join`, as for a sum joined with one of its cases).
+        (Typing::Type(_), Typing::Reject) if features.contains("logical") => {
+            Some("`&&` or `||` of two types inty joins (the waiting `Join`)")
+        }
         (Typing::Reject | Typing::Type(_), Typing::Type(_))
             if features.contains("typeof object") =>
         {
@@ -2778,6 +2915,7 @@ fn scan_held(
         Func(n, body) | Method(n, body) => under(held, &vec![None; n + 2], body, true),
         Getter(body) => under(held, &[None, None], body, true),
         TryCatch(x, y) => scan_held(x, held, used, hit) || under(held, &[None], y, used),
+        Logical(_, x, y) => go(held, x) || under(held, &[None], y, used),
         Unwrap(x, y, z) => {
             go(held, x) || scan_held(y, held, used, hit) || under(held, &[None], z, used)
         }
@@ -2869,6 +3007,9 @@ fn inty_agrees_with_the_lean_model() {
         if tests_typeof_object(core) {
             features.insert("typeof object");
         }
+        if js.contains(" && ") || js.contains(" || ") {
+            features.insert("logical");
+        }
         if ends_in_try(core) {
             features.insert("try at end");
         }
@@ -2951,7 +3092,10 @@ fn inty_agrees_with_the_lean_model() {
             eprintln!("{}", report("sum disagreement"));
         }
         for (form, what) in [
-            ("(unwrap ", "with a test for nothing (`!= null`, `??`)"),
+            (
+                "(unwrap ",
+                "with a test for nothing (`!= null`, `??`, truthiness)",
+            ),
             ("(nullable ", "with a `T | Null` annotation"),
             ("(optional ", "with a `T | Undefined` annotation"),
             ("(variant ", "with a variant annotation"),
@@ -2976,6 +3120,18 @@ fn inty_agrees_with_the_lean_model() {
                     ))
                     .or_default() += 1;
             }
+        }
+        if sources[i].contains(" && ") || sources[i].contains(" || ") {
+            *counts
+                .entry(format!(
+                    "with `&&` or `||`, {}",
+                    match (accepted, model_accepted) {
+                        (true, true) => "both accept",
+                        (false, false) => "both reject",
+                        _ => "they disagree",
+                    }
+                ))
+                .or_default() += 1;
         }
         if wire(&programs[i]).contains("ann ") {
             *counts

@@ -42,8 +42,13 @@ Paths like `src/infer` are relative to `crates/inty`.
    Lua, check the semantics. (Done for typing on the unit tests' programs
    in the model's fragment, 1242 of them: `inty::model_wire`,
    `tests/model_corpus.rs`, which also compares their types and runs them
-   in `dynamics`, the model and Node. Not yet: the examples, which use what
-   the model lacks, and classes, which the corpus sees lowered.)
+   in `dynamics`, the model and Node; 2,156 of the 2,909 programs the unit
+   tests check are in the fragment. And on the examples:
+   `tests/model_examples.rs` writes each JavaScript file under `examples/`
+   for the model, counts those in the fragment (10 of 51, 143 of 4,199
+   lines) and the first construct the model lacks in each of the others,
+   and checks inty and the model agree on the ones in it. Not yet: classes,
+   which the front end sees lowered.)
 5. **Every phase ends green.** `lake build` with no `sorry`; soundness, and
    inference sound and complete, for everything modelled so far (one
    exception, stated where it arises: completeness for polymorphic
@@ -346,10 +351,19 @@ touching the generic proofs.
   function or class defined after it (inty is imprecise there, a row of
   the README's divergence table). Reading a field every case has without
   a test is left out on purpose ([GAPS.md](GAPS.md)).
-- Still to come: `never`; `&&` and `||`; operations pushed through each
-  arm of a union; a declared union absorbing its arms (the waiting
-  `Join`, `docs/sum-types-design.md`); narrowing by truthiness and `==`,
-  and in loops; a `switch`'s exhaustiveness check. Subsumption only where
+- **`&&`, `||`, truthiness and `never` (done, in the model's own terms).**
+  `a && b` is `const t = a; t ? b : t` (`t ? t : b` for `||`), and a test
+  of a sum's truthiness, `x ? e₃ : e₂`, is `unwrap x e₂ (x' ? e₃ : e₂)`:
+  forms the front end writes, with no rule of their own. What never
+  completes has a type variable for its type, which no value has; inty's
+  function that never completes now returns one too, rather than `never`,
+  which joined with no other return type. Where inty's `&&` and `||` give
+  what can come out of two different types, it is the waiting `Join`.
+- Still to come: operations pushed through each arm of a union; a
+  declared union absorbing its arms (the waiting `Join`,
+  `docs/sum-types-design.md`), which `&&` and `||` of two types need too;
+  narrowing by `==`, and in loops; a `switch`'s exhaustiveness check;
+  `?.`. Subsumption only where
   `src/infer` applies it, never as a general conversion rule. The
   semantic relation handles narrowing as "Revisiting Soundness for
   Occurrence Typing, Semantically" (arXiv 2609.16299) does.
@@ -461,9 +475,10 @@ touching the generic proofs.
     which `e₃` sees) and the rest (`ρ`, a variant of the other cases or the
     one left, which `e₂` sees). A variant's values are its cases', each a
     record whose tag field holds its tag (`V`). Soundness and inference
-    sound and complete. Not yet: `switch` on the tag and its exhaustiveness,
-    and a field read on a variant without a test of the tag (one every case
-    has, which inty allows).
+    sound and complete. A `switch` on the tag is a chain of these tests
+    (phase 5). Not yet: its exhaustiveness check. Left out on purpose
+    ([GAPS.md](GAPS.md)): a field read on a variant without a test of the
+    tag (one every case has, which inty allows).
 
   inty matches: an object literal checked against a discriminated union
   takes the arm whose tag it writes, when several arms have its shape and

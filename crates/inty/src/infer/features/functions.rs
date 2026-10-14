@@ -243,8 +243,8 @@ impl InferState {
     /// Infer a function-like body in its own `return`-collection frame and
     /// derive the type it returns: the join of every explicit `return`'s
     /// value, plus `Undefined` when control can fall off the end. A body
-    /// that diverges with no `return` (e.g. `while True: …`) yields
-    /// `never`, which subsumes into any declared type. When `widen`, each
+    /// that diverges with no `return` (e.g. `while True: …`) yields a
+    /// fresh type variable: it gives no value, so any type will do. When `widen`, each
     /// returned literal is widened to its base (the unannotated-inference
     /// rule) *before* joining, so `return 0; return n - 1;` doesn't try to
     /// unify `Lit(0)` with `Number`.
@@ -292,7 +292,12 @@ impl InferState {
             }
         }
         Ok(if parts.is_empty() {
-            Type::never()
+            // A body that never completes (it only throws, or loops
+            // forever) gives no value: any type is its result, a type
+            // variable the binding generalises, as the Lean model leaves
+            // it. (`never`, the empty union, unified with no other return
+            // type: `c ? f : g` with `g` returning a number was refused.)
+            self.fresh_type_var()
         } else {
             let mut acc = parts[0].clone();
             for t in &parts[1..] {
