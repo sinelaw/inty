@@ -501,6 +501,35 @@ small programs, more store something else into a cell than read one. So
 the climb ends with untyped cells (69.9% typed) rather than ML's (67.8%).
 Both are sound. The objective decides, and here it isn't ML's.
 
+**The model** (`cargo run --release --example climb_walkthrough`, 56
+minutes) climbs from 11.4% of safe programs typed (577 ground rules) to
+68.7% with 59 rules. It keeps type variables (577 rules become 47), refined
+sorts, exit types, unions, binders and narrowing:
+
+```
+step  0: start                          11.4%   577 rules  kept
+step  1: + type variables               28.3%    47 rules  kept
+step  2: + refined sorts                30.6%    52 rules  kept
+step  3: + binders                      49.9%  1 unsound   dropped
+step  5: + exit types                   32.2%    53 rules  kept
+step  7: + unions                       34.4%    53 rules  kept
+step  9: + binders (again)              68.7%    61 rules  kept
+step 12: + narrowing                    68.7%    59 rules  kept (smaller)
+steps 15-20: removing any of them loses programs, adds rules, or is unsound
+```
+
+Two things to follow up:
+
+- **`let`-generalisation is never kept.** It types no more of the fixed
+  programs, which are small and rarely use a `let`-bound function at two
+  types. The measure undervalues it.
+- **The check caught unsound systems four times.** Binders before exit
+  types (1 unsound), generalisation at step 10 (1), and removing refined
+  sorts (74) or type variables (25) late on. The climb dropped them all.
+  But each means the search chose a rule its attacks didn't break, so
+  these are leads for the attacks. Without refined sorts, for one, `app1`
+  may be given a rule with nothing to say what a call returns.
+
 **What had to change:**
 
 - **Comparable runs.** Coverage is measured on a fixed set of programs:
