@@ -45,6 +45,8 @@ pub struct Config {
     /// Child terms whose value is tested in all instances of its type at
     /// once, to choose a generalisation policy.
     pub poly_tests: usize,
+    /// Bodies up to this size are enumerated for the aimed tests.
+    pub aimed_size: usize,
     pub seed: u64,
 }
 
@@ -62,6 +64,7 @@ impl Default for Config {
             typed_terms: 4000,
             typed_size: 14,
             poly_tests: 300,
+            aimed_size: 6,
             seed: 1,
         }
     }
@@ -393,6 +396,10 @@ fn check<L: Language>(
     c
 }
 
+/// A binder `(con, child, index)`, a policy tried for it, how many terms it
+/// would generalise, and the term that refuted it, if one did.
+pub type Trial = ((usize, usize, usize), Policy, usize, Option<String>);
+
 /// How each binder's variables are generalised, and why.
 #[derive(Clone, Default)]
 pub struct Generalisation {
@@ -400,7 +407,7 @@ pub struct Generalisation {
     pub inert: Vec<bool>,
     /// Per policy tried: the binder, the policy, programs it typed that
     /// the next stricter one didn't, and a typed program that got stuck.
-    pub trials: Vec<((usize, usize, usize), Policy, usize, Option<String>)>,
+    pub trials: Vec<Trial>,
 }
 
 /// Which constructors make syntactic values: those that, given children
@@ -425,6 +432,19 @@ fn inert<L: Language>(lang: &L) -> Vec<bool> {
             }
         })
         .collect()
+}
+
+/// Whether `t` mentions variable `idx` (de Bruijn, shifted under binders)
+/// by a constructor of `kind`: reads it, or assigns it.
+fn touches(t: &Term, idx: usize, kind: Kind, sig: &[crate::lang::Con]) -> bool {
+    let c = &sig[t.con];
+    if c.kind == kind && t.atom == Atom::Int(idx as i64) {
+        return true;
+    }
+    t.kids
+        .iter()
+        .zip(&c.binds)
+        .any(|(k, b)| touches(k, idx + b, kind, sig))
 }
 
 /// The corpus, the values it reaches, and the smallest term giving each.
@@ -609,6 +629,7 @@ fn poly_member<L: Language>(
 /// at once (`Semantics::holds_poly`), and it is worth having only if it
 /// generalises some. The child terms tried are the corpus and programs
 /// generated well typed.
+#[allow(clippy::too_many_arguments)]
 fn generalise<L: Language>(
     lang: &L,
     oracle: &mut Oracle<L>,
@@ -643,6 +664,128 @@ fn generalise<L: Language>(
     for n in 0..cfg.typed_terms {
         inits.extend(checker.generate(rng, 3 + n % cfg.typed_size));
     }
+    // And, aimed at state that outlives its initialiser: a binder whose
+    // body makes a refined value (a function) that may keep the binder's
+    // cell, with assignments likely.
+    let sig = lang.signature();
+    let binding: Vec<bool> = (0..sig.len())
+        .map(|c| binders.iter().any(|((b, ..), _)| *b == c))
+        .collect();
+    let makers: Vec<bool> = (0..sig.len())
+        .map(|c| {
+            rules
+                .iter()
+                .any(|r| r.con == c && matches!(r.res, Ty::Ref(..)))
+        })
+        .collect();
+    let mut aimed = checker_for(lang, sem, rules, &gen);
+    aimed.assign_weight = 6;
+    // Inside the function, constructors that commit to no sort: where
+    // state is moved around rather than computed on.
+    let structural: Vec<bool> = (0..sig.len())
+        .map(|c| {
+            sig[c].kind != Kind::Op
+                || (rules.iter().any(|r| r.con == c)
+                    && rules
+                        .iter()
+                        .filter(|r| r.con == c)
+                        .all(|r| r.types().all(|t| !matches!(t, Ty::Base(_)))))
+        })
+        .collect();
+    let shape = [binding, makers, structural];
+    // The binder's initial value: a syntactic value with a polymorphic type,
+    // what generalising would act on.
+    let poly_values: Vec<Term> = corpus
+        .iter()
+        .filter(|t| gen.inert[t.con] && t.size() <= 3)
+        .filter(|t| checker.types(t).iter().any(|ty| !ty.is_ground()))
+        .cloned()
+        .collect();
+    let mut aimed_inits = Vec::new();
+    // Exhaustively, small: `binder(value, maker(body))` for every body up to
+    // size 5 of structural constructors that assigns something.
+    let assigns = |t: &Term| -> bool {
+        fn go(t: &Term, sig: &[crate::lang::Con]) -> bool {
+            sig[t.con].kind == Kind::Assign || t.kids.iter().any(|k| go(k, sig))
+        }
+        go(t, sig)
+    };
+    // A value whose type shares a variable between positions behaves
+    // parametrically, like `(x) => x`: the one whose instances a cell can
+    // confuse.
+    let shares = |t: &Term| {
+        checker.types(t).iter().any(|ty| {
+            let mut vs = Vec::new();
+            fn all(t: &Ty, out: &mut Vec<u32>) {
+                match t {
+                    Ty::Var(v) => out.push(*v),
+                    Ty::Base(_) => {}
+                    Ty::Ref(_, ps) => ps.iter().for_each(|p| all(p, out)),
+                }
+            }
+            all(ty, &mut vs);
+            let n = vs.len();
+            vs.sort();
+            vs.dedup();
+            vs.len() < n
+        })
+    };
+    if let Some(value) = poly_values
+        .iter()
+        .find(|t| shares(t))
+        .or(poly_values.first())
+    {
+        let mut en = Enumerator::new(sig, cfg.aimed_size);
+        en.allowed = Some(shape[2].clone());
+        en.cap = 200_000;
+        for (b, &is_binder) in shape[0].iter().enumerate() {
+            if !is_binder {
+                continue;
+            }
+            let Some(&((_, i, _), k)) = binders.iter().find(|((c, ..), _)| *c == b) else {
+                continue;
+            };
+            for (m, &is_maker) in shape[1].iter().enumerate() {
+                if !is_maker || sig[m].arity != 1 {
+                    continue;
+                }
+                let depth = sig[b].binds[i] + sig[m].binds[0];
+                // The binder's variable, as the body sees it.
+                let outer = sig[m].binds[0] + sig[b].binds[i] - 1 - (sig[b].binds[i] - 1);
+                for body in en.up_to(cfg.aimed_size, depth) {
+                    // State can leak between instances only if the function
+                    // both writes and reads the cell.
+                    if !assigns(&body)
+                        || !touches(&body, outer, Kind::Assign, sig)
+                        || !touches(&body, outer, Kind::Var, sig)
+                    {
+                        continue;
+                    }
+                    let mut kids = vec![value.clone(); sig[b].arity];
+                    kids[i] = Term::new(m, vec![body]);
+                    kids[k] = value.clone();
+                    aimed_inits.push(Term::new(b, kids));
+                }
+            }
+        }
+    }
+    for n in 0..cfg.typed_terms * 2 {
+        let Some(mut t) = aimed.generate_shaped(rng, 7 + n % 8, &shape) else {
+            continue;
+        };
+        if !poly_values.is_empty() {
+            let (_, k) = binders
+                .iter()
+                .find(|((b, ..), _)| *b == t.con)
+                .copied()
+                .unwrap();
+            t.kids[k] = poly_values[rng.below(poly_values.len())].clone();
+            if aimed.types(&t).is_empty() {
+                continue;
+            }
+        }
+        aimed_inits.push(t);
+    }
     if std::env::var_os("TYSEARCH_TRACE").is_some() {
         eprintln!(
             "    generated initialisers in {:.2}s",
@@ -658,10 +801,49 @@ fn generalise<L: Language>(
     let mut seen = HashSet::new();
     inits.retain(|t| seen.insert(t.clone()));
     inits.sort_by_key(|t| (gen.inert[t.con], t.size()));
+    aimed_inits.retain(|t| seen.insert(t.clone()));
+    aimed_inits.sort_by_key(|t| t.size());
+    if std::env::var_os("TYSEARCH_TRACE").is_some() {
+        let shown: Vec<String> = aimed_inits.iter().map(|t| lang.show_term(t)).collect();
+        let at = shown.iter().position(|s| s.contains("seq(x3 =(x1), x0)"));
+        eprintln!(
+            "    swap-like at {at:?} of {}: {:?}",
+            shown.len(),
+            at.map(|i| &shown[i])
+        );
+    }
+    if std::env::var_os("TYSEARCH_TRACE").is_some() {
+        eprintln!("    {} aimed initialisers, e.g.", aimed_inits.len());
+        for t in aimed_inits
+            .iter()
+            .step_by((aimed_inits.len() / 8).max(1))
+            .take(8)
+        {
+            eprintln!("      {}", lang.show_term(t));
+        }
+    }
+    // Each list gets its own allowance: the aimed terms are bigger, and
+    // sorted with the rest would never be reached.
+    // Three allowances: plain non-values, plain values, aimed terms.
     let mut tested = 0;
-    for t in inits {
-        if tested >= cfg.poly_tests {
-            break;
+    let n_values = inits
+        .iter()
+        .position(|t| gen.inert[t.con])
+        .unwrap_or(inits.len());
+    let n_plain = inits.len();
+    inits.extend(aimed_inits);
+    for (i, t) in inits.into_iter().enumerate() {
+        if i == n_plain || i == n_values {
+            tested = 0;
+        }
+        // The aimed terms are many: all of them get a quick screen.
+        let cap = if i >= n_plain {
+            usize::MAX
+        } else {
+            cfg.poly_tests
+        };
+        if tested >= cap {
+            continue;
         }
         // A value of an unrefined sort has a ground type: nothing to
         // generalise, and no need to type it.
@@ -684,7 +866,11 @@ fn generalise<L: Language>(
         };
         typing += t0.elapsed().as_secs_f64();
         tested += 1;
-        let ok = poly_member(oracle, sem, rules, &v, &ty, 16, rng);
+        if i >= n_plain && std::env::var_os("TYSEARCH_TRACE").is_some() && tested <= 6 {
+            eprintln!("      tested {} : {:?}", lang.show_term(&t), ty);
+        }
+        let rounds = if i >= n_plain { 6 } else { 16 };
+        let ok = poly_member(oracle, sem, rules, &v, &ty, rounds, rng);
         verdicts.push((gen.inert[t.con], ok, t, ty));
     }
     if std::env::var_os("TYSEARCH_TRACE").is_some() {

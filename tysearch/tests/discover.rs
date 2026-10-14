@@ -71,12 +71,12 @@ fn core_finds_the_plus_class() {
     assert_eq!(d.check.unsound, 0);
 }
 
-/// Iterations 1 and 3: functions, calls, `let`, assignment and `e₁; e₂`.
-/// The rules are the Lean model's (`lean/Inty/Typing.lean`), found from
-/// its semantics alone: T3 and T4 are the functions of one and two
-/// parameters, refined by what a call gives (`T3<a -> b>` is `(a) => b`).
-/// Where they differ, the semantics allows more than inty's rules do,
-/// soundly:
+/// Iterations 1, 3 and 4: functions, calls, `let`, assignment and
+/// `e₁; e₂`. The rules are the Lean model's (`lean/Inty/Typing.lean`),
+/// found from its semantics alone: T3 and T4 are the functions of one and
+/// two parameters, refined by what a call gives (`T3<a -> b>` is
+/// `(a) => b`). Where they differ, the semantics allows more than inty's
+/// rules do, soundly:
 ///
 /// - T2 is booleans with `undefined` and `null`: nothing in this fragment
 ///   gets stuck on one and not the other.
@@ -85,14 +85,15 @@ fn core_finds_the_plus_class() {
 /// - A one-parameter function may be called with two arguments: the extra
 ///   one is ignored.
 ///
-/// And one known gap: `let` generalises always, where inty has the value
-/// restriction. Generalising a non-value is unsound only through a closure
-/// over a fresh cell that hands back what it stored; the semantic test
-/// refutes such a closure (`model_value_restriction_counterexample`), but
-/// the smallest has ten nodes, beyond what generation reaches.
+/// And `let` generalises only syntactic values, inty's value restriction:
+/// generalising always is refuted by a closure over a fresh cell that
+/// hands back at one instance what it stored at another, which the search
+/// builds itself.
 #[test]
-fn model_finds_functions_and_state() {
-    let d = discover(&Model::default(), &Config::default());
+fn model_finds_functions_state_and_the_value_restriction() {
+    let m = Model::default();
+    let cfg = Config::default();
+    let d = discover(&m, &cfg);
     assert_eq!(
         rules(&d),
         sorted(&[
@@ -125,18 +126,20 @@ fn model_finds_functions_and_state() {
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);
     let lets: Vec<Policy> = d.generalisation.policies.values().map(|p| p.0).collect();
-    assert_eq!(lets, vec![Policy::Always]);
-}
+    assert_eq!(lets, vec![Policy::IfValue]);
+    let always = d
+        .generalisation
+        .trials
+        .iter()
+        .find(|t| t.1 == Policy::Always)
+        .unwrap();
+    assert!(always.3.is_some(), "generalising always should be refuted");
 
-/// The counterexample to generalising non-values in the model, built by
-/// hand: `let c = (x) => x in (p) => { let old = c; c = p; old }`, whose
-/// type `((a) => a) => (a) => a` has a free variable, but whose value hands
-/// back at one instance what it stored at another.
-#[test]
-fn model_value_restriction_counterexample() {
-    let m = Model::default();
-    let cfg = Config::default();
-    let d = discover(&m, &cfg);
+    // The textbook counterexample, built by hand, is refuted too:
+    // `let c = (x) => x in (p) => { let old = c; c = p; old }`, whose type
+    // `((a) => a) => (a) => a` has a free variable, but whose value hands
+    // back at one instance what it stored at another; while the identity
+    // is in every instance of its type.
     let c = |n: &str| m.con(n);
     let var = |i: i64| Term::leaf(c("var"), Atom::Int(i));
     let node = |n: &str, kids: Vec<Term>| Term::new(c(n), kids);
@@ -156,7 +159,6 @@ fn model_value_restriction_counterexample() {
         ],
     );
     assert_eq!(generalisable(&m, &cfg, &d, &swap), Some(false));
-    // And the identity itself is in every instance of its type.
     assert_eq!(
         generalisable(&m, &cfg, &d, &node("func1", vec![var(0)])),
         Some(true)

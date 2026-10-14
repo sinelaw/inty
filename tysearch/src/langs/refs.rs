@@ -31,8 +31,15 @@ const SEQ: usize = 12;
 const VAR: usize = 13;
 
 /// A reference cell. Two are equal only if they are the same cell.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Cell_(Rc<RefCell<Val>>);
+
+/// Not its contents: a reference can come to hold itself.
+impl std::fmt::Debug for Cell_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ref@{:p}", Rc::as_ptr(&self.0))
+    }
+}
 
 impl PartialEq for Cell_ {
     fn eq(&self, other: &Cell_) -> bool {
@@ -218,7 +225,11 @@ impl Language for Refs {
             Val::Num(n) => n.to_string(),
             Val::Bool(b) => b.to_string(),
             Val::Clo(c) => format!("fn({})", self.show_term(&c.0)),
-            Val::Ref(c) => format!("ref {}", self.show_value(&c.0.borrow())),
+            // One level: a reference can hold itself.
+            Val::Ref(c) => match &*c.0.borrow() {
+                Val::Ref(_) => "ref ref ...".into(),
+                v => format!("ref {}", self.show_value(v)),
+            },
         }
     }
 }

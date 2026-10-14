@@ -52,8 +52,15 @@ const ASSIGN: usize = 21;
 const SEQ: usize = 22;
 
 /// A variable's cell. Two are equal only if they are the same cell.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Slot(Rc<RefCell<Val>>);
+
+/// Not its contents: a closure stored in a cell it captures is a cycle.
+impl std::fmt::Debug for Slot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cell@{:p}", Rc::as_ptr(&self.0))
+    }
+}
 
 impl Slot {
     fn new(v: Val) -> Slot {

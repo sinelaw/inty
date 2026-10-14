@@ -240,9 +240,16 @@ impl Checker {
     /// construction: built top down from the rules, each choice unified
     /// with what it must be, backtracking a little on failure.
     pub fn generate(&self, rng: &mut Rng, size: usize) -> Option<Term> {
+        self.generate_shaped(rng, size, &[])
+    }
+
+    /// As `generate`, the constructors along the path of last children
+    /// restricted: `shape[d]` says which may stand at depth `d` (say, a
+    /// `let` whose body is a function).
+    pub fn generate_shaped(&self, rng: &mut Rng, size: usize, shape: &[Vec<bool>]) -> Option<Term> {
         let mut u = Unifier::default();
         let want = u.fresh();
-        let t = self.gen(rng, &mut u, &mut Vec::new(), &want, size, &mut 64)?;
+        let t = self.gen(rng, &mut u, &mut Vec::new(), &want, size, &mut 64, shape)?;
         // Generation can type a term in ways inference won't find (an
         // overload branch past the cap): keep only what the checker types.
         (!self.types(&t).is_empty()).then_some(t)
@@ -256,7 +263,9 @@ impl Checker {
         want: &Ty,
         size: usize,
         fuel: &mut usize,
+        shape: &[Vec<bool>],
     ) -> Option<Term> {
+        let here = shape.first();
         if *fuel == 0 {
             return None;
         }
@@ -270,6 +279,9 @@ impl Checker {
         let mut choices = Vec::new();
         let rules: Vec<&Schema> = self.by_con.iter().flatten().collect();
         for i in 0..ctx.len() {
+            if here.is_some() {
+                break;
+            }
             let s = &ctx[ctx.len() - 1 - i];
             let mut u2 = u.clone();
             let ty = Self::instantiate(&mut u2, s);
@@ -294,7 +306,7 @@ impl Checker {
             }
         }
         for (ri, r) in rules.iter().enumerate() {
-            if r.kids.len() + 1 > size {
+            if r.kids.len() + 1 > size || here.is_some_and(|h| !h[r.con]) {
                 continue;
             }
             let mut u2 = u.clone();
@@ -320,14 +332,23 @@ impl Checker {
                     let ty = ctx[ctx.len() - 1 - i].ty.clone();
                     u2.unify(&ty, want);
                     let con = self.sig.iter().position(|c| c.kind == Kind::Assign)?;
-                    self.gen(rng, &mut u2, ctx, &ty, size - 1, fuel)
+                    self.gen(rng, &mut u2, ctx, &ty, size - 1, fuel, &[])
                         .map(|e| Term {
                             con,
                             atom: Atom::Int(i as i64),
                             kids: vec![e],
                         })
                 }
-                Choice::Rule(ri) => self.gen_rule(rng, &mut u2, ctx, rules[ri], want, size, fuel),
+                Choice::Rule(ri) => self.gen_rule(
+                    rng,
+                    &mut u2,
+                    ctx,
+                    rules[ri],
+                    want,
+                    size,
+                    fuel,
+                    shape.get(1..).unwrap_or(&[]),
+                ),
             };
             if let Some(t) = built {
                 *u = u2;
@@ -347,6 +368,7 @@ impl Checker {
         want: &Ty,
         size: usize,
         fuel: &mut usize,
+        shape: &[Vec<bool>],
     ) -> Option<Term> {
         let r = u.instantiate(rule);
         if !u.unify(&r.res, want) {
@@ -384,7 +406,9 @@ impl Checker {
             }
             let depth = ctx.len();
             ctx.extend(bs.into_iter().rev());
-            let kid = self.gen(rng, u, ctx, &prem.ty, sizes[i], fuel);
+            // The shape goes on down the last child.
+            let rest: &[Vec<bool>] = if i + 1 == n { shape } else { &[] };
+            let kid = self.gen(rng, u, ctx, &prem.ty, sizes[i], fuel, rest);
             ctx.truncate(depth);
             node.kids.push(kid?);
         }

@@ -177,13 +177,46 @@ ten nodes, and neither random generation (60,000 terms) nor exhaustive
 enumeration (too slow beyond size 5) reaches it. With references the
 counterexample is three nodes, and the search finds the restriction.
 
+## 4. The model's value restriction
+
+**Gap closed.** In iteration 3, `let` in the model generalised always,
+because no generated initialiser was a counterexample. The search now aims
+its tests at state that outlives an initialiser:
+
+- **Shape.** A binder whose variable takes a child's value (`let`), bound to
+  a small value whose type shares a variable between positions (behaves
+  parametrically, like `(x) => x`), and whose body makes a refined value (a
+  function).
+- **Bodies.** Every body up to size 6 built from the constructors that
+  commit to no sort (the ones that move state around rather than compute on
+  it), kept only if it both writes and reads the binder's cell: state can
+  leak between instances only that way.
+- **Screen.** All 15,000 such terms get a quick interleaved-instances test
+  (6 uses each); the plain candidates get the full one (16 uses), with
+  separate allowances for values and non-values.
+
+**Found.** "Always" is refuted by a counterexample the search built:
+
+```
+let c = (x) => x in (flag, p) => flag ? c : (c = p)
+```
+
+Its type `(bool, (a) => a) => (a) => a` has a free variable, but a call at
+one instance stores a function that a call at another hands back. So `let`
+generalises syntactic values only, which is inty's rule (`Expr.IsValue` in
+`lean/Inty/Typing.lean`'s `let_`). The rules are otherwise unchanged, and no
+typed term gets stuck.
+
+**Also fixed.**
+
+- Cells printed their contents in `Debug`, and a closure stored in a cell it
+  captures is a cycle. The result was a stack overflow when printing.
+
 ## Next
 
-- **Reach the model's value restriction:** generation aimed at state that
-  outlives its initialiser, or a symbolic argument.
+- **Speed.** The model takes five minutes: the search runs twice (with and
+  without subtyping), and the aimed screen takes 90 seconds.
 - **Statements:** `return`, `throw`, `try` and loops, with faults and
   abrupt completions.
 - **Objects and arrays:** refinement by an eliminator per field label, which
   gives rows. Records with width subtyping go in the suite too.
-- **Speed:** the model takes about three minutes now, mostly attacking
-  rules under the state checks.
