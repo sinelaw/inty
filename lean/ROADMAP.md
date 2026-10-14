@@ -42,7 +42,7 @@ Paths like `src/infer` are relative to `crates/inty`.
    Lua, check the semantics. (Done for typing on the unit tests' programs
    in the model's fragment, 1242 of them: `inty::model_wire`,
    `tests/model_corpus.rs`, which also compares their types and runs them
-   in `dynamics`, the model and Node; 2,156 of the 2,909 programs the unit
+   in `dynamics`, the model and Node; 2,538 of the 2,909 programs the unit
    tests check are in the fragment. And on the examples:
    `tests/model_examples.rs` writes each JavaScript file under `examples/`
    for the model, counts those in the fragment (10 of 51, 143 of 4,199
@@ -292,8 +292,11 @@ touching the generic proofs.
   a `NaN`) and `===`, `!==` (`strictEq`, of any two values; the model's
   functions have no identity, so two are never equal) share one typing
   rule, `BinOpTyS.num` (operands `number`, result `BinOp.resTy`), beside
-  `strictEq`'s; soundness and inference sound and complete. `%` waits for
-  an exact `fmod` (Lean's `Float` has none), and comparisons of strings
+  `strictEq`'s; soundness and inference sound and complete. `%`
+  (`BinOp.mod`) is one more of them: Lean's `Float` has no `fmod`, so
+  `Float.jsRem` subtracts doublings of the divisor, each subtraction exact
+  by Sterbenz's lemma, and is tested bit for bit against Node by the
+  differential generator. Comparisons of strings
   and of other values (inty compares any two values of one type, by
   JavaScript's coercions) wait for a model of those coercions. inty's
   lowering takes `&&` and `||` to `?:` (`const t = a; t ? b : t`, or
@@ -319,8 +322,8 @@ touching the generic proofs.
   prints the same and runs as fast or faster (`fuzzy-search` 1.9x).
   The model's three corpus disagreements on numbers and the differential
   test's two went with it.
-- A bit-level binary64 model, tested against Node, for `%` and the
-  conversions (`ToInt32`) Lean's opaque `Float` can't state.
+- A bit-level binary64 model, tested against Node, for the conversions
+  (`ToInt32`) Lean's opaque `Float` can't state.
 
 ### 5. Literal types, unions and narrowing
 
@@ -359,10 +362,9 @@ touching the generic proofs.
   function that never completes now returns one too, rather than `never`,
   which joined with no other return type (a member of an object or class
   keeps `never`, as the object holds it monomorphically). Where inty's `&&` and `||` give
-  what can come out of two different types, it is the waiting `Join`.
-- Still to come: operations pushed through each arm of a union; a
-  declared union absorbing its arms (the waiting `Join`,
-  `docs/sum-types-design.md`), which `&&` and `||` of two types need too;
+  what can come out of two different types, the model rejects, on purpose
+  ([GAPS.md](GAPS.md)).
+- Still to come: operations pushed through each arm of a union;
   narrowing by `==`, and in loops; a `switch`'s exhaustiveness check;
   `?.`. Subsumption only where
   `src/infer` applies it, never as a general conversion rule. The
@@ -517,8 +519,8 @@ touching the generic proofs.
   functions and records, checks values of their cases into them and takes
   them apart by `typeof`; inty's join of a sum with one of its cases
   (`c ? v : 1`, its value used) and the record case it keeps are the
-  divergences, put down to the waiting `Join` still to come and to a
-  `typeof` for declared values.
+  divergences: the join is left out on purpose ([GAPS.md](GAPS.md)), and
+  the record case waits on a `typeof` for declared values.
 
   Next: an annotated function type without `this:` is polymorphic in
   `this`; the model fixes it to `undefined`, as inty does for an

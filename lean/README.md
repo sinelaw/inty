@@ -578,12 +578,12 @@ function's body ends in what it returns, and a test of a binding for
 nothing, of its `typeof` or of its tag field is `unwrap`, `typetest` or
 `casetag` (on a binding an annotation declares a sum or a variant; on
 another, a plain `?:` on `===`); `&&` and `||` of booleans are `?:`. A
-program is left out when it uses what the model lacks (`%`, a bitwise
+program is left out when it uses what the model lacks (a bitwise
 operator, a comparison of strings or booleans, `&&` or `||` on what isn't
 a boolean, whose result inty types as a union, a builtin, a class (inty's
 parser lowers it to a factory function, which the corpus would then check
 as one; the differential test generates real class declarations), a
-module, a loop other than `while`, `?.`, `??`) or whose lowering would
+module, a `do`, `for … in` or `for … of` loop, `?.`, `??`) or whose lowering would
 change its meaning (a name used before its declaration, `let x;` without
 an initialiser, a `let` or a parameter taken apart by a test and
 assigned, a getter or a method beside a spread). Of the programs the unit tests check,
@@ -690,8 +690,8 @@ left on purpose, or places where inty is less precise than the model:
 | A literal type where a type is synthesised: `c ? t : "b"` with `t: "a"` | widens it to `String` | rejects (a literal synthesises `String`, and branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
 | A program whose last statement is a `try` | doesn't type the `try` block's last expression as the program's value | types it | none: intentional ([GAPS.md](GAPS.md)) |
 | A record case after `typeof x !== "object"`: `typeof x === "object" ? 0 : x - 1` with `x: Number \| {a: Number}` | keeps it (a declaration may type a function as a record: `Promise`, `Object`) | drops it (its records are object literals') | a `typeof` for declared values |
-| `a && b` or `a \|\| b` of two types: `"s" && []`, `false \|\| "s"` | what can come out: their union, or `b`'s type alone where `a` is never falsy (an object) | rejects, or `a`'s and `b`'s type made one (branches have one type) | the waiting `Join` |
-| A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | the waiting `Join` (`docs/sum-types-design.md`) |
+| `a && b` or `a \|\| b` of two types: `"s" && []`, `false \|\| "s"` | what can come out: their union, or `b`'s type alone where `a` is never falsy (an object) | rejects, or `a`'s and `b`'s type made one (branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
+| A sum joined with one of its cases: `c ? v : 1` with `v: Number \| String` (or `Number \| Null`) | the sum | rejects (branches have one type) | none: intentional ([GAPS.md](GAPS.md)) |
 
 The nullable join is gone from both: inty now has the model's sums
 (`T | Null` is `Nullable T`, made by an annotation, taken apart by `??`
@@ -790,16 +790,30 @@ model now also writes `&&` and `||` of any type, a test of a sum's
 truthiness, an early exit (`if (x == null) return …; rest`, the rest
 the test's other branch) and `??`: of the 2,909 programs the unit tests
 check, 2,156 are in the model's fragment, where 1,242 were, and inty and
-the model agree on all but the seven `known.txt` lists.
+the model agree on all but the seven `known.txt` lists. The differential
+generator writes `%` too (about 200 programs per 3,000), and 21 seeds
+agree on it. With `%` in the
+model (`BinOp.mod`: JavaScript's remainder, the dividend's sign, exact,
+by subtracting doublings of the divisor, each subtraction exact by
+Sterbenz's lemma; tested bit for bit against Node) and the front end
+writing `for (init; test; update) body` as `{ init; while (test) { body;
+update } }` (left out where a `continue` would skip the update or a
+closure sees a loop variable, which JavaScript binds afresh each
+iteration), `x += e` as `x = x + e` and `x++` whose value is dropped as
+`x = x - -1`, 2,538 are, and they agree on all but nine: the two more
+are a member that never completes used at two types (the divergence
+table's second row).
 
 `tests/model_examples.rs` measures the model against inty's examples:
 10 of the 51 JavaScript files under `examples/` (143 of their 4,199
 lines) are in the fragment, and inty and the model agree on each. The
 rest are left out for what the model lacks, by the first construct:
-modules (14 files), `%` (7), `for` (6), the standard library (`String`,
-`Math`, `find`, `toFixed`, a declared object: 6), annotated functions
-(4), annotated fields (2), a class (which the front end doesn't write
-yet) and a type alias.
+modules (14 files), the standard library (`Math`, `String`,
+`performance`, `find`, `toFixed`, a declared object: 15), annotated
+functions (5), template literals (2), annotated fields (2), a class
+(which the front end doesn't write yet), a closure seeing a `for` loop's
+variable and a type alias. `%` and `for`, which blocked 13 files, now
+block none.
 
 Each row is recognised from evidence, not guessed: a union in the
 types inty gave the program's expressions, say. (Two rows, `Int` and

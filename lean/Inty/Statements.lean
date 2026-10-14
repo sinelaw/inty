@@ -1398,8 +1398,8 @@ example : ∀ (clock : Nat) (h : Heap) (thisv : Value) (args : List Value) (cenv
   @call.eq_2
 example : ∀ (h : Heap) (thisv : Value) (args : List Value) (p : Prim), call 0 h (Value.prim p) thisv args = (Result.timeout, 0, h) :=
   @call.eq_3
-example : ∀ (h : Heap) (thisv : Value) (args : List Value) (p : Prim) (c : Nat),
-      call (Nat.succ c) h (Value.prim p) thisv args = (Prim.apply p args, c, h) :=
+example : ∀ (h : Heap) (thisv : Value) (args : List Value) (p : Prim) (n : Nat),
+      call (Nat.succ n) h (Value.prim p) thisv args = (Prim.apply p args, n, h) :=
   @call.eq_4
 example : ∀ (clock : Nat) (h : Heap) (vf thisv : Value) (args : List Value),
       (∀ (cenv : List Nat) (n : Nat) (body : Inty.Expr), vf = Value.closure cenv n body → False) →
@@ -1412,12 +1412,12 @@ example : ∀ (h : Heap) (vf : Value) (cenv : Env) (n : Nat) (body : Inty.Expr) 
       callClosure 0 h vf cenv n body thisv args =
         if n ≤ List.length args then (Result.timeout, 0, h) else (Result.stuck Stuck.arityMismatch, 0, h) :=
   @callClosure.eq_1
-example : ∀ (h : Heap) (vf : Value) (cenv : Env) (n : Nat) (body : Inty.Expr) (thisv : Value) (args : List Value) (c : Nat),
-      callClosure (Nat.succ c) h vf cenv n body thisv args =
+example : ∀ (h : Heap) (vf : Value) (cenv : Env) (n : Nat) (body : Inty.Expr) (thisv : Value) (args : List Value) (n_1 : Nat),
+      callClosure (Nat.succ n_1) h vf cenv n body thisv args =
         if n ≤ List.length args then
-          have p := run c (callEnv h n cenv) (h ++ List.take n args ++ [vf, thisv]) body;
+          have p := run n_1 (callEnv h n cenv) (h ++ List.take n args ++ [vf, thisv]) body;
           (Result.catchReturn (Prod.fst p), Prod.snd p)
-        else (Result.stuck Stuck.arityMismatch, Nat.succ c, h) :=
+        else (Result.stuck Stuck.arityMismatch, Nat.succ n_1, h) :=
   @callClosure.eq_2
 example : ∀ (clock : Nat) (h : Heap) (vo v : Value), getter clock h vo (Read.value v) = (Result.ok v, clock, h) :=
   @getter.eq_1
@@ -1596,17 +1596,19 @@ example : ∀ (a b : Float), BinOp.eval BinOp.times (Value.number a) (Value.numb
   @BinOp.eval.eq_4
 example : ∀ (a b : Float), BinOp.eval BinOp.div (Value.number a) (Value.number b) = Result.ok (Value.number (a / b)) :=
   @BinOp.eval.eq_5
-example : ∀ (a b : Float), BinOp.eval BinOp.lt (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (a < b))) :=
+example : ∀ (a b : Float), BinOp.eval BinOp.mod (Value.number a) (Value.number b) = Result.ok (Value.number (Float.jsRem a b)) :=
   @BinOp.eval.eq_6
-example : ∀ (a b : Float), BinOp.eval BinOp.le (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (a ≤ b))) :=
+example : ∀ (a b : Float), BinOp.eval BinOp.lt (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (a < b))) :=
   @BinOp.eval.eq_7
-example : ∀ (a b : Float), BinOp.eval BinOp.gt (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (b < a))) :=
+example : ∀ (a b : Float), BinOp.eval BinOp.le (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (a ≤ b))) :=
   @BinOp.eval.eq_8
-example : ∀ (a b : Float), BinOp.eval BinOp.ge (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (b ≤ a))) :=
+example : ∀ (a b : Float), BinOp.eval BinOp.gt (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (b < a))) :=
   @BinOp.eval.eq_9
+example : ∀ (a b : Float), BinOp.eval BinOp.ge (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (b ≤ a))) :=
+  @BinOp.eval.eq_10
 example : ∀ (x x_1 : Value) (neg : Bool),
       BinOp.eval (BinOp.strictEq neg) x x_1 = Result.ok (Value.boolean (Value.strictEq x x_1 != neg)) :=
-  @BinOp.eval.eq_10
+  @BinOp.eval.eq_11
 example : ∀ (x : BinOp) (x_1 x_2 : Value),
       (∀ (neg : Bool), x = BinOp.strictEq neg → False) →
         (∀ (a b : Float), x = BinOp.plus → x_1 = Value.number a → x_2 = Value.number b → False) →
@@ -1614,30 +1616,33 @@ example : ∀ (x : BinOp) (x_1 x_2 : Value),
             (∀ (a b : Float), x = BinOp.minus → x_1 = Value.number a → x_2 = Value.number b → False) →
               (∀ (a b : Float), x = BinOp.times → x_1 = Value.number a → x_2 = Value.number b → False) →
                 (∀ (a b : Float), x = BinOp.div → x_1 = Value.number a → x_2 = Value.number b → False) →
-                  (∀ (a b : Float), x = BinOp.lt → x_1 = Value.number a → x_2 = Value.number b → False) →
-                    (∀ (a b : Float), x = BinOp.le → x_1 = Value.number a → x_2 = Value.number b → False) →
-                      (∀ (a b : Float), x = BinOp.gt → x_1 = Value.number a → x_2 = Value.number b → False) →
-                        (∀ (a b : Float), x = BinOp.ge → x_1 = Value.number a → x_2 = Value.number b → False) →
-                          BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
-  @BinOp.eval.eq_11
+                  (∀ (a b : Float), x = BinOp.mod → x_1 = Value.number a → x_2 = Value.number b → False) →
+                    (∀ (a b : Float), x = BinOp.lt → x_1 = Value.number a → x_2 = Value.number b → False) →
+                      (∀ (a b : Float), x = BinOp.le → x_1 = Value.number a → x_2 = Value.number b → False) →
+                        (∀ (a b : Float), x = BinOp.gt → x_1 = Value.number a → x_2 = Value.number b → False) →
+                          (∀ (a b : Float), x = BinOp.ge → x_1 = Value.number a → x_2 = Value.number b → False) →
+                            BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
+  @BinOp.eval.eq_12
 example : BinOp.numeric BinOp.minus = true :=
   @BinOp.numeric.eq_1
 example : BinOp.numeric BinOp.times = true :=
   @BinOp.numeric.eq_2
 example : BinOp.numeric BinOp.div = true :=
   @BinOp.numeric.eq_3
-example : BinOp.numeric BinOp.lt = true :=
+example : BinOp.numeric BinOp.mod = true :=
   @BinOp.numeric.eq_4
-example : BinOp.numeric BinOp.le = true :=
+example : BinOp.numeric BinOp.lt = true :=
   @BinOp.numeric.eq_5
-example : BinOp.numeric BinOp.gt = true :=
+example : BinOp.numeric BinOp.le = true :=
   @BinOp.numeric.eq_6
-example : BinOp.numeric BinOp.ge = true :=
+example : BinOp.numeric BinOp.gt = true :=
   @BinOp.numeric.eq_7
-example : BinOp.numeric BinOp.plus = false :=
+example : BinOp.numeric BinOp.ge = true :=
   @BinOp.numeric.eq_8
-example : ∀ (negated : Bool), BinOp.numeric (BinOp.strictEq negated) = false :=
+example : BinOp.numeric BinOp.plus = false :=
   @BinOp.numeric.eq_9
+example : ∀ (negated : Bool), BinOp.numeric (BinOp.strictEq negated) = false :=
+  @BinOp.numeric.eq_10
 example : BinOp.resTy BinOp.lt = Ty.boolean :=
   @BinOp.resTy.eq_1
 example : BinOp.resTy BinOp.le = Ty.boolean :=
@@ -2048,8 +2053,8 @@ example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
 #equations Value.typeString 12
 #equations Lit.eval 5
 #equations UnOp.eval 4
-#equations BinOp.eval 11
-#equations BinOp.numeric 9
+#equations BinOp.eval 12
+#equations BinOp.numeric 10
 #equations BinOp.resTy 6
 #equations Value.strictEq 8
 #equations Expr.writes 30

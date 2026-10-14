@@ -1370,7 +1370,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       simp only [Option.some.injEq] at h; subst h
       exact ⟨by dsimp only; omega, (hσ₁.mono hn₂).compose hσ₂,
         fun a ha => by simp [Ty.ftv] at ha, hpre⟩
-    | minus | times | div | lt | le | gt | ge =>
+    | minus | times | div | mod | lt | le | gt | ge =>
       simp only at h
       split at h
       · cases h

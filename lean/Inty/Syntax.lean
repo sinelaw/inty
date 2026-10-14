@@ -44,6 +44,9 @@ inductive BinOp where
   | times
   /-- `/`: `Number` only. -/
   | div
+  /-- `%`: `Number` only, the remainder of a quotient truncated, with the
+  dividend's sign (JavaScript's, C's `fmod`). -/
+  | mod
   /-- `<`, `<=`, `>`, `>=`: of `Number`s (inty also compares two values of
   any one type, by JavaScript's coercions, which the model doesn't
   have). -/
@@ -52,9 +55,9 @@ inductive BinOp where
   | strictEq (negated : Bool)
   deriving DecidableEq, Repr
 
-/-- The operators of `Number`s: `-`, `*`, `/` and the comparisons. -/
+/-- The operators of `Number`s: `-`, `*`, `/`, `%` and the comparisons. -/
 def BinOp.numeric : BinOp → Bool
-  | .minus | .times | .div | .lt | .le | .gt | .ge => true
+  | .minus | .times | .div | .mod | .lt | .le | .gt | .ge => true
   | .plus | .strictEq _ => false
 
 /-- What a numeric operator gives: a comparison a `boolean`, the others a
