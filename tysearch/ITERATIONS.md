@@ -214,8 +214,10 @@ typed term gets stuck.
 
 ## Next
 
-- **Speed.** The model takes five minutes: the search runs twice (with and
-  without subtyping), and the aimed screen takes 90 seconds.
+- **Speed** (done). The model is down from five minutes to two:
+  - the aimed screen stops at its first refutation;
+  - the search runs again with subtyping only when a constructor's
+    overloads differ in sorts the order relates.
 - **Statements:** `return`, `throw`, `try` and loops, with faults and
   abrupt completions.
 - **Objects and arrays:** refinement by an eliminator per field label, which

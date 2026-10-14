@@ -255,6 +255,7 @@ impl Checker {
         (!self.types(&t).is_empty()).then_some(t)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gen(
         &self,
         rng: &mut Rng,

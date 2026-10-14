@@ -212,7 +212,19 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
     let size = |rules: &[Schema]| rules.iter().map(|r| 1 + r.constants()).sum::<usize>();
     let mut subtypes: Vec<(usize, usize)> = Vec::new();
     let mut sizes = (size(&rules), None);
-    if sem.has_order() {
+    // Subtyping can shorten a system only where a constructor's rules differ
+    // in sorts the order relates (`+` on `Int` and on `Float`).
+    let could_help = sem.has_order()
+        && searches.iter().any(|s| {
+            lgg(&s.chosen).is_some_and(|(_, cols)| {
+                cols.iter().any(|col| {
+                    col.iter().any(|a| {
+                        col.iter().any(|b| matches!((a, b), (Ty::Base(x), Ty::Base(y)) if x != y && sem.le[*x][*y]))
+                    })
+                })
+            })
+        });
+    if could_help {
         sem.set_subtyping(true);
         let (s2, r2) = run(&mut sem, &mut oracle, &mut rng);
         let order: Vec<(usize, usize)> = (0..nsorts)
@@ -872,6 +884,11 @@ fn generalise<L: Language>(
         let rounds = if i >= n_plain { 6 } else { 16 };
         let ok = poly_member(oracle, sem, rules, &v, &ty, rounds, rng);
         verdicts.push((gen.inert[t.con], ok, t, ty));
+        // The aimed terms are all non-values: one refutation settles what
+        // they can tell.
+        if i >= n_plain && !ok {
+            break;
+        }
     }
     if std::env::var_os("TYSEARCH_TRACE").is_some() {
         eprintln!(
