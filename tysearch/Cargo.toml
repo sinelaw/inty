@@ -1,0 +1,15 @@
+# A separate project: its own workspace, not a member of inty's (the root
+# Cargo.toml excludes it). No dependencies, so it builds on its own.
+[workspace]
+
+[package]
+name = "tysearch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Discover a type system for an operational semantics, as a search problem"
+publish = false
+
+[[bin]]
+name = "tysearch"
+path = "src/main.rs"

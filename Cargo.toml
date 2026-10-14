@@ -7,6 +7,8 @@ members = [
     "crates/inty-bundle",
     "crates/inty-go",
 ]
+# A separate project with its own workspace: see tysearch/README.md.
+exclude = ["tysearch"]
 
 [workspace.package]
 version = "0.1.1"
