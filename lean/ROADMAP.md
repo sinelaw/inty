@@ -38,7 +38,9 @@ Paths like `src/infer` are relative to `crates/inty`.
    and improvement rules.)
 4. **The model runs on real programs.** inty writes out its lowered AST in
    the wire format, so the differential test runs on inty's own test suite
-   and examples, beside the generated programs. Node, and later CPython and
+   and examples, beside the generated programs. This checks that the model
+   and inty agree; it is not a goal to cover every program: the model is
+   for correctness and completeness, not for practical type checking. Node, and later CPython and
    Lua, check the semantics. (Done for typing on the unit tests' programs
    in the model's fragment, 1242 of them: `inty::model_wire`,
    `tests/model_corpus.rs`, which also compares their types and runs them
@@ -543,9 +545,14 @@ touching the generic proofs.
   `slice`, `indexOf`): natives with `this` and the heap, typed by
   instances of `HasProp` on `string` and `τ[]` (`stringMethod`,
   `arrayMethod`), one per number of arguments, as the model has no
-  optional parameters. Next: the globals (`Math`, `console`, `String`,
-  which template literals need) in a context of builtins, with
-  `dynamics`; then methods that call back (`map`, `filter`).
+  optional parameters. The model is for correctness and completeness,
+  not for checking real programs, so the standard library is covered by
+  these representative examples, not in full: together with the globals
+  `Math.abs` and `Boolean` (`Inty/Builtins.lean`), they show each kind of
+  native the model needs (pure, reading the heap, allocating, called on a
+  receiver or not), and a further one is a row of a table and its `V`
+  proof. Not planned: the rest of `src/builtins`, and methods that call
+  back (`map`, `filter`), which would need a native to call a closure.
 
 ## Frontends
 
