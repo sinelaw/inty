@@ -120,6 +120,7 @@ fn error_code(err: &IntyError) -> &'static str {
             TypeError::Module { .. } => "Module",
             TypeError::InvalidSyntax { .. } => "InvalidSyntax",
             TypeError::TypeMismatch { .. } => "TypeMismatch",
+            TypeError::DetachedThis { .. } => "DetachedThis",
             TypeError::BranchMismatch { .. } => "BranchMismatch",
             TypeError::ArrayElementMismatch { .. } => "ArrayElementMismatch",
             TypeError::RequiredBy { .. } => "RequiredBy",

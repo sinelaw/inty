@@ -2737,6 +2737,9 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
         if text.contains("never") {
             features.insert("never");
         }
+        if text.contains("a function that uses no `this`") {
+            features.insert("this in a plain function type");
+        }
     }
     (typing, features)
 }
@@ -2794,6 +2797,13 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         }
         (Typing::Type(t), Typing::Type(_)) if t == "never" => {
             Some("never (a member that only throws)")
+        }
+        // A function type in an annotation without a method signature's
+        // `this` is of a function that uses no `this` in inty (so it can be
+        // called on an object or detached); the model's is called
+        // detached, and the function may read `this` as `undefined`.
+        (Typing::Reject, Typing::Type(_)) if features.contains("this in a plain function type") => {
+            Some("a function annotated with a plain function type that reads `this`")
         }
         // The model types a program that can't complete normally (it only
         // throws, or a function in it falls off its end only after a

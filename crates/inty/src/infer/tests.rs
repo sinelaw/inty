@@ -5386,16 +5386,83 @@ fn an_annotated_function_type_without_this_is_called_detached() {
 
 #[test]
 fn a_method_in_an_annotated_object_type_has_the_object_as_this() {
-    let src = "/** const o: {x: Number, m: (Number) => Number} */\n\
+    // A method signature, `m(Number): Number`, is called on the object,
+    // which it reads as `this`.
+    let src = "/** const o: {x: Number, m(n: Number): Number} */\n\
                const o = { x: 1, m(n) { return this.x + n; } };\n\
                const r = o.m(1);";
     assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
     // Taken off the object, it can't be called detached.
-    let bad = "/** const o: {x: Number, m: (Number) => Number} */\n\
+    let bad = "/** const o: {x: Number, m(n: Number): Number} */\n\
                const o = { x: 1, m(n) { return this.x + n; } };\n\
                const g = o.m;\n\
                const r = g(1);";
+    let err = check_program(bad, &[]).unwrap_err();
+    assert!(err.contains("`g` is a method (it reads `this`)"), "{}", err);
+    // A property of a function type, `m: (Number) => Number`, is a
+    // function that uses no `this`: one that reads it doesn't fit.
+    let bad = "/** const o: {x: Number, m: (Number) => Number} */\n\
+               const o = { x: 1, m(n) { return this.x + n; } };";
     assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+/// A record field of a function type holds a callback: a function that
+/// uses no `this`, which can be stored, read back, called on the object
+/// or detached, and passed on (Rosaclef, item 2).
+#[test]
+fn a_record_field_holds_a_callback() {
+    let src = "/** const s: { stop: () => Undefined } */\n\
+               const s = { stop: () => undefined };\n\
+               /** function set(stop: () => Undefined) => Undefined */\n\
+               function set(stop) { s.stop = stop; }\n\
+               const end = s.stop;\n\
+               end();\n\
+               /** function call(f: () => Undefined) => Undefined */\n\
+               function call(f) { f(); }\n\
+               call(s.stop);\n\
+               s.stop();\n\
+               set(function () { return undefined; });\n\
+               const r = 1;";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    // A property's own annotation says the same.
+    let src = "const hooks = {\n\
+               /** @type {() => Undefined} */\n\
+               mark: null,\n\
+               };\n\
+               hooks.mark = () => undefined;\n\
+               if (hooks.mark) hooks.mark();\n\
+               const m = hooks.mark;\n\
+               const r = 1;";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    // But a function that reads `this` can't be stored there: it would
+    // be called detached.
+    let bad = "/** const s: { stop: () => Number } */\n\
+               const s = { x: 1, stop: () => 1 };\n\
+               s.stop = function () { return this.x; };";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+/// A method that reads `this` and a function that uses none don't make
+/// one type, as an array's elements or a conditional's branches: either
+/// could then be called detached.
+#[test]
+fn a_method_and_a_detached_function_are_different_types() {
+    for bad in [
+        "const o = { x: 1, m() { return this.x; } };\n\
+         const fs = [() => 1, o.m];\n\
+         const g = fs[1];\n\
+         const r = g();",
+        "const o = { x: 1, m() { return this.x; } };\n\
+         const g = true ? () => 1 : o.m;\n\
+         const r = g();",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // A method that doesn't mention `this` uses none.
+    let src = "const o = { x: 1, m() { return 2; } };\n\
+               const g = o.m;\n\
+               const r = g() + o.m();";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
 }
 
 #[test]

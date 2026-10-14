@@ -606,11 +606,24 @@ function add(x, y) { return x + y; }
 const inc = function(k) { return k + 1; };
 ```
 
-A function type says nothing about `this`, so it means the `this` the function is called with:
+A function type, `(Number) => Number`, is of a function that uses no `this`: an arrow, or a function that doesn't mention `this`. It can be called on an object, called detached or passed on, wherever it is: an annotated function, a `const`, a parameter or result, or a member of an object type. So a record field can hold a callback:
 
-- An annotated function, a `const` whose type is a function type, and a parameter or result of function type are called detached, with `this` undefined. A function that reads `this` doesn't have such a type: `/** const f: (Number) => Number */ const f = function (n) { return this.x + n; };` is rejected, since `f(1)` throws.
-- A member of an object type is called on the object: in `/** const o: {x: Number, m: (Number) => Number} */`, `m` may read `this.x`, and `o.m(1)` is accepted, but `const g = o.m; g(1)` isn't.
-- A declaration without a body (`.d.js`) and a built-in method keep their own `this`, but call the functions they are given detached. So `[1, 2].map(o.m)` is rejected when `o.m` reads `this`, as JavaScript throws there. (The methods of an object they are given keep any `this`: a built-in seldom calls one.)
+```javascript
+/** const s: { stop: () => Undefined } */
+const s = { stop: () => undefined };
+/** function set(stop: () => Undefined) => Undefined */
+function set(stop) { s.stop = stop; }
+const end = s.stop;
+end();                 // detached
+s.stop();              // on the object
+```
+
+A function that reads `this` doesn't have such a type: `/** const f: (Number) => Number */ const f = function (n) { return this.x + n; };` is rejected, since `f(1)` throws.
+
+- A method signature in an object type, `m(n: Number): Number` (TypeScript's), is of a method: it is called on the object, which it may read as `this`. In `/** const o: {x: Number, m(n: Number): Number} */`, `m` may read `this.x`, and `o.m(1)` is accepted, but `const g = o.m; g(1)` isn't: `g` is a method, and calling it detached passes `this` = undefined.
+- A method and a function that uses no `this` are different types, so they don't join (as an array's elements, or a conditional's branches): one or the other could then be called the wrong way.
+- An object literal's method that doesn't mention `this` uses none; one that does reads the object.
+- A declaration without a body (`.d.js`) and a built-in method keep their own `this`, but the functions they are given use none. So `[1, 2].map(o.m)` is rejected when `o.m` reads `this`, as JavaScript throws there.
 
 Methods are written as plain fields holding a function; `this` is inferred via row polymorphism (no explicit `this:` annotation):
 

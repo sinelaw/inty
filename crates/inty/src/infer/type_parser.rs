@@ -467,6 +467,12 @@ impl<'a> TypeParser<'a> {
 
     /// Parse a function type like `(a: Number, b: String) => Boolean`.
     fn parse_func_type(&mut self) -> ParseResult<Type> {
+        self.parse_func_type_sep("=>")
+    }
+
+    /// Parse a function type whose result follows `sep`: `=>` in a
+    /// function type, `:` in a method signature (`m(a: Number): String`).
+    fn parse_func_type_sep(&mut self, sep: &str) -> ParseResult<Type> {
         self.expect_char('(')?;
         self.skip_whitespace();
 
@@ -553,7 +559,7 @@ impl<'a> TypeParser<'a> {
         // surface a confusing "unknown type 'a'" error instead of
         // the real diagnostic. Running the check after `=>` is
         // matched puts it past the backtrack point.
-        self.expect_str("=>")?;
+        self.expect_str(sep)?;
         self.skip_whitespace();
 
         let ret_type = self.parse_type()?;
@@ -959,12 +965,23 @@ impl<'a> TypeParser<'a> {
                 } else {
                     false
                 };
-                self.expect_char(':')?;
-                self.skip_whitespace();
-                // Property types inherit the current allow_quantifiers context.
-                // At top level, quantifiers are allowed: { fn: <T>(x: T) => T } is valid.
-                // Inside function params, they're not: (obj: { fn: <T>(x: T) => T }) => X is Rank-2.
-                let ty = self.parse_type()?;
+                let ty = if self.peek_char() == Some('(') {
+                    // A method signature, `m(a: Number): String`: a
+                    // function called on the object, which may read
+                    // `this` (TypeScript's method signature). A property
+                    // of a function type, `m: (a: Number) => String`, is
+                    // a function that doesn't use `this`.
+                    let mut ty = self.parse_func_type_sep(":")?;
+                    set_callable_this(&mut ty, Type::MethodThis);
+                    ty
+                } else {
+                    self.expect_char(':')?;
+                    self.skip_whitespace();
+                    // Property types inherit the current allow_quantifiers context.
+                    // At top level, quantifiers are allowed: { fn: <T>(x: T) => T } is valid.
+                    // Inside function params, they're not: (obj: { fn: <T>(x: T) => T }) => X is Rank-2.
+                    self.parse_type()?
+                };
                 let mut entry = if optional {
                     let pvar = self.fresh_pvar();
                     crate::types::FieldEntry::optional(pvar, ty)
@@ -1377,6 +1394,7 @@ pub(crate) fn substitute_alias_body(ty: &Type, subst: &HashMap<u32, Type>) -> Ty
         | Type::Regex
         | Type::NewTarget
         | Type::ArrowThis
+        | Type::MethodThis
         | Type::TypedArray(_)
         | Type::Literal(_)
         | Type::Error => ty.clone(),

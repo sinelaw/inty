@@ -232,11 +232,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
-                        // A function property is called on the object or
-                        // taken off it: its `this` is left to the value.
-                        let this = self.fresh_type_var();
+                        // A function property's annotation, as an object
+                        // type's member, is of a function that uses no
+                        // `this`: called on the object or taken off it.
                         let annotated_type =
-                            self.annotation_this(ann_span, &annotated_type, &this)?;
+                            self.annotation_this(ann_span, &annotated_type, &Type::ArrowThis)?;
                         // TypeScript's JSDoc convention is to allow a
                         // `null` / `undefined` placeholder initialiser
                         // for a `@type`-annotated field — the field is
@@ -290,6 +290,13 @@ impl InferState {
                     // Infer method with the shared 'this' type. A Python
                     // method's `-> T` return annotation (if any) is checked
                     // here too.
+                    // A method that never mentions `this` uses none: it can
+                    // be called on the object or taken off it.
+                    let this = if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                        shared_this.clone()
+                    } else {
+                        Type::ArrowThis
+                    };
                     self.member_function = true;
                     let method_type = self.infer_function_with_this(
                         env,
@@ -298,7 +305,7 @@ impl InferState {
                         body,
                         &None,
                         return_type_ast.as_ref(),
-                        shared_this.clone(),
+                        this,
                         *method_span,
                     );
                     self.member_function = false;
@@ -847,11 +854,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
-                        // A function property is called on the object or
-                        // taken off it: its `this` is left to the value.
-                        let this = self.fresh_type_var();
+                        // A function property's annotation, as an object
+                        // type's member, is of a function that uses no
+                        // `this`: called on the object or taken off it.
                         let annotated_type =
-                            self.annotation_this(ann_span, &annotated_type, &this)?;
+                            self.annotation_this(ann_span, &annotated_type, &Type::ArrowThis)?;
                         let is_placeholder = matches!(
                             value,
                             Expr::Lit {

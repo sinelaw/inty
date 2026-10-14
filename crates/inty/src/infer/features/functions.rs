@@ -576,7 +576,7 @@ impl InferState {
             // otherwise. Subsume rather than unify so a body annotated to
             // return `String` can hold a literal.
             let annotated_type =
-                self.annotation_this(annotation_span, &annotated_type, &Type::Undefined)?;
+                self.annotation_this(annotation_span, &annotated_type, &Type::ArrowThis)?;
             self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 
@@ -859,8 +859,7 @@ impl InferState {
             let this_type_applied = self.zonk(&this_type);
             self.unify_this(span, &this_type_applied, &obj_for_this)?;
         } else {
-            let this_type_applied = self.zonk(&this_type);
-            self.unify_this(span, &this_type_applied, &Type::Undefined)?;
+            self.detached_this(span, &this_type, Some(callee))?;
         }
 
         self.settle_promise_results(promise_mark, span)?;
@@ -990,12 +989,43 @@ impl InferState {
                         _ => o,
                     }
                 }
-                None => Type::Undefined,
+                None => return self.detached_this(span, &t, None).map(|()| self.zonk(&ret)),
             };
-            self.unify(span, &t, &obj)?;
+            self.unify_this(span, &t, &obj)?;
         }
 
         Ok(self.zonk(&ret))
+    }
+
+    /// A call without a receiver (`f()`, not `o.f()`): the callee gets
+    /// `this` = `undefined` (JavaScript's strict mode), so it must use no
+    /// `this` (`ArrowThis`) or read it as `Undefined`; a method, which
+    /// reads it as its object, can't be called so. One still to be known
+    /// waits (`settle_detached`).
+    pub(in crate::infer) fn detached_this(
+        &mut self,
+        span: Span,
+        this: &Type,
+        callee: Option<&Expr>,
+    ) -> InferResult<()> {
+        let callee = match callee {
+            Some(Expr::Ident { name, .. }) => format!("`{name}`"),
+            _ => "this function".to_string(),
+        };
+        match self.zonk(this) {
+            Type::ArrowThis
+            | Type::MethodThis
+            | Type::Undefined
+            | Type::Error
+            | Type::NewTarget => Ok(()),
+            // Not known yet: it may turn out to use none, or to be one
+            // that reads `this` as `undefined`, but not a method.
+            v @ Type::Var(_) => {
+                self.pending_detached.push((v, span, callee));
+                Ok(())
+            }
+            _ => Err(crate::error::TypeError::DetachedThis { callee, span }.into()),
+        }
     }
 
     /// Infer the type of a new expression.

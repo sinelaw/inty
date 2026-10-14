@@ -141,6 +141,7 @@ impl PrettyContext {
             Type::Regex => write!(w, "RegExp"),
             Type::NewTarget => write!(w, "new.target"),
             Type::ArrowThis => write!(w, "undefined"),
+            Type::MethodThis => write!(w, "this"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
             Type::Var(name) => self.write_var(w, name),
             Type::Func {
@@ -315,6 +316,7 @@ impl PrettyContext {
             Type::Regex => write!(w, "Regex"),
             Type::NewTarget => write!(w, "NewTarget"),
             Type::ArrowThis => write!(w, "ArrowThis"),
+            Type::MethodThis => write!(w, "MethodThis"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
 
             Type::Var(name) => self.write_var(w, name),
@@ -335,7 +337,10 @@ impl PrettyContext {
                 // - Some(concrete_type): show "this: T =>"
                 let show_this = match this_type {
                     None => false,
-                    Some(t) => !matches!(**t, Type::Undefined | Type::Var(_) | Type::ArrowThis),
+                    Some(t) => !matches!(
+                        **t,
+                        Type::Undefined | Type::Var(_) | Type::ArrowThis | Type::MethodThis
+                    ),
                 };
                 if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
                     // Called only by `new`: a class's constructor.
@@ -346,27 +351,8 @@ impl PrettyContext {
                     write!(w, " => ")?;
                 }
 
-                write!(w, "(")?;
-                for (i, param) in params.iter().enumerate() {
-                    if i > 0 {
-                        write!(w, ", ")?;
-                    }
-                    self.write_type(w, &param.ty, false)?;
-                    // Surface optionality on the type — `?` follows
-                    // the type in inty's source syntax so an
-                    // optional `Number` prints as `Number?`. Skip
-                    // the suffix for `Presence::Pre` (the common
-                    // case) and for `Presence::Abs` (which makes
-                    // the param effectively absent — the printer
-                    // could omit it entirely but the position is
-                    // still part of the signature and surface
-                    // syntax doesn't have a representation for
-                    // "absent slot in the middle").
-                    if !matches!(param.presence, Presence::Pre) {
-                        write!(w, "?")?;
-                    }
-                }
-                write!(w, ") => ")?;
+                self.write_params(w, params)?;
+                write!(w, " => ")?;
                 self.write_type(w, ret, false)?;
 
                 if in_func_arg {
@@ -505,6 +491,35 @@ impl PrettyContext {
     }
 
     /// Write a row type.
+    /// A function's parameter list, `(A, B?)`.
+    fn write_params<W: Write>(
+        &mut self,
+        w: &mut W,
+        params: &[crate::types::FuncParam],
+    ) -> fmt::Result {
+        write!(w, "(")?;
+        for (i, param) in params.iter().enumerate() {
+            if i > 0 {
+                write!(w, ", ")?;
+            }
+            self.write_type(w, &param.ty, false)?;
+            // Surface optionality on the type — `?` follows
+            // the type in inty's source syntax so an
+            // optional `Number` prints as `Number?`. Skip
+            // the suffix for `Presence::Pre` (the common
+            // case) and for `Presence::Abs` (which makes
+            // the param effectively absent — the printer
+            // could omit it entirely but the position is
+            // still part of the signature and surface
+            // syntax doesn't have a representation for
+            // "absent slot in the middle").
+            if !matches!(param.presence, Presence::Pre) {
+                write!(w, "?")?;
+            }
+        }
+        write!(w, ")")
+    }
+
     fn write_row<W: Write>(&mut self, w: &mut W, row: &RowType) -> fmt::Result {
         // Callable rows render with the call signature first, without a
         // key, mirroring the keyless `(args) => ret` syntax in `.d.js`
@@ -583,12 +598,22 @@ impl PrettyContext {
             // Private-field sentinels render as `#name`, restoring the
             // user-written form. The raw stored key contains control
             // characters that would otherwise look broken in errors.
-            if let Some(name) = private_key_display(prop) {
-                write!(w, "#{}{}: ", name, if optional_marker { "?" } else { "" })?;
+            let name = match private_key_display(prop) {
+                Some(name) => format!("#{}{}", name, if optional_marker { "?" } else { "" }),
+                None => format!("{}{}", prop.0, if optional_marker { "?" } else { "" }),
+            };
+            // A method, called on the object it reads as `this`, prints
+            // as a method signature, `m(A): R`, rather than nesting the
+            // object in its own member's type.
+            if let Some((params, ret)) = method_signature(&entry.ty) {
+                write!(w, "{}", name)?;
+                self.write_params(w, params)?;
+                write!(w, ": ")?;
+                self.write_type(w, ret, false)?;
             } else {
-                write!(w, "{}{}: ", prop.0, if optional_marker { "?" } else { "" })?;
+                write!(w, "{}: ", name)?;
+                self.write_type(w, &entry.ty, false)?;
             }
-            self.write_type(w, &entry.ty, false)?;
         }
         self.focus = focus;
         if hidden > 0 {
@@ -940,6 +965,30 @@ fn match_alias(
                 && match_alias(r1, r2, params, bound)
         }
         (a, b) => a == b,
+    }
+}
+
+/// A member's function type that is called on the object (a `this` the
+/// function reads): its parameters and result, printed as a method
+/// signature.
+fn method_signature(ty: &Type) -> Option<(&[crate::types::FuncParam], &Type)> {
+    match ty {
+        Type::Func {
+            this_type: Some(this),
+            params,
+            ret,
+        } if !matches!(
+            **this,
+            Type::Undefined | Type::Var(_) | Type::ArrowThis | Type::NewTarget
+        ) =>
+        {
+            Some((params, ret))
+        }
+        Type::Row(row) if row.props.len() == 1 && matches!(row.tail, RowTail::Closed) => row
+            .props
+            .get(&PropName(CALLABLE_KEY.to_string()))
+            .and_then(|e| method_signature(&e.ty)),
+        _ => None,
     }
 }
 

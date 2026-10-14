@@ -113,6 +113,7 @@ fn zonk_with_visited(
         Type::Regex => Type::Regex,
         Type::NewTarget => Type::NewTarget,
         Type::ArrowThis => Type::ArrowThis,
+        Type::MethodThis => Type::MethodThis,
         Type::TypedArray(k) => Type::TypedArray(*k),
         Type::Error => Type::Error,
         Type::Literal(lit) => Type::Literal(lit.clone()),
@@ -382,6 +383,7 @@ fn zonk_filtered(table: &mut VarTable, subst: &Subst, ty: &Type, quantified: &[T
         | Type::Regex
         | Type::NewTarget
         | Type::ArrowThis
+        | Type::MethodThis
         | Type::TypedArray(_)
         | Type::Error => ty.clone(),
         Type::Literal(lit) => Type::Literal(lit.clone()),

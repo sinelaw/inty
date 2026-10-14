@@ -321,6 +321,10 @@ pub struct InferState {
     /// settle them: `(callback result, promised value)`. See
     /// `builtins::promise_method_type`.
     pub(crate) promise_results: Vec<(Type, Type)>,
+    /// The `this` of a callee called detached (`f()`) that wasn't known
+    /// at the call, with the call's span and the callee's name: settled
+    /// when it is (`settle_detached`), at the latest as `Undefined`.
+    pub(crate) pending_detached: Vec<(Type, Span, String)>,
     /// Which declaration each identifier refers to, and which bindings
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
@@ -529,6 +533,7 @@ impl InferState {
             class_decls: std::collections::HashSet::new(),
             reserved_class_ids: HashMap::new(),
             promise_results: Vec::new(),
+            pending_detached: Vec::new(),
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
@@ -1205,6 +1210,47 @@ impl InferState {
         }
         self.restore_snapshot(snap);
 
+        // S-NoThis: a function that uses no `this` (`ArrowThis`) can be
+        // called with any, so it flows into a slot for a function with
+        // any `this` (a method, or one called detached), but a
+        // constructor's (it isn't one). Not the other way: a slot for one
+        // that uses none may be called either way.
+        if let (Some(sub_this), Some(sup_this)) = (callable_this(&sub), callable_this(&sup)) {
+            if matches!(self.zonk(&sub_this), Type::ArrowThis)
+                && !matches!(self.zonk(&sup_this), Type::ArrowThis | Type::NewTarget)
+            {
+                let sub_as = with_callable_this(&sub, sup_this.clone());
+                let snap = self.snapshot_inference();
+                if self.quietly(|s| s.unify(span, &sub_as, &sup)).is_ok() {
+                    return Ok(());
+                }
+                self.restore_snapshot(snap);
+            }
+            // A function that reads `this` where one that uses none is
+            // expected: say so, as the types print alike.
+            if matches!(self.zonk(&sup_this), Type::ArrowThis)
+                && !matches!(
+                    self.zonk(&sub_this),
+                    Type::ArrowThis | Type::Var(_) | Type::Error
+                )
+            {
+                let sub_as = with_callable_this(&sub, Type::ArrowThis);
+                let snap = self.snapshot_inference();
+                let only_this = self.quietly(|s| s.unify(span, &sub_as, &sup)).is_ok();
+                self.restore_snapshot(snap);
+                if only_this {
+                    return Err(crate::error::TypeError::TypeMismatch {
+                        expected: format!("{sup}, a function that uses no `this`"),
+                        found: "a function that reads `this` (for a method, write a method \
+                                signature in an object type: `m(…): …`)"
+                            .to_string(),
+                        span,
+                    }
+                    .into());
+                }
+            }
+        }
+
         // S-Unroll: an equi-recursive type (a recursive alias) is its
         // unrolling, so subsume against that — one side at a time, so
         // two recursive types never unroll each other forever (those
@@ -1276,6 +1322,18 @@ impl InferState {
             if matching.len() == 1 {
                 let chosen = self.zonk(&members[matching[0]]);
                 return self.subsume(span, &sub, &chosen);
+            }
+            // A function fits no arm: if one arm is a function type, its
+            // mismatch says why (a `this`, a parameter).
+            if matching.is_empty() && callable_this(&sub).is_some() {
+                let fns: Vec<Type> = members
+                    .iter()
+                    .map(|m| self.zonk(m))
+                    .filter(|m| callable_this(m).is_some() || matches!(m, Type::Func { .. }))
+                    .collect();
+                if let [only] = fns.as_slice() {
+                    return self.subsume(span, &sub, only);
+                }
             }
             // 0 → no arm fits; >1 → ambiguous. Both fall through to
             // the same error; the diagnostic is best-effort and uses
@@ -1988,6 +2046,44 @@ impl InferState {
         (skolems, subst.apply(&scheme.body.ty))
     }
 
+    /// Settle the `this` of callees called detached that weren't known
+    /// at the call (`pending_detached`): one that uses no `this`, or is
+    /// `Undefined`, was right to be; a method (which reads its object)
+    /// is an error; one still unknown is pinned to `Undefined` unless the
+    /// environment fixes it (`fixed`, at a generalisation: it would be
+    /// generalised, in the type or in a constraint), and always when
+    /// `fixed` is `None` (the program is done). Whether anything was
+    /// pinned.
+    pub(crate) fn settle_detached(
+        &mut self,
+        fixed: Option<&std::collections::HashSet<TVarName>>,
+    ) -> bool {
+        let mut pinned = false;
+        let mut keep = Vec::new();
+        for (this, span, callee) in std::mem::take(&mut self.pending_detached) {
+            match self.zonk(&this) {
+                Type::ArrowThis
+                | Type::MethodThis
+                | Type::Undefined
+                | Type::Error
+                | Type::NewTarget => {}
+                Type::Var(v) => {
+                    if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
+                        if let Err(e) = self.unify(span, &Type::Var(v), &Type::Undefined) {
+                            self.push_error(e);
+                        }
+                        pinned = true;
+                    } else {
+                        keep.push((this, span, callee));
+                    }
+                }
+                _ => self.push_error(crate::error::TypeError::DetachedThis { callee, span }.into()),
+            }
+        }
+        self.pending_detached.extend(keep);
+        pinned
+    }
+
     /// Generalize a type over free variables not in the environment.
     /// Also collects relevant predicates from pending_constraints.
     /// Generalizes over presence variables too (Remy '94), with the
@@ -2019,7 +2115,15 @@ impl InferState {
         if let Err(e) = self.resolve_known_plus() {
             self.push_error(e);
         }
-        let ty = self.main_subst.flatten(ty);
+        let mut ty = self.main_subst.flatten(ty);
+        // A detached call's `this` that would be generalised is settled
+        // first: as `Undefined`, what the call passes.
+        if !self.pending_detached.is_empty() {
+            let (fixed_vars, _) = self.env_fixed_vars(env_free, &ty);
+            if self.settle_detached(Some(&fixed_vars)) {
+                ty = self.main_subst.flatten(&ty);
+            }
+        }
         let mut ty_vars = ty.free_vars();
         ty_vars.extend(extra.iter().cloned());
         let pvars = ty.free_pvars();
@@ -2407,6 +2511,7 @@ impl InferState {
             | Type::Regex
             | Type::NewTarget
             | Type::ArrowThis
+            | Type::MethodThis
             | Type::TypedArray(_)
             | Type::Error => false,
 
@@ -2522,6 +2627,42 @@ fn plural(n: usize) -> &'static str {
         ""
     } else {
         "s"
+    }
+}
+
+/// The `this` of a function type, bare or a callable row's call.
+fn callable_this(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Func {
+            this_type: Some(t), ..
+        } => Some((**t).clone()),
+        Type::Row(row) => row
+            .props
+            .get(&crate::types::PropName(
+                crate::types::CALLABLE_KEY.to_string(),
+            ))
+            .and_then(|e| callable_this(&e.ty)),
+        _ => None,
+    }
+}
+
+/// A function type with its `this` replaced.
+fn with_callable_this(ty: &Type, this: Type) -> Type {
+    match ty {
+        Type::Func { params, ret, .. } => Type::Func {
+            this_type: Some(Box::new(this)),
+            params: params.clone(),
+            ret: ret.clone(),
+        },
+        Type::Row(row) => {
+            let mut row = row.clone();
+            let key = crate::types::PropName(crate::types::CALLABLE_KEY.to_string());
+            if let Some(e) = row.props.get_mut(&key) {
+                e.ty = with_callable_this(&e.ty, this);
+            }
+            Type::Row(row)
+        }
+        _ => ty.clone(),
     }
 }
 

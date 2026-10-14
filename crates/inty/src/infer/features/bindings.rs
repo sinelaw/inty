@@ -482,7 +482,7 @@ impl InferState {
                 // Checked against an initialiser, a function type says
                 // what `this` it is called with; a declaration keeps its.
                 let ann_ty = if decl.init.is_some() {
-                    self.annotation_this(annotation_span, &ann_ty, &Type::Undefined)?
+                    self.annotation_this(annotation_span, &ann_ty, &Type::ArrowThis)?
                 } else {
                     self.declared_callbacks_detached(&ann_ty)
                 };

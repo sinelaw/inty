@@ -245,55 +245,61 @@ impl InferState {
     /// Give each function type in a checked annotation the `this` it is
     /// called with, where the annotation doesn't say (`this_type: None`,
     /// which `unify` matches with any `this`, so a function that reads
-    /// `this` would pass for one that doesn't): a member of an object type
-    /// is called on the object, as an object literal's methods are, and
-    /// any other function is called detached, with `this` `Undefined`.
-    /// `this` is what the annotated type itself is called with, if it is a
-    /// function. Declarations without a body to check (`.d.js`) keep
-    /// theirs.
+    /// `this` would pass for one that doesn't): none (`ArrowThis`), so
+    /// it can be called on an object, called detached or passed on, and
+    /// only a function that doesn't use `this` (an arrow, or one that
+    /// doesn't mention it) has the type. A method signature in an object
+    /// type (`{ m(): T }`) is called on the object, which it may read as
+    /// `this`, as an object literal's methods are. `this` is what the
+    /// annotated type itself is called with, if it is a function.
+    /// Declarations without a body to check (`.d.js`) keep theirs.
     pub(crate) fn annotation_this(
         &mut self,
         span: Span,
         ty: &Type,
         this: &Type,
     ) -> InferResult<Type> {
+        let none = Type::ArrowThis;
         Ok(match ty {
             Type::Func {
                 this_type,
                 params,
                 ret,
             } => {
-                let this_type = match this_type {
-                    Some(t) => self.annotation_this(span, t, &Type::Undefined)?,
-                    None => this.clone(),
+                let this_type = match this_type.as_deref() {
+                    Some(Type::MethodThis) | None => this.clone(),
+                    Some(t) => self.annotation_this(span, t, &none)?,
                 };
                 let params = params
                     .iter()
                     .map(|p| {
                         let mut p = p.clone();
-                        p.ty = self.annotation_this(span, &p.ty, &Type::Undefined)?;
+                        p.ty = self.annotation_this(span, &p.ty, &none)?;
                         Ok(p)
                     })
                     .collect::<InferResult<Vec<_>>>()?;
                 Type::Func {
                     this_type: Some(Box::new(this_type)),
                     params,
-                    ret: Box::new(self.annotation_this(span, ret, &Type::Undefined)?),
+                    ret: Box::new(self.annotation_this(span, ret, &none)?),
                 }
             }
             Type::Row(row) => {
-                // The object the members are called on, tied to the row
-                // once it is built, as `infer_object` ties its literal's
-                // (if it has a method).
+                // The object a method signature is called on, tied to the
+                // row once it is built, as `infer_object` ties its
+                // literal's (if a method mentions `this`). Only a method
+                // signature makes the row recursive.
                 let shared = Type::Row(crate::types::RowType::empty_open(self.fresh_flex()));
                 let mut has_method = false;
                 let mut out = row.clone();
                 for (name, entry) in out.props.iter_mut() {
                     let member_this = if name.0 == CALLABLE_KEY {
                         this.clone()
-                    } else {
-                        has_method |= is_function(&entry.ty);
+                    } else if is_method_signature(&entry.ty) {
+                        has_method = true;
                         shared.clone()
+                    } else {
+                        none.clone()
                     };
                     entry.ty = self.annotation_this(span, &entry.ty, &member_this)?;
                 }
@@ -303,17 +309,13 @@ impl InferState {
                 }
                 out
             }
-            Type::Array(t) => {
-                Type::Array(Box::new(self.annotation_this(span, t, &Type::Undefined)?))
-            }
+            Type::Array(t) => Type::Array(Box::new(self.annotation_this(span, t, &none)?)),
             Type::Maybe(z, t) => Type::Maybe(*z, Box::new(self.annotation_this(span, t, this)?)),
-            Type::Map(t) => Type::Map(Box::new(self.annotation_this(span, t, &Type::Undefined)?)),
-            Type::Promise(t) => {
-                Type::Promise(Box::new(self.annotation_this(span, t, &Type::Undefined)?))
-            }
+            Type::Map(t) => Type::Map(Box::new(self.annotation_this(span, t, &none)?)),
+            Type::Promise(t) => Type::Promise(Box::new(self.annotation_this(span, t, &none)?)),
             Type::Tuple(ts) => Type::Tuple(
                 ts.iter()
-                    .map(|t| self.annotation_this(span, t, &Type::Undefined))
+                    .map(|t| self.annotation_this(span, t, &none))
                     .collect::<InferResult<_>>()?,
             ),
             Type::Union(ts) => Type::union(
@@ -324,11 +326,24 @@ impl InferState {
             Type::Named(id, args) => Type::Named(
                 *id,
                 args.iter()
-                    .map(|t| self.annotation_this(span, t, &Type::Undefined))
+                    .map(|t| self.annotation_this(span, t, &none))
                     .collect::<InferResult<_>>()?,
             ),
             _ => ty.clone(),
         })
+    }
+}
+
+/// Whether a member's type is a method signature (`m(): T`), whose `this`
+/// is the object it is a member of.
+fn is_method_signature(ty: &Type) -> bool {
+    match ty {
+        Type::Func { this_type, .. } => matches!(this_type.as_deref(), Some(Type::MethodThis)),
+        Type::Row(row) => row
+            .props
+            .get(&crate::types::PropName(CALLABLE_KEY.to_string()))
+            .is_some_and(|e| is_method_signature(&e.ty)),
+        _ => false,
     }
 }
 
@@ -341,14 +356,15 @@ impl InferState {
     /// otherwise. Otherwise `[1, 2].map(o.m)` would pass a method that
     /// reads `this`.
     pub(crate) fn declared_callbacks_detached(&self, ty: &Type) -> Type {
-        declared_this(ty, true, &Type::Undefined)
+        declared_this(ty, true, &Type::ArrowThis)
     }
 }
 
 /// `given` (a declaration's own value, or what it gives back) or not
 /// (what it is given, which it calls with `this` if a function).
 fn declared_this(ty: &Type, given: bool, this: &Type) -> Type {
-    let u = Type::Undefined;
+    // What a declared function is given uses no `this` (`ArrowThis`).
+    let u = Type::ArrowThis;
     match ty {
         Type::Func {
             this_type,
@@ -408,16 +424,5 @@ fn declared_this(ty: &Type, given: bool, this: &Type) -> Type {
                 .collect::<Vec<_>>(),
         ),
         _ => ty.clone(),
-    }
-}
-
-/// A function type: a bare one or a callable row.
-fn is_function(ty: &Type) -> bool {
-    match ty {
-        Type::Func { .. } => true,
-        Type::Row(row) => row
-            .props
-            .contains_key(&crate::types::PropName(CALLABLE_KEY.to_string())),
-        _ => false,
     }
 }

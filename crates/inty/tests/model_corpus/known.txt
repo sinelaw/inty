@@ -1,11 +1,6 @@
 # Disagreements between inty and the Lean model on inty's own programs
 # (tests/model_corpus.rs), each a program's wire line after its reason.
 
-# A member of an annotated object type is called on the object (its `this`
-# is the object), as inty checks an object literal's methods against it;
-# the model's function types in annotations are called detached.
-(letann (rec (s:m (fn number number)) (s:x number)) (obj (field s:x (num 1 0)) (method s:m (func 1 (ret (plus (get (var 2) s:x) (var 0)))))) (let (mcall (var 0) s:m (num 1 0)) (undef)))
-
 # A test of a tag no case of the sum has: inty warns that the branch is
 # dead; the model's Case has no instance.
 (let (func 1 (letmutann (sum number string) (var 0) (typetest (var 0) s:boolean (ret (num 2 0)) (ret (num 1 0))))) (undef))

@@ -40,6 +40,9 @@ impl InferState {
     pub(crate) fn unify_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
         let (z1, z2) = (self.zonk(t1), self.zonk(t2));
         match (&z1, &z2) {
+            // A declared method signature's `this`, as a declared member's
+            // missing one, fits any receiver.
+            (Type::MethodThis, _) | (_, Type::MethodThis) => Ok(()),
             (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {
                 Err(TypeError::TypeMismatch {
                     expected: "a constructor (`new` calls one)".to_string(),
@@ -53,6 +56,36 @@ impl InferState {
             }
             (Type::ArrowThis, _) | (_, Type::ArrowThis) => Ok(()),
             _ => self.unify(span, t1, t2),
+        }
+    }
+
+    /// Unify the `this` types of two function types. Unlike a call's
+    /// receiver (`unify_this`), a function that uses no `this`
+    /// (`ArrowThis`) is not one that reads it, as its object
+    /// (a method) or as `undefined` (one called detached): a slot for the
+    /// first may be called either way, so it can't hold the second, and
+    /// unification has no direction. (Subsumption has: a function that
+    /// uses no `this` flows into a slot for any, `subsume`.) A variable
+    /// takes either; a declared method signature's fits any.
+    fn unify_fn_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
+        let (z1, z2) = (self.zonk(t1), self.zonk(t2));
+        match (&z1, &z2) {
+            (Type::MethodThis, _) | (_, Type::MethodThis) => Ok(()),
+            (Type::ArrowThis, Type::ArrowThis) => Ok(()),
+            (Type::ArrowThis, Type::Error) | (Type::Error, Type::ArrowThis) => Ok(()),
+            (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {
+                self.unify_this(span, &z1, &z2)
+            }
+            (Type::ArrowThis, Type::Var(_)) | (Type::Var(_), Type::ArrowThis) => {
+                self.unify(span, &z1, &z2)
+            }
+            (Type::ArrowThis, other) | (other, Type::ArrowThis) => Err(TypeError::TypeMismatch {
+                expected: "a function that doesn't use `this`".to_string(),
+                found: format!("one that reads `this` (a method of {})", other),
+                span,
+            }
+            .into()),
+            _ => self.unify(span, &z1, &z2),
         }
     }
 
@@ -170,7 +203,7 @@ impl InferState {
                     (None, Some(_)) | (Some(_), None) => {
                         // One is static - compatible with any this
                     }
-                    (Some(t1), Some(t2)) => self.unify_this(span, t1, t2)?,
+                    (Some(t1), Some(t2)) => self.unify_fn_this(span, t1, t2)?,
                 }
 
                 // Unify parameters position-wise. Per-param presence
