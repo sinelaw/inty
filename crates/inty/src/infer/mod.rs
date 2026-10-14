@@ -32,7 +32,7 @@ pub use type_parser::{
 };
 pub use unify::UnifyResult;
 
-use crate::ast::{ExportDecl, Expr, Program, Stmt, VarDeclarator, VarKind};
+use crate::ast::{ExportDecl, Expr, Program, Stmt, TypeAnnotation, VarDeclarator, VarKind};
 use crate::error::{IntyError, TypeError};
 use crate::types::{Type, TypeScheme};
 
@@ -59,6 +59,42 @@ pub(crate) fn is_function_like_decl(stmt: &Stmt) -> bool {
                 ..
             }
     )
+}
+
+/// The identifiers in the type annotations a declaration statement
+/// carries itself (a function's, or each declarator's): the names its
+/// type may refer to.
+fn annotation_words(stmt: &Stmt) -> Vec<String> {
+    let annotations: Vec<&TypeAnnotation> = match stmt {
+        Stmt::FunctionDecl {
+            type_annotation, ..
+        }
+        | Stmt::Export {
+            declaration: ExportDecl::Function {
+                type_annotation, ..
+            },
+            ..
+        } => type_annotation.iter().collect(),
+        Stmt::Var { declarations, .. }
+        | Stmt::Export {
+            declaration: ExportDecl::Var { declarations, .. },
+            ..
+        } => declarations
+            .iter()
+            .filter_map(|d| d.type_annotation.as_ref())
+            .collect(),
+        _ => Vec::new(),
+    };
+    annotations
+        .iter()
+        .flat_map(|a| {
+            a.content
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                .filter(|w| !w.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Source-order recovery after a `Stmt` fails inference. Binds every
@@ -151,6 +187,7 @@ impl InferState {
         // Record which factory functions to brand nominally (classes).
         self.class_brand_names
             .extend(program.class_brands.iter().cloned());
+        self.class_decls.extend(program.class_decls.iter().copied());
         // (A module imported mid-inference resolves its own program, so
         // the enclosing one's resolution is put back afterwards.)
         let outer_resolution = std::mem::replace(
@@ -521,6 +558,20 @@ impl InferState {
         result
     }
 
+    /// Whether a declaration that is typed with the hoisted functions
+    /// (Pass 2 of `infer_stmt_list`) is still typed only once the
+    /// statements before it have been: a function-valued `const` or a
+    /// class, neither of which can be used before it has run, unlike a
+    /// `function` declaration.
+    fn typed_in_place(&self, stmt: &Stmt) -> bool {
+        if is_function_like_decl(stmt) {
+            crate::infer::features::functions::function_decl_parts(stmt)
+                .is_some_and(|(.., span)| self.class_decls.contains(&span))
+        } else {
+            crate::infer::features::functions::const_function_decl(stmt).is_some()
+        }
+    }
+
     /// Whether the statement list being checked is a program's top level
     /// and `--timings` is on.
     fn timing_top_level(&self) -> bool {
@@ -648,6 +699,32 @@ impl InferState {
                 }
             }
         }
+        // A declaration whose annotation names a class of this scope
+        // (`/** function f(c: Counter) => … */`) needs the class's type:
+        // it depends on the class's group as on a function it calls.
+        let class_names: std::collections::HashSet<&str> = scc_groups
+            .iter()
+            .flatten()
+            .filter(|&&i| is_function_like_decl(&stmts[i]) && self.typed_in_place(&stmts[i]))
+            .filter_map(|&i| crate::infer::features::functions::function_decl_parts(&stmts[i]))
+            .map(|(name, ..)| name)
+            .collect();
+        let annotated_classes = |stmt: &Stmt| -> Vec<String> {
+            annotation_words(stmt)
+                .into_iter()
+                .filter(|w| class_names.contains(w.as_str()))
+                .collect()
+        };
+        let group_free: Vec<std::collections::HashSet<String>> = group_free
+            .into_iter()
+            .zip(&scc_groups)
+            .map(|(mut free, g)| {
+                for &i in g {
+                    free.extend(annotated_classes(&stmts[i]));
+                }
+                free
+            })
+            .collect();
         let group_deps: Vec<Vec<usize>> = group_free
             .iter()
             .enumerate()
@@ -704,6 +781,7 @@ impl InferState {
             &superseded_by,
             &pending_decls,
             &mut group_done,
+            0,
         );
 
         // Pass 3: walk the statement list in source order. Function
@@ -716,11 +794,13 @@ impl InferState {
         // access, and call inference.
         let mut result = Type::Undefined;
         for (i, stmt) in stmts.iter().enumerate() {
-            if hoisted_consts.contains(&i) {
-                let (decl, ..) = crate::infer::features::functions::const_function_decl(stmt)
-                    .expect("hoisted const is a const function");
+            if hoisted_consts.contains(&i)
+                || (is_function_like_decl(stmt) && self.typed_in_place(stmt))
+            {
                 // Typed in Pass 2; only the duplicate-`const` check is left.
-                if !const_names.insert(decl.name.clone()) {
+                let decl = crate::infer::features::functions::const_function_decl(stmt)
+                    .map(|(decl, ..)| decl);
+                if let Some(decl) = decl.filter(|d| !const_names.insert(d.name.clone())) {
                     let err = TypeError::Module {
                         message: format!(
                             "duplicate declaration of 'const {}' in the same scope",
@@ -729,6 +809,34 @@ impl InferState {
                         span: decl.span,
                     };
                     self.push_error(err.into());
+                }
+                // Its group is typed here, after the statements before it,
+                // unless something used it sooner.
+                if let Some(gi) = scc_groups.iter().position(|g| g.contains(&i)) {
+                    if !group_done[gi] {
+                        self.infer_group_with_deps(
+                            &mut current_env,
+                            stmts,
+                            &scc_groups,
+                            &group_deps,
+                            &superseded_by,
+                            gi,
+                            &mut group_done,
+                        );
+                        if group_done.iter().any(|d| !d) {
+                            self.infer_ready_groups(
+                                &mut current_env,
+                                stmts,
+                                &scc_groups,
+                                &group_free,
+                                &group_deps,
+                                &superseded_by,
+                                &pending_decls,
+                                &mut group_done,
+                                i + 1,
+                            );
+                        }
+                    }
                 }
                 // A declaration, like any other `const`.
                 result = Type::Undefined;
@@ -740,8 +848,9 @@ impl InferState {
             // Groups this statement uses are typed before it.
             if group_done.iter().any(|d| !d) {
                 let used: Vec<usize> = crate::ast::free_idents::free_identifiers_in_stmt(stmt)
-                    .iter()
-                    .filter_map(|n| group_of_name.get(n).copied())
+                    .into_iter()
+                    .chain(annotated_classes(stmt))
+                    .filter_map(|n| group_of_name.get(&n).copied())
                     .collect();
                 for gi in used {
                     self.infer_group_with_deps(
@@ -926,6 +1035,7 @@ impl InferState {
                         &superseded_by,
                         &pending_decls,
                         &mut group_done,
+                        i + 1,
                     );
                 }
             }
@@ -969,10 +1079,21 @@ impl InferState {
         superseded_by: &[Vec<usize>],
         pending_decls: &std::collections::HashMap<String, usize>,
         group_done: &mut [bool],
+        reached: usize,
     ) {
         let mut ready = vec![false; scc_groups.len()];
         for gi in 0..scc_groups.len() {
-            ready[gi] = !group_free[gi].iter().any(|n| pending_decls.contains_key(n))
+            // A group of function-valued `const`s and classes only can't
+            // run before its first declaration (the temporal dead zone),
+            // so it waits for Pass 3 to reach it and is typed in the
+            // environment there, with the facts the statements before it
+            // establish (`if (v.kind !== "a") return; const g = () => v.x;`).
+            let waits_for_position = scc_groups[gi]
+                .iter()
+                .all(|&i| self.typed_in_place(&stmts[i]))
+                && scc_groups[gi].iter().all(|&i| i >= reached);
+            ready[gi] = !waits_for_position
+                && !group_free[gi].iter().any(|n| pending_decls.contains_key(n))
                 && group_deps[gi]
                     .iter()
                     .all(|&d| d < gi && (ready[d] || group_done[d]));

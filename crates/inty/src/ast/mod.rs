@@ -206,6 +206,11 @@ pub struct Program {
     /// (or programs) with no nominal classes. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brands: Vec<String>,
+    /// The spans of the factory functions a frontend lowered a `class`
+    /// declaration to. A class, unlike a `function`, isn't hoisted: it
+    /// can't be used before its declaration has run, so inference types
+    /// it where it stands, with the facts that hold there.
+    pub class_decls: Vec<Span>,
     /// The surface language this program was parsed from. Inference uses it
     /// for the few frontend-specific decisions that can't be read off the
     /// structural AST — the unit / "no value" type (JS `undefined` vs

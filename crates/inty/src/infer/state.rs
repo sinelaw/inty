@@ -300,6 +300,13 @@ pub struct InferState {
     /// checks map a class name back to its brand. See
     /// `docs/pyi-import-mapping.md` §8.
     pub class_brand_ids: HashMap<String, TypeId>,
+    /// The `switch` statements that always take some case: those with a
+    /// `default`, and those whose cases cover every value of a finite
+    /// discriminant. `definitely_returns` reads it once a body is inferred.
+    pub exhaustive_switches: std::collections::HashSet<crate::span::Span>,
+    /// The spans of the factory functions `class` declarations lowered to
+    /// (`Program::class_decls`): typed where they stand, not hoisted.
+    pub class_decls: std::collections::HashSet<crate::span::Span>,
     /// Brand ids allocated for a program's classes before its aliases
     /// are parsed (see `infer_program_with_env`), taken by the class's
     /// factory when it is branded.
@@ -511,6 +518,8 @@ impl InferState {
             type_aliases: HashMap::new(),
             class_brand_names: std::collections::HashSet::new(),
             class_brand_ids: HashMap::new(),
+            exhaustive_switches: std::collections::HashSet::new(),
+            class_decls: std::collections::HashSet::new(),
             reserved_class_ids: HashMap::new(),
             promise_results: Vec::new(),
             resolution: Default::default(),
@@ -2059,6 +2068,12 @@ impl InferState {
                 let mut took = false;
                 for constraint in remaining {
                     let mut pred = self.apply_subst_pred(&constraint.pred);
+                    // Flattened, as the type is: a row's bound tail (a
+                    // `Spread`'s rows) would otherwise be left out of the
+                    // quantified variables and shared by every instance.
+                    for t in pred.types.iter_mut() {
+                        *t = self.main_subst.flatten(t);
+                    }
                     // Where the requirement is written, for a failure of
                     // one of its instances at a call.
                     pred.origin.get_or_insert(constraint.span);
@@ -2283,6 +2298,16 @@ impl InferState {
                             vec![]
                         }
                     }
+                    // the operand and the fields before it → the result
+                    (ClassName::Spread, [operand, so_far, result]) => {
+                        if operand.free_vars().is_subset(&vars)
+                            && so_far.free_vars().is_subset(&vars)
+                        {
+                            vec![result]
+                        } else {
+                            vec![]
+                        }
+                    }
                     (ClassName::Plus, _) => vec![],
                     // Unknown shape: conservatively, any fixed variable
                     // fixes the whole predicate.
@@ -2469,6 +2494,13 @@ impl InferState {
             }
             Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row),
             Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
+            // A recursive type's arguments, as a type written out there
+            // would be: `t ~ μ<{c: () => t}>` (an instance whose field
+            // holds the factory that made it) is solved by a recursive
+            // type, not refused by the occurs check.
+            Type::Named(_, args) => args
+                .iter()
+                .any(|a| self.is_inside_row_type_impl(var, a, in_row)),
             Type::Tuple(elems) => elems
                 .iter()
                 .any(|e| self.is_inside_row_type_impl(var, e, in_row)),

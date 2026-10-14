@@ -128,6 +128,10 @@ impl InferState {
         // counts; the result is closed but `row_tail` may have been
         // set and then overridden back to Closed.
         let mut had_spread = false;
+        // The result of a spread waiting on its operand (`Spread`): the
+        // fields written after it are merged over it, not added beside it,
+        // since the operand may have them too.
+        let mut waiting_spread: Option<TVarName> = None;
 
         for prop in properties {
             match prop {
@@ -353,18 +357,42 @@ impl InferState {
                     had_spread = true;
                     let arg_ty = self.infer_expr(env, argument)?;
                     let resolved = self.zonk(&arg_ty);
-                    let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
+                    if let Some(base) = waiting_spread.take() {
+                        (props, row_tail) = self.merge_written_fields(*spread_span, base, props)?;
+                    }
                     let so_far = RowType {
                         props: std::mem::take(&mut props),
                         tail: row_tail,
                     };
-                    let merged = self.merge_spread(*spread_span, so_far, spread_row)?;
-                    props = merged.props;
-                    row_tail = merged.tail;
+                    if matches!(resolved, Type::Var(TVarName::Flex(_))) {
+                        // An operand of a type not known yet: which fields it
+                        // writes over is decided once it is (the model's
+                        // `Merge`, slot by slot), so a function spreading its
+                        // parameter takes objects of any fields.
+                        let result = self.fresh_tvar_name();
+                        self.add_constraint(
+                            TypePred::spread(
+                                resolved,
+                                Type::Row(so_far),
+                                Type::Var(result.clone()),
+                            ),
+                            *spread_span,
+                        );
+                        row_tail = RowTail::Open(result.clone());
+                        waiting_spread = Some(result);
+                    } else {
+                        let spread_row = self.coerce_to_row(&resolved, *spread_span)?;
+                        let merged = self.merge_spread(*spread_span, so_far, spread_row)?;
+                        props = merged.props;
+                        row_tail = merged.tail;
+                    }
                 }
             }
         }
 
+        if let Some(base) = waiting_spread.take() {
+            (props, row_tail) = self.merge_written_fields(span, base, props)?;
+        }
         let final_row = match row_tail {
             RowTail::Open(var) => RowType::open_entries(props, var),
             // Closed and Recursive both produce a closed row at the
@@ -383,6 +411,53 @@ impl InferState {
 
         let _ = had_spread;
         Ok(self.zonk(&obj_type))
+    }
+
+    /// The fields written after a spread whose operand isn't known yet,
+    /// merged over its result `base`: they win over whatever it has.
+    fn merge_written_fields(
+        &mut self,
+        span: Span,
+        base: TVarName,
+        written: BTreeMap<PropName, FieldEntry>,
+    ) -> InferResult<(BTreeMap<PropName, FieldEntry>, RowTail)> {
+        if written.is_empty() {
+            return Ok((written, RowTail::Open(base)));
+        }
+        let merged = self.merge_spread(
+            span,
+            RowType::empty_open(base),
+            RowType::closed_entries(written),
+        )?;
+        Ok((merged.props, merged.tail))
+    }
+
+    /// Resolve `Spread(operand, so_far, result)` (`{...so_far,
+    /// ...operand}` is a `result`) once the operand's type is known: as
+    /// a spread of a value of that type. While it is a variable it waits.
+    pub(crate) fn resolve_spread(
+        &mut self,
+        operand: &Type,
+        so_far: &Type,
+        result: &Type,
+        span: Span,
+    ) -> InferResult<()> {
+        let operand = self.zonk(operand);
+        if matches!(operand, Type::Var(TVarName::Flex(_))) {
+            self.add_constraint(
+                TypePred::spread(operand, so_far.clone(), result.clone()),
+                span,
+            );
+            return Ok(());
+        }
+        let spread_row = self.coerce_to_row(&operand, span)?;
+        let so_far_row = self.coerce_to_row(so_far, span)?;
+        let merged = self.merge_spread(span, so_far_row, spread_row)?;
+        let merged = match merged.tail {
+            RowTail::Open(var) => RowType::open_entries(merged.props, var),
+            _ => RowType::closed_entries(merged.props),
+        };
+        self.unify(span, result, &Type::Row(merged))
     }
 
     /// The row of `{...so_far, ...spread}`: the operand's fields win,

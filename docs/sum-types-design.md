@@ -177,7 +177,7 @@ The common idioms keep typing; what inty would newly reject is mixtures with no 
 
 ### Changes to inty
 
-- Replace the eager nullable join with a pending `Join` constraint, decided when both sides are known; the same pattern as the still-open deferred spread constraint.
+- Replace the eager nullable join with a pending `Join` constraint, decided when both sides are known; the same pattern as the deferred `Spread` constraint inty now has.
 - Add `Nullable` with its `NonNull` side condition, and make library signatures use it.
 - Restrict annotated unions to arms disjoint by `typeof`, or to variants with a tag field; reject the rest with an error that suggests a tag.
 - Type `&&` and `||` with operands of one type.

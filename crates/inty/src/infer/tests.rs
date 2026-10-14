@@ -4902,11 +4902,12 @@ fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
         function f(o) { return {a: 1, ...o}; }
         const n = f({a: "s"}).a - 1;
         "#,
-        // Two open operands: the later one's unknown part may hide the
-        // earlier one's fields, so they share it.
+        // Two operands of types not known yet: decided at the use, where
+        // the second's `a` is a number.
         r#"
         function g(o1, o2) { return {...o1, ...o2}; }
         const r = {a: "s", ...g({a: 1}, {})};
+        r.a.length;
         "#,
         // A spread's operand is an object, not a function (whose call
         // signature it used to copy).
@@ -4944,6 +4945,8 @@ fn test_spread_of_an_open_row_keeps_earlier_fields_sound() {
         const oo = opts({a: 3}).b.length;
         function g(o1, o2) { return {...o1, ...o2}; }
         const w = g({a: 1}, {a: 2}).a - 1;
+        const v = {a: "s", ...g({a: 1}, {})}.a - 1;
+        const u = g({a: "s"}, {a: 1}).a - 1;
     "#;
     assert!(infer_program_with_state(accepted).is_ok());
 }
@@ -5408,4 +5411,123 @@ fn a_builtin_calls_its_callbacks_detached() {
     ] {
         assert_eq!(check_program(src, &[name]).unwrap(), [ty], "{}", src);
     }
+}
+
+const SHAPES: &str = "/** const v: {kind: \"a\", x: Number} | {kind: \"b\", y: String} \
+                      | {kind: \"c\", z: Number} */ const v = {kind: \"a\", x: 1};";
+
+#[test]
+fn switch_default_sees_the_cases_left() {
+    // `default:` is taken when no case matches: the arms tested by the
+    // cases are ruled out there, wherever `default` stands.
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ case \"a\": return v.x; \
+         case \"b\": return 0; default: return v.z; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_ok(), "{src}");
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ default: return v.z; \
+         case \"a\": return v.x; case \"b\": return 0; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_ok(), "{src}");
+    // An arm no case rules out is still there.
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ case \"a\": return v.x; \
+         default: return v.z; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_err(), "{src}");
+    // A case fallen into from the one before gets no facts of its own.
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ case \"a\": v.x; \
+         default: return v.z; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_err(), "{src}");
+}
+
+#[test]
+fn exhaustive_switch_whose_cases_return_does_not_fall_through() {
+    // Every tag has a case and each returns: the function never falls off
+    // its end, so it returns a `Number`, not `Number | Undefined`.
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ case \"a\": return v.x; \
+         case \"b\": return 1; case \"c\": return v.z; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_ok(), "{src}");
+    // A missing tag can fall through.
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ case \"a\": return v.x; \
+         case \"b\": return 1; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_err(), "{src}");
+    // So can a case that breaks out of the switch.
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ case \"a\": break; \
+         case \"b\": return 1; case \"c\": return v.z; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_err(), "{src}");
+    // Cases falling through into one that returns don't.
+    let src = format!(
+        "{SHAPES} function f() {{ switch (v.kind) {{ case \"a\": case \"b\": \
+         default: return 1; }} }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_ok(), "{src}");
+}
+
+#[test]
+fn narrowing_after_an_early_exit_reaches_what_is_defined_after_it() {
+    // A function-valued `const` and a class can't run before their
+    // declaration, so they see the facts an early exit before them
+    // establishes.
+    let src = format!(
+        "{SHAPES} function f() {{ if (v.kind !== \"a\") {{ return 0; }} \
+         const g = () => v.x; return g(); }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_ok(), "{src}");
+    let src = format!(
+        "{SHAPES} function f() {{ if (v.kind !== \"a\") {{ return 0; }} \
+         class C {{ m() {{ return v.x; }} }} return new C().m(); }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_ok(), "{src}");
+    // A `function` declaration is hoisted: it may run before the test.
+    let src = format!(
+        "{SHAPES} function f() {{ if (v.kind !== \"a\") {{ return g(); }} \
+         function g() {{ return v.x; }} return g(); }} f() - 1;"
+    );
+    assert!(infer_program_via_program(&src).is_err(), "{src}");
+}
+
+#[test]
+fn spread_of_an_operand_not_known_yet_waits_for_it() {
+    // Which fields the operand writes over is decided at each use, as the
+    // Lean model's `Merge` decides it slot by slot.
+    let src = "const f = (a, b) => ({...a, ...b}); \
+               const r = f({a: \"s\", c: true}, {a: 1}); r.a - 1; r.c ? 1 : 2;";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "const f = (a, b) => ({...a, ...b}); f({a: \"s\"}, {a: 1}).a.length;";
+    assert!(infer_program_via_program(src).is_err());
+    // Fields written after the spread win over the operand's; those
+    // before it lose to them.
+    let src = "const g = (o) => ({x: 1, ...o, y: \"z\"}); \
+               const s = g({x: \"q\", y: 2, w: 3}); s.x.length + s.y.length + s.w;";
+    assert!(infer_program_via_program(src).is_ok());
+    let src = "const g = (o) => ({...o, y: \"z\"}); g({y: 2, w: 3}).y.length; \
+               g({w: true}).w ? 1 : 0;";
+    assert!(infer_program_via_program(src).is_ok());
+    // A field the operand may lack keeps the one before it.
+    let src = "const g = (o) => ({x: 1, ...o}); g({}).x + 1;";
+    assert!(infer_program_via_program(src).is_ok());
+    // A spread's result is an object, whose fields take stores: the call
+    // signature it carries as absent doesn't make it a function's (the
+    // differential test found `{...{...o}}` refused a store).
+    let src = "function k(o) { const r = {...{...o}}; r.c = 5; return r; } k({c: 1}).c - 1;";
+    assert!(infer_program_via_program(src).is_ok());
+}
+
+#[test]
+fn instance_holding_its_own_factory_is_a_recursive_type() {
+    // `t ~ μ<{c: () => t}>`: solved by a recursive type, not refused by
+    // the occurs check (the differential test found it).
+    let src = "function f6() { class C7 { constructor() { this.c = f6; } \
+               get g() { return this; } } return new C7(); } const h = f6().g.c; h().g;";
+    assert!(infer_program_via_program(src).is_ok());
 }
