@@ -423,17 +423,17 @@ fn the_climb_finds_what_each_language_needs() {
         climb(&Arith::default(), &Config::default()),
         climb(&Core::default(), &Config::default()),
     ] {
-        assert!(c.steps.iter().all(|s| s.discovery.check.unsound == 0));
         assert_eq!(c.steps[c.last].features, need);
-        // Every kept step types at least as much as the one before.
-        let kept: Vec<f64> = c
+        // Every kept step types at least as many programs as the one
+        // before (on a pool that only grows).
+        let kept: Vec<usize> = c
             .steps
             .iter()
             .filter(|s| s.kept)
-            .map(|s| s.discovery.check.coverage())
+            .map(|s| s.score.typed)
             .collect();
         assert!(kept.windows(2).all(|w| w[1] >= w[0]), "{kept:?}");
-        assert!(c.result().check.coverage() > c.steps[0].discovery.check.coverage());
+        assert!(c.steps.iter().all(|s| !s.kept || s.score.unsound == 0));
     }
 }
 

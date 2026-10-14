@@ -87,6 +87,9 @@ pub struct Check {
     /// among them. What runs with different type languages compare on.
     pub fixed_safe: usize,
     pub fixed_typed: usize,
+    /// The programs generated well typed by these rules (some may still
+    /// get stuck): what the climb pools to judge other systems on.
+    pub generated_terms: Vec<Term>,
 }
 
 impl Check {
@@ -609,6 +612,7 @@ fn check<L: Language>(
         untyped_safe_examples: Vec::new(),
         fixed_safe: 0,
         fixed_typed: 0,
+        generated_terms: terms[n_fixed..].to_vec(),
     };
     let (mut t_eval, mut t_types, mut t_sound) = (0.0, 0.0, 0.0);
     let mut tick = std::time::Instant::now();
@@ -1509,6 +1513,46 @@ pub struct Step {
     pub change: String,
     pub kept: bool,
     pub discovery: Discovery,
+    /// Its score when it ran (`Score`).
+    pub score: Score,
+}
+
+/// How a system does on the programs the climb judges by: the fixed set,
+/// and the pool of programs the systems tried so far generated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Score {
+    /// Safe programs, and those of them typed.
+    pub safe: usize,
+    pub typed: usize,
+    /// Typed programs that get stuck.
+    pub unsound: usize,
+}
+
+impl Score {
+    pub fn coverage(&self) -> f64 {
+        self.typed as f64 / self.safe.max(1) as f64
+    }
+}
+
+/// `d`'s score on its fixed set and on `pool` (programs, and whether
+/// each is safe).
+fn score(d: &Discovery, pool: &[(Term, bool)]) -> Score {
+    let mut s = Score {
+        safe: d.check.fixed_safe,
+        typed: d.check.fixed_typed,
+        unsound: d.check.unsound,
+    };
+    for (t, safe) in pool {
+        s.safe += *safe as usize;
+        if !d.checker.types(t).is_empty() {
+            if *safe {
+                s.typed += 1;
+            } else {
+                s.unsound += 1;
+            }
+        }
+    }
+    s
 }
 
 pub struct Climb {
@@ -1541,37 +1585,88 @@ pub fn climb_with<L: Language>(
     mut on_step: impl FnMut(usize, &Step),
 ) -> Climb {
     let mut cache = SearchCache::new();
-    let mut run = |f: Features| {
+    // The programs systems generated well typed, kept to judge every later
+    // system on too: what a capability types that the fixed set of small
+    // programs rarely shows (a `let`-bound function used at two types).
+    let mut pool: Vec<(Term, bool)> = Vec::new();
+    let mut pooled: HashSet<Term> = HashSet::new();
+    let mut prng = Rng(cfg.seed ^ 0x9001);
+    let mut run = |f: Features, pool: &mut Vec<(Term, bool)>| {
         let mut c = cfg.clone();
         c.search.features = f;
-        discover_with(lang, &c, &mut cache)
+        let d = discover_with(lang, &c, &mut cache);
+        for t in prng.sample(&d.check.generated_terms, 400) {
+            if pooled.insert(t.clone()) {
+                match lang.eval_in(&t, &[]) {
+                    Outcome::Timeout => {}
+                    o => pool.push((t, !o.is_stuck() && !matches!(o, Outcome::Return(_)))),
+                }
+            }
+        }
+        d
     };
     let caps = capabilities();
-    let mut steps = Vec::new();
+    let mut steps: Vec<Step> = Vec::new();
     let mut cur = Features::NONE;
+    let d = run(cur, &mut pool);
+    let sc = score(&d, &pool);
     steps.push(Step {
         features: cur,
         change: "start: sorts and ground rules only".into(),
         kept: true,
-        discovery: run(cur),
+        discovery: d,
+        score: sc,
     });
     on_step(steps.len() - 1, steps.last().unwrap());
     let mut best = 0;
     let applicable = steps[0].discovery.applicable;
-    // A gain is at least one program in five hundred (and at least one)
-    // more typed; or as many typed by a smaller system.
-    let tol = |d: &Discovery| (d.check.fixed_safe / 500).max(1);
-    let better = |d: &Discovery, b: &Discovery| {
-        d.check.unsound == 0
-            && (d.check.fixed_typed >= b.check.fixed_typed + tol(b)
-                || (d.check.fixed_typed >= b.check.fixed_typed && d.size() < b.size()))
+    // Better: sound, and at least one program in five hundred (and at
+    // least one) more typed; or as many by a smaller system. Both judged on
+    // the pool as it is now, which the candidate's own run added to.
+    let better = |c: &Score, cd: &Discovery, b: &Score, bd: &Discovery| {
+        let tol = (b.safe / 500).max(1);
+        c.unsound == 0
+            && (c.typed >= b.typed + tol || (c.typed >= b.typed && cd.size() < bd.size()))
     };
-    let covered = |d: &Discovery| d.check.coverage() >= 0.99;
-    // Grow.
+    let covered = |s: &Score| s.coverage() >= 0.99;
+    // Try a set of changes to the best so far; keep it if better.
+    let mut attempt = |cand: Features,
+                       change: String,
+                       grow: bool,
+                       steps: &mut Vec<Step>,
+                       best: &mut usize,
+                       pool: &mut Vec<(Term, bool)>|
+     -> bool {
+        let d = run(cand, pool);
+        let sc = score(&d, pool);
+        let bs = score(&steps[*best].discovery, pool);
+        let bd = &steps[*best].discovery;
+        let kept = if grow {
+            better(&sc, &d, &bs, bd)
+        } else {
+            // Removing: as many typed, sound, no bigger.
+            sc.unsound == 0 && sc.typed >= bs.typed && d.size() <= bd.size()
+        };
+        steps.push(Step {
+            features: cand,
+            change,
+            kept,
+            discovery: d,
+            score: sc,
+        });
+        on_step(steps.len() - 1, steps.last().unwrap());
+        if kept {
+            *best = steps.len() - 1;
+        }
+        kept
+    };
+    // Grow: each capability in turn, round after round while any helps;
+    // when none does alone, pairs, for capabilities that only pay
+    // together.
     'grow: loop {
         let mut progress = false;
         for cap in &caps {
-            if covered(&steps[best].discovery) {
+            if covered(&steps[best].score) {
                 break 'grow;
             }
             if (cap.get)(&cur) || !(cap.get)(&applicable) {
@@ -1579,19 +1674,35 @@ pub fn climb_with<L: Language>(
             }
             let mut cand = cur;
             (cap.set)(&mut cand, true);
-            let d = run(cand);
-            let kept = better(&d, &steps[best].discovery);
-            steps.push(Step {
-                features: cand,
-                change: format!("+ {}", cap.name),
-                kept,
-                discovery: d,
-            });
-            on_step(steps.len() - 1, steps.last().unwrap());
-            if kept {
+            if attempt(
+                cand,
+                format!("+ {}", cap.name),
+                true,
+                &mut steps,
+                &mut best,
+                &mut pool,
+            ) {
                 cur = cand;
-                best = steps.len() - 1;
                 progress = true;
+            }
+        }
+        if !progress {
+            let off: Vec<&Capability> = caps
+                .iter()
+                .filter(|c| !(c.get)(&cur) && (c.get)(&applicable))
+                .collect();
+            'pairs: for (i, a) in off.iter().enumerate() {
+                for b in &off[i + 1..] {
+                    let mut cand = cur;
+                    (a.set)(&mut cand, true);
+                    (b.set)(&mut cand, true);
+                    let change = format!("+ {} and {}", a.name, b.name);
+                    if attempt(cand, change, true, &mut steps, &mut best, &mut pool) {
+                        cur = cand;
+                        progress = true;
+                        break 'pairs;
+                    }
+                }
             }
         }
         if !progress {
@@ -1608,22 +1719,15 @@ pub fn climb_with<L: Language>(
             }
             let mut cand = cur;
             (cap.set)(&mut cand, false);
-            let d = run(cand);
-            let b = &steps[best].discovery;
-            // As many programs typed, by a system no bigger.
-            let kept = d.check.unsound == 0
-                && d.check.fixed_typed >= b.check.fixed_typed
-                && d.size() <= b.size();
-            steps.push(Step {
-                features: cand,
-                change: format!("- {}", cap.name),
-                kept,
-                discovery: d,
-            });
-            on_step(steps.len() - 1, steps.last().unwrap());
-            if kept {
+            if attempt(
+                cand,
+                format!("- {}", cap.name),
+                false,
+                &mut steps,
+                &mut best,
+                &mut pool,
+            ) {
                 cur = cand;
-                best = steps.len() - 1;
                 removed = true;
             }
         }
@@ -1640,10 +1744,11 @@ pub fn climb_with<L: Language>(
 pub fn step_report(i: usize, s: &Step, prev: &[String]) -> String {
     let d = &s.discovery;
     let mut out = format!(
-        "step {i}: {}  ->  {:.1}% of safe programs typed, {} unsound, {} rules (size {})  [{}]\n",
+        "step {i}: {}  ->  {:.1}% of {} safe programs typed, {} unsound, {} rules (size {})  [{}]\n",
         s.change,
-        100.0 * d.check.coverage(),
-        d.check.unsound,
+        100.0 * s.score.coverage(),
+        s.score.safe,
+        s.score.unsound,
         d.rules.len(),
         d.size(),
         if s.kept { "kept" } else { "dropped" }
@@ -1715,7 +1820,7 @@ impl Climb {
         format!(
             "\nresult (step {}): {:.1}% of safe programs typed, with {}\n",
             self.last,
-            100.0 * last.discovery.check.coverage(),
+            100.0 * last.score.coverage(),
             if caps.is_empty() {
                 "nothing beyond ground rules".to_string()
             } else {

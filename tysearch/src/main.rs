@@ -6,13 +6,16 @@ use tysearch::langs::{
     unityped::Unityped,
 };
 
-const USAGE: &str = "usage: tysearch <arith|core|model|unityped|coerce|pairs|subtyping|refs|units|files|effects|secrets|printf> [--climb] [--corpus N] [--check N] [--seed N]
+const USAGE: &str = "usage: tysearch <arith|core|model|unityped|coerce|pairs|subtyping|refs|units|files|effects|secrets|printf> [--corpus N] [--check N] [--seed N]
 
-  --climb  grow the type language from ground rules, one capability at a
-           time while it types more programs, then drop what isn't needed;
-           print each step
+Finds a type system for the language by itself: it starts from the
+simplest, adds what types more of its safe programs (type variables,
+function and object types, binders, let-generalisation, exit types,
+subtyping, unions, narrowing), drops what isn't needed, and prints each
+type system as it finds it.
+
   --features vars,refined,binders,generalise,exits,subtyping,unions,narrowing
-           run with only those capabilities (for working on the search)";
+           one run with only those capabilities (for working on the search)";
 
 fn run<L: Language>(lang: &L, cfg: &Config, climbing: bool) {
     if climbing {
@@ -41,10 +44,11 @@ fn main() {
         std::process::exit(2)
     });
     let mut cfg = Config::default();
-    let mut climbing = false;
+    // The climb unless a developer pins the capabilities.
+    let mut climbing = true;
     while let Some(flag) = args.next() {
+        // The default; kept for old scripts.
         if flag == "--climb" {
-            climbing = true;
             continue;
         }
         // For working on the search: `--features vars,refined,binders`
@@ -72,6 +76,7 @@ fn main() {
                 }
             }
             cfg.search.features = f;
+            climbing = false;
             continue;
         }
         let n = args.next().and_then(|n| n.parse().ok());

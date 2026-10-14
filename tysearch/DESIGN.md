@@ -366,12 +366,21 @@ The climb starts from sorts and ground rules. It tries the capabilities in
 that order, each needing only those before it to be of use, and keeps one
 if the result:
 
-- types more of a fixed set of safe programs (one in five hundred), or as
-  many with a smaller system (§6.1's description length);
+- types more of the programs it judges by (one in five hundred), or as many
+  with a smaller system (§6.1's description length);
 - and gets none of them stuck.
 
-It goes round again while anything was kept. It stops when nothing helps,
-or when 99% of the safe programs are typed. Then it minimises: it removes
+**What it judges by.** It judges by a fixed set of programs (all the small
+ones, and random ones), plus a **pool** that grows. Each run generates
+programs its own system types, and the climb keeps a sample of them, safe
+or not. Every later system, and the best so far, is judged on them too. A
+capability is credited with programs only it types, which small or random
+programs rarely show: a `let`-bound function used at two types. A crashing
+program in the pool counts against any system that types it.
+
+It goes round again while anything was kept. When no capability helps
+alone, it tries **pairs**, for capabilities that pay only together. It
+stops when nothing helps, or when 99% of the safe programs are typed. Then it minimises: it removes
 each kept capability, the latest first, if the system without it types as
 many programs and is no bigger. A capability that can't matter for the
 language (exit types where nothing returns) is not tried.
