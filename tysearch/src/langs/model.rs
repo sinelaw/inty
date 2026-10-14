@@ -10,7 +10,8 @@
 //! extra arguments and get stuck on missing ones, as the model's do
 //! (iteration 1); and variables in cells, as the model's environment holds
 //! them: `let`, assignment `x = e`, which closures see, and `e₁; e₂`
-//! (iteration 3).
+//! (iteration 3); and objects with properties `x` and `y`, read with `.x`,
+//! stored with `.x =` (iteration 5).
 //!
 //! Variables are de Bruijn indices. In a function's body `var(i)` is
 //! parameter `i` for `i` below the arity, and `var(arity)` is the function
@@ -50,6 +51,38 @@ const APP2: usize = 19;
 const VAR: usize = 20;
 const ASSIGN: usize = 21;
 const SEQ: usize = 22;
+const OBJ_X: usize = 23;
+const OBJ_Y: usize = 24;
+const OBJ_XY: usize = 25;
+const GET_X: usize = 26;
+const GET_Y: usize = 27;
+const SET_X: usize = 28;
+const SET_Y: usize = 29;
+
+/// An object's cell: its properties, in order. Two objects are the same
+/// object only if they are the same cell, as `===` sees them.
+#[derive(Clone)]
+pub struct ObjCell(Rc<RefCell<Vec<(&'static str, Val)>>>);
+
+impl std::fmt::Debug for ObjCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "obj@{:p}", Rc::as_ptr(&self.0))
+    }
+}
+
+impl PartialEq for ObjCell {
+    fn eq(&self, other: &ObjCell) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ObjCell {}
+
+impl Hash for ObjCell {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (Rc::as_ptr(&self.0) as usize).hash(h)
+    }
+}
 
 /// A variable's cell. Two are equal only if they are the same cell.
 #[derive(Clone)]
@@ -102,6 +135,7 @@ pub enum Val {
     Undefined,
     Null,
     Clo(Rc<Closure>),
+    Obj(ObjCell),
 }
 
 fn num(f: f64) -> Val {
@@ -124,6 +158,16 @@ impl Val {
                                 .zip(&b.env)
                                 .all(|(x, y)| x == y || x.get().same(&y.get(), depth - 1))))
             }
+            (Val::Obj(a), Val::Obj(b)) => {
+                a == b || {
+                    let (x, y) = (a.0.borrow(), b.0.borrow());
+                    x.len() == y.len()
+                        && (depth == 0
+                            || x.iter()
+                                .zip(y.iter())
+                                .all(|((l, v), (m, w))| l == m && v.same(w, depth - 1)))
+                }
+            }
             (a, b) => a == b,
         }
     }
@@ -140,6 +184,12 @@ impl Val {
                     .map(|s| Slot::new(s.get().isolate(depth - 1)))
                     .collect(),
             })),
+            Val::Obj(o) if depth > 0 => Val::Obj(ObjCell(Rc::new(RefCell::new(
+                o.0.borrow()
+                    .iter()
+                    .map(|(l, v)| (*l, v.isolate(depth - 1)))
+                    .collect(),
+            )))),
             v => v.clone(),
         }
     }
@@ -154,7 +204,7 @@ impl Val {
             Val::Str(s) => !s.is_empty(),
             Val::Bool(b) => *b,
             Val::Undefined | Val::Null => false,
-            Val::Clo(_) => true,
+            Val::Clo(_) | Val::Obj(_) => true,
         }
     }
 
@@ -162,6 +212,7 @@ impl Val {
         match (self, other) {
             (Val::Num(a), Val::Num(b)) => f64::from_bits(*a) == f64::from_bits(*b),
             (Val::Clo(a), Val::Clo(b)) => Rc::ptr_eq(a, b),
+            (Val::Obj(a), Val::Obj(b)) => a == b,
             (a, b) => a == b,
         }
     }
@@ -194,6 +245,13 @@ impl Default for Model {
                 Con::var(),
                 Con::assign(),
                 Con::op("seq", 2),
+                Con::op("{x}", 1),
+                Con::op("{y}", 1),
+                Con::op("{x,y}", 2),
+                Con::op(".x", 1),
+                Con::op(".y", 1),
+                Con::op(".x=", 2),
+                Con::op(".y=", 2),
             ],
             fuel: 64,
         }
@@ -237,6 +295,48 @@ impl Model {
                 }
                 _ => Outcome::stuck("undefinedVariable"),
             },
+            OBJ_X | OBJ_Y | OBJ_XY => {
+                let labels: &[&'static str] = match t.con {
+                    OBJ_X => &["x"],
+                    OBJ_Y => &["y"],
+                    _ => &["x", "y"],
+                };
+                let mut fields = Vec::new();
+                for (i, l) in labels.iter().enumerate() {
+                    fields.push((*l, value!(kid(i, env))));
+                }
+                Value(Val::Obj(ObjCell(Rc::new(RefCell::new(fields)))))
+            }
+            GET_X | GET_Y | SET_X | SET_Y => {
+                let label = if matches!(t.con, GET_X | SET_X) {
+                    "x"
+                } else {
+                    "y"
+                };
+                let Val::Obj(o) = value!(kid(0, env)) else {
+                    return Outcome::stuck("notIndexable");
+                };
+                if matches!(t.con, GET_X | GET_Y) {
+                    let found =
+                        o.0.borrow()
+                            .iter()
+                            .find(|(l, _)| *l == label)
+                            .map(|(_, v)| v.clone());
+                    return match found {
+                        Some(v) => Value(v),
+                        None => Outcome::stuck("propertyNotFound"),
+                    };
+                }
+                let v = value!(kid(1, env));
+                let mut fields = o.0.borrow_mut();
+                match fields.iter_mut().find(|(l, _)| *l == label) {
+                    Some(slot) => {
+                        slot.1 = v.clone();
+                        Value(v)
+                    }
+                    None => Outcome::stuck("propertyNotFound"),
+                }
+            }
             SEQ => {
                 value!(kid(0, env));
                 kid(1, env)
@@ -250,6 +350,7 @@ impl Model {
                     Val::Undefined => "undefined",
                     Val::Null => "object",
                     Val::Clo(_) => "function",
+                    Val::Obj(_) => "object",
                 }
                 .into(),
             )),
@@ -358,6 +459,18 @@ impl Language for Model {
             Val::Undefined => "undefined".into(),
             Val::Null => "null".into(),
             Val::Clo(c) => format!("fn{}({})", c.arity, self.show_term(&c.body)),
+            // Shallow: an object can hold itself.
+            Val::Obj(o) => {
+                let fields: Vec<String> =
+                    o.0.borrow()
+                        .iter()
+                        .map(|(l, v)| match v {
+                            Val::Obj(_) => format!("{l}: {{...}}"),
+                            v => format!("{l}: {}", self.show_value(v)),
+                        })
+                        .collect();
+                format!("{{{}}}", fields.join(", "))
+            }
         }
     }
 }

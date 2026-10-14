@@ -61,9 +61,11 @@ pub struct SearchConfig {
     pub climb: usize,
     /// Instantiations of a candidate's variables `falsify` tries.
     pub attacks: usize,
-    /// Selection stops when no rule gains this share of all the weight
-    /// the candidates can cover.
+    /// A rule joins only if it gains this share of what the best rule
+    /// chosen gained...
     pub min_gain: f64,
+    /// ...and the first, this share of all the weight the candidates cover.
+    pub first_gain: f64,
     /// Rules gaining this share of the best gain compete on simplicity.
     pub substantial: f64,
 }
@@ -79,7 +81,8 @@ impl Default for SearchConfig {
             seeds_per_group: 3,
             climb: 120,
             attacks: 60,
-            min_gain: 0.1,
+            min_gain: 0.2,
+            first_gain: 0.05,
             substantial: 0.25,
         }
     }
@@ -340,16 +343,21 @@ pub fn search_con<L: Language>(
     // specific type (with subtyping: `+ : (Int, Int) -> Int` after `+ :
     // (Float, Float) -> Float`).
     let mut covered: Vec<Option<Ty>> = vec![None; obs.len()];
-    let coverable: f64 = {
-        let mut any = vec![false; obs.len()];
-        for (_, c) in &sound {
+    // All the weight the candidates still standing, and those chosen, can
+    // cover: recomputed as candidates fall, so that rules refuted late
+    // don't keep the bar high.
+    let coverable_of = |sound: &[(Schema, Vec<(usize, Ty)>)], covered: &[Option<Ty>]| -> f64 {
+        let mut any: Vec<bool> = covered.iter().map(Option::is_some).collect();
+        for (_, c) in sound {
             for (i, _) in c {
                 any[*i] = true;
             }
         }
-        (0..obs.len()).filter(|&i| any[i]).map(|i| weight[i]).sum()
+        (0..any.len()).filter(|&i| any[i]).map(|i| weight[i]).sum()
     };
+    let mut best_gain: f64 = 0.0;
     loop {
+        let coverable = coverable_of(&sound, &covered);
         let order = (sem.subtyping, sem.le.clone());
         let improves = move |i: usize, p: &Ty, covered: &[Option<Ty>]| match (&covered[i], p) {
             (None, _) => true,
@@ -363,12 +371,19 @@ pub fn search_con<L: Language>(
                 .sum()
         };
         let gains: Vec<f64> = sound.iter().map(|(_, c)| gain(c, &covered)).collect();
+        // A rule must gain a share of what the best rule chosen gained (or,
+        // for the first, a small share of all there is).
+        let bar = if best_gain > 0.0 {
+            cfg.min_gain * best_gain
+        } else {
+            cfg.first_gain * coverable
+        };
         let max = gains.iter().cloned().fold(0.0, f64::max);
-        if max <= 1e-9 || max < cfg.min_gain * coverable {
+        if max <= 1e-9 || max < bar {
             break;
         }
         let at = (0..sound.len())
-            .filter(|&i| gains[i] >= cfg.substantial * max && gains[i] >= cfg.min_gain * coverable)
+            .filter(|&i| gains[i] >= cfg.substantial * max && gains[i] >= bar)
             .min_by(|&i, &j| {
                 let key = |k: usize| {
                     (
@@ -388,6 +403,7 @@ pub fn search_con<L: Language>(
             refuted.push((best, why));
             continue;
         }
+        best_gain = best_gain.max(gains[at]);
         if trace {
             eprintln!(
                 "    chose {:?} gaining {:.1}% of {coverable:.1}",
@@ -423,6 +439,34 @@ fn faithful<V: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
     sem: &Semantics<V>,
     r: &Schema,
 ) -> bool {
+    // An alias (an eliminator that repeats a refining one, extra arguments
+    // ignored) is held to the same meaning: its leading arguments have the
+    // parameters' types and its result the result's.
+    for (s, aliases) in sem.aliases.iter().enumerate() {
+        for &(elim, hole, ti) in aliases {
+            if elim != r.con {
+                continue;
+            }
+            let Ty::Ref(s2, ps) = &r.kids[hole].ty else {
+                continue;
+            };
+            if *s2 != s {
+                continue;
+            }
+            let (at, n) = sem.slices(s)[ti];
+            let others: Vec<&Ty> = (0..r.kids.len())
+                .filter(|&j| j != hole)
+                .map(|j| &r.kids[j].ty)
+                .collect();
+            let (res, args) = ps[at..at + n].split_last().unwrap();
+            if others.len() < args.len()
+                || others.iter().zip(args).any(|(o, a)| *o != a)
+                || r.res != *res
+            {
+                return false;
+            }
+        }
+    }
     for (s, ts) in sem.templates.iter().enumerate() {
         for (t, (at, n)) in ts.iter().zip(sem.slices(s)) {
             if t.elim != r.con {

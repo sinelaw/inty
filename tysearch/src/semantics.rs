@@ -110,6 +110,9 @@ pub struct Semantics<V> {
     behaviour_memo: HashMap<V, Vec<i64>>,
     /// Values per sort, smallest first.
     pub members: Vec<Vec<V>>,
+    /// Per sort, eliminators that only repeat one of its refining ones with
+    /// extra arguments ignored: `(eliminator, hole, which template)`.
+    pub aliases: Vec<Vec<(usize, usize, usize)>>,
     /// Per sort, the eliminators it's refined by (none if it isn't). A
     /// refined type's parameters are, per eliminator in turn, its other
     /// arguments' types and its result's.
@@ -181,6 +184,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
             behaviour_memo: HashMap::new(),
             members: Vec::new(),
             templates: Vec::new(),
+            aliases: Vec::new(),
             universe: Vec::new(),
             samples_per_type,
             le: Vec::new(),
@@ -201,6 +205,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         for (p, &id) in &sem.by_print {
             prints[id] = p.clone();
         }
+        sem.aliases = vec![Vec::new(); sem.members.len()];
         sem.templates = (0..sem.members.len())
             .map(|s| sem.refinement(oracle, s))
             .collect();
@@ -363,6 +368,16 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                 if same {
                     keep[j] = false;
                 }
+            }
+        }
+        // A dropped one is an alias of the one it repeats.
+        let kept: Vec<usize> = (0..out.len()).filter(|&i| keep[i]).collect();
+        for j in 0..out.len() {
+            if keep[j] {
+                continue;
+            }
+            if let Some(i) = kept.iter().position(|&i| out[i].k < out[j].k) {
+                self.aliases[s].push((out[j].elim, out[j].hole, i));
             }
         }
         out.into_iter()

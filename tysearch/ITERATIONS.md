@@ -212,13 +212,47 @@ typed term gets stuck.
 - Cells printed their contents in `Debug`, and a closure stored in a cell it
   captures is a cycle. The result was a stack overflow when printing.
 
+## 5. Objects
+
+**Model.** Following the Lean model's `obj`, `get` and `set`, with the
+labels `x` and `y`:
+
+- the literals `{x}`, `{y}` and `{x,y}`;
+- the reads `.x` and `.y`, stuck when the property is missing;
+- the stores `.x =` and `.y =`, which need the property to exist.
+
+Objects live in cells, and `===` compares them by identity.
+
+**Found.**
+
+- **Records.** Each set of labels is a sort, refined by its reads: `{x,y}`
+  makes a `T7{.x: -> a, .y: -> b}`, which is `{x: a, y: b}`.
+- **Reads.** `.x` is overloaded on the objects that have `x`:
+  `(T5< -> a>) -> a` and `(T7{.x: -> a, .y: -> b}) -> a`. Their lgg is
+  `.x : (c) -> a` where `c` has `x: a`, which is inty's `HasProp x`
+  constraint, here over a finite set of labels.
+- **Stores.** `.x=` keeps the property's type:
+  `(T7{.x: -> a, .y: -> b}, a) -> a`. The monotonicity check refutes a
+  store of any other type.
+- **Truthiness.** A conditional on an object takes its first branch, since
+  objects are truthy, as functions are.
+
+No typed term gets stuck.
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| No rule for stores. The invariant rule was a candidate, but the gain bar was relative to everything coverable, which counted what non-invariant rules (refuted later, by monotonicity) covered | A rule's bar is relative to the best rule chosen so far (20%). The first needs 5% of what the standing candidates cover |
+| Junk `app2 : (T3<T2 -> T0>, a, b) -> T0` came back | **Aliases.** An eliminator dropped from a refinement because it only repeats another with extra arguments ignored (`app2` on a one-parameter function) is recorded, and held to the same faithfulness: its leading arguments have the parameters' types |
+
 ## Next
 
-- **Speed** (done). The model is down from five minutes to two:
-  - the aimed screen stops at its first refutation;
-  - the search runs again with subtyping only when a constructor's
-    overloads differ in sorts the order relates.
 - **Statements:** `return`, `throw`, `try` and loops, with faults and
-  abrupt completions.
-- **Objects and arrays:** refinement by an eliminator per field label, which
-  gives rows. Records with width subtyping go in the suite too.
+  abrupt completions. `return` needs a context type (the enclosing
+  function's result), which the rule format doesn't have yet.
+- **Arrays:** indexing that faults out of bounds.
+- **Sums:** `undefined`/`null` unions with `unwrap`, and tag tests
+  (`typetest`, `caseTag`) with narrowing.
+- **Records with width subtyping in the suite:** order refined sorts by
+  their fingerprints too.

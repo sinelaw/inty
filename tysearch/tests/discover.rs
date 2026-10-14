@@ -71,8 +71,8 @@ fn core_finds_the_plus_class() {
     assert_eq!(d.check.unsound, 0);
 }
 
-/// Iterations 1, 3 and 4: functions, calls, `let`, assignment and
-/// `e₁; e₂`. The rules are the Lean model's (`lean/Inty/Typing.lean`),
+/// Iterations 1, 3, 4 and 5: functions, calls, `let`, assignment,
+/// `e₁; e₂`, and objects. The rules are the Lean model's (`lean/Inty/Typing.lean`),
 /// found from its semantics alone: T3 and T4 are the functions of one and
 /// two parameters, refined by what a call gives (`T3<a -> b>` is
 /// `(a) => b`). Where they differ, the semantics allows more than inty's
@@ -80,8 +80,8 @@ fn core_finds_the_plus_class() {
 ///
 /// - T2 is booleans with `undefined` and `null`: nothing in this fragment
 ///   gets stuck on one and not the other.
-/// - A conditional on a function takes its first branch: functions are
-///   truthy.
+/// - A conditional on a function or an object takes its first branch:
+///   they are truthy.
 /// - A one-parameter function may be called with two arguments: the extra
 ///   one is ignored.
 ///
@@ -122,6 +122,24 @@ fn model_finds_functions_state_and_the_value_restriction() {
             "app2 : (T3<a -> b>, a, c) -> b",
             "app2 : (T4<a, b -> c>, a, b) -> c",
             "seq : (a, b) -> b",
+            // Objects (iteration 5): T5, T6 and T7 are `{x: a}`, `{y: a}`
+            // and `{x: a, y: b}`, refined by their reads. A read is
+            // overloaded on the objects that have the property (inty's
+            // `HasProp`); a store keeps the property's type.
+            "cond : (T5< -> a>, b, c) -> b",
+            "cond : (T6< -> a>, b, c) -> b",
+            "cond : (T7{.x: -> a, .y: -> b}, c, d) -> c",
+            "{x} : (a) -> T5< -> a>",
+            "{y} : (a) -> T6< -> a>",
+            "{x,y} : (a, b) -> T7{.x: -> a, .y: -> b}",
+            ".x : (T5< -> a>) -> a",
+            ".x : (T7{.x: -> a, .y: -> b}) -> a",
+            ".y : (T6< -> a>) -> a",
+            ".y : (T7{.x: -> a, .y: -> b}) -> b",
+            ".x= : (T5< -> a>, a) -> a",
+            ".x= : (T7{.x: -> a, .y: -> b}, a) -> a",
+            ".y= : (T6< -> a>, a) -> a",
+            ".y= : (T7{.x: -> a, .y: -> b}, b) -> b",
         ])
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);
