@@ -2721,6 +2721,11 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
         features.insert("fewer parameters");
     }
     shown.extend(errors);
+    for text in &shown {
+        if text.contains("never") {
+            features.insert("never");
+        }
+    }
     (typing, features)
 }
 
@@ -2766,6 +2771,17 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // ignores the extra arguments, as JavaScript does.
         (Typing::Type(_), Typing::Reject) if features.contains("fewer parameters") => {
             Some("fewer parameters than the expected function type")
+        }
+        // A method or a field holding a function that never completes: inty
+        // types its result `never`, which the object holds monomorphically
+        // and which unifies with no other type (`this.c = {a: 1}` into a
+        // field that held such a result); the model gives it a type
+        // variable, which the first use fixes.
+        (Typing::Reject, Typing::Type(_)) if features.contains("never") => {
+            Some("never (a member that only throws)")
+        }
+        (Typing::Type(t), Typing::Type(_)) if t == "never" => {
+            Some("never (a member that only throws)")
         }
         // The model types a program that can't complete normally (it only
         // throws, or a function in it falls off its end only after a

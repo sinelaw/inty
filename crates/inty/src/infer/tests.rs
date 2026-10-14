@@ -5523,8 +5523,19 @@ fn spread_of_an_operand_not_known_yet_waits_for_it() {
     assert!(infer_program_via_program(src).is_ok()); // Its result is an object even before the operand is known: it can't
                                                      // be called (the differential test found it callable).
     let src = "function f(o) { return ({...o})(1); }";
-    assert!(infer_program_via_program(src).is_err()); // A spread whose result flows back into its operand (`x = {...x}`)
-                                                      // isn't a cycle (the differential test found the unifier giving up).
+    assert!(infer_program_via_program(src).is_err());
+    // A getter written after the spread stays a getter: it can't be
+    // stored to (the review found it made writable).
+    for src in [
+        "function f(o) { return {...o, get x() { return 1; }}; } const r = f({}); r.x = 2;",
+        "function f(o) { const r = {...o, get x() { return 1; }}; r.x = 2; return r; } f({});",
+    ] {
+        assert!(infer_program_via_program(src).is_err(), "{src}");
+    }
+    let src = "function f(o) { return {...o, get x() { return 1; }}; } \
+               f({x: \"s\", y: 2}).x - 1 + f({y: 2}).y;";
+    assert!(infer_program_via_program(src).is_ok()); // A spread whose result flows back into its operand (`x = {...x}`)
+                                                     // isn't a cycle (the differential test found the unifier giving up).
     for src in [
         "let x = [][0]; x = {...{a: \"\"}, ...x};",
         "const o = {b: [][0], m() { this.b = {...{a: \"\"}, ...this.b}; return this; }}; o.m();",
@@ -5553,6 +5564,18 @@ fn a_body_that_never_completes_returns_any_type() {
         "const f = function () { throw 1; }; const xs = [f, function () { return \"s\"; }];",
         "function apply(k) { return k(); } apply(function () { throw 1; }) + 1;",
         "function f() { throw 1; } f() - 1; f().length;",
+        // A member of an object or class keeps `never`: the object's type
+        // holds it as it is, so a variable would be fixed by its first use
+        // (the review found `fail` used as a number, then a string,
+        // refused).
+        "const util = { fail(msg) { throw msg; } }; \
+         function num(c) { return c ? 1 : util.fail(\"x\"); } \
+         function str(c) { return c ? \"s\" : util.fail(\"y\"); } num(true) - 1; str(true).length;",
+        "const util = { fail: (msg) => { throw msg; } }; \
+         function num(c) { return c ? 1 : util.fail(\"x\"); } \
+         function str(c) { return c ? \"s\" : util.fail(\"y\"); } num(true) - 1; str(true).length;",
+        "class C { m() { throw 1; } } const c = new C(); \
+         function a() { return c.m() - 1; } function b() { return c.m().length; }",
     ] {
         assert!(infer_program_via_program(src).is_ok(), "{src}");
     }

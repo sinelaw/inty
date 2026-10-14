@@ -272,6 +272,7 @@ impl InferState {
         expected: Option<Type>,
         span: Span,
     ) -> InferResult<Type> {
+        let member = std::mem::take(&mut self.member_function);
         self.return_value_stack.push(Vec::new());
         self.return_expected_stack.push(expected);
         let body_result = self.infer_stmt(body_env, body);
@@ -292,12 +293,21 @@ impl InferState {
             }
         }
         Ok(if parts.is_empty() {
-            // A body that never completes (it only throws, or loops
-            // forever) gives no value: any type is its result, a type
-            // variable the binding generalises, as the Lean model leaves
-            // it. (`never`, the empty union, unified with no other return
-            // type: `c ? f : g` with `g` returning a number was refused.)
-            self.fresh_type_var()
+            if member {
+                // A member's: the object's type holds it as it is, so a
+                // type variable would be fixed by its first use (`fail`
+                // used as a number, then as a string); `never` joins with
+                // any type where the call's value is used.
+                Type::never()
+            } else {
+                // A body that never completes (it only throws, or loops
+                // forever) gives no value: any type is its result, a type
+                // variable a binding generalises, as the Lean model leaves
+                // it. (`never`, the empty union, unified with no other
+                // return type: `c ? f : g` with `g` returning a number was
+                // refused.)
+                self.fresh_type_var()
+            }
         } else {
             let mut acc = parts[0].clone();
             for t in &parts[1..] {
@@ -441,6 +451,9 @@ impl InferState {
         expected: Option<(Vec<crate::types::FuncParam>, Type)>,
         span: Span,
     ) -> InferResult<Type> {
+        // (Taken here, so that nothing inferred before the body, such as a
+        // parameter's default, takes it.)
+        let member = std::mem::take(&mut self.member_function);
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()
@@ -622,6 +635,7 @@ impl InferState {
             t if annotated => Some(t),
             _ => None,
         };
+        self.member_function = member;
         let inferred_ret =
             self.infer_body_return_type_expecting(&body_env, body, !annotated, expected_ret, span)?;
 

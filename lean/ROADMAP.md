@@ -357,7 +357,8 @@ touching the generic proofs.
   forms the front end writes, with no rule of their own. What never
   completes has a type variable for its type, which no value has; inty's
   function that never completes now returns one too, rather than `never`,
-  which joined with no other return type. Where inty's `&&` and `||` give
+  which joined with no other return type (a member of an object or class
+  keeps `never`, as the object holds it monomorphically). Where inty's `&&` and `||` give
   what can come out of two different types, it is the waiting `Join`.
 - Still to come: operations pushed through each arm of a union; a
   declared union absorbing its arms (the waiting `Join`,
