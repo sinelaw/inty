@@ -2039,8 +2039,26 @@ pub fn falsify<L: Language>(
                     continue;
                 }
                 let uses = uses_of(oracle, sem, pools, &beta, rng);
+                // And closed terms of the wanted type, which ignore the
+                // variables: a branch that makes an array where the rule
+                // says nothing about arrays, say. Random open terms of a
+                // particular type are rare.
+                let mut typed = Vec::new();
+                let start = rng.below(pools.reps.len().max(1));
+                for i in 0..pools.reps.len() {
+                    let t = &pools.reps[(start + i) % pools.reps.len()];
+                    if let Outcome::Value(v) = oracle.eval(t) {
+                        if sem.holds(oracle, &v, &want) {
+                            typed.push(t.clone());
+                            if typed.len() >= 2 {
+                                break;
+                            }
+                        }
+                    }
+                }
                 let tries: Vec<&Term> = uses
                     .iter()
+                    .chain(&typed)
                     .chain(examples.iter().map(|e| &e.kids[k]))
                     .chain((0..60).map(|_| &open[rng.below(open.len())]))
                     .collect();

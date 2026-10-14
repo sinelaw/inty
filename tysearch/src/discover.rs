@@ -210,7 +210,17 @@ pub fn discover_with<L: Language>(lang: &L, cfg: &Config, cache: &mut SearchCach
     let mut reps: Vec<Term> = Vec::new();
     let mut per_sig: HashMap<Vec<usize>, usize> = HashMap::new();
     for v in &pool {
-        let n = per_sig.entry(sem.types_of(&mut oracle, v)).or_default();
+        // By the types a value is in, and, where refinement is off, by
+        // how its eliminator behaves, which the types no longer say.
+        let mut key = sem.types_of(&mut oracle, v);
+        if !feats.refined {
+            key.extend(
+                sem.behaviour(&mut oracle, v)
+                    .iter()
+                    .map(|b| (b + 1000) as usize),
+            );
+        }
+        let n = per_sig.entry(key).or_default();
         if *n < cfg.search.reps_per_type {
             *n += 1;
             reps.push(origin[v].clone());

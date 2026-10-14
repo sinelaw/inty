@@ -133,6 +133,10 @@ pub struct Semantics<V> {
     /// child's, but which only some sorts' values reach (the branches of a
     /// `typeof` test): those sorts. Its type is narrowed to them.
     pub narrow: HashMap<(usize, usize, usize), Vec<usize>>,
+    /// The refinements `unrefine` took out of the types: still how members
+    /// of a sort differ, so samples of it stay diverse (functions that
+    /// give numbers, and ones that give strings).
+    hidden: Vec<Vec<Template>>,
 }
 
 /// Builds `con` with child `hole` the variable `var(0)` and the others
@@ -199,6 +203,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
             forgets: 0,
             uses: Vec::new(),
             narrow: HashMap::new(),
+            hidden: Vec::new(),
         };
         for v in pool {
             let print = sem.fingerprint(oracle, v);
@@ -261,7 +266,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
     /// alone (and `unknown`, if it was there).
     pub fn unrefine(&mut self) {
         let n = self.count();
-        self.templates = vec![Vec::new(); n];
+        self.hidden = std::mem::replace(&mut self.templates, vec![Vec::new(); n]);
         self.aliases = vec![Vec::new(); n];
         let top = self.universe.contains(&Ty::Top);
         self.universe = (0..n).map(Ty::Base).collect();
@@ -615,12 +620,19 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
                 .collect(),
             Ty::Base(s) => {
                 // The smallest members first (0 and 1 are the indices an
-                // array of two has), then one from the far end.
-                let ms = &self.members[*s];
-                let mut out: Vec<V> = ms.iter().take(n.saturating_sub(1)).cloned().collect();
-                if ms.len() >= n {
-                    out.extend(ms.last().cloned());
-                }
+                // array of two has), then one from the far end. A sort whose
+                // refinement is hidden: members that behave apart.
+                let ms = self.members[*s].clone();
+                let mut out: Vec<V> = if self.hidden.get(*s).is_some_and(|h| !h.is_empty()) {
+                    let some: Vec<V> = ms.iter().take(64).cloned().collect();
+                    self.diverse(oracle, &some, n.max(4))
+                } else {
+                    let mut out: Vec<V> = ms.iter().take(n.saturating_sub(1)).cloned().collect();
+                    if ms.len() >= n {
+                        out.extend(ms.last().cloned());
+                    }
+                    out
+                };
                 // A subsort's values are the type's too: one of each.
                 if self.subtyping {
                     for u in 0..self.count() {
@@ -649,15 +661,24 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
     /// What `v`'s eliminator gives on a few probe arguments, as sorts (or
     /// -1 stuck, -2 fault, -3 out of fuel, -4 unsorted): a cheap
     /// fingerprint of a refined value's behaviour.
-    fn behaviour<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>, v: &V) -> Vec<i64> {
+    pub fn behaviour<L: Language<Value = V>>(&mut self, oracle: &mut Oracle<L>, v: &V) -> Vec<i64> {
         if let Some(b) = self.behaviour_memo.get(v) {
             return b.clone();
         }
         let mut out = Vec::new();
-        if let Some(t) = self
+        // Through every eliminator of its sort (an object's `.x` and `.y`
+        // both), refined or hidden.
+        let tmpls: Vec<Template> = self
             .sort(oracle, v)
-            .and_then(|s| self.templates[s].first().cloned())
-        {
+            .map(|s| {
+                if self.templates[s].is_empty() {
+                    self.hidden.get(s).cloned().unwrap_or_default()
+                } else {
+                    self.templates[s].clone()
+                }
+            })
+            .unwrap_or_default();
+        for t in tmpls {
             let probes: Vec<Vec<V>> = self
                 .contexts
                 .iter()

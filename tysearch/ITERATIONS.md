@@ -525,10 +525,19 @@ Two things to follow up:
   types. The measure undervalues it.
 - **The check caught unsound systems four times.** Binders before exit
   types (1 unsound), generalisation at step 10 (1), and removing refined
-  sorts (74) or type variables (25) late on. The climb dropped them all.
-  But each means the search chose a rule its attacks didn't break, so
-  these are leads for the attacks. Without refined sorts, for one, `app1`
-  may be given a rule with nothing to say what a call returns.
+  sorts (74) or type variables (25) late on. The climb dropped them all,
+  but each meant the attacks had missed a rule. Now fixed (below).
+
+**The four misses, fixed.** `--features` reruns one step's capabilities:
+
+| Run | Typed and got stuck | The rule | Why the attacks missed it | Fix |
+|---|---|---|---|---|
+| binders, no exit types or narrowing | `typeof=string("a", break, [a](x0))` | a `typeof=string` whose then-branch makes an array the result type doesn't mention | no random open term of that array type fitted, so the branch was never attacked | attacks also try **closed terms of the wanted type**, which ignore the variables |
+| + generalisation | `typeof=string(…, "", [a](0))` | the same | the same | the same |
+| no refined sorts | `app1(func1(""), 0) : T0` | `app1 : (T3, a) -> T0`: every call gives a number | unrefined, all functions are one type, so the pools kept the two smallest, `fn1(0)` and `fn1(1)`, both giving numbers | a sort whose refinement is hidden is still **sampled by behaviour**: functions giving numbers and strings, objects with each kind of `x` and `y` (every eliminator, not the first) |
+| no type variables | `func1({y}(0)) : T3<T2 -> T0>` | a ground `func1` whose body's type no reachable body has | as the first | as the first |
+
+All four runs are now sound.
 
 **What had to change:**
 

@@ -10,7 +10,9 @@ const USAGE: &str = "usage: tysearch <arith|core|model|unityped|coerce|pairs|sub
 
   --climb  grow the type language from ground rules, one capability at a
            time while it types more programs, then drop what isn't needed;
-           print each step";
+           print each step
+  --features vars,refined,binders,generalise,exits,subtyping,unions,narrowing
+           run with only those capabilities (for working on the search)";
 
 fn run<L: Language>(lang: &L, cfg: &Config, climbing: bool) {
     if climbing {
@@ -43,6 +45,33 @@ fn main() {
     while let Some(flag) = args.next() {
         if flag == "--climb" {
             climbing = true;
+            continue;
+        }
+        // For working on the search: `--features vars,refined,binders`
+        // runs with just those capabilities.
+        if flag == "--features" {
+            let list = args.next().unwrap_or_default();
+            let mut f = tysearch::search::Features::NONE;
+            for name in list.split(',') {
+                match name {
+                    "vars" => f.vars = true,
+                    "refined" => f.refined = true,
+                    "binders" => {
+                        f.binders = true;
+                        f.unknown = true
+                    }
+                    "generalise" => f.generalise = true,
+                    "exits" => f.exits = true,
+                    "subtyping" => f.subtyping = true,
+                    "unions" => f.unions = true,
+                    "narrowing" => f.narrowing = true,
+                    _ => {
+                        eprintln!("{USAGE}");
+                        std::process::exit(2)
+                    }
+                }
+            }
+            cfg.search.features = f;
             continue;
         }
         let n = args.next().and_then(|n| n.parse().ok());
