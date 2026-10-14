@@ -163,7 +163,7 @@ The common idioms keep typing; what inty would newly reject is mixtures with no 
 
 | Idiom | Today | Under the proposal |
 | --- | --- | --- |
-| `c ? x : null`, `return null` on one path | `T \| Null` | `Nullable T`, through a waiting `Join` |
+| `c ? x : null`, `return null` on one path | `T \| Null` | `Nullable T`, declared (no `Join`: `lean/GAPS.md`) |
 | `arr.find(f)`, `s.at(i)`, DOM `… \| Null` | union return types | `Optional T`, `Nullable T` |
 | `x ?? d`, `x?.f`, `if (x === null) return` | narrowing | case analysis on `Nullable` |
 | `first(xs)` on `(Number \| Null)[]` | accepted, ambiguous at run time | rejected: `NonNull` fails |
@@ -204,8 +204,8 @@ Steps 1 to 3 with the rigour items give a publishable claim: principal inference
 
 ### Open questions
 
-- [ ] Is rejecting `cond && obj` and `x || fallback` with differing types acceptable for inty's users?
+- [x] Is rejecting `cond && obj` and `x || fallback` with differing types acceptable for inty's users? inty keeps their union; the model rejects them, on purpose ([lean/GAPS.md](../lean/GAPS.md)).
 - [x] Which field marks a variant: always `kind`, any string-literal field compared by a `switch`, or one named in an annotation? The one an annotation gives each case a string literal type in (the model's `Con.variant l ts`).
 - [x] Should `Optional T` (with `undefined`) and `Nullable T` (with `null`) be one constructor or two? Two, tagged by their nothing (`Con.maybe z`).
-- [ ] `c ? x : null` now needs its sum declared. Is that acceptable, or should a waiting `Join` come back for it?
+- [x] `c ? x : null` now needs its sum declared. Is that acceptable, or should a waiting `Join` come back for it? In the model, it needs its sum declared: no `Join` ([lean/GAPS.md](../lean/GAPS.md)). inty still joins.
 - [ ] Do annotated unions that are neither disjoint by `typeof` nor tagged stay as an escape hatch, unchecked by the model?

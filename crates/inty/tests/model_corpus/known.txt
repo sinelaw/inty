@@ -10,16 +10,22 @@
 # dead; the model's Case has no instance.
 (let (func 1 (letmutann (sum number string) (var 0) (typetest (var 0) s:boolean (ret (num 2 0)) (ret (num 1 0))))) (undef))
 
-# never (roadmap phase 5): a function whose body loops forever returns
-# never in inty, which joins with anything; in the model it returns
-# undefined.
+# A function whose body loops forever: inty sees it never completes and
+# returns a type variable; the model's body falls off the loop's end and
+# returns undefined.
 (let (func 0 (seq (while (bool true) (undef)) (undef))) (let (cond (bool true) (app (var 0)) (num 1 0)) (let (minus (var 0) (num 1 0)) (undef))))
 
 # `&&` or `||` of two types: inty types it as what can come out (`"s" &&
 # []` is an array; `false || "s"` is `false` or a string), the model's
-# `const t = a; t ? b : t` gives both branches one type (the waiting
-# `Join`, docs/sum-types-design.md).
+# `const t = a; t ? b : t` gives both branches one type (a join left out
+# on purpose, lean/GAPS.md).
 (let (str s:F%20%207I7xRvS) (cond (var 0) (arr) (var 0)))
 (let (undef) (cond (var 0) (var 0) (bool true)))
 (let (bool false) (cond (var 0) (var 0) (str s:xuP9s%20JyV)))
 (let (bool true) (cond (var 0) (neg (num 488 0)) (var 0)))
+
+# A member that never completes (`fail(msg) { throw msg; }`): inty types
+# its result `never`, so `util.fail` serves at several types; the model's
+# object holds the member monomorphically (README, divergence table).
+(let (obj (method s:fail (func 1 (throw (var 0))))) (let (func 1 (ret (cond (var 0) (num 1 0) (mcall (var 3) s:fail (str s:x))))) (let (func 1 (ret (cond (var 0) (str s:s) (mcall (var 4) s:fail (str s:y))))) (seq (minus (app (var 1) (bool true)) (num 1 0)) (get (app (var 0) (bool true)) s:length)))))
+(let (obj (field s:fail (func 1 (throw (var 0))))) (let (func 1 (ret (cond (var 0) (num 1 0) (mcall (var 3) s:fail (str s:x))))) (let (func 1 (ret (cond (var 0) (str s:s) (mcall (var 4) s:fail (str s:y))))) (seq (minus (app (var 1) (bool true)) (num 1 0)) (get (app (var 0) (bool true)) s:length)))))

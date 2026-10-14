@@ -216,12 +216,37 @@ def Value.strictEq : Value → Value → Bool
   | .obj a, .obj b | .arr a, .arr b => a == b
   | _, _ => false
 
+/-- The largest `d·2ᵏ` not above `r` (given `d ≤ r`), by doublings, each
+exact. -/
+def Float.remBig (r d : Float) : Nat → Float
+  | 0 => d
+  | n + 1 => if d * 2 ≤ r then Float.remBig r (d * 2) n else d
+
+/-- `r` less the largest `y·2ᵏ` not above it, while `r ≥ y`. Each
+subtraction is exact (Sterbenz's lemma: `r/2 ≤ y·2ᵏ ≤ r`), and each
+leaves `r` below the `y·2ᵏ` taken, so the quotient loses a bit each time:
+a float's exponent range bounds the steps. -/
+def Float.remGo (y : Float) : Nat → Float → Float
+  | 0, r => r
+  | n + 1, r => if r < y then r else Float.remGo y n (r - Float.remBig r y 2100)
+
+/-- JavaScript's `%` on numbers (C's `fmod`): the exact remainder of `a` by
+`b` with the quotient truncated, with `a`'s sign; `NaN` for a `NaN`, an
+infinite `a` or a zero `b`, and `a` for an infinite `b`. -/
+def Float.jsRem (a b : Float) : Float :=
+  if a.isNaN || b.isNaN || a.isInf || b == 0 then 0.0 / 0.0
+  else if b.isInf || a.abs < b.abs then a
+  else
+    let r := Float.remGo b.abs 2100 a.abs
+    if a < 0 then -r else r
+
 def BinOp.eval : BinOp → Value → Value → Result
   | .plus, .number a, .number b => .ok (.number (a + b))
   | .plus, .string a, .string b => .ok (.string (a ++ b))
   | .minus, .number a, .number b => .ok (.number (a - b))
   | .times, .number a, .number b => .ok (.number (a * b))
   | .div, .number a, .number b => .ok (.number (a / b))
+  | .mod, .number a, .number b => .ok (.number (Float.jsRem a b))
   -- IEEE comparisons, as JavaScript's on numbers: false with a `NaN`.
   | .lt, .number a, .number b => .ok (.boolean (decide (a < b)))
   | .le, .number a, .number b => .ok (.boolean (decide (a ≤ b)))

@@ -720,7 +720,7 @@ def infer : Ctx → Option Ty → Mode → Option Ty → Expr → Nat → Option
         -- `===` and `!==` take any two values.
         | .strictEq _ => some ⟨σ₂₁, .boolean, preds, o₂.next⟩
         -- `-`, `*`, `/` and the comparisons take two numbers.
-        | .minus | .times | .div | .lt | .le | .gt | .ge =>
+        | .minus | .times | .div | .mod | .lt | .le | .gt | .ge =>
           match unify (o₁.τ.subst o₂.σ) .number with
           | none => none
           | some σ₃ =>

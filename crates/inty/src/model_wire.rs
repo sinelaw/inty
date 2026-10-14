@@ -15,7 +15,8 @@
 //! each branch with the binding the model's form makes.
 
 use crate::ast::{
-    BinOp, ChainSegment, Expr, Literal, Param, Program, PropDef, PropKey, Stmt, UnaryOp, VarKind,
+    AssignOp, BinOp, ChainSegment, Expr, ForInit, Literal, Param, Program, PropDef, PropKey, Stmt,
+    UnaryOp, VarKind,
 };
 use crate::span::Span;
 use crate::types::{LitValue, Nothing, Presence, RowTail, TVarName, Type};
@@ -50,6 +51,7 @@ pub fn lower_program(program: &Program) -> Lowered {
         tested: Vec::new(),
         assigned: Vec::new(),
         var_ok: true,
+        iteration: Vec::new(),
     };
     let wire = cx.block(&program.statements, Tail::Program)?;
     // A property only a builtin has (`xs.map`, `s.slice`): the model's
@@ -79,6 +81,11 @@ struct Binder {
     /// The sum its annotation declares, if any: what a test of its tag
     /// field or of its `typeof` can take apart in the model.
     sum: Option<Sum>,
+    /// How many functions it is declared inside.
+    depth: usize,
+    /// A `for` loop's `let`, which JavaScript binds afresh each iteration:
+    /// the model's one binding is the same only where no closure sees it.
+    per_iteration: bool,
 }
 
 /// A declared sum a test takes apart.
@@ -137,6 +144,8 @@ struct Cx {
     /// program, where a `var` is a `let` (in a nested block it would be
     /// the function's).
     var_ok: bool,
+    /// The names a `for` loop's initialiser is about to declare.
+    iteration: Vec<String>,
 }
 
 /// What the end of a statement list is.
@@ -164,6 +173,8 @@ impl Cx {
             kind,
             id: self.next_id,
             sum,
+            depth: self.depth,
+            per_iteration: false,
         });
     }
 
@@ -199,6 +210,9 @@ impl Cx {
             if b.name.as_deref() == Some(name) {
                 return match b.kind {
                     Kind::Later => unsupported(format!("`{name}` used before its declaration")),
+                    _ if b.per_iteration && b.depth < self.depth => {
+                        unsupported("a closure seeing a `for` loop's `let`")
+                    }
                     k => Ok((i, k)),
                 };
             }
@@ -407,6 +421,10 @@ impl Cx {
             if mutable { Kind::Mut } else { Kind::Const },
             sum,
         );
+        if let Some(k) = self.iteration.iter().position(|n| *n == d.name) {
+            self.iteration.remove(k);
+            self.scope.last_mut().expect("pushed").per_iteration = true;
+        }
         let body = self.decls(more, rest, tail, falls_off);
         self.pop(1);
         let body = body?;
@@ -431,6 +449,31 @@ impl Cx {
 
     fn stmt(&mut self, s: &Stmt, tail: Tail) -> Lowered {
         match s {
+            // `x++` and `x--` whose value is dropped: `x = x - -1` (a
+            // subtraction, which takes numbers only, as `++` does).
+            Stmt::Expr {
+                expression:
+                    Expr::Unary {
+                        op:
+                            op @ (UnaryOp::PreInc
+                            | UnaryOp::PostInc
+                            | UnaryOp::PreDec
+                            | UnaryOp::PostDec),
+                        argument,
+                        ..
+                    },
+                ..
+            } if tail != Tail::Program => {
+                let Expr::Ident { name, .. } = &**argument else {
+                    return unsupported(format!("the operator {op:?} on what isn't a binding"));
+                };
+                let one = if matches!(op, UnaryOp::PreInc | UnaryOp::PostInc) {
+                    "(neg (num 1 0))"
+                } else {
+                    "(num 1 0)"
+                };
+                self.assign(name, |_, i| Ok(format!("(minus (var {i}) {one})")))
+            }
             Stmt::Expr { expression, .. } => self.expr(expression),
             Stmt::Block { body, .. } => {
                 let var_ok = std::mem::replace(&mut self.var_ok, false);
@@ -465,6 +508,56 @@ impl Cx {
                 let c = self.expr(test)?;
                 let b = self.branch(body, Tail::Stmt)?;
                 Ok(format!("(while {c} {b})"))
+            }
+            // `for (init; test; update) body` is `{ init; while (test) {
+            // body; update } }`, where no `continue` skips the update and
+            // no closure sees the `let`s JavaScript binds afresh each
+            // iteration.
+            Stmt::For {
+                init,
+                test,
+                update,
+                body,
+                span,
+            } => {
+                if continues(body) {
+                    return unsupported("a `continue` in a `for` loop");
+                }
+                let test = test.clone().unwrap_or(Expr::Lit {
+                    value: Literal::Boolean(true),
+                    span: *span,
+                });
+                let mut each = vec![(**body).clone()];
+                if let Some(u) = update {
+                    each.push(Stmt::Expr {
+                        expression: u.clone(),
+                        span: *span,
+                    });
+                }
+                let w = Stmt::While {
+                    test,
+                    body: Box::new(Stmt::Block {
+                        body: each,
+                        span: *span,
+                    }),
+                    span: *span,
+                };
+                match init {
+                    None => self.stmt(&w, Tail::Stmt),
+                    Some(ForInit::Expr(e)) => {
+                        let e = self.expr(e)?;
+                        Ok(format!("(seq {e} {})", self.stmt(&w, Tail::Stmt)?))
+                    }
+                    Some(ForInit::VarDecl(ds)) => {
+                        if ds.iter().any(|d| d.kind == VarKind::Var) {
+                            return unsupported("a `var` in a `for` loop");
+                        }
+                        self.iteration = ds.iter().map(|d| d.name.clone()).collect();
+                        let r = self.decls(ds, &[&w], Tail::Stmt, false);
+                        self.iteration.clear();
+                        r
+                    }
+                }
             }
             Stmt::Break { label: None, .. } => Ok("(break)".to_string()),
             Stmt::Continue { label: None, .. } => Ok("(continue)".to_string()),
@@ -685,6 +778,20 @@ impl Cx {
         Ok(format!("(func {} {})", params.len(), b?))
     }
 
+    /// An assignment to the binding `name` of `value`, given `name`'s
+    /// index.
+    fn assign(&mut self, name: &str, value: impl FnOnce(&mut Self, usize) -> Lowered) -> Lowered {
+        let (i, b) = self.binder(name)?;
+        self.assigned.push(b.id);
+        if b.kind == Kind::Shadow {
+            return unsupported("an assignment to a binding a test took apart");
+        }
+        if b.kind == Kind::FnName {
+            return unsupported("an assignment to a function declaration's name");
+        }
+        Ok(format!("(assign {i} {})", value(self, i)?))
+    }
+
     fn exprs(&mut self, es: &[Expr]) -> Lowered {
         let mut out = String::new();
         for e in es {
@@ -816,6 +923,7 @@ impl Cx {
                 )),
                 BinOp::Mul
                 | BinOp::Div
+                | BinOp::Mod
                 | BinOp::Lt
                 | BinOp::LtEq
                 | BinOp::Gt
@@ -825,6 +933,7 @@ impl Cx {
                     let form = match op {
                         BinOp::Mul => "times",
                         BinOp::Div => "div",
+                        BinOp::Mod => "mod",
                         BinOp::Lt => "lt",
                         BinOp::LtEq => "le",
                         BinOp::Gt => "gt",
@@ -869,7 +978,7 @@ impl Cx {
                 // Otherwise `const t = a; t ? b : t` (`t ? t : b` for `||`),
                 // whose branches have one type, or an expected type pushed
                 // into each; inty's union of two known types (`c && obj`)
-                // is the model's waiting `Join`, not yet in it.
+                // is a join the model leaves out on purpose (lean/GAPS.md).
                 BinOp::And | BinOp::Or => {
                     let a = self.expr(left)?;
                     self.push(None, Kind::Const);
@@ -884,47 +993,48 @@ impl Cx {
                 }
                 op => unsupported(format!("the operator {op:?}")),
             },
+            // `x += e` is `x = x + e`, and so on, for a binding.
             Expr::Assign {
                 op, left, right, ..
-            } => {
-                if *op != crate::ast::AssignOp::Assign {
-                    return unsupported(format!("the assignment {op:?}"));
-                }
-                match &**left {
-                    Expr::Ident { name, .. } => {
-                        let (i, b) = self.binder(name)?;
-                        let k = b.kind;
-                        self.assigned.push(b.id);
-                        if k == Kind::Shadow {
-                            return unsupported("an assignment to a binding a test took apart");
-                        }
-                        if k == Kind::FnName {
-                            return unsupported("an assignment to a function declaration's name");
-                        }
-                        Ok(format!("(assign {i} {})", self.expr(right)?))
-                    }
-                    Expr::Member {
-                        object, property, ..
-                    } => {
-                        self.defined.push(property.clone());
-                        let property = tok(property)?;
-                        Ok(format!(
-                            "(set {} s:{property} {})",
-                            self.expr(object)?,
-                            self.expr(right)?
-                        ))
-                    }
-                    Expr::ComputedMember {
-                        object, property, ..
-                    } => Ok(format!(
-                        "(setindex {} {} {})",
-                        self.expr(object)?,
-                        self.expr(property)?,
-                        self.expr(right)?
-                    )),
-                    _ => unsupported("a destructuring assignment"),
-                }
+            } if *op != AssignOp::Assign => {
+                let form = match op {
+                    AssignOp::AddAssign => "plus",
+                    AssignOp::SubAssign => "minus",
+                    AssignOp::MulAssign => "times",
+                    AssignOp::DivAssign => "div",
+                    AssignOp::ModAssign => "mod",
+                    op => return unsupported(format!("the assignment {op:?}")),
+                };
+                let Expr::Ident { name, .. } = &**left else {
+                    return unsupported(format!("the assignment {op:?} to what isn't a binding"));
+                };
+                self.assign(name, |cx, i| {
+                    Ok(format!("({form} (var {i}) {})", cx.expr(right)?))
+                })
             }
+            Expr::Assign { left, right, .. } => match &**left {
+                Expr::Ident { name, .. } => self.assign(name, |cx, _| cx.expr(right)),
+                Expr::Member {
+                    object, property, ..
+                } => {
+                    self.defined.push(property.clone());
+                    let property = tok(property)?;
+                    Ok(format!(
+                        "(set {} s:{property} {})",
+                        self.expr(object)?,
+                        self.expr(right)?
+                    ))
+                }
+                Expr::ComputedMember {
+                    object, property, ..
+                } => Ok(format!(
+                    "(setindex {} {} {})",
+                    self.expr(object)?,
+                    self.expr(property)?,
+                    self.expr(right)?
+                )),
+                _ => unsupported("a destructuring assignment"),
+            },
             Expr::Conditional {
                 test,
                 consequent,
@@ -1150,6 +1260,32 @@ fn exits(s: &Stmt) -> bool {
             alternate: Some(alt),
             ..
         } => exits(consequent) && exits(alt),
+        _ => false,
+    }
+}
+
+/// Whether a loop's body has a `continue` of that loop.
+fn continues(s: &Stmt) -> bool {
+    match s {
+        Stmt::Continue { .. } => true,
+        Stmt::Block { body, .. } => body.iter().any(continues),
+        Stmt::If {
+            consequent,
+            alternate,
+            ..
+        } => continues(consequent) || alternate.as_deref().is_some_and(continues),
+        Stmt::Try {
+            block,
+            handler,
+            finalizer,
+            ..
+        } => {
+            continues(block)
+                || handler.as_ref().is_some_and(|h| continues(&h.body))
+                || finalizer.as_deref().is_some_and(continues)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| c.consequent.iter().any(continues)),
+        Stmt::Labeled { body, .. } => continues(body),
         _ => false,
     }
 }
@@ -1537,8 +1673,7 @@ mod tests {
 
     #[test]
     fn leaves_out_what_the_model_lacks() {
-        assert!(lower("7 % 2;").is_err());
-        assert!(lower("for (;;) {}").is_err());
+        assert!(lower("x => x++;").is_err());
         assert!(lower("Math.abs(1);").is_err());
         // Used before its declaration (hoisted).
         assert!(lower("function f() { return g(); } function g() { return f(); }").is_err());
@@ -1595,5 +1730,34 @@ mod tests {
              (ret (minus (var 0) (num 1 0))))) (app (var 0))))"
         );
         assert!(lower("\"a\" < \"b\";").is_err());
+    }
+
+    #[test]
+    fn lowers_for_loops_and_updates() {
+        assert_eq!(lower("7 % 2;").unwrap(), "(mod (num 7 0) (num 2 0))");
+        // `for (init; test; update) body` is `{ init; while (test) { body;
+        // update } }`; `i++` whose value is dropped is `i = i - -1`.
+        assert_eq!(
+            lower("let s = 0; for (let i = 0; i < 3; i++) { s += i; }").unwrap(),
+            "(letmut (num 0 0) (seq (letmut (num 0 0) (while (lt (var 0) (num 3 0)) \
+             (seq (assign 1 (plus (var 1) (var 0))) (assign 0 (minus (var 0) (neg (num 1 0))))))) \
+             (undef)))"
+        );
+        assert_eq!(
+            lower("let i = 0; for (i = 1; ; i--) { break; }").unwrap(),
+            "(letmut (num 0 0) (seq (seq (assign 0 (num 1 0)) (while (bool true) \
+             (seq (break) (assign 0 (minus (var 0) (num 1 0)))))) (undef)))"
+        );
+        // A `continue` would skip the update.
+        assert!(lower("for (let i = 0; i < 3; i++) { continue; }").is_err());
+        // A `continue` of a nested loop doesn't.
+        assert!(lower("for (let i = 0; i < 3; i++) { while (false) { continue; } }").is_ok());
+        // A closure would see one binding where JavaScript makes one each
+        // iteration.
+        assert!(lower("for (let i = 0; i < 3; i++) { const f = () => i; }").is_err());
+        assert!(lower("for (var i = 0; i < 3; i++) {}").is_err());
+        // The value of `i++` is the old `i`'s.
+        assert!(lower("let i = 0; i++;").is_err());
+        assert!(lower("let i = 0; const j = i++;").is_err());
     }
 }

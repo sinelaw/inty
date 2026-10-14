@@ -20,7 +20,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.app` | `infer_call` |
 | `HasTypeS.let_` | `infer_stmt_var`, `infer_stmt_function_decl`, `generalize` |
 | `HasTypeS.letPoly` | `check_polymorphic_annotation`, `skolemize` |
-| `HasTypeS.assign` | `infer_assign`, `infer_store_target` |
+| `HasTypeS.assign` | `infer_assign`, `infer_store_target`, `infer_unary` (x += e is x = x + e, and x++ whose value is dropped is x = x - -1, as the front end writes them) |
 | `HasTypeS.assignCheck` | `infer_assign`, `subsume` (the value subsumed into the variable's type; a rule of the system Sys.inty, not of HasType) |
 | `HasTypeS.cond` | `infer_conditional`, `infer_stmt_if`, `infer_binary` (a && b and a \|\| b are const t = a; t ? b : t, as the front end writes them) |
 | `HasTypeS.unop` | `infer_unary` |
@@ -28,7 +28,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.ret` | `infer_stmt` |
 | `HasTypeS.throw_` | `infer_stmt` |
 | `HasTypeS.seq` | `infer_stmt_list`, `infer_stmt_list_inner`, `infer_sequence` |
-| `HasTypeS.while_` | `infer_stmt_while` |
+| `HasTypeS.while_` | `infer_stmt_while`, `infer_stmt_for` (for (init; test; update) body is { init; while (test) { body; update } }, as the front end writes it, where no continue skips the update and no closure sees a loop variable) |
 | `HasTypeS.break_` | `infer_stmt` |
 | `HasTypeS.continue_` | `infer_stmt` |
 | `HasTypeS.tryCatch` | `infer_stmt_try` |
@@ -70,7 +70,6 @@ Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;
 | `infer_rest_array` | destructuring (remaining syntax) |
 | `infer_rest_row` | the same |
 | `infer_stmt_do_while` | `do … while` (remaining syntax) |
-| `infer_stmt_for` | `for` (remaining syntax) |
 | `infer_stmt_for_in` | `for … in` (remaining syntax) |
 | `infer_stmt_for_of` | `for … of` (remaining syntax) |
 | `infer_template_literal` | template literals (remaining syntax) |

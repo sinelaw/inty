@@ -50,6 +50,7 @@ use oracle::*;
 enum Op2 {
     Times,
     Div,
+    Mod,
     Lt,
     Le,
     Gt,
@@ -59,13 +60,14 @@ enum Op2 {
 }
 
 impl Op2 {
-    const NUMERIC: [Op2; 2] = [Op2::Times, Op2::Div];
+    const NUMERIC: [Op2; 3] = [Op2::Times, Op2::Div, Op2::Mod];
     const COMPARE: [Op2; 4] = [Op2::Lt, Op2::Le, Op2::Gt, Op2::Ge];
 
     fn wire(self) -> &'static str {
         match self {
             Op2::Times => "times",
             Op2::Div => "div",
+            Op2::Mod => "mod",
             Op2::Lt => "lt",
             Op2::Le => "le",
             Op2::Gt => "gt",
@@ -79,6 +81,7 @@ impl Op2 {
         match self {
             Op2::Times => "*",
             Op2::Div => "/",
+            Op2::Mod => "%",
             Op2::Lt => "<",
             Op2::Le => "<=",
             Op2::Gt => ">",
@@ -1836,7 +1839,7 @@ impl Gen {
             _ => match t {
                 T::Num => match self.rng.below(5) {
                     3 => {
-                        let o = Op2::NUMERIC[self.rng.below(2)];
+                        let o = Op2::NUMERIC[self.rng.below(Op2::NUMERIC.len())];
                         Bin(
                             o,
                             b(self.typed(&T::Num, d, scope, false)),
@@ -2603,7 +2606,7 @@ impl Gen {
             // false; the typed generator compares values of one type, not
             // functions.)
             9 => {
-                let o = Op2::NUMERIC[self.rng.below(2)];
+                let o = Op2::NUMERIC[self.rng.below(Op2::NUMERIC.len())];
                 Bin(
                     o,
                     b(self.any(d, scope, false)),
@@ -2804,8 +2807,8 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
             Some("a `try` ending the program, whose value only the model types")
         }
         // inty joins a sum (or a variant) with one of its cases to the sum;
-        // the model's branches must agree (sum-types-design: a waiting
-        // `Join` constraint is still to come).
+        // the model's branches must agree (a join left out on purpose,
+        // lean/GAPS.md).
         (Typing::Type(_), Typing::Reject) if features.contains("sum join") => {
             Some("a sum joined with one of its cases")
         }
@@ -2821,10 +2824,11 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
             Some("`&&` or `||` on what is never falsy (inty's type is `b`'s alone)")
         }
         // inty joins the operands of `&&` or `||` of two known types into
-        // their union, which the model's branches, of one type, don't (the
-        // waiting `Join`, as for a sum joined with one of its cases).
+        // their union, which the model's branches, of one type, don't (a
+        // join left out on purpose, as for a sum joined with one of its
+        // cases: lean/GAPS.md).
         (Typing::Type(_), Typing::Reject) if features.contains("logical") => {
-            Some("`&&` or `||` of two types inty joins (the waiting `Join`)")
+            Some("`&&` or `||` of two types inty joins (left out on purpose)")
         }
         (Typing::Reject | Typing::Type(_), Typing::Type(_))
             if features.contains("typeof object") =>
@@ -3120,6 +3124,7 @@ fn inty_agrees_with_the_lean_model() {
             ("(typetest ", "with a test of typeof"),
             ("(times ", "with `*`"),
             ("(div ", "with `/`"),
+            ("(mod ", "with `%`"),
             ("(lt ", "with `<`"),
             ("(ge ", "with `>=`"),
             ("(eq ", "with `===`"),

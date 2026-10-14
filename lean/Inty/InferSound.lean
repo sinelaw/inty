@@ -1732,7 +1732,7 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       have he₂ := ih₂ h₂ (by ret_ok) .none _ C hsat.2
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
       exact .binop .strictEq he₁ he₂
-    | minus | times | div | lt | le | gt | ge =>
+    | minus | times | div | mod | lt | le | gt | ge =>
       simp only at h
       split at h
       · cases h

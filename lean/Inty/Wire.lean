@@ -266,6 +266,7 @@ partial def parseForm (L : Option (List String)) (tag : String) (ts : List Strin
     let (b, rest) ← parseExpr L rest
     some (.binop .minus a b, rest)
   | "times", rest => parseBin L .times rest
+  | "mod", rest => parseBin L .mod rest
   | "div", rest => parseBin L .div rest
   | "lt", rest => parseBin L .lt rest
   | "le", rest => parseBin L .le rest
