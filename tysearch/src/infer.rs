@@ -580,8 +580,13 @@ impl Checker {
         for (i, prem) in r.kids.iter().enumerate() {
             let mut bs = Vec::new();
             for (j, b) in prem.bound.iter().enumerate() {
+                // Narrowed as the checker narrows it.
+                let b = match self.narrow.get(&(rule.con, i, j)) {
+                    Some(sorts) if u.resolve(b).is_ground() => u.resolve(b).meet(sorts),
+                    _ => b.clone(),
+                };
                 // Generalise where the policy allows, mostly.
-                let options = self.schemes(u, ctx, &node, i, j, b);
+                let options = self.schemes(u, ctx, &node, i, j, &b);
                 let pick = if rng.below(4) == 0 {
                     options.len() - 1
                 } else {

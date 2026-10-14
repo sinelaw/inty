@@ -1591,14 +1591,14 @@ pub fn climb_with<L: Language>(
     // system on too: what a capability types that the fixed set of small
     // programs rarely shows (a `let`-bound function used at two types).
     let mut pool: Vec<(Term, bool)> = Vec::new();
-    let mut pooled: HashSet<Term> = HashSet::new();
+    let pooled: std::cell::RefCell<HashSet<Term>> = Default::default();
     let mut prng = Rng(cfg.seed ^ 0x9001);
     let mut run = |f: Features, pool: &mut Vec<(Term, bool)>| {
         let mut c = cfg.clone();
         c.search.features = f;
         let d = discover_with(lang, &c, &mut cache);
         for t in prng.sample(&d.check.generated_terms, 400) {
-            if pooled.insert(t.clone()) {
+            if pooled.borrow_mut().insert(t.clone()) {
                 match lang.eval_in(&t, &[]) {
                     Outcome::Timeout => {}
                     o => pool.push((t, !o.is_stuck() && !matches!(o, Outcome::Return(_)))),
@@ -1635,6 +1635,7 @@ pub fn climb_with<L: Language>(
     };
     let covered = |s: &Score| s.coverage() >= 0.99;
     // Try a set of changes to the best so far; keep it if better.
+    let mut crng = Rng(cfg.seed ^ 0xC0_7A57);
     let mut attempt = |cand: Features,
                        change: String,
                        grow: bool,
@@ -1643,6 +1644,30 @@ pub fn climb_with<L: Language>(
                        pool: &mut Vec<(Term, bool)>|
      -> bool {
         let d = run(cand, pool);
+        // Contrast: programs the candidate's rules generate and the best's
+        // reject, the evidence for (or, if they crash, against) what the
+        // candidate adds. Random programs rarely show it: a `let`-bound
+        // function used at two types, a branch that relies on narrowing.
+        let bd = &steps[*best].discovery;
+        let mut found = 0;
+        for k in 0..20_000 {
+            if found >= 300 {
+                break;
+            }
+            let Some(t) = d.checker.generate(&mut crng, 3 + k % cfg.typed_size) else {
+                continue;
+            };
+            if !bd.checker.types(&t).is_empty() || !pooled.borrow_mut().insert(t.clone()) {
+                continue;
+            }
+            match lang.eval_in(&t, &[]) {
+                Outcome::Timeout => {}
+                o => {
+                    pool.push((t, !o.is_stuck() && !matches!(o, Outcome::Return(_))));
+                    found += 1;
+                }
+            }
+        }
         let sc = score(&d, pool);
         let bs = score(&steps[*best].discovery, pool);
         let bd = &steps[*best].discovery;

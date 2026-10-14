@@ -528,3 +528,16 @@ fn units_become_sorts_and_a_table() {
     );
     assert_eq!(d.check.unsound, 0);
 }
+
+/// ML's references, climbed: refined sorts (a cell knows its contents),
+/// binders, and `let`-generalisation all earn their place. The last one
+/// only through contrast: programs the candidate's rules generate and the
+/// best's reject (a `let`-bound function at two types), which random
+/// programs rarely are.
+#[test]
+fn the_climb_keeps_let_generalisation_for_refs() {
+    let c = climb(&tysearch::langs::refs::Refs::default(), &Config::default());
+    let f = c.steps[c.last].features;
+    assert!(f.vars && f.refined && f.binders && f.generalise, "{f:?}");
+    assert!(c.steps.iter().all(|s| !s.kept || s.score.unsound == 0));
+}

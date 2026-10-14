@@ -374,9 +374,15 @@ if the result:
 ones, and random ones), plus a **pool** that grows. Each run generates
 programs its own system types, and the climb keeps a sample of them, safe
 or not. Every later system, and the best so far, is judged on them too. A
-capability is credited with programs only it types, which small or random
-programs rarely show: a `let`-bound function used at two types. A crashing
-program in the pool counts against any system that types it.
+capability is credited with programs only it types. A crashing program in
+the pool counts against any system that types it.
+
+**Contrast.** Programs only one capability types are rare among random
+ones: a `let`-bound function used at two types, a branch that relies on
+narrowing. So after each candidate's run, the climb generates programs with
+the candidate's rules and keeps those the best's rules reject. Run, they
+are the evidence for the candidate, or, if they crash, against it. That is
+how `let`-generalisation earns its place for ML's references.
 
 It goes round again while anything was kept. When no capability helps
 alone, it tries **pairs**, for capabilities that pay only together. It
