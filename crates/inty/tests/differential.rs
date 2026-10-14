@@ -1867,14 +1867,23 @@ impl Gen {
                 },
                 T::Bool => match self.rng.below(4) {
                     0 => Not(b(self.any(d, scope, false))),
-                    // A comparison of numbers.
+                    // A comparison of two numbers or two strings; now and
+                    // then of two values of any types, which both reject
+                    // unless they are numbers or strings, one type.
                     1 => {
                         let o = Op2::COMPARE[self.rng.below(4)];
-                        Bin(
-                            o,
-                            b(self.typed(&T::Num, d, scope, false)),
-                            b(self.typed(&T::Num, d, scope, false)),
-                        )
+                        let (l, r) = match self.rng.below(5) {
+                            0 => (self.any(d, scope, false), self.any(d, scope, false)),
+                            1 | 2 => (
+                                self.typed(&T::Str, d, scope, false),
+                                self.typed(&T::Str, d, scope, false),
+                            ),
+                            _ => (
+                                self.typed(&T::Num, d, scope, false),
+                                self.typed(&T::Num, d, scope, false),
+                            ),
+                        };
+                        Bin(o, b(l), b(r))
                     }
                     // `===` of two values of some type, not functions (the
                     // model's functions have no identity).

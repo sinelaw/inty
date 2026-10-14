@@ -255,6 +255,22 @@ def Float.jsRem (a b : Float) : Float :=
     let r := Float.remGo b.abs 2100 a.abs
     if a < 0 then -r else r
 
+/-- A character's UTF-16 code units: one in the Basic Multilingual Plane,
+a surrogate pair outside it. -/
+def Char.utf16 (c : Char) : List Nat :=
+  if c.toNat < 0x10000 then [c.toNat]
+  else [0xD800 + (c.toNat - 0x10000) / 0x400, 0xDC00 + (c.toNat - 0x10000) % 0x400]
+
+/-- A string's UTF-16 code units, which JavaScript compares strings by. -/
+def _root_.String.utf16 (s : String) : List Nat := s.toList.flatMap Char.utf16
+
+/-- Lexicographic order on code units: a proper prefix is before. -/
+def unitsLt : List Nat → List Nat → Bool
+  | [], [] => false
+  | [], _ :: _ => true
+  | _ :: _, [] => false
+  | x :: xs, y :: ys => x < y || (x == y && unitsLt xs ys)
+
 def BinOp.eval : BinOp → Value → Value → Result
   | .plus, .number a, .number b => .ok (.number (a + b))
   | .plus, .string a, .string b => .ok (.string (a ++ b))
@@ -267,6 +283,11 @@ def BinOp.eval : BinOp → Value → Value → Result
   | .le, .number a, .number b => .ok (.boolean (decide (a ≤ b)))
   | .gt, .number a, .number b => .ok (.boolean (decide (b < a)))
   | .ge, .number a, .number b => .ok (.boolean (decide (b ≤ a)))
+  -- Strings, by their UTF-16 code units, as JavaScript's.
+  | .lt, .string a, .string b => .ok (.boolean (unitsLt a.utf16 b.utf16))
+  | .le, .string a, .string b => .ok (.boolean !(unitsLt b.utf16 a.utf16))
+  | .gt, .string a, .string b => .ok (.boolean (unitsLt b.utf16 a.utf16))
+  | .ge, .string a, .string b => .ok (.boolean !(unitsLt a.utf16 b.utf16))
   | .strictEq neg, a, b => .ok (.boolean (a.strictEq b != neg))
   | _, _, _ => .stuck .typeMismatch
 

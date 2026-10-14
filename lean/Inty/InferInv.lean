@@ -1388,7 +1388,24 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       simp only [Option.some.injEq] at h; subst h
       exact ⟨by dsimp only; omega, (hσ₁.mono hn₂).compose hσ₂,
         fun a ha => by simp [Ty.ftv] at ha, hpre⟩
-    | minus | times | div | mod | lt | le | gt | ge =>
+    | lt | le | gt | ge =>
+      simp only at h
+      split at h
+      · cases h
+      rename_i σ₃ hu
+      simp only [Option.some.injEq] at h; subst h
+      have hσ₃ := unify_within (hσ₂.subst_below (hτ₁.mono hn₂)) hτ₂ hu
+      refine ⟨by dsimp only; omega, ((hσ₁.mono hn₂).compose hσ₂).compose hσ₃,
+        fun a ha => by simp [Ty.ftv] at ha, ?_⟩
+      intro p hp
+      obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
+      refine hσ₃.pred_below ?_
+      rcases List.mem_append.mp hq with hq | hq
+      · exact hpre q hq
+      · simp only [List.mem_singleton] at hq; subst hq
+        intro a ha; simp only [Pred.ftv, List.flatMap_cons, List.flatMap_nil,
+          List.append_nil] at ha; exact hτ₂ a ha
+    | minus | times | div | mod =>
       simp only at h
       split at h
       · cases h
@@ -1400,7 +1417,7 @@ theorem infer_inv (L : List String) : ∀ e, InferInv L e := by
       have hσ₃ := unify_within (hσ₂.subst_below (hτ₁.mono hn₂)) hnum hu₃
       have hσ₄ := unify_within (hσ₃.subst_below hτ₂) hnum hu₄
       refine ⟨by dsimp only; omega, (((hσ₁.mono hn₂).compose hσ₂).compose hσ₃).compose hσ₄,
-        fun a ha => by simp [BinOp.resTy] at ha, ?_⟩
+        fun a ha => by simp [Ty.ftv] at ha, ?_⟩
       intro p hp
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hp
       obtain ⟨q', hq', rfl⟩ := List.mem_map.mp hq

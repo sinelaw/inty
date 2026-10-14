@@ -40,6 +40,7 @@ theorem BinOpTyS.cutC {S : Sys} {C D : List Pred} {op : BinOp} {τ₁ τ₂ τ :
   cases h with
   | plus hp => exact .plus (hp.cutS hD)
   | num h => exact .num h
+  | cmp h hp => exact .cmp h (hp.cutS hD)
   | strictEq => exact .strictEq
 
 /-- A typing under assumptions `D` is one under any `C` that entails each of

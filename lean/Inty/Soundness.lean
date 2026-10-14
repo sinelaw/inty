@@ -1090,7 +1090,22 @@ theorem BinOp.eval_sound {W' : World} (hC : HoldsOrVarW C) (hop : BinOpTyS Sys.w
     · simp only [List.cons.injEq] at he; exact (V_whnf_var (by rw [he.1]; exact hw) hv₁).elim
   | num hn =>
     simp at hv₁ hv₂; obtain ⟨_, rfl⟩ := hv₁; obtain ⟨_, rfl⟩ := hv₂
-    cases op <;> simp [BinOp.numeric] at hn <;> exact Safe.ok hc hW hH (by simp [BinOp.resTy])
+    cases op <;> simp [BinOp.numeric] at hn <;> exact Safe.ok hc hW hH (by simp)
+  | cmp hn hp =>
+    rcases hp.instOrVarN hC (by simp) (by simp) (by simp) with ⟨q, hq, hi⟩ | ⟨_, a, _, he, hw⟩
+    · cases hi
+      case plusNumber =>
+        have he := (PredEq.one hq).2
+        have h₁ := V.tyEq _ he hv₁; have h₂ := V.tyEq _ he hv₂
+        simp at h₁ h₂; obtain ⟨_, rfl⟩ := h₁; obtain ⟨_, rfl⟩ := h₂
+        cases op <;> simp [BinOp.compare] at hn <;> exact Safe.ok hc hW hH (by simp)
+      case plusString =>
+        have he := (PredEq.one hq).2
+        have h₁ := V.tyEq _ he hv₁; have h₂ := V.tyEq _ he hv₂
+        simp at h₁ h₂; obtain ⟨_, rfl⟩ := h₁; obtain ⟨_, rfl⟩ := h₂
+        cases op <;> simp [BinOp.compare] at hn <;> exact Safe.ok hc hW hH (by simp)
+      all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
+    · simp only [List.cons.injEq] at he; exact (V_whnf_var (by rw [he.1]; exact hw) hv₁).elim
   | strictEq => exact Safe.ok hc hW hH (by simp)
 
 /-- Running a syntactic value gives a value, and takes no clock and no

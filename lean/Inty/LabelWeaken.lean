@@ -1182,9 +1182,8 @@ theorem HasTypeS.extLabels {S : Sys} {L L' : List String} (hS : S.LExtable L L')
   | binop hop _ _ ih₁ ih₂ =>
     cases hop with
     | plus hc => exact .binop (.plus (by simpa using hc.extS hS)) ih₁ ih₂
-    | num h =>
-      rw [show ∀ o : BinOp, o.resTy.ext L L' = o.resTy from fun o => by cases o <;> rfl]
-      exact .binop (.num h) ih₁ ih₂
+    | num h => exact .binop (.num h) ih₁ ih₂
+    | cmp h hc => exact .binop (.cmp h (by simpa using hc.extS hS)) ih₁ ih₂
     | strictEq => exact .binop .strictEq ih₁ ih₂
   | ret _ ih => exact .ret ih
   | throw_ _ ih => exact .throw_ ih

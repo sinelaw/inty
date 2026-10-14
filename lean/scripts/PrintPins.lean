@@ -69,7 +69,10 @@ open Inty
 #pinEqns Inty.UnOp.eval
 #pinEqns Inty.BinOp.eval
 #pinEqns Inty.BinOp.numeric
-#pinEqns Inty.BinOp.resTy
+#pinEqns Inty.BinOp.compare
+#pinEqns Inty.Char.utf16
+#pinEqns String.utf16
+#pinEqns Inty.unitsLt
 #pinEqns Inty.Value.strictEq
 -- What the rules' side conditions are made of.
 #pinEqns Inty.Expr.writes
@@ -92,7 +95,7 @@ open Inty
   Inty.run Inty.call Inty.callClosure Inty.getter Inty.own Inty.copyOwn Inty.runArgs
   Inty.runInits Inty.bindC Inty.bindArgs Inty.bindFields Inty.callEnv Inty.loopNext Inty.Value.read
   Inty.Value.typeString Inty.Lit.eval Inty.UnOp.eval Inty.BinOp.eval Inty.BinOp.numeric
-  Inty.BinOp.resTy Inty.Value.strictEq Inty.Expr.writes
+  Inty.BinOp.compare Inty.Char.utf16 String.utf16 Inty.unitsLt Inty.Value.strictEq Inty.Expr.writes
   Inty.Expr.writesList Inty.Expr.writesCls Inty.Expr.assignsMutable Inty.Expr.assignsMutableList
   Inty.Expr.assignsMutableCls Inty.Expr.jumpsInLoop Inty.Expr.jumpsInLoopList Inty.Value.truthy
   Inty.Annotated Inty.annMode Inty.EntailsS Inty.Ty.whnf Inty.Ty.dataFields Inty.Expr.scoped

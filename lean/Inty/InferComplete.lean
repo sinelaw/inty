@@ -3853,8 +3853,19 @@ theorem infer_complete_binop (L : List String) (op : BinOp) (e₁ : Expr) (e₂ 
         ((habs₃ _).trans hτ₂)
       cases op <;> simp [BinOp.numeric] at hn <;>
       exact ⟨_, by simp only [infer, h₁, h₂, hσ₃, hσ₄]; rfl, φ₂,
-        (hag₁₂.absorb habs₃).absorb habs₄, by simpa [BinOp.resTy] using hτ₀,
+        (hag₁₂.absorb habs₃).absorb habs₄, by simpa using hτ₀,
         Sat.absorb habs₄ (Sat.absorb habs₃ hsat₁₂)⟩
+    | cmp hn hent =>
+      obtain ⟨σ₃, hσ₃, habs⟩ := unify_mgu (τ₁ := o₁.τ.subst o₂.σ) (τ₂ := o₂.τ) (ψ := φ₂)
+        (h₁₂.trans (hτ₁.trans hτ₂.symm))
+      have hsat₃ : Sat C ((o₁.preds.map (·.subst o₂.σ) ++ o₂.preds ++
+          [(⟨.plus, [o₂.τ]⟩ : Pred)]).map (·.subst σ₃)) φ₂ := by
+        refine Sat.absorb habs (Sat.app hsat₁₂ (fun p hp => ?_))
+        simp only [List.mem_singleton] at hp; subst hp
+        exact hent.of_predEq (PredEq.of_eqs (.cons hτ₂.symm .nil))
+      cases op <;> simp [BinOp.compare] at hn <;>
+      exact ⟨_, by simp only [infer, h₁, h₂, hσ₃]; rfl, φ₂, hag₁₂.absorb habs,
+        by simpa using hτ₀, hsat₃⟩
 
 theorem infer_complete_ret (L : List String) (e : Expr) (ih : e.PolyOK L → InferComplete L e) :
     (Expr.ret e).PolyOK L → InferComplete L (Expr.ret e) := by

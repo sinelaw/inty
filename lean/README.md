@@ -594,7 +594,7 @@ nothing, of its `typeof` or of its tag field is `unwrap`, `typetest` or
 `casetag` (on a binding an annotation declares a sum or a variant; on
 another, a plain `?:` on `===`); `&&` and `||` of booleans are `?:`. A
 program is left out when it uses what the model lacks (a bitwise
-operator, a comparison of strings or booleans, `&&` or `||` on what isn't
+operator, left out on purpose ([GAPS.md](GAPS.md)), `&&` or `||` on what isn't
 a boolean, whose result inty types as a union, a builtin, a class (inty's
 parser lowers it to a factory function, which the corpus would then check
 as one; the differential test generates real class declarations), an

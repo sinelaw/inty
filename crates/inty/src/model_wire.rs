@@ -1613,22 +1613,6 @@ impl Cx {
                         BinOp::EqEqEq => "eq",
                         _ => "ne",
                     };
-                    // The model compares numbers only (inty any two values of
-                    // one type).
-                    let literal = |e: &Expr| {
-                        matches!(
-                            e,
-                            Expr::Lit {
-                                value: Literal::String(_) | Literal::Boolean(_),
-                                ..
-                            }
-                        )
-                    };
-                    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq)
-                        && (literal(left) || literal(right))
-                    {
-                        return unsupported("a comparison of strings or booleans");
-                    }
                     Ok(format!(
                         "({form} {} {})",
                         self.expr(left)?,

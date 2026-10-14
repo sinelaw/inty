@@ -126,6 +126,7 @@ example : ¬ HasType L [] [] none .synth .synth mixedPlus τ := by
   | binop hop h₁ h₂ =>
     cases hop with
     | num h => simp [BinOp.numeric] at h
+    | cmp h => simp [BinOp.compare] at h
     | plus _ =>
       obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
       obtain ⟨_, e₂, h₂⟩ := h₂.top_synth

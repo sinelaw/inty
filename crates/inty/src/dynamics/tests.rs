@@ -484,3 +484,14 @@ fn exported_declarations_run() {
     );
     assert_number("export const a = 1; export let b = a + 1; b;", 2.0);
 }
+
+/// Strings compare by UTF-16 code units, as JavaScript's: an emoji (a
+/// surrogate pair from U+D83D) is before U+FF61, though its code point is
+/// after.
+#[test]
+fn strings_compare_by_utf16_code_units() {
+    assert_bool("\"\u{1F600}\" < \"\u{FF61}\"", true);
+    assert_bool("\"ab\" < \"b\"", true);
+    assert_bool("\"a\" <= \"a\"", true);
+    assert_bool("\"ab\" > \"a\"", true);
+}

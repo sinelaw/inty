@@ -290,22 +290,22 @@ touching the generic proofs.
 
 ### 4. Numbers and the remaining base types
 
-- **The operators of numbers and `===` (done, in the model's one number
-  type).** `*` and `/` (`BinOp.times`, `div`), the comparisons `<`,
-  `<=`, `>`, `>=` (`lt`, `le`, `gt`, `ge`, of numbers, IEEE: false with
-  a `NaN`) and `===`, `!==` (`strictEq`, of any two values; the model's
-  functions have no identity, so two are never equal) share one typing
-  rule, `BinOpTyS.num` (operands `number`, result `BinOp.resTy`), beside
-  `strictEq`'s; soundness and inference sound and complete. `%`
-  (`BinOp.mod`) is one more of them: Lean's `Float` has no `fmod`, so
+- **The operators of numbers, the comparisons and `===` (done).** `*`,
+  `/` and `%` (`BinOp.times`, `div`, `mod`) take numbers (`BinOpTyS.num`).
+  `%` is JavaScript's remainder: Lean's `Float` has no `fmod`, so
   `Float.jsRem` subtracts doublings of the divisor, each subtraction exact
-  by Sterbenz's lemma, and is tested bit for bit against Node by the
-  differential generator. Comparisons of strings
-  and of other values (inty compares any two values of one type, by
-  JavaScript's coercions) wait for a model of those coercions. inty's
-  lowering takes `&&` and `||` to `?:` (`const t = a; t ? b : t`, or
-  `a ? b : false` when `a` is a test). The differential generator uses
-  them all.
+  by Sterbenz's lemma, and it is tested bit for bit against Node by the
+  differential generator. The comparisons `<`, `<=`, `>`, `>=` (`lt`,
+  `le`, `gt`, `ge`) take two numbers (IEEE: false with a `NaN`) or two
+  strings (by UTF-16 code units, as JavaScript's), the types `+` takes
+  (`BinOpTyS.cmp`, with `Plus a`), and nothing else: no coercion. That is
+  a decision, stricter than JavaScript, which compares `"10" < 9` as
+  numbers, `true < 2` with `true` as `1` and two arrays as strings; inty
+  rejects these too. `===` and `!==` (`strictEq`) take any two values (the
+  model's functions have no identity, so two are never equal). Soundness
+  and inference sound and complete for all of them. inty's lowering takes
+  `&&` and `||` to `?:` (`const t = a; t ? b : t`, or `a ? b : false` when
+  `a` is a test). The differential generator uses them all.
 - Typed arrays, regex, `Promise` (with `await` as the identity, as in
   `dynamics`).
 - Arrays and records invariant while mutable (#96).
@@ -326,8 +326,7 @@ touching the generic proofs.
   prints the same and runs as fast or faster (`fuzzy-search` 1.9x).
   The model's three corpus disagreements on numbers and the differential
   test's two went with it.
-- A bit-level binary64 model, tested against Node, for the conversions
-  (`ToInt32`) Lean's opaque `Float` can't state.
+- The bitwise operators are left out on purpose ([GAPS.md](GAPS.md)).
 
 ### 5. Literal types, unions and narrowing
 

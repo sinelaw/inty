@@ -677,6 +677,7 @@ example : ¬ HasType L [] [] none .synth .synth (.binop .plus (num 1) (str "a"))
   | binop hop h₁ h₂ =>
     cases hop with
     | num h => simp [BinOp.numeric] at h
+    | cmp h => simp [BinOp.compare] at h
     | plus _ =>
       obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
       obtain ⟨_, e₂, h₂⟩ := h₂.top_synth
@@ -686,6 +687,46 @@ example : ¬ HasType L [] [] none .synth .synth (.binop .plus (num 1) (str "a"))
         cases h₂ with
         | lit hl => cases hl; exact ne_con (by decide) (e₁.trans e₂.symm)
 
+/-- `"a" < 1`: a comparison never mixes a `String` with a `Number`
+(JavaScript would coerce the string to a number). -/
+example : ¬ HasType L [] [] none .synth .synth (.binop .lt (str "a") (num 1)) τ := by
+  intro h
+  obtain ⟨_, -, h⟩ := h.top_synth
+  cases h with
+  | binop hop h₁ h₂ =>
+    cases hop with
+    | num h => simp [BinOp.numeric] at h
+    | cmp _ _ =>
+      obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
+      obtain ⟨_, e₂, h₂⟩ := h₂.top_synth
+      cases h₁ with
+      | lit hl =>
+        cases hl
+        cases h₂ with
+        | lit hl => cases hl; exact ne_con (by decide) (e₁.trans e₂.symm)
+
+/-- `true < false`: a comparison is of numbers or strings only (JavaScript
+would coerce the booleans to numbers). -/
+example : ¬ HasType L [] [] none .synth .synth
+    (.binop .lt (.lit (.boolean true)) (.lit (.boolean false))) τ := by
+  intro h
+  obtain ⟨_, -, h⟩ := h.top_synth
+  cases h with
+  | binop hop h₁ _ =>
+    cases hop with
+    | num h => simp [BinOp.numeric] at h
+    | cmp _ hc =>
+      obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
+      cases h₁ with
+      | lit hl =>
+        cases hl
+        rcases hc with ⟨q, hq, hi⟩ | hc
+        · cases hi
+          case plusNumber => exact ne_con (by decide) (e₁.trans (PredEq.one hq).2)
+          case plusString => exact ne_con (by decide) (e₁.trans (PredEq.one hq).2)
+          all_goals (obtain ⟨hcls, -, -⟩ := hq; cases hcls)
+        · obtain ⟨_, hm, -⟩ := hc; cases hm
+
 /-- `true + true`: `Boolean` is not a `Plus` instance, and nothing assumes it. -/
 example : ¬ HasType L [] [] none .synth .synth (.binop .plus (.lit (.boolean true)) (.lit (.boolean true))) τ := by
   intro h
@@ -694,6 +735,7 @@ example : ¬ HasType L [] [] none .synth .synth (.binop .plus (.lit (.boolean tr
   | binop hop h₁ _ =>
     cases hop with
     | num h => simp [BinOp.numeric] at h
+    | cmp h => simp [BinOp.compare] at h
     | plus hc =>
       obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
       cases h₁ with
@@ -712,9 +754,11 @@ example : ¬ HasType L [] [] none .synth .synth (.binop .minus (str "a") (num 1)
   obtain ⟨_, -, h⟩ := h.top_synth
   cases h with
   | binop hop h₁ _ =>
-    cases hop
-    obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
-    cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
+    cases hop with
+    | cmp h => simp [BinOp.compare] at h
+    | num =>
+      obtain ⟨_, e₁, h₁⟩ := h₁.top_synth
+      cases h₁ with | lit hl => cases hl; exact ne_con (by decide) e₁
 
 /-- `-"a"`: unary `-` is `Number` only. -/
 example : ¬ HasType L [] [] none .synth .synth (.unop .neg (str "a")) τ := by
@@ -1207,8 +1251,11 @@ example : UnOpTy UnOp.neg Ty.number Ty.number :=
   @UnOpTy.neg
 example : ∀ {S : Sys} {C : List Pred} {τ : Ty}, EntailsS S C { cls := Cls.plus, args := [τ] } → BinOpTyS S C BinOp.plus τ τ τ :=
   @BinOpTyS.plus
-example : ∀ {S : Sys} {C : List Pred} {op : BinOp}, BinOp.numeric op = true → BinOpTyS S C op Ty.number Ty.number (BinOp.resTy op) :=
+example : ∀ {S : Sys} {C : List Pred} {op : BinOp}, BinOp.numeric op = true → BinOpTyS S C op Ty.number Ty.number Ty.number :=
   @BinOpTyS.num
+example : ∀ {S : Sys} {C : List Pred} {τ : Ty} {op : BinOp},
+      BinOp.compare op = true → EntailsS S C { cls := Cls.plus, args := [τ] } → BinOpTyS S C op τ τ Ty.boolean :=
+  @BinOpTyS.cmp
 example : ∀ {S : Sys} {C : List Pred} {neg : Bool} {τ₁ τ₂ : Ty}, BinOpTyS S C (BinOp.strictEq neg) τ₁ τ₂ Ty.boolean :=
   @BinOpTyS.strictEq
 example : ∀ {ls : List String} {es : List Inty.Expr} {T : Ty}, ObjCase ls es T T :=
@@ -1628,9 +1675,25 @@ example : ∀ (a b : Float), BinOp.eval BinOp.gt (Value.number a) (Value.number 
   @BinOp.eval.eq_9
 example : ∀ (a b : Float), BinOp.eval BinOp.ge (Value.number a) (Value.number b) = Result.ok (Value.boolean (decide (b ≤ a))) :=
   @BinOp.eval.eq_10
+example : ∀ (a b : String),
+      BinOp.eval BinOp.lt (Value.string a) (Value.string b) =
+        Result.ok (Value.boolean (unitsLt (String.utf16 a) (String.utf16 b))) :=
+  @BinOp.eval.eq_11
+example : ∀ (a b : String),
+      BinOp.eval BinOp.le (Value.string a) (Value.string b) =
+        Result.ok (Value.boolean !unitsLt (String.utf16 b) (String.utf16 a)) :=
+  @BinOp.eval.eq_12
+example : ∀ (a b : String),
+      BinOp.eval BinOp.gt (Value.string a) (Value.string b) =
+        Result.ok (Value.boolean (unitsLt (String.utf16 b) (String.utf16 a))) :=
+  @BinOp.eval.eq_13
+example : ∀ (a b : String),
+      BinOp.eval BinOp.ge (Value.string a) (Value.string b) =
+        Result.ok (Value.boolean !unitsLt (String.utf16 a) (String.utf16 b)) :=
+  @BinOp.eval.eq_14
 example : ∀ (x x_1 : Value) (neg : Bool),
       BinOp.eval (BinOp.strictEq neg) x x_1 = Result.ok (Value.boolean (Value.strictEq x x_1 != neg)) :=
-  @BinOp.eval.eq_11
+  @BinOp.eval.eq_15
 example : ∀ (x : BinOp) (x_1 x_2 : Value),
       (∀ (neg : Bool), x = BinOp.strictEq neg → False) →
         (∀ (a b : Float), x = BinOp.plus → x_1 = Value.number a → x_2 = Value.number b → False) →
@@ -1643,8 +1706,12 @@ example : ∀ (x : BinOp) (x_1 x_2 : Value),
                       (∀ (a b : Float), x = BinOp.le → x_1 = Value.number a → x_2 = Value.number b → False) →
                         (∀ (a b : Float), x = BinOp.gt → x_1 = Value.number a → x_2 = Value.number b → False) →
                           (∀ (a b : Float), x = BinOp.ge → x_1 = Value.number a → x_2 = Value.number b → False) →
-                            BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
-  @BinOp.eval.eq_12
+                            (∀ (a b : String), x = BinOp.lt → x_1 = Value.string a → x_2 = Value.string b → False) →
+                              (∀ (a b : String), x = BinOp.le → x_1 = Value.string a → x_2 = Value.string b → False) →
+                                (∀ (a b : String), x = BinOp.gt → x_1 = Value.string a → x_2 = Value.string b → False) →
+                                  (∀ (a b : String), x = BinOp.ge → x_1 = Value.string a → x_2 = Value.string b → False) →
+                                    BinOp.eval x x_1 x_2 = Result.stuck Stuck.typeMismatch :=
+  @BinOp.eval.eq_16
 example : BinOp.numeric BinOp.minus = true :=
   @BinOp.numeric.eq_1
 example : BinOp.numeric BinOp.times = true :=
@@ -1653,34 +1720,54 @@ example : BinOp.numeric BinOp.div = true :=
   @BinOp.numeric.eq_3
 example : BinOp.numeric BinOp.mod = true :=
   @BinOp.numeric.eq_4
-example : BinOp.numeric BinOp.lt = true :=
-  @BinOp.numeric.eq_5
-example : BinOp.numeric BinOp.le = true :=
-  @BinOp.numeric.eq_6
-example : BinOp.numeric BinOp.gt = true :=
-  @BinOp.numeric.eq_7
-example : BinOp.numeric BinOp.ge = true :=
-  @BinOp.numeric.eq_8
 example : BinOp.numeric BinOp.plus = false :=
+  @BinOp.numeric.eq_5
+example : BinOp.numeric BinOp.lt = false :=
+  @BinOp.numeric.eq_6
+example : BinOp.numeric BinOp.le = false :=
+  @BinOp.numeric.eq_7
+example : BinOp.numeric BinOp.gt = false :=
+  @BinOp.numeric.eq_8
+example : BinOp.numeric BinOp.ge = false :=
   @BinOp.numeric.eq_9
 example : ∀ (negated : Bool), BinOp.numeric (BinOp.strictEq negated) = false :=
   @BinOp.numeric.eq_10
-example : BinOp.resTy BinOp.lt = Ty.boolean :=
-  @BinOp.resTy.eq_1
-example : BinOp.resTy BinOp.le = Ty.boolean :=
-  @BinOp.resTy.eq_2
-example : BinOp.resTy BinOp.gt = Ty.boolean :=
-  @BinOp.resTy.eq_3
-example : BinOp.resTy BinOp.ge = Ty.boolean :=
-  @BinOp.resTy.eq_4
-example : ∀ (negated : Bool), BinOp.resTy (BinOp.strictEq negated) = Ty.boolean :=
-  @BinOp.resTy.eq_5
-example : ∀ (x : BinOp),
-      (x = BinOp.lt → False) →
-        (x = BinOp.le → False) →
-          (x = BinOp.gt → False) →
-            (x = BinOp.ge → False) → (∀ (negated : Bool), x = BinOp.strictEq negated → False) → BinOp.resTy x = Ty.number :=
-  @BinOp.resTy.eq_6
+example : BinOp.compare BinOp.lt = true :=
+  @BinOp.compare.eq_1
+example : BinOp.compare BinOp.le = true :=
+  @BinOp.compare.eq_2
+example : BinOp.compare BinOp.gt = true :=
+  @BinOp.compare.eq_3
+example : BinOp.compare BinOp.ge = true :=
+  @BinOp.compare.eq_4
+example : BinOp.compare BinOp.plus = false :=
+  @BinOp.compare.eq_5
+example : BinOp.compare BinOp.minus = false :=
+  @BinOp.compare.eq_6
+example : BinOp.compare BinOp.times = false :=
+  @BinOp.compare.eq_7
+example : BinOp.compare BinOp.div = false :=
+  @BinOp.compare.eq_8
+example : BinOp.compare BinOp.mod = false :=
+  @BinOp.compare.eq_9
+example : ∀ (negated : Bool), BinOp.compare (BinOp.strictEq negated) = false :=
+  @BinOp.compare.eq_10
+example : ∀ (c : Char),
+      Char.utf16 c =
+        if Char.toNat c < 65536 then [Char.toNat c]
+        else [55296 + (Char.toNat c - 65536) / 1024, 56320 + (Char.toNat c - 65536) % 1024] :=
+  @Char.utf16.eq_1
+example : ∀ (s : String), String.utf16 s = List.flatMap Char.utf16 (String.toList s) :=
+  @String.utf16.eq_1
+example : unitsLt [] [] = false :=
+  @unitsLt.eq_1
+example : ∀ (head : Nat) (tail : List Nat), unitsLt [] (head :: tail) = true :=
+  @unitsLt.eq_2
+example : ∀ (head : Nat) (tail : List Nat), unitsLt (head :: tail) [] = false :=
+  @unitsLt.eq_3
+example : ∀ (x_2 : Nat) (xs : List Nat) (y : Nat) (ys : List Nat),
+      unitsLt (x_2 :: xs) (y :: ys) = (decide (x_2 < y) || x_2 == y && unitsLt xs ys) :=
+  @unitsLt.eq_4
 example : ∀ (a b : Float), Value.strictEq (Value.number a) (Value.number b) = (a == b) :=
   @Value.strictEq.eq_1
 example : ∀ (a b : String), Value.strictEq (Value.string a) (Value.string b) = (a == b) :=
@@ -2055,7 +2142,7 @@ example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
 #rules HasTypeS 40
 #rules LitTy 5
 #rules UnOpTy 3
-#rules BinOpTyS 3
+#rules BinOpTyS 4
 #rules ObjCase 2
 #rules Expr.IsValue 4
 #equations run 30
@@ -2075,9 +2162,12 @@ example : ∀ (a : List Value), Value.truthy (Value.items a) = true :=
 #equations Value.typeString 12
 #equations Lit.eval 5
 #equations UnOp.eval 4
-#equations BinOp.eval 12
+#equations BinOp.eval 16
 #equations BinOp.numeric 10
-#equations BinOp.resTy 6
+#equations BinOp.compare 10
+#equations Char.utf16 1
+#equations String.utf16 1
+#equations unitsLt 4
 #equations Value.strictEq 8
 #equations Expr.writes 30
 #equations Expr.writesList 2

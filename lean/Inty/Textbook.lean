@@ -48,6 +48,7 @@ theorem BinOpTyS.mono {S₁ S₂ : Sys} (hle : S₁.Le S₂) {C : List Pred} {op
   cases h with
   | plus hp => exact .plus (hp.mono hle)
   | num h => exact .num h
+  | cmp h hp => exact .cmp h (hp.mono hle)
   | strictEq => exact .strictEq
 
 theorem MemberSlotS.mono {S₁ S₂ : Sys} (hle : S₁.Le S₂) {C : List Pred} {T : Ty} {k : ClassKind}
@@ -174,6 +175,7 @@ theorem jonesExample_untyped : ¬ HasType L [] [] none .synth .synth jonesExampl
       | binop hop hl _ =>
         cases hop with
         | num h => simp [BinOp.numeric] at h
+        | cmp h => simp [BinOp.compare] at h
         | plus hc =>
           obtain ⟨_, e₁, hl⟩ := hl.top_synth
           cases hl with

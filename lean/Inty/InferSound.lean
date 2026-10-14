@@ -1793,7 +1793,19 @@ theorem infer_sound : ∀ {e : Expr}, InferSound L e := by
       have he₂ := ih₂ h₂ (by ret_ok) .none _ C hsat.2
       simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ ⊢
       exact .binop .strictEq he₁ he₂
-    | minus | times | div | mod | lt | le | gt | ge =>
+    | lt | le | gt | ge =>
+      simp only at h
+      split at h
+      · cases h
+      rename_i σ₃ hu
+      simp only [Option.some.injEq] at h; subst h
+      simp only [Sat.map, Sat.append, Sat.singleton] at hsat
+      have he₁ := ih₁ h₁ (by ret_ok) .none _ C hsat.1.1
+      have he₂ := ih₂ h₂ (by ret_ok) .none _ C hsat.1.2
+      simp only [Ty.subst_compose, Ctx.subst_compose, Ret.subst_compose] at he₁ he₂ hsat ⊢
+      replace he₁ := he₁.conv ((unify_sound hu).subst φ)
+      exact .binop (.cmp rfl (by simpa [Pred.subst] using hsat.2)) he₁ he₂
+    | minus | times | div | mod =>
       simp only at h
       split at h
       · cases h

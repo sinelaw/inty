@@ -39,8 +39,12 @@ types, result type. Both operands of `+` have the same type, one instance of
 `Plus`: inty's `+` never mixes a `Number` with a `String`. -/
 inductive BinOpTyS (S : Sys) (C : List Pred) : BinOp → Ty → Ty → Ty → Prop where
   | plus : EntailsS S C ⟨.plus, [τ]⟩ → BinOpTyS S C .plus τ τ τ
-  /-- `-`, `*`, `/` and the comparisons: of `Number`s. -/
-  | num : op.numeric = true → BinOpTyS S C op .number .number op.resTy
+  /-- `-`, `*`, `/`, `%`: of `Number`s. -/
+  | num : op.numeric = true → BinOpTyS S C op .number .number .number
+  /-- `<`, `<=`, `>`, `>=`: of two values of one type that `+` takes, a
+  `Number` or a `String` (`Plus`); no coercion, as JavaScript's
+  `"10" < 9` or `true < 2` would make. -/
+  | cmp : op.compare = true → EntailsS S C ⟨.plus, [τ]⟩ → BinOpTyS S C op τ τ .boolean
   /-- `===` and `!==`: of any two values, as inty's (JavaScript's is total,
   comparing values of disjoint types gives `false`). -/
   | strictEq : BinOpTyS S C (.strictEq neg) τ₁ τ₂ .boolean
