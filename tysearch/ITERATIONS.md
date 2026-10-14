@@ -416,11 +416,51 @@ inty: `cond : (a, b, b) -> b` types `cond(c, 0, "a")` as `T0 | T1`. In
 | `core`'s `==` came out as three overloads, not `(a, a) -> T2`: the attacks instantiated `a` to `unknown`, and two unknowns may differ | `unknown` is in the universe only if something binds a value of no known source (the model's `catch`); a rule's variables range over it only then |
 | `==(if(false, false, 0), false)` was typed and got stuck. At first only the variables the checker could widen were tested, so `==`'s `a` became a union through a child that was one | Every variable is tested, and the checker refuses a union where the attacks did |
 
+## 10. Narrowing by `typeof`
+
+**Model.** The Lean model's `caseTag e₁ .typeOf t e₂ e₃` for `t` of
+`"number"` and `"string"`: `e₃` if `e₁`'s `typeof` is `t`, else `e₂`, each
+with the value as `var 0`. This is JavaScript's
+`typeof x === "number" ? … : …`.
+
+**Found.**
+
+```
+typeof=number : (a, [x0: a] b, [x0: a] b) -> b
+typeof=number child 1, x0: Child(0), reached by T1, T2, …, T8 only
+typeof=number child 2, x0: Child(0), reached by T0 only
+```
+
+The rule is plain. The narrowing is a fact about the construct, found by
+probing: which sorts' values reach each branch. The checker meets the
+bound variable's type with them. With `x : T0 | T1`,
+`typeof x === "number" ? -x : x[0]` is typed `T0 | T1`: the one branch
+sees `x : T0`, the other `x : T1`. A branch no value of the type reaches
+binds `never`, which fits anything. This is inty's flow typing.
+
+**How.**
+
+- **Reach, by probing.** Give the tested child a member of each sort, and
+  see whether the branch runs: the node changes when the branch does
+  something else.
+- **Observation and attacks** run each branch under the narrowed type, so
+  a branch that only strings reach is judged on strings. If no value
+  reaches it, anything will do.
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| The then-branch's `x0` had no source: the probes drew the tested child from all ~110 representatives, few of them numbers, so the branch hardly ran | Probes draw a sort first, then a member, and sample until 12 trials ran the child |
+| T8 seemed to reach the number branch: two runs that each `return` a new array compared unequal | `same_outcome` compares returned values as it does values |
+| Junk `typeof=number : (a, [x0: a] T7<a -> b>, [x0: a] c) -> c`. A branch no value reaches has every type, so matching branched on its 57 types past the cap of 32 before reaching the branch that fixed `b`. So the plain rule matched nothing there | Matching takes the most constrained child first |
+
 ## Next
 
 - **Keys:** a string literal `"x"`, so that `idx` on objects by string
   has no one result type. inty gives literal string types for keys.
-- **Sums:** `undefined`/`null` unions with `unwrap`, and tag tests
-  (`typetest`, `caseTag`) with narrowing.
+- **Sums:** `unwrap` (`undefined`/`null`), and `caseTag` on a field.
+  Booleans, `undefined` and `null` are one sort in the model so far: no
+  context tells them apart, and branching is no context.
 - **Records with width subtyping in the suite:** order refined sorts by
   their fingerprints too.

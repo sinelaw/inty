@@ -84,10 +84,34 @@ impl Ty {
     }
 
     /// Whether every value of ground `self` is one of `other`'s, as unions
-    /// of their members.
+    /// of their members. `never` has no values, so is below everything.
     pub fn below(&self, other: &Ty) -> bool {
+        if *self == Ty::Never {
+            return true;
+        }
         let theirs = other.members();
         self.members().iter().all(|t| theirs.contains(t))
+    }
+
+    /// Ground `self`'s values of the given sorts: its members of them (all
+    /// of them, for `unknown`), as a union, one type, or `never`.
+    pub fn meet(&self, sorts: &[usize]) -> Ty {
+        let ms: Vec<Ty> = match self {
+            Ty::Top => sorts.iter().map(|&s| Ty::Base(s)).collect(),
+            t => t
+                .members()
+                .into_iter()
+                .filter(|m| match m {
+                    Ty::Base(s) | Ty::Ref(s, _) => sorts.contains(s),
+                    _ => false,
+                })
+                .collect(),
+        };
+        ms.iter()
+            .skip(1)
+            .fold(ms.first().cloned().unwrap_or(Ty::Never), |acc, t| {
+                Ty::union(&acc, t)
+            })
     }
 
     /// The union of two ground types: their members, flattened, sorted,

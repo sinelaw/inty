@@ -14,7 +14,7 @@
 //! stored with `.x =` (iteration 5); and arrays, indexed as the model's
 //! `Value.index` and `Value.setIndex` do (iteration 6); and `throw`,
 //! `try`/`catch`, `while`, `break` and `continue` (iteration 7); and
-//! `return` (iteration 8).
+//! `return` (iteration 8); and `typeof` tests that narrow (iteration 10).
 //!
 //! Variables are de Bruijn indices. In a function's body `var(i)` is
 //! parameter `i` for `i` below the arity, and `var(arity)` is the function
@@ -71,6 +71,8 @@ const WHILE: usize = 36;
 const BREAK: usize = 37;
 const CONTINUE: usize = 38;
 const RET: usize = 39;
+const IS_NUM: usize = 40;
+const IS_STR: usize = 41;
 
 /// A run's state besides the store: the fuel left, and the value a `throw`
 /// is carrying to its `try`.
@@ -263,6 +265,19 @@ impl Val {
         }
     }
 
+    /// What `typeof` says, as `Value.typeString` in the model.
+    fn type_string(&self) -> &'static str {
+        match self {
+            Val::Num(_) => "number",
+            Val::Str(_) => "string",
+            Val::Bool(_) => "boolean",
+            Val::Undefined => "undefined",
+            Val::Null => "object",
+            Val::Clo(_) => "function",
+            Val::Obj(_) | Val::Arr(_) => "object",
+        }
+    }
+
     /// JavaScript truthiness, as `Value.truthy` in the model.
     fn truthy(&self) -> bool {
         match self {
@@ -331,6 +346,8 @@ impl Default for Model {
                 Con::op("break", 0),
                 Con::op("continue", 0),
                 Con::op("return", 1),
+                Con::binder("typeof=number", vec![0, 1, 1]),
+                Con::binder("typeof=string", vec![0, 1, 1]),
             ],
             fuel: 64,
         }
@@ -480,18 +497,17 @@ impl Model {
                 kid(1, env)
             }
             NOT => Value(Val::Bool(!value!(kid(0, env)).truthy())),
-            TYPEOF => Value(Val::Str(
-                match value!(kid(0, env)) {
-                    Val::Num(_) => "number",
-                    Val::Str(_) => "string",
-                    Val::Bool(_) => "boolean",
-                    Val::Undefined => "undefined",
-                    Val::Null => "object",
-                    Val::Clo(_) => "function",
-                    Val::Obj(_) | Val::Arr(_) => "object",
-                }
-                .into(),
-            )),
+            TYPEOF => Value(Val::Str(value!(kid(0, env)).type_string().into())),
+            // As the model's `caseTag e₁ .typeOf t e₂ e₃`: `e₃` if `e₁`'s
+            // `typeof` is `t`, else `e₂`, each with the value as `var 0`.
+            IS_NUM | IS_STR => {
+                let v = value!(kid(0, env));
+                let tag = if t.con == IS_NUM { "number" } else { "string" };
+                let branch = if v.type_string() == tag { 2 } else { 1 };
+                let mut inner = vec![Slot::new(v)];
+                inner.extend_from_slice(env);
+                kid(branch, &inner)
+            }
             NEG => match value!(kid(0, env)) {
                 Val::Num(b) => Value(num(-f64::from_bits(b))),
                 _ => Outcome::stuck("typeMismatch"),

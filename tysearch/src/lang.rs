@@ -220,7 +220,9 @@ pub trait Language {
 
     fn same_outcome(&self, a: &Outcome<Self::Value>, b: &Outcome<Self::Value>) -> bool {
         match (a, b) {
-            (Outcome::Value(x), Outcome::Value(y)) => self.same(x, y),
+            (Outcome::Value(x), Outcome::Value(y)) | (Outcome::Return(x), Outcome::Return(y)) => {
+                self.same(x, y)
+            }
             (a, b) => a == b,
         }
     }

@@ -468,6 +468,13 @@ so only for a variable at the top of two or more children's types, and in
 no other premise, since a child typed against a structure holding it saw
 it narrower.
 
+### 8.7 Narrowing
+
+A branch of a `typeof` test binds the tested value, but only some sorts'
+values reach it. Probing finds which. The checker meets the bound
+variable's type with them, so `x : T0 | T1` is `T0` in the one branch and
+`T1` in the other, and `never` (which fits anything) where none reaches.
+
 ---
 
 ## 9. Connecting tysearch to inty

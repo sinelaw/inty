@@ -129,6 +129,10 @@ pub struct Semantics<V> {
     /// Per sort, `(constructor, hole)`: where its values are used, as an
     /// accepting context some other sort gets stuck in.
     pub uses: Vec<Vec<(usize, usize)>>,
+    /// Per bound variable `(con, child, index)` whose value is another
+    /// child's, but which only some sorts' values reach (the branches of a
+    /// `typeof` test): those sorts. Its type is narrowed to them.
+    pub narrow: HashMap<(usize, usize, usize), Vec<usize>>,
 }
 
 /// Builds `con` with child `hole` the variable `var(0)` and the others
@@ -194,6 +198,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
             subtyping: false,
             forgets: 0,
             uses: Vec::new(),
+            narrow: HashMap::new(),
         };
         for v in pool {
             let print = sem.fingerprint(oracle, v);

@@ -51,6 +51,9 @@ pub struct Checker {
     /// Constructors whose terms are syntactic values: they run none of
     /// their children (literals, functions).
     pub inert: Vec<bool>,
+    /// Per bound variable `(con, child, index)`, the sorts that reach it,
+    /// where not all do: its type is narrowed to them.
+    pub narrow: HashMap<(usize, usize, usize), Vec<usize>>,
     /// Typings kept per node when overloads branch.
     pub cap: usize,
     /// How much likelier `generate` picks a generalised variable than any
@@ -105,6 +108,7 @@ impl Checker {
             order: None,
             policies: HashMap::new(),
             inert: vec![false; sig.len()],
+            narrow: HashMap::new(),
             cap: 8,
             poly_weight: 4,
             assign_weight: 1,
@@ -284,7 +288,13 @@ impl Checker {
                             // Each way of typing the bound variables.
                             let mut binds: Vec<Vec<Sch>> = vec![Vec::new()];
                             for (j, b) in prem.bound.iter().enumerate() {
-                                let options = self.schemes(&ua, ctx, t, i, j, b);
+                                let b = match self.narrow.get(&(t.con, i, j)) {
+                                    Some(sorts) if ua.resolve(b).is_ground() => {
+                                        ua.resolve(b).meet(sorts)
+                                    }
+                                    _ => b.clone(),
+                                };
+                                let options = self.schemes(&ua, ctx, t, i, j, &b);
                                 binds = binds
                                     .into_iter()
                                     .flat_map(|bs| {

@@ -185,6 +185,10 @@ fn model_finds_functions_state_and_the_value_restriction() {
             "continue : a",
             // `return` (iteration 8): its exit type is its value's.
             "return : (a) -> b (return a)",
+            // `typeof` tests (iteration 10): plain rules; the narrowing is
+            // the binder flow's (checked below).
+            "typeof=number : (a, [x0: a] b, [x0: a] b) -> b",
+            "typeof=string : (a, [x0: a] b, [x0: a] b) -> b",
         ])
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);
@@ -193,7 +197,9 @@ fn model_finds_functions_state_and_the_value_restriction() {
     // handler may differ.
     assert!(no_unions(&d).is_empty());
     let lets: Vec<Policy> = d.generalisation.policies.values().map(|p| p.0).collect();
-    assert_eq!(lets, vec![Policy::IfValue]);
+    // `let`'s, and the `typeof` tests' branches', which bind a value too.
+    assert_eq!(lets.len(), 5);
+    assert!(lets.iter().all(|p| *p == Policy::IfValue));
     let always = d
         .generalisation
         .trials
@@ -230,6 +236,37 @@ fn model_finds_functions_state_and_the_value_restriction() {
         generalisable(&m, &cfg, &d, &node("func1", vec![var(0)])),
         Some(true)
     );
+
+    // Narrowing (iteration 10): with `x` a number or a string,
+    // `typeof x === "number" ? -x : x[0]` is typed, each branch seeing `x`
+    // as only the sorts that reach it: the probes find that only numbers
+    // reach the one, and all but numbers the other.
+    let lit = |n: &str, a: Atom| Term::leaf(c(n), a);
+    let x = node(
+        "cond",
+        vec![
+            node("true", vec![]),
+            lit("num", Atom::Int(0)),
+            lit("str", Atom::Str("a".into())),
+        ],
+    );
+    let test = node(
+        "typeof=number",
+        vec![
+            var(0),
+            node("idx", vec![var(0), lit("num", Atom::Int(0))]),
+            node("neg", vec![var(0)]),
+        ],
+    );
+    let narrowed = node("let", vec![x, test]);
+    let names = d.names();
+    let types: Vec<String> = d
+        .checker
+        .types(&narrowed)
+        .iter()
+        .map(|t| names.ty(t))
+        .collect();
+    assert_eq!(types, vec!["T0 | T1"]);
 }
 
 // The suite: languages whose type systems differ in kind from inty's, so

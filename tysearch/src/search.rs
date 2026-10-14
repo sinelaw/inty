@@ -130,6 +130,9 @@ pub struct Observation<V> {
 pub struct ConSearch {
     pub con: usize,
     pub sources: Vec<Vec<Source>>,
+    /// Per child and bound variable, the sorts that reach it, where not
+    /// all do.
+    pub narrow: Vec<Vec<Option<Vec<usize>>>>,
     pub exits: Option<ExitFlow>,
     pub observations: usize,
     pub candidates: usize,
@@ -157,6 +160,21 @@ pub struct Pools {
     /// Each one's kind (its reason's first word: a throw, a `break`, a
     /// `return`), numbered.
     pub fault_kinds: Vec<usize>,
+    /// The representatives by sort (those of none left out).
+    pub by_sort: Vec<Vec<Term>>,
+}
+
+impl Pools {
+    /// A representative of a sort drawn first: every sort is as likely,
+    /// however many representatives each has.
+    pub fn closed(&self, rng: &mut Rng) -> Term {
+        let groups: Vec<&Vec<Term>> = self.by_sort.iter().filter(|g| !g.is_empty()).collect();
+        if groups.is_empty() {
+            return self.reps[rng.below(self.reps.len())].clone();
+        }
+        let s = groups[rng.below(groups.len())];
+        s[rng.below(s.len())].clone()
+    }
 }
 
 pub fn search_con<L: Language>(
@@ -175,6 +193,14 @@ pub fn search_con<L: Language>(
         }
     };
     let sources = binder_sources(oracle, sem, pools, con, rng);
+    let narrow = narrowing(oracle, pools, con, &sources, rng);
+    for (i, vs) in narrow.iter().enumerate() {
+        for (j, n) in vs.iter().enumerate() {
+            if let Some(sorts) = n {
+                sem.narrow.insert((con, i, j), sorts.clone());
+            }
+        }
+    }
     let flow = exit_flow(oracle, pools, con, rng);
     let obs = observe(oracle, sem, pools, con, &sources, cfg, rng);
     // A construct that never completes normally may claim any result type.
@@ -297,6 +323,7 @@ pub fn search_con<L: Language>(
     let mut s = ConSearch {
         con,
         sources,
+        narrow,
         exits: flow.clone(),
         observations: obs.len(),
         candidates: candidates.len(),
@@ -851,6 +878,77 @@ fn uses_of<L: Language>(
     out
 }
 
+/// Bound variable `j` of child `i` of `con`'s ground type `t`, narrowed to
+/// the sorts that reach it.
+fn narrowed<V>(sem: &Semantics<V>, con: usize, i: usize, j: usize, t: &Ty) -> Ty {
+    match sem.narrow.get(&(con, i, j)) {
+        Some(sorts) if t.is_ground() => t.meet(sorts),
+        _ => t.clone(),
+    }
+}
+
+/// Per child and bound variable whose value is another child's, the sorts
+/// whose values reach it, if not all do: found by giving that child a
+/// member of each sort, and seeing whether the variable's child runs (the
+/// node changes when it does something else).
+fn narrowing<L: Language>(
+    oracle: &mut Oracle<L>,
+    pools: &Pools,
+    con: usize,
+    sources: &[Vec<Source>],
+    rng: &mut Rng,
+) -> Vec<Vec<Option<Vec<usize>>>> {
+    let sig = oracle.lang.signature();
+    let c = sig[con].clone();
+    let var = var_con(sig);
+    let atoms = c.atoms_or_none();
+    let sorts: Vec<usize> = (0..pools.by_sort.len())
+        .filter(|&s| !pools.by_sort[s].is_empty())
+        .collect();
+    let mut out = Vec::new();
+    for (i, srcs) in sources.iter().enumerate() {
+        let mut mine = Vec::new();
+        for (j, src) in srcs.iter().enumerate() {
+            let Source::Child(k) = *src else {
+                mine.push(None);
+                continue;
+            };
+            let mut reach = Vec::new();
+            for &s in &sorts {
+                let members = &pools.by_sort[s];
+                let runs = (0..8).any(|_| {
+                    let mut kids: Vec<Term> = (0..c.arity)
+                        .map(|m| {
+                            if c.binds[m] == 0 {
+                                pools.closed(rng)
+                            } else {
+                                let open = &pools.open[&c.binds[m]];
+                                open[rng.below(open.len())].clone()
+                            }
+                        })
+                        .collect();
+                    kids[k] = members[rng.below(members.len())].clone();
+                    kids[i] = Term::leaf(var, Atom::Int(j as i64));
+                    let atom = atoms[rng.below(atoms.len())].clone();
+                    let node = Term { con, atom, kids };
+                    let mut alt = node.clone();
+                    alt.kids[i] = pools.closed(rng);
+                    let (o1, o2) = (oracle.eval(&node), oracle.eval(&alt));
+                    let differ = !oracle.lang.same_outcome(&o1, &o2);
+                    differ
+                });
+                if runs {
+                    reach.push(s);
+                }
+            }
+            // None reaching says nothing (a function's body runs later).
+            mine.push((!reach.is_empty() && reach.len() < sorts.len()).then_some(reach));
+        }
+        out.push(mine);
+    }
+    out
+}
+
 /// Where `return`s go through `con`, found by putting a returning term in
 /// each child; `None` if nothing returns.
 fn exit_flow<L: Language>(
@@ -997,7 +1095,12 @@ pub fn binder_sources<L: Language>(
         let mut mine = Vec::new();
         for j in 0..b {
             let mut verdicts: Vec<Vec<Source>> = Vec::new();
-            for _ in 0..8 {
+            // Until enough trials ran the child: some (a branch for one
+            // sort only) run it rarely.
+            for _ in 0..160 {
+                if verdicts.len() >= 12 {
+                    break;
+                }
                 let kids: Vec<Term> = c
                     .binds
                     .iter()
@@ -1006,7 +1109,7 @@ pub fn binder_sources<L: Language>(
                         if k == i {
                             Term::leaf(var, Atom::Int(j as i64))
                         } else if bk == 0 {
-                            pools.reps[rng.below(pools.reps.len())].clone()
+                            pools.closed(rng)
                         } else {
                             let open = &pools.open[&bk];
                             open[rng.below(open.len())].clone()
@@ -1129,18 +1232,13 @@ fn observe<L: Language>(
     } else {
         // Stratified: a sort for each closed child at random, then one of
         // its representatives, so that every tuple of sorts is tried.
-        let by_sort: Vec<Vec<Term>> = {
-            let mut m: Vec<Vec<Term>> = vec![Vec::new(); sem.count()];
-            for t in &pools.reps {
-                if let Outcome::Value(v) = oracle.eval(t) {
-                    if let Some(s) = sem.sort(oracle, &v) {
-                        m[s].push(t.clone());
-                    }
-                }
-            }
-            m.push(pools.faults.clone());
-            m.into_iter().filter(|v| !v.is_empty()).collect()
-        };
+        let by_sort: Vec<Vec<Term>> = pools
+            .by_sort
+            .iter()
+            .cloned()
+            .chain([pools.faults.clone()])
+            .filter(|v| !v.is_empty())
+            .collect();
         let atoms = c.atoms_or_none();
         let mut seen = std::collections::HashSet::new();
         // Every tuple of groups for the closed children, each its share of
@@ -1320,7 +1418,11 @@ fn observe<L: Language>(
                 let (t, x) = if *b == 0 {
                     (closed[i].clone(), closed_exits[i].clone())
                 } else {
-                    let tys: Vec<Ty> = mine.iter().map(|&u| sem.universe[u].clone()).collect();
+                    let tys: Vec<Ty> = mine
+                        .iter()
+                        .enumerate()
+                        .map(|(j, &u)| narrowed(sem, con, i, j, &sem.universe[u]))
+                        .collect();
                     match open_types(oracle, sem, &node.kids[i], &tys, &actual[at - b..at]) {
                         Some((t, x)) => (Some(t), Some(x)),
                         None => (None, None),
@@ -1404,7 +1506,9 @@ fn open_types<L: Language>(
             .iter()
             .zip(beta)
             .map(|(a, ty)| {
+                // A value narrowed out doesn't reach this child.
                 a.clone()
+                    .filter(|v| sem.holds(oracle, v, ty))
                     .or_else(|| sem.samples(oracle, ty).into_iter().next())
             })
             .collect();
@@ -1662,8 +1766,10 @@ fn matches<V>(
         }
     }
     let mut thetas = vec![theta];
-    // Each child's type, and its exit type where the rule gives one.
-    let pats = cand
+    // Each child's type, and its exit type where the rule gives one: the
+    // most constrained first, so that a child of every type (one that
+    // faults, or never runs) doesn't branch the matching past its cap.
+    let mut pats: Vec<(&Ty, &Option<Vec<usize>>)> = cand
         .kids
         .iter()
         .zip(&o.kid_types)
@@ -1673,7 +1779,9 @@ fn matches<V>(
                 .iter()
                 .zip(&o.kid_exits)
                 .filter_map(|(k, xs)| k.exit.as_ref().map(|x| (x, xs))),
-        );
+        )
+        .collect();
+    pats.sort_by_key(|(_, ts)| ts.as_ref().map_or(0, Vec::len));
     for (pat, ts) in pats {
         let Some(ts) = ts else {
             return Vec::new();
@@ -1806,7 +1914,12 @@ pub fn falsify<L: Language>(
                 }
                 choices.push(mine);
             } else {
-                let beta: Vec<Ty> = prem.bound.iter().map(|b| subst(b, &theta)).collect();
+                let beta: Vec<Ty> = prem
+                    .bound
+                    .iter()
+                    .enumerate()
+                    .map(|(j, b)| narrowed(sem, rule.con, k, j, &subst(b, &theta)))
+                    .collect();
                 let es = envs(oracle, sem, &beta);
                 let open = &pools.open[&c.binds[k]];
                 let mut fit = Vec::new();
@@ -1814,6 +1927,15 @@ pub fn falsify<L: Language>(
                 // a function of two parameters: open terms that small are
                 // rare), then the children of nodes the rule covers, then
                 // any.
+                // A child no value reaches never runs: anything will do.
+                if es.is_empty() {
+                    choices.push(
+                        (0..2)
+                            .map(|_| (open[rng.below(open.len())].clone(), None))
+                            .collect(),
+                    );
+                    continue;
+                }
                 let uses = uses_of(oracle, sem, pools, &beta, rng);
                 let tries: Vec<&Term> = uses
                     .iter()

@@ -105,6 +105,8 @@ pub struct Discovery {
     pub generalisation: Generalisation,
     pub check: Check,
     pub evals: usize,
+    /// The checker the rules induce, as checked.
+    pub checker: Checker,
 }
 
 pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
@@ -210,11 +212,20 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
             fault_kinds.push(kinds.iter().position(|k| *k == kind).unwrap());
         }
     }
+    let mut by_sort: Vec<Vec<Term>> = vec![Vec::new(); sem.count()];
+    for t in &reps {
+        if let Outcome::Value(v) = oracle.eval(t) {
+            if let Some(s) = sem.sort(&mut oracle, &v) {
+                by_sort[s].push(t.clone());
+            }
+        }
+    }
     let pools = Pools {
         reps,
         open,
         faults,
         fault_kinds,
+        by_sort,
     };
     note(&format!("{} representatives", pools.reps.len()));
     // `unknown` is a type only where something binds a value of no known
@@ -354,7 +365,9 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
         &mut en,
         &mut rng,
     );
+    let checker = checker_for(lang, &sem, &rules, &gen);
     Discovery {
+        checker,
         language: lang.name().to_string(),
         config: cfg.clone(),
         con_names: sig.iter().map(|c| c.name).collect(),
@@ -393,6 +406,7 @@ fn checker_for<L: Language>(
     }
     checker.policies = gen.policies.clone();
     checker.inert = gen.inert.clone();
+    checker.narrow = sem.narrow.clone();
     for (r, vs) in &gen.no_unions {
         checker.set_no_unions(r, vs);
     }
@@ -1225,7 +1239,19 @@ impl fmt::Display for Discovery {
         for s in &self.searches {
             for (i, srcs) in s.sources.iter().enumerate() {
                 for (j, src) in srcs.iter().enumerate() {
-                    writeln!(f, "  {} child {i}, x{j}: {src:?}", self.con_names[s.con])?;
+                    let narrow = match s.narrow.get(i).and_then(|n| n.get(j)).cloned().flatten() {
+                        Some(sorts) => {
+                            let names: Vec<String> =
+                                sorts.iter().map(|&t| self.sort_names[t].clone()).collect();
+                            format!(", reached by {} only", names.join(", "))
+                        }
+                        None => String::new(),
+                    };
+                    writeln!(
+                        f,
+                        "  {} child {i}, x{j}: {src:?}{narrow}",
+                        self.con_names[s.con]
+                    )?;
                 }
             }
         }
