@@ -1,7 +1,9 @@
-//! A first-order slice of the operators of inty's Lean model
-//! (`lean/Inty/Syntax.lean`): numbers, strings and booleans, `+` on two
-//! numbers or two strings (inty's `Plus` class), `-` and `<` on numbers,
-//! `===` and `typeof` on anything, string `.length`, and the conditional.
+//! Iteration 0's model: a first-order slice of the operators of inty's
+//! Lean model (`lean/Inty/Syntax.lean`): numbers, strings and booleans, `+`
+//! on two numbers or two strings (inty's `Plus` class), `-` and `<` on
+//! numbers, `===` and `typeof` on anything, string `.length`, and a
+//! conditional on booleans. `model` is where the model grows; this stays as
+//! the first-order fixture.
 //!
 //! Unlike JavaScript, and like the model, `1 + "a"` and `1 < "a"` are stuck.
 
@@ -22,6 +24,7 @@ const EQ: usize = 7;
 const TYPEOF: usize = 8;
 const LENGTH: usize = 9;
 const IF: usize = 10;
+const VAR: usize = 11;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Val {
@@ -45,6 +48,7 @@ impl Default for Core {
                 Con::op("typeof", 1),
                 Con::op("length", 1),
                 Con::op("if", 3),
+                Con::var(),
             ],
         }
     }
@@ -61,19 +65,24 @@ impl Language for Core {
         &self.sig
     }
 
-    fn eval(&self, t: &Term) -> Outcome<Val> {
+    fn eval_in(&self, t: &Term, env: &[Val]) -> Outcome<Val> {
         use Outcome::*;
         use Val::*;
+        if t.con == VAR {
+            return match t.atom {
+                Atom::Int(i) if (i as usize) < env.len() => Value(env[i as usize].clone()),
+                _ => Outcome::stuck("unbound variable"),
+            };
+        }
         let mut kids = Vec::new();
         // `if` is the one constructor that doesn't evaluate all its children.
         let strict = if t.con == IF { 1 } else { t.kids.len() };
         for k in &t.kids[..strict] {
-            match self.eval(k) {
+            match self.eval_in(k, env) {
                 Value(v) => kids.push(v),
-                other => return other,
+                other => return other.from_inside(),
             }
         }
-        let stuck = || Stuck(format!("{} of {:?}", self.sig[t.con].name, kids));
         match (t.con, &t.atom, kids.as_slice()) {
             (NUM, Atom::Int(n), []) => Value(Num(*n)),
             (STR, Atom::Str(s), []) => Value(Str(s.clone())),
@@ -91,18 +100,17 @@ impl Language for Core {
             }
             .into())),
             (LENGTH, _, [Str(s)]) => Value(Num(s.chars().count() as i64)),
-            (IF, _, [Bool(true)]) => self.eval(&t.kids[1]),
-            (IF, _, [Bool(false)]) => self.eval(&t.kids[2]),
-            _ => stuck(),
+            (IF, _, [Bool(true)]) => self.eval_in(&t.kids[1], env).from_inside(),
+            (IF, _, [Bool(false)]) => self.eval_in(&t.kids[2], env).from_inside(),
+            _ => Outcome::stuck(format!("{} of {:?}", self.sig[t.con].name, kids)),
         }
     }
 
-    fn quote(&self, v: &Val) -> Term {
+    fn show_value(&self, v: &Val) -> String {
         match v {
-            Val::Num(n) => Term::leaf(NUM, Atom::Int(*n)),
-            Val::Str(s) => Term::leaf(STR, Atom::Str(s.clone())),
-            Val::Bool(true) => Term::leaf(TRUE, Atom::None),
-            Val::Bool(false) => Term::leaf(FALSE, Atom::None),
+            Val::Num(n) => n.to_string(),
+            Val::Str(s) => format!("{s:?}"),
+            Val::Bool(b) => b.to_string(),
         }
     }
 }

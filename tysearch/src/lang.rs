@@ -1,15 +1,20 @@
 //! What the search is given: a language as a black box.
 //!
-//! A language is a signature (its term constructors) and an evaluator that
-//! says what a closed term does: a value, stuck, an allowed fault, or out of
-//! fuel. Nothing else about the semantics is visible to the search, so the
-//! same machinery runs on a toy interpreter, on inty's `dynamics`, or on the
+//! A language is a signature (its term constructors, and which children
+//! bind variables) and an evaluator that runs a term in an environment of
+//! values: to a value, stuck, an allowed fault, or out of fuel. Nothing
+//! else about the semantics is visible to the search, so the same
+//! machinery runs on a toy interpreter, on inty's `dynamics`, or on the
 //! Lean model behind a process boundary.
+//!
+//! Variables are de Bruijn indices, as in the Lean model: `var(i)` is
+//! `env[i]`, `env[0]` the innermost binding.
 
 use std::fmt;
 use std::hash::Hash;
 
-/// A literal's payload: the number in `3`, the text in `"a"`.
+/// A literal's payload: the number in `3`, the text in `"a"`, the index
+/// of a variable.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum Atom {
     None,
@@ -17,7 +22,6 @@ pub enum Atom {
     Str(String),
 }
 
-/// A closed first-order term: a constructor, its payload and its children.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Term {
     pub con: usize,
@@ -47,13 +51,25 @@ impl Term {
     }
 }
 
+/// What kind of constructor: an ordinary one, whose typing rule the search
+/// looks for, or the variable, whose rule (look the variable up in the
+/// context) every type system with binders shares.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Op,
+    Var,
+}
+
 /// A term constructor. A literal family (`num`, `str`) has arity 0 and the
-/// payloads the enumerator tries; every other constructor has none.
+/// payloads the enumerator tries. `binds[i]` is how many variables child
+/// `i` sees bound: `var(0)` .. `var(binds[i] - 1)`.
 #[derive(Clone, Debug)]
 pub struct Con {
     pub name: &'static str,
     pub arity: usize,
+    pub binds: Vec<usize>,
     pub atoms: Vec<Atom>,
+    pub kind: Kind,
 }
 
 impl Con {
@@ -61,7 +77,20 @@ impl Con {
         Con {
             name,
             arity,
+            binds: vec![0; arity],
             atoms: Vec::new(),
+            kind: Kind::Op,
+        }
+    }
+
+    /// A constructor whose children bind `binds[i]` variables each.
+    pub fn binder(name: &'static str, binds: Vec<usize>) -> Con {
+        Con {
+            name,
+            arity: binds.len(),
+            binds,
+            atoms: Vec::new(),
+            kind: Kind::Op,
         }
     }
 
@@ -69,7 +98,19 @@ impl Con {
         Con {
             name,
             arity: 0,
+            binds: Vec::new(),
             atoms,
+            kind: Kind::Op,
+        }
+    }
+
+    pub fn var() -> Con {
+        Con {
+            name: "var",
+            arity: 0,
+            binds: Vec::new(),
+            atoms: Vec::new(),
+            kind: Kind::Var,
         }
     }
 
@@ -83,17 +124,49 @@ impl Con {
     }
 }
 
-/// What running a closed term does.
+/// What running a term does.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Outcome<V> {
     Value(V),
-    /// No rule applies: the thing a type system must rule out.
-    Stuck(String),
-    /// A failure the language documents as allowed (an index out of bounds,
-    /// an uncaught `throw`): safe for every type, as in inty's model.
+    /// No rule applies: the thing a type system must rule out. `root` says
+    /// whether the term's own constructor got stuck, on its children's
+    /// values, rather than something it ran (a child, or a called
+    /// function's body). Canonical forms are about the first kind.
+    Stuck {
+        reason: String,
+        root: bool,
+    },
+    /// A failure the language documents as allowed (an index out of
+    /// bounds, an uncaught `throw`): safe for every type, as in inty's
+    /// model.
     Fault(String),
     /// Out of fuel: says nothing either way.
     Timeout,
+}
+
+impl<V> Outcome<V> {
+    pub fn stuck(reason: impl Into<String>) -> Self {
+        Outcome::Stuck {
+            reason: reason.into(),
+            root: true,
+        }
+    }
+
+    /// The same outcome seen from an enclosing term: a stuck child is not
+    /// the enclosing term's own.
+    pub fn from_inside(self) -> Self {
+        match self {
+            Outcome::Stuck { reason, .. } => Outcome::Stuck {
+                reason,
+                root: false,
+            },
+            o => o,
+        }
+    }
+
+    pub fn is_stuck(&self) -> bool {
+        matches!(self, Outcome::Stuck { .. })
+    }
 }
 
 /// A language under study.
@@ -102,20 +175,21 @@ pub trait Language {
 
     fn name(&self) -> &str;
     fn signature(&self) -> &[Con];
-    fn eval(&self, t: &Term) -> Outcome<Self::Value>;
-    /// A term that evaluates to `v`, to plug values into contexts.
-    fn quote(&self, v: &Self::Value) -> Term;
+    /// Runs `t` with `var(i)` bound to `env[i]`.
+    fn eval_in(&self, t: &Term, env: &[Self::Value]) -> Outcome<Self::Value>;
+    fn show_value(&self, v: &Self::Value) -> String;
 
-    fn show_value(&self, v: &Self::Value) -> String {
-        self.show_term(&self.quote(v))
+    fn eval(&self, t: &Term) -> Outcome<Self::Value> {
+        self.eval_in(t, &[])
     }
 
     fn show_term(&self, t: &Term) -> String {
         let c = &self.signature()[t.con];
-        let head = match &t.atom {
-            Atom::None => c.name.to_string(),
-            Atom::Int(n) => n.to_string(),
-            Atom::Str(s) => format!("{s:?}"),
+        let head = match (&t.atom, c.kind) {
+            (Atom::Int(n), Kind::Var) => format!("x{n}"),
+            (Atom::None, _) => c.name.to_string(),
+            (Atom::Int(n), _) => n.to_string(),
+            (Atom::Str(s), _) => format!("{s:?}"),
         };
         if t.kids.is_empty() {
             head
@@ -123,5 +197,13 @@ pub trait Language {
             let kids: Vec<String> = t.kids.iter().map(|k| self.show_term(k)).collect();
             format!("{head}({})", kids.join(", "))
         }
+    }
+
+    /// The constructor named `name`.
+    fn con(&self, name: &str) -> usize {
+        self.signature()
+            .iter()
+            .position(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no constructor {name}"))
     }
 }

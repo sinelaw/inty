@@ -13,3 +13,7 @@ publish = false
 [[bin]]
 name = "tysearch"
 path = "src/main.rs"
+
+# The search runs millions of evaluations: tests are built optimised.
+[profile.test]
+opt-level = 3

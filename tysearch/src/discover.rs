@@ -1,78 +1,60 @@
-//! The pipeline: enumerate, sort, observe, search, verify.
+//! The pipeline: enumerate, find the sorts, search each constructor's
+//! rules, then check the whole system on terms it never saw.
 //!
-//! 1. Enumerate every term up to a size and run it: the corpus.
-//! 2. Partition the values into sorts by behaviour (`sorts`).
-//! 3. Observe each constructor locally: for every corpus term whose
-//!    children all evaluate to sorted values, record the children's sorts
-//!    and what the term did.
-//! 4. Search each constructor's rules on its own. Because sorts are
-//!    semantic, not syntactic, a rule's soundness is a local fact (its
-//!    compatibility lemma), so the search factors by constructor:
-//!    enumerate the schemas, refute the ones an observation contradicts,
-//!    refute the ones a sampled compatibility test breaks, and cover the
-//!    child sort tuples, weighted by how often the corpus runs each, with
-//!    as few and as general rules as possible.
-//! 5. Check the composed system end to end on a larger corpus than it was
-//!    learned from: every typed term must run to a value of its type, and
-//!    the safe terms it can't type measure what it gave up.
+//! 1. Enumerate every closed term up to a size and run it: the values
+//!    reached are the pool, and the terms are representatives of their
+//!    types.
+//! 2. Find the sorts, which of them are refined, and the universe of
+//!    ground types (`semantics`).
+//! 3. Search each constructor's rules on its own (`search`). Because types
+//!    mean sets of values, a rule's soundness is a local fact, its
+//!    compatibility lemma, so the search factors by constructor.
+//! 4. Check the composed system end to end, with the checker it induces
+//!    (`infer`): every typed term must run to a value of its type, on all
+//!    terms up to a size and on random bigger ones. The safe terms it
+//!    can't type measure what it gave up.
 
-use crate::enumerate::terms_up_to;
-use crate::lang::{Language, Outcome, Term};
-use crate::rules::{all_tuples, anti_unify, enumerate_schemas, Pat, RuleSet, Schema, Show};
-use crate::sorts::{Oracle, SortId, Sorts};
-use std::collections::{BTreeMap, HashSet};
+use crate::enumerate::{Enumerator, Rng};
+use crate::infer::Checker;
+use crate::lang::{Atom, Kind, Language, Outcome, Term};
+use crate::search::{search_con, ConSearch, Pools, SearchConfig};
+use crate::semantics::{Oracle, Semantics};
+use crate::types::{lgg, Names, Schema, Ty};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Terms up to this size are observed.
-    pub learn_size: usize,
-    /// Terms up to this size check the result.
-    pub check_size: usize,
+    /// Closed terms up to this size make the pool.
+    pub corpus_size: usize,
+    /// Open terms up to this size are the bodies under binders.
+    pub open_size: usize,
     /// Values filling the other holes of a fingerprinting context.
     pub probes: usize,
-    /// Values per sort tried in a compatibility test.
-    pub samples: usize,
+    pub samples_per_type: usize,
+    pub search: SearchConfig,
+    /// All closed terms up to this size check the result...
+    pub check_size: usize,
+    /// ...and this many random ones up to `random_size`.
+    pub random_terms: usize,
+    pub random_size: usize,
+    pub seed: u64,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            learn_size: 4,
-            check_size: 6,
+            corpus_size: 4,
+            open_size: 3,
             probes: 8,
-            samples: 6,
+            samples_per_type: 3,
+            search: SearchConfig::default(),
+            check_size: 4,
+            random_terms: 20000,
+            random_size: 9,
+            seed: 1,
         }
     }
-}
-
-/// What a term did, abstracted to sorts.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum Res {
-    Sort(SortId),
-    Stuck,
-    Fault,
-    /// A value no pool value behaves like.
-    Unsorted,
-}
-
-#[derive(Default)]
-struct Obs {
-    counts: BTreeMap<Res, usize>,
-    example: BTreeMap<Res, Term>,
-}
-
-/// One constructor's search.
-pub struct ConSearch {
-    pub con: String,
-    pub candidates: usize,
-    pub refuted_by_observation: usize,
-    pub refuted_by_compatibility: usize,
-    pub chosen: Vec<Schema>,
-    /// The most general schema refuted, and the term that refuted it.
-    pub best_refuted: Option<(Schema, String)>,
-    /// When `chosen` folds into one schema: it, and its variables' instances.
-    pub class: Option<(Schema, Vec<Vec<SortId>>)>,
 }
 
 pub struct Check {
@@ -90,10 +72,14 @@ pub struct Check {
 pub struct Discovery {
     pub language: String,
     pub config: Config,
+    pub con_names: Vec<&'static str>,
     pub sort_names: Vec<String>,
     pub sort_examples: Vec<Vec<String>>,
+    /// Per sort, the eliminator it is refined by.
+    pub refined_by: Vec<Option<String>>,
+    pub universe: usize,
     pub searches: Vec<ConSearch>,
-    pub rules: RuleSet,
+    pub rules: Vec<Schema>,
     pub check: Check,
     pub evals: usize,
 }
@@ -101,148 +87,105 @@ pub struct Discovery {
 pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
     let sig = lang.signature();
     let mut oracle = Oracle::new(lang);
+    let mut rng = Rng(cfg.seed);
 
-    // 1. The corpus, and the values it reaches.
-    let corpus = terms_up_to(sig, cfg.learn_size);
-    let mut seen = HashSet::new();
+    // 1. The corpus and its values, each with the smallest term giving it.
+    let mut en = Enumerator::new(sig, cfg.corpus_size.max(cfg.open_size));
+    en.cap = 400_000;
+    let corpus = en.up_to(cfg.corpus_size, 0);
     let mut pool = Vec::new();
+    let mut origin: HashMap<L::Value, Term> = HashMap::new();
     for t in &corpus {
         if let Outcome::Value(v) = oracle.eval(t) {
-            if seen.insert(v.clone()) {
+            if !origin.contains_key(&v) {
+                origin.insert(v.clone(), t.clone());
                 pool.push(v);
             }
         }
     }
     let probes: Vec<L::Value> = pool.iter().take(cfg.probes).cloned().collect();
+    let clock = std::time::Instant::now();
+    let trace = std::env::var_os("TYSEARCH_TRACE").is_some();
+    let note = |what: &str| {
+        if trace {
+            eprintln!("[{:>7.2}s] {what}", clock.elapsed().as_secs_f64());
+        }
+    };
+    note(&format!(
+        "corpus {} terms, pool {} values",
+        corpus.len(),
+        pool.len()
+    ));
 
-    // 2. Sorts.
-    let mut sorts = Sorts::discover(&mut oracle, &pool, &probes);
-    let nsorts = sorts.count();
+    // 2. Sorts, refinements and the universe.
+    let mut sem = Semantics::discover(&mut oracle, &pool, &probes, cfg.samples_per_type);
+    let nsorts = sem.count();
+    note(&format!("{nsorts} sorts, universe {}", sem.universe.len()));
     let sort_names: Vec<String> = (0..nsorts).map(|s| format!("T{s}")).collect();
     let sort_examples = (0..nsorts)
         .map(|s| {
-            sorts.members[s]
+            sem.members[s]
                 .iter()
                 .take(4)
                 .map(|v| lang.show_value(v))
                 .collect()
         })
         .collect();
+    let refined_by = sem
+        .templates
+        .iter()
+        .map(|t| t.as_ref().map(|t| sig[t.elim].name.to_string()))
+        .collect();
 
-    // 3. Observations.
-    let mut table: BTreeMap<(usize, Vec<SortId>), Obs> = BTreeMap::new();
-    for t in &corpus {
-        let mut kid_sorts = Vec::new();
-        for k in &t.kids {
-            match oracle.eval(k) {
-                Outcome::Value(v) => match sorts.classify(&mut oracle, &v) {
-                    Some(s) => kid_sorts.push(s),
-                    None => break,
-                },
-                _ => break,
+    // Representatives: per behaviour (the set of universe types a value
+    // is in), its smallest closed terms.
+    let mut reps: Vec<Term> = Vec::new();
+    let mut per_sig: HashMap<Vec<usize>, usize> = HashMap::new();
+    for v in &pool {
+        let n = per_sig.entry(sem.types_of(&mut oracle, v)).or_default();
+        if *n < cfg.search.reps_per_type {
+            *n += 1;
+            reps.push(origin[v].clone());
+        }
+    }
+    let mut open = HashMap::new();
+    for c in sig {
+        for &b in &c.binds {
+            if b > 0 && !open.contains_key(&b) {
+                let terms = en.up_to(cfg.open_size, b);
+                open.insert(b, rng.sample(&terms, 3000));
             }
         }
-        if kid_sorts.len() != t.kids.len() {
+    }
+    let pools = Pools { reps, open };
+    note(&format!("{} representatives", pools.reps.len()));
+
+    // 3. Search.
+    let mut searches = Vec::new();
+    let mut rules = Vec::new();
+    for (ci, c) in sig.iter().enumerate() {
+        if c.kind == Kind::Var {
             continue;
         }
-        let res = match oracle.eval(t) {
-            Outcome::Value(v) => sorts
-                .classify(&mut oracle, &v)
-                .map_or(Res::Unsorted, Res::Sort),
-            Outcome::Stuck(_) => Res::Stuck,
-            Outcome::Fault(_) => Res::Fault,
-            Outcome::Timeout => continue,
-        };
-        let obs = table.entry((t.con, kid_sorts)).or_default();
-        *obs.counts.entry(res).or_default() += 1;
-        obs.example.entry(res).or_insert_with(|| t.clone());
-    }
-
-    // 4. Search, one constructor at a time.
-    let mut searches = Vec::new();
-    let mut rules = RuleSet::default();
-    for (ci, c) in sig.iter().enumerate() {
-        let candidates = enumerate_schemas(ci, c.arity, nsorts);
-        let mut s = ConSearch {
-            con: c.name.to_string(),
-            candidates: candidates.len(),
-            refuted_by_observation: 0,
-            refuted_by_compatibility: 0,
-            chosen: Vec::new(),
-            best_refuted: None,
-            class: None,
-        };
-        let mut sound = Vec::new();
-        let mut refuted: Vec<(Schema, Term)> = Vec::new();
-        for schema in candidates {
-            if let Some(w) = contradicts(&schema, ci, &table) {
-                s.refuted_by_observation += 1;
-                refuted.push((schema, w));
-            } else if let Some(w) = incompatible(&schema, &mut oracle, &mut sorts, cfg.samples) {
-                s.refuted_by_compatibility += 1;
-                refuted.push((schema, w));
-            } else {
-                sound.push(schema);
-            }
-        }
-        s.best_refuted = refuted
-            .into_iter()
-            .max_by_key(|(r, _)| (r.generality(nsorts), std::cmp::Reverse(r.constants())))
-            .map(|(r, w)| (r, lang.show_term(&w)));
-
-        // Cover as many child sort tuples as possible: each counts once,
-        // plus how often the corpus ran the constructor on it safely. A
-        // chosen rule is sound, so whatever tuple it accepts it types right.
-        let targets: Vec<(Vec<SortId>, usize)> = all_tuples(c.arity, nsorts)
-            .into_iter()
-            .map(|ks| {
-                let seen = table.get(&(ci, ks.clone())).map_or(0, |obs| {
-                    obs.counts
-                        .iter()
-                        .filter(|(r, _)| matches!(r, Res::Sort(_)))
-                        .map(|(_, n)| n)
-                        .sum()
-                });
-                (ks, 1 + seen)
-            })
-            .collect();
-        let mut covered = vec![false; targets.len()];
-        loop {
-            let gain = |r: &Schema| -> usize {
-                targets
-                    .iter()
-                    .zip(&covered)
-                    .filter(|((ks, _), done)| !**done && r.apply(ks).is_some())
-                    .map(|((_, w), _)| w)
-                    .sum()
-            };
-            let Some(best) = sound
-                .iter()
-                .max_by_key(|r| (gain(r), std::cmp::Reverse(r.constants())))
-                .filter(|r| gain(r) > 0)
-                .cloned()
-            else {
-                break;
-            };
-            for ((ks, _), done) in targets.iter().zip(covered.iter_mut()) {
-                *done |= best.apply(ks).is_some();
-            }
-            s.chosen.push(best);
-        }
-        if s.chosen.len() > 1 {
-            s.class = Some(anti_unify(&s.chosen));
-        }
-        rules.rules.extend(s.chosen.iter().cloned());
+        let s = search_con(&mut oracle, &mut sem, &pools, ci, &cfg.search, &mut rng);
+        note(&format!(
+            "searched {} ({} candidates)",
+            c.name, s.candidates
+        ));
+        rules.extend(s.chosen.iter().cloned());
         searches.push(s);
     }
 
-    // 5. Check end to end.
-    let check = check(lang, &mut oracle, &mut sorts, &rules, cfg.check_size);
+    // 4. Check.
+    let check = check(lang, &mut oracle, &mut sem, &rules, cfg, &mut en, &mut rng);
     Discovery {
         language: lang.name().to_string(),
         config: cfg.clone(),
+        con_names: sig.iter().map(|c| c.name).collect(),
         sort_names,
         sort_examples,
+        refined_by,
+        universe: sem.universe.len(),
         searches,
         rules,
         check,
@@ -250,91 +193,34 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
     }
 }
 
-/// An observed term the schema types wrongly: it gets stuck, or runs to a
-/// value of another sort.
-fn contradicts(
-    schema: &Schema,
-    con: usize,
-    table: &BTreeMap<(usize, Vec<SortId>), Obs>,
-) -> Option<Term> {
-    for ((c, ks), obs) in table {
-        if *c != con {
-            continue;
-        }
-        let Some(p) = schema.apply(ks) else { continue };
-        for (res, t) in &obs.example {
-            if !matches!(res, Res::Fault) && *res != Res::Sort(p) {
-                return Some(t.clone());
-            }
-        }
-    }
-    None
-}
-
-/// The schema's compatibility lemma, tested: for every instance of its
-/// variables and sampled values of its argument sorts, the constructor
-/// applied to them runs to a value of the result sort (or an allowed
-/// fault, or out of fuel). Returns a term that breaks it.
-fn incompatible<L: Language>(
-    schema: &Schema,
-    oracle: &mut Oracle<L>,
-    sorts: &mut Sorts<L::Value>,
-    samples: usize,
-) -> Option<Term> {
-    let nsorts = sorts.count();
-    let con = &oracle.lang.signature()[schema.con];
-    for assign in all_tuples(schema.vars(), nsorts) {
-        let sort_of = |p: &Pat| match *p {
-            Pat::Sort(s) => s,
-            Pat::Var(v) => assign[v],
-        };
-        let expect = sort_of(&schema.res);
-        let pools: Vec<Vec<Term>> = schema
-            .args
-            .iter()
-            .map(|p| {
-                sorts
-                    .samples(sort_of(p), samples)
-                    .iter()
-                    .map(|v| oracle.lang.quote(v))
-                    .collect()
-            })
-            .collect();
-        let refs: Vec<&[Term]> = pools.iter().map(|p| p.as_slice()).collect();
-        let mut terms = Vec::new();
-        for atom in con.atoms_or_none() {
-            crate::enumerate::product(&refs, &mut Vec::new(), &mut |kids| {
-                terms.push(Term {
-                    con: schema.con,
-                    atom: atom.clone(),
-                    kids: kids.to_vec(),
-                })
-            });
-        }
-        for t in terms {
-            let ok = match oracle.eval(&t) {
-                Outcome::Value(v) => sorts.classify(oracle, &v) == Some(expect),
-                Outcome::Stuck(_) => false,
-                Outcome::Fault(_) | Outcome::Timeout => true,
-            };
-            if !ok {
-                return Some(t);
-            }
-        }
-    }
-    None
-}
-
 fn check<L: Language>(
     lang: &L,
     oracle: &mut Oracle<L>,
-    sorts: &mut Sorts<L::Value>,
-    rules: &RuleSet,
-    size: usize,
+    sem: &mut Semantics<L::Value>,
+    rules: &[Schema],
+    cfg: &Config,
+    en: &mut Enumerator,
+    rng: &mut Rng,
 ) -> Check {
-    let terms = terms_up_to(lang.signature(), size);
+    let checker = Checker::new(lang.signature(), rules);
+    let mut terms = Enumerator::new(lang.signature(), cfg.check_size);
+    terms.cap = en.cap;
+    let mut terms = terms.up_to(cfg.check_size, 0);
+    let mut seen: HashSet<Term> = terms.iter().cloned().collect();
+    for _ in 0..cfg.random_terms {
+        let t = random_term(lang.signature(), rng, cfg.random_size, 0);
+        if seen.insert(t.clone()) {
+            terms.push(t);
+        }
+    }
+    let bases: Vec<Ty> = sem
+        .universe
+        .iter()
+        .filter(|t| matches!(t, Ty::Base(_)))
+        .cloned()
+        .collect();
     let mut c = Check {
-        size,
+        size: cfg.check_size,
         terms: terms.len(),
         safe: 0,
         typed: 0,
@@ -348,9 +234,9 @@ fn check<L: Language>(
         if matches!(out, Outcome::Timeout) {
             continue;
         }
-        let safe = !matches!(out, Outcome::Stuck(_));
+        let safe = !out.is_stuck();
         c.safe += safe as usize;
-        let types = rules.type_of(t);
+        let types = checker.types(t);
         if types.is_empty() {
             if safe {
                 c.untyped_safe += 1;
@@ -361,14 +247,15 @@ fn check<L: Language>(
             continue;
         }
         c.typed += 1;
-        let good = match &out {
-            Outcome::Value(v) => {
-                let s = sorts.classify(oracle, v);
-                types.iter().all(|ty| s == Some(*ty))
-            }
-            Outcome::Fault(_) | Outcome::Timeout => true,
-            Outcome::Stuck(_) => false,
-        };
+        // A type with variables claims every instance: try each with the
+        // unrefined sorts.
+        let good = types.iter().all(|ty| {
+            let mut vs = Vec::new();
+            ty.vars(&mut vs);
+            ground_instances(ty, &vs, &bases)
+                .iter()
+                .all(|g| sem.in_e(oracle, &out, g))
+        });
         if !good {
             c.unsound += 1;
             if c.violations.len() < 5 {
@@ -384,91 +271,156 @@ fn check<L: Language>(
     c
 }
 
+fn ground_instances(t: &Ty, vars: &[u32], bases: &[Ty]) -> Vec<Ty> {
+    let mut out = vec![t.clone()];
+    for &v in vars.iter().take(3) {
+        out = out
+            .into_iter()
+            .flat_map(|t| {
+                bases.iter().map(move |b| {
+                    let mut m = HashMap::new();
+                    m.insert(v, b.clone());
+                    crate::types::subst(&t, &m)
+                })
+            })
+            .collect();
+    }
+    out.into_iter().filter(Ty::is_ground).collect()
+}
+
+/// A random closed term of at most `size` nodes.
+pub fn random_term(sig: &[crate::lang::Con], rng: &mut Rng, size: usize, depth: usize) -> Term {
+    loop {
+        let ci = rng.below(sig.len());
+        let c = &sig[ci];
+        if c.kind == Kind::Var {
+            if depth > 0 {
+                return Term::leaf(ci, Atom::Int(rng.below(depth) as i64));
+            }
+            continue;
+        }
+        if c.arity + 1 > size {
+            continue;
+        }
+        let atoms = c.atoms_or_none();
+        let atom = atoms[rng.below(atoms.len())].clone();
+        let mut budget = size - 1;
+        let mut kids = Vec::new();
+        for (i, b) in c.binds.iter().enumerate() {
+            let rest = c.arity - i - 1;
+            let mine = 1 + rng.below(budget - rest);
+            budget -= mine;
+            kids.push(random_term(sig, rng, mine, depth + b));
+        }
+        return Term {
+            con: ci,
+            atom,
+            kids,
+        };
+    }
+}
+
 impl Discovery {
-    pub fn show<'a>(&'a self, r: &'a Schema) -> Show<'a> {
-        Show {
-            schema: r,
-            con: &self.searches[r.con].con,
-            sort_names: &self.sort_names,
+    pub fn names(&self) -> Names<'_> {
+        Names {
+            sorts: &self.sort_names,
+            cons: &self.con_names,
         }
     }
 
     /// The chosen rules, printed one per line.
     pub fn rule_strings(&self) -> Vec<String> {
-        self.rules
-            .rules
+        self.rules.iter().map(|r| self.names().schema(r)).collect()
+    }
+
+    pub fn search(&self, con: &str) -> &ConSearch {
+        self.searches
             .iter()
-            .map(|r| self.show(r).to_string())
-            .collect()
+            .find(|s| self.con_names[s.con] == con)
+            .unwrap_or_else(|| panic!("no constructor {con}"))
     }
 }
 
 impl fmt::Display for Discovery {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "language: {}", self.language)?;
-        writeln!(
-            f,
-            "learned from terms of size <= {}, checked on size <= {}\n",
-            self.config.learn_size, self.config.check_size
-        )?;
+        let names = self.names();
+        writeln!(f, "language: {}\n", self.language)?;
         writeln!(
             f,
             "sorts (values that get stuck in the same immediate contexts):"
         )?;
-        for (n, ex) in self.sort_names.iter().zip(&self.sort_examples) {
-            writeln!(f, "  {n} = {{{}, ...}}", ex.join(", "))?;
+        for (i, (n, ex)) in self.sort_names.iter().zip(&self.sort_examples).enumerate() {
+            write!(f, "  {n} = {{{}, ...}}", ex.join(", "))?;
+            if let Some(e) = &self.refined_by[i] {
+                write!(f, "  refined by what `{e}` gives: {n}<args -> result>")?;
+            }
+            writeln!(f)?;
         }
+        writeln!(f, "  ({} ground types observed)", self.universe)?;
         writeln!(f, "\nrules:")?;
         for s in &self.searches {
             if s.chosen.is_empty() {
-                writeln!(f, "  {} : (no rule; not typable)", s.con)?;
+                writeln!(f, "  {} : (no rule; not typable)", self.con_names[s.con])?;
             }
             for r in &s.chosen {
-                writeln!(f, "  {}", self.show(r))?;
+                writeln!(f, "  {}", names.schema(r))?;
             }
-            if let Some((r, inst)) = &s.class {
-                let names = |t: &Vec<SortId>| {
-                    let n: Vec<&str> = t.iter().map(|&s| self.sort_names[s].as_str()).collect();
-                    if n.len() == 1 {
-                        n[0].to_string()
-                    } else {
-                        format!("({})", n.join(", "))
-                    }
-                };
-                let vars: Vec<String> = (0..r.vars())
-                    .map(|v| ((b'a' + v as u8) as char).to_string())
+            if let Some((r, cols)) = (s.chosen.len() > 1).then(|| lgg(&s.chosen)).flatten() {
+                let vs = r.vars();
+                let fresh: Vec<String> = (0..cols.len())
+                    .map(|i| crate::types::var_name(vs[vs.len() - cols.len() + i]))
                     .collect();
-                let inst: Vec<String> = inst.iter().map(names).collect();
-                let vars = if vars.len() == 1 {
-                    vars[0].clone()
+                let rows: Vec<String> = (0..s.chosen.len())
+                    .map(|j| {
+                        let row: Vec<String> = cols.iter().map(|c| names.ty(&c[j])).collect();
+                        if row.len() == 1 {
+                            row[0].clone()
+                        } else {
+                            format!("({})", row.join(", "))
+                        }
+                    })
+                    .collect();
+                let lhs = if fresh.len() == 1 {
+                    fresh[0].clone()
                 } else {
-                    format!("({})", vars.join(", "))
+                    format!("({})", fresh.join(", "))
                 };
                 writeln!(
                     f,
-                    "    = class: {}  where {vars} in {{{}}}",
-                    self.show(r),
-                    inst.join(", ")
+                    "    = class: {}  where {lhs} in {{{}}}",
+                    names.schema(&r),
+                    rows.join(", ")
                 )?;
+            }
+        }
+        writeln!(
+            f,
+            "\nbinder flow (where each bound variable's value comes from):"
+        )?;
+        for s in &self.searches {
+            for (i, srcs) in s.sources.iter().enumerate() {
+                for (j, src) in srcs.iter().enumerate() {
+                    writeln!(f, "  {} child {i}, x{j}: {src:?}", self.con_names[s.con])?;
+                }
             }
         }
         writeln!(f, "\nsearch:")?;
         for s in &self.searches {
             write!(
                 f,
-                "  {:<8} {:>5} schemas, {:>5} refuted by observation, {:>5} by compatibility testing",
-                s.con, s.candidates, s.refuted_by_observation, s.refuted_by_compatibility
+                "  {:<9} {:>5} observations, {:>5} candidates, {:>5} refuted, {:>2} falsified",
+                self.con_names[s.con], s.observations, s.candidates, s.refuted, s.falsified
             )?;
             if let Some((r, w)) = &s.best_refuted {
-                write!(f, "; e.g. {} fails on {w}", self.show(r))?;
+                write!(f, "; e.g. {} fails on {w}", names.schema(r))?;
             }
             writeln!(f)?;
         }
         let c = &self.check;
         writeln!(
             f,
-            "\nend-to-end check on all {} terms of size <= {}:",
-            c.terms, c.size
+            "\nend-to-end check on {} terms (all of size <= {}, and random ones up to {}):",
+            c.terms, c.size, self.config.random_size
         )?;
         writeln!(f, "  safe terms:           {}", c.safe)?;
         writeln!(f, "  typed terms:          {}", c.typed)?;

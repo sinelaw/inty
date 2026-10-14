@@ -242,12 +242,15 @@ tysearch borrows from each:
 
 | Stage | Prototype module | What it does |
 |---|---|---|
-| 1 | `enumerate.rs` | Enumerates every term up to size *n*. An `Oracle` caches outcomes, since subterms are evaluated many times |
-| 2 | `sorts.rs` | Fingerprints values against one-hole contexts filled with probes, and partitions them into sorts. `classify` gives the sort of any value, including ones that weren't in the pool |
-| 3 | `discover.rs` | For each constructor, builds a table: child sorts → outcomes (a sort, `Stuck`, `Fault`), with the smallest witness term for each |
-| 4 | `rules.rs`, `discover.rs` | Enumerates schemas up to renaming. Refutes them by observation (T0), then by compatibility sampling (T1). Selects a weighted cover |
-| 5 | `rules.rs` | Anti-unifies overloaded rules into a class |
-| 6 | `discover.rs` | Checks end to end on a larger corpus than learning used, and reports |
+| 1 | `enumerate.rs` | Enumerates every term up to size *n* and scope depth |
+| 2 | `semantics.rs` | Fingerprints values against one-hole contexts (stuck *at the root*), and partitions them into sorts. Refines a sort whose eliminator's result depends on the member (§8.1). Builds the universe of ground types, and tests membership |
+| 3 | `search.rs` | Per constructor: binder flow, then nodes built from representatives and open bodies, and observations under typings of the bound variables |
+| 4 | `search.rs`, `types.rs` | Proposes rules: simple ones top down, lgg of instances bottom up, lgg climbing. Refutes them by observation (T0), attacks the survivors (`falsify`, T1). Selects a weighted cover |
+| 5 | `types.rs` | Anti-unifies overloaded rules into a class |
+| 6 | `infer.rs`, `discover.rs` | Checks end to end with the induced checker, on more terms than learning used, and reports |
+
+[ITERATIONS.md](ITERATIONS.md) records how each stage came to be, from the
+failures each new feature of the model caused.
 
 ---
 
@@ -481,7 +484,7 @@ test that pins it.
 | Milestone | Scope | Exit criterion |
 |---|---|---|
 | **M0** (done) | L0, a black-box `Language` trait, fingerprint sorts, T0 and T1, a weighted cover, anti-unified classes, an end-to-end check | TAPL ch. 8 exactly. `Plus` on `core`. 0 typed terms stuck up to size 6. Correct even when learning from size-2 terms |
-| M1 | L1: binders, closing substitutions, `→` with a bounded logical relation, unification checker, Popper pruning | STLC from an untyped λ-calculus with `Bool`/`Nat` |
+| M1 (done) | L1: binders, closing substitutions, `→` with a bounded logical relation, unification checker | The model's functions, calls and `const` (ITERATIONS.md, iteration 1) |
 | M2 | L2: generalisation switches; T2 typed generation with shrinking | HM `let`. With `ref`, the value restriction as the frontier's knee |
 | M3 | L3: rows and field labels; containers | Records with row polymorphism; `HasProp` |
 | M4 | inty adapters (model wire format, `dynamics`); the corpus; comparison report | A diff of the discovered system against `HasType` on the model's fragment, with every disagreement explained or filed |
@@ -516,6 +519,9 @@ test that pins it.
 ---
 
 ## 12. The prototype today
+
+*This section shows iteration 0's output. For the current state (functions,
+calls, `const`, binder flow and refined sorts), see ITERATIONS.md.*
 
 ```sh
 cd tysearch

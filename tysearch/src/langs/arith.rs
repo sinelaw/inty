@@ -15,6 +15,7 @@ const SUCC: usize = 3;
 const PRED: usize = 4;
 const ISZERO: usize = 5;
 const IF: usize = 6;
+const VAR: usize = 7;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Val {
@@ -33,6 +34,7 @@ impl Default for Arith {
                 Con::op("pred", 1),
                 Con::op("iszero", 1),
                 Con::op("if", 3),
+                Con::var(),
             ],
         }
     }
@@ -51,9 +53,9 @@ impl Language for Arith {
 
     /// Big-step, after TAPL's small-step rules: `pred zero` is `zero`, and
     /// a numeral in a boolean position (or the converse) is stuck.
-    fn eval(&self, t: &Term) -> Outcome<Val> {
+    fn eval_in(&self, t: &Term, env: &[Val]) -> Outcome<Val> {
         use Outcome::*;
-        let ev = |i: usize| self.eval(&t.kids[i]);
+        let ev = |i: usize| self.eval_in(&t.kids[i], env).from_inside();
         match t.con {
             TRUE => Value(Val::Bool(true)),
             FALSE => Value(Val::Bool(false)),
@@ -64,24 +66,24 @@ impl Language for Arith {
                     PRED => Val::Nat(n.saturating_sub(1)),
                     _ => Val::Bool(n == 0),
                 }),
-                Value(Val::Bool(_)) => Stuck(format!("{} of a boolean", self.sig[t.con].name)),
+                Value(Val::Bool(_)) => {
+                    Outcome::stuck(format!("{} of a boolean", self.sig[t.con].name))
+                }
                 other => other,
             },
             IF => match ev(0) {
                 Value(Val::Bool(true)) => ev(1),
                 Value(Val::Bool(false)) => ev(2),
-                Value(Val::Nat(_)) => Stuck("if on a numeral".into()),
+                Value(Val::Nat(_)) => Outcome::stuck("if on a numeral"),
                 other => other,
             },
+            VAR => match t.atom {
+                crate::lang::Atom::Int(i) if (i as usize) < env.len() => {
+                    Value(env[i as usize].clone())
+                }
+                _ => Outcome::stuck("unbound variable"),
+            },
             _ => unreachable!(),
-        }
-    }
-
-    fn quote(&self, v: &Val) -> Term {
-        match *v {
-            Val::Bool(true) => Term::new(TRUE, vec![]),
-            Val::Bool(false) => Term::new(FALSE, vec![]),
-            Val::Nat(n) => (0..n).fold(Term::new(ZERO, vec![]), |t, _| Term::new(SUCC, vec![t])),
         }
     }
 
