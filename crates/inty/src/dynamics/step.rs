@@ -1184,7 +1184,11 @@ fn cmp_op(
             Some(o) => Ok(Value::Boolean(pred(o))),
             None => Ok(Value::Boolean(false)),
         },
-        (Value::String(a), Value::String(b)) => Ok(Value::Boolean(pred(a.cmp(b)))),
+        // By UTF-16 code units, as JavaScript compares strings (not by
+        // code points: U+FF61 is after U+1F600's first unit).
+        (Value::String(a), Value::String(b)) => {
+            Ok(Value::Boolean(pred(a.encode_utf16().cmp(b.encode_utf16()))))
+        }
         _ => Err(Stuck::TypeMismatch {
             op: name,
             expected: "number or string",

@@ -162,12 +162,28 @@ const PLUS_ARMS: &[TypingArm] = &[
     },
 ];
 
-const COMPARE_ARMS: &[TypingArm] = &[TypingArm {
-    inputs: &[SameAsArg(1), SameAsArg(0)],
-    output: Concrete(Boolean),
-    class: None,
-    notes: "operands are unified, no per-type arm enumerated",
-}];
+/// `<`, `<=`, `>`, `>=`: two numbers or two strings, the types `+` takes
+/// (`Plus`), with no coercion between types.
+const COMPARE_ARMS: &[TypingArm] = &[
+    TypingArm {
+        inputs: &[Concrete(Number), Concrete(Number)],
+        output: Concrete(Boolean),
+        class: None,
+        notes: "",
+    },
+    TypingArm {
+        inputs: &[Concrete(String), Concrete(String)],
+        output: Concrete(Boolean),
+        class: None,
+        notes: "",
+    },
+    TypingArm {
+        inputs: &[AnyOfClass(ClassName::Plus), SameAsArg(0)],
+        output: Concrete(Boolean),
+        class: Some(ClassName::Plus),
+        notes: "",
+    },
+];
 
 const STRICT_EQ_ARMS: &[TypingArm] = &[TypingArm {
     inputs: &[Wildcard, SameAsArg(0)],

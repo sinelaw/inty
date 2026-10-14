@@ -643,7 +643,13 @@ def verdict (clock : Nat) (line : String) : String :=
   "type boolean;value bool true"
 #guard verdict 100 "(eq (str s:a) (num 1 0))" == "type boolean;value bool false"
 #guard verdict 100 "(ne (null) (undef))" == "type boolean;value bool true"
-#guard verdict 100 "(lt (str s:a) (str s:b))" == "reject;stuck typeMismatch"
+-- The comparisons: two numbers or two strings, by UTF-16 code units; no
+-- coercion between types.
+#guard verdict 100 "(lt (str s:a) (str s:b))" == "type boolean;value bool true"
+#guard verdict 100 "(ge (str s:ab) (str s:a))" == "type boolean;value bool true"
+#guard verdict 100 "(lt (str s:a) (num 1 0))" == "reject;stuck typeMismatch"
+#guard verdict 100 "(lt (bool true) (bool false))" == "reject;stuck typeMismatch"
+#guard unitsLt "😀".utf16 "｡".utf16 && !unitsLt "｡".utf16 "😀".utf16
 
 #guard verdict 100 "(letmut (num 2 0) (seq (while (var 0) (assign 0 (minus (var 0) (num 1 0)))) (var 0)))"
   == s!"type number;value num {(0 : Float).toBits}"

@@ -47,24 +47,23 @@ inductive BinOp where
   /-- `%`: `Number` only, the remainder of a quotient truncated, with the
   dividend's sign (JavaScript's, C's `fmod`). -/
   | mod
-  /-- `<`, `<=`, `>`, `>=`: of `Number`s (inty also compares two values of
-  any one type, by JavaScript's coercions, which the model doesn't
-  have). -/
+  /-- `<`, `<=`, `>`, `>=`: of two `Number`s or two `String`s, the types
+  `+` takes. JavaScript compares any two values after coercing them;
+  inty and the model take no coercion. -/
   | lt | le | gt | ge
   /-- `===` (`negated = false`) or `!==`: of any two values. -/
   | strictEq (negated : Bool)
   deriving DecidableEq, Repr
 
-/-- The operators of `Number`s: `-`, `*`, `/`, `%` and the comparisons. -/
+/-- The operators of `Number`s only: `-`, `*`, `/`, `%`. -/
 def BinOp.numeric : BinOp → Bool
-  | .minus | .times | .div | .mod | .lt | .le | .gt | .ge => true
-  | .plus | .strictEq _ => false
+  | .minus | .times | .div | .mod => true
+  | .plus | .lt | .le | .gt | .ge | .strictEq _ => false
 
-/-- What a numeric operator gives: a comparison a `boolean`, the others a
-`number`. -/
-def BinOp.resTy : BinOp → Ty
-  | .lt | .le | .gt | .ge | .strictEq _ => .boolean
-  | _ => .number
+/-- The comparisons: `<`, `<=`, `>`, `>=`. -/
+def BinOp.compare : BinOp → Bool
+  | .lt | .le | .gt | .ge => true
+  | .plus | .minus | .times | .div | .mod | .strictEq _ => false
 
 /-- How an object literal's field is written. -/
 inductive FieldKind where

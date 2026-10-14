@@ -170,22 +170,17 @@ impl InferState {
                 self.infer_add(span, &left_widened, &right_widened)
             }
 
-            // Comparison (return boolean). The two operands need to
-            // sit in a common type so the comparison is well-defined.
-            // Widen both to their base first so `1 < 2` doesn't try
-            // to unify `Lit(1) ~ Lit(2)`, then check that one
-            // subsumes into the other (either direction is fine —
-            // `String < "a"` is meaningful in both orders).
-            //
+            // Comparison (return boolean): of two numbers or of two
+            // strings, as `+` takes them (`Plus`), and nothing else.
+            // JavaScript compares any two values after coercing them
+            // (`"10" < 9`, `true < 2`, `[2] < [10]`); inty is stricter
+            // and takes no coercion. Both are widened to their base
+            // first, so `1 < 2` doesn't unify `Lit(1) ~ Lit(2)`.
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                 let left_widened = self.widen(span, &left_type);
                 let right_widened = self.widen(span, &right_type);
-                if self.is_numeric(&left_widened) || self.is_numeric(&right_widened) {
-                    self.require_num(span, &left_widened)?;
-                    self.require_num(span, &right_widened)?;
-                } else {
-                    self.subsume_either(span, &left_widened, &right_widened)?;
-                }
+                self.unify(span, &left_widened, &right_widened)?;
+                self.resolve_plus(&left_widened, span)?;
                 Ok(Type::Boolean)
             }
 

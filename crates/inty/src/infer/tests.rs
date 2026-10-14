@@ -5599,3 +5599,51 @@ fn a_body_that_never_completes_returns_any_type() {
         assert!(infer_program_via_program(src).is_ok(), "{src}");
     }
 }
+
+/// Whether `source` type-checks: inferred, with no error recorded, and its
+/// constraints resolved.
+fn typechecks(source: &str) -> bool {
+    match infer_program_with_state(source) {
+        Ok((_, _, mut state)) => {
+            state.take_errors().is_empty() && state.resolve_constraints().is_ok()
+        }
+        Err(_) => false,
+    }
+}
+
+/// A comparison takes two numbers or two strings, and no coercion between
+/// types: stricter than JavaScript, which would compare `"10" < 9` as
+/// numbers, `true < 2` with `true` as `1`, and two arrays as strings.
+#[test]
+fn comparisons_take_two_numbers_or_two_strings() {
+    for ok in [
+        "1 < 2;",
+        "\"a\" <= \"b\";",
+        "const s = \"a\"; s > \"b\";",
+        "function lt(a, b) { return a < b; } lt(1, 2); lt(\"a\", \"b\");",
+    ] {
+        assert!(typechecks(ok), "should type-check: {ok}");
+    }
+    for bad in [
+        "\"10\" < 9;",
+        "1 >= \"a\";",
+        "true < false;",
+        "({}) < ({});",
+        "[1] < [2];",
+        "null < 1;",
+        "function lt(a, b) { return a < b; } lt(true, false);",
+        "function lt(a, b) { return a < b; } lt(1, \"a\");",
+    ] {
+        assert!(!typechecks(bad), "should be rejected: {bad}");
+    }
+}
+
+/// `function lt(a, b) { return a < b; }` is generic in a number-or-string
+/// type, `Plus a`, as `+` is.
+#[test]
+fn comparison_function_has_plus_constraint() {
+    let (_, env, _) = infer_program_with_state("function lt(a, b) { return a < b; }").unwrap();
+    let scheme = env.lookup("lt").unwrap();
+    assert_eq!(scheme.body.preds.len(), 1, "{scheme:?}");
+    assert_eq!(scheme.body.preds[0].class, crate::types::ClassName::Plus);
+}

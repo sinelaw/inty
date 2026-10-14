@@ -311,6 +311,7 @@ theorem BinOpTyS.toW {C : List Pred} (h : BinOpTy C op τ₁ τ₂ τ) :
   cases h with
   | plus hc => exact .plus (by simpa [Pred.toW] using hc.toW)
   | num h => exact .num h
+  | cmp h hc => exact .cmp h (by simpa [Pred.toW] using hc.toW)
   | strictEq => exact .strictEq
 
 theorem MemberSlotS.toW {C : List Pred} (h : MemberSlot C T k e τ s) :
@@ -350,6 +351,7 @@ theorem BinOpTyS.narrowOf {S : Sys} (hS : S.NarrowLike) {C : List Pred} {op : Bi
   cases h with
   | plus hp => exact .plus (hp.narrowOf hS)
   | num h => exact .num h
+  | cmp h hp => exact .cmp h (hp.narrowOf hS)
   | strictEq => exact .strictEq
 
 theorem MemberSlotS.narrowOf {S : Sys} (hS : S.NarrowLike) {C : List Pred} {T : Ty} {k : ClassKind}
