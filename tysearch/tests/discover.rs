@@ -71,8 +71,8 @@ fn core_finds_the_plus_class() {
     assert_eq!(d.check.unsound, 0);
 }
 
-/// Iterations 1, 3 to 6: functions, calls, `let`, assignment,
-/// `e₁; e₂`, objects and arrays. The rules are the Lean model's (`lean/Inty/Typing.lean`),
+/// Iterations 1, 3 to 7: functions, calls, `let`, assignment,
+/// `e₁; e₂`, objects, arrays and statements. The rules are the Lean model's (`lean/Inty/Typing.lean`),
 /// found from its semantics alone: T3 and T4 are the functions of one and
 /// two parameters, refined by what a call gives (`T3<a -> b>` is
 /// `(a) => b`). Where they differ, the semantics allows more than inty's
@@ -155,6 +155,13 @@ fn model_finds_functions_state_and_the_value_restriction() {
             "idx : (T8{.x: -> a, .y: -> b}, T0) -> T2",
             "idx : (T8{.x: -> a, .y: -> b}, T1) -> T2",
             "idx= : (T7<a -> b>, a, b) -> b",
+            // Statements (iteration 7): what doesn't complete is of every
+            // type, and a `catch` binds `unknown`, as in the Lean model.
+            "throw : (a) -> b",
+            "try : (a, [x0: unknown] a) -> a",
+            "while : (a, b) -> T2",
+            "break : a",
+            "continue : a",
         ])
     );
     assert_eq!(d.check.unsound, 0, "{:?}", d.check.violations);

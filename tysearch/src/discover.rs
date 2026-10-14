@@ -186,7 +186,19 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
             }
         }
     }
-    let pools = Pools { reps, open };
+    let mut faults = Vec::new();
+    let mut reasons = std::collections::HashSet::new();
+    for t in &corpus {
+        if faults.len() >= cfg.search.reps_per_type * 4 {
+            break;
+        }
+        if let Outcome::Fault(r) = oracle.eval(t) {
+            if reasons.insert(r) {
+                faults.push(t.clone());
+            }
+        }
+    }
+    let pools = Pools { reps, open, faults };
     note(&format!("{} representatives", pools.reps.len()));
 
     // 3. Search, without subtyping and, if the fingerprints order any
@@ -258,7 +270,7 @@ pub fn discover<L: Language>(lang: &L, cfg: &Config) -> Discovery {
                     fn has(t: &Ty, w: &[bool]) -> bool {
                         match t {
                             Ty::Base(s) => w[*s],
-                            Ty::Var(_) => false,
+                            Ty::Var(_) | Ty::Top => false,
                             Ty::Ref(_, ps) => ps.iter().any(|p| has(p, w)),
                         }
                     }
@@ -587,11 +599,22 @@ fn poly_member<L: Language>(
         .collect();
     let mut vars = Vec::new();
     ty.vars(&mut vars);
-    // The uses: a rule without binders, and a child of it to put `v` in.
+    // The uses: a rule without binders, and a child of it to put `v` in,
+    // where the result depends on its type (not `typeof(v)`, `throw(v)`).
+    let tells = |r: &Schema, p: usize| {
+        let mut res = Vec::new();
+        r.res.vars(&mut res);
+        r.res_bound()
+            && match &r.kids[p].ty {
+                Ty::Var(x) => res.contains(x),
+                _ => true,
+            }
+    };
     let uses: Vec<(&Schema, usize)> = rules
         .iter()
         .filter(|r| r.kids.iter().all(|k| k.bound.is_empty()))
         .flat_map(|r| (0..r.kids.len()).map(move |p| (r, p)))
+        .filter(|&(r, p)| tells(r, p))
         .collect();
     let mut tried = 0;
     for _ in 0..rounds * 8 {
@@ -774,7 +797,7 @@ fn generalise<L: Language>(
             fn all(t: &Ty, out: &mut Vec<u32>) {
                 match t {
                     Ty::Var(v) => out.push(*v),
-                    Ty::Base(_) => {}
+                    Ty::Base(_) | Ty::Top => {}
                     Ty::Ref(_, ps) => ps.iter().for_each(|p| all(p, out)),
                 }
             }

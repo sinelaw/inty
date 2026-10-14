@@ -290,11 +290,49 @@ No typed term gets stuck.
 Also new: `TYSEARCH_ONLY='app2|[a,b]'` searches just those constructors.
 Constructor names have commas in them, hence the `|`.
 
+## 7. Statements: `throw`, `try`, loops
+
+**Model.** As the Lean model's `throw_`, `tryCatch`, `while_`, `break_` and
+`continue_`:
+
+- `throw e` throws any value.
+- `try body catch handler` runs `handler` with the thrown value as `var 0`.
+- `while (c) body` reads `c` by truthiness, and gives `undefined`. Each
+  iteration takes a tick of fuel.
+- `break` and `continue` reach their loop.
+
+Uncaught, each is allowed, as a fault is: the Lean model's
+`Result.Abrupt`. Abrupt completions travel as faults, and `throw`'s
+carries its value.
+
+**Found.** The Lean model's rules exactly:
+
+```
+throw : (a) -> b
+try   : (a, [x0: unknown] a) -> a
+while : (a, b) -> T2
+break : a
+continue : a
+```
+
+`unknown` is new: the type of every value, about which nothing can be
+assumed. It is inty's rigid `unknown`. No typed term gets stuck.
+
+**What broke, and what fixed it:**
+
+| Problem | Fix |
+|---|---|
+| `throw`, `break` and `continue` had no rule: they never give a value, so no observation supports a result type | A construct that never completes normally, only abruptly, gets `c : (a, …) -> z`, its result free, if the attacks don't break it |
+| `try : (a, [x0: a] b) -> a`: the binder probe saw the node's value equal the body's, and took `x0` to be the body's value. The handler never ran | A probe counts only if the child ran: the node must change when another term replaces it |
+| `try`'s bodies never threw: closed children came from values only | The pools get the smallest closed term for each kind of fault: one per thrown value, `break`, out of bounds. Observations and attacks draw from them, since a fault is in every type |
+| No type for what a `catch` binds: any type variable is refuted, rightly | `Top` (`unknown`): in the universe, but never a child's own type. A binder of no known source is observed at `Top` |
+| Junk `try` rules (`[x0: T4<b, c -> d>] a`, a handler that's an object) survived the attacks. Open terms are of size 3 at most, so no handler calls a two-argument `x0`. The handlers that fit were those that only fault, and those refute nothing | Attacks try **uses** of each bound variable first: a context its sort is accepted in and another sort is not (`app2(x0, 0, 1)`, `neg(x0)`). Then the children of nodes the rule covers. Children that only fault are skipped |
+| The value restriction's hand-built counterexample stopped being refuted. `throw`, `while` and the like were among the uses that test a value at many instances, and they tell nothing about its type, so they crowded out the uses that do | A use must have a result that depends on the value's type: its type is not a bare variable, or that variable is in the result |
+
 ## Next
 
-- **Statements:** `return`, `throw`, `try` and loops, with faults and
-  abrupt completions. `return` needs a context type (the enclosing
-  function's result), which the rule format doesn't have yet.
+- **`return`:** it needs a context type (the enclosing function's
+  result), which the rule format doesn't have yet.
 - **Keys:** a string literal `"x"`, so that `idx` on objects by string
   has no one result type. inty gives literal string types for keys.
 - **Sums:** `undefined`/`null` unions with `unwrap`, and tag tests

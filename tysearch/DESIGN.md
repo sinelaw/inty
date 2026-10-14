@@ -523,7 +523,7 @@ test that pins it.
 *This section shows iteration 0's output. For the current state, see
 ITERATIONS.md:*
 
-- *functions, state, objects and arrays in the model of inty's;*
+- *functions, state, objects, arrays and statements in the model of inty's;*
 - *the language suite (unityped, products, subtyping, coercion, ML
   references);*
 - *the value restriction.*

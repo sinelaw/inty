@@ -126,6 +126,9 @@ pub struct Semantics<V> {
     /// Whether a sort's type includes its subsorts' values.
     pub subtyping: bool,
     pub forgets: usize,
+    /// Per sort, `(constructor, hole)`: where its values are used, as an
+    /// accepting context some other sort gets stuck in.
+    pub uses: Vec<Vec<(usize, usize)>>,
 }
 
 /// Builds `con` with child `hole` the variable `var(0)` and the others
@@ -190,6 +193,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
             le: Vec::new(),
             subtyping: false,
             forgets: 0,
+            uses: Vec::new(),
         };
         for v in pool {
             let print = sem.fingerprint(oracle, v);
@@ -205,11 +209,31 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         for (p, &id) in &sem.by_print {
             prints[id] = p.clone();
         }
+        // Uses: the immediate contexts a sort is accepted in and some other
+        // sort is not.
+        sem.uses = (0..sem.members.len())
+            .map(|s| {
+                let mut out: Vec<(usize, usize)> = Vec::new();
+                for (i, ctx) in sem.contexts.iter().enumerate() {
+                    if !prints[s][i]
+                        && prints.iter().any(|p| p[i])
+                        && !out.contains(&(ctx.con, ctx.hole))
+                    {
+                        out.push((ctx.con, ctx.hole));
+                    }
+                }
+                out
+            })
+            .collect();
         sem.aliases = vec![Vec::new(); sem.members.len()];
         sem.templates = (0..sem.members.len())
             .map(|s| sem.refinement(oracle, s))
             .collect();
         sem.universe = sem.build_universe(oracle);
+        // And the type of every value, for what is bound to a value of no
+        // known source (what a `catch` catches). It is no value's own type
+        // (`types_of`): a child is typed by what can be done with it.
+        sem.universe.push(Ty::Top);
         // The order: `s <: t` when `s` gets stuck in no context `t` is
         // accepted in. Refined sorts are ordered only by equality.
         let n = sem.count();
@@ -447,6 +471,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         }
         let b = match t {
             Ty::Var(_) => false,
+            Ty::Top => true,
             Ty::Base(s) => match self.sort(oracle, v) {
                 Some(v) if self.subtyping => self.le[v][*s],
                 v => v == Some(*s),
@@ -529,6 +554,12 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         let n = self.samples_per_type;
         let out = match t {
             Ty::Var(_) => Vec::new(),
+            // The smallest member of each sort.
+            Ty::Top => self
+                .members
+                .iter()
+                .filter_map(|m| m.first().cloned())
+                .collect(),
             Ty::Base(s) => {
                 // The smallest members first (0 and 1 are the indices an
                 // array of two has), then one from the far end.
@@ -631,7 +662,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         out
     }
 
-    /// The ground types in the universe that `v` is in.
+    /// The ground types in the universe that `v` is in, but `Top`.
     pub fn types_of<L: Language<Value = V>>(
         &mut self,
         oracle: &mut Oracle<L>,
@@ -640,7 +671,7 @@ impl<V: Clone + Eq + std::hash::Hash + std::fmt::Debug> Semantics<V> {
         (0..self.universe.len())
             .filter(|&i| {
                 let t = self.universe[i].clone();
-                self.holds(oracle, v, &t)
+                t != Ty::Top && self.holds(oracle, v, &t)
             })
             .collect()
     }

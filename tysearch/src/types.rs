@@ -16,6 +16,9 @@ pub enum Ty {
     /// A refined sort: its eliminator's other arguments' types, then the
     /// result's.
     Ref(usize, Vec<Ty>),
+    /// Every value: inty's `unknown`, the type of what a `catch` binds.
+    /// Nothing can be done with one but what can be done with anything.
+    Top,
 }
 
 impl Ty {
@@ -26,7 +29,7 @@ impl Ty {
                     out.push(*v)
                 }
             }
-            Ty::Base(_) => {}
+            Ty::Base(_) | Ty::Top => {}
             Ty::Ref(_, ps) => ps.iter().for_each(|p| p.vars(out)),
         }
     }
@@ -34,7 +37,7 @@ impl Ty {
     pub fn is_ground(&self) -> bool {
         match self {
             Ty::Var(_) => false,
-            Ty::Base(_) => true,
+            Ty::Base(_) | Ty::Top => true,
             Ty::Ref(_, ps) => ps.iter().all(Ty::is_ground),
         }
     }
@@ -43,7 +46,7 @@ impl Ty {
     pub fn constants(&self) -> usize {
         match self {
             Ty::Var(_) => 0,
-            Ty::Base(_) => 1,
+            Ty::Base(_) | Ty::Top => 1,
             Ty::Ref(_, ps) => 1 + ps.iter().map(Ty::constants).sum::<usize>(),
         }
     }
@@ -59,6 +62,7 @@ impl Ty {
         match self {
             Ty::Var(v) => f(*v),
             Ty::Base(s) => Ty::Base(*s),
+            Ty::Top => Ty::Top,
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(|p| p.map_vars(f)).collect()),
         }
     }
@@ -154,6 +158,7 @@ pub fn match_ground(p: &Ty, g: &Ty, theta: &mut HashMap<u32, Ty>) -> bool {
             }
         },
         (Ty::Base(a), Ty::Base(b)) => a == b,
+        (Ty::Top, Ty::Top) => true,
         (Ty::Ref(a, ps), Ty::Ref(b, gs)) => {
             a == b
                 && ps.len() == gs.len()
@@ -192,7 +197,7 @@ impl Unifier {
                 Some(b) => self.resolve(b),
                 None => t.clone(),
             },
-            Ty::Base(_) => t.clone(),
+            Ty::Base(_) | Ty::Top => t.clone(),
             Ty::Ref(s, ps) => Ty::Ref(*s, ps.iter().map(|p| self.resolve(p)).collect()),
         }
     }
@@ -200,7 +205,7 @@ impl Unifier {
     fn occurs(&self, v: u32, t: &Ty) -> bool {
         match self.resolve(t) {
             Ty::Var(w) => v == w,
-            Ty::Base(_) => false,
+            Ty::Base(_) | Ty::Top => false,
             Ty::Ref(_, ps) => ps.iter().any(|p| self.occurs(v, p)),
         }
     }
@@ -217,6 +222,7 @@ impl Unifier {
                 true
             }
             (Ty::Base(x), Ty::Base(y)) => x == y,
+            (Ty::Top, Ty::Top) => true,
             (Ty::Ref(x, ps), Ty::Ref(y, qs)) => {
                 x == y && ps.len() == qs.len() && ps.iter().zip(qs).all(|(p, q)| self.unify(p, q))
             }
@@ -345,6 +351,7 @@ impl Names<'_> {
         match t {
             Ty::Var(v) => var_name(*v),
             Ty::Base(s) => self.sorts[*s].clone(),
+            Ty::Top => "unknown".into(),
             Ty::Ref(s, ps) => {
                 let shape = self.shapes.get(*s).map_or(&[][..], |v| v.as_slice());
                 let slice = |ps: &[Ty]| {

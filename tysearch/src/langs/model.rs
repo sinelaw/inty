@@ -12,7 +12,8 @@
 //! them: `let`, assignment `x = e`, which closures see, and `e₁; e₂`
 //! (iteration 3); and objects with properties `x` and `y`, read with `.x`,
 //! stored with `.x =` (iteration 5); and arrays, indexed as the model's
-//! `Value.index` and `Value.setIndex` do (iteration 6).
+//! `Value.index` and `Value.setIndex` do (iteration 6); and `throw`,
+//! `try`/`catch`, `while`, `break` and `continue` (iteration 7).
 //!
 //! Variables are de Bruijn indices. In a function's body `var(i)` is
 //! parameter `i` for `i` below the arity, and `var(arity)` is the function
@@ -63,6 +64,26 @@ const ARR1: usize = 30;
 const ARR2: usize = 31;
 const IDX: usize = 32;
 const SET_IDX: usize = 33;
+const THROW: usize = 34;
+const TRY: usize = 35;
+const WHILE: usize = 36;
+const BREAK: usize = 37;
+const CONTINUE: usize = 38;
+
+/// A run's state besides the store: the fuel left, and the value a `throw`
+/// is carrying to its `try`.
+struct Run {
+    fuel: Cell<usize>,
+    thrown: RefCell<Option<Val>>,
+}
+
+/// Abrupt completions travel as faults, which every construct but their
+/// catcher passes on, and which are allowed at the top, as in the Lean
+/// model's `Result.Abrupt`: an uncaught `throw`, or a `break` or `continue`
+/// outside a loop.
+const THROWN: &str = "uncaughtThrow";
+const BROKE: &str = "break";
+const CONTINUED: &str = "continue";
 
 /// An array's cell: its elements. Equal only if the same cell.
 #[derive(Clone)]
@@ -302,6 +323,11 @@ impl Default for Model {
                 Con::op("[a,b]", 2),
                 Con::op("idx", 2),
                 Con::op("idx=", 3),
+                Con::op("throw", 1),
+                Con::binder("try", vec![0, 1]),
+                Con::op("while", 2),
+                Con::op("break", 0),
+                Con::op("continue", 0),
             ],
             fuel: 64,
         }
@@ -309,9 +335,9 @@ impl Default for Model {
 }
 
 impl Model {
-    fn ev(&self, t: &Term, env: &[Slot], fuel: &Cell<usize>) -> Outcome<Val> {
+    fn ev(&self, t: &Term, env: &[Slot], run: &Run) -> Outcome<Val> {
         use Outcome::Value;
-        let kid = |i: usize, env: &[Slot]| self.ev(&t.kids[i], env, fuel).from_inside();
+        let kid = |i: usize, env: &[Slot]| self.ev(&t.kids[i], env, run).from_inside();
         macro_rules! value {
             ($e:expr) => {
                 match $e {
@@ -521,16 +547,51 @@ impl Model {
                 if args.len() < c.arity {
                     return Outcome::stuck("arityMismatch");
                 }
-                if fuel.get() == 0 {
+                if run.fuel.get() == 0 {
                     return Outcome::Timeout;
                 }
-                fuel.set(fuel.get() - 1);
+                run.fuel.set(run.fuel.get() - 1);
                 // Extra arguments are ignored, as in JavaScript.
                 let mut inner: Vec<Slot> = args[..c.arity].iter().cloned().map(Slot::new).collect();
                 inner.push(Slot::new(f.clone()));
                 inner.extend_from_slice(&c.env);
-                self.ev(&c.body, &inner, fuel).from_inside()
+                self.ev(&c.body, &inner, run).from_inside()
             }
+            THROW => {
+                let v = value!(kid(0, env));
+                let what = format!("{THROWN} {}", self.show_value(&v));
+                *run.thrown.borrow_mut() = Some(v);
+                Outcome::Fault(what)
+            }
+            // The caught value goes in a new cell, as `var 0`.
+            TRY => match kid(0, env) {
+                Outcome::Fault(f) if f.starts_with(THROWN) => {
+                    let v = run.thrown.borrow_mut().take().expect("a throw's value");
+                    let mut inner = vec![Slot::new(v)];
+                    inner.extend_from_slice(env);
+                    kid(1, &inner)
+                }
+                o => o,
+            },
+            // Each iteration takes a tick, as a call does. A `break` leaves
+            // the loop with `undefined`.
+            WHILE => loop {
+                if !value!(kid(0, env)).truthy() {
+                    return Value(Val::Undefined);
+                }
+                match kid(1, env) {
+                    Value(_) => {}
+                    Outcome::Fault(f) if f == CONTINUED => {}
+                    Outcome::Fault(f) if f == BROKE => return Value(Val::Undefined),
+                    o => return o,
+                }
+                if run.fuel.get() == 0 {
+                    return Outcome::Timeout;
+                }
+                run.fuel.set(run.fuel.get() - 1);
+            },
+            BREAK => Outcome::Fault(BROKE.into()),
+            CONTINUE => Outcome::Fault(CONTINUED.into()),
             _ => unreachable!(),
         }
     }
@@ -549,7 +610,14 @@ impl Language for Model {
 
     fn eval_in(&self, t: &Term, env: &[Val]) -> Outcome<Val> {
         let slots: Vec<Slot> = env.iter().cloned().map(Slot::new).collect();
-        self.ev(t, &slots, &Cell::new(self.fuel))
+        self.ev(
+            t,
+            &slots,
+            &Run {
+                fuel: Cell::new(self.fuel),
+                thrown: RefCell::new(None),
+            },
+        )
     }
 
     fn same(&self, a: &Val, b: &Val) -> bool {
