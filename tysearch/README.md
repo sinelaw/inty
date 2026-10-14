@@ -43,7 +43,11 @@ inty, a suite of languages with other kinds of type system runs alongside:
 - subtyping, where it finds `Int <: Float` from the fingerprints' order;
 - JavaScript-style coercion;
 - ML-style references, where it finds that a cell's type is invariant,
-  and Wright's value restriction for `let`. [ITERATIONS.md](ITERATIONS.md) has
+  and Wright's value restriction for `let`;
+- five languages unlike inty's (units of measure, typestate, an effect,
+  information flow, printf), to see where the rule format stops. It finds
+  information flow's type system; elsewhere it leaves what it can't
+  express untyped, and never types a program that crashes. [ITERATIONS.md](ITERATIONS.md) has
 what each round found, and what had to change in the search to find it.
 
 **The climb.** With `--climb`, tysearch grows the type system itself.
@@ -60,7 +64,9 @@ cargo run --release -- core --climb   # each step, what it added, coverage
 cargo run --release -- arith
 cargo run --release -- core
 cargo run --release -- model
-cargo run --release -- refs        # also: unityped, pairs, subtyping, coerce
+cargo run --release -- refs        # also: unityped, pairs, subtyping, coerce,
+                                   #   units, files, effects, secrets, printf
+cargo run --release --example climb_walkthrough  # the model's climb, with examples
 TYSEARCH_TRACE=1 cargo run --release -- model     # timings, rejected rules
 TYSEARCH_EXPLAIN=app2 cargo run --release -- model # one constructor's candidates
 cargo test --release
@@ -77,4 +83,4 @@ cargo test --release
 | `src/search.rs` | Per constructor: binder flow, observation, proposals, refutation, `falsify`, selection |
 | `src/infer.rs` | The checker a rule set induces: algorithm W with overloads |
 | `src/discover.rs` | The pipeline, the end-to-end check, the report; the climb |
-| `src/langs/` | `arith` (TAPL ch. 3), `core` (first-order slice), `model` (the growing model of inty's), and the suite: `unityped`, `pairs`, `subtyping`, `coerce`, `refs` |
+| `src/langs/` | `arith` (TAPL ch. 3), `core` (first-order slice), `model` (the growing model of inty's), and the suite: `unityped`, `pairs`, `subtyping`, `coerce`, `refs`, `units`, `files`, `effects`, `secrets`, `printf` |

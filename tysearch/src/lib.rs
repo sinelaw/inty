@@ -15,9 +15,14 @@ pub mod langs {
     pub mod arith;
     pub mod coerce;
     pub mod core;
+    pub mod effects;
+    pub mod files;
     pub mod model;
     pub mod pairs;
+    pub mod printf;
     pub mod refs;
+    pub mod secrets;
     pub mod subtyping;
+    pub mod units;
     pub mod unityped;
 }

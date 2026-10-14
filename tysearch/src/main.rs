@@ -1,11 +1,12 @@
 use tysearch::discover::{climb, discover, Config};
 use tysearch::lang::Language;
 use tysearch::langs::{
-    arith::Arith, coerce::Coerce, core::Core, model::Model, pairs::Pairs, refs::Refs,
-    subtyping::Subtyping, unityped::Unityped,
+    arith::Arith, coerce::Coerce, core::Core, effects::Effects, files::Files, model::Model,
+    pairs::Pairs, printf::Printf, refs::Refs, secrets::Secrets, subtyping::Subtyping, units::Units,
+    unityped::Unityped,
 };
 
-const USAGE: &str = "usage: tysearch <arith|core|model|unityped|coerce|pairs|subtyping|refs> [--climb] [--corpus N] [--check N] [--seed N]
+const USAGE: &str = "usage: tysearch <arith|core|model|unityped|coerce|pairs|subtyping|refs|units|files|effects|secrets|printf> [--climb] [--corpus N] [--check N] [--seed N]
 
   --climb  grow the type language from ground rules, one capability at a
            time while it types more programs, then drop what isn't needed;
@@ -55,6 +56,11 @@ fn main() {
         "pairs" => run(&Pairs::default(), &cfg, climbing),
         "subtyping" => run(&Subtyping::default(), &cfg, climbing),
         "refs" => run(&Refs::default(), &cfg, climbing),
+        "units" => run(&Units::default(), &cfg, climbing),
+        "files" => run(&Files::default(), &cfg, climbing),
+        "effects" => run(&Effects::default(), &cfg, climbing),
+        "secrets" => run(&Secrets::default(), &cfg, climbing),
+        "printf" => run(&Printf::default(), &cfg, climbing),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2)

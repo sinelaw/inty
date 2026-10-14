@@ -508,8 +508,54 @@ Both are sound. The objective decides, and here it isn't ML's.
   generalisation; nothing returns, no exit types; sorts unordered, no
   subtyping.
 
+## 12. Languages it wasn't built for
+
+The search grew from inty's features. These five languages have type
+systems of other kinds. They measure how much of the search is general,
+and where its format stops. In each, the only unsafe thing is getting
+stuck, and the search was run unchanged.
+
+| Language | What its type system needs | Found | Typed | Unsound |
+|---|---|---|---|---|
+| `secrets`: `print` gets stuck on a secret | information flow | public `<:` secret (from the fingerprints: a public number goes everywhere a secret does, and to `print`); `print : (public) -> public`; `declassify : (secret) -> public` | 98.2% | 0 |
+| `units`: metres only add to metres; `*` and `/` make `m·s`, `m/s`, … | unit arithmetic: `* : (U, V) -> U·V` | each unit a sort, and `*` and `/` as a table of 78 ground overloads | 80.6% | 0 |
+| `files`: `read` and `close` need an open file, and `close` closes it | typestate: a value's type changes | open and closed files are sorts of their own; `read : (open) -> string`; **no rule for `close`** | 84.6% | 0 |
+| `effects`: `ask` gives the enclosing `with`'s value, stuck outside one | a context carried down: the handler's type | `with : (a, b) -> b`; **no rule for `ask`** | 77.6% | 0 |
+| `printf`: `fmt(s)` wants one argument per `%` in `s` | the type of `fmt(s)` depends on `s`'s contents | a string's type records what `fmt` makes of it: `fmt : (T0< -> a>) -> a`; **no rule for the literal `str`** | 6.1% | 0 |
+
+**Also fixed.** `units` took 16 minutes, all in the checker. With 78
+overloads for `*`, it typed each child again for every rule its parent
+tried, at every level. A closed child's types don't depend on the rule
+tried, so the checker now works them out once per check. `units` takes
+under a second, with the same result.
+
+**What this says.**
+
+- **It never claims more than holds.** Where a language needs what the
+  rule format lacks, the constructor gets no rule. `close`, `ask` and
+  string literals stay untyped, and no typed program gets stuck in any of
+  the five.
+- **Some of it is general.** Information flow came out unaided, as
+  subtyping from the fingerprints. Units became sorts. Typestate's states
+  became sorts. The format just can't say how `close` moves between them.
+- **What the misses ask for:**
+  - `close`: a rule that changes a variable's type. That is flow-sensitive
+    typing, which inty's narrowing does in a small way.
+  - `ask`: discovered context attributes: the generalisation of exit
+    types.
+  - `str`: per-literal types, as inty's literal string types.
+  - `*`: rules whose result is computed from their arguments' types.
+- **The semantics bounds what can be found.** Implicit flows
+  (`if secret < 1 then print(0) else print(1)`) never get stuck, so
+  nothing rules them out. Noninterference is about two runs, not one.
+
 ## Next
 
+- **Context attributes:** discover what a node passes down to its
+  children (a handler's type, a loop flag), as exit types are now, so
+  `effects`' `ask` gets a rule.
+- **Literal types:** a rule per literal where the literals behave apart
+  (`printf`'s `"%"` and `"%%"`).
 - **Keys:** a string literal `"x"`, so that `idx` on objects by string
   has no one result type. inty gives literal string types for keys.
 - **Sums:** `unwrap` (`undefined`/`null`), and `caseTag` on a field.

@@ -36,6 +36,11 @@ struct Sch {
 
 pub struct Checker {
     by_con: Vec<Vec<Schema>>,
+    /// Within one `types` call, a closed child's types under an exit type:
+    /// the same whichever rule its parent tries, so worked out once. With
+    /// many overloads (78 for a units language's `*`), nested children
+    /// would otherwise be typed once per rule per level.
+    memo: std::cell::RefCell<HashMap<(usize, Ty), Vec<Ty>>>,
     /// Per rule (as `by_con`), the variables that may not stand for a
     /// union, and those a child that doesn't fit may widen to one.
     no_unions: Vec<Vec<Vec<u32>>>,
@@ -91,6 +96,21 @@ fn widenable(r: &Schema) -> Vec<u32> {
 }
 
 impl Checker {
+    /// Whether `t`, under `depth` binders, uses no variable from outside.
+    fn closed(&self, t: &Term, depth: usize) -> bool {
+        match self.sig[t.con].kind {
+            Kind::Var | Kind::Assign => {
+                matches!(t.atom, Atom::Int(i) if (i as usize) < depth)
+                    && t.kids.iter().all(|k| self.closed(k, depth))
+            }
+            Kind::Op => t
+                .kids
+                .iter()
+                .zip(&self.sig[t.con].binds)
+                .all(|(k, b)| self.closed(k, depth + b)),
+        }
+    }
+
     pub fn new(sig: &[Con], rules: &[Schema]) -> Self {
         let mut by_con = vec![Vec::new(); sig.len()];
         let mut no_unions = vec![Vec::new(); sig.len()];
@@ -101,6 +121,7 @@ impl Checker {
             widen[r.con].push(widenable(r));
         }
         Checker {
+            memo: Default::default(),
             by_con,
             no_unions,
             widen,
@@ -118,6 +139,7 @@ impl Checker {
     /// The types a closed term can be given, each with its variables
     /// unconstrained.
     pub fn types(&self, t: &Term) -> Vec<Ty> {
+        self.memo.borrow_mut().clear();
         let mut ctx = Vec::new();
         // At the top there is nothing to return from.
         let mut out: Vec<Ty> = self
@@ -317,9 +339,45 @@ impl Checker {
                                 let depth = ctx.len();
                                 ctx.extend(bs.into_iter().rev());
                                 let kid_exit = prem.exit.as_ref().unwrap_or(exit);
-                                for (mut ub, ty) in self.infer(ua.clone(), ctx, kid_exit, kid) {
-                                    if self.fits(&mut ub, &ty, &prem.ty, &widen) {
-                                        next.push(ub);
+                                let exit_now = ua.resolve(kid_exit);
+                                if prem.bound.is_empty()
+                                    && exit_now.is_ground()
+                                    && self.closed(kid, 0)
+                                {
+                                    let key = (kid as *const Term as usize, exit_now.clone());
+                                    let known = self.memo.borrow().get(&key).cloned();
+                                    let tys = known.unwrap_or_else(|| {
+                                        let mut tys: Vec<Ty> = self
+                                            .infer(
+                                                Unifier::default(),
+                                                &mut Vec::new(),
+                                                &exit_now,
+                                                kid,
+                                            )
+                                            .into_iter()
+                                            .map(|(u, ty)| u.resolve(&ty))
+                                            .collect();
+                                        tys.sort();
+                                        tys.dedup();
+                                        self.memo.borrow_mut().insert(key, tys.clone());
+                                        tys
+                                    });
+                                    for ty in tys {
+                                        let mut ub = ua.clone();
+                                        let mut vs = Vec::new();
+                                        ty.vars(&mut vs);
+                                        let fresh: HashMap<u32, Ty> =
+                                            vs.into_iter().map(|v| (v, ub.fresh())).collect();
+                                        let ty = crate::types::subst(&ty, &fresh);
+                                        if self.fits(&mut ub, &ty, &prem.ty, &widen) {
+                                            next.push(ub);
+                                        }
+                                    }
+                                } else {
+                                    for (mut ub, ty) in self.infer(ua.clone(), ctx, kid_exit, kid) {
+                                        if self.fits(&mut ub, &ty, &prem.ty, &widen) {
+                                            next.push(ub);
+                                        }
                                     }
                                 }
                                 ctx.truncate(depth);

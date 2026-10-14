@@ -436,3 +436,95 @@ fn the_climb_finds_what_each_language_needs() {
         assert!(c.result().check.coverage() > c.steps[0].discovery.check.coverage());
     }
 }
+
+// Languages unlike any the search was built for: what it finds, what it
+// can't, and that it never claims more than holds.
+
+/// Typestate: a closed file is a sort of its own (`read` gets stuck on
+/// it), but `close` changes its argument's sort, and a rule types each
+/// value once, so `close` has no rule. Refused, not wrong.
+#[test]
+fn files_close_is_out_of_reach() {
+    let d = discover(
+        &tysearch::langs::files::Files::default(),
+        &Config::default(),
+    );
+    let r = rules(&d);
+    assert!(r.contains(&"read : (T0) -> T1".to_string()), "{r:?}");
+    assert!(!r.iter().any(|s| s.starts_with("close")), "{r:?}");
+    assert_eq!(d.check.unsound, 0);
+}
+
+/// An effect: `ask`'s type is its handler's, a context carried down the
+/// program. The search carries one for `return` only, so `ask` has none.
+#[test]
+fn effects_ask_is_out_of_reach() {
+    let d = discover(
+        &tysearch::langs::effects::Effects::default(),
+        &Config::default(),
+    );
+    let r = rules(&d);
+    assert!(r.contains(&"with : (a, b) -> b".to_string()), "{r:?}");
+    assert!(!r.iter().any(|s| s.starts_with("ask")), "{r:?}");
+    assert_eq!(d.check.unsound, 0);
+}
+
+/// Information flow, where a leak gets stuck: public below secret, found
+/// from the fingerprints (a public number goes everywhere a secret does,
+/// and to `print`), and `print` takes public numbers only. Implicit flows
+/// run fine, so nothing rules them out.
+#[test]
+fn secrets_find_an_information_flow_type_system() {
+    let d = discover(
+        &tysearch::langs::secrets::Secrets::default(),
+        &Config::default(),
+    );
+    let r = rules(&d);
+    assert_eq!(d.subtypes, vec![(0, 1)]);
+    for want in [
+        "print : (T0) -> T0",
+        "declassify : (T1) -> T0",
+        "secret : T1",
+    ] {
+        assert!(r.contains(&want.to_string()), "missing {want} in {r:?}");
+    }
+    assert_eq!(d.check.unsound, 0);
+}
+
+/// printf: a string's type records what `fmt` makes of it, and a
+/// formatter's what `arg` does, but the literal `str` has no rule: "%" and
+/// "%%" would need types of their own (literal types).
+#[test]
+fn printf_needs_literal_types() {
+    let d = discover(
+        &tysearch::langs::printf::Printf::default(),
+        &Config::default(),
+    );
+    let r = rules(&d);
+    for want in ["fmt : (T0< -> a>) -> a", "arg : (T3<a -> b>, a) -> b"] {
+        assert!(r.contains(&want.to_string()), "missing {want} in {r:?}");
+    }
+    assert!(!r.iter().any(|s| s.starts_with("str")), "{r:?}");
+    assert_eq!(d.check.unsound, 0);
+}
+
+/// Units of measure: each unit is a sort, but `*`'s result is computed
+/// from its arguments' units (`U·V`), which no rule with variables says.
+/// So `*` and `/` come out as a table of ground overloads.
+#[test]
+fn units_become_sorts_and_a_table() {
+    let d = discover(
+        &tysearch::langs::units::Units::default(),
+        &Config::default(),
+    );
+    let r = rules(&d);
+    assert_eq!(d.sort_names.len(), 9);
+    assert!(r.contains(&"* : (T0, T1) -> T3".to_string()), "{r:?}");
+    let times = r.iter().filter(|s| s.starts_with("* :")).count();
+    assert!(times > 30, "{times} rules for *");
+    assert!(
+        !r.iter().any(|s| s.starts_with("* :") && s.contains('a')),
+        "{r:?}"
+    );
+    assert_eq!(d.check.unsound, 0);
+}
