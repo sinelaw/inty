@@ -9,6 +9,9 @@ times out. It returns typing rules that never type a stuck program, type as
 much of the rest as they can, and are as small as possible. It also returns
 the evidence behind each rule.
 
+For a plain-language tour of one session, for readers who aren't type
+theorists, see [WALKTHROUGH.md](WALKTHROUGH.md).
+
 It is a separate project from inty, with its own Cargo workspace and no
 dependencies. The design, the theory behind it, related work and the
 roadmap are in [DESIGN.md](DESIGN.md).
