@@ -2430,7 +2430,10 @@ mod tests {
             "(letann (nullable number) (num 1 0) (let (func 0 (unwrap (var 2) (ret (num 0 0)) \
              (ret (minus (var 0) (num 1 0))))) (app (var 0))))"
         );
-        assert!(lower("\"a\" < \"b\";").is_err());
+        // Comparisons of strings are in the model; bitwise operators are
+        // left out on purpose (`lean/GAPS.md`).
+        assert_eq!(lower("\"a\" < \"b\";").unwrap(), "(lt (str s:a) (str s:b))");
+        assert!(lower("1 | 2;").is_err());
     }
 
     #[test]
