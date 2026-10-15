@@ -42,6 +42,13 @@ pub fn is_callable_key(name: &PropName) -> bool {
     name.0 == CALLABLE_KEY
 }
 
+/// The field of a record that says what `for … of`, a spread and
+/// `Array.from` get from it: its element type. Written
+/// `[Symbol.iterator]: T` in an annotation (`type NodeList = {length:
+/// Number, [Symbol.iterator]: Element}`), and printed so; JavaScript
+/// source can't name it.
+pub const ITER_KEY: &str = "\x03iter\x03";
+
 /// Prefix for private-field sentinel keys produced by the class-body
 /// lowering of `#name`. Starts with `\x02` so JS source can't tokenise
 /// it; the parser emits these names from `Token::PrivateIdent` only.

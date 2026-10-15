@@ -87,6 +87,9 @@ pub fn instances_of(class: ClassName) -> &'static [InstanceDecl] {
         ClassName::Inject | ClassName::Strip => &[],
         // A merge of two rows, not a catalogued shape.
         ClassName::Spread => &[],
+        // Structural (a record's `[Symbol.iterator]` field) as well as
+        // by shape: not catalogued.
+        ClassName::Iterable => &[],
     }
 }
 

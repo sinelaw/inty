@@ -668,6 +668,9 @@ impl InferState {
         keywords: &[(String, Expr)],
         span: Span,
     ) -> InferResult<Type> {
+        if let Some(result) = self.infer_array_from(env, callee, arguments, keywords) {
+            return result;
+        }
         // `then` / `catch` callbacks this call's callee records (see
         // `builtins::promise_method_type`) are settled at its end.
         let promise_mark = self.promise_results.len();
@@ -870,6 +873,92 @@ impl InferState {
         // to what follows.
         self.simplify_has_props()?;
         Ok(self.zonk(&ret_type))
+    }
+
+    /// A call of the standard library's `Array.from`, whose result
+    /// depends on whether it is given a map function, which no one
+    /// function type says:
+    ///
+    /// - `Array.from(it)`: `it` is iterated (`Iterable it e`), giving an
+    ///   `e[]`;
+    /// - `Array.from(it, f)`: `f` is called with each element and its
+    ///   index (it may take only the element), giving an array of its
+    ///   results; an array-like `it` (`{length: n}`, with no
+    ///   `[Symbol.iterator]`) has `undefined` elements.
+    ///
+    /// `None` for any other call (or an `Array` the program binds itself).
+    fn infer_array_from(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        keywords: &[(String, Expr)],
+    ) -> Option<InferResult<Type>> {
+        let Expr::Member {
+            object,
+            property,
+            span,
+        } = callee
+        else {
+            return None;
+        };
+        let Expr::Ident {
+            name,
+            span: name_span,
+        } = object.as_ref()
+        else {
+            return None;
+        };
+        if name != "Array"
+            || property != "from"
+            || !keywords.is_empty()
+            || !(1..=2).contains(&arguments.len())
+            || arguments.iter().any(|a| matches!(a, Expr::Spread { .. }))
+            || !self.ambient.contains(&self.key_of(*name_span, name))
+        {
+            return None;
+        }
+        let span = *span;
+        Some((|| {
+            let source = self.infer_expr(env, &arguments[0])?;
+            let element = self.fresh_type_var();
+            // An array-like object: a record with a `length`, which isn't
+            // iterable, read by index (`undefined`s for `{length: n}`).
+            let array_like = arguments.len() == 2
+                && match crate::infer::zonk::zonk_head_cow(&mut self.var_table, &source).as_ref() {
+                    Type::Row(_) => {
+                        self.row_field_entry(&source, crate::types::ITER_KEY)
+                            .is_none()
+                            && self.row_field_entry(&source, "length").is_some()
+                    }
+                    _ => false,
+                };
+            if array_like {
+                let length = self
+                    .row_field_entry(&source, "length")
+                    .expect("just found")
+                    .ty;
+                self.subsume(arguments[0].span(), &length, &Type::Number)?;
+                self.unify(span, &element, &Type::Undefined)?;
+            } else {
+                self.require_iterable(&source, &element, arguments[0].span())?;
+            }
+            let Some(map_fn) = arguments.get(1) else {
+                return Ok(Type::array(self.zonk(&element)));
+            };
+            let result = self.fresh_type_var();
+            let index = self.fresh_pvar();
+            let element = self.zonk(&element);
+            let callback = self.callable_row_open_with_params(
+                vec![
+                    crate::types::FuncParam::required(element),
+                    crate::types::FuncParam::optional(index, Type::Number),
+                ],
+                result.clone(),
+            );
+            self.check_expr(env, map_fn, &callback)?;
+            Ok(Type::array(self.zonk(&result)))
+        })())
     }
 
     /// What a method called on `receiver` sees as `this`. A nominal brand

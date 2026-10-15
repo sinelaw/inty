@@ -64,10 +64,14 @@ const Object;
 // type; nor has `Array(x)` with a non-integer, which makes `[x]`.)
 // A stored `const h = new Array(n)` has one element type, like any
 // other binding of a call's result (the value restriction).
-/** const Array: <a, b, c, d>{
+// `Array.from(it)` iterates `it`; a call with a map function,
+// `Array.from(it, (x, i) => …)`, is typed by its own rule (its result
+// depends on whether the map function is passed), which also takes an
+// array-like `{length: n}` (with `undefined` elements).
+/** const Array: <a, b, c, d> where Iterable b d => {
         (Number) => {length: Number, fill: (c) => c[]},
         isArray: (a) => Boolean,
-        from: (a, mapFn?: (d, Number) => b) => b[],
+        from: (b) => d[],
         of: (a) => a[]
     } */
 const Array;
@@ -258,7 +262,11 @@ const RegExp;
         delete: (this: Map<K, V>, K) => Boolean,
         clear: (this: Map<K, V>) => Undefined,
         forEach: (this: Map<K, V>, (V, K) => Undefined) => Undefined,
-        size: Number
+        keys: (this: Map<K, V>) => {[Symbol.iterator]: K},
+        values: (this: Map<K, V>) => {[Symbol.iterator]: V},
+        entries: (this: Map<K, V>) => {[Symbol.iterator]: [K, V]},
+        size: Number,
+        proto readonly [Symbol.iterator]: [K, V]
     } */
 /** type Set<T> = {
         add: (this: Set<T>, T) => Undefined,
@@ -266,12 +274,16 @@ const RegExp;
         delete: (this: Set<T>, T) => Boolean,
         clear: (this: Set<T>) => Undefined,
         forEach: (this: Set<T>, (T) => Undefined) => Undefined,
-        size: Number
+        values: (this: Set<T>) => {[Symbol.iterator]: T},
+        size: Number,
+        proto readonly [Symbol.iterator]: T
     } */
-/** const Map: <K, V>() => Map<K, V> */
+// `new Map(entries?)`, `new Set(items?)`: from any iterable of `[K, V]`
+// pairs, of items (an array, a string, another set, …).
+/** const Map: <K, V, I> where Iterable I [K, V] => (entries?: I) => Map<K, V> */
 const Map;
 
-/** const Set: <T>() => Set<T> */
+/** const Set: <T, I> where Iterable I T => (items?: I) => Set<T> */
 const Set;
 
 /** type WeakMap<K, V> = {

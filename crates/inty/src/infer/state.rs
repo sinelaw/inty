@@ -2196,6 +2196,45 @@ impl InferState {
             let mut scheme_preds = Vec::new();
             let mut remaining: Vec<PendingConstraint> =
                 std::mem::take(&mut self.pending_constraints);
+            // An `Iterable` on a container nothing else mentions (not the
+            // type, the environment or another constraint) is vacuous: it
+            // was posed for an argument a call left out (`new Set()`), and
+            // no value of that type is ever iterated. Kept, it would show
+            // in the scheme as a requirement on a variable no caller sees.
+            let container_var = |c: &PendingConstraint, s: &mut Self| match (
+                c.pred.class,
+                c.pred.types.first().map(|t| s.zonk(t)),
+            ) {
+                (crate::types::ClassName::Iterable, Some(Type::Var(v))) if v.is_flex() => Some(v),
+                _ => None,
+            };
+            let all_vars: Vec<std::collections::HashSet<TVarName>> = remaining
+                .iter()
+                .map(|c| {
+                    self.apply_subst_pred(&c.pred)
+                        .types
+                        .iter()
+                        .flat_map(|t| self.main_subst.flatten(t).free_vars())
+                        .collect()
+                })
+                .collect();
+            let ty_free = ty.free_vars();
+            let mut vacuous = vec![false; remaining.len()];
+            for (i, c) in remaining.iter().enumerate() {
+                if let Some(v) = container_var(c, self) {
+                    vacuous[i] = !ty_free.contains(&v)
+                        && !fixed_vars.contains(&v)
+                        && all_vars
+                            .iter()
+                            .enumerate()
+                            .all(|(j, vars)| j == i || !vars.contains(&v));
+                }
+            }
+            let mut i = 0;
+            remaining.retain(|_| {
+                i += 1;
+                !vacuous[i - 1]
+            });
             loop {
                 let mut rest = Vec::new();
                 let mut took = false;
@@ -2452,6 +2491,14 @@ impl InferState {
                             && so_far.free_vars().is_subset(&vars)
                         {
                             vec![result]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    // the container → its elements
+                    (ClassName::Iterable, [container, element]) => {
+                        if container.free_vars().is_subset(&vars) {
+                            vec![element]
                         } else {
                             vec![]
                         }

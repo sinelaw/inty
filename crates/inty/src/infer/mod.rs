@@ -1298,6 +1298,31 @@ impl InferState {
             return self.check_by_synthesis(env, expr, expected);
         }
         let mut expected = self.zonk(expected);
+        // An array literal where an iterable of `E` is expected (a
+        // parameter `I` with `Iterable I E`, as `new Map(entries)`'s) is
+        // an `E[]`: its elements are checked against `E` (a pair against
+        // `[K, V]`).
+        if let (Expr::Array { .. }, Type::Var(var @ crate::types::TVarName::Flex(_))) =
+            (expr, &expected)
+        {
+            let candidates: Vec<(Type, Type)> = self
+                .pending_constraints
+                .iter()
+                .filter(|c| c.pred.class == crate::types::ClassName::Iterable)
+                .map(|c| (c.pred.types[0].clone(), c.pred.types[1].clone()))
+                .collect();
+            let var = Type::Var(var.clone());
+            let element = candidates
+                .into_iter()
+                .find(|(container, _)| self.zonk(container) == var)
+                .map(|(_, element)| element);
+            if let Some(element) = element {
+                let element = self.zonk(&element);
+                if !matches!(element, Type::Var(_)) {
+                    expected = Type::array(element);
+                }
+            }
+        }
         // A recursive alias pushes its unrolling into a literal.
         if let (Type::Named(id, args), Expr::Object { .. } | Expr::Array { .. }) = (&expected, expr)
         {
@@ -1453,7 +1478,14 @@ impl InferState {
                             let arg_ty = self.infer_expr(env, argument)?;
                             match self.zonk(&arg_ty) {
                                 Type::Array(arg_elem) => self.subsume(*span, &arg_elem, elem)?,
-                                _ => self.subsume(*span, &arg_ty, &expected)?,
+                                Type::Var(_) => self.subsume(*span, &arg_ty, &expected)?,
+                                // Any other iterable: its elements fit.
+                                _ => {
+                                    let arg_elem = self.fresh_type_var();
+                                    self.require_iterable(&arg_ty, &arg_elem, *span)?;
+                                    let arg_elem = self.zonk(&arg_elem);
+                                    self.subsume(*span, &arg_elem, elem)?;
+                                }
                             }
                         }
                         e => {

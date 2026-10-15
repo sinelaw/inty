@@ -524,3 +524,12 @@ fn number_methods_run() {
     assert_string("(-10).toString(2)", "-1010");
     assert_string("(1.5).toString()", "1.5");
 }
+
+#[test]
+fn strings_iterate_their_characters() {
+    assert_string("const xs = [...\"ab\"]; xs[1]", "b");
+    assert_string(
+        "let out = \"\"; for (const c of \"ab\") { out = c + out; } out",
+        "ba",
+    );
+}

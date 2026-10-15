@@ -52,12 +52,12 @@ impl InferState {
                     argument,
                     span: spread_span,
                 } => {
-                    // The spread operand must be an array; its
-                    // element type joins the accumulator.
+                    // The spread operand is iterated (an array, a
+                    // string, a `Set`, …); its element type joins the
+                    // accumulator.
                     let arg_ty = self.infer_expr(env, argument)?;
                     let elem_var = self.fresh_type_var();
-                    let expected = Type::array(elem_var.clone());
-                    self.unify(*spread_span, &arg_ty, &expected)?;
+                    self.require_iterable(&arg_ty, &elem_var, *spread_span)?;
                     self.zonk(&elem_var)
                 }
                 // An element's literal type widens where the array is

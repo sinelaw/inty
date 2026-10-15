@@ -827,6 +827,7 @@ impl InferState {
                         pred.class,
                         ClassName::HasProp
                             | ClassName::Indexable
+                            | ClassName::Iterable
                             | ClassName::Inject
                             | ClassName::Strip
                             | ClassName::Spread
@@ -885,6 +886,7 @@ impl InferState {
         matches!(
             pred.class,
             ClassName::Indexable
+                | ClassName::Iterable
                 | ClassName::HasProp
                 | ClassName::Inject
                 | ClassName::Strip
@@ -1121,6 +1123,91 @@ impl InferState {
             ClassName::Spread => {
                 self.resolve_spread(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
+            ClassName::Iterable => self.resolve_iterable(&pred.types[0], &pred.types[1], span),
+        }
+    }
+
+    /// `container` is iterated (`for … of`, a spread, `Array.from`): its
+    /// element type is `element`. Decided now for a known container,
+    /// posed (`Iterable`) for a variable.
+    pub(crate) fn require_iterable(
+        &mut self,
+        container: &Type,
+        element: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        self.resolve_iterable(container, element, span)
+    }
+
+    /// Resolve `Iterable c e` (see [`ClassName::Iterable`]).
+    pub(crate) fn resolve_iterable(
+        &mut self,
+        container: &Type,
+        element: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        let not_iterable = |s: &mut Self, why: &str| -> Result<(), IntyError> {
+            Err(TypeError::ConstraintNotSatisfied {
+                class: format!("Iterable ({why})"),
+                ty: s.show(container),
+                span,
+            }
+            .into())
+        };
+        match self.flatten_type(container) {
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::iterable(container.clone(), element.clone()), span);
+                Ok(())
+            }
+            Type::Error => Ok(()),
+            Type::Array(elem) => self.unify(span, element, &elem),
+            Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
+                self.unify(span, element, &Type::String)
+            }
+            Type::TypedArray(_) => self.unify(span, element, &Type::Number),
+            Type::Tuple(components) => {
+                for c in &components {
+                    self.unify(span, element, c)?;
+                }
+                Ok(())
+            }
+            Type::Union(members) => {
+                for m in &members {
+                    self.resolve_iterable(m, element, span)?;
+                }
+                Ok(())
+            }
+            Type::Named(id, args) => match self.unroll_named(id, &args) {
+                Some(unrolled) => self.resolve_iterable(&unrolled, element, span),
+                None => not_iterable(self, "not an iterable type"),
+            },
+            Type::Row(_) => match self.row_field_entry(container, crate::types::ITER_KEY) {
+                Some(entry) if self.main_subst.resolve_presence(&entry.presence).is_pre() => {
+                    self.unify(span, element, &entry.ty)
+                }
+                _ if self.row_field_entry(container, "length").is_some() => not_iterable(
+                    self,
+                    "an array-like object (`{length: n}`) isn't iterable; \
+                     `Array.from(o, (_, i) => …)` maps its indices",
+                ),
+                _ => not_iterable(
+                    self,
+                    "an object isn't iterable unless its type says what it gives, \
+                     `[Symbol.iterator]: T`; iterate `Object.keys(o)`, `Object.values(o)` or \
+                     `Object.entries(o)`",
+                ),
+            },
+            Type::Map(_) => not_iterable(
+                self,
+                "a `Dict` is a plain object: iterate `Object.keys(d)`, `Object.values(d)` or \
+                 `Object.entries(d)`",
+            ),
+            Type::Maybe(..) => not_iterable(self, "it may be `null` or `undefined`: test it first"),
+            _ => not_iterable(
+                self,
+                "`for … of`, a spread and `Array.from` take an array, a string, a `Set`, a `Map` \
+                 or another iterable",
+            ),
         }
     }
 

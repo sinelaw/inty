@@ -1327,6 +1327,25 @@ impl InferState {
     /// Look up a property by following row tail chains.
     /// Returns the property type if found in any row that the tail resolves to.
     fn lookup_property_in_row_tail(&self, row: &RowType, property: &str) -> Option<Type> {
+        self.lookup_entry_in_row_tail(row, property)
+            .map(|entry| entry.ty)
+    }
+
+    /// The field `name` of `ty`, a record (or a variable bound to one),
+    /// in its own props or along its tail.
+    pub(crate) fn row_field_entry(&mut self, ty: &Type, name: &str) -> Option<FieldEntry> {
+        let head = crate::infer::zonk::zonk_head_cow(&mut self.var_table, ty);
+        let Type::Row(row) = &*head else {
+            return None;
+        };
+        match row.props.get(&PropName(name.to_string())) {
+            Some(entry) => Some(entry.clone()),
+            None => self.lookup_entry_in_row_tail(row, name),
+        }
+    }
+
+    /// [`Self::lookup_property_in_row_tail`]'s field, presence and all.
+    fn lookup_entry_in_row_tail(&self, row: &RowType, property: &str) -> Option<FieldEntry> {
         use std::collections::HashSet;
         let prop_name = PropName(property.to_string());
         let mut visited: HashSet<TVarId> = HashSet::new();
@@ -1348,7 +1367,7 @@ impl InferState {
                         Type::Row(tail_row) => {
                             // Check if property is in this row
                             if let Some(entry) = tail_row.props.get(&prop_name) {
-                                return Some(entry.ty.clone());
+                                return Some(entry.clone());
                             }
                             // Continue with this row's tail
                             current_tail = &tail_row.tail;
@@ -1363,7 +1382,7 @@ impl InferState {
                                 self.main_subst.get(&TVarName::Flex(*next_id))
                             {
                                 if let Some(entry) = tail_row.props.get(&prop_name) {
-                                    return Some(entry.ty.clone());
+                                    return Some(entry.clone());
                                 }
                                 current_tail = &tail_row.tail;
                                 continue;

@@ -609,6 +609,7 @@ impl PrettyContext {
             // user-written form. The raw stored key contains control
             // characters that would otherwise look broken in errors.
             let name = match private_key_display(prop) {
+                _ if prop.0 == crate::types::ITER_KEY => "[Symbol.iterator]".to_string(),
                 Some(name) => format!("#{}{}", name, if optional_marker { "?" } else { "" }),
                 None => format!("{}{}", prop.0, if optional_marker { "?" } else { "" }),
             };
@@ -742,7 +743,7 @@ impl PrettyContext {
                 write!(w, " ")?;
                 self.write_type(w, &pred.types[2], true)?;
             }
-            ClassName::Inject | ClassName::Strip | ClassName::Spread => {
+            ClassName::Inject | ClassName::Strip | ClassName::Spread | ClassName::Iterable => {
                 write!(w, "{}", pred.class)?;
                 for t in &pred.types {
                     write!(w, " ")?;
@@ -896,6 +897,7 @@ impl Display for ClassName {
         match self {
             ClassName::Plus => write!(f, "Plus"),
             ClassName::Indexable => write!(f, "Indexable"),
+            ClassName::Iterable => write!(f, "Iterable"),
             ClassName::IndexWrite => write!(f, "IndexWrite"),
             ClassName::FieldWrite => write!(f, "FieldWrite"),
             ClassName::HasProp => write!(f, "HasProp"),

@@ -178,6 +178,10 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                                     return Err(Stuck::NotImplemented("spread of non-array cell"));
                                 }
                             },
+                            // A string spreads its characters (code points).
+                            Value::String(s) => {
+                                vs.extend(s.chars().map(|c| Value::String(c.to_string())));
+                            }
                             _ => {
                                 return Err(Stuck::NotImplemented(
                                     "spread argument is not an array value",

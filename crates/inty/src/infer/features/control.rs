@@ -650,9 +650,9 @@ impl InferState {
     ) -> InferResult<(Type, TypeEnv)> {
         let right_type = self.infer_expr(env, right)?;
 
-        // Right side should be an array
+        // The right side is iterated: an array, a string, a `Set`, …
         let elem_type = self.fresh_type_var();
-        self.unify(span, &right_type, &Type::array(elem_type.clone()))?;
+        self.require_iterable(&right_type, &elem_type, right.span())?;
 
         let loop_env = match left {
             ForInLhs::VarDecl(name, _, decl_span, _) => {

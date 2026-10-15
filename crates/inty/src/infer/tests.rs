@@ -5960,3 +5960,120 @@ fn block_scoped_bindings_are_distinct() {
     // The inner binding isn't visible after its block.
     assert!(check_program("function f() { { const x = 1; } return x; }", &[]).is_err());
 }
+
+/// Check with the standard library (`Set`, `Map`, `Array.from`, …);
+/// `Ok` holds the display form of each named binding's scheme.
+fn check_with_stdlib(src: &str, names: &[&str]) -> Result<Vec<String>, String> {
+    let program = crate::frontends::javascript::parse_source(src).map_err(|e| e.to_string())?;
+    let (env, mut state) = crate::stdlib::initial_env_with_stdlib().map_err(|e| e.to_string())?;
+    let (_, env) = state
+        .infer_program_with_env(&env, &program)
+        .map_err(|e| e.to_string())?;
+    if let Some(e) = state.errors.first() {
+        return Err(e.to_string());
+    }
+    state.resolve_constraints().map_err(|e| e.to_string())?;
+    Ok(names
+        .iter()
+        .map(|n| {
+            let scheme = env.lookup(n).unwrap_or_else(|| panic!("{} not bound", n));
+            format!("{}", state.display_scheme(scheme))
+        })
+        .collect())
+}
+
+#[test]
+fn iterating_strings_sets_and_maps() {
+    let src = "for (const ch of \"abc\") { ch.toUpperCase(); }\n\
+               const xs = [...\"abc\"];\n\
+               const st = new Set(); st.add(1);\n\
+               let n = 0; for (const x of st) { n = n + x; }\n\
+               const ys = [...st];\n\
+               const s2 = new Set([\"a\", \"b\"]);\n\
+               const s3 = new Set(\"abc\");\n\
+               const s4 = new Set(s2);\n\
+               const m = new Map([[\"a\", 1]]);\n\
+               for (const [k, v] of m) { k.length + v; }\n\
+               const ks = [...m.keys()];\n\
+               const vs = [...m.values()];\n\
+               const es = [...m.entries()];\n\
+               function mk() { return new Set(); }\n\
+               const s5 = mk(); s5.add(\"q\");";
+    // (`mk`'s scheme has no `Iterable`: the one `new Set()` posed for the
+    // argument it leaves out is vacuous.)
+    let t = check_with_stdlib(src, &["xs", "ys", "ks", "vs", "es"]).unwrap();
+    assert_eq!(
+        t,
+        [
+            "String[]",
+            "Number[]",
+            "String[]",
+            "Number[]",
+            "[String, Number][]",
+        ]
+    );
+    for bad in [
+        // A Dict is a plain object: not iterable.
+        "/** const d: Dict<Number> */ const d; for (const x of d) {}",
+        "for (const x of {a: 1}) {}",
+        "const xs = [...5];",
+        // The element type is the set's.
+        "const s = new Set([\"a\"]); for (const x of s) { x * 2; }",
+        "const m = new Map([[\"a\", 1]]); m.set(\"b\", \"c\");",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn declared_iterable_host_collection() {
+    // A declaration says what iterating a host object gives, without
+    // claiming it is an array.
+    let src = "/** type El = {id: String} */\n\
+               /** type NodeList = {length: Number, item: (Number) => El | Null, [Symbol.iterator]: El} */\n\
+               /** const all: () => NodeList */\n\
+               const all;\n\
+               for (const el of all()) { el.id.length; }\n\
+               const ids = Array.from(all(), (el) => el.id);\n\
+               const els = [...all()];";
+    let t = check_with_stdlib(src, &["ids", "els"]).unwrap();
+    assert_eq!(t, ["String[]", "{id: String}[]"]);
+    // It isn't an array.
+    let bad = "/** type NodeList = {length: Number, [Symbol.iterator]: String} */\n\
+               /** const all: () => NodeList */\n\
+               const all;\n\
+               all().map((x) => x);";
+    assert!(check_with_stdlib(bad, &[]).is_err());
+}
+
+#[test]
+fn array_from_is_checked() {
+    let src = "const a = Array.from(new Set([\"s\"]));\n\
+               const b = Array.from(\"abc\");\n\
+               const c = Array.from({length: 3}, (_, i) => i * 2);\n\
+               const d = Array.from([1, 2], (x) => String(x));";
+    let t = check_with_stdlib(src, &["a", "b", "c", "d"]).unwrap();
+    assert_eq!(t, ["String[]", "String[]", "Number[]", "String[]"]);
+    for bad in [
+        // Was an unchecked cast: `a` and `b[]` unrelated.
+        "Array.from(new Set([\"s\"])).push(3);",
+        // An array-like object needs a map function.
+        "const z = Array.from({length: 3});",
+        "const z = Array.from(5);",
+        "const z = Array.from([1], (x) => x.length);",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn iterable_constraint_is_generalised() {
+    // A function that iterates its parameter takes any iterable.
+    let src = "function firstOf(xs) { for (const x of xs) { return x; } throw 0; }\n\
+               const a = firstOf([1, 2]);\n\
+               const b = firstOf(\"ab\");\n\
+               const c = firstOf(new Set([true]));";
+    let t = check_with_stdlib(src, &["firstOf", "a", "b", "c"]).unwrap();
+    assert_eq!(t[0], "<a, b> where Iterable a b => (a) => b");
+    assert_eq!(&t[1..], ["Number", "String", "Boolean"]);
+}

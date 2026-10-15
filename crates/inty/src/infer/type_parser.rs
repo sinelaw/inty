@@ -276,7 +276,7 @@ impl<'a> TypeParser<'a> {
         self.parse_simple_type()
     }
 
-    /// One constraint of a `where` clause: `Plus t`, `Indexable t t t`, or `t has {name: T, …}` (one `HasProp` per field).
+    /// One constraint of a `where` clause: `Plus t`, `Indexable t t t`, `Iterable t t`, or `t has {name: T, …}` (one `HasProp` per field).
     fn parse_constraint(&mut self) -> ParseResult<()> {
         let rest = &self.input[self.pos..];
         let keyword = |kw: &str| {
@@ -316,6 +316,15 @@ impl<'a> TypeParser<'a> {
             self.preds.push(TypePred::index_write(t));
             return Ok(());
         }
+        if keyword("Iterable") {
+            self.pos += "Iterable".len();
+            self.skip_whitespace();
+            let container = self.parse_simple_type()?;
+            self.skip_whitespace();
+            let element = self.parse_simple_type()?;
+            self.preds.push(TypePred::iterable(container, element));
+            return Ok(());
+        }
         if keyword("Indexable") {
             self.pos += "Indexable".len();
             let mut ts = Vec::new();
@@ -339,7 +348,7 @@ impl<'a> TypeParser<'a> {
                 .is_some_and(|c| c.is_whitespace() || c == '{'))
         {
             return Err(self.error(
-                "expected a constraint: `Plus t`, `Indexable t i e` \
+                "expected a constraint: `Plus t`, `Indexable t i e`, `Iterable t e` \
                  or `t has {field: T}`"
                     .to_string(),
             ));
@@ -852,8 +861,9 @@ impl<'a> TypeParser<'a> {
         self.skip_whitespace();
 
         // An index signature, `{ [String]: V }` or `{ [key: String]: V }`:
-        // a `Dict<V>`.
-        if self.peek_char() == Some('[') {
+        // a `Dict<V>`. (`{ [Symbol.iterator]: T, … }` is a record.)
+        if self.peek_char() == Some('[') && !self.input[self.pos..].starts_with("[Symbol.iterator]")
+        {
             self.pos += 1;
             self.skip_whitespace();
             let save = self.pos;
@@ -972,7 +982,13 @@ impl<'a> TypeParser<'a> {
                     self.pos += word.map_or(0, str::len);
                     self.skip_whitespace();
                 }
-                let name = self.parse_ident()?;
+                // `[Symbol.iterator]: T`: what iterating the object gives.
+                let name = if self.input[self.pos..].starts_with("[Symbol.iterator]") {
+                    self.pos += "[Symbol.iterator]".len();
+                    crate::types::ITER_KEY.to_string()
+                } else {
+                    self.parse_ident()?
+                };
                 self.skip_whitespace();
                 // Optional property `x?: T` allocates a fresh presence
                 // variable on the field (Remy '94) — the caller may

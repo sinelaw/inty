@@ -595,6 +595,19 @@ Typed arrays are `Int32Array`, `Uint8Array`, `Float32Array` and `Float64Array`. 
 - A store into an integer array takes any number and wraps it to 32 or 8 bits, as JavaScript's `ToInt32` / `ToUint8` do (`a[0] = 1.5` stores 1).
 - They are made with `new Int32Array(n)` or `Int32Array.from(xs)`.
 
+### Iteration
+
+`for (const x of it)`, a spread `[...it]` and `Array.from(it)` iterate `it`, which may be:
+
+- an array (its elements), a typed array (numbers), a tuple (its components, all of one type);
+- a string (its characters, as strings: code points);
+- a `Set<T>` (`T`s), a `Map<K, V>` (`[K, V]` pairs), and what their `keys()`, `values()` and `entries()` give;
+- any record whose type says what iterating it gives with a `[Symbol.iterator]: T` field. A declaration says a host collection is iterable this way without claiming it is an array: `/** type NodeList = {length: Number, item: (Number) => Element | Null, [Symbol.iterator]: Element} */`.
+
+Not a `Dict<V>` or another plain object (`for … of` throws on one): iterate `Object.keys(o)`, `Object.values(o)` or `Object.entries(o)`. A function that iterates its parameter takes any iterable: its scheme says `where Iterable a b` (a `where` clause in an annotation may say it too).
+
+`new Set(items?)` and `new Map(entries?)` take any iterable of items or of `[K, V]` pairs (an array literal of pairs is checked as one). `Array.from(it)` gives an array of `it`'s elements; `Array.from(it, (x, i) => …)` an array of the map function's results, and also takes an array-like object, `Array.from({length: n}, (_, i) => i)` (whose elements are `undefined`).
+
 ### Function types
 
 A function-type annotation is `(P1, P2, ...) => R`. Parameter names are optional. For functions, both forms below are accepted:
@@ -708,7 +721,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Variables      | `var` (function-scoped), `const`, `let` (block-scoped; a `for (const x of …)` binding is the loop body's)  |
 | Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
-| Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
+| Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of` — see [Iteration](#iteration)                              |
 | Classes        | declarations + `export default class`, instance methods, fields, getters (no setters), private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |

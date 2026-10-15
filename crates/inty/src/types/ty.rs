@@ -310,6 +310,16 @@ pub enum ClassName {
     /// object is (the model's waiting `Merge`). The operand and `so_far`
     /// determine `result`.
     Spread,
+    /// `Iterable c e`: a `c` can be iterated (`for … of`, `[...c]`,
+    /// `Array.from(c)`), giving `e`s: an array its elements, a string its
+    /// characters (strings), a typed array numbers, a tuple its
+    /// components (all of one type), a record with a `[Symbol.iterator]:
+    /// e` field (a `Set<T>`, a `Map<K, V>`'s `[K, V]` entries, a host
+    /// collection a declaration says is iterable). Not a `Dict<V>`, which
+    /// is a plain object: `Object.keys`/`values`/`entries` iterate it.
+    /// The container determines the element; it waits while it's a
+    /// variable.
+    Iterable,
 }
 
 /// Type class predicate: a constraint that a type must satisfy.
@@ -346,6 +356,15 @@ impl TypePred {
         TypePred {
             class: ClassName::Indexable,
             types: vec![container, index, element],
+            origin: None,
+        }
+    }
+
+    /// `Iterable c e`: iterating a `c` gives `e`s.
+    pub fn iterable(container: Type, element: Type) -> Self {
+        TypePred {
+            class: ClassName::Iterable,
+            types: vec![container, element],
             origin: None,
         }
     }
