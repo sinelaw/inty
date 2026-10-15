@@ -5863,3 +5863,16 @@ fn a_method_signature_says_its_this() {
     .unwrap_err();
     assert!(err.contains("(this: T, …) => R"), "{err}");
 }
+
+#[test]
+fn test_member_on_recursive_union_alias() {
+    // A union that refers to itself is a named (recursive) type: reading a
+    // field reads it from each member, and the tag narrows, as for a union
+    // written out.
+    let src = "/** type T = {kind: \"a\", kids: T[]} | {kind: \"b\", n: Number} */\n\
+               /** function size(t: T) => Number */\n\
+               function size(t) { if (t.kind === \"b\") return t.n; return t.kids.length; }\n\
+               /** function tag(t: T) => String */\n\
+               function tag(t) { return t.kind; }";
+    infer_program_with_state(src).expect("field access on a recursive union alias");
+}

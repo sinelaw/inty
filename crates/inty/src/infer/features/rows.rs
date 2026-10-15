@@ -1217,6 +1217,15 @@ impl InferState {
                     return self.infer_member_on_type(&unrolled, property, span);
                 }
             }
+            // A recursive alias of a union (`type T = {kind: "a", kids: T[]}
+            // | {kind: "b"}`): read the property from each member, as for
+            // the union written out. A row fall-through would try to make
+            // the whole union one row.
+            Type::Named(id, args) => {
+                if let Some(unrolled @ Type::Union(_)) = self.unroll_named(*id, args) {
+                    return self.infer_member_on_type(&unrolled, property, span);
+                }
+            }
             _ => {}
         }
 
