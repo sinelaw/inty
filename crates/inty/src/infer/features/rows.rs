@@ -1047,7 +1047,7 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
-        let obj_type = self.zonk(&obj_type);
+        let obj_type = self.zonk_head(&obj_type);
         // (After the object's own members.) Only a store's target needs
         // it (see `infer_store_target`).
         if self.recording_member_receiver {
@@ -1093,7 +1093,7 @@ impl InferState {
         if let Type::Union(members) = obj_type {
             let mut result: Option<Type> = None;
             for m in members {
-                let m_resolved = self.zonk(m);
+                let m_resolved = self.zonk_head(m);
                 let prop_ty = self.infer_member_on_type(&m_resolved, property, span)?;
                 result = Some(match result {
                     None => prop_ty,
@@ -1193,13 +1193,13 @@ impl InferState {
                     // if it was already `Abs` we get a structured
                     // presence-mismatch error.
                     self.unify_presence(span, &entry.presence, &crate::types::Presence::Pre)?;
-                    return Ok(self.zonk(&entry.ty));
+                    return Ok(self.zonk_head(&entry.ty));
                 }
                 // Otherwise the property may live in a row reached
                 // through the tail (e.g., a flex tail bound by an
                 // earlier unification to another row).
                 if let Some(prop_type) = self.lookup_property_in_row_tail(row, property) {
-                    return Ok(self.zonk(&prop_type));
+                    return Ok(self.zonk_head(&prop_type));
                 }
                 // If property still not found and row is closed, the
                 // unification fall-through below will report it.
@@ -1207,7 +1207,7 @@ impl InferState {
             Type::Module(m) => {
                 if let Some(scheme) = m.exports.get(property) {
                     let ty = self.instantiate(scheme);
-                    return Ok(self.zonk(&ty));
+                    return Ok(self.zonk_head(&ty));
                 }
                 return Err(crate::error::TypeError::Module {
                     message: format!("module {:?} has no export named {:?}", m.source, property),
@@ -1257,7 +1257,7 @@ impl InferState {
         // `resolve_has_prop`) — so a parameter used as `s.slice(i)` can
         // still be a string, and every access gets its own copy of a
         // built-in method's type.
-        let receiver = self.zonk(obj_type);
+        let receiver = self.zonk_head(obj_type);
         if matches!(receiver, Type::Var(TVarName::Flex(_))) {
             self.add_constraint(
                 TypePred::has_prop(receiver, property, result_type.clone()),

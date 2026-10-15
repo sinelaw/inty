@@ -685,7 +685,9 @@ impl InferState {
             } => {
                 // Infer object once
                 let obj_type = self.infer_expr(env, object)?;
-                let obj_type_applied = self.zonk(&obj_type);
+                // Only its head: a receiver may be a large row (a DOM
+                // element's), and resolving it whole copies it.
+                let obj_type_applied = self.zonk_head(&obj_type);
 
                 if matches!(obj_type_applied, Type::Var(TVarName::Flex(_))) {
                     // A receiver whose type isn't known yet: the method and
@@ -872,7 +874,9 @@ impl InferState {
         // `this` — so resolve those now: the result type is then known
         // to what follows.
         self.simplify_has_props()?;
-        Ok(self.zonk(&ret_type))
+        // Its head: a result may be a large row (`appendChild`'s, a DOM
+        // element's), which resolving whole copies.
+        Ok(self.zonk_head(&ret_type))
     }
 
     /// A call of the standard library's `Array.from`, whose result

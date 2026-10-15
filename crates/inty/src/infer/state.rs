@@ -866,6 +866,13 @@ impl InferState {
         }
     }
 
+    /// `ty` with its head resolved through the substitution (what a
+    /// bound variable stands for), and nothing below it: cheap on a large
+    /// type, where [`Self::zonk`] copies the whole of it.
+    pub fn zonk_head(&mut self, ty: &Type) -> Type {
+        super::zonk::zonk_head_cow(&mut self.var_table, ty).into_owned()
+    }
+
     /// Generate a fresh type ID for recursive types.
     pub fn fresh_type_id(&mut self) -> TypeId {
         let id = self.type_id_source;
@@ -2580,12 +2587,33 @@ impl InferState {
     }
 
     /// Check if a type variable occurs in a type (occurs check).
+    ///
+    /// Walks `ty` through the substitution as it goes, each bound
+    /// variable's type once: applying the substitution first copied the
+    /// type whole, and a type that shares a large part (a DOM element's
+    /// row, reached again through each of its event handlers' events) was
+    /// expanded into a tree exponentially larger than itself.
     pub fn occurs_in(&self, var: TVarId, ty: &Type) -> bool {
-        let ty = self.apply_subst(ty);
-        self.occurs_in_impl(var, &ty)
+        let mut seen = std::collections::HashSet::new();
+        self.occurs_in_impl(var, ty, &mut seen)
     }
 
-    fn occurs_in_impl(&self, var: TVarId, ty: &Type) -> bool {
+    /// The type a variable is bound to, if it is bound and not yet seen.
+    fn bound_unseen(
+        &self,
+        id: TVarId,
+        seen: &mut std::collections::HashSet<TVarId>,
+    ) -> Option<&Type> {
+        let bound = self.main_subst.get(&TVarName::Flex(id))?;
+        seen.insert(id).then_some(bound)
+    }
+
+    fn occurs_in_impl(
+        &self,
+        var: TVarId,
+        ty: &Type,
+        seen: &mut std::collections::HashSet<TVarId>,
+    ) -> bool {
         match ty {
             Type::Number
             | Type::String
@@ -2598,7 +2626,12 @@ impl InferState {
             | Type::TypedArray(_)
             | Type::Error => false,
 
-            Type::Var(TVarName::Flex(id)) => *id == var,
+            Type::Var(TVarName::Flex(id)) => {
+                *id == var
+                    || self
+                        .bound_unseen(*id, seen)
+                        .is_some_and(|b| self.occurs_in_impl(var, b, seen))
+            }
             Type::Var(TVarName::Skolem(_)) => false,
 
             Type::Func {
@@ -2608,32 +2641,47 @@ impl InferState {
             } => {
                 this_type
                     .as_ref()
-                    .is_some_and(|t| self.occurs_in_impl(var, t))
-                    || params.iter().any(|p| self.occurs_in_impl(var, &p.ty))
-                    || self.occurs_in_impl(var, ret)
+                    .is_some_and(|t| self.occurs_in_impl(var, t, seen))
+                    || params.iter().any(|p| self.occurs_in_impl(var, &p.ty, seen))
+                    || self.occurs_in_impl(var, ret, seen)
             }
 
             Type::Row(row) => {
-                row.props.values().any(|e| self.occurs_in_impl(var, &e.ty))
-                    || matches!(&row.tail, RowTail::Open(TVarName::Flex(id)) if *id == var)
-                    || matches!(&row.tail, RowTail::Recursive(_, args) if args.iter().any(|a| self.occurs_in_impl(var, a)))
+                row.props
+                    .values()
+                    .any(|e| self.occurs_in_impl(var, &e.ty, seen))
+                    || match &row.tail {
+                        RowTail::Open(TVarName::Flex(id)) => {
+                            *id == var
+                                || self
+                                    .bound_unseen(*id, seen)
+                                    .is_some_and(|b| self.occurs_in_impl(var, b, seen))
+                        }
+                        RowTail::Recursive(_, args) => {
+                            args.iter().any(|a| self.occurs_in_impl(var, a, seen))
+                        }
+                        _ => false,
+                    }
             }
 
-            Type::Array(elem) => self.occurs_in_impl(var, elem),
-            Type::Maybe(_, inner) => self.occurs_in_impl(var, inner),
-            Type::Promise(inner) => self.occurs_in_impl(var, inner),
-            Type::Map(value) => self.occurs_in_impl(var, value),
-            Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in_impl(var, e)),
+            Type::Array(elem) => self.occurs_in_impl(var, elem, seen),
+            Type::Maybe(_, inner) => self.occurs_in_impl(var, inner, seen),
+            Type::Promise(inner) => self.occurs_in_impl(var, inner, seen),
+            Type::Map(value) => self.occurs_in_impl(var, value, seen),
+            Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in_impl(var, e, seen)),
 
-            Type::Named(_, args) => args.iter().any(|a| self.occurs_in_impl(var, a)),
+            Type::Named(_, args) => args.iter().any(|a| self.occurs_in_impl(var, a, seen)),
 
             Type::Literal(_) => false,
-            Type::Union(members) => members.iter().any(|m| self.occurs_in_impl(var, m)),
+            Type::Union(members) => members.iter().any(|m| self.occurs_in_impl(var, m, seen)),
 
-            Type::Module(m) => {
+            Type::Module(_) => {
                 // A module's exports are schemes; the occurs check looks
                 // at free variables of each scheme (i.e. those not bound
                 // by the scheme's quantifier).
+                let Type::Module(m) = self.apply_subst(ty) else {
+                    unreachable!("a module stays one")
+                };
                 m.exports
                     .values()
                     .any(|scheme| scheme.free_vars().contains(&TVarName::Flex(var)))
@@ -2643,23 +2691,41 @@ impl InferState {
 
     /// Check if a type variable occurs within a row type (for recursive type detection).
     /// Returns true if the variable occurs at the tail position of a row.
+    /// (Walks through the substitution lazily, as [`Self::occurs_in`].)
     pub fn is_inside_row_type(&self, var: TVarId, ty: &Type) -> bool {
-        let ty = self.apply_subst(ty);
-        self.is_inside_row_type_impl(var, &ty, false)
+        // A variable's type is looked at once outside a row and once
+        // inside one (where finding `var` means more).
+        let mut seen = [
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        ];
+        self.is_inside_row_type_impl(var, ty, false, &mut seen)
     }
 
-    fn is_inside_row_type_impl(&self, var: TVarId, ty: &Type, in_row: bool) -> bool {
+    fn is_inside_row_type_impl(
+        &self,
+        var: TVarId,
+        ty: &Type,
+        in_row: bool,
+        seen: &mut [std::collections::HashSet<TVarId>; 2],
+    ) -> bool {
         match ty {
             Type::Row(row) => {
-                // Check if var is the row tail
-                if matches!(&row.tail, RowTail::Open(TVarName::Flex(id)) if *id == var) {
-                    return true;
-                }
+                // Check if var is the row tail (a bound tail continues
+                // the row)
+                let tail = match &row.tail {
+                    RowTail::Open(TVarName::Flex(id)) if *id == var => return true,
+                    RowTail::Open(TVarName::Flex(id)) => self
+                        .bound_unseen(*id, &mut seen[1])
+                        .is_some_and(|b| self.is_inside_row_type_impl(var, b, true, seen)),
+                    _ => false,
+                };
 
                 // Check inside properties - we're now inside a row
-                row.props
+                tail || row
+                    .props
                     .values()
-                    .any(|e| self.is_inside_row_type_impl(var, &e.ty, true))
+                    .any(|e| self.is_inside_row_type_impl(var, &e.ty, true, seen))
             }
 
             Type::Func {
@@ -2671,11 +2737,11 @@ impl InferState {
                 // (this is the key for equi-recursive types with object methods)
                 this_type
                     .as_ref()
-                    .is_some_and(|t| self.is_inside_row_type_impl(var, t, in_row))
+                    .is_some_and(|t| self.is_inside_row_type_impl(var, t, in_row, seen))
                     || params
                         .iter()
-                        .any(|p| self.is_inside_row_type_impl(var, &p.ty, in_row))
-                    || self.is_inside_row_type_impl(var, ret, in_row)
+                        .any(|p| self.is_inside_row_type_impl(var, &p.ty, in_row, seen))
+                    || self.is_inside_row_type_impl(var, ret, in_row, seen)
             }
 
             Type::Var(TVarName::Flex(id)) if *id == var => {
@@ -2683,22 +2749,25 @@ impl InferState {
                 // This is valid for recursion if we're inside a row
                 in_row
             }
+            Type::Var(TVarName::Flex(id)) => self
+                .bound_unseen(*id, &mut seen[usize::from(in_row)])
+                .is_some_and(|b| self.is_inside_row_type_impl(var, b, in_row, seen)),
 
             Type::Array(elem) | Type::Maybe(_, elem) => {
-                self.is_inside_row_type_impl(var, elem, in_row)
+                self.is_inside_row_type_impl(var, elem, in_row, seen)
             }
-            Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row),
-            Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
+            Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row, seen),
+            Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row, seen),
             // A recursive type's arguments, as a type written out there
             // would be: `t ~ μ<{c: () => t}>` (an instance whose field
             // holds the factory that made it) is solved by a recursive
             // type, not refused by the occurs check.
             Type::Named(_, args) => args
                 .iter()
-                .any(|a| self.is_inside_row_type_impl(var, a, in_row)),
+                .any(|a| self.is_inside_row_type_impl(var, a, in_row, seen)),
             Type::Tuple(elems) => elems
                 .iter()
-                .any(|e| self.is_inside_row_type_impl(var, e, in_row)),
+                .any(|e| self.is_inside_row_type_impl(var, e, in_row, seen)),
 
             _ => false,
         }
