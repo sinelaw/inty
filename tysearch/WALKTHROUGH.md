@@ -46,6 +46,32 @@ The percentage on each rung is the share of safe programs its rules
 approve. Each rung also shows a program it still rejects although it runs
 fine: the smallest it could find, so they start obvious and get obscure.
 
+Under each rung, the rules themselves, exactly as the tool prints them,
+showing what changed since the rung before. How to read them:
+
+| In the rules | Means |
+|---|---|
+| `+ : (number, number) -> number` | `+` takes two numbers and gives a number |
+| `a`, `b`, `c` | any kind; the same letter is the same kind each time |
+| `fn<a -> b>`, `fn2<a, b -> c>` | a function taking an `a` (and a `b`) and giving back a `b` (a `c`) |
+| `{x: a}`, `{x: a, y: b}` | an object whose `x` holds an `a` (and whose `y` a `b`) |
+| `array<number -> a>` | an array: index it with a number, get an `a` |
+| `bool` | `true`, `false`, `undefined` or `null`: this language treats them alike |
+| `unknown` | anything at all |
+| `[x0: a] b` | this part sees a new variable `x0` holding an `a`, and gives a `b` |
+| `b (return b)` | gives a `b`, and any `return` inside also gives a `b` |
+| `+` / `-` at the start of a line | new at this rung / dropped at this rung |
+| `... and 74 more like these` | the same rule for other kinds, one each |
+| `child 1, x0` | the variable `x0` in a construct's second part (counting from 0) |
+
+The constructs go by the tool's own names: `func1` is `(x0) => body`, and
+inside it `x1` is the function itself; `app1` is `f(x)`; `cond` is
+`c ? a : b`; `seq` is `a; b`; `let` is `let x0 = a; b`; `idx` is `a[i]`;
+`idx=` is `a[i] = v`; `.x=` is `o.x = v`; `try` is
+`try { a } catch (x0) { b }`; and `typeof=number` is
+`typeof v === "number" ? then : otherwise`, with `x0` the value tested
+in both branches, the otherwise branch first.
+
 ### Rung 0, the start: fixed rules only (10.8%)
 
 Every rule names exact kinds: "`+` takes two numbers". It knows nothing
