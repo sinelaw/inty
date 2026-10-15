@@ -36,6 +36,12 @@ time. Each try means a full search for rules, then checking them on about
 approves more of them, or as many with fewer rules, and still never
 approves a crash.
 
+The programs grow as it climbs. Each try also writes programs that only
+its new rules would approve, and runs them. If they work, they count for
+the new ability, and every later try is judged on them too. If they crash,
+they count against it. That is how an ability that matters only in
+particular programs, like using one function at two types, gets noticed.
+
 The percentage on each rung is the share of safe programs its rules
 approve.
 
@@ -47,19 +53,19 @@ needs a separate rule for every pair of kinds.
 
 It can check: `1 + 1`, `"a" + "a"`.
 
-### Rung 1, kept: "any kind" placeholders (28.0%)
+### Rung 1, kept: "any kind" placeholders (28.4%)
 
 Rules may say "any kind" (a type variable): "`===` compares any two
 values". The 527 rules shrink to 44, and approvals nearly triple.
 
-### Rung 2, kept: knowing what's inside (31.7%)
+### Rung 2, kept: knowing what's inside (32.3%)
 
 "Object with x" becomes "object whose x is a number". "Function" becomes
 "function from number to string". "Array" becomes "array of strings".
 
 Now it can also check: `({x: 1}).x + 1`, `[1, 1][0] + 1`.
 
-### Rung 3, kept, the biggest jump: variables inside code (55.0%)
+### Rung 3, kept, the biggest jump: variables inside code (55.7%)
 
 Rules for things that name a value: function parameters, `let`, and the
 `e` in `catch (e)`. Something thrown could be anything, so it learns that
@@ -68,39 +74,52 @@ Rules for things that name a value: function parameters, `let`, and the
 Now it can also check: `((x) => x + 1)(1)`,
 `try { throw 1 } catch (e) { typeof e }`.
 
-> **Tried and dropped:** functions you can use at several types (generic
-> `let`). They approved a few more programs, but not enough to count.
+### Rung 4, kept: one function, many types (56.0%)
 
-### Rung 4, kept: tracking `return` (63.4%)
+A value bound by `let` may be used at different types each time, if it is
+a plain value like a function (generic `let`). It approved 76 programs
+nothing else could.
+
+### Rung 5, kept: tracking `return` (64.2%)
 
 A `return` sends a value out of the function it's in. So the rules have to
 know what the function is expected to give back.
 
-Now it can also check: `((x) => { return x + 1 })(1)`.
+Now it can also check: `((x) => { return x + 1 })(1)`, and
+`let id = (x) => x; id(1); id("a")`. That one needed both rungs 4 and 5.
+Until `return` is tracked, a function's body could hand back something
+other than its last value. So the rules can't say "the identity gives back
+whatever it gets", only "number to number", "string to string", and so on,
+separately.
 
 > **Tried and dropped:** "a number is also an ok string" style rules
 > (subtyping). Nothing in this language works that way.
 
-### Rung 5, kept: "this or that" types (70.0%)
+### Rung 6, kept: "this or that" types (70.6%)
 
 When the two sides of `c ? a : b` differ, the result is "number or string"
 (a union type).
 
 Now it can also check: `typeof (true ? 1 : "a")`.
 
-> **Tried and dropped:** narrowing (knowing `x` is a number inside
-> `if (typeof x === "number")`), generic `let` again, and both in pairs.
-> Each approved a few more programs, but too few to count.
+### Rung 7, kept: knowing what a `typeof` test tells you (70.8%)
+
+Inside `if (typeof x === "number")`, `x` is a number, even if it could
+otherwise be a string (narrowing).
+
+Now it can also check: `let x = true ? 1 : "a"; typeof x === "number" ? -x : x[0]`.
+
+> **Tried and dropped:** subtyping again.
 
 ### Cleanup: could any ability go?
 
 Finally it tries removing each ability it kept, in case a later one made
-an earlier one unnecessary. Every removal approved fewer programs. So all
-five stay.
+an earlier one unnecessary. Every removal approved fewer programs, or
+needed more rules. So all seven stay.
 
 ## What it never did
 
-At every one of the 20 tries, including those it dropped, it approved no
+At every one of the 17 tries, including those it dropped, it approved no
 crashing program. These two were rejected every time:
 
 | Program | What happens |
@@ -108,30 +127,19 @@ crashing program. These two were rejected every time:
 | `1 + "a"` | crashes: can't add a number and a string |
 | `({x: 1}).y` | crashes: the object has no `y` |
 
-The final rules were checked on 99,963 programs, 61,174 of them safe. They
-approved 42,697 of the safe ones, and not one that crashes.
+The final rules were checked on 99,950 programs, 61,159 of them safe. They
+approved 42,688 of the safe ones, and not one that crashes.
 
 ## Still out of reach
 
-- `let id = (x) => x; id(1); id("a")`: safe, but rejected. Using one
-  function at two types needs generic `let`, which didn't make the cut in
-  this session.
-- `let x = true ? 1 : "a"; typeof x === "number" ? -x : x[0]`: safe, but
-  rejected. This needs narrowing, which was also tried and dropped.
-- `(true ? 1 : "a") + 1`: rejected on purpose. It happens to work, but the
-  rules can't know the condition is `true`. Had it been `false`, it would
-  add a string to a number and crash. A checker has to be careful like
-  this.
+`(true ? 1 : "a") + 1` is rejected on purpose. It happens to work, but the
+rules can't know the condition is `true`. Had it been `false`, it would
+add a string to a number and crash. A checker has to be careful like this.
 
 ## Where this came from
 
-One run of `cargo run --release --example climb_walkthrough`, which took
-77 minutes, recorded in [ITERATIONS.md](ITERATIONS.md). The percentages are
-shares of safe programs: every small program, 20,000 random ones, and
-programs the rules on each rung generated, kept so that later rungs are
+One run of `cargo run --release --example climb_walkthrough`, which took 68
+minutes, recorded in [ITERATIONS.md](ITERATIONS.md) (iteration 13). The
+percentages are shares of safe programs: every small program, 20,000
+random ones, and the programs each try wrote, kept so that later tries are
 judged on them too.
-
-Since this run, the bar for keeping an ability is lower (one more program
-in 2,000 approved, from one in 500), so generic `let` and narrowing may
-make the cut in later runs. Running the example again shows the current
-climb, each step as it finishes.

@@ -522,7 +522,7 @@ Two things to follow up:
 
 - **`let`-generalisation is never kept.** It types no more of the fixed
   programs, which are small and rarely use a `let`-bound function at two
-  types. The measure undervalues it.
+  types. The measure undervalues it. Fixed in iteration 13.
 - **The check caught unsound systems four times.** Binders before exit
   types (1 unsound), generalisation at step 10 (1), and removing refined
   sorts (74) or type variables (25) late on. The climb dropped them all,
@@ -591,6 +591,61 @@ under a second, with the same result.
 - **The semantics bounds what can be found.** Implicit flows
   (`if secret < 1 then print(0) else print(1)`) never get stuck, so
   nothing rules them out. Noninterference is about two runs, not one.
+
+## 13. Generalisation earns its place
+
+**The problem.** In the model's climb, `let`-generalisation was tried
+three times and never kept. The climb now reports each step's gain over
+the best on the same programs, and that showed it typed exactly as many
+(+0). Its rules were right: the policy generalised syntactic values. The
+evidence was missing: random and generated programs almost never use one
+`let`-bound function at two types. Narrowing was the same, and worse: the
+generator didn't narrow inside `typeof` branches.
+
+**The fix: contrast.**
+
+- After each candidate's run, the climb generates programs with the
+  candidate's rules and keeps those the best's rules reject. Run, they are
+  the evidence for the candidate, or, if they crash, against it.
+- Half are rooted at a binder.
+- Some are built from the candidate's own pieces: a binder it generalises,
+  a polymorphic syntactic value from its generated programs, and two uses
+  of the variable through its sort's eliminator with different leaves. In
+  the model these come out as `let f = (x) => [x]; f(true); f("a")`. None
+  of this is the model's: it is read off the rules.
+- The generator narrows as the checker does.
+- `never`, for a variable no value reaches, now fits every premise.
+  Narrowing had lost programs whose dead branch called it.
+- The bar for keeping a capability is one program in 2,000: each run adds a
+  few hundred programs, so what only one capability types is a small
+  share.
+
+**Found.** On ML references, the climb keeps refined sorts, binders and
+`let`-generalisation: the value restriction, found by climbing. On the
+model (68 minutes, every step sound):
+
+```
+step  0: start                          10.8%   527 rules  kept
+step  1: + type variables               28.4%    44 rules  kept
+step  2: + refined sorts                32.3%    52 rules  kept
+step  3: + binders                      55.7%    62 rules  kept
+step  4: + let-generalisation           56.0%   (+76)      kept
+step  5: + exit types                   64.2%    60 rules  kept
+step  7: + unions                       70.6%    60 rules  kept
+step  8: + narrowing                    70.8%   (+64)      kept
+steps 10-16: removing any of them loses programs, or adds a rule
+```
+
+`let id = (x) => x; id(1); id("a")` is typed from step 5, not 4. Without
+exit types a body can `return` something else than its value, so the
+search gives `func1` a rule per result sort, not one with a variable. The
+identity has three types, not a generic one. Generalisation's +76 at step
+4 came from other binders (the `typeof` tests').
+
+**To follow up.** Removing narrowing at the end would type 75 more
+programs, with one more rule. So narrowing also loses some programs, even
+with `never` fitting everything, and is kept on size. Something still
+types worse narrowed.
 
 ## Next
 
