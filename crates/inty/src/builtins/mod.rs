@@ -1217,6 +1217,13 @@ impl InferState {
         if name == "length" && matches!(receiver, Type::Array(_)) {
             return Ok(());
         }
+        // `d.key = v` on a JavaScript `Dict<V>` stores that key, as
+        // `d["key"] = v` does.
+        if matches!(receiver, Type::Map(_))
+            && self.language == crate::ast::SourceLanguage::JavaScript
+        {
+            return Ok(());
+        }
         let builtin = match &receiver {
             // A function's row has a call signature; one a spread's result
             // carries as absent (`{...{...o}}`) is an object's.

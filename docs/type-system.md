@@ -587,7 +587,7 @@ Reading an array's or a string's element at an index it hasn't (`xs[xs.length]`,
 
 A **tuple** `[A, B]` is a fixed-length array whose elements have their own types. An array literal where one is expected is one; `t[0]` with a constant index reads that element, and `const [a, b] = t` destructures it. An array literal with elements of different types and no annotation is an error that suggests a tuple (or a record, or an element union).
 
-A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
+A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); storing one, `d.k = v` or `d[k] = v`, takes a `V` (not `undefined`, which `Object.values` would then return; an update such as `d.k += 1` reads the entry first, so it needs it narrowed); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
 
 Typed arrays are `Int32Array`, `Uint8Array`, `Float32Array` and `Float64Array`. Each is its own type, not an ordinary array:
 - It has a fixed length: `.length`, `.fill(v)`, `.subarray(start?, end?)`, `.slice(start?, end?)`, `.set(other, offset?)`, `.buffer` and `.byteLength`, but no `push`.

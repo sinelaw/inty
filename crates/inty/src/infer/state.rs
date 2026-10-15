@@ -409,7 +409,7 @@ pub struct InferState {
     /// frontend-specific rules — currently the unit type and which
     /// primitive-method surface (`str`/`list` vs `String`/`Array`) a value
     /// carries. Defaults to JavaScript.
-    pub(in crate::infer) language: crate::ast::SourceLanguage,
+    pub(crate) language: crate::ast::SourceLanguage,
 
     /// Coinductive unification assumptions for recursive `Named` types.
     /// When `unify` is about to unfold a `Named(id, ...)` against another

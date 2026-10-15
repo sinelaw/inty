@@ -22,7 +22,7 @@ impl InferState {
             op,
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
         ) {
-            self.infer_store_target(env, argument, span)?
+            self.infer_store_target(env, argument, span, false)?
         } else {
             self.infer_expr(env, argument)?
         };

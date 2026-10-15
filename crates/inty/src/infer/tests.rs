@@ -5911,3 +5911,26 @@ fn string_replace_with_a_function() {
     // the pattern.
     assert!(check_program("\"ab\".replace(/(a)/, (m, g) => g);", &[]).is_err());
 }
+
+#[test]
+fn dict_dot_and_bracket_writes_agree() {
+    // `d.k = v` stores key `k` of a `Dict<V>`, as `d["k"] = v` does, and
+    // both store a `V`: an `undefined` stored would come back out of
+    // `Object.values`. A read is `V | Undefined` (the key may be missing),
+    // so an update that reads the entry first needs it narrowed.
+    let ok = "/** function g({dataset: Dict<String>}) => Undefined */\n\
+              function g(el) { el.dataset.x = \"a\"; el.dataset[\"y\"] = \"b\"; el.dataset.z ??= \"c\"; }";
+    check_program(ok, &[]).unwrap();
+    for bad in [
+        "el.dataset.x = undefined;",
+        "el.dataset[\"x\"] = undefined;",
+        "el.dataset.x = 1;",
+        "el.dataset.x += \"s\";",
+    ] {
+        let src = format!(
+            "/** function g({{dataset: Dict<String>}}) => Undefined */\n\
+             function g(el) {{ {bad} }}"
+        );
+        assert!(check_program(&src, &[]).is_err(), "{src}");
+    }
+}
