@@ -321,6 +321,10 @@ impl Checker {
                         for ua in alts {
                             // Each way of typing the bound variables.
                             let mut binds: Vec<Vec<Sch>> = vec![Vec::new()];
+                            // No value reaches a child whose variable
+                            // narrows to nothing: it is typed, but its type
+                            // doesn't count.
+                            let mut dead = false;
                             for (j, b) in prem.bound.iter().enumerate() {
                                 let b = match self.narrow.get(&(t.con, i, j)) {
                                     Some(sorts) if ua.resolve(b).is_ground() => {
@@ -328,6 +332,7 @@ impl Checker {
                                     }
                                     _ => b.clone(),
                                 };
+                                dead |= b == Ty::Never;
                                 let options = self.schemes(&ua, ctx, t, i, j, &b);
                                 binds = binds
                                     .into_iter()
@@ -380,7 +385,7 @@ impl Checker {
                                     }
                                 } else {
                                     for (mut ub, ty) in self.infer(ua.clone(), ctx, kid_exit, kid) {
-                                        if self.fits(&mut ub, &ty, &prem.ty, &widen) {
+                                        if dead || self.fits(&mut ub, &ty, &prem.ty, &widen) {
                                             next.push(ub);
                                         }
                                     }
