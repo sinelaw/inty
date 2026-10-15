@@ -5790,7 +5790,7 @@ fn a_field_of_an_empty_default_is_not_read() {
     let src = "/** function f<T>(raw: T) => String[] */\n\
                function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => x); }";
     let err = check_program(src, &[]).unwrap_err();
-    assert!(format!("{err}").contains("'off' not found"), "{err}");
+    assert!(err.to_string().contains("'off' not found"), "{err}");
     let src = "/** function decode<T>(c: T) => String[] */\n\
                function decode(c) {\n\
                  if (!c) return [];\n\
