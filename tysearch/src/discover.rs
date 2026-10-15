@@ -2161,6 +2161,9 @@ pub fn step_doc(i: usize, s: &Step, prev: Option<&Discovery>) -> String {
     let changed = facts.iter().any(|f| !facts_before.contains(f))
         || facts_before.iter().any(|f| !facts.contains(f));
     if changed {
+        if out.ends_with("```\n") {
+            out.push_str("(no rule changes)\n");
+        }
         out.push_str("\nbesides the rules:\n");
         for f in &facts {
             let mark = if prev.is_none() || facts_before.contains(f) {
