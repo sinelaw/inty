@@ -653,3 +653,25 @@ fn stdlib_host_methods_are_called_on_their_object() {
     err("const m = Map(); const g = m.get; const v = g(\"a\");");
     err("const r = [\"k\"].map(localStorage.getItem);");
 }
+
+// The canvas context's and a gradient's methods say their `this`: called on
+// them, as painters do, but not taken off them. A type naming the
+// context (`type Ctx = CanvasRenderingContext2D<…>`) types a painter.
+#[test]
+fn canvas_methods_are_called_on_their_context() {
+    ok("
+        const g = document.createElement(\"canvas\").getContext(\"2d\");
+        g.beginPath(); g.moveTo(0, 0); g.lineTo(1, 1); g.stroke();
+        const grad = g.createLinearGradient(0, 0, 1, 0);
+        grad.addColorStop(0, \"red\");
+        g.fillStyle = grad;
+        const w = g.measureText(\"hi\").width;
+        /** type Ctx = CanvasRenderingContext2D<{}> */
+        /** type Painter = (Ctx, Number, Number) => Undefined */
+        /** function run(p: Painter) => Undefined */
+        function run(p) {}
+        run((c, w, h) => { c.fillStyle = \"red\"; c.fillRect(0, 0, w, h); });
+    ");
+    err("const g = document.createElement(\"canvas\").getContext(\"2d\"); const f = g.fillRect; f(0, 0, 1, 1);");
+    err("const g = document.createElement(\"canvas\").getContext(\"2d\"); const a = g.createLinearGradient(0, 0, 1, 0).addColorStop; a(0, \"red\");");
+}
