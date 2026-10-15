@@ -560,6 +560,43 @@ impl InferState {
         result
     }
 
+    /// The type a hoisted `var` / `let` / `const` placeholder takes from
+    /// the declaration's own inline annotation (`/** let x: T */`), when
+    /// the annotation is monomorphic: the declaration then binds that same
+    /// type (checking its initialiser, if any, against it), so the
+    /// placeholder and the binding relate as two copies of one type.
+    /// `None` otherwise (the placeholder stays a fresh variable).
+    fn hoisted_annotation_type(&mut self, decl: &VarDeclarator) -> Option<Type> {
+        let annotation = decl.type_annotation.as_ref()?;
+        if annotation.kind != crate::ast::AnnotationKind::Inline {
+            return None;
+        }
+        let span = crate::span::Span::new(annotation.span.start, annotation.span.end);
+        let (ty, var_map, next_pvar, preds) =
+            crate::infer::type_parser::parse_type_annotation_with_preds(
+                &annotation.content,
+                span,
+                self.next_var_id(),
+                self.next_pvar_id(),
+                &self.type_aliases,
+            )
+            .ok()?;
+        if !var_map.is_empty() || !preds.is_empty() {
+            return None;
+        }
+        // The presence variables of its optional fields are this copy's
+        // own: later allocations must not reuse them.
+        self.bump_pvar_id_to(next_pvar);
+        // As `infer_stmt_var` reads the annotation: checked against an
+        // initialiser, a function type says what `this` it is called
+        // with; a declaration keeps its.
+        Some(if decl.init.is_some() {
+            crate::infer::lower::annotation_this(&ty, &Type::ArrowThis)
+        } else {
+            self.declared_callbacks_detached(&ty)
+        })
+    }
+
     /// Whether a declaration that is typed with the hoisted functions
     /// (Pass 2 of `infer_stmt_list`) is still typed only once the
     /// statements before it have been: a function-valued `const` or a
@@ -622,10 +659,17 @@ impl InferState {
                         continue;
                     }
                     let key = state.key_of(decl.span, &decl.name);
-                    hoisted_data.entry(key).or_insert_with(|| {
-                        let var = state.fresh_type_var();
-                        (decl.name.clone(), var)
-                    });
+                    if hoisted_data.contains_key(&key) {
+                        continue;
+                    }
+                    // A binding annotated with a monomorphic type is that
+                    // type from the start, so a function checked before the
+                    // declaration (one a top-level call reaches early) reads
+                    // it rather than a variable the first use would pin.
+                    let ty = state
+                        .hoisted_annotation_type(decl)
+                        .unwrap_or_else(|| state.fresh_type_var());
+                    hoisted_data.insert(key, (decl.name.clone(), ty));
                 }
             };
         // Function-valued `const`s inferred with the hoisted functions
