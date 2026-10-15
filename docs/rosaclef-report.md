@@ -32,7 +32,7 @@ $ cd web && sh check.sh
 
 | | `cb4bfca` (main) | this branch |
 |---|---:|---:|
-| `web/check.sh` | killed at 15 GB after 4.5 min | 5.8 s (8 s without mimalloc) |
+| `web/check.sh` | killed at 15 GB after 4.5 min | about 8 s |
 | tree/tree.js on its own | 155 s | 0.1 s |
 | tree/memory.js on its own | 3 s | 0.03 s |
 
@@ -74,8 +74,8 @@ are not recursive any more. The rest came from copying types: resolving a
 type copied it whole at every step of a unification and of each check, and
 a module that failed was checked again for each importer. Unification and
 the common checks now resolve only the part of a type they look at, and a
-failed module is checked once. The CLI also uses the mimalloc allocator;
-the system allocator spent about half of the time. Details in
+failed module is checked once. About half of what remains is allocating
+and freeing copied types; sharing them would be the next step. Details in
 [performance.md](performance.md#second-round-annotated-function-types).
 `tests/checking_time.rs` checks a program shaped like Rosaclef's (a
 record with 25 methods, 60 functions using it) and fails over 10 s; it

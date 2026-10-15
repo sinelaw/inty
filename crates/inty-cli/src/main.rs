@@ -5,11 +5,6 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
-
-// Checking allocates and frees many small types (every resolved type is
-// a fresh tree); the system allocator spent about half the time on it.
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::time::Instant;
 
 use inty::ast::pretty::print_program;
