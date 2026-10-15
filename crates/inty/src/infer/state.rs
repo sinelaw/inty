@@ -1269,9 +1269,10 @@ impl InferState {
                 if only_this {
                     return Err(crate::error::TypeError::TypeMismatch {
                         expected: format!("{sup}, a function that uses no `this`"),
-                        found: "a function that reads `this` (for a method, write a method \
-                                signature in an object type: `m(…): …`)"
-                            .to_string(),
+                        found:
+                            "a function that reads `this` (a method says its `this` in its type: \
+                                `m: (this: T, …) => R`)"
+                                .to_string(),
                         span,
                     }
                     .into());
@@ -2082,11 +2083,7 @@ impl InferState {
         let mut keep = Vec::new();
         for (this, span, callee) in std::mem::take(&mut self.pending_detached) {
             match self.zonk(&this) {
-                Type::ArrowThis
-                | Type::MethodThis
-                | Type::Undefined
-                | Type::Error
-                | Type::NewTarget => {}
+                Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => {}
                 Type::Var(v) => {
                     if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
                         if let Err(e) = self.unify(span, &Type::Var(v), &Type::Undefined) {
@@ -2530,7 +2527,6 @@ impl InferState {
             | Type::Regex
             | Type::NewTarget
             | Type::ArrowThis
-            | Type::MethodThis
             | Type::TypedArray(_)
             | Type::Error => false,
 

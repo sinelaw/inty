@@ -209,6 +209,35 @@
     dispatchEvent: (T) => Boolean
 } */
 
+// Host objects whose methods are called on them (a detached call throws
+// "Illegal invocation"): each method says its `this`.
+/** type Storage = {
+        getItem: (this: Storage, String) => String | Null,
+        setItem: (this: Storage, String, String) => Undefined,
+        removeItem: (this: Storage, String) => Undefined,
+        clear: (this: Storage) => Undefined,
+        key: (this: Storage, Number) => String,
+        length: Number
+    } */
+/** type Location = {
+        href: String, protocol: String, host: String, hostname: String, port: String,
+        pathname: String, search: String, hash: String, origin: String,
+        assign: (this: Location, String) => Undefined,
+        replace: (this: Location, String) => Undefined,
+        reload: (this: Location) => Undefined,
+        toString: (this: Location) => String
+    } */
+/** type History<T> = {
+        length: Number,
+        state: T,
+        scrollRestoration: String,
+        back: (this: History<T>) => Undefined,
+        forward: (this: History<T>) => Undefined,
+        go: (this: History<T>, Number) => Undefined,
+        pushState: (this: History<T>, T, String, String) => Undefined,
+        replaceState: (this: History<T>, T, String, String) => Undefined
+    } */
+
 /** const document: <T>{
         getElementById: (String) => Element<T>,
         createElement: (String) => Element<T>,
@@ -224,13 +253,7 @@
         activeElement: T,
         title: String,
         cookie: String,
-        location: {
-            href: String, pathname: String, hash: String, search: String,
-            origin: String, host: String, hostname: String, protocol: String, port: String,
-            reload: () => Undefined,
-            assign: (String) => Undefined,
-            replace: (String) => Undefined
-        }
+        location: Location
     } */
 const document;
 
@@ -246,13 +269,7 @@ const document;
         addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         dispatchEvent: (T) => Boolean,
-        location: {
-            href: String, pathname: String, hash: String, search: String,
-            origin: String, host: String, hostname: String, protocol: String, port: String,
-            reload: () => Undefined,
-            assign: (String) => Undefined,
-            replace: (String) => Undefined
-        },
+        location: Location,
         scrollTo: (Number, Number) => Undefined,
         scrollBy: (Number, Number) => Undefined,
         getComputedStyle: (T) => {getPropertyValue: (String) => String},
@@ -262,32 +279,9 @@ const document;
         setInterval: (() => Undefined, Number) => Number,
         clearTimeout: (Number) => Undefined,
         clearInterval: (Number) => Undefined,
-        history: {
-            length: Number,
-            state: T,
-            scrollRestoration: String,
-            back: () => Undefined,
-            forward: () => Undefined,
-            go: (Number) => Undefined,
-            pushState: (T, String, String) => Undefined,
-            replaceState: (T, String, String) => Undefined
-        },
-        sessionStorage: {
-            getItem: (String) => String | Null,
-            setItem: (String, String) => Undefined,
-            removeItem: (String) => Undefined,
-            clear: () => Undefined,
-            key: (Number) => String,
-            length: Number
-        },
-        localStorage: {
-            getItem: (String) => String | Null,
-            setItem: (String, String) => Undefined,
-            removeItem: (String) => Undefined,
-            clear: () => Undefined,
-            key: (Number) => String,
-            length: Number
-        },
+        history: History<T>,
+        sessionStorage: Storage,
+        localStorage: Storage,
         navigator: {userAgent: String, language: String, platform: String, vendor: String, onLine: Boolean},
         document: T,
         atob: (String) => String,
@@ -305,16 +299,7 @@ const window;
 // History API as a top-level global. Mirrors `window.history`. inty
 // has no module-level reference identity, so the two appear as
 // separate row instantiations — fine for type-checking purposes.
-/** const history: <T>{
-        length: Number,
-        state: T,
-        scrollRestoration: String,
-        back: () => Undefined,
-        forward: () => Undefined,
-        go: (Number) => Undefined,
-        pushState: (T, String, String) => Undefined,
-        replaceState: (T, String, String) => Undefined
-    } */
+/** const history: <T>History<T> */
 const history;
 
 // Reflect. A few htmx-class libraries use Reflect.has and Reflect.get
@@ -570,43 +555,15 @@ const fetch;
 // `window.location` and the bare `location` global are aliases for the
 // same Location object. Setting `href` triggers navigation; the rest
 // of the row exposes the parsed URL parts and the navigation methods.
-/** const location: {
-        href: String,
-        protocol: String,
-        host: String,
-        hostname: String,
-        port: String,
-        pathname: String,
-        search: String,
-        hash: String,
-        origin: String,
-        assign: (String) => Undefined,
-        replace: (String) => Undefined,
-        reload: () => Undefined,
-        toString: () => String
-    } */
+/** const location: Location */
 const location;
 
 // Web Storage. `sessionStorage` and `localStorage` share the same
 // shape; both store String → String. A missing key reads as `null`.
-/** const sessionStorage: {
-        getItem: (String) => String | Null,
-        setItem: (String, String) => Undefined,
-        removeItem: (String) => Undefined,
-        clear: () => Undefined,
-        key: (Number) => String,
-        length: Number
-    } */
+/** const sessionStorage: Storage */
 const sessionStorage;
 
-/** const localStorage: {
-        getItem: (String) => String | Null,
-        setItem: (String, String) => Undefined,
-        removeItem: (String) => Undefined,
-        clear: () => Undefined,
-        key: (Number) => String,
-        length: Number
-    } */
+/** const localStorage: Storage */
 const localStorage;
 
 // URL constructor. The (String) call form covers both `URL(href)` and

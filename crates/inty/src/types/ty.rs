@@ -685,12 +685,6 @@ pub enum Type {
     /// gives it nothing; and an arrow function isn't a constructor, so
     /// it never meets `NewTarget` (`new` on one throws a `TypeError`).
     ArrowThis,
-    /// The `this` of a method signature in an object type (`{ m(): T }`):
-    /// the object the method is a member of. Where an annotation is
-    /// checked against code, `annotation_this` replaces it with the
-    /// object; a declaration's stays, and fits any receiver, as a
-    /// declared member's missing `this` does.
-    MethodThis,
 
     // === Type variable ===
     /// Type variable (flexible or skolem).
@@ -1137,7 +1131,6 @@ impl Type {
             | Type::Regex
             | Type::NewTarget
             | Type::ArrowThis
-            | Type::MethodThis
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Named(_, _)
@@ -1509,7 +1502,6 @@ impl Type {
             | Type::Regex
             | Type::NewTarget
             | Type::ArrowThis
-            | Type::MethodThis
             | Type::TypedArray(_)
             | Type::Var(_)
             | Type::Literal(_)
@@ -1591,7 +1583,6 @@ impl Type {
             | Type::Regex
             | Type::NewTarget
             | Type::ArrowThis
-            | Type::MethodThis
             | Type::TypedArray(_)
             | Type::Error => {}
 
@@ -1823,7 +1814,6 @@ fn union_member_sort_key(t: &Type) -> (u8, String) {
         Type::Regex => (5, String::new()),
         Type::NewTarget => (5, "new.target".to_string()),
         Type::ArrowThis => (5, "arrow.this".to_string()),
-        Type::MethodThis => (5, "method.this".to_string()),
         Type::TypedArray(k) => (19, k.name().to_string()),
         Type::Literal(lit) => {
             let (sub, key) = lit.sort_key();

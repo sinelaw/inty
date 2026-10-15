@@ -68,9 +68,10 @@ The `gap_…` tests are in `crates/inty/tests/rosaclef_regressions.rs`
 was a method whose `this` is the object, so every record type with a
 function field was recursive, and each use of it made fresh rows that were
 unified against each other. Now a function type, `() => T`, is a function
-that uses no `this` (it is never bound to a receiver), and a method is
-written as a method signature, `m(): T` (see B). Records with callbacks
-are not recursive any more. The rest came from copying types: resolving a
+that uses no `this` (it is never bound to a receiver), and a method says
+its `this`, `m: (this: T) => R`, with `T` a named type (see B). Records
+with callbacks are not recursive any more, and a method's record refers to
+itself through its name, which costs nothing to unify. The rest came from copying types: resolving a
 type copied it whole at every step of a unification and of each check, and
 a module that failed was checked again for each importer. Unification and
 the common checks now resolve only the part of a type they look at, and a
@@ -83,8 +84,10 @@ takes about 1 s.
 
 **B. Callbacks in records.** In an object type, `stop: () => Undefined`
 is a function that uses no `this`, which can be stored, read back, called
-detached and passed on. `stop(): Undefined` is a method, called on the
-object. A function that reads `this` can't be stored in the first: it
+detached and passed on. A method says its `this`:
+`/** type S = {x: Number, stop: (this: S) => Undefined} */` is called on
+an `S`. (A body says it too: a function that mentions `this` is a method.)
+A function that reads `this` can't be stored in the first: it
 would be called detached. An arrow, or a function that never mentions
 `this` (an object literal's method included), fits either. So the
 wrappers Rosaclef added
@@ -95,8 +98,10 @@ end();`) says "`end` is a method (it reads `this`), so calling it detached
 passes `this` = undefined", and suggests calling it on its object or
 giving it no `this`. A
 function that reads `this` where one that uses none is expected says
-that, and suggests a method signature. A method in a record type prints
-as `stop(): Undefined`, not `this: {…} => () => Undefined`.
+that, and says how to write a method's type. A method prints with its
+`this` as a first parameter, `stop: (this: S) => Undefined`; when that is
+an unnamed record (the object the method is on), as `(this: {…}) => …`,
+rather than nesting the record in its own member's type.
 
 **D. `(x ?? {}).f`: not changed.** `{}` is a record with no fields, so
 `(raw.c ?? {}).off` reads a field one side doesn't have. There are two

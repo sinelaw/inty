@@ -141,7 +141,6 @@ impl PrettyContext {
             Type::Regex => write!(w, "RegExp"),
             Type::NewTarget => write!(w, "new.target"),
             Type::ArrowThis => write!(w, "undefined"),
-            Type::MethodThis => write!(w, "this"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
             Type::Var(name) => self.write_var(w, name),
             Type::Func {
@@ -316,7 +315,6 @@ impl PrettyContext {
             Type::Regex => write!(w, "Regex"),
             Type::NewTarget => write!(w, "NewTarget"),
             Type::ArrowThis => write!(w, "ArrowThis"),
-            Type::MethodThis => write!(w, "MethodThis"),
             Type::TypedArray(k) => write!(w, "{}", k.name()),
 
             Type::Var(name) => self.write_var(w, name),
@@ -337,21 +335,21 @@ impl PrettyContext {
                 // - Some(concrete_type): show "this: T =>"
                 let show_this = match this_type {
                     None => false,
-                    Some(t) => !matches!(
-                        **t,
-                        Type::Undefined | Type::Var(_) | Type::ArrowThis | Type::MethodThis
-                    ),
+                    Some(t) => !matches!(**t, Type::Undefined | Type::Var(_) | Type::ArrowThis),
                 };
                 if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
                     // Called only by `new`: a class's constructor.
                     write!(w, "new ")?;
+                    self.write_params(w, None, params)?;
                 } else if show_this {
-                    write!(w, "this: ")?;
-                    self.write_type(w, this_type.as_ref().unwrap(), false)?;
-                    write!(w, " => ")?;
+                    // A method's `this` is its first parameter, as written
+                    // (`(this: T, …) => R`). A record (most often the
+                    // object the method is on) is shortened, rather than
+                    // printed inside its own member's type.
+                    self.write_params(w, this_type.as_deref(), params)?;
+                } else {
+                    self.write_params(w, None, params)?;
                 }
-
-                self.write_params(w, params)?;
                 write!(w, " => ")?;
                 self.write_type(w, ret, false)?;
 
@@ -495,9 +493,21 @@ impl PrettyContext {
     fn write_params<W: Write>(
         &mut self,
         w: &mut W,
+        this: Option<&Type>,
         params: &[crate::types::FuncParam],
     ) -> fmt::Result {
         write!(w, "(")?;
+        if let Some(this) = this {
+            write!(w, "this: ")?;
+            if matches!(this, Type::Row(_)) {
+                write!(w, "{{…}}")?;
+            } else {
+                self.write_type(w, this, false)?;
+            }
+            if !params.is_empty() {
+                write!(w, ", ")?;
+            }
+        }
         for (i, param) in params.iter().enumerate() {
             if i > 0 {
                 write!(w, ", ")?;
@@ -602,18 +612,8 @@ impl PrettyContext {
                 Some(name) => format!("#{}{}", name, if optional_marker { "?" } else { "" }),
                 None => format!("{}{}", prop.0, if optional_marker { "?" } else { "" }),
             };
-            // A method, called on the object it reads as `this`, prints
-            // as a method signature, `m(A): R`, rather than nesting the
-            // object in its own member's type.
-            if let Some((params, ret)) = method_signature(&entry.ty) {
-                write!(w, "{}", name)?;
-                self.write_params(w, params)?;
-                write!(w, ": ")?;
-                self.write_type(w, ret, false)?;
-            } else {
-                write!(w, "{}: ", name)?;
-                self.write_type(w, &entry.ty, false)?;
-            }
+            write!(w, "{}: ", name)?;
+            self.write_type(w, &entry.ty, false)?;
         }
         self.focus = focus;
         if hidden > 0 {
@@ -965,30 +965,6 @@ fn match_alias(
                 && match_alias(r1, r2, params, bound)
         }
         (a, b) => a == b,
-    }
-}
-
-/// A member's function type that is called on the object (a `this` the
-/// function reads): its parameters and result, printed as a method
-/// signature.
-fn method_signature(ty: &Type) -> Option<(&[crate::types::FuncParam], &Type)> {
-    match ty {
-        Type::Func {
-            this_type: Some(this),
-            params,
-            ret,
-        } if !matches!(
-            **this,
-            Type::Undefined | Type::Var(_) | Type::ArrowThis | Type::NewTarget
-        ) =>
-        {
-            Some((params, ret))
-        }
-        Type::Row(row) if row.props.len() == 1 && matches!(row.tail, RowTail::Closed) => row
-            .props
-            .get(&PropName(CALLABLE_KEY.to_string()))
-            .and_then(|e| method_signature(&e.ty)),
-        _ => None,
     }
 }
 

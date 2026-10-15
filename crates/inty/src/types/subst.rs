@@ -584,7 +584,6 @@ impl Substitutable for Type {
             Type::Regex => Type::Regex,
             Type::NewTarget => Type::NewTarget,
             Type::ArrowThis => Type::ArrowThis,
-            Type::MethodThis => Type::MethodThis,
             Type::TypedArray(k) => Type::TypedArray(*k),
 
             // Variable substitution

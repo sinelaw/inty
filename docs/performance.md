@@ -170,7 +170,7 @@ Each step, measured on the whole run:
 | Change | `check.sh` |
 |---|---:|
 | `cb4bfca` | out of memory |
-| A function type uses no `this`; methods are `m(): T` signatures (rows with callbacks aren't recursive) | 16.6 s |
+| A function type uses no `this`; a method says its `this` (`m: (this: T) => R`) (rows with callbacks aren't recursive) | 16.6 s |
 | A module that fails is checked once, not again by each importer | 11.8 s |
 | `zonk` expands a bound variable in place instead of copying it twice; checking whether a variable is free doesn't copy its type | 10.8 s |
 | `unify`, `unify_this`, `subsume`, `check_expr`, `method_receiver` and calls resolve only a type's head where that is all they look at | 7.9 s |

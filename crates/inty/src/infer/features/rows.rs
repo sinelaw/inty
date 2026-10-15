@@ -886,9 +886,9 @@ impl InferState {
                 }
                 // An object literal's own method (not a class's): like a
                 // property, it only has to fit its slot, so one that uses
-                // no `this` fits a method signature (`m(): T`) as well as a
-                // function type. One that reads `this` reads the object,
-                // which has the expected type.
+                // no `this` fits a method's slot (`m: (this: T) => R`) as
+                // well as a plain function's. One that reads `this` reads
+                // the object, which has the expected type.
                 PropDef::Method {
                     key,
                     params,

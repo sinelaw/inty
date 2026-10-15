@@ -2798,8 +2798,8 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(t), Typing::Type(_)) if t == "never" => {
             Some("never (a member that only throws)")
         }
-        // A function type in an annotation without a method signature's
-        // `this` is of a function that uses no `this` in inty (so it can be
+        // A function type in an annotation without a `this: T` parameter
+        // is of a function that uses no `this` in inty (so it can be
         // called on an object or detached); the model's is called
         // detached, and the function may read `this` as `undefined`.
         (Typing::Reject, Typing::Type(_)) if features.contains("this in a plain function type") => {

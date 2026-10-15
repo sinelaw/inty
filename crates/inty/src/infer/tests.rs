@@ -5386,14 +5386,16 @@ fn an_annotated_function_type_without_this_is_called_detached() {
 
 #[test]
 fn a_method_in_an_annotated_object_type_has_the_object_as_this() {
-    // A method signature, `m(Number): Number`, is called on the object,
-    // which it reads as `this`.
-    let src = "/** const o: {x: Number, m(n: Number): Number} */\n\
+    // A method says its `this`, `m: (this: O, n: Number) => Number`, and is
+    // called on such an object, which it reads as `this`.
+    let src = "/** type O = {x: Number, m: (this: O, n: Number) => Number} */\n\
+               /** const o: O */\n\
                const o = { x: 1, m(n) { return this.x + n; } };\n\
                const r = o.m(1);";
     assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
     // Taken off the object, it can't be called detached.
-    let bad = "/** const o: {x: Number, m(n: Number): Number} */\n\
+    let bad = "/** type O = {x: Number, m: (this: O, n: Number) => Number} */\n\
+               /** const o: O */\n\
                const o = { x: 1, m(n) { return this.x + n; } };\n\
                const g = o.m;\n\
                const r = g(1);";
@@ -5802,14 +5804,16 @@ fn a_field_of_an_empty_default_is_not_read() {
     assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
 }
 
-// An object literal's method that never mentions `this` fits a method
-// signature as well as a function type; one that reads `this` reads the
-// object (of the annotated type), and doesn't fit a function type.
+// An object literal's method that never mentions `this` fits a method's
+// slot (`stop: (this: S) => Number`) as well as a plain function's; one
+// that reads `this` reads the object (of the annotated type), and doesn't
+// fit a plain function's.
 #[test]
 fn a_literal_method_fits_the_slot_it_is_checked_against() {
-    let src = "/** const s: { stop(): Number, x: Number } */\n\
+    let src = "/** type S = { stop: (this: S) => Number, x: Number } */\n\
+               /** const s: S */\n\
                const s = { x: 1, stop() { return this.x; } };\n\
-               /** const u: { stop(): Number, x: Number } */\n\
+               /** const u: S */\n\
                const u = { x: 1, stop() { return 2; } };\n\
                /** const t: { stop: () => Number, x: Number } */\n\
                const t = { x: 1, stop() { return 2; } };\n\
@@ -5821,12 +5825,14 @@ fn a_literal_method_fits_the_slot_it_is_checked_against() {
     assert!(check_program(bad, &[]).is_err(), "{}", bad);
 }
 
-// A method signature in a declaration (which has no body to tie to its
-// object) is called on its object: not detached, and not where a function
-// that is called detached goes. A declared plain function is either.
+// A declared method (a declaration has no body to show whether it reads
+// `this`, so its type says: `m: (this: L) => Number`) is called on its
+// object: not detached, and not where a function that is called detached
+// goes. A declared plain function (`f: () => Number`) is either.
 #[test]
 fn a_declared_method_is_called_on_its_object() {
-    let decl = "/** const lib: {x: Number, m(): Number, f: () => Number} */\nconst lib;\n";
+    let decl = "/** type L = {x: Number, m: (this: L) => Number, f: () => Number} */\n\
+                /** const lib: L */\nconst lib;\n";
     let ok = format!(
         "{decl}const a = lib.m() + lib.x;\n\
          const g = lib.f;\n\
@@ -5844,4 +5850,16 @@ fn a_declared_method_is_called_on_its_object() {
         let src = format!("{decl}{bad}");
         assert!(check_program(&src, &[]).is_err(), "{}", src);
     }
+}
+
+// TypeScript's method signature (`m(): T`) leaves `this` implicit; inty's
+// error says how to write it.
+#[test]
+fn a_method_signature_says_its_this() {
+    let err = check_program(
+        "/** const o: {m(): Number} */\nconst o = {m() { return 1; }};",
+        &[],
+    )
+    .unwrap_err();
+    assert!(err.contains("(this: T, …) => R"), "{err}");
 }

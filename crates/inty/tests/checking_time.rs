@@ -6,7 +6,7 @@
 //! record itself, so each annotation built and unified fresh recursive
 //! rows: Rosaclef's `tree/memory.js` went from 15 ms to 5 s and the whole
 //! frontend ran out of memory. A function type in an object type now uses
-//! no `this` (a method signature, `m(): T`, says otherwise), and the
+//! no `this` (a method says its `this`: `m: (this: T) => R`), and the
 //! program below checks in a fifth of a second in a release build (10 s
 //! at cb4bfca).
 

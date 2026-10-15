@@ -248,11 +248,11 @@ impl InferState {
     /// `this` would pass for one that doesn't): none (`ArrowThis`), so
     /// it can be called on an object, called detached or passed on, and
     /// only a function that doesn't use `this` (an arrow, or one that
-    /// doesn't mention it) has the type. A method signature in an object
-    /// type (`{ m(): T }`) is called on the object, which it may read as
-    /// `this`, as an object literal's methods are. `this` is what the
-    /// annotated type itself is called with, if it is a function.
-    /// Declarations without a body to check (`.d.js`) keep theirs.
+    /// doesn't mention it) has the type. A method says its `this`, as
+    /// TypeScript's first parameter `this: T`, which is kept. `this` is
+    /// what the annotated type itself is called with, if it is a
+    /// function. Declarations without a body to check (`.d.js`) keep
+    /// theirs.
     pub(crate) fn annotation_this(
         &mut self,
         span: Span,
@@ -267,7 +267,7 @@ impl InferState {
                 ret,
             } => {
                 let this_type = match this_type.as_deref() {
-                    Some(Type::MethodThis) | None => this.clone(),
+                    None => this.clone(),
                     Some(t) => self.annotation_this(span, t, &none)?,
                 };
                 let params = params
@@ -285,29 +285,18 @@ impl InferState {
                 }
             }
             Type::Row(row) => {
-                // The object a method signature is called on, tied to the
-                // row once it is built, as `infer_object` ties its
-                // literal's (if a method mentions `this`). Only a method
-                // signature makes the row recursive.
-                let shared = Type::Row(crate::types::RowType::empty_open(self.fresh_flex()));
-                let mut has_method = false;
+                // A member uses no `this` unless it says; the row's call
+                // signature is called with what the type itself is.
                 let mut out = row.clone();
                 for (name, entry) in out.props.iter_mut() {
                     let member_this = if name.0 == CALLABLE_KEY {
                         this.clone()
-                    } else if is_method_signature(&entry.ty) {
-                        has_method = true;
-                        shared.clone()
                     } else {
                         none.clone()
                     };
                     entry.ty = self.annotation_this(span, &entry.ty, &member_this)?;
                 }
-                let out = Type::Row(out);
-                if has_method {
-                    self.unify(span, &shared, &out)?;
-                }
-                out
+                Type::Row(out)
             }
             Type::Array(t) => Type::Array(Box::new(self.annotation_this(span, t, &none)?)),
             Type::Maybe(z, t) => Type::Maybe(*z, Box::new(self.annotation_this(span, t, this)?)),
@@ -331,19 +320,6 @@ impl InferState {
             ),
             _ => ty.clone(),
         })
-    }
-}
-
-/// Whether a member's type is a method signature (`m(): T`), whose `this`
-/// is the object it is a member of.
-fn is_method_signature(ty: &Type) -> bool {
-    match ty {
-        Type::Func { this_type, .. } => matches!(this_type.as_deref(), Some(Type::MethodThis)),
-        Type::Row(row) => row
-            .props
-            .get(&crate::types::PropName(CALLABLE_KEY.to_string()))
-            .is_some_and(|e| is_method_signature(&e.ty)),
-        _ => false,
     }
 }
 

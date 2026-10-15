@@ -635,3 +635,21 @@ fn gap_g_array_at() {
     ");
     err("const xs = [1, 2]; const n = xs.at(-1) + 1;");
 }
+
+// The standard library's host methods that throw when called detached
+// ("Illegal invocation") say their `this`: called on their object, not
+// taken off it or passed as a callback.
+#[test]
+fn stdlib_host_methods_are_called_on_their_object() {
+    ok("
+        localStorage.setItem(\"k\", \"v\");
+        const v = localStorage.getItem(\"k\");
+        const m = Map(); m.set(\"a\", 1);
+        const n = m.get(\"a\") + m.size;
+        history.pushState(1, \"\", \"/a\");
+        const r = [1.5].map(Math.round);
+    ");
+    err("const g = localStorage.getItem; const v = g(\"k\");");
+    err("const m = Map(); const g = m.get; const v = g(\"a\");");
+    err("const r = [\"k\"].map(localStorage.getItem);");
+}

@@ -252,56 +252,43 @@ const RegExp;
 // `<K, V>` quantifies fresh per construction.
 // `Map<K, V>` and `Set<T>` also name the instance types in annotations.
 /** type Map<K, V> = {
-        get: (K) => V,
-        set: (K, V) => Undefined,
-        has: (K) => Boolean,
-        delete: (K) => Boolean,
-        clear: () => Undefined,
-        forEach: ((V, K) => Undefined) => Undefined,
+        get: (this: Map<K, V>, K) => V,
+        set: (this: Map<K, V>, K, V) => Undefined,
+        has: (this: Map<K, V>, K) => Boolean,
+        delete: (this: Map<K, V>, K) => Boolean,
+        clear: (this: Map<K, V>) => Undefined,
+        forEach: (this: Map<K, V>, (V, K) => Undefined) => Undefined,
         size: Number
     } */
 /** type Set<T> = {
-        add: (T) => Undefined,
-        has: (T) => Boolean,
-        delete: (T) => Boolean,
-        clear: () => Undefined,
-        forEach: ((T) => Undefined) => Undefined,
+        add: (this: Set<T>, T) => Undefined,
+        has: (this: Set<T>, T) => Boolean,
+        delete: (this: Set<T>, T) => Boolean,
+        clear: (this: Set<T>) => Undefined,
+        forEach: (this: Set<T>, (T) => Undefined) => Undefined,
         size: Number
     } */
-/** const Map: <K, V>() => {
-        get: (K) => V,
-        set: (K, V) => Undefined,
-        has: (K) => Boolean,
-        delete: (K) => Boolean,
-        clear: () => Undefined,
-        forEach: ((V, K) => Undefined) => Undefined,
-        size: Number
-    } */
+/** const Map: <K, V>() => Map<K, V> */
 const Map;
 
-/** const Set: <T>() => {
-        add: (T) => Undefined,
-        has: (T) => Boolean,
-        delete: (T) => Boolean,
-        clear: () => Undefined,
-        forEach: ((T) => Undefined) => Undefined,
-        size: Number
-    } */
+/** const Set: <T>() => Set<T> */
 const Set;
 
-/** const WeakMap: <K, V>() => {
-        get: (K) => V,
-        set: (K, V) => Undefined,
-        has: (K) => Boolean,
-        delete: (K) => Boolean
+/** type WeakMap<K, V> = {
+        get: (this: WeakMap<K, V>, K) => V,
+        set: (this: WeakMap<K, V>, K, V) => Undefined,
+        has: (this: WeakMap<K, V>, K) => Boolean,
+        delete: (this: WeakMap<K, V>, K) => Boolean
     } */
+/** const WeakMap: <K, V>() => WeakMap<K, V> */
 const WeakMap;
 
-/** const WeakSet: <T>() => {
-        add: (T) => Undefined,
-        has: (T) => Boolean,
-        delete: (T) => Boolean
+/** type WeakSet<T> = {
+        add: (this: WeakSet<T>, T) => Undefined,
+        has: (this: WeakSet<T>, T) => Boolean,
+        delete: (this: WeakSet<T>, T) => Boolean
     } */
+/** const WeakSet: <T>() => WeakSet<T> */
 const WeakSet;
 
 // Proxy. The handler shape is opaque (H) — modelling all the trap
