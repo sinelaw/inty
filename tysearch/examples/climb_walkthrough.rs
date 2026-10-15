@@ -3,6 +3,7 @@
 //! accept. `cargo run --release --example climb_walkthrough`.
 
 use tysearch::discover::{climb_with, step_report, Config};
+use tysearch::enumerate::Enumerator;
 use tysearch::lang::{Atom, Language, Outcome, Term};
 use tysearch::langs::model::Model;
 
@@ -140,6 +141,44 @@ fn main() {
             );
         }
     }
+    // Per kept step, the smallest safe programs its rules still reject:
+    // those the next kept step accepts first (what that step fixes).
+    println!("\nwrongly rejected (safe programs each kept step rejects, smallest first):");
+    let mut en = Enumerator::new(m.signature(), 5);
+    en.cap = 400_000;
+    let mut safe: Vec<Term> = en
+        .up_to(5, 0)
+        .into_iter()
+        .filter(|t| matches!(m.eval_in(t, &[]), Outcome::Value(_)))
+        .collect();
+    fn size(t: &Term) -> usize {
+        1 + t.kids.iter().map(size).sum::<usize>()
+    }
+    safe.sort_by_key(size);
+    let kept: Vec<usize> = (0..cl.steps.len()).filter(|&i| cl.steps[i].kept).collect();
+    for (n, &i) in kept.iter().enumerate() {
+        let d = &cl.steps[i].discovery;
+        let next = kept.get(n + 1).map(|&j| &cl.steps[j].discovery);
+        let rejected: Vec<&Term> = safe
+            .iter()
+            .filter(|t| d.checker.types(t).is_empty())
+            .collect();
+        let (fixed, rest): (Vec<&Term>, Vec<&Term>) = rejected
+            .iter()
+            .partition(|t| next.is_some_and(|nd| !nd.checker.types(t).is_empty()));
+        println!(
+            "  step {i} ({}): {} safe programs rejected",
+            cl.steps[i].change,
+            rejected.len()
+        );
+        for t in fixed.iter().take(4) {
+            println!("    fixed next: {}", m.show_term(t));
+        }
+        for t in rest.iter().take(4) {
+            println!("    still out:  {}", m.show_term(t));
+        }
+    }
+
     let d = cl.result();
     println!("\nsorts of the result:");
     for (i, ex) in d.sort_examples.iter().enumerate() {
