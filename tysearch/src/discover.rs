@@ -1348,7 +1348,7 @@ impl Discovery {
         for (r, vs) in self.checker.union_vars() {
             let vs: Vec<String> = vs.iter().map(|&v| crate::types::var_name(v)).collect();
             out.push(format!(
-                "{}: {} may be a union",
+                "in {}, {} may be a union",
                 names.schema(r),
                 vs.join(", ")
             ));
@@ -2164,13 +2164,14 @@ pub fn step_doc(i: usize, s: &Step, prev: Option<&Discovery>) -> String {
         if out.ends_with("```\n") {
             out.push_str("(no rule changes)\n");
         }
-        out.push_str("\nbesides the rules:\n");
-        for f in &facts {
-            let mark = if prev.is_none() || facts_before.contains(f) {
-                ' '
-            } else {
-                '+'
-            };
+        let same = facts.iter().filter(|f| facts_before.contains(f)).count();
+        out.push_str("\nbesides the rules");
+        if same > 0 {
+            out.push_str(&format!(" ({same} facts as before)"));
+        }
+        out.push_str(":\n");
+        let mark = if prev.is_some() { '+' } else { ' ' };
+        for f in facts.iter().filter(|f| !facts_before.contains(f)) {
             out.push_str(&format!("{mark} {f}\n"));
         }
         for f in facts_before.iter().filter(|f| !facts.contains(f)) {
