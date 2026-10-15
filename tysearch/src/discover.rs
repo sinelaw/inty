@@ -1597,33 +1597,38 @@ pub fn poly_contrast<L: Language>(lang: &L, d: &Discovery, rng: &mut Rng, n: usi
             sig[con].arity == 2 && sig[con].binds[i] == 1 && sig[con].binds[k] == 0
         })
         .collect();
-    if binders.is_empty() {
+    let Some(var) = sig.iter().position(|c| c.kind == Kind::Var) else {
         return Vec::new();
-    }
-    // Closed syntactic values with a type that has variables.
-    let mut inits: Vec<Term> = Vec::new();
-    let mut seen = HashSet::new();
+    };
+    // Closed syntactic values whose type has variables, with the sort it
+    // refines: the uses must eliminate that sort.
     fn subterms(t: &Term, out: &mut Vec<Term>) {
         out.push(t.clone());
         t.kids.iter().for_each(|k| subterms(k, out));
     }
+    let mut inits: Vec<(Term, usize)> = Vec::new();
+    let mut seen = HashSet::new();
     for t in d.check.generated_terms.iter().take(2000) {
         let mut subs = Vec::new();
         subterms(t, &mut subs);
         for s in subs {
-            if gen.inert.get(s.con) == Some(&true)
-                && seen.insert(s.clone())
-                && d.checker.types(&s).iter().any(|ty| !ty.is_ground())
-            {
-                inits.push(s);
+            if gen.inert.get(s.con) != Some(&true) || !seen.insert(s.clone()) {
+                continue;
+            }
+            let sort = d.checker.types(&s).iter().find_map(|ty| match ty {
+                Ty::Ref(sort, _) if !ty.is_ground() => Some(*sort),
+                _ => None,
+            });
+            if let Some(sort) = sort {
+                inits.push((s, sort));
             }
         }
         if inits.len() >= 40 {
             break;
         }
     }
-    // Leaves, and rules that join any two things, and that eliminate.
-    let var = sig.iter().position(|c| c.kind == Kind::Var);
+    // Leaves that are values (not `break`), rules that join any two
+    // things, and per sort the rules that eliminate it (a call).
     let leaves: Vec<Term> = (0..sig.len())
         .filter(|&c| sig[c].kind == Kind::Op && sig[c].arity == 0)
         .flat_map(|c| {
@@ -1633,6 +1638,7 @@ pub fn poly_contrast<L: Language>(lang: &L, d: &Discovery, rng: &mut Rng, n: usi
                 kids: Vec::new(),
             })
         })
+        .filter(|t| matches!(lang.eval_in(t, &[]), Outcome::Value(_)))
         .collect();
     let joins: Vec<usize> = d
         .rules
@@ -1646,32 +1652,38 @@ pub fn poly_contrast<L: Language>(lang: &L, d: &Discovery, rng: &mut Rng, n: usi
         })
         .map(|r| r.con)
         .collect();
-    let elims: Vec<usize> = d
+    let elims: Vec<(usize, usize)> = d
         .rules
         .iter()
-        .filter(|r| {
-            matches!(r.kids.first().map(|k| &k.ty), Some(Ty::Ref(..)))
-                && r.kids.iter().all(|k| k.bound.is_empty())
+        .filter(|r| r.kids.iter().all(|k| k.bound.is_empty()))
+        .filter_map(|r| match r.kids.first().map(|k| &k.ty) {
+            Some(Ty::Ref(sort, _)) => Some((*sort, r.con)),
+            _ => None,
         })
-        .map(|r| r.con)
         .collect();
-    let (Some(var), false, false, false) =
-        (var, inits.is_empty(), joins.is_empty(), elims.is_empty())
-    else {
+    if binders.is_empty() || inits.is_empty() || joins.is_empty() || leaves.is_empty() {
         return Vec::new();
-    };
-    let pick = |v: &[Term], rng: &mut Rng| v[rng.below(v.len())].clone();
+    }
     let mut out = Vec::new();
     for _ in 0..n {
         let (con, i, k) = binders[rng.below(binders.len())];
+        let (init, sort) = inits[rng.below(inits.len())].clone();
+        let mine: Vec<usize> = elims
+            .iter()
+            .filter(|(s, _)| *s == sort)
+            .map(|(_, c)| *c)
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
         let use_of = |rng: &mut Rng| {
-            let e = elims[rng.below(elims.len())];
+            let e = mine[rng.below(mine.len())];
             let kids = (0..sig[e].arity)
                 .map(|m| {
                     if m == 0 {
                         Term::leaf(var, Atom::Int(0))
                     } else {
-                        pick(&leaves, rng)
+                        leaves[rng.below(leaves.len())].clone()
                     }
                 })
                 .collect();
@@ -1682,18 +1694,14 @@ pub fn poly_contrast<L: Language>(lang: &L, d: &Discovery, rng: &mut Rng, n: usi
             }
         };
         let j = joins[rng.below(joins.len())];
-        let mut jk: Vec<Term> = (0..sig[j].arity).map(|_| use_of(rng)).collect();
-        if jk.len() < 2 {
-            continue;
-        }
-        jk.truncate(sig[j].arity);
+        let jk: Vec<Term> = (0..sig[j].arity).map(|_| use_of(rng)).collect();
         let body = Term {
             con: j,
             atom: sig[j].atoms_or_none()[0].clone(),
             kids: jk,
         };
         let mut kids = vec![Term::leaf(var, Atom::Int(0)); 2];
-        kids[k] = pick(&inits, rng);
+        kids[k] = init;
         kids[i] = body;
         out.push(Term {
             con,
