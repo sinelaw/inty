@@ -1135,6 +1135,16 @@ impl InferState {
                     return Ok(self.declared_callbacks_detached(&ty));
                 }
             }
+            Type::Number if language == SourceLanguage::JavaScript => {
+                if let Some(ty) = crate::builtins::number_method_type(self, property) {
+                    return Ok(ty);
+                }
+            }
+            Type::Boolean if language == SourceLanguage::JavaScript => {
+                if let Some(ty) = crate::builtins::boolean_method_type(property) {
+                    return Ok(ty);
+                }
+            }
             Type::String => {
                 if property == "length" {
                     return Ok(Type::Number);

@@ -5876,3 +5876,22 @@ fn test_member_on_recursive_union_alias() {
                function tag(t) { return t.kind; }";
     infer_program_with_state(src).expect("field access on a recursive union alias");
 }
+
+#[test]
+fn number_methods() {
+    // `Number.prototype`'s formatting methods, each optional argument
+    // omittable per call.
+    let src = "const n = 1.5;\n\
+               const a = n.toFixed(1);\n\
+               const b = n.toString(16);\n\
+               const c = n.toString();\n\
+               const d = n.toPrecision(2);\n\
+               const e = (2).toFixed();\n\
+               const f = true.toString();\n\
+               function g(x) { return x.toFixed(2); }\n\
+               const h = g(3);";
+    let t = check_program(src, &["a", "b", "c", "d", "e", "f", "h"]).unwrap();
+    assert!(t.iter().all(|s| s == "String"), "{t:?}");
+    assert!(check_program("const n = 1; n.toFixed(\"2\");", &[]).is_err());
+    assert!(check_program("const n = 1; n.toUpperCase();", &[]).is_err());
+}

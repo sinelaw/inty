@@ -217,6 +217,43 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
     })
 }
 
+/// Look up a `Number.prototype` method by name (JavaScript), with the
+/// number as its receiver. Each optional argument gets its own presence
+/// variable per read, as for strings, so `n.toString()` and
+/// `n.toString(16)` both check.
+pub fn number_method_type(state: &mut InferState, method: &str) -> Option<Type> {
+    use crate::types::FuncParam;
+    let n = Type::Number;
+    let s = Type::String;
+    let optional_only = |state: &mut InferState, optional: Type, ret: Type| -> Type {
+        let pvar = state.fresh_pvar();
+        Type::simple_func_with_params(vec![FuncParam::optional(pvar, optional)], ret)
+    };
+    let ty = match method {
+        // `toFixed(digits?)`, `toPrecision(precision?)`,
+        // `toExponential(fractionDigits?)`, `toString(radix?)`
+        // (ECMAScript §21.1.3).
+        "toFixed" | "toPrecision" | "toExponential" | "toString" => {
+            optional_only(state, n.clone(), s.clone())
+        }
+        // `toLocaleString(locales?)`: the options argument isn't modelled.
+        "toLocaleString" => optional_only(state, s.clone(), s.clone()),
+        "valueOf" => Type::simple_func(vec![], n.clone()),
+        _ => return None,
+    };
+    Some(with_receiver(ty, Type::Number))
+}
+
+/// Look up a `Boolean.prototype` method by name (JavaScript).
+pub fn boolean_method_type(method: &str) -> Option<Type> {
+    let ty = match method {
+        "toString" => Type::simple_func(vec![], Type::String),
+        "valueOf" => Type::simple_func(vec![], Type::Boolean),
+        _ => return None,
+    };
+    Some(with_receiver(ty, Type::Boolean))
+}
+
 /// Look up a Python `str` method by name. Separate from the JavaScript
 /// [`string_method_type`] surface so each language only sees its own
 /// methods (issue #67); inference picks the table by `Program::language`.
