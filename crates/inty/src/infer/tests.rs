@@ -6129,3 +6129,25 @@ fn a_copied_property_narrows() {
     );
     check_program(&ok, &[]).unwrap();
 }
+
+#[test]
+fn independent_groups_are_inferred_in_a_fixed_order() {
+    // `a` … `f` are independent groups that each fix `xs`' element type:
+    // the one inferred first decides it, and the others are errors.
+    // Which that is mustn't depend on hash order (a group's call edges
+    // and a statement's free names are hash sets), so every run reports
+    // the same error.
+    let src = "const xs = [];\n\
+               function h() { a(); b(); c(); d(); e(); f(); }\n\
+               function a() { xs.push(1); }\n\
+               function b() { xs.push(\"s\"); }\n\
+               function c() { xs.push(true); }\n\
+               function d() { xs.push(null); }\n\
+               function e() { xs.push([1]); }\n\
+               function f() { xs.push({ k: 1 }); }\n\
+               h();";
+    let first = check_program(src, &[]).expect_err("xs is given six element types");
+    for _ in 0..32 {
+        assert_eq!(check_program(src, &[]).expect_err("as before"), first);
+    }
+}

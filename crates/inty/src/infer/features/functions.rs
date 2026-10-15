@@ -1726,6 +1726,11 @@ pub(in crate::infer) fn compute_scc_groups(
                 }
             }
         }
+        // `free` is a hash set: without an order of their own, the
+        // edges (and so the order Tarjan emits independent groups in,
+        // which is the order they are inferred in) would change from
+        // run to run.
+        adj[i].sort_unstable();
     }
 
     // Pass 3: Tarjan's SCC algorithm. Iterative implementation to

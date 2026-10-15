@@ -893,11 +893,14 @@ impl InferState {
             }
             // Groups this statement uses are typed before it.
             if group_done.iter().any(|d| !d) {
-                let used: Vec<usize> = crate::ast::free_idents::free_identifiers_in_stmt(stmt)
+                let mut used: Vec<usize> = crate::ast::free_idents::free_identifiers_in_stmt(stmt)
                     .into_iter()
                     .chain(annotated_classes(stmt))
                     .filter_map(|n| group_of_name.get(&n).copied())
                     .collect();
+                // In source order: the names come from a hash set, and
+                // the order groups are inferred in shows in the result.
+                used.sort_unstable();
                 for gi in used {
                     self.infer_group_with_deps(
                         &mut current_env,
