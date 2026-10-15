@@ -6100,3 +6100,22 @@ fn narrowing_through_a_disjunction_of_tag_tests() {
         assert!(check_program(&src, &[]).is_err(), "{src}");
     }
 }
+
+#[test]
+fn a_copied_property_narrows() {
+    // Records are mutable: a test of `reg.palette` says nothing about a
+    // later read (a call between them could store `null`; see the golden
+    // test `25-unnarrowed-property` for the error). A `const` copy does
+    // narrow.
+    let decls = "/** function render(String) => Undefined */\nfunction render(s) {}\n";
+    let bad = format!(
+        "{decls}/** function g({{palette: String | Null}}) => Undefined */\n\
+         function g(reg) {{ if (reg.palette) render(reg.palette); }}"
+    );
+    assert!(check_program(&bad, &[]).is_err());
+    let ok = format!(
+        "{decls}/** function g({{palette: String | Null}}) => Undefined */\n\
+         function g(reg) {{ const p = reg.palette; if (p) render(p); }}"
+    );
+    check_program(&ok, &[]).unwrap();
+}

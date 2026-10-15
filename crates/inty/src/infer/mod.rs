@@ -1529,8 +1529,66 @@ impl InferState {
         } else {
             synth.clone()
         };
-        self.subsume(expr.span(), &synth_for_bind, expected)?;
+        if let Err(mut err) = self.subsume(expr.span(), &synth_for_bind, expected) {
+            self.note_unnarrowed_property(expr, &synth, expected, &mut err);
+            return Err(err);
+        }
         Ok(self.zonk(&synth))
+    }
+
+    /// A property read `r.p` that may be `null` or `undefined`, where its
+    /// value would fit: a test of `r.p` doesn't narrow it (a record is
+    /// mutable: a call, or another reference to the object, could store
+    /// `null` there before the use), so say how to narrow it.
+    fn note_unnarrowed_property(
+        &mut self,
+        expr: &Expr,
+        synth: &Type,
+        expected: &Type,
+        err: &mut crate::error::IntyError,
+    ) {
+        if self.quiet > 0 {
+            return;
+        }
+        let Some(path @ crate::infer::narrow::Path::Member(..)) =
+            crate::infer::narrow::path_from_expr(expr)
+        else {
+            return;
+        };
+        let Type::Maybe(_, value) = self.zonk(synth) else {
+            return;
+        };
+        let snap = self.snapshot_inference();
+        let fits = self
+            .quietly(|s| s.subsume(expr.span(), &value, expected))
+            .is_ok();
+        self.restore_snapshot(snap);
+        if !fits {
+            return;
+        }
+        fn show(path: &crate::infer::narrow::Path) -> String {
+            match path {
+                crate::infer::narrow::Path::Ident(name, _) => name.clone(),
+                crate::infer::narrow::Path::Member(parent, prop) => {
+                    format!("{}.{}", show(parent), prop.0)
+                }
+            }
+        }
+        let crate::infer::narrow::Path::Member(_, prop) = &path else {
+            unreachable!("matched above")
+        };
+        let (name, read) = (prop.0.as_str(), show(&path));
+        let note = format!(
+            "a test of a property doesn't narrow it: a record can be changed between the \
+             test and the use (by a call, or through another reference). Copy it into a \
+             `const` and test that: `const {name} = {read}; if ({name}) …`"
+        );
+        if let Some(crate::error::TypeError::UnificationError { context, .. }) = err.as_type_mut() {
+            *context = Some(match context.take() {
+                Some(c) => format!("{c}; {note}"),
+                None => note,
+            });
+        }
     }
 
     /// Infer the type of an expression.

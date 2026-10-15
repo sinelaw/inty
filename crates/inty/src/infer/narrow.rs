@@ -131,7 +131,9 @@ impl Narrowing {
             | Narrowing::IsInstance(_)
             | Narrowing::IsNotInstance(_) => true,
             Narrowing::Is(t) | Narrowing::IsNot(t) => matches!(t, Type::Literal(_)),
-            Narrowing::AnyOf(ns) | Narrowing::AllOf(ns) => ns.iter().all(Narrowing::warns_when_dead),
+            Narrowing::AnyOf(ns) | Narrowing::AllOf(ns) => {
+                ns.iter().all(Narrowing::warns_when_dead)
+            }
             _ => false,
         }
     }
@@ -504,11 +506,7 @@ fn refine_type(ty: &Type, narrowing: &Narrowing, lang: Language) -> Type {
                     .collect::<Vec<_>>(),
             )
         }
-        Narrowing::AllOf(ns) => {
-            return ns
-                .iter()
-                .fold(ty.clone(), |t, n| refine_type(&t, n, lang))
-        }
+        Narrowing::AllOf(ns) => return ns.iter().fold(ty.clone(), |t, n| refine_type(&t, n, lang)),
         _ => {}
     }
     match ty {
