@@ -158,14 +158,21 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
         "trimEnd" => Type::simple_func(vec![], s.clone()),
         // `String.prototype.replace(pattern, replacement)`. `pattern`
         // is `String | Regex` per the ECMAScript spec; htmx hits the
-        // Regex form for HTML scrubbing. Replacement could also be a
-        // function in real JS but inty doesn't model that overload.
-        "replace" => Type::simple_func(
-            vec![Type::union(vec![s.clone(), Type::Regex]), s.clone()],
-            s.clone(),
-        ),
-        "replaceAll" => Type::simple_func(
-            vec![Type::union(vec![s.clone(), Type::Regex]), s.clone()],
+        // Regex form for HTML scrubbing. The replacement is a string or a
+        // function of the match. JavaScript passes the function more —
+        // the capture groups (each a string, or `undefined` when it
+        // didn't take part), then the offset (a number) and the whole
+        // string — whose types depend on the pattern; only the match,
+        // always a string, is modelled, so a replacer takes one
+        // parameter.
+        "replace" | "replaceAll" => Type::simple_func(
+            vec![
+                Type::union(vec![s.clone(), Type::Regex]),
+                Type::union(vec![
+                    s.clone(),
+                    Type::simple_func(vec![s.clone()], s.clone()),
+                ]),
+            ],
             s.clone(),
         ),
         "toUpperCase" => Type::simple_func(vec![], s.clone()),

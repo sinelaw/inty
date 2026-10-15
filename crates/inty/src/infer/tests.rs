@@ -5895,3 +5895,19 @@ fn number_methods() {
     assert!(check_program("const n = 1; n.toFixed(\"2\");", &[]).is_err());
     assert!(check_program("const n = 1; n.toUpperCase();", &[]).is_err());
 }
+
+#[test]
+fn string_replace_with_a_function() {
+    // The replacement is a string or a function of the match.
+    let src = "const a = \"ab\".replace(/a/g, c => c + \"b\");\n\
+               const b = \"ab\".replaceAll(\"a\", (m) => m.toUpperCase());\n\
+               const c = \"ab\".replace(\"a\", \"z\");";
+    let t = check_program(src, &["a", "b", "c"]).unwrap();
+    assert!(t.iter().all(|s| s == "String"), "{t:?}");
+    // A replacer returns a string, and gets the match as one.
+    assert!(check_program("\"ab\".replace(/a/, c => 1);", &[]).is_err());
+    assert!(check_program("\"ab\".replace(/a/, c => c * 2);", &[]).is_err());
+    // The groups and the offset aren't modelled: their types depend on
+    // the pattern.
+    assert!(check_program("\"ab\".replace(/(a)/, (m, g) => g);", &[]).is_err());
+}
