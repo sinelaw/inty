@@ -6077,3 +6077,26 @@ fn iterable_constraint_is_generalised() {
     assert_eq!(t[0], "<a, b> where Iterable a b => (a) => b");
     assert_eq!(&t[1..], ["Number", "String", "Boolean"]);
 }
+
+#[test]
+fn narrowing_through_a_disjunction_of_tag_tests() {
+    let alias = "/** type S = {kind: \"row\", children: Number[]} | {kind: \"col\", children: Number[]} | {kind: \"leaf\", v: String} */\n";
+    let ok = format!(
+        "{alias}/** function f(S) => Number */\n\
+         function f(spec) {{ if (spec.kind === \"row\" || spec.kind === \"col\") return spec.children.length; return spec.v.length; }}\n\
+         /** function g(S) => Number */\n\
+         function g(spec) {{ if (spec.kind !== \"row\" && spec.kind !== \"col\") return spec.v.length; return spec.children.length; }}\n\
+         /** function h(String | Number | Boolean) => Number */\n\
+         function h(x) {{ if (typeof x === \"string\" || typeof x === \"number\") {{ return 1; }} return x ? 1 : 0; }}"
+    );
+    check_program(&ok, &[]).unwrap();
+    for bad in [
+        // A member the disjunction lets through lacks the field.
+        "/** function f(S) => Number */\nfunction f(spec) { if (spec.kind === \"row\" || spec.kind === \"leaf\") return spec.children.length; return 0; }",
+        // A test of another path says nothing about this one.
+        "/** function f(S, S) => Number */\nfunction f(a, b) { if (a.kind === \"row\" || b.kind === \"col\") return a.children.length; return 0; }",
+    ] {
+        let src = format!("{alias}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{src}");
+    }
+}

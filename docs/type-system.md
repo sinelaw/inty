@@ -218,7 +218,10 @@ The other predicates that narrow:
 - `x === null` and `x !== undefined`, read by the *type* of the other operand, so a local `const undefined = 0` doesn't count;
 - `x == null` / `x != null`;
 - truthiness (`if (x)`, `!x`), with each language's rules;
-- `&&`, `||` and `?:`, including their right operands (`q !== null && q.x > 0`).
+- `&&`, `||` and `?:`, including their right operands (`q !== null && q.x > 0`);
+- a disjunction of tests of one path: `if (s.kind === "row" || s.kind === "col")` narrows `s` to those two members (and `s.kind !== "row" && s.kind !== "col"` does in its `else`).
+
+**A property's own type isn't narrowed.** A tag test picks a union's members, but `if (r.palette) use(r.palette)` with `palette: String | Null` leaves `r.palette` a `String | Null`: a record is mutable, and a call between the test and the use, or another reference to the same object, could store `null` there. Copy it into a `const` first: `const p = r.palette; if (p) use(p);` (the error says so).
 
 A test also narrows:
 - the code after an `if` whose other branch always returns, throws, breaks or continues (`if (q === null) return 0; return q.x;`);
