@@ -236,7 +236,7 @@ impl InferState {
                         // type's member, is of a function that uses no
                         // `this`: called on the object or taken off it.
                         let annotated_type =
-                            self.annotation_this(ann_span, &annotated_type, &Type::ArrowThis)?;
+                            crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
                         // TypeScript's JSDoc convention is to allow a
                         // `null` / `undefined` placeholder initialiser
                         // for a `@type`-annotated field — the field is
@@ -858,7 +858,7 @@ impl InferState {
                         // type's member, is of a function that uses no
                         // `this`: called on the object or taken off it.
                         let annotated_type =
-                            self.annotation_this(ann_span, &annotated_type, &Type::ArrowThis)?;
+                            crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
                         let is_placeholder = matches!(
                             value,
                             Expr::Lit {

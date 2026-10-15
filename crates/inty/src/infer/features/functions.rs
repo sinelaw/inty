@@ -576,7 +576,7 @@ impl InferState {
             // otherwise. Subsume rather than unify so a body annotated to
             // return `String` can hold a literal.
             let annotated_type =
-                self.annotation_this(annotation_span, &annotated_type, &Type::ArrowThis)?;
+                crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
             self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 
