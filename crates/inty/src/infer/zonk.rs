@@ -64,6 +64,55 @@ pub fn zonk(table: &mut VarTable, subst: &Subst, ty: &Type) -> Type {
     zonk_with_visited(table, subst, ty, &mut visited)
 }
 
+/// Resolve only a type's head: a variable to what it is bound to (to the
+/// root of its class if free), and nothing inside. `unify` resolves each
+/// level as it reaches it, so a large type isn't copied whole at every
+/// step of a unification that walks it (which made unifying two large
+/// rows quadratic in their size).
+/// A type whose head is already resolved (not a variable) is borrowed,
+/// not copied.
+pub fn zonk_head_cow<'a>(table: &mut VarTable, ty: &'a Type) -> std::borrow::Cow<'a, Type> {
+    if !matches!(ty, Type::Var(TVarName::Flex(_))) {
+        return std::borrow::Cow::Borrowed(ty);
+    }
+    let mut ty = ty.clone();
+    // A bound chain is short (`find` compresses it); the bound guards a
+    // cycle that a drift in the table could leave.
+    for _ in 0..64 {
+        let Type::Var(TVarName::Flex(id)) = &ty else {
+            return std::borrow::Cow::Owned(ty);
+        };
+        let Some(root) = table.find_if_present(*id) else {
+            return std::borrow::Cow::Owned(ty);
+        };
+        match table.root_resolution(root) {
+            Resolution::Bound(bound) => ty = bound,
+            _ => return std::borrow::Cow::Owned(Type::Var(TVarName::Flex(root))),
+        }
+    }
+    std::borrow::Cow::Owned(ty)
+}
+
+/// Look at a type's resolved head (as [`zonk_head_cow`] gives it)
+/// without copying what a variable is bound to: for a caller that only
+/// asks what kind of type it is.
+pub fn with_head<R>(table: &mut VarTable, ty: &Type, f: impl FnOnce(&Type) -> R) -> R {
+    let Type::Var(TVarName::Flex(mut id)) = ty else {
+        return f(ty);
+    };
+    for _ in 0..64 {
+        let Some(root) = table.find_if_present(id) else {
+            return f(&Type::Var(TVarName::Flex(id)));
+        };
+        match table.bound(root) {
+            Some(Type::Var(TVarName::Flex(next))) => id = *next,
+            Some(bound) => return f(bound),
+            None => return f(&Type::Var(TVarName::Flex(root))),
+        }
+    }
+    f(&Type::Var(TVarName::Flex(id)))
+}
+
 /// Per-zonk-call visited-set. Stack-allocated for the common-case
 /// shallow walk (most zonk calls touch < 8 variables) and falls back
 /// to a heap-allocated Vec for deeper recursions. Linear scan instead
@@ -127,49 +176,39 @@ fn zonk_with_visited(
             let Some(root) = table.find_if_present(*id) else {
                 return ty.clone();
             };
-            match table.root_resolution(root) {
-                // Free root: use the equivalence-class root id. This
-                // mirrors `Subst::apply_subst`'s "follow the chain to
-                // its endpoint" behaviour — for an aliased pair like
-                // `unify(α, β)`, both zonk to the surviving root so
-                // downstream `==` checks treat them as equal.
-                Resolution::Unbound { .. } => Type::Var(TVarName::Flex(root)),
-                Resolution::Bound(bound) => {
-                    // Decycle: if we're already mid-expanding `root`,
-                    // return the variable verbatim. Inty's normal
-                    // path converts equi-recursive bindings to
-                    // nominal `Type::Named` references in
-                    // `var_bind` / `create_recursive_type`, so a
-                    // well-formed table never holds a cycle on
-                    // directly-bound variables. If this branch
-                    // fires in production it means a binding
-                    // slipped through that conversion — a real
-                    // bug, not a benign defensive case.
-                    if !visited.insert(root) {
-                        debug_assert!(
-                            false,
-                            "zonk cycle: re-entered Bound root {} \
-                             during expansion. The mirror has a \
-                             structural cycle that `apply_subst` \
-                             would also overflow on — investigate \
-                             `var_bind` / `create_recursive_type` \
-                             for the missing equi-recursive \
-                             conversion.",
-                            root
-                        );
-                        return Type::Var(TVarName::Flex(root));
-                    }
-                    let bound = bound.clone();
-                    let result = zonk_with_visited(table, subst, &bound, visited);
-                    visited.remove(root);
-                    result
-                }
-                Resolution::Link(_) => {
-                    // `find` returned a root, so `root_resolution`
-                    // can't yield Link. Defensive.
-                    ty.clone()
-                }
+            // A bound root is expanded in place: its type is taken out
+            // of the table while it is walked (not copied first), and
+            // put back after.
+            if let Some(bound) = table.take_bound(root) {
+                visited.insert(root);
+                let result = zonk_with_visited(table, subst, &bound, visited);
+                table.restore_bound(root, bound);
+                visited.remove(root);
+                return result;
             }
+            // Decycle: a root being expanded reads as free while it is
+            // out of the table, so it is left as the variable. Inty's
+            // normal path converts equi-recursive bindings to nominal
+            // `Type::Named` references in `var_bind` /
+            // `create_recursive_type`, so a well-formed table never
+            // holds a cycle on directly-bound variables: if this fires
+            // a binding slipped through that conversion — a real bug,
+            // not a benign defensive case.
+            debug_assert!(
+                !visited.items.contains(&root),
+                "zonk cycle: re-entered Bound root {} during expansion. \
+                 The mirror has a structural cycle that `apply_subst` \
+                 would also overflow on — investigate `var_bind` / \
+                 `create_recursive_type` for the missing equi-recursive \
+                 conversion.",
+                root
+            );
+            // Free root: use the equivalence-class root id. This
+            // mirrors `Subst::apply_subst`'s "follow the chain to its
+            // endpoint" behaviour — for an aliased pair like
+            // `unify(α, β)`, both zonk to the surviving root so
+            // downstream `==` checks treat them as equal.
+            Type::Var(TVarName::Flex(root))
         }
         Type::Func {
             this_type,
@@ -278,11 +317,7 @@ fn zonk_row_with_visited(
             // `RowType::apply_subst`.
             match table.find_if_present(*id) {
                 None => row.tail.clone(),
-                Some(root) => match table.root_resolution(root) {
-                    Resolution::Unbound { .. } => RowTail::Open(TVarName::Flex(root)),
-                    Resolution::Bound(_) => RowTail::Open(TVarName::Flex(root)),
-                    Resolution::Link(_) => RowTail::Open(TVarName::Flex(root)),
-                },
+                Some(root) => RowTail::Open(TVarName::Flex(root)),
             }
         }
         RowTail::Recursive(id, args) => RowTail::Recursive(
@@ -367,10 +402,7 @@ fn zonk_filtered(table: &mut VarTable, subst: &Subst, ty: &Type, quantified: &[T
                     let root = table.find(*id);
                     Type::Var(TVarName::Flex(root))
                 }
-                Resolution::Bound(bound) => {
-                    let bound = bound.clone();
-                    zonk_filtered(table, subst, &bound, quantified)
-                }
+                Resolution::Bound(bound) => zonk_filtered(table, subst, &bound, quantified),
                 Resolution::Link(_) => ty.clone(),
             }
         }
@@ -463,13 +495,13 @@ fn zonk_row_filtered(
     let tail = match &row.tail {
         RowTail::Closed => RowTail::Closed,
         RowTail::Open(name) if quantified.contains(name) => RowTail::Open(name.clone()),
-        RowTail::Open(TVarName::Flex(id)) => match table.root_resolution(*id) {
-            Resolution::Unbound { .. } => {
-                let root = table.find(*id);
-                RowTail::Open(TVarName::Flex(root))
+        RowTail::Open(TVarName::Flex(id)) => {
+            if table.is_free(*id) {
+                RowTail::Open(TVarName::Flex(table.find(*id)))
+            } else {
+                RowTail::Open(TVarName::Flex(*id))
             }
-            Resolution::Bound(_) | Resolution::Link(_) => RowTail::Open(TVarName::Flex(*id)),
-        },
+        }
         RowTail::Open(skolem) => RowTail::Open(skolem.clone()),
         RowTail::Recursive(id, args) => RowTail::Recursive(
             *id,

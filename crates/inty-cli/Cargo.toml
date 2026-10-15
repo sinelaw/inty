@@ -15,3 +15,4 @@ inty = { workspace = true }
 inty-lsp = { workspace = true }
 inty-bundle = { workspace = true }
 inty-go = { workspace = true }
+mimalloc = "0.1"

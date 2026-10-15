@@ -884,11 +884,51 @@ impl InferState {
                         props.insert(prop_name, slot);
                     }
                 }
+                // An object literal's own method (not a class's): like a
+                // property, it only has to fit its slot, so one that uses
+                // no `this` fits a method signature (`m(): T`) as well as a
+                // function type. One that reads `this` reads the object,
+                // which has the expected type.
+                PropDef::Method {
+                    key,
+                    params,
+                    body,
+                    return_type_ast,
+                    proto: false,
+                    span: method_span,
+                } => {
+                    let prop_name = self.prop_key_to_name(key);
+                    let Some(expected_prop_ty) =
+                        expected_row.props.get(&prop_name).map(|e| e.ty.clone())
+                    else {
+                        return Ok(None);
+                    };
+                    let this = if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                        expected.clone()
+                    } else {
+                        Type::ArrowThis
+                    };
+                    self.member_function = true;
+                    let method_type = self.infer_function_with_this(
+                        env,
+                        None,
+                        params,
+                        body,
+                        &None,
+                        return_type_ast.as_ref(),
+                        this,
+                        *method_span,
+                    );
+                    self.member_function = false;
+                    let method_type = method_type?;
+                    self.subsume(*method_span, &method_type, &expected_prop_ty)?;
+                    let slot = self.zonk(&expected_prop_ty);
+                    props.insert(prop_name, slot);
+                }
                 _ => {
-                    // Methods/getters/setters/spreads: synthesis
-                    // fallback knows how to handle them; we don't
-                    // (yet) push contextual types into method
-                    // bodies.
+                    // Class methods, getters, setters, spreads: synthesis
+                    // fallback knows how to handle them; we don't (yet)
+                    // push contextual types into them.
                     return Ok(None);
                 }
             }
@@ -1008,8 +1048,11 @@ impl InferState {
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
         let obj_type = self.zonk(&obj_type);
-        // (After the object's own members.)
-        self.last_member_receiver = Some(obj_type.clone());
+        // (After the object's own members.) Only a store's target needs
+        // it (see `infer_store_target`).
+        if self.recording_member_receiver {
+            self.last_member_receiver = Some(obj_type.clone());
+        }
         self.infer_member_on_type(&obj_type, property, span)
     }
 

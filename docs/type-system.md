@@ -74,7 +74,7 @@ An object spread (`{a: 1, ...o}`) takes the operand's fields over the ones befor
 
 ### Operator Overloading (Type Classes)
 
-`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned (`xs.length = 0` is an error; `xs = []` replaces the array). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. `+` takes two operands of one type, and `Plus a` says that type is a number or a string, so `function add(x, y) { return x + y; }` is `<a> where Plus a => (a, a) => a`: `add(1, 0.5)` is a `Number`, `add("a", "b")` a `String`, and `add(1, "b")` an error. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
+`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned, but for an array's `length`, which takes a number and truncates the array (`xs.length = 0` clears it; a larger length would leave holes, a fault like a read past the end). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. `+` takes two operands of one type, and `Plus a` says that type is a number or a string, so `function add(x, y) { return x + y; }` is `<a> where Plus a => (a, a) => a`: `add(1, 0.5)` is a `Number`, `add("a", "b")` a `String`, and `add(1, "b")` an error. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
 
 A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a, b, c> where Plus a b c => (a, b) => c */`, and the annotation parser reads the `where` clause back (`Plus t`, short for `Plus t t t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them. A `Plus` on a type that is already known is decided when the binding is generalised rather than carried into its scheme, so `const f = function () { return g + g; }` with `g` a function is an error even if `f` is never called.
 
@@ -167,9 +167,10 @@ The join rules, none of which guesses:
 
 - literals of one base type widen to it (`b ? 1 : 2` is `Number`; also inside tuples and objects);
 - a value of a (declared) union or sum joined with one of its arms is that union or sum;
-- a branch that doesn't complete (`return`, `throw`) contributes nothing, and statements (`if (c) n += 1; else break;`) aren't joined by value at all.
+- a branch that doesn't complete (`return`, `throw`) contributes nothing, and statements (`if (c) n += 1; else break;`) aren't joined by value at all;
+- a conditional one of whose branches is exactly `undefined` (or `null`) is the other branch's type or nothing: `xs.length > 0 ? xs[0] : undefined` is `Number | Undefined`, `c ? "a" : null` is `String | Null`. The branch itself says which sum, so nothing is guessed.
 
-A branch that is `null` or `undefined` is no exception: the sum is said, and each branch is injected into it.
+Other branches that are `null` or `undefined` — the `return`s of a function, an element, a side of `??` — are no exception: the sum is said, and each branch is injected into it.
 
 ```javascript
 function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }

@@ -38,8 +38,9 @@ impl InferState {
     /// variable takes it, so that a later `new` through the variable is
     /// rejected too.
     pub(crate) fn unify_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
-        let (z1, z2) = (self.zonk(t1), self.zonk(t2));
-        match (&z1, &z2) {
+        let z1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
+        let z2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
+        match (&*z1, &*z2) {
             // A declared method signature's `this`, as a declared member's
             // missing one, fits any receiver.
             (Type::MethodThis, _) | (_, Type::MethodThis) => Ok(()),
@@ -68,8 +69,9 @@ impl InferState {
     /// uses no `this` flows into a slot for any, `subsume`.) A variable
     /// takes either; a declared method signature's fits any.
     fn unify_fn_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
-        let (z1, z2) = (self.zonk(t1), self.zonk(t2));
-        match (&z1, &z2) {
+        let z1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
+        let z2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
+        match (&*z1, &*z2) {
             (Type::MethodThis, _) | (_, Type::MethodThis) => Ok(()),
             (Type::ArrowThis, Type::ArrowThis) => Ok(()),
             (Type::ArrowThis, Type::Error) | (Type::Error, Type::ArrowThis) => Ok(()),
@@ -81,7 +83,7 @@ impl InferState {
             }
             (Type::ArrowThis, other) | (other, Type::ArrowThis) => Err(TypeError::TypeMismatch {
                 expected: "a function that doesn't use `this`".to_string(),
-                found: format!("one that reads `this` (a method of {})", other),
+                found: format!("one that reads `this` (a method of {})", self.zonk(other)),
                 span,
             }
             .into()),
@@ -97,8 +99,8 @@ impl InferState {
         if self.unify_depth >= super::MAX_UNIFY_DEPTH {
             return Err(TypeError::UnifyDepth { span }.into());
         }
-        let t1 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t1);
-        let t2 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t2);
+        let t1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
+        let t2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
         self.unify_depth += 1;
         let result = self.unify_impl(span, &t1, &t2);
         self.unify_depth -= 1;
@@ -960,11 +962,22 @@ impl InferState {
         let found_origin = self.get_origin(t2).cloned();
 
         let (expected, found) = self.show_pair(t1, t2);
+        // A caught exception's type is rigid on purpose: say why.
+        let caught = |t: &Type| {
+            matches!(self.flatten_type(t), Type::Var(TVarName::Skolem(id))
+                if self.caught_exceptions.contains(&id))
+        };
+        let context = (caught(t1) || caught(t2)).then(|| {
+            "a caught exception may be any value that was thrown, so it can be passed on, \
+             tested and rethrown, but not used as a number, string or record; `String(e)` \
+             gives its text"
+                .to_string()
+        });
         TypeError::UnificationError {
             expected,
             found,
             span,
-            context: None,
+            context,
             expected_origin,
             found_origin,
         }

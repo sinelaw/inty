@@ -331,8 +331,38 @@ pub fn resolve_imports(
                 }));
             }
 
-            let (module_env, exports) =
-                load_imported(state, env.clone(), &resolved_path, visiting)?;
+            // A module that failed is reported once, where it failed, and
+            // checked once: its importers (this one and later ones) go on
+            // with what it would have bound typed `Error`, which
+            // propagates silently, rather than failing with it — or each
+            // checking it again.
+            let loaded = if state.failed_modules.contains(&resolved_path) {
+                None
+            } else {
+                let importer = state.current_source();
+                match load_imported(state, env.clone(), &resolved_path, visiting) {
+                    Ok(checked) => Some(checked),
+                    Err(e) => {
+                        state.push_error(e);
+                        state.set_current_source(importer);
+                        visiting.remove(&resolved_path);
+                        state.failed_modules.insert(resolved_path.clone());
+                        None
+                    }
+                }
+            };
+            let Some((module_env, exports)) = loaded else {
+                let error = TypeScheme::mono(Type::Error);
+                for spec in specifiers {
+                    let local = match spec {
+                        ImportSpecifier::Named { local, .. }
+                        | ImportSpecifier::Default { local, .. }
+                        | ImportSpecifier::Namespace { local, .. } => local,
+                    };
+                    env = env.extend(local.clone(), error.clone());
+                }
+                continue;
+            };
 
             let lookup_export_scheme = |name: &str| -> Option<TypeScheme> {
                 exports
@@ -421,10 +451,13 @@ pub fn check_entry(
     path: &Path,
 ) -> Result<Option<(TypeEnv, ExportTable)>, IntyError> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if state.module_cache.contains_key(&canonical) {
+    if state.module_cache.contains_key(&canonical) || state.failed_modules.contains(&canonical) {
         return Ok(None);
     }
-    let checked = load_module(state, starting_env, path, &mut HashSet::new(), false)?;
+    let checked =
+        load_module(state, starting_env, path, &mut HashSet::new(), false).inspect_err(|_| {
+            state.failed_modules.insert(canonical.clone());
+        })?;
     state.module_cache.insert(canonical, checked.clone());
     Ok(Some(checked))
 }
@@ -844,13 +877,18 @@ mod tests {
         let program = parse(&source).unwrap();
         let mut state = InferState::new();
         let mut visiting = HashSet::new();
-        resolve_imports(
+        let env = resolve_imports(
             &mut state,
             crate::builtins::initial_env(),
             &program,
             main_path.parent().unwrap(),
             &mut visiting,
-        )
+        )?;
+        // A module that failed is reported, and its importer goes on.
+        match state.take_errors().into_iter().next() {
+            Some(e) => Err(e),
+            None => Ok(env),
+        }
     }
 
     fn check(dir: &Path, main: &str) -> Result<(), IntyError> {
@@ -867,7 +905,10 @@ mod tests {
             &mut visiting,
         )?;
         state.infer_program_with_env(&env, &program)?;
-        Ok(())
+        match state.take_errors().into_iter().next() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     #[test]
@@ -1290,6 +1331,50 @@ mod tests {
         write_file(dir.path(), "main.js", "import { x } from \"./a.js\";");
         let err = check(dir.path(), "main.js").expect_err("re-export cycle should error");
         assert!(format!("{}", err).contains("circular"));
+    }
+
+    // Rosaclef: a module that failed was checked again by each importer,
+    // which failed with it (its own code unchecked), and its error was
+    // reported once per importer.
+    #[test]
+    fn a_failed_module_is_checked_once_and_its_importers_still_are() {
+        let dir = tempdir();
+        write_file(
+            dir.path(),
+            "lib.js",
+            "export const ok = 1;\nexport const bad = 1 - \"s\";",
+        );
+        write_file(
+            dir.path(),
+            "a.js",
+            "import { ok } from \"./lib.js\";\nexport const a = ok;",
+        );
+        write_file(
+            dir.path(),
+            "main.js",
+            "import { ok } from \"./lib.js\";\nimport { a } from \"./a.js\";\nconst z = true * 2;",
+        );
+        let mut state = InferState::new();
+        let mut errors = Vec::new();
+        for entry in ["main.js", "a.js", "lib.js"] {
+            let checked = check_entry(
+                &mut state,
+                crate::builtins::initial_env(),
+                &dir.path().join(entry),
+            );
+            errors.extend(state.take_errors());
+            // As the CLI: the statement list re-raises the first error it
+            // recorded.
+            if let Err(e) = checked {
+                if !errors.iter().any(|r| format!("{r:?}") == format!("{e:?}")) {
+                    errors.push(e);
+                }
+            }
+        }
+        let shown: Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
+        let lib = shown.iter().filter(|e| e.contains("String")).count();
+        let main = shown.iter().filter(|e| e.contains("Boolean")).count();
+        assert_eq!((lib, main), (1, 1), "{shown:#?}");
     }
 
     #[test]

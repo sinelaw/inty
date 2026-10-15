@@ -494,6 +494,12 @@ fn js_array_method_type(state: &mut InferState, elem: &Type, method: &str) -> Op
             vec![element_callback(state, elem, b.clone())],
             Type::union(vec![elem.clone(), Type::Undefined]),
         ),
+        // `Array.prototype.at(index)`: the element at `index`, counted
+        // from the end if negative, or `undefined` outside the array.
+        "at" => Type::simple_func(
+            vec![n.clone()],
+            Type::union(vec![elem.clone(), Type::Undefined]),
+        ),
         "findIndex" => {
             Type::simple_func(vec![element_callback(state, elem, b.clone())], Type::Number)
         }
@@ -840,10 +846,22 @@ impl InferState {
                 | ClassName::Strip
                 | ClassName::Spread
                 | ClassName::Plus
-        ) && matches!(
-            pred.types.first().map(|c| self.apply_subst(c)),
-            Some(Type::Var(TVarName::Flex(_)))
-        )
+        ) && pred.types.first().is_some_and(|c| {
+            // Only the head matters: follow the variable's bindings (a
+            // whole substitution, applied to each pending constraint at
+            // each call, was most of a large program's checking time).
+            let mut head = c;
+            for _ in 0..64 {
+                match head {
+                    Type::Var(v @ TVarName::Flex(_)) => match self.main_subst.get(v) {
+                        Some(t) => head = t,
+                        None => return true,
+                    },
+                    _ => return false,
+                }
+            }
+            matches!(self.apply_subst(c), Type::Var(TVarName::Flex(_)))
+        })
     }
 
     /// Resolve `HasProp(receiver, name, result)` for a known receiver:
@@ -1150,6 +1168,11 @@ impl InferState {
         span: Span,
     ) -> Result<(), IntyError> {
         let receiver = self.apply_subst(receiver);
+        // An array's `length` takes a store (`xs.length = 0` empties it in
+        // place); the number stored is checked as the property's type.
+        if name == "length" && matches!(receiver, Type::Array(_)) {
+            return Ok(());
+        }
         let builtin = match &receiver {
             // A function's row has a call signature; one a spread's result
             // carries as absent (`{...{...o}}`) is an object's.

@@ -5,6 +5,11 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
+
+// Checking allocates and frees many small types (every resolved type is
+// a fresh tree); the system allocator spent about half the time on it.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::time::Instant;
 
 use inty::ast::pretty::print_program;
@@ -277,10 +282,17 @@ fn check_many(state: &mut InferState, env: TypeEnv, files: &[String], color: boo
             Ok(Some(_)) => checked += 1,
             // Already checked, imported by an earlier file.
             Ok(None) => {}
-            Err(e) => errors.push(LocatedError {
-                error: e,
-                source: state.current_source(),
-            }),
+            // The statement list re-raises the first error it recorded:
+            // report it once.
+            Err(e) => {
+                let shown = format!("{e:?}");
+                if !errors.iter().any(|l| format!("{:?}", l.error) == shown) {
+                    errors.push(LocatedError {
+                        error: e,
+                        source: state.current_source(),
+                    })
+                }
+            }
         }
         state.set_current_source(None);
         if !errors.is_empty() {

@@ -4987,15 +4987,15 @@ fn test_stores_only_into_what_takes_them() {
         let s = "ab";
         s[0]++;
         "#,
-        // Nor a built-in property: a string's, an array's (which `dynamics`
-        // doesn't store), a function's.
+        // Nor a built-in property: a string's, a function's (an array's
+        // `length` takes a number: `a_store_to_an_array_length_truncates_it`).
         r#"
         function f(o) { o.length = 0; return o; }
         const s = f("ab");
         "#,
         r#"
         const xs = [1, 2];
-        xs.length = 1;
+        xs.length = "1";
         "#,
         r#"
         const f = function () { return 1; };
@@ -5713,4 +5713,110 @@ fn comparison_function_has_plus_constraint() {
     let scheme = env.lookup("lt").unwrap();
     assert_eq!(scheme.body.preds.len(), 1, "{scheme:?}");
     assert_eq!(scheme.body.preds[0].class, crate::types::ClassName::Plus);
+}
+
+// Rosaclef (inty-notes "Gaps found moving to inty cb4bfca", E): an
+// array's `length` takes a number, which truncates it.
+#[test]
+fn a_store_to_an_array_length_truncates_it() {
+    let src = "/** const xs: String[] */\n\
+               const xs = [];\n\
+               xs.length = 0;\n\
+               function clear(a) { a.length = 0; return a; }\n\
+               const ys = clear([1, 2]);\n\
+               const n = xs.length;";
+    assert_eq!(
+        check_program(src, &["ys", "n"]).unwrap(),
+        ["Number[]", "Number"]
+    );
+    // A number only, and no other built-in property.
+    for bad in [
+        "const xs = [1]; xs.length = \"0\";",
+        "const xs = [1]; xs.push = 0;",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+}
+
+// Rosaclef (F): a branch that is exactly `undefined` or `null` makes the
+// conditional the other branch's type or nothing.
+#[test]
+fn a_branch_of_nothing_makes_the_conditional_a_sum() {
+    let src = "/** const xs: Number[] */\n\
+               const xs = [];\n\
+               const last = xs.length > 0 ? xs[xs.length - 1] : undefined;\n\
+               const c = xs.length > 2;\n\
+               const s = c ? \"a\" : null;\n\
+               const u = c ? undefined : 1;\n\
+               const v = last ?? 0;";
+    assert_eq!(
+        check_program(src, &["last", "s", "u", "v"]).unwrap(),
+        [
+            "Number | Undefined",
+            "String | Null",
+            "Number | Undefined",
+            "Number"
+        ]
+    );
+    // The value may be nothing, so it is used only once told apart.
+    let bad = "const c = Math.random() > 0.5;\n\
+               const x = c ? 1 : undefined;\n\
+               const y = x + 1;";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+// Rosaclef (G): `Array.prototype.at`, which is past the end (either way)
+// `undefined`.
+#[test]
+fn an_array_at_may_be_undefined() {
+    let src = "const xs = [1, 2, 3];\n\
+               const a = xs.at(-1);\n\
+               const b = xs.at(0) ?? 0;";
+    assert_eq!(
+        check_program(src, &["a", "b"]).unwrap(),
+        ["Number | Undefined", "Number"]
+    );
+    let bad = "const xs = [1, 2, 3];\nconst a = xs.at(-1) + 1;";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+// Rosaclef (D), not changed: `{}` is a closed empty record, so
+// `(raw.c ?? {}).off` reads a field `{}` doesn't have. Accepting it would
+// need an open `{}` (unsound: a later read of a field the value lacks) or
+// fields that may be absent (`off?: T` read as `T | Undefined`). Telling
+// the absent case apart first does it.
+#[test]
+fn a_field_of_an_empty_default_is_not_read() {
+    let src = "/** function f<T>(raw: T) => String[] */\n\
+               function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => x); }";
+    let err = check_program(src, &[]).unwrap_err();
+    assert!(format!("{err}").contains("'off' not found"), "{err}");
+    let src = "/** function decode<T>(c: T) => String[] */\n\
+               function decode(c) {\n\
+                 if (!c) return [];\n\
+                 return (c.off ?? []).map((x) => x);\n\
+               }\n\
+               /** function f<T>(raw: T) => String[] */\n\
+               function f(raw) { return decode(raw.c); }\n\
+               const r = 1;";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+}
+
+// An object literal's method that never mentions `this` fits a method
+// signature as well as a function type; one that reads `this` reads the
+// object (of the annotated type), and doesn't fit a function type.
+#[test]
+fn a_literal_method_fits_the_slot_it_is_checked_against() {
+    let src = "/** const s: { stop(): Number, x: Number } */\n\
+               const s = { x: 1, stop() { return this.x; } };\n\
+               /** const u: { stop(): Number, x: Number } */\n\
+               const u = { x: 1, stop() { return 2; } };\n\
+               /** const t: { stop: () => Number, x: Number } */\n\
+               const t = { x: 1, stop() { return 2; } };\n\
+               const f = t.stop;\n\
+               const r = s.stop() + u.stop() + f();";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    let bad = "/** const t: { stop: () => Number, x: Number } */\n\
+               const t = { x: 1, stop() { return this.x; } };";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
 }

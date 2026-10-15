@@ -118,8 +118,11 @@ impl InferState {
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
         let index_type = self.infer_expr(env, property)?;
-        // (After the operands' own computed members.)
-        self.last_index_container = Some(obj_type.clone());
+        // (After the operands' own computed members.) Only a store's
+        // target needs it (see `infer_store_target`).
+        if self.recording_member_receiver {
+            self.last_index_container = Some(obj_type.clone());
+        }
 
         // Apply substitution to see if we know the object type
         let obj_type_resolved = self.zonk(&obj_type);

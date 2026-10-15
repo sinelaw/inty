@@ -536,3 +536,102 @@ const back = Object.fromEntries(Object.entries(params));
     err(r##"/** const d: Dict<Number> */ const d = { a: 1 }; const n = d.b + 1;"##);
     ok(r##"/** const d: Dict<Number> */ const d = { a: 1 }; const n = (d.b ?? 0) + 1;"##);
 }
+
+// "Gaps found moving to inty cb4bfca" (Rosaclef's docs/inty-notes.md),
+// lettered as there. A (checking time) is `tests/checking_time.rs`.
+
+// B. A record field holds a callback (a function that uses no `this`):
+// stored, read back, called and passed on. A function that reads `this`
+// can't be stored there.
+#[test]
+fn gap_b_a_record_field_holds_a_callback() {
+    ok("
+        /** const s: { stop: () => Undefined } */
+        const s = { stop: () => undefined };
+        /** function set(stop: () => Undefined) => Undefined */
+        function set(stop) { s.stop = stop; }
+        const end = s.stop;
+        end();
+        /** function call(f: () => Undefined) => Undefined */
+        function call(f) { f(); }
+        call(s.stop);
+    ");
+    err("
+        /** const s: { x: Number, stop: () => Number } */
+        const s = { x: 1, stop: () => 1 };
+        s.stop = function () { return this.x; };
+    ");
+}
+
+// C. Calling a method detached says it is about `this`.
+#[test]
+fn gap_c_a_detached_method_call_says_this() {
+    let e = err("
+        const s = { x: 1, stop() { return this.x; } };
+        const end = s.stop;
+        end();
+    ");
+    assert!(e.contains("`this`"), "{e}");
+}
+
+// D (not changed): `{}` is a closed empty record, so a field read of
+// `(x ?? {})` is rejected; telling the absent case apart first works.
+#[test]
+fn gap_d_a_field_of_an_empty_default() {
+    let e = err("
+        /** function f<T>(raw: T) => String[] */
+        function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => String(x)); }
+    ");
+    assert!(e.contains("'off' not found"), "{e}");
+    ok("
+        /** function decode<T>(c: T) => String[] */
+        function decode(c) {
+          if (!c) return [];
+          return (c.off ?? []).map((x) => String(x));
+        }
+        /** function f<T>(raw: T) => String[] */
+        function f(raw) { return decode(raw.c); }
+    ");
+}
+
+// E. `arr.length = 0` clears an array.
+#[test]
+fn gap_e_array_length_store() {
+    ok("
+        /** const xs: String[] */
+        const xs = [];
+        xs.length = 0;
+    ");
+    err("const xs = [1]; xs.length = \"0\";");
+}
+
+// F. `c ? x : undefined` (or `null`) is `T | Undefined` (`T | Null`).
+#[test]
+fn gap_f_conditional_with_nothing() {
+    ok("
+        /** const xs: Number[] */
+        const xs = [];
+        const last = xs.length > 0 ? xs[xs.length - 1] : undefined;
+        const first = xs.length > 0 ? xs[0] : null;
+        /** const n: Number */
+        const n = (last ?? 0) + (first ?? 0);
+    ");
+    err("
+        /** const xs: Number[] */
+        const xs = [];
+        const last = xs.length > 0 ? xs[xs.length - 1] : undefined;
+        const n = last + 1;
+    ");
+}
+
+// G. `Array.prototype.at`.
+#[test]
+fn gap_g_array_at() {
+    ok("
+        /** const xs: Number[] */
+        const xs = [1, 2];
+        /** const n: Number */
+        const n = xs.at(-1) ?? 0;
+    ");
+    err("const xs = [1, 2]; const n = xs.at(-1) + 1;");
+}

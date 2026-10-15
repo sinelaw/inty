@@ -194,6 +194,12 @@ pub struct InferState {
     /// The receiver of the member inferred last (`infer_member`), so an
     /// assignment to `r.p` can require `r` to take stores (`FieldWrite`).
     pub(crate) last_member_receiver: Option<Type>,
+    /// The rigid variables `catch (e)` gives a caught exception, for the
+    /// diagnostic when one is used at a concrete type.
+    pub(crate) caught_exceptions: std::collections::HashSet<crate::types::TVarId>,
+    /// Whether member reads record `last_member_receiver` and
+    /// `last_index_container` (while a store's target is checked).
+    pub(crate) recording_member_receiver: bool,
 
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
@@ -275,6 +281,10 @@ pub struct InferState {
     /// environments and export tables (see `modules::load_imported`).
     pub module_cache:
         HashMap<std::path::PathBuf, (crate::infer::TypeEnv, crate::modules::ExportTable)>,
+    /// Modules that failed this run, by canonical path: reported once,
+    /// and not checked again by a later importer (see
+    /// `modules::resolve_imports`).
+    pub failed_modules: std::collections::HashSet<std::path::PathBuf>,
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
@@ -507,6 +517,8 @@ impl InferState {
             pending_constraints: Vec::new(),
             last_index_container: None,
             last_member_receiver: None,
+            caught_exceptions: std::collections::HashSet::new(),
+            recording_member_receiver: false,
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -520,6 +532,7 @@ impl InferState {
             module_depth: 0,
             quiet: 0,
             module_cache: HashMap::new(),
+            failed_modules: std::collections::HashSet::new(),
             timings: None,
             module_timings: Vec::new(),
             stmt_list_depth: 0,
@@ -878,6 +891,12 @@ impl InferState {
         super::zonk::zonk(&mut self.var_table, &self.main_subst, t)
     }
 
+    /// Whether `t`'s resolved head satisfies `f`, without resolving (or
+    /// copying) anything below the head.
+    pub fn head_is(&mut self, t: &Type, f: impl FnOnce(&Type) -> bool) -> bool {
+        super::zonk::with_head(&mut self.var_table, t, f)
+    }
+
     /// Snapshot the inference state for speculative work.
     ///
     /// Captures everything a rollback needs to restore:
@@ -1172,8 +1191,12 @@ impl InferState {
     /// `check_expr` pushes the expected element/field types into it.
     /// Covariance belongs only to an immutable type constructor.
     pub fn subsume(&mut self, span: Span, sub: &Type, sup: &Type) -> InferResult<()> {
-        let sub = self.zonk(sub);
-        let sup = self.zonk(sup);
+        // The rules up to unification look at heads only, and most
+        // subsumptions end there: the types are resolved whole only if
+        // it fails (unification resolves what it reaches itself).
+        let sub_head = super::zonk::zonk_head_cow(&mut self.var_table, sub);
+        let sup_head = super::zonk::zonk_head_cow(&mut self.var_table, sup);
+        let (sub, sup) = (&*sub_head, &*sup_head);
 
         // Rule 0 (S-LitBase): `Lit(l) ≤ Base` is sound — every
         // singleton is a value of its base. This rule used to live
@@ -1181,7 +1204,7 @@ impl InferState {
         // subsumption rule and lives here. The reverse direction
         // `Base ≤ Lit` is intentionally absent.
         if let Type::Literal(lit) = &sub {
-            if lit.base_type() == sup {
+            if lit.base_type() == *sup {
                 return Ok(());
             }
         }
@@ -1197,18 +1220,23 @@ impl InferState {
 
         // The same for a sum told apart by `typeof` (`Number | String`):
         // the variable may be the sum or one of its cases.
-        if matches!(sub, Type::Var(TVarName::Flex(_))) && sup.is_typeof_sum() {
-            self.add_constraint(TypePred::inject(sub.clone(), sup.clone()), span);
-            return Ok(());
+        if matches!(sub, Type::Var(TVarName::Flex(_))) && matches!(sup, Type::Union(_)) {
+            let sup = self.zonk(sup);
+            if sup.is_typeof_sum() {
+                self.add_constraint(TypePred::inject(sub.clone(), sup), span);
+                return Ok(());
+            }
         }
 
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
         let snap = self.snapshot_inference();
-        if self.quietly(|s| s.unify(span, &sub, &sup)).is_ok() {
+        if self.quietly(|s| s.unify(span, sub, sup)).is_ok() {
             return Ok(());
         }
         self.restore_snapshot(snap);
+        let sub = self.zonk(sub);
+        let sup = self.zonk(sup);
 
         // S-NoThis: a function that uses no `this` (`ArrowThis`) can be
         // called with any, so it flows into a slot for a function with
@@ -1697,27 +1725,19 @@ impl InferState {
         }
         // Variable-to-structured: bind the root iff still free.
         let root = self.var_table.find(id);
-        match self.var_table.root_resolution(root) {
-            Resolution::Unbound { .. } => {
-                self.var_table.bind(root, ty.clone());
-            }
-            Resolution::Bound(_) => {
-                // Reachable only if some prior `mirror_extend` (via
-                // another alias of `id`) bound this root, but
-                // `main_subst.resolve(&var)` at the call site
-                // didn't see the alias in main_subst — a drift.
-                debug_assert!(
-                    false,
-                    "mirror_extend Var-to-struct: root already Bound \
-                     but extend_subst's `resolve` didn't intercept. \
-                     Drift between var_table and main_subst."
-                );
-            }
-            Resolution::Link(_) => {
-                // `find` returns a root; `root_resolution(root)` can
-                // never yield Link. Defensive.
-                debug_assert!(false, "find returned a Link root");
-            }
+        if self.var_table.is_free(root) {
+            self.var_table.bind(root, ty.clone());
+        } else {
+            // Reachable only if some prior `mirror_extend` (via
+            // another alias of `id`) bound this root, but
+            // `main_subst.resolve(&var)` at the call site
+            // didn't see the alias in main_subst — a drift.
+            debug_assert!(
+                false,
+                "mirror_extend Var-to-struct: root already Bound \
+                 but extend_subst's `resolve` didn't intercept. \
+                 Drift between var_table and main_subst."
+            );
         }
     }
 
@@ -2116,13 +2136,13 @@ impl InferState {
             self.push_error(e);
         }
         let mut ty = self.main_subst.flatten(ty);
+        let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
         // A detached call's `this` that would be generalised is settled
-        // first: as `Undefined`, what the call passes.
-        if !self.pending_detached.is_empty() {
-            let (fixed_vars, _) = self.env_fixed_vars(env_free, &ty);
-            if self.settle_detached(Some(&fixed_vars)) {
-                ty = self.main_subst.flatten(&ty);
-            }
+        // first: as `Undefined`, what the call passes. (Which variables
+        // the environment fixes doesn't change: one is bound to a type
+        // without variables.)
+        if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
+            ty = self.main_subst.flatten(&ty);
         }
         let mut ty_vars = ty.free_vars();
         ty_vars.extend(extra.iter().cloned());
@@ -2134,7 +2154,6 @@ impl InferState {
         // HashSet is seeded independently — which would otherwise make
         // the printed scheme `<a, b>...` non-deterministically map
         // letters to type-var slots across runs.
-        let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
         // A variable that is bound in the substitution is not free, whatever
         // a (shallow) traversal of `ty` reports; `flatten` expands each
         // variable once, so a bound variable can survive in its output.

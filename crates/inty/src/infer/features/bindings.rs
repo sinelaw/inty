@@ -238,7 +238,10 @@ impl InferState {
     ) -> InferResult<Type> {
         self.last_index_container = None;
         self.last_member_receiver = None;
-        let ty = self.infer_expr(env, target)?;
+        let recording = std::mem::replace(&mut self.recording_member_receiver, true);
+        let ty = self.infer_expr(env, target);
+        self.recording_member_receiver = recording;
+        let ty = ty?;
         match target {
             Expr::ComputedMember { property, .. } => {
                 if let Some(container) = self.last_index_container.take() {

@@ -240,6 +240,44 @@ impl VarTable {
         self.cells[root as usize].clone()
     }
 
+    /// Whether `id`'s class is free (its root unbound), without copying a
+    /// bound root's type as [`Self::root_resolution`] does.
+    pub fn is_free(&mut self, id: TVarId) -> bool {
+        let root = self.find(id);
+        matches!(self.cells[root as usize], Resolution::Unbound { .. })
+    }
+
+    /// What a root is bound to, borrowed; `None` if it is free (or
+    /// `root` isn't a root).
+    pub fn bound(&self, root: TVarId) -> Option<&Type> {
+        match self.cells.get(root as usize)? {
+            Resolution::Bound(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
+    /// Take a bound root's type out of its cell, leaving the root
+    /// unbound until [`Self::restore_bound`] puts it back. A reader that
+    /// walks the bound type while it needs the table (`zonk`) then
+    /// doesn't copy it first; while it is out, the root reads as free,
+    /// which is how such a reader treats a root it is already inside.
+    /// `None` if `root` isn't a bound root.
+    pub fn take_bound(&mut self, root: TVarId) -> Option<Type> {
+        let cell = self.cells.get_mut(root as usize)?;
+        if !matches!(cell, Resolution::Bound(_)) {
+            return None;
+        }
+        match std::mem::replace(cell, Resolution::Unbound { level: 0, rank: 0 }) {
+            Resolution::Bound(ty) => Some(ty),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Put back what [`Self::take_bound`] took.
+    pub fn restore_bound(&mut self, root: TVarId, ty: Type) {
+        self.cells[root as usize] = Resolution::Bound(ty);
+    }
+
     /// Like [`Self::find`] but returns `None` when `id` is past
     /// the table's high-water mark — i.e. when the caller is asking
     /// about a variable that was never `fresh`-allocated. Used by

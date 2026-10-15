@@ -157,3 +157,31 @@ read at each resolution.)
   constraints; a module with thousands of never-resolved property reads
   would still be slow. Types are also still deep-copied when a variable is
   bound; sharing them (`Arc`) would help programs with very large rows.
+
+## Second round: annotated function types
+
+Rosaclef at `913758b` (branch `claude/gallant-planck-ermxo9`, 64 files,
+`web/check.sh` in one run). On `cb4bfca` the run was killed at 15 GB
+after 4.5 minutes; `tree/tree.js` alone took 155 s. Now it takes 5.8 s.
+Each step, measured on the whole run:
+
+| Change | `check.sh` |
+|---|---:|
+| `cb4bfca` | out of memory |
+| A function type uses no `this`; methods are `m(): T` signatures (rows with callbacks aren't recursive) | 16.6 s |
+| A module that fails is checked once, not again by each importer | 11.8 s |
+| `zonk` expands a bound variable in place instead of copying it twice; checking whether a variable is free doesn't copy its type | 10.8 s |
+| `unify`, `unify_this`, `subsume`, `check_expr`, `method_receiver` and calls resolve only a type's head where that is all they look at | 7.9 s |
+| mimalloc as the CLI's allocator | 5.8 s |
+
+`--timings` showed the per-module split (`src/ui/score.js` 2.4 s before the
+last three rows), and callgrind (`valgrind --tool=callgrind` on a release
+build with `CARGO_PROFILE_RELEASE_DEBUG=true`) the cause. About 30 % of the
+instructions were in `zonk` resolving whole types to look at their head,
+and about half in `malloc`/`free`, mostly copying `Type`s and their
+`BTreeMap` rows. What remains is mostly the same, spread over many callers.
+Sharing types (`Arc`) rather than copying them is still the larger fix.
+
+`tests/checking_time.rs` keeps the first row from coming back: a record
+type with 25 methods used by 60 functions, which took 30 s on `cb4bfca` and
+takes about 1 s.
