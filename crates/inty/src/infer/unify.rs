@@ -41,8 +41,25 @@ impl InferState {
         let z1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
         let z2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
         match (&*z1, &*z2) {
-            // A declared method signature's `this`, as a declared member's
-            // missing one, fits any receiver.
+            // A declared method (`m(): T` in a declaration, which has no
+            // body to tie to its object) is called on an object: any
+            // receiver, but not none.
+            (Type::MethodThis, Type::Undefined | Type::NewTarget)
+            | (Type::Undefined | Type::NewTarget, Type::MethodThis) => {
+                Err(TypeError::TypeMismatch {
+                    expected: "a receiver (a declared method is called on its object)".to_string(),
+                    found: format!(
+                        "{}",
+                        if matches!(&*z1, Type::MethodThis) {
+                            &*z2
+                        } else {
+                            &*z1
+                        }
+                    ),
+                    span,
+                }
+                .into())
+            }
             (Type::MethodThis, _) | (_, Type::MethodThis) => Ok(()),
             (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {
                 Err(TypeError::TypeMismatch {
@@ -67,12 +84,28 @@ impl InferState {
     /// first may be called either way, so it can't hold the second, and
     /// unification has no direction. (Subsumption has: a function that
     /// uses no `this` flows into a slot for any, `subsume`.) A variable
-    /// takes either; a declared method signature's fits any.
+    /// takes either. A declared method (`MethodThis`) is only itself: it
+    /// needs its object, so it fills no slot for a function called
+    /// detached, or for a method of an object type written in code.
     fn unify_fn_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
         let z1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
         let z2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
         match (&*z1, &*z2) {
-            (Type::MethodThis, _) | (_, Type::MethodThis) => Ok(()),
+            (Type::MethodThis, Type::MethodThis | Type::Error)
+            | (Type::Error, Type::MethodThis) => Ok(()),
+            (Type::MethodThis, Type::Var(_)) | (Type::Var(_), Type::MethodThis) => {
+                self.unify(span, &z1, &z2)
+            }
+            (Type::MethodThis, other) | (other, Type::MethodThis) => Err(TypeError::TypeMismatch {
+                expected: match other {
+                    Type::ArrowThis => "a function that doesn't use `this`".to_string(),
+                    Type::Undefined => "a function called detached".to_string(),
+                    other => format!("a method of {}", self.zonk(other)),
+                },
+                found: "a declared method (it is called on its own object)".to_string(),
+                span,
+            }
+            .into()),
             (Type::ArrowThis, Type::ArrowThis) => Ok(()),
             (Type::ArrowThis, Type::Error) | (Type::Error, Type::ArrowThis) => Ok(()),
             (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {

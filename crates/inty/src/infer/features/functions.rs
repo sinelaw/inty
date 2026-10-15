@@ -1019,11 +1019,7 @@ impl InferState {
             _ => "this function".to_string(),
         };
         match self.zonk(this) {
-            Type::ArrowThis
-            | Type::MethodThis
-            | Type::Undefined
-            | Type::Error
-            | Type::NewTarget => Ok(()),
+            Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => Ok(()),
             // Not known yet: it may turn out to use none, or to be one
             // that reads `this` as `undefined`, but not a method.
             v @ Type::Var(_) => {

@@ -5820,3 +5820,28 @@ fn a_literal_method_fits_the_slot_it_is_checked_against() {
                const t = { x: 1, stop() { return this.x; } };";
     assert!(check_program(bad, &[]).is_err(), "{}", bad);
 }
+
+// A method signature in a declaration (which has no body to tie to its
+// object) is called on its object: not detached, and not where a function
+// that is called detached goes. A declared plain function is either.
+#[test]
+fn a_declared_method_is_called_on_its_object() {
+    let decl = "/** const lib: {x: Number, m(): Number, f: () => Number} */\nconst lib;\n";
+    let ok = format!(
+        "{decl}const a = lib.m() + lib.x;\n\
+         const g = lib.f;\n\
+         /** function call(h: () => Number) => Number */\n\
+         function call(h) {{ return h(); }}\n\
+         const r = a + g() + call(lib.f);"
+    );
+    assert_eq!(check_program(&ok, &["r"]).unwrap(), ["Number"]);
+    for bad in [
+        "const g = lib.m;\nconst r = g();",
+        "/** function call(h: () => Number) => Number */\n\
+         function call(h) { return h(); }\nconst r = call(lib.m);",
+        "function call(h) { return h(); }\nconst r = call(lib.m);",
+    ] {
+        let src = format!("{decl}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{}", src);
+    }
+}
