@@ -83,6 +83,84 @@ It can check: `1 + 1`, `"a" + "a"`.
 Still rejects: `0 === 0`. One fixed rule per pair of kinds makes 81 rules
 for `===`; it found 76, and "number `===` number" wasn't one of them.
 
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+Kinds of value it found:
+
+- `number`: 0, 1, -0, -1, ...
+- `string`: "", "a", "number", "string", ...
+- `bool`: true, false, undefined, null, ...
+- `fn`: fn1(0), fn1(1), fn1(""), fn1("a"), ...
+- `fn2`: fn2(0), fn2(1), fn2(""), fn2("a"), ...
+- `{x}`: {x: 0}, {x: 1}, {x: ""}, {x: "a"}, ...
+- `{y}`: {y: 0}, {y: 1}, {y: ""}, {y: "a"}, ...
+- `array`: [0], [1], [""], ["a"], ...
+- `{x,y}`: {x: 0, y: 0}, {x: 0, y: 1}, {x: 0, y: ""}, {x: 0, y: "a"}, ...
+
+527 rules:
+
+```
+  num : number
+  str : string
+  true : bool
+  false : bool
+  undefined : bool
+  null : bool
+  ! : (array) -> bool
+  ! : (bool) -> bool
+  ... and 7 more like these
+  typeof : (array) -> string
+  typeof : (bool) -> string
+  ... and 7 more like these
+  neg : (number) -> number
+  + : (number, number) -> number
+  + : (string, string) -> string
+  - : (number, number) -> number
+  * : (number, number) -> number
+  < : (number, number) -> bool
+  === : (array, array) -> bool
+  === : (array, bool) -> bool
+  ... and 74 more like these
+  cond : (array, array, array) -> array
+  cond : (array, bool, array) -> bool
+  ... and 72 more like these
+  seq : (array, array) -> array
+  seq : (array, bool) -> bool
+  ... and 78 more like these
+  {x} : (array) -> {x}
+  {x} : (bool) -> {x}
+  ... and 7 more like these
+  {y} : (array) -> {y}
+  {y} : (bool) -> {y}
+  ... and 7 more like these
+  {x,y} : (array, array) -> {x,y}
+  {x,y} : (array, bool) -> {x,y}
+  ... and 77 more like these
+  .x= : ({x,y}, array) -> array
+  .x= : ({x,y}, bool) -> bool
+  ... and 16 more like these
+  .y= : ({x,y}, array) -> array
+  .y= : ({x,y}, bool) -> bool
+  ... and 16 more like these
+  [a] : (array) -> array
+  [a] : (bool) -> array
+  ... and 7 more like these
+  [a,b] : (array, array) -> array
+  [a,b] : (array, bool) -> array
+  ... and 78 more like these
+  idx : (string, number) -> string
+  idx : ({x,y}, number) -> bool
+  ... and 5 more like these
+  idx= : (array, number, array) -> array
+  idx= : (array, number, bool) -> bool
+  ... and 7 more like these
+  while : (array, bool) -> bool
+  while : (bool, array) -> bool
+  ... and 27 more like these
+```
+
+</details>
+
 ### Rung 1, kept: "any kind" placeholders (28.4%)
 
 Rules may say "any kind" (a type variable): "`===` compares any two
@@ -90,6 +168,78 @@ values". The 527 rules shrink to 44, and approvals nearly triple.
 
 Still rejects: `({x: 0}).x`. It knows this is an object with `x`, but not
 what `x` holds, so not what reading it gives.
+
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+44 rules, 19 of them as before:
+
+```
++ ! : (a) -> bool
+- ! : (array) -> bool
+- ! : (bool) -> bool
+  ... and 7 more like these
++ typeof : (a) -> string
+- typeof : (array) -> string
+- typeof : (bool) -> string
+  ... and 7 more like these
++ === : (a, b) -> bool
+- === : (array, array) -> bool
+- === : (array, bool) -> bool
+  ... and 74 more like these
++ cond : (a, b, b) -> b
++ cond : (array, a, b) -> a
+  ... and 5 more like these
+- cond : (array, array, array) -> array
+- cond : (array, bool, array) -> bool
+  ... and 72 more like these
++ seq : (a, b) -> b
+- seq : (array, array) -> array
+- seq : (array, bool) -> bool
+  ... and 78 more like these
++ {x} : (a) -> {x}
+- {x} : (array) -> {x}
+- {x} : (bool) -> {x}
+  ... and 7 more like these
++ {y} : (a) -> {y}
+- {y} : (array) -> {y}
+- {y} : (bool) -> {y}
+  ... and 7 more like these
++ {x,y} : (a, b) -> {x,y}
+- {x,y} : (array, array) -> {x,y}
+- {x,y} : (array, bool) -> {x,y}
+  ... and 77 more like these
++ .x= : ({x,y}, a) -> a
++ .x= : ({x}, a) -> a
+- .x= : ({x,y}, array) -> array
+- .x= : ({x,y}, bool) -> bool
+  ... and 16 more like these
++ .y= : ({x,y}, a) -> a
++ .y= : ({y}, a) -> a
+- .y= : ({x,y}, array) -> array
+- .y= : ({x,y}, bool) -> bool
+  ... and 16 more like these
++ [a] : (a) -> array
+- [a] : (array) -> array
+- [a] : (bool) -> array
+  ... and 7 more like these
++ [a,b] : (a, b) -> array
+- [a,b] : (array, array) -> array
+- [a,b] : (array, bool) -> array
+  ... and 78 more like these
++ idx= : (array, number, a) -> a
+- idx= : (array, number, array) -> array
+- idx= : (array, number, bool) -> bool
+  ... and 7 more like these
++ throw : (a) -> b
++ while : (a, b) -> bool
+- while : (array, bool) -> bool
+- while : (bool, array) -> bool
+  ... and 27 more like these
++ break : a
++ continue : a
+```
+
+</details>
 
 ### Rung 2, kept: knowing what's inside (32.3%)
 
@@ -99,6 +249,54 @@ what `x` holds, so not what reading it gives.
 Now it can also check: `({x: 1}).x + 1`, `[1, 1][0] + 1`.
 
 Still rejects: `(x) => 0`. It has no rule for a parameter yet.
+
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+52 rules, 22 of them as before:
+
+```
++ cond : (array<a -> b>, c, d) -> c
++ cond : (fn2<a, b -> c>, d, e) -> d
+  ... and 4 more like these
+- cond : (array, a, b) -> a
+- cond : (fn, a, b) -> a
+  ... and 4 more like these
++ app1 : (fn<a -> b>, a) -> b
++ app2 : (fn2<a, b -> c>, a, b) -> c
++ app2 : (fn<a -> b>, a, c) -> b
++ {x} : (a) -> {x: a}
+- {x} : (a) -> {x}
++ {y} : (a) -> {y: a}
+- {y} : (a) -> {y}
++ {x,y} : (a, b) -> {x: a, y: b}
+- {x,y} : (a, b) -> {x,y}
++ .x : ({x: a, y: b}) -> a
++ .x : ({x: a}) -> a
++ .y : ({x: a, y: b}) -> b
++ .y : ({y: a}) -> a
++ .x= : ({x: a, y: b}, a) -> a
++ .x= : ({x: a}, a) -> a
+- .x= : ({x,y}, a) -> a
+- .x= : ({x}, a) -> a
++ .y= : ({x: a, y: b}, b) -> b
++ .y= : ({y: a}, a) -> a
+- .y= : ({x,y}, a) -> a
+- .y= : ({y}, a) -> a
++ [a] : (a) -> array<number -> a>
+- [a] : (a) -> array
++ [a,b] : (a, a) -> array<number -> a>
+- [a,b] : (a, b) -> array
++ idx : (array<a -> b>, a) -> b
++ idx : ({x: a, y: b}, number) -> bool
+  ... and 5 more like these
+- idx : ({x,y}, number) -> bool
+- idx : ({x,y}, string) -> bool
+  ... and 4 more like these
++ idx= : (array<a -> b>, a, b) -> b
+- idx= : (array, number, a) -> a
+```
+
+</details>
 
 ### Rung 3, kept, the biggest jump: variables inside code (55.7%)
 
@@ -112,6 +310,25 @@ Now it can also check: `((x) => x + 1)(1)`,
 Still rejects: `let id = (x) => x; id(1); id("a")`. `id` is used once with
 a number and once with a string. Rungs 4 and 5 fix this together.
 
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+62 rules, 52 of them as before:
+
+```
++ let : (a, [x0: a] b) -> b
++ func1 : ([x0: a, x1: fn<a -> bool>] bool) -> fn<a -> bool>
++ func1 : ([x0: a, x1: fn<a -> number>] number) -> fn<a -> number>
++ func1 : ([x0: a, x1: fn<a -> string>] string) -> fn<a -> string>
++ func2 : ([x0: a, x1: b, x2: fn2<a, b -> bool>] bool) -> fn2<a, b -> bool>
++ func2 : ([x0: a, x1: b, x2: fn2<a, b -> number>] number) -> fn2<a, b -> number>
++ func2 : ([x0: a, x1: b, x2: fn2<a, b -> string>] string) -> fn2<a, b -> string>
++ try : (a, [x0: unknown] a) -> a
++ typeof=number : (a, [x0: a] b, [x0: a] b) -> b
++ typeof=string : (a, [x0: a] b, [x0: a] b) -> b
+```
+
+</details>
+
 ### Rung 4, kept: one function, many types (56.0%)
 
 A value bound by `let` may be used at different types each time, if it is
@@ -122,6 +339,23 @@ Still rejects: `(x) => (y) => 0`, a function that makes a function. Its
 rules for functions say what they return one kind at a time: one rule for
 "returns a number", one for "returns a string", one for "returns
 true/false/null". None says "returns a function".
+
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+62 rules, 62 of them as before:
+
+```
+(no rule changes)
+
+besides the rules:
++ let child 1, x0: generic when bound to a value
++ typeof=number child 1, x0: generic when bound to a value
++ typeof=number child 2, x0: generic when bound to a value
++ typeof=string child 1, x0: generic when bound to a value
++ typeof=string child 2, x0: generic when bound to a value
+```
+
+</details>
 
 ### Rung 5, kept: tracking `return` (64.2%)
 
@@ -139,6 +373,25 @@ its body gives back", and that also covers `(x) => (y) => 0`.
 Still rejects: `[0, ""]`. An array of numbers, or of strings, it can
 describe; one that holds both, it can't.
 
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+60 rules, 56 of them as before:
+
+```
++ func1 : ([x0: a, x1: fn<a -> b>] b (return b)) -> fn<a -> b>
+- func1 : ([x0: a, x1: fn<a -> bool>] bool) -> fn<a -> bool>
+- func1 : ([x0: a, x1: fn<a -> number>] number) -> fn<a -> number>
+- func1 : ([x0: a, x1: fn<a -> string>] string) -> fn<a -> string>
++ func2 : ([x0: a, x1: b, x2: fn2<a, b -> c>] c (return c)) -> fn2<a, b -> c>
+- func2 : ([x0: a, x1: b, x2: fn2<a, b -> bool>] bool) -> fn2<a, b -> bool>
+- func2 : ([x0: a, x1: b, x2: fn2<a, b -> number>] number) -> fn2<a, b -> number>
+- func2 : ([x0: a, x1: b, x2: fn2<a, b -> string>] string) -> fn2<a, b -> string>
++ return : (a) -> b (return a)
++ typeof=string : (a, [x0: a] a, [x0: a] string) -> a
+```
+
+</details>
+
 > **Tried and dropped:** "a number is also an ok string" style rules
 > (subtyping). Nothing in this language works that way.
 
@@ -153,6 +406,23 @@ Still rejects: `-(typeof 0 === "number" ? 0 : "")`. The `""` can never be
 the answer, since `0` is a number. But the rules see "number or string",
 and `-` needs a number.
 
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+60 rules, 60 of them as before:
+
+```
+(no rule changes)
+
+besides the rules (5 facts as before):
++ in cond : (a, b, b) -> b, b may be a union
++ in [a,b] : (a, a) -> array<number -> a>, a may be a union
++ in try : (a, [x0: unknown] a) -> a, a may be a union
++ in typeof=number : (a, [x0: a] b, [x0: a] b) -> b, b may be a union
++ in typeof=string : (a, [x0: a] b, [x0: a] b) -> b, b may be a union
+```
+
+</details>
+
 ### Rung 7, kept: knowing what a `typeof` test tells you (70.9%)
 
 Inside `if (typeof x === "number")`, `x` is a number, even if it could
@@ -165,6 +435,22 @@ doesn't count.
 Still rejects: `function f(x) { return f }`, a function that returns
 itself. Its type would be "a function returning a function returning a
 function...", forever, and the rules can't write that down.
+
+<details><summary>The rules at this rung, as the tool prints them</summary>
+
+59 rules, 59 of them as before:
+
+```
+- typeof=string : (a, [x0: a] a, [x0: a] string) -> a
+
+besides the rules (10 facts as before):
++ typeof=number child 1, x0: narrowed to string | bool | fn | fn2 | {x} | {y} | array | {x,y}
++ typeof=number child 2, x0: narrowed to number
++ typeof=string child 1, x0: narrowed to number | bool | fn | fn2 | {x} | {y} | array | {x,y}
++ typeof=string child 2, x0: narrowed to string
+```
+
+</details>
 
 > **Tried and dropped:** subtyping again.
 
@@ -196,9 +482,11 @@ add a string to a number and crash. A checker has to be careful like this.
 ## Where this came from
 
 One run of `cargo run --release --example climb_walkthrough`, which took
-163 minutes, recorded in [ITERATIONS.md](ITERATIONS.md) (iterations 13 and
+about 160 minutes, recorded in [ITERATIONS.md](ITERATIONS.md) (iterations 13 and
 14). The programs each rung still rejects are the smallest safe ones it
-rejects, from every program of up to five pieces. The
+rejects, from every program of up to five pieces. The rules under each rung are
+what the run prints at its end, under "the ladder, ready for a document",
+pasted in unchanged. The
 percentages are shares of safe programs: every small program, 20,000
 random ones, and the programs each try wrote, kept so that later tries are
 judged on them too.
