@@ -1579,6 +1579,131 @@ pub fn climb<L: Language>(lang: &L, cfg: &Config) -> Climb {
     climb_with(lang, cfg, |_, _| {})
 }
 
+/// Programs that use a generalised value at two types, built from `d`'s
+/// own pieces: a binder its policy generalises, a closed syntactic value
+/// its rules give a type with variables (from its generated programs), and
+/// a body joining two uses of the variable, each an eliminator applied to
+/// a different small leaf. What `let`-generalisation adds, and random
+/// generation almost never builds: `let id = (x) => x; id(0); id("a")`.
+pub fn poly_contrast<L: Language>(lang: &L, d: &Discovery, rng: &mut Rng, n: usize) -> Vec<Term> {
+    let sig = lang.signature();
+    let gen = &d.generalisation;
+    let binders: Vec<(usize, usize, usize)> = gen
+        .policies
+        .iter()
+        .filter(|(_, (p, _))| *p != Policy::Never)
+        .map(|(&(con, i, _), &(_, k))| (con, i, k))
+        .filter(|&(con, i, k)| {
+            sig[con].arity == 2 && sig[con].binds[i] == 1 && sig[con].binds[k] == 0
+        })
+        .collect();
+    if binders.is_empty() {
+        return Vec::new();
+    }
+    // Closed syntactic values with a type that has variables.
+    let mut inits: Vec<Term> = Vec::new();
+    let mut seen = HashSet::new();
+    fn subterms(t: &Term, out: &mut Vec<Term>) {
+        out.push(t.clone());
+        t.kids.iter().for_each(|k| subterms(k, out));
+    }
+    for t in d.check.generated_terms.iter().take(2000) {
+        let mut subs = Vec::new();
+        subterms(t, &mut subs);
+        for s in subs {
+            if gen.inert.get(s.con) == Some(&true)
+                && seen.insert(s.clone())
+                && d.checker.types(&s).iter().any(|ty| !ty.is_ground())
+            {
+                inits.push(s);
+            }
+        }
+        if inits.len() >= 40 {
+            break;
+        }
+    }
+    // Leaves, and rules that join any two things, and that eliminate.
+    let var = sig.iter().position(|c| c.kind == Kind::Var);
+    let leaves: Vec<Term> = (0..sig.len())
+        .filter(|&c| sig[c].kind == Kind::Op && sig[c].arity == 0)
+        .flat_map(|c| {
+            sig[c].atoms_or_none().into_iter().map(move |a| Term {
+                con: c,
+                atom: a,
+                kids: Vec::new(),
+            })
+        })
+        .collect();
+    let joins: Vec<usize> = d
+        .rules
+        .iter()
+        .filter(|r| {
+            r.kids.len() >= 2
+                && r.kids
+                    .iter()
+                    .all(|k| k.bound.is_empty() && matches!(k.ty, Ty::Var(_)))
+                && r.kids[0].ty != r.kids[1].ty
+        })
+        .map(|r| r.con)
+        .collect();
+    let elims: Vec<usize> = d
+        .rules
+        .iter()
+        .filter(|r| {
+            matches!(r.kids.first().map(|k| &k.ty), Some(Ty::Ref(..)))
+                && r.kids.iter().all(|k| k.bound.is_empty())
+        })
+        .map(|r| r.con)
+        .collect();
+    let (Some(var), false, false, false) =
+        (var, inits.is_empty(), joins.is_empty(), elims.is_empty())
+    else {
+        return Vec::new();
+    };
+    let pick = |v: &[Term], rng: &mut Rng| v[rng.below(v.len())].clone();
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let (con, i, k) = binders[rng.below(binders.len())];
+        let use_of = |rng: &mut Rng| {
+            let e = elims[rng.below(elims.len())];
+            let kids = (0..sig[e].arity)
+                .map(|m| {
+                    if m == 0 {
+                        Term::leaf(var, Atom::Int(0))
+                    } else {
+                        pick(&leaves, rng)
+                    }
+                })
+                .collect();
+            Term {
+                con: e,
+                atom: sig[e].atoms_or_none()[0].clone(),
+                kids,
+            }
+        };
+        let j = joins[rng.below(joins.len())];
+        let mut jk: Vec<Term> = (0..sig[j].arity).map(|_| use_of(rng)).collect();
+        if jk.len() < 2 {
+            continue;
+        }
+        jk.truncate(sig[j].arity);
+        let body = Term {
+            con: j,
+            atom: sig[j].atoms_or_none()[0].clone(),
+            kids: jk,
+        };
+        let mut kids = vec![Term::leaf(var, Atom::Int(0)); 2];
+        kids[k] = pick(&inits, rng);
+        kids[i] = body;
+        out.push(Term {
+            con,
+            atom: sig[con].atoms_or_none()[0].clone(),
+            kids,
+        });
+    }
+    out
+}
+
 /// `climb`, calling `on_step` with each step as soon as it is run (and its
 /// number), so the type systems can be shown as they appear.
 pub fn climb_with<L: Language>(
@@ -1649,12 +1774,41 @@ pub fn climb_with<L: Language>(
         // candidate adds. Random programs rarely show it: a `let`-bound
         // function used at two types, a branch that relies on narrowing.
         let bd = &steps[*best].discovery;
+        // Half of them rooted at a constructor that binds (a `let`), whose
+        // body may use what it binds more than once, at different types.
+        let sig = lang.signature();
+        let binding: Vec<bool> = sig.iter().map(|c| c.binds.iter().any(|&b| b > 0)).collect();
+        let shape = vec![binding];
         let mut found = 0;
-        for k in 0..20_000 {
+        for t in poly_contrast(lang, &d, &mut crng, 400) {
+            if found >= 100 {
+                break;
+            }
+            if d.checker.types(&t).is_empty()
+                || !bd.checker.types(&t).is_empty()
+                || !pooled.borrow_mut().insert(t.clone())
+            {
+                continue;
+            }
+            match lang.eval_in(&t, &[]) {
+                Outcome::Timeout => {}
+                o => {
+                    pool.push((t, !o.is_stuck() && !matches!(o, Outcome::Return(_))));
+                    found += 1;
+                }
+            }
+        }
+        for k in 0..40_000 {
             if found >= 300 {
                 break;
             }
-            let Some(t) = d.checker.generate(&mut crng, 3 + k % cfg.typed_size) else {
+            let size = 3 + k % cfg.typed_size;
+            let t = if k % 2 == 0 {
+                d.checker.generate(&mut crng, size)
+            } else {
+                d.checker.generate_shaped(&mut crng, size.max(6), &shape)
+            };
+            let Some(t) = t else {
                 continue;
             };
             if !bd.checker.types(&t).is_empty() || !pooled.borrow_mut().insert(t.clone()) {

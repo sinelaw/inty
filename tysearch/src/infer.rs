@@ -171,6 +171,11 @@ impl Checker {
     /// by subsumption into a union, or with subtyping, between sorts.
     /// `widen` are the premise's variables that may stand for unions.
     fn fits(&self, u: &mut Unifier, ty: &Ty, prem: &Ty, widen: &[u32]) -> bool {
+        // `never` (a variable no value reaches, in a dead branch) fits
+        // anything, a function's or an object's type too.
+        if u.resolve(ty) == Ty::Never {
+            return true;
+        }
         let Some(order) = &self.order else {
             let mut u2 = u.clone();
             if u2.unify(ty, prem) {
