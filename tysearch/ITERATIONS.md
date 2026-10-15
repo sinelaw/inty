@@ -645,10 +645,54 @@ identity has three types, not a generic one. Generalisation's +76 at step
 **To follow up.** Removing narrowing at the end would type 75 more
 programs, with one more rule. So narrowing also loses some programs, even
 with `never` fitting everything, and is kept on size. Something still
-types worse narrowed.
+types worse narrowed. (Found in iteration 14.)
+
+## 14. Dead branches, and what each rung still rejects
+
+**The problem.** Comparing the model's rules with and without narrowing
+on every term up to size 5 (488,801 of them) found 40 that only the rules
+without it type, all like `-(typeof 0 === "string" ? "" : 0)`. The
+scrutinee is a number, so the then-branch's variable narrows to `never`:
+no value reaches that branch. It was typed all the same, and its type
+joined the result, `number | string`, which `-` rejects.
+
+**The fix.** A child whose bound variable narrows to `never` is typed, but
+its type doesn't constrain the rule's: nothing it does happens. It is
+typed one way only, since none of its typings binds anything.
+
+**Found.** Narrowing now loses 20 of those terms, not 40, and gains 436;
+none of them crash. The 20 left test `break` or `continue`, whose type is
+an open variable, not a sort, so the narrowing can't rule the branch out.
+In the climb, narrowing gains 128 programs (was 64), and removing it at
+the end loses one, where it used to gain 75: it is kept on what it types,
+not on size.
+
+**What each rung still rejects.** The walkthrough now lists, per kept
+step, the smallest safe programs its rules reject, and which of them the
+next kept step accepts:
+
+| rung | smallest rejected | accepted from |
+|---|---|---|
+| ground rules | `0 === 0` (76 of the 81 ground `===` rules found) | type variables |
+| type variables | `({x: 0}).x` | refined sorts |
+| refined sorts | `(x) => 0` | binders |
+| binders | `let id = (x) => x; id(1); id("a")` (not up to size 5) | generalisation and exit types |
+| generalisation | `(x) => (y) => 0`: `func1`'s rules are one per result sort | exit types |
+| exit types | `[0, ""]` | unions |
+| unions | `-(typeof 0 === "number" ? 0 : "")` | narrowing |
+| narrowing | `function f(x) { return f }`: a recursive type | (none) |
+
+In the model a function's body sees itself as the variable after its
+parameters, so `func1(x1)` is `function f(x) { return f }`, closed.
+
+The run took 163 minutes, against 68 for iteration 13's; the model's test
+takes as long without this iteration's change, so the time went elsewhere,
+not yet tracked down.
 
 ## Next
 
+- **Recursive types:** `function f(x) { return f }` is the smallest safe
+  program the model's final rules reject.
 - **Context attributes:** discover what a node passes down to its
   children (a handler's type, a loop flag), as exit types are now, so
   `effects`' `ask` gets a rule.

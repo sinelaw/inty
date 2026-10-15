@@ -97,7 +97,7 @@ fn widenable(r: &Schema) -> Vec<u32> {
 
 impl Checker {
     /// Whether `t`, under `depth` binders, uses no variable from outside.
-    pub fn closed(&self, t: &Term, depth: usize) -> bool {
+    fn closed(&self, t: &Term, depth: usize) -> bool {
         match self.sig[t.con].kind {
             Kind::Var | Kind::Assign => {
                 matches!(t.atom, Atom::Int(i) if (i as usize) < depth)
