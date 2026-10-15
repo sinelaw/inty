@@ -146,10 +146,13 @@ fn main() {
     println!("\nwrongly rejected (safe programs each kept step rejects, smallest first):");
     let mut en = Enumerator::new(m.signature(), 5);
     en.cap = 400_000;
+    // Closed ones only: `(x) => y` runs to a function, but only because
+    // its body never runs.
+    let checker = &cl.steps[0].discovery.checker;
     let mut safe: Vec<Term> = en
         .up_to(5, 0)
         .into_iter()
-        .filter(|t| matches!(m.eval_in(t, &[]), Outcome::Value(_)))
+        .filter(|t| checker.closed(t, 0) && matches!(m.eval_in(t, &[]), Outcome::Value(_)))
         .collect();
     fn size(t: &Term) -> usize {
         1 + t.kids.iter().map(size).sum::<usize>()

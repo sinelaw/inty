@@ -97,7 +97,7 @@ fn widenable(r: &Schema) -> Vec<u32> {
 
 impl Checker {
     /// Whether `t`, under `depth` binders, uses no variable from outside.
-    fn closed(&self, t: &Term, depth: usize) -> bool {
+    pub fn closed(&self, t: &Term, depth: usize) -> bool {
         match self.sig[t.con].kind {
             Kind::Var | Kind::Assign => {
                 matches!(t.atom, Atom::Int(i) if (i as usize) < depth)
@@ -345,7 +345,11 @@ impl Checker {
                                     })
                                     .collect();
                             }
+                            let mut reached = false;
                             for bs in binds {
+                                if dead && reached {
+                                    break;
+                                }
                                 let depth = ctx.len();
                                 ctx.extend(bs.into_iter().rev());
                                 let kid_exit = prem.exit.as_ref().unwrap_or(exit);
@@ -384,9 +388,19 @@ impl Checker {
                                         }
                                     }
                                 } else {
-                                    for (mut ub, ty) in self.infer(ua.clone(), ctx, kid_exit, kid) {
-                                        if dead || self.fits(&mut ub, &ty, &prem.ty, &widen) {
-                                            next.push(ub);
+                                    let tys = self.infer(ua.clone(), ctx, kid_exit, kid);
+                                    if dead {
+                                        // Never run, so nothing it does
+                                        // binds anything: one way will do.
+                                        if !tys.is_empty() {
+                                            reached = true;
+                                            next.push(ua.clone());
+                                        }
+                                    } else {
+                                        for (mut ub, ty) in tys {
+                                            if self.fits(&mut ub, &ty, &prem.ty, &widen) {
+                                                next.push(ub);
+                                            }
                                         }
                                     }
                                 }
