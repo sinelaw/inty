@@ -13,6 +13,133 @@ Related pages: [performance.md](performance.md) (item 18),
 [design-notes.md](design-notes.md) (items 22–24),
 [patterns.md](patterns.md) (the idioms Rosaclef invented).
 
+There have been two rounds. The second, [below](#second-round-moving-to-inty-cb4bfca),
+covers the gaps Rosaclef found moving from inty `0439e15` to `cb4bfca`
+(its notes' section "Gaps found moving to inty `cb4bfca`", items A–G).
+The first, from [Final run](#final-run) on, covers the items numbered
+1–24.
+
+## Second round: moving to inty `cb4bfca`
+
+Rosaclef branch `claude/gallant-planck-ermxo9` at `913758b`: 64 files
+under `web/`, checked by `web/check.sh` in one run.
+
+```
+$ cd web && sh check.sh
+…
+1 of 64 files had errors
+```
+
+| | `cb4bfca` (main) | this branch |
+|---|---:|---:|
+| `web/check.sh` | killed at 15 GB after 4.5 min | about 8 s |
+| tree/tree.js on its own | 155 s | 0.1 s |
+| tree/memory.js on its own | 3 s | 0.03 s |
+
+- **The one remaining error is Rosaclef's**, and by design:
+  `errText(e)` in `src/ui/mixcheck.js` reads `e.message` of a caught
+  exception. Anything can be thrown, so since `faa297b` a caught value has
+  an opaque type: it can be passed on, tested and rethrown, but not read
+  as a record ([type-system.md](type-system.md)). `0439e15` accepted it.
+  The message now says so and suggests `String(e)`.
+- Before this round an error in an imported module was printed once per
+  importer (12 times here), and every importer of the failing module was
+  checked again and failed with it, its own code unchecked. A module that
+  fails is now reported once and checked once; its importers go on, with
+  what it would have bound typed `Error` (test
+  `a_failed_module_is_checked_once_and_its_importers_still_are` in
+  `modules.rs`).
+
+| Item | Status | Tests |
+|---|---|---|
+| A. Checking 100× slower, out of memory | Fixed | `tests/checking_time.rs` |
+| B. A record field can't hold a callback | Fixed | `gap_b_a_record_field_holds_a_callback`, `a_record_field_holds_a_callback`, `a_method_and_a_detached_function_are_different_types`, `a_literal_method_fits_the_slot_it_is_checked_against` |
+| C. The `this` mismatch doesn't say `this` | Fixed | `gap_c_a_detached_method_call_says_this` |
+| D. `(x ?? {}).f` | Not changed (reasons below) | `gap_d_a_field_of_an_empty_default`, `a_field_of_an_empty_default_is_not_read` |
+| E. `arr.length = 0` | Fixed | `gap_e_array_length_store`, `a_store_to_an_array_length_truncates_it` (checking and evaluation) |
+| F. `c ? x : undefined` | Fixed | `gap_f_conditional_with_nothing`, `a_branch_of_nothing_makes_the_conditional_a_sum` |
+| G. `Array.prototype.at` | Fixed | `gap_g_array_at`, `an_array_at_may_be_undefined` |
+
+The `gap_…` tests are in `crates/inty/tests/rosaclef_regressions.rs`
+(each is the repro from Rosaclef's notes); the others are in
+`crates/inty/src/infer/tests.rs` and `crates/inty/src/dynamics/tests.rs`.
+
+**A. Checking time.** Since `74c2460` a function type in an object type
+was a method whose `this` is the object, so every record type with a
+function field was recursive, and each use of it made fresh rows that were
+unified against each other. Now a function type, `() => T`, is a function
+that uses no `this` (it is never bound to a receiver), and a method says
+its `this`, `m: (this: T) => R`, with `T` a named type (see B). Records
+with callbacks are not recursive any more, and a method's record refers to
+itself through its name, which costs nothing to unify. The rest came from copying types: resolving a
+type copied it whole at every step of a unification and of each check, and
+a module that failed was checked again for each importer. Unification and
+the common checks now resolve only the part of a type they look at, and a
+failed module is checked once. About half of what remains is allocating
+and freeing copied types; sharing them would be the next step. Details in
+[performance.md](performance.md#second-round-annotated-function-types).
+`tests/checking_time.rs` checks a program shaped like Rosaclef's (a
+record with 25 methods, 60 functions using it) and fails over 10 s; it
+takes about 1 s.
+
+**B. Callbacks in records.** In an object type, `stop: () => Undefined`
+is a function that uses no `this`, which can be stored, read back, called
+detached and passed on. A method says its `this`:
+`/** type S = {x: Number, stop: (this: S) => Undefined} */` is called on
+an `S`. (A body says it too: a function that mentions `this` is a method.)
+A function that reads `this` can't be stored in the first: it
+would be called detached. An arrow, or a function that never mentions
+`this` (an object literal's method included), fits either. So the
+wrappers Rosaclef added
+(`fn: (e) => fn(e)`, `paint: (g, w, h) => d.paint(g, w, h)`) can go.
+
+**C. Diagnostics.** A detached call of a method (`const end = s.stop;
+end();`) says "`end` is a method (it reads `this`), so calling it detached
+passes `this` = undefined", and suggests calling it on its object or
+giving it no `this`. A
+function that reads `this` where one that uses none is expected says
+that, and says how to write a method's type. A method prints with its
+`this` as a first parameter, `stop: (this: S) => Undefined`; when that is
+an unnamed record (the object the method is on), as `(this: {…}) => …`,
+rather than nesting the record in its own member's type.
+
+**For Rosaclef: the canvas context.** inty's `CanvasRenderingContext2D<T>`
+(what `getContext("2d")` gives) now says its methods' `this`, so
+`const f = g.fillRect; f(…)` is rejected. Rosaclef's own `Ctx` in
+`tree/types.d.js` describes part of the context with plain function fields,
+which the context no longer fits. Naming inty's type,
+`type Ctx = CanvasRenderingContext2D<…>`, fixes that and gives painters the
+whole context. The two helpers `tree/dom.js` adds to it, `fillGradient` and
+`strokeGradient`, can go: `fillStyle` takes a gradient
+(`String | CanvasGradient`), so `g.fillStyle = grad`.
+
+**D. `(x ?? {}).f`: not changed.** `{}` is a record with no fields, so
+`(raw.c ?? {}).off` reads a field one side doesn't have. There are two
+ways to accept it, and both are worse:
+- an open `{}` (a record with unknown other fields) would make a later
+  read of any field succeed, on a value that doesn't have it;
+- an optional field read as `T | Undefined` (TypeScript's `off?: T`)
+  needs absent fields in record types, which inty doesn't have: its
+  `off?: T` is a field that may or may not be in the type, and reading it
+  requires it.
+
+Rosaclef's rewrite is the way to write it: tell the absent case apart
+first, `if (!c) return …; … c.off ?? []` (its `decodeCritic`).
+
+**E. `arr.length = 0`.** An array's `length` takes a number (only an
+array's: a string's and other built-in properties still can't be
+assigned). A store truncates the array. A store of a larger length, which
+would leave holes, is an index fault, like reading past the end.
+
+**F. `c ? x : undefined`.** When one branch is exactly `undefined`
+(or `null`), the conditional is the other branch's type or `Undefined`
+(`Null`): `xs.length > 0 ? xs[xs.length - 1] : undefined` is
+`Number | Undefined`. Other branches of different types are still an
+error unless an annotation says what the result is.
+
+**G. `Array.prototype.at`.** `xs.at(i): T | Undefined`, since an index
+past either end gives `undefined`.
+
 ## Final run
 
 ```

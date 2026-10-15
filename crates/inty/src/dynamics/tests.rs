@@ -495,3 +495,19 @@ fn strings_compare_by_utf16_code_units() {
     assert_bool("\"a\" <= \"a\"", true);
     assert_bool("\"ab\" > \"a\"", true);
 }
+
+/// `xs.length = n` truncates the array (Rosaclef: the usual way to clear
+/// one in place). A longer length would leave holes, which these arrays
+/// don't have: an index fault, as reading past the end is.
+#[test]
+fn a_store_to_an_array_length_truncates_it() {
+    assert_number("const xs = [1, 2, 3]; xs.length = 1; xs.length;", 1.0);
+    assert_number(
+        "const xs = [1, 2, 3]; xs.length = 0; xs[0] = 4; xs.length;",
+        1.0,
+    );
+    assert!(matches!(
+        run("const xs = [1]; xs.length = 3;"),
+        Err(Stuck::OutOfBounds { .. })
+    ));
+}

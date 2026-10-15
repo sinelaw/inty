@@ -238,7 +238,10 @@ impl InferState {
     ) -> InferResult<Type> {
         self.last_index_container = None;
         self.last_member_receiver = None;
-        let ty = self.infer_expr(env, target)?;
+        let recording = std::mem::replace(&mut self.recording_member_receiver, true);
+        let ty = self.infer_expr(env, target);
+        self.recording_member_receiver = recording;
+        let ty = ty?;
         match target {
             Expr::ComputedMember { property, .. } => {
                 if let Some(container) = self.last_index_container.take() {
@@ -482,7 +485,7 @@ impl InferState {
                 // Checked against an initialiser, a function type says
                 // what `this` it is called with; a declaration keeps its.
                 let ann_ty = if decl.init.is_some() {
-                    self.annotation_this(annotation_span, &ann_ty, &Type::Undefined)?
+                    crate::infer::lower::annotation_this(&ann_ty, &Type::ArrowThis)
                 } else {
                     self.declared_callbacks_detached(&ann_ty)
                 };

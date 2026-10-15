@@ -563,6 +563,16 @@ fn write_error_with<W: Write>(
                 *span,
                 None,
             ),
+            e @ TypeError::DetachedThis { span, .. } => (
+                e.to_string(),
+                *span,
+                Some(
+                    "call it on its object (`o.m()`), or give it no `this`: an arrow \
+                     function, or a function that doesn't mention `this`, can be called \
+                     either way"
+                        .to_string(),
+                ),
+            ),
             TypeError::UnknownTypeRef { name, span } => (
                 format!("Unknown type '{}' in annotation", name),
                 *span,

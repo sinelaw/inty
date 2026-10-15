@@ -1004,6 +1004,21 @@ fn write_place(
                 }
                 _ => Err(Stuck::BadAssignmentTarget),
             },
+            // `xs.length = n` truncates the array (a longer one would have
+            // holes, which these arrays don't).
+            Value::Array(loc) if *property == "length" => match (state.heap.get_mut(*loc), value) {
+                (Some(Cell::Array(v)), Value::Number(n)) => match array_index(n) {
+                    Some(len) if len <= v.len() => {
+                        v.truncate(len);
+                        Ok(())
+                    }
+                    _ => Err(Stuck::OutOfBounds {
+                        index: n,
+                        len: v.len(),
+                    }),
+                },
+                _ => Err(Stuck::BadAssignmentTarget),
+            },
             _ => Err(Stuck::BadAssignmentTarget),
         },
         Place::Index(obj, idx) => match (obj, idx) {

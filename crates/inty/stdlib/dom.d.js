@@ -86,7 +86,7 @@
 
 // Canvas 2D (`canvas.getContext("2d")`). A style is a CSS colour or a
 // gradient.
-/** type CanvasGradient = {addColorStop: (Number, String) => Undefined} */
+/** type CanvasGradient = {addColorStop: (this: CanvasGradient, Number, String) => Undefined} */
 /** type CanvasRenderingContext2D<T> = {
     canvas: T,
     fillStyle: String | CanvasGradient, strokeStyle: String | CanvasGradient,
@@ -94,33 +94,33 @@
     lineJoin: String, font: String, textAlign: String, textBaseline: String,
     globalAlpha: Number, globalCompositeOperation: String, imageSmoothingEnabled: Boolean,
     shadowBlur: Number, shadowColor: String, shadowOffsetX: Number, shadowOffsetY: Number,
-    beginPath: () => Undefined, closePath: () => Undefined,
-    moveTo: (Number, Number) => Undefined, lineTo: (Number, Number) => Undefined,
-    rect: (Number, Number, Number, Number) => Undefined,
-    roundRect: (Number, Number, Number, Number, Number) => Undefined,
-    arc: (x: Number, y: Number, r: Number, start: Number, end: Number, ccw?: Boolean) => Undefined,
-    arcTo: (Number, Number, Number, Number, Number) => Undefined,
-    quadraticCurveTo: (Number, Number, Number, Number) => Undefined,
-    bezierCurveTo: (Number, Number, Number, Number, Number, Number) => Undefined,
-    ellipse: (Number, Number, Number, Number, Number, Number, Number) => Undefined,
-    fill: () => Undefined, stroke: () => Undefined, clip: () => Undefined,
-    fillRect: (Number, Number, Number, Number) => Undefined,
-    strokeRect: (Number, Number, Number, Number) => Undefined,
-    clearRect: (Number, Number, Number, Number) => Undefined,
-    fillText: (text: String, x: Number, y: Number, maxWidth?: Number) => Undefined,
-    strokeText: (text: String, x: Number, y: Number, maxWidth?: Number) => Undefined,
-    measureText: (String) => {width: Number, actualBoundingBoxAscent: Number, actualBoundingBoxDescent: Number},
-    save: () => Undefined, restore: () => Undefined,
-    translate: (Number, Number) => Undefined, rotate: (Number) => Undefined,
-    scale: (Number, Number) => Undefined,
-    setTransform: (Number, Number, Number, Number, Number, Number) => Undefined,
-    resetTransform: () => Undefined,
-    setLineDash: (Number[]) => Undefined,
-    createLinearGradient: (Number, Number, Number, Number) => CanvasGradient,
-    createRadialGradient: (Number, Number, Number, Number, Number, Number) => CanvasGradient,
-    drawImage: (image: T, dx: Number, dy: Number, dw?: Number, dh?: Number) => Undefined,
-    getImageData: (Number, Number, Number, Number) => {width: Number, height: Number, data: Uint8Array},
-    putImageData: ({width: Number, height: Number, data: Uint8Array}, Number, Number) => Undefined
+    beginPath: (this: CanvasRenderingContext2D<T>) => Undefined, closePath: (this: CanvasRenderingContext2D<T>) => Undefined,
+    moveTo: (this: CanvasRenderingContext2D<T>, Number, Number) => Undefined, lineTo: (this: CanvasRenderingContext2D<T>, Number, Number) => Undefined,
+    rect: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number) => Undefined,
+    roundRect: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number, Number) => Undefined,
+    arc: (this: CanvasRenderingContext2D<T>, x: Number, y: Number, r: Number, start: Number, end: Number, ccw?: Boolean) => Undefined,
+    arcTo: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number, Number) => Undefined,
+    quadraticCurveTo: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number) => Undefined,
+    bezierCurveTo: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number, Number, Number) => Undefined,
+    ellipse: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number, Number, Number, Number) => Undefined,
+    fill: (this: CanvasRenderingContext2D<T>) => Undefined, stroke: (this: CanvasRenderingContext2D<T>) => Undefined, clip: (this: CanvasRenderingContext2D<T>) => Undefined,
+    fillRect: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number) => Undefined,
+    strokeRect: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number) => Undefined,
+    clearRect: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number) => Undefined,
+    fillText: (this: CanvasRenderingContext2D<T>, text: String, x: Number, y: Number, maxWidth?: Number) => Undefined,
+    strokeText: (this: CanvasRenderingContext2D<T>, text: String, x: Number, y: Number, maxWidth?: Number) => Undefined,
+    measureText: (this: CanvasRenderingContext2D<T>, String) => {width: Number, actualBoundingBoxAscent: Number, actualBoundingBoxDescent: Number},
+    save: (this: CanvasRenderingContext2D<T>) => Undefined, restore: (this: CanvasRenderingContext2D<T>) => Undefined,
+    translate: (this: CanvasRenderingContext2D<T>, Number, Number) => Undefined, rotate: (this: CanvasRenderingContext2D<T>, Number) => Undefined,
+    scale: (this: CanvasRenderingContext2D<T>, Number, Number) => Undefined,
+    setTransform: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number, Number, Number) => Undefined,
+    resetTransform: (this: CanvasRenderingContext2D<T>) => Undefined,
+    setLineDash: (this: CanvasRenderingContext2D<T>, Number[]) => Undefined,
+    createLinearGradient: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number) => CanvasGradient,
+    createRadialGradient: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number, Number, Number) => CanvasGradient,
+    drawImage: (this: CanvasRenderingContext2D<T>, image: T, dx: Number, dy: Number, dw?: Number, dh?: Number) => Undefined,
+    getImageData: (this: CanvasRenderingContext2D<T>, Number, Number, Number, Number) => {width: Number, height: Number, data: Uint8Array},
+    putImageData: (this: CanvasRenderingContext2D<T>, {width: Number, height: Number, data: Uint8Array}, Number, Number) => Undefined
 } */
 
 /** type Element<T> = {
@@ -209,6 +209,35 @@
     dispatchEvent: (T) => Boolean
 } */
 
+// Host objects whose methods are called on them (a detached call throws
+// "Illegal invocation"): each method says its `this`.
+/** type Storage = {
+        getItem: (this: Storage, String) => String | Null,
+        setItem: (this: Storage, String, String) => Undefined,
+        removeItem: (this: Storage, String) => Undefined,
+        clear: (this: Storage) => Undefined,
+        key: (this: Storage, Number) => String,
+        length: Number
+    } */
+/** type Location = {
+        href: String, protocol: String, host: String, hostname: String, port: String,
+        pathname: String, search: String, hash: String, origin: String,
+        assign: (this: Location, String) => Undefined,
+        replace: (this: Location, String) => Undefined,
+        reload: (this: Location) => Undefined,
+        toString: (this: Location) => String
+    } */
+/** type History<T> = {
+        length: Number,
+        state: T,
+        scrollRestoration: String,
+        back: (this: History<T>) => Undefined,
+        forward: (this: History<T>) => Undefined,
+        go: (this: History<T>, Number) => Undefined,
+        pushState: (this: History<T>, T, String, String) => Undefined,
+        replaceState: (this: History<T>, T, String, String) => Undefined
+    } */
+
 /** const document: <T>{
         getElementById: (String) => Element<T>,
         createElement: (String) => Element<T>,
@@ -224,13 +253,7 @@
         activeElement: T,
         title: String,
         cookie: String,
-        location: {
-            href: String, pathname: String, hash: String, search: String,
-            origin: String, host: String, hostname: String, protocol: String, port: String,
-            reload: () => Undefined,
-            assign: (String) => Undefined,
-            replace: (String) => Undefined
-        }
+        location: Location
     } */
 const document;
 
@@ -246,13 +269,7 @@ const document;
         addEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         removeEventListener: (String, (DomEvent<T>) => Undefined) => Undefined,
         dispatchEvent: (T) => Boolean,
-        location: {
-            href: String, pathname: String, hash: String, search: String,
-            origin: String, host: String, hostname: String, protocol: String, port: String,
-            reload: () => Undefined,
-            assign: (String) => Undefined,
-            replace: (String) => Undefined
-        },
+        location: Location,
         scrollTo: (Number, Number) => Undefined,
         scrollBy: (Number, Number) => Undefined,
         getComputedStyle: (T) => {getPropertyValue: (String) => String},
@@ -262,32 +279,9 @@ const document;
         setInterval: (() => Undefined, Number) => Number,
         clearTimeout: (Number) => Undefined,
         clearInterval: (Number) => Undefined,
-        history: {
-            length: Number,
-            state: T,
-            scrollRestoration: String,
-            back: () => Undefined,
-            forward: () => Undefined,
-            go: (Number) => Undefined,
-            pushState: (T, String, String) => Undefined,
-            replaceState: (T, String, String) => Undefined
-        },
-        sessionStorage: {
-            getItem: (String) => String | Null,
-            setItem: (String, String) => Undefined,
-            removeItem: (String) => Undefined,
-            clear: () => Undefined,
-            key: (Number) => String,
-            length: Number
-        },
-        localStorage: {
-            getItem: (String) => String | Null,
-            setItem: (String, String) => Undefined,
-            removeItem: (String) => Undefined,
-            clear: () => Undefined,
-            key: (Number) => String,
-            length: Number
-        },
+        history: History<T>,
+        sessionStorage: Storage,
+        localStorage: Storage,
         navigator: {userAgent: String, language: String, platform: String, vendor: String, onLine: Boolean},
         document: T,
         atob: (String) => String,
@@ -305,16 +299,7 @@ const window;
 // History API as a top-level global. Mirrors `window.history`. inty
 // has no module-level reference identity, so the two appear as
 // separate row instantiations — fine for type-checking purposes.
-/** const history: <T>{
-        length: Number,
-        state: T,
-        scrollRestoration: String,
-        back: () => Undefined,
-        forward: () => Undefined,
-        go: (Number) => Undefined,
-        pushState: (T, String, String) => Undefined,
-        replaceState: (T, String, String) => Undefined
-    } */
+/** const history: <T>History<T> */
 const history;
 
 // Reflect. A few htmx-class libraries use Reflect.has and Reflect.get
@@ -570,43 +555,15 @@ const fetch;
 // `window.location` and the bare `location` global are aliases for the
 // same Location object. Setting `href` triggers navigation; the rest
 // of the row exposes the parsed URL parts and the navigation methods.
-/** const location: {
-        href: String,
-        protocol: String,
-        host: String,
-        hostname: String,
-        port: String,
-        pathname: String,
-        search: String,
-        hash: String,
-        origin: String,
-        assign: (String) => Undefined,
-        replace: (String) => Undefined,
-        reload: () => Undefined,
-        toString: () => String
-    } */
+/** const location: Location */
 const location;
 
 // Web Storage. `sessionStorage` and `localStorage` share the same
 // shape; both store String → String. A missing key reads as `null`.
-/** const sessionStorage: {
-        getItem: (String) => String | Null,
-        setItem: (String, String) => Undefined,
-        removeItem: (String) => Undefined,
-        clear: () => Undefined,
-        key: (Number) => String,
-        length: Number
-    } */
+/** const sessionStorage: Storage */
 const sessionStorage;
 
-/** const localStorage: {
-        getItem: (String) => String | Null,
-        setItem: (String, String) => Undefined,
-        removeItem: (String) => Undefined,
-        clear: () => Undefined,
-        key: (Number) => String,
-        length: Number
-    } */
+/** const localStorage: Storage */
 const localStorage;
 
 // URL constructor. The (String) call form covers both `URL(href)` and

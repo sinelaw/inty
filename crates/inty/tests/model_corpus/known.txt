@@ -1,11 +1,6 @@
 # Disagreements between inty and the Lean model on inty's own programs
 # (tests/model_corpus.rs), each a program's wire line after its reason.
 
-# A member of an annotated object type is called on the object (its `this`
-# is the object), as inty checks an object literal's methods against it;
-# the model's function types in annotations are called detached.
-(letann (rec (s:m (fn number number)) (s:x number)) (obj (field s:x (num 1 0)) (method s:m (func 1 (ret (plus (get (var 2) s:x) (var 0)))))) (let (mcall (var 0) s:m (num 1 0)) (undef)))
-
 # A test of a tag no case of the sum has: inty warns that the branch is
 # dead; the model's Case has no instance.
 (let (func 1 (letmutann (sum number string) (var 0) (typetest (var 0) s:boolean (ret (num 2 0)) (ret (num 1 0))))) (undef))
@@ -31,3 +26,23 @@
 # object holds the member monomorphically (README, divergence table).
 (let (obj (method s:fail (func 1 (throw (var 0))))) (let (func 1 (ret (cond (var 0) (num 1 0) (mcall (var 3) s:fail (str s:x))))) (let (func 1 (ret (cond (var 0) (str s:s) (mcall (var 4) s:fail (str s:y))))) (seq (minus (app (var 1) (bool true)) (num 1 0)) (get (app (var 0) (bool true)) s:length)))))
 (let (obj (field s:fail (func 1 (throw (var 0))))) (let (func 1 (ret (cond (var 0) (num 1 0) (mcall (var 3) s:fail (str s:x))))) (let (func 1 (ret (cond (var 0) (str s:s) (mcall (var 4) s:fail (str s:y))))) (seq (minus (app (var 1) (bool true)) (num 1 0)) (get (app (var 0) (bool true)) s:length)))))
+
+# A branch of exactly `null` or `undefined`: inty makes an optional of the
+# other branch's type (`c ? x : undefined` is `T | Undefined`), as an
+# annotation would; the model's branches have one type (the join of types
+# the branches don't share, left out on purpose: lean/GAPS.md).
+(cond (bool false) (typeof (str s:)) (null))
+(not (cond (bool true) (null) (neg (num 249 0))))
+(cond (neg (num 22 1)) (bool false) (undef))
+(letmut (cond (num 6 0) (null) (num 34 1)) (undef))
+(cond (bool true) (neg (num 2 0)) (null))
+(cond (str s:h) (str s:711nhMn) (undef))
+(cond (neg (num 56 1)) (undef) (bool false))
+(not (cond (num 5 0) (bool true) (undef)))
+(cond (bool false) (undef) (neg (num 51 1)))
+(cond (str s:%20%20H9%20N9%20a) (undef) (neg (num 146 0)))
+(cond (str s:%208W2pQ) (undef) (bool false))
+
+# A store to an array's `length` (`xs.length = 0` empties it in place):
+# inty takes a number there; the model's arrays have a `length` to read.
+(let (arr (num 1 0) (num 2 0)) (set (var 0) s:length (num 1 0)))

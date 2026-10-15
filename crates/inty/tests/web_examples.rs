@@ -98,6 +98,10 @@ fn check(lang: Language, src: &str) -> Result<(), String> {
     let (_ty, _) = state
         .infer_program_with_env(&env, &program)
         .map_err(|e| format!("type error: {:?}", e))?;
+    // Errors inference records and goes on past, as the CLI reports them.
+    if let Some(e) = state.take_errors().into_iter().next() {
+        return Err(format!("type error: {:?}", e));
+    }
     state
         .resolve_constraints()
         .map_err(|e| format!("constraint error: {:?}", e))?;

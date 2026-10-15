@@ -4987,15 +4987,15 @@ fn test_stores_only_into_what_takes_them() {
         let s = "ab";
         s[0]++;
         "#,
-        // Nor a built-in property: a string's, an array's (which `dynamics`
-        // doesn't store), a function's.
+        // Nor a built-in property: a string's, a function's (an array's
+        // `length` takes a number: `a_store_to_an_array_length_truncates_it`).
         r#"
         function f(o) { o.length = 0; return o; }
         const s = f("ab");
         "#,
         r#"
         const xs = [1, 2];
-        xs.length = 1;
+        xs.length = "1";
         "#,
         r#"
         const f = function () { return 1; };
@@ -5386,16 +5386,85 @@ fn an_annotated_function_type_without_this_is_called_detached() {
 
 #[test]
 fn a_method_in_an_annotated_object_type_has_the_object_as_this() {
-    let src = "/** const o: {x: Number, m: (Number) => Number} */\n\
+    // A method says its `this`, `m: (this: O, n: Number) => Number`, and is
+    // called on such an object, which it reads as `this`.
+    let src = "/** type O = {x: Number, m: (this: O, n: Number) => Number} */\n\
+               /** const o: O */\n\
                const o = { x: 1, m(n) { return this.x + n; } };\n\
                const r = o.m(1);";
     assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
     // Taken off the object, it can't be called detached.
-    let bad = "/** const o: {x: Number, m: (Number) => Number} */\n\
+    let bad = "/** type O = {x: Number, m: (this: O, n: Number) => Number} */\n\
+               /** const o: O */\n\
                const o = { x: 1, m(n) { return this.x + n; } };\n\
                const g = o.m;\n\
                const r = g(1);";
+    let err = check_program(bad, &[]).unwrap_err();
+    assert!(err.contains("`g` is a method (it reads `this`)"), "{}", err);
+    // A property of a function type, `m: (Number) => Number`, is a
+    // function that uses no `this`: one that reads it doesn't fit.
+    let bad = "/** const o: {x: Number, m: (Number) => Number} */\n\
+               const o = { x: 1, m(n) { return this.x + n; } };";
     assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+/// A record field of a function type holds a callback: a function that
+/// uses no `this`, which can be stored, read back, called on the object
+/// or detached, and passed on (Rosaclef, item 2).
+#[test]
+fn a_record_field_holds_a_callback() {
+    let src = "/** const s: { stop: () => Undefined } */\n\
+               const s = { stop: () => undefined };\n\
+               /** function set(stop: () => Undefined) => Undefined */\n\
+               function set(stop) { s.stop = stop; }\n\
+               const end = s.stop;\n\
+               end();\n\
+               /** function call(f: () => Undefined) => Undefined */\n\
+               function call(f) { f(); }\n\
+               call(s.stop);\n\
+               s.stop();\n\
+               set(function () { return undefined; });\n\
+               const r = 1;";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    // A property's own annotation says the same.
+    let src = "const hooks = {\n\
+               /** @type {() => Undefined} */\n\
+               mark: null,\n\
+               };\n\
+               hooks.mark = () => undefined;\n\
+               if (hooks.mark) hooks.mark();\n\
+               const m = hooks.mark;\n\
+               const r = 1;";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    // But a function that reads `this` can't be stored there: it would
+    // be called detached.
+    let bad = "/** const s: { stop: () => Number } */\n\
+               const s = { x: 1, stop: () => 1 };\n\
+               s.stop = function () { return this.x; };";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+/// A method that reads `this` and a function that uses none don't make
+/// one type, as an array's elements or a conditional's branches: either
+/// could then be called detached.
+#[test]
+fn a_method_and_a_detached_function_are_different_types() {
+    for bad in [
+        "const o = { x: 1, m() { return this.x; } };\n\
+         const fs = [() => 1, o.m];\n\
+         const g = fs[1];\n\
+         const r = g();",
+        "const o = { x: 1, m() { return this.x; } };\n\
+         const g = true ? () => 1 : o.m;\n\
+         const r = g();",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+    // A method that doesn't mention `this` uses none.
+    let src = "const o = { x: 1, m() { return 2; } };\n\
+               const g = o.m;\n\
+               const r = g() + o.m();";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
 }
 
 #[test]
@@ -5646,4 +5715,151 @@ fn comparison_function_has_plus_constraint() {
     let scheme = env.lookup("lt").unwrap();
     assert_eq!(scheme.body.preds.len(), 1, "{scheme:?}");
     assert_eq!(scheme.body.preds[0].class, crate::types::ClassName::Plus);
+}
+
+// Rosaclef (inty-notes "Gaps found moving to inty cb4bfca", E): an
+// array's `length` takes a number, which truncates it.
+#[test]
+fn a_store_to_an_array_length_truncates_it() {
+    let src = "/** const xs: String[] */\n\
+               const xs = [];\n\
+               xs.length = 0;\n\
+               function clear(a) { a.length = 0; return a; }\n\
+               const ys = clear([1, 2]);\n\
+               const n = xs.length;";
+    assert_eq!(
+        check_program(src, &["ys", "n"]).unwrap(),
+        ["Number[]", "Number"]
+    );
+    // A number only, and no other built-in property.
+    for bad in [
+        "const xs = [1]; xs.length = \"0\";",
+        "const xs = [1]; xs.push = 0;",
+    ] {
+        assert!(check_program(bad, &[]).is_err(), "{}", bad);
+    }
+}
+
+// Rosaclef (F): a branch that is exactly `undefined` or `null` makes the
+// conditional the other branch's type or nothing.
+#[test]
+fn a_branch_of_nothing_makes_the_conditional_a_sum() {
+    let src = "/** const xs: Number[] */\n\
+               const xs = [];\n\
+               const last = xs.length > 0 ? xs[xs.length - 1] : undefined;\n\
+               const c = xs.length > 2;\n\
+               const s = c ? \"a\" : null;\n\
+               const u = c ? undefined : 1;\n\
+               const v = last ?? 0;";
+    assert_eq!(
+        check_program(src, &["last", "s", "u", "v"]).unwrap(),
+        [
+            "Number | Undefined",
+            "String | Null",
+            "Number | Undefined",
+            "Number"
+        ]
+    );
+    // The value may be nothing, so it is used only once told apart.
+    let bad = "const c = Math.random() > 0.5;\n\
+               const x = c ? 1 : undefined;\n\
+               const y = x + 1;";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+// Rosaclef (G): `Array.prototype.at`, which is past the end (either way)
+// `undefined`.
+#[test]
+fn an_array_at_may_be_undefined() {
+    let src = "const xs = [1, 2, 3];\n\
+               const a = xs.at(-1);\n\
+               const b = xs.at(0) ?? 0;";
+    assert_eq!(
+        check_program(src, &["a", "b"]).unwrap(),
+        ["Number | Undefined", "Number"]
+    );
+    let bad = "const xs = [1, 2, 3];\nconst a = xs.at(-1) + 1;";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+// Rosaclef (D), not changed: `{}` is a closed empty record, so
+// `(raw.c ?? {}).off` reads a field `{}` doesn't have. Accepting it would
+// need an open `{}` (unsound: a later read of a field the value lacks) or
+// fields that may be absent (`off?: T` read as `T | Undefined`). Telling
+// the absent case apart first does it.
+#[test]
+fn a_field_of_an_empty_default_is_not_read() {
+    let src = "/** function f<T>(raw: T) => String[] */\n\
+               function f(raw) { return ((raw.c ?? {}).off ?? []).map((x) => x); }";
+    let err = check_program(src, &[]).unwrap_err();
+    assert!(err.to_string().contains("'off' not found"), "{err}");
+    let src = "/** function decode<T>(c: T) => String[] */\n\
+               function decode(c) {\n\
+                 if (!c) return [];\n\
+                 return (c.off ?? []).map((x) => x);\n\
+               }\n\
+               /** function f<T>(raw: T) => String[] */\n\
+               function f(raw) { return decode(raw.c); }\n\
+               const r = 1;";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+}
+
+// An object literal's method that never mentions `this` fits a method's
+// slot (`stop: (this: S) => Number`) as well as a plain function's; one
+// that reads `this` reads the object (of the annotated type), and doesn't
+// fit a plain function's.
+#[test]
+fn a_literal_method_fits_the_slot_it_is_checked_against() {
+    let src = "/** type S = { stop: (this: S) => Number, x: Number } */\n\
+               /** const s: S */\n\
+               const s = { x: 1, stop() { return this.x; } };\n\
+               /** const u: S */\n\
+               const u = { x: 1, stop() { return 2; } };\n\
+               /** const t: { stop: () => Number, x: Number } */\n\
+               const t = { x: 1, stop() { return 2; } };\n\
+               const f = t.stop;\n\
+               const r = s.stop() + u.stop() + f();";
+    assert_eq!(check_program(src, &["r"]).unwrap(), ["Number"]);
+    let bad = "/** const t: { stop: () => Number, x: Number } */\n\
+               const t = { x: 1, stop() { return this.x; } };";
+    assert!(check_program(bad, &[]).is_err(), "{}", bad);
+}
+
+// A declared method (a declaration has no body to show whether it reads
+// `this`, so its type says: `m: (this: L) => Number`) is called on its
+// object: not detached, and not where a function that is called detached
+// goes. A declared plain function (`f: () => Number`) is either.
+#[test]
+fn a_declared_method_is_called_on_its_object() {
+    let decl = "/** type L = {x: Number, m: (this: L) => Number, f: () => Number} */\n\
+                /** const lib: L */\nconst lib;\n";
+    let ok = format!(
+        "{decl}const a = lib.m() + lib.x;\n\
+         const g = lib.f;\n\
+         /** function call(h: () => Number) => Number */\n\
+         function call(h) {{ return h(); }}\n\
+         const r = a + g() + call(lib.f);"
+    );
+    assert_eq!(check_program(&ok, &["r"]).unwrap(), ["Number"]);
+    for bad in [
+        "const g = lib.m;\nconst r = g();",
+        "/** function call(h: () => Number) => Number */\n\
+         function call(h) { return h(); }\nconst r = call(lib.m);",
+        "function call(h) { return h(); }\nconst r = call(lib.m);",
+    ] {
+        let src = format!("{decl}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{}", src);
+    }
+}
+
+// TypeScript's method signature (`m(): T`) leaves `this` implicit; inty's
+// error says how to write it.
+#[test]
+fn a_method_signature_says_its_this() {
+    let err = check_program(
+        "/** const o: {m(): Number} */\nconst o = {m() { return 1; }};",
+        &[],
+    )
+    .unwrap_err();
+    assert!(err.contains("(this: T, …) => R"), "{err}");
 }

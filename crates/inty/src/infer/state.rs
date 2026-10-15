@@ -194,6 +194,16 @@ pub struct InferState {
     /// The receiver of the member inferred last (`infer_member`), so an
     /// assignment to `r.p` can require `r` to take stores (`FieldWrite`).
     pub(crate) last_member_receiver: Option<Type>,
+    /// The rigid variables `catch (e)` gives a caught exception, for the
+    /// diagnostic when one is used at a concrete type.
+    pub(crate) caught_exceptions: std::collections::HashSet<crate::types::TVarId>,
+    /// Whether member reads record `last_member_receiver` and
+    /// `last_index_container` (while a store's target is checked).
+    pub(crate) recording_member_receiver: bool,
+    /// Named types whose body has no variable but its parameters (most
+    /// declared ones): nothing in them is fixed by an environment that
+    /// reaches them, so `env_fixed_vars` needn't resolve them again.
+    pub(crate) closed_named: std::collections::HashSet<TypeId>,
 
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
@@ -275,6 +285,10 @@ pub struct InferState {
     /// environments and export tables (see `modules::load_imported`).
     pub module_cache:
         HashMap<std::path::PathBuf, (crate::infer::TypeEnv, crate::modules::ExportTable)>,
+    /// Modules that failed this run, by canonical path: reported once,
+    /// and not checked again by a later importer (see
+    /// `modules::resolve_imports`).
+    pub failed_modules: std::collections::HashSet<std::path::PathBuf>,
 
     /// Policy knobs. See `InferConfig`.
     pub config: InferConfig,
@@ -321,6 +335,10 @@ pub struct InferState {
     /// settle them: `(callback result, promised value)`. See
     /// `builtins::promise_method_type`.
     pub(crate) promise_results: Vec<(Type, Type)>,
+    /// The `this` of a callee called detached (`f()`) that wasn't known
+    /// at the call, with the call's span and the callee's name: settled
+    /// when it is (`settle_detached`), at the latest as `Undefined`.
+    pub(crate) pending_detached: Vec<(Type, Span, String)>,
     /// Which declaration each identifier refers to, and which bindings
     /// are never written after their initialiser: the only ones
     /// narrowing refines (see `ast::resolve`).
@@ -503,6 +521,9 @@ impl InferState {
             pending_constraints: Vec::new(),
             last_index_container: None,
             last_member_receiver: None,
+            caught_exceptions: std::collections::HashSet::new(),
+            recording_member_receiver: false,
+            closed_named: std::collections::HashSet::new(),
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -516,6 +537,7 @@ impl InferState {
             module_depth: 0,
             quiet: 0,
             module_cache: HashMap::new(),
+            failed_modules: std::collections::HashSet::new(),
             timings: None,
             module_timings: Vec::new(),
             stmt_list_depth: 0,
@@ -529,6 +551,7 @@ impl InferState {
             class_decls: std::collections::HashSet::new(),
             reserved_class_ids: HashMap::new(),
             promise_results: Vec::new(),
+            pending_detached: Vec::new(),
             resolution: Default::default(),
             local_types: HashMap::new(),
             forward_locals: HashMap::new(),
@@ -873,6 +896,12 @@ impl InferState {
         super::zonk::zonk(&mut self.var_table, &self.main_subst, t)
     }
 
+    /// Whether `t`'s resolved head satisfies `f`, without resolving (or
+    /// copying) anything below the head.
+    pub fn head_is(&mut self, t: &Type, f: impl FnOnce(&Type) -> bool) -> bool {
+        super::zonk::with_head(&mut self.var_table, t, f)
+    }
+
     /// Snapshot the inference state for speculative work.
     ///
     /// Captures everything a rollback needs to restore:
@@ -1167,8 +1196,12 @@ impl InferState {
     /// `check_expr` pushes the expected element/field types into it.
     /// Covariance belongs only to an immutable type constructor.
     pub fn subsume(&mut self, span: Span, sub: &Type, sup: &Type) -> InferResult<()> {
-        let sub = self.zonk(sub);
-        let sup = self.zonk(sup);
+        // The rules up to unification look at heads only, and most
+        // subsumptions end there: the types are resolved whole only if
+        // it fails (unification resolves what it reaches itself).
+        let sub_head = super::zonk::zonk_head_cow(&mut self.var_table, sub);
+        let sup_head = super::zonk::zonk_head_cow(&mut self.var_table, sup);
+        let (sub, sup) = (&*sub_head, &*sup_head);
 
         // Rule 0 (S-LitBase): `Lit(l) ≤ Base` is sound — every
         // singleton is a value of its base. This rule used to live
@@ -1176,7 +1209,7 @@ impl InferState {
         // subsumption rule and lives here. The reverse direction
         // `Base ≤ Lit` is intentionally absent.
         if let Type::Literal(lit) = &sub {
-            if lit.base_type() == sup {
+            if lit.base_type() == *sup {
                 return Ok(());
             }
         }
@@ -1192,18 +1225,65 @@ impl InferState {
 
         // The same for a sum told apart by `typeof` (`Number | String`):
         // the variable may be the sum or one of its cases.
-        if matches!(sub, Type::Var(TVarName::Flex(_))) && sup.is_typeof_sum() {
-            self.add_constraint(TypePred::inject(sub.clone(), sup.clone()), span);
-            return Ok(());
+        if matches!(sub, Type::Var(TVarName::Flex(_))) && matches!(sup, Type::Union(_)) {
+            let sup = self.zonk(sup);
+            if sup.is_typeof_sum() {
+                self.add_constraint(TypePred::inject(sub.clone(), sup), span);
+                return Ok(());
+            }
         }
 
         // Rule 1: try unify with rollback so a failed attempt has
         // no observable side-effect on the substitution.
         let snap = self.snapshot_inference();
-        if self.quietly(|s| s.unify(span, &sub, &sup)).is_ok() {
+        if self.quietly(|s| s.unify(span, sub, sup)).is_ok() {
             return Ok(());
         }
         self.restore_snapshot(snap);
+        let sub = self.zonk(sub);
+        let sup = self.zonk(sup);
+
+        // S-NoThis: a function that uses no `this` (`ArrowThis`) can be
+        // called with any, so it flows into a slot for a function with
+        // any `this` (a method, or one called detached), but a
+        // constructor's (it isn't one). Not the other way: a slot for one
+        // that uses none may be called either way.
+        if let (Some(sub_this), Some(sup_this)) = (callable_this(&sub), callable_this(&sup)) {
+            if matches!(self.zonk(&sub_this), Type::ArrowThis)
+                && !matches!(self.zonk(&sup_this), Type::ArrowThis | Type::NewTarget)
+            {
+                let sub_as = with_callable_this(&sub, sup_this.clone());
+                let snap = self.snapshot_inference();
+                if self.quietly(|s| s.unify(span, &sub_as, &sup)).is_ok() {
+                    return Ok(());
+                }
+                self.restore_snapshot(snap);
+            }
+            // A function that reads `this` where one that uses none is
+            // expected: say so, as the types print alike.
+            if matches!(self.zonk(&sup_this), Type::ArrowThis)
+                && !matches!(
+                    self.zonk(&sub_this),
+                    Type::ArrowThis | Type::Var(_) | Type::Error
+                )
+            {
+                let sub_as = with_callable_this(&sub, Type::ArrowThis);
+                let snap = self.snapshot_inference();
+                let only_this = self.quietly(|s| s.unify(span, &sub_as, &sup)).is_ok();
+                self.restore_snapshot(snap);
+                if only_this {
+                    return Err(crate::error::TypeError::TypeMismatch {
+                        expected: format!("{sup}, a function that uses no `this`"),
+                        found:
+                            "a function that reads `this` (a method says its `this` in its type: \
+                                `m: (this: T, …) => R`)"
+                                .to_string(),
+                        span,
+                    }
+                    .into());
+                }
+            }
+        }
 
         // S-Unroll: an equi-recursive type (a recursive alias) is its
         // unrolling, so subsume against that — one side at a time, so
@@ -1276,6 +1356,18 @@ impl InferState {
             if matching.len() == 1 {
                 let chosen = self.zonk(&members[matching[0]]);
                 return self.subsume(span, &sub, &chosen);
+            }
+            // A function fits no arm: if one arm is a function type, its
+            // mismatch says why (a `this`, a parameter).
+            if matching.is_empty() && callable_this(&sub).is_some() {
+                let fns: Vec<Type> = members
+                    .iter()
+                    .map(|m| self.zonk(m))
+                    .filter(|m| callable_this(m).is_some() || matches!(m, Type::Func { .. }))
+                    .collect();
+                if let [only] = fns.as_slice() {
+                    return self.subsume(span, &sub, only);
+                }
             }
             // 0 → no arm fits; >1 → ambiguous. Both fall through to
             // the same error; the diagnostic is best-effort and uses
@@ -1639,27 +1731,19 @@ impl InferState {
         }
         // Variable-to-structured: bind the root iff still free.
         let root = self.var_table.find(id);
-        match self.var_table.root_resolution(root) {
-            Resolution::Unbound { .. } => {
-                self.var_table.bind(root, ty.clone());
-            }
-            Resolution::Bound(_) => {
-                // Reachable only if some prior `mirror_extend` (via
-                // another alias of `id`) bound this root, but
-                // `main_subst.resolve(&var)` at the call site
-                // didn't see the alias in main_subst — a drift.
-                debug_assert!(
-                    false,
-                    "mirror_extend Var-to-struct: root already Bound \
-                     but extend_subst's `resolve` didn't intercept. \
-                     Drift between var_table and main_subst."
-                );
-            }
-            Resolution::Link(_) => {
-                // `find` returns a root; `root_resolution(root)` can
-                // never yield Link. Defensive.
-                debug_assert!(false, "find returned a Link root");
-            }
+        if self.var_table.is_free(root) {
+            self.var_table.bind(root, ty.clone());
+        } else {
+            // Reachable only if some prior `mirror_extend` (via
+            // another alias of `id`) bound this root, but
+            // `main_subst.resolve(&var)` at the call site
+            // didn't see the alias in main_subst — a drift.
+            debug_assert!(
+                false,
+                "mirror_extend Var-to-struct: root already Bound \
+                 but extend_subst's `resolve` didn't intercept. \
+                 Drift between var_table and main_subst."
+            );
         }
     }
 
@@ -1761,6 +1845,7 @@ impl InferState {
 
     /// Register a named type definition.
     pub fn register_named_type(&mut self, def: TypeDef) {
+        self.closed_named.remove(&def.id);
         self.named_types.insert(def.id, def);
     }
 
@@ -1988,6 +2073,40 @@ impl InferState {
         (skolems, subst.apply(&scheme.body.ty))
     }
 
+    /// Settle the `this` of callees called detached that weren't known
+    /// at the call (`pending_detached`): one that uses no `this`, or is
+    /// `Undefined`, was right to be; a method (which reads its object)
+    /// is an error; one still unknown is pinned to `Undefined` unless the
+    /// environment fixes it (`fixed`, at a generalisation: it would be
+    /// generalised, in the type or in a constraint), and always when
+    /// `fixed` is `None` (the program is done). Whether anything was
+    /// pinned.
+    pub(crate) fn settle_detached(
+        &mut self,
+        fixed: Option<&std::collections::HashSet<TVarName>>,
+    ) -> bool {
+        let mut pinned = false;
+        let mut keep = Vec::new();
+        for (this, span, callee) in std::mem::take(&mut self.pending_detached) {
+            match self.zonk(&this) {
+                Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => {}
+                Type::Var(v) => {
+                    if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
+                        if let Err(e) = self.unify(span, &Type::Var(v), &Type::Undefined) {
+                            self.push_error(e);
+                        }
+                        pinned = true;
+                    } else {
+                        keep.push((this, span, callee));
+                    }
+                }
+                _ => self.push_error(crate::error::TypeError::DetachedThis { callee, span }.into()),
+            }
+        }
+        self.pending_detached.extend(keep);
+        pinned
+    }
+
     /// Generalize a type over free variables not in the environment.
     /// Also collects relevant predicates from pending_constraints.
     /// Generalizes over presence variables too (Remy '94), with the
@@ -2019,7 +2138,15 @@ impl InferState {
         if let Err(e) = self.resolve_known_plus() {
             self.push_error(e);
         }
-        let ty = self.main_subst.flatten(ty);
+        let mut ty = self.main_subst.flatten(ty);
+        let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
+        // A detached call's `this` that would be generalised is settled
+        // first: as `Undefined`, what the call passes. (Which variables
+        // the environment fixes doesn't change: one is bound to a type
+        // without variables.)
+        if !self.pending_detached.is_empty() && self.settle_detached(Some(&fixed_vars)) {
+            ty = self.main_subst.flatten(&ty);
+        }
         let mut ty_vars = ty.free_vars();
         ty_vars.extend(extra.iter().cloned());
         let pvars = ty.free_pvars();
@@ -2030,7 +2157,6 @@ impl InferState {
         // HashSet is seeded independently — which would otherwise make
         // the printed scheme `<a, b>...` non-deterministically map
         // letters to type-var slots across runs.
-        let (fixed_vars, fixed_pvars) = self.env_fixed_vars(env_free, &ty);
         // A variable that is bound in the substitution is not free, whatever
         // a (shallow) traversal of `ty` reports; `flatten` expands each
         // variable once, so a bound variable can survive in its output.
@@ -2249,7 +2375,7 @@ impl InferState {
         }
         let mut seen: HashSet<TypeId> = HashSet::new();
         while let Some(id) = named.pop() {
-            if !seen.insert(id) {
+            if !seen.insert(id) || self.closed_named.contains(&id) {
                 continue;
             }
             let Some(def) = self.named_types.get(&id) else {
@@ -2258,9 +2384,24 @@ impl InferState {
             let params: HashSet<TVarName> = def.params.iter().cloned().collect();
             let body = self.main_subst.flatten(&def.body.clone());
             let body = self.zonk(&body);
-            vars.extend(body.free_vars().into_iter().filter(|v| !params.contains(v)));
-            pvars.extend(body.free_pvars());
-            named.extend(body.named_ids());
+            let free: Vec<TVarName> = body
+                .free_vars()
+                .into_iter()
+                .filter(|v| !params.contains(v))
+                .collect();
+            let free_pvars = body.free_pvars();
+            let inner: Vec<TypeId> = body.named_ids().into_iter().filter(|n| *n != id).collect();
+            // Only its parameters, and named types that are closed too: no
+            // substitution reaches inside it again.
+            if free.is_empty()
+                && free_pvars.is_empty()
+                && inner.iter().all(|n| self.closed_named.contains(n))
+            {
+                self.closed_named.insert(id);
+            }
+            vars.extend(free);
+            pvars.extend(free_pvars);
+            named.extend(inner);
         }
         // Close over the pending constraints' functional dependencies.
         let preds: Vec<TypePred> = self
@@ -2522,6 +2663,42 @@ fn plural(n: usize) -> &'static str {
         ""
     } else {
         "s"
+    }
+}
+
+/// The `this` of a function type, bare or a callable row's call.
+fn callable_this(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Func {
+            this_type: Some(t), ..
+        } => Some((**t).clone()),
+        Type::Row(row) => row
+            .props
+            .get(&crate::types::PropName(
+                crate::types::CALLABLE_KEY.to_string(),
+            ))
+            .and_then(|e| callable_this(&e.ty)),
+        _ => None,
+    }
+}
+
+/// A function type with its `this` replaced.
+fn with_callable_this(ty: &Type, this: Type) -> Type {
+    match ty {
+        Type::Func { params, ret, .. } => Type::Func {
+            this_type: Some(Box::new(this)),
+            params: params.clone(),
+            ret: ret.clone(),
+        },
+        Type::Row(row) => {
+            let mut row = row.clone();
+            let key = crate::types::PropName(crate::types::CALLABLE_KEY.to_string());
+            if let Some(e) = row.props.get_mut(&key) {
+                e.ty = with_callable_this(&e.ty, this);
+            }
+            Type::Row(row)
+        }
+        _ => ty.clone(),
     }
 }
 

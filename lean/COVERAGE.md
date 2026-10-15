@@ -51,7 +51,7 @@ named here that inty hasn't, or an inference function of inty's
 | `HasTypeS.litBool` | `check_expr` |
 | `HasTypeS.caseTag` | `infer_branching_test`, `apply_narrowing`, `test_facts`, `infer_stmt_switch` (a switch statement on a variant's tag is a chain of tests of one value's tag) |
 | `HasTypeS.conv` | `unify`, `unroll_named` |
-| `HasTypeS.inj` | `check_expr`, `subsume` |
+| `HasTypeS.inj` | `check_expr`, `check_by_synthesis`, `subsume` |
 | `HasTypeS.drop` | `infer_discarded` |
 
 Beside the rules: `Expr.assignsMutable` is `check_assignment_target`;

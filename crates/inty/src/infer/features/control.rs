@@ -327,6 +327,39 @@ impl InferState {
         let cons_type = self.infer_expr(&cons_env, consequent)?;
         let alt_type = self.infer_expr(&alt_env, alternate)?;
 
+        // A branch that is exactly `undefined` (`null`) makes an optional
+        // (`T | Undefined`, `T | Null`) of the other branch's `T`, as an
+        // annotation would: `c ? x : undefined`. Each branch is injected
+        // into it; one still unknown waits (`Inject`).
+        let nothing = |e: &Expr| match e {
+            Expr::Lit {
+                value: crate::ast::Literal::Undefined,
+                ..
+            } => Some(crate::types::Nothing::Undefined),
+            Expr::Ident { name, .. } if name == "undefined" => {
+                Some(crate::types::Nothing::Undefined)
+            }
+            Expr::Lit {
+                value: crate::ast::Literal::Null,
+                ..
+            } => Some(crate::types::Nothing::Null),
+            _ => None,
+        };
+        let optional = match (nothing(consequent), nothing(alternate)) {
+            (None, Some(z)) => Some((z, &cons_type)),
+            (Some(z), None) => Some((z, &alt_type)),
+            _ => None,
+        };
+        if let Some((z, value)) = optional {
+            let value = self.widen(span, value);
+            // (Two nothings are one: `c ? null : f()` with `f()` null.)
+            if self.zonk(&value) != z.ty() {
+                let sum = Type::Maybe(z, Box::new(self.fresh_type_var()));
+                self.subsume(span, &value, &sum)?;
+                return Ok(self.zonk(&sum));
+            }
+        }
+
         // Branches that disagree in type are merged into a union rather
         // than rejected — see InferState::join for details. The
         // joined result is then widened: `true ? 3 : 4` is `Number`,
@@ -675,7 +708,11 @@ impl InferState {
             // concrete type. A flexible variable would let `e - 1` pin it
             // to `Number` whatever was thrown. The handler runs against
             // the try-body's environment.
-            let param_type = Type::Var(self.fresh_skolem());
+            let caught = self.fresh_skolem();
+            if let crate::types::TVarName::Skolem(id) = caught {
+                self.caught_exceptions.insert(id);
+            }
+            let param_type = Type::Var(caught);
             let catch_env = self.bind(
                 &unsure_env,
                 catch.span,

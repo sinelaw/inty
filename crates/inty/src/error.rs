@@ -440,6 +440,13 @@ pub enum TypeError {
     #[error("{message}")]
     InvalidSyntax { message: String, span: Span },
 
+    /// A function that reads `this` called detached (`f()`, not
+    /// `o.f()`): it gets `this` = `undefined`.
+    #[error(
+        "{callee} is a method (it reads `this`), so calling it detached passes `this` = undefined"
+    )]
+    DetachedThis { callee: String, span: Span },
+
     #[error("Type mismatch: expected {expected}, found {found}")]
     TypeMismatch {
         expected: String,
@@ -523,6 +530,7 @@ impl TypeError {
             TypeError::Module { span, .. } => *span,
             TypeError::InvalidSyntax { span, .. } => *span,
             TypeError::TypeMismatch { span, .. } => *span,
+            TypeError::DetachedThis { span, .. } => *span,
             TypeError::BranchMismatch { span, .. } => *span,
             TypeError::ArrayElementMismatch { span, .. } => *span,
             TypeError::RequiredBy { inner, .. } => inner.span(),

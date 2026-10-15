@@ -74,7 +74,7 @@ An object spread (`{a: 1, ...o}`) takes the operand's fields over the ones befor
 
 ### Operator Overloading (Type Classes)
 
-`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned (`xs.length = 0` is an error; `xs = []` replaces the array). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. `+` takes two operands of one type, and `Plus a` says that type is a number or a string, so `function add(x, y) { return x + y; }` is `<a> where Plus a => (a, a) => a`: `add(1, 0.5)` is a `Number`, `add("a", "b")` a `String`, and `add(1, "b")` an error. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
+`+` works on `Number` or `String`; `[]` works on `Array`, `String`, `Map`, or any indexable row, and storing through it (`c[i] = v`) on any of them but a `String`, whose characters are read-only (`IndexWrite`). A property store (`r.p = v`) needs an object (`FieldWrite`): a string's, an array's or a function's built-in properties aren't assigned, but for an array's `length`, which takes a number and truncates the array (`xs.length = 0` clears it; a larger length would leave holes, a fault like a read past the end). Both are encoded as type classes (`Plus`, `Indexable`) — the function is polymorphic in any instance, but the call site fixes a single one. `+` takes two operands of one type, and `Plus a` says that type is a number or a string, so `function add(x, y) { return x + y; }` is `<a> where Plus a => (a, a) => a`: `add(1, 0.5)` is a `Number`, `add("a", "b")` a `String`, and `add(1, "b")` an error. Property reads on values of unknown type (`HasProp`, above) are a third, structural class.
 
 A scheme's constraints are part of its written form, so declarations carry them: `inty declarations` prints `/** const add: <a, b, c> where Plus a b c => (a, b) => c */`, and the annotation parser reads the `where` clause back (`Plus t`, short for `Plus t t t`, `Indexable t i e`, `t has {name: T, …}`), so a consumer of the `.d.js` is held to them. A `Plus` on a type that is already known is decided when the binding is generalised rather than carried into its scheme, so `const f = function () { return g + g; }` with `g` a function is an error even if `f` is never called.
 
@@ -167,9 +167,10 @@ The join rules, none of which guesses:
 
 - literals of one base type widen to it (`b ? 1 : 2` is `Number`; also inside tuples and objects);
 - a value of a (declared) union or sum joined with one of its arms is that union or sum;
-- a branch that doesn't complete (`return`, `throw`) contributes nothing, and statements (`if (c) n += 1; else break;`) aren't joined by value at all.
+- a branch that doesn't complete (`return`, `throw`) contributes nothing, and statements (`if (c) n += 1; else break;`) aren't joined by value at all;
+- a conditional one of whose branches is exactly `undefined` (or `null`) is the other branch's type or nothing: `xs.length > 0 ? xs[0] : undefined` is `Number | Undefined`, `c ? "a" : null` is `String | Null`. The branch itself says which sum, so nothing is guessed.
 
-A branch that is `null` or `undefined` is no exception: the sum is said, and each branch is injected into it.
+Other branches that are `null` or `undefined` — the `return`s of a function, an element, a side of `??` — are no exception: the sum is said, and each branch is injected into it.
 
 ```javascript
 function find(xs, v) { for (const x of xs) { if (x === v) return x; } return null; }
@@ -606,11 +607,25 @@ function add(x, y) { return x + y; }
 const inc = function(k) { return k + 1; };
 ```
 
-A function type says nothing about `this`, so it means the `this` the function is called with:
+A function type, `(Number) => Number`, is of a function that uses no `this`: an arrow, or a function that doesn't mention `this`. It can be called on an object, called detached or passed on, wherever it is: an annotated function, a `const`, a parameter or result, or a member of an object type. So a record field can hold a callback:
 
-- An annotated function, a `const` whose type is a function type, and a parameter or result of function type are called detached, with `this` undefined. A function that reads `this` doesn't have such a type: `/** const f: (Number) => Number */ const f = function (n) { return this.x + n; };` is rejected, since `f(1)` throws.
-- A member of an object type is called on the object: in `/** const o: {x: Number, m: (Number) => Number} */`, `m` may read `this.x`, and `o.m(1)` is accepted, but `const g = o.m; g(1)` isn't.
-- A declaration without a body (`.d.js`) and a built-in method keep their own `this`, but call the functions they are given detached. So `[1, 2].map(o.m)` is rejected when `o.m` reads `this`, as JavaScript throws there. (The methods of an object they are given keep any `this`: a built-in seldom calls one.)
+```javascript
+/** const s: { stop: () => Undefined } */
+const s = { stop: () => undefined };
+/** function set(stop: () => Undefined) => Undefined */
+function set(stop) { s.stop = stop; }
+const end = s.stop;
+end();                 // detached
+s.stop();              // on the object
+```
+
+A function that reads `this` doesn't have such a type: `/** const f: (Number) => Number */ const f = function (n) { return this.x + n; };` is rejected, since `f(1)` throws.
+
+- A method says its `this` as a first parameter, as TypeScript's `this: T`: `(this: T, n: Number) => Number` is called on a `T`, which it may read as `this`. An object type whose methods read the object names itself: with `/** type O = {x: Number, m: (this: O, n: Number) => Number} */` and `/** const o: O */`, `m` may read `this.x`, and `o.m(1)` is accepted, but `const g = o.m; g(1)` isn't: `g` is a method, and calling it detached passes `this` = undefined. TypeScript's method signature, `m(n: Number): Number`, which leaves `this` unsaid, is an error that says how to write it.
+- A body says whether a function is a method: one that mentions `this` is. A type, which has no body, says it: a function type without `this:` is of a function that uses none, in an annotation and in a declaration (`.d.js`) alike. So the standard library declares the host methods that throw when called detached (`Storage`'s, `Location`'s, `History`'s, `Map`'s, `Set`'s, the canvas context's and a gradient's) with their `this`, and `const g = localStorage.getItem; g("k")` is rejected. A type for such an object names the library's (`type Ctx = CanvasRenderingContext2D<…>`): one that describes part of it with plain function fields doesn't fit, since the object's methods need it. Elements, events and audio objects don't say theirs yet.
+- A method and a function that uses no `this` are different types, so they don't join (as an array's elements, or a conditional's branches): one or the other could then be called the wrong way.
+- An object literal's method that doesn't mention `this` uses none; one that does reads the object.
+- A declaration without a body (`.d.js`) and a built-in method keep their own `this`, but the functions they are given use none. So `[1, 2].map(o.m)` is rejected when `o.m` reads `this`, as JavaScript throws there.
 
 Methods are written as plain fields holding a function; `this` is inferred via row polymorphism (no explicit `this:` annotation):
 

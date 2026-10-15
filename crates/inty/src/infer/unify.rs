@@ -38,8 +38,9 @@ impl InferState {
     /// variable takes it, so that a later `new` through the variable is
     /// rejected too.
     pub(crate) fn unify_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
-        let (z1, z2) = (self.zonk(t1), self.zonk(t2));
-        match (&z1, &z2) {
+        let z1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
+        let z2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
+        match (&*z1, &*z2) {
             (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {
                 Err(TypeError::TypeMismatch {
                     expected: "a constructor (`new` calls one)".to_string(),
@@ -56,6 +57,36 @@ impl InferState {
         }
     }
 
+    /// Unify the `this` types of two function types. Unlike a call's
+    /// receiver (`unify_this`), a function that uses no `this`
+    /// (`ArrowThis`) is not one that reads it, as its object
+    /// (a method) or as `undefined` (one called detached): a slot for the
+    /// first may be called either way, so it can't hold the second, and
+    /// unification has no direction. (Subsumption has: a function that
+    /// uses no `this` flows into a slot for any, `subsume`.) A variable
+    /// takes either.
+    fn unify_fn_this(&mut self, span: Span, t1: &Type, t2: &Type) -> Result<(), IntyError> {
+        let z1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
+        let z2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
+        match (&*z1, &*z2) {
+            (Type::ArrowThis, Type::ArrowThis) => Ok(()),
+            (Type::ArrowThis, Type::Error) | (Type::Error, Type::ArrowThis) => Ok(()),
+            (Type::ArrowThis, Type::NewTarget) | (Type::NewTarget, Type::ArrowThis) => {
+                self.unify_this(span, &z1, &z2)
+            }
+            (Type::ArrowThis, Type::Var(_)) | (Type::Var(_), Type::ArrowThis) => {
+                self.unify(span, &z1, &z2)
+            }
+            (Type::ArrowThis, other) | (other, Type::ArrowThis) => Err(TypeError::TypeMismatch {
+                expected: "a function that doesn't use `this`".to_string(),
+                found: format!("one that reads `this` (a method of {})", self.zonk(other)),
+                span,
+            }
+            .into()),
+            _ => self.unify(span, &z1, &z2),
+        }
+    }
+
     pub fn unify(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
         // A cycle in the substitution that `zonk` cuts (it shows a bound
         // row tail as free) can make unification re-bind the same tails
@@ -64,8 +95,8 @@ impl InferState {
         if self.unify_depth >= super::MAX_UNIFY_DEPTH {
             return Err(TypeError::UnifyDepth { span }.into());
         }
-        let t1 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t1);
-        let t2 = super::zonk::zonk(&mut self.var_table, &self.main_subst, t2);
+        let t1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
+        let t2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
         self.unify_depth += 1;
         let result = self.unify_impl(span, &t1, &t2);
         self.unify_depth -= 1;
@@ -170,7 +201,7 @@ impl InferState {
                     (None, Some(_)) | (Some(_), None) => {
                         // One is static - compatible with any this
                     }
-                    (Some(t1), Some(t2)) => self.unify_this(span, t1, t2)?,
+                    (Some(t1), Some(t2)) => self.unify_fn_this(span, t1, t2)?,
                 }
 
                 // Unify parameters position-wise. Per-param presence
@@ -927,11 +958,22 @@ impl InferState {
         let found_origin = self.get_origin(t2).cloned();
 
         let (expected, found) = self.show_pair(t1, t2);
+        // A caught exception's type is rigid on purpose: say why.
+        let caught = |t: &Type| {
+            matches!(self.flatten_type(t), Type::Var(TVarName::Skolem(id))
+                if self.caught_exceptions.contains(&id))
+        };
+        let context = (caught(t1) || caught(t2)).then(|| {
+            "a caught exception may be any value that was thrown, so it can be passed on, \
+             tested and rethrown, but not used as a number, string or record; `String(e)` \
+             gives its text"
+                .to_string()
+        });
         TypeError::UnificationError {
             expected,
             found,
             span,
-            context: None,
+            context,
             expected_origin,
             found_origin,
         }

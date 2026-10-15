@@ -232,11 +232,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
-                        // A function property is called on the object or
-                        // taken off it: its `this` is left to the value.
-                        let this = self.fresh_type_var();
+                        // A function property's annotation, as an object
+                        // type's member, is of a function that uses no
+                        // `this`: called on the object or taken off it.
                         let annotated_type =
-                            self.annotation_this(ann_span, &annotated_type, &this)?;
+                            crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
                         // TypeScript's JSDoc convention is to allow a
                         // `null` / `undefined` placeholder initialiser
                         // for a `@type`-annotated field — the field is
@@ -290,6 +290,13 @@ impl InferState {
                     // Infer method with the shared 'this' type. A Python
                     // method's `-> T` return annotation (if any) is checked
                     // here too.
+                    // A method that never mentions `this` uses none: it can
+                    // be called on the object or taken off it.
+                    let this = if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                        shared_this.clone()
+                    } else {
+                        Type::ArrowThis
+                    };
                     self.member_function = true;
                     let method_type = self.infer_function_with_this(
                         env,
@@ -298,7 +305,7 @@ impl InferState {
                         body,
                         &None,
                         return_type_ast.as_ref(),
-                        shared_this.clone(),
+                        this,
                         *method_span,
                     );
                     self.member_function = false;
@@ -847,11 +854,11 @@ impl InferState {
                         if let Some(&max) = var_map.values().max() {
                             self.bump_var_id_to(max + 1);
                         }
-                        // A function property is called on the object or
-                        // taken off it: its `this` is left to the value.
-                        let this = self.fresh_type_var();
+                        // A function property's annotation, as an object
+                        // type's member, is of a function that uses no
+                        // `this`: called on the object or taken off it.
                         let annotated_type =
-                            self.annotation_this(ann_span, &annotated_type, &this)?;
+                            crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
                         let is_placeholder = matches!(
                             value,
                             Expr::Lit {
@@ -877,11 +884,51 @@ impl InferState {
                         props.insert(prop_name, slot);
                     }
                 }
+                // An object literal's own method (not a class's): like a
+                // property, it only has to fit its slot, so one that uses
+                // no `this` fits a method's slot (`m: (this: T) => R`) as
+                // well as a plain function's. One that reads `this` reads
+                // the object, which has the expected type.
+                PropDef::Method {
+                    key,
+                    params,
+                    body,
+                    return_type_ast,
+                    proto: false,
+                    span: method_span,
+                } => {
+                    let prop_name = self.prop_key_to_name(key);
+                    let Some(expected_prop_ty) =
+                        expected_row.props.get(&prop_name).map(|e| e.ty.clone())
+                    else {
+                        return Ok(None);
+                    };
+                    let this = if crate::ast::free_idents::mentions_this_in_stmt(body) {
+                        expected.clone()
+                    } else {
+                        Type::ArrowThis
+                    };
+                    self.member_function = true;
+                    let method_type = self.infer_function_with_this(
+                        env,
+                        None,
+                        params,
+                        body,
+                        &None,
+                        return_type_ast.as_ref(),
+                        this,
+                        *method_span,
+                    );
+                    self.member_function = false;
+                    let method_type = method_type?;
+                    self.subsume(*method_span, &method_type, &expected_prop_ty)?;
+                    let slot = self.zonk(&expected_prop_ty);
+                    props.insert(prop_name, slot);
+                }
                 _ => {
-                    // Methods/getters/setters/spreads: synthesis
-                    // fallback knows how to handle them; we don't
-                    // (yet) push contextual types into method
-                    // bodies.
+                    // Class methods, getters, setters, spreads: synthesis
+                    // fallback knows how to handle them; we don't (yet)
+                    // push contextual types into them.
                     return Ok(None);
                 }
             }
@@ -1001,8 +1048,11 @@ impl InferState {
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
         let obj_type = self.zonk(&obj_type);
-        // (After the object's own members.)
-        self.last_member_receiver = Some(obj_type.clone());
+        // (After the object's own members.) Only a store's target needs
+        // it (see `infer_store_target`).
+        if self.recording_member_receiver {
+            self.last_member_receiver = Some(obj_type.clone());
+        }
         self.infer_member_on_type(&obj_type, property, span)
     }
 

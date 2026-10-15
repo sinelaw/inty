@@ -216,6 +216,8 @@ impl InferState {
             .cloned()
             .collect();
         let result = self.infer_stmt_list(&env, &program.statements);
+        // The detached calls whose callee's `this` is still unknown.
+        self.settle_detached(None);
         let mut ambient = outer_ambient;
         if let Ok((_, env)) = &result {
             for (name, key) in env.name_keys() {
@@ -1238,6 +1240,19 @@ impl InferState {
     /// is a fresh variable, a primitive, or anything else where
     /// pushing-down has no purchase.
     pub fn check_expr(&mut self, env: &TypeEnv, expr: &Expr, expected: &Type) -> InferResult<Type> {
+        // Only these push what is expected into them; anything else is
+        // synthesised and subsumed, which resolves `expected` as far as
+        // it goes (not whole, up front).
+        if !matches!(
+            expr,
+            Expr::Object { .. }
+                | Expr::Array { .. }
+                | Expr::Function { .. }
+                | Expr::Conditional { .. }
+                | Expr::NullishCoalesce { .. }
+        ) {
+            return self.check_by_synthesis(env, expr, expected);
+        }
         let mut expected = self.zonk(expected);
         // A recursive alias pushes its unrolling into a literal.
         if let (Type::Named(id, args), Expr::Object { .. } | Expr::Array { .. }) = (&expected, expr)
@@ -1409,7 +1424,16 @@ impl InferState {
                 return Ok(ty);
             }
         }
-        // Default: synthesise, then subsume into expected.
+        self.check_by_synthesis(env, expr, &expected)
+    }
+
+    /// `check_expr`'s default: synthesise, then subsume into expected.
+    fn check_by_synthesis(
+        &mut self,
+        env: &TypeEnv,
+        expr: &Expr,
+        expected: &Type,
+    ) -> InferResult<Type> {
         // When the expected type is still a fresh flex variable
         // (e.g. an un-instantiated polymorphic parameter), the
         // subsume below will simply bind it to whatever the synth
@@ -1422,15 +1446,14 @@ impl InferState {
         // lands on the base type, matching what `var x = 1` would
         // produce at a synthesis site.
         let synth = self.infer_expr(env, expr)?;
-        let synth_for_bind = if matches!(
-            self.zonk(&expected),
-            Type::Var(crate::types::TVarName::Flex(_))
-        ) {
+        let synth_for_bind = if self.head_is(expected, |t| {
+            matches!(t, Type::Var(crate::types::TVarName::Flex(_)))
+        }) {
             self.widen(expr.span(), &synth)
         } else {
             synth.clone()
         };
-        self.subsume(expr.span(), &synth_for_bind, &expected)?;
+        self.subsume(expr.span(), &synth_for_bind, expected)?;
         Ok(self.zonk(&synth))
     }
 

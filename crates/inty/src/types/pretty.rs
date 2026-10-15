@@ -340,33 +340,17 @@ impl PrettyContext {
                 if matches!(this_type.as_deref(), Some(Type::NewTarget)) {
                     // Called only by `new`: a class's constructor.
                     write!(w, "new ")?;
+                    self.write_params(w, None, params)?;
                 } else if show_this {
-                    write!(w, "this: ")?;
-                    self.write_type(w, this_type.as_ref().unwrap(), false)?;
-                    write!(w, " => ")?;
+                    // A method's `this` is its first parameter, as written
+                    // (`(this: T, …) => R`). A record (most often the
+                    // object the method is on) is shortened, rather than
+                    // printed inside its own member's type.
+                    self.write_params(w, this_type.as_deref(), params)?;
+                } else {
+                    self.write_params(w, None, params)?;
                 }
-
-                write!(w, "(")?;
-                for (i, param) in params.iter().enumerate() {
-                    if i > 0 {
-                        write!(w, ", ")?;
-                    }
-                    self.write_type(w, &param.ty, false)?;
-                    // Surface optionality on the type — `?` follows
-                    // the type in inty's source syntax so an
-                    // optional `Number` prints as `Number?`. Skip
-                    // the suffix for `Presence::Pre` (the common
-                    // case) and for `Presence::Abs` (which makes
-                    // the param effectively absent — the printer
-                    // could omit it entirely but the position is
-                    // still part of the signature and surface
-                    // syntax doesn't have a representation for
-                    // "absent slot in the middle").
-                    if !matches!(param.presence, Presence::Pre) {
-                        write!(w, "?")?;
-                    }
-                }
-                write!(w, ") => ")?;
+                write!(w, " => ")?;
                 self.write_type(w, ret, false)?;
 
                 if in_func_arg {
@@ -505,6 +489,47 @@ impl PrettyContext {
     }
 
     /// Write a row type.
+    /// A function's parameter list, `(A, B?)`.
+    fn write_params<W: Write>(
+        &mut self,
+        w: &mut W,
+        this: Option<&Type>,
+        params: &[crate::types::FuncParam],
+    ) -> fmt::Result {
+        write!(w, "(")?;
+        if let Some(this) = this {
+            write!(w, "this: ")?;
+            if matches!(this, Type::Row(_)) {
+                write!(w, "{{…}}")?;
+            } else {
+                self.write_type(w, this, false)?;
+            }
+            if !params.is_empty() {
+                write!(w, ", ")?;
+            }
+        }
+        for (i, param) in params.iter().enumerate() {
+            if i > 0 {
+                write!(w, ", ")?;
+            }
+            self.write_type(w, &param.ty, false)?;
+            // Surface optionality on the type — `?` follows
+            // the type in inty's source syntax so an
+            // optional `Number` prints as `Number?`. Skip
+            // the suffix for `Presence::Pre` (the common
+            // case) and for `Presence::Abs` (which makes
+            // the param effectively absent — the printer
+            // could omit it entirely but the position is
+            // still part of the signature and surface
+            // syntax doesn't have a representation for
+            // "absent slot in the middle").
+            if !matches!(param.presence, Presence::Pre) {
+                write!(w, "?")?;
+            }
+        }
+        write!(w, ")")
+    }
+
     fn write_row<W: Write>(&mut self, w: &mut W, row: &RowType) -> fmt::Result {
         // Callable rows render with the call signature first, without a
         // key, mirroring the keyless `(args) => ret` syntax in `.d.js`
@@ -583,11 +608,11 @@ impl PrettyContext {
             // Private-field sentinels render as `#name`, restoring the
             // user-written form. The raw stored key contains control
             // characters that would otherwise look broken in errors.
-            if let Some(name) = private_key_display(prop) {
-                write!(w, "#{}{}: ", name, if optional_marker { "?" } else { "" })?;
-            } else {
-                write!(w, "{}{}: ", prop.0, if optional_marker { "?" } else { "" })?;
-            }
+            let name = match private_key_display(prop) {
+                Some(name) => format!("#{}{}", name, if optional_marker { "?" } else { "" }),
+                None => format!("{}{}", prop.0, if optional_marker { "?" } else { "" }),
+            };
+            write!(w, "{}: ", name)?;
             self.write_type(w, &entry.ty, false)?;
         }
         self.focus = focus;

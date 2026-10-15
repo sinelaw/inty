@@ -2737,6 +2737,9 @@ fn inty_typing(program: &inty::ast::Program, source: &str) -> (Typing, Features)
         if text.contains("never") {
             features.insert("never");
         }
+        if text.contains("a function that uses no `this`") {
+            features.insert("this in a plain function type");
+        }
     }
     (typing, features)
 }
@@ -2795,6 +2798,13 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         (Typing::Type(t), Typing::Type(_)) if t == "never" => {
             Some("never (a member that only throws)")
         }
+        // A function type in an annotation without a `this: T` parameter
+        // is of a function that uses no `this` in inty (so it can be
+        // called on an object or detached); the model's is called
+        // detached, and the function may read `this` as `undefined`.
+        (Typing::Reject, Typing::Type(_)) if features.contains("this in a plain function type") => {
+            Some("a function annotated with a plain function type that reads `this`")
+        }
         // The model types a program that can't complete normally (it only
         // throws, or a function in it falls off its end only after a
         // `throw`) with a free type variable, which no value has; inty
@@ -2820,6 +2830,17 @@ fn known_divergence(inty: &Typing, features: &Features, model: &Typing) -> Optio
         // lean/GAPS.md).
         (Typing::Type(_), Typing::Reject) if features.contains("sum join") => {
             Some("a sum joined with one of its cases")
+        }
+        // inty makes `c ? x : null` an optional of `x`'s type (`T | Null`);
+        // the model's branches have one type (the README's divergence
+        // table: a rule the model doesn't have yet).
+        (Typing::Type(_), Typing::Reject) if features.contains("nothing join") => {
+            Some("a branch of exactly `null` or `undefined` joined into an optional")
+        }
+        (Typing::Type(t), Typing::Type(_))
+            if t == "nullable" && features.contains("nothing join") =>
+        {
+            Some("a branch of exactly `null` or `undefined` joined into an optional")
         }
         // inty keeps a record case after `typeof x !== "object"`: a
         // declaration may type a function as a record (`Promise`); the
@@ -2876,6 +2897,24 @@ fn joins_sum(e: &Core) -> bool {
         Arr(es) => es.iter().any(|x| es.iter().any(|y| joins(held, x, y))),
         _ => false,
     })
+}
+
+/// Whether a conditional in `e` has a branch that is exactly `null` (or
+/// `undefined`): inty makes an optional of the other branch's type (as an
+/// annotation would), where the model's branches have one type (a join
+/// left out on purpose, lean/GAPS.md).
+fn joins_nothing(e: &Core, js: &str) -> bool {
+    // The generator writes `undefined` as `void 0`, which inty doesn't take
+    // for a branch of exactly `undefined`; a `typeof` test's branches are
+    // the printed conditional's.
+    js.contains(" ? null : ")
+        || js.contains(" : null)")
+        || scan_held(
+            e,
+            &mut Vec::new(),
+            true,
+            &|e, _, _| matches!(e, Cond(_, y, z) if matches!(**y, Null) != matches!(**z, Null)),
+        )
 }
 
 /// Whether `e` tests a value's `typeof` against `"object"`.
@@ -3032,6 +3071,9 @@ fn inty_agrees_with_the_lean_model() {
         }
         if sum_join {
             features.insert("sum join");
+        }
+        if joins_nothing(core, &js) {
+            features.insert("nothing join");
         }
         if tests_typeof_object(core) {
             features.insert("typeof object");

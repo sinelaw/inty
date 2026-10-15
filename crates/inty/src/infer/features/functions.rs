@@ -576,7 +576,7 @@ impl InferState {
             // otherwise. Subsume rather than unify so a body annotated to
             // return `String` can hold a literal.
             let annotated_type =
-                self.annotation_this(annotation_span, &annotated_type, &Type::Undefined)?;
+                crate::infer::lower::annotation_this(&annotated_type, &Type::ArrowThis);
             self.subsume(annotation_span, &func_type, &annotated_type)?;
         }
 
@@ -736,7 +736,7 @@ impl InferState {
         // already failed to infer, every `Error(args)` site
         // re-produces `Error` so a single upstream failure doesn't
         // spawn one diagnostic per call site.
-        if matches!(self.zonk(&callee_type), Type::Error) {
+        if self.head_is(&callee_type, |t| matches!(t, Type::Error)) {
             // Still walk the argument expressions so any standalone
             // type errors *inside* them surface — recovery is
             // best-effort, not silence-everything.
@@ -813,7 +813,6 @@ impl InferState {
         // above; callers that want a single-arg function fed from an
         // array's element will type-check correctly.
         for (arg, param) in arguments.iter().zip(param_vars.iter()) {
-            let expected = self.zonk(param);
             match arg {
                 Expr::Spread {
                     argument,
@@ -823,10 +822,12 @@ impl InferState {
                     let elem = self.fresh_type_var();
                     self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
                     let elem_resolved = self.zonk(&elem);
+                    let expected = self.zonk(param);
                     self.subsume(*spread_span, &elem_resolved, &expected)?;
                 }
                 _ => {
-                    self.check_expr(env, arg, &expected)?;
+                    // `check_expr` resolves what it is checked against.
+                    self.check_expr(env, arg, param)?;
                 }
             }
         }
@@ -843,7 +844,7 @@ impl InferState {
         // `this`-agnostic functions are unaffected) and produces a
         // type error when it's a concrete row, catching detached
         // method calls like `var f = obj.m; f();` at type-check time.
-        if matches!(self.zonk(&this_type), Type::NewTarget) {
+        if self.head_is(&this_type, |t| matches!(t, Type::NewTarget)) {
             return Err(crate::error::TypeError::TypeMismatch {
                 expected: "`new` (a class can only be called with `new`)".to_string(),
                 found: "a call without `new`".to_string(),
@@ -856,11 +857,9 @@ impl InferState {
             self.unify_this(span, &this_type, &this)?;
         } else if let Some(obj_type) = obj_type_for_this {
             let obj_for_this = self.method_receiver(&obj_type);
-            let this_type_applied = self.zonk(&this_type);
-            self.unify_this(span, &this_type_applied, &obj_for_this)?;
+            self.unify_this(span, &this_type, &obj_for_this)?;
         } else {
-            let this_type_applied = self.zonk(&this_type);
-            self.unify_this(span, &this_type_applied, &Type::Undefined)?;
+            self.detached_this(span, &this_type, Some(callee))?;
         }
 
         self.settle_promise_results(promise_mark, span)?;
@@ -878,14 +877,20 @@ impl InferState {
     /// field access: it unrolls to its representation row so the method
     /// body's `this`-row unifies against the instance shape. The
     /// receiver's own type stays nominal everywhere else.
-    pub(crate) fn method_receiver(&mut self, receiver: &Type) -> Type {
-        let receiver = self.zonk(receiver);
-        match &receiver {
+    pub(crate) fn method_receiver<'a>(&mut self, receiver: &'a Type) -> std::borrow::Cow<'a, Type> {
+        use std::borrow::Cow;
+        // Only the head decides; what is below it is resolved by the
+        // unification the receiver goes to.
+        let receiver = crate::infer::zonk::zonk_head_cow(&mut self.var_table, receiver);
+        match &*receiver {
             // `"abc".trim()`: a literal's methods are its base type's.
-            Type::Literal(lit) => lit.base_type(),
-            Type::Named(id, args) if self.is_nominal_type(*id) => self
-                .unroll_named(*id, args)
-                .unwrap_or_else(|| receiver.clone()),
+            Type::Literal(lit) => Cow::Owned(lit.base_type()),
+            Type::Named(id, args) if self.is_nominal_type(*id) => {
+                match self.unroll_named(*id, args) {
+                    Some(unrolled) => Cow::Owned(unrolled),
+                    None => receiver,
+                }
+            }
             _ => receiver,
         }
     }
@@ -990,12 +995,39 @@ impl InferState {
                         _ => o,
                     }
                 }
-                None => Type::Undefined,
+                None => return self.detached_this(span, &t, None).map(|()| self.zonk(&ret)),
             };
-            self.unify(span, &t, &obj)?;
+            self.unify_this(span, &t, &obj)?;
         }
 
         Ok(self.zonk(&ret))
+    }
+
+    /// A call without a receiver (`f()`, not `o.f()`): the callee gets
+    /// `this` = `undefined` (JavaScript's strict mode), so it must use no
+    /// `this` (`ArrowThis`) or read it as `Undefined`; a method, which
+    /// reads it as its object, can't be called so. One still to be known
+    /// waits (`settle_detached`).
+    pub(in crate::infer) fn detached_this(
+        &mut self,
+        span: Span,
+        this: &Type,
+        callee: Option<&Expr>,
+    ) -> InferResult<()> {
+        let callee = match callee {
+            Some(Expr::Ident { name, .. }) => format!("`{name}`"),
+            _ => "this function".to_string(),
+        };
+        match self.zonk(this) {
+            Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => Ok(()),
+            // Not known yet: it may turn out to use none, or to be one
+            // that reads `this` as `undefined`, but not a method.
+            v @ Type::Var(_) => {
+                self.pending_detached.push((v, span, callee));
+                Ok(())
+            }
+            _ => Err(crate::error::TypeError::DetachedThis { callee, span }.into()),
+        }
     }
 
     /// Infer the type of a new expression.

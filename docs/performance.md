@@ -157,3 +157,43 @@ read at each resolution.)
   constraints; a module with thousands of never-resolved property reads
   would still be slow. Types are also still deep-copied when a variable is
   bound; sharing them (`Arc`) would help programs with very large rows.
+
+## Second round: annotated function types
+
+Rosaclef at `913758b` (branch `claude/gallant-planck-ermxo9`, 64 files,
+`web/check.sh` in one run). On `cb4bfca` the run was killed at 15 GB
+after 4.5 minutes; `tree/tree.js` alone took 155 s. Now it takes about
+8 s (7 s of it user time; wall-clock times varied by a few seconds between
+machines, with the system time).
+Each step, measured on the whole run:
+
+| Change | `check.sh` |
+|---|---:|
+| `cb4bfca` | out of memory |
+| A function type uses no `this`; a method says its `this` (`m: (this: T) => R`) (rows with callbacks aren't recursive) | 16.6 s |
+| A module that fails is checked once, not again by each importer | 11.8 s |
+| `zonk` expands a bound variable in place instead of copying it twice; checking whether a variable is free doesn't copy its type | 10.8 s |
+| `unify`, `unify_this`, `subsume`, `check_expr`, `method_receiver` and calls resolve only a type's head where that is all they look at | 7.9 s |
+
+`--timings` showed the per-module split (`src/ui/score.js` 2.4 s before the
+last two rows), and callgrind (`valgrind --tool=callgrind` on a release
+build with `CARGO_PROFILE_RELEASE_DEBUG=true`) the cause. About 30 % of the
+instructions were in `zonk` resolving whole types to look at their head,
+and about half in `malloc`/`free`, mostly copying `Type`s and their
+`BTreeMap` rows. What remains is mostly the same, spread over many callers.
+Sharing types (`Arc`) rather than copying them is still the larger fix. A
+faster allocator (mimalloc) took the run to 5.8 s, but was left out: it
+is a C dependency of the CLI, and sharing types attacks the same cost.
+
+Declaring the canvas context's methods with their `this`
+(`(this: CanvasRenderingContext2D<T>, …) => …`) made the context a
+self-referencing named type, and cost 7 % more instructions: at every
+generalisation, `env_fixed_vars` resolved the body of each named type the
+environment reaches, the context's included, looking for variables it
+fixes. A body with no variable but its parameters (most declared types)
+has none, now or later, so such a type is marked closed once and skipped;
+the cost went to 1 %.
+
+`tests/checking_time.rs` keeps the first row from coming back: a record
+type with 25 methods used by 60 functions, which took 30 s on `cb4bfca` and
+takes about 1 s.
