@@ -356,7 +356,7 @@ impl InferState {
             if self.zonk_head(&value) != z.ty() {
                 let sum = Type::Maybe(z, Box::new(self.fresh_type_var()));
                 self.subsume(span, &value, &sum)?;
-                return Ok(self.zonk_head(&sum));
+                return Ok(self.zonk_head_into(sum));
             }
         }
 

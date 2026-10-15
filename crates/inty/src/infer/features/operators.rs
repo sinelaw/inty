@@ -100,7 +100,7 @@ impl InferState {
                 // the shape `Promise<T>` pins it down either way.
                 let inner = self.fresh_type_var();
                 self.unify(span, &arg_type, &Type::promise(inner.clone()))?;
-                Ok(self.zonk_head(&inner))
+                Ok(self.zonk_head_into(inner))
             }
         }
     }
@@ -282,7 +282,7 @@ impl InferState {
                     }
                     return Err(err);
                 }
-                Ok(self.zonk_head(&left_type))
+                Ok(self.zonk_head_into(left_type))
             }
 
             // Bitwise

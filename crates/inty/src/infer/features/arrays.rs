@@ -24,7 +24,7 @@ impl InferState {
         let elem_var = self.fresh_type_var();
         let array_ty = Type::array(elem_var.clone());
         self.unify(span, &source_ty, &array_ty)?;
-        Ok(self.zonk_head(&array_ty))
+        Ok(self.zonk_head_into(array_ty))
     }
 
     /// Infer the type of an array literal.

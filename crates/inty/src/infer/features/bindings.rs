@@ -294,8 +294,8 @@ impl InferState {
         }
         // Only the head decides: the receiver of a store may be a large
         // row (a DOM element's), which resolving whole copies.
-        match self.zonk_head(container) {
-            Type::Map(value) => Some(*value),
+        match &*crate::infer::zonk::zonk_head_cow(&mut self.var_table, container) {
+            Type::Map(value) => Some((**value).clone()),
             _ => None,
         }
     }
@@ -325,11 +325,11 @@ impl InferState {
                 .is_some()
             {
                 self.check_expr(env, right, &left_type)?;
-                return Ok(self.zonk_head(&left_type));
+                return Ok(self.zonk_head_into(left_type));
             }
             let right_type = self.infer_expr(env, right)?;
             self.subsume(span, &right_type, &left_type)?;
-            return Ok(self.zonk_head(&left_type));
+            return Ok(self.zonk_head_into(left_type));
         }
 
         let right_type = self.infer_expr(env, right)?;
@@ -379,7 +379,7 @@ impl InferState {
                         }
                     }
                 }
-                return Ok(self.zonk_head(&expected_ty));
+                return Ok(self.zonk_head_into(expected_ty));
             }
         }
 
@@ -456,7 +456,7 @@ impl InferState {
             }
         }
 
-        Ok(self.zonk_head(&left_type))
+        Ok(self.zonk_head_into(left_type))
     }
 
     /// Handle a `var` / `let` / `const` declaration statement.

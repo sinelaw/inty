@@ -890,6 +890,15 @@ impl InferState {
         super::zonk::zonk_head_cow(&mut self.var_table, ty).into_owned()
     }
 
+    /// [`Self::zonk_head`] of a type the caller gives up: one that is
+    /// already a head is returned as is, not copied.
+    pub fn zonk_head_into(&mut self, ty: Type) -> Type {
+        match ty {
+            Type::Var(_) => self.zonk_head(&ty),
+            head => head,
+        }
+    }
+
     /// Generate a fresh type ID for recursive types.
     pub fn fresh_type_id(&mut self) -> TypeId {
         let id = self.type_id_source;
@@ -1152,7 +1161,7 @@ impl InferState {
             let (a, b) = (self.widen(span, &t1), self.widen(span, &t2));
             let snap = self.snapshot_inference();
             if self.quietly(|s| s.unify(span, &a, &b)).is_ok() {
-                return Ok(self.zonk_head(&a));
+                return Ok(self.zonk_head_into(a));
             }
             self.restore_snapshot(snap);
         }

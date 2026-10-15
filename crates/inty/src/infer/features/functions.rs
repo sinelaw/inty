@@ -656,7 +656,7 @@ impl InferState {
             types.insert((span.start, span.end), func_type.clone());
         }
 
-        Ok(self.zonk_head(&func_type))
+        Ok(self.zonk_head_into(func_type))
     }
 
     /// Infer the type of a function call.
@@ -876,7 +876,7 @@ impl InferState {
         self.simplify_has_props()?;
         // Its head: a result may be a large row (`appendChild`'s, a DOM
         // element's), which resolving whole copies.
-        Ok(self.zonk_head(&ret_type))
+        Ok(self.zonk_head_into(ret_type))
     }
 
     /// A call of the standard library's `Array.from`, whose result
@@ -1096,7 +1096,7 @@ impl InferState {
             self.unify_this(span, &t, &obj)?;
         }
 
-        Ok(self.zonk_head(&ret))
+        Ok(self.zonk_head_into(ret))
     }
 
     /// A call without a receiver (`f()`, not `o.f()`): the callee gets
@@ -1180,7 +1180,7 @@ impl InferState {
         }
 
         self.require_constructed_object(&result_type, span)?;
-        Ok(self.zonk_head(&result_type))
+        Ok(self.zonk_head_into(result_type))
     }
 
     /// What `new` gives back must be what the constructor returned, so

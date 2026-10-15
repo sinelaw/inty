@@ -1378,7 +1378,7 @@ impl InferState {
                     types.insert((span.start, span.end), ty.clone());
                 }
                 self.subsume(*span, &ty, &expected)?;
-                return Ok(self.zonk_head(&ty));
+                return Ok(self.zonk_head_into(ty));
             }
         }
         // An object literal where a `Dict<V>` is expected is one: each
@@ -1522,20 +1522,26 @@ impl InferState {
         // lands on the base type, matching what `var x = 1` would
         // produce at a synthesis site.
         let synth = self.infer_expr(env, expr)?;
-        let synth_for_bind = if self.head_is(expected, |t| {
+        let widened = if self.head_is(expected, |t| {
             matches!(t, Type::Var(crate::types::TVarName::Flex(_)))
         }) {
-            self.widen(expr.span(), &synth)
+            Some(self.widen(expr.span(), &synth))
         } else {
-            synth.clone()
+            None
         };
-        if let Err(mut err) = self.subsume(expr.span(), &synth_for_bind, expected) {
+        if let Err(mut err) =
+            self.subsume(expr.span(), widened.as_ref().unwrap_or(&synth), expected)
+        {
             self.note_unnarrowed_property(expr, &synth, expected, &mut err);
             return Err(err);
         }
         // Its head: an argument may be a large row (a DOM element),
-        // which resolving whole copies.
-        Ok(self.zonk_head(&synth))
+        // which resolving whole copies (and copying a head already
+        // resolved would copy it again).
+        match synth {
+            Type::Var(_) => Ok(self.zonk_head_into(synth)),
+            head => Ok(head),
+        }
     }
 
     /// A property read `r.p` that may be `null` or `undefined`, where its

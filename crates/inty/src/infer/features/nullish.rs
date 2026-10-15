@@ -44,7 +44,7 @@ impl InferState {
     pub(in crate::infer) fn strip_sum(&mut self, span: Span, ty: &Type) -> InferResult<Type> {
         let sigma = self.fresh_type_var();
         self.resolve_strip(ty, &sigma, span)?;
-        Ok(self.zonk_head(&sigma))
+        Ok(self.zonk_head_into(sigma))
     }
 
     /// Infer an optional-chain expression.
@@ -146,7 +146,7 @@ impl InferState {
         // constructor with statics). See state.rs::callable_row_open.
         let expected = self.callable_row_open(None, arg_types.to_vec(), result.clone());
         self.unify(span, carrier, &expected)?;
-        Ok(self.zonk_head(&result))
+        Ok(self.zonk_head_into(result))
     }
 }
 

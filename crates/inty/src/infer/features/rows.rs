@@ -433,7 +433,7 @@ impl InferState {
         self.unify(span, &shared_this, &obj_type)?;
 
         let _ = had_spread;
-        Ok(self.zonk_head(&obj_type))
+        Ok(self.zonk_head_into(obj_type))
     }
 
     /// The fields written after a spread whose operand isn't known yet,
@@ -1201,7 +1201,7 @@ impl InferState {
                 // through the tail (e.g., a flex tail bound by an
                 // earlier unification to another row).
                 if let Some(prop_type) = self.lookup_property_in_row_tail(row, property) {
-                    return Ok(self.zonk_head(&prop_type));
+                    return Ok(self.zonk_head_into(prop_type));
                 }
                 // If property still not found and row is closed, the
                 // unification fall-through below will report it.
@@ -1209,7 +1209,7 @@ impl InferState {
             Type::Module(m) => {
                 if let Some(scheme) = m.exports.get(property) {
                     let ty = self.instantiate(scheme);
-                    return Ok(self.zonk_head(&ty));
+                    return Ok(self.zonk_head_into(ty));
                 }
                 return Err(crate::error::TypeError::Module {
                     message: format!("module {:?} has no export named {:?}", m.source, property),
@@ -1301,7 +1301,7 @@ impl InferState {
 
         self.unify(span, obj_type, &expected_row)?;
 
-        Ok(self.zonk_head(&result_type))
+        Ok(self.zonk_head_into(result_type))
     }
 
     /// The field a read of a property of type `ty` needs: present, of any
