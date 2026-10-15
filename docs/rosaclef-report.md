@@ -103,6 +103,16 @@ that, and says how to write a method's type. A method prints with its
 an unnamed record (the object the method is on), as `(this: {…}) => …`,
 rather than nesting the record in its own member's type.
 
+**For Rosaclef: the canvas context.** inty's `CanvasRenderingContext2D<T>`
+(what `getContext("2d")` gives) now says its methods' `this`, so
+`const f = g.fillRect; f(…)` is rejected. Rosaclef's own `Ctx` in
+`tree/types.d.js` describes part of the context with plain function fields,
+which the context no longer fits. Naming inty's type,
+`type Ctx = CanvasRenderingContext2D<…>`, fixes that and gives painters the
+whole context. The two helpers `tree/dom.js` adds to it, `fillGradient` and
+`strokeGradient`, can go: `fillStyle` takes a gradient
+(`String | CanvasGradient`), so `g.fillStyle = grad`.
+
 **D. `(x ?? {}).f`: not changed.** `{}` is a record with no fields, so
 `(raw.c ?? {}).off` reads a field one side doesn't have. There are two
 ways to accept it, and both are worse:

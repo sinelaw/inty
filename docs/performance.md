@@ -185,6 +185,15 @@ Sharing types (`Arc`) rather than copying them is still the larger fix. A
 faster allocator (mimalloc) took the run to 5.8 s, but was left out: it
 is a C dependency of the CLI, and sharing types attacks the same cost.
 
+Declaring the canvas context's methods with their `this`
+(`(this: CanvasRenderingContext2D<T>, …) => …`) made the context a
+self-referencing named type, and cost 7 % more instructions: at every
+generalisation, `env_fixed_vars` resolved the body of each named type the
+environment reaches, the context's included, looking for variables it
+fixes. A body with no variable but its parameters (most declared types)
+has none, now or later, so such a type is marked closed once and skipped;
+the cost went to 1 %.
+
 `tests/checking_time.rs` keeps the first row from coming back: a record
 type with 25 methods used by 60 functions, which took 30 s on `cb4bfca` and
 takes about 1 s.
