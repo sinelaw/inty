@@ -61,7 +61,10 @@ pub enum Resolution {
     /// (under the trail) so amortised path length is α(n).
     Link(TVarId),
     /// Root resolved to a structured type. Reads zonk through it.
-    Bound(Type),
+    /// Shared: a reader that resolves a variable's head (each level of a
+    /// unification does) takes a reference to it, not a copy — a bound
+    /// type can be large (a DOM element's row).
+    Bound(std::sync::Arc<Type>),
 }
 
 /// Opaque trail mark returned by [`VarTable::snapshot`]. Passing it
@@ -251,7 +254,7 @@ impl VarTable {
     /// `root` isn't a root).
     pub fn bound(&self, root: TVarId) -> Option<&Type> {
         match self.cells.get(root as usize)? {
-            Resolution::Bound(ty) => Some(ty),
+            Resolution::Bound(ty) => Some(&**ty),
             _ => None,
         }
     }
@@ -262,7 +265,7 @@ impl VarTable {
     /// doesn't copy it first; while it is out, the root reads as free,
     /// which is how such a reader treats a root it is already inside.
     /// `None` if `root` isn't a bound root.
-    pub fn take_bound(&mut self, root: TVarId) -> Option<Type> {
+    pub fn take_bound(&mut self, root: TVarId) -> Option<std::sync::Arc<Type>> {
         let cell = self.cells.get_mut(root as usize)?;
         if !matches!(cell, Resolution::Bound(_)) {
             return None;
@@ -274,7 +277,7 @@ impl VarTable {
     }
 
     /// Put back what [`Self::take_bound`] took.
-    pub fn restore_bound(&mut self, root: TVarId, ty: Type) {
+    pub fn restore_bound(&mut self, root: TVarId, ty: std::sync::Arc<Type>) {
         self.cells[root as usize] = Resolution::Bound(ty);
     }
 
@@ -336,7 +339,7 @@ impl VarTable {
             prev
         );
         self.trail.push((root, prev));
-        self.cells[root as usize] = Resolution::Bound(ty);
+        self.cells[root as usize] = Resolution::Bound(std::sync::Arc::new(ty));
     }
 
     /// Overwrite a root cell to `Bound(ty)`, regardless of its
@@ -358,7 +361,7 @@ impl VarTable {
         );
         let prev = self.cells[root as usize].clone();
         self.trail.push((root, prev));
-        self.cells[root as usize] = Resolution::Bound(ty);
+        self.cells[root as usize] = Resolution::Bound(std::sync::Arc::new(ty));
     }
 
     /// Point `child`'s root cell at `parent`'s root, making the two
@@ -519,7 +522,7 @@ mod tests {
         t.bind(a, ty_number());
         for id in [a, b, c] {
             match t.root_resolution(id) {
-                Resolution::Bound(ty) => assert_eq!(ty, ty_number()),
+                Resolution::Bound(ty) => assert_eq!(*ty, ty_number()),
                 other => panic!("expected Bound(Number), got {:?}", other),
             }
         }

@@ -1533,7 +1533,9 @@ impl InferState {
             self.note_unnarrowed_property(expr, &synth, expected, &mut err);
             return Err(err);
         }
-        Ok(self.zonk(&synth))
+        // Its head: an argument may be a large row (a DOM element),
+        // which resolving whole copies.
+        Ok(self.zonk_head(&synth))
     }
 
     /// A property read `r.p` that may be `null` or `undefined`, where its

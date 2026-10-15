@@ -425,6 +425,14 @@ pub struct InferState {
     pub(in crate::infer) unfold_assumptions: Vec<UnfoldAssumption>,
     /// Current nesting of [`Self::unify`] (see `MAX_UNIFY_DEPTH`).
     pub(in crate::infer) unify_depth: usize,
+    /// Pairs of variables, each bound to a type, that the outermost
+    /// [`Self::unify`] under way has unified (or is unifying): a pair met
+    /// again is taken as unified (coinductively, as for recursive types).
+    /// Two bound variables' types are compared, not linked, so without
+    /// this a type that mentions them in many places (an element's row:
+    /// each of its handlers' events mentions the element) is compared
+    /// again at each, which is exponential in how deeply such types nest.
+    pub(in crate::infer) unify_bound_pairs: std::collections::HashSet<(TVarId, TVarId)>,
 }
 
 /// One in-progress unfold the unifier is mid-recursion on. Two
@@ -567,6 +575,7 @@ impl InferState {
             language: crate::ast::SourceLanguage::JavaScript,
             unfold_assumptions: Vec::new(),
             unify_depth: 0,
+            unify_bound_pairs: std::collections::HashSet::new(),
         }
     }
 
@@ -959,6 +968,8 @@ impl InferState {
         );
         self.pending_constraints.truncate(snap.constraints);
         self.var_table.restore(snap.trail);
+        // A pair unified in what was undone isn't unified any more.
+        self.unify_bound_pairs.clear();
         // Post-restore probe (debug only): the var_table and
         // main_subst should still agree on every key that survives
         // the rollback. Spot-check a handful — full-table sweep
@@ -988,6 +999,12 @@ impl InferState {
     /// `Subst::flatten` for the full rationale.
     pub fn flatten_type(&self, ty: &Type) -> Type {
         self.main_subst.flatten(ty)
+    }
+
+    /// How large `ty` is written out (see [`Subst::flattened_size`]),
+    /// counted up to a cap well past what a printer shows.
+    pub fn flattened_size(&self, ty: &Type) -> usize {
+        self.main_subst.flattened_size(ty, 1 << 20)
     }
 
     /// Boundary-view of a scheme: flattens the body type and every
@@ -2210,21 +2227,22 @@ impl InferState {
             // in the scheme as a requirement on a variable no caller sees.
             let container_var = |c: &PendingConstraint, s: &mut Self| match (
                 c.pred.class,
-                c.pred.types.first().map(|t| s.zonk(t)),
+                c.pred.types.first().map(|t| s.zonk_head(t)),
             ) {
                 (crate::types::ClassName::Iterable, Some(Type::Var(v))) if v.is_flex() => Some(v),
                 _ => None,
             };
-            let all_vars: Vec<std::collections::HashSet<TVarName>> = remaining
-                .iter()
-                .map(|c| {
-                    self.apply_subst_pred(&c.pred)
-                        .types
-                        .iter()
-                        .flat_map(|t| self.main_subst.flatten(t).free_vars())
-                        .collect()
-                })
-                .collect();
+            // Each constraint's variables through the substitution
+            // (`reach`: a flattened copy can be far larger).
+            let reach_of = |s: &Self, c: &PendingConstraint| {
+                let mut r = crate::types::subst::Reach::default();
+                for t in &c.pred.types {
+                    s.main_subst.reach(t, &mut r);
+                }
+                r
+            };
+            let all_vars: Vec<std::collections::HashSet<TVarName>> =
+                remaining.iter().map(|c| reach_of(self, c).vars).collect();
             let ty_free = ty.free_vars();
             let mut vacuous = vec![false; remaining.len()];
             for (i, c) in remaining.iter().enumerate() {
@@ -2246,35 +2264,35 @@ impl InferState {
                 let mut rest = Vec::new();
                 let mut took = false;
                 for constraint in remaining {
-                    let mut pred = self.apply_subst_pred(&constraint.pred);
-                    // Flattened, as the type is: a row's bound tail (a
-                    // `Spread`'s rows) would otherwise be left out of the
-                    // quantified variables and shared by every instance.
-                    for t in pred.types.iter_mut() {
-                        *t = self.main_subst.flatten(t);
-                    }
-                    // Where the requirement is written, for a failure of
-                    // one of its instances at a call.
-                    pred.origin.get_or_insert(constraint.span);
-                    if pred.free_vars().iter().any(|v| gen_var_set.contains(v)) {
-                        for t in &pred.types {
-                            let t = self.main_subst.flatten(t);
-                            for v in t.free_vars() {
-                                if v.is_flex()
-                                    && !fixed_vars.contains(&v)
-                                    && self.zonk(&Type::Var(v.clone())) == Type::Var(v.clone())
-                                    && gen_var_set.insert(v.clone())
-                                {
-                                    gen_vars.push(v);
-                                }
+                    // Whether it mentions a generalised variable, found
+                    // without building its flattened types.
+                    let reach = reach_of(self, &constraint);
+                    if reach.vars.iter().any(|v| gen_var_set.contains(v)) {
+                        let mut pred = self.apply_subst_pred(&constraint.pred);
+                        // Flattened, as the type is: a row's bound tail (a
+                        // `Spread`'s rows) would otherwise be left out of the
+                        // quantified variables and shared by every instance.
+                        for t in pred.types.iter_mut() {
+                            *t = self.main_subst.flatten(t);
+                        }
+                        // Where the requirement is written, for a failure of
+                        // one of its instances at a call.
+                        pred.origin.get_or_insert(constraint.span);
+                        for v in reach.vars {
+                            if v.is_flex()
+                                && !fixed_vars.contains(&v)
+                                && self.zonk(&Type::Var(v.clone())) == Type::Var(v.clone())
+                                && gen_var_set.insert(v.clone())
+                            {
+                                gen_vars.push(v);
                             }
-                            for p in t.free_pvars() {
-                                if p.is_flex()
-                                    && !fixed_pvars.contains(&p)
-                                    && gen_pvar_set.insert(p.clone())
-                                {
-                                    gen_pvars.push(p);
-                                }
+                        }
+                        for p in reach.pvars {
+                            if p.is_flex()
+                                && !fixed_pvars.contains(&p)
+                                && gen_pvar_set.insert(p.clone())
+                            {
+                                gen_pvars.push(p);
                             }
                         }
                         scheme_preds.push(pred);
@@ -2391,14 +2409,13 @@ impl InferState {
                 named.extend(scheme.body.ty.named_ids());
             }
         }
+        // What the environment's variables reach through the
+        // substitution (without building their flattened types, which can
+        // be far larger than the substitution: see `Subst::reach`).
+        let mut reach = crate::types::subst::Reach::default();
         for v in &env_vars {
             vars.insert(v.clone());
-            let var = Type::Var(v.clone());
-            for resolved in [self.zonk(&var), self.main_subst.flatten(&var)] {
-                vars.extend(resolved.free_vars());
-                pvars.extend(resolved.free_pvars());
-                named.extend(resolved.named_ids());
-            }
+            self.main_subst.reach(&Type::Var(v.clone()), &mut reach);
         }
         // Presence variables bound in the substitution resolve too.
         let bound_pvars: Vec<crate::types::PVarName> = pvars.iter().cloned().collect();
@@ -2416,9 +2433,14 @@ impl InferState {
         named.extend(ty.named_ids());
         for c in &self.pending_constraints {
             for t in &c.pred.types {
-                named.extend(self.main_subst.flatten(t).named_ids());
+                let mut r = crate::types::subst::Reach::default();
+                self.main_subst.reach(t, &mut r);
+                named.extend(r.named);
             }
         }
+        vars.extend(reach.vars);
+        pvars.extend(reach.pvars);
+        named.extend(reach.named);
         let mut seen: HashSet<TypeId> = HashSet::new();
         while let Some(id) = named.pop() {
             if !seen.insert(id) || self.closed_named.contains(&id) {
@@ -2449,28 +2471,34 @@ impl InferState {
             pvars.extend(free_pvars);
             named.extend(inner);
         }
-        // Close over the pending constraints' functional dependencies.
-        let preds: Vec<TypePred> = self
+        // Close over the pending constraints' functional dependencies:
+        // each type's free variables through the substitution (`reach`,
+        // not a flattened copy of it).
+        let preds: Vec<(ClassName, Vec<crate::types::subst::Reach>)> = self
             .pending_constraints
             .iter()
-            .map(|c| TypePred {
-                class: c.pred.class,
-                types: c
+            .map(|c| {
+                let reaches = c
                     .pred
                     .types
                     .iter()
-                    .map(|t| self.main_subst.flatten(t))
-                    .collect(),
-                origin: c.pred.origin,
+                    .map(|t| {
+                        let mut r = crate::types::subst::Reach::default();
+                        self.main_subst.reach(t, &mut r);
+                        r
+                    })
+                    .collect();
+                (c.pred.class, reaches)
             })
             .collect();
         loop {
             let mut changed = false;
-            for pred in &preds {
-                let determined: Vec<&Type> = match (pred.class, pred.types.as_slice()) {
+            for (class, types) in &preds {
+                let fixed = |r: &crate::types::subst::Reach| r.vars.is_subset(&vars);
+                let determined: Vec<&crate::types::subst::Reach> = match (class, types.as_slice()) {
                     // container → index, element
                     (ClassName::Indexable, [container, index, element]) => {
-                        if container.free_vars().is_subset(&vars) {
+                        if fixed(container) {
                             vec![index, element]
                         } else {
                             vec![]
@@ -2478,7 +2506,7 @@ impl InferState {
                     }
                     // receiver → result (and a method call's `this`)
                     (ClassName::HasProp, [receiver, _, determined @ ..]) => {
-                        if receiver.free_vars().is_subset(&vars) {
+                        if fixed(receiver) {
                             determined.iter().collect()
                         } else {
                             vec![]
@@ -2486,7 +2514,7 @@ impl InferState {
                     }
                     // the type → what it holds besides nothing
                     (ClassName::Strip, [ty, sigma]) => {
-                        if ty.free_vars().is_subset(&vars) {
+                        if fixed(ty) {
                             vec![sigma]
                         } else {
                             vec![]
@@ -2494,9 +2522,7 @@ impl InferState {
                     }
                     // the operand and the fields before it → the result
                     (ClassName::Spread, [operand, so_far, result]) => {
-                        if operand.free_vars().is_subset(&vars)
-                            && so_far.free_vars().is_subset(&vars)
-                        {
+                        if fixed(operand) && fixed(so_far) {
                             vec![result]
                         } else {
                             vec![]
@@ -2504,7 +2530,7 @@ impl InferState {
                     }
                     // the container → its elements
                     (ClassName::Iterable, [container, element]) => {
-                        if container.free_vars().is_subset(&vars) {
+                        if fixed(container) {
                             vec![element]
                         } else {
                             vec![]
@@ -2516,7 +2542,7 @@ impl InferState {
                     (_, types) => {
                         if types
                             .iter()
-                            .any(|t| t.free_vars().iter().any(|v| vars.contains(v)))
+                            .any(|r| r.vars.iter().any(|v| vars.contains(v)))
                         {
                             types.iter().collect()
                         } else {
@@ -2524,13 +2550,17 @@ impl InferState {
                         }
                     }
                 };
-                for t in determined {
-                    for v in t.free_vars() {
-                        changed |= vars.insert(v);
-                    }
-                    for p in t.free_pvars() {
-                        changed |= pvars.insert(p);
-                    }
+                let mut add_vars = Vec::new();
+                let mut add_pvars = Vec::new();
+                for r in determined {
+                    add_vars.extend(r.vars.iter().cloned());
+                    add_pvars.extend(r.pvars.iter().cloned());
+                }
+                for v in add_vars {
+                    changed |= vars.insert(v);
+                }
+                for p in add_pvars {
+                    changed |= pvars.insert(p);
                 }
             }
             if !changed {

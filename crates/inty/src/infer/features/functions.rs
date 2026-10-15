@@ -970,17 +970,20 @@ impl InferState {
     /// field access: it unrolls to its representation row so the method
     /// body's `this`-row unifies against the instance shape. The
     /// receiver's own type stays nominal everywhere else.
-    pub(crate) fn method_receiver<'a>(&mut self, receiver: &'a Type) -> std::borrow::Cow<'a, Type> {
-        use std::borrow::Cow;
+    pub(crate) fn method_receiver<'a>(
+        &mut self,
+        receiver: &'a Type,
+    ) -> crate::infer::zonk::Head<'a> {
+        use crate::infer::zonk::Head;
         // Only the head decides; what is below it is resolved by the
         // unification the receiver goes to.
         let receiver = crate::infer::zonk::zonk_head_cow(&mut self.var_table, receiver);
         match &*receiver {
             // `"abc".trim()`: a literal's methods are its base type's.
-            Type::Literal(lit) => Cow::Owned(lit.base_type()),
+            Type::Literal(lit) => Head::Owned(lit.base_type()),
             Type::Named(id, args) if self.is_nominal_type(*id) => {
                 match self.unroll_named(*id, args) {
-                    Some(unrolled) => Cow::Owned(unrolled),
+                    Some(unrolled) => Head::Owned(unrolled),
                     None => receiver,
                 }
             }

@@ -524,6 +524,228 @@ impl Subst {
     }
 }
 
+impl Subst {
+    /// How many nodes [`Self::flatten`] would give for `ty`, counted
+    /// without building it (each variable's count once), up to `cap`.
+    /// `flatten` builds a tree: a type that mentions a large one in many
+    /// places (a DOM element's row, in each of its event handlers'
+    /// events) expands to far more than the substitution holds, so a
+    /// printer asks first.
+    pub fn flattened_size(&self, ty: &Type, cap: usize) -> usize {
+        let mut memo: HashMap<TVarName, usize> = HashMap::new();
+        let mut in_progress: HashSet<TVarName> = HashSet::new();
+        self.size_of(ty, cap, &mut memo, &mut in_progress)
+    }
+
+    fn size_of(
+        &self,
+        ty: &Type,
+        cap: usize,
+        memo: &mut HashMap<TVarName, usize>,
+        in_progress: &mut HashSet<TVarName>,
+    ) -> usize {
+        let sum = |types: &mut dyn Iterator<Item = &Type>,
+                   memo: &mut HashMap<TVarName, usize>,
+                   in_progress: &mut HashSet<TVarName>| {
+            let mut n = 1usize;
+            for t in types {
+                n = n.saturating_add(self.size_of(t, cap, memo, in_progress));
+                if n >= cap {
+                    return cap;
+                }
+            }
+            n
+        };
+        match ty {
+            Type::Var(name) => self.size_of_var(name, cap, memo, in_progress),
+            Type::Row(row) => {
+                let mut n = sum(&mut row.props.values().map(|e| &e.ty), memo, in_progress);
+                match &row.tail {
+                    RowTail::Open(var) => {
+                        n = n.saturating_add(self.size_of_var(var, cap, memo, in_progress))
+                    }
+                    RowTail::Recursive(_, args) => {
+                        n = n.saturating_add(sum(&mut args.iter(), memo, in_progress))
+                    }
+                    RowTail::Closed => {}
+                }
+                n.min(cap)
+            }
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => sum(
+                &mut this_type
+                    .iter()
+                    .map(|t| &**t)
+                    .chain(params.iter().map(|p| &p.ty))
+                    .chain(std::iter::once(&**ret)),
+                memo,
+                in_progress,
+            ),
+            Type::Array(t) | Type::Maybe(_, t) | Type::Promise(t) | Type::Map(t) => {
+                sum(&mut std::iter::once(&**t), memo, in_progress)
+            }
+            Type::Tuple(ts) | Type::Union(ts) | Type::Named(_, ts) => {
+                sum(&mut ts.iter(), memo, in_progress)
+            }
+            _ => 1,
+        }
+    }
+
+    fn size_of_var(
+        &self,
+        name: &TVarName,
+        cap: usize,
+        memo: &mut HashMap<TVarName, usize>,
+        in_progress: &mut HashSet<TVarName>,
+    ) -> usize {
+        let Some(bound) = self.get(name) else {
+            return 1;
+        };
+        if let Some(&n) = memo.get(name) {
+            return n;
+        }
+        // A cycle is cut where it closes, as `flatten` cuts it.
+        if !in_progress.insert(name.clone()) {
+            return 1;
+        }
+        let n = self.size_of(bound, cap, memo, in_progress);
+        in_progress.remove(name);
+        memo.insert(name.clone(), n);
+        n
+    }
+}
+
+/// What a type reaches through a substitution: the free type and
+/// presence variables and the named types of its flattening (see
+/// [`Subst::reach`]).
+#[derive(Default, Debug)]
+pub struct Reach {
+    pub vars: HashSet<TVarName>,
+    pub pvars: HashSet<PVarName>,
+    pub named: HashSet<super::TypeId>,
+}
+
+impl Subst {
+    /// `flatten(ty)`'s free variables, free presence variables and named
+    /// type ids, found without building the flattened type: each bound
+    /// variable's binding is walked once. (A flattened type is a tree,
+    /// exponentially larger than the substitution when it mentions a
+    /// large type in many places; a caller that only wants these sets
+    /// shouldn't build it.) A variable whose expansion is cut by a cycle
+    /// counts as free, as it stays in `flatten`'s output.
+    pub fn reach(&self, ty: &Type, into: &mut Reach) {
+        let mut done: HashSet<TVarName> = HashSet::new();
+        let mut in_progress: HashSet<TVarName> = HashSet::new();
+        self.reach_type(ty, into, &mut done, &mut in_progress);
+    }
+
+    fn reach_var(
+        &self,
+        name: &TVarName,
+        into: &mut Reach,
+        done: &mut HashSet<TVarName>,
+        in_progress: &mut HashSet<TVarName>,
+    ) {
+        let Some(bound) = self.get(name) else {
+            into.vars.insert(name.clone());
+            return;
+        };
+        if done.contains(name) {
+            return;
+        }
+        if !in_progress.insert(name.clone()) {
+            into.vars.insert(name.clone());
+            return;
+        }
+        let bound = bound.clone();
+        self.reach_type(&bound, into, done, in_progress);
+        in_progress.remove(name);
+        done.insert(name.clone());
+    }
+
+    fn reach_presence(&self, p: &Presence, into: &mut Reach) {
+        if let Presence::Var(v) = self.resolve_presence(p) {
+            into.pvars.insert(v);
+        }
+    }
+
+    fn reach_type(
+        &self,
+        ty: &Type,
+        into: &mut Reach,
+        done: &mut HashSet<TVarName>,
+        in_progress: &mut HashSet<TVarName>,
+    ) {
+        match ty {
+            Type::Var(name) => self.reach_var(name, into, done, in_progress),
+            Type::Row(row) => {
+                for e in row.props.values() {
+                    for p in e.presences() {
+                        self.reach_presence(p, into);
+                    }
+                    self.reach_type(&e.ty, into, done, in_progress);
+                }
+                match &row.tail {
+                    RowTail::Closed => {}
+                    RowTail::Recursive(id, args) => {
+                        into.named.insert(*id);
+                        for a in args {
+                            self.reach_type(a, into, done, in_progress);
+                        }
+                    }
+                    // A tail bound to anything but a row or a variable
+                    // stays as it is in `flatten`'s output.
+                    RowTail::Open(var) => match self.get(var) {
+                        Some(Type::Row(_) | Type::Var(_)) | None => {
+                            self.reach_var(var, into, done, in_progress)
+                        }
+                        Some(_) => {
+                            into.vars.insert(var.clone());
+                        }
+                    },
+                }
+            }
+            Type::Func {
+                this_type,
+                params,
+                ret,
+            } => {
+                if let Some(t) = this_type {
+                    self.reach_type(t, into, done, in_progress);
+                }
+                for p in params {
+                    self.reach_presence(&p.presence, into);
+                    self.reach_type(&p.ty, into, done, in_progress);
+                }
+                self.reach_type(ret, into, done, in_progress);
+            }
+            Type::Array(t) | Type::Maybe(_, t) | Type::Promise(t) | Type::Map(t) => {
+                self.reach_type(t, into, done, in_progress)
+            }
+            Type::Tuple(ts) | Type::Union(ts) => {
+                for t in ts {
+                    self.reach_type(t, into, done, in_progress);
+                }
+            }
+            Type::Named(id, args) => {
+                into.named.insert(*id);
+                for a in args {
+                    self.reach_type(a, into, done, in_progress);
+                }
+            }
+            // `flatten` leaves a module as it is.
+            Type::Module(_) => {
+                into.vars.extend(ty.free_vars());
+                into.pvars.extend(ty.free_pvars());
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Working state of one [`Subst::flatten`] call.
 #[derive(Default)]
 struct FlattenState {

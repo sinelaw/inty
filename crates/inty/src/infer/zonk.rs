@@ -71,26 +71,63 @@ pub fn zonk(table: &mut VarTable, subst: &Subst, ty: &Type) -> Type {
 /// rows quadratic in their size).
 /// A type whose head is already resolved (not a variable) is borrowed,
 /// not copied.
-pub fn zonk_head_cow<'a>(table: &mut VarTable, ty: &'a Type) -> std::borrow::Cow<'a, Type> {
-    if !matches!(ty, Type::Var(TVarName::Flex(_))) {
-        return std::borrow::Cow::Borrowed(ty);
-    }
-    let mut ty = ty.clone();
+/// What a variable is bound to is shared with the table, not copied.
+pub fn zonk_head_cow<'a>(table: &mut VarTable, ty: &'a Type) -> Head<'a> {
+    let Type::Var(TVarName::Flex(mut id)) = ty else {
+        return Head::Borrowed(ty);
+    };
     // A bound chain is short (`find` compresses it); the bound guards a
     // cycle that a drift in the table could leave.
     for _ in 0..64 {
-        let Type::Var(TVarName::Flex(id)) = &ty else {
-            return std::borrow::Cow::Owned(ty);
-        };
-        let Some(root) = table.find_if_present(*id) else {
-            return std::borrow::Cow::Owned(ty);
+        let Some(root) = table.find_if_present(id) else {
+            return Head::Owned(Type::Var(TVarName::Flex(id)));
         };
         match table.root_resolution(root) {
-            Resolution::Bound(bound) => ty = bound,
-            _ => return std::borrow::Cow::Owned(Type::Var(TVarName::Flex(root))),
+            Resolution::Bound(bound) => match &*bound {
+                Type::Var(TVarName::Flex(next)) => id = *next,
+                _ => return Head::Shared(bound),
+            },
+            _ => return Head::Owned(Type::Var(TVarName::Flex(root))),
         }
     }
-    std::borrow::Cow::Owned(ty)
+    Head::Owned(Type::Var(TVarName::Flex(id)))
+}
+
+/// A type's resolved head, as [`zonk_head_cow`] gives it: the type
+/// itself, what a variable is bound to (shared with the table), or a
+/// free variable's root.
+pub enum Head<'a> {
+    Borrowed(&'a Type),
+    Shared(std::sync::Arc<Type>),
+    Owned(Type),
+}
+
+impl std::ops::Deref for Head<'_> {
+    type Target = Type;
+    fn deref(&self) -> &Type {
+        match self {
+            Head::Borrowed(t) => t,
+            Head::Shared(t) => t,
+            Head::Owned(t) => t,
+        }
+    }
+}
+
+impl AsRef<Type> for Head<'_> {
+    fn as_ref(&self) -> &Type {
+        self
+    }
+}
+
+impl Head<'_> {
+    /// The head as an owned type (a copy of a shared one).
+    pub fn into_owned(self) -> Type {
+        match self {
+            Head::Borrowed(t) => t.clone(),
+            Head::Shared(t) => std::sync::Arc::unwrap_or_clone(t),
+            Head::Owned(t) => t,
+        }
+    }
 }
 
 /// Look at a type's resolved head (as [`zonk_head_cow`] gives it)
@@ -537,7 +574,7 @@ mod tests {
                 s.insert(TVarName::Flex(id), Type::Var(TVarName::Flex(root)));
             }
             if let Resolution::Bound(ty) = table.root_resolution(id) {
-                s.insert(TVarName::Flex(root), ty.clone());
+                s.insert(TVarName::Flex(root), (*ty).clone());
             }
         }
         s

@@ -95,12 +95,49 @@ impl InferState {
         if self.unify_depth >= super::MAX_UNIFY_DEPTH {
             return Err(TypeError::UnifyDepth { span }.into());
         }
+        // Two variables both bound to types: compared once per outermost
+        // unification (see `unify_bound_pairs`).
+        let pair = self.bound_pair(t1, t2);
+        if let Some(pair) = pair {
+            if !self.unify_bound_pairs.insert(pair) {
+                return Ok(());
+            }
+        }
         let t1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
         let t2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
+        // Two variables bound to the very same type (one binding, or a
+        // type shared since): nothing to do. Walking it would compare a
+        // large row with itself field by field.
+        if let (super::zonk::Head::Shared(a), super::zonk::Head::Shared(b)) = (&t1, &t2) {
+            if std::sync::Arc::ptr_eq(a, b) {
+                return Ok(());
+            }
+        }
         self.unify_depth += 1;
         let result = self.unify_impl(span, &t1, &t2);
         self.unify_depth -= 1;
+        if let (Err(_), Some(pair)) = (&result, pair) {
+            // Not unified: a caller that recovers may meet it again.
+            self.unify_bound_pairs.remove(&pair);
+        }
+        if self.unify_depth == 0 {
+            self.unify_bound_pairs.clear();
+        }
         result
+    }
+
+    /// The roots of `t1` and `t2`, ordered, when both are variables bound
+    /// to types (and distinct).
+    fn bound_pair(&mut self, t1: &Type, t2: &Type) -> Option<(TVarId, TVarId)> {
+        let (Type::Var(TVarName::Flex(a)), Type::Var(TVarName::Flex(b))) = (t1, t2) else {
+            return None;
+        };
+        let a = self.var_table.find_if_present(*a)?;
+        let b = self.var_table.find_if_present(*b)?;
+        if a == b || self.var_table.bound(a).is_none() || self.var_table.bound(b).is_none() {
+            return None;
+        }
+        Some((a.min(b), a.max(b)))
     }
 
     fn unify_impl(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
