@@ -1687,8 +1687,9 @@ impl InferState {
         // Mirror the binding into the Union-Find table so reads
         // through `crate::infer::zonk` see the same view as reads
         // through `apply_subst`. Step 3 will flip the reads over.
+        let ty = std::sync::Arc::new(ty);
         self.mirror_extend(&var, &ty);
-        self.main_subst.insert(var.clone(), ty.clone());
+        self.main_subst.insert_shared(var.clone(), ty.clone());
         // Invariant probe (debug only): after every binding, the
         // Union-Find table and the HashMap must agree on the
         // chain endpoint for `var`. apply_subst follows the chain
@@ -1737,7 +1738,7 @@ impl InferState {
     /// so the contracts of `bind` / `union` apply: the root must be
     /// `Unbound`. The collision case is handled by `extend_subst`'s
     /// caller running `resolve(var)` first.
-    fn mirror_extend(&mut self, var: &TVarName, ty: &Type) {
+    fn mirror_extend(&mut self, var: &TVarName, ty: &std::sync::Arc<Type>) {
         use super::var_table::Resolution;
         // Only flex variables ever appear as the LHS of a binding in
         // this codebase — `unify`'s `var_bind` rule only fires on
@@ -1751,7 +1752,7 @@ impl InferState {
         // in range; padding cells are `Unbound { level: 0 }` which is
         // the right starting point for a never-allocated variable.
         self.var_table.ensure_id(id);
-        if let Type::Var(TVarName::Flex(other)) = ty {
+        if let Type::Var(TVarName::Flex(other)) = &**ty {
             self.var_table.ensure_id(*other);
             let root_a = self.var_table.find(id);
             let root_b = self.var_table.find(*other);
@@ -1815,7 +1816,7 @@ impl InferState {
         // Variable-to-structured: bind the root iff still free.
         let root = self.var_table.find(id);
         if self.var_table.is_free(root) {
-            self.var_table.bind(root, ty.clone());
+            self.var_table.bind_shared(root, ty.clone());
         } else {
             // Reachable only if some prior `mirror_extend` (via
             // another alias of `id`) bound this root, but

@@ -331,6 +331,12 @@ impl VarTable {
     /// in Step 2) is responsible for ensuring `ty` doesn't refer back
     /// to `id`'s root.
     pub fn bind(&mut self, id: TVarId, ty: Type) {
+        self.bind_shared(id, std::sync::Arc::new(ty));
+    }
+
+    /// [`Self::bind`] with a type already shared (the substitution
+    /// holds the same `Arc`).
+    pub fn bind_shared(&mut self, id: TVarId, ty: std::sync::Arc<Type>) {
         let root = self.find(id);
         let prev = self.cells[root as usize].clone();
         debug_assert!(
@@ -339,7 +345,7 @@ impl VarTable {
             prev
         );
         self.trail.push((root, prev));
-        self.cells[root as usize] = Resolution::Bound(std::sync::Arc::new(ty));
+        self.cells[root as usize] = Resolution::Bound(ty);
     }
 
     /// Overwrite a root cell to `Bound(ty)`, regardless of its

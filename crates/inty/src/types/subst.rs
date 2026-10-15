@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::ty::{
     FieldEntry, PVarName, Presence, PropName, QualType, RowTail, RowType, TVarName, Type, TypePred,
@@ -93,7 +94,9 @@ impl Drop for ApplySubstGuard {
 /// variables to presences (Remy '94 — two domains for one substitution).
 #[derive(Clone, Debug, Default)]
 pub struct Subst {
-    map: HashMap<TVarName, Type>,
+    /// Bound types are shared: the inference state's union-find table
+    /// holds the same `Arc`, and path compression copies pointers.
+    map: HashMap<TVarName, Arc<Type>>,
     presences: HashMap<PVarName, Presence>,
     /// Undo log (Warren's trail, as in `VarTable`): each mutation's
     /// prior entry, so a speculative branch is rolled back by undoing
@@ -107,7 +110,7 @@ pub struct Subst {
 /// before a write (`None`: unbound).
 #[derive(Clone, Debug)]
 enum SubstUndo {
-    Type(TVarName, Option<Type>),
+    Type(TVarName, Option<Arc<Type>>),
     Presence(PVarName, Option<Presence>),
 }
 
@@ -165,7 +168,7 @@ impl Subst {
     }
 
     /// Write `var ↦ ty`, logging the previous entry.
-    fn write(&mut self, var: TVarName, ty: Type) {
+    fn write(&mut self, var: TVarName, ty: Arc<Type>) {
         let prev = self.map.insert(var.clone(), ty);
         if let Some(trail) = self.trail.as_mut() {
             trail.push(SubstUndo::Type(var, prev));
@@ -175,7 +178,7 @@ impl Subst {
     /// Create a singleton substitution.
     pub fn singleton(var: TVarName, ty: Type) -> Self {
         let mut map = HashMap::new();
-        map.insert(var, ty);
+        map.insert(var, Arc::new(ty));
         Subst {
             map,
             presences: HashMap::new(),
@@ -190,7 +193,7 @@ impl Subst {
 
     /// Get the type for a variable, if present.
     pub fn get(&self, var: &TVarName) -> Option<&Type> {
-        self.map.get(var)
+        self.map.get(var).map(|t| &**t)
     }
 
     /// Path-compressing lookup. Chases `Type::Var → Type::Var → …`
@@ -205,9 +208,9 @@ impl Subst {
     /// Defensively bounded by a `visited` set so a malformed
     /// substitution (post-occurs-check this shouldn't happen) can't
     /// loop here.
-    pub fn resolve(&mut self, var: &TVarName) -> Option<Type> {
+    pub fn resolve(&mut self, var: &TVarName) -> Option<Arc<Type>> {
         let first = self.map.get(var)?.clone();
-        if !matches!(first, Type::Var(_)) {
+        if !matches!(*first, Type::Var(_)) {
             return Some(first);
         }
 
@@ -216,7 +219,7 @@ impl Subst {
         let mut visited: HashSet<TVarName> = HashSet::new();
         visited.insert(var.clone());
 
-        while let Type::Var(v) = &current {
+        while let Type::Var(v) = &*current {
             let next_name = v.clone();
             if !visited.insert(next_name.clone()) {
                 // Cycle (shouldn't happen post-occurs-check).
@@ -259,6 +262,11 @@ impl Subst {
 
     /// Insert a type mapping into the substitution.
     pub fn insert(&mut self, var: TVarName, ty: Type) {
+        self.write(var, Arc::new(ty));
+    }
+
+    /// [`Self::insert`] of a type shared with another table.
+    pub fn insert_shared(&mut self, var: TVarName, ty: Arc<Type>) {
         self.write(var, ty);
     }
 
@@ -319,7 +327,7 @@ impl Subst {
 
         // Apply self to all mappings in other
         for (var, ty) in &other.map {
-            result.insert(var.clone(), self.apply(ty));
+            result.insert(var.clone(), Arc::new(self.apply(&**ty)));
         }
 
         // Add mappings from self that aren't in other
@@ -381,7 +389,7 @@ impl Subst {
 
     /// Iterate over the mappings.
     pub fn iter(&self) -> impl Iterator<Item = (&TVarName, &Type)> {
-        self.map.iter()
+        self.map.iter().map(|(v, t)| (v, &**t))
     }
 
     /// Walk a type and merge every row tail variable that resolves
@@ -688,8 +696,7 @@ impl Subst {
             into.vars.insert(name.clone());
             return;
         }
-        let bound = bound.clone();
-        self.reach_type(&bound, into, done, in_progress);
+        self.reach_type(bound, into, done, in_progress);
         in_progress.remove(name);
         done.insert(name.clone());
     }
@@ -793,17 +800,21 @@ struct FlattenState {
 
 impl IntoIterator for Subst {
     type Item = (TVarName, Type);
-    type IntoIter = std::collections::hash_map::IntoIter<TVarName, Type>;
+    type IntoIter = std::vec::IntoIter<(TVarName, Type)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.map.into_iter()
+        self.map
+            .into_iter()
+            .map(|(v, t)| (v, Arc::unwrap_or_clone(t)))
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
 impl FromIterator<(TVarName, Type)> for Subst {
     fn from_iter<T: IntoIterator<Item = (TVarName, Type)>>(iter: T) -> Self {
         Subst {
-            map: iter.into_iter().collect(),
+            map: iter.into_iter().map(|(v, t)| (v, Arc::new(t))).collect(),
             presences: HashMap::new(),
             trail: None,
         }
@@ -1253,7 +1264,7 @@ mod tests {
         s.insert(flex(1), Type::Var(flex(2)));
         s.insert(flex(2), Type::Number);
 
-        assert_eq!(s.resolve(&flex(0)), Some(Type::Number));
+        assert_eq!(s.resolve(&flex(0)).as_deref().cloned(), Some(Type::Number));
     }
 
     #[test]
@@ -1262,7 +1273,10 @@ mod tests {
         let mut s = Subst::empty();
         s.insert(flex(0), Type::Var(flex(1)));
 
-        assert_eq!(s.resolve(&flex(0)), Some(Type::Var(flex(1))));
+        assert_eq!(
+            s.resolve(&flex(0)).as_deref().cloned(),
+            Some(Type::Var(flex(1)))
+        );
         // The unbound endpoint must not be in the map afterwards
         // (path compression writes through every entry on the chain,
         // but stops at the endpoint).
@@ -1278,11 +1292,11 @@ mod tests {
         s.insert(flex(1), Type::Var(flex(2)));
         s.insert(flex(2), Type::Number);
 
-        let _ = s.resolve(&flex(0));
+        let _ = s.resolve(&flex(0)).as_deref().cloned();
 
-        assert_eq!(s.map.get(&flex(0)), Some(&Type::Number));
-        assert_eq!(s.map.get(&flex(1)), Some(&Type::Number));
-        assert_eq!(s.map.get(&flex(2)), Some(&Type::Number));
+        assert_eq!(s.get(&flex(0)), Some(&Type::Number));
+        assert_eq!(s.get(&flex(1)), Some(&Type::Number));
+        assert_eq!(s.get(&flex(2)), Some(&Type::Number));
     }
 
     #[test]
@@ -1292,9 +1306,9 @@ mod tests {
         s.insert(flex(1), Type::Var(flex(2)));
         s.insert(flex(2), Type::String);
 
-        let first = s.resolve(&flex(0));
+        let first = s.resolve(&flex(0)).as_deref().cloned();
         let snapshot = s.map.clone();
-        let second = s.resolve(&flex(0));
+        let second = s.resolve(&flex(0)).as_deref().cloned();
 
         assert_eq!(first, second);
         // The second call should be a no-op on the storage: every
@@ -1326,7 +1340,7 @@ mod tests {
         let before: Vec<Type> = test_types.iter().map(|t| s.apply(t)).collect();
 
         for id in 0..=4 {
-            let _ = s.resolve(&flex(id));
+            let _ = s.resolve(&flex(id)).as_deref().cloned();
         }
 
         let after: Vec<Type> = test_types.iter().map(|t| s.apply(t)).collect();
@@ -1343,7 +1357,7 @@ mod tests {
         s.insert(flex(1), Type::Var(flex(2)));
         s.insert(flex(2), Type::Var(flex(0))); // closes the cycle
 
-        let result = s.resolve(&flex(0));
+        let result = s.resolve(&flex(0)).as_deref().cloned();
         // We don't pin the exact return value (any of the three vars
         // is acceptable). Just that the call terminates.
         assert!(matches!(result, Some(Type::Var(_))));
@@ -1353,6 +1367,6 @@ mod tests {
     fn resolve_returns_none_for_unbound() {
         let mut s = Subst::empty();
         s.insert(flex(0), Type::Number);
-        assert_eq!(s.resolve(&flex(99)), None);
+        assert_eq!(s.resolve(&flex(99)).as_deref().cloned(), None);
     }
 }

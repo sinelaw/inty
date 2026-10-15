@@ -721,8 +721,8 @@ impl InferState {
                 // in gdb. Catching "same equivalence class" here
                 // short-circuits that loop the same way the v1 == v2
                 // check does for the trivial case.
-                let root1 = match self.main_subst.resolve(&TVarName::Flex(*id1)) {
-                    Some(Type::Var(TVarName::Flex(r))) => r,
+                let root1 = match self.main_subst.resolve(&TVarName::Flex(*id1)).as_deref() {
+                    Some(Type::Var(TVarName::Flex(r))) => *r,
                     None => *id1,
                     // If the chain ends at a structural type or a
                     // skolem, fall through to the fresh-tail dance
@@ -731,8 +731,8 @@ impl InferState {
                     // normal Var-vs-structure path.
                     _ => *id1,
                 };
-                let root2 = match self.main_subst.resolve(&TVarName::Flex(*id2)) {
-                    Some(Type::Var(TVarName::Flex(r))) => r,
+                let root2 = match self.main_subst.resolve(&TVarName::Flex(*id2)).as_deref() {
+                    Some(Type::Var(TVarName::Flex(r))) => *r,
                     None => *id2,
                     _ => *id2,
                 };
