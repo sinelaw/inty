@@ -200,6 +200,10 @@ pub struct InferState {
     /// Whether member reads record `last_member_receiver` and
     /// `last_index_container` (while a store's target is checked).
     pub(crate) recording_member_receiver: bool,
+    /// Named types whose body has no variable but its parameters (most
+    /// declared ones): nothing in them is fixed by an environment that
+    /// reaches them, so `env_fixed_vars` needn't resolve them again.
+    pub(crate) closed_named: std::collections::HashSet<TypeId>,
 
     /// Inferred types for declarations, keyed by span start position.
     /// Used for decorating the AST with type annotations.
@@ -519,6 +523,7 @@ impl InferState {
             last_member_receiver: None,
             caught_exceptions: std::collections::HashSet::new(),
             recording_member_receiver: false,
+            closed_named: std::collections::HashSet::new(),
             decl_types: HashMap::new(),
             decl_schemes: HashMap::new(),
             expr_types: None,
@@ -1840,6 +1845,7 @@ impl InferState {
 
     /// Register a named type definition.
     pub fn register_named_type(&mut self, def: TypeDef) {
+        self.closed_named.remove(&def.id);
         self.named_types.insert(def.id, def);
     }
 
@@ -2369,7 +2375,7 @@ impl InferState {
         }
         let mut seen: HashSet<TypeId> = HashSet::new();
         while let Some(id) = named.pop() {
-            if !seen.insert(id) {
+            if !seen.insert(id) || self.closed_named.contains(&id) {
                 continue;
             }
             let Some(def) = self.named_types.get(&id) else {
@@ -2378,9 +2384,24 @@ impl InferState {
             let params: HashSet<TVarName> = def.params.iter().cloned().collect();
             let body = self.main_subst.flatten(&def.body.clone());
             let body = self.zonk(&body);
-            vars.extend(body.free_vars().into_iter().filter(|v| !params.contains(v)));
-            pvars.extend(body.free_pvars());
-            named.extend(body.named_ids());
+            let free: Vec<TVarName> = body
+                .free_vars()
+                .into_iter()
+                .filter(|v| !params.contains(v))
+                .collect();
+            let free_pvars = body.free_pvars();
+            let inner: Vec<TypeId> = body.named_ids().into_iter().filter(|n| *n != id).collect();
+            // Only its parameters, and named types that are closed too: no
+            // substitution reaches inside it again.
+            if free.is_empty()
+                && free_pvars.is_empty()
+                && inner.iter().all(|n| self.closed_named.contains(n))
+            {
+                self.closed_named.insert(id);
+            }
+            vars.extend(free);
+            pvars.extend(free_pvars);
+            named.extend(inner);
         }
         // Close over the pending constraints' functional dependencies.
         let preds: Vec<TypePred> = self
