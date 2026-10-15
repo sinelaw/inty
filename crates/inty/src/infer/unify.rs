@@ -18,6 +18,10 @@ use super::state::{InferState, UnfoldAssumption};
 /// Result type for unification.
 pub type UnifyResult<T> = Result<T, IntyError>;
 
+/// How much of a type (in nodes) a diagnostic writes out before leaving
+/// the rest out (`…`).
+const DIAGNOSTIC_TYPE_BUDGET: usize = 4_000;
+
 impl InferState {
     /// Unify two types, updating the substitution.
     ///
@@ -906,7 +910,8 @@ impl InferState {
 
     /// `ty` resolved and tidied for display.
     fn display_form(&self, tidy: &mut crate::types::TidyEnv, ty: &Type) -> Type {
-        let flat = self.flatten_type(ty);
+        // Bounded: a diagnostic shows a large type's first fields anyway.
+        let flat = self.main_subst.flatten_bounded(ty, DIAGNOSTIC_TYPE_BUDGET);
         tidy.tidy_type(&flat)
     }
 
@@ -997,7 +1002,7 @@ impl InferState {
         let (expected, found) = self.show_pair(t1, t2);
         // A caught exception's type is rigid on purpose: say why.
         let caught = |t: &Type| {
-            matches!(self.flatten_type(t), Type::Var(TVarName::Skolem(id))
+            matches!(self.main_subst.flatten_bounded(t, 64), Type::Var(TVarName::Skolem(id))
                 if self.caught_exceptions.contains(&id))
         };
         let context = (caught(t1) || caught(t2)).then(|| {

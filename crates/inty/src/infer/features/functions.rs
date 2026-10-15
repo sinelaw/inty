@@ -407,7 +407,7 @@ impl InferState {
         // TypeScript `void` callback's. A block body still returns what
         // it says.
         let discarded;
-        let body = match (self.zonk(&expected_ret), concise_body(body)) {
+        let body = match (self.zonk_head(&expected_ret), concise_body(body)) {
             (Type::Undefined, Some((expr, ret_span))) => {
                 let mut stmts = match body {
                     Stmt::Block { body, .. } => body[..body.len() - 1].to_vec(),
@@ -512,7 +512,7 @@ impl InferState {
                     None => {}
                 }
             }
-            let ret = self.zonk(&ret);
+            let ret = self.zonk_head(&ret);
             if !matches!(ret, Type::Var(TVarName::Flex(_))) {
                 expected_ret = Some(ret);
             }
@@ -630,7 +630,7 @@ impl InferState {
         let annotated =
             type_annotation.is_some() || return_type_ast.is_some() || expected_ret.is_some();
         // An annotated return type is pushed into the `return`s.
-        let expected_ret = match self.zonk(&ret_type) {
+        let expected_ret = match self.zonk_head(&ret_type) {
             Type::Var(crate::types::TVarName::Flex(_)) => None,
             t if annotated => Some(t),
             _ => None,
@@ -656,7 +656,7 @@ impl InferState {
             types.insert((span.start, span.end), func_type.clone());
         }
 
-        Ok(self.zonk(&func_type))
+        Ok(self.zonk_head(&func_type))
     }
 
     /// Infer the type of a function call.
@@ -719,7 +719,7 @@ impl InferState {
             } => {
                 // Infer object once
                 let obj_type = self.infer_expr(env, object)?;
-                let obj_type_applied = self.zonk(&obj_type);
+                let obj_type_applied = self.zonk_head(&obj_type);
 
                 // Get computed member type
                 let index_type = self.infer_expr(env, property)?;
@@ -826,8 +826,8 @@ impl InferState {
                     let inner = self.infer_expr(env, argument)?;
                     let elem = self.fresh_type_var();
                     self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
-                    let elem_resolved = self.zonk(&elem);
-                    let expected = self.zonk(param);
+                    let elem_resolved = self.zonk_head(&elem);
+                    let expected = self.zonk_head(param);
                     self.subsume(*spread_span, &elem_resolved, &expected)?;
                 }
                 _ => {
@@ -948,11 +948,11 @@ impl InferState {
                 self.require_iterable(&source, &element, arguments[0].span())?;
             }
             let Some(map_fn) = arguments.get(1) else {
-                return Ok(Type::array(self.zonk(&element)));
+                return Ok(Type::array(self.zonk_head(&element)));
             };
             let result = self.fresh_type_var();
             let index = self.fresh_pvar();
-            let element = self.zonk(&element);
+            let element = self.zonk_head(&element);
             let callback = self.callable_row_open_with_params(
                 vec![
                     crate::types::FuncParam::required(element),
@@ -961,7 +961,7 @@ impl InferState {
                 result.clone(),
             );
             self.check_expr(env, map_fn, &callback)?;
-            Ok(Type::array(self.zonk(&result)))
+            Ok(Type::array(self.zonk_head(&result)))
         })())
     }
 
@@ -1096,7 +1096,7 @@ impl InferState {
             self.unify_this(span, &t, &obj)?;
         }
 
-        Ok(self.zonk(&ret))
+        Ok(self.zonk_head(&ret))
     }
 
     /// A call without a receiver (`f()`, not `o.f()`): the callee gets
@@ -1114,7 +1114,7 @@ impl InferState {
             Some(Expr::Ident { name, .. }) => format!("`{name}`"),
             _ => "this function".to_string(),
         };
-        match self.zonk(this) {
+        match self.zonk_head(this) {
             Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => Ok(()),
             // Not known yet: it may turn out to use none, or to be one
             // that reads `this` as `undefined`, but not a method.
@@ -1180,7 +1180,7 @@ impl InferState {
         }
 
         self.require_constructed_object(&result_type, span)?;
-        Ok(self.zonk(&result_type))
+        Ok(self.zonk_head(&result_type))
     }
 
     /// What `new` gives back must be what the constructor returned, so
@@ -1308,6 +1308,31 @@ impl InferState {
         // `f` with nothing to decide it. So a second round generalises
         // every member over all of them, when the first didn't.
         let mut group_vars: Vec<TVarName> = Vec::new();
+        // A member whose type is too large to write out (see
+        // `MAX_GENERALISED`) isn't generalised, and so neither is any
+        // member of its group: one generalised over a variable another
+        // keeps would come apart from it. Each keeps its monomorphic type,
+        // which is sound, if less general.
+        let too_large = group.iter().find_map(|stmt| {
+            let (name, _, _, _, _, span) = function_decl_parts(stmt)?;
+            let key = self.key_of(hoisted_key_span(stmt)?, name);
+            let ty = hoisted.lookup_key(&key)?.scheme.ty().clone();
+            self.too_large_to_generalise(&ty)
+                .then(|| (name.to_string(), span))
+        });
+        if let Some((name, span)) = too_large {
+            self.warn(
+                span,
+                format!(
+                    "`{name}`'s type is too large to write out (it nests types that mention \
+                     each other many times, such as elements chained through `appendChild`), \
+                     so it and the functions it calls back aren't generalised: each is \
+                     checked with one type for all its uses. Annotating it with a smaller \
+                     type (a project's own element type) avoids this"
+                ),
+            );
+            return Ok(hoisted);
+        }
         for round in 0..2 {
             hoisted = outer.clone();
             let mut left_by_all = vec![true; pending.len()];

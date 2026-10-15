@@ -265,7 +265,7 @@ impl InferState {
                         ..
                     } = property.as_ref()
                     {
-                        if matches!(self.flatten_type(&container), Type::Row(_)) {
+                        if matches!(self.zonk_head(&container), Type::Row(_)) {
                             self.require_field_write(&container, key, span)?;
                         }
                     }
@@ -321,14 +321,15 @@ impl InferState {
             && lhs_polytype(self, env, left).is_none()
         {
             let left_type = self.infer_store_target(env, left, span, true)?;
-            if crate::infer::features::functions::extract_callable(&self.zonk(&left_type)).is_some()
+            if crate::infer::features::functions::extract_callable(&self.zonk_head(&left_type))
+                .is_some()
             {
                 self.check_expr(env, right, &left_type)?;
-                return Ok(self.zonk(&left_type));
+                return Ok(self.zonk_head(&left_type));
             }
             let right_type = self.infer_expr(env, right)?;
             self.subsume(span, &right_type, &left_type)?;
-            return Ok(self.zonk(&left_type));
+            return Ok(self.zonk_head(&left_type));
         }
 
         let right_type = self.infer_expr(env, right)?;
@@ -372,13 +373,13 @@ impl InferState {
                         if !v.is_flex() {
                             continue;
                         }
-                        let after = self.zonk(&Type::Var(v.clone()));
+                        let after = self.zonk_head(&Type::Var(v.clone()));
                         if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
                             return Err(TypeError::EscapedSkolem { span }.into());
                         }
                     }
                 }
-                return Ok(self.zonk(&expected_ty));
+                return Ok(self.zonk_head(&expected_ty));
             }
         }
 
@@ -409,7 +410,7 @@ impl InferState {
                 // this rule: at the type level they look identical to
                 // `=`, the runtime test only decides whether the
                 // assignment actually fires.
-                let lhs_resolved = self.zonk(&left_type);
+                let lhs_resolved = self.zonk_head(&left_type);
                 let rhs_for_assign =
                     if matches!(lhs_resolved, Type::Var(crate::types::TVarName::Flex(_))) {
                         self.widen(span, &right_type)
@@ -455,7 +456,7 @@ impl InferState {
             }
         }
 
-        Ok(self.zonk(&left_type))
+        Ok(self.zonk_head(&left_type))
     }
 
     /// Handle a `var` / `let` / `const` declaration statement.
@@ -693,7 +694,7 @@ impl InferState {
             if !v.is_flex() {
                 continue;
             }
-            let after = self.zonk(&Type::Var(v.clone()));
+            let after = self.zonk_head(&Type::Var(v.clone()));
             if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
                 return Err(TypeError::EscapedSkolem { span: ann_span }.into());
             }

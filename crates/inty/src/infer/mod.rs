@@ -1297,7 +1297,7 @@ impl InferState {
         ) {
             return self.check_by_synthesis(env, expr, expected);
         }
-        let mut expected = self.zonk(expected);
+        let mut expected = self.zonk_head(expected);
         // An array literal where an iterable of `E` is expected (a
         // parameter `I` with `Iterable I E`, as `new Map(entries)`'s) is
         // an `E[]`: its elements are checked against `E` (a pair against
@@ -1314,10 +1314,10 @@ impl InferState {
             let var = Type::Var(var.clone());
             let element = candidates
                 .into_iter()
-                .find(|(container, _)| self.zonk(container) == var)
+                .find(|(container, _)| self.zonk_head(container) == var)
                 .map(|(_, element)| element);
             if let Some(element) = element {
-                let element = self.zonk(&element);
+                let element = self.zonk_head(&element);
                 if !matches!(element, Type::Var(_)) {
                     expected = Type::array(element);
                 }
@@ -1378,7 +1378,7 @@ impl InferState {
                     types.insert((span.start, span.end), ty.clone());
                 }
                 self.subsume(*span, &ty, &expected)?;
-                return Ok(self.zonk(&ty));
+                return Ok(self.zonk_head(&ty));
             }
         }
         // An object literal where a `Dict<V>` is expected is one: each
@@ -1402,7 +1402,7 @@ impl InferState {
                     }
                 }
             }
-            let ty = self.zonk(&expected);
+            let ty = self.zonk_head(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());
             }
@@ -1432,7 +1432,7 @@ impl InferState {
             let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
             self.check_expr(&cons_env, consequent, &expected)?;
             self.check_expr(&alt_env, alternate, &expected)?;
-            let ty = self.zonk(&expected);
+            let ty = self.zonk_head(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());
             }
@@ -1444,7 +1444,7 @@ impl InferState {
             let value = self.strip_sum(left.span(), &left_ty)?;
             self.subsume(left.span(), &value, &expected)?;
             self.check_expr(env, right, &expected)?;
-            let ty = self.zonk(&expected);
+            let ty = self.zonk_head(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());
             }
@@ -1460,7 +1460,7 @@ impl InferState {
                 for (e, t) in elements.iter().flatten().zip(elems.iter()) {
                     self.check_expr(env, e, t)?;
                 }
-                let ty = self.zonk(&expected);
+                let ty = self.zonk_head(&expected);
                 if let Some(types) = self.expr_types.as_mut() {
                     types.insert((span.start, span.end), ty.clone());
                 }
@@ -1476,14 +1476,14 @@ impl InferState {
                         // value (`Int[]` spreads into `(Number | String)[]`).
                         Expr::Spread { argument, span } => {
                             let arg_ty = self.infer_expr(env, argument)?;
-                            match self.zonk(&arg_ty) {
+                            match self.zonk_head(&arg_ty) {
                                 Type::Array(arg_elem) => self.subsume(*span, &arg_elem, elem)?,
                                 Type::Var(_) => self.subsume(*span, &arg_ty, &expected)?,
                                 // Any other iterable: its elements fit.
                                 _ => {
                                     let arg_elem = self.fresh_type_var();
                                     self.require_iterable(&arg_ty, &arg_elem, *span)?;
-                                    let arg_elem = self.zonk(&arg_elem);
+                                    let arg_elem = self.zonk_head(&arg_elem);
                                     self.subsume(*span, &arg_elem, elem)?;
                                 }
                             }
@@ -1493,7 +1493,7 @@ impl InferState {
                         }
                     }
                 }
-                let ty = self.zonk(&expected);
+                let ty = self.zonk_head(&expected);
                 if let Some(types) = self.expr_types.as_mut() {
                     types.insert((span.start, span.end), ty.clone());
                 }
@@ -1557,7 +1557,7 @@ impl InferState {
         else {
             return;
         };
-        let Type::Maybe(_, value) = self.zonk(synth) else {
+        let Type::Maybe(_, value) = self.zonk_head(synth) else {
             return;
         };
         let snap = self.snapshot_inference();

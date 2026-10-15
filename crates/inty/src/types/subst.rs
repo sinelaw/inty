@@ -411,6 +411,19 @@ impl Subst {
         self.flatten_type(ty, &mut state)
     }
 
+    /// [`Self::flatten`] for a printer: once about `budget` nodes have
+    /// been written out, a bound variable met after is left out (a
+    /// `Named` of [`super::ty::ELIDED_TYPE_ID`], which prints as `…`).
+    /// A type that mentions a large one in many places would otherwise be
+    /// written out exponentially larger than the substitution holds it.
+    pub fn flatten_bounded(&self, ty: &Type, budget: usize) -> Type {
+        let mut state = FlattenState {
+            budget: Some(budget),
+            ..FlattenState::default()
+        };
+        self.flatten_type(ty, &mut state)
+    }
+
     /// Resolve a variable to its fully flattened binding (or itself when
     /// unbound). Every occurrence of a bound variable is expanded — a type
     /// like `{p: o, q: o}` mentions `o`'s row twice — but each expansion
@@ -419,10 +432,21 @@ impl Subst {
     /// variable being expanded; an expansion that had to cut one is not
     /// memoised, since it is only valid inside that cycle.
     fn flatten_var(&self, name: &TVarName, state: &mut FlattenState) -> Type {
+        // (A row's tail is expanded whatever the budget: it holds the
+        // rest of the row's fields, whose types the budget still bounds.)
+        let tail = std::mem::take(&mut state.expanding_tail);
         let Some(bound) = self.get(name) else {
             return Type::Var(name.clone());
         };
+        if let Some(budget) = state.budget {
+            if state.written >= budget && !tail {
+                return Type::Named(super::ty::ELIDED_TYPE_ID, Vec::new());
+            }
+        }
         if let Some(done) = state.memo.get(name) {
+            if state.budget.is_some() {
+                state.written += self.flattened_size(done, usize::MAX);
+            }
             return done.clone();
         }
         if !state.in_progress.insert(name.clone()) {
@@ -440,6 +464,7 @@ impl Subst {
     }
 
     fn flatten_type(&self, ty: &Type, state: &mut FlattenState) -> Type {
+        state.written += 1;
         match ty {
             // Resolve variables at any depth, not just the top level —
             // `Subst::compose` only fully applies the substitution to its
@@ -508,7 +533,10 @@ impl Subst {
             // The tail variable's own flattening already merged the rest
             // of its tail chain, so one step suffices. Fields of the row
             // itself take precedence over the tail's.
-            RowTail::Open(var) => match self.flatten_var(var, state) {
+            RowTail::Open(var) => match {
+                state.expanding_tail = true;
+                self.flatten_var(var, state)
+            } {
                 Type::Row(rest) => {
                     for (k, e) in rest.props {
                         props.entry(k).or_insert(e);
@@ -755,6 +783,12 @@ struct FlattenState {
     memo: HashMap<TVarName, Type>,
     /// Number of cycle cuts so far; see [`Subst::flatten_var`].
     cuts: usize,
+    /// Nodes written so far, and how many to write before leaving bound
+    /// variables out ([`Subst::flatten_bounded`]).
+    written: usize,
+    budget: Option<usize>,
+    /// The variable about to be expanded is a row's tail.
+    expanding_tail: bool,
 }
 
 impl IntoIterator for Subst {

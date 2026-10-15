@@ -401,6 +401,7 @@ impl PrettyContext {
                 write!(w, ">")
             }
 
+            Type::Named(id, _) if *id == crate::types::ty::ELIDED_TYPE_ID => write!(w, "…"),
             Type::Named(id, args) => {
                 match self.nominal_names.get(id) {
                     Some(name) => write!(w, "{}", name)?,

@@ -675,7 +675,7 @@ impl InferState {
         }
         let pairs: Vec<(Type, Type)> = self.promise_results.drain(mark..).collect();
         for (r, u) in pairs {
-            match self.zonk(&r) {
+            match self.zonk_head(&r) {
                 Type::Promise(v) => self.unify(span, &u, &v)?,
                 // Unknown: the conservative choice — a later non-promise
                 // is a type error rather than a mistyped flattening.
@@ -753,7 +753,7 @@ impl InferState {
                     .filter(|c| c.pred.class == ClassName::Plus)
                     .flat_map(|c| c.pred.types.clone())
                     .collect();
-                let operands: Vec<Type> = operands.iter().map(|t| self.zonk(t)).collect();
+                let operands: Vec<Type> = operands.iter().map(|t| self.zonk_head(t)).collect();
                 let mut defaulted = false;
                 let mut rest = Vec::new();
                 let mut seen: Vec<(Type, String)> = Vec::new();
@@ -796,7 +796,7 @@ impl InferState {
                                 c.pred.class,
                                 ClassName::Inject | ClassName::Strip | ClassName::Spread
                             ) && matches!(
-                                c.pred.types.first().map(|t| self.zonk(t)),
+                                c.pred.types.first().map(|t| self.zonk_head(t)),
                                 Some(Type::Var(v)) if keep.contains(&v)
                             )
                         })
@@ -922,7 +922,7 @@ impl InferState {
         this: Option<&Type>,
         span: Span,
     ) -> Result<(), IntyError> {
-        let receiver = self.zonk(receiver);
+        let receiver = self.zonk_head(receiver);
         if matches!(receiver, Type::Var(TVarName::Flex(_))) {
             return Ok(());
         }
@@ -933,7 +933,7 @@ impl InferState {
             // rule would accept that.) An arm whose type isn't known yet
             // gets its own constraint.
             for m in members {
-                match self.zonk(m) {
+                match self.zonk_head(m) {
                     m @ Type::Var(TVarName::Flex(_)) => {
                         self.add_constraint(TypePred::has_prop(m, name, result.clone()), span)
                     }
@@ -1003,7 +1003,7 @@ impl InferState {
     ) -> Result<(), IntyError> {
         use crate::infer::extract_callable;
         use crate::types::Presence;
-        let (site_z, callee_z) = (self.zonk(site), self.zonk(callee));
+        let (site_z, callee_z) = (self.zonk_head(site), self.zonk_head(callee));
         let (Some((_, args, site_ret)), Some((_, params, ret))) =
             (extract_callable(&site_z), extract_callable(&callee_z))
         else {
@@ -1019,7 +1019,7 @@ impl InferState {
                     // a `Number` (a number literal fits); elsewhere it is
                     // unification, done directly (no snapshot).
                     if matches!(
-                        self.zonk(&p.ty),
+                        self.zonk_head(&p.ty),
                         Type::Union(_) | Type::Maybe(..) | Type::Number
                     ) {
                         self.subsume(span, &a.ty, &p.ty)?;
@@ -1154,7 +1154,7 @@ impl InferState {
             }
             .into())
         };
-        match self.flatten_type(container) {
+        match self.zonk_head(container) {
             Type::Var(TVarName::Flex(_)) => {
                 self.add_constraint(TypePred::iterable(container.clone(), element.clone()), span);
                 Ok(())
@@ -1221,7 +1221,7 @@ impl InferState {
         sigma: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        match self.flatten_type(ty) {
+        match self.zonk_head(ty) {
             Type::Var(TVarName::Flex(_)) => {
                 self.add_constraint(TypePred::strip(ty.clone(), sigma.clone()), span);
                 Ok(())
@@ -1246,7 +1246,7 @@ impl InferState {
     /// Resolve `Plus a`: a number or a string has `+`, any other known
     /// type hasn't, and a variable waits.
     pub(crate) fn resolve_plus(&mut self, a: &Type, span: Span) -> Result<(), IntyError> {
-        match self.zonk(a) {
+        match self.zonk_head(a) {
             Type::Number
             | Type::String
             | Type::Literal(

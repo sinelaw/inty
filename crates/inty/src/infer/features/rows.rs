@@ -433,7 +433,7 @@ impl InferState {
         self.unify(span, &shared_this, &obj_type)?;
 
         let _ = had_spread;
-        Ok(self.zonk(&obj_type))
+        Ok(self.zonk_head(&obj_type))
     }
 
     /// The fields written after a spread whose operand isn't known yet,
@@ -648,7 +648,7 @@ impl InferState {
     fn row_view(&mut self, row: RowType) -> RowType {
         let mut row = row;
         while let RowTail::Open(v) = row.tail.clone() {
-            match self.zonk(&Type::Var(v.clone())) {
+            match self.zonk_head(&Type::Var(v.clone())) {
                 Type::Row(rest) => {
                     for (k, e) in rest.props {
                         row.props.entry(k).or_insert(e);
@@ -701,7 +701,7 @@ impl InferState {
                 .collect();
             let mut shaped: Vec<Type> = Vec::new();
             for m in members {
-                let mut m_resolved = self.zonk(m);
+                let mut m_resolved = self.zonk_head(m);
                 // A recursive alias arm (`B | Null`) is its unrolling.
                 if let Type::Named(id, args) = &m_resolved {
                     if !self.is_nominal_type(*id) {
@@ -752,12 +752,14 @@ impl InferState {
                     .iter()
                     .map(|arm| match arm {
                         Type::Row(row) => {
-                            row.props.get(&name).and_then(|e| match self.zonk(&e.ty) {
-                                Type::Literal(l @ (LitValue::String(_) | LitValue::Bool(_))) => {
-                                    Some(l)
-                                }
-                                _ => None,
-                            })
+                            row.props
+                                .get(&name)
+                                .and_then(|e| match self.zonk_head(&e.ty) {
+                                    Type::Literal(
+                                        l @ (LitValue::String(_) | LitValue::Bool(_)),
+                                    ) => Some(l),
+                                    _ => None,
+                                })
                         }
                         _ => None,
                     })
@@ -880,7 +882,7 @@ impl InferState {
                         // into a `Number` field is a value flowing, not a
                         // shared slot being reinterpreted).
                         self.check_expr(env, value, &expected_prop_ty)?;
-                        let slot = self.zonk(&expected_prop_ty);
+                        let slot = self.zonk_head(&expected_prop_ty);
                         props.insert(prop_name, slot);
                     }
                 }
@@ -922,7 +924,7 @@ impl InferState {
                     self.member_function = false;
                     let method_type = method_type?;
                     self.subsume(*method_span, &method_type, &expected_prop_ty)?;
-                    let slot = self.zonk(&expected_prop_ty);
+                    let slot = self.zonk_head(&expected_prop_ty);
                     props.insert(prop_name, slot);
                 }
                 _ => {
@@ -946,7 +948,7 @@ impl InferState {
         // outstanding constraints (e.g. from row-tail variables)
         // resolve here.
         self.subsume(span, &result, expected)?;
-        Ok(Some(self.zonk(&result)))
+        Ok(Some(self.zonk_head(&result)))
     }
 
     /// Infer `Expr::RestRow { source, excluded }` — the synthetic
@@ -986,7 +988,7 @@ impl InferState {
         ty: &Type,
         span: Span,
     ) -> InferResult<RowType> {
-        let resolved = self.zonk(ty);
+        let resolved = self.zonk_head(ty);
         match resolved {
             Type::Row(row) => Ok(row),
             // A class instance (or any brand) spreads its fields, as
@@ -1299,7 +1301,7 @@ impl InferState {
 
         self.unify(span, obj_type, &expected_row)?;
 
-        Ok(self.zonk(&result_type))
+        Ok(self.zonk_head(&result_type))
     }
 
     /// The field a read of a property of type `ty` needs: present, of any

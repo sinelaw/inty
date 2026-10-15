@@ -510,6 +510,14 @@ impl Default for InferState {
     }
 }
 
+/// The largest type (in nodes, written out) a binding is generalised at.
+/// A scheme holds its type written out, as a tree: a type that nests
+/// types mentioning each other many times (an element whose fields
+/// mention the element it was appended to, and so on) is exponentially
+/// larger than the substitution it is in. One larger than this keeps its
+/// monomorphic type.
+pub(crate) const MAX_GENERALISED: usize = 200_000;
+
 impl InferState {
     /// Create a new inference state with default policy.
     pub fn new() -> Self {
@@ -1001,6 +1009,33 @@ impl InferState {
         self.main_subst.flatten(ty)
     }
 
+    /// `ty` with its head resolved and, through a union or a sum, each
+    /// arm's head: what joining and `&&`/`||` look at, without resolving
+    /// (copying) the arms whole.
+    pub(crate) fn zonk_arms(&mut self, ty: &Type) -> Type {
+        match self.zonk_head(ty) {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|m| self.zonk_arms(m))
+                    .collect::<Vec<_>>(),
+            ),
+            Type::Maybe(_, _) => {
+                let Type::Maybe(z, inner) = self.zonk_head(ty) else {
+                    unreachable!("just matched")
+                };
+                Type::union(vec![z.ty(), self.zonk_arms(&inner)])
+            }
+            other => other,
+        }
+    }
+
+    /// Whether `ty` written out (as a scheme holds it) would exceed
+    /// [`MAX_GENERALISED`] nodes.
+    pub(crate) fn too_large_to_generalise(&self, ty: &Type) -> bool {
+        self.main_subst.flattened_size(ty, MAX_GENERALISED + 1) > MAX_GENERALISED
+    }
+
     /// How large `ty` is written out (see [`Subst::flattened_size`]),
     /// counted up to a cap well past what a printer shows.
     pub fn flattened_size(&self, ty: &Type) -> usize {
@@ -1080,16 +1115,35 @@ impl InferState {
     /// joined (`check_expr`, annotated returns), so a union is made by
     /// saying so.
     pub fn join(&mut self, span: Span, t1: &Type, t2: &Type) -> InferResult<Type> {
-        let t1 = self.zonk(t1);
-        let t2 = self.zonk(t2);
-        if t1 == t2 {
-            return Ok(t1);
-        }
+        // Heads first: the branches may be large (DOM elements), which
+        // resolving whole copies.
+        let (h1, h2) = (self.zonk_head(t1), self.zonk_head(t2));
         let is_never = |t: &Type| matches!(t, Type::Union(m) if m.is_empty());
-        if is_never(&t1) {
-            return Ok(t2);
+        if is_never(&h1) {
+            return Ok(h2);
         }
-        if is_never(&t2) {
+        if is_never(&h2) {
+            return Ok(h1);
+        }
+        // Where widening leaves both alike (it only reaches into a
+        // literal, a sum, a tuple or a union of literals, not a record,
+        // array or function), the widened attempt below is this one.
+        let widens = |t: &Type| {
+            matches!(
+                t,
+                Type::Literal(_) | Type::Maybe(..) | Type::Tuple(_) | Type::Union(_)
+            )
+        };
+        if !widens(&h1) && !widens(&h2) {
+            let snap = self.snapshot_inference();
+            if self.quietly(|s| s.unify(span, &h1, &h2)).is_ok() {
+                return Ok(self.zonk_head(&h1));
+            }
+            self.restore_snapshot(snap);
+        }
+        let t1 = self.zonk_arms(t1);
+        let t2 = self.zonk_arms(t2);
+        if t1 == t2 {
             return Ok(t1);
         }
         // Equal after widening literals (also inside tuples, rows, …) —
@@ -1098,7 +1152,7 @@ impl InferState {
             let (a, b) = (self.widen(span, &t1), self.widen(span, &t2));
             let snap = self.snapshot_inference();
             if self.quietly(|s| s.unify(span, &a, &b)).is_ok() {
-                return Ok(self.zonk(&a));
+                return Ok(self.zonk_head(&a));
             }
             self.restore_snapshot(snap);
         }
@@ -1111,7 +1165,7 @@ impl InferState {
                 }
                 let snap = self.snapshot_inference();
                 if self.quietly(|s| s.subsume(span, small, big)).is_ok() {
-                    return Ok(self.zonk(big));
+                    return Ok(self.zonk_head(big));
                 }
                 self.restore_snapshot(snap);
             }
@@ -1144,8 +1198,8 @@ impl InferState {
     /// substitution is rolled back and a union is returned. This means
     /// it is safe to call speculatively.
     pub fn union_of(&mut self, span: Span, t1: &Type, t2: &Type) -> Type {
-        let t1 = self.zonk(t1);
-        let t2 = self.zonk(t2);
+        let t1 = self.zonk_arms(t1);
+        let t2 = self.zonk_arms(t2);
 
         if t1 == t2 {
             return t1;
@@ -1187,7 +1241,7 @@ impl InferState {
         let snap = self.snapshot_inference();
 
         if self.quietly(|s| s.unify(span, &t1, &t2)).is_ok() {
-            return self.zonk(&t1);
+            return self.zonk_head(&t1);
         }
 
         self.restore_snapshot(snap);
@@ -1264,8 +1318,8 @@ impl InferState {
             return Ok(());
         }
         self.restore_snapshot(snap);
-        let sub = self.zonk(sub);
-        let sup = self.zonk(sup);
+        let sub = self.zonk_head(sub);
+        let sup = self.zonk_head(sup);
 
         // S-NoThis: a function that uses no `this` (`ArrowThis`) can be
         // called with any, so it flows into a slot for a function with
@@ -1273,8 +1327,8 @@ impl InferState {
         // constructor's (it isn't one). Not the other way: a slot for one
         // that uses none may be called either way.
         if let (Some(sub_this), Some(sup_this)) = (callable_this(&sub), callable_this(&sup)) {
-            if matches!(self.zonk(&sub_this), Type::ArrowThis)
-                && !matches!(self.zonk(&sup_this), Type::ArrowThis | Type::NewTarget)
+            if matches!(self.zonk_head(&sub_this), Type::ArrowThis)
+                && !matches!(self.zonk_head(&sup_this), Type::ArrowThis | Type::NewTarget)
             {
                 let sub_as = with_callable_this(&sub, sup_this.clone());
                 let snap = self.snapshot_inference();
@@ -1285,9 +1339,9 @@ impl InferState {
             }
             // A function that reads `this` where one that uses none is
             // expected: say so, as the types print alike.
-            if matches!(self.zonk(&sup_this), Type::ArrowThis)
+            if matches!(self.zonk_head(&sup_this), Type::ArrowThis)
                 && !matches!(
-                    self.zonk(&sub_this),
+                    self.zonk_head(&sub_this),
                     Type::ArrowThis | Type::Var(_) | Type::Error
                 )
             {
@@ -1353,7 +1407,7 @@ impl InferState {
         // ⋃τᵢ may be any τᵢ at runtime, so each must fit.
         if let Type::Union(members) = &sub {
             for m in members {
-                let m_resolved = self.zonk(m);
+                let m_resolved = self.zonk_head(m);
                 self.subsume(span, &m_resolved, &sup)?;
             }
             return Ok(());
@@ -1364,7 +1418,7 @@ impl InferState {
             let mut matching: Vec<usize> = Vec::new();
             for (i, m) in members.iter().enumerate() {
                 let snap = self.snapshot_inference();
-                let m_resolved = self.zonk(m);
+                let m_resolved = self.zonk_head(m);
                 let ok = self.quietly(|s| s.subsume(span, &sub, &m_resolved)).is_ok();
                 // Roll back on every probe; we re-run on the chosen
                 // arm below so the committed substitution comes from
@@ -1378,7 +1432,7 @@ impl InferState {
                 }
             }
             if matching.len() == 1 {
-                let chosen = self.zonk(&members[matching[0]]);
+                let chosen = self.zonk_head(&members[matching[0]]);
                 return self.subsume(span, &sub, &chosen);
             }
             // A function fits no arm: if one arm is a function type, its
@@ -1386,7 +1440,7 @@ impl InferState {
             if matching.is_empty() && callable_this(&sub).is_some() {
                 let fns: Vec<Type> = members
                     .iter()
-                    .map(|m| self.zonk(m))
+                    .map(|m| self.zonk_head(m))
                     .filter(|m| callable_this(m).is_some() || matches!(m, Type::Func { .. }))
                     .collect();
                 if let [only] = fns.as_slice() {
@@ -1430,7 +1484,7 @@ impl InferState {
         let snap = self.snapshot_inference();
         let fits = self.quietly(|s| s.fits_covariantly(span, sub, sup));
         self.restore_snapshot(snap);
-        match (fits, self.flatten_type(sup)) {
+        match (fits, self.main_subst.flatten_bounded(sup, 4_000)) {
             (true, Type::Array(_)) => Some(
                 "an array can be written to, so its element type must match exactly \
                  (a push through the expected type could add an element this array \
@@ -1457,7 +1511,10 @@ impl InferState {
         let inner = |s: &mut Self, a: &Type, b: &Type| {
             s.subsume(span, a, b).is_ok() || s.fits_covariantly(span, a, b)
         };
-        match (self.flatten_type(sub), self.flatten_type(sup)) {
+        match (
+            self.main_subst.flatten_bounded(sub, 4_000),
+            self.main_subst.flatten_bounded(sup, 4_000),
+        ) {
             (Type::Array(a), Type::Array(b)) | (Type::Map(a), Type::Map(b)) => inner(self, &a, &b),
             (Type::Row(r1), Type::Row(r2))
                 if r1.is_closed() && r2.is_closed() && r1.props.keys().eq(r2.props.keys()) =>
@@ -1474,8 +1531,10 @@ impl InferState {
     /// For two record types, which fields one has and the other lacks:
     /// what a mismatch between them is usually about.
     fn row_difference(&self, expected: &Type, found: &Type) -> Option<String> {
-        let (Type::Row(e), Type::Row(f)) = (self.flatten_type(expected), self.flatten_type(found))
-        else {
+        let (Type::Row(e), Type::Row(f)) = (
+            self.main_subst.flatten_bounded(expected, 4_000),
+            self.main_subst.flatten_bounded(found, 4_000),
+        ) else {
             return None;
         };
         let visible = |r: &crate::types::RowType| -> Vec<String> {
@@ -2112,7 +2171,7 @@ impl InferState {
         let mut pinned = false;
         let mut keep = Vec::new();
         for (this, span, callee) in std::mem::take(&mut self.pending_detached) {
-            match self.zonk(&this) {
+            match self.zonk_head(&this) {
                 Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => {}
                 Type::Var(v) => {
                     if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
@@ -2150,6 +2209,12 @@ impl InferState {
         extra: &[TVarName],
     ) -> TypeScheme {
         self.constraint_removals += 1;
+        // A type too large to write out isn't generalised: it keeps its
+        // monomorphic type (sound, if less general) rather than be copied
+        // into a scheme.
+        if self.too_large_to_generalise(ty) {
+            return TypeScheme::mono(ty.clone());
+        }
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
         // for performance reasons; without flattening here, a
@@ -2189,7 +2254,7 @@ impl InferState {
             .filter(|v| v.is_flex() && !fixed_vars.contains(v))
             .filter(|v| {
                 let var = Type::Var(v.clone());
-                self.zonk(&var) == var
+                self.zonk_head(&var) == var
             })
             .collect();
         gen_vars.sort_by_key(|v| v.id());
@@ -2281,7 +2346,7 @@ impl InferState {
                         for v in reach.vars {
                             if v.is_flex()
                                 && !fixed_vars.contains(&v)
-                                && self.zonk(&Type::Var(v.clone())) == Type::Var(v.clone())
+                                && self.zonk_head(&Type::Var(v.clone())) == Type::Var(v.clone())
                                 && gen_var_set.insert(v.clone())
                             {
                                 gen_vars.push(v);

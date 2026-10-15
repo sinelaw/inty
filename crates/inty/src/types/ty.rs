@@ -14,6 +14,10 @@ pub type TVarId = u32;
 /// Unique identifier for named recursive types.
 pub type TypeId = u32;
 
+/// A `Type::Named` id no type has: a part of a type a printer left out
+/// (`…`), past what a diagnostic shows (see `Subst::flatten_bounded`).
+pub const ELIDED_TYPE_ID: TypeId = TypeId::MAX;
+
 /// Type variable names differentiate between flexible (unification) and
 /// rigid (skolem) variables.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

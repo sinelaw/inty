@@ -353,10 +353,10 @@ impl InferState {
         if let Some((z, value)) = optional {
             let value = self.widen(span, value);
             // (Two nothings are one: `c ? null : f()` with `f()` null.)
-            if self.zonk(&value) != z.ty() {
+            if self.zonk_head(&value) != z.ty() {
                 let sum = Type::Maybe(z, Box::new(self.fresh_type_var()));
                 self.subsume(span, &value, &sum)?;
-                return Ok(self.zonk(&sum));
+                return Ok(self.zonk_head(&sum));
             }
         }
 
@@ -391,7 +391,7 @@ impl InferState {
                 let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
                 let cons = self.infer_discarded(&cons_env, consequent)?;
                 let alt = self.infer_discarded(&alt_env, alternate)?;
-                if is_never(&self.zonk(&cons)) && is_never(&self.zonk(&alt)) {
+                if is_never(&self.zonk_head(&cons)) && is_never(&self.zonk_head(&alt)) {
                     Ok(Type::never())
                 } else {
                     Ok(Type::Undefined)
@@ -498,7 +498,7 @@ impl InferState {
         let is_never = |t: &Type| matches!(t, Type::Union(m) if m.is_empty());
         let result = if let Some(alt) = alternate {
             let (alt_type, _) = self.infer_stmt(&alt_env, alt)?;
-            if is_never(&self.zonk(&cons_type)) && is_never(&self.zonk(&alt_type)) {
+            if is_never(&self.zonk_head(&cons_type)) && is_never(&self.zonk_head(&alt_type)) {
                 Type::never()
             } else {
                 Type::Undefined
@@ -656,7 +656,7 @@ impl InferState {
 
         let loop_env = match left {
             ForInLhs::VarDecl(name, _, decl_span, _) => {
-                let var_type = self.zonk(&elem_type);
+                let var_type = self.zonk_head(&elem_type);
                 self.record_decl_type(*decl_span, var_type.clone());
                 self.bind(
                     env,
