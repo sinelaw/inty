@@ -30,6 +30,8 @@ fn run<L: Language>(lang: &L, cfg: &Config, climbing: bool) {
             std::io::stdout().flush().ok();
         });
         print!("{}", c.summary());
+        println!("\nthe ladder, ready for a document:\n");
+        print!("{}", c.doc());
         println!("\nthe system found, in full:\n");
         print!("{}", c.result());
     } else {

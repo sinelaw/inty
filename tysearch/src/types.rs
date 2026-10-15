@@ -468,6 +468,9 @@ pub struct Names<'a> {
     pub cons: &'a [&'a str],
     /// Per refined sort, its eliminators' names and parameter counts.
     pub shapes: &'a [Vec<(String, usize)>],
+    /// For people: a sort refined only by fields (eliminators `.f` with a
+    /// result and no arguments) prints as a record, `{x: a, y: b}`.
+    pub records: bool,
 }
 
 impl Names<'_> {
@@ -489,7 +492,18 @@ impl Names<'_> {
                     let args: Vec<String> = args.iter().map(|a| self.ty(a)).collect();
                     format!("{} -> {}", args.join(", "), self.ty(res))
                 };
-                if shape.len() <= 1 {
+                let fields = !shape.is_empty()
+                    && shape
+                        .iter()
+                        .all(|(name, n)| *n == 1 && name.starts_with('.'));
+                if self.records && fields && shape.len() == ps.len() {
+                    let parts: Vec<String> = shape
+                        .iter()
+                        .zip(ps)
+                        .map(|((name, _), t)| format!("{}: {}", &name[1..], self.ty(t)))
+                        .collect();
+                    format!("{{{}}}", parts.join(", "))
+                } else if shape.len() <= 1 {
                     format!("{}<{}>", self.sorts[*s], slice(ps))
                 } else {
                     // One part per eliminator: `T2{fst: -> a, snd: -> b}`.

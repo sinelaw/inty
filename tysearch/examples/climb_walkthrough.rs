@@ -118,6 +118,8 @@ fn main() {
         std::io::stdout().flush().ok();
     });
     print!("{}", cl.summary());
+    println!("\nthe ladder, ready for a document:\n");
+    print!("{}", cl.doc());
     println!("\nexamples (what each kept step's checker says):");
     for (label, t) in &examples {
         let run = match m.eval_in(t, &[]) {

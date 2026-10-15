@@ -652,6 +652,22 @@ impl Language for Model {
         v.isolate(6)
     }
 
+    fn kind_name(&self, v: &Val) -> Option<String> {
+        Some(match v {
+            Val::Num(_) => "number".into(),
+            Val::Str(_) => "string".into(),
+            Val::Bool(_) | Val::Undefined | Val::Null => "bool".into(),
+            Val::Clo(c) if c.arity == 1 => "fn".into(),
+            Val::Clo(_) => "fn2".into(),
+            Val::Arr(_) => "array".into(),
+            Val::Obj(o) => {
+                let mut keys: Vec<&str> = o.0.borrow().iter().map(|(l, _)| *l).collect();
+                keys.sort();
+                format!("{{{}}}", keys.join(","))
+            }
+        })
+    }
+
     fn show_value(&self, v: &Val) -> String {
         match v {
             Val::Num(b) => f64::from_bits(*b).to_string(),

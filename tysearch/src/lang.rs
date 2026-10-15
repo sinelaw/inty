@@ -197,6 +197,13 @@ pub trait Language {
     fn eval_in(&self, t: &Term, env: &[Self::Value]) -> Outcome<Self::Value>;
     fn show_value(&self, v: &Self::Value) -> String;
 
+    /// A name for the kind of value `v` is, such as `number`, used only to
+    /// print rules for people; the search never sees it. A sort gets the
+    /// name its members agree on, if no other sort has it.
+    fn kind_name(&self, _v: &Self::Value) -> Option<String> {
+        None
+    }
+
     fn eval(&self, t: &Term) -> Outcome<Self::Value> {
         self.eval_in(t, &[])
     }

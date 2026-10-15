@@ -104,6 +104,9 @@ pub struct Discovery {
     pub config: Config,
     pub con_names: Vec<&'static str>,
     pub sort_names: Vec<String>,
+    /// Per sort, the name the language gives its members (only to print
+    /// rules for people), or its own name.
+    pub kind_names: Vec<String>,
     pub sort_examples: Vec<Vec<String>>,
     /// Per sort, the eliminators it is refined by.
     pub refined_by: Vec<Option<String>>,
@@ -177,6 +180,19 @@ pub fn discover_with<L: Language>(lang: &L, cfg: &Config, cache: &mut SearchCach
     let nsorts = sem.count();
     note(&format!("{nsorts} sorts, universe {}", sem.universe.len()));
     let sort_names: Vec<String> = (0..nsorts).map(|s| format!("T{s}")).collect();
+    let agreed: Vec<Option<String>> = (0..nsorts)
+        .map(|s| {
+            let mut names = sem.members[s].iter().map(|v| lang.kind_name(v));
+            let first = names.next().flatten()?;
+            names.all(|n| n.as_deref() == Some(&first)).then_some(first)
+        })
+        .collect();
+    let kind_names: Vec<String> = (0..nsorts)
+        .map(|s| match &agreed[s] {
+            Some(n) if agreed.iter().filter(|m| m.as_ref() == Some(n)).count() == 1 => n.clone(),
+            _ => sort_names[s].clone(),
+        })
+        .collect();
     let sort_examples = (0..nsorts)
         .map(|s| {
             sem.members[s]
@@ -489,6 +505,7 @@ pub fn discover_with<L: Language>(lang: &L, cfg: &Config, cache: &mut SearchCach
         config: cfg.clone(),
         con_names: sig.iter().map(|c| c.name).collect(),
         sort_names,
+        kind_names,
         sort_examples,
         refined_by,
         shapes,
@@ -1275,6 +1292,18 @@ impl Discovery {
             sorts: &self.sort_names,
             cons: &self.con_names,
             shapes: &self.shapes,
+            records: false,
+        }
+    }
+
+    /// Names for people: sorts by the language's names for their members,
+    /// records as records.
+    pub fn readable_names(&self) -> Names<'_> {
+        Names {
+            sorts: &self.kind_names,
+            cons: &self.con_names,
+            shapes: &self.shapes,
+            records: true,
         }
     }
 
@@ -1287,7 +1316,10 @@ impl Discovery {
     /// bound variables are generic, which a test narrows, and which rule
     /// variables may stand for unions.
     pub fn fact_strings(&self) -> Vec<String> {
-        let names = self.names();
+        self.facts_with(&self.names())
+    }
+
+    fn facts_with(&self, names: &Names) -> Vec<String> {
         let mut out = Vec::new();
         let mut policies: Vec<_> = self.checker.policies.iter().collect();
         policies.sort_by_key(|(k, _)| **k);
@@ -1302,7 +1334,7 @@ impl Discovery {
         let mut narrow: Vec<_> = self.checker.narrow.iter().collect();
         narrow.sort_by_key(|(k, _)| **k);
         for ((con, i, j), sorts) in narrow {
-            let to: Vec<&str> = sorts.iter().map(|&t| self.sort_names[t].as_str()).collect();
+            let to: Vec<&str> = sorts.iter().map(|&t| names.sorts[t].as_str()).collect();
             let to = if to.is_empty() {
                 "never".to_string()
             } else {
@@ -2055,6 +2087,104 @@ pub fn step_report(i: usize, s: &Step, prev: &System) -> String {
         marked(&mut out, &facts, &prev.facts);
     }
     out
+}
+
+/// A kept step's type system for a document: in Markdown, with readable
+/// names, what is new (`+`) or gone (`-`) since `prev`, the rest only
+/// counted, and a family of more than three like rules cut to two.
+pub fn step_doc(i: usize, s: &Step, prev: Option<&Discovery>) -> String {
+    let d = &s.discovery;
+    let rules = |d: &Discovery| -> Vec<(usize, String)> {
+        let names = d.readable_names();
+        let mut rs: Vec<(usize, String)> =
+            d.rules.iter().map(|r| (r.con, names.schema(r))).collect();
+        rs.sort();
+        rs
+    };
+    let now = rules(d);
+    let before = prev.map(rules).unwrap_or_default();
+    let facts = d.facts_with(&d.readable_names());
+    let facts_before = prev
+        .map(|p| p.facts_with(&p.readable_names()))
+        .unwrap_or_default();
+    let mut out = format!(
+        "#### Step {i}: {} ({:.1}% of safe programs typed)\n\n",
+        s.change,
+        100.0 * s.score.coverage()
+    );
+    if prev.is_none() {
+        out.push_str("Kinds of value:\n\n");
+        for (t, ex) in d.sort_examples.iter().enumerate() {
+            out.push_str(&format!(
+                "- `{}`: {}, ...\n",
+                d.kind_names[t],
+                ex.join(", ")
+            ));
+        }
+        out.push('\n');
+    }
+    let kept = now.iter().filter(|r| before.contains(r)).count();
+    out.push_str(&format!("{} rules", now.len()));
+    if prev.is_some() {
+        out.push_str(&format!(", {kept} of them as before"));
+    }
+    out.push_str(":\n\n```\n");
+    // Each constructor's new rules, then its gone ones, families cut.
+    let family = |out: &mut String, mark: char, rs: Vec<&String>| {
+        let n = rs.len();
+        let shown = if n > 3 { 2 } else { n };
+        for r in &rs[..shown] {
+            out.push_str(&format!("{mark} {r}\n"));
+        }
+        if n > shown {
+            out.push_str(&format!("  ... and {} more like these\n", n - shown));
+        }
+    };
+    let mut cons: Vec<usize> = now.iter().chain(&before).map(|(c, _)| *c).collect();
+    cons.sort();
+    cons.dedup();
+    for c in cons {
+        let new: Vec<&String> = now
+            .iter()
+            .filter(|r| r.0 == c && !before.contains(r))
+            .map(|r| &r.1)
+            .collect();
+        let gone: Vec<&String> = before
+            .iter()
+            .filter(|r| r.0 == c && !now.contains(r))
+            .map(|r| &r.1)
+            .collect();
+        family(&mut out, '+', new);
+        family(&mut out, '-', gone);
+    }
+    let changed = facts.iter().any(|f| !facts_before.contains(f))
+        || facts_before.iter().any(|f| !facts.contains(f));
+    if changed {
+        out.push_str("\nbesides the rules:\n");
+        for f in &facts {
+            let mark = if facts_before.contains(f) { ' ' } else { '+' };
+            out.push_str(&format!("{mark} {f}\n"));
+        }
+        for f in facts_before.iter().filter(|f| !facts.contains(f)) {
+            out.push_str(&format!("- {f}\n"));
+        }
+    }
+    out.push_str("```\n");
+    out
+}
+
+impl Climb {
+    /// Every kept step's `step_doc`, each against the kept one before.
+    pub fn doc(&self) -> String {
+        let mut out = String::new();
+        let mut prev: Option<&Discovery> = None;
+        for (i, s) in self.steps.iter().enumerate().filter(|(_, s)| s.kept) {
+            out.push_str(&step_doc(i, s, prev));
+            out.push('\n');
+            prev = Some(&s.discovery);
+        }
+        out
+    }
 }
 
 impl fmt::Display for Climb {
