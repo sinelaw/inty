@@ -2154,7 +2154,8 @@ pub fn step_doc(i: usize, s: &Step, prev: Option<&Discovery>) -> String {
             .filter(|r| r.0 == c && !now.contains(r))
             .map(|r| &r.1)
             .collect();
-        family(&mut out, '+', new);
+        // The first step has nothing to be new against.
+        family(&mut out, if prev.is_some() { '+' } else { ' ' }, new);
         family(&mut out, '-', gone);
     }
     let changed = facts.iter().any(|f| !facts_before.contains(f))
@@ -2162,7 +2163,11 @@ pub fn step_doc(i: usize, s: &Step, prev: Option<&Discovery>) -> String {
     if changed {
         out.push_str("\nbesides the rules:\n");
         for f in &facts {
-            let mark = if facts_before.contains(f) { ' ' } else { '+' };
+            let mark = if prev.is_none() || facts_before.contains(f) {
+                ' '
+            } else {
+                '+'
+            };
             out.push_str(&format!("{mark} {f}\n"));
         }
         for f in facts_before.iter().filter(|f| !facts.contains(f)) {
