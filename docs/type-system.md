@@ -705,7 +705,7 @@ Quick reference for the JavaScript surface inty accepts:
 | Category       | What works                                                                                                |
 |----------------|-----------------------------------------------------------------------------------------------------------|
 | Literals       | template literals, regex literals, object property shorthand (`{a, b}`)                                   |
-| Variables      | `var`, `const`, `let` (treated as `var` — block scoping isn't modelled)                                   |
+| Variables      | `var` (function-scoped), `const`, `let` (block-scoped; a `for (const x of …)` binding is the loop body's)  |
 | Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
 | Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |

@@ -5934,3 +5934,29 @@ fn dict_dot_and_bracket_writes_agree() {
         assert!(check_program(&src, &[]).is_err(), "{src}");
     }
 }
+#[test]
+fn block_scoped_bindings_are_distinct() {
+    // `let`/`const` are block-scoped, and a `for … of` binding is the
+    // loop body's: two bindings of one name in one function are two
+    // variables, each with its own type, and the later one, never
+    // reassigned, narrows.
+    let src = "/** function f(Dict<String>) => String */\n\
+               function f(d) {\n\
+                 for (const [k, v] of [[1, 2]]) { const z = v + 1; }\n\
+                 const v = d[\"k\"];\n\
+                 if (v !== undefined) { const g = () => v.length; return v; }\n\
+                 return \"\";\n\
+               }\n\
+               /** function g(Dict<String>) => Number */\n\
+               function g(d) {\n\
+                 { let v = 1; v = 2; }\n\
+                 for (let i = 0; i < 2; i++) { const v = true; }\n\
+                 const v = d[\"k\"];\n\
+                 if (v !== undefined) { const h = () => v.length; return h(); }\n\
+                 return 0;\n\
+               }\n\
+               function h() { if (true) { const x = 1; return x + 1; } else { const x = \"s\"; return x.length; } }";
+    check_program(src, &[]).unwrap();
+    // The inner binding isn't visible after its block.
+    assert!(check_program("function f() { { const x = 1; } return x; }", &[]).is_err());
+}
