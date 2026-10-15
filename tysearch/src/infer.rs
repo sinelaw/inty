@@ -159,6 +159,20 @@ impl Checker {
         }
     }
 
+    /// Per rule, the variables that may stand for a union of what its
+    /// children give them: none without widening.
+    pub fn union_vars(&self) -> Vec<(&Schema, Vec<u32>)> {
+        let mut out = Vec::new();
+        for (rs, ws) in self.by_con.iter().zip(&self.widen) {
+            for (r, w) in rs.iter().zip(ws) {
+                if !w.is_empty() {
+                    out.push((r, w.clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// Which variables of `rule` may not stand for unions.
     pub fn set_no_unions(&mut self, rule: &Schema, vars: &[u32]) {
         if let Some(i) = self.by_con[rule.con].iter().position(|r| r == rule) {

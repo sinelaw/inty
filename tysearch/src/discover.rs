@@ -1283,6 +1283,55 @@ impl Discovery {
         self.rules.iter().map(|r| self.names().schema(r)).collect()
     }
 
+    /// What the checker knows besides the rules, one fact a line: which
+    /// bound variables are generic, which a test narrows, and which rule
+    /// variables may stand for unions.
+    pub fn fact_strings(&self) -> Vec<String> {
+        let names = self.names();
+        let mut out = Vec::new();
+        let mut policies: Vec<_> = self.checker.policies.iter().collect();
+        policies.sort_by_key(|(k, _)| **k);
+        for ((con, i, j), (policy, _)) in policies {
+            let when = match policy {
+                Policy::Never => continue,
+                Policy::IfValue => "generic when bound to a value",
+                Policy::Always => "generic",
+            };
+            out.push(format!("{} child {i}, x{j}: {when}", self.con_names[*con]));
+        }
+        let mut narrow: Vec<_> = self.checker.narrow.iter().collect();
+        narrow.sort_by_key(|(k, _)| **k);
+        for ((con, i, j), sorts) in narrow {
+            let to: Vec<&str> = sorts.iter().map(|&t| self.sort_names[t].as_str()).collect();
+            let to = if to.is_empty() {
+                "never".to_string()
+            } else {
+                to.join(" | ")
+            };
+            out.push(format!(
+                "{} child {i}, x{j}: narrowed to {to}",
+                self.con_names[*con]
+            ));
+        }
+        for (r, vs) in self.checker.union_vars() {
+            let vs: Vec<String> = vs.iter().map(|&v| crate::types::var_name(v)).collect();
+            out.push(format!(
+                "{}: {} may be a union",
+                names.schema(r),
+                vs.join(", ")
+            ));
+        }
+        out
+    }
+
+    /// The rules and the facts, as `step_report` compares them.
+    pub fn system(&self) -> System {
+        System {
+            rules: self.rule_strings(),
+            facts: self.fact_strings(),
+        }
+    }
+
     pub fn search(&self, con: &str) -> &ConSearch {
         self.searches
             .iter()
@@ -1934,7 +1983,17 @@ pub fn climb_with<L: Language>(
 /// What one step of the climb did, and, if it was kept, the type system
 /// it leaves: every rule, those new since `prev` (the last kept step's)
 /// marked `+`, and those gone listed after.
-pub fn step_report(i: usize, s: &Step, prev: &[String]) -> String {
+/// A type system as printed: its rules, and what the checker knows
+/// besides them.
+#[derive(Clone, Default)]
+pub struct System {
+    pub rules: Vec<String>,
+    pub facts: Vec<String>,
+}
+
+/// One step of the climb, with a kept step's type system marked against
+/// the previous kept one's: `+` new, `-` gone.
+pub fn step_report(i: usize, s: &Step, prev: &System) -> String {
     let d = &s.discovery;
     let gain = s.score.typed as i64 - s.against.typed as i64;
     let mut out = format!(
@@ -1980,23 +2039,31 @@ pub fn step_report(i: usize, s: &Step, prev: &[String]) -> String {
             .collect();
         out.push_str(&format!("    subtyping: {}\n", order.join(", ")));
     }
-    for r in &now {
-        let mark = if prev.contains(r) { ' ' } else { '+' };
-        out.push_str(&format!("  {mark} {r}\n"));
-    }
-    for r in prev.iter().filter(|r| !now.contains(r)) {
-        out.push_str(&format!("  - {r}\n"));
+    let facts = d.fact_strings();
+    let marked = |out: &mut String, now: &[String], prev: &[String]| {
+        for r in now {
+            let mark = if prev.contains(r) { ' ' } else { '+' };
+            out.push_str(&format!("  {mark} {r}\n"));
+        }
+        for r in prev.iter().filter(|r| !now.contains(r)) {
+            out.push_str(&format!("  - {r}\n"));
+        }
+    };
+    marked(&mut out, &now, &prev.rules);
+    if !facts.is_empty() || !prev.facts.is_empty() {
+        out.push_str("  and, besides the rules:\n");
+        marked(&mut out, &facts, &prev.facts);
     }
     out
 }
 
 impl fmt::Display for Climb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut prev: Vec<String> = Vec::new();
+        let mut prev = System::default();
         for (i, s) in self.steps.iter().enumerate() {
             write!(f, "{}", step_report(i, s, &prev))?;
             if s.kept {
-                prev = s.discovery.rule_strings();
+                prev = s.discovery.system();
             }
         }
         write!(f, "{}", self.summary())

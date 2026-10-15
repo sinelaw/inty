@@ -1,4 +1,4 @@
-use tysearch::discover::{climb_with, discover, step_report, Config};
+use tysearch::discover::{climb_with, discover, step_report, Config, System};
 use tysearch::lang::Language;
 use tysearch::langs::{
     arith::Arith, coerce::Coerce, core::Core, effects::Effects, files::Files, model::Model,
@@ -20,11 +20,11 @@ type system as it finds it.
 fn run<L: Language>(lang: &L, cfg: &Config, climbing: bool) {
     if climbing {
         // Each step as it comes, with the type system it leaves.
-        let mut prev: Vec<String> = Vec::new();
+        let mut prev = System::default();
         let c = climb_with(lang, cfg, |i, s| {
             print!("{}", step_report(i, s, &prev));
             if s.kept {
-                prev = s.discovery.rule_strings();
+                prev = s.discovery.system();
             }
             use std::io::Write;
             std::io::stdout().flush().ok();
