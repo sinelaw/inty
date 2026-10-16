@@ -1837,6 +1837,7 @@ impl InferState {
                             body: body.clone(),
                             type_annotation: type_annotation.clone(),
                             return_type_ast: None,
+                            name_span: None,
                             span: *span,
                         },
                     ),
@@ -1889,6 +1890,7 @@ impl InferState {
                                     body: body.clone(),
                                     type_annotation: type_annotation.clone(),
                                     return_type_ast: None,
+                                    name_span: None,
                                     span: *f_span,
                                 },
                             )?;
@@ -2021,6 +2023,7 @@ impl InferState {
                 body,
                 type_annotation,
                 return_type_ast,
+                name_span,
                 span,
             } => self.infer_stmt_function_decl(
                 env,
@@ -2029,6 +2032,7 @@ impl InferState {
                 body,
                 type_annotation,
                 return_type_ast.as_ref(),
+                *name_span,
                 *span,
             ),
         }

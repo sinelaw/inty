@@ -223,6 +223,7 @@ fn read_module(
                         body: body.clone(),
                         type_annotation: type_annotation.clone(),
                         return_type_ast: None,
+                        name_span: None,
                         span: *span,
                     });
                 }
@@ -248,6 +249,7 @@ fn read_module(
                         body: body.clone(),
                         type_annotation: type_annotation.clone(),
                         return_type_ast: None,
+                        name_span: None,
                         span: *span,
                     });
                 }

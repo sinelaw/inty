@@ -354,6 +354,7 @@ fn rename_stmt(stmt: &Stmt, from: &str, to: &str) -> Stmt {
             body,
             type_annotation,
             return_type_ast,
+            name_span,
             span,
         } => Stmt::FunctionDecl {
             name: if name == from {
@@ -374,6 +375,7 @@ fn rename_stmt(stmt: &Stmt, from: &str, to: &str) -> Stmt {
             body: Box::new(rename_stmt(body, from, to)),
             type_annotation: type_annotation.clone(),
             return_type_ast: return_type_ast.clone(),
+            name_span: *name_span,
             span: *span,
         },
         Stmt::Expr { expression, span } => Stmt::Expr {

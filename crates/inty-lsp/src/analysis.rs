@@ -207,14 +207,14 @@ impl Analysis {
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str: format_scheme(state.display_scheme(scheme)),
+                    type_str: format_scheme(state, state.display_scheme(scheme)),
                 });
             }
             if let Some(ty) = state.get_decl_type(def_span) {
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str: format_type(state.display_type(ty)),
+                    type_str: format_type(state, state.display_type(ty)),
                 });
             }
             // Resolver knows the def but inference didn't record a
@@ -224,7 +224,7 @@ impl Analysis {
                 return Some(HoverResult {
                     name: def.name.clone(),
                     span: hit_span,
-                    type_str: format_scheme(state.display_scheme(scheme)),
+                    type_str: format_scheme(state, state.display_scheme(scheme)),
                 });
             }
         }
@@ -238,7 +238,7 @@ impl Analysis {
         Some(HoverResult {
             name,
             span,
-            type_str: format_scheme(state.display_scheme(scheme)),
+            type_str: format_scheme(state, state.display_scheme(scheme)),
         })
     }
 
@@ -249,7 +249,7 @@ impl Analysis {
         let env = self.final_env.as_ref()?;
         let state = self.state.as_ref()?;
         let scheme = env.lookup(name)?;
-        Some(format_scheme(state.display_scheme(scheme)))
+        Some(format_scheme(state, state.display_scheme(scheme)))
     }
 
     /// If the byte just before `offset` is `.` and the preceding
@@ -311,7 +311,7 @@ impl Analysis {
             .map(|(name, entry)| CompletionItem {
                 label: name.0.clone(),
                 kind: Some(CompletionItemKind::FIELD),
-                detail: Some(format_type(entry.ty.clone())),
+                detail: Some(format_type(state, entry.ty.clone())),
                 ..Default::default()
             })
             .collect();
@@ -351,8 +351,11 @@ impl Analysis {
         let search_end = call_span.end.min(bytes.len());
         let paren_open = (search_start..search_end).find(|&i| bytes[i] == b'(')?;
 
-        let param_labels: Vec<String> = params.iter().map(|p| format_type(p.clone())).collect();
-        let ret_label = format_type(ret.clone());
+        let param_labels: Vec<String> = params
+            .iter()
+            .map(|p| format_type(state, p.clone()))
+            .collect();
+        let ret_label = format_type(state, ret.clone());
         let signature_label = format!(
             "{}({}): {}",
             callee_label,
@@ -418,23 +421,52 @@ impl Analysis {
             if matches!(def.kind, DefKind::Function) {
                 // Function decls show only the return type, anchored
                 // after `)`, instead of repeating the whole signature
-                // after the function's name.
+                // after the function's name. A declared return type
+                // (`def f() -> int`) already says it.
+                // A Python `class C():` lowers to a factory function;
+                // its "return type" is the instance, not worth a hint.
+                if def.annotated
+                    || text[..def_span.start.min(text.len())]
+                        .trim_end()
+                        .ends_with("class")
+                {
+                    continue;
+                }
                 if let Some((_, _, ret)) = applied.as_callable() {
                     if let Some(pos) = close_paren_after(text, def_span.end) {
                         let where_clause = where_clause_for(state, def_span, &mut tidy);
                         hints.push(InlayHintData {
                             after_byte: pos,
-                            label: format!(" -> {}{}", format_type(ret.clone()), where_clause),
+                            label: format!(
+                                " -> {}{}",
+                                format_hint(state, ret.clone()),
+                                where_clause
+                            ),
                         });
                     }
                 }
                 continue;
             }
 
+            // Inference gave up on this binding (an error was reported
+            // where it failed); `x: <error>` adds nothing to that.
+            if matches!(applied, Type::Error) {
+                continue;
+            }
+            // `x: int` already shows its type in the source. (A JSDoc
+            // annotation sits in a comment elsewhere, so those bindings
+            // still get a hint.)
+            if def.annotated
+                && text[def_span.end.min(text.len())..]
+                    .trim_start()
+                    .starts_with(':')
+            {
+                continue;
+            }
             let where_clause = where_clause_for(state, def_span, &mut tidy);
             hints.push(InlayHintData {
                 after_byte: def_span.end,
-                label: format!(": {}{}", format_type(applied), where_clause),
+                label: format!(": {}{}", format_hint(state, applied), where_clause),
             });
         }
         hints
@@ -459,25 +491,79 @@ fn where_clause_for(state: &InferState, def_span: Span, tidy: &mut inty::types::
         return String::new();
     };
     let displayed = state.display_scheme_in(tidy, scheme);
-    if displayed.body.preds.is_empty() {
+    let preds: Vec<_> = displayed
+        .body
+        .preds
+        .into_iter()
+        .filter(|p| !is_vacuous_inject(p))
+        .collect();
+    if preds.is_empty() {
         return String::new();
     }
-    let mut ctx = PrettyContext::new();
-    format!(" where {}", ctx.format_preds(&displayed.body.preds))
+    let mut ctx = pretty_context(state, &displayed.body.ty).hiding_row_args();
+    format!(" where {}", ctx.format_preds(&preds))
+}
+
+/// `Inject a (Null | a)`: `a` is accepted where `Null | a` is, which
+/// holds by construction — `a` is one of the arms. Says nothing to a
+/// reader, so hints leave it out.
+fn is_vacuous_inject(pred: &inty::types::TypePred) -> bool {
+    if pred.class != inty::types::ClassName::Inject || pred.types.len() != 2 {
+        return false;
+    }
+    let (sub, sup) = (&pred.types[0], &pred.types[1]);
+    match sup {
+        Type::Maybe(_, inner) => **inner == *sub,
+        Type::Union(arms) => arms.contains(sub),
+        _ => false,
+    }
+}
+
+/// A fresh `PrettyContext` for printing `ty`. Classes and other
+/// nominal types print by their declared names (`Counter`, not `μ0`),
+/// as diagnostics do. Anonymous recursive types have no name: a
+/// reference back to the object `ty` itself prints as `Self`
+/// (`setUrl: (this: Self, String) => Self`), any other as `{…}`.
+fn pretty_context(state: &InferState, ty: &Type) -> PrettyContext {
+    let mut names = state.nominal_names();
+    let own_fields = match ty {
+        Type::Row(row) => Some(row.props.keys().collect::<Vec<_>>()),
+        _ => None,
+    };
+    for id in ty.named_ids() {
+        let Some(def) = state.get_named_type(id) else {
+            continue;
+        };
+        if def.name.is_some() {
+            continue;
+        }
+        let is_self = match (&own_fields, &def.body) {
+            (Some(own), Type::Row(body)) => body.props.keys().collect::<Vec<_>>() == *own,
+            _ => false,
+        };
+        names.insert(id, if is_self { "Self" } else { "{…}" }.to_string());
+    }
+    PrettyContext::with_nominal_names(names)
 }
 
 /// Format a tidied `Type` with a fresh `PrettyContext`. The context's
 /// letter map is per-call because the input is already canonical —
 /// see [`inty::types::TidyEnv`].
-fn format_type(ty: Type) -> String {
-    let mut ctx = PrettyContext::new();
-    ctx.format_type(&ty)
+fn format_type(state: &InferState, ty: Type) -> String {
+    pretty_context(state, &ty).format_type(&ty)
+}
+
+/// Format a tidied `Type` for an inlay hint, which sits inline in the
+/// code and so drops detail hover keeps (a class's field-row argument).
+fn format_hint(state: &InferState, ty: Type) -> String {
+    pretty_context(state, &ty)
+        .hiding_row_args()
+        .format_type(&ty)
 }
 
 /// Format a tidied `TypeScheme` with a fresh `PrettyContext`.
-fn format_scheme(scheme: inty::types::TypeScheme) -> String {
-    let mut ctx = PrettyContext::new();
-    ctx.format_scheme(&scheme)
+fn format_scheme(state: &InferState, scheme: inty::types::TypeScheme) -> String {
+    pretty_context(state, &scheme.body.ty).format_scheme(&scheme)
 }
 
 /// Starting at `name_end`, skip whitespace, then walk a balanced

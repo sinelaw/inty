@@ -104,6 +104,7 @@ impl<'a> Decorator<'a> {
                 body,
                 type_annotation,
                 return_type_ast,
+                name_span,
                 span,
             } => {
                 // For function declarations, always use the scheme from the environment
@@ -130,6 +131,7 @@ impl<'a> Decorator<'a> {
                         body: Box::new(decorated_body),
                         type_annotation: annotation,
                         return_type_ast: return_type_ast.clone(),
+                        name_span: *name_span,
                         span: *span,
                     },
                     new_env,

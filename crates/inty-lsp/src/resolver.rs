@@ -50,6 +50,9 @@ pub struct Def {
     pub kind: DefKind,
     /// Span covering just the identifier text of this binding.
     pub name_span: Span,
+    /// The binding carries a declared type in the AST: a parameter or
+    /// variable annotation, or a function's return annotation.
+    pub annotated: bool,
 }
 
 /// Result of running the resolver over a program.
@@ -226,9 +229,20 @@ impl Resolution {
                     name: name.to_string(),
                     kind,
                     name_span: span,
+                    annotated: false,
                 },
             );
             self.uses_of.entry(span).or_default();
+        }
+    }
+
+    /// Flag the binding at `span` as carrying a declared type. Keyed by
+    /// span, so it applies whichever pass (hoist or visit) declared it.
+    fn mark_annotated(&mut self, span: Span, annotated: bool) {
+        if annotated {
+            if let Some(def) = self.defs.get_mut(&span) {
+                def.annotated = true;
+            }
         }
     }
 
@@ -500,6 +514,7 @@ impl Resolution {
         for d in decls {
             let name_span = name_span_from_decl(d);
             self.declare(target, &d.name, name_span, def_kind);
+            self.mark_annotated(name_span, d.type_ast.is_some());
             if let Some(init) = &d.init {
                 self.visit_expr(init, scope);
             }
@@ -662,6 +677,7 @@ impl Resolution {
         // header — matching what users expect.
         for p in params {
             self.declare(func_scope, &p.name, p.span, DefKind::Param);
+            self.mark_annotated(p.span, p.type_ast.is_some());
         }
         // Hoist `var` and `function` declarations from anywhere in the
         // body that isn't itself inside a nested function.
@@ -708,9 +724,16 @@ fn hoist_stmt(stmt: &Stmt, r: &mut Resolution, scope: ScopeId) {
         // Skip Let/Const here — visit_stmt will handle them in their
         // proper block scope.
         Stmt::Var { .. } => {}
-        Stmt::FunctionDecl { name, span, .. } => {
-            let name_span = name_span_from_func(*span, name);
+        Stmt::FunctionDecl {
+            name,
+            name_span,
+            return_type_ast,
+            span,
+            ..
+        } => {
+            let name_span = inty::ast::function_name_span(*name_span, *span, name);
             r.declare(scope, name, name_span, DefKind::Function);
+            r.mark_annotated(name_span, return_type_ast.is_some());
         }
         Stmt::Export { declaration, .. } => match declaration {
             ExportDecl::Var {

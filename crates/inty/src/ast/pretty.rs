@@ -1124,6 +1124,7 @@ mod tests {
             }),
             type_annotation: None,
             return_type_ast: None,
+            name_span: None,
             span: span(),
         };
         let output = print_stmt(&stmt);
