@@ -246,6 +246,10 @@ touching the generic proofs.
   argument determines the rest, so improvement and its completeness are
   written once over each class's arity (`Pred.decide`,
   `Pred.decide_complete`), and a new instance adds an arm to each.
+  Still to come: in JavaScript, a `Dict<V>` (`Map`) also takes dot
+  writes, `d.k = v`, which store a `V` as `d["k"] = v` does (an instance
+  of `FieldWrite` on `Map`); the model's `Map` has only its `Indexable`
+  and `IndexWrite` instances.
 - **Arrays (done).** An array is a cell of its elements, as an object is
   of its fields. An index that isn't a whole number in bounds is a fault
   (`Result.fault`, which `Safe` allows), as `dynamics` makes it
@@ -368,6 +372,11 @@ touching the generic proofs.
   what can come out of two different types, the model rejects, on purpose
   ([GAPS.md](GAPS.md)).
 - Still to come: operations pushed through each arm of a union;
+  narrowing by a disjunction of tests of one value's tag (`x.kind ===
+  "a" || x.kind === "b"` keeps both cases in one branch and the rest in
+  the other; inty's `Narrowing::AnyOf`), which is two nested `caseTag`s
+  whose matching branches are one expression, so it needs either a
+  `caseTag` on a set of tags or the front end duplicating that branch;
   narrowing by `==`, and in loops; a `switch`'s exhaustiveness check;
   `?.`. Subsumption only where
   `src/infer` applies it, never as a general conversion rule. The
@@ -555,6 +564,18 @@ touching the generic proofs.
   receiver or not), and a further one is a row of a table and its `V`
   proof. Not planned: the rest of `src/builtins`, and methods that call
   back (`map`, `filter`), which would need a native to call a closure.
+  Among the methods not planned: a number's (`toFixed`, `toString`,
+  `toPrecision`, …) and a boolean's, and `replace` / `replaceAll` taking
+  a replacer function (a method that calls back).
+- Still to come: iteration. `for (x of e)`, an array literal's spread
+  `[...e]`, `Array.from(e)`, `new Set(e)` and `new Map(e)` take any `e`
+  with an instance of the class `Iterable c e` (`ClassName::Iterable`):
+  arrays, strings (of their characters), tuples, unions of iterables,
+  and records with a `[Symbol.iterator]` field (`Set`, `Map` and a
+  declared host collection). The model has `for` over arrays only; the
+  class would be one more arm of `Pred.decide` and its completeness,
+  with an instance per container, and `Array.from` a native whose map
+  function makes it a method that calls back (above).
 
 ## Frontends
 
