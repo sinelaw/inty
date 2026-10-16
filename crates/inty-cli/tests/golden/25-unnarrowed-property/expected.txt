@@ -1,0 +1,13 @@
+
+Error: Type mismatch: expected 'String', found 'String | Null'
+   ╭─[ main.js:4:43 ]
+   │
+ 4 │ function g(reg) { if (reg.palette) render(reg.palette); }
+   │                                           ─────┬─────  
+   │                                                ╰─────── Type mismatch: expected 'String', found 'String | Null'
+   │ 
+   │ Help: a test of a property doesn't narrow it: a record can be changed between the test and the use (by a call, or through another reference). Copy it into a `const` and test that: `const palette = reg.palette; if (palette) …`
+   │ 
+   │ Note: Cannot unify expected 'String' with found 'String | Null'
+───╯
+

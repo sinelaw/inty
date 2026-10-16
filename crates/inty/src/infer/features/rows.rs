@@ -433,7 +433,7 @@ impl InferState {
         self.unify(span, &shared_this, &obj_type)?;
 
         let _ = had_spread;
-        Ok(self.zonk(&obj_type))
+        Ok(self.zonk_head_into(obj_type))
     }
 
     /// The fields written after a spread whose operand isn't known yet,
@@ -648,7 +648,7 @@ impl InferState {
     fn row_view(&mut self, row: RowType) -> RowType {
         let mut row = row;
         while let RowTail::Open(v) = row.tail.clone() {
-            match self.zonk(&Type::Var(v.clone())) {
+            match self.zonk_head(&Type::Var(v.clone())) {
                 Type::Row(rest) => {
                     for (k, e) in rest.props {
                         row.props.entry(k).or_insert(e);
@@ -701,7 +701,7 @@ impl InferState {
                 .collect();
             let mut shaped: Vec<Type> = Vec::new();
             for m in members {
-                let mut m_resolved = self.zonk(m);
+                let mut m_resolved = self.zonk_head(m);
                 // A recursive alias arm (`B | Null`) is its unrolling.
                 if let Type::Named(id, args) = &m_resolved {
                     if !self.is_nominal_type(*id) {
@@ -752,12 +752,14 @@ impl InferState {
                     .iter()
                     .map(|arm| match arm {
                         Type::Row(row) => {
-                            row.props.get(&name).and_then(|e| match self.zonk(&e.ty) {
-                                Type::Literal(l @ (LitValue::String(_) | LitValue::Bool(_))) => {
-                                    Some(l)
-                                }
-                                _ => None,
-                            })
+                            row.props
+                                .get(&name)
+                                .and_then(|e| match self.zonk_head(&e.ty) {
+                                    Type::Literal(
+                                        l @ (LitValue::String(_) | LitValue::Bool(_)),
+                                    ) => Some(l),
+                                    _ => None,
+                                })
                         }
                         _ => None,
                     })
@@ -880,7 +882,7 @@ impl InferState {
                         // into a `Number` field is a value flowing, not a
                         // shared slot being reinterpreted).
                         self.check_expr(env, value, &expected_prop_ty)?;
-                        let slot = self.zonk(&expected_prop_ty);
+                        let slot = self.zonk_head(&expected_prop_ty);
                         props.insert(prop_name, slot);
                     }
                 }
@@ -922,7 +924,7 @@ impl InferState {
                     self.member_function = false;
                     let method_type = method_type?;
                     self.subsume(*method_span, &method_type, &expected_prop_ty)?;
-                    let slot = self.zonk(&expected_prop_ty);
+                    let slot = self.zonk_head(&expected_prop_ty);
                     props.insert(prop_name, slot);
                 }
                 _ => {
@@ -946,7 +948,7 @@ impl InferState {
         // outstanding constraints (e.g. from row-tail variables)
         // resolve here.
         self.subsume(span, &result, expected)?;
-        Ok(Some(self.zonk(&result)))
+        Ok(Some(self.zonk_head(&result)))
     }
 
     /// Infer `Expr::RestRow { source, excluded }` — the synthetic
@@ -986,7 +988,7 @@ impl InferState {
         ty: &Type,
         span: Span,
     ) -> InferResult<RowType> {
-        let resolved = self.zonk(ty);
+        let resolved = self.zonk_head(ty);
         match resolved {
             Type::Row(row) => Ok(row),
             // A class instance (or any brand) spreads its fields, as
@@ -1047,7 +1049,7 @@ impl InferState {
         span: Span,
     ) -> InferResult<Type> {
         let obj_type = self.infer_expr(env, object)?;
-        let obj_type = self.zonk(&obj_type);
+        let obj_type = self.zonk_head(&obj_type);
         // (After the object's own members.) Only a store's target needs
         // it (see `infer_store_target`).
         if self.recording_member_receiver {
@@ -1093,7 +1095,7 @@ impl InferState {
         if let Type::Union(members) = obj_type {
             let mut result: Option<Type> = None;
             for m in members {
-                let m_resolved = self.zonk(m);
+                let m_resolved = self.zonk_head(m);
                 let prop_ty = self.infer_member_on_type(&m_resolved, property, span)?;
                 result = Some(match result {
                     None => prop_ty,
@@ -1133,6 +1135,16 @@ impl InferState {
                 };
                 if let Some(ty) = method {
                     return Ok(self.declared_callbacks_detached(&ty));
+                }
+            }
+            Type::Number if language == SourceLanguage::JavaScript => {
+                if let Some(ty) = crate::builtins::number_method_type(self, property) {
+                    return Ok(ty);
+                }
+            }
+            Type::Boolean if language == SourceLanguage::JavaScript => {
+                if let Some(ty) = crate::builtins::boolean_method_type(property) {
+                    return Ok(ty);
                 }
             }
             Type::String => {
@@ -1183,13 +1195,13 @@ impl InferState {
                     // if it was already `Abs` we get a structured
                     // presence-mismatch error.
                     self.unify_presence(span, &entry.presence, &crate::types::Presence::Pre)?;
-                    return Ok(self.zonk(&entry.ty));
+                    return Ok(self.zonk_head(&entry.ty));
                 }
                 // Otherwise the property may live in a row reached
                 // through the tail (e.g., a flex tail bound by an
                 // earlier unification to another row).
                 if let Some(prop_type) = self.lookup_property_in_row_tail(row, property) {
-                    return Ok(self.zonk(&prop_type));
+                    return Ok(self.zonk_head_into(prop_type));
                 }
                 // If property still not found and row is closed, the
                 // unification fall-through below will report it.
@@ -1197,7 +1209,7 @@ impl InferState {
             Type::Module(m) => {
                 if let Some(scheme) = m.exports.get(property) {
                     let ty = self.instantiate(scheme);
-                    return Ok(self.zonk(&ty));
+                    return Ok(self.zonk_head_into(ty));
                 }
                 return Err(crate::error::TypeError::Module {
                     message: format!("module {:?} has no export named {:?}", m.source, property),
@@ -1214,6 +1226,15 @@ impl InferState {
             // handles them by unrolling during unification.
             Type::Named(id, args) if self.is_nominal_type(*id) => {
                 if let Some(unrolled) = self.unroll_named(*id, args) {
+                    return self.infer_member_on_type(&unrolled, property, span);
+                }
+            }
+            // A recursive alias of a union (`type T = {kind: "a", kids: T[]}
+            // | {kind: "b"}`): read the property from each member, as for
+            // the union written out. A row fall-through would try to make
+            // the whole union one row.
+            Type::Named(id, args) => {
+                if let Some(unrolled @ Type::Union(_)) = self.unroll_named(*id, args) {
                     return self.infer_member_on_type(&unrolled, property, span);
                 }
             }
@@ -1238,7 +1259,7 @@ impl InferState {
         // `resolve_has_prop`) — so a parameter used as `s.slice(i)` can
         // still be a string, and every access gets its own copy of a
         // built-in method's type.
-        let receiver = self.zonk(obj_type);
+        let receiver = self.zonk_head(obj_type);
         if matches!(receiver, Type::Var(TVarName::Flex(_))) {
             self.add_constraint(
                 TypePred::has_prop(receiver, property, result_type.clone()),
@@ -1280,7 +1301,7 @@ impl InferState {
 
         self.unify(span, obj_type, &expected_row)?;
 
-        Ok(self.zonk(&result_type))
+        Ok(self.zonk_head_into(result_type))
     }
 
     /// The field a read of a property of type `ty` needs: present, of any
@@ -1308,6 +1329,25 @@ impl InferState {
     /// Look up a property by following row tail chains.
     /// Returns the property type if found in any row that the tail resolves to.
     fn lookup_property_in_row_tail(&self, row: &RowType, property: &str) -> Option<Type> {
+        self.lookup_entry_in_row_tail(row, property)
+            .map(|entry| entry.ty)
+    }
+
+    /// The field `name` of `ty`, a record (or a variable bound to one),
+    /// in its own props or along its tail.
+    pub(crate) fn row_field_entry(&mut self, ty: &Type, name: &str) -> Option<FieldEntry> {
+        let head = crate::infer::zonk::zonk_head_cow(&mut self.var_table, ty);
+        let Type::Row(row) = &*head else {
+            return None;
+        };
+        match row.props.get(&PropName(name.to_string())) {
+            Some(entry) => Some(entry.clone()),
+            None => self.lookup_entry_in_row_tail(row, name),
+        }
+    }
+
+    /// [`Self::lookup_property_in_row_tail`]'s field, presence and all.
+    fn lookup_entry_in_row_tail(&self, row: &RowType, property: &str) -> Option<FieldEntry> {
         use std::collections::HashSet;
         let prop_name = PropName(property.to_string());
         let mut visited: HashSet<TVarId> = HashSet::new();
@@ -1329,7 +1369,7 @@ impl InferState {
                         Type::Row(tail_row) => {
                             // Check if property is in this row
                             if let Some(entry) = tail_row.props.get(&prop_name) {
-                                return Some(entry.ty.clone());
+                                return Some(entry.clone());
                             }
                             // Continue with this row's tail
                             current_tail = &tail_row.tail;
@@ -1344,7 +1384,7 @@ impl InferState {
                                 self.main_subst.get(&TVarName::Flex(*next_id))
                             {
                                 if let Some(entry) = tail_row.props.get(&prop_name) {
-                                    return Some(entry.ty.clone());
+                                    return Some(entry.clone());
                                 }
                                 current_tail = &tail_row.tail;
                                 continue;

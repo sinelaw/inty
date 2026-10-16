@@ -3518,7 +3518,17 @@ fn multi_error_duplicate_const_no_longer_aborts() {
 /// to drive the limit from inside `infer_program_with_env` without
 /// fighting the parser, which is itself recursive on deep literals.
 fn nested_object_literal_source(depth: usize) -> String {
-    let mut src = String::from("var x = ");
+    // Annotated: a declaration resolves its annotated type whole (an
+    // inferred result is only resolved at its head).
+    let mut src = String::from("/** var x: ");
+    for _ in 0..depth {
+        src.push_str("{a: ");
+    }
+    src.push_str("Number");
+    for _ in 0..depth {
+        src.push('}');
+    }
+    src.push_str(" */\nvar x = ");
     for _ in 0..depth {
         src.push_str("{a: ");
     }
@@ -5862,4 +5872,282 @@ fn a_method_signature_says_its_this() {
     )
     .unwrap_err();
     assert!(err.contains("(this: T, …) => R"), "{err}");
+}
+
+#[test]
+fn test_member_on_recursive_union_alias() {
+    // A union that refers to itself is a named (recursive) type: reading a
+    // field reads it from each member, and the tag narrows, as for a union
+    // written out.
+    let src = "/** type T = {kind: \"a\", kids: T[]} | {kind: \"b\", n: Number} */\n\
+               /** function size(t: T) => Number */\n\
+               function size(t) { if (t.kind === \"b\") return t.n; return t.kids.length; }\n\
+               /** function tag(t: T) => String */\n\
+               function tag(t) { return t.kind; }";
+    infer_program_with_state(src).expect("field access on a recursive union alias");
+}
+
+#[test]
+fn number_methods() {
+    // `Number.prototype`'s formatting methods, each optional argument
+    // omittable per call.
+    let src = "const n = 1.5;\n\
+               const a = n.toFixed(1);\n\
+               const b = n.toString(16);\n\
+               const c = n.toString();\n\
+               const d = n.toPrecision(2);\n\
+               const e = (2).toFixed();\n\
+               const f = true.toString();\n\
+               function g(x) { return x.toFixed(2); }\n\
+               const h = g(3);";
+    let t = check_program(src, &["a", "b", "c", "d", "e", "f", "h"]).unwrap();
+    assert!(t.iter().all(|s| s == "String"), "{t:?}");
+    assert!(check_program("const n = 1; n.toFixed(\"2\");", &[]).is_err());
+    assert!(check_program("const n = 1; n.toUpperCase();", &[]).is_err());
+}
+
+#[test]
+fn string_replace_with_a_function() {
+    // The replacement is a string or a function of the match.
+    let src = "const a = \"ab\".replace(/a/g, c => c + \"b\");\n\
+               const b = \"ab\".replaceAll(\"a\", (m) => m.toUpperCase());\n\
+               const c = \"ab\".replace(\"a\", \"z\");";
+    let t = check_program(src, &["a", "b", "c"]).unwrap();
+    assert!(t.iter().all(|s| s == "String"), "{t:?}");
+    // A replacer returns a string, and gets the match as one.
+    assert!(check_program("\"ab\".replace(/a/, c => 1);", &[]).is_err());
+    assert!(check_program("\"ab\".replace(/a/, c => c * 2);", &[]).is_err());
+    // The groups and the offset aren't modelled: their types depend on
+    // the pattern.
+    assert!(check_program("\"ab\".replace(/(a)/, (m, g) => g);", &[]).is_err());
+}
+
+#[test]
+fn dict_dot_and_bracket_writes_agree() {
+    // `d.k = v` stores key `k` of a `Dict<V>`, as `d["k"] = v` does, and
+    // both store a `V`: an `undefined` stored would come back out of
+    // `Object.values`. A read is `V | Undefined` (the key may be missing),
+    // so an update that reads the entry first needs it narrowed.
+    let ok = "/** function g({dataset: Dict<String>}) => Undefined */\n\
+              function g(el) { el.dataset.x = \"a\"; el.dataset[\"y\"] = \"b\"; el.dataset.z ??= \"c\"; }";
+    check_program(ok, &[]).unwrap();
+    for bad in [
+        "el.dataset.x = undefined;",
+        "el.dataset[\"x\"] = undefined;",
+        "el.dataset.x = 1;",
+        "el.dataset.x += \"s\";",
+    ] {
+        let src = format!(
+            "/** function g({{dataset: Dict<String>}}) => Undefined */\n\
+             function g(el) {{ {bad} }}"
+        );
+        assert!(check_program(&src, &[]).is_err(), "{src}");
+    }
+}
+#[test]
+fn block_scoped_bindings_are_distinct() {
+    // `let`/`const` are block-scoped, and a `for … of` binding is the
+    // loop body's: two bindings of one name in one function are two
+    // variables, each with its own type, and the later one, never
+    // reassigned, narrows.
+    let src = "/** function f(Dict<String>) => String */\n\
+               function f(d) {\n\
+                 for (const [k, v] of [[1, 2]]) { const z = v + 1; }\n\
+                 const v = d[\"k\"];\n\
+                 if (v !== undefined) { const g = () => v.length; return v; }\n\
+                 return \"\";\n\
+               }\n\
+               /** function g(Dict<String>) => Number */\n\
+               function g(d) {\n\
+                 { let v = 1; v = 2; }\n\
+                 for (let i = 0; i < 2; i++) { const v = true; }\n\
+                 const v = d[\"k\"];\n\
+                 if (v !== undefined) { const h = () => v.length; return h(); }\n\
+                 return 0;\n\
+               }\n\
+               function h() { if (true) { const x = 1; return x + 1; } else { const x = \"s\"; return x.length; } }";
+    check_program(src, &[]).unwrap();
+    // The inner binding isn't visible after its block.
+    assert!(check_program("function f() { { const x = 1; } return x; }", &[]).is_err());
+}
+
+/// Check with the standard library (`Set`, `Map`, `Array.from`, …);
+/// `Ok` holds the display form of each named binding's scheme.
+fn check_with_stdlib(src: &str, names: &[&str]) -> Result<Vec<String>, String> {
+    let program = crate::frontends::javascript::parse_source(src).map_err(|e| e.to_string())?;
+    let (env, mut state) = crate::stdlib::initial_env_with_stdlib().map_err(|e| e.to_string())?;
+    let (_, env) = state
+        .infer_program_with_env(&env, &program)
+        .map_err(|e| e.to_string())?;
+    if let Some(e) = state.errors.first() {
+        return Err(e.to_string());
+    }
+    state.resolve_constraints().map_err(|e| e.to_string())?;
+    Ok(names
+        .iter()
+        .map(|n| {
+            let scheme = env.lookup(n).unwrap_or_else(|| panic!("{} not bound", n));
+            format!("{}", state.display_scheme(scheme))
+        })
+        .collect())
+}
+
+#[test]
+fn iterating_strings_sets_and_maps() {
+    let src = "for (const ch of \"abc\") { ch.toUpperCase(); }\n\
+               const xs = [...\"abc\"];\n\
+               const st = new Set(); st.add(1);\n\
+               let n = 0; for (const x of st) { n = n + x; }\n\
+               const ys = [...st];\n\
+               const s2 = new Set([\"a\", \"b\"]);\n\
+               const s3 = new Set(\"abc\");\n\
+               const s4 = new Set(s2);\n\
+               const m = new Map([[\"a\", 1]]);\n\
+               for (const [k, v] of m) { k.length + v; }\n\
+               const ks = [...m.keys()];\n\
+               const vs = [...m.values()];\n\
+               const es = [...m.entries()];\n\
+               function mk() { return new Set(); }\n\
+               const s5 = mk(); s5.add(\"q\");";
+    // (`mk`'s scheme has no `Iterable`: the one `new Set()` posed for the
+    // argument it leaves out is vacuous.)
+    let t = check_with_stdlib(src, &["xs", "ys", "ks", "vs", "es"]).unwrap();
+    assert_eq!(
+        t,
+        [
+            "String[]",
+            "Number[]",
+            "String[]",
+            "Number[]",
+            "[String, Number][]",
+        ]
+    );
+    for bad in [
+        // A Dict is a plain object: not iterable.
+        "/** const d: Dict<Number> */ const d; for (const x of d) {}",
+        "for (const x of {a: 1}) {}",
+        "const xs = [...5];",
+        // The element type is the set's.
+        "const s = new Set([\"a\"]); for (const x of s) { x * 2; }",
+        "const m = new Map([[\"a\", 1]]); m.set(\"b\", \"c\");",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn declared_iterable_host_collection() {
+    // A declaration says what iterating a host object gives, without
+    // claiming it is an array.
+    let src = "/** type El = {id: String} */\n\
+               /** type NodeList = {length: Number, item: (Number) => El | Null, [Symbol.iterator]: El} */\n\
+               /** const all: () => NodeList */\n\
+               const all;\n\
+               for (const el of all()) { el.id.length; }\n\
+               const ids = Array.from(all(), (el) => el.id);\n\
+               const els = [...all()];";
+    let t = check_with_stdlib(src, &["ids", "els"]).unwrap();
+    assert_eq!(t, ["String[]", "{id: String}[]"]);
+    // It isn't an array.
+    let bad = "/** type NodeList = {length: Number, [Symbol.iterator]: String} */\n\
+               /** const all: () => NodeList */\n\
+               const all;\n\
+               all().map((x) => x);";
+    assert!(check_with_stdlib(bad, &[]).is_err());
+}
+
+#[test]
+fn array_from_is_checked() {
+    let src = "const a = Array.from(new Set([\"s\"]));\n\
+               const b = Array.from(\"abc\");\n\
+               const c = Array.from({length: 3}, (_, i) => i * 2);\n\
+               const d = Array.from([1, 2], (x) => String(x));";
+    let t = check_with_stdlib(src, &["a", "b", "c", "d"]).unwrap();
+    assert_eq!(t, ["String[]", "String[]", "Number[]", "String[]"]);
+    for bad in [
+        // Was an unchecked cast: `a` and `b[]` unrelated.
+        "Array.from(new Set([\"s\"])).push(3);",
+        // An array-like object needs a map function.
+        "const z = Array.from({length: 3});",
+        "const z = Array.from(5);",
+        "const z = Array.from([1], (x) => x.length);",
+    ] {
+        assert!(check_with_stdlib(bad, &[]).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn iterable_constraint_is_generalised() {
+    // A function that iterates its parameter takes any iterable.
+    let src = "function firstOf(xs) { for (const x of xs) { return x; } throw 0; }\n\
+               const a = firstOf([1, 2]);\n\
+               const b = firstOf(\"ab\");\n\
+               const c = firstOf(new Set([true]));";
+    let t = check_with_stdlib(src, &["firstOf", "a", "b", "c"]).unwrap();
+    assert_eq!(t[0], "<a, b> where Iterable a b => (a) => b");
+    assert_eq!(&t[1..], ["Number", "String", "Boolean"]);
+}
+
+#[test]
+fn narrowing_through_a_disjunction_of_tag_tests() {
+    let alias = "/** type S = {kind: \"row\", children: Number[]} | {kind: \"col\", children: Number[]} | {kind: \"leaf\", v: String} */\n";
+    let ok = format!(
+        "{alias}/** function f(S) => Number */\n\
+         function f(spec) {{ if (spec.kind === \"row\" || spec.kind === \"col\") return spec.children.length; return spec.v.length; }}\n\
+         /** function g(S) => Number */\n\
+         function g(spec) {{ if (spec.kind !== \"row\" && spec.kind !== \"col\") return spec.v.length; return spec.children.length; }}\n\
+         /** function h(String | Number | Boolean) => Number */\n\
+         function h(x) {{ if (typeof x === \"string\" || typeof x === \"number\") {{ return 1; }} return x ? 1 : 0; }}"
+    );
+    check_program(&ok, &[]).unwrap();
+    for bad in [
+        // A member the disjunction lets through lacks the field.
+        "/** function f(S) => Number */\nfunction f(spec) { if (spec.kind === \"row\" || spec.kind === \"leaf\") return spec.children.length; return 0; }",
+        // A test of another path says nothing about this one.
+        "/** function f(S, S) => Number */\nfunction f(a, b) { if (a.kind === \"row\" || b.kind === \"col\") return a.children.length; return 0; }",
+    ] {
+        let src = format!("{alias}{bad}");
+        assert!(check_program(&src, &[]).is_err(), "{src}");
+    }
+}
+
+#[test]
+fn a_copied_property_narrows() {
+    // Records are mutable: a test of `reg.palette` says nothing about a
+    // later read (a call between them could store `null`; see the golden
+    // test `25-unnarrowed-property` for the error). A `const` copy does
+    // narrow.
+    let decls = "/** function render(String) => Undefined */\nfunction render(s) {}\n";
+    let bad = format!(
+        "{decls}/** function g({{palette: String | Null}}) => Undefined */\n\
+         function g(reg) {{ if (reg.palette) render(reg.palette); }}"
+    );
+    assert!(check_program(&bad, &[]).is_err());
+    let ok = format!(
+        "{decls}/** function g({{palette: String | Null}}) => Undefined */\n\
+         function g(reg) {{ const p = reg.palette; if (p) render(p); }}"
+    );
+    check_program(&ok, &[]).unwrap();
+}
+
+#[test]
+fn independent_groups_are_inferred_in_a_fixed_order() {
+    // `a` … `f` are independent groups that each fix `xs`' element type:
+    // the one inferred first decides it, and the others are errors.
+    // Which that is mustn't depend on hash order (a group's call edges
+    // and a statement's free names are hash sets), so every run reports
+    // the same error.
+    let src = "const xs = [];\n\
+               function h() { a(); b(); c(); d(); e(); f(); }\n\
+               function a() { xs.push(1); }\n\
+               function b() { xs.push(\"s\"); }\n\
+               function c() { xs.push(true); }\n\
+               function d() { xs.push(null); }\n\
+               function e() { xs.push([1]); }\n\
+               function f() { xs.push({ k: 1 }); }\n\
+               h();";
+    let first = check_program(src, &[]).expect_err("xs is given six element types");
+    for _ in 0..32 {
+        assert_eq!(check_program(src, &[]).expect_err("as before"), first);
+    }
 }

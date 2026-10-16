@@ -407,7 +407,7 @@ impl InferState {
         // TypeScript `void` callback's. A block body still returns what
         // it says.
         let discarded;
-        let body = match (self.zonk(&expected_ret), concise_body(body)) {
+        let body = match (self.zonk_head(&expected_ret), concise_body(body)) {
             (Type::Undefined, Some((expr, ret_span))) => {
                 let mut stmts = match body {
                     Stmt::Block { body, .. } => body[..body.len() - 1].to_vec(),
@@ -512,7 +512,7 @@ impl InferState {
                     None => {}
                 }
             }
-            let ret = self.zonk(&ret);
+            let ret = self.zonk_head(&ret);
             if !matches!(ret, Type::Var(TVarName::Flex(_))) {
                 expected_ret = Some(ret);
             }
@@ -630,7 +630,7 @@ impl InferState {
         let annotated =
             type_annotation.is_some() || return_type_ast.is_some() || expected_ret.is_some();
         // An annotated return type is pushed into the `return`s.
-        let expected_ret = match self.zonk(&ret_type) {
+        let expected_ret = match self.zonk_head(&ret_type) {
             Type::Var(crate::types::TVarName::Flex(_)) => None,
             t if annotated => Some(t),
             _ => None,
@@ -656,7 +656,7 @@ impl InferState {
             types.insert((span.start, span.end), func_type.clone());
         }
 
-        Ok(self.zonk(&func_type))
+        Ok(self.zonk_head_into(func_type))
     }
 
     /// Infer the type of a function call.
@@ -668,6 +668,9 @@ impl InferState {
         keywords: &[(String, Expr)],
         span: Span,
     ) -> InferResult<Type> {
+        if let Some(result) = self.infer_array_from(env, callee, arguments, keywords) {
+            return result;
+        }
         // `then` / `catch` callbacks this call's callee records (see
         // `builtins::promise_method_type`) are settled at its end.
         let promise_mark = self.promise_results.len();
@@ -682,7 +685,9 @@ impl InferState {
             } => {
                 // Infer object once
                 let obj_type = self.infer_expr(env, object)?;
-                let obj_type_applied = self.zonk(&obj_type);
+                // Only its head: a receiver may be a large row (a DOM
+                // element's), and resolving it whole copies it.
+                let obj_type_applied = self.zonk_head(&obj_type);
 
                 if matches!(obj_type_applied, Type::Var(TVarName::Flex(_))) {
                     // A receiver whose type isn't known yet: the method and
@@ -714,7 +719,7 @@ impl InferState {
             } => {
                 // Infer object once
                 let obj_type = self.infer_expr(env, object)?;
-                let obj_type_applied = self.zonk(&obj_type);
+                let obj_type_applied = self.zonk_head(&obj_type);
 
                 // Get computed member type
                 let index_type = self.infer_expr(env, property)?;
@@ -821,8 +826,8 @@ impl InferState {
                     let inner = self.infer_expr(env, argument)?;
                     let elem = self.fresh_type_var();
                     self.unify(*spread_span, &inner, &Type::Array(Box::new(elem.clone())))?;
-                    let elem_resolved = self.zonk(&elem);
-                    let expected = self.zonk(param);
+                    let elem_resolved = self.zonk_head(&elem);
+                    let expected = self.zonk_head(param);
                     self.subsume(*spread_span, &elem_resolved, &expected)?;
                 }
                 _ => {
@@ -869,7 +874,95 @@ impl InferState {
         // `this` — so resolve those now: the result type is then known
         // to what follows.
         self.simplify_has_props()?;
-        Ok(self.zonk(&ret_type))
+        // Its head: a result may be a large row (`appendChild`'s, a DOM
+        // element's), which resolving whole copies.
+        Ok(self.zonk_head_into(ret_type))
+    }
+
+    /// A call of the standard library's `Array.from`, whose result
+    /// depends on whether it is given a map function, which no one
+    /// function type says:
+    ///
+    /// - `Array.from(it)`: `it` is iterated (`Iterable it e`), giving an
+    ///   `e[]`;
+    /// - `Array.from(it, f)`: `f` is called with each element and its
+    ///   index (it may take only the element), giving an array of its
+    ///   results; an array-like `it` (`{length: n}`, with no
+    ///   `[Symbol.iterator]`) has `undefined` elements.
+    ///
+    /// `None` for any other call (or an `Array` the program binds itself).
+    fn infer_array_from(
+        &mut self,
+        env: &TypeEnv,
+        callee: &Expr,
+        arguments: &[Expr],
+        keywords: &[(String, Expr)],
+    ) -> Option<InferResult<Type>> {
+        let Expr::Member {
+            object,
+            property,
+            span,
+        } = callee
+        else {
+            return None;
+        };
+        let Expr::Ident {
+            name,
+            span: name_span,
+        } = object.as_ref()
+        else {
+            return None;
+        };
+        if name != "Array"
+            || property != "from"
+            || !keywords.is_empty()
+            || !(1..=2).contains(&arguments.len())
+            || arguments.iter().any(|a| matches!(a, Expr::Spread { .. }))
+            || !self.ambient.contains(&self.key_of(*name_span, name))
+        {
+            return None;
+        }
+        let span = *span;
+        Some((|| {
+            let source = self.infer_expr(env, &arguments[0])?;
+            let element = self.fresh_type_var();
+            // An array-like object: a record with a `length`, which isn't
+            // iterable, read by index (`undefined`s for `{length: n}`).
+            let array_like = arguments.len() == 2
+                && match crate::infer::zonk::zonk_head_cow(&mut self.var_table, &source).as_ref() {
+                    Type::Row(_) => {
+                        self.row_field_entry(&source, crate::types::ITER_KEY)
+                            .is_none()
+                            && self.row_field_entry(&source, "length").is_some()
+                    }
+                    _ => false,
+                };
+            if array_like {
+                let length = self
+                    .row_field_entry(&source, "length")
+                    .expect("just found")
+                    .ty;
+                self.subsume(arguments[0].span(), &length, &Type::Number)?;
+                self.unify(span, &element, &Type::Undefined)?;
+            } else {
+                self.require_iterable(&source, &element, arguments[0].span())?;
+            }
+            let Some(map_fn) = arguments.get(1) else {
+                return Ok(Type::array(self.zonk_head(&element)));
+            };
+            let result = self.fresh_type_var();
+            let index = self.fresh_pvar();
+            let element = self.zonk_head(&element);
+            let callback = self.callable_row_open_with_params(
+                vec![
+                    crate::types::FuncParam::required(element),
+                    crate::types::FuncParam::optional(index, Type::Number),
+                ],
+                result.clone(),
+            );
+            self.check_expr(env, map_fn, &callback)?;
+            Ok(Type::array(self.zonk_head(&result)))
+        })())
     }
 
     /// What a method called on `receiver` sees as `this`. A nominal brand
@@ -877,17 +970,20 @@ impl InferState {
     /// field access: it unrolls to its representation row so the method
     /// body's `this`-row unifies against the instance shape. The
     /// receiver's own type stays nominal everywhere else.
-    pub(crate) fn method_receiver<'a>(&mut self, receiver: &'a Type) -> std::borrow::Cow<'a, Type> {
-        use std::borrow::Cow;
+    pub(crate) fn method_receiver<'a>(
+        &mut self,
+        receiver: &'a Type,
+    ) -> crate::infer::zonk::Head<'a> {
+        use crate::infer::zonk::Head;
         // Only the head decides; what is below it is resolved by the
         // unification the receiver goes to.
         let receiver = crate::infer::zonk::zonk_head_cow(&mut self.var_table, receiver);
         match &*receiver {
             // `"abc".trim()`: a literal's methods are its base type's.
-            Type::Literal(lit) => Cow::Owned(lit.base_type()),
+            Type::Literal(lit) => Head::Owned(lit.base_type()),
             Type::Named(id, args) if self.is_nominal_type(*id) => {
                 match self.unroll_named(*id, args) {
-                    Some(unrolled) => Cow::Owned(unrolled),
+                    Some(unrolled) => Head::Owned(unrolled),
                     None => receiver,
                 }
             }
@@ -1000,7 +1096,7 @@ impl InferState {
             self.unify_this(span, &t, &obj)?;
         }
 
-        Ok(self.zonk(&ret))
+        Ok(self.zonk_head_into(ret))
     }
 
     /// A call without a receiver (`f()`, not `o.f()`): the callee gets
@@ -1018,7 +1114,7 @@ impl InferState {
             Some(Expr::Ident { name, .. }) => format!("`{name}`"),
             _ => "this function".to_string(),
         };
-        match self.zonk(this) {
+        match self.zonk_head(this) {
             Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => Ok(()),
             // Not known yet: it may turn out to use none, or to be one
             // that reads `this` as `undefined`, but not a method.
@@ -1084,7 +1180,7 @@ impl InferState {
         }
 
         self.require_constructed_object(&result_type, span)?;
-        Ok(self.zonk(&result_type))
+        Ok(self.zonk_head_into(result_type))
     }
 
     /// What `new` gives back must be what the constructor returned, so
@@ -1212,6 +1308,31 @@ impl InferState {
         // `f` with nothing to decide it. So a second round generalises
         // every member over all of them, when the first didn't.
         let mut group_vars: Vec<TVarName> = Vec::new();
+        // A member whose type is too large to write out (see
+        // `MAX_GENERALISED`) isn't generalised, and so neither is any
+        // member of its group: one generalised over a variable another
+        // keeps would come apart from it. Each keeps its monomorphic type,
+        // which is sound, if less general.
+        let too_large = group.iter().find_map(|stmt| {
+            let (name, _, _, _, _, span) = function_decl_parts(stmt)?;
+            let key = self.key_of(hoisted_key_span(stmt)?, name);
+            let ty = hoisted.lookup_key(&key)?.scheme.ty().clone();
+            self.too_large_to_generalise(&ty)
+                .then(|| (name.to_string(), span))
+        });
+        if let Some((name, span)) = too_large {
+            self.warn(
+                span,
+                format!(
+                    "`{name}`'s type is too large to write out (it nests types that mention \
+                     each other many times, such as elements chained through `appendChild`), \
+                     so it and the functions it calls back aren't generalised: each is \
+                     checked with one type for all its uses. Annotating it with a smaller \
+                     type (a project's own element type) avoids this"
+                ),
+            );
+            return Ok(hoisted);
+        }
         for round in 0..2 {
             hoisted = outer.clone();
             let mut left_by_all = vec![true; pending.len()];
@@ -1605,6 +1726,11 @@ pub(in crate::infer) fn compute_scc_groups(
                 }
             }
         }
+        // `free` is a hash set: without an order of their own, the
+        // edges (and so the order Tarjan emits independent groups in,
+        // which is the order they are inferred in) would change from
+        // run to run.
+        adj[i].sort_unstable();
     }
 
     // Pass 3: Tarjan's SCC algorithm. Iterative implementation to

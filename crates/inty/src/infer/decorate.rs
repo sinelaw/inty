@@ -682,6 +682,13 @@ impl<'a> Decorator<'a> {
         // `PrettyContext` per annotation now produces the same
         // letters another caller would for the same scheme — the
         // mutable letter map is no longer load-bearing.
+        let size = std::iter::once(&scheme.body.ty)
+            .chain(scheme.body.preds.iter().flat_map(|p| p.types.iter()))
+            .map(|t| self.state.flattened_size(t))
+            .fold(0usize, usize::saturating_add);
+        if size > MAX_SHOWN_TYPE {
+            return too_large(span);
+        }
         let displayed = self.state.display_scheme(scheme);
         let mut ctx = PrettyContext::new();
         TypeAnnotation {
@@ -693,6 +700,9 @@ impl<'a> Decorator<'a> {
     }
 
     fn type_to_annotation(&mut self, ty: &Type, span: Span) -> TypeAnnotation {
+        if self.state.flattened_size(ty) > MAX_SHOWN_TYPE {
+            return too_large(span);
+        }
         let displayed = self.state.display_type(ty);
         let mut ctx = PrettyContext::new();
         TypeAnnotation {
@@ -708,4 +718,20 @@ impl<'a> Decorator<'a> {
 pub fn decorate_with_types(program: &Program, env: &TypeEnv, state: &InferState) -> Program {
     let mut decorator = Decorator::new(state);
     decorator.decorate_program(program, env)
+}
+
+/// The largest type (in nodes, written out) an annotation shows. A type
+/// that mentions a large one in many places (a DOM element's row, in each
+/// of its event handlers' events) written out whole would be unreadable
+/// and could take more memory than there is.
+const MAX_SHOWN_TYPE: usize = 20_000;
+
+/// The annotation of a declaration whose type is too large to show.
+fn too_large(span: Span) -> TypeAnnotation {
+    TypeAnnotation {
+        name: "".to_string(),
+        content: "… (a type too large to show)".to_string(),
+        span,
+        kind: crate::ast::AnnotationKind::Inline,
+    }
 }

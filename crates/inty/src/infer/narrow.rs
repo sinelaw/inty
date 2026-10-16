@@ -93,6 +93,10 @@ pub enum Narrowing {
     Truthy,
     /// `!<path>`.
     Falsy,
+    /// One of these holds (`x.k === "a" || x.k === "b"`, true).
+    AnyOf(Vec<Narrowing>),
+    /// All of these hold (its negation: both sides of an `||` false).
+    AllOf(Vec<Narrowing>),
 }
 
 impl Narrowing {
@@ -112,6 +116,8 @@ impl Narrowing {
             Narrowing::IsNotInstance(id) => Narrowing::IsInstance(*id),
             Narrowing::Truthy => Narrowing::Falsy,
             Narrowing::Falsy => Narrowing::Truthy,
+            Narrowing::AnyOf(ns) => Narrowing::AllOf(ns.iter().map(Narrowing::negate).collect()),
+            Narrowing::AllOf(ns) => Narrowing::AnyOf(ns.iter().map(Narrowing::negate).collect()),
         }
     }
 
@@ -125,6 +131,9 @@ impl Narrowing {
             | Narrowing::IsInstance(_)
             | Narrowing::IsNotInstance(_) => true,
             Narrowing::Is(t) | Narrowing::IsNot(t) => matches!(t, Type::Literal(_)),
+            Narrowing::AnyOf(ns) | Narrowing::AllOf(ns) => {
+                ns.iter().all(Narrowing::warns_when_dead)
+            }
             _ => false,
         }
     }
@@ -173,8 +182,11 @@ impl Facts {
 /// - `<path>` alone: truthy when true, falsy when false;
 /// - `!e`: the facts of `e`, swapped;
 /// - `a && b`: when true, both sides' true facts (`b` only runs once
-///   `a` held); when false, nothing we can pin to one side;
-/// - `a || b`: when false, both sides' false facts; when true, nothing.
+///   `a` held); when false, for a path both sides say something about,
+///   that one side's false facts hold or the other's;
+/// - `a || b`: when false, both sides' false facts; when true, for a path
+///   both sides say something about, one side's true facts or the
+///   other's (`x.kind === "row" || x.kind === "col"`).
 pub fn test_facts(test: &Expr, atom: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>) -> Facts {
     if let Some((path, narrowing)) = atom(test) {
         return Facts::one(path, narrowing);
@@ -193,10 +205,11 @@ pub fn test_facts(test: &Expr, atom: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>
         } => {
             let mut l = test_facts(left, atom);
             let r = test_facts(right, atom);
+            let when_false = either(&l.when_false, &r.when_false);
             l.when_true.extend(r.when_true);
             Facts {
                 when_true: l.when_true,
-                when_false: Vec::new(),
+                when_false,
             }
         }
         Expr::Binary {
@@ -207,9 +220,10 @@ pub fn test_facts(test: &Expr, atom: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>
         } => {
             let mut l = test_facts(left, atom);
             let r = test_facts(right, atom);
+            let when_true = either(&l.when_true, &r.when_true);
             l.when_false.extend(r.when_false);
             Facts {
-                when_true: Vec::new(),
+                when_true,
                 when_false: l.when_false,
             }
         }
@@ -218,6 +232,42 @@ pub fn test_facts(test: &Expr, atom: &dyn Fn(&Expr) -> Option<(Path, Narrowing)>
             None => Facts::default(),
         },
     }
+}
+
+/// What holds when one of two lists of facts does: for each path both
+/// say something about, all of the one's facts about it, or all of the
+/// other's. (A path only one side mentions may be anything.)
+fn either(l: &[(Path, Narrowing)], r: &[(Path, Narrowing)]) -> Vec<(Path, Narrowing)> {
+    // The same path, written twice in one test: the same names (its
+    // occurrences differ in where they are; within one expression a name
+    // is one binding).
+    fn same(a: &Path, b: &Path) -> bool {
+        match (a, b) {
+            (Path::Ident(x, _), Path::Ident(y, _)) => x == y,
+            (Path::Member(pa, ka), Path::Member(pb, kb)) => ka == kb && same(pa, pb),
+            _ => false,
+        }
+    }
+    let about = |facts: &[(Path, Narrowing)], p: &Path| -> Narrowing {
+        let mut ns: Vec<Narrowing> = facts
+            .iter()
+            .filter(|(q, _)| same(q, p))
+            .map(|(_, n)| n.clone())
+            .collect();
+        if ns.len() == 1 {
+            ns.pop().expect("one")
+        } else {
+            Narrowing::AllOf(ns)
+        }
+    };
+    let mut out: Vec<(Path, Narrowing)> = Vec::new();
+    for (p, _) in l {
+        if out.iter().any(|(q, _)| same(q, p)) || !r.iter().any(|(q, _)| same(q, p)) {
+            continue;
+        }
+        out.push((p.clone(), Narrowing::AnyOf(vec![about(l, p), about(r, p)])));
+    }
+    out
 }
 
 /// Apply a narrowing predicate to an environment, returning a refined
@@ -448,6 +498,17 @@ fn refine_at_path(ty: &Type, steps: &[PropName], narrowing: &Narrowing, lang: La
 
 /// Refine a type with a top-level (non-property) narrowing.
 fn refine_type(ty: &Type, narrowing: &Narrowing, lang: Language) -> Type {
+    match narrowing {
+        Narrowing::AnyOf(ns) => {
+            return Type::union(
+                ns.iter()
+                    .map(|n| refine_type(ty, n, lang))
+                    .collect::<Vec<_>>(),
+            )
+        }
+        Narrowing::AllOf(ns) => return ns.iter().fold(ty.clone(), |t, n| refine_type(&t, n, lang)),
+        _ => {}
+    }
     match ty {
         Type::Union(members) => {
             let kept: Vec<Type> = members
@@ -493,6 +554,8 @@ fn member_compatible(ty: &Type, narrowing: &Narrowing, lang: Language) -> bool {
         Narrowing::IsNotInstance(id) => !brand_definitely_matches(ty, *id),
         Narrowing::Truthy => could_be_truthy(ty, lang),
         Narrowing::Falsy => could_be_falsy(ty, lang),
+        Narrowing::AnyOf(ns) => ns.iter().any(|n| member_compatible(ty, n, lang)),
+        Narrowing::AllOf(ns) => ns.iter().all(|n| member_compatible(ty, n, lang)),
     }
 }
 
@@ -682,6 +745,19 @@ fn member_property_compatible(
 ) -> bool {
     if steps.is_empty() {
         return member_compatible(member_ty, narrowing, lang);
+    }
+    match narrowing {
+        Narrowing::AnyOf(ns) => {
+            return ns
+                .iter()
+                .any(|n| member_property_compatible(member_ty, steps, n, lang))
+        }
+        Narrowing::AllOf(ns) => {
+            return ns
+                .iter()
+                .all(|n| member_property_compatible(member_ty, steps, n, lang))
+        }
+        _ => {}
     }
 
     match member_ty {

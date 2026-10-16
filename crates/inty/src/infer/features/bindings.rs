@@ -230,11 +230,16 @@ impl InferState {
     /// The type of an assignment's target (`x`, `r.p`, `c[i]`), whose
     /// receiver must take the store: an object's property (`FieldWrite`),
     /// an element of a container that isn't a string (`IndexWrite`).
+    /// `store_only` when the assignment doesn't read the target first
+    /// (`=`, `??=`, `||=`, whose result is what is stored or a truthy old
+    /// value): a `Dict<V>`'s entry is then the `V` it stores, not the `V |
+    /// Undefined` a read gives.
     pub(in crate::infer) fn infer_store_target(
         &mut self,
         env: &TypeEnv,
         target: &Expr,
         span: Span,
+        store_only: bool,
     ) -> InferResult<Type> {
         self.last_index_container = None;
         self.last_member_receiver = None;
@@ -245,6 +250,14 @@ impl InferState {
         match target {
             Expr::ComputedMember { property, .. } => {
                 if let Some(container) = self.last_index_container.take() {
+                    // A JavaScript `Dict<V>`'s entry is read as `V |
+                    // Undefined` (the key may be missing) but stores a
+                    // `V`: an `undefined` stored would come back out of
+                    // `Object.values`.
+                    if let Some(value) = self.js_dict_value(&container) {
+                        self.require_index_write(&container, span)?;
+                        return Ok(if store_only { value } else { ty });
+                    }
                     self.require_index_write(&container, span)?;
                     // A literal key names the property stored to.
                     if let Expr::Lit {
@@ -252,7 +265,7 @@ impl InferState {
                         ..
                     } = property.as_ref()
                     {
-                        if matches!(self.flatten_type(&container), Type::Row(_)) {
+                        if matches!(self.zonk_head(&container), Type::Row(_)) {
                             self.require_field_write(&container, key, span)?;
                         }
                     }
@@ -260,12 +273,31 @@ impl InferState {
             }
             Expr::Member { property, .. } => {
                 if let Some(receiver) = self.last_member_receiver.take() {
+                    // `d.key = v` on a `Dict<V>` stores that key, as
+                    // `d["key"] = v` does.
+                    if let Some(value) = self.js_dict_value(&receiver) {
+                        return Ok(if store_only { value } else { ty });
+                    }
                     self.require_field_write(&receiver, property, span)?;
                 }
             }
             _ => {}
         }
         Ok(ty)
+    }
+
+    /// The value type `V` of a JavaScript `Dict<V>`, the type its entries
+    /// store; `None` for any other type.
+    fn js_dict_value(&mut self, container: &Type) -> Option<Type> {
+        if self.language != crate::ast::SourceLanguage::JavaScript {
+            return None;
+        }
+        // Only the head decides: the receiver of a store may be a large
+        // row (a DOM element's), which resolving whole copies.
+        match &*crate::infer::zonk::zonk_head_cow(&mut self.var_table, container) {
+            Type::Map(value) => Some((**value).clone()),
+            _ => None,
+        }
     }
 
     /// Infer the type of an assignment.
@@ -288,15 +320,16 @@ impl InferState {
             && matches!(left, Expr::Member { .. } | Expr::Ident { .. })
             && lhs_polytype(self, env, left).is_none()
         {
-            let left_type = self.infer_store_target(env, left, span)?;
-            if crate::infer::features::functions::extract_callable(&self.zonk(&left_type)).is_some()
+            let left_type = self.infer_store_target(env, left, span, true)?;
+            if crate::infer::features::functions::extract_callable(&self.zonk_head(&left_type))
+                .is_some()
             {
                 self.check_expr(env, right, &left_type)?;
-                return Ok(self.zonk(&left_type));
+                return Ok(self.zonk_head_into(left_type));
             }
             let right_type = self.infer_expr(env, right)?;
             self.subsume(span, &right_type, &left_type)?;
-            return Ok(self.zonk(&left_type));
+            return Ok(self.zonk_head_into(left_type));
         }
 
         let right_type = self.infer_expr(env, right)?;
@@ -340,17 +373,21 @@ impl InferState {
                         if !v.is_flex() {
                             continue;
                         }
-                        let after = self.zonk(&Type::Var(v.clone()));
+                        let after = self.zonk_head(&Type::Var(v.clone()));
                         if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
                             return Err(TypeError::EscapedSkolem { span }.into());
                         }
                     }
                 }
-                return Ok(self.zonk(&expected_ty));
+                return Ok(self.zonk_head_into(expected_ty));
             }
         }
 
-        let left_type = self.infer_store_target(env, left, span)?;
+        let store_only = matches!(
+            op,
+            AssignOp::Assign | AssignOp::NullishAssign | AssignOp::LogicalOrAssign
+        );
+        let left_type = self.infer_store_target(env, left, span, store_only)?;
 
         match op {
             AssignOp::Assign
@@ -373,7 +410,7 @@ impl InferState {
                 // this rule: at the type level they look identical to
                 // `=`, the runtime test only decides whether the
                 // assignment actually fires.
-                let lhs_resolved = self.zonk(&left_type);
+                let lhs_resolved = self.zonk_head(&left_type);
                 let rhs_for_assign =
                     if matches!(lhs_resolved, Type::Var(crate::types::TVarName::Flex(_))) {
                         self.widen(span, &right_type)
@@ -419,7 +456,7 @@ impl InferState {
             }
         }
 
-        Ok(self.zonk(&left_type))
+        Ok(self.zonk_head_into(left_type))
     }
 
     /// Handle a `var` / `let` / `const` declaration statement.
@@ -657,7 +694,7 @@ impl InferState {
             if !v.is_flex() {
                 continue;
             }
-            let after = self.zonk(&Type::Var(v.clone()));
+            let after = self.zonk_head(&Type::Var(v.clone()));
             if after.free_vars().iter().any(|s| skolem_set.contains(s)) {
                 return Err(TypeError::EscapedSkolem { span: ann_span }.into());
             }

@@ -24,7 +24,7 @@ impl InferState {
         let elem_var = self.fresh_type_var();
         let array_ty = Type::array(elem_var.clone());
         self.unify(span, &source_ty, &array_ty)?;
-        Ok(self.zonk(&array_ty))
+        Ok(self.zonk_head_into(array_ty))
     }
 
     /// Infer the type of an array literal.
@@ -52,13 +52,13 @@ impl InferState {
                     argument,
                     span: spread_span,
                 } => {
-                    // The spread operand must be an array; its
-                    // element type joins the accumulator.
+                    // The spread operand is iterated (an array, a
+                    // string, a `Set`, …); its element type joins the
+                    // accumulator.
                     let arg_ty = self.infer_expr(env, argument)?;
                     let elem_var = self.fresh_type_var();
-                    let expected = Type::array(elem_var.clone());
-                    self.unify(*spread_span, &arg_ty, &expected)?;
-                    self.zonk(&elem_var)
+                    self.require_iterable(&arg_ty, &elem_var, *spread_span)?;
+                    self.zonk_head(&elem_var)
                 }
                 // An element's literal type widens where the array is
                 // made (`[1]` is a `Number[]`, which a later write may
@@ -89,7 +89,7 @@ impl InferState {
             };
         }
 
-        Ok(Type::array(self.zonk(&acc)))
+        Ok(Type::array(self.zonk_head(&acc)))
     }
 
     /// Infer the type of a tuple literal `(a, b, …)`: each element keeps
@@ -125,13 +125,13 @@ impl InferState {
         }
 
         // Apply substitution to see if we know the object type
-        let obj_type_resolved = self.zonk(&obj_type);
+        let obj_type_resolved = self.zonk_head(&obj_type);
 
         // Union elimination on indexing: index every member and join.
         if let Type::Union(members) = &obj_type_resolved {
             let mut result: Option<Type> = None;
             for m in members {
-                let m_resolved = self.zonk(m);
+                let m_resolved = self.zonk_head(m);
                 // We re-derive the index by re-using the same `index_type`
                 // expression — it's already been inferred once at the top
                 // and unification against multiple member types is fine.
@@ -262,7 +262,7 @@ impl InferState {
                 // so resolve a constant only from a literal index type;
                 // otherwise the union of components.
                 self.subsume(span, index_type, &Type::Number)?;
-                if let Type::Literal(LitValue::Number(n)) = self.zonk(index_type) {
+                if let Type::Literal(LitValue::Number(n)) = self.zonk_head(index_type) {
                     if n.fract() == 0.0 && n >= 0.0 && (n as usize) < elems.len() {
                         return Ok(elems[n as usize].clone());
                     }

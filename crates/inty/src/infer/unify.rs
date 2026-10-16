@@ -18,6 +18,10 @@ use super::state::{InferState, UnfoldAssumption};
 /// Result type for unification.
 pub type UnifyResult<T> = Result<T, IntyError>;
 
+/// How much of a type (in nodes) a diagnostic writes out before leaving
+/// the rest out (`…`).
+const DIAGNOSTIC_TYPE_BUDGET: usize = 4_000;
+
 impl InferState {
     /// Unify two types, updating the substitution.
     ///
@@ -95,12 +99,49 @@ impl InferState {
         if self.unify_depth >= super::MAX_UNIFY_DEPTH {
             return Err(TypeError::UnifyDepth { span }.into());
         }
+        // Two variables both bound to types: compared once per outermost
+        // unification (see `unify_bound_pairs`).
+        let pair = self.bound_pair(t1, t2);
+        if let Some(pair) = pair {
+            if !self.unify_bound_pairs.insert(pair) {
+                return Ok(());
+            }
+        }
         let t1 = super::zonk::zonk_head_cow(&mut self.var_table, t1);
         let t2 = super::zonk::zonk_head_cow(&mut self.var_table, t2);
+        // Two variables bound to the very same type (one binding, or a
+        // type shared since): nothing to do. Walking it would compare a
+        // large row with itself field by field.
+        if let (super::zonk::Head::Shared(a), super::zonk::Head::Shared(b)) = (&t1, &t2) {
+            if std::sync::Arc::ptr_eq(a, b) {
+                return Ok(());
+            }
+        }
         self.unify_depth += 1;
         let result = self.unify_impl(span, &t1, &t2);
         self.unify_depth -= 1;
+        if let (Err(_), Some(pair)) = (&result, pair) {
+            // Not unified: a caller that recovers may meet it again.
+            self.unify_bound_pairs.remove(&pair);
+        }
+        if self.unify_depth == 0 {
+            self.unify_bound_pairs.clear();
+        }
         result
+    }
+
+    /// The roots of `t1` and `t2`, ordered, when both are variables bound
+    /// to types (and distinct).
+    fn bound_pair(&mut self, t1: &Type, t2: &Type) -> Option<(TVarId, TVarId)> {
+        let (Type::Var(TVarName::Flex(a)), Type::Var(TVarName::Flex(b))) = (t1, t2) else {
+            return None;
+        };
+        let a = self.var_table.find_if_present(*a)?;
+        let b = self.var_table.find_if_present(*b)?;
+        if a == b || self.var_table.bound(a).is_none() || self.var_table.bound(b).is_none() {
+            return None;
+        }
+        Some((a.min(b), a.max(b)))
     }
 
     fn unify_impl(&mut self, span: Span, t1: &Type, t2: &Type) -> UnifyResult<()> {
@@ -680,8 +721,8 @@ impl InferState {
                 // in gdb. Catching "same equivalence class" here
                 // short-circuits that loop the same way the v1 == v2
                 // check does for the trivial case.
-                let root1 = match self.main_subst.resolve(&TVarName::Flex(*id1)) {
-                    Some(Type::Var(TVarName::Flex(r))) => r,
+                let root1 = match self.main_subst.resolve(&TVarName::Flex(*id1)).as_deref() {
+                    Some(Type::Var(TVarName::Flex(r))) => *r,
                     None => *id1,
                     // If the chain ends at a structural type or a
                     // skolem, fall through to the fresh-tail dance
@@ -690,8 +731,8 @@ impl InferState {
                     // normal Var-vs-structure path.
                     _ => *id1,
                 };
-                let root2 = match self.main_subst.resolve(&TVarName::Flex(*id2)) {
-                    Some(Type::Var(TVarName::Flex(r))) => r,
+                let root2 = match self.main_subst.resolve(&TVarName::Flex(*id2)).as_deref() {
+                    Some(Type::Var(TVarName::Flex(r))) => *r,
                     None => *id2,
                     _ => *id2,
                 };
@@ -869,7 +910,8 @@ impl InferState {
 
     /// `ty` resolved and tidied for display.
     fn display_form(&self, tidy: &mut crate::types::TidyEnv, ty: &Type) -> Type {
-        let flat = self.flatten_type(ty);
+        // Bounded: a diagnostic shows a large type's first fields anyway.
+        let flat = self.main_subst.flatten_bounded(ty, DIAGNOSTIC_TYPE_BUDGET);
         tidy.tidy_type(&flat)
     }
 
@@ -960,7 +1002,7 @@ impl InferState {
         let (expected, found) = self.show_pair(t1, t2);
         // A caught exception's type is rigid on purpose: say why.
         let caught = |t: &Type| {
-            matches!(self.flatten_type(t), Type::Var(TVarName::Skolem(id))
+            matches!(self.main_subst.flatten_bounded(t, 64), Type::Var(TVarName::Skolem(id))
                 if self.caught_exceptions.contains(&id))
         };
         let context = (caught(t1) || caught(t2)).then(|| {

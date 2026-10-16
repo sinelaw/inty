@@ -158,14 +158,21 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
         "trimEnd" => Type::simple_func(vec![], s.clone()),
         // `String.prototype.replace(pattern, replacement)`. `pattern`
         // is `String | Regex` per the ECMAScript spec; htmx hits the
-        // Regex form for HTML scrubbing. Replacement could also be a
-        // function in real JS but inty doesn't model that overload.
-        "replace" => Type::simple_func(
-            vec![Type::union(vec![s.clone(), Type::Regex]), s.clone()],
-            s.clone(),
-        ),
-        "replaceAll" => Type::simple_func(
-            vec![Type::union(vec![s.clone(), Type::Regex]), s.clone()],
+        // Regex form for HTML scrubbing. The replacement is a string or a
+        // function of the match. JavaScript passes the function more —
+        // the capture groups (each a string, or `undefined` when it
+        // didn't take part), then the offset (a number) and the whole
+        // string — whose types depend on the pattern; only the match,
+        // always a string, is modelled, so a replacer takes one
+        // parameter.
+        "replace" | "replaceAll" => Type::simple_func(
+            vec![
+                Type::union(vec![s.clone(), Type::Regex]),
+                Type::union(vec![
+                    s.clone(),
+                    Type::simple_func(vec![s.clone()], s.clone()),
+                ]),
+            ],
             s.clone(),
         ),
         "toUpperCase" => Type::simple_func(vec![], s.clone()),
@@ -215,6 +222,43 @@ fn js_string_method_type(state: &mut InferState, method: &str) -> Option<Type> {
             return None;
         }
     })
+}
+
+/// Look up a `Number.prototype` method by name (JavaScript), with the
+/// number as its receiver. Each optional argument gets its own presence
+/// variable per read, as for strings, so `n.toString()` and
+/// `n.toString(16)` both check.
+pub fn number_method_type(state: &mut InferState, method: &str) -> Option<Type> {
+    use crate::types::FuncParam;
+    let n = Type::Number;
+    let s = Type::String;
+    let optional_only = |state: &mut InferState, optional: Type, ret: Type| -> Type {
+        let pvar = state.fresh_pvar();
+        Type::simple_func_with_params(vec![FuncParam::optional(pvar, optional)], ret)
+    };
+    let ty = match method {
+        // `toFixed(digits?)`, `toPrecision(precision?)`,
+        // `toExponential(fractionDigits?)`, `toString(radix?)`
+        // (ECMAScript §21.1.3).
+        "toFixed" | "toPrecision" | "toExponential" | "toString" => {
+            optional_only(state, n.clone(), s.clone())
+        }
+        // `toLocaleString(locales?)`: the options argument isn't modelled.
+        "toLocaleString" => optional_only(state, s.clone(), s.clone()),
+        "valueOf" => Type::simple_func(vec![], n.clone()),
+        _ => return None,
+    };
+    Some(with_receiver(ty, Type::Number))
+}
+
+/// Look up a `Boolean.prototype` method by name (JavaScript).
+pub fn boolean_method_type(method: &str) -> Option<Type> {
+    let ty = match method {
+        "toString" => Type::simple_func(vec![], Type::String),
+        "valueOf" => Type::simple_func(vec![], Type::Boolean),
+        _ => return None,
+    };
+    Some(with_receiver(ty, Type::Boolean))
 }
 
 /// Look up a Python `str` method by name. Separate from the JavaScript
@@ -631,7 +675,7 @@ impl InferState {
         }
         let pairs: Vec<(Type, Type)> = self.promise_results.drain(mark..).collect();
         for (r, u) in pairs {
-            match self.zonk(&r) {
+            match self.zonk_head(&r) {
                 Type::Promise(v) => self.unify(span, &u, &v)?,
                 // Unknown: the conservative choice — a later non-promise
                 // is a type error rather than a mistyped flattening.
@@ -709,7 +753,7 @@ impl InferState {
                     .filter(|c| c.pred.class == ClassName::Plus)
                     .flat_map(|c| c.pred.types.clone())
                     .collect();
-                let operands: Vec<Type> = operands.iter().map(|t| self.zonk(t)).collect();
+                let operands: Vec<Type> = operands.iter().map(|t| self.zonk_head(t)).collect();
                 let mut defaulted = false;
                 let mut rest = Vec::new();
                 let mut seen: Vec<(Type, String)> = Vec::new();
@@ -752,7 +796,7 @@ impl InferState {
                                 c.pred.class,
                                 ClassName::Inject | ClassName::Strip | ClassName::Spread
                             ) && matches!(
-                                c.pred.types.first().map(|t| self.zonk(t)),
+                                c.pred.types.first().map(|t| self.zonk_head(t)),
                                 Some(Type::Var(v)) if keep.contains(&v)
                             )
                         })
@@ -783,6 +827,7 @@ impl InferState {
                         pred.class,
                         ClassName::HasProp
                             | ClassName::Indexable
+                            | ClassName::Iterable
                             | ClassName::Inject
                             | ClassName::Strip
                             | ClassName::Spread
@@ -841,6 +886,7 @@ impl InferState {
         matches!(
             pred.class,
             ClassName::Indexable
+                | ClassName::Iterable
                 | ClassName::HasProp
                 | ClassName::Inject
                 | ClassName::Strip
@@ -876,7 +922,7 @@ impl InferState {
         this: Option<&Type>,
         span: Span,
     ) -> Result<(), IntyError> {
-        let receiver = self.zonk(receiver);
+        let receiver = self.zonk_head(receiver);
         if matches!(receiver, Type::Var(TVarName::Flex(_))) {
             return Ok(());
         }
@@ -887,7 +933,7 @@ impl InferState {
             // rule would accept that.) An arm whose type isn't known yet
             // gets its own constraint.
             for m in members {
-                match self.zonk(m) {
+                match self.zonk_head(m) {
                     m @ Type::Var(TVarName::Flex(_)) => {
                         self.add_constraint(TypePred::has_prop(m, name, result.clone()), span)
                     }
@@ -957,7 +1003,7 @@ impl InferState {
     ) -> Result<(), IntyError> {
         use crate::infer::extract_callable;
         use crate::types::Presence;
-        let (site_z, callee_z) = (self.zonk(site), self.zonk(callee));
+        let (site_z, callee_z) = (self.zonk_head(site), self.zonk_head(callee));
         let (Some((_, args, site_ret)), Some((_, params, ret))) =
             (extract_callable(&site_z), extract_callable(&callee_z))
         else {
@@ -973,7 +1019,7 @@ impl InferState {
                     // a `Number` (a number literal fits); elsewhere it is
                     // unification, done directly (no snapshot).
                     if matches!(
-                        self.zonk(&p.ty),
+                        self.zonk_head(&p.ty),
                         Type::Union(_) | Type::Maybe(..) | Type::Number
                     ) {
                         self.subsume(span, &a.ty, &p.ty)?;
@@ -1077,6 +1123,91 @@ impl InferState {
             ClassName::Spread => {
                 self.resolve_spread(&pred.types[0], &pred.types[1], &pred.types[2], span)
             }
+            ClassName::Iterable => self.resolve_iterable(&pred.types[0], &pred.types[1], span),
+        }
+    }
+
+    /// `container` is iterated (`for … of`, a spread, `Array.from`): its
+    /// element type is `element`. Decided now for a known container,
+    /// posed (`Iterable`) for a variable.
+    pub(crate) fn require_iterable(
+        &mut self,
+        container: &Type,
+        element: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        self.resolve_iterable(container, element, span)
+    }
+
+    /// Resolve `Iterable c e` (see [`ClassName::Iterable`]).
+    pub(crate) fn resolve_iterable(
+        &mut self,
+        container: &Type,
+        element: &Type,
+        span: Span,
+    ) -> Result<(), IntyError> {
+        let not_iterable = |s: &mut Self, why: &str| -> Result<(), IntyError> {
+            Err(TypeError::ConstraintNotSatisfied {
+                class: format!("Iterable ({why})"),
+                ty: s.show(container),
+                span,
+            }
+            .into())
+        };
+        match self.zonk_head(container) {
+            Type::Var(TVarName::Flex(_)) => {
+                self.add_constraint(TypePred::iterable(container.clone(), element.clone()), span);
+                Ok(())
+            }
+            Type::Error => Ok(()),
+            Type::Array(elem) => self.unify(span, element, &elem),
+            Type::String | Type::Literal(crate::types::LitValue::String(_)) => {
+                self.unify(span, element, &Type::String)
+            }
+            Type::TypedArray(_) => self.unify(span, element, &Type::Number),
+            Type::Tuple(components) => {
+                for c in &components {
+                    self.unify(span, element, c)?;
+                }
+                Ok(())
+            }
+            Type::Union(members) => {
+                for m in &members {
+                    self.resolve_iterable(m, element, span)?;
+                }
+                Ok(())
+            }
+            Type::Named(id, args) => match self.unroll_named(id, &args) {
+                Some(unrolled) => self.resolve_iterable(&unrolled, element, span),
+                None => not_iterable(self, "not an iterable type"),
+            },
+            Type::Row(_) => match self.row_field_entry(container, crate::types::ITER_KEY) {
+                Some(entry) if self.main_subst.resolve_presence(&entry.presence).is_pre() => {
+                    self.unify(span, element, &entry.ty)
+                }
+                _ if self.row_field_entry(container, "length").is_some() => not_iterable(
+                    self,
+                    "an array-like object (`{length: n}`) isn't iterable; \
+                     `Array.from(o, (_, i) => …)` maps its indices",
+                ),
+                _ => not_iterable(
+                    self,
+                    "an object isn't iterable unless its type says what it gives, \
+                     `[Symbol.iterator]: T`; iterate `Object.keys(o)`, `Object.values(o)` or \
+                     `Object.entries(o)`",
+                ),
+            },
+            Type::Map(_) => not_iterable(
+                self,
+                "a `Dict` is a plain object: iterate `Object.keys(d)`, `Object.values(d)` or \
+                 `Object.entries(d)`",
+            ),
+            Type::Maybe(..) => not_iterable(self, "it may be `null` or `undefined`: test it first"),
+            _ => not_iterable(
+                self,
+                "`for … of`, a spread and `Array.from` take an array, a string, a `Set`, a `Map` \
+                 or another iterable",
+            ),
         }
     }
 
@@ -1090,7 +1221,7 @@ impl InferState {
         sigma: &Type,
         span: Span,
     ) -> Result<(), IntyError> {
-        match self.flatten_type(ty) {
+        match self.zonk_head(ty) {
             Type::Var(TVarName::Flex(_)) => {
                 self.add_constraint(TypePred::strip(ty.clone(), sigma.clone()), span);
                 Ok(())
@@ -1115,7 +1246,7 @@ impl InferState {
     /// Resolve `Plus a`: a number or a string has `+`, any other known
     /// type hasn't, and a variable waits.
     pub(crate) fn resolve_plus(&mut self, a: &Type, span: Span) -> Result<(), IntyError> {
-        match self.zonk(a) {
+        match self.zonk_head(a) {
             Type::Number
             | Type::String
             | Type::Literal(
@@ -1171,6 +1302,13 @@ impl InferState {
         // An array's `length` takes a store (`xs.length = 0` empties it in
         // place); the number stored is checked as the property's type.
         if name == "length" && matches!(receiver, Type::Array(_)) {
+            return Ok(());
+        }
+        // `d.key = v` on a JavaScript `Dict<V>` stores that key, as
+        // `d["key"] = v` does.
+        if matches!(receiver, Type::Map(_))
+            && self.language == crate::ast::SourceLanguage::JavaScript
+        {
             return Ok(());
         }
         let builtin = match &receiver {

@@ -409,7 +409,7 @@ pub struct InferState {
     /// frontend-specific rules — currently the unit type and which
     /// primitive-method surface (`str`/`list` vs `String`/`Array`) a value
     /// carries. Defaults to JavaScript.
-    pub(in crate::infer) language: crate::ast::SourceLanguage,
+    pub(crate) language: crate::ast::SourceLanguage,
 
     /// Coinductive unification assumptions for recursive `Named` types.
     /// When `unify` is about to unfold a `Named(id, ...)` against another
@@ -425,6 +425,14 @@ pub struct InferState {
     pub(in crate::infer) unfold_assumptions: Vec<UnfoldAssumption>,
     /// Current nesting of [`Self::unify`] (see `MAX_UNIFY_DEPTH`).
     pub(in crate::infer) unify_depth: usize,
+    /// Pairs of variables, each bound to a type, that the outermost
+    /// [`Self::unify`] under way has unified (or is unifying): a pair met
+    /// again is taken as unified (coinductively, as for recursive types).
+    /// Two bound variables' types are compared, not linked, so without
+    /// this a type that mentions them in many places (an element's row:
+    /// each of its handlers' events mentions the element) is compared
+    /// again at each, which is exponential in how deeply such types nest.
+    pub(in crate::infer) unify_bound_pairs: std::collections::HashSet<(TVarId, TVarId)>,
 }
 
 /// One in-progress unfold the unifier is mid-recursion on. Two
@@ -502,6 +510,14 @@ impl Default for InferState {
     }
 }
 
+/// The largest type (in nodes, written out) a binding is generalised at.
+/// A scheme holds its type written out, as a tree: a type that nests
+/// types mentioning each other many times (an element whose fields
+/// mention the element it was appended to, and so on) is exponentially
+/// larger than the substitution it is in. One larger than this keeps its
+/// monomorphic type.
+pub(crate) const MAX_GENERALISED: usize = 200_000;
+
 impl InferState {
     /// Create a new inference state with default policy.
     pub fn new() -> Self {
@@ -567,6 +583,7 @@ impl InferState {
             language: crate::ast::SourceLanguage::JavaScript,
             unfold_assumptions: Vec::new(),
             unify_depth: 0,
+            unify_bound_pairs: std::collections::HashSet::new(),
         }
     }
 
@@ -866,6 +883,22 @@ impl InferState {
         }
     }
 
+    /// `ty` with its head resolved through the substitution (what a
+    /// bound variable stands for), and nothing below it: cheap on a large
+    /// type, where [`Self::zonk`] copies the whole of it.
+    pub fn zonk_head(&mut self, ty: &Type) -> Type {
+        super::zonk::zonk_head_cow(&mut self.var_table, ty).into_owned()
+    }
+
+    /// [`Self::zonk_head`] of a type the caller gives up: one that is
+    /// already a head is returned as is, not copied.
+    pub fn zonk_head_into(&mut self, ty: Type) -> Type {
+        match ty {
+            Type::Var(_) => self.zonk_head(&ty),
+            head => head,
+        }
+    }
+
     /// Generate a fresh type ID for recursive types.
     pub fn fresh_type_id(&mut self) -> TypeId {
         let id = self.type_id_source;
@@ -952,6 +985,8 @@ impl InferState {
         );
         self.pending_constraints.truncate(snap.constraints);
         self.var_table.restore(snap.trail);
+        // A pair unified in what was undone isn't unified any more.
+        self.unify_bound_pairs.clear();
         // Post-restore probe (debug only): the var_table and
         // main_subst should still agree on every key that survives
         // the rollback. Spot-check a handful — full-table sweep
@@ -981,6 +1016,39 @@ impl InferState {
     /// `Subst::flatten` for the full rationale.
     pub fn flatten_type(&self, ty: &Type) -> Type {
         self.main_subst.flatten(ty)
+    }
+
+    /// `ty` with its head resolved and, through a union or a sum, each
+    /// arm's head: what joining and `&&`/`||` look at, without resolving
+    /// (copying) the arms whole.
+    pub(crate) fn zonk_arms(&mut self, ty: &Type) -> Type {
+        match self.zonk_head(ty) {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .map(|m| self.zonk_arms(m))
+                    .collect::<Vec<_>>(),
+            ),
+            Type::Maybe(_, _) => {
+                let Type::Maybe(z, inner) = self.zonk_head(ty) else {
+                    unreachable!("just matched")
+                };
+                Type::union(vec![z.ty(), self.zonk_arms(&inner)])
+            }
+            other => other,
+        }
+    }
+
+    /// Whether `ty` written out (as a scheme holds it) would exceed
+    /// [`MAX_GENERALISED`] nodes.
+    pub(crate) fn too_large_to_generalise(&self, ty: &Type) -> bool {
+        self.main_subst.flattened_size(ty, MAX_GENERALISED + 1) > MAX_GENERALISED
+    }
+
+    /// How large `ty` is written out (see [`Subst::flattened_size`]),
+    /// counted up to a cap well past what a printer shows.
+    pub fn flattened_size(&self, ty: &Type) -> usize {
+        self.main_subst.flattened_size(ty, 1 << 20)
     }
 
     /// Boundary-view of a scheme: flattens the body type and every
@@ -1056,16 +1124,35 @@ impl InferState {
     /// joined (`check_expr`, annotated returns), so a union is made by
     /// saying so.
     pub fn join(&mut self, span: Span, t1: &Type, t2: &Type) -> InferResult<Type> {
-        let t1 = self.zonk(t1);
-        let t2 = self.zonk(t2);
-        if t1 == t2 {
-            return Ok(t1);
-        }
+        // Heads first: the branches may be large (DOM elements), which
+        // resolving whole copies.
+        let (h1, h2) = (self.zonk_head(t1), self.zonk_head(t2));
         let is_never = |t: &Type| matches!(t, Type::Union(m) if m.is_empty());
-        if is_never(&t1) {
-            return Ok(t2);
+        if is_never(&h1) {
+            return Ok(h2);
         }
-        if is_never(&t2) {
+        if is_never(&h2) {
+            return Ok(h1);
+        }
+        // Where widening leaves both alike (it only reaches into a
+        // literal, a sum, a tuple or a union of literals, not a record,
+        // array or function), the widened attempt below is this one.
+        let widens = |t: &Type| {
+            matches!(
+                t,
+                Type::Literal(_) | Type::Maybe(..) | Type::Tuple(_) | Type::Union(_)
+            )
+        };
+        if !widens(&h1) && !widens(&h2) {
+            let snap = self.snapshot_inference();
+            if self.quietly(|s| s.unify(span, &h1, &h2)).is_ok() {
+                return Ok(self.zonk_head(&h1));
+            }
+            self.restore_snapshot(snap);
+        }
+        let t1 = self.zonk_arms(t1);
+        let t2 = self.zonk_arms(t2);
+        if t1 == t2 {
             return Ok(t1);
         }
         // Equal after widening literals (also inside tuples, rows, …) —
@@ -1074,7 +1161,7 @@ impl InferState {
             let (a, b) = (self.widen(span, &t1), self.widen(span, &t2));
             let snap = self.snapshot_inference();
             if self.quietly(|s| s.unify(span, &a, &b)).is_ok() {
-                return Ok(self.zonk(&a));
+                return Ok(self.zonk_head_into(a));
             }
             self.restore_snapshot(snap);
         }
@@ -1087,7 +1174,7 @@ impl InferState {
                 }
                 let snap = self.snapshot_inference();
                 if self.quietly(|s| s.subsume(span, small, big)).is_ok() {
-                    return Ok(self.zonk(big));
+                    return Ok(self.zonk_head(big));
                 }
                 self.restore_snapshot(snap);
             }
@@ -1120,8 +1207,8 @@ impl InferState {
     /// substitution is rolled back and a union is returned. This means
     /// it is safe to call speculatively.
     pub fn union_of(&mut self, span: Span, t1: &Type, t2: &Type) -> Type {
-        let t1 = self.zonk(t1);
-        let t2 = self.zonk(t2);
+        let t1 = self.zonk_arms(t1);
+        let t2 = self.zonk_arms(t2);
 
         if t1 == t2 {
             return t1;
@@ -1163,7 +1250,7 @@ impl InferState {
         let snap = self.snapshot_inference();
 
         if self.quietly(|s| s.unify(span, &t1, &t2)).is_ok() {
-            return self.zonk(&t1);
+            return self.zonk_head(&t1);
         }
 
         self.restore_snapshot(snap);
@@ -1240,8 +1327,8 @@ impl InferState {
             return Ok(());
         }
         self.restore_snapshot(snap);
-        let sub = self.zonk(sub);
-        let sup = self.zonk(sup);
+        let sub = self.zonk_head(sub);
+        let sup = self.zonk_head(sup);
 
         // S-NoThis: a function that uses no `this` (`ArrowThis`) can be
         // called with any, so it flows into a slot for a function with
@@ -1249,8 +1336,8 @@ impl InferState {
         // constructor's (it isn't one). Not the other way: a slot for one
         // that uses none may be called either way.
         if let (Some(sub_this), Some(sup_this)) = (callable_this(&sub), callable_this(&sup)) {
-            if matches!(self.zonk(&sub_this), Type::ArrowThis)
-                && !matches!(self.zonk(&sup_this), Type::ArrowThis | Type::NewTarget)
+            if matches!(self.zonk_head(&sub_this), Type::ArrowThis)
+                && !matches!(self.zonk_head(&sup_this), Type::ArrowThis | Type::NewTarget)
             {
                 let sub_as = with_callable_this(&sub, sup_this.clone());
                 let snap = self.snapshot_inference();
@@ -1261,9 +1348,9 @@ impl InferState {
             }
             // A function that reads `this` where one that uses none is
             // expected: say so, as the types print alike.
-            if matches!(self.zonk(&sup_this), Type::ArrowThis)
+            if matches!(self.zonk_head(&sup_this), Type::ArrowThis)
                 && !matches!(
-                    self.zonk(&sub_this),
+                    self.zonk_head(&sub_this),
                     Type::ArrowThis | Type::Var(_) | Type::Error
                 )
             {
@@ -1329,7 +1416,7 @@ impl InferState {
         // ⋃τᵢ may be any τᵢ at runtime, so each must fit.
         if let Type::Union(members) = &sub {
             for m in members {
-                let m_resolved = self.zonk(m);
+                let m_resolved = self.zonk_head(m);
                 self.subsume(span, &m_resolved, &sup)?;
             }
             return Ok(());
@@ -1340,7 +1427,7 @@ impl InferState {
             let mut matching: Vec<usize> = Vec::new();
             for (i, m) in members.iter().enumerate() {
                 let snap = self.snapshot_inference();
-                let m_resolved = self.zonk(m);
+                let m_resolved = self.zonk_head(m);
                 let ok = self.quietly(|s| s.subsume(span, &sub, &m_resolved)).is_ok();
                 // Roll back on every probe; we re-run on the chosen
                 // arm below so the committed substitution comes from
@@ -1354,7 +1441,7 @@ impl InferState {
                 }
             }
             if matching.len() == 1 {
-                let chosen = self.zonk(&members[matching[0]]);
+                let chosen = self.zonk_head(&members[matching[0]]);
                 return self.subsume(span, &sub, &chosen);
             }
             // A function fits no arm: if one arm is a function type, its
@@ -1362,7 +1449,7 @@ impl InferState {
             if matching.is_empty() && callable_this(&sub).is_some() {
                 let fns: Vec<Type> = members
                     .iter()
-                    .map(|m| self.zonk(m))
+                    .map(|m| self.zonk_head(m))
                     .filter(|m| callable_this(m).is_some() || matches!(m, Type::Func { .. }))
                     .collect();
                 if let [only] = fns.as_slice() {
@@ -1406,7 +1493,7 @@ impl InferState {
         let snap = self.snapshot_inference();
         let fits = self.quietly(|s| s.fits_covariantly(span, sub, sup));
         self.restore_snapshot(snap);
-        match (fits, self.flatten_type(sup)) {
+        match (fits, self.main_subst.flatten_bounded(sup, 4_000)) {
             (true, Type::Array(_)) => Some(
                 "an array can be written to, so its element type must match exactly \
                  (a push through the expected type could add an element this array \
@@ -1433,7 +1520,10 @@ impl InferState {
         let inner = |s: &mut Self, a: &Type, b: &Type| {
             s.subsume(span, a, b).is_ok() || s.fits_covariantly(span, a, b)
         };
-        match (self.flatten_type(sub), self.flatten_type(sup)) {
+        match (
+            self.main_subst.flatten_bounded(sub, 4_000),
+            self.main_subst.flatten_bounded(sup, 4_000),
+        ) {
             (Type::Array(a), Type::Array(b)) | (Type::Map(a), Type::Map(b)) => inner(self, &a, &b),
             (Type::Row(r1), Type::Row(r2))
                 if r1.is_closed() && r2.is_closed() && r1.props.keys().eq(r2.props.keys()) =>
@@ -1450,8 +1540,10 @@ impl InferState {
     /// For two record types, which fields one has and the other lacks:
     /// what a mismatch between them is usually about.
     fn row_difference(&self, expected: &Type, found: &Type) -> Option<String> {
-        let (Type::Row(e), Type::Row(f)) = (self.flatten_type(expected), self.flatten_type(found))
-        else {
+        let (Type::Row(e), Type::Row(f)) = (
+            self.main_subst.flatten_bounded(expected, 4_000),
+            self.main_subst.flatten_bounded(found, 4_000),
+        ) else {
             return None;
         };
         let visible = |r: &crate::types::RowType| -> Vec<String> {
@@ -1604,8 +1696,9 @@ impl InferState {
         // Mirror the binding into the Union-Find table so reads
         // through `crate::infer::zonk` see the same view as reads
         // through `apply_subst`. Step 3 will flip the reads over.
+        let ty = std::sync::Arc::new(ty);
         self.mirror_extend(&var, &ty);
-        self.main_subst.insert(var.clone(), ty.clone());
+        self.main_subst.insert_shared(var.clone(), ty.clone());
         // Invariant probe (debug only): after every binding, the
         // Union-Find table and the HashMap must agree on the
         // chain endpoint for `var`. apply_subst follows the chain
@@ -1654,7 +1747,7 @@ impl InferState {
     /// so the contracts of `bind` / `union` apply: the root must be
     /// `Unbound`. The collision case is handled by `extend_subst`'s
     /// caller running `resolve(var)` first.
-    fn mirror_extend(&mut self, var: &TVarName, ty: &Type) {
+    fn mirror_extend(&mut self, var: &TVarName, ty: &std::sync::Arc<Type>) {
         use super::var_table::Resolution;
         // Only flex variables ever appear as the LHS of a binding in
         // this codebase — `unify`'s `var_bind` rule only fires on
@@ -1668,7 +1761,7 @@ impl InferState {
         // in range; padding cells are `Unbound { level: 0 }` which is
         // the right starting point for a never-allocated variable.
         self.var_table.ensure_id(id);
-        if let Type::Var(TVarName::Flex(other)) = ty {
+        if let Type::Var(TVarName::Flex(other)) = &**ty {
             self.var_table.ensure_id(*other);
             let root_a = self.var_table.find(id);
             let root_b = self.var_table.find(*other);
@@ -1732,7 +1825,7 @@ impl InferState {
         // Variable-to-structured: bind the root iff still free.
         let root = self.var_table.find(id);
         if self.var_table.is_free(root) {
-            self.var_table.bind(root, ty.clone());
+            self.var_table.bind_shared(root, ty.clone());
         } else {
             // Reachable only if some prior `mirror_extend` (via
             // another alias of `id`) bound this root, but
@@ -2088,7 +2181,7 @@ impl InferState {
         let mut pinned = false;
         let mut keep = Vec::new();
         for (this, span, callee) in std::mem::take(&mut self.pending_detached) {
-            match self.zonk(&this) {
+            match self.zonk_head(&this) {
                 Type::ArrowThis | Type::Undefined | Type::Error | Type::NewTarget => {}
                 Type::Var(v) => {
                     if fixed.is_none_or(|fixed| !fixed.contains(&v)) {
@@ -2126,6 +2219,12 @@ impl InferState {
         extra: &[TVarName],
     ) -> TypeScheme {
         self.constraint_removals += 1;
+        // A type too large to write out isn't generalised: it keeps its
+        // monomorphic type (sound, if less general) rather than be copied
+        // into a scheme.
+        if self.too_large_to_generalise(ty) {
+            return TypeScheme::mono(ty.clone());
+        }
         // Flatten row tails through the substitution before
         // computing free vars. `apply_subst` is shallow on tails
         // for performance reasons; without flattening here, a
@@ -2165,7 +2264,7 @@ impl InferState {
             .filter(|v| v.is_flex() && !fixed_vars.contains(v))
             .filter(|v| {
                 let var = Type::Var(v.clone());
-                self.zonk(&var) == var
+                self.zonk_head(&var) == var
             })
             .collect();
         gen_vars.sort_by_key(|v| v.id());
@@ -2196,39 +2295,79 @@ impl InferState {
             let mut scheme_preds = Vec::new();
             let mut remaining: Vec<PendingConstraint> =
                 std::mem::take(&mut self.pending_constraints);
+            // An `Iterable` on a container nothing else mentions (not the
+            // type, the environment or another constraint) is vacuous: it
+            // was posed for an argument a call left out (`new Set()`), and
+            // no value of that type is ever iterated. Kept, it would show
+            // in the scheme as a requirement on a variable no caller sees.
+            let container_var = |c: &PendingConstraint, s: &mut Self| match (
+                c.pred.class,
+                c.pred.types.first().map(|t| s.zonk_head(t)),
+            ) {
+                (crate::types::ClassName::Iterable, Some(Type::Var(v))) if v.is_flex() => Some(v),
+                _ => None,
+            };
+            // Each constraint's variables through the substitution
+            // (`reach`: a flattened copy can be far larger).
+            let reach_of = |s: &Self, c: &PendingConstraint| {
+                let mut r = crate::types::subst::Reach::default();
+                for t in &c.pred.types {
+                    s.main_subst.reach(t, &mut r);
+                }
+                r
+            };
+            let all_vars: Vec<std::collections::HashSet<TVarName>> =
+                remaining.iter().map(|c| reach_of(self, c).vars).collect();
+            let ty_free = ty.free_vars();
+            let mut vacuous = vec![false; remaining.len()];
+            for (i, c) in remaining.iter().enumerate() {
+                if let Some(v) = container_var(c, self) {
+                    vacuous[i] = !ty_free.contains(&v)
+                        && !fixed_vars.contains(&v)
+                        && all_vars
+                            .iter()
+                            .enumerate()
+                            .all(|(j, vars)| j == i || !vars.contains(&v));
+                }
+            }
+            let mut i = 0;
+            remaining.retain(|_| {
+                i += 1;
+                !vacuous[i - 1]
+            });
             loop {
                 let mut rest = Vec::new();
                 let mut took = false;
                 for constraint in remaining {
-                    let mut pred = self.apply_subst_pred(&constraint.pred);
-                    // Flattened, as the type is: a row's bound tail (a
-                    // `Spread`'s rows) would otherwise be left out of the
-                    // quantified variables and shared by every instance.
-                    for t in pred.types.iter_mut() {
-                        *t = self.main_subst.flatten(t);
-                    }
-                    // Where the requirement is written, for a failure of
-                    // one of its instances at a call.
-                    pred.origin.get_or_insert(constraint.span);
-                    if pred.free_vars().iter().any(|v| gen_var_set.contains(v)) {
-                        for t in &pred.types {
-                            let t = self.main_subst.flatten(t);
-                            for v in t.free_vars() {
-                                if v.is_flex()
-                                    && !fixed_vars.contains(&v)
-                                    && self.zonk(&Type::Var(v.clone())) == Type::Var(v.clone())
-                                    && gen_var_set.insert(v.clone())
-                                {
-                                    gen_vars.push(v);
-                                }
+                    // Whether it mentions a generalised variable, found
+                    // without building its flattened types.
+                    let reach = reach_of(self, &constraint);
+                    if reach.vars.iter().any(|v| gen_var_set.contains(v)) {
+                        let mut pred = self.apply_subst_pred(&constraint.pred);
+                        // Flattened, as the type is: a row's bound tail (a
+                        // `Spread`'s rows) would otherwise be left out of the
+                        // quantified variables and shared by every instance.
+                        for t in pred.types.iter_mut() {
+                            *t = self.main_subst.flatten(t);
+                        }
+                        // Where the requirement is written, for a failure of
+                        // one of its instances at a call.
+                        pred.origin.get_or_insert(constraint.span);
+                        for v in reach.vars {
+                            if v.is_flex()
+                                && !fixed_vars.contains(&v)
+                                && self.zonk_head(&Type::Var(v.clone())) == Type::Var(v.clone())
+                                && gen_var_set.insert(v.clone())
+                            {
+                                gen_vars.push(v);
                             }
-                            for p in t.free_pvars() {
-                                if p.is_flex()
-                                    && !fixed_pvars.contains(&p)
-                                    && gen_pvar_set.insert(p.clone())
-                                {
-                                    gen_pvars.push(p);
-                                }
+                        }
+                        for p in reach.pvars {
+                            if p.is_flex()
+                                && !fixed_pvars.contains(&p)
+                                && gen_pvar_set.insert(p.clone())
+                            {
+                                gen_pvars.push(p);
                             }
                         }
                         scheme_preds.push(pred);
@@ -2345,14 +2484,13 @@ impl InferState {
                 named.extend(scheme.body.ty.named_ids());
             }
         }
+        // What the environment's variables reach through the
+        // substitution (without building their flattened types, which can
+        // be far larger than the substitution: see `Subst::reach`).
+        let mut reach = crate::types::subst::Reach::default();
         for v in &env_vars {
             vars.insert(v.clone());
-            let var = Type::Var(v.clone());
-            for resolved in [self.zonk(&var), self.main_subst.flatten(&var)] {
-                vars.extend(resolved.free_vars());
-                pvars.extend(resolved.free_pvars());
-                named.extend(resolved.named_ids());
-            }
+            self.main_subst.reach(&Type::Var(v.clone()), &mut reach);
         }
         // Presence variables bound in the substitution resolve too.
         let bound_pvars: Vec<crate::types::PVarName> = pvars.iter().cloned().collect();
@@ -2370,9 +2508,14 @@ impl InferState {
         named.extend(ty.named_ids());
         for c in &self.pending_constraints {
             for t in &c.pred.types {
-                named.extend(self.main_subst.flatten(t).named_ids());
+                let mut r = crate::types::subst::Reach::default();
+                self.main_subst.reach(t, &mut r);
+                named.extend(r.named);
             }
         }
+        vars.extend(reach.vars);
+        pvars.extend(reach.pvars);
+        named.extend(reach.named);
         let mut seen: HashSet<TypeId> = HashSet::new();
         while let Some(id) = named.pop() {
             if !seen.insert(id) || self.closed_named.contains(&id) {
@@ -2403,28 +2546,34 @@ impl InferState {
             pvars.extend(free_pvars);
             named.extend(inner);
         }
-        // Close over the pending constraints' functional dependencies.
-        let preds: Vec<TypePred> = self
+        // Close over the pending constraints' functional dependencies:
+        // each type's free variables through the substitution (`reach`,
+        // not a flattened copy of it).
+        let preds: Vec<(ClassName, Vec<crate::types::subst::Reach>)> = self
             .pending_constraints
             .iter()
-            .map(|c| TypePred {
-                class: c.pred.class,
-                types: c
+            .map(|c| {
+                let reaches = c
                     .pred
                     .types
                     .iter()
-                    .map(|t| self.main_subst.flatten(t))
-                    .collect(),
-                origin: c.pred.origin,
+                    .map(|t| {
+                        let mut r = crate::types::subst::Reach::default();
+                        self.main_subst.reach(t, &mut r);
+                        r
+                    })
+                    .collect();
+                (c.pred.class, reaches)
             })
             .collect();
         loop {
             let mut changed = false;
-            for pred in &preds {
-                let determined: Vec<&Type> = match (pred.class, pred.types.as_slice()) {
+            for (class, types) in &preds {
+                let fixed = |r: &crate::types::subst::Reach| r.vars.is_subset(&vars);
+                let determined: Vec<&crate::types::subst::Reach> = match (class, types.as_slice()) {
                     // container → index, element
                     (ClassName::Indexable, [container, index, element]) => {
-                        if container.free_vars().is_subset(&vars) {
+                        if fixed(container) {
                             vec![index, element]
                         } else {
                             vec![]
@@ -2432,7 +2581,7 @@ impl InferState {
                     }
                     // receiver → result (and a method call's `this`)
                     (ClassName::HasProp, [receiver, _, determined @ ..]) => {
-                        if receiver.free_vars().is_subset(&vars) {
+                        if fixed(receiver) {
                             determined.iter().collect()
                         } else {
                             vec![]
@@ -2440,7 +2589,7 @@ impl InferState {
                     }
                     // the type → what it holds besides nothing
                     (ClassName::Strip, [ty, sigma]) => {
-                        if ty.free_vars().is_subset(&vars) {
+                        if fixed(ty) {
                             vec![sigma]
                         } else {
                             vec![]
@@ -2448,10 +2597,16 @@ impl InferState {
                     }
                     // the operand and the fields before it → the result
                     (ClassName::Spread, [operand, so_far, result]) => {
-                        if operand.free_vars().is_subset(&vars)
-                            && so_far.free_vars().is_subset(&vars)
-                        {
+                        if fixed(operand) && fixed(so_far) {
                             vec![result]
+                        } else {
+                            vec![]
+                        }
+                    }
+                    // the container → its elements
+                    (ClassName::Iterable, [container, element]) => {
+                        if fixed(container) {
+                            vec![element]
                         } else {
                             vec![]
                         }
@@ -2462,7 +2617,7 @@ impl InferState {
                     (_, types) => {
                         if types
                             .iter()
-                            .any(|t| t.free_vars().iter().any(|v| vars.contains(v)))
+                            .any(|r| r.vars.iter().any(|v| vars.contains(v)))
                         {
                             types.iter().collect()
                         } else {
@@ -2470,13 +2625,17 @@ impl InferState {
                         }
                     }
                 };
-                for t in determined {
-                    for v in t.free_vars() {
-                        changed |= vars.insert(v);
-                    }
-                    for p in t.free_pvars() {
-                        changed |= pvars.insert(p);
-                    }
+                let mut add_vars = Vec::new();
+                let mut add_pvars = Vec::new();
+                for r in determined {
+                    add_vars.extend(r.vars.iter().cloned());
+                    add_pvars.extend(r.pvars.iter().cloned());
+                }
+                for v in add_vars {
+                    changed |= vars.insert(v);
+                }
+                for p in add_pvars {
+                    changed |= pvars.insert(p);
                 }
             }
             if !changed {
@@ -2533,12 +2692,33 @@ impl InferState {
     }
 
     /// Check if a type variable occurs in a type (occurs check).
+    ///
+    /// Walks `ty` through the substitution as it goes, each bound
+    /// variable's type once: applying the substitution first copied the
+    /// type whole, and a type that shares a large part (a DOM element's
+    /// row, reached again through each of its event handlers' events) was
+    /// expanded into a tree exponentially larger than itself.
     pub fn occurs_in(&self, var: TVarId, ty: &Type) -> bool {
-        let ty = self.apply_subst(ty);
-        self.occurs_in_impl(var, &ty)
+        let mut seen = std::collections::HashSet::new();
+        self.occurs_in_impl(var, ty, &mut seen)
     }
 
-    fn occurs_in_impl(&self, var: TVarId, ty: &Type) -> bool {
+    /// The type a variable is bound to, if it is bound and not yet seen.
+    fn bound_unseen(
+        &self,
+        id: TVarId,
+        seen: &mut std::collections::HashSet<TVarId>,
+    ) -> Option<&Type> {
+        let bound = self.main_subst.get(&TVarName::Flex(id))?;
+        seen.insert(id).then_some(bound)
+    }
+
+    fn occurs_in_impl(
+        &self,
+        var: TVarId,
+        ty: &Type,
+        seen: &mut std::collections::HashSet<TVarId>,
+    ) -> bool {
         match ty {
             Type::Number
             | Type::String
@@ -2551,7 +2731,12 @@ impl InferState {
             | Type::TypedArray(_)
             | Type::Error => false,
 
-            Type::Var(TVarName::Flex(id)) => *id == var,
+            Type::Var(TVarName::Flex(id)) => {
+                *id == var
+                    || self
+                        .bound_unseen(*id, seen)
+                        .is_some_and(|b| self.occurs_in_impl(var, b, seen))
+            }
             Type::Var(TVarName::Skolem(_)) => false,
 
             Type::Func {
@@ -2561,32 +2746,47 @@ impl InferState {
             } => {
                 this_type
                     .as_ref()
-                    .is_some_and(|t| self.occurs_in_impl(var, t))
-                    || params.iter().any(|p| self.occurs_in_impl(var, &p.ty))
-                    || self.occurs_in_impl(var, ret)
+                    .is_some_and(|t| self.occurs_in_impl(var, t, seen))
+                    || params.iter().any(|p| self.occurs_in_impl(var, &p.ty, seen))
+                    || self.occurs_in_impl(var, ret, seen)
             }
 
             Type::Row(row) => {
-                row.props.values().any(|e| self.occurs_in_impl(var, &e.ty))
-                    || matches!(&row.tail, RowTail::Open(TVarName::Flex(id)) if *id == var)
-                    || matches!(&row.tail, RowTail::Recursive(_, args) if args.iter().any(|a| self.occurs_in_impl(var, a)))
+                row.props
+                    .values()
+                    .any(|e| self.occurs_in_impl(var, &e.ty, seen))
+                    || match &row.tail {
+                        RowTail::Open(TVarName::Flex(id)) => {
+                            *id == var
+                                || self
+                                    .bound_unseen(*id, seen)
+                                    .is_some_and(|b| self.occurs_in_impl(var, b, seen))
+                        }
+                        RowTail::Recursive(_, args) => {
+                            args.iter().any(|a| self.occurs_in_impl(var, a, seen))
+                        }
+                        _ => false,
+                    }
             }
 
-            Type::Array(elem) => self.occurs_in_impl(var, elem),
-            Type::Maybe(_, inner) => self.occurs_in_impl(var, inner),
-            Type::Promise(inner) => self.occurs_in_impl(var, inner),
-            Type::Map(value) => self.occurs_in_impl(var, value),
-            Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in_impl(var, e)),
+            Type::Array(elem) => self.occurs_in_impl(var, elem, seen),
+            Type::Maybe(_, inner) => self.occurs_in_impl(var, inner, seen),
+            Type::Promise(inner) => self.occurs_in_impl(var, inner, seen),
+            Type::Map(value) => self.occurs_in_impl(var, value, seen),
+            Type::Tuple(elems) => elems.iter().any(|e| self.occurs_in_impl(var, e, seen)),
 
-            Type::Named(_, args) => args.iter().any(|a| self.occurs_in_impl(var, a)),
+            Type::Named(_, args) => args.iter().any(|a| self.occurs_in_impl(var, a, seen)),
 
             Type::Literal(_) => false,
-            Type::Union(members) => members.iter().any(|m| self.occurs_in_impl(var, m)),
+            Type::Union(members) => members.iter().any(|m| self.occurs_in_impl(var, m, seen)),
 
-            Type::Module(m) => {
+            Type::Module(_) => {
                 // A module's exports are schemes; the occurs check looks
                 // at free variables of each scheme (i.e. those not bound
                 // by the scheme's quantifier).
+                let Type::Module(m) = self.apply_subst(ty) else {
+                    unreachable!("a module stays one")
+                };
                 m.exports
                     .values()
                     .any(|scheme| scheme.free_vars().contains(&TVarName::Flex(var)))
@@ -2596,23 +2796,41 @@ impl InferState {
 
     /// Check if a type variable occurs within a row type (for recursive type detection).
     /// Returns true if the variable occurs at the tail position of a row.
+    /// (Walks through the substitution lazily, as [`Self::occurs_in`].)
     pub fn is_inside_row_type(&self, var: TVarId, ty: &Type) -> bool {
-        let ty = self.apply_subst(ty);
-        self.is_inside_row_type_impl(var, &ty, false)
+        // A variable's type is looked at once outside a row and once
+        // inside one (where finding `var` means more).
+        let mut seen = [
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        ];
+        self.is_inside_row_type_impl(var, ty, false, &mut seen)
     }
 
-    fn is_inside_row_type_impl(&self, var: TVarId, ty: &Type, in_row: bool) -> bool {
+    fn is_inside_row_type_impl(
+        &self,
+        var: TVarId,
+        ty: &Type,
+        in_row: bool,
+        seen: &mut [std::collections::HashSet<TVarId>; 2],
+    ) -> bool {
         match ty {
             Type::Row(row) => {
-                // Check if var is the row tail
-                if matches!(&row.tail, RowTail::Open(TVarName::Flex(id)) if *id == var) {
-                    return true;
-                }
+                // Check if var is the row tail (a bound tail continues
+                // the row)
+                let tail = match &row.tail {
+                    RowTail::Open(TVarName::Flex(id)) if *id == var => return true,
+                    RowTail::Open(TVarName::Flex(id)) => self
+                        .bound_unseen(*id, &mut seen[1])
+                        .is_some_and(|b| self.is_inside_row_type_impl(var, b, true, seen)),
+                    _ => false,
+                };
 
                 // Check inside properties - we're now inside a row
-                row.props
+                tail || row
+                    .props
                     .values()
-                    .any(|e| self.is_inside_row_type_impl(var, &e.ty, true))
+                    .any(|e| self.is_inside_row_type_impl(var, &e.ty, true, seen))
             }
 
             Type::Func {
@@ -2624,11 +2842,11 @@ impl InferState {
                 // (this is the key for equi-recursive types with object methods)
                 this_type
                     .as_ref()
-                    .is_some_and(|t| self.is_inside_row_type_impl(var, t, in_row))
+                    .is_some_and(|t| self.is_inside_row_type_impl(var, t, in_row, seen))
                     || params
                         .iter()
-                        .any(|p| self.is_inside_row_type_impl(var, &p.ty, in_row))
-                    || self.is_inside_row_type_impl(var, ret, in_row)
+                        .any(|p| self.is_inside_row_type_impl(var, &p.ty, in_row, seen))
+                    || self.is_inside_row_type_impl(var, ret, in_row, seen)
             }
 
             Type::Var(TVarName::Flex(id)) if *id == var => {
@@ -2636,22 +2854,25 @@ impl InferState {
                 // This is valid for recursion if we're inside a row
                 in_row
             }
+            Type::Var(TVarName::Flex(id)) => self
+                .bound_unseen(*id, &mut seen[usize::from(in_row)])
+                .is_some_and(|b| self.is_inside_row_type_impl(var, b, in_row, seen)),
 
             Type::Array(elem) | Type::Maybe(_, elem) => {
-                self.is_inside_row_type_impl(var, elem, in_row)
+                self.is_inside_row_type_impl(var, elem, in_row, seen)
             }
-            Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row),
-            Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row),
+            Type::Promise(inner) => self.is_inside_row_type_impl(var, inner, in_row, seen),
+            Type::Map(value) => self.is_inside_row_type_impl(var, value, in_row, seen),
             // A recursive type's arguments, as a type written out there
             // would be: `t ~ μ<{c: () => t}>` (an instance whose field
             // holds the factory that made it) is solved by a recursive
             // type, not refused by the occurs check.
             Type::Named(_, args) => args
                 .iter()
-                .any(|a| self.is_inside_row_type_impl(var, a, in_row)),
+                .any(|a| self.is_inside_row_type_impl(var, a, in_row, seen)),
             Type::Tuple(elems) => elems
                 .iter()
-                .any(|e| self.is_inside_row_type_impl(var, e, in_row)),
+                .any(|e| self.is_inside_row_type_impl(var, e, in_row, seen)),
 
             _ => false,
         }

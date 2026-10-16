@@ -511,3 +511,25 @@ fn a_store_to_an_array_length_truncates_it() {
         Err(Stuck::OutOfBounds { .. })
     ));
 }
+
+#[test]
+fn number_methods_run() {
+    assert_string("(1.26).toFixed(1)", "1.3");
+    assert!(
+        run("(1.25).toFixed(1)").is_err(),
+        "a tie rounds differently in Rust"
+    );
+    assert_string("(3).toFixed(2)", "3.00");
+    assert_string("(255).toString(16)", "ff");
+    assert_string("(-10).toString(2)", "-1010");
+    assert_string("(1.5).toString()", "1.5");
+}
+
+#[test]
+fn strings_iterate_their_characters() {
+    assert_string("const xs = [...\"ab\"]; xs[1]", "b");
+    assert_string(
+        "let out = \"\"; for (const c of \"ab\") { out = c + out; } out",
+        "ba",
+    );
+}

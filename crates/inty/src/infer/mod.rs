@@ -560,6 +560,43 @@ impl InferState {
         result
     }
 
+    /// The type a hoisted `var` / `let` / `const` placeholder takes from
+    /// the declaration's own inline annotation (`/** let x: T */`), when
+    /// the annotation is monomorphic: the declaration then binds that same
+    /// type (checking its initialiser, if any, against it), so the
+    /// placeholder and the binding relate as two copies of one type.
+    /// `None` otherwise (the placeholder stays a fresh variable).
+    fn hoisted_annotation_type(&mut self, decl: &VarDeclarator) -> Option<Type> {
+        let annotation = decl.type_annotation.as_ref()?;
+        if annotation.kind != crate::ast::AnnotationKind::Inline {
+            return None;
+        }
+        let span = crate::span::Span::new(annotation.span.start, annotation.span.end);
+        let (ty, var_map, next_pvar, preds) =
+            crate::infer::type_parser::parse_type_annotation_with_preds(
+                &annotation.content,
+                span,
+                self.next_var_id(),
+                self.next_pvar_id(),
+                &self.type_aliases,
+            )
+            .ok()?;
+        if !var_map.is_empty() || !preds.is_empty() {
+            return None;
+        }
+        // The presence variables of its optional fields are this copy's
+        // own: later allocations must not reuse them.
+        self.bump_pvar_id_to(next_pvar);
+        // As `infer_stmt_var` reads the annotation: checked against an
+        // initialiser, a function type says what `this` it is called
+        // with; a declaration keeps its.
+        Some(if decl.init.is_some() {
+            crate::infer::lower::annotation_this(&ty, &Type::ArrowThis)
+        } else {
+            self.declared_callbacks_detached(&ty)
+        })
+    }
+
     /// Whether a declaration that is typed with the hoisted functions
     /// (Pass 2 of `infer_stmt_list`) is still typed only once the
     /// statements before it have been: a function-valued `const` or a
@@ -622,10 +659,17 @@ impl InferState {
                         continue;
                     }
                     let key = state.key_of(decl.span, &decl.name);
-                    hoisted_data.entry(key).or_insert_with(|| {
-                        let var = state.fresh_type_var();
-                        (decl.name.clone(), var)
-                    });
+                    if hoisted_data.contains_key(&key) {
+                        continue;
+                    }
+                    // A binding annotated with a monomorphic type is that
+                    // type from the start, so a function checked before the
+                    // declaration (one a top-level call reaches early) reads
+                    // it rather than a variable the first use would pin.
+                    let ty = state
+                        .hoisted_annotation_type(decl)
+                        .unwrap_or_else(|| state.fresh_type_var());
+                    hoisted_data.insert(key, (decl.name.clone(), ty));
                 }
             };
         // Function-valued `const`s inferred with the hoisted functions
@@ -849,11 +893,14 @@ impl InferState {
             }
             // Groups this statement uses are typed before it.
             if group_done.iter().any(|d| !d) {
-                let used: Vec<usize> = crate::ast::free_idents::free_identifiers_in_stmt(stmt)
+                let mut used: Vec<usize> = crate::ast::free_idents::free_identifiers_in_stmt(stmt)
                     .into_iter()
                     .chain(annotated_classes(stmt))
                     .filter_map(|n| group_of_name.get(&n).copied())
                     .collect();
+                // In source order: the names come from a hash set, and
+                // the order groups are inferred in shows in the result.
+                used.sort_unstable();
                 for gi in used {
                     self.infer_group_with_deps(
                         &mut current_env,
@@ -1253,7 +1300,32 @@ impl InferState {
         ) {
             return self.check_by_synthesis(env, expr, expected);
         }
-        let mut expected = self.zonk(expected);
+        let mut expected = self.zonk_head(expected);
+        // An array literal where an iterable of `E` is expected (a
+        // parameter `I` with `Iterable I E`, as `new Map(entries)`'s) is
+        // an `E[]`: its elements are checked against `E` (a pair against
+        // `[K, V]`).
+        if let (Expr::Array { .. }, Type::Var(var @ crate::types::TVarName::Flex(_))) =
+            (expr, &expected)
+        {
+            let candidates: Vec<(Type, Type)> = self
+                .pending_constraints
+                .iter()
+                .filter(|c| c.pred.class == crate::types::ClassName::Iterable)
+                .map(|c| (c.pred.types[0].clone(), c.pred.types[1].clone()))
+                .collect();
+            let var = Type::Var(var.clone());
+            let element = candidates
+                .into_iter()
+                .find(|(container, _)| self.zonk_head(container) == var)
+                .map(|(_, element)| element);
+            if let Some(element) = element {
+                let element = self.zonk_head(&element);
+                if !matches!(element, Type::Var(_)) {
+                    expected = Type::array(element);
+                }
+            }
+        }
         // A recursive alias pushes its unrolling into a literal.
         if let (Type::Named(id, args), Expr::Object { .. } | Expr::Array { .. }) = (&expected, expr)
         {
@@ -1309,7 +1381,7 @@ impl InferState {
                     types.insert((span.start, span.end), ty.clone());
                 }
                 self.subsume(*span, &ty, &expected)?;
-                return Ok(self.zonk(&ty));
+                return Ok(self.zonk_head_into(ty));
             }
         }
         // An object literal where a `Dict<V>` is expected is one: each
@@ -1333,7 +1405,7 @@ impl InferState {
                     }
                 }
             }
-            let ty = self.zonk(&expected);
+            let ty = self.zonk_head(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());
             }
@@ -1363,7 +1435,7 @@ impl InferState {
             let (cons_env, alt_env) = self.infer_branching_test(env, test)?;
             self.check_expr(&cons_env, consequent, &expected)?;
             self.check_expr(&alt_env, alternate, &expected)?;
-            let ty = self.zonk(&expected);
+            let ty = self.zonk_head(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());
             }
@@ -1375,7 +1447,7 @@ impl InferState {
             let value = self.strip_sum(left.span(), &left_ty)?;
             self.subsume(left.span(), &value, &expected)?;
             self.check_expr(env, right, &expected)?;
-            let ty = self.zonk(&expected);
+            let ty = self.zonk_head(&expected);
             if let Some(types) = self.expr_types.as_mut() {
                 types.insert((span.start, span.end), ty.clone());
             }
@@ -1391,7 +1463,7 @@ impl InferState {
                 for (e, t) in elements.iter().flatten().zip(elems.iter()) {
                     self.check_expr(env, e, t)?;
                 }
-                let ty = self.zonk(&expected);
+                let ty = self.zonk_head(&expected);
                 if let Some(types) = self.expr_types.as_mut() {
                     types.insert((span.start, span.end), ty.clone());
                 }
@@ -1407,9 +1479,16 @@ impl InferState {
                         // value (`Int[]` spreads into `(Number | String)[]`).
                         Expr::Spread { argument, span } => {
                             let arg_ty = self.infer_expr(env, argument)?;
-                            match self.zonk(&arg_ty) {
+                            match self.zonk_head(&arg_ty) {
                                 Type::Array(arg_elem) => self.subsume(*span, &arg_elem, elem)?,
-                                _ => self.subsume(*span, &arg_ty, &expected)?,
+                                Type::Var(_) => self.subsume(*span, &arg_ty, &expected)?,
+                                // Any other iterable: its elements fit.
+                                _ => {
+                                    let arg_elem = self.fresh_type_var();
+                                    self.require_iterable(&arg_ty, &arg_elem, *span)?;
+                                    let arg_elem = self.zonk_head(&arg_elem);
+                                    self.subsume(*span, &arg_elem, elem)?;
+                                }
                             }
                         }
                         e => {
@@ -1417,7 +1496,7 @@ impl InferState {
                         }
                     }
                 }
-                let ty = self.zonk(&expected);
+                let ty = self.zonk_head(&expected);
                 if let Some(types) = self.expr_types.as_mut() {
                     types.insert((span.start, span.end), ty.clone());
                 }
@@ -1446,15 +1525,81 @@ impl InferState {
         // lands on the base type, matching what `var x = 1` would
         // produce at a synthesis site.
         let synth = self.infer_expr(env, expr)?;
-        let synth_for_bind = if self.head_is(expected, |t| {
+        let widened = if self.head_is(expected, |t| {
             matches!(t, Type::Var(crate::types::TVarName::Flex(_)))
         }) {
-            self.widen(expr.span(), &synth)
+            Some(self.widen(expr.span(), &synth))
         } else {
-            synth.clone()
+            None
         };
-        self.subsume(expr.span(), &synth_for_bind, expected)?;
-        Ok(self.zonk(&synth))
+        if let Err(mut err) =
+            self.subsume(expr.span(), widened.as_ref().unwrap_or(&synth), expected)
+        {
+            self.note_unnarrowed_property(expr, &synth, expected, &mut err);
+            return Err(err);
+        }
+        // Its head: an argument may be a large row (a DOM element),
+        // which resolving whole copies (and copying a head already
+        // resolved would copy it again).
+        match synth {
+            Type::Var(_) => Ok(self.zonk_head_into(synth)),
+            head => Ok(head),
+        }
+    }
+
+    /// A property read `r.p` that may be `null` or `undefined`, where its
+    /// value would fit: a test of `r.p` doesn't narrow it (a record is
+    /// mutable: a call, or another reference to the object, could store
+    /// `null` there before the use), so say how to narrow it.
+    fn note_unnarrowed_property(
+        &mut self,
+        expr: &Expr,
+        synth: &Type,
+        expected: &Type,
+        err: &mut crate::error::IntyError,
+    ) {
+        if self.quiet > 0 {
+            return;
+        }
+        let Some(path @ crate::infer::narrow::Path::Member(..)) =
+            crate::infer::narrow::path_from_expr(expr)
+        else {
+            return;
+        };
+        let Type::Maybe(_, value) = self.zonk_head(synth) else {
+            return;
+        };
+        let snap = self.snapshot_inference();
+        let fits = self
+            .quietly(|s| s.subsume(expr.span(), &value, expected))
+            .is_ok();
+        self.restore_snapshot(snap);
+        if !fits {
+            return;
+        }
+        fn show(path: &crate::infer::narrow::Path) -> String {
+            match path {
+                crate::infer::narrow::Path::Ident(name, _) => name.clone(),
+                crate::infer::narrow::Path::Member(parent, prop) => {
+                    format!("{}.{}", show(parent), prop.0)
+                }
+            }
+        }
+        let crate::infer::narrow::Path::Member(_, prop) = &path else {
+            unreachable!("matched above")
+        };
+        let (name, read) = (prop.0.as_str(), show(&path));
+        let note = format!(
+            "a test of a property doesn't narrow it: a record can be changed between the \
+             test and the use (by a call, or through another reference). Copy it into a \
+             `const` and test that: `const {name} = {read}; if ({name}) …`"
+        );
+        if let Some(crate::error::TypeError::UnificationError { context, .. }) = err.as_type_mut() {
+            *context = Some(match context.take() {
+                Some(c) => format!("{c}; {note}"),
+                None => note,
+            });
+        }
     }
 
     /// Infer the type of an expression.

@@ -218,7 +218,10 @@ The other predicates that narrow:
 - `x === null` and `x !== undefined`, read by the *type* of the other operand, so a local `const undefined = 0` doesn't count;
 - `x == null` / `x != null`;
 - truthiness (`if (x)`, `!x`), with each language's rules;
-- `&&`, `||` and `?:`, including their right operands (`q !== null && q.x > 0`).
+- `&&`, `||` and `?:`, including their right operands (`q !== null && q.x > 0`);
+- a disjunction of tests of one path: `if (s.kind === "row" || s.kind === "col")` narrows `s` to those two members (and `s.kind !== "row" && s.kind !== "col"` does in its `else`).
+
+**A property's own type isn't narrowed.** A tag test picks a union's members, but `if (r.palette) use(r.palette)` with `palette: String | Null` leaves `r.palette` a `String | Null`: a record is mutable, and a call between the test and the use, or another reference to the same object, could store `null` there. Copy it into a `const` first: `const p = r.palette; if (p) use(p);` (the error says so).
 
 A test also narrows:
 - the code after an `if` whose other branch always returns, throws, breaks or continues (`if (q === null) return 0; return q.x;`);
@@ -587,13 +590,26 @@ Reading an array's or a string's element at an index it hasn't (`xs[xs.length]`,
 
 A **tuple** `[A, B]` is a fixed-length array whose elements have their own types. An array literal where one is expected is one; `t[0]` with a constant index reads that element, and `const [a, b] = t` destructures it. An array literal with elements of different types and no annotation is an error that suggests a tuple (or a record, or an element union).
 
-A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
+A **`Dict<V>`** is a plain object used as a string-keyed map (`{ [String]: V }` is the same type). An object literal where one is expected is one (each value must fit `V`); reading a key, `d.k` or `d[k]`, gives `V | Undefined`, since the key may be missing (`d.k ?? 0`); storing one, `d.k = v` or `d[k] = v`, takes a `V` (not `undefined`, which `Object.values` would then return; an update such as `d.k += 1` reads the entry first, so it needs it narrowed); `Object.keys`, `Object.values(d)` (`V[]`), `Object.entries(d)` (`[String, V][]`) and `Object.fromEntries` work on it.
 
 Typed arrays are `Int32Array`, `Uint8Array`, `Float32Array` and `Float64Array`. Each is its own type, not an ordinary array:
 - It has a fixed length: `.length`, `.fill(v)`, `.subarray(start?, end?)`, `.slice(start?, end?)`, `.set(other, offset?)`, `.buffer` and `.byteLength`, but no `push`.
 - Indexing `a[i]` takes a number index, and reads a `Number`.
 - A store into an integer array takes any number and wraps it to 32 or 8 bits, as JavaScript's `ToInt32` / `ToUint8` do (`a[0] = 1.5` stores 1).
 - They are made with `new Int32Array(n)` or `Int32Array.from(xs)`.
+
+### Iteration
+
+`for (const x of it)`, a spread `[...it]` and `Array.from(it)` iterate `it`, which may be:
+
+- an array (its elements), a typed array (numbers), a tuple (its components, all of one type);
+- a string (its characters, as strings: code points);
+- a `Set<T>` (`T`s), a `Map<K, V>` (`[K, V]` pairs), and what their `keys()`, `values()` and `entries()` give;
+- any record whose type says what iterating it gives with a `[Symbol.iterator]: T` field. A declaration says a host collection is iterable this way without claiming it is an array: `/** type NodeList = {length: Number, item: (Number) => Element | Null, [Symbol.iterator]: Element} */`.
+
+Not a `Dict<V>` or another plain object (`for … of` throws on one): iterate `Object.keys(o)`, `Object.values(o)` or `Object.entries(o)`. A function that iterates its parameter takes any iterable: its scheme says `where Iterable a b` (a `where` clause in an annotation may say it too).
+
+`new Set(items?)` and `new Map(entries?)` take any iterable of items or of `[K, V]` pairs (an array literal of pairs is checked as one). `Array.from(it)` gives an array of `it`'s elements; `Array.from(it, (x, i) => …)` an array of the map function's results, and also takes an array-like object, `Array.from({length: n}, (_, i) => i)` (whose elements are `undefined`).
 
 ### Function types
 
@@ -705,13 +721,14 @@ Quick reference for the JavaScript surface inty accepts:
 | Category       | What works                                                                                                |
 |----------------|-----------------------------------------------------------------------------------------------------------|
 | Literals       | template literals, regex literals, object property shorthand (`{a, b}`)                                   |
-| Variables      | `var`, `const`, `let` (treated as `var` — block scoping isn't modelled)                                   |
+| Variables      | `var` (function-scoped), `const`, `let` (block-scoped; a `for (const x of …)` binding is the loop body's)  |
 | Functions      | declarations, expressions, arrow functions, method shorthand, default params (`x = 1`), destructuring defaults (`{a = null}`), rest (`...args`), spread in calls (`f(...arr)`) |
 | Destructuring  | object and array, with defaults; rest patterns (`{a, ...rest}`, `[head, ...tail]`)                        |
-| Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of`                                                            |
+| Iteration      | `for`, `while`, `do-while`, `for-in`, `for-of` — see [Iteration](#iteration)                              |
 | Classes        | declarations + `export default class`, instance methods, fields, getters (no setters), private fields (`#x`) (see [Class Bodies](#class-bodies-fields-private-fields-accessors)), external classes declared without a body (`/** class X extends B { … } */ class X;`); no `extends` in a class with a body, no `static` members |
 | Async          | `async`/`await`, `export async function`, desugared via `Promise.resolve`                                 |
 | Errors         | `try` / `catch (e)` / `catch {}` (binding optional) / `finally`; `e` may be any thrown value, so its type is opaque: it can be passed on, tested and rethrown, but not used as a number, string or object |
+| Primitive methods | the `String.prototype` and `Array.prototype` methods (`replace`/`replaceAll` take a string or a function of the match, `(String) => String`: the capture groups and offset JavaScript also passes have pattern-dependent types and aren't modelled — read them from `match`/`exec` instead); on numbers `toFixed`, `toPrecision`, `toExponential`, `toString(radix?)`, `toLocaleString`, `valueOf`; on booleans `toString`, `valueOf` |
 | ASI            | inserted before `return` / `break` / `continue` / `throw` / postfix `++` / `--` when a line terminator separates the next token |
 | Rejected       | `delete` (soft type-time diagnostic pointing at workaround — accepted by the parser, the expression's result is `Type::Error` so the rest of the file still checks); `super.member`, `static` members |
 | Modules        | ES `import`/`export` with `inty.json` paths/baseUrl — see [Modules](#modules-es-import--export) above     |

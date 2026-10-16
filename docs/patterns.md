@@ -238,3 +238,18 @@ requires what failed), each module is checked once per run, and
 `class P extends AudioWorkletProcessor { … }` is supported. A class
 constructor may only assign fields (`this.x = …`) after `super(…)`; keep
 any other set-up in methods.
+
+## Iterables declared as arrays
+
+From the Fresh port. *No longer needed.* With no way to say "iterable of
+X", a declaration said "array of X" — `Intl.Segmenter#segment` declared
+as returning an array, which then failed at run time where the code used
+an array method. Say what iterating it gives instead:
+
+```javascript
+/** type Segments = {[Symbol.iterator]: {segment: String, index: Number}} */
+```
+
+`for … of`, `[...it]` and `Array.from(it)` accept it; `it.map(…)` is
+rejected, as in the browser. Strings, `Set`s and `Map`s iterate too, and
+`new Set([...])` / `new Map([[k, v], …])` need no library override.

@@ -178,6 +178,10 @@ pub fn eval_expr(state: &mut State, env: &RuntimeEnv, expr: &Expr) -> Result<Val
                                     return Err(Stuck::NotImplemented("spread of non-array cell"));
                                 }
                             },
+                            // A string spreads its characters (code points).
+                            Value::String(s) => {
+                                vs.extend(s.chars().map(|c| Value::String(c.to_string())));
+                            }
                             _ => {
                                 return Err(Stuck::NotImplemented(
                                     "spread argument is not an array value",
@@ -681,6 +685,11 @@ fn read_member(heap: &Heap, obj: &Value, property: &str) -> Result<Value, Stuck>
                 })
             }
         }
+        // Any other member of a number is stuck as before numbers had
+        // methods, as in the Lean model (`notIndexable`).
+        Value::Number(_) => builtin_method("number", property)
+            .map(Value::Builtin)
+            .ok_or_else(|| Stuck::NotIndexable(obj.type_string())),
         Value::String(s) => {
             if property == "length" {
                 Ok(Value::Number(s.chars().count() as f64))
@@ -705,6 +714,8 @@ const BUILTIN_METHODS: &[(&str, &str)] = &[
     ("string", "indexOf"),
     ("array", "slice"),
     ("array", "indexOf"),
+    ("number", "toFixed"),
+    ("number", "toString"),
 ];
 
 fn builtin_method(kind: &str, property: &str) -> Option<&'static str> {
@@ -806,6 +817,64 @@ fn apply_builtin(
             // By `===`: an object or an array by its identity.
             let found = items.iter().position(|v| strict_equal(v, &args[0]));
             Ok(Value::Number(found.map_or(-1.0, |i| i as f64)))
+        }
+        (Some(Value::Number(n)), "toFixed") => {
+            arity(0, 1)?;
+            let digits = match args.first() {
+                None | Some(Value::Undefined) => 0.0,
+                Some(Value::Number(d)) if (0.0..=100.0).contains(&d.trunc()) => d.trunc(),
+                // A RangeError in JavaScript.
+                Some(_) => return Err(Stuck::NotImplemented("toFixed outside 0..=100 digits")),
+            };
+            // Beyond 1e21 JavaScript switches to exponent notation.
+            if !n.is_finite() || n.abs() >= 1e21 {
+                return Err(Stuck::NotImplemented(
+                    "toFixed of a non-finite or huge number",
+                ));
+            }
+            // Rust rounds a tie to even, JavaScript away from zero; the
+            // exact expansion tells a tie apart.
+            let exact = format!("{:.1100}", n.abs());
+            let frac = &exact[exact.find('.').map_or(exact.len(), |i| i + 1)..];
+            let rest = frac.get(digits as usize..).unwrap_or("");
+            if rest.starts_with('5') && rest[1..].bytes().all(|b| b == b'0') {
+                return Err(Stuck::NotImplemented("toFixed of a tie"));
+            }
+            Ok(Value::String(format!("{:.*}", digits as usize, n)))
+        }
+        (Some(Value::Number(n)), "toString") => {
+            arity(0, 1)?;
+            match args.first() {
+                None | Some(Value::Undefined) => {
+                    Ok(Value::String(value_to_string(&Value::Number(n))))
+                }
+                Some(Value::Number(r)) if *r == 10.0 => {
+                    Ok(Value::String(value_to_string(&Value::Number(n))))
+                }
+                Some(Value::Number(r))
+                    if (2.0..=36.0).contains(r)
+                        && r.fract() == 0.0
+                        && n.fract() == 0.0
+                        && n.abs() < 9e15 =>
+                {
+                    let radix = *r as u32;
+                    let mut m = n.abs() as u64;
+                    let mut digits = Vec::new();
+                    loop {
+                        digits
+                            .push(std::char::from_digit((m % radix as u64) as u32, radix).unwrap());
+                        m /= radix as u64;
+                        if m == 0 {
+                            break;
+                        }
+                    }
+                    if n < 0.0 {
+                        digits.push('-');
+                    }
+                    Ok(Value::String(digits.iter().rev().collect()))
+                }
+                Some(_) => Err(Stuck::NotImplemented("toString with this radix")),
+            }
         }
         // A method detached from its receiver (`const f = s.slice; f()`):
         // a TypeError in JavaScript, so a real stuck state.

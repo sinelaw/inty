@@ -20,14 +20,14 @@ impl InferState {
     /// Whether `ty` is known to be a number: `Number` or a number literal.
     pub(crate) fn is_numeric(&mut self, ty: &Type) -> bool {
         matches!(
-            self.zonk(ty),
+            self.zonk_head(ty),
             Type::Number | Type::Literal(LitValue::Number(_))
         )
     }
 
     /// `ty` must be a number.
     pub(crate) fn require_num(&mut self, span: Span, ty: &Type) -> InferResult<()> {
-        match self.zonk(ty) {
+        match self.zonk_head(ty) {
             Type::Number | Type::Literal(LitValue::Number(_)) | Type::Error => Ok(()),
             // (A literal of another type is reported by its base type.)
             other => self.subsume(span, &other.widen_fresh_literals(), &Type::Number),

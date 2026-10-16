@@ -22,7 +22,7 @@ impl InferState {
             op,
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec
         ) {
-            self.infer_store_target(env, argument, span)?
+            self.infer_store_target(env, argument, span, false)?
         } else {
             self.infer_expr(env, argument)?
         };
@@ -100,7 +100,7 @@ impl InferState {
                 // the shape `Promise<T>` pins it down either way.
                 let inner = self.fresh_type_var();
                 self.unify(span, &arg_type, &Type::promise(inner.clone()))?;
-                Ok(self.zonk(&inner))
+                Ok(self.zonk_head_into(inner))
             }
         }
     }
@@ -196,8 +196,9 @@ impl InferState {
                     };
 
                     // Apply substitution to get the actual type variables
-                    let left_subst = self.zonk(&left_type);
-                    let right_subst = self.zonk(&right_type);
+                    // Heads only: an operand may be large (a DOM element).
+                    let left_subst = self.zonk_head(&left_type);
+                    let right_subst = self.zonk_head(&right_type);
 
                     // If left side is a variable, record comparison origin
                     if let Type::Var(var) = &left_subst {
@@ -253,7 +254,7 @@ impl InferState {
                 // `cond && maybeObj` is `Boolean | Undefined | {…}` and
                 // `name || "Guest"` a `String`. (With an unknown side
                 // they must agree, as before: nothing is guessed.)
-                let (l, r) = (self.zonk(&left_type), self.zonk(&right_type));
+                let (l, r) = (self.zonk_arms(&left_type), self.zonk_head(&right_type));
                 if !matches!(l, Type::Var(_)) && !matches!(r, Type::Var(_)) {
                     if let Some(part) = logical_part(&l, matches!(op, BinOp::Or)) {
                         return Ok(match part {
@@ -281,7 +282,7 @@ impl InferState {
                     }
                     return Err(err);
                 }
-                Ok(self.zonk(&left_type))
+                Ok(self.zonk_head_into(left_type))
             }
 
             // Bitwise
@@ -320,7 +321,7 @@ impl InferState {
     ) -> InferResult<Type> {
         self.unify(span, left, right)?;
         self.resolve_plus(left, span)?;
-        Ok(self.zonk(left))
+        Ok(self.zonk_head(left))
     }
 }
 
