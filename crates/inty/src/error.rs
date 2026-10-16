@@ -383,6 +383,16 @@ pub enum TypeError {
         span: Span,
     },
 
+    /// A member read of a value that may be `null` or `undefined`
+    /// (`T | Null`, `T | Undefined`): the nothing has no members.
+    #[error("Property '{prop}' not found on type {obj_type}: the value may be {nothing}")]
+    PropertyOfNullable {
+        prop: String,
+        obj_type: String,
+        nothing: &'static str,
+        span: Span,
+    },
+
     #[error("Presence mismatch: expected {expected}, found {found}")]
     PresenceMismatch {
         expected: String,
@@ -523,6 +533,7 @@ impl TypeError {
             TypeError::UnifyDepth { span } => *span,
             TypeError::UndefinedVariable { span, .. } => *span,
             TypeError::PropertyNotFound { span, .. } => *span,
+            TypeError::PropertyOfNullable { span, .. } => *span,
             TypeError::PresenceMismatch { span, .. } => *span,
             TypeError::NotAFunction { span, .. } => *span,
             TypeError::ArityMismatch { span, .. } => *span,

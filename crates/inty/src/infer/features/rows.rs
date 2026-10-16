@@ -1268,6 +1268,36 @@ impl InferState {
             return Ok(result_type);
         }
 
+        // A value that may be nothing has no members: say so, and how to
+        // get the value out, rather than report the object shape the sum
+        // can't unify with.
+        if let Type::Maybe(nothing, inner) = &receiver {
+            // `T | Null | Undefined` is a sum of a sum: name both nothings.
+            let (mut null, mut undefined) = (false, false);
+            let mut sum: (&crate::types::Nothing, &Type) = (nothing, inner);
+            loop {
+                match sum.0 {
+                    crate::types::Nothing::Null => null = true,
+                    crate::types::Nothing::Undefined => undefined = true,
+                }
+                match sum.1 {
+                    Type::Maybe(n, t) => sum = (n, t),
+                    _ => break,
+                }
+            }
+            return Err(crate::error::TypeError::PropertyOfNullable {
+                prop: property.to_string(),
+                obj_type: self.show(&receiver),
+                nothing: match (null, undefined) {
+                    (true, true) => "null or undefined",
+                    (true, false) => "null",
+                    _ => "undefined",
+                },
+                span,
+            }
+            .into());
+        }
+
         // A primitive without the property (its built-ins were looked up
         // above): say so, rather than report the object shape it can't
         // unify with.
@@ -1299,7 +1329,9 @@ impl InferState {
             row_var,
         ));
 
-        self.unify(span, obj_type, &expected_row)?;
+        // The access needs the row: it is what's expected, the receiver
+        // what's found.
+        self.unify(span, &expected_row, obj_type)?;
 
         Ok(self.zonk_head_into(result_type))
     }

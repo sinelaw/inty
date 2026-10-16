@@ -6151,3 +6151,25 @@ fn independent_groups_are_inferred_in_a_fixed_order() {
         assert_eq!(check_program(src, &[]).expect_err("as before"), first);
     }
 }
+
+#[test]
+fn member_of_a_nullable_value_says_it_may_be_nothing() {
+    // The receiver is what's found, not what's expected, and the error
+    // says the value may be nothing rather than naming a record shape.
+    let src = "/** const q: Number | Null */\nconst q = 1;\nconst s = q.toFixed(2);";
+    let err = check_program(src, &[]).expect_err("q may be null");
+    assert!(
+        err.contains("Property 'toFixed' not found") && err.contains("may be null"),
+        "{err}"
+    );
+    let src = "/** const q: String | Undefined */\nconst q = \"a\";\nconst n = q.length;";
+    let err = check_program(src, &[]).expect_err("q may be undefined");
+    assert!(err.contains("may be undefined"), "{err}");
+    let src = "/** const q: Number | Null | Undefined */\nconst q = 1;\nconst s = q.toFixed(2);";
+    let err = check_program(src, &[]).expect_err("q may be either");
+    assert!(err.contains("may be null or undefined"), "{err}");
+    // Narrowed first, it type-checks.
+    let src =
+        "/** const q: Number | Null */\nconst q = 1;\nconst s = q !== null ? q.toFixed(2) : \"\";";
+    assert!(check_program(src, &[]).is_ok());
+}
