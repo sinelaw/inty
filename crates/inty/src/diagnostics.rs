@@ -417,9 +417,14 @@ fn write_error_with<W: Write>(
                 ),
                 *span,
                 Some(format!(
-                    "test it first (`if (x !== {nothing}) x.{prop}`) or give a default \
+                    "test it first (`if (x {test}) x.{prop}`) or give a default \
                      (`(x ?? fallback).{prop}`); to test a property, copy it into a \
-                     `const` and test that"
+                     `const` and test that",
+                    // `!= null` rules out both nothings.
+                    test = match *nothing {
+                        "null or undefined" => "!= null".to_string(),
+                        n => format!("!== {n}"),
+                    },
                 )),
             ),
             TypeError::PresenceMismatch {
