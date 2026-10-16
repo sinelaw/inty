@@ -6173,3 +6173,18 @@ fn member_of_a_nullable_value_says_it_may_be_nothing() {
         "/** const q: Number | Null */\nconst q = 1;\nconst s = q !== null ? q.toFixed(2) : \"\";";
     assert!(check_program(src, &[]).is_ok());
 }
+
+#[test]
+fn a_nullable_operand_is_what_is_found() {
+    // `+` and comparisons have no expected side; an operand that may be
+    // nothing is the one that doesn't fit, on either side.
+    for e in ["q + 1", "1 + q", "q < 3", "3 < q"] {
+        let src = format!("/** const q: Number | Null */\nconst q = 1;\nconst r = {e};");
+        let err = check_program(&src, &[]).expect_err("q may be null");
+        assert!(
+            err.contains("expected Number, found Number | Null")
+                || err.contains("expected 'Number', found 'Number | Null'"),
+            "{e}: {err}"
+        );
+    }
+}

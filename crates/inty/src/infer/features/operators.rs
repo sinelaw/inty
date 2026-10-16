@@ -167,6 +167,7 @@ impl InferState {
                 // is meaningless once arithmetic happens.
                 let left_widened = self.widen(span, &left_type);
                 let right_widened = self.widen(span, &right_type);
+                self.unify_operands(span, (&left_widened, left), (&right_widened, right))?;
                 self.infer_add(span, &left_widened, &right_widened)
             }
 
@@ -179,7 +180,7 @@ impl InferState {
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
                 let left_widened = self.widen(span, &left_type);
                 let right_widened = self.widen(span, &right_type);
-                self.unify(span, &left_widened, &right_widened)?;
+                self.unify_operands(span, (&left_widened, left), (&right_widened, right))?;
                 self.resolve_plus(&left_widened, span)?;
                 Ok(Type::Boolean)
             }
@@ -313,6 +314,27 @@ impl InferState {
     /// `left + right` (operands widened): both operands have one type,
     /// the result's, which has `+` (`Plus`): a number or a string, so
     /// `1 + "a"` is rejected; on a variable the constraint waits.
+    /// The two operands of `+` or a comparison have one type. Neither
+    /// side is what the other is expected to be, but a value that may be
+    /// nothing (`T | Null`) is never what an operator takes: when one
+    /// operand is such a sum and the other isn't, the sum is what's found
+    /// (`expected 'Number', found 'Number | Null'`), at that operand,
+    /// whichever side it is on.
+    fn unify_operands(
+        &mut self,
+        span: Span,
+        (left, left_expr): (&Type, &Expr),
+        (right, right_expr): (&Type, &Expr),
+    ) -> InferResult<()> {
+        let nullable = |s: &mut Self, t: &Type| matches!(s.zonk_head(t), Type::Maybe(..));
+        match (nullable(self, left), nullable(self, right)) {
+            (true, false) => self.unify(left_expr.span(), right, left)?,
+            (false, true) => self.unify(right_expr.span(), left, right)?,
+            _ => self.unify(span, left, right)?,
+        }
+        Ok(())
+    }
+
     pub(in crate::infer) fn infer_add(
         &mut self,
         span: Span,
