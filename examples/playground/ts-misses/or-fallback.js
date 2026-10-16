@@ -7,7 +7,7 @@
 // fails at the call site, not silently inside the body.
 
 function label(n) {
-    var name = n || "Guest";        // n: Number, fallback: String — mismatch
+    var name = n || "Guest";        // `||` gives both sides one type, so n: String
     return name;
 }
 

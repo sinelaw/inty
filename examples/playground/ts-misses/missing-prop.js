@@ -10,5 +10,5 @@ function fullName(user) {
 
 var name = fullName({ name: "Alice", id: 42 });
 //                        ^^^^^^^^^^^^^^^^^^
-// Inty: `firstName` not found in `{name: String, id: Number}`.
+// Inty: Property 'firstName' not found on type {id: Number, name: String}.
 // TS (.js, no types): silently `any` — caller sees no error.
