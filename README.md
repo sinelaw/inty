@@ -84,6 +84,102 @@ may be polymorphic, or a closed union of literals or row shapes, but it can't
 their operands' types to agree. The benefit is that type errors become
 compile-time errors, with no runtime fallback.
 
+## JavaScript idioms, the inty way
+
+For JavaScript programmers, and for people coming from typed languages who
+want to write JavaScript with inty. Your code stays plain JavaScript: inty
+infers types, and where you need to state one it goes in a comment
+(`/** let x: T */`, `/** function f(a: A) => R */`). The rule to keep in
+mind is that each variable has one type for its whole life, so the idioms
+below are mostly about saying "this may be missing" or "this is one of
+several types" explicitly. More in [docs/patterns.md](docs/patterns.md) and
+[docs/type-system.md](docs/type-system.md).
+
+**A function that may return nothing.** Declare the optional type, return
+`undefined` explicitly, and unwrap at the call site.
+
+```js
+/** function find(xs: Number[], v: Number) => Number? */   // Number? = Number | Undefined
+function find(xs, v) { for (const x of xs) { if (x === v) return x; } return undefined; }
+const n = find([1, 2], 2) ?? 0;
+```
+
+Unannotated, `if (c) return 1; return null;` is an error (inty doesn't guess
+the union). A conditional with an `undefined` or `null` arm is fine:
+`xs.length > 0 ? xs[0] : undefined`.
+
+**Checking a property for null.** Copy it into a `const` and test that;
+`if (o.p !== null) o.p + 1` doesn't type-check.
+
+```js
+const p = o.p;
+if (p !== null) p + 1;
+```
+
+**A variable that holds different types.** Declare the union; `let id = 1;
+id = "abc";` is an error.
+
+```js
+/** let id: Number | String */
+let id = 1;
+id = "abc";
+```
+
+**An empty array filled later.** Give it its element type.
+
+```js
+/** let names: String[] */
+let names = [];
+names.push("a");
+```
+
+**An object used as a map.** Make it a `Dict`; reads give `V | Undefined`.
+A record can't be read with a key known only at run time (`o[k]`).
+
+```js
+/** const counts: Dict<Number> */
+const counts = {};
+counts[w] = (counts[w] ?? 0) + 1;
+```
+
+**Objects of several shapes.** A tagged union, taken apart by testing the tag.
+
+```js
+/** type Shape = {kind: "circle", r: Number} | {kind: "rect", w: Number, h: Number} */
+/** function area(s: Shape) => Number */
+function area(s) { return s.kind === "circle" ? 3.14 * s.r * s.r : s.w * s.h; }
+```
+
+**Building strings from numbers.** `"n=" + 3` is an error; convert
+explicitly.
+
+```js
+`n=${n}`;   "n=" + String(n);   n.toFixed(2);
+```
+
+**Default values.** `??` on an optional parameter.
+
+```js
+/** function greet(name: String?) => String */
+function greet(name) { return "hi " + (name ?? "guest"); }
+```
+
+**Iterating.** `for…of` and spread work on arrays, strings, `Set` and `Map`.
+
+```js
+for (const [k, v] of new Map([["a", 1]])) {}
+for (const c of "abc") {}
+const xs = [...new Set([1, 2])];
+const squares = Array.from({ length: 5 }, (_, i) => i * i);
+```
+
+**DOM lookups.** `getElementById` may return `null`; test it first.
+
+```js
+const btn = document.getElementById("go");
+if (btn) btn.addEventListener("click", (e) => e.preventDefault());
+```
+
 ## Type system
 
 The type system features — full inference, parametric and row polymorphism,
