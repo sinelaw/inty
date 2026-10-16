@@ -108,9 +108,8 @@ Unannotated, `if (c) return 1; return null;` is an error (inty doesn't guess
 the union). A conditional with an `undefined` or `null` arm is fine:
 `xs.length > 0 ? xs[0] : undefined`.
 
-**Checking a property for null.** Copy it into a `const` first: a property
-can change between the test and the use, so `if (o.p !== null) o.p + 1` is
-rejected.
+**Checking a property for null.** Copy it into a `const` and test that;
+`if (o.p !== null) o.p + 1` doesn't type-check.
 
 ```js
 const p = o.p;
